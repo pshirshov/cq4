@@ -1,6 +1,6 @@
 # Harness adapter inventory
 
-Read-only M2 preparation, 2026-09-26. No CQ harness evaluation or adapter implementation is claimed by this inventory. Installed CLI help is retained under `/srv/nvme/tmp/cq4-implementation/m2-capabilities-20260926/`.
+M2 inventory, 2026-09-26. [Finalized-output usage collectors](usage-collectors.md) now exist for these installed formats. Execution adapters and actual CQ harness evaluations remain pending. Installed CLI help is retained under `/srv/nvme/tmp/cq4-implementation/m2-capabilities-20260926/`.
 
 | Installed harness | Observed batch/output controls | Observed capability controls |
 | --- | --- | --- |

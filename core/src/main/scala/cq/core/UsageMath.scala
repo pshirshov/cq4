@@ -4,6 +4,8 @@ import cq.api.*
 
 object UsageMath {
   val MaxPricingVersion = 300
+  val MaxAmountLength = 64
+  val MaxAmountScale = 18
   private def check(value: Boolean, message: String): Unit = LedgerPolicy.invalid(value, message)
 
   def zeroCounter: Counter = Counter(Some(0L), Measurement.Observed)
@@ -24,9 +26,9 @@ object UsageMath {
   def validate(counts: TokenCounts): Unit = List(counts.input, counts.output, counts.cacheRead, counts.cacheWrite, counts.reasoning).foreach(validate)
 
   def amount(value: DecimalAmount): BigDecimal = {
-    check(value.value.length <= 64 && value.value.matches("[0-9]+(?:\\.[0-9]+)?"), "Money requires a nonnegative decimal string")
+    check(value.value.length <= MaxAmountLength && value.value.matches("[0-9]+(?:\\.[0-9]+)?"), "Money requires a nonnegative decimal string")
     val parsed = BigDecimal(value.value, java.math.MathContext.UNLIMITED)
-    check(parsed.scale <= 18, "Monetary precision exceeds 18 decimal places")
+    check(parsed.scale <= MaxAmountScale, "Monetary precision exceeds 18 decimal places")
     parsed
   }
 

@@ -1,0 +1,17 @@
+{"type":"session","id":"01a0de41-accf-7548-93a3-572222d24146"}
+{"type":"agent_start"}
+{"type":"turn_start"}
+{"type":"message_start","message":{"role":"system","timestamp":1790435241246}}
+{"type":"message_end","message":{"role":"system","timestamp":1790435241246}}
+{"type":"message_start","message":{"role":"user","timestamp":1790435241245}}
+{"type":"message_end","message":{"role":"user","timestamp":1790435241245}}
+{"type":"message_start","message":{"role":"assistant","api":"openai-codex-responses","provider":"openai-codex","model":"gpt-5.5","usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"pending","timestamp":1790435241266}}
+{"type":"message_update","usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}}}
+{"type":"message_update","usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}}}
+{"type":"message_update","usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}}}
+{"type":"message_update","usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}}}
+{"type":"message_update","usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}}}
+{"type":"message_end","message":{"role":"assistant","api":"openai-codex-responses","provider":"openai-codex","model":"gpt-5.5","usage":{"input":48,"output":20,"cacheRead":0,"cacheWrite":0,"reasoning":13,"totalTokens":68,"cost":{"input":0.00024000000000000003,"output":0.0006000000000000001,"cacheRead":0,"cacheWrite":0,"total":0.00084}},"stopReason":"stop","timestamp":1790435241266,"responseId":"resp_01db5307d203332f016ab7dfaa0fb087d2bd10d97318f6a537"}}
+{"type":"turn_end","message":{"role":"assistant","api":"openai-codex-responses","provider":"openai-codex","model":"gpt-5.5","usage":{"input":48,"output":20,"cacheRead":0,"cacheWrite":0,"reasoning":13,"totalTokens":68,"cost":{"input":0.00024000000000000003,"output":0.0006000000000000001,"cacheRead":0,"cacheWrite":0,"total":0.00084}},"stopReason":"stop","timestamp":1790435241266,"responseId":"resp_01db5307d203332f016ab7dfaa0fb087d2bd10d97318f6a537"}}
+{"type":"agent_end","willRetry":false}
+{"type":"agent_settled"}
