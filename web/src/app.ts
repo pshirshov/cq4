@@ -41,6 +41,7 @@ class App {
   private dirty = false;
   private historyBefore = new api.Revision(9223372036854775807n);
   private auditAfter = 0n;
+  private auditRequest = 0;
   private editor: { form: Editor; record: api.BrowserDraft; key: string; discard: HTMLButtonElement; busy: boolean } | null = null;
 
   constructor(private readonly root: HTMLElement) { void this.start(); }
@@ -298,10 +299,44 @@ class App {
       if (totals.unknownCosts > 0n) this.usagePanel.append(element('p', `${totals.unknownCosts} unknown costs`));
     }
     this.usagePanel.append(element('p', `Shared work is counted once and is not divided among members. Incomplete meters: ${result.report.incompleteMeters}; attempts without measurements: ${result.report.attemptsWithoutMeters}.`),
-      button('Refresh usage', () => this.action(() => this.loadUsage())), button('Usage audit', () => this.action(async () => { this.auditAfter = 0n; await this.loadAudit(); })));
+      element('p', `Attempt coverage: ${result.report.attempts.running} running; ${result.report.attempts.unknown} unknown outcomes; ${result.report.attempts.withGaps} with reported gaps.`),
+      button('Refresh usage', () => this.action(() => this.loadUsage())), button('Attempts', () => this.action(() => this.loadAttempts(undefined, undefined))), button('Usage audit', () => this.action(async () => { this.auditAfter = 0n; await this.loadAudit(); })));
+  }
+  private async loadAttempts(after: api.AttemptId | undefined, snapshot: bigint | undefined): Promise<void> {
+    const request = ++this.auditRequest; const epoch = this.epoch; const selected = this.selected;
+    const result = await this.call(new api.Command_Usage(new api.UsageInput(this.currentProject(), new api.UsageSelection_Attempts(this.usageFilter(), after, snapshot, 20))));
+    if (request !== this.auditRequest || epoch !== this.epoch || selected !== this.selected) return;
+    if (!(result instanceof api.Result_UsageAttempts)) throw new Error('Unexpected attempt response');
+    this.auditPanel.replaceChildren(element('h3', 'Attempts'));
+    if (result.page.entries.length === 0) this.auditPanel.append(element('p', 'No attempts in this scope.'));
+    for (const entry of result.page.entries) {
+      const row = element('section', ''); const outcome = entry.outcome;
+      row.append(element('h4', `${entry.attempt.harness} · ${entry.attempt.role} · ${outcome === undefined ? 'Running' : outcome.value.state}`),
+        element('p', `Attempt ${entry.attempt.id.value} · ${entry.assignment.attribution}`));
+      if (outcome !== undefined) for (const gap of outcome.value.gaps) row.append(element('p', gap));
+      const details = element('details', ''); details.append(element('summary', 'Attempt details'), element('pre', describe(api.AttemptView_JsonCodec.instance.encode(CONTEXT, entry))));
+      row.append(details, button('Outcome history', () => this.action(() => this.loadOutcomes(entry.attempt.id, 0n)))); this.auditPanel.append(row);
+    }
+    if (result.page.hasMore) this.auditPanel.append(button('Next attempt page', () => this.action(() => this.loadAttempts(result.page.after, result.page.cursor))));
+  }
+  private async loadOutcomes(attempt: api.AttemptId, after: bigint): Promise<void> {
+    const request = ++this.auditRequest; const epoch = this.epoch; const selected = this.selected;
+    const result = await this.call(new api.Command_Usage(new api.UsageInput(this.currentProject(), new api.UsageSelection_Outcomes(attempt, after, 20))));
+    if (request !== this.auditRequest || epoch !== this.epoch || selected !== this.selected) return;
+    if (!(result instanceof api.Result_UsageOutcomes)) throw new Error('Unexpected outcome response');
+    this.auditPanel.replaceChildren(element('h3', 'Outcome history'));
+    if (result.page.entries.length === 0) this.auditPanel.append(element('p', 'No outcome recorded yet.'));
+    for (const entry of result.page.entries) {
+      const row = element('details', ''); row.append(element('summary', `${entry.sequence} · ${entry.value.state}`),
+        element('pre', describe(api.RecordedOutcome_JsonCodec.instance.encode(CONTEXT, entry))));
+      this.auditPanel.append(row);
+    }
+    if (result.page.hasMore) this.auditPanel.append(button('Next outcome page', () => this.action(() => this.loadOutcomes(attempt, result.page.after))));
   }
   private async loadAudit(): Promise<void> {
+    const request = ++this.auditRequest; const epoch = this.epoch; const selected = this.selected;
     const result = await this.call(new api.Command_Usage(new api.UsageInput(this.currentProject(), new api.UsageSelection_Audit(this.usageFilter(), this.auditAfter, 20))));
+    if (request !== this.auditRequest || epoch !== this.epoch || selected !== this.selected) return;
     if (!(result instanceof api.Result_UsageAudit)) throw new Error('Unexpected audit response');
     this.auditPanel.replaceChildren(element('h3', 'Usage audit'));
     if (result.page.entries.length === 0) this.auditPanel.append(element('p', 'No usage observations in this scope.'));

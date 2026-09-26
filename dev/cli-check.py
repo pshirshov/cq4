@@ -38,6 +38,8 @@ def main():
         assert json.loads(run(root, "query"))["Found"]["page"]["items"] == []
         assert json.loads(run(root, "status"))["UsageSummary"]["report"]["direct"]["total"]["known"] == "0"
         assert json.loads(run(root, "status", "audit", "--limit", "1"))["UsageAudit"]["page"]["entries"] == []
+        assert json.loads(run(root, "status", "attempts", "--limit", "1"))["UsageAttempts"]["page"]["entries"] == []
+        run(root, "status", "outcomes", "--attempt", "00000000-0000-0000-0000-000000000001", expected=1)
         run(root, "init", "--project-id", "00000000-0000-0000-0000-000000000001", expected=1)
         subprocess.run(["git", "-C", str(root), "worktree", "remove", str(worktree)], check=True)
         moved = Path(temporary) / "moved"

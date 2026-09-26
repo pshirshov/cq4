@@ -38,6 +38,43 @@ abstract class UsageContractTest extends SpecZIO with AssertZIO {
     effect.either.flatMap(result => assertIO(result match { case Left(DomainFailure(fault)) => expected(fault); case _ => false })).unit
 
   "Operational usage audit (Behavioral Active Blackbox; dummy Group / PostgreSQL Good Communication)" should {
+    "expose attempt completion gaps independently of complete individual observations" in { (usage: UsageService[IO], ledger: LedgerService[IO]) =>
+      val owner = scope()
+      val gap = "Final request usage unavailable"
+      for {
+        _ <- ledger.initialize(owner, "attempt coverage")
+        member <- task(ledger, owner, "Interrupted task")
+        attempt <- start(usage, owner, assignment(owner, Set(member), Attribution.Direct, None), CounterScope.Increment, UsageMath.zeroCounts, UsageMath.unknownMoney)
+        _ <- usage.ingest(collector(owner), upload(attempt, 1, CounterScope.Increment, counts(100, 0), UsageMath.unknownMoney))
+        _ <- usage.finish(collector(owner), AttemptOutcome(RequestId(UUID.randomUUID()), attempt.id, AttemptState.Cancelled, 3000, List(gap), None))
+        report <- usage.summary(owner, UsageFilter.TaskOnly(member))
+        attempts <- usage.attempts(owner, UsageFilter.TaskOnly(member), None, None, 20)
+        recorded = attempts.entries.head.outcome.get
+        _ <- assertIO(report.incompleteMeters == 0 && report.attempts.withGaps == 1 && recorded.value.gaps == List(gap))
+        _ <- usage.ingest(collector(owner), upload(attempt, 2, CounterScope.Increment, counts(10, 0), UsageMath.unknownMoney))
+        stillIncomplete <- usage.summary(owner, UsageFilter.TaskOnly(member))
+        _ <- assertIO(stillIncomplete.attempts.withGaps == 1 && stillIncomplete.direct.total.known == 110)
+        corrected = AttemptOutcome(RequestId(UUID.randomUUID()), attempt.id, AttemptState.Completed, 2500, Nil, Some(recorded.value.request))
+        _ <- usage.finish(collector(owner), corrected)
+        _ <- usage.finish(collector(owner), recorded.value)
+        complete <- usage.summary(owner, UsageFilter.TaskOnly(member))
+        _ <- assertIO(complete.attempts.withGaps == 0)
+        historical <- usage.outcomes(owner, attempt.id, 0, 1)
+        next <- usage.outcomes(owner, attempt.id, historical.after, 1)
+        _ <- assertIO(historical.hasMore && historical.entries.head == recorded && !next.hasMore && next.entries.head.value == corrected)
+        _ <- denied(usage.finish(collector(owner), corrected.copy(request = RequestId(UUID.randomUUID()))))(_.isInstanceOf[Fault.Invalid])
+        pending = Attempt(AttemptId(UUID.randomUUID()), attempt.assignment, None, owner.actor.session, Role.Worker, Harness.Claude, "fixture", "fixture", "fixture", 1000)
+        _ <- usage.start(collector(owner), pending)
+        page <- usage.attempts(owner, UsageFilter.TaskOnly(member), None, None, 1)
+        last <- usage.attempts(owner, UsageFilter.TaskOnly(member), page.after, Some(page.cursor), 1)
+        _ <- assertIO(page.hasMore && !last.hasMore && (page.entries ++ last.entries).exists(v => v.attempt.id == pending.id && v.outcome.isEmpty))
+        running <- usage.summary(owner, UsageFilter.TaskOnly(member))
+        _ <- assertIO(running.attempts.running == 1 && running.attemptsWithoutMeters == 1)
+        _ <- usage.meter(collector(owner), UsageMeter("new", pending.id, CounterScope.Increment, UsageMath.zeroCounts, UsageMath.unknownMoney))
+        _ <- denied(usage.attempts(owner, UsageFilter.TaskOnly(member), page.after, Some(page.cursor), 1))(_.isInstanceOf[Fault.Resync])
+      } yield ()
+    }
+
     "include exclusive member work in cohort totals while preserving direct task attribution" in { (usage: UsageService[IO], ledger: LedgerService[IO]) =>
       val owner = scope()
       val cohort = UUID.randomUUID()
@@ -81,7 +118,7 @@ abstract class UsageContractTest extends SpecZIO with AssertZIO {
         correction = sharedUpload.copy(observation = sharedUpload.observation.copy(id = ObservationId(UUID.randomUUID()), counters = counts(1100, 0), supersedes = Some(sharedUpload.observation.id)))
         corrections <- ZIO.foreachPar((1 to 8).toList)(_ => usage.ingest(host, correction))
         _ <- assertIO(corrections.distinct.size == 1)
-        _ <- usage.finish(host, AttemptOutcome(RequestId(UUID.randomUUID()), second.id, AttemptState.Cancelled, 3000, List("Cancelled after measured work")))
+        _ <- usage.finish(host, AttemptOutcome(RequestId(UUID.randomUUID()), second.id, AttemptState.Cancelled, 3000, List("Cancelled after measured work"), None))
         corrected <- usage.summary(owner, UsageFilter.ProjectAll())
         _ <- assertIO(corrected.direct.total.known + corrected.shared.total.known == 1600)
         cohortView <- usage.summary(owner, UsageFilter.CohortOnly(cohort))

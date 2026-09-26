@@ -17,6 +17,10 @@ trait UsageReader {
   def observation(id: ObservationId): Option[RecordedUsage]
   def sample(key: MeterKey, position: Long): Option[RecordedUsage]
   def outcome(request: RequestId): Option[AttemptOutcome]
+  def latestOutcome(attempt: AttemptId): Option[RecordedOutcome]
+  def outcomes(attempt: AttemptId, after: Long, limit: Int): ReadPage[RecordedOutcome]
+  def attempts(filter: UsageFilter, after: Option[AttemptId], limit: Int): ReadPage[AttemptView]
+  def coverage(filter: UsageFilter): AttemptCoverage
   def meters(filter: UsageFilter, after: Option[MeterKey], limit: Int): List[MeterView]
   def attemptsWithoutMeters(filter: UsageFilter): Long
   def audit(filter: UsageFilter, after: Long, limit: Int): ReadPage[RecordedUsage]

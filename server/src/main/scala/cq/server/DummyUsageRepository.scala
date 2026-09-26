@@ -29,7 +29,7 @@ private final case class DummyUsageState(
   meters: Map[MeterKey, (UsageMeter, MeterProjection)],
   observations: Map[ObservationId, RecordedUsage],
   heads: Map[(MeterKey, Long), ObservationId],
-  outcomes: Map[RequestId, AttemptOutcome],
+  outcomes: Map[RequestId, RecordedOutcome],
 )
 
 private object DummyUsageState {
@@ -46,7 +46,7 @@ private final class DummyUsageTransaction(initial: DummyUsageState) extends Usag
   override def meter(key: MeterKey): Option[(UsageMeter, MeterProjection)] = state.meters.get(key)
   override def observation(id: ObservationId): Option[RecordedUsage] = state.observations.get(id)
   override def sample(key: MeterKey, position: Long): Option[RecordedUsage] = state.heads.get((key, position)).flatMap(state.observations.get)
-  override def outcome(request: RequestId): Option[AttemptOutcome] = state.outcomes.get(request)
+  override def outcome(request: RequestId): Option[AttemptOutcome] = state.outcomes.get(request).map(_.value)
   override def putAssignment(value: Assignment, actor: Actor, receivedAt: Long): Unit = { state = state.copy(assignments = state.assignments.updated(value.id, value)); tick(); () }
   override def putAttempt(value: Attempt, actor: Actor, receivedAt: Long): Unit = { state = state.copy(attempts = state.attempts.updated(value.id, value)); tick(); () }
   override def putMeter(value: UsageMeter, projection: MeterProjection, actor: Actor, receivedAt: Long): Unit = {
@@ -69,9 +69,20 @@ private final class DummyUsageTransaction(initial: DummyUsageState) extends Usag
     state = state.copy(heads = state.heads.updated(key, value.upload.observation.id))
   }
   override def putOutcome(value: AttemptOutcome, actor: Actor, receivedAt: Long): Unit = {
-    state = state.copy(outcomes = state.outcomes.updated(value.request, value))
-    tick()
-    ()
+    val recorded = RecordedOutcome(value, actor, receivedAt, tick())
+    state = state.copy(outcomes = state.outcomes.updated(value.request, recorded))
+  }
+  override def latestOutcome(attempt: AttemptId): Option[RecordedOutcome] = state.outcomes.valuesIterator.filter(_.value.attempt == attempt).maxByOption(_.sequence)
+  override def outcomes(attempt: AttemptId, after: Long, limit: Int): ReadPage[RecordedOutcome] =
+    ReadPage.select(state.outcomes.valuesIterator.filter(o => o.value.attempt == attempt && o.sequence > after).toList.sortBy(_.sequence).iterator, limit, RecordedOutcome_JsonCodec)
+  override def attempts(filter: UsageFilter, after: Option[AttemptId], limit: Int): ReadPage[AttemptView] = {
+    val values = state.attempts.valuesIterator.filter(a => matches(filter, a) && after.forall(p => a.id.value.toString > p.value.toString))
+      .toList.sortBy(_.id.value.toString).iterator.map(a => AttemptView(state.assignments(a.assignment), a, latestOutcome(a.id)))
+    ReadPage.select(values, limit, AttemptView_JsonCodec)
+  }
+  override def coverage(filter: UsageFilter): AttemptCoverage = {
+    val outcomes = state.attempts.valuesIterator.filter(matches(filter, _)).map(a => latestOutcome(a.id)).toList
+    AttemptCoverage(outcomes.count(_.isEmpty).toLong, outcomes.count(_.exists(_.value.state == AttemptState.Unknown)).toLong, outcomes.count(_.exists(_.value.gaps.nonEmpty)).toLong)
   }
   private def matches(filter: UsageFilter, attempt: Attempt): Boolean = {
     val assignment = state.assignments(attempt.assignment)

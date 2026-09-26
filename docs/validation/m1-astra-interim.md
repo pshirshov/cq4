@@ -34,3 +34,11 @@ Browser reproductions: `20260926T200258-browser` confirms both failures against 
 Astra inspected the corrections, failing reproductions and successful follow-ups and accepted the first three corrections without additional blocking/major findings. The reviewer explicitly requires PostgreSQL verification before closing the service corrections. The fourth finding (attempt coverage/outcome gaps) remains open. This is not M1 approval.
 
 `20260926T200950-postgres` passes all 22 scenarios plus actual clients and SIGKILL restart, closing the service verification condition from the correction review. `20260926T201115-contracts` passes deterministic generation, strict Scala/TypeScript compilation and generated codec/schema checks.
+
+## Attempt outcome correction
+
+`20260926T201212-fast` reproduces the fourth finding: after a complete sample and cancellation with “Final request usage unavailable”, the summary reports zero incomplete meters/zero attempts without meters and the observation audit cannot expose the gap.
+
+`20260926T201508-fast` passes all 23 scenarios after adding separate attempt coverage and bounded attempt/outcome-history reads. The retained scenario verifies no-meter attempts, effective outcome gaps, late samples leaving gaps intact, an explicit correction with an earlier client timestamp, replay of the superseded request, lossless outcome pagination, rejection of an unlinked correction, and snapshot invalidation during attempt pagination. `20260926T201851-postgres` passes all 23 scenarios plus actual HTTP/WebSocket/MCP/CLI checks and SIGKILL restart. `20260926T202040-browser` passes no-meter visibility, gap reporting, explicit correction/history and unchanged ledger revision, alongside the prior workflow/draft/connection corpus. `20260926T202514-contracts` passes deterministic generation, strict compilation and generated schema/codec checks.
+
+Astra approved the fourth correction after inspecting source and retained dummy/PostgreSQL/browser evidence, with no blocking or major findings. All four interim findings are corrected. This is correction approval only; aggregate bounds, isolated workspaces and full M1 milestone review remain open.

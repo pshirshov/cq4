@@ -12,6 +12,8 @@ trait UsageService[F[_, _]] {
   def ingest(scope: Scope, value: UsageUpload): F[Throwable, UsageReceipt]
   def finish(scope: Scope, value: AttemptOutcome): F[Throwable, AttemptOutcome]
   def summary(scope: Scope, filter: UsageFilter): F[Throwable, UsageReport]
+  def attempts(scope: Scope, filter: UsageFilter, after: Option[AttemptId], snapshot: Option[Long], limit: Int): F[Throwable, AttemptPage]
+  def outcomes(scope: Scope, attempt: AttemptId, after: Long, limit: Int): F[Throwable, OutcomePage]
   def audit(scope: Scope, filter: UsageFilter, after: Long, limit: Int): F[Throwable, UsagePage]
 }
 
@@ -150,7 +152,10 @@ object UsageService {
       val attempt = found(tx.attempt(value.attempt), "Attempt not registered")
       invalid(value.state != AttemptState.Running && value.finishedAt >= attempt.startedAt, "Invalid attempt outcome or finish time")
       gaps(value.gaps)
-      if (!same(tx.outcome(value.request), value)) tx.putOutcome(value, scope.actor, clock.millis())
+      if (!same(tx.outcome(value.request), value)) {
+        invalid(value.supersedes == tx.latestOutcome(value.attempt).map(_.value.request), "Outcome correction must supersede the current outcome")
+        tx.putOutcome(value, scope.actor, clock.millis())
+      }
       value
     }
 
@@ -186,7 +191,24 @@ object UsageService {
         after = page.lastOption.map(p => MeterKey(p.attempt.id, p.meter.key))
         more = page.size == ReadBatch
       }
-      UsageReport(direct, shared, unattributed, sharedAssignments, sharedAssignmentsTruncated, reader.cursor, incomplete, reader.attemptsWithoutMeters(value))
+      UsageReport(direct, shared, unattributed, sharedAssignments, sharedAssignmentsTruncated, reader.cursor, incomplete, reader.attemptsWithoutMeters(value), reader.coverage(value))
+    }
+
+    override def attempts(scope: Scope, value: UsageFilter, after: Option[AttemptId], snapshot: Option[Long], limit: Int): F[Throwable, AttemptPage] = repository.read(scope.project) { reader =>
+      filter(scope, value)
+      invalid(limit > 0 && limit <= ReadBatch, "Invalid attempt page size")
+      invalid(after.isEmpty || snapshot.nonEmpty, "Attempt continuation requires snapshot cursor")
+      if (snapshot.exists(_ != reader.cursor)) throw DomainFailure(Fault.Resync("Usage snapshot changed; restart attempt listing"))
+      val page = reader.attempts(value, after, limit)
+      AttemptPage(page.entries, page.entries.lastOption.map(_.attempt.id), page.hasMore, reader.cursor)
+    }
+
+    override def outcomes(scope: Scope, attempt: AttemptId, after: Long, limit: Int): F[Throwable, OutcomePage] = repository.read(scope.project) { reader =>
+      invalid(limit > 0 && limit <= ReadBatch && after >= 0, "Invalid outcome page bounds")
+      found(reader.attempt(attempt), "Attempt not registered")
+      if (after > reader.cursor) throw DomainFailure(Fault.Resync("Outcome cursor outside retained audit"))
+      val page = reader.outcomes(attempt, after, limit)
+      OutcomePage(page.entries, page.entries.lastOption.fold(after)(_.sequence), page.hasMore, reader.cursor)
     }
 
     override def audit(scope: Scope, value: UsageFilter, after: Long, limit: Int): F[Throwable, UsagePage] = repository.read(scope.project) { reader =>

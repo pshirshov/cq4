@@ -99,6 +99,8 @@ cq init --name "New display name"
 cq query --ledger Tasks --archived All --limit 20
 cq status --task T1
 cq status audit --task T1 --limit 20
+cq status attempts --task T1 --limit 20
+cq status outcomes --attempt <attempt-uuid> --limit 20
 cq web
 ```
 

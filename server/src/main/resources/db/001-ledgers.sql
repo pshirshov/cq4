@@ -118,6 +118,7 @@ CREATE TABLE cq_usage_attempts (
   attempt_id uuid NOT NULL,
   assignment_id uuid NOT NULL,
   parent_id uuid,
+  effective_outcome jsonb,
   session_id uuid NOT NULL,
   actor jsonb NOT NULL,
   received_at bigint NOT NULL,
@@ -167,6 +168,7 @@ CREATE TABLE cq_usage_heads (
 CREATE TABLE cq_usage_outcomes (
   project_id uuid NOT NULL,
   request_id uuid NOT NULL,
+  sequence bigint NOT NULL,
   attempt_id uuid NOT NULL,
   actor jsonb NOT NULL,
   received_at bigint NOT NULL,
@@ -174,4 +176,5 @@ CREATE TABLE cq_usage_outcomes (
   PRIMARY KEY (project_id, request_id),
   FOREIGN KEY (project_id, attempt_id) REFERENCES cq_usage_attempts
 );
-CREATE INDEX cq_usage_attempt_outcomes ON cq_usage_outcomes (project_id, attempt_id, received_at);
+CREATE UNIQUE INDEX cq_usage_outcome_sequence ON cq_usage_outcomes (project_id, sequence);
+CREATE INDEX cq_usage_attempt_outcomes ON cq_usage_outcomes (project_id, attempt_id, sequence);

@@ -49,7 +49,7 @@ private final class PostgresUsageTransaction(connection: Connection, project: Pr
   override def observation(id: ObservationId): Option[RecordedUsage] = sql.query("SELECT body::text FROM cq_usage_records WHERE project_id = ? AND observation_id = ?")(identity(_, id.value))(r => Wire.decode(RecordedUsage_JsonCodec, r.getString(1))).headOption
   override def sample(key: MeterKey, position: Long): Option[RecordedUsage] =
     sql.query("SELECT r.body::text FROM cq_usage_heads h JOIN cq_usage_records r USING(project_id, observation_id) WHERE h.project_id = ? AND h.attempt_id = ? AND h.meter = ? AND h.position = ?") { s => meterKey(s, key); s.setLong(4, position) }(r => Wire.decode(RecordedUsage_JsonCodec, r.getString(1))).headOption
-  override def outcome(request: RequestId): Option[AttemptOutcome] = sql.query("SELECT body::text FROM cq_usage_outcomes WHERE project_id = ? AND request_id = ?")(identity(_, request.value))(r => Wire.decode(AttemptOutcome_JsonCodec, r.getString(1))).headOption
+  override def outcome(request: RequestId): Option[AttemptOutcome] = sql.query("SELECT body::text FROM cq_usage_outcomes WHERE project_id = ? AND request_id = ?")(identity(_, request.value))(r => Wire.decode(RecordedOutcome_JsonCodec, r.getString(1)).value).headOption
 
   override def putAssignment(value: Assignment, actor: Actor, receivedAt: Long): Unit = {
     sql.execute("INSERT INTO cq_usage_assignments(project_id, assignment_id, attribution, cohort, evaluation_run, evaluation_scenario, actor, received_at, body) VALUES (?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?::jsonb)") { s =>
@@ -109,12 +109,45 @@ private final class PostgresUsageTransaction(connection: Connection, project: Pr
   }
 
   override def putOutcome(value: AttemptOutcome, actor: Actor, receivedAt: Long): Unit = {
-    sql.execute("INSERT INTO cq_usage_outcomes(project_id, request_id, attempt_id, actor, received_at, body) VALUES (?, ?, ?, ?::jsonb, ?, ?::jsonb)") { s =>
-      identity(s, value.request.value); s.setObject(3, value.attempt.value); s.setString(4, Wire.encode(Actor_JsonCodec, actor)); s.setLong(5, receivedAt); s.setString(6, Wire.encode(AttemptOutcome_JsonCodec, value))
+    val recorded = RecordedOutcome(value, actor, receivedAt, tick())
+    val encoded = Wire.encode(RecordedOutcome_JsonCodec, recorded)
+    sql.execute("INSERT INTO cq_usage_outcomes(project_id, request_id, attempt_id, actor, received_at, sequence, body) VALUES (?, ?, ?, ?::jsonb, ?, ?, ?::jsonb)") { s =>
+      identity(s, value.request.value); s.setObject(3, value.attempt.value); s.setString(4, Wire.encode(Actor_JsonCodec, actor)); s.setLong(5, receivedAt)
+      s.setLong(6, recorded.sequence); s.setString(7, encoded)
     }
-    tick()
-    ()
+    val changed = sql.execute("UPDATE cq_usage_attempts SET effective_outcome = ?::jsonb WHERE project_id = ? AND attempt_id = ?") { s =>
+      s.setString(1, encoded); s.setObject(2, project.value); s.setObject(3, value.attempt.value)
+    }
+    require(changed == 1, "Attempt disappeared during outcome admission")
   }
+
+  override def latestOutcome(attempt: AttemptId): Option[RecordedOutcome] =
+    sql.query("SELECT effective_outcome::text FROM cq_usage_attempts WHERE project_id = ? AND attempt_id = ?")(identity(_, attempt.value))
+      (r => Option(r.getString(1)).map(Wire.decode(RecordedOutcome_JsonCodec, _))).headOption.flatten
+
+  override def outcomes(attempt: AttemptId, after: Long, limit: Int): ReadPage[RecordedOutcome] =
+    sql.page("SELECT body::text FROM cq_usage_outcomes WHERE project_id = ? AND attempt_id = ? AND sequence > ? ORDER BY sequence LIMIT ?", limit, RecordedOutcome_JsonCodec) { s =>
+      identity(s, attempt.value); s.setLong(3, after); s.setInt(4, limit + 1)
+    }
+
+  override def attempts(filter: UsageFilter, after: Option[AttemptId], limit: Int): ReadPage[AttemptView] = {
+    val pagination = after.fold("")(_ => " AND t.attempt_id > ?")
+    sql.pageBy("SELECT a.body::text, t.body::text, t.effective_outcome::text FROM cq_usage_attempts t JOIN cq_usage_assignments a USING(project_id, assignment_id) WHERE t.project_id = ?" +
+      filterSql(filter) + pagination + " ORDER BY t.attempt_id LIMIT ?", limit, AttemptView_JsonCodec) { s =>
+      val index = bindFilter(s, filter)
+      after match {
+        case Some(id) => s.setObject(index, id.value); s.setInt(index + 1, limit + 1)
+        case None => s.setInt(index, limit + 1)
+      }
+    } { r => AttemptView(Wire.decode(Assignment_JsonCodec, r.getString(1)), Wire.decode(Attempt_JsonCodec, r.getString(2)), Option(r.getString(3)).map(Wire.decode(RecordedOutcome_JsonCodec, _))) }
+  }
+
+  override def coverage(filter: UsageFilter): AttemptCoverage =
+    sql.query("SELECT count(*) FILTER (WHERE t.effective_outcome IS NULL), " +
+      "count(*) FILTER (WHERE t.effective_outcome->'value'->>'state' = 'Unknown'), " +
+      "count(*) FILTER (WHERE jsonb_array_length(t.effective_outcome->'value'->'gaps') > 0) " +
+      "FROM cq_usage_attempts t JOIN cq_usage_assignments a USING(project_id, assignment_id) WHERE t.project_id = ?" + filterSql(filter))
+      (s => { bindFilter(s, filter); () })(r => AttemptCoverage(r.getLong(1), r.getLong(2), r.getLong(3))).head
 
   private def filterSql(filter: UsageFilter): String = filter match {
     case _: UsageFilter.ProjectAll => ""

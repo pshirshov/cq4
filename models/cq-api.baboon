@@ -149,7 +149,12 @@ enum UsageDisposition { Contribution Detail }
 root data UsageUpload { observation: UsageObservation meter: str disposition: UsageDisposition detailReason: opt[str] }
 root data UsageReceipt { id: ObservationId sequence: i64 }
 root data RecordedUsage { upload: UsageUpload normalized: TokenCounts actor: Actor sequence: i64 }
-root data AttemptOutcome { request: RequestId attempt: AttemptId state: AttemptState finishedAt: i64 gaps: lst[str] }
+root data AttemptOutcome { request: RequestId attempt: AttemptId state: AttemptState finishedAt: i64 gaps: lst[str] supersedes: opt[RequestId] }
+root data RecordedOutcome { value: AttemptOutcome actor: Actor receivedAt: i64 sequence: i64 }
+root data AttemptCoverage { running: i64 unknown: i64 withGaps: i64 }
+root data AttemptView { assignment: Assignment attempt: Attempt outcome: opt[RecordedOutcome] }
+root data AttemptPage { entries: lst[AttemptView] after: opt[AttemptId] hasMore: bit cursor: i64 }
+root data OutcomePage { entries: lst[RecordedOutcome] after: i64 hasMore: bit cursor: i64 }
 root data MetricTotal { known: i64 unknown: i64 estimated: i64 }
 root data CostTotal { amount: DecimalAmount currency: str basis: CostBasis pricingVersion: opt[str] measurements: i64 }
 root data UsageTotals {
@@ -180,6 +185,7 @@ root data UsageReport {
   cursor: i64
   incompleteMeters: i64
   attemptsWithoutMeters: i64
+  attempts: AttemptCoverage
 }
 root data UsagePage { entries: lst[RecordedUsage] after: i64 hasMore: bit cursor: i64 }
 
@@ -202,6 +208,8 @@ root data ClaimInput { project: ProjectId action: ClaimAction }
 root adt UsageSelection {
   data Summary { filter: UsageFilter }
   data Audit { filter: UsageFilter after: i64 limit: i32 }
+  data Attempts { filter: UsageFilter after: opt[AttemptId] snapshot: opt[i64] limit: i32 }
+  data Outcomes { attempt: AttemptId after: i64 limit: i32 }
 }
 root data UsageInput { project: ProjectId selection: UsageSelection }
 root adt Command {
@@ -225,6 +233,8 @@ root adt Result {
   data Claimed { claim: Claim }
   data UsageSummary { report: UsageReport }
   data UsageAudit { page: UsagePage }
+  data UsageAttempts { page: AttemptPage }
+  data UsageOutcomes { page: OutcomePage }
   data Failed { fault: Fault }
 }
 root adt HostUsage {

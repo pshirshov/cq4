@@ -4,6 +4,7 @@ import { writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { connectionChecks } from './connection-browser.mjs';
 import { draftChecks } from './draft-browser.mjs';
+import { usageChecks } from './usage-browser.mjs';
 
 const origin = process.env.CQ_ORIGIN;
 const evidence = process.env.CQ_BROWSER_EVIDENCE;
@@ -71,6 +72,7 @@ try {
   assert.deepEqual(errors, []);
   console.log('Chromium: login, project creation, all 14 forms, persisted draft, create/edit/history, usage audit, external live update and offline recovery passed');
   await draftChecks(browser, await context.storageState(), origin, evidence);
+  await usageChecks(page, origin, project);
   await connectionChecks(browser, await context.storageState(), origin, evidence);
 } finally {
   await writeFile(`${evidence}/browser-errors.json`, JSON.stringify(errors, null, 2));

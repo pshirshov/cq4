@@ -39,6 +39,8 @@ final class Application(ledger: LedgerService[IO], repository: LedgerRepository[
       }}
       case Command.Usage(input) => scoped(authority, input.project) { scope => input.selection match {
         case UsageSelection.Summary(filter) => usage.summary(scope, filter).map(Result.UsageSummary.apply)
+        case UsageSelection.Attempts(filter, after, snapshot, limit) => usage.attempts(scope, filter, after, snapshot, limit).map(Result.UsageAttempts.apply)
+        case UsageSelection.Outcomes(attempt, after, limit) => usage.outcomes(scope, attempt, after, limit).map(Result.UsageOutcomes.apply)
         case UsageSelection.Audit(filter, after, limit) => usage.audit(scope, filter, after, limit).map(Result.UsageAudit.apply)
       }}
     }

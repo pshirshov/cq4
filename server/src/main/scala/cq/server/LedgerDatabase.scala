@@ -49,11 +49,14 @@ private[server] final class Jdbc(connection: Connection) {
   }
 
   def page[A](sql: String, limit: Int, codec: BaboonJsonCodec[A])(bind: PreparedStatement => Unit): ReadPage[A] =
+    pageBy(sql, limit, codec)(bind)(rows => Wire.decode(codec, rows.getString(1)))
+
+  def pageBy[A](sql: String, limit: Int, codec: BaboonJsonCodec[A])(bind: PreparedStatement => Unit)(read: ResultSet => A): ReadPage[A] =
     Using.resource(connection.prepareStatement(sql)) { statement =>
       statement.setFetchSize(1)
       bind(statement)
       Using.resource(statement.executeQuery()) { rows =>
-        val values = Iterator.continually(rows.next()).takeWhile(identity).map(_ => Wire.decode(codec, rows.getString(1)))
+        val values = Iterator.continually(rows.next()).takeWhile(identity).map(_ => read(rows))
         ReadPage.select(values, limit, codec)
       }
     }
