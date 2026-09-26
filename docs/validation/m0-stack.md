@@ -1,6 +1,6 @@
 # M0 stack proof evidence
 
-Date: 2026-09-26. Baseline: `7e3076a`. The implementation is identified by each run's `source-sha256.json`; all non-documentation source hashes were compared against the working tree before commit and matched. M0 milestone approval is pending final Astra review of the committed increment.
+Date: 2026-09-26. Baseline: `7e3076a`. Verified implementation: `1801c2a`. The implementation is identified by each run's `source-sha256.json`; all non-documentation source hashes were compared against the working tree before commit and matched. Independent Astra review approved M0 at `1801c2a`, with no blocking or major findings. The reviewer independently checked the current manifests, source hashes, native executable hash and runtime logs. Approval covers M0 only.
 
 ## Executed checks
 
