@@ -1,0 +1,7 @@
+model cq.fixture
+version "0.1.0"
+
+root data Note {
+  revision: i64
+  text: str
+}

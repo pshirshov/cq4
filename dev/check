@@ -1,0 +1,223 @@
+#!/usr/bin/env python3
+import contextlib
+import datetime
+import getpass
+import hashlib
+import json
+import os
+from pathlib import Path
+import shutil
+import socket
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+import uuid
+
+
+ROOT = Path(__file__).resolve().parent.parent
+COMMAND_TIMEOUT = 600
+STARTUP_TIMEOUT = 60
+SHUTDOWN_TIMEOUT = 20
+
+
+class Checks:
+    def __init__(self, evidence: Path, environment: dict[str, str]):
+        self.evidence = evidence
+        self.environment = environment
+        self.results: list[dict[str, object]] = []
+
+    def run(self, command: list[str], name: str, timeout: int):
+        print(f"Running {name}", flush=True)
+        path = self.evidence / f"{name}.log"
+        with path.open("w") as output:
+            result = subprocess.run(command, cwd=ROOT, env=self.environment, stdout=output,
+                                    stderr=subprocess.STDOUT, timeout=timeout)
+        self.results.append({"command": command, "exit": result.returncode, "log": str(path)})
+        self.save()
+        if result.returncode != 0:
+            print(path.read_text()[-12000:], file=sys.stderr)
+            raise RuntimeError(f"{name} failed with exit {result.returncode}; see {path}")
+        return path.read_text()
+
+    def save(self):
+        (self.evidence / "commands.json").write_text(json.dumps(self.results, indent=2) + "\n")
+
+    def sbt(self, commands: list[str], name: str):
+        return self.run(["sbt", "--server", "--batch", "--no-colors", ";" + ";".join(commands + ["exit"])], name, COMMAND_TIMEOUT)
+
+    def generate(self):
+        self.run([str(ROOT / "dev/generate")], "generate", COMMAND_TIMEOUT)
+        self.run(["npm", "ci", "--ignore-scripts"], "npm-ci", COMMAND_TIMEOUT)
+
+    def contracts(self):
+        self.generate()
+        first = generated_hashes()
+        self.run([str(ROOT / "dev/generate")], "generate-repeat", COMMAND_TIMEOUT)
+        if first != generated_hashes():
+            raise RuntimeError("Generated contracts changed across identical generation runs")
+        (self.evidence / "generated-sha256.json").write_text(json.dumps(first, indent=2) + "\n")
+        self.run(["npm", "run", "check"], "typescript-compile", COMMAND_TIMEOUT)
+        fixtures = self.evidence / "wire"
+        self.sbt([f"contracts/Test/runMain cq.contracts.ContractCheck export {fixtures}"], "scala-contract-export")
+        self.sbt([f"server/Test/runMain cq.server.ExportSchema {fixtures}/mcp-probe.json"], "mcp-schema-export")
+        for source, name in [
+            ("generated/typescript/cq/api/index.ts", "contracts"),
+            ("generated/typescript/BaboonSharedRuntime.ts", "contract-runtime"),
+            ("dev/evolution.ts", "evolution"),
+        ]:
+            self.run([str(ROOT / "node_modules/.bin/esbuild"), source, "--bundle", "--platform=node",
+                      "--format=esm", f"--outfile=.work/{name}.mjs"], f"bundle-{name}", COMMAND_TIMEOUT)
+        self.run(["node", "dev/contracts.mjs", str(fixtures)], "typescript-roundtrip", COMMAND_TIMEOUT)
+        self.sbt([f"contracts/Test/runMain cq.contracts.ContractCheck verify {fixtures}"], "scala-contract-verify")
+
+    @contextlib.contextmanager
+    def database(self):
+        provided = self.environment.get("CQ_TEST_DATABASE_URL")
+        if provided is not None:
+            parsed = urllib.parse.urlsplit(provided.removeprefix("jdbc:"))
+            if parsed.scheme != "postgresql" or parsed.username is not None or parsed.query:
+                raise ValueError("Provided database URL must be postgresql://host:port/database; supply credentials separately")
+            schema = "cq_test_" + uuid.uuid4().hex
+            self.environment["PGPASSWORD"] = self.environment["CQ_TEST_DATABASE_PASSWORD"]
+            command = ["psql", "--no-psqlrc", "--set", "ON_ERROR_STOP=1", "--host", parsed.hostname,
+                       "--port", str(parsed.port or 5432), "--dbname", parsed.path[1:],
+                       "--username", self.environment["CQ_TEST_DATABASE_USER"]]
+            self.run(command + ["--command", f'CREATE SCHEMA "{schema}"'], "database-create-schema", STARTUP_TIMEOUT)
+            self.environment.update(CQ_DATABASE_URL=f"jdbc:{provided.removeprefix('jdbc:')}?currentSchema={schema}",
+                                    CQ_DATABASE_USER=self.environment["CQ_TEST_DATABASE_USER"],
+                                    CQ_DATABASE_PASSWORD=self.environment["CQ_TEST_DATABASE_PASSWORD"])
+            try:
+                yield
+            finally:
+                self.run(command + ["--command", f'DROP SCHEMA "{schema}" CASCADE'], "database-drop-schema", SHUTDOWN_TIMEOUT)
+        else:
+            with tempfile.TemporaryDirectory(prefix="pg-", dir=ROOT / ".work") as temporary:
+                data = Path(temporary) / "data"
+                port = free_port()
+                self.run(["initdb", "-D", str(data), "--auth=trust", "--encoding=UTF8", "--no-locale"], "database-init", STARTUP_TIMEOUT)
+                self.run(["pg_ctl", "-D", str(data), "-l", str(self.evidence / "postgres.log"),
+                          "-o", f"-h 127.0.0.1 -p {port} -k {temporary}", "-w", "start"], "database-start", STARTUP_TIMEOUT)
+                self.environment.update(CQ_DATABASE_URL=f"jdbc:postgresql://127.0.0.1:{port}/postgres",
+                                        CQ_DATABASE_USER=getpass.getuser(), CQ_DATABASE_PASSWORD="")
+                try:
+                    yield
+                finally:
+                    self.run(["pg_ctl", "-D", str(data), "-m", "fast", "-w", "stop"], "database-stop", SHUTDOWN_TIMEOUT)
+
+    def classpath(self):
+        output = self.sbt(["server/compile", "show server/runtimeClasspath"], "server-classpath")
+        paths = [line.removeprefix("[info] ") for line in output.splitlines()
+                 if line.startswith("[info] /") and ".jar" in line]
+        if len(paths) != 1:
+            raise RuntimeError("Expected one exported sbt runtime classpath")
+        return paths[0]
+
+    def transport(self, command: list[str], name: str):
+        port = free_port()
+        self.environment.update(CQ_HOST="127.0.0.1", CQ_PORT=str(port), CQ_ORIGIN=f"http://127.0.0.1:{port}",
+                                CQ_TOKEN=uuid.uuid4().hex, CQ_PROJECT_ID="00000000-0000-0000-0000-000000000001")
+        with (self.evidence / f"{name}-server.log").open("w") as log:
+            process = subprocess.Popen(command, cwd=ROOT, env=self.environment, stdout=log, stderr=subprocess.STDOUT)
+            try:
+                deadline = time.monotonic() + STARTUP_TIMEOUT
+                request = urllib.request.Request(self.environment["CQ_ORIGIN"] + "/api/hello",
+                                                 headers={"Authorization": "Bearer " + self.environment["CQ_TOKEN"]})
+                while True:
+                    if process.poll() is not None:
+                        raise RuntimeError(f"{name} server exited {process.returncode}; see {name}-server.log")
+                    try:
+                        with urllib.request.urlopen(request, timeout=1) as response:
+                            if response.status == 200:
+                                break
+                    except (urllib.error.URLError, TimeoutError):
+                        pass
+                    if time.monotonic() >= deadline:
+                        raise RuntimeError(f"{name} server startup deadline exceeded")
+                    time.sleep(0.1)
+                self.run(["node", "dev/transport.mjs"], f"{name}-transport", STARTUP_TIMEOUT)
+            finally:
+                if process.poll() is None:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=SHUTDOWN_TIMEOUT)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait(timeout=SHUTDOWN_TIMEOUT)
+                        raise RuntimeError(f"{name} server failed graceful shutdown")
+
+    def postgres(self):
+        self.generate()
+        classpath = self.classpath()
+        with self.database():
+            self.sbt(["server/testOnly *Postgres"], "postgres-contract")
+            self.transport(["java", "-cp", classpath, "cq.server.Main"], "jvm")
+
+    def native(self):
+        self.generate()
+        classpath = self.classpath()
+        config = self.evidence / "native-config"
+        config.mkdir()
+        binary = self.evidence / "cq"
+        with self.database():
+            self.transport(["java", f"-agentlib:native-image-agent=config-output-dir={config}",
+                            "-cp", classpath, "cq.server.Main"], "native-agent")
+            self.run(["native-image", "--no-fallback", "-march=compatibility", "-O1", "-J-Xmx8g",
+                      f"-H:ConfigurationFileDirectories={config}", "-cp", classpath,
+                      "cq.server.Main", str(binary)], "native-image", COMMAND_TIMEOUT)
+            self.transport([str(binary)], "native")
+
+
+def free_port():
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        return listener.getsockname()[1]
+
+
+def generated_hashes():
+    return {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in sorted((ROOT / "generated").rglob("*")) if path.is_file()}
+
+
+def main():
+    if len(sys.argv) != 2 or sys.argv[1] not in ["contracts", "fast", "postgres", "process", "browser", "native"]:
+        raise SystemExit("Usage: ./dev/check contracts|fast|postgres|process|browser|native")
+    if shutil.which("java") is None or shutil.which("sbt") is None:
+        os.chdir(ROOT)
+        os.execvp("nix", ["nix", "develop", "-c", str(ROOT / "dev/check"), sys.argv[1]])
+    (ROOT / ".work").mkdir(exist_ok=True)
+    identifier = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S") + "-" + sys.argv[1]
+    evidence = Path(os.environ.get("CQ_EVIDENCE_ROOT", str(ROOT / ".work/evidence"))) / identifier
+    evidence.mkdir(parents=True)
+    print(f"Evidence: {evidence}", flush=True)
+    checks = Checks(evidence, dict(os.environ))
+    command = sys.argv[1]
+    files = subprocess.check_output(["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"], cwd=ROOT).decode().split("\0")
+    source = {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in sorted(set(files)) if name and (ROOT / name).is_file()}
+    (evidence / "source-sha256.json").write_text(json.dumps(source, indent=2) + "\n")
+    summary = {"check": command, "baseline": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT).decode().strip(),
+               "status": "running", "sourceManifest": "source-sha256.json"}
+    result_file = evidence / "result.json"
+    result_file.write_text(json.dumps(summary, indent=2) + "\n")
+    try:
+        if command == "fast":
+            checks.generate()
+            checks.sbt(["server/testOnly *Dummy"], "dummy-contract")
+        elif command in ["process", "browser"]:
+            raise RuntimeError(f"UNAVAILABLE: {command} coverage has not been implemented")
+        else:
+            getattr(checks, command)()
+    except BaseException as failure:
+        summary.update(status="failed", error=str(failure))
+        result_file.write_text(json.dumps(summary, indent=2) + "\n")
+        raise
+    summary["status"] = "passed"
+    result_file.write_text(json.dumps(summary, indent=2) + "\n")
+    print(f"PASS: {command}; evidence {evidence}", flush=True)
+
+
+if __name__ == "__main__":
+    main()

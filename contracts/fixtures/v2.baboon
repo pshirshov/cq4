@@ -1,0 +1,8 @@
+model cq.fixture
+version "0.2.0"
+
+root data Note {
+  revision: i64
+  text: str
+  annotation: opt[str]
+}

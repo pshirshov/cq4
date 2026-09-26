@@ -1,0 +1,27 @@
+import assert from 'node:assert/strict';
+import { readFile, writeFile } from 'node:fs/promises';
+import { Probe_JsonCodec, ApiError_JsonCodec } from '../.work/contracts.mjs';
+import { BaboonCodecContext } from '../.work/contract-runtime.mjs';
+import { checkEvolution } from '../.work/evolution.mjs';
+import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv';
+
+const directory = process.argv[2];
+assert.ok(directory, 'Expected fixture directory');
+const context = BaboonCodecContext.Default;
+const probe = Probe_JsonCodec.instance.decode(context, JSON.parse(await readFile(`${directory}/scala-probe.json`, 'utf8')));
+assert.equal(probe.revision.value, 9007199254740993n);
+assert.equal(probe.text, 'round trip λ');
+const error = ApiError_JsonCodec.instance.decode(context, JSON.parse(await readFile(`${directory}/scala-error.json`, 'utf8')));
+assert.equal(error.expected.value, 9007199254740993n);
+assert.equal(error.actual.value, 9223372036854775807n);
+await writeFile(`${directory}/typescript-probe.json`, JSON.stringify(Probe_JsonCodec.instance.encode(context, probe)));
+await writeFile(`${directory}/typescript-error.json`, JSON.stringify(ApiError_JsonCodec.instance.encode(context, error)));
+checkEvolution();
+const schema = JSON.parse(await readFile(`${directory}/mcp-probe.json`, 'utf8'));
+const validate = new AjvJsonSchemaValidator().getValidator(schema.inputSchema);
+const encoded = Probe_JsonCodec.instance.encode(context, probe);
+assert.equal(validate(encoded).valid, true);
+assert.equal(validate({ ...encoded, revision: { value: 9007199254740992 } }).valid, false);
+assert.equal(validate({ ...encoded, project: { value: 'invalid' } }).valid, false);
+assert.equal(validate({ project: encoded.project, revision: encoded.revision }).valid, false);
+console.log('TypeScript codec round trips, evolution and MCP schema examples passed');

@@ -1,0 +1,23 @@
+model cq.api
+version "0.1.0"
+
+root id ProjectId { value: uid }
+root id Revision { value: i64 }
+
+root data Probe {
+  project: ProjectId
+  revision: Revision
+  text: str
+}
+
+root adt ApiError {
+  data InvalidInput { message: str }
+  data Unauthorized { message: str }
+  data Conflict { expected: Revision actual: Revision }
+  data UnsupportedVersion { requested: str supported: lst[str] }
+}
+
+root data ProtocolHello {
+  version: str
+  supported: lst[str]
+}

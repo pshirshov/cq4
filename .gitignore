@@ -1,0 +1,12 @@
+.direnv/
+.tools/
+.work/
+target/
+project/target/
+project/project/
+node_modules/
+web/dist/
+generated/
+.bsp/
+.bloop/
+metals.sbt

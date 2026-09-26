@@ -1,0 +1,11 @@
+{
+  "scheme" : 2,
+  "locks" : {
+    "cq.api" : [
+      {
+        "version" : "0.1.0",
+        "sigId" : "5c163ae06c6b9e7859fbaad5131cda77bd04c4a823e73065ee50a9a24e85a4bc"
+      }
+    ]
+  }
+}

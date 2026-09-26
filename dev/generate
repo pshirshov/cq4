@@ -1,0 +1,78 @@
+#!/usr/bin/env python3
+import hashlib
+import os
+from pathlib import Path
+import subprocess
+import urllib.request
+
+
+ROOT = Path(__file__).resolve().parent.parent
+VERSION = "0.0.196"
+SHA256 = "9b4b5dd4b8756e5485b95dd2b1631cba4e262e412987c457666c37ced2e3279c"
+
+
+def replace_once(path, before, after):
+    content = path.read_text()
+    if content.count(before) != 1:
+        raise RuntimeError(f"Baboon compatibility patch no longer matches {path}")
+    path.write_text(content.replace(before, after))
+
+
+def scala3_runtime():
+    runtime = ROOT / "generated" / "scala"
+    tools = runtime / "BaboonTools.scala"
+    for body, condition in [
+        ("""        byteRead = input.readByte() & 0xFF // Read unsigned byte
+        length |= (byteRead & 0x7F) << shift
+        shift += 7""", "(byteRead & 0x80) != 0"),
+        ("""        var currentByte = (value & 0x7F).toByte
+        value >>>= 7
+        if (value != 0) currentByte = (currentByte | 0x80).toByte
+        output.writeByte(currentByte.toInt)""", "value != 0"),
+    ]:
+        replace_once(tools, f"      do {{\n{body}\n      }} while ({condition})",
+                     f"      while ({{\n{body}\n        {condition}\n      }}) ()")
+    replace_once(runtime / "BaboonCodecsFacade.scala", "convert(value).toOption",
+                 "convert[TI, TO](value).toOption")
+    replace_once(runtime / "BaboonCodecsFacade.scala",
+                 "def tryConvert[TI <: BaboonGenerated, TO <: BaboonGeneratedLatest]",
+                 "def tryConvert[TI <: BaboonGenerated, TO <: BaboonGeneratedLatest: ClassTag]")
+
+
+def main():
+    binary = Path(os.environ.get("CQ_BABOON", str(ROOT / ".tools" / f"baboon-{VERSION}")))
+    if not binary.exists():
+        binary.parent.mkdir(parents=True, exist_ok=True)
+        url = f"https://github.com/7mind/baboon/releases/download/v{VERSION}/baboon-linux-amd64"
+        with urllib.request.urlopen(url) as response:
+            content = response.read()
+        if hashlib.sha256(content).hexdigest() != SHA256:
+            raise RuntimeError("Baboon download checksum mismatch")
+        binary.write_bytes(content)
+        binary.chmod(0o755)
+    if hashlib.sha256(binary.read_bytes()).hexdigest() != SHA256:
+        raise RuntimeError("Baboon binary checksum mismatch")
+    subprocess.run([
+        str(binary), "--model-dir", "models", "--lockfile", "models/baboon.lock",
+        "--lockfile-update", "create-only", "--lockfile-enforcement", "all-versions",
+        ":scala", "--output", "generated/scala", "--generate-json-codecs-by-default=true",
+        "--generate-ueba-codecs-by-default=true",
+        ":typescript", "--output", "generated/typescript", "--ts-import-suffix", ".js",
+        "--generate-json-codecs-by-default=true", "--generate-ueba-codecs-by-default=true",
+    ], cwd=ROOT, check=True)
+    scala3_runtime()
+    subprocess.run([
+        str(binary), "--model-dir", "contracts/fixtures",
+        "--lockfile", "contracts/fixtures/baboon.lock", "--lockfile-update", "create-only",
+        "--lockfile-enforcement", "all-versions",
+        ":scala", "--output", "generated/fixtures/scala", "--runtime", "without",
+        "--generate-json-codecs-by-default=true", "--generate-ueba-codecs-by-default=true",
+        "--enable-deprecated-encoders=true",
+        ":typescript", "--output", "generated/fixtures/typescript",
+        "--generate-json-codecs-by-default=true", "--generate-ueba-codecs-by-default=true",
+        "--ts-import-suffix", ".js",
+    ], cwd=ROOT, check=True)
+
+
+if __name__ == "__main__":
+    main()
