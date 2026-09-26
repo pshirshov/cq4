@@ -73,8 +73,8 @@ private final class DummyLedgerTransaction(initial: DummyLedgerState) extends Le
     changed
   }
   override def historical(id: ItemId, revision: Revision): Option[HistoryEntry] = state.history.get((id, revision))
-  override def history(id: ItemId, before: Revision, limit: Int): List[HistoryEntry] =
-    state.history.iterator.collect { case ((`id`, revision), value) if revision.value < before.value => value }.toList.sortBy(e => -e.item.item.revision.value).take(limit)
+  override def history(id: ItemId, before: Revision, limit: Int): ReadPage[HistoryEntry] =
+    ReadPage.select(state.history.iterator.collect { case ((`id`, revision), value) if revision.value < before.value => value }.toList.sortBy(e => -e.item.item.revision.value).iterator, limit, HistoryEntry_JsonCodec)
   override def append(entry: HistoryEntry): Unit = {
     val key = (entry.item.item.id, entry.item.item.revision)
     require(!state.history.contains(key), "Duplicate history revision")
@@ -91,15 +91,16 @@ private final class DummyLedgerTransaction(initial: DummyLedgerState) extends Le
     state = state.copy(cursor = next.value, events = state.events :+ ChangeEvent(next, request, items))
     next
   }
-  override def changes(after: ChangeCursor, limit: Int): List[ChangeEvent] = state.events.filter(_.cursor.value > after.value).take(limit)
-  override def scan(filter: ItemFilter, after: Option[ItemId], limit: Int): List[Item] = {
-    state.items.valuesIterator.filter { item =>
+  override def changes(after: ChangeCursor, limit: Int): ReadPage[ChangeEvent] = ReadPage.select(state.events.iterator.filter(_.cursor.value > after.value), limit, ChangeEvent_JsonCodec)
+  override def scan(filter: ItemFilter, after: Option[ItemId], limit: Int): ReadPage[ItemSummary] = {
+    val candidates = state.items.valuesIterator.filter { item =>
       filter.ledger.forall(_ == item.id.ledger) && (filter.archived match {
         case ArchiveFilter.Active => !item.draft.archived
         case ArchiveFilter.Archived => item.draft.archived
         case ArchiveFilter.All => true
       }) && after.forall(id => Ordering[(String, Long)].gt(LedgerPolicy.key(item.id), LedgerPolicy.key(id)))
-    }.toList.sortBy(i => LedgerPolicy.key(i.id)).take(limit)
+    }.toList.sortBy(i => LedgerPolicy.key(i.id)).iterator.map(LedgerPolicy.summary)
+    ReadPage.select(candidates, limit, ItemSummary_JsonCodec)
   }
   override def claim(id: ItemId): Option[Claim] = state.members.get(id).flatMap(state.claims.get)
   override def claimById(id: ClaimId): Option[Claim] = state.claims.get(id)

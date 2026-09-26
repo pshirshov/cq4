@@ -166,7 +166,7 @@ class App {
       this.items.replaceChildren();
       if (result.page.items.length === 0) this.items.append(element('p', 'No matching items.'));
       for (const item of result.page.items) {
-        const row = button(`${itemName(item.id)} · ${item.draft.title}${item.draft.archived ? ' · archived' : ''}`, () => this.action(() => this.select(item.id)));
+        const row = button(`${itemName(item.id)} · ${item.title}${item.archived ? ' · archived' : ''}`, () => this.action(() => this.select(item.id)));
         row.className = 'item-row'; this.items.append(row);
       }
       const subscription = this.connection().subscribe(project, result.page.cursor); this.subscription = subscription.id.value;

@@ -171,6 +171,27 @@ abstract class LedgerContractTest extends SpecZIO with AssertZIO {
       } yield ()
     }
 
+    "return compact discovery and byte-bounded history pages with lossless continuation" in { (service: LedgerService[IO]) =>
+      val owner = scope()
+      val large = task("Large narrative").copy(body = "x" * 60000,
+        content = Content.Task(TaskStatus.Ready, List("a" * 60000), Some("r" * 60000), Nil))
+      for {
+        _ <- service.initialize(owner, "bounded pages")
+        first <- create(service, owner, large)
+        _ <- ZIO.foreach((1L to 5L).toList)(revision => service.change(owner,
+          request(List(Mutation.Replace(first.id, Revision(revision), large.copy(title = s"Revision ${revision + 1}"))), Nil)))
+        discovery <- service.search(owner, ItemFilter(None, ArchiveFilter.All), None, 200)
+        _ <- assertIO(Wire.encode(ItemPage_JsonCodec, discovery).getBytes(java.nio.charset.StandardCharsets.UTF_8).length < 4096)
+        one <- service.history(owner, first.id, Revision(Long.MaxValue), 200)
+        historyCount = one.entries.size
+        historyBytes = Wire.encode(HistoryPage_JsonCodec, one).getBytes(java.nio.charset.StandardCharsets.UTF_8).length
+        _ <- assertIO(historyCount > 0 && one.hasMore && historyBytes < 525000)
+        two <- service.history(owner, first.id, one.entries.last.item.item.revision, 200)
+        three <- service.history(owner, first.id, two.entries.last.item.item.revision, 200)
+        _ <- assertIO(!three.hasMore && (one.entries ++ two.entries ++ three.entries).map(_.item.item.revision.value) == List(6L, 5L, 4L, 3L, 2L, 1L))
+      } yield ()
+    }
+
     "restore historical relationships and append both endpoint histories atomically" in { (service: LedgerService[IO]) =>
       val owner = scope()
       for {

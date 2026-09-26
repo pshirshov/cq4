@@ -98,7 +98,8 @@ root data ChangeEvent { cursor: ChangeCursor request: RequestId items: lst[ItemR
 root data ChangePage { cursor: ChangeCursor events: lst[ChangeEvent] hasMore: bit }
 enum ArchiveFilter { Active Archived All }
 root data ItemFilter { ledger: opt[Ledger] archived: ArchiveFilter }
-root data ItemPage { items: lst[Item] cursor: ChangeCursor after: opt[ItemId] hasMore: bit }
+root data ItemSummary { id: ItemId revision: Revision title: str status: str archived: bit labels: set[str] updatedAt: i64 }
+root data ItemPage { items: lst[ItemSummary] cursor: ChangeCursor after: opt[ItemId] hasMore: bit }
 root data HistoryPage { entries: lst[HistoryEntry] hasMore: bit }
 root adt Fault {
   data Invalid { message: str }

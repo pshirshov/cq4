@@ -170,24 +170,22 @@ object LedgerService {
     override def search(scope: Scope, filter: ItemFilter, after: Option[ItemId], limit: Int): F[Throwable, ItemPage] = repository.transact(scope.project) { tx =>
       page(limit)
       after.foreach(inScope(scope, _))
-      val found = tx.scan(filter, after, limit + 1)
-      val items = found.take(limit)
-      ItemPage(items, tx.cursor, items.lastOption.map(_.id), found.size > limit)
+      val found = tx.scan(filter, after, limit)
+      ItemPage(found.entries, tx.cursor, found.entries.lastOption.map(_.id), found.hasMore)
     }
 
     override def history(scope: Scope, id: ItemId, before: Revision, limit: Int): F[Throwable, HistoryPage] = repository.transact(scope.project) { tx =>
       page(limit)
       required(tx, scope, id)
-      val entries = tx.history(id, before, limit + 1)
-      HistoryPage(entries.take(limit), entries.size > limit)
+      val entries = tx.history(id, before, limit)
+      HistoryPage(entries.entries, entries.hasMore)
     }
 
     override def changes(scope: Scope, after: ChangeCursor, limit: Int): F[Throwable, ChangePage] = repository.transact(scope.project) { tx =>
       page(limit)
       if (after.value < 0 || after.value > tx.cursor.value) throw DomainFailure(Fault.Resync("Cursor outside retained stream"))
-      val entries = tx.changes(after, limit + 1)
-      val events = entries.take(limit)
-      ChangePage(events.lastOption.map(_.cursor).getOrElse(after), events, entries.size > limit)
+      val entries = tx.changes(after, limit)
+      ChangePage(entries.entries.lastOption.map(_.cursor).getOrElse(after), entries.entries, entries.hasMore)
     }
 
     private def duration(value: Long): Unit = invalid(value > 0 && value <= MaxClaimMillis, s"Claim duration must be 1–$MaxClaimMillis ms")

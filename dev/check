@@ -5,6 +5,7 @@ import getpass
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import socket
@@ -47,7 +48,10 @@ class Checks:
         (self.evidence / "commands.json").write_text(json.dumps(self.results, indent=2) + "\n")
 
     def sbt(self, commands: list[str], name: str):
-        return self.run(["sbt", "--server", "--batch", "--no-colors", ";" + ";".join(commands + ["exit"])], name, COMMAND_TIMEOUT)
+        output = self.run(["sbt", "--server", "--batch", "--no-colors", ";" + ";".join(commands + ["exit"])], name, COMMAND_TIMEOUT)
+        if any("testOnly" in command for command in commands):
+            verify_test_report(output)
+        return output
 
     def generate(self):
         self.run([str(ROOT / "dev/generate")], "generate", COMMAND_TIMEOUT)
@@ -197,6 +201,14 @@ class Checks:
                       f"-H:ConfigurationFileDirectories={config}", "-cp", classpath,
                       "cq.server.Main", str(binary)], "native-image", COMMAND_TIMEOUT)
             self.transport([str(binary)], "native", False)
+
+
+def verify_test_report(output: str):
+    summaries = re.findall(r"Tests: succeeded (\d+), failed (\d+), canceled (\d+), ignored (\d+), pending (\d+)", output)
+    if not summaries or any(int(values[0]) == 0 or any(int(value) != 0 for value in values[1:]) for values in summaries):
+        raise RuntimeError("Required test report is absent, failed or incomplete, regardless of sbt exit status")
+    if "*** FAILED ***" in output or "*** ABORTED ***" in output:
+        raise RuntimeError("Required test report contains failure/abort despite sbt exit status")
 
 
 def free_port():

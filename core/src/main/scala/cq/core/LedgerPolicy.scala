@@ -173,6 +173,9 @@ object LedgerPolicy {
     }
   }
 
+  def summary(item: Item): ItemSummary = ItemSummary(item.id, item.revision, item.draft.title,
+    status(item.draft.content), item.draft.archived, item.draft.labels, item.updatedAt)
+
   def inverse(relation: Relation): Relation = relation match {
     case Relation.DerivedFrom => Relation.Produces
     case Relation.Produces => Relation.DerivedFrom

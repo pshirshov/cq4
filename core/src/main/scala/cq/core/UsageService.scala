@@ -192,9 +192,8 @@ object UsageService {
     override def audit(scope: Scope, value: UsageFilter, after: Long, limit: Int): F[Throwable, UsagePage] = repository.read(scope.project) { reader =>
       filter(scope, value)
       invalid(limit > 0 && limit <= ReadBatch && after >= 0, "Invalid audit page bounds")
-      val entries = reader.audit(value, after, limit + 1)
-      val page = entries.take(limit)
-      UsagePage(page, page.lastOption.fold(after)(_.sequence), entries.size > limit, reader.cursor)
+      val page = reader.audit(value, after, limit)
+      UsagePage(page.entries, page.entries.lastOption.fold(after)(_.sequence), page.hasMore, reader.cursor)
     }
   }
 }

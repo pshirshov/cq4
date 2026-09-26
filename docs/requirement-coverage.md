@@ -16,13 +16,13 @@ Requirements: [R01–R31](drafts/20260926-0957-cq-requirements-prompt.md). Miles
 | R10 History | M1, M3 | In progress | Creation/edit/archive/edge history and full content/relationship restore pass both adapters, including neighbor revisions, claims and rollback; [increment evidence](validation/m1-core.md) |
 | R11 Atomic IDs | M1 | In progress | Concurrent per-project/ledger allocation and duplicate request replay pass; whole-server SIGKILL/restart preserves counters and acknowledgements; [increment evidence](validation/m1-core.md) |
 | R12 PostgreSQL | M0, M1, M6 | In progress | Versioned DDL and real PostgreSQL transactions pass shared ledger scenarios; backup/restore remains M6; [increment evidence](validation/m1-core.md) |
-| R13 Lean MCP | M1, M4 | In progress | Five ordinary capabilities; generated schemas include only referenced definitions. Compact search projections, dispatch and measured token budgets remain. [Interface evidence](validation/m1-interfaces.md) |
+| R13 Lean MCP | M1, M4 | In progress | Five ordinary capabilities; generated schemas include only referenced definitions. Compact search projections and byte-bounded pages implemented; dispatch and measured token budgets remain. [Interface evidence](validation/m1-interfaces.md) |
 | R14 Archive attribute | M1 | In progress | Archive field, default omission, direct read and restoration pass shared scenarios; browser/CLI archive filters implemented; [increment evidence](validation/m1-core.md) |
 | R15 Query language | M1, M3 | In progress | Typed ledger/archive filter and stable ID ordering implemented; complete shared grammar remains M3; [increment evidence](validation/m1-core.md) |
 | R16 Cohorts | M4 | Not started | — |
 | R17 Canonical refs | M1, M3 | In progress | Canonical/inverse rows, endpoint history, duplicate normalization and project checks implemented; graph checks remain; [increment evidence](validation/m1-core.md) |
 | R18 Worksets | M3 | Not started | — |
-| R19 Bounded work | M3 | Not started | — |
+| R19 Bounded work | M1, M3 | In progress | Summary-only discovery and byte-bounded streaming pages; affected-row mutations. Aggregate limits and scale/query-plan evidence remain. [Read bounds](validation/m1-read-bounds.md) |
 | R20 Project identity | M1 | In progress | UUID project service initialization/reattachment tested; CLI concurrent init, worktrees, moves, explicit reattachment and revision-checked display rename pass, including whole-server restart. [Interface evidence](validation/m1-interfaces.md); [increment evidence](validation/m1-core.md) |
 | R21 Supervision | M2 | Not started | — |
 | R22 Privilege separation | M1, M2, M4 | In progress | Service mutation roles enforced; signed project/role credentials and tool-call restrictions tested; native harness restrictions remain. [Interface evidence](validation/m1-interfaces.md); [increment evidence](validation/m1-core.md) |

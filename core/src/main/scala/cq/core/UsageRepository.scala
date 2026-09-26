@@ -19,7 +19,7 @@ trait UsageReader {
   def outcome(request: RequestId): Option[AttemptOutcome]
   def meters(filter: UsageFilter, after: Option[MeterKey], limit: Int): List[MeterView]
   def attemptsWithoutMeters(filter: UsageFilter): Long
-  def audit(filter: UsageFilter, after: Long, limit: Int): List[RecordedUsage]
+  def audit(filter: UsageFilter, after: Long, limit: Int): ReadPage[RecordedUsage]
 }
 
 trait UsageTransaction extends UsageReader {

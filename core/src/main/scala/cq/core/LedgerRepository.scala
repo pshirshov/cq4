@@ -23,13 +23,13 @@ trait LedgerTransaction {
   def refs(id: ItemId): List[ItemRef]
   def edge(edge: CanonicalEdge, present: Boolean): Boolean
   def historical(id: ItemId, revision: Revision): Option[HistoryEntry]
-  def history(id: ItemId, before: Revision, limit: Int): List[HistoryEntry]
+  def history(id: ItemId, before: Revision, limit: Int): ReadPage[HistoryEntry]
   def append(entry: HistoryEntry): Unit
   def request(actor: Actor, id: RequestId): Option[StoredRequest]
   def acknowledge(actor: Actor, value: StoredRequest): Unit
   def publish(request: RequestId, items: List[ItemRevision]): ChangeCursor
-  def changes(after: ChangeCursor, limit: Int): List[ChangeEvent]
-  def scan(filter: ItemFilter, after: Option[ItemId], limit: Int): List[Item]
+  def changes(after: ChangeCursor, limit: Int): ReadPage[ChangeEvent]
+  def scan(filter: ItemFilter, after: Option[ItemId], limit: Int): ReadPage[ItemSummary]
   def claim(id: ItemId): Option[Claim]
   def claimById(id: ClaimId): Option[Claim]
   def saveClaim(claim: Claim): Unit

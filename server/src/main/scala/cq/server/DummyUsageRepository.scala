@@ -91,6 +91,6 @@ private final class DummyUsageTransaction(initial: DummyUsageState) extends Usag
         MeterView(state.assignments(attempt.assignment), attempt, meter, projection)
       }
   override def attemptsWithoutMeters(filter: UsageFilter): Long = state.attempts.valuesIterator.count(a => matches(filter, a) && !state.meters.keysIterator.exists(_.attempt == a.id)).toLong
-  override def audit(filter: UsageFilter, after: Long, limit: Int): List[RecordedUsage] =
-    state.observations.valuesIterator.filter(r => r.sequence > after && matches(filter, state.attempts(r.upload.observation.attempt))).toList.sortBy(_.sequence).take(limit)
+  override def audit(filter: UsageFilter, after: Long, limit: Int): ReadPage[RecordedUsage] =
+    ReadPage.select(state.observations.valuesIterator.filter(r => r.sequence > after && matches(filter, state.attempts(r.upload.observation.attempt))).toList.sortBy(_.sequence).iterator, limit, RecordedUsage_JsonCodec)
 }

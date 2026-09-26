@@ -1,5 +1,7 @@
 package cq.server
 
+import baboon.runtime.shared.BaboonJsonCodec
+import cq.core.ReadPage
 import java.sql.{Connection, DriverManager, PreparedStatement, ResultSet}
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
@@ -45,6 +47,16 @@ private[server] final class Jdbc(connection: Connection) {
     statement.execute()
     statement.getUpdateCount
   }
+
+  def page[A](sql: String, limit: Int, codec: BaboonJsonCodec[A])(bind: PreparedStatement => Unit): ReadPage[A] =
+    Using.resource(connection.prepareStatement(sql)) { statement =>
+      statement.setFetchSize(1)
+      bind(statement)
+      Using.resource(statement.executeQuery()) { rows =>
+        val values = Iterator.continually(rows.next()).takeWhile(identity).map(_ => Wire.decode(codec, rows.getString(1)))
+        ReadPage.select(values, limit, codec)
+      }
+    }
 
   def query[A](sql: String)(bind: PreparedStatement => Unit)(read: ResultSet => A): List[A] =
     Using.resource(connection.prepareStatement(sql)) { statement =>

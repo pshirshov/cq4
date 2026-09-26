@@ -22,6 +22,7 @@ CREATE TABLE cq_items (
   narrative text NOT NULL,
   search_vector tsvector GENERATED ALWAYS AS (to_tsvector('simple', title || ' ' || narrative)) STORED,
   body jsonb NOT NULL,
+  summary jsonb NOT NULL,
   PRIMARY KEY (project_id, ledger, number)
 );
 CREATE INDEX cq_items_active ON cq_items (project_id, ledger, number) WHERE NOT archived;

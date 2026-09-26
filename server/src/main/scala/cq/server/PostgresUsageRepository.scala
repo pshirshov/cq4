@@ -155,8 +155,8 @@ private final class PostgresUsageTransaction(connection: Connection, project: Pr
     sql.query("SELECT count(*) FROM cq_usage_attempts t JOIN cq_usage_assignments a USING(project_id, assignment_id) WHERE t.project_id = ?" + filterSql(filter) +
       " AND NOT EXISTS (SELECT 1 FROM cq_usage_meters m WHERE m.project_id = t.project_id AND m.attempt_id = t.attempt_id)")(s => { bindFilter(s, filter); () })(_.getLong(1)).head
 
-  override def audit(filter: UsageFilter, after: Long, limit: Int): List[RecordedUsage] =
-    sql.query("SELECT r.body::text FROM cq_usage_records r" + JoinedScope + "WHERE r.project_id = ?" + filterSql(filter) + " AND r.sequence > ? ORDER BY r.sequence LIMIT ?") { s =>
-      val index = bindFilter(s, filter); s.setLong(index, after); s.setInt(index + 1, limit)
-    }(r => Wire.decode(RecordedUsage_JsonCodec, r.getString(1)))
+  override def audit(filter: UsageFilter, after: Long, limit: Int): ReadPage[RecordedUsage] =
+    sql.page("SELECT r.body::text FROM cq_usage_records r" + JoinedScope + "WHERE r.project_id = ?" + filterSql(filter) + " AND r.sequence > ? ORDER BY r.sequence LIMIT ?", limit, RecordedUsage_JsonCodec) { s =>
+      val index = bindFilter(s, filter); s.setLong(index, after); s.setInt(index + 1, limit + 1)
+    }
 }

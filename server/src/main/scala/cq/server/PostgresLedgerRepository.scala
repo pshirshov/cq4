@@ -71,13 +71,13 @@ private final class PostgresLedgerTransaction(connection: Connection, override v
   override def get(id: ItemId): Option[Item] = sql.query("SELECT body::text FROM cq_items WHERE project_id = ? AND ledger = ? AND number = ?")(itemKey(_, id))(r => Wire.decode(Item_JsonCodec, r.getString(1))).headOption
 
   override def put(item: Item): Unit = {
-    sql.execute("INSERT INTO cq_items(project_id, ledger, number, revision, schema_version, archived, status, title, narrative, body) " +
-      "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb) ON CONFLICT(project_id, ledger, number) DO UPDATE SET " +
+    sql.execute("INSERT INTO cq_items(project_id, ledger, number, revision, schema_version, archived, status, title, narrative, body, summary) " +
+      "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?::jsonb) ON CONFLICT(project_id, ledger, number) DO UPDATE SET " +
       "revision = EXCLUDED.revision, schema_version = EXCLUDED.schema_version, archived = EXCLUDED.archived, " +
-      "status = EXCLUDED.status, title = EXCLUDED.title, narrative = EXCLUDED.narrative, body = EXCLUDED.body") { s =>
+      "status = EXCLUDED.status, title = EXCLUDED.title, narrative = EXCLUDED.narrative, body = EXCLUDED.body, summary = EXCLUDED.summary") { s =>
       itemKey(s, item.id); s.setLong(4, item.revision.value); s.setString(5, item.baboonDomainVersion)
       s.setBoolean(6, item.draft.archived); s.setString(7, LedgerPolicy.status(item.draft.content))
-      s.setString(8, item.draft.title); s.setString(9, item.draft.body); s.setString(10, Wire.encode(Item_JsonCodec, item))
+      s.setString(8, item.draft.title); s.setString(9, item.draft.body); s.setString(10, Wire.encode(Item_JsonCodec, item)); s.setString(11, Wire.encode(ItemSummary_JsonCodec, LedgerPolicy.summary(item)))
     }
     ()
   }
@@ -105,10 +105,10 @@ private final class PostgresLedgerTransaction(connection: Connection, override v
       itemKey(s, id); s.setLong(4, revision.value)
     }(r => Wire.decode(HistoryEntry_JsonCodec, r.getString(1))).headOption
 
-  override def history(id: ItemId, before: Revision, limit: Int): List[HistoryEntry] =
-    sql.query("SELECT body::text FROM cq_history WHERE project_id = ? AND ledger = ? AND number = ? AND revision < ? ORDER BY revision DESC LIMIT ?") { s =>
-      itemKey(s, id); s.setLong(4, before.value); s.setInt(5, limit)
-    }(r => Wire.decode(HistoryEntry_JsonCodec, r.getString(1)))
+  override def history(id: ItemId, before: Revision, limit: Int): ReadPage[HistoryEntry] =
+    sql.page("SELECT body::text FROM cq_history WHERE project_id = ? AND ledger = ? AND number = ? AND revision < ? ORDER BY revision DESC LIMIT ?", limit, HistoryEntry_JsonCodec) { s =>
+      itemKey(s, id); s.setLong(4, before.value); s.setInt(5, limit + 1)
+    }
 
   override def append(entry: HistoryEntry): Unit = {
     sql.execute("INSERT INTO cq_history(project_id, ledger, number, revision, schema_version, body) VALUES (?, ?, ?, ?, ?, ?::jsonb)") { s =>
@@ -139,12 +139,12 @@ private final class PostgresLedgerTransaction(connection: Connection, override v
     next
   }
 
-  override def changes(after: ChangeCursor, limit: Int): List[ChangeEvent] =
-    sql.query("SELECT body::text FROM cq_changes WHERE project_id = ? AND cursor > ? ORDER BY cursor LIMIT ?") { s =>
-      projectKey(s); s.setLong(2, after.value); s.setInt(3, limit)
-    }(r => Wire.decode(ChangeEvent_JsonCodec, r.getString(1)))
+  override def changes(after: ChangeCursor, limit: Int): ReadPage[ChangeEvent] =
+    sql.page("SELECT body::text FROM cq_changes WHERE project_id = ? AND cursor > ? ORDER BY cursor LIMIT ?", limit, ChangeEvent_JsonCodec) { s =>
+      projectKey(s); s.setLong(2, after.value); s.setInt(3, limit + 1)
+    }
 
-  override def scan(filter: ItemFilter, after: Option[ItemId], limit: Int): List[Item] = {
+  override def scan(filter: ItemFilter, after: Option[ItemId], limit: Int): ReadPage[ItemSummary] = {
     val ledgerFilter = filter.ledger.fold("")(_ => " AND ledger = ?")
     val archiveFilter = filter.archived match {
       case ArchiveFilter.Active => " AND NOT archived"
@@ -152,13 +152,13 @@ private final class PostgresLedgerTransaction(connection: Connection, override v
       case ArchiveFilter.All => ""
     }
     val pagination = after.fold("")(_ => " AND (ledger, number) > (?, ?)")
-    sql.query(s"SELECT body::text FROM cq_items WHERE project_id = ?$ledgerFilter$archiveFilter$pagination ORDER BY ledger, number LIMIT ?") { s =>
+    sql.page(s"SELECT summary::text FROM cq_items WHERE project_id = ?$ledgerFilter$archiveFilter$pagination ORDER BY ledger, number LIMIT ?", limit, ItemSummary_JsonCodec) { s =>
       projectKey(s)
       var index = 2
       filter.ledger.foreach { value => s.setString(index, value.toString); index += 1 }
       after.foreach { id => s.setString(index, id.ledger.toString); s.setLong(index + 1, id.number); index += 2 }
-      s.setInt(index, limit)
-    }(r => Wire.decode(Item_JsonCodec, r.getString(1)))
+      s.setInt(index, limit + 1)
+    }
   }
 
   override def claim(id: ItemId): Option[Claim] =
