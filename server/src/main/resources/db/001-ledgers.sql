@@ -140,6 +140,18 @@ CREATE TABLE cq_usage_meters (
   PRIMARY KEY (project_id, attempt_id, meter),
   FOREIGN KEY (project_id, attempt_id) REFERENCES cq_usage_attempts
 );
+CREATE TABLE cq_usage_costs (
+  project_id uuid NOT NULL,
+  attempt_id uuid NOT NULL,
+  meter text NOT NULL,
+  currency text COLLATE "C" NOT NULL,
+  basis text COLLATE "C" NOT NULL,
+  pricing_version text COLLATE "C" NOT NULL,
+  amount numeric NOT NULL CHECK (amount >= 0),
+  measurements bigint NOT NULL CHECK (measurements > 0),
+  PRIMARY KEY (project_id, attempt_id, meter, currency, basis, pricing_version),
+  FOREIGN KEY (project_id, attempt_id, meter) REFERENCES cq_usage_meters
+);
 CREATE TABLE cq_usage_records (
   project_id uuid NOT NULL,
   observation_id uuid NOT NULL,

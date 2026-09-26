@@ -295,12 +295,26 @@ class App {
     this.usagePanel.replaceChildren(element('h3', `Usage · ${this.selected === null ? 'project' : itemName(this.selected.item.id)}`));
     for (const [label, totals] of [['Direct', result.report.direct], ['Shared', result.report.shared], ['Unattributed', result.report.unattributed]] as const) {
       this.usagePanel.append(element('p', `${label}: ${totals.total.known} known tokens; ${totals.total.unknown} unknown measurements; ${totals.total.estimated} estimated measurements`));
-      for (const cost of totals.costs) this.usagePanel.append(element('p', `${cost.amount.value} ${cost.currency} · ${cost.basis} · pricing ${cost.pricingVersion === undefined ? 'unspecified' : cost.pricingVersion}`));
       if (totals.unknownCosts > 0n) this.usagePanel.append(element('p', `${totals.unknownCosts} unknown costs`));
     }
+    for (const cost of result.report.costs.entries) this.usagePanel.append(this.costRow(cost));
+    if (result.report.costs.hasMore) this.usagePanel.append(button('More costs', () => this.action(() => this.loadCosts(result.report.costs.after, result.report.cursor))));
     this.usagePanel.append(element('p', `Shared work is counted once and is not divided among members. Incomplete meters: ${result.report.incompleteMeters}; attempts without measurements: ${result.report.attemptsWithoutMeters}.`),
       element('p', `Attempt coverage: ${result.report.attempts.running} running; ${result.report.attempts.unknown} unknown outcomes; ${result.report.attempts.withGaps} with reported gaps.`),
       button('Refresh usage', () => this.action(() => this.loadUsage())), button('Attempts', () => this.action(() => this.loadAttempts(undefined, undefined))), button('Usage audit', () => this.action(async () => { this.auditAfter = 0n; await this.loadAudit(); })));
+  }
+  private costRow(cost: api.CostTotal): HTMLElement {
+    const group = cost.group;
+    return element('p', `${group.attribution}: ${cost.amount.value} ${group.currency} · ${group.basis} · pricing ${group.pricingVersion === undefined ? 'unspecified' : group.pricingVersion} · ${cost.measurements} measurements`);
+  }
+  private async loadCosts(after: api.CostGroup | undefined, snapshot: bigint | undefined): Promise<void> {
+    const request = ++this.auditRequest; const epoch = this.epoch; const selected = this.selected;
+    const result = await this.call(new api.Command_Usage(new api.UsageInput(this.currentProject(), new api.UsageSelection_Costs(this.usageFilter(), after, snapshot, 20))));
+    if (request !== this.auditRequest || epoch !== this.epoch || selected !== this.selected) return;
+    if (!(result instanceof api.Result_UsageCosts)) throw new Error('Unexpected cost response');
+    this.auditPanel.replaceChildren(element('h3', 'Cost breakdown'));
+    for (const entry of result.page.entries) this.auditPanel.append(this.costRow(entry));
+    if (result.page.hasMore) this.auditPanel.append(button('Next cost page', () => this.action(() => this.loadCosts(result.page.after, result.page.cursor))));
   }
   private async loadAttempts(after: api.AttemptId | undefined, snapshot: bigint | undefined): Promise<void> {
     const request = ++this.auditRequest; const epoch = this.epoch; const selected = this.selected;

@@ -132,11 +132,12 @@ final class Cli(environment: Map[String, String], directory: Path, output: Print
         opts.get("--snapshot").map(v => ChangeCursor(v.toLong)), opts.get("--limit").map(_.toInt).getOrElse(DefaultPageSize))
       output.println(Wire.encode(Result_JsonCodec, request(config, actorSession, Command.Search(input))))
     case "status" :: rest =>
-      val mode = rest.headOption.filter(Set("audit", "attempts", "outcomes")).getOrElse("summary")
+      val mode = rest.headOption.filter(Set("audit", "costs", "attempts", "outcomes")).getOrElse("summary")
       val scopes = Set("--task", "--cohort", "--session")
       val allowed = mode match {
         case "summary" => scopes
         case "audit" => scopes ++ Set("--after", "--limit")
+        case "costs" => scopes ++ Set("--after", "--snapshot", "--limit")
         case "attempts" => scopes ++ Set("--after", "--snapshot", "--limit")
         case "outcomes" => Set("--attempt", "--after", "--limit")
       }
@@ -151,12 +152,13 @@ final class Cli(environment: Map[String, String], directory: Path, output: Print
       val selection = mode match {
         case "summary" => UsageSelection.Summary(filter)
         case "audit" => UsageSelection.Audit(filter, opts.get("--after").map(_.toLong).getOrElse(0L), limit)
+        case "costs" => UsageSelection.Costs(filter, opts.get("--after").map(v => Wire.decode(CostGroup_JsonCodec, v)), opts.get("--snapshot").map(_.toLong), limit)
         case "attempts" => UsageSelection.Attempts(filter, opts.get("--after").map(v => AttemptId(UUID.fromString(v))), opts.get("--snapshot").map(_.toLong), limit)
         case "outcomes" => UsageSelection.Outcomes(AttemptId(UUID.fromString(opts.getOrElse("--attempt", throw new IllegalArgumentException("status outcomes requires --attempt UUID")))), opts.get("--after").map(_.toLong).getOrElse(0L), limit)
       }
       output.println(Wire.encode(Result_JsonCodec, request(config, actorSession, Command.Usage(UsageInput(config.project, selection)))))
     case List("web") => output.println(configuration(configDirectory).endpoint)
-    case Nil | List("--help") => output.println("cq serve | init [--endpoint URL] [--project-id UUID] [--name TEXT] | web | query [--ledger NAME] [--archived Active|Archived|All] [--after T1 --snapshot N] [--limit N] | status [audit|attempts|outcomes] [--task T1|--cohort UUID|--session UUID] [--attempt UUID] [--after CURSOR] [--snapshot N] [--limit N]")
+    case Nil | List("--help") => output.println("cq serve | init [--endpoint URL] [--project-id UUID] [--name TEXT] | web | query [--ledger NAME] [--archived Active|Archived|All] [--after T1 --snapshot N] [--limit N] | status [audit|costs|attempts|outcomes] [--task T1|--cohort UUID|--session UUID] [--attempt UUID] [--after CURSOR] [--snapshot N] [--limit N]")
     case _ => throw new IllegalArgumentException("Unknown command; use cq --help")
   }
 }

@@ -11,6 +11,7 @@ trait UsageService[F[_, _]] {
   def meter(scope: Scope, value: UsageMeter): F[Throwable, UsageMeter]
   def ingest(scope: Scope, value: UsageUpload): F[Throwable, UsageReceipt]
   def finish(scope: Scope, value: AttemptOutcome): F[Throwable, AttemptOutcome]
+  def costs(scope: Scope, filter: UsageFilter, after: Option[CostGroup], snapshot: Option[Long], limit: Int): F[Throwable, CostPage]
   def summary(scope: Scope, filter: UsageFilter): F[Throwable, UsageReport]
   def attempts(scope: Scope, filter: UsageFilter, after: Option[AttemptId], snapshot: Option[Long], limit: Int): F[Throwable, AttemptPage]
   def outcomes(scope: Scope, attempt: AttemptId, after: Long, limit: Int): F[Throwable, OutcomePage]
@@ -119,6 +120,8 @@ object UsageService {
                 val incomplete = if (observation.completeness == UsageCompleteness.Complete) 0L else 1L
                 val next = meter.scope match {
                   case CounterScope.Increment =>
+                    previous.foreach(p => UsageCosts.adjust(tx, key, p.upload.observation.cost, -1))
+                    UsageCosts.adjust(tx, key, observation.cost, 1)
                     val prior = if (projection.latestPosition.isEmpty) UsageMath.zeroTotals else projection.totals
                     val removed = previous.fold(prior)(p => UsageMath.combine(prior, UsageMath.totals(p.normalized, p.upload.observation.cost), -1))
                     val totals = UsageMath.combine(removed, UsageMath.totals(normalized, observation.cost), 1)
@@ -135,6 +138,11 @@ object UsageService {
                         UsageMath.monotonic(p.normalized, normalized)
                         UsageMath.monotonic(p.upload.observation.cost, observation.cost)
                       }
+                      projection.latestPosition.foreach { position =>
+                        val effective = tx.sample(key, position).getOrElse(throw new IllegalStateException("Effective cumulative observation disappeared"))
+                        UsageCosts.adjust(tx, key, UsageMath.since(effective.upload.observation.cost, meter.baselineCost), -1)
+                      }
+                      UsageCosts.adjust(tx, key, UsageMath.since(observation.cost, meter.baselineCost), 1)
                       val totals = UsageMath.totals(UsageMath.since(normalized, meter.baseline), UsageMath.since(observation.cost, meter.baselineCost))
                       MeterProjection(totals, Some(observation.position), incomplete, observation.completeness, observation.gaps)
                     }
@@ -191,7 +199,21 @@ object UsageService {
         after = page.lastOption.map(p => MeterKey(p.attempt.id, p.meter.key))
         more = page.size == ReadBatch
       }
-      UsageReport(direct, shared, unattributed, sharedAssignments, sharedAssignmentsTruncated, reader.cursor, incomplete, reader.attemptsWithoutMeters(value), reader.coverage(value))
+      UsageReport(direct, shared, unattributed, sharedAssignments, sharedAssignmentsTruncated, reader.cursor, incomplete, reader.attemptsWithoutMeters(value), reader.coverage(value), costPage(reader, value, None, ReadBatch))
+    }
+
+    private def costPage(reader: UsageReader, filter: UsageFilter, after: Option[CostGroup], limit: Int): CostPage = {
+      val page = reader.costs(filter, after, limit)
+      CostPage(page.entries, page.entries.lastOption.map(_.group), page.hasMore, reader.cursor)
+    }
+
+    override def costs(scope: Scope, value: UsageFilter, after: Option[CostGroup], snapshot: Option[Long], limit: Int): F[Throwable, CostPage] = repository.read(scope.project) { reader =>
+      filter(scope, value)
+      invalid(limit > 0 && limit <= ReadBatch, "Invalid cost page size")
+      invalid(after.isEmpty || snapshot.nonEmpty, "Cost continuation requires snapshot cursor")
+      after.foreach(g => UsageMath.validate(Money(Some(DecimalAmount("0")), Some(g.currency), g.basis, g.pricingVersion)))
+      if (snapshot.exists(_ != reader.cursor)) throw DomainFailure(Fault.Resync("Usage snapshot changed; restart cost listing"))
+      costPage(reader, value, after, limit)
     }
 
     override def attempts(scope: Scope, value: UsageFilter, after: Option[AttemptId], snapshot: Option[Long], limit: Int): F[Throwable, AttemptPage] = repository.read(scope.project) { reader =>

@@ -38,6 +38,95 @@ abstract class UsageContractTest extends SpecZIO with AssertZIO {
     effect.either.flatMap(result => assertIO(result match { case Left(DomainFailure(fault)) => expected(fault); case _ => false })).unit
 
   "Operational usage audit (Behavioral Active Blackbox; dummy Group / PostgreSQL Good Communication)" should {
+    "bound cost-group summaries without discarding distinct pricing evidence" in { (usage: UsageService[IO], ledger: LedgerService[IO]) =>
+      val owner = scope()
+      for {
+        _ <- ledger.initialize(owner, "bounded costs")
+        run <- start(usage, owner, assignment(owner, Set.empty, Attribution.Unattributed, None), CounterScope.Increment, UsageMath.zeroCounts, UsageMath.unknownMoney)
+        _ <- ZIO.foreachDiscard(1 to 201) { position =>
+          usage.ingest(collector(owner), upload(run, position, CounterScope.Increment, counts(1, 0), price("0.01").copy(pricingVersion = Some(f"price-$position%04d"))))
+        }
+        report <- usage.summary(owner, UsageFilter.ProjectAll())
+        groups = report.costs.entries.size
+        _ <- assertIO(groups <= 200 && report.costs.hasMore && report.costs.cursor == report.cursor && report.unattributed.total.known == 201)
+        remaining <- usage.costs(owner, UsageFilter.ProjectAll(), report.costs.after, Some(report.cursor), 200)
+        all = report.costs.entries ++ remaining.entries
+        _ <- assertIO(!remaining.hasMore && all.map(_.group.pricingVersion).distinct.size == 201 && all.map(_.amount.value).forall(_ == "0.01"))
+        _ <- assertIO(Wire.encode(UsageReport_JsonCodec, report).getBytes(java.nio.charset.StandardCharsets.UTF_8).length <= ReadPage.MaxBytes)
+        extra = upload(run, 202, CounterScope.Increment, counts(1, 0), price("0").copy(pricingVersion = None))
+        receipt <- usage.ingest(collector(owner), extra)
+        _ <- denied(usage.costs(owner, UsageFilter.ProjectAll(), report.costs.after, Some(report.cursor), 200))(_.isInstanceOf[Fault.Resync])
+        zero <- usage.costs(owner, UsageFilter.ProjectAll(), None, None, 1)
+        _ <- assertIO(zero.entries.head.amount.value == "0" && zero.entries.head.measurements == 1 && zero.entries.head.group.pricingVersion.isEmpty)
+        corrected = extra.copy(observation = extra.observation.copy(id = ObservationId(UUID.randomUUID()), cost = price("1").copy(currency = Some("EUR"), basis = CostBasis.ActualBilling), supersedes = Some(receipt.id)))
+        _ <- usage.ingest(collector(owner), corrected)
+        _ <- usage.ingest(collector(owner), corrected)
+        head <- usage.costs(owner, UsageFilter.ProjectAll(), None, None, 2)
+        _ <- assertIO(head.entries.map(_.group.currency) == List("EUR", "USD") && head.entries.forall(_.group.pricingVersion.nonEmpty) && head.entries.head.measurements == 1)
+        raw <- usage.audit(owner, UsageFilter.ProjectAll(), receipt.sequence - 1, 10)
+        _ <- assertIO(raw.entries.size == 2 && raw.entries.head.upload.observation.cost.amount.get.value == "0")
+      } yield ()
+    }
+
+    "reject oversized cost provenance before storing or returning it" in { (usage: UsageService[IO], ledger: LedgerService[IO]) =>
+      val owner = scope()
+      for {
+        _ <- ledger.initialize(owner, "cost provenance bounds")
+        run <- start(usage, owner, assignment(owner, Set.empty, Attribution.Unattributed, None), CounterScope.Increment, UsageMath.zeroCounts, UsageMath.unknownMoney)
+        value = upload(run, 1, CounterScope.Increment, counts(1, 0), price("0.01").copy(pricingVersion = Some("x" * 600000)))
+        _ <- denied(usage.ingest(collector(owner), value))(_.isInstanceOf[Fault.Invalid])
+        _ <- denied(usage.ingest(collector(owner), value.copy(observation = value.observation.copy(cost = price("0.01").copy(pricingVersion = Some(""))))))(_.isInstanceOf[Fault.Invalid])
+      } yield ()
+    }
+
+    "page all cost identities losslessly and keep shared spend separate from member spend" in { (usage: UsageService[IO], ledger: LedgerService[IO]) =>
+      val owner = scope()
+      val prices = List(
+        price("0").copy(pricingVersion = None), price("0.01").copy(pricingVersion = Some("😀")),
+        price("0.02").copy(pricingVersion = Some("\ue000")), price("0.03").copy(basis = CostBasis.PriceTable),
+        price("0.04").copy(currency = Some("EUR"), basis = CostBasis.ActualBilling), price("0.05"),
+      )
+      def pages(after: Option[CostGroup], cursor: Option[Long]): IO[Throwable, List[CostTotal]] =
+        usage.costs(owner, UsageFilter.ProjectAll(), after, cursor, 1).flatMap { page =>
+          if (page.hasMore) pages(page.after, Some(page.cursor)).map(page.entries ++ _) else ZIO.succeed(page.entries)
+        }
+      for {
+        _ <- ledger.initialize(owner, "cost identities")
+        one <- task(ledger, owner, "One")
+        two <- task(ledger, owner, "Two")
+        _ <- ZIO.foreachDiscard(List((Attribution.Direct, Set(one)), (Attribution.Shared, Set(one, two)), (Attribution.Unattributed, Set.empty[ItemId]))) { case (attribution, members) =>
+          for {
+            run <- start(usage, owner, assignment(owner, members, attribution, None), CounterScope.Increment, UsageMath.zeroCounts, UsageMath.unknownMoney)
+            _ <- ZIO.foreachDiscard(prices.zipWithIndex) { case (money, i) => usage.ingest(collector(owner), upload(run, i, CounterScope.Increment, counts(1, 0), money)) }
+          } yield ()
+        }
+        all <- pages(None, None)
+        expected = Attribution.all.toList.flatMap(a => prices.map(p => CostGroup(a, p.currency.get, p.basis, p.pricingVersion))).toSet
+        _ <- assertIO(all.size == 18 && all.map(_.group).toSet == expected)
+        member <- usage.summary(owner, UsageFilter.TaskOnly(two))
+        _ <- assertIO(member.costs.entries.size == 6 && member.costs.entries.forall(_.group.attribution == Attribution.Shared))
+      } yield ()
+    }
+
+    "preserve exact decimal amounts beyond machine decimal precision" in { (usage: UsageService[IO], ledger: LedgerService[IO]) =>
+      val owner = scope()
+      val amount = "9" * 50
+      val expected = (BigInt(amount) * 2).toString
+      for {
+        _ <- ledger.initialize(owner, "exact costs")
+        run <- start(usage, owner, assignment(owner, Set.empty, Attribution.Unattributed, None), CounterScope.Increment, UsageMath.zeroCounts, UsageMath.unknownMoney)
+        _ <- usage.ingest(collector(owner), upload(run, 1, CounterScope.Increment, counts(1, 0), price(amount)))
+        _ <- usage.ingest(collector(owner), upload(run, 2, CounterScope.Increment, counts(1, 0), price(amount)))
+        report <- usage.summary(owner, UsageFilter.ProjectAll())
+        actual = report.costs.entries.head.amount.value
+        _ <- assertIO(actual == expected)
+        cumulative <- start(usage, owner, assignment(owner, Set.empty, Attribution.Unattributed, None), CounterScope.Cumulative, UsageMath.zeroCounts, price("1"))
+        _ <- usage.ingest(collector(owner), upload(cumulative, 1, CounterScope.Cumulative, counts(1, 0), price(amount)))
+        combined <- usage.summary(owner, UsageFilter.ProjectAll())
+        _ <- assertIO(combined.costs.entries.head.amount.value == (BigInt(amount) * 3 - 1).toString)
+      } yield ()
+    }
+
     "expose attempt completion gaps independently of complete individual observations" in { (usage: UsageService[IO], ledger: LedgerService[IO]) =>
       val owner = scope()
       val gap = "Final request usage unavailable"
@@ -112,7 +201,7 @@ abstract class UsageContractTest extends SpecZIO with AssertZIO {
         _ <- assertIO(firstReceipt == repeated)
         project <- usage.summary(owner, UsageFilter.ProjectAll())
         _ <- assertIO(project.direct.total.known == 500 && project.shared.total.known == 1000 && project.unattributed.total.known == 0)
-        _ <- assertIO(project.direct.unknownCosts == 2 && project.shared.unknownCosts == 1 && project.shared.costs.isEmpty)
+        _ <- assertIO(project.direct.unknownCosts == 2 && project.shared.unknownCosts == 1 && project.costs.entries.isEmpty)
         views <- ZIO.foreach(List(one, two))(id => usage.summary(owner, UsageFilter.TaskOnly(id)))
         _ <- assertIO(views.map(_.direct.total.known) == List(200L, 300L) && views.forall(_.sharedAssignments == Set(sharedAssignment.id)))
         correction = sharedUpload.copy(observation = sharedUpload.observation.copy(id = ObservationId(UUID.randomUUID()), counters = counts(1100, 0), supersedes = Some(sharedUpload.observation.id)))
@@ -156,7 +245,7 @@ abstract class UsageContractTest extends SpecZIO with AssertZIO {
         report <- usage.summary(owner, UsageFilter.ProjectAll())
         _ <- assertIO(report.unattributed.input.known == 158 && report.unattributed.output.known == 20 && report.unattributed.total.known == 178)
         _ <- assertIO(report.unattributed.cacheRead.known == 100 && report.unattributed.reasoning.known == 13)
-        _ <- assertIO(report.unattributed.costs.map(_.amount.value) == List("0.00084"))
+        _ <- assertIO(report.costs.entries.map(_.amount.value) == List("0.00084"))
         audit <- usage.audit(owner, UsageFilter.ProjectAll(), 0, 200)
         _ <- assertIO(audit.entries.size == 2 && audit.entries.head.upload.observation.counters.input.value.contains(48L) && audit.entries.head.normalized.input.value.contains(158L))
       } yield ()
@@ -174,7 +263,7 @@ abstract class UsageContractTest extends SpecZIO with AssertZIO {
         _ <- usage.ingest(host, two)
         _ <- usage.ingest(host, upload(run, 0, CounterScope.Cumulative, counts(130, 25), price("1.2")))
         before <- usage.summary(owner, UsageFilter.ProjectAll())
-        _ <- assertIO(before.unattributed.total.known == 120 && before.unattributed.costs.head.amount.value == "0.9")
+        _ <- assertIO(before.unattributed.total.known == 120 && before.costs.entries.head.amount.value == "0.9")
         _ <- denied(usage.ingest(host, upload(run, 3, CounterScope.Cumulative, counts(190, 45), price("2"))))(_.isInstanceOf[Fault.Invalid])
         _ <- denied(usage.ingest(host, upload(run, 3, CounterScope.Cumulative, counts(230, 45), price("1.8"))))(_.isInstanceOf[Fault.Invalid])
         correction = two.copy(observation = two.observation.copy(id = ObservationId(UUID.randomUUID()), counters = counts(230, 45), cost = price("2.05"), supersedes = Some(two.observation.id)))
@@ -182,7 +271,7 @@ abstract class UsageContractTest extends SpecZIO with AssertZIO {
         oldCorrection = one.copy(observation = one.observation.copy(id = ObservationId(UUID.randomUUID()), counters = counts(170, 35), cost = price("1.7"), supersedes = Some(one.observation.id)))
         _ <- usage.ingest(host, oldCorrection)
         report <- usage.summary(owner, UsageFilter.ProjectAll())
-        _ <- assertIO(report.unattributed.total.known == 155 && report.unattributed.costs.head.amount.value == "1.05")
+        _ <- assertIO(report.unattributed.total.known == 155 && report.costs.entries.head.amount.value == "1.05")
       } yield ()
     }
 

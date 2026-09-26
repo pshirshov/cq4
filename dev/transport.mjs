@@ -129,6 +129,8 @@ const mcpRead = await client.callTool({ name: 'read', arguments: read(first) });
 assert.equal(mcpRead.structuredContent.Detail.view.item.draft.title, 'Changed');
 const attempts = await client.callTool({ name: 'usage', arguments: { project: first, selection: { Attempts: { filter: { ProjectAll: {} }, after: null, snapshot: null, limit: 20 } } } });
 assert.deepEqual(attempts.structuredContent.UsageAttempts.page.entries, []);
+const costs = await client.callTool({ name: 'usage', arguments: { project: first, selection: { Costs: { filter: { ProjectAll: {} }, after: null, snapshot: null, limit: 20 } } } });
+assert.deepEqual(costs.structuredContent.UsageCosts.page.entries, []);
 const outcomes = await client.callTool({ name: 'usage', arguments: { project: first, selection: { Outcomes: { attempt: id(), after: '0', limit: 20 } } } });
 assert.ok(outcomes.structuredContent.Failed.fault.Missing);
 const usage = await client.callTool({ name: 'usage', arguments: { project: first, selection: { Summary: { filter: { ProjectAll: {} } } } } });

@@ -24,6 +24,7 @@ final class DummyUsageResource(ledger: LedgerRepository[IO]) extends Lifecycle.L
 
 private final case class DummyUsageState(
   cursor: Long,
+  costs: Map[(MeterKey, MoneyKey), CostProjection],
   assignments: Map[AssignmentId, Assignment],
   attempts: Map[AttemptId, Attempt],
   meters: Map[MeterKey, (UsageMeter, MeterProjection)],
@@ -33,13 +34,28 @@ private final case class DummyUsageState(
 )
 
 private object DummyUsageState {
-  def empty: DummyUsageState = DummyUsageState(0, Map.empty, Map.empty, Map.empty, Map.empty, Map.empty, Map.empty)
+  def empty: DummyUsageState = DummyUsageState(0, Map.empty, Map.empty, Map.empty, Map.empty, Map.empty, Map.empty, Map.empty)
 }
 
 private final class DummyUsageTransaction(initial: DummyUsageState) extends UsageTransaction {
   private var state = initial
   def result: DummyUsageState = state
   private def tick(): Long = { state = state.copy(cursor = Math.addExact(state.cursor, 1)); state.cursor }
+  override def cost(key: MeterKey, group: MoneyKey): Option[CostProjection] = state.costs.get((key, group))
+  override def putCost(key: MeterKey, group: MoneyKey, value: Option[CostProjection]): Unit = {
+    val pair = (key, group)
+    state = state.copy(costs = value.fold(state.costs - pair)(v => state.costs.updated(pair, v)))
+  }
+  override def costs(filter: UsageFilter, after: Option[CostGroup], limit: Int): ReadPage[CostTotal] = {
+    val groups = state.costs.iterator.filter { case ((meter, _), _) => matches(filter, state.attempts(meter.attempt)) }
+      .map { case ((meter, group), value) =>
+        val attribution = state.assignments(state.attempts(meter.attempt).assignment).attribution
+        CostGroup(attribution, group.currency, group.basis, group.pricingVersion) -> value
+      }.toList.groupMapReduce(_._1)(_._2)((a, b) => CostProjection(UsageMath.addAmount(a.amount, b.amount, 1), Math.addExact(a.measurements, b.measurements)))
+    val rows = groups.iterator.filter { case (group, _) => after.forall(UsageCosts.compare(group, _) > 0) }.toList
+      .sortWith((a, b) => UsageCosts.compare(a._1, b._1) < 0).iterator.map { case (group, value) => CostTotal(group, UsageMath.decimal(value.amount), value.measurements) }
+    ReadPage.select(rows, limit, CostTotal_JsonCodec)
+  }
   override def cursor: Long = state.cursor
   override def assignment(id: AssignmentId): Option[Assignment] = state.assignments.get(id)
   override def attempt(id: AttemptId): Option[Attempt] = state.attempts.get(id)

@@ -46,6 +46,18 @@ export async function usageChecks(page, origin, projectId) {
   await page.getByRole('button', { name: 'Outcome history', exact: true }).click();
   await page.getByText(/^\d+ · Cancelled$/).waitFor();
   await page.getByText(/^\d+ · Completed$/).waitFor();
+  for (let index = 0; index < 201; index++) {
+    await host({ Ingest: { value: { observation: { id: id(), attempt: attempt.id, source: 'fixture', position: String(index + 2), occurredAt: '4000', receivedAt: '0',
+      scope: 'Increment', counters: counts(1), inputIncludesCache: true, outputIncludesReasoning: true,
+      cost: { amount: { value: '0.01' }, currency: 'USD', basis: 'ProviderEstimate', pricingVersion: `price-${String(index).padStart(3, '0')}` },
+      completeness: 'Complete', gaps: [], evidence: null, supersedes: null }, meter: 'fixture', disposition: 'Contribution', detailReason: null } } });
+  }
+  await page.getByRole('button', { name: 'Refresh usage', exact: true }).click();
+  await page.getByText('Direct: 301 known tokens; 0 unknown measurements; 0 estimated measurements', { exact: true }).waitFor();
+  await page.getByRole('button', { name: 'More costs', exact: true }).click();
+  await page.getByRole('heading', { name: 'Cost breakdown', exact: true }).waitFor();
+  await page.getByText('Direct: 0.01 USD · ProviderEstimate · pricing price-200 · 1 measurements', { exact: true }).waitFor();
+  assert.equal(await page.getByRole('button', { name: 'Next cost page', exact: true }).count(), 0);
   assert.deepEqual(await detail(), before, 'Usage lifecycle writes must not revise the item');
-  console.log('Chromium usage: no-meter attempt, complete sample with cancellation gap, explicit correction, retained outcome history and unchanged item revision passed');
+  console.log('Chromium usage: no-meter attempt, complete sample with cancellation gap, explicit correction, retained outcome history, paginated exact costs and unchanged item revision passed');
 }

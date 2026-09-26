@@ -99,9 +99,12 @@ cq init --name "New display name"
 cq query --ledger Tasks --archived All --limit 20
 cq status --task T1
 cq status audit --task T1 --limit 20
+cq status costs --task T1 --limit 20
 cq status attempts --task T1 --limit 20
 cq status outcomes --attempt <attempt-uuid> --limit 20
 cq web
 ```
+
+Cost summaries include a bounded first page grouped by attribution, currency, cost basis and pricing version. Continue with `status costs --after '<after-object-as-JSON>' --snapshot <cursor> --limit 20` using the returned key and cursor; concurrent audit changes require restarting the listing. Raw observations retain original amounts and pricing evidence.
 
 Here `cq` denotes that JVM launcher until the current native package is built. `web` prints the configured origin. Project configuration lives under the Git common directory (`cq/project.json`) or `.cq/project.json` outside Git. Worktrees share identity. Explicit `init --name` renames the server display; ordinary reattachment preserves that name and refreshes the local cache. `status` also supports `--cohort` and `--session`; omit scope flags for project totals. Commands emit generated JSON with lossless decimal strings. See [tested behavior and gaps](docs/validation/m1-interfaces.md).

@@ -26,7 +26,7 @@ final class McpSchemas {
       decoder(ChangeInput_JsonCodec)(Command.Change.apply)),
     McpTool("claim", "Acquire, renew or release an explicit item-set claim. Governor authority required.", "ClaimInput", Set("Claimed"), true,
       decoder(ClaimInput_JsonCodec)(Command.ClaimWork.apply)),
-    McpTool("usage", "Read task, cohort, session, evaluation or project usage totals and bounded observation, attempt and outcome audit pages. Shared totals are not per-member allocations.", "UsageInput", Set("UsageSummary", "UsageAudit", "UsageAttempts", "UsageOutcomes"), false,
+    McpTool("usage", "Read task, cohort, session, evaluation or project usage totals and bounded cost, observation, attempt and outcome audit pages. Shared totals are not per-member allocations.", "UsageInput", Set("UsageSummary", "UsageCosts", "UsageAudit", "UsageAttempts", "UsageOutcomes"), false,
       decoder(UsageInput_JsonCodec)(Command.Usage.apply)),
   )
 

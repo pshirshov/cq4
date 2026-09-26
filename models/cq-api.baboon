@@ -156,7 +156,9 @@ root data AttemptView { assignment: Assignment attempt: Attempt outcome: opt[Rec
 root data AttemptPage { entries: lst[AttemptView] after: opt[AttemptId] hasMore: bit cursor: i64 }
 root data OutcomePage { entries: lst[RecordedOutcome] after: i64 hasMore: bit cursor: i64 }
 root data MetricTotal { known: i64 unknown: i64 estimated: i64 }
-root data CostTotal { amount: DecimalAmount currency: str basis: CostBasis pricingVersion: opt[str] measurements: i64 }
+root data CostGroup { attribution: Attribution currency: str basis: CostBasis pricingVersion: opt[str] }
+root data CostTotal { group: CostGroup amount: DecimalAmount measurements: i64 }
+root data CostPage { entries: lst[CostTotal] after: opt[CostGroup] hasMore: bit cursor: i64 }
 root data UsageTotals {
   input: MetricTotal
   output: MetricTotal
@@ -164,7 +166,6 @@ root data UsageTotals {
   cacheWrite: MetricTotal
   reasoning: MetricTotal
   total: MetricTotal
-  costs: lst[CostTotal]
   unknownCosts: i64
 }
 root data MeterProjection { totals: UsageTotals latestPosition: opt[i64] incompleteSamples: i64 completeness: UsageCompleteness gaps: lst[str] }
@@ -186,6 +187,7 @@ root data UsageReport {
   incompleteMeters: i64
   attemptsWithoutMeters: i64
   attempts: AttemptCoverage
+  costs: CostPage
 }
 root data UsagePage { entries: lst[RecordedUsage] after: i64 hasMore: bit cursor: i64 }
 
@@ -207,6 +209,7 @@ root adt ClaimAction {
 root data ClaimInput { project: ProjectId action: ClaimAction }
 root adt UsageSelection {
   data Summary { filter: UsageFilter }
+  data Costs { filter: UsageFilter after: opt[CostGroup] snapshot: opt[i64] limit: i32 }
   data Audit { filter: UsageFilter after: i64 limit: i32 }
   data Attempts { filter: UsageFilter after: opt[AttemptId] snapshot: opt[i64] limit: i32 }
   data Outcomes { attempt: AttemptId after: i64 limit: i32 }
@@ -232,6 +235,7 @@ root adt Result {
   data Changed { ack: ChangeAck }
   data Claimed { claim: Claim }
   data UsageSummary { report: UsageReport }
+  data UsageCosts { page: CostPage }
   data UsageAudit { page: UsagePage }
   data UsageAttempts { page: AttemptPage }
   data UsageOutcomes { page: OutcomePage }

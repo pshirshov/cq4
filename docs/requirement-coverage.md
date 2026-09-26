@@ -22,7 +22,7 @@ Requirements: [R01–R31](drafts/20260926-0957-cq-requirements-prompt.md). Miles
 | R16 Cohorts | M4 | Not started | — |
 | R17 Canonical refs | M1, M3 | In progress | Canonical/inverse rows, endpoint history, duplicate normalization and project checks implemented; graph checks remain; [increment evidence](validation/m1-core.md) |
 | R18 Worksets | M3 | Not started | — |
-| R19 Bounded work | M1, M3 | In progress | Summary-only discovery and byte-bounded streaming pages; affected-row mutations. Aggregate limits and scale/query-plan evidence remain. [Read bounds](validation/m1-read-bounds.md) |
+| R19 Bounded work | M1, M3 | In progress | Summary-only discovery and byte-bounded streaming pages; affected-row mutations. Fixed-size meter token projections and separately paginated cost aggregates implemented; scale/query-plan evidence remains. [Read bounds](validation/m1-read-bounds.md) |
 | R20 Project identity | M1 | In progress | UUID project service initialization/reattachment tested; CLI concurrent init, worktrees, moves, explicit reattachment and revision-checked display rename pass, including whole-server restart. [Interface evidence](validation/m1-interfaces.md); [increment evidence](validation/m1-core.md) |
 | R21 Supervision | M2 | Not started | — |
 | R22 Privilege separation | M1, M2, M4 | In progress | Service mutation roles enforced; signed project/role credentials and tool-call restrictions tested; native harness restrictions remain. [Interface evidence](validation/m1-interfaces.md); [increment evidence](validation/m1-core.md) |
@@ -34,4 +34,4 @@ Requirements: [R01–R31](drafts/20260926-0957-cq-requirements-prompt.md). Miles
 | R28 Roles | M2, M4 | Not started | — |
 | R29 Commands | M2, M4 | Not started | — |
 | R30 Handle dispatch | M2, M4 | Not started | — |
-| R31 Usage audit | M1, M2, M4, M5 | In progress | Immutable audit, frozen attribution, normalization, corrections, idempotency and scoped summaries pass dummy/PG scenarios, including 1,500 → 1,600; authenticated host/read endpoints and CLI audit view implemented; bounded CLI/browser attempt and outcome-history views, explicit corrections and coverage gaps pass both adapters and Chromium; collectors, live usage invalidation and complete scoped UI remain. [Interface evidence](validation/m1-interfaces.md) [Evidence](validation/m1-usage.md) |
+| R31 Usage audit | M1, M2, M4, M5 | In progress | Immutable audit, frozen attribution, normalization, corrections, idempotency, exact monetary arithmetic and bounded scoped summaries pass dummy/PG scenarios, including 1,500 → 1,600; authenticated host/read endpoints and CLI audit view implemented; bounded CLI/browser attempt and outcome-history views, explicit corrections and coverage gaps pass both adapters and Chromium; collectors, live usage invalidation and complete scoped UI remain. [Interface evidence](validation/m1-interfaces.md) [Evidence](validation/m1-usage.md) |

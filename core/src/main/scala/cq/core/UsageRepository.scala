@@ -10,6 +10,8 @@ trait UsageRepository[F[_, _]] {
 }
 
 trait UsageReader {
+  def costs(filter: UsageFilter, after: Option[CostGroup], limit: Int): ReadPage[CostTotal]
+  def cost(key: MeterKey, group: MoneyKey): Option[CostProjection]
   def cursor: Long
   def assignment(id: AssignmentId): Option[Assignment]
   def attempt(id: AttemptId): Option[Attempt]
@@ -27,6 +29,7 @@ trait UsageReader {
 }
 
 trait UsageTransaction extends UsageReader {
+  def putCost(key: MeterKey, group: MoneyKey, value: Option[CostProjection]): Unit
   def putAssignment(value: Assignment, actor: Actor, receivedAt: Long): Unit
   def putAttempt(value: Attempt, actor: Actor, receivedAt: Long): Unit
   def putMeter(value: UsageMeter, projection: MeterProjection, actor: Actor, receivedAt: Long): Unit

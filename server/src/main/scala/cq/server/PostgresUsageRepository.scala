@@ -91,6 +91,42 @@ private final class PostgresUsageTransaction(connection: Connection, project: Pr
     require(changed == 1, "Accounting meter disappeared")
   }
 
+  private def costKey(s: PreparedStatement, key: MeterKey, group: MoneyKey): Unit = {
+    meterKey(s, key); s.setString(4, group.currency); s.setString(5, group.basis.toString); s.setString(6, group.pricingVersion.getOrElse(""))
+  }
+  private val CostKeySql = "project_id = ? AND attempt_id = ? AND meter = ? AND currency = ? AND basis = ? AND pricing_version = ?"
+  override def cost(key: MeterKey, group: MoneyKey): Option[CostProjection] =
+    sql.query("SELECT amount, measurements FROM cq_usage_costs WHERE " + CostKeySql)(costKey(_, key, group))(r => CostProjection(BigDecimal(r.getBigDecimal(1)), r.getLong(2))).headOption
+  override def putCost(key: MeterKey, group: MoneyKey, value: Option[CostProjection]): Unit = {
+    value match {
+      case None => sql.execute("DELETE FROM cq_usage_costs WHERE " + CostKeySql)(costKey(_, key, group))
+      case Some(next) =>
+        sql.execute("INSERT INTO cq_usage_costs(project_id, attempt_id, meter, currency, basis, pricing_version, amount, measurements) VALUES (?, ?, ?, ?, ?, ?, ?, ?) " +
+          "ON CONFLICT(project_id, attempt_id, meter, currency, basis, pricing_version) DO UPDATE SET amount = EXCLUDED.amount, measurements = EXCLUDED.measurements") { s =>
+          costKey(s, key, group); s.setBigDecimal(7, next.amount.bigDecimal); s.setLong(8, next.measurements)
+        }
+    }
+    ()
+  }
+
+  override def costs(filter: UsageFilter, after: Option[CostGroup], limit: Int): ReadPage[CostTotal] = {
+    val grouping = "a.attribution COLLATE \"C\", c.currency, c.basis, c.pricing_version"
+    val continuation = after.fold("")(_ => " AND (" + grouping + ") > (?, ?, ?, ?)")
+    sql.pageBy("SELECT " + grouping + ", sum(c.amount), sum(c.measurements) FROM cq_usage_costs c" + JoinedScope +
+      "WHERE c.project_id = ?" + filterSql(filter) + continuation + " GROUP BY " + grouping + " ORDER BY " + grouping + " LIMIT ?", limit, CostTotal_JsonCodec) { s =>
+      val index = bindFilter(s, filter)
+      after match {
+        case None => s.setInt(index, limit + 1)
+        case Some(group) =>
+          s.setString(index, group.attribution.toString); s.setString(index + 1, group.currency); s.setString(index + 2, group.basis.toString)
+          s.setString(index + 3, group.pricingVersion.getOrElse("")); s.setInt(index + 4, limit + 1)
+      }
+    } { r =>
+      val group = CostGroup(Attribution.parse(r.getString(1)).get, r.getString(2), CostBasis.parse(r.getString(3)).get, Option(r.getString(4)).filter(_.nonEmpty))
+      CostTotal(group, UsageMath.decimal(BigDecimal(r.getBigDecimal(5))), r.getBigDecimal(6).longValueExact())
+    }
+  }
+
   override def append(value: UsageUpload, normalized: TokenCounts, actor: Actor): RecordedUsage = {
     val record = RecordedUsage(value, normalized, actor, tick())
     val observation = value.observation
