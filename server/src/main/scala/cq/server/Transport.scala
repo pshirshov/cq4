@@ -13,7 +13,7 @@ import zio.{Task, ZIO}
 import zio.interop.catz.*
 import java.nio.charset.StandardCharsets.UTF_8
 
-final class Transport(application: Application, authorization: Authorization, access: AccessConfig, schemas: McpSchemas, live: LiveSession)
+final class Transport(application: Application, authorization: Authorization, access: AccessConfig, schemas: McpSchemas, live: LiveSession, assets: StaticAssets)
     extends Http4sDsl[Task] {
   private val context = BaboonCodecContext.Default
   private val protocolVersions = List("2025-03-26", "2025-06-18", "2025-11-25")
@@ -57,6 +57,9 @@ final class Transport(application: Application, authorization: Authorization, ac
 
   def routes(ws: WebSocketBuilder2[Task]): HttpRoutes[Task] = HttpRoutes.of[Task] {
     case request if header(request, "Origin").exists(_ != access.origin) => encoded(Status.Forbidden, Fault_JsonCodec, Fault.Denied("Origin rejected"))
+    case GET -> Root => assets.page
+    case GET -> Root / "app.js" => assets.javascript
+    case GET -> Root / "style.css" => assets.stylesheet
     case request @ POST -> Root / "api" / "login" => guarded {
       ZIO.attempt(authorization.login(bearer(request).getOrElse(""))).flatMap { token =>
         encoded(Status.Ok, AccessToken_JsonCodec, token).map(_.putHeaders(cookie(token.value, 12L * 60 * 60)))

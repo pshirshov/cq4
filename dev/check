@@ -52,11 +52,13 @@ class Checks:
     def generate(self):
         self.run([str(ROOT / "dev/generate")], "generate", COMMAND_TIMEOUT)
         self.run(["npm", "ci", "--ignore-scripts"], "npm-ci", COMMAND_TIMEOUT)
+        self.run(["npm", "run", "build"], "browser-build", COMMAND_TIMEOUT)
 
     def contracts(self):
         self.generate()
         first = generated_hashes()
         self.run([str(ROOT / "dev/generate")], "generate-repeat", COMMAND_TIMEOUT)
+        self.run(["npm", "run", "build"], "browser-build-repeat", COMMAND_TIMEOUT)
         if first != generated_hashes():
             raise RuntimeError("Generated contracts changed across identical generation runs")
         (self.evidence / "generated-sha256.json").write_text(json.dumps(first, indent=2) + "\n")
@@ -115,7 +117,7 @@ class Checks:
             raise RuntimeError("Expected one exported sbt runtime classpath")
         return paths[0]
 
-    def transport(self, command: list[str], name: str):
+    def transport(self, command: list[str], name: str, browser: bool):
         port = free_port()
         self.environment.update(CQ_HOST="127.0.0.1", CQ_PORT=str(port), CQ_ORIGIN=f"http://127.0.0.1:{port}",
                                 CQ_TOKEN=uuid.uuid4().hex, CQ_SESSION=str(uuid.uuid4()))
@@ -139,6 +141,9 @@ class Checks:
                     time.sleep(0.1)
                 self.run(["node", "dev/transport.mjs"], f"{name}-transport", STARTUP_TIMEOUT)
                 self.run(["python3", "dev/cli-check.py", *command], f"{name}-cli", STARTUP_TIMEOUT)
+                if browser:
+                    self.environment["CQ_BROWSER_EVIDENCE"] = str(self.evidence)
+                    self.run(["node", "dev/browser.mjs"], f"{name}-browser", COMMAND_TIMEOUT)
             finally:
                 if process.poll() is None:
                     process.terminate()
@@ -154,7 +159,13 @@ class Checks:
         classpath = self.classpath()
         with self.database():
             self.sbt(["server/testOnly *Postgres"], "postgres-contract")
-            self.transport(["java", "-cp", classpath, "cq.server.Main"], "jvm")
+            self.transport(["java", "-cp", classpath, "cq.server.Main"], "jvm", False)
+
+    def browser(self):
+        self.generate()
+        classpath = self.classpath()
+        with self.database():
+            self.transport(["java", "-cp", classpath, "cq.server.Main"], "browser", True)
 
     def native(self):
         self.generate()
@@ -164,11 +175,11 @@ class Checks:
         binary = self.evidence / "cq"
         with self.database():
             self.transport(["java", f"-agentlib:native-image-agent=config-output-dir={config}",
-                            "-cp", classpath, "cq.server.Main"], "native-agent")
+                            "-cp", classpath, "cq.server.Main"], "native-agent", False)
             self.run(["native-image", "--no-fallback", "-march=compatibility", "-O1", "-J-Xmx8g",
                       f"-H:ConfigurationFileDirectories={config}", "-cp", classpath,
                       "cq.server.Main", str(binary)], "native-image", COMMAND_TIMEOUT)
-            self.transport([str(binary)], "native")
+            self.transport([str(binary)], "native", False)
 
 
 def free_port():
@@ -206,7 +217,7 @@ def main():
         if command == "fast":
             checks.generate()
             checks.sbt(["server/testOnly *Dummy"], "dummy-contract")
-        elif command in ["process", "browser"]:
+        elif command == "process":
             raise RuntimeError(f"UNAVAILABLE: {command} coverage has not been implemented")
         else:
             getattr(checks, command)()

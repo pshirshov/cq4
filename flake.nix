@@ -11,7 +11,7 @@
           pkgs = import nixpkgs { inherit system; };
           java = pkgs.graalvmPackages.graalvm-ce;
         in {
-          default = pkgs.mkShell {
+          default = pkgs.mkShell ({
             packages = [
               java
               (pkgs.sbt.override { jre = java; })
@@ -24,7 +24,10 @@
               pkgs.pkg-config
             ];
             JAVA_HOME = java;
-          };
+          } // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+            PLAYWRIGHT_BROWSERS_PATH = pkgs.playwright-driver.browsers;
+            PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS = "true";
+          });
         });
     };
 }

@@ -10,6 +10,7 @@ On Linux amd64 with Nix and network access:
 ./dev/check contracts
 ./dev/check fast
 ./dev/check postgres
+./dev/check browser
 ./dev/check native
 ```
 
@@ -28,11 +29,19 @@ CQ_TEST_DATABASE_PASSWORD=local-test-password \
 ./dev/check postgres
 ```
 
-The runner creates and drops a unique schema in that database. The account must have schema creation permission. With no provided URL, PostgreSQL is started as the current non-root user and stopped by the runner. Missing infrastructure fails the check. `process` and `browser` currently report unavailable; they do not report success.
+The runner creates and drops a unique schema in that database. The account must have schema creation permission. With no provided URL, PostgreSQL is started as the current non-root user and stopped by the runner. Missing infrastructure fails the check. `browser` runs real Chromium UI and connection checks. `process` remains unavailable until supervisor coverage is implemented; it does not report success.
 
 ## Run the current development server
 
-Create an empty PostgreSQL database, then run from this repository:
+Create an empty PostgreSQL database. Generate contracts and browser assets from this repository first:
+
+```sh
+./dev/generate
+npm ci --ignore-scripts
+npm run build
+```
+
+Then run:
 
 ```sh
 CQ_DATABASE_URL=jdbc:postgresql://127.0.0.1:5432/cq \
@@ -54,7 +63,7 @@ curl --fail-with-body \
   http://127.0.0.1:8765/api/hello
 ```
 
-Expected body: `{"version":"0.1.0","supported":["0.1.0"]}`. `/api/call`, `/ws` and `/mcp` use the same ledger/audit application service; see [contracts](docs/design/contracts.md). The browser and supervisor are not implemented yet.
+Expected body: `{"version":"0.1.0","supported":["0.1.0"]}`. `/api/call`, `/ws` and `/mcp` use the same ledger/audit application service; see [contracts](docs/design/contracts.md). Open the configured origin and sign in with the operator token. The minimal browser supports project selection/creation, schema-derived item forms, list/detail/history and usage/audit views. The supervisor remains unimplemented.
 
 Pins, local compatibility patches and their failure evidence are documented in [dependencies](docs/design/dependencies.md).
 
@@ -76,6 +85,8 @@ Build a JVM launcher classpath from the repository:
 
 ```sh
 ./dev/generate
+npm ci --ignore-scripts
+npm run build
 nix develop -c sbt --server --batch --no-colors ';server/compile;show server/runtimeClasspath;exit'
 ```
 

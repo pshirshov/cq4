@@ -52,6 +52,7 @@ object CqPlugin extends PluginDef {
   make[Authorization]
   make[Application]
   make[LiveSession]
+  make[StaticAssets]
   make[McpSchemas]
   make[RunningServer].fromResource[RunningServer.Resource]
   make[DatabaseSetup]

@@ -5,7 +5,7 @@ Requirements: [R01–R31](drafts/20260926-0957-cq-requirements-prompt.md). Miles
 | Requirement | Owning milestones | State | Implementation and evidence |
 | --- | --- | --- | --- |
 | R01 Stack | M0, M6 | In progress | [M0 JVM/native stack proof passes](validation/m0-stack.md); complete release packaging remains M6 |
-| R02 Live frontend | M1, M5 | Not started | — |
+| R02 Live frontend | M1, M5 | In progress | Generated WebSocket browser, live changes, truthful health/sync and heartbeat recovery pass Chromium checks. Full lifecycle corpus remains M5. [Evidence](validation/m1-browser.md) |
 | R03 Baboon contracts | M0, M6 | In progress | One 0.1.0 model; edits and breaking changes in place per user correction; no compatibility gate. See [current contract policy](design/contracts.md) and [increment evidence](validation/m1-core.md) |
 | R04 HTTP MCP | M0, M1 | In progress | Five generated-schema ledger/audit tools and enforced role profiles pass real SDK checks on JVM; earlier native evidence covers M0 only. [Interface evidence](validation/m1-interfaces.md) |
 | R05 Fixed ledgers | M1 | In progress | Fourteen typed content/status branches and outcome classification; examples pass on both adapters; nested validation remains; [increment evidence](validation/m1-core.md) |
@@ -34,4 +34,4 @@ Requirements: [R01–R31](drafts/20260926-0957-cq-requirements-prompt.md). Miles
 | R28 Roles | M2, M4 | Not started | — |
 | R29 Commands | M2, M4 | Not started | — |
 | R30 Handle dispatch | M2, M4 | Not started | — |
-| R31 Usage audit | M1, M2, M4, M5 | In progress | Immutable audit, frozen attribution, normalization, corrections, idempotency and scoped summaries pass dummy/PG scenarios, including 1,500 → 1,600; authenticated host/read endpoints and CLI audit view implemented; collectors and UI remain. [Interface evidence](validation/m1-interfaces.md) [Evidence](validation/m1-usage.md) |
+| R31 Usage audit | M1, M2, M4, M5 | In progress | Immutable audit, frozen attribution, normalization, corrections, idempotency and scoped summaries pass dummy/PG scenarios, including 1,500 → 1,600; authenticated host/read endpoints and CLI audit view implemented; minimal browser summary/audit view tested; collectors, live usage invalidation and complete scoped UI remain. [Interface evidence](validation/m1-interfaces.md) [Evidence](validation/m1-usage.md) |
