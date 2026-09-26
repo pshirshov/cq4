@@ -48,6 +48,12 @@ def main():
         copied = json.loads(run(independent, "init", "--project-id", config["project"]["value"]).splitlines()[0])["Initialized"]["project"]
         assert copied == first
         assert (independent / ".cq/project.json").is_file()
+        renamed = json.loads(run(moved, "init", "--name", "Renamed consumer").splitlines()[0])["Initialized"]["project"]
+        assert renamed["id"] == first["id"] and renamed["name"] == "Renamed consumer", renamed
+        assert renamed["revision"]["value"] == "2"
+        refreshed = json.loads(run(independent, "init").splitlines()[0])["Initialized"]["project"]
+        assert refreshed == renamed
+        assert json.loads((independent / ".cq/project.json").read_text())["name"] == renamed["name"]
     print("CLI concurrent init, worktree sharing, moved checkout, explicit reattachment, collision rejection, query and usage audit passed")
 
 

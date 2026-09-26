@@ -9,6 +9,7 @@ import java.nio.charset.StandardCharsets
 
 trait LedgerService[F[_, _]] {
   def initialize(scope: Scope, name: String): F[Throwable, Project]
+  def rename(scope: Scope, expected: Revision, name: String): F[Throwable, Project]
   def change(scope: Scope, request: ChangeRequest): F[Throwable, ChangeAck]
   def get(scope: Scope, id: ItemId): F[Throwable, ItemView]
   def search(scope: Scope, filter: ItemFilter, after: Option[ItemId], limit: Int): F[Throwable, ItemPage]
@@ -57,6 +58,18 @@ object LedgerService {
         _ <- F.fromEither(scala.util.Try { write(scope); invalid(name.trim.nonEmpty && name.length <= MaxTitle, "Invalid project name") }.toEither)
         project <- repository.initialize(Project(scope.project, name, Revision(1), clock.millis()))
       } yield project
+    }
+
+    override def rename(scope: Scope, expected: Revision, name: String): F[Throwable, Project] = repository.transact(scope.project) { tx =>
+      if (scope.actor.role != Role.Human) throw DomainFailure(Fault.Denied("Project rename requires human authority"))
+      invalid(name.trim.nonEmpty && name.length <= MaxTitle, "Invalid project name")
+      if (tx.project.revision != expected) throw DomainFailure(Fault.Conflict("Project revision changed; refresh before renaming"))
+      if (tx.project.name == name) tx.project
+      else {
+        val next = tx.project.copy(name = name, revision = Revision(Math.addExact(expected.value, 1L)))
+        tx.renameProject(next)
+        next
+      }
     }
 
     override def change(scope: Scope, request: ChangeRequest): F[Throwable, ChangeAck] = repository.transact(scope.project) { tx =>

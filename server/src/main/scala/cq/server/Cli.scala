@@ -93,7 +93,7 @@ final class Cli(environment: Map[String, String], directory: Path, output: Print
     case "init" :: rest =>
       val opts = options(rest, Set("--endpoint", "--project-id", "--name"))
       val location = configDirectory
-      val (config, actorSession) = locked(location) {
+      val initialized = locked(location) {
         val file = location.resolve("project.json")
         val existing = if (Files.exists(file)) Some(configuration(location)) else None
         val project = opts.get("--project-id").map(v => ProjectId(UUID.fromString(v))).orElse(existing.map(_.project)).getOrElse(ProjectId(UUID.randomUUID()))
@@ -103,10 +103,23 @@ final class Cli(environment: Map[String, String], directory: Path, output: Print
         val name = opts.get("--name").orElse(existing.map(_.name)).getOrElse(directory.getFileName.toString)
         require(name.trim.nonEmpty && name.length <= LedgerPolicy.MaxTitle, "Invalid project name")
         val config = ProjectConfig(project, endpoint, name)
-        atomicWrite(file, Wire.encode(ProjectConfig_JsonCodec, config))
-        (config, session(location))
+        if (existing.isEmpty) atomicWrite(file, Wire.encode(ProjectConfig_JsonCodec, config))
+        val actorSession = session(location)
+        val attached = request(config, actorSession, Command.Initialize(config)) match {
+          case Result.Initialized(value) => value
+          case other => throw new IllegalStateException(s"Unexpected initialization result: $other")
+        }
+        val result = opts.get("--name") match {
+          case Some(value) if value != attached.name => request(config, actorSession, Command.RenameProject(project, attached.revision, value))
+          case _ => Result.Initialized(attached)
+        }
+        val current = result match {
+          case Result.Initialized(value) => value
+          case other => throw new IllegalStateException(s"Unexpected rename result: $other")
+        }
+        atomicWrite(file, Wire.encode(ProjectConfig_JsonCodec, config.copy(name = current.name)))
+        result
       }
-      val initialized = request(config, actorSession, Command.Initialize(config))
       output.println(Wire.encode(Result_JsonCodec, initialized))
       output.println(s"Configuration: ${location.resolve("project.json")}")
     case "query" :: rest =>

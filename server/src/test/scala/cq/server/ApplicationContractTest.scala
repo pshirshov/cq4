@@ -60,6 +60,29 @@ abstract class ApplicationContractTest extends SpecZIO with AssertZIO {
         } yield ()
     }
 
+    "rename display metadata with revision comparison and preserve item identity and counters" in {
+      (ledger: LedgerService[IO], repository: LedgerRepository[IO], usage: UsageService[IO]) =>
+        val auth = authorization(Now)
+        val root = auth.authenticate(Token, Some(UUID.randomUUID().toString))
+        val application = new Application(ledger, repository, usage, auth)
+        val project = ProjectId(UUID.randomUUID())
+        val worker = auth.authenticate(auth.grant(root, GrantRequest(project, Actor("worker", SessionId(UUID.randomUUID()), Role.Worker), Now + 10000)).value, None)
+        for {
+          _ <- application.execute(root, Command.Initialize(ProjectConfig(project, "http://localhost", "Original")))
+          _ <- application.execute(root, Command.Change(ChangeInput(project, request)))
+          denied <- application.execute(worker, Command.RenameProject(project, Revision(1), "Forbidden"))
+          _ <- assertIO(denied match { case Result.Failed(_: Fault.Denied) => true; case _ => false })
+          renamed <- application.execute(root, Command.RenameProject(project, Revision(1), "New display"))
+          _ <- assertIO(renamed match { case Result.Initialized(value) => value.id == project && value.name == "New display" && value.revision == Revision(2); case _ => false })
+          stale <- application.execute(root, Command.RenameProject(project, Revision(1), "Stale name"))
+          _ <- assertIO(stale match { case Result.Failed(_: Fault.Conflict) => true; case _ => false })
+          attached <- application.execute(root, Command.Initialize(ProjectConfig(project, "http://localhost", "New directory")))
+          _ <- assertIO(attached == renamed)
+          created <- application.execute(root, Command.Change(ChangeInput(project, request)))
+          _ <- assertIO(created match { case Result.Changed(ack) => ack.items.head.id.number == 2; case _ => false })
+        } yield ()
+    }
+
     "preserve mutation acknowledgements across service re-creation and reject mixed snapshot pages" in {
       (ledger: LedgerService[IO], repository: LedgerRepository[IO], usage: UsageService[IO]) =>
         val auth = authorization(Now)

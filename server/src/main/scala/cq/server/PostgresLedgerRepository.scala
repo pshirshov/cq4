@@ -50,6 +50,14 @@ private final class PostgresLedgerTransaction(connection: Connection, override v
   private def ledger(value: String): Ledger = Ledger.parse(value).getOrElse(throw new IllegalStateException(s"Invalid persisted ledger $value"))
   private def relation(value: String): Relation = Relation.parse(value).getOrElse(throw new IllegalStateException(s"Invalid persisted relation $value"))
 
+  override def renameProject(value: Project): Unit = {
+    require(value.id == project.id, "Project identity cannot change")
+    sql.execute("UPDATE cq_projects SET body = ?::jsonb WHERE project_id = ?") { s =>
+      s.setString(1, Wire.encode(Project_JsonCodec, value)); s.setObject(2, value.id.value)
+    }
+    ()
+  }
+
   override def cursor: ChangeCursor = ChangeCursor(sql.query("SELECT change_cursor FROM cq_projects WHERE project_id = ?")(projectKey)(_.getLong(1)).head)
 
   override def allocate(value: Ledger): ItemId = {

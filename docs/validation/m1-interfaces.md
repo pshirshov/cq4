@@ -20,14 +20,25 @@ Browser login issues an HttpOnly, SameSite=Strict cookie (Secure on HTTPS). Cook
 
 HTTP commands, MCP and WebSocket calls invoke `Application`, which uses the existing ledger/usage services. Continuation search requires a matching snapshot cursor or returns `Resync`. The five ordinary capabilities are `search`, `read`, `change`, `claim`, and `usage`. Host ingestion is a separate HTTP endpoint. The 2 MiB inbound HTTP/frame bound is implemented; complete output and aggregate budgets remain open.
 
-WebSocket subscriptions carry a request identity and committed cursor. Subscription setup/replacement and polling serialize per connection. Clients receive correlated replies and committed replay pages, or explicit resynchronization errors. A bounded output queue and nonce-correlated heartbeat provide the server foundation. Browser recovery and its complete reliability checks are not implemented yet.
+WebSocket subscriptions carry a request identity and committed cursor. Subscription setup/replacement and polling serialize per connection. Clients receive correlated replies and committed replay pages, or explicit resynchronization errors. A bounded output queue and nonce-correlated heartbeat provide the server foundation. The minimal browser now has recovery checks; the full lifecycle corpus remains M5 work. See [browser evidence](m1-browser.md).
 
 ## CLI identity
 
 `cq init` stores generated `ProjectConfig` in the Git common directory's `cq/project.json`, or `.cq/project.json` for a directory outside Git. Git worktrees share the common-directory configuration. Moving the repository preserves it. Clones do not automatically copy Git-local configuration: explicit `--project-id` or transferring the configuration reattaches to existing server identity. Independently initialized copies receive independent UUIDs. The basename supplies the first display name; reattachment preserves the server name.
 
-A file lock serializes initialization and session creation; write/fsync/atomic rename publishes a complete configuration. A failed network initialization leaves the identity available for retry. A mismatched explicit UUID fails rather than silently replacing an established identity. Endpoint replacement with `init --endpoint` is explicit. `cq query`, `cq status`, `cq status audit`, and `cq web` use this configuration. Project display rename remains to be implemented.
+A file lock serializes initialization and session creation; write/fsync/atomic rename publishes a complete configuration. A failed network initialization leaves the identity available for retry. A mismatched explicit UUID fails rather than silently replacing an established identity. Endpoint replacement with `init --endpoint` is explicit. `cq query`, `cq status`, `cq status audit`, and `cq web` use this configuration. `cq init --name TEXT` explicitly renames server display metadata using the current project revision. Reattachment without `--name` refreshes the local cache from the server and does not rename it. UUID, created time, item counters and references remain unchanged. Concurrent name edits with stale revisions are rejected. Rename is an operator command, outside ordinary role MCP capabilities.
 
 ## Remaining M1 work
 
-Minimal browser; complete nested/provenance validation; full relationship restore; service-level coherent paging across all readers; response/aggregate budgets; project rename; isolated workspace foundation; real server restart evidence; independent Astra milestone review. Harness restriction and collector behavior belong to M2 and later. No M1 completion or human acceptance is claimed.
+Response/aggregate budgets and service-level paging; isolated workspace foundation; independent Astra milestone review. Browser, nested validation, relationship restore and restart evidence are covered by subsequent increments. Harness restriction and collector behavior belong to M2 and later. No M1 completion or human acceptance is claimed.
+
+## Project rename and process restart
+
+The CLI name mismatch was reproduced in `20260926T194155-postgres/jvm-cli.log`: `cq init --name` returned the old server name and revision 1 while changing the local configuration. The correction adds an explicit operator rename command with expected project revision; CLI initialization serializes local changes and refreshes the cached name after the server response.
+
+- `20260926T194347-fast`: all 19 dummy scenarios pass, including rename authority/revision checks and unchanged item counters.
+- `20260926T194532-postgres`: all 19 PostgreSQL scenarios and CLI rename checks passed; the new restart fixture then failed schema validation because it used incorrect reference field names. Corrected to the generated contract's `expectedSource`/`expectedTarget` fields.
+- `20260926T194635-postgres`: all 19 scenarios, actual transport/CLI rename checks, and whole-process crash/restart verification pass.
+- `20260926T194814-contracts`: deterministic generation, Scala/TypeScript compilation, current codecs and all concrete MCP schemas pass.
+
+The restart scenario uses a fresh server process, eight concurrent allocations and repeated delivery of a fixed request; it then records an inverse relationship, claim, renamed project and controlled usage observation. The runner sends SIGKILL to that server process and starts another against the same database and credentials. Verification compares original acknowledgements and claims, checks counter continuation/history/both reference directions, and replays the usage observation without changing totals. This is server-process crash recovery, not a PostgreSQL crash or power-loss test.

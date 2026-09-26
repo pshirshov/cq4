@@ -117,10 +117,8 @@ class Checks:
             raise RuntimeError("Expected one exported sbt runtime classpath")
         return paths[0]
 
-    def transport(self, command: list[str], name: str, browser: bool):
-        port = free_port()
-        self.environment.update(CQ_HOST="127.0.0.1", CQ_PORT=str(port), CQ_ORIGIN=f"http://127.0.0.1:{port}",
-                                CQ_TOKEN=uuid.uuid4().hex, CQ_SESSION=str(uuid.uuid4()))
+    @contextlib.contextmanager
+    def server(self, command: list[str], name: str):
         with (self.evidence / f"{name}-server.log").open("w") as log:
             process = subprocess.Popen(command + ["serve"], cwd=ROOT, env=self.environment, stdout=log, stderr=subprocess.STDOUT)
             try:
@@ -139,11 +137,7 @@ class Checks:
                     if time.monotonic() >= deadline:
                         raise RuntimeError(f"{name} server startup deadline exceeded")
                     time.sleep(0.1)
-                self.run(["node", "dev/transport.mjs"], f"{name}-transport", STARTUP_TIMEOUT)
-                self.run(["python3", "dev/cli-check.py", *command], f"{name}-cli", STARTUP_TIMEOUT)
-                if browser:
-                    self.environment["CQ_BROWSER_EVIDENCE"] = str(self.evidence)
-                    self.run(["node", "dev/browser.mjs"], f"{name}-browser", COMMAND_TIMEOUT)
+                yield process
             finally:
                 if process.poll() is None:
                     process.terminate()
@@ -154,12 +148,35 @@ class Checks:
                         process.wait(timeout=SHUTDOWN_TIMEOUT)
                         raise RuntimeError(f"{name} server failed graceful shutdown")
 
+    def transport(self, command: list[str], name: str, browser: bool):
+        port = free_port()
+        self.environment.update(CQ_HOST="127.0.0.1", CQ_PORT=str(port), CQ_ORIGIN=f"http://127.0.0.1:{port}",
+                                CQ_TOKEN=uuid.uuid4().hex, CQ_SESSION=str(uuid.uuid4()))
+        with self.server(command, name):
+            self.run(["node", "dev/transport.mjs"], f"{name}-transport", STARTUP_TIMEOUT)
+            self.run(["python3", "dev/cli-check.py", *command], f"{name}-cli", STARTUP_TIMEOUT)
+            if browser:
+                self.environment["CQ_BROWSER_EVIDENCE"] = str(self.evidence)
+                self.run(["node", "dev/browser.mjs"], f"{name}-browser", COMMAND_TIMEOUT)
+
+    def restart(self, command: list[str]):
+        fixture = str(self.evidence / "restart-fixture.json")
+        with self.server(command, "before-crash") as process:
+            self.run(["node", "dev/restart.mjs", "seed", fixture], "restart-seed", STARTUP_TIMEOUT)
+            process.kill()
+            process.wait(timeout=SHUTDOWN_TIMEOUT)
+            if process.returncode != -9:
+                raise RuntimeError("Restart scenario did not terminate the original server with SIGKILL")
+        with self.server(command, "after-crash"):
+            self.run(["node", "dev/restart.mjs", "verify", fixture], "restart-verify", STARTUP_TIMEOUT)
+
     def postgres(self):
         self.generate()
         classpath = self.classpath()
         with self.database():
             self.sbt(["server/testOnly *Postgres"], "postgres-contract")
             self.transport(["java", "-cp", classpath, "cq.server.Main"], "jvm", False)
+            self.restart(["java", "-cp", classpath, "cq.server.Main"])
 
     def browser(self):
         self.generate()

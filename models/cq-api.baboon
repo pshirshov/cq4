@@ -205,6 +205,7 @@ root data UsageInput { project: ProjectId selection: UsageSelection }
 root adt Command {
   data Projects { after: opt[ProjectId] limit: i32 }
   data Initialize { config: ProjectConfig }
+  data RenameProject { project: ProjectId expected: Revision name: str }
   data Search { input: SearchInput }
   data Read { input: ReadInput }
   data Change { input: ChangeInput }

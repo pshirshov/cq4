@@ -15,6 +15,7 @@ trait LedgerRepository[F[_, _]] {
 
 trait LedgerTransaction {
   def project: Project
+  def renameProject(project: Project): Unit
   def cursor: ChangeCursor
   def allocate(ledger: Ledger): ItemId
   def get(id: ItemId): Option[Item]

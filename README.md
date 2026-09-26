@@ -95,10 +95,11 @@ Use the emitted classpath with `java -cp <classpath> cq.server.Main` from the co
 ```text
 cq init --endpoint http://127.0.0.1:8765
 cq init --project-id <existing-uuid> --endpoint <server-origin>
+cq init --name "New display name"
 cq query --ledger Tasks --archived All --limit 20
 cq status --task T1
 cq status audit --task T1 --limit 20
 cq web
 ```
 
-Here `cq` denotes that JVM launcher until the current native package is built. `web` prints the configured origin. Project configuration lives under the Git common directory (`cq/project.json`) or `.cq/project.json` outside Git. Worktrees share identity. `status` also supports `--cohort` and `--session`; omit scope flags for project totals. Commands emit generated JSON with lossless decimal strings. See [tested behavior and gaps](docs/validation/m1-interfaces.md).
+Here `cq` denotes that JVM launcher until the current native package is built. `web` prints the configured origin. Project configuration lives under the Git common directory (`cq/project.json`) or `.cq/project.json` outside Git. Worktrees share identity. Explicit `init --name` renames the server display; ordinary reattachment preserves that name and refreshes the local cache. `status` also supports `--cohort` and `--session`; omit scope flags for project totals. Commands emit generated JSON with lossless decimal strings. See [tested behavior and gaps](docs/validation/m1-interfaces.md).

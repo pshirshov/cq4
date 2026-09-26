@@ -50,6 +50,10 @@ private final class DummyLedgerTransaction(initial: DummyLedgerState) extends Le
   private var state = initial
   def result: DummyLedgerState = state
   override def project: Project = state.project
+  override def renameProject(project: Project): Unit = {
+    require(project.id == state.project.id, "Project identity cannot change")
+    state = state.copy(project = project)
+  }
   override def cursor: ChangeCursor = ChangeCursor(state.cursor)
   override def allocate(ledger: Ledger): ItemId = {
     val next = Math.addExact(state.counters.getOrElse(ledger, 0L), 1L)
