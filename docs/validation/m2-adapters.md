@@ -29,7 +29,7 @@ The fast suite covers environment/credential isolation, explicit routing, role i
 - `pi-bridge-before.log` reproduced rejection of `tools/list` before `notifications/initialized`. The bridge now completes that handshake; `pi-bridge-after.log` passes, as do both actual Pi probes.
 - `20260926T233821-fast` reproduced silently ignored Claude provider selection: the unsupported-provider rejection assertion failed because launch succeeded. Claude now rejects unverified provider routes. The verified Anthropic launch is unchanged.
 
-`20260926T233854-fast` passes all 58 Scala scenarios and the Node bridge check after these corrections. Source/command manifests and complete reports are retained. Independent review is pending for this increment.
+`20260926T233854-fast` passes all 58 Scala scenarios and the Node bridge check after these corrections. Source/command manifests and complete reports are retained. Astra independently approved `7e1f87d`, with no blocking or major findings. The reviewed source hashes match the final fast evidence. Approval covers the bounded adapter increment and its six capability probes; the remaining M2 work below stays open.
 
 ## Reproduction and remaining work
 
