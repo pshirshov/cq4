@@ -34,4 +34,4 @@ Requirements: [R01–R31](drafts/20260926-0957-cq-requirements-prompt.md). Miles
 | R28 Roles | M2, M4 | Not started | — |
 | R29 Commands | M2, M4 | Not started | — |
 | R30 Handle dispatch | M2, M4 | Not started | — |
-| R31 Usage audit | M1, M2, M4, M5 | In progress | Initial typed assignment/attempt/observation models generated; audit persistence and accounting are next; [increment evidence](validation/m1-core.md) |
+| R31 Usage audit | M1, M2, M4, M5 | In progress | Immutable audit, frozen attribution, normalization, corrections, idempotency and scoped summaries pass dummy/PG scenarios, including 1,500 → 1,600; authenticated clients, collectors and UI remain. [Evidence](validation/m1-usage.md) |

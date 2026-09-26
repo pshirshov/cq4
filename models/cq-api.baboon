@@ -149,7 +149,7 @@ root data UsageReceipt { id: ObservationId sequence: i64 }
 root data RecordedUsage { upload: UsageUpload normalized: TokenCounts actor: Actor sequence: i64 }
 root data AttemptOutcome { request: RequestId attempt: AttemptId state: AttemptState finishedAt: i64 gaps: lst[str] }
 root data MetricTotal { known: i64 unknown: i64 estimated: i64 }
-root data CostTotal { amount: DecimalAmount currency: str basis: CostBasis pricingVersion: opt[str] }
+root data CostTotal { amount: DecimalAmount currency: str basis: CostBasis pricingVersion: opt[str] measurements: i64 }
 root data UsageTotals {
   input: MetricTotal
   output: MetricTotal
@@ -160,7 +160,7 @@ root data UsageTotals {
   costs: lst[CostTotal]
   unknownCosts: i64
 }
-root data MeterProjection { totals: UsageTotals latestPosition: opt[i64] completeness: UsageCompleteness gaps: lst[str] }
+root data MeterProjection { totals: UsageTotals latestPosition: opt[i64] incompleteSamples: i64 completeness: UsageCompleteness gaps: lst[str] }
 root data MeterView { assignment: Assignment attempt: Attempt meter: UsageMeter projection: MeterProjection }
 root adt UsageFilter {
   data ProjectAll {}
@@ -174,6 +174,7 @@ root data UsageReport {
   shared: UsageTotals
   unattributed: UsageTotals
   sharedAssignments: set[AssignmentId]
+  sharedAssignmentsTruncated: bit
   cursor: i64
   incompleteMeters: i64
   attemptsWithoutMeters: i64

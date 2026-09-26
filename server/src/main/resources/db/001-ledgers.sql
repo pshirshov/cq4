@@ -83,3 +83,94 @@ CREATE TABLE cq_claim_members (
   FOREIGN KEY (project_id, ledger, number) REFERENCES cq_items,
   FOREIGN KEY (project_id, claim_id) REFERENCES cq_claims
 );
+
+CREATE TABLE cq_usage_clock (
+  project_id uuid PRIMARY KEY REFERENCES cq_projects,
+  cursor bigint NOT NULL CHECK (cursor >= 0)
+);
+CREATE TABLE cq_usage_assignments (
+  project_id uuid NOT NULL REFERENCES cq_projects,
+  assignment_id uuid NOT NULL,
+  attribution text NOT NULL,
+  cohort uuid,
+  evaluation_run text,
+  evaluation_scenario text,
+  actor jsonb NOT NULL,
+  received_at bigint NOT NULL,
+  body jsonb NOT NULL,
+  PRIMARY KEY (project_id, assignment_id)
+);
+CREATE INDEX cq_usage_cohorts ON cq_usage_assignments (project_id, cohort);
+CREATE INDEX cq_usage_evaluations ON cq_usage_assignments (project_id, evaluation_run, evaluation_scenario);
+CREATE TABLE cq_usage_members (
+  project_id uuid NOT NULL,
+  assignment_id uuid NOT NULL,
+  ledger text NOT NULL,
+  number bigint NOT NULL,
+  PRIMARY KEY (project_id, assignment_id, ledger, number),
+  FOREIGN KEY (project_id, assignment_id) REFERENCES cq_usage_assignments,
+  FOREIGN KEY (project_id, ledger, number) REFERENCES cq_items
+);
+CREATE INDEX cq_usage_tasks ON cq_usage_members (project_id, ledger, number, assignment_id);
+CREATE TABLE cq_usage_attempts (
+  project_id uuid NOT NULL,
+  attempt_id uuid NOT NULL,
+  assignment_id uuid NOT NULL,
+  parent_id uuid,
+  session_id uuid NOT NULL,
+  actor jsonb NOT NULL,
+  received_at bigint NOT NULL,
+  body jsonb NOT NULL,
+  PRIMARY KEY (project_id, attempt_id),
+  FOREIGN KEY (project_id, assignment_id) REFERENCES cq_usage_assignments,
+  FOREIGN KEY (project_id, parent_id) REFERENCES cq_usage_attempts
+);
+CREATE INDEX cq_usage_assignment_attempts ON cq_usage_attempts (project_id, assignment_id, attempt_id);
+CREATE INDEX cq_usage_sessions ON cq_usage_attempts (project_id, session_id, attempt_id);
+CREATE TABLE cq_usage_meters (
+  project_id uuid NOT NULL,
+  attempt_id uuid NOT NULL,
+  meter text NOT NULL,
+  actor jsonb NOT NULL,
+  received_at bigint NOT NULL,
+  body jsonb NOT NULL,
+  projection jsonb NOT NULL,
+  PRIMARY KEY (project_id, attempt_id, meter),
+  FOREIGN KEY (project_id, attempt_id) REFERENCES cq_usage_attempts
+);
+CREATE TABLE cq_usage_records (
+  project_id uuid NOT NULL,
+  observation_id uuid NOT NULL,
+  sequence bigint NOT NULL,
+  attempt_id uuid NOT NULL,
+  meter text NOT NULL,
+  source text NOT NULL,
+  position bigint NOT NULL,
+  body jsonb NOT NULL,
+  PRIMARY KEY (project_id, observation_id),
+  UNIQUE (project_id, sequence),
+  FOREIGN KEY (project_id, attempt_id, meter) REFERENCES cq_usage_meters
+);
+CREATE INDEX cq_usage_attempt_records ON cq_usage_records (project_id, attempt_id, sequence);
+CREATE INDEX cq_usage_native_sources ON cq_usage_records (project_id, attempt_id, source, position);
+CREATE TABLE cq_usage_heads (
+  project_id uuid NOT NULL,
+  attempt_id uuid NOT NULL,
+  meter text NOT NULL,
+  position bigint NOT NULL,
+  observation_id uuid NOT NULL,
+  PRIMARY KEY (project_id, attempt_id, meter, position),
+  FOREIGN KEY (project_id, attempt_id, meter) REFERENCES cq_usage_meters,
+  FOREIGN KEY (project_id, observation_id) REFERENCES cq_usage_records
+);
+CREATE TABLE cq_usage_outcomes (
+  project_id uuid NOT NULL,
+  request_id uuid NOT NULL,
+  attempt_id uuid NOT NULL,
+  actor jsonb NOT NULL,
+  received_at bigint NOT NULL,
+  body jsonb NOT NULL,
+  PRIMARY KEY (project_id, request_id),
+  FOREIGN KEY (project_id, attempt_id) REFERENCES cq_usage_attempts
+);
+CREATE INDEX cq_usage_attempt_outcomes ON cq_usage_outcomes (project_id, attempt_id, received_at);
