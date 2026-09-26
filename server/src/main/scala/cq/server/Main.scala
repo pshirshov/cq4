@@ -1,7 +1,6 @@
 package cq.server
 
 import com.comcast.ip4s.{Host, Port}
-import cq.api.ProjectId
 import cq.core.{LedgerRepository, LedgerService, ProbeRepository, ProbeService, UsageRepository, UsageService}
 import distage.{Activation, Lifecycle, ModuleDef}
 import distage.StandardAxis.Repo
@@ -14,7 +13,6 @@ import org.http4s.ember.server.EmberServerBuilder
 import org.http4s.server.Server
 import zio.{IO, Task, ZIO}
 import zio.interop.catz.*
-import java.util.UUID
 import java.time.Clock
 
 final case class ListenConfig(host: Host, port: Port)
@@ -51,6 +49,9 @@ object CqPlugin extends PluginDef {
   make[Clock].fromValue(Clock.systemUTC())
   make[LedgerDatabase]
   make[Transport]
+  make[Authorization]
+  make[Application]
+  make[LiveSession]
   make[McpSchemas]
   make[RunningServer].fromResource[RunningServer.Resource]
   make[DatabaseSetup]
@@ -60,7 +61,7 @@ object CqPlugin extends PluginDef {
   make[AccessConfig].fromEffect(ZIO.attempt {
     val token = required("CQ_TOKEN")
     require(token.length >= 32, "CQ_TOKEN must contain at least 32 characters")
-    AccessConfig(token, ProjectId(UUID.fromString(required("CQ_PROJECT_ID"))), required("CQ_ORIGIN"))
+    AccessConfig(token, required("CQ_ORIGIN"))
   })
   make[ListenConfig].fromEffect(ZIO.attempt {
     ListenConfig(Host.fromString(required("CQ_HOST")).getOrElse(throw new IllegalArgumentException("Invalid CQ_HOST")),
@@ -86,11 +87,23 @@ object CqPlugin extends PluginDef {
   private def required(name: String): String = sys.env.getOrElse(name, throw new IllegalArgumentException(s"Missing $name"))
 }
 
-object Main extends RoleAppMain.LauncherBIO[IO] {
+object ServerMain extends RoleAppMain.LauncherBIO[IO] {
   override def requiredRoles(argv: RoleAppMain.ArgV): Vector[RoleArgs] = Vector(RoleArgs(ServerRole.id))
   override def pluginConfig: PluginConfig = PluginConfig.const(List(CqPlugin))
   override protected def roleAppBootOverrides(argv: RoleAppMain.ArgV): distage.Module =
     super.roleAppBootOverrides(argv) ++ new ModuleDef {
       make[Activation].named("default").fromValue(Activation(Repo -> Repo.Prod))
     }
+}
+
+object Main {
+  def main(args: Array[String]): Unit = {
+    if (args.headOption.contains("serve")) ServerMain.main(args.tail)
+    else try new Cli(sys.env, java.nio.file.Path.of("").toAbsolutePath, System.out).run(args.toList)
+    catch {
+      case failure: Exception =>
+        System.err.println(s"CQ: ${failure.getMessage}")
+        System.exit(1)
+    }
+  }
 }

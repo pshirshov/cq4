@@ -63,7 +63,7 @@ class Checks:
         self.run(["npm", "run", "check"], "typescript-compile", COMMAND_TIMEOUT)
         fixtures = self.evidence / "wire"
         self.sbt([f"contracts/Test/runMain cq.contracts.ContractCheck export {fixtures}"], "scala-contract-export")
-        self.sbt([f"server/Test/runMain cq.server.ExportSchema {fixtures}/mcp-probe.json"], "mcp-schema-export")
+        self.sbt([f"server/Test/runMain cq.server.ExportSchema {fixtures}/mcp-tools.json"], "mcp-schema-export")
         for source, name in [
             ("generated/typescript/cq/api/index.ts", "contracts"),
             ("generated/typescript/BaboonSharedRuntime.ts", "contract-runtime"),
@@ -118,13 +118,13 @@ class Checks:
     def transport(self, command: list[str], name: str):
         port = free_port()
         self.environment.update(CQ_HOST="127.0.0.1", CQ_PORT=str(port), CQ_ORIGIN=f"http://127.0.0.1:{port}",
-                                CQ_TOKEN=uuid.uuid4().hex, CQ_PROJECT_ID="00000000-0000-0000-0000-000000000001")
+                                CQ_TOKEN=uuid.uuid4().hex, CQ_SESSION=str(uuid.uuid4()))
         with (self.evidence / f"{name}-server.log").open("w") as log:
-            process = subprocess.Popen(command, cwd=ROOT, env=self.environment, stdout=log, stderr=subprocess.STDOUT)
+            process = subprocess.Popen(command + ["serve"], cwd=ROOT, env=self.environment, stdout=log, stderr=subprocess.STDOUT)
             try:
                 deadline = time.monotonic() + STARTUP_TIMEOUT
                 request = urllib.request.Request(self.environment["CQ_ORIGIN"] + "/api/hello",
-                                                 headers={"Authorization": "Bearer " + self.environment["CQ_TOKEN"]})
+                                                 headers={"Authorization": "Bearer " + self.environment["CQ_TOKEN"], "CQ-Session": self.environment["CQ_SESSION"]})
                 while True:
                     if process.poll() is not None:
                         raise RuntimeError(f"{name} server exited {process.returncode}; see {name}-server.log")
@@ -138,6 +138,7 @@ class Checks:
                         raise RuntimeError(f"{name} server startup deadline exceeded")
                     time.sleep(0.1)
                 self.run(["node", "dev/transport.mjs"], f"{name}-transport", STARTUP_TIMEOUT)
+                self.run(["python3", "dev/cli-check.py", *command], f"{name}-cli", STARTUP_TIMEOUT)
             finally:
                 if process.poll() is None:
                     process.terminate()

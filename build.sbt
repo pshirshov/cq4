@@ -10,6 +10,7 @@ val runtimeClasspath = taskKey[String]("Resolved runtime classpath for JVM and n
 
 lazy val contracts = project.in(file("contracts")).settings(
   Compile / unmanagedSourceDirectories += (ThisBuild / baseDirectory).value / "generated" / "scala",
+  Compile / unmanagedResourceDirectories += (ThisBuild / baseDirectory).value / "generated" / "resources",
   libraryDependencies += "io.circe" %% "circe-parser" % circeVersion,
 )
 

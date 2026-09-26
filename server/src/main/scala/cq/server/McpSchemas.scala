@@ -1,0 +1,74 @@
+package cq.server
+
+import baboon.runtime.shared.{BaboonCodecContext, BaboonJsonCodec}
+import cq.api.*
+import io.circe.{Json, JsonObject, parser}
+import java.nio.charset.StandardCharsets.UTF_8
+
+final case class McpTool(name: String, description: String, inputType: String, results: Set[String], writes: Boolean,
+  decode: Json => Either[Throwable, Command])
+
+final class McpSchemas {
+  private val definitions = {
+    val stream = Option(getClass.getResourceAsStream("/cq-schemas.json")).getOrElse(throw new IllegalStateException("Missing generated schemas"))
+    try parser.parse(new String(stream.readAllBytes(), UTF_8)).fold(throw _, identity).asObject.get
+    finally stream.close()
+  }
+  private def decoder[A](codec: BaboonJsonCodec[A])(wrap: A => Command): Json => Either[Throwable, Command] =
+    json => codec.decode(BaboonCodecContext.Default, json).map(wrap)
+
+  val tools: List[McpTool] = List(
+    McpTool("search", "Read a bounded item page. Continue with its snapshot cursor; restart on Resync.", "SearchInput", Set("Found"), false,
+      decoder(SearchInput_JsonCodec)(Command.Search.apply)),
+    McpTool("read", "Read one item, a bounded history page, or committed changes after a cursor.", "ReadInput", Set("Detail", "History", "Changes"), false,
+      decoder(ReadInput_JsonCodec)(Command.Read.apply)),
+    McpTool("change", "Commit an idempotent atomic change batch with expected revisions and claim fences. Governor authority required.", "ChangeInput", Set("Changed"), true,
+      decoder(ChangeInput_JsonCodec)(Command.Change.apply)),
+    McpTool("claim", "Acquire, renew or release an explicit item-set claim. Governor authority required.", "ClaimInput", Set("Claimed"), true,
+      decoder(ClaimInput_JsonCodec)(Command.ClaimWork.apply)),
+    McpTool("usage", "Read task, cohort, session, evaluation or project usage totals and bounded raw audit pages. Shared totals are not per-member allocations.", "UsageInput", Set("UsageSummary", "UsageAudit"), false,
+      decoder(UsageInput_JsonCodec)(Command.Usage.apply)),
+  )
+
+  def visible(authority: Authority): List[McpTool] = {
+    val canWrite = authority.credential match {
+      case _: Credential.RootSession => true
+      case Credential.Scoped(grant) => grant.actor.role == Role.Governor
+    }
+    tools.filter(tool => !tool.writes || canWrite)
+  }
+
+  def advertised(tool: McpTool): Json = Json.obj(
+    "name" -> Json.fromString(tool.name), "description" -> Json.fromString(tool.description),
+    "inputSchema" -> schema(tool.inputType),
+    "outputSchema" -> closure(Json.obj("type" -> Json.fromString("object"), "oneOf" -> Json.arr(
+      (tool.results + "Failed").toList.sorted.map { tag => Json.obj(
+        "type" -> Json.fromString("object"), "required" -> Json.arr(Json.fromString(tag)), "additionalProperties" -> Json.False,
+        "properties" -> Json.obj(tag -> Json.obj("$ref" -> Json.fromString(s"#/$$defs/cq_api_Result_$tag"))),
+      ) }*
+    ))),
+    "annotations" -> Json.obj("readOnlyHint" -> Json.fromBoolean(!tool.writes), "openWorldHint" -> Json.False),
+  )
+
+  def schema(name: String): Json = closure(definitions(s"cq_api_$name").get)
+
+  private def closure(root: Json): Json = {
+    val selected = scala.collection.mutable.LinkedHashMap.empty[String, Json]
+    def visit(value: Json): Unit = {
+      value.asObject.foreach { obj =>
+        obj("$ref").flatMap(_.asString).foreach { reference =>
+          val key = reference.stripPrefix("#/$defs/")
+          if (!selected.contains(key)) {
+            val definition = definitions(key).getOrElse(throw new IllegalStateException(s"Missing schema $key"))
+            selected.update(key, definition)
+            visit(definition)
+          }
+        }
+        obj.values.foreach(visit)
+      }
+      value.asArray.foreach(_.foreach(visit))
+    }
+    visit(root)
+    root.deepMerge(Json.obj("$defs" -> Json.fromJsonObject(JsonObject.fromIterable(selected))))
+  }
+}

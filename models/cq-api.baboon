@@ -180,3 +180,81 @@ root data UsageReport {
   attemptsWithoutMeters: i64
 }
 root data UsagePage { entries: lst[RecordedUsage] after: i64 hasMore: bit cursor: i64 }
+
+root data ProjectPage { projects: lst[Project] after: opt[ProjectId] hasMore: bit }
+root data ProjectConfig { project: ProjectId endpoint: str name: str }
+root data SearchInput { project: ProjectId filter: ItemFilter after: opt[ItemId] snapshot: opt[ChangeCursor] limit: i32 }
+root adt ReadSelection {
+  data ItemDetail { id: ItemId }
+  data History { id: ItemId before: Revision limit: i32 }
+  data Changes { after: ChangeCursor limit: i32 }
+}
+root data ReadInput { project: ProjectId selection: ReadSelection }
+root data ChangeInput { project: ProjectId change: ChangeRequest }
+root adt ClaimAction {
+  data Acquire { id: ClaimId members: set[ItemId] durationMillis: i64 }
+  data Renew { fence: Fence durationMillis: i64 }
+  data Release { fence: Fence }
+}
+root data ClaimInput { project: ProjectId action: ClaimAction }
+root adt UsageSelection {
+  data Summary { filter: UsageFilter }
+  data Audit { filter: UsageFilter after: i64 limit: i32 }
+}
+root data UsageInput { project: ProjectId selection: UsageSelection }
+root adt Command {
+  data Projects { after: opt[ProjectId] limit: i32 }
+  data Initialize { config: ProjectConfig }
+  data Search { input: SearchInput }
+  data Read { input: ReadInput }
+  data Change { input: ChangeInput }
+  data ClaimWork { input: ClaimInput }
+  data Usage { input: UsageInput }
+}
+root adt Result {
+  data Projects { page: ProjectPage }
+  data Initialized { project: Project }
+  data Found { page: ItemPage }
+  data Detail { view: ItemView }
+  data History { page: HistoryPage }
+  data Changes { page: ChangePage }
+  data Changed { ack: ChangeAck }
+  data Claimed { claim: Claim }
+  data UsageSummary { report: UsageReport }
+  data UsageAudit { page: UsagePage }
+  data Failed { fault: Fault }
+}
+root adt HostUsage {
+  data Assign { value: Assignment }
+  data Start { value: Attempt }
+  data Meter { value: UsageMeter }
+  data Ingest { value: UsageUpload }
+  data Finish { value: AttemptOutcome }
+}
+root data HostUsageInput { project: ProjectId operation: HostUsage }
+root adt HostUsageResult {
+  data Assigned { value: Assignment }
+  data Started { value: Attempt }
+  data Metered { value: UsageMeter }
+  data Ingested { value: UsageReceipt }
+  data Finished { value: AttemptOutcome }
+}
+root data GrantRequest { project: ProjectId actor: Actor expiresAt: i64 }
+root adt Credential {
+  data RootSession { session: SessionId expiresAt: i64 }
+  data Scoped { grant: GrantRequest }
+}
+root data AccessToken { value: str expiresAt: i64 }
+root adt ClientFrame {
+  data Call { id: RequestId command: Command }
+  data Subscribe { id: RequestId project: ProjectId after: ChangeCursor }
+  data Ping { nonce: str }
+  data Pong { nonce: str }
+}
+root adt ServerFrame {
+  data Reply { id: RequestId result: Result }
+  data Changes { subscription: RequestId project: ProjectId page: ChangePage }
+  data Resync { subscription: RequestId project: ProjectId fault: Fault }
+  data Ping { nonce: str }
+  data Pong { nonce: str }
+}

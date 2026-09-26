@@ -9,6 +9,12 @@ import java.sql.{Connection, PreparedStatement}
 import zio.{IO, Task}
 
 final class PostgresLedgerRepository(database: LedgerDatabase) extends LedgerRepository[IO] {
+  override def projects(after: Option[ProjectId], limit: Int): IO[Throwable, List[Project]] = database.transaction { connection =>
+    new Jdbc(connection).query("SELECT body::text FROM cq_projects WHERE (?::uuid IS NULL OR project_id > ?::uuid) ORDER BY project_id LIMIT ?") { s =>
+      s.setObject(1, after.map(_.value).orNull); s.setObject(2, after.map(_.value).orNull); s.setInt(3, limit)
+    }(r => Wire.decode(Project_JsonCodec, r.getString(1)))
+  }
+
   override def initialize(project: Project): IO[Throwable, Project] = database.transaction { connection =>
     val sql = new Jdbc(connection)
     sql.execute("INSERT INTO cq_projects(project_id, body) VALUES (?, ?::jsonb) ON CONFLICT DO NOTHING") { s =>

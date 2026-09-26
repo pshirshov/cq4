@@ -6,9 +6,13 @@ import distage.Lifecycle
 import zio.{IO, Ref, Task, ZIO}
 
 final class DummyLedgerResource extends Lifecycle.LiftF[Task, LedgerRepository[IO]](
-  Ref.Synchronized.make(Map.empty[ProjectId, DummyLedgerState]).map { projects =>
+  Ref.Synchronized.make(Map.empty[ProjectId, DummyLedgerState]).map { states =>
     new LedgerRepository[IO] {
-      override def initialize(project: Project): IO[Throwable, Project] = projects.modify { current =>
+      override def projects(after: Option[ProjectId], limit: Int): IO[Throwable, List[Project]] = states.get.map { current =>
+        current.valuesIterator.map(_.project).filter(p => after.forall(a => p.id.value.toString > a.value.toString))
+          .toList.sortBy(_.id.value.toString).take(limit)
+      }
+      override def initialize(project: Project): IO[Throwable, Project] = states.modify { current =>
         current.get(project.id) match {
           case Some(existing) => (existing.project, current)
           case None =>
@@ -16,7 +20,7 @@ final class DummyLedgerResource extends Lifecycle.LiftF[Task, LedgerRepository[I
             (project, current.updated(project.id, state))
         }
       }
-      override def transact[A](project: ProjectId)(operation: LedgerTransaction => A): IO[Throwable, A] = projects.modifyZIO { current =>
+      override def transact[A](project: ProjectId)(operation: LedgerTransaction => A): IO[Throwable, A] = states.modifyZIO { current =>
         ZIO.attempt {
           val state = current.getOrElse(project, throw DomainFailure(Fault.Missing("Project not initialized")))
           val tx = new DummyLedgerTransaction(state)

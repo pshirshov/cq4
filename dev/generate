@@ -5,6 +5,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import urllib.request
+from schema import generate_schemas
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -68,8 +69,10 @@ def main():
         "--generate-json-codecs-by-default=true", "--generate-ueba-codecs-by-default=true",
         ":typescript", "--output", "generated/typescript", "--ts-import-suffix", ".js",
         "--generate-json-codecs-by-default=true", "--generate-ueba-codecs-by-default=true",
+        ":openapi", "--output", "generated/openapi",
     ], cwd=ROOT, check=True)
     scala3_runtime()
+    generate_schemas(ROOT)
 
 
 if __name__ == "__main__":

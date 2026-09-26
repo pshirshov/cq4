@@ -5,7 +5,7 @@ Goal: complete the first CQ release under the [implementation plan](drafts/20260
 | Milestone | State | Evidence |
 | --- | --- | --- |
 | M0 stack and contracts | Complete; Astra approved `1801c2a` | [Four checks and native artifact](validation/m0-stack.md) |
-| M1 durable core | In progress | [Ledger/claim checks](validation/m1-core.md), [usage accounting checks](validation/m1-usage.md); authenticated interfaces and remaining invariants are next |
+| M1 durable core | In progress | [Ledger/claim checks](validation/m1-core.md), [usage accounting checks](validation/m1-usage.md); [authenticated clients and CLI](validation/m1-interfaces.md); browser and remaining invariants are next |
 | M2 first usable agent slice | Not started | — |
 | M3 graph and concurrency | Not started | — |
 | M4 process and cohorts | Not started | — |
@@ -16,7 +16,7 @@ Goal: complete the first CQ release under the [implementation plan](drafts/20260
 
 User correction applied and verified at `fbb7918`: maintain one mutable `cq.api` 0.1.0 model; permit breaking changes and bump only on explicit instruction. Historical model copies and evolution fixtures are removed. Generation refreshes the current signature and rejects unrequested extra versions.
 
-The usage audit now has immutable assignments/attempts/observations/outcomes, increment/cumulative normalization, correction/deduplication, indexed scope filters and separate direct/shared/unattributed summaries. Fourteen dummy and PostgreSQL scenarios pass, including the required 1,500 → 1,600 fixture. [Evidence and remaining scope](validation/m1-usage.md). Next: complete M1 authenticated ledger/audit transport, CLI project initialization and the minimal browser, together with the remaining validation/restore/snapshot/workspace requirements.
+The usage audit now has immutable assignments/attempts/observations/outcomes, increment/cumulative normalization, correction/deduplication, indexed scope filters and separate direct/shared/unattributed summaries. Fourteen dummy and PostgreSQL scenarios pass, including the required 1,500 → 1,600 fixture. [Evidence and remaining scope](validation/m1-usage.md). Authenticated ledger/audit transport and CLI project initialization now pass actual PostgreSQL/client checks. See [interface evidence](validation/m1-interfaces.md). Next: the minimal browser and remaining validation, relationship restore, paging/bounds, rename, restart and workspace requirements.
 
 M0 is implemented and verified at `1801c2a`, with Astra approval. The first M1 increment adds all fourteen typed content/status models, project initialization/reattachment in the service, atomic counters, idempotent batches, immutable history, canonical references, committed change cursors and explicit-set claims. Contracts, dummy checks and real PostgreSQL checks pass. This increment does not complete M1 and has not received a milestone review. No user decision is currently required.
 

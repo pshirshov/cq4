@@ -7,7 +7,7 @@ Requirements: [R01–R31](drafts/20260926-0957-cq-requirements-prompt.md). Miles
 | R01 Stack | M0, M6 | In progress | [M0 JVM/native stack proof passes](validation/m0-stack.md); complete release packaging remains M6 |
 | R02 Live frontend | M1, M5 | Not started | — |
 | R03 Baboon contracts | M0, M6 | In progress | One 0.1.0 model; edits and breaking changes in place per user correction; no compatibility gate. See [current contract policy](design/contracts.md) and [increment evidence](validation/m1-core.md) |
-| R04 HTTP MCP | M0, M1 | In progress | Real SDK initialize/list/call passes on JVM/native; production tools and roles pending |
+| R04 HTTP MCP | M0, M1 | In progress | Five generated-schema ledger/audit tools and enforced role profiles pass real SDK checks on JVM; earlier native evidence covers M0 only. [Interface evidence](validation/m1-interfaces.md) |
 | R05 Fixed ledgers | M1 | In progress | Fourteen typed content/status branches and outcome classification; examples pass on both adapters; nested validation remains; [increment evidence](validation/m1-core.md) |
 | R06 No custom ledgers | M1 | In progress | Closed generated Content/Ledger types and server allocation; no registration capability; transport exposure pending; [increment evidence](validation/m1-core.md) |
 | R07 Provenance/gating | M1, M4 | In progress | Actor/session/request provenance persisted with history; host-observed evidence enforcement remains; [increment evidence](validation/m1-core.md) |
@@ -16,16 +16,16 @@ Requirements: [R01–R31](drafts/20260926-0957-cq-requirements-prompt.md). Miles
 | R10 History | M1, M3 | In progress | Creation/edit/archive/edge history and content restore tested; full relationship restore remains; [increment evidence](validation/m1-core.md) |
 | R11 Atomic IDs | M1 | In progress | Concurrent per-project/ledger allocation and duplicate request replay pass; actual-client restart evidence remains; [increment evidence](validation/m1-core.md) |
 | R12 PostgreSQL | M0, M1, M6 | In progress | Versioned DDL and real PostgreSQL transactions pass shared ledger scenarios; backup/restore remains M6; [increment evidence](validation/m1-core.md) |
-| R13 Lean MCP | M1, M4 | Not started | — |
+| R13 Lean MCP | M1, M4 | In progress | Five ordinary capabilities; generated schemas include only referenced definitions. Compact search projections, dispatch and measured token budgets remain. [Interface evidence](validation/m1-interfaces.md) |
 | R14 Archive attribute | M1 | In progress | Archive field, default omission, direct read and restoration pass shared scenarios; clients remain; [increment evidence](validation/m1-core.md) |
 | R15 Query language | M1, M3 | In progress | Typed ledger/archive filter and stable ID ordering implemented; complete shared grammar remains M3; [increment evidence](validation/m1-core.md) |
 | R16 Cohorts | M4 | Not started | — |
 | R17 Canonical refs | M1, M3 | In progress | Canonical/inverse rows, endpoint history, duplicate normalization and project checks implemented; graph checks remain; [increment evidence](validation/m1-core.md) |
 | R18 Worksets | M3 | Not started | — |
 | R19 Bounded work | M3 | Not started | — |
-| R20 Project identity | M1 | In progress | UUID project service initialization/reattachment tested; filesystem init/CLI and rename remain; [increment evidence](validation/m1-core.md) |
+| R20 Project identity | M1 | In progress | UUID project service initialization/reattachment tested; CLI concurrent init, worktrees, moves and explicit reattachment pass; rename remains. [Interface evidence](validation/m1-interfaces.md); [increment evidence](validation/m1-core.md) |
 | R21 Supervision | M2 | Not started | — |
-| R22 Privilege separation | M1, M2, M4 | In progress | Service mutation roles enforced; authenticated role credentials and harness restrictions remain; [increment evidence](validation/m1-core.md) |
+| R22 Privilege separation | M1, M2, M4 | In progress | Service mutation roles enforced; signed project/role credentials and tool-call restrictions tested; native harness restrictions remain. [Interface evidence](validation/m1-interfaces.md); [increment evidence](validation/m1-core.md) |
 | R23 Query editor | M5 | Not started | — |
 | R24 Three panes | M5 | Not started | — |
 | R25 Correction/reopening | M1, M4 | In progress | No transition gates; archive/status correction and content restoration pass; readiness/review applicability remains; [increment evidence](validation/m1-core.md) |
@@ -34,4 +34,4 @@ Requirements: [R01–R31](drafts/20260926-0957-cq-requirements-prompt.md). Miles
 | R28 Roles | M2, M4 | Not started | — |
 | R29 Commands | M2, M4 | Not started | — |
 | R30 Handle dispatch | M2, M4 | Not started | — |
-| R31 Usage audit | M1, M2, M4, M5 | In progress | Immutable audit, frozen attribution, normalization, corrections, idempotency and scoped summaries pass dummy/PG scenarios, including 1,500 → 1,600; authenticated clients, collectors and UI remain. [Evidence](validation/m1-usage.md) |
+| R31 Usage audit | M1, M2, M4, M5 | In progress | Immutable audit, frozen attribution, normalization, corrections, idempotency and scoped summaries pass dummy/PG scenarios, including 1,500 → 1,600; authenticated host/read endpoints and CLI audit view implemented; collectors and UI remain. [Interface evidence](validation/m1-interfaces.md) [Evidence](validation/m1-usage.md) |

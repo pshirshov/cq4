@@ -10,3 +10,4 @@ generated/
 .bsp/
 .bloop/
 metals.sbt
+__pycache__/

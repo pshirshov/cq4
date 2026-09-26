@@ -1,6 +1,6 @@
 # CQ
 
-CQ is being implemented under the [M0–M6 plan](docs/drafts/20260926-1549-cq-implementation-plan.md). The current code is the M0 stack proof. Release functionality, consumer evaluations and human acceptance are tracked in [implementation status](docs/implementation-status.md) and [requirement coverage](docs/requirement-coverage.md).
+CQ is being implemented under the [M0–M6 plan](docs/drafts/20260926-1549-cq-implementation-plan.md). The durable ledger/audit core and authenticated HTTP/MCP/WebSocket/CLI interfaces are implemented; M1 is still in progress. Release functionality, consumer evaluations and human acceptance are tracked in [implementation status](docs/implementation-status.md) and [requirement coverage](docs/requirement-coverage.md).
 
 ## Development checks
 
@@ -30,7 +30,7 @@ CQ_TEST_DATABASE_PASSWORD=local-test-password \
 
 The runner creates and drops a unique schema in that database. The account must have schema creation permission. With no provided URL, PostgreSQL is started as the current non-root user and stopped by the runner. Missing infrastructure fails the check. `process` and `browser` currently report unavailable; they do not report success.
 
-## Run the stack proof
+## Run the current development server
 
 Create an empty PostgreSQL database, then run from this repository:
 
@@ -42,19 +42,19 @@ CQ_HOST=127.0.0.1 \
 CQ_PORT=8765 \
 CQ_ORIGIN=http://127.0.0.1:8765 \
 CQ_TOKEN=0123456789abcdef0123456789abcdef \
-CQ_PROJECT_ID=00000000-0000-0000-0000-000000000001 \
-nix develop -c sbt --server --batch 'server/run'
+nix develop -c sbt --server --batch 'server/run serve'
 ```
 
-Use your own local credential in place of the example token. All variables are required, including the database password (which may be empty for local trust authentication). The proof creates its `cq_probe` table. A native artifact accepts the same environment; replace the sbt invocation with its executable path.
+Use your own local credential in place of the example token. All variables are required, including the database password (which may be empty for local trust authentication). The server initializes the current ledger/audit schema in an empty database. Existing development databases may require recreation after schema edits; no upgrade compatibility is promised. The previously retained native artifact covers M0, not this current increment.
 
 ```sh
 curl --fail-with-body \
   -H 'Authorization: Bearer 0123456789abcdef0123456789abcdef' \
+  -H 'CQ-Session: 00000000-0000-0000-0000-000000000001' \
   http://127.0.0.1:8765/api/hello
 ```
 
-Expected body: `{"version":"0.1.0","supported":["0.1.0"]}`. `/api/probe`, `/ws` and `/mcp` exercise the same probe service; see [contracts](docs/design/contracts.md). No browser application or ledger workflow is available yet.
+Expected body: `{"version":"0.1.0","supported":["0.1.0"]}`. `/api/call`, `/ws` and `/mcp` use the same ledger/audit application service; see [contracts](docs/design/contracts.md). The browser and supervisor are not implemented yet.
 
 Pins, local compatibility patches and their failure evidence are documented in [dependencies](docs/design/dependencies.md).
 
@@ -69,3 +69,25 @@ Pins, local compatibility patches and their failure evidence are documented in [
 Confirmed scope: fresh data, web UI and CLI, cohorts retaining item identity, enforced permissions for cooperative agents, restricted subgraph termination, and compact dispatch summaries with explicit drill-down. Subagents may be terminated with their governing harness; the brief chooses this simpler lifetime model.
 
 Checked during planning: document links, requirement coverage R01–R31, embedded JSON syntax, source inventories, the isolated gate resolver probe, selected upstream documentation, installed harness CLI capabilities, and one successful token-usage probe per harness. Complete generated schemas and application/runtime verification are deliverables of the implementation milestones.
+
+## Current CLI
+
+Build a JVM launcher classpath from the repository:
+
+```sh
+./dev/generate
+nix develop -c sbt --server --batch --no-colors ';server/compile;show server/runtimeClasspath;exit'
+```
+
+Use the emitted classpath with `java -cp <classpath> cq.server.Main` from the consumer directory (inside `nix develop` or with Java 25 available). Set `CQ_TOKEN` to the operator or scoped credential. Supported commands:
+
+```text
+cq init --endpoint http://127.0.0.1:8765
+cq init --project-id <existing-uuid> --endpoint <server-origin>
+cq query --ledger Tasks --archived All --limit 20
+cq status --task T1
+cq status audit --task T1 --limit 20
+cq web
+```
+
+Here `cq` denotes that JVM launcher until the current native package is built. `web` prints the configured origin. Project configuration lives under the Git common directory (`cq/project.json`) or `.cq/project.json` outside Git. Worktrees share identity. `status` also supports `--cohort` and `--session`; omit scope flags for project totals. Commands emit generated JSON with lossless decimal strings. See [tested behavior and gaps](docs/validation/m1-interfaces.md).
