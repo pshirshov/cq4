@@ -2,7 +2,7 @@ package cq.server
 
 import baboon.runtime.shared.BaboonCodecContext
 import cq.api.*
-import cq.core.{Scope, WorkspaceService}
+import cq.core.{DomainFailure, Scope, WorkspaceService}
 import cq.host.*
 import distage.Activation
 import distage.StandardAxis.Repo
@@ -58,6 +58,8 @@ final class JobSupervisorProcess extends SpecZIO with AssertZIO {
             _ <- (for {
               _ <- supervisor.start(scope, workspace, command(guardian, "print('must not launch')"))
               _ <- ZIO.attemptBlocking(assert(entered.await(3, TimeUnit.SECONDS)))
+              forbidden <- supervisor.start(scope.copy(actor = scope.actor.copy(role = Role.Worker)), workspace, command(guardian, "pass")).either
+              _ <- assertIO(forbidden.left.exists { case DomainFailure(_: Fault.Denied) => true; case _ => false })
               cancellation <- supervisor.cancel(scope, workspace.attempt).fork
               _ <- ZIO.sleep(zio.Duration.fromMillis(100))
               observed <- supervisor.status(scope, workspace.attempt)
@@ -72,7 +74,7 @@ final class JobSupervisorProcess extends SpecZIO with AssertZIO {
       } yield ()
     }
 
-    "deliver cancellation while an unrelated reservation holds the journal lock and never launch after its acknowledgement times out" in { (local: LocalWorkspaceFixture, guardian: GuardianFixture) =>
+    "stop active jobs with or without explicit cancellation when an unrelated reservation stalls, and suppress late launch" in { (local: LocalWorkspaceFixture, guardian: GuardianFixture) => ZIO.foreachDiscard(List(true, false)) { explicitCancellation =>
       val scope = owner
       val first = local.fixture.spec(scope)
       val second = local.fixture.spec(scope)
@@ -113,13 +115,14 @@ final class JobSupervisorProcess extends SpecZIO with AssertZIO {
                 .timeoutFail(new IllegalStateException("Fixture never started"))(zio.Duration.fromSeconds(5))
               starting <- supervisor.start(scope, second, command(guardian, "print('must not launch')")).fork
               _ <- ZIO.attemptBlocking(assert(entered.await(3, TimeUnit.SECONDS)))
-              cancellation <- supervisor.cancel(scope, first.attempt).fork
+              cancellation <- if (explicitCancellation) supervisor.cancel(scope, first.attempt).fork.map(Some(_)) else ZIO.succeed(None)
+              _ <- ZIO.sleep(zio.Duration.fromMillis(1200))
               observed <- ZIO.attemptBlocking(process.get().get.await(Duration.ofSeconds(3)))
               _ <- assertIO(observed.phase == ProcessPhase.Settled && observed.result.exists(_.reason == StopReason.Cancelled))
               _ <- ZIO.sleep(zio.Duration.fromMillis(1200))
               startAck <- starting.poll
-              cancelAck <- cancellation.poll
-              _ <- assertIO(startAck.exists(_.isFailure) && cancelAck.exists(_.isFailure))
+              cancelAck <- ZIO.foreach(cancellation)(_.poll)
+              _ <- assertIO(startAck.exists(_.isFailure) && cancelAck.forall(_.exists(_.isFailure)))
               _ <- ZIO.succeed(release.countDown())
             } yield ()).ensuring(ZIO.succeed(release.countDown()))
           } yield ()
@@ -133,7 +136,7 @@ final class JobSupervisorProcess extends SpecZIO with AssertZIO {
           } yield ()
         }
       } yield ()
-    }
+    } }
 
     "deliver cancellation and bound its acknowledgement while journal persistence is stalled" in { (local: LocalWorkspaceFixture, guardian: GuardianFixture) =>
       val scope = owner

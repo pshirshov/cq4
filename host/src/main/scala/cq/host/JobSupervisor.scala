@@ -51,16 +51,19 @@ final class JobSupervisor private (owner: Scope, repository: JobRepository, work
     }
   }
   private def healthy(): Unit = failure.get().foreach(cause => throw new IllegalStateException("Supervisor storage/quarantine failed; new work is disabled", cause))
+  private def disable(cause: Throwable, current: State): Unit = {
+    failure.compareAndSet(None, Some(cause))
+    current.jobs.values.foreach(_.stop())
+  }
   private def acknowledge[A](operation: IO[Throwable, A]): IO[Throwable, A] = ZIO.uninterruptibleMask { restore =>
     for {
       pending <- operation.forkDaemon
       result <- restore(pending.join).timeout(zio.Duration.fromMillis(AcknowledgementMillis))
       value <- result match {
         case Some(value) => ZIO.succeed(value)
-        case None => ZIO.attempt {
+        case None => state.get.flatMap { current =>
           val cause = new java.io.IOException("Job journal acknowledgement deadline exceeded; execution admission is disabled")
-          failure.compareAndSet(None, Some(cause))
-          throw cause
+          ZIO.succeed(disable(cause, current)) *> ZIO.fail(cause)
         }
       }
     } yield value
@@ -70,7 +73,7 @@ final class JobSupervisor private (owner: Scope, repository: JobRepository, work
       cause => {
         cause match {
           case _: DomainFailure | _: IllegalArgumentException => ()
-          case _ => failure.compareAndSet(None, Some(cause))
+          case _ => disable(cause, current)
         }
         (Left(cause), current)
       },
@@ -84,14 +87,17 @@ final class JobSupervisor private (owner: Scope, repository: JobRepository, work
     read(attempt)
   }
 
-  def start(scope: Scope, workspace: WorkspaceSpec, command: JobCommand): IO[Throwable, JobRecord] = acknowledge {
+  def start(scope: Scope, workspace: WorkspaceSpec, command: JobCommand): IO[Throwable, JobRecord] = ZIO.attempt {
+    authorized(scope)
+    if (workspace.project != owner.project || workspace.owner != owner.actor.session)
+      throw DomainFailure(Fault.Denied("Job workspace has another owner"))
+    healthy()
+  } *> acknowledge {
     mutate { current =>
       for {
         reserved <- ZIO.attemptBlocking {
-          authorized(scope)
           healthy()
           require(!current.closing, "Supervisor is closing")
-          require(workspace.project == owner.project && workspace.owner == owner.actor.session, "Job workspace has another owner")
           val reserved = repository.reserve(workspace, command.fingerprint, clock.millis())
           observations.updateAndGet(_.updated(workspace.attempt, reserved._1))
           healthy()
@@ -181,7 +187,7 @@ final class JobSupervisor private (owner: Scope, repository: JobRepository, work
         _ <- quarantine(attempt, diagnostic)
       } yield ()
       settle.catchAll { storage =>
-        ZIO.succeed(this.failure.compareAndSet(None, Some(storage))) *> quarantine(attempt, diagnostic).either *> ZIO.fail(storage)
+        state.get.flatMap(current => ZIO.succeed(disable(storage, current))) *> quarantine(attempt, diagnostic).either *> ZIO.fail(storage)
       }
     }
   }
