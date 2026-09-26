@@ -2,6 +2,8 @@
 
 The text below is the reusable prompt. The companion [design brief](20260926-0957-cq-design-brief.md) proposes concrete boundaries, roles, commands, and dispatch behavior. The [source audit](20260926-0957-existing-cq-audit.md) records what was inspected and one reproduced configuration leak. The brief's detailed recommendations are starting points; requirements and confirmed user decisions in this prompt take precedence.
 
+Implementation handoff: the [implementation plan and goal](20260926-1549-cq-implementation-plan.md) execute these requirements in stages. The design-only instruction below describes the original requirements task; it does not prohibit implementation when the user activates that goal. The substantive requirements and confirmed decisions remain in force.
+
 ---
 
 You are designing a fresh implementation of **cq**, a general-purpose agent-assisted software development system. Produce a complete, concise, implementable design and requirements package. This task is design, including executable schema artifacts and feasibility checks; do not start implementing the application.
