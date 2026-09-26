@@ -6,14 +6,14 @@ All types remain in the single mutable `cq.api` 0.1.0 model. Breaking developmen
 
 ## Identity and attribution
 
-- Assignment identity freezes project, member IDs, direct/shared/unattributed classification, optional cohort execution and optional evaluation/scenario/assessor identity. Direct work has exactly one member; shared work has two or more; unattributed overhead has no members. Registration checks that members exist in the authenticated project. Archive and later regrouping cannot alter an assignment.
+- Assignment identity freezes project, member IDs, direct/shared/unattributed classification, optional cohort execution and optional evaluation/scenario/assessor identity. Direct work has exactly one member and may belong to a cohort execution without becoming shared; shared work has two or more; unattributed overhead has no members. Registration checks that members exist in the authenticated project. Archive and later regrouping cannot alter an assignment.
 - An attempt freezes assignment, parent attempt, session, role, harness/provider/model, collector version and start time. A retry that performs model work gets a new attempt. Repeated registration of the same identity/content is idempotent; changed content is a conflict.
 - A meter identifies one contributing counter stream within an attempt. It freezes increment/cumulative semantics and the baseline for resumed cumulative counters. A counter reset requires a new meter. Increment meters have zero token baselines and no cost baseline.
 - An observation has a UUID, native source identity/position, occurrence time, raw counter fields, native inclusion semantics, cost basis, completeness/gaps and optional evidence artifact. Receipt time is assigned by the service. Uploads retain both raw and normalized numerical evidence. Host callers register meters and upload observations; the governing model does not forward these values.
 
 Task views return direct totals and references to shared assignments. Shared totals are explicitly separate and must not be added across task views. Project/cohort/session/evaluation views visit each matching meter once. A declared work assignment is not a provider measurement of causal cost for individual members.
 
-The report returns at most 200 shared assignment references and an explicit `sharedAssignmentsTruncated` flag. Meter aggregation continues over all matching pages. Observation drill-down has pages of 1–200 entries. Lifecycle metadata/outcome drill-down and transport response-size enforcement remain part of M1 interface work.
+The report returns at most 200 shared assignment references and an explicit `sharedAssignmentsTruncated` flag. Meter aggregation continues over all matching pages. Observation drill-down has pages of 1–200 entries with a 512 KiB encoded byte budget. Lifecycle metadata/outcome drill-down and transport response-size enforcement remain part of M1 interface work.
 
 ## Normalization and corrections
 
@@ -35,7 +35,7 @@ The initial PostgreSQL DDL includes indexes for assignment membership, cohort, e
 
 Summary reads use PostgreSQL repeatable-read snapshots without locking the audit clock. They fold matching meter projections in pages of 200; raw drill-down uses the committed audit sequence. Total work is proportional to the matching meters rather than every historical raw observation. Query-plan/scale measurements remain M3 work. A project-wide report naturally reads that project's matching meters.
 
-Only Collector/Human service scopes may register or ingest audit data. Governor/worker ledger permissions do not confer telemetry-writing permission. An authorized late observation is admitted after claim release or result rejection because usage ingestion has no work-claim precondition. Transport authentication and per-attempt collector credentials remain M1/M2 work; `Scope` is currently a trusted adapter input.
+Only Collector/Human service scopes may register or ingest audit data. Governor/worker ledger permissions do not confer telemetry-writing permission. An authorized late observation is admitted after claim release or result rejection because usage ingestion has no work-claim precondition. Signed project/role credentials and host-only HTTP ingestion enforce transport scope. Per-attempt collector credentials remain M2 work; `Scope` is a trusted adapter input.
 
 This increment retains all numerical records, frozen membership and corrections indefinitely. There is no deletion or retention job. Optional native evidence artifacts will have separate retention in the artifact service; removing a bulky artifact must retain its reference, numerical evidence and explicit detail-availability state. Artifact storage and retention execution are not implemented yet.
 

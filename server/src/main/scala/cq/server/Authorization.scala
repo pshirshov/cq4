@@ -43,9 +43,10 @@ final class Authorization(access: AccessConfig, clock: Clock) {
     val payload = encoder.encodeToString(Wire.encode(Credential_JsonCodec, credential).getBytes(UTF_8))
     AccessToken(payload + "." + encoder.encodeToString(signature(payload)), new Authority(credential).expiresAt)
   }
-  def login(bearer: String): AccessToken = {
+  def login(bearer: String, sessionId: String): AccessToken = {
     if (!equal(bearer, access.token)) throw DomainFailure(Fault.Denied("Invalid operator credential"))
-    sign(Credential.RootSession(SessionId(UUID.randomUUID()), Math.addExact(clock.millis(), SessionMillis)))
+    val session = Try(UUID.fromString(sessionId)).getOrElse(throw DomainFailure(Fault.Invalid("Login requires CQ-Session UUID")))
+    sign(Credential.RootSession(SessionId(session), Math.addExact(clock.millis(), SessionMillis)))
   }
   def grant(authority: Authority, request: GrantRequest): AccessToken = {
     authority.requireRoot()

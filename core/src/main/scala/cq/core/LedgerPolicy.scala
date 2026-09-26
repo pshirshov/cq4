@@ -167,7 +167,7 @@ object LedgerPolicy {
     }
     draft.content match {
       case c: Content.OperatorAction if c.confirmation.nonEmpty && role != Role.Human =>
-        if (!recorded.exists(_.content match { case previous: Content.OperatorAction => previous.confirmation == c.confirmation; case _ => false }))
+        if (!recorded.exists(_.content match { case previous: Content.OperatorAction => previous.confirmation == c.confirmation && previous.action == c.action && previous.expectedEvidence == c.expectedEvidence; case _ => false }))
           throw DomainFailure(Fault.Denied("Operator confirmation requires human authority"))
       case _ => ()
     }

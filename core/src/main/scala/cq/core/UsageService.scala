@@ -41,7 +41,7 @@ object UsageService {
         invalid(value.project == scope.project && value.members.forall(_.project == scope.project), "Assignment must stay within its authenticated project")
         invalid(value.members.size <= LedgerPolicy.MaxBatch, "Assignment membership exceeds the bound")
         value.attribution match {
-          case Attribution.Direct => invalid(value.members.size == 1 && value.cohort.isEmpty, "Direct work requires exactly one item and no cohort")
+          case Attribution.Direct => invalid(value.members.size == 1, "Direct work requires exactly one item")
           case Attribution.Shared => invalid(value.members.size >= 2, "Shared work requires at least two members")
           case Attribution.Unattributed => invalid(value.members.isEmpty && value.cohort.isEmpty, "Unattributed overhead cannot claim item membership")
         }

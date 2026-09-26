@@ -10,7 +10,7 @@ Requirements: [R01–R31](drafts/20260926-0957-cq-requirements-prompt.md). Miles
 | R04 HTTP MCP | M0, M1 | In progress | Five generated-schema ledger/audit tools and enforced role profiles pass real SDK checks on JVM; earlier native evidence covers M0 only. [Interface evidence](validation/m1-interfaces.md) |
 | R05 Fixed ledgers | M1 | In progress | Fourteen typed content/status branches and outcome classification; nested narrative/citation/evidence validation passes on both adapters; [increment evidence](validation/m1-core.md) |
 | R06 No custom ledgers | M1 | In progress | Closed generated Content/Ledger types and server allocation; no registration capability; actual clients use generated closed contracts; [increment evidence](validation/m1-core.md) |
-| R07 Provenance/gating | M1, M4 | In progress | Actor/session/request provenance persisted; fabricated human/host evidence is denied and recorded evidence preserved; host artifact admission and readiness remain; [increment evidence](validation/m1-core.md) |
+| R07 Provenance/gating | M1, M4 | In progress | Actor/session/request provenance persisted; fabricated human/host evidence is denied and recorded evidence preserved; operator confirmation stays bound to its action/expected evidence; host artifact admission and readiness remain; [increment evidence](validation/m1-core.md) |
 | R08 Process relationships | M4 | Not started | — |
 | R09 Real evaluations | M2, M4, M6 | Not started | Earlier harness probes were not CQ evaluations |
 | R10 History | M1, M3 | In progress | Creation/edit/archive/edge history and full content/relationship restore pass both adapters, including neighbor revisions, claims and rollback; [increment evidence](validation/m1-core.md) |

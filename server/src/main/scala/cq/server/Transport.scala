@@ -61,7 +61,7 @@ final class Transport(application: Application, authorization: Authorization, ac
     case GET -> Root / "app.js" => assets.javascript
     case GET -> Root / "style.css" => assets.stylesheet
     case request @ POST -> Root / "api" / "login" => guarded {
-      ZIO.attempt(authorization.login(bearer(request).getOrElse(""))).flatMap { token =>
+      ZIO.attempt(authorization.login(bearer(request).getOrElse(""), header(request, "CQ-Session").getOrElse(""))).flatMap { token =>
         encoded(Status.Ok, AccessToken_JsonCodec, token).map(_.putHeaders(cookie(token.value, 12L * 60 * 60)))
       }
     }

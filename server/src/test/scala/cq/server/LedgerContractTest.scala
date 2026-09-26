@@ -108,6 +108,21 @@ abstract class LedgerContractTest extends SpecZIO with AssertZIO {
       } yield ()
     }
 
+    "keep human confirmation bound to the operator action and expected evidence" in { (service: LedgerService[IO]) =>
+      val owner = scope()
+      val human = owner.copy(actor = owner.actor.copy(role = Role.Human))
+      val action = Content.OperatorAction(OperatorActionStatus.Confirmed, "Deploy candidate A", "Candidate A is reachable", Some("Approved"), Nil)
+      val draft = task("Operator action").copy(content = action)
+      for {
+        _ <- service.initialize(owner, "confirmation applicability")
+        created <- create(service, human, draft)
+        _ <- denied(service.change(owner, request(List(Mutation.Replace(created.id, Revision(1), draft.copy(content = action.copy(action = "Deploy candidate B")))), Nil)))(_.isInstanceOf[Fault.Denied])
+        _ <- denied(service.change(owner, request(List(Mutation.Replace(created.id, Revision(1), draft.copy(content = action.copy(expectedEvidence = "Candidate B is reachable")))), Nil)))(_.isInstanceOf[Fault.Denied])
+        _ <- service.change(owner, request(List(Mutation.Replace(created.id, Revision(1), draft.copy(title = "Editorial correction"))), Nil))
+        _ <- service.change(owner, request(List(Mutation.Replace(created.id, Revision(2), draft.copy(content = action.copy(action = "Deploy candidate B", confirmation = None)))), Nil))
+      } yield ()
+    }
+
     "roll back an entire batch and allow archive, status correction and restore as a new revision" in { (service: LedgerService[IO]) =>
       val owner = scope()
       val initial = task("Task")
@@ -243,7 +258,7 @@ abstract class LedgerContractTest extends SpecZIO with AssertZIO {
         _ <- denied(later.change(owner, request(List(Mutation.Replace(left.id, Revision(2), task("Late result"))), List(claim.fence))))(_.isInstanceOf[Fault.StaleFence])
         _ <- later.release(other, replacement.fence)
         _ <- denied(later.change(other, request(List(Mutation.Replace(left.id, Revision(2), task("Released result"))), List(replacement.fence))))(_.isInstanceOf[Fault.StaleFence])
-        _ <- later.change(owner, request(List(Mutation.Replace(left.id, Revision(2), task("Human correction"))), Nil))
+        _ <- later.change(owner, request(List(Mutation.Replace(left.id, Revision(2), task("New governing correction"))), Nil))
       } yield ()
     }
 

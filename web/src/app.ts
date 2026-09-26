@@ -41,7 +41,7 @@ class App {
   private dirty = false;
   private historyBefore = new api.Revision(9223372036854775807n);
   private auditAfter = 0n;
-  private editor: { form: Editor; base: api.ItemView | null; key: string; request: api.RequestId | null; submitted: string | null } | null = null;
+  private editor: { form: Editor; record: api.BrowserDraft; key: string; discard: HTMLButtonElement; busy: boolean } | null = null;
 
   constructor(private readonly root: HTMLElement) { void this.start(); }
   private showError(error: unknown): void { this.notice.textContent = String(error); this.notice.setAttribute('role', 'alert'); }
@@ -69,7 +69,9 @@ class App {
     const submit = element('button', 'Sign in'); submit.type = 'submit';
     form.append(element('h1', 'CQ'), element('p', 'Connect to your project workspace.'), label, submit, this.notice);
     form.addEventListener('submit', event => { event.preventDefault(); this.action(async () => {
-      const response = await fetch('/api/login', { method: 'POST', headers: { Authorization: `Bearer ${token.value}` } });
+      let session = localStorage.getItem('cq-browser-session');
+      if (session === null) { session = crypto.randomUUID(); localStorage.setItem('cq-browser-session', session); }
+      const response = await fetch('/api/login', { method: 'POST', headers: { Authorization: `Bearer ${token.value}`, 'CQ-Session': session } });
       if (!response.ok) throw new Error(`Sign in failed (${response.status})`);
       token.value = ''; this.notice.textContent = ''; await this.start();
     }); });
@@ -202,32 +204,72 @@ class App {
     this.detail.append(fields, element('p', result.view.refs.map(ref => `${ref.relation} ${itemName(ref.target)}`).join(' · ')));
     this.auditAfter = 0n; this.auditPanel.replaceChildren(); await this.loadUsage();
   }
+  private storeDraft(editor: NonNullable<App['editor']>): void {
+    localStorage.setItem(editor.key, JSON.stringify(api.BrowserDraft_JsonCodec.instance.encode(CONTEXT, editor.record)));
+  }
+  private lockDraft(editor: NonNullable<App['editor']>): void {
+    const pending = editor.record.pending !== undefined;
+    for (const input of editor.form.element.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | HTMLButtonElement>('input,select,textarea,button')) input.disabled = pending;
+    editor.discard.disabled = pending;
+  }
   private openEditor(base: api.ItemView | null): void {
     const project = this.currentProject();
     const key = `cq-draft:${project.value}:${base === null ? 'new' : itemName(base.item.id)}`;
-    let value: Json = base === null ? { title: '', body: '', labels: [], archived: false, content: { Task: { status: 'Ready', acceptance: [''], result: null, validation: [] } }, citations: [] } :
-      api.ItemDraft_JsonCodec.instance.encode(CONTEXT, base.item.draft) as Json;
+    const initial = base === null ? api.ItemDraft_JsonCodec.instance.decode(CONTEXT, { title: '', body: '', labels: [], archived: false,
+      content: { Task: { status: 'Ready', acceptance: [''], result: null, validation: [] } }, citations: [] }) : base.item.draft;
+    let record = new api.BrowserDraft(project, base === null ? undefined : new api.ItemRevision(base.item.id, base.item.revision), initial, undefined);
     const saved = localStorage.getItem(key);
-    if (saved !== null) { value = JSON.parse(saved) as Json; this.notice.textContent = 'Restored your local draft. Review the current revision before saving.'; }
-    const form = edit('ItemDraft', value, base === null ? 'New item' : `Edit ${itemName(base.item.id)} from revision ${base.item.revision.value}`);
-    this.editor = { form, base, key, request: null, submitted: null };
-    for (const event of ['input', 'change', 'click']) form.element.addEventListener(event, () => {
-      try { localStorage.setItem(key, JSON.stringify(form.read())); } catch (error) { this.showError(`Draft storage failed: ${String(error)}`); }
-    });
-    this.editorPanel.replaceChildren(form.element, button('Save item', () => this.action(() => this.save())), button('Discard local draft', () => {
+    if (saved !== null) {
+      record = api.BrowserDraft_JsonCodec.instance.decode(CONTEXT, JSON.parse(saved));
+      if (record.project.value !== project.value || (base === null ? record.item !== undefined : record.item === undefined || itemName(record.item.id) !== itemName(base.item.id)))
+        throw new Error('Stored draft identity differs from the selected item');
+      this.notice.textContent = record.pending === undefined ? 'Restored your local draft with its original base revision.' : 'A previous save is unresolved. Save item retries that exact request before further editing.';
+    }
+    const caption = record.item === undefined ? 'New item' : `Edit ${itemName(record.item.id)} from revision ${record.item.revision.value}`;
+    const form = edit('ItemDraft', api.ItemDraft_JsonCodec.instance.encode(CONTEXT, record.value) as Json, caption);
+    const discard = button('Discard local draft', () => {
+      if (this.editor !== editor || editor.record.pending !== undefined) return;
       localStorage.removeItem(key); this.editor = null; this.editorPanel.replaceChildren();
-    }));
+    });
+    const editor = { form, record, key, discard, busy: false };
+    this.editor = editor;
+    for (const event of ['input', 'change', 'click']) form.element.addEventListener(event, () => {
+      if (editor.record.pending !== undefined) return;
+      try {
+        editor.record = new api.BrowserDraft(project, editor.record.item, api.ItemDraft_JsonCodec.instance.decode(CONTEXT, form.read()), undefined);
+        this.storeDraft(editor);
+      } catch (error) { this.showError(`Draft storage failed: ${String(error)}`); }
+    });
+    this.lockDraft(editor);
+    this.editorPanel.replaceChildren(form.element, button('Save item', () => this.action(() => this.save())), discard);
   }
   private async save(): Promise<void> {
-    const editor = this.editor; if (editor === null) return;
-    const draft = api.ItemDraft_JsonCodec.instance.decode(CONTEXT, editor.form.read());
-    const serialized = JSON.stringify(api.ItemDraft_JsonCodec.instance.encode(CONTEXT, draft));
-    if (editor.request === null || editor.submitted !== serialized) { editor.request = new api.RequestId(crypto.randomUUID()); editor.submitted = serialized; }
-    const mutation = editor.base === null ? new api.Mutation_Create(draft) : new api.Mutation_Replace(editor.base.item.id, editor.base.item.revision, draft);
-    const result = await this.call(new api.Command_Change(new api.ChangeInput(this.currentProject(), new api.ChangeRequest(editor.request, [mutation], [], 'Browser edit'))));
-    if (!(result instanceof api.Result_Changed)) throw new Error('Unexpected change acknowledgement');
-    localStorage.removeItem(editor.key); this.editor = null; this.editorPanel.replaceChildren(); this.notice.textContent = 'Saved';
-    this.after = undefined; this.snapshot = undefined; await this.refresh(); await this.select(result.ack.items[0].id);
+    const editor = this.editor; if (editor === null || editor.busy) return;
+    if (editor.record.pending === undefined) {
+      const draft = api.ItemDraft_JsonCodec.instance.decode(CONTEXT, editor.form.read());
+      const base = editor.record.item;
+      const mutation = base === undefined ? new api.Mutation_Create(draft) : new api.Mutation_Replace(base.id, base.revision, draft);
+      const pending = new api.ChangeRequest(new api.RequestId(crypto.randomUUID()), [mutation], [], 'Browser edit');
+      editor.record = new api.BrowserDraft(editor.record.project, base, draft, pending);
+    }
+    this.storeDraft(editor);
+    this.lockDraft(editor);
+    const submitted = localStorage.getItem(editor.key);
+    const pending = editor.record.pending;
+    if (pending === undefined) throw new Error('Missing prepared draft request');
+    editor.busy = true;
+    try {
+      const result = await this.connection().call(new api.Command_Change(new api.ChangeInput(editor.record.project, pending)));
+      if (result instanceof api.Result_Failed) {
+        editor.record = new api.BrowserDraft(editor.record.project, editor.record.item, editor.record.value, undefined);
+        this.storeDraft(editor); this.lockDraft(editor); readResult(result);
+      }
+      if (!(result instanceof api.Result_Changed)) throw new Error('Unexpected change acknowledgement');
+      if (localStorage.getItem(editor.key) === submitted) localStorage.removeItem(editor.key);
+      if (this.editor !== editor) return;
+      this.editor = null; this.editorPanel.replaceChildren(); this.notice.textContent = 'Saved';
+      this.after = undefined; this.snapshot = undefined; await this.refresh(); await this.select(result.ack.items[0].id);
+    } finally { editor.busy = false; }
   }
   private async loadHistory(): Promise<void> {
     const selected = this.selected; if (selected === null) return;

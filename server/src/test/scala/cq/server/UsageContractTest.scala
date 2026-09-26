@@ -38,6 +38,23 @@ abstract class UsageContractTest extends SpecZIO with AssertZIO {
     effect.either.flatMap(result => assertIO(result match { case Left(DomainFailure(fault)) => expected(fault); case _ => false })).unit
 
   "Operational usage audit (Behavioral Active Blackbox; dummy Group / PostgreSQL Good Communication)" should {
+    "include exclusive member work in cohort totals while preserving direct task attribution" in { (usage: UsageService[IO], ledger: LedgerService[IO]) =>
+      val owner = scope()
+      val cohort = UUID.randomUUID()
+      for {
+        _ <- ledger.initialize(owner, "cohort direct usage")
+        one <- task(ledger, owner, "One")
+        two <- task(ledger, owner, "Two")
+        shared <- start(usage, owner, assignment(owner, Set(one, two), Attribution.Shared, Some(cohort)), CounterScope.Increment, UsageMath.zeroCounts, UsageMath.unknownMoney)
+        direct <- start(usage, owner, assignment(owner, Set(one), Attribution.Direct, Some(cohort)), CounterScope.Increment, UsageMath.zeroCounts, UsageMath.unknownMoney)
+        _ <- usage.ingest(collector(owner), upload(shared, 1, CounterScope.Increment, counts(1000, 0), UsageMath.unknownMoney))
+        _ <- usage.ingest(collector(owner), upload(direct, 1, CounterScope.Increment, counts(200, 0), UsageMath.unknownMoney))
+        report <- usage.summary(owner, UsageFilter.CohortOnly(cohort))
+        member <- usage.summary(owner, UsageFilter.TaskOnly(one))
+        _ <- assertIO(report.direct.total.known == 200 && report.shared.total.known == 1000 && member.direct.total.known == 200)
+      } yield ()
+    }
+
     "account 1500 then 1600 tokens without duplicating shared spend or mutating item history" in { (usage: UsageService[IO], ledger: LedgerService[IO]) =>
       val owner = scope()
       val host = collector(owner)
