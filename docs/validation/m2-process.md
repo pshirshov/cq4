@@ -24,4 +24,4 @@ The helper now closes inherited descriptors with `close_range` before opening in
 - `20260926T213624-process` reproduced three driver timeouts: absent start acknowledgement, premature lifecycle EOF and a helper hanging after its terminal record. Separate startup/completion deadlines and explicit EOF validation correct these cases.
 - `20260926T213759-process` reproduced cancellation changing an already settled observation and a STOP-only helper outliving its termination bound. Terminal cancellation is now a no-op; an observed STOP starts its own settlement deadline.
 
-Both reproductions are retained. Driver review is pending; its uncertainty outcome has not yet been connected to durable workspace quarantine or the local control API.
+Both reproductions are retained. Astra approved the driver foundation at `aabac88`, with no blocking or major findings and matching source hashes. Its uncertainty outcome has not yet been connected to durable workspace quarantine or the local control API; M2 acceptance remains pending.
