@@ -1,0 +1,190 @@
+#!/usr/bin/env python3
+import os
+from pathlib import Path
+import signal
+import subprocess
+import sys
+import tempfile
+import time
+import unittest
+
+
+class GuardianChecks(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix="guardian-", dir=Path(__file__).resolve().parent.parent / ".work")
+        self.directory = Path(self.temporary.name)
+        self.input = self.directory / "input"
+        self.input.write_text("prompt λ\n")
+        self.children = []
+        self.ignore_child_exit = False
+
+    def tearDown(self):
+        for child in self.children:
+            if child.poll() is None:
+                child.kill()
+                child.wait(timeout=5)
+        self.temporary.cleanup()
+
+    def launch(self, command, run_ms, heartbeat_ms, output_bytes):
+        binary = os.environ["CQ_GUARDIAN_TEST_BINARY"]
+        def ignore_child_exit():
+            signal.signal(signal.SIGCHLD, signal.SIG_IGN)
+        process = subprocess.Popen([binary, "500", str(run_ms), str(heartbeat_ms), "100", "1000", str(output_bytes),
+                                    str(self.input), str(self.directory / "stdout"), str(self.directory / "stderr"), "--", *command],
+                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                   preexec_fn=ignore_child_exit if self.ignore_child_exit else None)
+        self.children.append(process)
+        return process
+
+    def result(self, process, control):
+        output, errors = process.communicate(control, timeout=5)
+        self.assertEqual(process.returncode, 0, (output, errors))
+        self.assertEqual(errors, "")
+        terminal = output.strip().splitlines()[-1].split()
+        self.assertEqual(terminal[0], "EXIT", output)
+        self.assertEqual(terminal[-2:], ["1", "0"], output)
+        return terminal
+
+    def wait_until_exited(self, process):
+        process.wait(timeout=5)
+        return self.result(process, None)
+
+    def test_separate_streams_and_prompt(self):
+        process = self.launch([sys.executable, "-c", "import sys; print(sys.stdin.read(), end=''); sys.stderr.write('error λ\\n')"], 2000, 3000, 100000)
+        terminal = self.wait_until_exited(process)
+        self.assertEqual(terminal[1:4], ["0", "0", "Exited"])
+        self.assertEqual((self.directory / "stdout").read_text(), "prompt λ\n")
+        self.assertEqual((self.directory / "stderr").read_text(), "error λ\n")
+
+    def test_nonzero_and_launch_failure_are_separate(self):
+        process = self.launch(["/cq-does-not-exist"], 2000, 3000, 100000)
+        terminal = self.wait_until_exited(process)
+        self.assertEqual(terminal[1:4], ["127", "0", "LaunchFailed"])
+
+    def test_nonzero_child_exit(self):
+        process = self.launch([sys.executable, "-c", "raise SystemExit(7)"], 2000, 3000, 100000)
+        terminal = self.wait_until_exited(process)
+        self.assertEqual(terminal[1:4], ["7", "0", "Exited"])
+
+    def test_inherited_signal_policy_does_not_discard_exit_identity(self):
+        self.ignore_child_exit = True
+        process = self.launch([sys.executable, "-c", "raise SystemExit(7)"], 2000, 3000, 100000)
+        terminal = self.wait_until_exited(process)
+        self.assertEqual(terminal[1:4], ["7", "0", "Exited"])
+
+    def test_nonregular_input_is_rejected_before_launch_without_blocking(self):
+        self.input.unlink()
+        os.mkfifo(self.input)
+        process = self.launch([sys.executable, "-c", "raise SystemExit(0)"], 500, 500, 10000)
+        output, errors = process.communicate("", timeout=2)
+        self.assertEqual(process.returncode, 2, (output, errors))
+        self.assertNotIn("START", output)
+
+    def test_both_pipes_are_drained_without_backpressure_deadlock(self):
+        process = self.launch([sys.executable, "-c", "import os; [(os.write(1,b'o'*8192),os.write(2,b'e'*8192)) for _ in range(128)]"], 3000, 4000, 2000000)
+        terminal = self.wait_until_exited(process)
+        self.assertEqual(terminal[1:4], ["0", "0", "Exited"])
+        self.assertEqual([len((self.directory / name).read_bytes()) for name in ["stdout", "stderr"]], [1048576, 1048576])
+
+    def test_output_limit_preserves_bounded_prefix(self):
+        process = self.launch([sys.executable, "-c", "import os; [os.write(1,b'x'*8192) for _ in range(1000)]"], 2000, 3000, 1024)
+        terminal = self.wait_until_exited(process)
+        self.assertEqual(terminal[3], "OutputLimit")
+        self.assertEqual((self.directory / "stdout").stat().st_size, 1024)
+
+    def test_silent_process_execution_deadline(self):
+        process = self.launch([sys.executable, "-c", "import time; time.sleep(30)"], 200, 3000, 10000)
+        terminal = self.wait_until_exited(process)
+        self.assertEqual(terminal[3], "ExecutionDeadline")
+
+    def test_frozen_owner_heartbeat_deadline(self):
+        process = self.launch([sys.executable, "-c", "import time; time.sleep(30)"], 3000, 200, 10000)
+        terminal = self.wait_until_exited(process)
+        self.assertEqual(terminal[3], "HeartbeatLost")
+
+    def test_owner_pipe_exit(self):
+        process = self.launch([sys.executable, "-c", "import time; time.sleep(30)"], 3000, 3000, 10000)
+        terminal = self.result(process, "")
+        self.assertEqual(terminal[3], "OwnerExited")
+
+    def test_explicit_cancellation(self):
+        process = self.launch([sys.executable, "-c", "import time; time.sleep(30)"], 3000, 3000, 10000)
+        terminal = self.result(process, "C")
+        self.assertEqual(terminal[3], "Cancelled")
+
+    def test_detached_descendant_is_adopted_and_reaped_after_root_exit(self):
+        pid_file = self.directory / "detached.pid"
+        gate = self.directory / "exit-root"
+        script = """import os, signal, sys, time
+child = os.fork()
+if child == 0:
+    os.setsid()
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    with open(sys.argv[1], 'w') as out:
+        out.write(str(os.getpid()))
+    time.sleep(30)
+else:
+    while not os.path.exists(sys.argv[2]):
+        time.sleep(0.005)
+"""
+        process = self.launch([sys.executable, "-c", script, str(pid_file), str(gate)], 3000, 3000, 10000)
+        retained = None
+        try:
+            deadline = time.monotonic() + 1
+            while not pid_file.exists() and time.monotonic() < deadline:
+                time.sleep(0.005)
+            self.assertTrue(pid_file.exists())
+            retained = os.pidfd_open(int(pid_file.read_text()))
+            gate.touch()
+            terminal = self.wait_until_exited(process)
+            self.assertEqual(terminal[3], "Exited")
+            with self.assertRaises(ProcessLookupError):
+                signal.pidfd_send_signal(retained, 0)
+        finally:
+            if retained is not None:
+                try:
+                    signal.pidfd_send_signal(retained, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                os.close(retained)
+
+    def test_actual_owner_sigkill_closes_control_pipe_and_settles_child(self):
+        lifecycle = self.directory / "lifecycle"
+        guardian_pid = self.directory / "guardian.pid"
+        script = """import subprocess, sys, time
+from pathlib import Path
+with open(sys.argv[2], 'w') as output, open(sys.argv[2] + '.errors', 'w') as errors:
+    child = subprocess.Popen([sys.argv[1], '500', '3000', '3000', '100', '1000', '10000', *sys.argv[4:7], '--', sys.executable, '-c', 'import time; time.sleep(30)'], stdin=subprocess.PIPE, stdout=output, stderr=errors)
+    Path(sys.argv[3]).write_text(str(child.pid))
+    time.sleep(30)
+"""
+        owner = subprocess.Popen([sys.executable, "-c", script, os.environ["CQ_GUARDIAN_TEST_BINARY"], str(lifecycle), str(guardian_pid),
+                                  str(self.input), str(self.directory / "stdout"), str(self.directory / "stderr")])
+        self.children.append(owner)
+        retained = None
+        try:
+            deadline = time.monotonic() + 2
+            while (not lifecycle.exists() or "START" not in lifecycle.read_text()) and time.monotonic() < deadline:
+                time.sleep(0.005)
+            self.assertIn("START", lifecycle.read_text())
+            retained = os.pidfd_open(int(guardian_pid.read_text()))
+            owner.kill()
+            owner.wait(timeout=2)
+            deadline = time.monotonic() + 2
+            while "EXIT" not in lifecycle.read_text() and time.monotonic() < deadline:
+                time.sleep(0.005)
+            terminal = lifecycle.read_text().strip().splitlines()[-1].split()
+            self.assertEqual(terminal[0], "EXIT")
+            self.assertEqual(terminal[3], "OwnerExited")
+            self.assertEqual(terminal[-2:], ["1", "0"])
+        finally:
+            if retained is not None:
+                try:
+                    signal.pidfd_send_signal(retained, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+                os.close(retained)
+
+
+if __name__ == "__main__":
+    unittest.main()

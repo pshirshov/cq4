@@ -190,6 +190,15 @@ class Checks:
         with self.database():
             self.transport(["java", "-cp", classpath, "cq.server.Main"], "browser", True)
 
+    def process(self):
+        if sys.platform != "linux":
+            raise RuntimeError("UNAVAILABLE: native process guardian currently requires Linux")
+        binary = self.evidence / "cq-guardian"
+        self.run(["gcc", "-std=c17", "-O2", "-Wall", "-Wextra", "-Werror", "-o", str(binary),
+                  "host/native/guardian.c"], "guardian-build", COMMAND_TIMEOUT)
+        self.environment["CQ_GUARDIAN_TEST_BINARY"] = str(binary)
+        self.run(["python3", "dev/guardian-check.py", "-v"], "guardian-process", STARTUP_TIMEOUT)
+
     def native(self):
         self.generate()
         classpath = self.classpath()
@@ -248,8 +257,6 @@ def main():
         if command == "fast":
             checks.generate()
             checks.sbt(["server/testOnly *Dummy *Local"], "dummy-contract")
-        elif command == "process":
-            raise RuntimeError(f"UNAVAILABLE: {command} coverage has not been implemented")
         else:
             getattr(checks, command)()
     except BaseException as failure:

@@ -12,6 +12,7 @@ On Linux amd64 with Nix, Git and network access:
 ./dev/check postgres
 ./dev/check browser
 ./dev/check native
+./dev/check process
 ```
 
 The entrypoint enters the pinned Nix environment when Java/sbt are absent. Baboon is downloaded to `.tools` and checked against a pinned SHA-256. npm dependencies are installed from the lockfile. Generated source and build products are ignored. `contracts` verifies deterministic generation and cross-language codecs; `fast` runs dummy repository scenarios and the isolated-workspace scenarios against real scratch Git; `postgres` starts an isolated PostgreSQL cluster and runs the same service/repository scenarios plus real transport clients. `native` traces the JVM proof, builds a native executable, and exercises that executable against PostgreSQL.
