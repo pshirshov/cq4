@@ -11,7 +11,12 @@ import java.time.Duration
 import java.util.UUID
 import scala.util.Using
 
-final class Cli(environment: Map[String, String], directory: Path, output: PrintStream) {
+final case class CliContext(environment: Map[String, String], directory: Path, output: PrintStream)
+
+final class Cli(context: CliContext) {
+  private val environment = context.environment
+  private val directory = context.directory
+  private val output = context.output
   private val RequestTimeout = Duration.ofSeconds(30)
   private val DefaultPageSize = 50
   private val GitTimeout = Duration.ofSeconds(10)

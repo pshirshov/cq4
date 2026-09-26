@@ -6,9 +6,11 @@ import distage.{Activation, Lifecycle, ModuleDef}
 import distage.StandardAxis.Repo
 import izumi.distage.plugins.{PluginConfig, PluginDef}
 import izumi.distage.roles.RoleAppMain
+import izumi.distage.roles.launcher.{EarlyLoggerFactory, RouterFactory}
 import izumi.distage.roles.model.{RoleDescriptor, RoleService}
 import izumi.distage.roles.model.definition.RoleModuleDef
-import izumi.fundamentals.platform.cli.model.{EntrypointArgs, RoleArgs}
+import izumi.fundamentals.platform.cli.{CLIParser, CLIParserImpl}
+import izumi.fundamentals.platform.cli.model.EntrypointArgs
 import org.http4s.ember.server.EmberServerBuilder
 import org.http4s.server.Server
 import zio.{IO, Task, ZIO}
@@ -92,23 +94,15 @@ object CqPlugin extends PluginDef {
   private def required(name: String): String = sys.env.getOrElse(name, throw new IllegalArgumentException(s"Missing $name"))
 }
 
-object ServerMain extends RoleAppMain.LauncherBIO[IO] {
-  override def requiredRoles(argv: RoleAppMain.ArgV): Vector[RoleArgs] = Vector(RoleArgs(ServerRole.id))
-  override def pluginConfig: PluginConfig = PluginConfig.const(List(CqPlugin))
+object Main extends RoleAppMain.LauncherBIO[IO] {
+  override def pluginConfig: PluginConfig = PluginConfig.const(List(CqPlugin, ClientPlugin))
   override protected def roleAppBootOverrides(argv: RoleAppMain.ArgV): distage.Module =
     super.roleAppBootOverrides(argv) ++ new ModuleDef {
       make[Activation].named("default").fromValue(Activation(Repo -> Repo.Prod))
+      make[CLIParserImpl]
+      make[CLIParser].from[CqCliParser]
+      make[DiagnosticOutput].fromValue(DiagnosticOutput(System.err))
+      make[EarlyLoggerFactory].from[EarlyDiagnostics]
+      make[RouterFactory].from[DiagnosticRouter]
     }
-}
-
-object Main {
-  def main(args: Array[String]): Unit = {
-    if (args.headOption.contains("serve")) ServerMain.main(args.tail)
-    else try new Cli(sys.env, java.nio.file.Path.of("").toAbsolutePath, System.out).run(args.toList)
-    catch {
-      case failure: Exception =>
-        System.err.println(s"CQ: ${failure.getMessage}")
-        System.exit(1)
-    }
-  }
 }
