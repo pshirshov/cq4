@@ -198,6 +198,8 @@ class Checks:
                   "host/native/guardian.c"], "guardian-build", COMMAND_TIMEOUT)
         self.environment["CQ_GUARDIAN_TEST_BINARY"] = str(binary)
         self.run(["python3", "dev/guardian-check.py", "-v"], "guardian-process", STARTUP_TIMEOUT)
+        self.generate()
+        self.sbt(["server/testOnly *Process"], "guardian-driver")
 
     def native(self):
         self.generate()
