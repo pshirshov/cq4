@@ -12,7 +12,9 @@ The journal is bounded to 256 jobs per governing session and 64 KiB per record. 
 
 ## Cancellation, failure and recovery
 
-Start returns after reserving the job, without waiting for workspace creation or execution. Cancellation persists the desired Stop and reaches the retained process object even if the persistence attempt fails. Cancellation during workspace preparation prevents subsequent launch. Normal scope shutdown stops active jobs and waits for their completion before releasing journal ownership. The process driver's heartbeat, execution and cleanup deadlines remain independent of journal writes.
+Start acknowledges a durable reservation without waiting for workspace creation or execution. Start/cancel acknowledgement has a one-second deadline. Expiry disables result admission and new work, even if the underlying filesystem operation completes later. The pending operation retains journal ownership until it finishes; a deadline does not prove a kernel filesystem operation was interrupted.
+
+Authorized cancellation first sets an in-memory Stop and reaches the retained execution, independently of the journal mutation lock and filesystem writes. A small per-job control lock serializes that request with the driver's short launch call; it never covers filesystem I/O. Stop during preparation or a stalled Starting write suppresses launch when persistence returns. Status reads the last acknowledged durable observation from memory. Normal scope shutdown delivers cancellation before waiting for outstanding journal writes, and waits for jobs before releasing journal ownership. The process driver's heartbeat, execution and cleanup deadlines remain independent of journal writes.
 
 A storage failure during reservation or cancellation disables further work. This includes a reservation that committed but lost its acknowledgement. A supervisor with uncertain storage does not infer that repeating the launch is safe. Active jobs are stopped and quarantined. A failed read, write or quarantine is surfaced; recovery must finish before the new supervisor accepts work.
 

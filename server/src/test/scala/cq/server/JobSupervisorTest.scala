@@ -12,6 +12,7 @@ import java.nio.file.{Files, Path}
 import java.time.{Clock, Duration}
 import java.util.UUID
 import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger, AtomicReference}
+import java.util.concurrent.{CountDownLatch, TimeUnit}
 import scala.jdk.CollectionConverters.*
 import zio.{IO, Promise, ZIO}
 
@@ -27,6 +28,167 @@ final class JobSupervisorProcess extends SpecZIO with AssertZIO {
       service, driver, at.resolve("payload"), Clock.systemUTC())
 
   "Durable supervisor (Behavioral Active Blackbox; Git/filesystem/process Communication)" should {
+    "suppress launch when cancellation races a stalled Starting record" in { (local: LocalWorkspaceFixture, guardian: GuardianFixture) =>
+      val scope = owner
+      val workspace = local.fixture.spec(scope)
+      val entered = new CountDownLatch(1)
+      val release = new CountDownLatch(1)
+      val count = new AtomicInteger(0)
+      val driver = new ExecutionDriver { override def start(spec: ExecutionSpec): ManagedExecution = { count.incrementAndGet(); new GuardianDriver(guardian.binary).start(spec) } }
+      for {
+        at <- root(local)
+        _ <- ZIO.scoped {
+          val acquireRepository = ZIO.attemptBlocking {
+            val delegate = FileJobRepository.open(at.resolve("journal"), scope.project, scope.actor.session)
+            new JobRepository {
+              override def records = delegate.records
+              override def reserve(spec: WorkspaceSpec, fingerprint: String, now: Long) = delegate.reserve(spec, fingerprint, now)
+              override def replace(expected: JobRecord, next: JobRecord): Unit = {
+                if (next.phase == JobPhase.Starting) {
+                  entered.countDown()
+                  require(release.await(10, TimeUnit.SECONDS), "Starting record fixture was not released")
+                }
+                delegate.replace(expected, next)
+              }
+              override def close(): Unit = delegate.close()
+            }
+          }
+          for {
+            supervisor <- JobSupervisor.acquire(scope, acquireRepository, local.fixture.service, driver, at.resolve("payload"), Clock.systemUTC())
+            _ <- (for {
+              _ <- supervisor.start(scope, workspace, command(guardian, "print('must not launch')"))
+              _ <- ZIO.attemptBlocking(assert(entered.await(3, TimeUnit.SECONDS)))
+              cancellation <- supervisor.cancel(scope, workspace.attempt).fork
+              _ <- ZIO.sleep(zio.Duration.fromMillis(100))
+              observed <- supervisor.status(scope, workspace.attempt)
+              _ <- assertIO(observed.phase == JobPhase.Preparing)
+              _ <- ZIO.succeed(release.countDown())
+              _ <- cancellation.join
+              completed <- supervisor.await(scope, workspace.attempt)
+              _ <- assertIO(completed.phase == JobPhase.Settled && completed.target == JobTarget.Stop && completed.exit.isEmpty && count.get() == 0)
+            } yield ()).ensuring(ZIO.succeed(release.countDown()))
+          } yield ()
+        }
+      } yield ()
+    }
+
+    "deliver cancellation while an unrelated reservation holds the journal lock and never launch after its acknowledgement times out" in { (local: LocalWorkspaceFixture, guardian: GuardianFixture) =>
+      val scope = owner
+      val first = local.fixture.spec(scope)
+      val second = local.fixture.spec(scope)
+      val entered = new CountDownLatch(1)
+      val release = new CountDownLatch(1)
+      val process = new AtomicReference[Option[ManagedExecution]](None)
+      val count = new AtomicInteger(0)
+      val driver = new ExecutionDriver { override def start(spec: ExecutionSpec): ManagedExecution = {
+        count.incrementAndGet()
+        val running = new GuardianDriver(guardian.binary).start(spec)
+        process.set(Some(running))
+        running
+      } }
+      for {
+        at <- root(local)
+        _ <- ZIO.scoped {
+          val acquireRepository = ZIO.attemptBlocking {
+            val delegate = FileJobRepository.open(at.resolve("journal"), scope.project, scope.actor.session)
+            new JobRepository {
+              override def records = delegate.records
+              override def reserve(spec: WorkspaceSpec, fingerprint: String, now: Long): (JobRecord, Boolean) = {
+                val record = delegate.reserve(spec, fingerprint, now)
+                if (spec.attempt == second.attempt) {
+                  entered.countDown()
+                  require(release.await(10, TimeUnit.SECONDS), "Reservation fixture was not released")
+                }
+                record
+              }
+              override def replace(expected: JobRecord, next: JobRecord): Unit = delegate.replace(expected, next)
+              override def close(): Unit = delegate.close()
+            }
+          }
+          for {
+            supervisor <- JobSupervisor.acquire(scope, acquireRepository, local.fixture.service, driver, at.resolve("payload"), Clock.systemUTC())
+            _ <- (for {
+              _ <- supervisor.start(scope, first, command(guardian, "import time; time.sleep(30)"))
+              _ <- (ZIO.sleep(zio.Duration.fromMillis(20)) *> supervisor.status(scope, first.attempt)).repeatUntil(_.phase == JobPhase.Running)
+                .timeoutFail(new IllegalStateException("Fixture never started"))(zio.Duration.fromSeconds(5))
+              starting <- supervisor.start(scope, second, command(guardian, "print('must not launch')")).fork
+              _ <- ZIO.attemptBlocking(assert(entered.await(3, TimeUnit.SECONDS)))
+              cancellation <- supervisor.cancel(scope, first.attempt).fork
+              observed <- ZIO.attemptBlocking(process.get().get.await(Duration.ofSeconds(3)))
+              _ <- assertIO(observed.phase == ProcessPhase.Settled && observed.result.exists(_.reason == StopReason.Cancelled))
+              _ <- ZIO.sleep(zio.Duration.fromMillis(1200))
+              startAck <- starting.poll
+              cancelAck <- cancellation.poll
+              _ <- assertIO(startAck.exists(_.isFailure) && cancelAck.exists(_.isFailure))
+              _ <- ZIO.succeed(release.countDown())
+            } yield ()).ensuring(ZIO.succeed(release.countDown()))
+          } yield ()
+        }
+        _ <- assertIO(count.get() == 1)
+        _ <- ZIO.scoped {
+          for {
+            supervisor <- acquire(at, scope, local.fixture.service, new GuardianDriver(guardian.binary))
+            record <- supervisor.status(scope, second.attempt)
+            _ <- assertIO(record.phase == JobPhase.Uncertain && record.target == JobTarget.Stop)
+          } yield ()
+        }
+      } yield ()
+    }
+
+    "deliver cancellation and bound its acknowledgement while journal persistence is stalled" in { (local: LocalWorkspaceFixture, guardian: GuardianFixture) =>
+      val scope = owner
+      val workspace = local.fixture.spec(scope)
+      val armed = new AtomicBoolean(false)
+      val entered = new CountDownLatch(1)
+      val release = new CountDownLatch(1)
+      val process = new AtomicReference[Option[ManagedExecution]](None)
+      val driver = new ExecutionDriver {
+        override def start(spec: ExecutionSpec): ManagedExecution = {
+          val running = new GuardianDriver(guardian.binary).start(spec)
+          process.set(Some(running))
+          running
+        }
+      }
+      for {
+        at <- root(local)
+        _ <- ZIO.scoped {
+          val acquireRepository = ZIO.attemptBlocking {
+            val delegate = FileJobRepository.open(at.resolve("journal"), scope.project, scope.actor.session)
+            new JobRepository {
+              override def records = delegate.records
+              override def reserve(spec: WorkspaceSpec, fingerprint: String, now: Long) = delegate.reserve(spec, fingerprint, now)
+              override def replace(expected: JobRecord, next: JobRecord): Unit = {
+                if (armed.compareAndSet(true, false)) {
+                  entered.countDown()
+                  require(release.await(10, TimeUnit.SECONDS), "Stalled storage fixture was not released")
+                }
+                delegate.replace(expected, next)
+              }
+              override def close(): Unit = delegate.close()
+            }
+          }
+          for {
+            supervisor <- JobSupervisor.acquire(scope, acquireRepository, local.fixture.service, driver, at.resolve("payload"), Clock.systemUTC())
+            _ <- (for {
+              _ <- supervisor.start(scope, workspace, command(guardian, "import time; time.sleep(30)"))
+              _ <- (ZIO.sleep(zio.Duration.fromMillis(20)) *> supervisor.status(scope, workspace.attempt)).repeatUntil(_.phase == JobPhase.Running)
+                .timeoutFail(new IllegalStateException("Fixture never started"))(zio.Duration.fromSeconds(5))
+              _ <- ZIO.succeed(armed.set(true))
+              cancellation <- supervisor.cancel(scope, workspace.attempt).fork
+              _ <- ZIO.attemptBlocking(assert(entered.await(3, TimeUnit.SECONDS)))
+              observed <- ZIO.attemptBlocking(process.get().get.await(Duration.ofSeconds(3)))
+              _ <- assertIO(observed.phase == ProcessPhase.Settled && observed.result.exists(_.reason == StopReason.Cancelled))
+              _ <- ZIO.sleep(zio.Duration.fromMillis(1200))
+              acknowledgement <- cancellation.poll
+              _ <- assertIO(acknowledgement.exists(_.isFailure))
+              status <- supervisor.status(scope, workspace.attempt).either
+              _ <- assertIO(status.isLeft)
+            } yield ()).ensuring(ZIO.succeed(release.countDown()))
+          } yield ()
+        }
+      } yield ()
+    }
+
     "terminate a real supervisor hierarchy after SIGKILL and quarantine its unacknowledged workspace on reopen" in { (local: LocalWorkspaceFixture, guardian: GuardianFixture) =>
       val scope = owner
       val workspace = local.fixture.spec(scope)
