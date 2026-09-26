@@ -192,6 +192,8 @@ Provide server-supported exclusive work claims, distinct from optimistic edit ch
 
 Demonstrate expiry/late-result behavior and make clear where server fences stop: they cannot directly prevent arbitrary stale OS processes from writing files. Combine them with isolated worktrees and supervisor-owned result/integration admission. Specify bounded cancellation after claim loss and handling of unconfirmed termination.
 
+Define integration-target concurrency separately from item claims. Two valid claims for different tasks do not authorize concurrent uncoordinated changes to the same branch. Require an isolated integration workspace, an expected target revision, and a conditional atomic update or equivalent serialization that prevents lost updates and shared checkout/index interference. Specify what happens when the target advances and which review/validation evidence remains applicable to a newly combined candidate. A lease alone does not fence stale Git effects. Define reconciliation when Git integration succeeds but its ledger acknowledgement fails or is uncertain, without claiming a transaction spanning Git and PostgreSQL or blindly repeating the integration effect.
+
 ### R28 — Simplified subagent inventory
 
 Provide a complete required subagent list and old-to-new mapping. Start with four roles: **explorer, planner, worker, reviewer**, with small typed modes where required. Explorer gathers evidence; planner proposes a plan; worker implements/probes/resolves conflicts; reviewer reviews a plan/candidate or audits evidence. Preserve meaningful privilege differences and independent review.
@@ -231,6 +233,7 @@ The design must include at least these worked examples:
 - A user enters an idea, then the process creates a goal and milestone-organized work without binding that milestone to the idea.
 - A reproduced defect produces hypotheses/research, then a fix goal and reviewed implementation.
 - Two sessions race to claim related work; only the valid owner proceeds; an expired worker's late result is rejected.
+- Two sessions hold different valid task claims and integrate candidates based on the same target revision. Target advancement cannot cause lost updates or shared index interference; the resulting combined candidate receives applicable validation/review. Git success followed by failed ledger acknowledgement is reconciled without duplicate integration.
 - A fused job shares work but produces separate member outcomes; conflicting requirements cause an explained split.
 - A Claude parent dispatches a Codex worker, then passes its result handle to a Pi reviewer without reading/copying either prompt or full output.
 - A child emits a result but never exits, or a nested process keeps stdout open; bounded supervision reports the right outcome while the parent stays responsive.

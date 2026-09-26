@@ -126,6 +126,10 @@ Recommended claim semantics:
 
 The server cannot atomically fence arbitrary shell/Git effects. Distinct editing jobs get distinct worktrees; the local supervisor checks ownership before accepting a result or integrating a candidate. Reused PIDs, an unkillable descendant, and uncertain process exit must be observable outcomes. Do not release/reuse a worktree because a JavaScript promise timed out.
 
+Integration needs its own concurrency boundary: two sessions with valid claims for different tasks can still target the same branch. Require an isolated integration workspace, an expected target revision, and a conditional atomic target update or equivalent serialization that prevents both lost updates and shared checkout/index interference. An item claim or expiring lease alone cannot fence a stale Git writer. If the target advances, construct the new combined candidate and determine which checks and reviews remain applicable; rerun those invalidated by the changed candidate before attempting integration again. Prior approval of one candidate must not silently approve a different combined result.
+
+Git and PostgreSQL do not share a transaction. Retain enough operation identity and expected/observed target state to reconcile successful integration after a failed or uncertain ledger acknowledgement. Do not blindly repeat an integration effect or mark it recorded without checking its outcome. The full design must give a bounded reconciliation path and an acceptance scenario with two independently claimed tasks integrating concurrently, including target advancement and Git success followed by ledger failure. A small operation record should satisfy this requirement without restoring the old attestation protocol.
+
 Mutation cost must scale with the changed item, incident refs, and explicitly requested closure, not unrelated project size. Use row-local FTS maintenance and indexes on scoped scalar filters and both edge directions. Bulk operations and explicit migrations are allowed to visit their whole declared target set. Pagination and result limits must not disguise an unbounded internal scan.
 
 ## Search, archive, and termination
