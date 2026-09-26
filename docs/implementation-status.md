@@ -5,8 +5,8 @@ Goal: complete the first CQ release under the [implementation plan](drafts/20260
 | Milestone | State | Evidence |
 | --- | --- | --- |
 | M0 stack and contracts | Complete; Astra approved `1801c2a` | [Four checks and native artifact](validation/m0-stack.md) |
-| M1 durable core | In progress | [Ledger/claim checks](validation/m1-core.md), [usage accounting checks](validation/m1-usage.md); [authenticated clients and CLI](validation/m1-interfaces.md); [browser foundation](validation/m1-browser.md) passes Chromium checks; remaining invariants follow |
-| M2 first usable agent slice | Not started | — |
+| M1 durable core | Complete; Astra approved `439fc50` | [Milestone review](validation/m1-review.md); [Ledger/claim checks](validation/m1-core.md), [usage accounting checks](validation/m1-usage.md); [authenticated clients and CLI](validation/m1-interfaces.md); [browser foundation](validation/m1-browser.md) passes Chromium checks; remaining invariants follow |
+| M2 first usable agent slice | In progress | [Installed harness inventory](design/harness-adapters.md); supervisor, artifacts, collectors and real evaluations next |
 | M3 graph and concurrency | Not started | — |
 | M4 process and cohorts | Not started | — |
 | M5 complete UI | Not started | — |
@@ -23,14 +23,14 @@ M1 now includes:
 - Authenticated HTTP/MCP/WebSocket/CLI clients and a minimal browser with live updates, durable drafts/retries, accounting drill-down and connection recovery.
 - A local isolated-workspace foundation with frozen ownership/base, detached worktrees, separate indexes and durable quarantine after uncertain creation or changed identity.
 
-Latest workspace/core verification: `20260926T205412-fast` passes 34 scenarios. Final contracts verification passes at `20260926T205927-contracts`. Accounting/UI evidence is in [read bounds](validation/m1-read-bounds.md) and [interim corrections](validation/m1-astra-interim.md).
+M1 is complete at `439fc50`, with independent Astra approval after correction loops. [Final evidence and scope](validation/m1-review.md): 34 fast scenarios, 27 PostgreSQL scenarios plus actual clients/deadline/restart checks, contracts, and the unchanged browser corpus all pass.
 
-Full Astra M1 review requested two corrections: canonical workspace containment and complete HTTP response deadlines. Both reproduced and corrected. Containment checks and the complete HTTP/client/restart pipeline pass (`20260926T205703-postgres`). Final contracts verification passes; M1 approval is pending. Astra found no additional blocking/major application finding on recheck. M1 awaits final verification and approval; no user decision is currently required. See [workspace/deadline evidence](validation/m1-workspaces.md).
+M2 is starting with the local supervisor and artifact boundary. The [installed harness inventory](design/harness-adapters.md) records observed CLI controls and documentation; no CQ consumer evaluation has run yet. No user decision is currently required.
 
 See [dependency evidence and compatibility patches](design/dependencies.md), [architecture](design/architecture.md), and [contracts](design/contracts.md). Planning baseline: `7e3076a`; verified M0 implementation: `1801c2a`.
 
-Current evidence: [M0 manifest](validation/m0-stack.md), [M1 core increment](validation/m1-core.md), and [M1 usage increment](validation/m1-usage.md). Native evidence currently applies to M0 only. M1 retains its full milestone review; the isolated workspace foundation is implemented. Query-plan/scale verification remains M3 work.
+Current evidence: [M0 manifest](validation/m0-stack.md), [M1 core increment](validation/m1-core.md), and [M1 usage increment](validation/m1-usage.md). Native evidence currently applies to M0 only. M1 has milestone approval; its isolated workspace foundation is available for M2. Query-plan/scale verification remains M3 work.
 
 ## Acceptance
 
-M0 has independent Astra approval. M2 and M6 human acceptance are pending; neither evidence package exists. No later milestone is complete.
+M0 and M1 have independent Astra approval. M2 and M6 human acceptance are pending; neither evidence package exists. No later milestone is complete.

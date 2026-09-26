@@ -1,6 +1,6 @@
 # CQ
 
-CQ is being implemented under the [M0–M6 plan](docs/drafts/20260926-1549-cq-implementation-plan.md). The durable ledger/audit core and authenticated HTTP/MCP/WebSocket/CLI interfaces are implemented; M1 is still in progress. Release functionality, consumer evaluations and human acceptance are tracked in [implementation status](docs/implementation-status.md) and [requirement coverage](docs/requirement-coverage.md).
+CQ is being implemented under the [M0–M6 plan](docs/drafts/20260926-1549-cq-implementation-plan.md). The durable ledger/audit core and authenticated HTTP/MCP/WebSocket/CLI interfaces are implemented; [M1 has independent Astra approval](docs/validation/m1-review.md); M2 supervisor and real-harness integration are starting. Release functionality, consumer evaluations and human acceptance are tracked in [implementation status](docs/implementation-status.md) and [requirement coverage](docs/requirement-coverage.md).
 
 ## Development checks
 
