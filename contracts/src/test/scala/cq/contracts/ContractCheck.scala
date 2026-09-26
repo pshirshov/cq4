@@ -19,10 +19,6 @@ object ContractCheck {
     val binary = new ByteArrayOutputStream()
     Probe_UEBACodec.encode(context, new LEDataOutputStream(binary), probe)
     assert(Probe_UEBACodec.decode(context, new LEDataInputStream(new ByteArrayInputStream(binary.toByteArray))) == Right(probe))
-    val old = cq.fixture.v0_1_0.Note(revision.value, "historical")
-    val conversions = new cq.fixture.BaboonConversions(new cq.fixture.RequiredConversions {})
-    val evolved = cq.fixture.Convert__Note__From__0_1_0.doConvert(None, conversions, old)
-    assert(evolved == cq.fixture.Note(revision.value, "historical", None))
     assert(RevisionCodec.parseRepr(revision.toString) == Right(revision))
     assert(RevisionCodec.parseRepr(s"Revision:${Revision.baboonDomainVersion}#value:9223372036854775808").isLeft)
     args(0) match {
@@ -36,6 +32,6 @@ object ContractCheck {
         assert(error == Right(conflict))
       case _ => throw new IllegalArgumentException("Expected export|verify")
     }
-    println(s"contracts ${args(0)} passed: JSON, UEBA, 64-bit values, typed error, evolution")
+    println(s"contracts ${args(0)} passed: JSON, UEBA, 64-bit values, typed error")
   }
 }

@@ -7,5 +7,5 @@
     "skipLibCheck": true,
     "outDir": ".work/js"
   },
-  "include": ["generated/typescript/**/*.ts", "generated/fixtures/typescript/**/*.ts", "web/src/**/*.ts"]
+  "include": ["generated/typescript/**/*.ts", "web/src/**/*.ts"]
 }

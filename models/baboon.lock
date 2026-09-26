@@ -4,11 +4,7 @@
     "cq.api" : [
       {
         "version" : "0.1.0",
-        "sigId" : "5c163ae06c6b9e7859fbaad5131cda77bd04c4a823e73065ee50a9a24e85a4bc"
-      },
-      {
-        "version" : "0.2.0",
-        "sigId" : "7adfdc6f72e1d59d180b01c556402e4df16b224ffcae3ac4255a673162bbbbe9"
+        "sigId" : "c1deb19f1e40cb96a1b4c48f5c4c9c23ce809a0f4b7a8394926b7cf5c7dae11f"
       }
     ]
   }

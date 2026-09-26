@@ -1,6 +1,6 @@
 # CQ v1 implementation plan
 
-Status: implementation handoff; no application code has been implemented. Baseline requirements commit: `6a923a6`. The objective is the complete first release described by R01–R31, delivered in executable increments.
+Status: implementation underway; see [current status](../implementation-status.md). Baseline requirements commit: `6a923a6`. The objective is the complete first release described by R01–R31, delivered in executable increments.
 
 ## Authority, workspace, and starting evidence
 
@@ -10,6 +10,7 @@ Status: implementation handoff; no application code has been implemented. Baseli
 - The baseline contains documentation only. No build, generated contracts, database migrations, application, or automated application checks exist. Earlier real calls established usage observability, not CQ functionality.
 - On 2026-09-26, the [official sbt site](https://www.scala-sbt.org/) listed 2.0.9 as stable. Start the compatibility check with the newest stable compatible sbt 2.0.x; verify and pin the rest of the stack. Neither that listing nor the reference project's sbt 1.x build proves stack compatibility.
 - Apply the chosen Baboon and izumi skills, `resilient-ws-ui`, and the constructive-test-taxonomy/dual-tests guidance at the relevant implementation steps. User requirements take precedence over examples and optional recommendations in skills.
+- User correction, 2026-09-26: keep one CQ schema version (0.1.0), edit it in place and permit breaking changes. Only explicit user instruction authorizes a version bump. Historical schema decoding, conversion fixtures and compatibility/upgrade paths are excluded for now. Earlier evolution evidence remains historical; item revision history and current-schema backup/restore remain required.
 
 ## Execution loop
 
@@ -52,7 +53,7 @@ Store concise result manifests in `docs/validation/` with commit/configuration, 
 
 - Pin Scala 3, sbt 2.0.x, BIO/distage, Baboon compiler/runtimes, PostgreSQL driver, HTTP/WebSocket/MCP libraries, the TypeScript toolchain, and a compatible native-image toolchain. Record exact versions, reasons, and commands in a dependency/compatibility note.
 - Create the small build/module layout: generated contracts; domain/application services; PostgreSQL and transport adapters; server/supervisor composition roots; browser; process assets; verification tooling. Split modules when they enforce a dependency boundary; avoid empty future modules.
-- Compile an actual Baboon schema and Scala/TypeScript codecs. Round-trip IDs/revisions beyond JavaScript's safe integer range, typed errors, and version negotiation. Demonstrate schema evolution/conversion on a small fixture; keep handwritten conversion code outside generated output.
+- Compile the single actual Baboon schema and Scala/TypeScript codecs. Round-trip IDs/revisions beyond JavaScript's safe integer range, typed errors, and explicit current-version acceptance/rejection. Change the schema in place during development.
 - Exercise a distage/BIO service, real PostgreSQL JSONB write/read, one authenticated HTTP operation, one WebSocket exchange, and MCP initialization/tool exchange. Build and run this path as a native executable with explicit plugin registration.
 - Write `docs/design/architecture.md`, `docs/design/contracts.md`, and `docs/requirement-coverage.md`; start the R01–R31 mapping. Record the canonical edge/history/change-cursor approach, authority boundaries, and usage observation/assignment identity before dependent code grows.
 
@@ -137,7 +138,7 @@ Store concise result manifests in `docs/validation/` with commit/configuration, 
 **Build:**
 
 - Produce the native server/supervisor/CLI distribution and frontend assets, with JVM development mode, reproducible generation/build instructions, pinned dependencies, configuration examples, and locally installable harness integration assets compatible with ponygirls.
-- Verify fresh initialization and supported new-product schema upgrades, historical decoding/version negotiation, PostgreSQL backup/restore, artifact/usage retention behavior, and resource shutdown. No legacy-data importer is required.
+- Verify fresh initialization, current-schema decoding/version acceptance, PostgreSQL backup/restore, artifact/usage retention behavior, and resource shutdown. No historical schema compatibility or upgrade path is required during this development phase.
 - Run the complete deterministic verification surface and native runtime checks. Re-run the consumer corpus against the packaged executable, including all nine routes and the usage/efficiency report. Confirm setup works from an unrelated working directory with explicit project configuration.
 - Complete `docs/requirement-coverage.md` for R01–R31 and all required design artifacts, operational instructions, known limitations, and final evidence manifest. Obtain independent Astra review of the release candidate and request human acceptance of the concrete release evaluation.
 

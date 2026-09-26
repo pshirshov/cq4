@@ -1,6 +1,6 @@
 # Typed ledgers and durable transactions
 
-Implemented contract: [cq.api 0.2.0](../../models/cq-api-v02.baboon). The original 0.1.0 model remains immutable. These are service and repository contracts; transport integration is still being implemented under M1.
+Implemented contract: the single [cq.api 0.1.0 model](../../models/cq-api.baboon). Edit it in place during development; version bumps require explicit user instruction. These are service and repository contracts; transport integration is still being implemented under M1.
 
 ## Content and outcomes
 

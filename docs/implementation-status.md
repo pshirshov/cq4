@@ -14,6 +14,8 @@ Goal: complete the first CQ release under the [implementation plan](drafts/20260
 
 ## Current increment
 
+User correction applied and verified: maintain one mutable `cq.api` 0.1.0 model; permit breaking changes and bump only on explicit instruction. Removed historical model copies and evolution fixtures. Generation refreshes the current signature and rejects unrequested extra versions. Contracts, dummy scenarios and PostgreSQL/JVM transport checks pass; [evidence](validation/m1-core.md#single-version-consolidation). Next: usage audit implementation.
+
 M0 is implemented and verified at `1801c2a`, with Astra approval. The first M1 increment adds all fourteen typed content/status models, project initialization/reattachment in the service, atomic counters, idempotent batches, immutable history, canonical references, committed change cursors and explicit-set claims. Contracts, dummy checks and real PostgreSQL checks pass. This increment does not complete M1 and has not received a milestone review. No user decision is currently required.
 
 See [dependency evidence and compatibility patches](design/dependencies.md), [architecture](design/architecture.md), and [contracts](design/contracts.md). Planning baseline: `7e3076a`; verified M0 implementation: `1801c2a`.

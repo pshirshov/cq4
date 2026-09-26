@@ -6,7 +6,7 @@ Requirements: [R01–R31](drafts/20260926-0957-cq-requirements-prompt.md). Miles
 | --- | --- | --- | --- |
 | R01 Stack | M0, M6 | In progress | [M0 JVM/native stack proof passes](validation/m0-stack.md); complete release packaging remains M6 |
 | R02 Live frontend | M1, M5 | Not started | — |
-| R03 Baboon contracts | M0, M6 | In progress | Generated Scala/TS 0.2.0 ledger/claim/audit models compile; locked 0.1.0 history retained; [M1 core checks](validation/m1-core.md); [increment evidence](validation/m1-core.md) |
+| R03 Baboon contracts | M0, M6 | In progress | One 0.1.0 model; edits and breaking changes in place per user correction; no compatibility gate. See [current contract policy](design/contracts.md) and [increment evidence](validation/m1-core.md) |
 | R04 HTTP MCP | M0, M1 | In progress | Real SDK initialize/list/call passes on JVM/native; production tools and roles pending |
 | R05 Fixed ledgers | M1 | In progress | Fourteen typed content/status branches and outcome classification; examples pass on both adapters; nested validation remains; [increment evidence](validation/m1-core.md) |
 | R06 No custom ledgers | M1 | In progress | Closed generated Content/Ledger types and server allocation; no registration capability; transport exposure pending; [increment evidence](validation/m1-core.md) |

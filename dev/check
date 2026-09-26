@@ -67,7 +67,6 @@ class Checks:
         for source, name in [
             ("generated/typescript/cq/api/index.ts", "contracts"),
             ("generated/typescript/BaboonSharedRuntime.ts", "contract-runtime"),
-            ("dev/evolution.ts", "evolution"),
         ]:
             self.run([str(ROOT / "node_modules/.bin/esbuild"), source, "--bundle", "--platform=node",
                       "--format=esm", f"--outfile=.work/{name}.mjs"], f"bundle-{name}", COMMAND_TIMEOUT)

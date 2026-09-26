@@ -13,7 +13,9 @@ On Linux amd64 with Nix and network access:
 ./dev/check native
 ```
 
-The entrypoint enters the pinned Nix environment when Java/sbt are absent. Baboon is downloaded to `.tools` and checked against a pinned SHA-256. npm dependencies are installed from the lockfile. Generated source and build products are ignored. `contracts` verifies cross-language codecs and an evolution fixture; `fast` uses the dummy repository; `postgres` starts an isolated PostgreSQL cluster and runs the same repository scenario plus real transport clients. `native` traces the JVM proof, builds a native executable, and exercises that executable against PostgreSQL.
+The entrypoint enters the pinned Nix environment when Java/sbt are absent. Baboon is downloaded to `.tools` and checked against a pinned SHA-256. npm dependencies are installed from the lockfile. Generated source and build products are ignored. `contracts` verifies deterministic generation and cross-language codecs; `fast` uses the dummy repository; `postgres` starts an isolated PostgreSQL cluster and runs the same service/repository scenarios plus real transport clients. `native` traces the JVM proof, builds a native executable, and exercises that executable against PostgreSQL.
+
+Development uses one CQ schema version, `0.1.0`. Edit it in place and run `./dev/generate`; breaking changes are permitted. Version bumps require explicit user instruction. See [AGENTS.md](AGENTS.md).
 
 Each invocation prints its evidence directory, normally `.work/evidence/<timestamp>-<check>`. Set `CQ_EVIDENCE_ROOT` to retain logs elsewhere. `result.json`, `commands.json` and `source-sha256.json` distinguish pass/failure and identify the tested source. Native proof output is `<evidence-directory>/cq`; it is currently a development artifact.
 

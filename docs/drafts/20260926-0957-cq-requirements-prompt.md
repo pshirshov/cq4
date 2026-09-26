@@ -33,6 +33,7 @@ Apply the Baboon and izumi skills, the requested `resilient-ws-ui` skill (called
 4. **Restricted bulk traversal:** terminate derived work and milestone members; exclude prerequisites and shared work unless explicitly selected. Show exclusions in the preview.
 5. **Parent-owned lifetime is acceptable:** surviving the governing harness's exit/restart is not required. Prefer cancellation of the whole child hierarchy if it yields the simpler design. Completed artifacts remain durable.
 6. **Compact orchestration results:** bounded outcome summaries and explicit drill-down are allowed. Prompt/input/result forwarding must not require their full content in the governing session.
+7. **Single development version (2026-09-26 correction):** keep one CQ schema version, currently 0.1.0. Change it in place, including breaking changes. Bump versions only when explicitly requested by the user; ignore backward compatibility for now.
 
 ## Requirements
 
@@ -50,7 +51,7 @@ The browser frontend is TypeScript and uses WebSocket requests/events for dynami
 
 Define actual Baboon schemas and generate Scala/TypeScript types and codecs. Cover application operations, typed errors, version negotiation, request correlation, subscriptions, snapshot/change synchronization, replay/resync, heartbeat, and mutation acknowledgements. Specify exact JSON/binary encoding and lossless 64-bit values; handwritten parallel DTO hierarchies are not the contract.
 
-Preserve the ability to decode historical persisted versions. Define external API version support and exercise old/new clients as the new product evolves. A fresh start removes the old CQ compatibility burden, not the need for version discipline in released new CQ APIs. Database migrations and Baboon wire conversions are separate responsibilities.
+Use the single current schema for persisted data and clients during this development phase. Historical-version decoding, old/new client compatibility, conversion fixtures and upgrade paths are not required now, per the user's subsequent correction. Change contracts in place and bump the version only upon explicit user instruction. Item revision history under the current schema remains required.
 
 ### R04 — HTTP MCP in the server
 

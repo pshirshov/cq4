@@ -2,6 +2,8 @@
 
 This is an implementation increment, not the M1 exit verdict. No M1 Astra review or human acceptance is claimed.
 
+The original checks below describe commit `5f7aed5`. The user subsequently required one mutable development schema version. Multiple schema copies, evolution fixtures and signature-freezing behavior were removed; their old results below are historical evidence, not current requirements. See [current contract policy](../design/contracts.md).
+
 ## Checks
 
 Run from the repository with `CQ_EVIDENCE_ROOT=/srv/nvme/tmp/cq4-implementation`:
@@ -21,6 +23,18 @@ The seven new shared service scenarios cover creation of all fourteen branches, 
 - Replaying a released claim displaced a newly acquired owner's membership. `20260926T171623-fast/dummy-contract.log` reproduces the expected forbidden write being admitted. The service now returns the existing release without rewriting membership. Both adapters pass the retained regression.
 - Baboon `create-only` left the newly generated 0.2.0 version absent from the lockfile. `m1-lock-before.json` preserves the old lock; `m1-unlocked-version-rejection.log` shows the new explicit rejection. `dev/generate --update-lock` registers new versions after checking that every previous signature remains identical. Normal generation refuses unregistered versions. `m1-lock-registration.log` records registration.
 - The first evolved transport run correctly advertised 0.2.0 while the test still expected 0.1.0 (`20260926T171659-postgres/jvm-transport.log`). The proof client now explicitly requests/asserts 0.2.0. Production version negotiation remains explicit; 0.1.0 is retained as a schema history, not advertised as a supported ledger protocol.
+
+## Single-version consolidation
+
+Applied the subsequent user correction: all current contracts, including the new audit types, now live in one mutable `cq.api` 0.1.0 model. Historical copies and evolution fixtures were removed. The generator cleans its owned output directory, refreshes the current signature and requires explicit source changes to permit a version bump. `AGENTS.md` and the requirements/plan record the user's instruction.
+
+| Command | Result | Evidence directory |
+| --- | --- | --- |
+| `./dev/check contracts` | Pass: deterministic generation, Scala/TS compilation, JSON/UEBA round trips, typed errors and MCP examples | `20260926T172943-contracts` |
+| `./dev/check fast` | Pass: all 8 dummy scenarios | `20260926T173052-fast` |
+| `./dev/check postgres` | Pass: all 8 real-database scenarios and JVM transport checks using 0.1.0 | `20260926T173103-postgres` |
+
+Source inspection confirms one `.baboon` file and one signature version. Generated output contains no historical namespaces or evolution fixture. These checks supersede the schema-policy portions of the earlier increment evidence; M1 remains incomplete.
 
 ## Implemented scope and remaining work
 
