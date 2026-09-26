@@ -24,7 +24,11 @@ The fixtures remove prompt/response text and unrelated machine metadata while re
 - `20260926T225611-fast`: a missing cumulative sample hid a later decrease. Validation now remembers previously known values without replacing the missing observation. The Pi corrections passed in this run; the new cumulative scenario was its sole failure.
 - `collector-decimal-repro/before.log`: formatting `1e100000000` exhausted the bounded JVM heap. Expanded decimal length and scale are now checked before formatting; the same command passes in `after.log`, with a permanent fast regression including the accepted 64-character boundary.
 
-Current fast verification passes all these corrections. Full transcripts, source manifests and command arrays are retained. Independent Astra review is pending.
+Current fast verification passes all these corrections. Full transcripts, source manifests and command arrays are retained.
+
+## Independent review
+
+Astra **approved `7491114`** for this bounded collector foundation, with no blocking or major findings. The review covered scopes, resumed baselines, deterministic replay, Pi response identities, unknown/default-zero handling, resource bounds and coverage reporting. Reviewed collector/test source hashes match the retained fast evidence. This approval excludes the integration and evaluation work listed below and does not close M2 acceptance.
 
 ## Limits and next work
 
