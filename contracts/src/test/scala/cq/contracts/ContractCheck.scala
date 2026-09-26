@@ -24,7 +24,7 @@ object ContractCheck {
     val evolved = cq.fixture.Convert__Note__From__0_1_0.doConvert(None, conversions, old)
     assert(evolved == cq.fixture.Note(revision.value, "historical", None))
     assert(RevisionCodec.parseRepr(revision.toString) == Right(revision))
-    assert(RevisionCodec.parseRepr("Revision:0.1.0#value:9223372036854775808").isLeft)
+    assert(RevisionCodec.parseRepr(s"Revision:${Revision.baboonDomainVersion}#value:9223372036854775808").isLeft)
     args(0) match {
       case "export" =>
         Files.writeString(directory.resolve("scala-probe.json"), Probe_JsonCodec.encode(context, probe).noSpaces)

@@ -1,0 +1,123 @@
+model cq.api
+version "0.2.0"
+import "0.1.0" { * }
+
+enum Ledger { Milestones Ideas Defects Goals Tasks Researches Hypothesis Questions Decisions Reviews Handoffs OperatorActions Memories Upstream }
+root data ItemId { project: ProjectId ledger: Ledger number: i64 }
+root id SessionId { value: uid }
+root id RequestId { value: uid }
+root id ClaimId { value: uid }
+root id AttemptId { value: uid }
+root id AssignmentId { value: uid }
+root id ObservationId { value: uid }
+root id ArtifactId { value: uid }
+root id ChangeCursor { value: i64 }
+enum Role { Human Governor Explorer Planner Worker Reviewer Collector }
+root data Actor { subject: str session: SessionId role: Role }
+root data Provenance { actor: Actor receivedAt: i64 request: RequestId }
+root data Project { id: ProjectId name: str revision: Revision createdAt: i64 }
+
+enum MilestoneStatus { Open Complete Cancelled }
+enum IdeaStatus { Proposed Accepted Declined Withdrawn }
+enum DefectStatus { Open Resolved NotReproducible Rejected }
+enum GoalStatus { Open Achieved Abandoned }
+enum TaskStatus { Ready Active Done Cancelled }
+enum ResearchStatus { Open Active Concluded Inconclusive Cancelled }
+enum HypothesisStatus { Proposed Investigating Supported Refuted Inconclusive Withdrawn }
+enum QuestionStatus { Open Answered Withdrawn }
+enum DecisionStatus { Proposed Adopted Superseded Withdrawn }
+enum ReviewStatus { Pending Active Approved ChangesRequested Cancelled }
+enum HandoffStatus { Open Accepted Cancelled }
+enum OperatorActionStatus { Requested Confirmed Observed Failed Cancelled }
+enum MemoryStatus { Current Superseded Retracted }
+enum UpstreamStatus { Identified Reported Resolved Declined Withdrawn }
+enum Severity { Low Medium High Critical }
+enum EvidenceOrigin { ModelDeclared HostObserved HumanReported }
+root adt Citation {
+  data Url { address: str }
+  data Artifact { id: ArtifactId }
+  data Commit { repository: str hash: str }
+  data File { path: str revision: opt[str] }
+}
+root data Evidence { description: str origin: EvidenceOrigin citations: lst[Citation] }
+root data ReviewedItem { item: ItemId revision: Revision }
+root adt Content {
+  data Milestone { status: MilestoneStatus objective: str }
+  data Idea { status: IdeaStatus outcome: str motivation: str }
+  data Defect { status: DefectStatus severity: Severity observed: str expected: str reproduction: str cause: opt[str] resolution: lst[Evidence] }
+  data Goal { status: GoalStatus outcome: str acceptance: lst[str] scope: str }
+  data Task { status: TaskStatus acceptance: lst[str] result: opt[str] validation: lst[Evidence] }
+  data Research { status: ResearchStatus question: str findings: lst[Evidence] conclusion: opt[str] recommendation: opt[str] }
+  data Hypothesis { status: HypothesisStatus claim: str rationale: str evidence: lst[Evidence] adjudication: opt[str] }
+  data Question { status: QuestionStatus prompt: str context: str alternatives: lst[str] answer: opt[str] }
+  data Decision { status: DecisionStatus choice: str rationale: str alternatives: lst[str] }
+  data Review { status: ReviewStatus subjects: lst[ReviewedItem] candidate: opt[Citation.Commit] findings: lst[Evidence] summary: opt[str] }
+  data Handoff { status: HandoffStatus outcome: str remaining: lst[str] blockers: lst[str] }
+  data OperatorAction { status: OperatorActionStatus action: str expectedEvidence: str confirmation: opt[str] observedEvidence: lst[Evidence] }
+  data Memory { status: MemoryStatus knowledge: str applicability: str evidence: lst[Evidence] }
+  data Upstream { status: UpstreamStatus component: str version: str reproduction: str report: opt[Citation.Url] outcome: opt[str] }
+}
+root data ItemDraft { title: str body: str labels: set[str] archived: bit content: Content citations: lst[Citation] }
+root data Item { id: ItemId revision: Revision draft: ItemDraft createdAt: i64 updatedAt: i64 provenance: Provenance }
+enum Relation { DerivedFrom Produces PartOf Contains BlockedBy Blocks Reviews ReviewedBy Supports SupportedBy Contradicts ContradictedBy Supersedes SupersededBy RelatesTo }
+root data ItemRef { relation: Relation target: ItemId }
+root data ItemView { item: Item refs: lst[ItemRef] }
+root data HistoryEntry { item: ItemView cursor: ChangeCursor reason: str schemaVersion: str }
+root data Fence { claim: ClaimId generation: i64 }
+root data Claim { fence: Fence owner: Actor members: set[ItemId] expiresAt: i64 released: bit }
+root adt Mutation {
+  data Create { draft: ItemDraft }
+  data Replace { id: ItemId expected: Revision draft: ItemDraft }
+  data Reference { source: ItemId expectedSource: Revision relation: Relation target: ItemId expectedTarget: Revision present: bit }
+  data Restore { id: ItemId expected: Revision historical: Revision }
+}
+root data ChangeRequest { request: RequestId mutations: lst[Mutation] fences: lst[Fence] reason: str }
+root data ItemRevision { id: ItemId revision: Revision }
+root data ChangeAck { request: RequestId cursor: ChangeCursor items: lst[ItemRevision] }
+root data ChangeEvent { cursor: ChangeCursor request: RequestId items: lst[ItemRevision] }
+root data ChangePage { cursor: ChangeCursor events: lst[ChangeEvent] hasMore: bit }
+enum ArchiveFilter { Active Archived All }
+root data ItemFilter { ledger: opt[Ledger] archived: ArchiveFilter }
+root data ItemPage { items: lst[Item] cursor: ChangeCursor after: opt[ItemId] hasMore: bit }
+root data HistoryPage { entries: lst[HistoryEntry] hasMore: bit }
+root adt Fault {
+  data Invalid { message: str }
+  data Denied { message: str }
+  data Missing { message: str }
+  data Conflict { message: str }
+  data StaleFence { message: str }
+  data Resync { message: str }
+  data Limit { message: str }
+}
+
+enum Harness { Claude Codex Pi }
+enum AttemptState { Running Completed Failed Cancelled Unknown }
+enum Attribution { Direct Shared Unattributed }
+root data EvaluationScope { run: str scenario: str assessor: bit }
+root data Assignment { id: AssignmentId project: ProjectId members: set[ItemId] attribution: Attribution cohort: opt[uid] evaluation: opt[EvaluationScope] }
+root data Attempt { id: AttemptId assignment: AssignmentId parent: opt[AttemptId] session: SessionId role: Role harness: Harness provider: str model: str collector: str startedAt: i64 }
+enum CounterScope { Increment Cumulative }
+enum Measurement { Observed Estimated Missing Unsupported }
+root data Counter { value: opt[i64] measurement: Measurement }
+root data TokenCounts { input: Counter output: Counter cacheRead: Counter cacheWrite: Counter reasoning: Counter }
+enum CostBasis { ProviderEstimate PriceTable ActualBilling Unknown }
+root id DecimalAmount { value: str }
+root data Money { amount: opt[DecimalAmount] currency: opt[str] basis: CostBasis pricingVersion: opt[str] }
+enum UsageCompleteness { Partial Complete Unavailable }
+root data UsageObservation {
+  id: ObservationId
+  attempt: AttemptId
+  source: str
+  position: i64
+  occurredAt: i64
+  receivedAt: i64
+  scope: CounterScope
+  counters: TokenCounts
+  inputIncludesCache: bit
+  outputIncludesReasoning: bit
+  cost: Money
+  completeness: UsageCompleteness
+  gaps: lst[str]
+  evidence: opt[ArtifactId]
+  supersedes: opt[ObservationId]
+}

@@ -1,0 +1,56 @@
+# Typed ledgers and durable transactions
+
+Implemented contract: [cq.api 0.2.0](../../models/cq-api-v02.baboon). The original 0.1.0 model remains immutable. These are service and repository contracts; transport integration is still being implemented under M1.
+
+## Content and outcomes
+
+Every item has a required title, Markdown body, label set, archive flag, typed content and citation list. Empty body/citation/label collections are valid. Titles contain 1–300 characters; bodies at most 65,536; at most 32 nonempty labels of at most 80 characters. The content branch determines the ledger. Callers cannot register a ledger or change an existing item's ledger.
+
+The schema lists exact required, optional and collection fields. Every content branch has its own closed status type. Collections are required even when empty; `opt` fields explicitly represent absence. Acceptance lists for goals/tasks are nonempty. A review identifies at least one item revision or candidate commit. Required narrative fields are nonempty. Status values never impose transition restrictions.
+
+| Ledger/prefix | Domain fields beyond status | Terminal statuses | Dependency-satisfying status |
+| --- | --- | --- | --- |
+| milestones/M | objective | Complete, Cancelled | Complete |
+| ideas/I | outcome, motivation | Accepted, Declined, Withdrawn | Accepted |
+| defects/D | severity, observed, expected, reproduction, optional cause, resolution evidence | Resolved, NotReproducible, Rejected | Resolved |
+| goals/G | outcome, acceptance, scope | Achieved, Abandoned | Achieved |
+| tasks/T | acceptance, optional result, validation evidence | Done, Cancelled | Done |
+| researches/RS | question, findings, optional conclusion/recommendation | Concluded, Inconclusive, Cancelled | Concluded |
+| hypothesis/H | claim, rationale, evidence, optional adjudication | Supported, Refuted, Inconclusive, Withdrawn | Supported, Refuted |
+| questions/Q | prompt, context, alternatives, optional answer | Answered, Withdrawn | Answered |
+| decisions/K | choice, rationale, alternatives | Adopted, Superseded, Withdrawn | Adopted |
+| reviews/R | reviewed revisions, optional candidate, findings, optional summary | Approved, ChangesRequested, Cancelled | Approved |
+| handoffs/HO | outcome, remaining work, blockers | Accepted, Cancelled | Accepted |
+| operatorActions/OA | action, expected evidence, optional confirmation, observed evidence | Observed, Failed, Cancelled | Observed |
+| memories/MEM | knowledge, applicability, evidence | Current, Superseded, Retracted | Current |
+| upstream/U | component, version, reproduction, optional report/outcome | Resolved, Declined, Withdrawn | Resolved |
+
+These are nominal outcome classifications. Readiness must additionally explain missing evidence and stale reviews; a status does not establish that validation was observed. In particular, operator confirmation is not observed completion. Facts may be corrected and records reopened. Archive is independent of these classifications.
+
+Executable examples for all fourteen ledgers are in `LedgerContractTest`. They create records through the same application service using either the dummy or PostgreSQL repository. The schema represents citations separately from canonical ledger relations. Typed review subjects pin applicability to a revision; they do not create a second mutable graph.
+
+## Transactions and identity
+
+`LedgerService[F]` implements BIO operations against `LedgerRepository[F]`. A transaction is scoped to one authenticated project. The PostgreSQL adapter acquires that project's row lock, executes bounded row operations, and commits or rolls back the entire operation. Reads currently acquire the same lock for a coherent cursor/content view. This deliberately serializes a project's transactions; contention measurements are pending M3. It does not load or rewrite the project.
+
+The migration has relational primary/foreign keys for projects, counters, items, edges, history, requests, committed changes and claims. Generated Baboon JSON is persisted as JSONB with schema versions. Metadata indexes support project/ledger/archive/status access; the initial full-text index uses PostgreSQL's `simple` configuration. The complete query grammar is not implemented yet.
+
+Creation allocates from the project/ledger counter inside the same transaction as the item, revision-one history, change event and request acknowledgement. The stable compound identity is project UUID, ledger and positive signed 64-bit number. A replay under the same actor/session/request returns the original acknowledgement. Reusing that identity with a different payload is a conflict. Failed batches leave no history, change event or acknowledgement. An ordinary batch contains 1–64 operations and currently may change each existing item only once.
+
+The committed change cursor is incremented under the project lock and published in the transaction. This avoids treating a sequence allocated before commit as a committed watermark. A snapshot returns its cursor; subsequent events can be read after it in ascending order. Changes are retained without truncation in this increment. Invalid cursors explicitly require resynchronization. Multi-page snapshot consistency and live transport replay remain M1 interface work.
+
+History stores complete item content and its inverse-derived reference view for every changed endpoint. Pagination is by revision descending. Content restore creates a new revision while retaining prior history and creation time. The current restore operation rejects changed relationship membership; full graph restore/preview remains open, rather than silently overwriting other endpoints.
+
+## References
+
+Canonical relations are DerivedFrom, PartOf, BlockedBy, Reviews, Supports, Contradicts, Supersedes and RelatesTo. Their inverses are Produces, Contains, Blocks, ReviewedBy, SupportedBy, ContradictedBy, SupersededBy and RelatesTo respectively. Symmetric edges use deterministic endpoint order. Inverse mutations normalize to one row. Duplicate additions/removals produce an acknowledgement without a new item revision. Actual membership changes revise both endpoints atomically.
+
+All targets must exist in the same project, including archived records. Self references are rejected. PartOf targets a milestone, permits process artifacts rather than milestones/intake/goals as members, and permits at most one milestone per member. Reviews originates at a review. Other relation endpoint types are unrestricted in this increment. Cycles are permitted; bounded visited-set traversal and relation-specific readiness/termination policies are required by M3 before graph operations are exposed. Each item currently supports at most 200 incident references, with explicit failure beyond that bound.
+
+## Claims and authority
+
+Only Human/Governor service scopes may mutate ledgers or claims. Authenticated scope is a trusted adapter input, never mutation payload. Restricted-role transport credentials still need implementation before agent work is allowed.
+
+Claims atomically cover explicit sets of 1–64 existing items. The owner includes subject, session and role. Leases last at most five minutes and use monotonically increasing project fences. Overlapping active claims are rejected as a set; no partial acquisition remains. An active claim requires its owner and fence on edits. An explicitly supplied expired/released/replaced fence is rejected even if the item is otherwise unclaimed. Ordinary authorized corrections can proceed after a claim ends without supplying a stale job fence.
+
+Claim identity retries return the original active claim. Renewal checks ownership and expiry. Release replay does not rewrite membership, preventing an old release from displacing a new owner. A new acquisition after expiry/release needs a new claim identity. Producer/descendant coordination, takeover, host result admission, cancellation, filesystem isolation and Git integration are later work; these server checks alone do not fence OS processes.

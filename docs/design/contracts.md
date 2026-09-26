@@ -1,12 +1,12 @@
 # Contract boundary
 
-Authoritative production schema: `models/cq-api.baboon`, currently `cq.api` 0.1.0. `dev/generate` pins Baboon 0.0.196 by SHA-256, enforces the schema lockfile, emits Scala/TypeScript codecs and applies the documented Scala runtime compatibility patch. Generated files are ignored and regenerated; no handwritten conversion belongs in generated output.
+Authoritative production schemas: `models/cq-api.baboon` (immutable 0.1.0) and `models/cq-api-v02.baboon` (current `cq.api` 0.2.0). `dev/generate` pins Baboon 0.0.196 by SHA-256, enforces the schema lockfile, emits Scala/TypeScript codecs and applies the documented Scala runtime compatibility patch. `dev/generate --update-lock` registers new versions while rejecting changes to existing signatures. Generated files are ignored and regenerated; no handwritten conversion belongs in generated output. The [ledger contracts](ledgers.md) describe M1's typed content and transaction services.
 
 ## Wire representation
 
 The generated codecs encode `i64` as decimal JSON strings. JavaScript consumers use `bigint` internally. Always call generated codecs; generated record `toJSON()` is not the wire encoder. `ProjectId` wraps a UUID. `Revision` wraps a signed 64-bit integer. The proof includes 9,007,199,254,740,993 and the signed 64-bit maximum, Unicode text, canonical identifier parsing and a typed conflict error.
 
-HTTP requests to `/api/probe` require `CQ-Protocol-Version: 0.1.0`; unsupported or missing versions receive a typed `UnsupportedVersion` error. `/api/hello` advertises supported CQ schema versions. An authenticated caller cannot exchange a probe for another project. All current application routes require a bearer credential, and any supplied Origin must match configuration.
+HTTP requests to `/api/probe` require `CQ-Protocol-Version: 0.2.0`; unsupported or missing versions receive a typed `UnsupportedVersion` error. `/api/hello` advertises supported CQ schema versions. An authenticated caller cannot exchange a probe for another project. All current application routes require a bearer credential, and any supplied Origin must match configuration.
 
 The separate test schema `cq.fixture` evolves from 0.1.0 to 0.2.0 by adding an optional annotation. Generated conversions preserve the old revision/text and initialize the new field to absent. This fixture is compiled in the Scala test scope and exercises TypeScript conversion; it is not a production ledger model.
 

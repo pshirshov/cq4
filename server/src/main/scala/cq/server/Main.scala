@@ -2,7 +2,7 @@ package cq.server
 
 import com.comcast.ip4s.{Host, Port}
 import cq.api.ProjectId
-import cq.core.{ProbeRepository, ProbeService}
+import cq.core.{LedgerRepository, LedgerService, ProbeRepository, ProbeService}
 import distage.{Activation, Lifecycle, ModuleDef}
 import distage.StandardAxis.Repo
 import izumi.distage.plugins.{PluginConfig, PluginDef}
@@ -15,6 +15,7 @@ import org.http4s.server.Server
 import zio.{IO, Task, ZIO}
 import zio.interop.catz.*
 import java.util.UUID
+import java.time.Clock
 
 final case class ListenConfig(host: Host, port: Port)
 
@@ -45,6 +46,9 @@ object CqPlugin extends PluginDef {
   include(new ModuleDef {
   include(new RoleModuleDef { makeRole[ServerRole] })
   make[ProbeService[IO]].from[ProbeService.Impl[IO]]
+  make[LedgerService[IO]].from[LedgerService.Impl[IO]]
+  make[Clock].fromValue(Clock.systemUTC())
+  make[LedgerDatabase]
   make[Transport]
   make[McpSchemas]
   make[RunningServer].fromResource[RunningServer.Resource]
@@ -65,10 +69,13 @@ object CqPlugin extends PluginDef {
     tag(Repo.Prod)
     make[PostgresProbeRepository]
     make[ProbeRepository[IO]].fromResource[PostgresProbeResource]
+    make[PostgresLedgerRepository]
+    make[LedgerRepository[IO]].fromResource[PostgresLedgerResource]
   })
   include(new ModuleDef {
     tag(Repo.Dummy)
     make[ProbeRepository[IO]].fromResource[DummyProbeRepository]
+    make[LedgerRepository[IO]].fromResource[DummyLedgerResource]
   })
   })
 

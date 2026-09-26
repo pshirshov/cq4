@@ -5,7 +5,7 @@ Goal: complete the first CQ release under the [implementation plan](drafts/20260
 | Milestone | State | Evidence |
 | --- | --- | --- |
 | M0 stack and contracts | Complete; Astra approved `1801c2a` | [Four checks and native artifact](validation/m0-stack.md) |
-| M1 durable core | In progress | Typed ledger and durable transaction contracts are next |
+| M1 durable core | In progress | [Typed ledgers, transactions and claim checks](validation/m1-core.md); audit and interfaces remain |
 | M2 first usable agent slice | Not started | — |
 | M3 graph and concurrency | Not started | — |
 | M4 process and cohorts | Not started | — |
@@ -14,11 +14,11 @@ Goal: complete the first CQ release under the [implementation plan](drafts/20260
 
 ## Current increment
 
-M0 is implemented and verified at `1801c2a`. Astra approved that commit after checking all four current result manifests, matching source hashes, the native executable hash and runtime logs. No blocking or major finding remains for M0. No user decision is currently required.
+M0 is implemented and verified at `1801c2a`, with Astra approval. The first M1 increment adds all fourteen typed content/status models, project initialization/reattachment in the service, atomic counters, idempotent batches, immutable history, canonical references, committed change cursors and explicit-set claims. Contracts, dummy checks and real PostgreSQL checks pass. This increment does not complete M1 and has not received a milestone review. No user decision is currently required.
 
 See [dependency evidence and compatibility patches](design/dependencies.md), [architecture](design/architecture.md), and [contracts](design/contracts.md). Planning baseline: `7e3076a`; verified M0 implementation: `1801c2a`.
 
-Current evidence: [M0 manifest](validation/m0-stack.md), including exact commands, source hashes, native executable identity and gaps. Next: implement M1 durable contracts, transactions, history, claims and usage accounting, then the minimal browser/CLI interfaces.
+Current evidence: [M0 manifest](validation/m0-stack.md) and [M1 core increment](validation/m1-core.md). Next: implement append-only usage accounting, then authenticated ledger/audit transport, CLI initialization and the minimal browser. Native evidence currently applies to M0 only. M1 also retains open validation, full relationship restore, snapshot paging and workspace-isolation work listed in its evidence manifest.
 
 ## Acceptance
 

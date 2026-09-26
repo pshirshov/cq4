@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 import hashlib
+import argparse
+import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
+import tempfile
 import urllib.request
 
 
@@ -40,6 +44,9 @@ def scala3_runtime():
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--update-lock", action="store_true", help="Register new schema versions without changing existing signatures")
+    arguments = parser.parse_args()
     binary = Path(os.environ.get("CQ_BABOON", str(ROOT / ".tools" / f"baboon-{VERSION}")))
     if not binary.exists():
         binary.parent.mkdir(parents=True, exist_ok=True)
@@ -52,14 +59,30 @@ def main():
         binary.chmod(0o755)
     if hashlib.sha256(binary.read_bytes()).hexdigest() != SHA256:
         raise RuntimeError("Baboon binary checksum mismatch")
-    subprocess.run([
-        str(binary), "--model-dir", "models", "--lockfile", "models/baboon.lock",
-        "--lockfile-update", "create-only", "--lockfile-enforcement", "all-versions",
-        ":scala", "--output", "generated/scala", "--generate-json-codecs-by-default=true",
-        "--generate-ueba-codecs-by-default=true",
-        ":typescript", "--output", "generated/typescript", "--ts-import-suffix", ".js",
-        "--generate-json-codecs-by-default=true", "--generate-ueba-codecs-by-default=true",
-    ], cwd=ROOT, check=True)
+    lock = ROOT / "models/baboon.lock"
+    previous = json.loads(lock.read_text())
+    with tempfile.TemporaryDirectory(prefix="cq-baboon-") as temporary:
+        candidate = Path(temporary) / "baboon.lock"
+        shutil.copyfile(lock, candidate)
+        subprocess.run([
+            str(binary), "--model-dir", "models", "--lockfile", str(candidate),
+            "--lockfile-update", "force", "--lockfile-enforcement", "all-versions",
+            ":scala", "--output", "generated/scala", "--generate-json-codecs-by-default=true",
+            "--generate-ueba-codecs-by-default=true",
+            ":typescript", "--output", "generated/typescript", "--ts-import-suffix", ".js",
+            "--generate-json-codecs-by-default=true", "--generate-ueba-codecs-by-default=true",
+        ], cwd=ROOT, check=True)
+        current = json.loads(candidate.read_text())
+        if previous["scheme"] != current["scheme"]:
+            raise RuntimeError("Baboon signature scheme changed; explicit migration required")
+        for domain, signatures in previous["locks"].items():
+            for signature in signatures:
+                if signature not in current["locks"].get(domain, []):
+                    raise RuntimeError(f"Existing schema signature changed or disappeared: {domain} {signature['version']}")
+        if current != previous:
+            if not arguments.update_lock:
+                raise RuntimeError("New schema version is not locked; run dev/generate --update-lock")
+            lock.write_text(candidate.read_text())
     scala3_runtime()
     subprocess.run([
         str(binary), "--model-dir", "contracts/fixtures",

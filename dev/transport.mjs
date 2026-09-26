@@ -6,12 +6,12 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv';
 
 const origin = process.env.CQ_ORIGIN;
-const headers = { Authorization: `Bearer ${process.env.CQ_TOKEN}`, 'Content-Type': 'application/json', 'CQ-Protocol-Version': '0.1.0' };
+const headers = { Authorization: `Bearer ${process.env.CQ_TOKEN}`, 'Content-Type': 'application/json', 'CQ-Protocol-Version': '0.2.0' };
 const probe = { project: { value: process.env.CQ_PROJECT_ID }, revision: { value: '9007199254740993' }, text: 'real PostgreSQL λ' };
 assert.equal((await fetch(`${origin}/api/hello`)).status, 401);
 assert.equal((await fetch(`${origin}/api/hello`, { headers: { ...headers, Origin: 'https://invalid.example' } })).status, 403);
 const hello = await fetch(`${origin}/api/hello`, { headers });
-assert.deepEqual(await hello.json(), { version: '0.1.0', supported: ['0.1.0'] });
+assert.deepEqual(await hello.json(), { version: '0.2.0', supported: ['0.2.0'] });
 const post = await fetch(`${origin}/api/probe`, { method: 'POST', headers, body: JSON.stringify(probe) });
 assert.equal(post.status, 200);
 assert.deepEqual(await post.json(), probe);
