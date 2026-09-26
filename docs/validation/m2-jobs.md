@@ -31,4 +31,6 @@ Cancellation now uses an independent per-job control state, while journal change
 
 Astra's second pass found two related predictions. `20260926T222326-process` reproduced both: without an explicit cancellation, an active process exceeded its three-second settlement wait after another job's acknowledgement timeout; a Worker start queued behind a stalled write timed out instead of returning `Denied`. Failure publication now stops every visible live job independently of persistence, and caller/workspace ownership is validated before entering the acknowledgement queue. Both extended scenarios pass in `20260926T222438-process`.
 
-No actual model invocation or CQ consumer evaluation is represented by these fixtures. Public local control transport, unified role composition, artifacts/usage collection, full claim response, native packaging and M2 human acceptance remain pending. Astra re-review of this correction is pending.
+Astra approved the durable job foundation at `cd0c6e5`, with no remaining blocking or major findings and matching source hashes for the final process evidence. The reviewer explicitly confirmed that pending storage retains journal ownership and that a timeout does not imply the filesystem operation stopped.
+
+No actual model invocation or CQ consumer evaluation is represented by these fixtures. Public local control transport, unified role composition, artifacts/usage collection, full claim response, native packaging and M2 human acceptance remain pending.
