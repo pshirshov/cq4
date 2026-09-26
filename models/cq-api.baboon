@@ -89,7 +89,7 @@ root adt Mutation {
   data Create { draft: ItemDraft }
   data Replace { id: ItemId expected: Revision draft: ItemDraft }
   data Reference { source: ItemId expectedSource: Revision relation: Relation target: ItemId expectedTarget: Revision present: bit }
-  data Restore { id: ItemId expected: Revision historical: Revision }
+  data Restore { id: ItemId expected: Revision historical: Revision neighbors: lst[ItemRevision] }
 }
 root data ChangeRequest { request: RequestId mutations: lst[Mutation] fences: lst[Fence] reason: str }
 root data ItemRevision { id: ItemId revision: Revision }

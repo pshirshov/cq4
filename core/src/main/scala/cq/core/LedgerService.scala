@@ -73,6 +73,17 @@ object LedgerService {
           val now = clock.millis()
           val provenance = Provenance(scope.actor, now, request.request)
           val touched = scala.collection.mutable.LinkedHashMap.empty[ItemId, Item]
+          def validateDraft(draft: ItemDraft, recorded: List[ItemDraft]): Unit = {
+            validate(draft)
+            LedgerPolicy.provenance(scope.actor.role, draft, recorded)
+            draft.content match {
+              case review: Content.Review => review.subjects.foreach { subject =>
+                required(tx, scope, subject.item)
+                if (tx.historical(subject.item, subject.revision).isEmpty) throw DomainFailure(Fault.Missing("Reviewed revision does not exist"))
+              }
+              case _ => ()
+            }
+          }
           def check(id: ItemId, revision: Revision): Item = {
             invalid(!touched.contains(id), "An item may be changed only once in a batch")
             val item = required(tx, scope, id)
@@ -80,40 +91,53 @@ object LedgerService {
             fenced(tx, scope, id, request.fences, now)
             item
           }
-          def revise(item: Item, draft: ItemDraft): Unit = {
-            validate(draft)
+          def revise(item: Item, draft: ItemDraft, restored: Option[ItemDraft]): Unit = {
+            validateDraft(draft, item.draft :: restored.toList)
             invalid(ledger(draft.content) == item.id.ledger, "An item's ledger cannot change")
+            if (touched.size >= MaxTouchedItems) throw DomainFailure(Fault.Limit(s"A change touches at most $MaxTouchedItems items"))
             val next = item.copy(revision = Revision(Math.addExact(item.revision.value, 1L)), draft = draft, updatedAt = now, provenance = provenance)
             tx.put(next)
             touched.update(next.id, next)
           }
+          def edgeChange(edge: CanonicalEdge, present: Boolean): Boolean = {
+            endpoints(edge)
+            if (present && !tx.refs(edge.source).contains(ItemRef(edge.relation, edge.target))) {
+              if (List(edge.source, edge.target).exists(id => tx.refs(id).size >= MaxRefs))
+                throw DomainFailure(Fault.Limit(s"An item supports at most $MaxRefs incident references"))
+              if (edge.relation == Relation.PartOf)
+                invalid(!tx.refs(edge.source).exists(r => r.relation == Relation.PartOf && r.target != edge.target), "An item has at most one milestone")
+            }
+            tx.edge(edge, present)
+          }
           request.mutations.foreach {
             case Mutation.Create(draft) =>
-              validate(draft)
+              validateDraft(draft, Nil)
+              if (touched.size >= MaxTouchedItems) throw DomainFailure(Fault.Limit(s"A change touches at most $MaxTouchedItems items"))
               val id = tx.allocate(ledger(draft.content))
               val item = Item(id, Revision(1), draft, now, now, provenance)
               tx.put(item)
               touched.update(id, item)
-            case Mutation.Replace(id, revision, draft) => revise(check(id, revision), draft)
-            case Mutation.Restore(id, revision, historical) =>
+            case Mutation.Replace(id, revision, draft) => revise(check(id, revision), draft, None)
+            case Mutation.Restore(id, revision, historical, neighbors) =>
               val item = check(id, revision)
               val previous = tx.historical(id, historical).getOrElse(throw DomainFailure(Fault.Missing("Historical revision not found")))
-              invalid(tx.refs(id).toSet == previous.item.refs.toSet, "Restore content separately from changed relationships using explicit reference mutations")
-              revise(item, previous.item.item.draft)
+              val currentRefs = tx.refs(id).toSet
+              val previousRefs = previous.item.refs.toSet
+              val removed = currentRefs -- previousRefs
+              val added = previousRefs -- currentRefs
+              val targets = (removed ++ added).map(_.target)
+              invalid(neighbors.size <= MaxRefs * 2 && neighbors.map(_.id).distinct.size == neighbors.size && neighbors.map(_.id).toSet == targets,
+                "Restore requires expected revisions for exactly the changed relationship endpoints")
+              val checked = neighbors.map(n => check(n.id, n.revision))
+              removed.foreach(ref => edgeChange(canonical(id, ref.relation, ref.target), false))
+              added.foreach(ref => edgeChange(canonical(id, ref.relation, ref.target), true))
+              revise(item, previous.item.item.draft, Some(previous.item.item.draft))
+              checked.foreach(other => revise(other, other.draft, None))
             case Mutation.Reference(source, sourceRevision, relation, target, targetRevision, present) =>
               val left = check(source, sourceRevision)
               val right = check(target, targetRevision)
               val edge = canonical(source, relation, target)
-              endpoints(edge)
-              if (present) {
-                List(source, target).foreach { id =>
-                  if (tx.refs(id).size >= MaxRefs && !tx.refs(id).contains(ItemRef(if (id == source) relation else inverse(relation), if (id == source) target else source)))
-                    throw DomainFailure(Fault.Limit(s"An item supports at most $MaxRefs incident references"))
-                }
-                if (edge.relation == Relation.PartOf)
-                  invalid(!tx.refs(edge.source).exists(r => r.relation == Relation.PartOf && r.target != edge.target), "An item has at most one milestone")
-              }
-              if (tx.edge(edge, present)) { revise(left, left.draft); revise(right, right.draft) }
+              if (edgeChange(edge, present)) { revise(left, left.draft, None); revise(right, right.draft, None) }
           }
           val items = touched.valuesIterator.map(i => ItemRevision(i.id, i.revision)).toList
           val cursor = if (items.nonEmpty) tx.publish(request.request, items) else tx.cursor

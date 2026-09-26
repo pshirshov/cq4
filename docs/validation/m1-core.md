@@ -40,8 +40,27 @@ Source inspection confirms one `.baboon` file and one signature version. Generat
 
 See [ledger contracts](../design/ledgers.md), [DDL](../../server/src/main/resources/db/001-ledgers.sql), `LedgerService`, both repository adapters and `LedgerContractTest`.
 
-Remaining M1 work includes operational audit persistence/accounting (only initial models exist), real ledger/audit clients and concrete schemas, authenticated scoped credentials, browser/CLI project initialization, live replay/resnapshot, coherent multi-page snapshots, full relationship restoration, nested content/evidence validation and host-observed provenance enforcement, and isolated workspaces before agent execution. Query parsing, graph traversal, producer coordination, takeover, cancellation and Git integration remain assigned to their planned milestones.
+Subsequent increments implement the audit, authenticated real clients, minimal browser and snapshot continuation guards; see the linked status page. Remaining M1 work includes compact/bounded results, project rename, actual-server restart evidence and isolated workspaces before agent execution. Query parsing, graph traversal, producer coordination, takeover, cancellation and Git integration remain assigned to their planned milestones.
 
 Current transaction locking serializes a project's reads/writes; no throughput claim has been measured. Mutation code uses affected-row/index access, but query-plan evidence at increasing unrelated sizes is pending M3. No new native runtime claim is made for this increment; the M0 native artifact remains retained at its original evidence location. The provided-database configuration path is still unexecuted.
 
 Retain this evidence under `/srv/nvme/tmp/cq4-implementation/` through release acceptance. It contains local test data rather than production credentials. No reference snapshot was modified.
+
+## Nested validation and complete relationship restoration
+
+Both adapters now reject malformed/oversized nested narratives, citations, evidence and review subjects before item allocation. Ordinary model writes cannot invent HumanReported or HostObserved evidence; unchanged previously admitted evidence can be preserved. Human actors may add human reports. Host evidence admission through execution artifacts belongs to M2. A draft is limited to 262,144 encoded UTF-8 bytes and nested collections to 64 entries.
+
+Restore now reconstructs historical content and incident relationships in one transaction, with expected revisions and current claims for every affected neighbor. It appends history for both endpoints and preserves other neighbor content. Missing/stale neighbor revisions, active foreign claims or current graph invariant conflicts reject the whole change. One request touches at most 512 items. Browser restore controls remain M5 work.
+
+Reproductions retained before implementation:
+
+- `20260926T192813-fast/dummy-contract.log`: malformed nested input and fabricated provenance were accepted.
+- `20260926T193157-fast/dummy-contract.log`: historical relationship restore returned the old content-only restriction.
+
+Verification (same source, 18 shared scenarios):
+
+| Command | Result | Evidence directory |
+| --- | --- | --- |
+| `./dev/check fast` | Pass | `20260926T193450-fast` |
+| `./dev/check postgres` | Pass, including real transport and CLI | `20260926T193907-postgres` |
+| `./dev/check contracts` | Pass: current Scala/TS codecs and concrete MCP schemas | `20260926T193955-contracts` |

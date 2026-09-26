@@ -1,12 +1,12 @@
 # Typed ledgers and durable transactions
 
-Implemented contract: the single [cq.api 0.1.0 model](../../models/cq-api.baboon). Edit it in place during development; version bumps require explicit user instruction. These are service and repository contracts; transport integration is still being implemented under M1.
+Implemented contract: the single [cq.api 0.1.0 model](../../models/cq-api.baboon). Edit it in place during development; version bumps require explicit user instruction. These contracts are shared by the service, authenticated transport, CLI and browser.
 
 ## Content and outcomes
 
 Every item has a required title, Markdown body, label set, archive flag, typed content and citation list. Empty body/citation/label collections are valid. Titles contain 1–300 characters; bodies at most 65,536; at most 32 nonempty labels of at most 80 characters. The content branch determines the ledger. Callers cannot register a ledger or change an existing item's ledger.
 
-The schema lists exact required, optional and collection fields. Every content branch has its own closed status type. Collections are required even when empty; `opt` fields explicitly represent absence. Acceptance lists for goals/tasks are nonempty. A review identifies at least one item revision or candidate commit. Required narrative fields are nonempty. Status values never impose transition restrictions.
+The schema lists exact required, optional and collection fields. Every content branch has its own closed status type. Collections are required even when empty; `opt` fields explicitly represent absence. Acceptance lists for goals/tasks are nonempty. A review identifies at least one item revision or candidate commit. Required narrative fields are nonempty; present optional narratives must also be nonempty. Nested collections contain at most 64 entries. URL citations require absolute HTTP(S) addresses, file citations a nonempty path, and commit citations a nonempty repository and hexadecimal commit identifier. Review subjects must identify existing revisions in the same project. A complete draft is limited to 262,144 encoded UTF-8 bytes. Status values never impose transition restrictions.
 
 | Ledger/prefix | Domain fields beyond status | Terminal statuses | Dependency-satisfying status |
 | --- | --- | --- | --- |
@@ -37,9 +37,9 @@ The migration has relational primary/foreign keys for projects, counters, items,
 
 Creation allocates from the project/ledger counter inside the same transaction as the item, revision-one history, change event and request acknowledgement. The stable compound identity is project UUID, ledger and positive signed 64-bit number. A replay under the same actor/session/request returns the original acknowledgement. Reusing that identity with a different payload is a conflict. Failed batches leave no history, change event or acknowledgement. An ordinary batch contains 1–64 operations and currently may change each existing item only once.
 
-The committed change cursor is incremented under the project lock and published in the transaction. This avoids treating a sequence allocated before commit as a committed watermark. A snapshot returns its cursor; subsequent events can be read after it in ascending order. Changes are retained without truncation in this increment. Invalid cursors explicitly require resynchronization. Multi-page snapshot consistency and live transport replay remain M1 interface work.
+The committed change cursor is incremented under the project lock and published in the transaction. This avoids treating a sequence allocated before commit as a committed watermark. A snapshot returns its cursor; subsequent events can be read after it in ascending order. Changes are retained without truncation in this increment. Invalid cursors explicitly require resynchronization. Search continuation supplies the original snapshot cursor and explicitly resynchronizes if the project changed. Live transport replays committed changes from the snapshot cursor.
 
-History stores complete item content and its inverse-derived reference view for every changed endpoint. Pagination is by revision descending. Content restore creates a new revision while retaining prior history and creation time. The current restore operation rejects changed relationship membership; full graph restore/preview remains open, rather than silently overwriting other endpoints.
+History stores complete item content and its inverse-derived reference view for every changed endpoint. Pagination is by revision descending. Restore creates a new revision while retaining prior history and creation time. It reconstructs content and incident relationships from the selected history entry. Callers must supply current revisions for exactly the changed relationship endpoints; claims and graph invariants apply to every endpoint. All affected neighbors receive history revisions, preserving their own content. Conflicts reject the entire transaction. The maximum touched set is 512 items per change request.
 
 ## References
 
@@ -49,7 +49,7 @@ All targets must exist in the same project, including archived records. Self ref
 
 ## Claims and authority
 
-Only Human/Governor service scopes may mutate ledgers or claims. Authenticated scope is a trusted adapter input, never mutation payload. Restricted-role transport credentials still need implementation before agent work is allowed.
+Only Human/Governor service scopes may mutate ledgers or claims. Authenticated scope is a trusted adapter input, never mutation payload. Signed project/role credentials enforce the same restrictions at transport boundaries. Declared evidence cannot fabricate human or host provenance. Only a Human actor can introduce HumanReported evidence or operator confirmation; unchanged recorded evidence can be preserved. HostObserved admission from execution artifacts remains M2 work.
 
 Claims atomically cover explicit sets of 1–64 existing items. The owner includes subject, session and role. Leases last at most five minutes and use monotonically increasing project fences. Overlapping active claims are rejected as a set; no partial acquisition remains. An active claim requires its owner and fence on edits. An explicitly supplied expired/released/replaced fence is rejected even if the item is otherwise unclaimed. Ordinary authorized corrections can proceed after a claim ends without supplying a stale job fence.
 

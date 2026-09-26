@@ -8,16 +8,16 @@ Requirements: [R01–R31](drafts/20260926-0957-cq-requirements-prompt.md). Miles
 | R02 Live frontend | M1, M5 | In progress | Generated WebSocket browser, live changes, truthful health/sync and heartbeat recovery pass Chromium checks. Full lifecycle corpus remains M5. [Evidence](validation/m1-browser.md) |
 | R03 Baboon contracts | M0, M6 | In progress | One 0.1.0 model; edits and breaking changes in place per user correction; no compatibility gate. See [current contract policy](design/contracts.md) and [increment evidence](validation/m1-core.md) |
 | R04 HTTP MCP | M0, M1 | In progress | Five generated-schema ledger/audit tools and enforced role profiles pass real SDK checks on JVM; earlier native evidence covers M0 only. [Interface evidence](validation/m1-interfaces.md) |
-| R05 Fixed ledgers | M1 | In progress | Fourteen typed content/status branches and outcome classification; examples pass on both adapters; nested validation remains; [increment evidence](validation/m1-core.md) |
-| R06 No custom ledgers | M1 | In progress | Closed generated Content/Ledger types and server allocation; no registration capability; transport exposure pending; [increment evidence](validation/m1-core.md) |
-| R07 Provenance/gating | M1, M4 | In progress | Actor/session/request provenance persisted with history; host-observed evidence enforcement remains; [increment evidence](validation/m1-core.md) |
+| R05 Fixed ledgers | M1 | In progress | Fourteen typed content/status branches and outcome classification; nested narrative/citation/evidence validation passes on both adapters; [increment evidence](validation/m1-core.md) |
+| R06 No custom ledgers | M1 | In progress | Closed generated Content/Ledger types and server allocation; no registration capability; actual clients use generated closed contracts; [increment evidence](validation/m1-core.md) |
+| R07 Provenance/gating | M1, M4 | In progress | Actor/session/request provenance persisted; fabricated human/host evidence is denied and recorded evidence preserved; host artifact admission and readiness remain; [increment evidence](validation/m1-core.md) |
 | R08 Process relationships | M4 | Not started | — |
 | R09 Real evaluations | M2, M4, M6 | Not started | Earlier harness probes were not CQ evaluations |
-| R10 History | M1, M3 | In progress | Creation/edit/archive/edge history and content restore tested; full relationship restore remains; [increment evidence](validation/m1-core.md) |
+| R10 History | M1, M3 | In progress | Creation/edit/archive/edge history and full content/relationship restore pass both adapters, including neighbor revisions, claims and rollback; [increment evidence](validation/m1-core.md) |
 | R11 Atomic IDs | M1 | In progress | Concurrent per-project/ledger allocation and duplicate request replay pass; actual-client restart evidence remains; [increment evidence](validation/m1-core.md) |
 | R12 PostgreSQL | M0, M1, M6 | In progress | Versioned DDL and real PostgreSQL transactions pass shared ledger scenarios; backup/restore remains M6; [increment evidence](validation/m1-core.md) |
 | R13 Lean MCP | M1, M4 | In progress | Five ordinary capabilities; generated schemas include only referenced definitions. Compact search projections, dispatch and measured token budgets remain. [Interface evidence](validation/m1-interfaces.md) |
-| R14 Archive attribute | M1 | In progress | Archive field, default omission, direct read and restoration pass shared scenarios; clients remain; [increment evidence](validation/m1-core.md) |
+| R14 Archive attribute | M1 | In progress | Archive field, default omission, direct read and restoration pass shared scenarios; browser/CLI archive filters implemented; [increment evidence](validation/m1-core.md) |
 | R15 Query language | M1, M3 | In progress | Typed ledger/archive filter and stable ID ordering implemented; complete shared grammar remains M3; [increment evidence](validation/m1-core.md) |
 | R16 Cohorts | M4 | Not started | — |
 | R17 Canonical refs | M1, M3 | In progress | Canonical/inverse rows, endpoint history, duplicate normalization and project checks implemented; graph checks remain; [increment evidence](validation/m1-core.md) |

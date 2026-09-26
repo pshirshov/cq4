@@ -77,6 +77,37 @@ abstract class LedgerContractTest extends SpecZIO with AssertZIO {
       } yield ()
     }
 
+    "reject fabricated observation provenance and invalid nested content without allocating items" in { (service: LedgerService[IO]) =>
+      val owner = scope()
+      val invalidDrafts = List(
+        task("Fabricated host observation").copy(content = Content.Task(TaskStatus.Ready, List("Acceptance"), None,
+          List(Evidence("Tests passed", EvidenceOrigin.HostObserved, Nil)))),
+        task("Fabricated human report").copy(content = Content.Task(TaskStatus.Ready, List("Acceptance"), None,
+          List(Evidence("User approved", EvidenceOrigin.HumanReported, Nil)))),
+        task("Empty evidence").copy(content = Content.Task(TaskStatus.Ready, List("Acceptance"), None,
+          List(Evidence("", EvidenceOrigin.ModelDeclared, Nil)))),
+        task("Invalid URL").copy(citations = List(Citation.Url("javascript:alert(1)"))),
+        task("Empty file path").copy(citations = List(Citation.File("", None))),
+        task("Invalid commit").copy(citations = List(Citation.Commit("consumer", "not-a-commit"))),
+        task("Missing reviewed revision").copy(content = Content.Review(ReviewStatus.Pending,
+          List(ReviewedItem(ItemId(owner.project, Ledger.Tasks, 999), Revision(1))), None, Nil, None)),
+        task("Oversized optional narrative").copy(content = Content.Task(TaskStatus.Ready, List("Acceptance"), Some("x" * 65537), Nil)),
+      )
+      for {
+        _ <- service.initialize(owner, "nested validation")
+        results <- ZIO.foreach(invalidDrafts)(draft => create(service, owner, draft).either)
+        _ <- assertIO(results.forall(_.isLeft))
+        snapshot <- service.search(owner, ItemFilter(None, ArchiveFilter.All), None, 200)
+        _ <- assertIO(snapshot.items.isEmpty && snapshot.cursor.value == 0)
+        human = owner.copy(actor = owner.actor.copy(role = Role.Human))
+        accepted = task("Human report").copy(content = Content.Task(TaskStatus.Ready, List("Acceptance"), None,
+          List(Evidence("User ran the check", EvidenceOrigin.HumanReported, List(Citation.Url("https://example.com/result"))))))
+        first <- create(service, human, accepted)
+        _ <- assertIO(first.id.number == 1)
+        _ <- service.change(owner, request(List(Mutation.Replace(first.id, first.revision, accepted.copy(title = "Preserved report"))), Nil))
+      } yield ()
+    }
+
     "roll back an entire batch and allow archive, status correction and restore as a new revision" in { (service: LedgerService[IO]) =>
       val owner = scope()
       val initial = task("Task")
@@ -93,7 +124,7 @@ abstract class LedgerContractTest extends SpecZIO with AssertZIO {
         _ <- assertIO(hidden.items.isEmpty)
         direct <- service.get(owner, first.id)
         _ <- assertIO(direct.item.draft.archived)
-        _ <- service.change(owner, request(List(Mutation.Restore(first.id, Revision(2), Revision(1))), Nil))
+        _ <- service.change(owner, request(List(Mutation.Restore(first.id, Revision(2), Revision(1), Nil)), Nil))
         restored <- service.get(owner, first.id)
         _ <- assertIO(restored.item.revision.value == 3 && restored.item.draft == initial)
         entries <- service.history(owner, first.id, Revision(Long.MaxValue), 2)
@@ -137,6 +168,34 @@ abstract class LedgerContractTest extends SpecZIO with AssertZIO {
         next <- service.changes(owner, page.cursor, 1)
         _ <- assertIO(!next.hasMore && next.events.flatMap(_.items).map(_.id) == List(third.id))
         _ <- denied(service.changes(owner, ChangeCursor(999), 1))(_.isInstanceOf[Fault.Resync])
+      } yield ()
+    }
+
+    "restore historical relationships and append both endpoint histories atomically" in { (service: LedgerService[IO]) =>
+      val owner = scope()
+      for {
+        _ <- service.initialize(owner, "relationship restore")
+        source <- create(service, owner, task("Dependent"))
+        target <- create(service, owner, task("Prerequisite"))
+        _ <- service.change(owner, request(List(Mutation.Reference(source.id, Revision(1), Relation.BlockedBy, target.id, Revision(1), true)), Nil))
+        _ <- service.change(owner, request(List(Mutation.Reference(source.id, Revision(2), Relation.BlockedBy, target.id, Revision(2), false)), Nil))
+        _ <- denied(service.change(owner, request(List(Mutation.Restore(source.id, Revision(3), Revision(2), List(ItemRevision(target.id, Revision(2))))), Nil)))(_.isInstanceOf[Fault.Conflict])
+        unchanged <- service.get(owner, source.id)
+        _ <- assertIO(unchanged.item.revision == Revision(3) && unchanged.refs.isEmpty)
+        other = owner.copy(actor = owner.actor.copy(session = SessionId(UUID.randomUUID())))
+        claim <- service.acquire(other, ClaimId(UUID.randomUUID()), Set(target.id), 300000)
+        _ <- denied(service.change(owner, request(List(Mutation.Restore(source.id, Revision(3), Revision(2), List(ItemRevision(target.id, Revision(3))))), Nil)))(_.isInstanceOf[Fault.StaleFence])
+        _ <- service.release(other, claim.fence)
+        restored <- service.change(owner, request(List(Mutation.Restore(source.id, Revision(3), Revision(2), List(ItemRevision(target.id, Revision(3))))), Nil))
+        _ <- assertIO(restored.items.toSet == Set(ItemRevision(source.id, Revision(4)), ItemRevision(target.id, Revision(4))))
+        left <- service.get(owner, source.id)
+        right <- service.get(owner, target.id)
+        _ <- assertIO(left.refs == List(ItemRef(Relation.BlockedBy, target.id)) && right.refs == List(ItemRef(Relation.Blocks, source.id)))
+        histories <- ZIO.foreach(List(source.id, target.id))(id => service.history(owner, id, Revision(Long.MaxValue), 200))
+        _ <- assertIO(histories.forall(h => h.entries.size == 4 && h.entries.head.cursor == restored.cursor))
+        _ <- service.change(owner, request(List(Mutation.Restore(source.id, Revision(4), Revision(1), List(ItemRevision(target.id, Revision(4))))), Nil))
+        removed <- service.get(owner, target.id)
+        _ <- assertIO(removed.item.revision == Revision(5) && removed.refs.isEmpty)
       } yield ()
     }
 
