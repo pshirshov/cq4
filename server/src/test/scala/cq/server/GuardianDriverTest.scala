@@ -1,5 +1,6 @@
 package cq.server
 
+import cq.api.StopReason
 import cq.host.*
 import distage.ModuleDef
 import izumi.distage.plugins.{PluginConfig, PluginDef}

@@ -14,7 +14,7 @@ The `/proc` child listing is advisory: the kernel documentation warns that exiti
 
 On normal root exit, descendants are also terminated and reaped. Root exit code/signal, cleanup settlement, output-limit failure and host I/O failure are distinct facts. Input must be a regular non-symlink file; opening a FIFO cannot block before the watchdog begins. Output files are created exclusively and retain only their configured prefix; overflow terminates execution and remains explicit.
 
-The root also receives a parent-death signal if the helper dies. That signal does not guarantee termination of the complete hierarchy. Missing/malformed terminal protocol, helper failure, unsettled descendants or a driver timeout therefore produce `Uncertain` from the Scala driver. The supervisor must persist workspace quarantine; that durable integration remains pending. A timeout is not proof of termination. [Parent-death signal scope](https://man7.org/linux/man-pages/man2/PR_SET_PDEATHSIG.2const.html).
+The root also receives a parent-death signal if the helper dies. That signal does not guarantee termination of the complete hierarchy. Missing/malformed terminal protocol, helper failure, unsettled descendants or a driver timeout therefore produce `Uncertain` from the Scala driver. The [durable local job service](local-jobs.md) persists uncertainty and workspace quarantine before admitting further work. A timeout is not proof of termination. [Parent-death signal scope](https://man7.org/linux/man-pages/man2/PR_SET_PDEATHSIG.2const.html).
 
 ## Scala driver
 
@@ -28,4 +28,4 @@ Cancellation is idempotent after settlement and cannot relabel completed work. O
 
 The helper uses a private bounded line protocol at its process boundary, not a model-facing API. Lines are `START pid`, `STOP reason`, and `EXIT code signal reason stdoutBytes stderrBytes settled hostFailure`. The driver must validate ordering and fields. `settled` and `hostFailure` are `0` or `1`; a signalled root has code `-1`. Helper exit 0 means cleanup settled without a host I/O failure; it does not mean the command succeeded. Exit 2 is pre-launch setup rejection and exit 3 is unconfirmed cleanup or a host failure. No protocol version is introduced.
 
-Build and controlled checks: `CQ_EVIDENCE_ROOT=/srv/nvme/tmp/cq4-implementation ./dev/check process`. This covers the helper and Scala driver; job persistence/control, workspace quarantine integration and the complete R21 harness lifecycle corpus remain pending.
+Build and controlled checks: `CQ_EVIDENCE_ROOT=/srv/nvme/tmp/cq4-implementation ./dev/check process`. This covers the helper, Scala driver and durable local job service. The local transport and complete R21 harness lifecycle corpus remain pending.

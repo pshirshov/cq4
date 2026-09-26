@@ -1,5 +1,6 @@
 package cq.host
 
+import cq.api.StopReason
 import java.io.{BufferedInputStream, ByteArrayOutputStream, InputStream}
 import java.nio.charset.StandardCharsets.US_ASCII
 import java.nio.file.Path
@@ -28,8 +29,12 @@ trait ManagedExecution extends AutoCloseable {
   def await(timeout: Duration): ProcessObservation
 }
 
-final class GuardianDriver(binary: Path) {
-  def start(spec: ExecutionSpec): ManagedExecution = {
+trait ExecutionDriver {
+  def start(spec: ExecutionSpec): ManagedExecution
+}
+
+final class GuardianDriver(binary: Path) extends ExecutionDriver {
+  override def start(spec: ExecutionSpec): ManagedExecution = {
     require(binary.isAbsolute && spec.directory.isAbsolute && List(spec.input, spec.stdout, spec.stderr).forall(_.isAbsolute), "Guardian paths must be absolute")
     require(spec.arguments.nonEmpty && spec.arguments.forall(v => !v.contains('\u0000')), "Invalid command arguments")
     new Execution(binary, spec)

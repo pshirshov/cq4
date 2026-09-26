@@ -42,6 +42,10 @@ lazy val server = project.in(file("server")).dependsOn(core, host).settings(
   Compile / mainClass := Some("cq.server.Main"),
   Compile / run / fork := true,
   Test / fork := true,
+  Test / javaOptions += {
+    val converter = fileConverter.value
+    "-Dcq.test.classpath=" + (Test / fullClasspath).value.map(entry => converter.toPath(entry.data).toString).mkString(java.io.File.pathSeparator)
+  },
 )
 
 lazy val root = project.in(file(".")).aggregate(contracts, core, host, server).settings(

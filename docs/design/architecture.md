@@ -33,6 +33,8 @@ Claims cover explicit item sets and carry monotonically increasing fences. Resul
 
 ## Process authority
 
+The complete executable will use one distage `RoleAppMain` composition root for server, CLI tasks and local supervisor roles. Harness adapters are injectable services within the local role's graph. At present the server uses a role and the CLI has a temporary manual branch; M2 will unify their composition. Role selection must acquire only the selected role's resources, so client commands and supervision do not require a local PostgreSQL server.
+
 The local governing wrapper owns child processes and hierarchy cancellation. The server owns durable records, artifacts and operational usage observations; it never launches harness processes. Prompt assembly and result storage occur outside the parent model. Normal parent traffic contains references and bounded summaries. Claude, Codex and Pi adapters enforce the same role contract through their own tool and configuration mechanisms.
 
 ## Usage identity

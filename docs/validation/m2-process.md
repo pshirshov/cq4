@@ -9,7 +9,7 @@ Two defects were reproduced before correction:
 - `20260926T212039-process`: FIFO input blocked beyond the two-second test deadline despite 500 ms configured launch/heartbeat limits. Nonblocking open plus regular-file validation now rejects it before launch.
 - `20260926T212204-process`: inherited `SIGCHLD=SIG_IGN` produced `EXIT -1 0 Running` after a command exited 7. Resetting the policy preserves waitable child identity/status; settlement additionally requires the root to have been reaped. The final check observes exit 7 and reason `Exited`.
 
-These checks do not establish the complete local supervisor. Job start/status/cancel, durable state/quarantine after helper failure, claim-loss response, actual harness adapters and the native distribution remain pending. No M2 milestone or release approval is claimed.
+These helper checks do not establish the complete local supervisor. Subsequent [durable job checks](m2-jobs.md) cover in-process start/status/cancel and workspace quarantine. Local control transport, claim-loss response, actual harness adapters and the native distribution remain pending. No M2 milestone or release approval is claimed.
 
 ## Independent Astra correction loop
 
@@ -24,4 +24,4 @@ The helper now closes inherited descriptors with `close_range` before opening in
 - `20260926T213624-process` reproduced three driver timeouts: absent start acknowledgement, premature lifecycle EOF and a helper hanging after its terminal record. Separate startup/completion deadlines and explicit EOF validation correct these cases.
 - `20260926T213759-process` reproduced cancellation changing an already settled observation and a STOP-only helper outliving its termination bound. Terminal cancellation is now a no-op; an observed STOP starts its own settlement deadline.
 
-Both reproductions are retained. Astra approved the driver foundation at `aabac88`, with no blocking or major findings and matching source hashes. Its uncertainty outcome has not yet been connected to durable workspace quarantine or the local control API; M2 acceptance remains pending.
+Both reproductions are retained. Astra approved the driver foundation at `aabac88`, with no blocking or major findings and matching source hashes. The subsequent [job increment](m2-jobs.md) connects uncertainty to durable workspace quarantine and an in-process control service. Public control transport and M2 acceptance remain pending.

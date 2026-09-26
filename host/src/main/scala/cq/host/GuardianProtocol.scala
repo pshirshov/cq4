@@ -1,9 +1,6 @@
 package cq.host
 
-enum StopReason {
-  case Exited, Cancelled, OwnerExited, InvalidControl, LaunchFailed, OutputLimit, HostFailure,
-    StartupDeadline, ExecutionDeadline, HeartbeatLost, Signalled
-}
+import cq.api.StopReason
 
 final case class GuardianExit(code: Option[Int], signal: Option[Int], reason: StopReason,
   stdoutBytes: Long, stderrBytes: Long, settled: Boolean, hostFailure: Boolean)
@@ -11,7 +8,7 @@ final case class GuardianExit(code: Option[Int], signal: Option[Int], reason: St
 final case class GuardianTranscript(root: Option[Long], stop: Option[StopReason], result: Option[GuardianExit]) {
   def append(line: String): GuardianTranscript = {
     require(result.isEmpty, "Guardian output after terminal record")
-    def reason(text: String): StopReason = StopReason.valueOf(text)
+    def reason(text: String): StopReason = StopReason.parse(text).getOrElse(throw new IllegalArgumentException("Unknown guardian stop reason"))
     def number(text: String, minimum: Long, maximum: Long): Long = {
       require(text.matches("-?[0-9]+"), "Malformed guardian number")
       val value = text.toLong

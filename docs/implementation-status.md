@@ -6,7 +6,7 @@ Goal: complete the first CQ release under the [implementation plan](drafts/20260
 | --- | --- | --- |
 | M0 stack and contracts | Complete; Astra approved `1801c2a` | [Four checks and native artifact](validation/m0-stack.md) |
 | M1 durable core | Complete; Astra approved `439fc50` | [Milestone review](validation/m1-review.md); [Ledger/claim checks](validation/m1-core.md), [usage accounting checks](validation/m1-usage.md); [authenticated clients and CLI](validation/m1-interfaces.md); [browser foundation](validation/m1-browser.md) passes Chromium checks; remaining invariants follow |
-| M2 first usable agent slice | In progress | [Artifacts](validation/m2-artifacts.md), shared typed host HTTP client and [process guardian/driver](validation/m2-process.md) implemented; durable supervisor, collectors and real evaluations next |
+| M2 first usable agent slice | In progress | [Artifacts](validation/m2-artifacts.md), shared typed host HTTP client and [process guardian/driver](validation/m2-process.md) implemented; durable local jobs implemented; role wiring, collectors and real evaluations next |
 | M3 graph and concurrency | Not started | — |
 | M4 process and cohorts | Not started | — |
 | M5 complete UI | Not started | — |
@@ -25,12 +25,14 @@ M1 now includes:
 
 M1 is complete at `439fc50`, with independent Astra approval after correction loops. [Final evidence and scope](validation/m1-review.md): 34 fast scenarios, 27 PostgreSQL scenarios plus actual clients/deadline/restart checks, contracts, and the unchanged browser corpus all pass.
 
-M2 has an implemented [immutable artifact boundary](design/artifacts.md): host publication, compact metadata, bounded explicit text reads and persistence across server SIGKILL. [Evidence](validation/m2-artifacts.md): 37 fast scenarios, 30 PostgreSQL scenarios plus actual clients/restart, and generated contracts pass. The [Linux process guardian and Scala driver](design/process-guardian.md) pass 16 helper scenarios and eight driver scenarios; Astra approved both foundations. Durable job control and workspace quarantine integration are next. The [installed harness inventory](design/harness-adapters.md) records observed CLI controls and documentation; no CQ consumer evaluation has run yet. No user decision is currently required.
+M2 has an implemented [immutable artifact boundary](design/artifacts.md): host publication, compact metadata, bounded explicit text reads and persistence across server SIGKILL. [Artifact/HTTP evidence](validation/m2-artifacts.md) includes 30 PostgreSQL scenarios, actual clients/restart and generated contracts. The [Linux guardian and Scala driver](design/process-guardian.md) have Astra approval. The [durable local job service](design/local-jobs.md) now binds them to immutable journal records, cancellation and workspace quarantine: [42 fast scenarios and 16 helper plus 16 Scala process scenarios pass](validation/m2-jobs.md), including actual supervisor SIGKILL/recovery. Generated-contract verification passes; Astra review of this increment is pending. Unified distage role composition, local control transport and harness adapters are next. The [installed harness inventory](design/harness-adapters.md) records observed CLI controls and documentation; no CQ consumer evaluation has run yet. No user decision is currently required.
 
 See [dependency evidence and compatibility patches](design/dependencies.md), [architecture](design/architecture.md), and [contracts](design/contracts.md). Planning baseline: `7e3076a`; verified M0 implementation: `1801c2a`.
 
 Current evidence: [M0 manifest](validation/m0-stack.md), [M1 core increment](validation/m1-core.md), and [M1 usage increment](validation/m1-usage.md). Native evidence currently applies to M0 only. M1 has milestone approval; its isolated workspace foundation is available for M2. Query-plan/scale verification remains M3 work.
 
 ## Acceptance
+
+Queued for M6 at the user's request: replace manual Baboon compiler downloading with a pinned upstream flake input, retaining deterministic generation and contract verification. Current implementation work continues first.
 
 M0 and M1 have independent Astra approval. M2 and M6 human acceptance are pending; neither evidence package exists. No later milestone is complete.

@@ -290,3 +290,12 @@ enum ArtifactKind { Prompt Input Result Transcript Validation }
 root data ArtifactUpload { project: ProjectId id: ArtifactId attempt: AttemptId kind: ArtifactKind mediaType: str body: str }
 root data ArtifactMetadata { project: ProjectId id: ArtifactId attempt: AttemptId kind: ArtifactKind mediaType: str sha256: str bytes: i32 codePoints: i32 actor: Actor receivedAt: i64 }
 root data ArtifactPage { metadata: ArtifactMetadata offset: i32 next: i32 hasMore: bit text: str }
+
+enum StopReason { Exited Cancelled OwnerExited InvalidControl LaunchFailed OutputLimit HostFailure StartupDeadline ExecutionDeadline HeartbeatLost Signalled }
+enum JobTarget { Run Stop }
+enum JobPhase { Preparing Starting Running Stopping Settled Uncertain }
+root data JobExit { code: opt[i32] signal: opt[i32] reason: StopReason stdoutBytes: i64 stderrBytes: i64 settled: bit hostFailure: bit }
+root data JobRecord {
+  workspace: WorkspaceSpec fingerprint: str target: JobTarget phase: JobPhase
+  exit: opt[JobExit] problem: opt[str] revision: i64 createdAt: i64 updatedAt: i64
+}
