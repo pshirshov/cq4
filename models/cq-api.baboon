@@ -195,6 +195,8 @@ root data ProjectPage { projects: lst[Project] after: opt[ProjectId] hasMore: bi
 root data ProjectConfig { project: ProjectId endpoint: str name: str }
 root data SearchInput { project: ProjectId filter: ItemFilter after: opt[ItemId] snapshot: opt[ChangeCursor] limit: i32 }
 root adt ReadSelection {
+  data ArtifactInfo { id: ArtifactId }
+  data ArtifactText { id: ArtifactId offset: i32 limit: i32 }
   data ItemDetail { id: ItemId }
   data History { id: ItemId before: Revision limit: i32 }
   data Changes { after: ChangeCursor limit: i32 }
@@ -226,6 +228,8 @@ root adt Command {
   data Usage { input: UsageInput }
 }
 root adt Result {
+  data ArtifactInfo { metadata: ArtifactMetadata }
+  data ArtifactText { page: ArtifactPage }
   data Projects { page: ProjectPage }
   data Initialized { project: Project }
   data Found { page: ItemPage }
@@ -281,3 +285,8 @@ root data WorkspaceSpec { project: ProjectId owner: SessionId attempt: AttemptId
 enum WorkspaceAdmission { Open Quarantined }
 root data WorkspaceObservation { head: GitCommit gitCommon: str verifiedAt: i64 }
 root data WorkspaceRecord { spec: WorkspaceSpec directory: str admission: WorkspaceAdmission observed: opt[WorkspaceObservation] quarantineReason: opt[str] }
+
+enum ArtifactKind { Prompt Input Result Transcript Validation }
+root data ArtifactUpload { project: ProjectId id: ArtifactId attempt: AttemptId kind: ArtifactKind mediaType: str body: str }
+root data ArtifactMetadata { project: ProjectId id: ArtifactId attempt: AttemptId kind: ArtifactKind mediaType: str sha256: str bytes: i32 codePoints: i32 actor: Actor receivedAt: i64 }
+root data ArtifactPage { metadata: ArtifactMetadata offset: i32 next: i32 hasMore: bit text: str }

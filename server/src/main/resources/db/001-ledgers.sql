@@ -190,3 +190,12 @@ CREATE TABLE cq_usage_outcomes (
 );
 CREATE UNIQUE INDEX cq_usage_outcome_sequence ON cq_usage_outcomes (project_id, sequence);
 CREATE INDEX cq_usage_attempt_outcomes ON cq_usage_outcomes (project_id, attempt_id, sequence);
+CREATE TABLE cq_artifacts (
+  project_id uuid NOT NULL,
+  artifact_id uuid NOT NULL,
+  attempt_id uuid NOT NULL,
+  metadata jsonb NOT NULL,
+  content bytea NOT NULL CHECK (octet_length(content) <= 262144),
+  PRIMARY KEY (project_id, artifact_id),
+  FOREIGN KEY (project_id, attempt_id) REFERENCES cq_usage_attempts
+);

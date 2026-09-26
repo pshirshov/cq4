@@ -50,8 +50,11 @@ if (phase === 'seed') {
     completeness: 'Complete', gaps: [], evidence: null, supersedes: null }, meter: meter.key, disposition: 'Contribution', detailReason: null };
   for (const operation of [{ Assign: { value: assignment } }, { Start: { value: attempt } }, { Meter: { value: meter } }])
     await post('/api/usage', { project, operation });
+  const artifact = { project, id: id(), attempt: attempt.id, kind: 'Result', mediaType: 'text/plain', body: 'Durable result λ😀\u0000' };
+  const artifactMetadata = await post('/api/artifact', artifact);
+  upload.observation.evidence = artifact.id;
   const receipt = await post('/api/usage', { project, operation: { Ingest: { value: upload } } });
-  writeFileSync(file, JSON.stringify({ project, operation, ack, source, target, claimInput, claim, renamed, upload, receipt }, null, 2));
+  writeFileSync(file, JSON.stringify({ project, operation, ack, source, target, claimInput, claim, renamed, upload, receipt, artifact, artifactMetadata }, null, 2));
   console.log('Persisted concurrent counters, request acknowledgement, inverse edge, claim, renamed project and usage observation');
 } else if (phase === 'verify') {
   const state = JSON.parse(readFileSync(file, 'utf8'));
@@ -65,10 +68,14 @@ if (phase === 'seed') {
   const history = await call({ Read: { input: { project, selection: { History: { id: source.id, before: { value: '9223372036854775807' }, limit: 20 } } } } });
   assert.deepEqual(history.History.page.entries.map(e => e.item.item.revision.value), ['2', '1']);
   assert.deepEqual(await post('/api/usage', { project, operation: { Ingest: { value: state.upload } } }), state.receipt);
+  assert.deepEqual(await post('/api/artifact', state.artifact), state.artifactMetadata);
+  const artifact = await call({ Read: { input: { project, selection: { ArtifactText: { id: state.artifact.id, offset: 0, limit: 8192 } } } } });
+  assert.deepEqual(artifact.ArtifactText.page.metadata, state.artifactMetadata);
+  assert.equal(artifact.ArtifactText.page.text, state.artifact.body);
   const usage = await call({ Usage: { input: { project, selection: { Summary: { filter: { ProjectAll: {} } } } } } });
   assert.equal(usage.UsageSummary.report.direct.total.known, '250');
   assert.equal(usage.UsageSummary.report.direct.unknownCosts, '1');
   const audit = await call({ Usage: { input: { project, selection: { Audit: { filter: { ProjectAll: {} }, after: '0', limit: 20 } } } } });
   assert.equal(audit.UsageAudit.page.entries.length, 1);
-  console.log('Fresh server after SIGKILL preserved counters, idempotency, project identity, history, inverse references, claims and usage');
+  console.log('Fresh server after SIGKILL preserved counters, idempotency, project identity, history, inverse references, claims, usage and artifact bytes/receipts');
 } else throw new Error('Expected seed or verify');

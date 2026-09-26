@@ -10,6 +10,8 @@ The generated codecs encode `i64` as decimal JSON strings. JavaScript consumers 
 
 HTTP application/host requests require `CQ-Protocol-Version: 0.1.0`; `/api/hello` advertises that single version. Clients/server must be built from the same development schema. `/api/call` accepts generated `Command` and returns `Result`; `/api/usage` accepts host-only `HostUsageInput`. Browser login also supplies a persistent `CQ-Session` UUID after operator authentication so an uncertain mutation can be retried after signing in again. `BrowserDraft` stores the original item revision and exact pending request; full request bodies stay local to that editor. `/ws` exchanges correlated `ClientFrame`/`ServerFrame` values with committed replay cursors and heartbeat nonces. [Authority and identity details](../validation/m1-interfaces.md).
 
+`/api/artifact` accepts host-only `ArtifactUpload` and returns immutable `ArtifactMetadata`. The existing `read` capability supplies metadata and explicit bounded text pages; [artifact bounds and permissions](artifacts.md) apply.
+
 Earlier evolution fixtures were removed under the single-version policy. Their prior results remain historical evidence in the M0/M1 validation records. Current-schema history and backup/restore remain required; compatibility with records written by superseded development schemas is not promised.
 
 ## MCP capabilities

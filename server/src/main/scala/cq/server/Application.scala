@@ -1,10 +1,10 @@
 package cq.server
 
 import cq.api.*
-import cq.core.{DomainFailure, LedgerRepository, LedgerService, UsageService}
+import cq.core.{ArtifactService, DomainFailure, LedgerRepository, LedgerService, UsageService}
 import zio.{IO, Task, ZIO}
 
-final class Application(ledger: LedgerService[IO], repository: LedgerRepository[IO], usage: UsageService[IO], authorization: Authorization) {
+final class Application(ledger: LedgerService[IO], repository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], authorization: Authorization) {
   def execute(authority: Authority, command: Command): Task[Result] = ZIO.attempt(authorization.check(authority)).flatMap { _ =>
     command match {
       case Command.Projects(after, limit) =>
@@ -27,6 +27,8 @@ final class Application(ledger: LedgerService[IO], repository: LedgerRepository[
         }
       }
       case Command.Read(input) => scoped(authority, input.project) { scope => input.selection match {
+        case ReadSelection.ArtifactInfo(id) => artifacts.metadata(scope, id).map(Result.ArtifactInfo.apply)
+        case ReadSelection.ArtifactText(id, offset, limit) => artifacts.page(scope, id, offset, limit).map(Result.ArtifactText.apply)
         case ReadSelection.ItemDetail(id) => ledger.get(scope, id).map(Result.Detail.apply)
         case ReadSelection.History(id, before, limit) => ledger.history(scope, id, before, limit).map(Result.History.apply)
         case ReadSelection.Changes(after, limit) => ledger.changes(scope, after, limit).map(Result.Changes.apply)
@@ -49,6 +51,9 @@ final class Application(ledger: LedgerService[IO], repository: LedgerRepository[
 
   private def scoped[A](authority: Authority, project: ProjectId)(operation: cq.core.Scope => Task[A]): Task[A] =
     ZIO.attempt(authority.scope(project)).flatMap(operation)
+
+  def upload(authority: Authority, input: ArtifactUpload): Task[ArtifactMetadata] =
+    ZIO.attempt(authorization.check(authority)) *> scoped(authority, input.project)(artifacts.upload(_, input))
 
   def ingest(authority: Authority, input: HostUsageInput): Task[HostUsageResult] =
     ZIO.attempt(authorization.check(authority)) *> scoped(authority, input.project) { scope => input.operation match {

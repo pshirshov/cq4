@@ -91,6 +91,16 @@ final class Transport(application: Application, authorization: Authorization, ac
         response <- encoded(Status.Ok, Result_JsonCodec, result)
       } yield response
     }
+    case request @ POST -> Root / "api" / "artifact" => guarded {
+      for {
+        authority <- authenticate(request)
+        _ <- version(request)
+        json <- readJson(request)
+        input <- decode(ArtifactUpload_JsonCodec, json)
+        result <- application.upload(authority, input)
+        response <- encoded(Status.Ok, ArtifactMetadata_JsonCodec, result)
+      } yield response
+    }
     case request @ POST -> Root / "api" / "usage" => guarded {
       for {
         authority <- authenticate(request)

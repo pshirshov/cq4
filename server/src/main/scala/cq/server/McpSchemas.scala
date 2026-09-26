@@ -20,7 +20,7 @@ final class McpSchemas {
   val tools: List[McpTool] = List(
     McpTool("search", "Read a bounded item page. Continue with its snapshot cursor; restart on Resync.", "SearchInput", Set("Found"), false,
       decoder(SearchInput_JsonCodec)(Command.Search.apply)),
-    McpTool("read", "Read one item, a bounded history page, or committed changes after a cursor.", "ReadInput", Set("Detail", "History", "Changes"), false,
+    McpTool("read", "Read an item, history or changes; inspect artifact metadata or explicitly drill down into bounded text pages by Unicode code-point offset.", "ReadInput", Set("Detail", "History", "Changes", "ArtifactInfo", "ArtifactText"), false,
       decoder(ReadInput_JsonCodec)(Command.Read.apply)),
     McpTool("change", "Commit an idempotent atomic change batch with expected revisions and claim fences. Governor authority required.", "ChangeInput", Set("Changed"), true,
       decoder(ChangeInput_JsonCodec)(Command.Change.apply)),

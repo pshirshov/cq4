@@ -158,6 +158,7 @@ class Checks:
                                 CQ_TOKEN=uuid.uuid4().hex, CQ_SESSION=str(uuid.uuid4()))
         with self.server(command, name):
             self.run(["node", "dev/transport.mjs"], f"{name}-transport", STARTUP_TIMEOUT)
+            self.run(["node", "dev/artifacts.mjs"], f"{name}-artifacts", STARTUP_TIMEOUT)
             self.run(["python3", "dev/cli-check.py", *command], f"{name}-cli", STARTUP_TIMEOUT)
             self.run(["python3", "dev/cli-timeouts.py", *command], f"{name}-cli-timeouts", STARTUP_TIMEOUT)
             if browser:
