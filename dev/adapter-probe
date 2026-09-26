@@ -1,0 +1,73 @@
+#!/usr/bin/env python3
+"""Explicit, charged live-model capability probe; not a deterministic check."""
+import datetime
+import hashlib
+import json
+import os
+from pathlib import Path
+import runpy
+import shutil
+import subprocess
+import sys
+import uuid
+
+
+ROOT = Path(__file__).resolve().parent.parent
+MODEL_PROFILES = {
+    "claude": ("claude", "claude-opus-5-5", "anthropic"),
+    "codex": ("codex", "gpt-6-sol", "openai"),
+    "pi": ("pi", "gpt-5.5", "openai-codex"),
+}
+
+
+def main():
+    if len(sys.argv) != 3 or sys.argv[1] not in MODEL_PROFILES or sys.argv[2] not in ["Worker", "Reviewer"]:
+        raise SystemExit("Usage: ./dev/adapter-probe claude|codex|pi Worker|Reviewer (runs a real model)")
+    os.chdir(ROOT)
+    if shutil.which("sbt") is None or shutil.which("java") is None:
+        os.execvp("nix", ["nix", "develop", "-c", str(ROOT / "dev/adapter-probe"), *sys.argv[1:]])
+    module = runpy.run_path(str(ROOT / "dev/check"))
+    harness, role = sys.argv[1:]
+    identifier = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S") + f"-adapter-{harness}-{role.lower()}"
+    evidence = Path(os.environ.get("CQ_EVIDENCE_ROOT", str(ROOT / ".work/evidence"))) / identifier
+    evidence.mkdir(parents=True)
+    print(f"Evidence: {evidence}", flush=True)
+    files = subprocess.check_output(["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"]).decode().split("\0")
+    source = {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in sorted(set(files)) if name and (ROOT / name).is_file()}
+    (evidence / "source-sha256.json").write_text(json.dumps(source, indent=2) + "\n")
+    checks = module["Checks"](evidence, dict(os.environ))
+    command, model, provider = MODEL_PROFILES[harness]
+    executable = shutil.which(command)
+    if executable is None:
+        raise RuntimeError(f"Configured harness executable is unavailable: {command}")
+    key = harness.upper()
+    checks.environment[f"CQ_{key}_BIN"] = str(Path(executable).absolute())
+    checks.environment[f"CQ_{key}_MODEL"] = checks.environment.get(f"CQ_{key}_MODEL", model)
+    checks.environment[f"CQ_{key}_PROVIDER"] = checks.environment.get(f"CQ_{key}_PROVIDER", provider)
+    checks.environment["CQ_ADAPTER_EVIDENCE"] = str(evidence)
+    guardian = evidence / "cq-guardian"
+    checks.environment["CQ_GUARDIAN_TEST_BINARY"] = str(guardian)
+    result = {"status": "running", "harness": harness, "role": role, "baseline": subprocess.check_output(["git", "rev-parse", "HEAD"]).decode().strip(),
+              "model": checks.environment[f"CQ_{key}_MODEL"], "provider": checks.environment[f"CQ_{key}_PROVIDER"], "scope": "adapter capability probe, not a consumer evaluation"}
+    result_file = evidence / "result.json"
+    result_file.write_text(json.dumps(result, indent=2) + "\n")
+    try:
+        checks.run(["gcc", "-std=c17", "-O2", "-Wall", "-Wextra", "-Werror", "-o", str(guardian), "host/native/guardian.c"], "guardian-build", 60)
+        classpath = checks.classpath()
+        port = module["free_port"]()
+        checks.environment.update(CQ_HOST="127.0.0.1", CQ_PORT=str(port), CQ_ORIGIN=f"http://127.0.0.1:{port}",
+                                  CQ_TOKEN=uuid.uuid4().hex + uuid.uuid4().hex, CQ_SESSION=str(uuid.uuid4()))
+        with checks.database():
+            with checks.server(["java", "-cp", classpath, "cq.server.Main"], "adapter"):
+                checks.sbt([f"server/Test/runMain cq.server.HarnessAdapterProbe {harness} {role}"], "live-probe")
+        result["status"] = "passed"
+    except BaseException as error:
+        result.update(status="failed", error=str(error))
+        raise
+    finally:
+        result_file.write_text(json.dumps(result, indent=2) + "\n")
+    print(f"PASS: {harness} {role} live adapter capability; evidence {evidence}", flush=True)
+
+
+if __name__ == "__main__":
+    main()
