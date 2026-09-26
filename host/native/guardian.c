@@ -50,6 +50,18 @@ static bool nonblocking(int fd) {
     return flags >= 0 && fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0;
 }
 
+static bool reset_signals(void) {
+    struct sigaction action = {0};
+    action.sa_handler = SIG_DFL;
+    sigemptyset(&action.sa_mask);
+    for (int number = 1; number < NSIG; number++) {
+        if (number == SIGKILL || number == SIGSTOP) continue;
+        /* libc's reserved realtime signal numbers reject sigaction with EINVAL. */
+        if (sigaction(number, &action, NULL) != 0 && errno != EINVAL) return false;
+    }
+    return true;
+}
+
 static void stop(Job *job, const char *reason, int64_t now) {
     if (!job->stopping) {
         job->stopping = true;
@@ -142,7 +154,7 @@ static void child(int input, int out, int err, int acknowledgement, pid_t parent
     sigset_t empty;
     sigemptyset(&empty);
     if (prctl(PR_SET_PDEATHSIG, SIGKILL) != 0 || getppid() != parent || setpgid(0, 0) != 0 ||
-        sigprocmask(SIG_SETMASK, &empty, NULL) != 0 || signal(SIGPIPE, SIG_DFL) == SIG_ERR ||
+        !reset_signals() || sigprocmask(SIG_SETMASK, &empty, NULL) != 0 ||
         dup2(input, STDIN_FILENO) < 0 || dup2(out, STDOUT_FILENO) < 0 || dup2(err, STDERR_FILENO) < 0) {
         failure = errno == 0 ? ECHILD : errno;
     } else {
@@ -154,6 +166,7 @@ static void child(int input, int out, int err, int acknowledgement, pid_t parent
 }
 
 int main(int argc, char **argv) {
+    if (close_range(3, UINT_MAX, 0) != 0 || !reset_signals()) return 2;
     if (argc < 12 || strcmp(argv[10], "--") != 0) {
         fputs("Usage: cq-guardian startup-ms run-ms heartbeat-ms grace-ms kill-ms max-output-bytes input stdout stderr -- command [args]\n", stderr);
         return 2;
@@ -166,8 +179,7 @@ int main(int argc, char **argv) {
     sigset_t signals;
     sigemptyset(&signals);
     sigaddset(&signals, SIGTERM); sigaddset(&signals, SIGINT); sigaddset(&signals, SIGHUP);
-    if (sigprocmask(SIG_BLOCK, &signals, NULL) != 0 || signal(SIGCHLD, SIG_DFL) == SIG_ERR ||
-        signal(SIGPIPE, SIG_IGN) == SIG_ERR || prctl(PR_SET_CHILD_SUBREAPER, 1) != 0) return 2;
+    if (sigprocmask(SIG_BLOCK, &signals, NULL) != 0 || signal(SIGPIPE, SIG_IGN) == SIG_ERR || prctl(PR_SET_CHILD_SUBREAPER, 1) != 0) return 2;
     int notifications = signalfd(-1, &signals, SFD_CLOEXEC | SFD_NONBLOCK);
     int out[2], err[2], ack[2];
     if (notifications < 0 || pipe2(out, O_CLOEXEC) != 0 || pipe2(err, O_CLOEXEC) != 0 || pipe2(ack, O_CLOEXEC) != 0) return 2;

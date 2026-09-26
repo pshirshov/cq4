@@ -17,6 +17,9 @@ class GuardianChecks(unittest.TestCase):
         self.input.write_text("prompt λ\n")
         self.children = []
         self.ignore_child_exit = False
+        self.ignore_termination = False
+        self.inherited_descriptors = ()
+        self.control_input = subprocess.PIPE
 
     def tearDown(self):
         for child in self.children:
@@ -27,12 +30,15 @@ class GuardianChecks(unittest.TestCase):
 
     def launch(self, command, run_ms, heartbeat_ms, output_bytes):
         binary = os.environ["CQ_GUARDIAN_TEST_BINARY"]
-        def ignore_child_exit():
-            signal.signal(signal.SIGCHLD, signal.SIG_IGN)
+        def signal_policy():
+            if self.ignore_child_exit:
+                signal.signal(signal.SIGCHLD, signal.SIG_IGN)
+            if self.ignore_termination:
+                signal.signal(signal.SIGTERM, signal.SIG_IGN)
         process = subprocess.Popen([binary, "500", str(run_ms), str(heartbeat_ms), "100", "1000", str(output_bytes),
                                     str(self.input), str(self.directory / "stdout"), str(self.directory / "stderr"), "--", *command],
-                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                                   preexec_fn=ignore_child_exit if self.ignore_child_exit else None)
+                                   stdin=self.control_input, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                   preexec_fn=signal_policy, pass_fds=self.inherited_descriptors)
         self.children.append(process)
         return process
 
@@ -71,6 +77,40 @@ class GuardianChecks(unittest.TestCase):
         process = self.launch([sys.executable, "-c", "raise SystemExit(7)"], 2000, 3000, 100000)
         terminal = self.wait_until_exited(process)
         self.assertEqual(terminal[1:4], ["7", "0", "Exited"])
+
+    def test_ignored_termination_signal_does_not_leak_to_command(self):
+        self.ignore_termination = True
+        process = self.launch(["sleep", "30"], 3000, 3000, 10000)
+        self.assertTrue(process.stdout.readline().startswith("START "))
+        terminal = self.result(process, "C")
+        self.assertEqual(terminal[1:4], ["-1", "15", "Cancelled"])
+
+    def test_inherited_descriptor_is_closed_before_command_exec(self):
+        with self.input.open('rb') as sentinel:
+            self.inherited_descriptors = (sentinel.fileno(),)
+            script = """import os, sys
+try:
+    os.read(int(sys.argv[1]), 1)
+    print('leaked')
+except OSError:
+    print('closed')
+"""
+            process = self.launch([sys.executable, "-c", script, str(sentinel.fileno())], 2000, 3000, 10000)
+            self.wait_until_exited(process)
+            self.assertEqual((self.directory / 'stdout').read_text(), 'closed\n')
+
+    def test_inherited_control_writer_cannot_conceal_owner_exit(self):
+        read_end, write_end = os.pipe()
+        try:
+            self.control_input = read_end
+            self.inherited_descriptors = (write_end,)
+            process = self.launch(["sleep", "30"], 3000, 2000, 10000)
+            self.assertTrue(process.stdout.readline().startswith("START "))
+        finally:
+            os.close(read_end)
+            os.close(write_end)
+        terminal = self.wait_until_exited(process)
+        self.assertEqual(terminal[3], "OwnerExited")
 
     def test_nonregular_input_is_rejected_before_launch_without_blocking(self):
         self.input.unlink()

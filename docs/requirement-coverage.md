@@ -24,7 +24,7 @@ Requirements: [R01–R31](drafts/20260926-0957-cq-requirements-prompt.md). Miles
 | R18 Worksets | M3 | Not started | — |
 | R19 Bounded work | M1, M3 | In progress | Summary-only discovery and byte-bounded streaming pages; affected-row mutations. Fixed-size meter token projections and separately paginated cost aggregates implemented; scale/query-plan evidence remains. [Read bounds](validation/m1-read-bounds.md) |
 | R20 Project identity | M1 | Implemented; M1 approved | UUID project service initialization/reattachment tested; CLI concurrent init, worktrees, moves, explicit reattachment and revision-checked display rename pass, including whole-server restart. [Interface evidence](validation/m1-interfaces.md); [increment evidence](validation/m1-core.md) |
-| R21 Supervision | M2 | In progress | Linux guardian passes 13 real-process scenarios including output bounds, deadlines, lost heartbeat, owner SIGKILL and detached descendants. Scala integration, durable quarantine and complete harness lifecycle checks remain. [Evidence](validation/m2-process.md) |
+| R21 Supervision | M2 | In progress | Linux guardian passes 16 real-process scenarios including output bounds, deadlines, lost heartbeat, owner SIGKILL and detached descendants. Scala integration, durable quarantine and complete harness lifecycle checks remain. [Evidence](validation/m2-process.md) |
 | R22 Privilege separation | M1, M2, M4 | In progress | Service mutation roles enforced; signed project/role credentials and tool-call restrictions tested; native harness restrictions remain. [Interface evidence](validation/m1-interfaces.md); [increment evidence](validation/m1-core.md) |
 | R23 Query editor | M5 | Not started | — |
 | R24 Three panes | M5 | Not started | — |

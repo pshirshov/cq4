@@ -1,8 +1,10 @@
 # Local process guardian
 
-M2 host primitive, currently Linux only. The current locally verified release platform is Linux amd64. A macOS guardian is not implemented; the Scala supervisor must reject an unsupported host explicitly. This helper is not linked into the CQ server and does not contain project, workflow or harness policy.
+M2 host primitive, currently Linux 5.9+ only. The current locally verified release platform is Linux amd64 (observed kernel 7.1.9). A macOS guardian is not implemented; the Scala supervisor must reject an unsupported host explicitly. This helper is not linked into the CQ server and does not contain project, workflow or harness policy.
 
 One small native helper owns one root command and its descendants. Scala will supply an isolated working directory/environment, prepared input file, private output paths and required startup/execution/heartbeat/termination/output bounds. The helper receives `H` heartbeats and `C` cancellation on its standard input. Closing the pipe cancels the job, including when its owning process receives `SIGKILL`. Missing heartbeats handle a frozen owner. Standard output contains a bounded lifecycle protocol; command stdout and stderr are drained separately into bounded private files.
+
+At entry, the helper closes every inherited descriptor above stderr before creating its own descriptors. This prevents accidental file/socket leakage and inherited control writers concealing owner exit. It resets signal dispositions for itself and again for the command before unblocking command signals. Descriptor closure uses `close_range`, available since Linux 5.9; an unsupported syscall causes explicit setup failure. [Descriptor closure semantics](https://man7.org/linux/man-pages/man2/close_range.2.html).
 
 The helper sets the Linux child-subreaper flag before forking, so orphaned descendants are adopted by it. This includes descendants which create a new session. [Linux subreaper semantics](https://man7.org/linux/man-pages/man2/PR_SET_CHILD_SUBREAPER.2const.html).
 
