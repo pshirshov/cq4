@@ -62,10 +62,10 @@ Installed source inspected under `pi-monorepo`: `node_modules/@earendil-works/pi
 
 The Responses adapter initializes counters to zero and uses zero defaults for missing provider fields, including reasoning. Thus an exposed zero can be unavailable data; the collector must retain that uncertainty when provider support cannot be established. Other Pi providers/extensions need their own capability checks. A displayed cost of zero can likewise mean absent pricing.
 
-## Consequences for R09
+## Consequences for R09 and R31
 
 Token monitoring is feasible for all three checked installations without asking an LLM to read the measurements. Whole-evaluation completeness still depends on collecting parent, child, retry, summary, and auxiliary activity, and on the source actually exposing it. Event-based collection can update as counts arrive; none of these probes establishes continuous per-token visibility or exact billing.
 
-Require the first usable slice to retain structured observations and report coverage alongside usage. Compare accepted work on matched scenarios, count unsuccessful attempts, and keep independent assessment usage separate. Track parent-visible dispatch traffic as well as total hierarchy consumption. These measurements answer different questions: bounded parent traffic establishes the dispatch context property; matched end-to-end measurements establish any actual efficiency improvement.
+R31 makes the usage audit log an operational feature for tasks/cohorts; R09 evaluation reports consume that same log and accounting service. Require the first usable slice to retain structured observations and report coverage alongside usage. Compare accepted work on matched scenarios, count unsuccessful attempts, and keep independent assessment usage separate. Track parent-visible dispatch traffic as well as total hierarchy consumption. These measurements answer different questions: bounded parent traffic establishes the dispatch context property; matched end-to-end measurements establish any actual efficiency improvement.
 
 Remaining runtime checks belong to the collector implementation: nonzero cache normalization, duplicate/replayed events, multiple turns and resume/fork baselines, failed/cancelled attempts, missing counters, auxiliary/compaction usage, and any interactive collection path. Preserve gaps explicitly rather than claiming complete usage from a successful one-shot probe.

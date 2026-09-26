@@ -27,11 +27,11 @@ flowchart LR
   Host -->|assemble input from refs| Server
   Host -->|shellout| Children[Claude / Codex / Pi role processes]
   Children -->|scoped MCP reads| Server
-  Host -->|store results and logs| Server
+  Host -->|store results, logs, usage| Server
   Server <--> DB[(PostgreSQL JSONB)]
 ```
 
-The server owns project identity, ledger state, revisions, relationships, queries, claims, artifacts, and live changes. Both transport adapters call the same application services. It does not own checkouts, Git processes, validation commands, or harness processes.
+The server owns project identity, ledger state, revisions, relationships, queries, claims, artifacts, the usage audit log, and live changes. Both transport adapters call the same application services. It does not own checkouts, Git processes, validation commands, or harness processes.
 
 A local supervisor owns one governing harness and its subprocess hierarchy. Prefer a `cq run <claude|codex|pi>` wrapper, integrated through ponygirls packaging, so the process relationship is explicit. Shell tools make short calls to its local control socket; the Pi extension uses the same control protocol. If a session was started without the required supervisor, dispatch reports an actionable unavailable state rather than silently changing execution policy.
 
@@ -152,7 +152,7 @@ Cohorts are execution groupings of individually identified work, not a new ledge
 
 The process proposes groups from bounded workset candidates and observed context. The server validates scope, item revisions, claims, phase compatibility, and dependencies. Grouping can use shared requirements, causes, affected components, and validation work; a TypeScript import graph or a CQ-specific command is not an eligibility requirement.
 
-Freeze membership while a job runs. Reconsider it between rounds when evidence changes. Split on incompatible acceptance criteria, divergent causes, excessive context, a blocked member, conflicting edit scope, or repeated failure to progress. An explicit singleton with a reason is a valid result of the grouping policy. Pairwise overlap is not proof that every member can share one correction.
+Freeze membership while a job runs. Retain the execution identity and that membership snapshot for historical usage attribution; this does not create permanent item ownership. Reconsider grouping between rounds when evidence changes. Split on incompatible acceptance criteria, divergent causes, excessive context, a blocked member, conflicting edit scope, or repeated failure to progress. An explicit singleton with a reason is a valid result of the grouping policy. Pairwise overlap is not proof that every member can share one correction.
 
 A shared candidate/review still carries an outcome for **every** member. A cohort's green check does not automatically mark every task done. Claim the whole scheduled group atomically. Return unexamined candidate counts so batching does not pretend to have considered the entire project. Start with a simple observable heuristic; learned policies or language-specific plugins need demonstrated benefit before becoming requirements.
 
@@ -186,7 +186,7 @@ Four user-facing agent commands preserve the useful workflow entry points:
 
 Claude and Pi can render these as `/cq:begin`, `/cq:advance`, `/cq:review`, `/cq:upstream`. Codex uses generated `cq-begin`, `cq-advance`, `cq-review`, `cq-upstream` skills. One source owns semantic instructions; adapters own invocation vocabulary and tool names.
 
-Administrative CLI operations are separate from LLM workflows: `cq init`, `cq serve`, `cq web`, `cq run <harness>`, `cq status`, `cq query`, and `cq job status|cancel`. Project identity changes and artifact inspection can be subcommands of the relevant administrative groups. Specify the final CLI inventory in the full design; do not create a command for every ledger transition.
+Administrative CLI operations are separate from LLM workflows: `cq init`, `cq serve`, `cq web`, `cq run <harness>`, `cq status`, `cq query`, and `cq job status|cancel`. Put usage summaries and paginated audit inspection under `cq status`, with an explicit task/cohort/session/project scope. Project identity changes and artifact inspection can be subcommands of the relevant administrative groups. Specify the final CLI inventory in the full design; do not create a command for every ledger transition.
 
 ## Token-saving dispatch
 
@@ -258,14 +258,14 @@ Candidate ordinary server surface: **eight tools** — `context`, `search`, `get
 |---|---|
 | context | Project/catalog/actor capabilities; schemas and role metadata on demand |
 | search | One query string, projection, page size/cursor; matches and explicit pagination |
-| get | Item IDs/revisions or history page; current records or immutable versions |
+| get | Item IDs/revisions or history page; alternatively a typed task/cohort/session/project usage scope with summary or audit-page projection |
 | mutate | Typed create/update/ref changes, or a stored proposal handle; request ID and expected revisions; atomic acknowledgement |
 | graph | Roots, traversal purpose, limits/cursor; actionable members, context, readiness and exclusions |
 | claim | Acquire/renew/release/inspect explicit work claims; opaque ownership plus fence/expiry |
 | terminate | Preview roots/intention or apply frozen preview; exact changes/conflicts |
 | artifact | Authorized bounded section reads; host upload path stores full content without parent copying |
 
-Keep project registration and credential issuance explicit in the host API, with authorization appropriate to their effects. They are infrastructure operations, not per-role lifecycle ceremonies. The full design must inventory them too, so a lean advertised surface cannot conceal an unbounded private protocol.
+Keep project registration, credential issuance, and bounded usage ingestion/correction explicit in the host API, with authorization appropriate to their effects. They are infrastructure operations, not per-role lifecycle ceremonies. Usage ingestion is unavailable to role MCP clients. The full design must inventory them too, so a lean advertised surface cannot conceal an unbounded private protocol.
 
 Baboon owns browser wire types and codecs. Use closed sums for ledger content, commands, outcomes, errors, and WebSocket frames. Define Hello/version negotiation, correlated requests/responses, subscriptions, committed change batches, acknowledgements, resynchronization, and nonce heartbeat. A generated service or MCP adapter is usable only after proving compatibility with HTTP transport, BIO errors, auth, and native-image. Baboon generation does not itself supply these behaviors.
 
@@ -288,7 +288,7 @@ The full design must distinguish immutable database identity, an optional user-f
 Recommended order:
 
 1. **Compatibility and contracts.** Prove Scala 3/sbt 2.0/BIO/distage/Baboon/PostgreSQL/native-image composition with a minimal vertical slice. Compile schema drafts and verify Scala/TypeScript exchange. Publish exact dependency versions and unresolved constraints.
-2. **First usable slice and real harness evaluations.** Project init, create/read/search/history, scoped MCP, minimal browser WS view, supervisor and all three shellout adapters, including their usage collectors. Each harness builds a tiny unrelated consumer project and produces retained evidence plus a usage/efficiency baseline covering parent and children. Do not postpone real harness use or usage measurement until after the workflow engine grows.
+2. **First usable slice and real harness evaluations.** Project init, create/read/search/history, scoped MCP, minimal browser WS view, supervisor and all three shellout adapters, including their usage collectors and shared audit log. Deliver task/session/project usage summaries and audit pages; retain scope snapshots for grouped execution. Each harness builds a tiny unrelated consumer project and produces retained evidence plus a usage/efficiency baseline derived from that same log, covering parent and children. Do not postpone real harness use or operational usage measurement until after the workflow engine grows.
 3. **Graph and concurrent work.** Fixed ledgers, typed refs/inverses, worksets, claims/fences, proposal-by-handle application, preview/apply termination, indexed query grammar. Exercise two independent sessions and real PostgreSQL transactions.
 4. **Complete process.** Four roles/four commands, adaptive cohorts, reviews, operator actions, handoffs, memories/upstream support, nonblocking cancellation, cross-harness chaining. Evaluate every directed parent/child harness pairing across the acceptance corpus.
 5. **UI and production completion.** Full query editor and three panes, reconnect/replay/conflict behavior, native packaging and deployment. Repeat the same consumer-project evaluations through the production binary.
@@ -297,9 +297,11 @@ Use typed contracts to eliminate invalid internal states; use boundary tests for
 
 Measure context with actual rendered tool schemas and captured parent transcripts. Increasing child input/output from a short record to a large artifact must not proportionally increase normal parent dispatch traffic. Verify that chaining a result handle never materializes the result in parent context. Record counts and bytes plus tokenizer/model-specific token counts when available; do not infer tokens from characters alone.
 
-### Usage collection and efficiency
+## Operational usage audit log
 
-The [local observability audit](20260926-usage-observability.md) verified successful real calls through all three installed harnesses. The supervisor/evaluation runner captures usage as host telemetry alongside existing run artifacts; the parent model receives no full usage log. Run the governing evaluation harness in structured-output mode as well as its children. Interactive-session collection needs an adapter for the harness's events/session artifacts and its own verification; the one-shot probes do not establish that path.
+Usage accounting is a product feature for normal tasks, cohorts, sessions, and projects. Evaluation monitoring consumes the same log and accounting service, adding evaluation/scenario tags and outcome analysis; it has no second collector or accounting store. Keep this append-only audit data outside the 14 workflow ledgers and item history. Usage does not participate in workset traversal, claims, or task status transitions.
+
+The [local observability audit](20260926-usage-observability.md) verified successful real calls through all three installed harnesses. The supervisor captures usage as host telemetry alongside existing run artifacts; the parent model receives no full usage log. Run the governing evaluation harness in structured-output mode as well as its children. Interactive-session collection needs an adapter for the harness's events/session artifacts and its own verification; unavailable coverage is explicit. The one-shot probes do not establish that path.
 
 | Harness | Primary collection point | Accounting constraint |
 | --- | --- | --- |
@@ -309,8 +311,24 @@ The [local observability audit](20260926-usage-observability.md) verified succes
 
 Use a small typed observation contract with run/attempt identity, parent identity, harness/provider/model/version, event identity or stable stream position, scope, counter semantics, native artifact reference, and completeness. Input totals include cached input; cache-read/write are subdivisions. Output totals include reasoning, with a separate breakdown only when supported. Preserve native counters so future adapter corrections can recompute reports. Keep native estimated costs and any independently calculated costs labeled with their price basis. Subscription limits and actual billing are separate observations.
 
+Freeze assignment references, cohort execution identity, and membership when work starts. These identify intended work; token counters alone cannot establish how much reasoning causally benefited each member. Use three attribution cases:
+
+| Observation scope | Accounting and display |
+| --- | --- |
+| Exclusive task work | Add to that task's direct usage; retain the attempt and parent identity. |
+| Shared cohort work | Count once for the execution; show a shared-work reference from each member. Do not assign invented shares or add the whole amount to every task's direct total. |
+| Mixed or unknown scope | Keep session/project overhead explicitly unattributed; narrow it only when source observation boundaries support attribution. |
+
+A cohort execution summary deduplicates all attempts explicitly associated with that execution, including any exclusively assigned member attempts. Task lifetime totals include exclusive work across executions; these are overlapping views, not amounts to sum together. For example, a shared T1/T2 run using 1,000 tokens plus separate task-only attempts using 200 and 300 yields a project total of 1,500. T1 shows 200 direct plus the shared-run reference; T2 shows 300 direct plus the same reference. Correcting the shared observation to 1,100 changes the effective total to 1,600 while retaining the original evidence; replaying that correction cannot add another contribution. Later regrouping cannot change that history. Unknown monetary cost stays unknown even when token counts are available.
+
+Store append-only observations and explicit superseding corrections in PostgreSQL behind a narrow repository interface, with indexed project/task/cohort/run/time access and idempotency keys. Keep original evidence; effective summaries resolve corrections and cumulative snapshots without recounting them. Define bounded upload batches, acknowledgements, retries, and visible pending/gap states after disconnection or process exit. This requires no child survival guarantee. The authenticated host can submit a late observation for its authorized attempt after claim loss; this cannot admit the attempt's rejected work product. Correction authority is separate from ordinary role reads.
+
+The browser's task detail and cohort execution views show direct/shared usage, estimated cost where available, coverage, and paginated audit drill-down. CLI and bounded MCP `get` projections use the same service; project/session summaries preserve unattributed overhead. Specify access checks on underlying project and artifacts. Audit updates emit scoped usage-view changes without creating task revisions or rebuilding ledger indexes. Numeric evidence and scope snapshots survive task archiving and optional bulky-log expiry; retention of those records and any resulting reporting gaps must be explicit.
+
 Aggregate by unique attempt across the hierarchy, then by role/model; sharing one run across items must not multiply its cost. Separate governing work, child work, auxiliary model calls, and the independent evaluator. Where an aggregate already includes a component, use it for reconciliation rather than adding both. Preserve observed usage before cancellation, missing final events, retries, and unknown auxiliary usage; incomplete totals remain incomplete. Missing instrumentation fails the required collection check; a source limitation produces an explicit coverage gap. Do not require an unavailable per-request breakdown merely because a terminal total exists.
 
 First-slice reports pair accepted-result rate and quality assessment with observed input/output/cache/reasoning totals, parent/child shares, calls/retries where exposed, elapsed time, and estimated cost where supportable. Compute usage per accepted scenario from all attempts in the matched scenario cohort; zero accepted scenarios gives no efficiency score. Record sample size/variation, effective instructions/tools, model/effort settings, and cache condition. Compare against a declared baseline and tolerances. Report dispatch payload growth separately from total inference consumption: moving work to children can reduce parent context while increasing overall usage. Exercise repeated events, resume/fork baselines, cache normalization, and missing final counters before relying on comparisons.
+
+Verify ingestion, correction, attribution, and summary behavior through the same repository/service scenarios against a hand-written dummy and PostgreSQL. Use targeted real-PostgreSQL checks for concurrent duplicate delivery and atomic correction visibility. Include the 1,500-token example, a cancelled attempt, missing costs, late usage after claim loss, and regrouping without historical reassignment. Keep these deterministic accounting checks separate from live harness capability and efficiency evaluations.
 
 The complete design produced from the prompt must supply executable schemas, a full acceptance matrix, milestone exit checks, example workflows, and explicit limits. This brief deliberately leaves those as accountable design outputs rather than pretending illustrative JSON constitutes a finished protocol.
