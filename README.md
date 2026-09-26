@@ -30,7 +30,7 @@ CQ_TEST_DATABASE_PASSWORD=local-test-password \
 ./dev/check postgres
 ```
 
-The runner creates and drops a unique schema in that database. The account must have schema creation permission. With no provided URL, PostgreSQL is started as the current non-root user and stopped by the runner. Missing infrastructure fails the check. `browser` runs real Chromium UI and connection checks. `process` remains unavailable until supervisor coverage is implemented; it does not report success.
+The runner creates and drops a unique schema in that database. The account must have schema creation permission. With no provided URL, PostgreSQL is started as the current non-root user and stopped by the runner. Missing infrastructure fails the check. `browser` runs real Chromium UI and connection checks. `process` builds the Linux guardian and checks process-tree cleanup and the Scala driver; full supervisor and harness coverage remains pending. It requires Linux 5.9 or newer.
 
 ## Run the current development server
 
@@ -64,7 +64,7 @@ curl --fail-with-body \
   http://127.0.0.1:8765/api/hello
 ```
 
-Expected body: `{"version":"0.1.0","supported":["0.1.0"]}`. `/api/call`, `/ws` and `/mcp` use the same ledger/audit application service; see [contracts](docs/design/contracts.md). Open the configured origin and sign in with the operator token. The minimal browser supports project selection/creation, schema-derived item forms, list/detail/history and usage/audit views. The supervisor remains unimplemented.
+Expected body: `{"version":"0.1.0","supported":["0.1.0"]}`. `/api/call`, `/ws` and `/mcp` use the same ledger/audit application service; see [contracts](docs/design/contracts.md). Open the configured origin and sign in with the operator token. The minimal browser supports project selection/creation, schema-derived item forms, list/detail/history and usage/audit views. The process guardian, Scala driver and immutable artifact storage are implemented; the complete `cq run` supervisor remains pending.
 
 Pins, local compatibility patches and their failure evidence are documented in [dependencies](docs/design/dependencies.md).
 

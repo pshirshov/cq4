@@ -6,7 +6,7 @@ Goal: complete the first CQ release under the [implementation plan](drafts/20260
 | --- | --- | --- |
 | M0 stack and contracts | Complete; Astra approved `1801c2a` | [Four checks and native artifact](validation/m0-stack.md) |
 | M1 durable core | Complete; Astra approved `439fc50` | [Milestone review](validation/m1-review.md); [Ledger/claim checks](validation/m1-core.md), [usage accounting checks](validation/m1-usage.md); [authenticated clients and CLI](validation/m1-interfaces.md); [browser foundation](validation/m1-browser.md) passes Chromium checks; remaining invariants follow |
-| M2 first usable agent slice | In progress | [Installed harness inventory](design/harness-adapters.md); supervisor, artifacts, collectors and real evaluations next |
+| M2 first usable agent slice | In progress | [Artifacts](validation/m2-artifacts.md), shared typed host HTTP client and [process guardian/driver](validation/m2-process.md) implemented; durable supervisor, collectors and real evaluations next |
 | M3 graph and concurrency | Not started | — |
 | M4 process and cohorts | Not started | — |
 | M5 complete UI | Not started | — |

@@ -2,21 +2,18 @@ package cq.server
 
 import cq.api.*
 import cq.core.LedgerPolicy
-import cq.host.{BoundedHostCommand, GitEnvironment}
+import cq.host.{BoundedHostCommand, GitEnvironment, HttpServerApi}
 import java.io.PrintStream
 import java.net.URI
-import java.net.http.{HttpClient, HttpRequest, HttpResponse, HttpTimeoutException}
 import java.nio.channels.FileChannel
 import java.nio.file.{Files, Path, StandardCopyOption, StandardOpenOption}
 import java.time.Duration
 import java.util.UUID
-import java.util.concurrent.{ExecutionException, TimeUnit, TimeoutException}
 import scala.util.Using
 
 final class Cli(environment: Map[String, String], directory: Path, output: PrintStream) {
   private val RequestTimeout = Duration.ofSeconds(30)
   private val DefaultPageSize = 50
-  private val MaxResponseBytes = 2 * 1024 * 1024
   private val GitTimeout = Duration.ofSeconds(10)
   private val MaxGitOutputBytes = 8192
 
@@ -66,29 +63,10 @@ final class Cli(environment: Map[String, String], directory: Path, output: Print
   }
   private def request(config: ProjectConfig, sessionId: SessionId, command: Command): Result = {
     val token = environment.getOrElse("CQ_TOKEN", throw new IllegalArgumentException("CQ_TOKEN is required"))
-    val body = Wire.encode(Command_JsonCodec, command)
-    val request = HttpRequest.newBuilder(URI.create(validateEndpoint(config.endpoint) + "/api/call"))
-      .timeout(RequestTimeout).header("Authorization", "Bearer " + token)
-      .header("CQ-Session", sessionId.value.toString).header("CQ-Protocol-Version", Command.baboonDomainVersion)
-      .header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofString(body)).build()
-    val client = HttpClient.newBuilder().connectTimeout(RequestTimeout).build()
-    try {
-      val pending = client.sendAsync(request, HttpResponse.BodyHandlers.limiting(HttpResponse.BodyHandlers.ofByteArray(), MaxResponseBytes.toLong))
-      val response = try pending.get(RequestTimeout.toMillis, TimeUnit.MILLISECONDS) catch {
-        case failure: TimeoutException =>
-          pending.cancel(true)
-          throw new IllegalStateException("HTTP response deadline exceeded", failure)
-        case failure: ExecutionException if failure.getCause.isInstanceOf[HttpTimeoutException] =>
-          throw new IllegalStateException("HTTP response deadline exceeded", failure)
-      }
-      val bytes = response.body()
-      val text = new String(bytes, java.nio.charset.StandardCharsets.UTF_8)
-      require(response.statusCode() == 200, s"HTTP ${response.statusCode()}: $text")
-      Wire.decode(Result_JsonCodec, text) match {
-        case Result.Failed(fault) => throw new IllegalArgumentException(Wire.encode(Fault_JsonCodec, fault))
-        case result => result
-      }
-    } finally client.shutdownNow()
+    new HttpServerApi(URI.create(validateEndpoint(config.endpoint)), token, sessionId, RequestTimeout).call(command) match {
+      case Result.Failed(fault) => throw new IllegalArgumentException(Wire.encode(Fault_JsonCodec, fault))
+      case result => result
+    }
   }
   private def item(project: ProjectId, value: String): ItemId = {
     val found = Ledger.all.toList.sortBy(l => -LedgerPolicy.prefix(l).length).find(l => value.startsWith(LedgerPolicy.prefix(l)))
