@@ -159,6 +159,7 @@ class Checks:
         with self.server(command, name):
             self.run(["node", "dev/transport.mjs"], f"{name}-transport", STARTUP_TIMEOUT)
             self.run(["python3", "dev/cli-check.py", *command], f"{name}-cli", STARTUP_TIMEOUT)
+            self.run(["python3", "dev/cli-timeouts.py", *command], f"{name}-cli-timeouts", STARTUP_TIMEOUT)
             if browser:
                 self.environment["CQ_BROWSER_EVIDENCE"] = str(self.evidence)
                 self.run(["node", "dev/browser.mjs"], f"{name}-browser", COMMAND_TIMEOUT)
@@ -245,7 +246,7 @@ def main():
     try:
         if command == "fast":
             checks.generate()
-            checks.sbt(["server/testOnly *Dummy"], "dummy-contract")
+            checks.sbt(["server/testOnly *Dummy *Local"], "dummy-contract")
         elif command == "process":
             raise RuntimeError(f"UNAVAILABLE: {command} coverage has not been implemented")
         else:

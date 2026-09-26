@@ -30,7 +30,7 @@ Requirements: [R01–R31](drafts/20260926-0957-cq-requirements-prompt.md). Miles
 | R24 Three panes | M5 | Not started | — |
 | R25 Correction/reopening | M1, M4 | In progress | No transition gates; archive/status correction and content restoration pass; readiness/review applicability remains; [increment evidence](validation/m1-core.md) |
 | R26 Termination | M3 | Not started | — |
-| R27 Claims/integration | M1, M3 | In progress | Atomic sets, monotonic fences, expiry, renewal/release foundation; retained release-retry regression; integration remains; [increment evidence](validation/m1-core.md) |
+| R27 Claims/integration | M1, M3 | In progress | Atomic sets, monotonic fences, expiry, renewal/release foundation; retained release-retry regression; isolated detached workspaces, ownership and quarantine pass real Git checks; integration remains; [workspace evidence](validation/m1-workspaces.md); [increment evidence](validation/m1-core.md) |
 | R28 Roles | M2, M4 | Not started | — |
 | R29 Commands | M2, M4 | Not started | — |
 | R30 Handle dispatch | M2, M4 | Not started | — |

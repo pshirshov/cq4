@@ -1,6 +1,6 @@
 # CQ architecture
 
-This document distinguishes the running M0 stack proof from the intended release. The implementation status and requirement coverage identify what has been verified.
+This document records the implemented foundations and the intended release boundaries. The implementation status and requirement coverage identify what has been verified.
 
 ## Dependency boundaries
 
@@ -17,11 +17,11 @@ flowchart LR
   distage -. selects .-> contract
 ```
 
-`contracts` compiles Baboon-generated Scala models and codecs. `core` owns service/repository interfaces and BIO business operations. `server` contains JDBC and http4s adapters, the explicit distage plugin, and the server composition root. The TypeScript contract compiler and verification clients exercise the generated browser-facing representation. Supervisor and browser application modules will be introduced with their implementations.
+`contracts` compiles Baboon-generated Scala models and codecs. `core` owns service/repository interfaces and BIO business operations. `server` contains JDBC and http4s adapters, the explicit distage plugin, and the server composition root. The TypeScript contract compiler and verification clients exercise the generated browser-facing representation. `web` contains the minimal browser. `host` contains the local isolated-workspace adapter and bounded command runner; it is not bound into server startup. The supervisor will use it in M2.
 
-The application service depends on `ProbeRepository[F]`; its implementation requires BIO `Error2`. The PostgreSQL adapter uses ZIO blocking effects and lexical JDBC resource ownership. The in-memory adapter uses an injected lifecycle-scoped reference. Production and dummy bindings share a plugin and differ by `Repo` activation. Plugins are registered explicitly for JVM and native execution; runtime classpath scanning is not used to discover application plugins.
+The application services depend on ledger, usage and workspace repository contracts; their implementations require BIO `Error2`. The PostgreSQL adapter uses ZIO blocking effects and lexical JDBC resource ownership. The in-memory adapter uses an injected lifecycle-scoped reference. Production and dummy bindings share a plugin and differ by `Repo` activation. Plugins are registered explicitly for JVM and native execution; runtime classpath scanning is not used to discover application plugins.
 
-The M0 `probe` is a stack proof, not a ledger or a consumer workflow. It uses one JSONB row per authenticated project. The runtime requires explicit database, listening, origin, credential and project configuration. HTTP, WebSocket and MCP share the same service and codecs. The M0 token represents one project; role credentials and browser authentication are M1 work.
+The retained M0 `probe` remains a stack proof. M1 supplies the ledger/audit services and actual clients. It uses one JSONB row per authenticated project. The runtime requires explicit database, listening, origin, credential and project configuration. HTTP, WebSocket and MCP share the same service and codecs. Signed project/role credentials and browser sessions authenticate M1 requests; separate host ingestion accounts usage.
 
 ## Durable state design for M1–M4
 
@@ -39,4 +39,4 @@ The local governing wrapper owns child processes and hierarchy cancellation. The
 
 The operational usage audit is append-only and separate from all fourteen ledgers. An attempt/source identity deduplicates raw observations, including cumulative updates and resumed sessions. Corrections append records referencing earlier observations. Frozen assignment identities preserve direct task, shared cohort and unattributed scopes. Shared totals are counted once; regrouping cannot rewrite historical attribution. Missing metrics remain unknown. Evaluation reporting consumes this same log and adds outcome assessment, not another accounting store.
 
-The ledger, claim, supervisor, integration and usage sections above define implementation constraints; none is claimed implemented by the M0 probe.
+Ledger/explicit claims/usage and the [workspace foundation](workspaces.md) have implementation evidence. Supervisor, claim-bound result admission, full process, Git integration and later UI behavior remain in their assigned milestones; see [implementation status](../implementation-status.md).

@@ -30,7 +30,7 @@ A file lock serializes initialization and session creation; write/fsync/atomic r
 
 ## Remaining M1 work
 
-Response/aggregate budgets and service-level paging; isolated workspace foundation; independent Astra milestone review. Browser, nested validation, relationship restore and restart evidence are covered by subsequent increments. Harness restriction and collector behavior belong to M2 and later. No M1 completion or human acceptance is claimed.
+Independent Astra milestone review and correction verification. Subsequent [read bounds](m1-read-bounds.md) and [workspace foundation](m1-workspaces.md) evidence cover those implementation requirements. Browser, nested validation, relationship restore and restart evidence are covered by subsequent increments. Harness restriction and collector behavior belong to M2 and later. No M1 completion or human acceptance is claimed.
 
 ## Project rename and process restart
 
@@ -42,3 +42,6 @@ The CLI name mismatch was reproduced in `20260926T194155-postgres/jvm-cli.log`: 
 - `20260926T194814-contracts`: deterministic generation, Scala/TypeScript compilation, current codecs and all concrete MCP schemas pass.
 
 The restart scenario uses a fresh server process, eight concurrent allocations and repeated delivery of a fixed request; it then records an inverse relationship, claim, renamed project and controlled usage observation. The runner sends SIGKILL to that server process and starts another against the same database and credentials. Verification compares original acknowledgements and claims, checks counter continuation/history/both reference directions, and replays the usage observation without changing totals. This is server-process crash recovery, not a PostgreSQL crash or power-loss test.
+
+
+CLI complete response consumption is limited to 2 MiB and 30 seconds, including the response body. A stalled-body regression and retry after identity-lock release are recorded with [workspace/deadline evidence](m1-workspaces.md). Git identity lookup likewise has a working process deadline; it no longer blocks on stdout before starting its wait.

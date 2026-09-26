@@ -1,6 +1,7 @@
 import concurrent.futures
 import json
 import os
+import signal
 from pathlib import Path
 import subprocess
 import sys
@@ -12,6 +13,21 @@ def main():
     environment = dict(os.environ)
     environment["CQ_ENDPOINT"] = environment["CQ_ORIGIN"]
     with tempfile.TemporaryDirectory(prefix="cq-cli-") as temporary:
+        fake_bin = Path(temporary) / "silent-git"
+        fake_bin.mkdir()
+        fake_git = fake_bin / "git"
+        fake_git.write_text("#!/bin/sh\nexec sleep 30\n")
+        fake_git.chmod(0o700)
+        timeout_environment = {**environment, "PATH": str(fake_bin) + os.pathsep + environment["PATH"]}
+        silent = subprocess.Popen(command + ["web"], cwd=temporary, env=timeout_environment,
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
+        try:
+            stdout, stderr = silent.communicate(timeout=12)
+            assert silent.returncode == 1 and "deadline exceeded" in stderr, stdout + stderr
+        except subprocess.TimeoutExpired:
+            os.killpg(silent.pid, signal.SIGKILL)
+            silent.communicate()
+            raise AssertionError("CLI Git lookup exceeded its 10-second deadline while waiting for stdout")
         root = Path(temporary) / "consumer"
         root.mkdir()
         subprocess.run(["git", "init", "--quiet", str(root)], check=True)

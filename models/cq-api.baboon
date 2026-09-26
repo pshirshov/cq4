@@ -275,3 +275,9 @@ root adt ServerFrame {
   data Ping { nonce: str }
   data Pong { nonce: str }
 }
+
+root id GitCommit { value: str }
+root data WorkspaceSpec { project: ProjectId owner: SessionId attempt: AttemptId repository: str base: GitCommit }
+enum WorkspaceAdmission { Open Quarantined }
+root data WorkspaceObservation { head: GitCommit gitCommon: str verifiedAt: i64 }
+root data WorkspaceRecord { spec: WorkspaceSpec directory: str admission: WorkspaceAdmission observed: opt[WorkspaceObservation] quarantineReason: opt[str] }

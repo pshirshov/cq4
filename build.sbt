@@ -22,7 +22,9 @@ lazy val core = project.in(file("core")).dependsOn(contracts).settings(
   ),
 )
 
-lazy val server = project.in(file("server")).dependsOn(core).settings(
+lazy val host = project.in(file("host")).dependsOn(core)
+
+lazy val server = project.in(file("server")).dependsOn(core, host).settings(
   runtimeClasspath := {
     val converter = fileConverter.value
     (Runtime / fullClasspath).value.map(entry => converter.toPath(entry.data).toString).mkString(java.io.File.pathSeparator)
@@ -42,6 +44,6 @@ lazy val server = project.in(file("server")).dependsOn(core).settings(
   Test / fork := true,
 )
 
-lazy val root = project.in(file(".")).aggregate(contracts, core, server).settings(
+lazy val root = project.in(file(".")).aggregate(contracts, core, host, server).settings(
   publish / skip := true,
 )
