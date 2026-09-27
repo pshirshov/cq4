@@ -122,10 +122,17 @@ cq status attempts --task T1 --limit 20
 cq status outcomes --attempt <attempt-uuid> --limit 20
 cq web
 cq run codex --settings /absolute/settings.json --input /absolute/request.txt
+cq run codex --settings /absolute/settings.json --input /absolute/request.txt --workflow begin
+cq run claude --settings /absolute/settings.json --input /absolute/request.txt --workflow advance --roots G1 --through review
+cq run pi --settings /absolute/settings.json --input /absolute/request.txt --workflow review --result <result-uuid> --mode candidate
+cq run codex --settings /absolute/settings.json --input /absolute/request.txt --workflow upstream --roots U1 --action prepare
+cq commands export codex --directory /absolute/consumer
 cq job upload --session /absolute/session-directory
 ```
 
 Cost summaries include a bounded first page grouped by attribution, currency, cost basis and pricing version. Continue with `status costs --after '<after-object-as-JSON>' --snapshot <cursor> --limit 20` using the returned key and cursor; concurrent audit changes require restarting the listing. Raw observations retain original amounts and pricing evidence.
+
+Workflow commands use shared installed instructions and enforce execution scope/phase on the host. `commands export` supports `claude`, `codex` and `pi`; identical assets are idempotent, conflicts require explicit `--replace`. Select the generated project assets explicitly when older commands share their names; see [native invocation and collision instructions](docs/design/workflows.md). The supervisor receipt includes a bounded report: surface pending user questions and remaining work even when the process succeeds. Full worked-process/cohort evaluation remains in progress.
 
 The [query language](docs/design/query-language.md) is shared by CLI, MCP and browser. For example, `cq query --query 'ledger:Tasks status:Ready "retry deadline" NOT tag:blocked'`. Empty queries select active items; `archived:all` includes archived items. Continue with `--after T42 --snapshot <cursor>` from the returned page and restart on `Resync`. Invalid searches include UTF-16 source spans and return a nonzero CLI exit. `--complete <UTF-16 offset>` returns syntax diagnostics and up to 50 replacement suggestions through the existing read capability; it does not accept page continuation.
 

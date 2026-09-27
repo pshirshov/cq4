@@ -23,7 +23,7 @@ final class HarnessRegistry(adapters: Set[HarnessAdapter]) {
 }
 
 final case class SupervisorConfig(settings: SupervisorSettings, project: ProjectConfig, profile: HarnessProfile,
-  limits: ExecutionLimits, run: SupervisorRun, directory: Path, input: String, environment: Map[String, String]) {
+  limits: ExecutionLimits, run: SupervisorRun, directory: Path, input: String, workflow: Option[WorkflowRequest], environment: Map[String, String]) {
   val owner: Scope = Scope(project.project, Actor("CQ governor", run.attempt.session, Role.Governor))
   val endpoint: URI = URI.create(project.endpoint)
 }
@@ -57,10 +57,12 @@ object SupervisorConfig {
   def load(arguments: RoleAppArgs, context: CliContext, location: ProjectLocation, clock: Clock): Task[SupervisorConfig] = ZIO.attemptBlocking {
     val raw = arguments.roles.find(_.role == SupervisorRole.id).getOrElse(throw new IllegalArgumentException("Supervisor role arguments missing")).roleParameters.raw.toList
     val args = if (raw.headOption.contains("--")) raw.tail else raw
-    require(args.size == 5, "cq run HARNESS --settings FILE --input FILE")
+    require(args.size >= 5 && args.size % 2 == 1, "cq run HARNESS --settings FILE --input FILE [--workflow NAME ...]")
     val harness = Harness.all.find(_.toString.equalsIgnoreCase(args.head)).getOrElse(throw new IllegalArgumentException("Unknown governing harness"))
     val pairs = args.tail.grouped(2).map(values => values.head -> values(1)).toList
-    require(pairs.map(_._1).toSet == Set("--settings", "--input"), "cq run requires exactly --settings FILE and --input FILE")
+    val required = Set("--settings", "--input")
+    require(pairs.map(_._1).distinct.size == pairs.size && required.subsetOf(pairs.map(_._1).toSet) &&
+      pairs.forall(pair => (required ++ WorkflowArguments.Options)(pair._1)), "cq run requires unique supported options, --settings FILE and --input FILE")
     val options = pairs.toMap
     val settings = HostFiles.read(context.directory.resolve(options("--settings")).normalize(), SupervisorSettings_JsonCodec, MaxConfigBytes)
     val profiles = settings.harnesses.map(SupervisorConfig.profile)
@@ -83,6 +85,7 @@ object SupervisorConfig {
     val guardian = Path.of(settings.guardian)
     require(guardian.isAbsolute && guardian.normalize() == guardian && Files.isExecutable(guardian), "Explicit executable guardian required")
     val project = HostFiles.read(location.directory.resolve("project.json"), ProjectConfig_JsonCodec, MaxConfigBytes)
+    val workflow = WorkflowArguments.parse(project.project, options.filter((key, _) => WorkflowArguments.Options(key)))
     val git = new BoundedHostCommand(GitEnvironment.isolated(context.environment), Duration.ofSeconds(10), MaxConfigBytes)
     def command(arguments: String*): String = {
       val value = git.run(context.directory, List("git") ++ arguments)
@@ -111,7 +114,7 @@ object SupervisorConfig {
     val version = new BoundedHostCommand(HarnessEnvironment.isolated(profile, context.environment), Duration.ofSeconds(10), 4096)
       .run(repository, List(profile.executable.toString, "--version"))
     require(version.exit == 0 && version.text.split("[\\s()]+").contains(profile.version), "Installed harness version differs from its configured verified route")
-    SupervisorConfig(settings, project, profile, limits, run, directory, input, context.environment)
+    SupervisorConfig(settings, project, profile, limits, run, directory, input, workflow, context.environment)
   }
 }
 
@@ -126,6 +129,7 @@ final class SupervisorJobs(config: SupervisorConfig, workspaces: WorkspaceServic
 
 object SupervisorProgram {
   val Instructions = "Govern CQ through the exposed tools. Input identifies project, routes, limits, checks and human request. Select/create tasks and claim their exact members. " +
+    "When workflow is present, follow its host-installed instructions and typed scope. " +
     "Dispatch sequentially using item revisions and handles. The host assembles prompts, captures candidates and runs checks. Never read/compose child prompts or copy full results. Poll Status with waitMillis 20000; use compact outcomes and bounded artifact reads only for necessary drill-down. " +
     "Use Explorer Investigate/Research for evidence, Worker Probe for experiments, Planner for typed proposals and Reviewer Plan/Audit for independent findings. Pass previous result handles with identical members and current fence. Preview read/Proposal, then apply by result handle; never reconstruct drafts. Children cannot mutate CQ or integrate. " +
     "Pass worker candidates to Reviewer Candidate; prefer another configured harness. " +
@@ -136,7 +140,8 @@ object SupervisorProgram {
 
 final class SupervisorProgram(config: SupervisorConfig, registry: HarnessRegistry, jobs: JobSupervisor, authority: SupervisorAuthority,
   local: LocalControlServer, access: LocalAccess, dispatch: DispatchController, integrations: IntegrationController, combinations: CombinationController,
-  schemas: McpSchemas, output: HarnessOutput, clock: Clock, context: CliContext) {
+  schemas: McpSchemas, output: HarnessOutput, workflows: WorkflowAssets, clock: Clock, context: CliContext) {
+  private val MaxInputBytes = 192 * 1024
   private val MaxOutputBytes = 32 * 1024 * 1024
   private val MaxRecordBytes = 64 * 1024
   private val MaxSummaryCharacters = 8192
@@ -155,7 +160,9 @@ final class SupervisorProgram(config: SupervisorConfig, registry: HarnessRegistr
         HostFiles.immutable(config.directory.resolve("settings.json"), HostFiles.encode(SupervisorSettings_JsonCodec, config.settings), MaxRecordBytes)
         val collector = authority.collector
         val input = HostFiles.encode(GoverningInput_JsonCodec, GoverningInput(config.project,
-          config.settings.harnesses.map(value => HarnessRoute(value.harness, value.model, value.provider)), config.settings.checks.map(_.name), config.settings.limits, config.settings.integrationTarget, config.input))
+          config.settings.harnesses.map(value => HarnessRoute(value.harness, value.model, value.provider)), config.settings.checks.map(_.name), config.settings.limits, config.settings.integrationTarget, config.input,
+          config.workflow.map(new WorkflowAssembly(authority.governor, project, workflows).assemble)))
+        require(input.getBytes(java.nio.charset.StandardCharsets.UTF_8).length <= MaxInputBytes, "Complete governing input exceeds its byte bound")
         val invocation = schemas.nativeInvocation(attempt.harness,
           HarnessInvocation(Role.Governor, attempt.id, SupervisorProgram.Instructions, schemas.schema("GoverningReport"),
             List(HarnessMcp(McpTarget.Domain, config.endpoint.resolve("/mcp"), authority.governorToken),
@@ -209,7 +216,7 @@ final class SupervisorProgram(config: SupervisorConfig, registry: HarnessRegistr
         val delivered = Try(queue.flush(collector)).toEither
         val pending = delivered.left.toOption.map(_ => "Operational usage/artifact delivery is pending; retain the session directory and retry cq job upload")
         val receipt = SupervisorReceipt(attempt.session, attempt.id, config.directory.toString, record.phase, succeeded,
-          report.toOption.map(_.id), delivered.isRight, pending.orElse(problem))
+          report.toOption.map(_.id), report.toOption.map(value => Wire.decode(GoverningReport_JsonCodec, value.body)), delivered.isRight, pending.orElse(problem))
         HostFiles.immutable(config.directory.resolve("receipt.json"), HostFiles.encode(SupervisorReceipt_JsonCodec, receipt), MaxRecordBytes)
         context.output.println(HostFiles.encode(SupervisorReceipt_JsonCodec, receipt))
         receipt
@@ -225,7 +232,7 @@ final class SupervisorRole(program: SupervisorProgram) extends RoleTask[Task] {
 object SupervisorRole extends RoleDescriptor {
   override val id = "supervisor"
   override def parserSchema: RoleParserSchema = RoleParserSchema(id, ParserDef.Empty,
-    Some("Own a local governing harness and its isolated jobs"), Some("cq run HARNESS --settings FILE --input FILE"), freeArgsAllowed = true)
+    Some("Own a local governing harness and its isolated jobs"), Some("cq run HARNESS --settings FILE --input FILE [--workflow NAME ...]"), freeArgsAllowed = true)
 }
 
 object SupervisorPlugin extends PluginDef {
@@ -239,6 +246,9 @@ object SupervisorPlugin extends PluginDef {
     make[WorkspaceReader]
     make[CandidateWorkspace]
     make[SupervisorAuthority].fromEffect(SupervisorAuthority.acquire _)
+    make[WorkflowExecution].from { (config: SupervisorConfig, authority: SupervisorAuthority) =>
+      new WorkflowExecution(authority.governor, config.project.project, config.owner.actor.session, config.workflow)
+    }
     make[LocalAccess]
     make[ChildRunner]
     make[DispatchController].fromResource[DispatchController.Resource]

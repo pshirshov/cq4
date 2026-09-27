@@ -4,7 +4,7 @@ import baboon.runtime.shared.{BaboonCodecContext, BaboonJsonCodec}
 import com.comcast.ip4s.{Host, Port}
 import cq.api.*
 import cq.core.DomainFailure
-import cq.host.{ChildContracts, DispatchProjection}
+import cq.host.{ChildContracts, DispatchProjection, WorkflowExecution}
 import distage.Lifecycle
 import io.circe.{Json, parser}
 import org.http4s.*
@@ -18,7 +18,7 @@ import zio.{Task, ZIO}
 import zio.interop.catz.*
 
 final class LocalControl(dispatch: DispatchController, integrations: IntegrationController, combinations: CombinationController,
-  access: LocalAccess, schemas: McpSchemas, config: SupervisorConfig) extends Http4sDsl[Task] {
+  access: LocalAccess, schemas: McpSchemas, config: SupervisorConfig, workflow: WorkflowExecution) extends Http4sDsl[Task] {
   private val Versions = List("2025-03-26", "2025-06-18", "2025-11-25")
   private val MaxRequestBytes = 65536
   private val Context = BaboonCodecContext.Default
@@ -48,7 +48,7 @@ final class LocalControl(dispatch: DispatchController, integrations: Integration
   }
   private def call(capability: LocalCapability, name: String, arguments: Json): Task[(Json, Boolean)] = {
     if (capability.role == Role.Governor && name == "dispatch") {
-      val operation = decode(DispatchCommand_JsonCodec, arguments).flatMap {
+      val operation = decode(DispatchCommand_JsonCodec, arguments).tap(command => ZIO.attemptBlocking(workflow.authorize(command))).flatMap {
         case DispatchCommand.Start(request) => ZIO.attempt(ChildContracts.request(config.project.project, request)) *> dispatch.start(request).map(DispatchReply.Status.apply)
         case DispatchCommand.Status(attempt, wait) => dispatch.status(attempt, wait).map(DispatchReply.Status.apply)
         case DispatchCommand.Cancel(attempt) => dispatch.cancel(attempt).map(DispatchReply.Status.apply)

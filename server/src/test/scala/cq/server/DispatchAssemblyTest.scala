@@ -72,6 +72,41 @@ abstract class DispatchAssemblyTest extends SpecZIO with AssertZIO {
           _ <- ZIO.attemptBlocking {
             val api = new ApplicationApi(application, authority, runtime)
             val assembler = new InputAssembler(api, scope, clock)
+            val workflows = new WorkflowAssembly(api, scope.project, new WorkflowAssets)
+            val subject = workflows.assemble(WorkflowRequest.Review(previous.id, ReviewerMode.Candidate))
+            assert(subject.subject.contains(WorkflowSubject(previous.id, request.work, List(member), stored.candidate)))
+            assert(!Wire.encode(WorkflowContext_JsonCodec, subject).contains(narrative) &&
+              !Wire.encode(WorkflowContext_JsonCodec, subject).contains("Candidate produced; validation is model-declared"))
+            intercept[IllegalArgumentException](workflows.assemble(WorkflowRequest.Review(previous.id, ReviewerMode.Plan)))
+            intercept[IllegalArgumentException](workflows.assemble(WorkflowRequest.Review(unbound.id, ReviewerMode.Candidate)))
+            intercept[IllegalArgumentException](workflows.assemble(WorkflowRequest.Review(small.id, ReviewerMode.Audit)))
+            intercept[IllegalArgumentException](workflows.assemble(WorkflowRequest.Begin(Set(member.id.copy(project = ProjectId(UUID.randomUUID()))))))
+            def policy(value: WorkflowRequest) = new WorkflowExecution(api, scope.project, scope.actor.session, Some(value))
+            def denied(value: WorkflowExecution, command: DispatchCommand): Unit =
+              assert(intercept[DomainFailure](value.authorize(command)).fault.isInstanceOf[Fault.Denied])
+            val explore = policy(WorkflowRequest.Advance(Set(member.id), WorkflowPhase.Explore))
+            denied(explore, DispatchCommand.Start(request))
+            explore.authorize(DispatchCommand.Start(request.copy(work = DispatchWork.Worker(WorkerMode.Probe))))
+            val plan = policy(WorkflowRequest.Advance(Set(member.id), WorkflowPhase.Plan))
+            plan.authorize(DispatchCommand.Start(request.copy(work = DispatchWork.Planner())))
+            denied(plan, DispatchCommand.Start(request.copy(members = List(guidance), work = DispatchWork.Planner())))
+            policy(WorkflowRequest.Begin(Set.empty)).authorize(DispatchCommand.Start(request.copy(work = DispatchWork.Planner())))
+            denied(new WorkflowExecution(api, scope.project, SessionId(UUID.randomUUID()), Some(WorkflowRequest.Begin(Set.empty))),
+              DispatchCommand.Start(request.copy(work = DispatchWork.Planner())))
+            val standalone = policy(WorkflowRequest.Review(previous.id, ReviewerMode.Candidate))
+            val exact = request.copy(work = DispatchWork.Reviewer(ReviewerMode.Candidate), previous = Some(previous.id))
+            standalone.authorize(DispatchCommand.Start(exact))
+            denied(standalone, DispatchCommand.Start(exact.copy(previous = Some(unbound.id))))
+            denied(standalone, DispatchCommand.Start(exact.copy(work = DispatchWork.Reviewer(ReviewerMode.Audit))))
+            denied(standalone, DispatchCommand.Start(exact.copy(members = List(guidance))))
+            List(explore, plan, standalone, policy(WorkflowRequest.Begin(Set.empty)), policy(WorkflowRequest.Upstream(Set(member.id), UpstreamAction.Prepare))).foreach { execution =>
+              denied(execution, DispatchCommand.PrepareIntegration(IntegrationId(UUID.randomUUID()), previous.id))
+              denied(execution, DispatchCommand.Integrate(IntegrationId(UUID.randomUUID())))
+              denied(execution, DispatchCommand.Combine(requestId, IntegrationId(UUID.randomUUID()), claim.fence))
+              execution.authorize(DispatchCommand.Status(attempt.id, 0))
+              execution.authorize(DispatchCommand.Cancel(attempt.id))
+              execution.authorize(DispatchCommand.IntegrationStatus(IntegrationId(UUID.randomUUID()), 0))
+            }
             val one = assembler.assemble(request)
             val largeRequest = request.copy(artifacts = List(large.id))
             val two = assembler.assemble(largeRequest)
@@ -103,6 +138,13 @@ abstract class DispatchAssemblyTest extends SpecZIO with AssertZIO {
           }
           _ <- ZIO.attemptBlocking {
             intercept[DomainFailure](new InputAssembler(new ApplicationApi(application, authority, runtime), scope, clock).assemble(request))
+          }
+          _ <- ledger.change(scope, ChangeRequest(requestId, List(Mutation.Replace(member.id, member.revision, draft("Changed acceptance context"))),
+            List(replacement.fence), "Current task correction"))
+          _ <- ZIO.attemptBlocking {
+            val workflows = new WorkflowAssembly(new ApplicationApi(application, authority, runtime), scope.project, new WorkflowAssets)
+            val stale = intercept[IllegalArgumentException](workflows.assemble(WorkflowRequest.Review(previous.id, ReviewerMode.Candidate)))
+            assert(stale.getMessage.contains("stale"))
           }
         } yield ()
     }

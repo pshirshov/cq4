@@ -146,6 +146,24 @@ def main():
 
     assert sandbox == "read-only"
     project = data["project"]["project"]
+    if data["request"].startswith("workflow-denial:"):
+        selection = json.loads(data["request"].split(":", 1)[1])
+        members = selection["members"]
+        claim = tool("cq", "claim", {"project": project, "action": {"Acquire": {
+            "id": identity(), "members": [value["id"] for value in members], "durationMillis": "180000"}}})
+        request = {"request": identity(), "work": selection["work"], "harness": "Codex", "members": members,
+                   "guidance": [], "artifacts": [], "previous": selection["previous"],
+                   "fence": claim["Claimed"]["claim"]["fence"], "limits": data["limits"]}
+        rejected = tool("cq_host", "dispatch", {"Start": {"request": request}}, denied=True)
+        assert "workflow" in json.dumps(rejected).lower(), rejected
+        for operation in [{"PrepareIntegration": {"id": identity(), "reviewer": identity()}},
+                          {"Integrate": {"id": identity()}},
+                          {"Combine": {"id": identity(), "source": identity(), "fence": request["fence"]}}]:
+            rejected = tool("cq_host", "dispatch", operation, denied=True)
+            if selection["integrationDenied"]:
+                assert "workflow" in json.dumps(rejected).lower(), rejected
+        finish({"summary": "Workflow execution limits denied admission before side effects"})
+        return
     draft = {"title": "Consumer fixture", "body": "Implement consumer.txt with the specified contents", "labels": [], "archived": False,
              "content": {"Task": {"status": "Ready", "acceptance": ["Exact content verified"], "result": None, "validation": []}}, "citations": []}
     if data["request"] == "proposal-workflow":

@@ -1,0 +1,100 @@
+# Four workflow entry points
+
+M4 implementation contract. The [role/proposal](proposals.md), [reviewer-check](reviewer-checks.md), [claims](claims.md) and [integration](git-integration.md) boundaries are already implemented. This increment connects process guidance and native command entry points to those services; adaptive cohort selection follows as its own increment. The contract model remains the single mutable `cq.api 0.1.0`.
+
+## Entry points and execution
+
+The four agent commands are begin, advance, review and upstream. All invoke the existing `cq run` supervisor role through the single distage entrypoint. Interactive command assets hand the user's request and explicit selection to the host; the host loads the governing workflow instructions and all child instructions. There is no second workflow executor or additional dispatched role.
+
+Keep the existing `cq run HARNESS --settings FILE --input FILE` for direct governing requests and evaluations. Add explicit workflow selection with `--workflow NAME` and command-specific arguments:
+
+| Workflow | Additional arguments | Meaning |
+| --- | --- | --- |
+| `begin` | optional `--roots I1,G1` | Capture new intent, or associate a scope correction/follow-up with these existing roots |
+| `advance` | required `--roots I1,G1`; required `--through explore\|plan\|work\|review\|integrate` | Advance this explicit workset up to the selected phase, continuing independent work |
+| `review` | required `--result UUID`; required `--mode plan\|candidate\|audit` | Independently review the exact stored result and its frozen members |
+| `upstream` | required `--roots U1,D1`; required `--action prepare\|report\|recheck` | Prepare evidence, report an explicitly authorized external action, or recheck an existing upstream record |
+
+All forms require the input file for the current user request/context. Typed Baboon workflow inputs distinguish the four alternatives; the parser rejects unknown/duplicate options and options belonging to another workflow. Root parsing uses canonical project-local references, rejects duplicates and enforces the existing 64-root bound. Review derives its member revisions from the admitted result on the host; the interactive caller and governor need not decode its full body. An empty root set is never interpreted as the entire project.
+
+`GoverningInput` gains an optional host-assembled workflow context. It contains the typed request, installed workflow instructions and bounded selection metadata; user text remains separate. The host records that complete input using the existing immutable input artifact and usage/publication path. Workflow instructions go in the input, preserving the separately bounded native system/schema guide. Validate the complete encoded governing input against its byte limit before launch.
+
+The supervisor receipt additionally projects the validated bounded governing report alongside its artifact handle. Interactive assets must surface that report's unanswered question IDs/choices, blockers and remaining roots; process success alone does not establish workflow completion. Await actual user answers before another dependent run, passing their answer as user input and retaining the relevant question/root IDs. Do not auto-answer a question or infer approval from successful process exit. Failed or unavailable reports remain explicit.
+
+`cq commands export HARNESS --directory DIR` renders exactly four command assets beneath a chosen consumer-project directory. Existing identical files are accepted; conflicting files are reported without overwrite. An explicit `--replace` option may replace only those four designated generated paths. It must reject symbolic-link destinations/parents and validate the full output set before writing. No shell-constructed code or user argument is substituted into generated executable fragments.
+
+| Harness | Generated project path | User invocation |
+| --- | --- | --- |
+| Claude | `.claude/commands/cq/begin.md` and its three peers | `/cq:begin`, `/cq:advance`, `/cq:review`, `/cq:upstream` |
+| Codex | `.agents/skills/cq-begin/SKILL.md` and its three peers | `$cq-begin`, `$cq-advance`, `$cq-review`, `$cq-upstream` |
+| Pi | `.pi/prompts/cq:begin.md` and its three peers | `/cq:begin`, `/cq:advance`, `/cq:review`, `/cq:upstream` |
+
+The native renderers own descriptions, argument forwarding and the spelling of the invoking harness. One installed common workflow resource plus one resource per command own semantic instructions. The exported entry points tell the interactive agent how to pass the current request to CQ and interpret its bounded outcome; they do not copy child prompts, schemas or full results. The interactive agent may ask genuine user choices and resume with their answers. Its overhead remains explicitly outside measured batch usage until an interactive collector exists; the managed governor and children retain their normal audit coverage.
+
+Existing installations may expose older commands with the same names. Native invocation checks verify these explicit selection paths: launch Claude with `--setting-sources project`; select the Codex project skill by its displayed `.agents/skills/cq-NAME/SKILL.md` path; launch Pi with `--no-prompt-templates --prompt-template .pi/prompts`. Claude and Pi otherwise permit a personal command with the same name to take precedence. Codex lists both versions; the command name alone does not establish which body was selected. Export never modifies personal installations. The [verification record](../validation/m4-workflow-entrypoints.md) distinguishes actual expansion from live workflow execution.
+
+Claude documents namespaced files under `.claude/commands/`; Codex discovers repository skills under `.agents/skills/`; Pi uses a prompt filename as its command name. These formats have separate native discovery checks against the pinned installed harnesses. Sources: [Claude command names](https://code.claude.com/docs/en/skills#how-a-skill-gets-its-command-name), [Codex skill discovery](https://learn.chatgpt.com/docs/build-skills), [Pi prompt templates](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/prompt-templates.md). The installed Pi 0.87.1 documentation independently confirms filename naming and direct-child prompt discovery.
+
+## Shared governing process
+
+Readiness guides selection; it does not add status-transition gates. Respect current revisions, claims, role permissions and integration reservations. Re-read a claimed producer's descendants before producing additional work. Use stored planner proposals, previews and handle application; the governor never reconstructs proposed draft bodies. Review proposal/candidate identity independently before semantic acceptance. Manual schema-valid correction and reopening remain available.
+
+Resolve preferences and requirements with the user through question records. Use research and Worker/Probe for uncertainties answerable by observation. Explorer/Investigate produces possible causes and discriminating observations; hypotheses derive from the defect/research or parent hypothesis, with Supports/Contradicts evidence and explicit inconclusive outcomes. Shared artifacts may have several derivation relationships; a milestone provides organization rather than ownership. Never create an ambient milestone or attach intake/goals as milestone members.
+
+Claims and assignments freeze exact execution membership. Child outcomes remain per member. A blocked member does not imply that unrelated work is blocked; one green shared check does not imply that every member is done. Bounded selection, phase limits and the existing child/deadline limits constrain each managed run. No actionable work, required user input, cancellation, exhausted limits or an execution failure produce an explicit remaining-work summary. Do not repeatedly retry an unchanged failure; retain its evidence and continue independent eligible work when possible. Adaptive selection, fairness and regrouping are the next cohort increment and are not claimed by these instructions alone.
+
+The host enforces execution limits before local control reaches a dispatch, integration or combination controller. Explore permits Explorer, Worker/Probe and Reviewer/Audit; Plan additionally permits Planner and Reviewer/Plan; Work adds implementation/conflict workers; Review adds candidate review; Integrate permits reviewed integration/combination. Begin and upstream permit exploration/planning. Standalone review admits only its exact result handle, mode and frozen members. Selected roots admit only graph entries classified Selected, with snapshot-consistent bounded pagination; contextual milestone siblings remain excluded. Begin without roots admits only records whose original revision was created by this governing session. Later edits cannot adopt an older record into that scope. Ordinary schema-valid domain corrections retain their existing permissions.
+
+Integration preparation and combination admission verify members against the current selection. Applying an already prepared integration uses its frozen, previously checked identity, preserving reconciliation when graph relationships subsequently change. Status and cancellation remain available independently of workflow phase. These checks are execution boundaries, not additional item status-transition rules.
+
+### Begin
+
+Capture an idea or defect directly from the user's intent without requiring a milestone or lifecycle metadata. Preserve the user's text in the host input artifact; actor provenance and evidence origin remain honest. A model quoting input cannot manufacture HumanReported evidence or operator confirmation.
+
+For existing roots, inspect current work and record the requested scope change or follow-up without cancelling unrelated work. Claim the producer and use Planner to propose goals. Review and apply a proposal by handle. Derive tasks, researches, questions, decisions and handoffs from goals in further bounded rounds. After server allocation, organize eligible work/artifacts with PartOf relations to an explicitly selected or newly proposed milestone; never invent IDs to refer to proposed records inside a mutation.
+
+### Advance
+
+Traverse selected descendants separately from contextual prerequisites, reviews and milestones. Do not expand a contextual milestone into sibling work. Select the next actionable step under the requested phase limit: exploration/probing, planning, implementation, independent review, then integration where configured and requested. An upper phase limit includes necessary earlier phases; it does not authorize unrelated work.
+
+Pass evidence/proposal/candidate/rejection handles between roles. Record research conclusions, decisions, handoffs and durable memories with their actual evidence. For ChangesRequested, correct through a worker/planner using the retained review handle, then obtain a fresh independent review. Compare current revisions before considering an old review applicable. Only the existing recorded integration path establishes observed code incorporation and its task completion evidence.
+
+A new managed run is a new governing session. Prior results may provide context, but proposal application and integration retain their existing session/claim authority. Re-establish a current worker or planner result under the fresh claim and obtain a fresh review before application/integration. Do not rewrite historical artifacts or silently adopt a foreign session's publication authority.
+
+### Review
+
+The host resolves the admitted result and its members, rejects a foreign project or incompatible mode, and exposes only compact selection metadata to the governor. The governor acquires a current claim and verifies that the frozen revisions are still current. A stale subject stays available for inspection and is reported as stale; do not present it as a current approval.
+
+Dispatch Reviewer/Plan for a proposal, Reviewer/Candidate for a worker candidate and Reviewer/Audit for evidence. Candidate reviewers may request configured named checks; they cannot edit the candidate or invoke unrestricted shell tools. Record actionable per-member findings and exact reviewed identities. A standalone review does not itself integrate, apply the reviewed proposal or mark tasks done. Follow-up planning uses the result handle under current authority.
+
+### Upstream
+
+Prepare a bounded report from a reproduced external dependency defect, with component/version, reproduction, observations and linked local work. Keep empirical verification and untested hypotheses distinct. Preparing a report does not publish it.
+
+The `report` action records or facilitates the explicitly requested external action. Before any external submission, require human authorization for that concrete destination/action; a model-authored record or the command name alone cannot supply it. Use ordinary operator-action confirmation/evidence fields and existing request provenance, not a new approval protocol. The managed governor has no external submission tool: if the current host has no authorized action adapter, retain the prepared report and surface the required operator action rather than inventing completion. An interactive agent may perform an already explicitly authorized action using its configured tools and return the observed URL/evidence through the ordinary human record path. That interactive activity has unavailable usage coverage until instrumentation exists.
+
+Recheck compares the recorded upstream outcome/version with observed dependency behavior and preserves previous reports. Resolving an upstream record cannot automatically resolve every related local defect; each local acceptance criterion still needs evidence.
+
+## Inventories and old-command mapping
+
+| Previous commands | Retained concept |
+| --- | --- |
+| begin, plan/follow-up | begin |
+| advance, investigate, investigate/advance, plan, plan/advance, research, research/advance, implement/start, implement/advance | advance with selected roots and phase limit |
+| plan-review, implement-review | review with exact result and typed mode |
+| upstream | upstream with explicit action |
+| planners, reviewers | Configured harness/model routes and role metadata, not workflow commands |
+
+Administrative CLI inventory remains `serve`, `init`, `web`, `run`, `job upload`, `query`, `proposal preview|apply` and `status` with audit/costs/attempts/outcomes scopes; this increment adds only `commands export`. Distage administrative roles remain available through its normal role syntax. Native job control stays on the host protocol; document the final status/cancel CLI disposition before M6 rather than claiming those commands already exist.
+
+Domain MCP remains search, read, graph, change, apply, claim and usage. Governors additionally receive local dispatch; children receive scoped workspace reads and candidate reviewers' named Check operation. Host-only operations cover credential grants, artifact publication, usage ingestion/correction, result admission, integration/combination publication and reconciliation, process ownership, and immutable delivery replay. Workflow entry points add no domain MCP capability.
+
+## Verification boundary
+
+- Deterministic checks exercise command/option discrimination, typed scope/phase/mode bounds, exact result selection without exposing narrative bodies, encoded input limits, generated command path/content identity, conflict/symlink refusal and all-or-error preflight.
+- Actual CLI fixtures load the shared resources through the supervisor role with no database configuration in that local process, and retain the assembled workflow input artifact. Existing child handle, permission, cancellation and audit scenarios continue to pass.
+- Native command discovery proves that all four names load and invoke the intended generated content in each pinned harness, including command-name collisions; generated text alone is insufficient. Live worked-process scenarios then exercise intake-to-goal-to-milestone-work, investigation trees, user question versus empirical research, independent review/correction, handoffs and upstream preparation/operator evidence. User-choice scenarios must expose the unanswered choice in the receipt report and proceed only after an actual supplied answer.
+- Shared dummy/PostgreSQL scenarios verify the process's actual relationship and provenance invariants. Live models remain outside deterministic gates and all observed usage goes through the shared operational audit.
+- Full M4 approval still requires the adaptive cohort increment and all nine real governing/child routes. No command-generation test substitutes for the worked process or accepted-quality consumer evidence.
+
+Independent Astra approved this design scope for implementation, with the explicit bounded-report/user-answer boundary, exact review subject/authority checks, native discovery/collision evidence and external-action evidence requirements above. This is not runtime or milestone approval.

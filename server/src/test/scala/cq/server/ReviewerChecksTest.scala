@@ -53,7 +53,7 @@ final class ReviewerChecksProcess extends SpecZIO with AssertZIO {
       settings = SupervisorSettings(directory.toString, guardian.binary.toString, List(profile), limits,
         scripts.map { case (name, script) => ValidationCheck(name, List("python3", "-c", script), 10000, 65536) }, None, None)
       run = SupervisorRun(project, assignment, governor, profile.version, local.source.toString, local.base)
-      config = SupervisorConfig(settings, project, SupervisorConfig.profile(profile), SupervisorConfig.limits(limits), run, directory, "", guardian.environment)
+      config = SupervisorConfig(settings, project, SupervisorConfig.profile(profile), SupervisorConfig.limits(limits), run, directory, "", None, guardian.environment)
       failCancellation = new AtomicBoolean(false)
       journal <- ZIO.acquireRelease(ZIO.attemptBlocking {
         val delegate = FileJobRepository.open(directory.resolve("journal"), project.project, governor.session)

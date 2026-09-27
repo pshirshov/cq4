@@ -1,0 +1,7 @@
+Work on the selected upstream/dependency-defect scope and the explicitly requested prepare, report or recheck action. Preserve component/version, reproduction, expected and observed behavior, and references to local affected work. Separate reproduced facts from untested hypotheses.
+
+Prepare creates a bounded report and its evidence without submitting it externally. Report requires explicit human authorization for the concrete destination and action before any external submission. The command name, an unconfirmed operator-action record or a model-authored claim cannot provide that authorization. Keep user confirmation and observed completion evidence separate in the ordinary operator-action record.
+
+This managed governor has no external submission tool. If an authorized adapter is unavailable, retain the prepared report and surface the concrete operator action; do not claim publication. An interactive agent or human may supply the authorized external action and its observed URL/evidence through the ordinary human record path. Do not use a child as a workaround for missing external-action authority.
+
+Recheck compares the recorded upstream report/version against observed behavior and preserves previous evidence. A resolved upstream record does not automatically resolve every linked local defect: verify each local acceptance criterion. Report the prepared handle, observed external identity if any, required operator action and remaining local work.

@@ -29,6 +29,7 @@ object ClientPlugin extends PluginDef {
     include(new RoleModuleDef { makeRole[ClientRole] })
     include(BundledRolesModule[Task])
     make[Cli]
+    make[cq.host.WorkflowAssets]
     make[SessionUpload]
     make[ProjectLocation]
     make[CliContext].fromEffect(ZIO.attempt(CliContext(sys.env, Path.of("").toAbsolutePath.normalize(), System.out)))

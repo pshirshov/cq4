@@ -1,0 +1,5 @@
+Review the exact admitted result selected by the host and its frozen member revisions. Acquire current ownership and compare revisions before dispatch. If the subject is stale, retain it for inspection and report the changed scope; do not label it a current approval.
+
+Use Reviewer Plan for a stored proposal, Reviewer Candidate for a worker candidate, or Reviewer Audit for evidence. Pass the result handle as previous input with the exact assigned members. Keep reviewer authorship independent of the producer. Candidate reviewers may request configured named checks; host-observed failures or unknown checks cannot be waived by the model's verdict.
+
+Record findings against each member and the exact result/candidate identity. Distinguish missing evidence, an observed failure and a requirements choice. A standalone review does not integrate a candidate, apply the reviewed proposal or mark tasks done. Retain actionable findings and the review handle for later correction/planning; full critique stays behind that handle.

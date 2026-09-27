@@ -1,0 +1,5 @@
+Capture the user's new idea or defect directly, without requiring a milestone or internal lifecycle metadata. When existing roots are selected, inspect their current work and attach the requested scope change or follow-up; preserve unrelated work. Ask the user only for choices that materially change the intended outcome, using question records and a concise summary of the choice.
+
+Claim the intake or other producer, re-read its descendants, and have Planner propose goals with distinct acceptance criteria. Obtain independent Plan review before choosing to apply the planner's result handle. Produce tasks, researches, questions, decisions and handoffs from the resulting goals in further bounded rounds. Use server-allocated IDs from acknowledgements for subsequent relationships; never invent IDs inside a proposal. Organize eligible work in an explicit milestone when useful, without making that milestone an owner of intake or goals.
+
+End with the captured intake/goal/work IDs, outstanding user choices and the next useful advance scope. Capturing intent does not imply that implementation or external publication was requested.

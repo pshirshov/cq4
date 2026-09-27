@@ -2,7 +2,7 @@ package cq.server
 
 import cq.api.*
 import cq.core.LedgerPolicy
-import cq.host.HttpServerApi
+import cq.host.{HttpServerApi, WorkflowAssets}
 import java.io.PrintStream
 import java.net.URI
 import java.nio.channels.FileChannel
@@ -14,7 +14,7 @@ import zio.{Task, ZIO}
 
 final case class CliContext(environment: Map[String, String], directory: Path, output: PrintStream)
 
-final class Cli(context: CliContext, location: ProjectLocation, upload: SessionUpload) {
+final class Cli(context: CliContext, location: ProjectLocation, upload: SessionUpload, workflows: WorkflowAssets) {
   private val environment = context.environment
   private val directory = context.directory
   private val output = context.output
@@ -78,6 +78,12 @@ final class Cli(context: CliContext, location: ProjectLocation, upload: SessionU
   }
 
   private def runSynchronous(args: List[String]): Unit = args match {
+    case "commands" :: "export" :: harness :: rest =>
+      val replace = rest.lastOption.contains("--replace")
+      val opts = options(if (replace) rest.dropRight(1) else rest, Set("--directory"))
+      require(opts.keySet == Set("--directory"), "Command export requires --directory DIR [--replace]")
+      val native = Harness.all.find(_.toString.toLowerCase == harness).getOrElse(throw new IllegalArgumentException("Unknown command harness"))
+      workflows.writeCommands(native, directory.resolve(opts("--directory")).normalize(), replace).foreach(output.println)
     case "init" :: rest =>
       val opts = options(rest, Set("--endpoint", "--project-id", "--name"))
       val location = configDirectory
@@ -163,7 +169,7 @@ final class Cli(context: CliContext, location: ProjectLocation, upload: SessionU
       }
       output.println(Wire.encode(Result_JsonCodec, request(config, actorSession, Command.Usage(UsageInput(config.project, selection)))))
     case List("web") => output.println(configuration(configDirectory).endpoint)
-    case Nil | List("--help") => output.println("cq serve | init [--endpoint URL] [--project-id UUID] [--name TEXT] | web | run HARNESS --settings FILE --input FILE | job upload --session DIR | query [--query TEXT] [--complete UTF16_OFFSET] [--roots T1,M1] [--after T1 --snapshot CURSOR] [--limit N] | proposal preview|apply RESULT_UUID | status [audit|costs|attempts|outcomes] [--task T1|--cohort UUID|--session UUID] [--attempt UUID] [--after CURSOR] [--snapshot N] [--limit N]")
+    case Nil | List("--help") => output.println("cq serve | init [--endpoint URL] [--project-id UUID] [--name TEXT] | web | run HARNESS --settings FILE --input FILE [--workflow begin|advance|review|upstream ...] | commands export HARNESS --directory DIR [--replace] | job upload --session DIR | query [--query TEXT] [--complete UTF16_OFFSET] [--roots T1,M1] [--after T1 --snapshot CURSOR] [--limit N] | proposal preview|apply RESULT_UUID | status [audit|costs|attempts|outcomes] [--task T1|--cohort UUID|--session UUID] [--attempt UUID] [--after CURSOR] [--snapshot N] [--limit N]")
     case _ => throw new IllegalArgumentException("Unknown command; use cq --help")
   }
 }

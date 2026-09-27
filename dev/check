@@ -171,6 +171,8 @@ class Checks:
             self.run(["python3", "dev/cli-check.py", *command], f"{name}-cli", STARTUP_TIMEOUT)
             self.run(["python3", "dev/cli-timeouts.py", *command], f"{name}-cli-timeouts", STARTUP_TIMEOUT)
             self.run(["python3", "dev/supervisor-check.py", *command], f"{name}-supervisor", STARTUP_TIMEOUT)
+            self.environment["CQ_WORKFLOW_EVIDENCE"] = str(self.evidence / f"{name}-workflow")
+            self.run(["python3", "dev/workflow-check.py", *command], f"{name}-workflow", DISPATCH_FIXTURE_TIMEOUT)
             self.environment["CQ_DISPATCH_EVIDENCE"] = str(self.evidence / f"{name}-dispatch")
             self.run(["python3", "dev/dispatch-check.py", *command], f"{name}-dispatch", DISPATCH_FIXTURE_TIMEOUT)
             self.environment["CQ_COMBINATION_EVIDENCE"] = str(self.evidence / f"{name}-combination")

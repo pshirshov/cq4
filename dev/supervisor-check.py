@@ -32,7 +32,11 @@ if sys.argv[1:] == ["--version"]:
 assert "CQ_TOKEN" not in os.environ and "CQ_DATABASE_URL" not in os.environ
 assert sys.argv[sys.argv.index("--sandbox") + 1] == "read-only"
 assert sys.argv[sys.argv.index("--model") + 1] == "fixture-model"
-prompt = json.loads(sys.stdin.read())["request"]
+governing = json.loads(sys.stdin.read())
+prompt = governing["request"]
+if prompt == "workflow input":
+    assert governing["workflow"]["request"] == {"Begin": {"roots": []}}
+    assert governing["workflow"]["subject"] is None and len(governing["workflow"]["instructions"]) > 100
 if prompt == "deadline input":
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
 target = pathlib.Path(sys.argv[sys.argv.index("--output-last-message") + 1])
@@ -75,6 +79,7 @@ if prompt == "recovery input":
         receipt = json.loads(result.stdout)
         assert receipt["phase"] == "Settled" and receipt["processSucceeded"] and receipt["usageDelivered"]
         assert receipt["result"] is not None and receipt["problem"] is None
+        assert receipt["report"] == {"summary": "Fixture governing result"}
         session = Path(receipt["directory"])
         manifest = json.loads((session / "run.json").read_text())
         assert manifest["attempt"]["role"] == "Governor"
@@ -100,6 +105,10 @@ if prompt == "recovery input":
         assert "Acknowledged 1" in run(["job", "upload", "--session", str(session)], 0).stdout
         replayed = api({"Usage": {"input": {"project": manifest["project"]["project"], "selection": selection}}})
         assert replayed == usage, "Replaying acknowledged native usage changed totals or audit cursor"
+
+        input_file.write_text("workflow input")
+        workflow = json.loads(run(["run", "codex", "--settings", str(settings), "--input", str(input_file), "--workflow", "begin"], 0).stdout)
+        assert workflow["report"] == {"summary": "Fixture governing result"} and workflow["problem"] is None
 
         input_file.write_text("recovery input")
         existing = set((root / "sessions").iterdir())
