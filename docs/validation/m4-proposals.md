@@ -2,7 +2,7 @@
 
 Status: all deterministic gates pass; independent Astra increment approval granted. This is an M4 increment, not the M4 milestone exit.
 
-Baseline: `3ae9cfd`. Model: the single mutable `cq.api 0.1.0`.
+Verified implementation: `f4e1d75`; baseline: `3ae9cfd`. Model: the single mutable `cq.api 0.1.0`.
 
 ## Implemented boundary
 
