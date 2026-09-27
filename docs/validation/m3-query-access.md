@@ -14,7 +14,7 @@ Astra independently approved this increment after the retained failures, correct
 - Scan visits sum rows emitted/filtered/rechecked, multiplied by loops, across every scan node, including parent scans. This is node work, not distinct rows; bitmap index/heap work can count a row more than once. Shared-buffer totals use each statement's root plan and therefore do not sum inclusive parent/child buffer counters repeatedly.
 - Planned-statement counts exclude transaction/control statements without plans. End-to-end timings are observations of this local instrumented fixture, including HTTP/JDBC overhead and warm-up effects; they are not a general latency guarantee. Broad negations and arbitrary Boolean combinations may scan project data. No exact-count operation is hidden in a page.
 
-These checks cover the sampled ordinary replacement and query operations. Larger affected closures, graph termination, claim/integration contention, and operational-usage ingestion remain separate work. The project lock deliberately serializes same-project reads and writes; this fixture proves that boundary rather than claiming absence of contention.
+These initial checks cover the sampled ordinary replacement and query operations. Subsequent [extended measurements](m3-extended-access.md) cover larger affected closures, termination application, integration reservations/recording and operational-usage ingestion. The project lock deliberately serializes same-project reads and writes; this fixture proves that boundary rather than claiming absence of contention.
 
 ## Retained failures and corrections
 

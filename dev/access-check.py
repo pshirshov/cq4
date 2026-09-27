@@ -10,6 +10,8 @@ import urllib.parse
 import urllib.request
 import uuid
 
+from access_extended import ExtendedAccess
+
 
 SIZES = (100, 10_000, 100_000)
 REPETITIONS = 5
@@ -18,6 +20,13 @@ MAX_MUTATION_VISITS = 256
 MAX_SMALL_TABLE_VISITS = 1024
 MAX_MUTATION_BUFFERS = 4096
 MAX_COMPLETION_VISITS = 64
+MAX_EXTENDED_SMALL_VISITS_PER_MEMBER = 2048
+MAX_EXTENDED_VISITS_PER_MEMBER = 8
+MAX_EXTENDED_VISITS_OVERHEAD = 64
+MAX_EXTENDED_STATEMENTS_PER_MEMBER = 12
+MAX_EXTENDED_STATEMENTS_OVERHEAD = 16
+MAX_EXTENDED_BUFFERS_PER_MEMBER = 128
+MAX_EXTENDED_BUFFERS_OVERHEAD = 256
 
 
 class AccessFixture:
@@ -25,6 +34,7 @@ class AccessFixture:
         self.environment = environment
         self.evidence = evidence
         self.records = []
+        self.seeds = []
         address = urllib.parse.urlsplit(environment["CQ_DATABASE_URL"].removeprefix("jdbc:"))
         self.psql = ["psql", "--no-psqlrc", "--set", "ON_ERROR_STOP=1", "--quiet", "--tuples-only", "--no-align",
                      "--host", address.hostname, "--port", str(address.port), "--dbname", address.path[1:],
@@ -39,8 +49,11 @@ class AccessFixture:
         return result.stdout.strip()
 
     def call(self, command: dict):
-        request = urllib.request.Request(self.environment["CQ_ORIGIN"] + "/api/call",
-            data=json.dumps(command).encode(), headers={"Authorization": "Bearer " + self.environment["CQ_TOKEN"],
+        return self.exchange("/api/call", command, self.environment["CQ_TOKEN"])
+
+    def exchange(self, path: str, command: dict, token: str):
+        request = urllib.request.Request(self.environment["CQ_ORIGIN"] + path,
+            data=json.dumps(command).encode(), headers={"Authorization": "Bearer " + token,
                 "Content-Type": "application/json", "CQ-Protocol-Version": "0.1.0", "CQ-Session": self.environment["CQ_SESSION"]})
         with urllib.request.urlopen(request, timeout=30) as response:
             result = json.load(response)
@@ -48,13 +61,19 @@ class AccessFixture:
         return result
 
     def measured(self, name: str, command: dict):
+        return self.observe(name, lambda: self.call(command))
+
+    def observe(self, name, operation):
         started = time.time()
-        result = self.call(command)
+        result = operation()
         finished = time.time()
         self.records.append({"name": name, "started": started, "finished": finished,
                              "elapsedMs": (finished - started) * 1000, "responseBytes": len(json.dumps(result).encode())})
-        (self.evidence / "access-operations.json").write_text(json.dumps(self.records, indent=2) + "\n")
+        self.save()
         return result
+
+    def save(self):
+        (self.evidence / "access-operations.json").write_text(json.dumps(self.records, indent=2) + "\n")
 
     def seed(self, project: dict, lower: int, upper: int):
         self.sql("""
@@ -100,6 +119,7 @@ COMMIT;
             template = self.call({"ClaimWork": {"input": {"project": project, "action": {"Acquire": {
                 "id": {"value": str(uuid.uuid4())}, "members": [item_id(project, 3)], "durationMillis": "300000"}}}}})["Claimed"]["claim"]
             self.call({"ClaimWork": {"input": {"project": project, "action": {"Release": {"fence": template["fence"]}}}}})
+        extended = ExtendedAccess(self, projects)
         project = projects[0]
         first, second = [item_id(project, number) for number in (1, 2)]
         linked = self.call(change(project, [{"Reference": {"source": first, "expectedSource": {"value": "1"}, "relation": "BlockedBy",
@@ -109,7 +129,9 @@ COMMIT;
         for size in SIZES:
             for scope in projects:
                 self.seed(scope, previous + 1, size)
-            self.sql("ANALYZE cq_items; ANALYZE cq_edges; ANALYZE cq_labels; ANALYZE cq_history; ANALYZE cq_claims; ANALYZE cq_claim_members;", {})
+                extended.seed(scope, previous + 1, size)
+            before_changes = int(self.sql("SELECT count(*) FROM cq_changes;", {}))
+            self.sql("ANALYZE cq_items; ANALYZE cq_edges; ANALYZE cq_labels; ANALYZE cq_history; ANALYZE cq_claims; ANALYZE cq_claim_members; ANALYZE cq_integrations; ANALYZE cq_integration_members; ANALYZE cq_usage_assignments; ANALYZE cq_usage_members; ANALYZE cq_usage_attempts; ANALYZE cq_usage_meters; ANALYZE cq_usage_costs; ANALYZE cq_usage_records; ANALYZE cq_usage_heads;", {})
             for repetition in range(REPETITIONS):
                 value = {**draft("needleword"), "labels": [f"needle{size}-{repetition}"]}
                 request = change(project, [{"Replace": {"id": first, "expected": revision, "draft": value}}])
@@ -151,10 +173,11 @@ SELECT count(*) FROM cq_history WHERE number > 1000;
 SELECT count(*) FROM cq_changes;
 SELECT count(*) FROM cq_history WHERE project_id = :'project'::uuid AND ledger = 'Tasks' AND number = 1;""", {"project": project["value"]})
             stage = SIZES.index(size) + 1
-            assert invariant.splitlines() == [f"{size * 2}|0", str(size * 2), str(3 + stage * REPETITIONS), str(2 + stage * REPETITIONS)], invariant
+            assert invariant.splitlines() == [f"{size * 2}|0", str(size * 2), str(before_changes + REPETITIONS), str(2 + stage * REPETITIONS)], invariant
+            extended.measure(size, project)
             previous = size
         self.contention(projects)
-        print("Actual HTTP mutation/retry/search/completion/claim workloads passed at 100, 10000 and 100000 unrelated items and claims per project")
+        print("Actual HTTP mutation/query/closure/integration/usage workloads passed at 100, 10000 and 100000 unrelated rows per project")
 
     def contention(self, projects: list[dict]):
         holder = subprocess.Popen(self.psql + ["--set", "project=" + projects[0]["value"]], env=self.database_environment,
@@ -242,12 +265,25 @@ def report(evidence: Path):
     for row in mutations:
         visit_limit = MAX_SMALL_TABLE_VISITS if row["name"].startswith("100-") else MAX_MUTATION_VISITS
         assert row["statements"] <= MAX_MUTATION_STATEMENTS and row["scanVisits"] <= visit_limit and row["sharedBuffers"] <= MAX_MUTATION_BUFFERS, row
+    extended = [row for row in reports if "affectedMembers" in row]
+    groups = {}
+    for row in extended:
+        groups.setdefault(row["name"].split("-", 1)[1], []).append(row)
+        members = row["affectedMembers"]
+        assert row["statements"] <= MAX_EXTENDED_STATEMENTS_PER_MEMBER * members + MAX_EXTENDED_STATEMENTS_OVERHEAD, row
+        assert row["sharedBuffers"] <= MAX_EXTENDED_BUFFERS_PER_MEMBER * members + MAX_EXTENDED_BUFFERS_OVERHEAD, row
+        visits = MAX_EXTENDED_SMALL_VISITS_PER_MEMBER if row["name"].startswith("100-") else MAX_EXTENDED_VISITS_PER_MEMBER
+        assert row["scanVisits"] <= visits * members + MAX_EXTENDED_VISITS_OVERHEAD, row
+        if "-closure-" in row["name"] and row["name"].endswith(("-graph", "-preview")):
+            selected = json.loads((evidence / (row["name"] + "-plans.json")).read_text())
+            assert not any("SELECT body::text FROM cq_items" in plan["Query Text"] for plan in selected), row
+    assert len(groups) == 24 and all(len(rows) == len(SIZES) and len({row["statements"] for row in rows}) == 1 for rows in groups.values()), groups
     for row in reports:
         if "-complete-" in row["name"]:
             assert row["scanVisits"] <= MAX_COMPLETION_VISITS, row
         if row["name"].endswith("-search-reference") and not row["name"].startswith("100-"):
             assert row["scanVisits"] <= MAX_MUTATION_VISITS, row
-        if row["name"].endswith(("-graph", "-termination-preview")):
+        if "affectedMembers" not in row and row["name"].endswith(("-graph", "-termination-preview")):
             visit_limit = MAX_SMALL_TABLE_VISITS if row["name"].startswith("100-") else MAX_MUTATION_VISITS
             assert row["scanVisits"] <= visit_limit and row["statements"] <= 8 and row["responseBytes"] < 4096, row
             selected = json.loads((evidence / (row["name"] + "-plans.json")).read_text())

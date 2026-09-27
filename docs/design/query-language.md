@@ -1,6 +1,6 @@
 # Shared query language
 
-M3 implementation is in progress. Generated AST/diagnostic types, a bounded parser and shared text normalization now drive the single `SearchInput.query` operation. The CLI, MCP and browser submit the same query text. Cursor-aware completion metadata and [sampled query-plan measurements](../validation/m3-query-access.md) are implemented. All contracts stay in the single mutable `cq.api` 0.1.0 model; the earlier `ItemFilter` contract is removed.
+Generated AST/diagnostic types, a bounded parser and shared text normalization drive the single `SearchInput.query` operation. The CLI, MCP and browser submit the same query text. Cursor-aware completion metadata and [sampled query-plan measurements](../validation/m3-query-access.md) are implemented. All contracts stay in the single mutable `cq.api` 0.1.0 model; the earlier `ItemFilter` contract is removed.
 
 ## Grammar and values
 
