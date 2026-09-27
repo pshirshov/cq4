@@ -38,5 +38,7 @@ trait LedgerTransaction {
   def claimMembers(id: ClaimId): Set[ItemId]
   def insertClaim(claim: Claim): Unit
   def updateClaim(claim: Claim): Unit
+  def admission(attempt: AttemptId): Option[ResultAdmission]
+  def insertAdmission(value: ResultAdmission): Unit
   def nextFence(): Long
 }

@@ -27,10 +27,32 @@ final class HostDeliveryLocal extends AnyWordSpec {
     }
     override def call(value: Command): Result = throw new IllegalStateException("Not a publication operation")
     override def usage(value: HostUsageInput): HostUsageResult = throw new IllegalStateException("Not used in artifact replay scenario")
+    override def admit(value: HostAdmissionInput): ResultAdmission = throw new IllegalStateException("This publication has no admission request")
     override def grant(value: GrantRequest): AccessToken = throw new IllegalStateException("Publication queue cannot grant authority")
   }
 
   "Host delivery (Behavioral Active Blackbox; Group / filesystem Communication)" should {
+    "reject independently supplied result bytes that disagree with the sealed publication" in {
+      val p = project
+      val a = attempt
+      val owner = Actor("governor", SessionId(UUID.randomUUID()), Role.Governor)
+      val item = ItemRevision(ItemId(p, Ledger.Tasks, 1), Revision(1))
+      val assignment = Assignment(AssignmentId(UUID.randomUUID()), p, Set(item.id), Attribution.Direct, None, None)
+      val record = Attempt(a, assignment.id, Some(attempt), owner.session, Role.Worker, Harness.Codex, "fixture", "fixture", "fixture", 1000)
+      val request = DispatchRequest(RequestId(UUID.randomUUID()), DispatchWork.Worker(WorkerMode.Implement), Harness.Codex, List(item), Nil, Nil, None,
+        Fence(ClaimId(UUID.randomUUID()), 1), HostLimits(3000, 10000, 1000, 300, 2000, 262144))
+      val ticket = DispatchTicket(request, assignment, record, HarnessSetting(Harness.Codex, "/fixture", "fixture", "fixture", "0.156.1", Nil, Set.empty))
+      val ready = ChildResult(a, request, GitCommit("a" * 40), Some(GitCommit("b" * 40)),
+        ChildReport.Work(List(WorkMember(item.id, WorkDisposition.CandidateReady, "Ready"))), Nil)
+      val blocked = ready.copy(report = ChildReport.Work(List(WorkMember(item.id, WorkDisposition.Blocked, "Blocked"))))
+      val intent = ChildPublication(p, owner, Some(ready), DispatchProjection.pending(ticket),
+        AttemptOutcome(RequestId(NativeArtifacts.id(a, "outcome").value), a, AttemptState.Completed, 2000, Nil, None))
+      val upload = ArtifactUpload(p, NativeArtifacts.id(a, "result"), a, ArtifactKind.Result, "application/json", HostFiles.encode(ChildResult_JsonCodec, blocked))
+      val directory = Files.createTempDirectory("cq-inconsistent-publication-")
+      intercept[IllegalArgumentException](new ChildPublicationDelivery(directory, ticket).seal(intent, List(HostDelivery.Artifact(upload))))
+      assert(!Files.exists(directory.resolve("publication.json")))
+    }
+
     "admit only normal successful exits and retain cancellation and uncertain cleanup outcomes" in {
       val spec = WorkspaceSpec(project, SessionId(UUID.randomUUID()), attempt, "/consumer", GitCommit("a" * 40))
       val normal = JobRecord(spec, "fixture", JobTarget.Stop, JobPhase.Settled,
@@ -180,7 +202,8 @@ object PublicationDurabilityCheck {
       }
       override def call(value: Command): Result = throw new IllegalStateException("Unexpected domain call")
       override def usage(value: HostUsageInput): HostUsageResult = throw new IllegalStateException("Unexpected usage call")
-      override def grant(value: GrantRequest): AccessToken = throw new IllegalStateException("Unexpected grant")
+      override def admit(value: HostAdmissionInput): ResultAdmission = throw new IllegalStateException("This publication has no admission request")
+    override def grant(value: GrantRequest): AccessToken = throw new IllegalStateException("Unexpected grant")
     }
     def rejected[A](operation: => A): Boolean = try { operation; false } catch { case _: IOException => true }
     require(rejected(queue.commit(entries)) && Files.isDirectory(root.resolve("final")), "Expected failure after rename")

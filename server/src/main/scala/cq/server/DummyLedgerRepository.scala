@@ -16,7 +16,7 @@ final class DummyLedgerResource extends Lifecycle.LiftF[Task, LedgerRepository[I
         current.get(project.id) match {
           case Some(existing) => (existing.project, current)
           case None =>
-            val state = DummyLedgerState(project, 0L, 0L, Map.empty, Map.empty, Set.empty, Map.empty, Map.empty, List.empty, Map.empty, Map.empty)
+            val state = DummyLedgerState(project, 0L, 0L, Map.empty, Map.empty, Set.empty, Map.empty, Map.empty, List.empty, Map.empty, Map.empty, Map.empty)
             (project, current.updated(project.id, state))
         }
       }
@@ -44,6 +44,7 @@ private final case class DummyLedgerState(
   events: List[ChangeEvent],
   claims: Map[ClaimId, Claim],
   members: Map[ItemId, ClaimId],
+  admissions: Map[AttemptId, ResultAdmission],
 )
 
 private final class DummyLedgerTransaction(initial: DummyLedgerState) extends LedgerTransaction {
@@ -131,6 +132,11 @@ private final class DummyLedgerTransaction(initial: DummyLedgerState) extends Le
   override def updateClaim(claim: Claim): Unit = {
     require(state.claims.get(claim.fence.claim).exists(_.fence == claim.fence), "Claim fence does not exist")
     state = state.copy(claims = state.claims.updated(claim.fence.claim, claim))
+  }
+  override def admission(attempt: AttemptId): Option[ResultAdmission] = state.admissions.get(attempt)
+  override def insertAdmission(value: ResultAdmission): Unit = {
+    require(!state.admissions.contains(value.artifact.attempt), "Result admission already exists")
+    state = state.copy(admissions = state.admissions.updated(value.artifact.attempt, value))
   }
   override def nextFence(): Long = {
     val next = Math.addExact(state.fence, 1L)

@@ -20,14 +20,14 @@ final class SessionDelivery(journal: JobRepository, workspaces: WorkspaceService
   private val MaxOutputBytes = 32 * 1024 * 1024
   private val MaxGaps = 32
   private val Interrupted = "Supervisor publication was interrupted; retained output is a bounded snapshot, process settlement and remaining usage are unknown"
-  private final case class Publication(assignment: Assignment, attempt: Attempt, version: String, queue: DeliveryQueue)
+  private final case class Publication(assignment: Assignment, attempt: Attempt, version: String, queue: DeliveryQueue, child: Option[ChildPublicationDelivery])
 
   private final case class Inventory(publications: List[Publication], incompleteTickets: List[Path])
 
   private def inventory(directory: Path, run: SupervisorRun): Inventory = {
     require(run.assignment.project == run.project.project && run.attempt.assignment == run.assignment.id &&
       run.attempt.parent.isEmpty && run.attempt.role == Role.Governor, "Invalid governing publication identity")
-    val governing = Publication(run.assignment, run.attempt, run.harnessVersion, new DeliveryQueue(directory.resolve("delivery")))
+    val governing = Publication(run.assignment, run.attempt, run.harnessVersion, new DeliveryQueue(directory.resolve("delivery")), None)
     val root = directory.resolve("children")
     val (children, incomplete) = if (!Files.exists(root)) (Nil, Nil) else {
       require(Files.isDirectory(root) && !Files.isSymbolicLink(root), "Child delivery root must be a directory")
@@ -54,7 +54,7 @@ final class SessionDelivery(journal: JobRepository, workspaces: WorkspaceService
           ticket.attempt.role == ChildContracts.role(ticket.request.work) && ticket.attempt.harness == ticket.profile.harness &&
           ticket.attempt.model == ticket.profile.model && ticket.attempt.provider == ticket.profile.provider,
           "Child delivery ticket has another assignment or governing owner")
-        Publication(ticket.assignment, ticket.attempt, ticket.profile.version, new DeliveryQueue(child.resolve("delivery")))
+        Publication(ticket.assignment, ticket.attempt, ticket.profile.version, new DeliveryQueue(child.resolve("delivery")), Some(new ChildPublicationDelivery(child, ticket)))
       }
       (publications, incomplete)
     }
@@ -118,11 +118,17 @@ final class SessionDelivery(journal: JobRepository, workspaces: WorkspaceService
       } *> quarantine(owner, record.workspace.attempt)
     }
     delivered <- ZIO.foreach(inventory.publications) { publication =>
-      for {
-        committed <- ZIO.attemptBlocking(publication.queue.finalized)
-        _ <- if (committed) ZIO.unit else quarantine(owner, publication.attempt.id) *> ZIO.attemptBlocking(reconcile(directory, publication))
-        count <- ZIO.attemptBlocking(publication.queue.flush(api))
-      } yield count
+      publication.child.filter(_.sealedIntent) match {
+        case Some(child) => for {
+          receipt <- ZIO.attemptBlocking(child.finish(api))
+          _ <- if (receipt.status.phase == DispatchPhase.Completed) ZIO.unit else quarantine(owner, publication.attempt.id)
+        } yield receipt.acknowledged
+        case None => for {
+          committed <- ZIO.attemptBlocking(publication.queue.finalized)
+          _ <- if (committed) ZIO.unit else quarantine(owner, publication.attempt.id) *> ZIO.attemptBlocking(reconcile(directory, publication))
+          count <- ZIO.attemptBlocking(publication.queue.flush(api))
+        } yield count
+      }
     }
   } yield SessionDeliveryReport(delivered.sum, inventory.incompleteTickets)
 }

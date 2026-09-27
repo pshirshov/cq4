@@ -23,10 +23,10 @@ abstract class ApplicationContractTest extends SpecZIO with AssertZIO {
 
   "Authenticated application (Behavioral Active Blackbox; dummy Group / PostgreSQL Good Communication)" should {
     "scope project and role from signed credentials, preserve sessions, and deny mutation and host ingestion to workers" in {
-      (ledger: LedgerService[IO], repository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO]) =>
+      (ledger: LedgerService[IO], repository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO]) =>
         val auth = authorization(Now)
         val root = auth.authenticate(Token, Some(UUID.randomUUID().toString))
-        val application = new Application(ledger, repository, usage, artifacts, auth)
+        val application = new Application(ledger, repository, usage, artifacts, admissions, auth)
         val first = ProjectId(UUID.randomUUID())
         val second = ProjectId(UUID.randomUUID())
         val workerActor = Actor("worker", SessionId(UUID.randomUUID()), Role.Worker)
@@ -61,10 +61,10 @@ abstract class ApplicationContractTest extends SpecZIO with AssertZIO {
     }
 
     "rename display metadata with revision comparison and preserve item identity and counters" in {
-      (ledger: LedgerService[IO], repository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO]) =>
+      (ledger: LedgerService[IO], repository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO]) =>
         val auth = authorization(Now)
         val root = auth.authenticate(Token, Some(UUID.randomUUID().toString))
-        val application = new Application(ledger, repository, usage, artifacts, auth)
+        val application = new Application(ledger, repository, usage, artifacts, admissions, auth)
         val project = ProjectId(UUID.randomUUID())
         val worker = auth.authenticate(auth.grant(root, GrantRequest(project, Actor("worker", SessionId(UUID.randomUUID()), Role.Worker), Now + 10000)).value, None)
         for {
@@ -84,17 +84,17 @@ abstract class ApplicationContractTest extends SpecZIO with AssertZIO {
     }
 
     "preserve mutation acknowledgements across service re-creation and reject mixed snapshot pages" in {
-      (ledger: LedgerService[IO], repository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO]) =>
+      (ledger: LedgerService[IO], repository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO]) =>
         val auth = authorization(Now)
         val session = UUID.randomUUID().toString
         val root = auth.authenticate(Token, Some(session))
-        val application = new Application(ledger, repository, usage, artifacts, auth)
+        val application = new Application(ledger, repository, usage, artifacts, admissions, auth)
         val project = ProjectId(UUID.randomUUID())
         val change = request
         for {
           _ <- application.execute(root, Command.Initialize(ProjectConfig(project, "http://localhost", "snapshots")))
           first <- application.execute(root, Command.Change(ChangeInput(project, change)))
-          restarted = new Application(ledger, repository, usage, artifacts, authorization(Now + 1))
+          restarted = new Application(ledger, repository, usage, artifacts, admissions, authorization(Now + 1))
           replay <- restarted.execute(authorization(Now + 1).authenticate(Token, Some(session)), Command.Change(ChangeInput(project, change)))
           _ <- assertIO(first == replay)
           _ <- application.execute(root, Command.Change(ChangeInput(project, request)))

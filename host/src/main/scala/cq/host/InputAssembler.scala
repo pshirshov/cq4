@@ -78,6 +78,13 @@ final class InputAssembler(api: ServerApi, owner: Scope, clock: Clock) {
       val value = ChildResult_JsonCodec.decode(BaboonCodecContext.Default, json).fold(throw _, identity)
       require(ChildResult_JsonCodec.encode(BaboonCodecContext.Default, value) == json, "Prior result contains undeclared or noncanonical fields")
       ChildContracts.result(owner.project, value)
+      val admission = call(Command.Read(ReadInput(owner.project, ReadSelection.Admission(value.attempt)))) match {
+        case Result.Admission(record) => record
+        case _ => throw new IllegalStateException("Result admission read returned an unexpected result")
+      }
+      require(admission.artifact == stored.metadata && admission.fence == value.request.fence &&
+        admission.members == value.request.members && admission.decision == AdmissionDecision.Accepted(),
+        "Prior result has no matching accepted admission")
       require(value.attempt == stored.metadata.attempt && value.request.members.toSet == request.members.toSet, "Prior result belongs to another attempt or assignment revision")
       if (ChildContracts.role(request.work) == Role.Reviewer)
         require(value.report.isInstanceOf[ChildReport.Work] && value.candidate.nonEmpty, "Candidate review requires a worker result with a candidate")

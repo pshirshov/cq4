@@ -270,6 +270,7 @@ root data ProjectConfig { project: ProjectId endpoint: str name: str }
 root data SearchInput { project: ProjectId query: str after: opt[ItemId] snapshot: opt[ChangeCursor] limit: i32 }
 root data GraphInput { project: ProjectId roots: set[ItemId] after: opt[ItemId] snapshot: opt[WorksetSnapshot] limit: i32 }
 root adt ReadSelection {
+  data Admission { attempt: AttemptId }
   data Claims { members: set[ItemId] }
   data Termination { roots: set[ItemId] intent: TerminationIntent }
   data QueryComplete { query: str cursor: i32 limit: i32 }
@@ -308,6 +309,7 @@ root adt Command {
   data Usage { input: UsageInput }
 }
 root adt Result {
+  data Admission { record: ResultAdmission }
   data Claims { preview: ClaimPreview }
   data Termination { preview: TerminationPreview }
   data Workset { page: WorksetPage }
@@ -429,6 +431,18 @@ root adt ChildReport {
 }
 root data ChildResult {
   attempt: AttemptId request: DispatchRequest base: GitCommit candidate: opt[GitCommit] report: ChildReport validation: lst[ValidationEvidence]
+}
+root data ChildPublication {
+  project: ProjectId owner: Actor result: opt[ChildResult] status: DispatchStatus outcome: AttemptOutcome
+}
+enum AdmissionRejection { ClaimLost RevisionsChanged }
+root adt AdmissionDecision {
+  data Accepted {}
+  data Rejected { reason: AdmissionRejection }
+}
+root data HostAdmissionInput { project: ProjectId artifact: ArtifactId owner: Actor }
+root data ResultAdmission {
+  artifact: ArtifactMetadata owner: Actor fence: Fence members: lst[ItemRevision] decision: AdmissionDecision decidedAt: i64
 }
 root data ResolvedArtifact { metadata: ArtifactMetadata body: str }
 root data ChildInput {

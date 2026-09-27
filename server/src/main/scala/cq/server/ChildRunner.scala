@@ -145,7 +145,7 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
         .catchSome { case DomainFailure(_: Fault.Missing) => ZIO.unit }
     } else ZIO.unit
     observed <- trace.get
-    _ <- publish(entry, queue, result, observed).ensuring(ZIO.succeed(access.revoke(entry.ticket.attempt.id)))
+    _ <- publish(entry, result, observed).ensuring(ZIO.succeed(access.revoke(entry.ticket.attempt.id)))
   } yield ()
 
   private def validate(entry: DispatchExecution, candidate: GitCommit, check: ValidationCheck, index: Int, trace: Ref[Trace]): Task[ValidationEvidence] = for {
@@ -170,7 +170,7 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
     _ <- ZIO.attempt(require(evidence.state != ValidationState.Unknown, "Host validation cleanup is unconfirmed"))
   } yield evidence
 
-  private def publish(entry: DispatchExecution, queue: DeliveryQueue, result: Either[Throwable, ChildResult], trace: Trace): Task[Unit] = {
+  private def publish(entry: DispatchExecution, result: Either[Throwable, ChildResult], trace: Trace): Task[Unit] = {
     val attempt = entry.ticket.attempt
     for {
       job <- trace.native match {
@@ -193,30 +193,23 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
         val state = if (trace.uncertain || observed.exists(_.state == AttemptState.Unknown)) AttemptState.Unknown
           else if (cancelled.nonEmpty) AttemptState.Cancelled
           else observed.map(_.withResult(valid.nonEmpty)).getOrElse(AttemptState.Failed)
-        val resultArtifact = valid.map(value => ArtifactUpload(project, NativeArtifacts.id(attempt.id, "result"), attempt.id,
-          ArtifactKind.Result, "application/json", HostFiles.encode(ChildResult_JsonCodec, value)))
-        val allArtifacts = outParts ++ errParts ++ trace.extra ++ resultArtifact.toList
+        val allArtifacts = outParts ++ errParts ++ trace.extra
         val observations = usage.meters.flatMap(batch => HostDelivery.Usage(HostUsageInput(project, HostUsage.Meter(batch.meter))) ::
           batch.observations.map(value => HostDelivery.Usage(HostUsageInput(project, HostUsage.Ingest(value)))))
         val outcome = AttemptOutcome(RequestId(NativeArtifacts.id(attempt.id, "outcome").value), attempt.id, state, collectedAt,
           (problem.toList ++ observed.toList.flatMap(_.problem).map(DispatchProjection.concise) ++ usage.gaps).take(MaxGaps), None)
-        val entries = allArtifacts.map(HostDelivery.Artifact.apply) ++ observations :+ HostDelivery.Usage(HostUsageInput(project, HostUsage.Finish(outcome)))
-        queue.commit(entries)
-        val delivered = Try(queue.flush(authority.collector)).isSuccess
-        val base = entry.status.copy(process = job.map(_.phase), blocker = problem, usageDelivered = delivered, detailsOmitted = true)
-        val finalStatus = (valid, resultArtifact) match {
-          case (Some(value), Some(artifact)) => DispatchProjection.completed(base, value, artifact.id)
-          case _ => base.copy(phase = state match {
-            case AttemptState.Cancelled => DispatchPhase.Cancelled
-            case AttemptState.Unknown => DispatchPhase.Unknown
-            case _ => DispatchPhase.Failed
-          }, next = if (state == AttemptState.Unknown) ChildNext.InspectEvidence else ChildNext.Retry)
-        }
-        val retained = if (delivered) finalStatus else finalStatus.copy(phase = DispatchPhase.PublicationPending,
-          next = ChildNext.RetryDelivery, result = None, blocker = Some("Operational publication is pending; retain the session directory and run cq job upload"))
-        HostFiles.immutable(entry.directory.resolve("receipt.json"), HostFiles.encode(DispatchStatus_JsonCodec, retained), 16384)
+        val entries = allArtifacts.map(HostDelivery.Artifact.apply) ++ observations
+        val base = entry.status.copy(process = job.map(_.phase), blocker = problem, usageDelivered = false, detailsOmitted = true)
+        val publication = new ChildPublicationDelivery(entry.directory, entry.ticket)
+        publication.seal(ChildPublication(project, config.owner.actor, valid, base, outcome), entries)
+        val retained = Try(publication.finish(authority.collector)).toOption.map(_.status).getOrElse(base.copy(
+          phase = DispatchPhase.PublicationPending, next = ChildNext.RetryDelivery, result = None,
+          blocker = Some("Result admission or operational publication is pending; retain the session directory and run cq job upload")))
         entry.finish(retained)
       }
+      _ <- if (entry.status.phase == DispatchPhase.Failed && result.isRight)
+        workspaces.quarantine(config.owner, entry.ticket.attempt.id, "Server result admission rejected; inspect retained evidence").unit
+      else ZIO.unit
     } yield ()
   }
 }

@@ -221,5 +221,18 @@ private final class PostgresLedgerTransaction(connection: Connection, override v
     require(changed == 1, "Claim fence does not exist")
   }
 
+  override def admission(attempt: AttemptId): Option[ResultAdmission] =
+    sql.query("SELECT body::text FROM cq_result_admissions WHERE project_id = ? AND attempt_id = ?") { s =>
+      projectKey(s); s.setObject(2, attempt.value)
+    }(r => Wire.decode(ResultAdmission_JsonCodec, r.getString(1))).headOption
+
+  override def insertAdmission(value: ResultAdmission): Unit = {
+    sql.execute("INSERT INTO cq_result_admissions(project_id, attempt_id, artifact_id, body) VALUES (?, ?, ?, ?::jsonb)") { s =>
+      projectKey(s); s.setObject(2, value.artifact.attempt.value); s.setObject(3, value.artifact.id.value)
+      s.setString(4, Wire.encode(ResultAdmission_JsonCodec, value))
+    }
+    ()
+  }
+
   override def nextFence(): Long = sql.query("UPDATE cq_projects SET fence_counter = fence_counter + 1 WHERE project_id = ? RETURNING fence_counter")(projectKey)(_.getLong(1)).head
 }

@@ -210,3 +210,12 @@ CREATE TABLE cq_artifacts (
   PRIMARY KEY (project_id, artifact_id),
   FOREIGN KEY (project_id, attempt_id) REFERENCES cq_usage_attempts
 );
+CREATE TABLE cq_result_admissions (
+  project_id uuid NOT NULL,
+  attempt_id uuid NOT NULL,
+  artifact_id uuid NOT NULL,
+  body jsonb NOT NULL,
+  PRIMARY KEY (project_id, attempt_id),
+  FOREIGN KEY (project_id, attempt_id) REFERENCES cq_usage_attempts,
+  FOREIGN KEY (project_id, artifact_id) REFERENCES cq_artifacts
+);

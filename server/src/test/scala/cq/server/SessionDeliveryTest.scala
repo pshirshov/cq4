@@ -33,19 +33,121 @@ abstract class SessionDeliveryTest extends SpecZIO with AssertZIO {
       }
       result
     }
+    override def admit(value: HostAdmissionInput): ResultAdmission = execute(application.admit(authority, value))
     override def grant(value: GrantRequest): AccessToken = throw new IllegalStateException("Recovery cannot grant authority")
   }
 
   "Interrupted publication (Behavioral Active Blackbox; dummy Group / PostgreSQL and Git Good Communication)" should {
+    "recover sealed child publications after lost admission and outcome acknowledgements without rereading output" in {
+      (ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], fixture: WorkspaceFixture) =>
+        ZIO.foreachDiscard(List(false, true)) { releaseBefore =>
+          val clock = Clock.systemUTC()
+          val owner = Scope(ProjectId(UUID.randomUUID()), Actor("governor", SessionId(UUID.randomUUID()), Role.Governor))
+          val collector = owner.copy(actor = owner.actor.copy(role = Role.Collector))
+          val auth = new Authorization(AccessConfig("sealed-publication-root-token", "http://localhost"), clock)
+          val root = auth.authenticate("sealed-publication-root-token", Some(owner.actor.session.value.toString))
+          val authority = auth.authenticate(auth.grant(root, GrantRequest(owner.project, collector.actor, clock.millis() + 60000)).value, None)
+          val application = new Application(ledger, ledgerRepository, usage, artifacts, admissions, auth)
+          val initialUsage = """{"type":"thread.started","thread_id":"sealed-thread"}
+{"type":"turn.completed","usage":{"input_tokens":100,"cached_input_tokens":20,"cache_write_input_tokens":0,"output_tokens":31,"reasoning_output_tokens":3}}
+"""
+          def uuid: UUID = UUID.randomUUID()
+          ZIO.scoped {
+            for {
+              runtime <- ZIO.runtime[Any]
+              _ <- ledger.initialize(owner, "Sealed recovery")
+              ack <- ledger.change(owner, ChangeRequest(RequestId(uuid), List(Mutation.Create(ItemDraft("Task", "Body", Set.empty, false,
+                Content.Task(TaskStatus.Ready, List("Outcome"), None, Nil), Nil))), Nil, "Fixture"))
+              member = ack.items.head
+              claim <- ledger.acquire(owner, ClaimId(uuid), Set(member.id), 300000)
+              assignment <- usage.assign(collector, Assignment(AssignmentId(uuid), owner.project, Set.empty, Attribution.Unattributed, None, None))
+              governor <- usage.start(collector, Attempt(AttemptId(uuid), assignment.id, None, owner.actor.session, Role.Governor,
+                Harness.Codex, "fixture", "fixture", "fixture", 1000))
+              run = SupervisorRun(ProjectConfig(owner.project, "http://localhost", "Sealed"), assignment, governor, "0.156.1", fixture.source.toString, fixture.base)
+              childAssignment = Assignment(AssignmentId(uuid), owner.project, Set(member.id), Attribution.Direct, None, None)
+              attempt = governor.copy(id = AttemptId(uuid), assignment = childAssignment.id, parent = Some(governor.id), role = Role.Worker, startedAt = 1001)
+              request = DispatchRequest(RequestId(uuid), DispatchWork.Worker(WorkerMode.Implement), Harness.Codex, List(member), Nil, Nil, None,
+                claim.fence, HostLimits(3000, 10000, 1000, 300, 2000, 262144))
+              ticket = DispatchTicket(request, childAssignment, attempt, HarnessSetting(Harness.Codex, "/fixture", "fixture", "fixture", "0.156.1", Nil, Set.empty))
+              result = ChildResult(attempt.id, request, fixture.base, Some(fixture.base),
+                ChildReport.Work(List(WorkMember(member.id, WorkDisposition.CandidateReady, "Candidate"))), Nil)
+              directory <- ZIO.attemptBlocking(Files.createTempDirectory("cq-sealed-recovery-"))
+              journal <- ZIO.acquireRelease(ZIO.attemptBlocking(FileJobRepository.open(directory.resolve("journal"), owner.project, owner.actor.session)))(v => ZIO.attemptBlocking(v.close()).orDie)
+              child = directory.resolve("children").resolve(attempt.id.value.toString)
+              _ <- ZIO.attemptBlocking {
+                HostFiles.directory(child)
+                HostFiles.immutable(child.resolve("ticket.json"), HostFiles.encode(DispatchTicket_JsonCodec, ticket), 65536)
+                val governing = new DeliveryQueue(directory.resolve("delivery"))
+                governing.commit(List(HostDelivery.Usage(HostUsageInput(owner.project,
+                  HostUsage.Finish(AttemptOutcome(RequestId(uuid), governor.id, AttemptState.Completed, 2000, Nil, None))))))
+                val initial = new DeliveryQueue(child.resolve("delivery"))
+                initial.enqueue(0, DeliveryBatch(List(HostDelivery.Usage(HostUsageInput(owner.project, HostUsage.Assign(childAssignment))),
+                  HostDelivery.Usage(HostUsageInput(owner.project, HostUsage.Start(attempt))))))
+                val payload = directory.resolve("payload").resolve(attempt.id.value.toString)
+                HostFiles.directory(payload)
+                Files.writeString(payload.resolve("stdout"), initialUsage)
+                val bytes = initialUsage.getBytes(java.nio.charset.StandardCharsets.UTF_8)
+                val (native, parts) = NativeArtifacts.binary(owner.project, attempt.id, "stdout", "application/x-ndjson", bytes)
+                val collected = new HarnessUsage().collect(new java.io.ByteArrayInputStream(bytes),
+                  UsageCollectionRequest(attempt.id, Harness.Codex, "0.156.1", UsageOrigin.Fresh, 2000, native))
+                val observations = collected.meters.flatMap(batch => HostDelivery.Usage(HostUsageInput(owner.project, HostUsage.Meter(batch.meter))) ::
+                  batch.observations.map(value => HostDelivery.Usage(HostUsageInput(owner.project, HostUsage.Ingest(value)))))
+                val status = DispatchProjection.pending(ticket).copy(phase = DispatchPhase.Publishing, process = Some(JobPhase.Settled))
+                val outcome = AttemptOutcome(RequestId(NativeArtifacts.id(attempt.id, "outcome").value), attempt.id, AttemptState.Completed, 2000, Nil, None)
+                new ChildPublicationDelivery(child, ticket).seal(ChildPublication(owner.project, owner.actor, Some(result), status, outcome),
+                  parts.map(HostDelivery.Artifact.apply) ++ observations)
+              }
+              receiver = new Receiver(application, authority, runtime, attempt.id)
+              lossy = new ServerApi {
+                private var first = true
+                override def call(value: Command): Result = receiver.call(value)
+                override def artifact(value: ArtifactUpload): ArtifactMetadata = receiver.artifact(value)
+                override def usage(value: HostUsageInput): HostUsageResult = receiver.usage(value)
+                override def grant(value: GrantRequest): AccessToken = receiver.grant(value)
+                override def admit(value: HostAdmissionInput): ResultAdmission = {
+                  val record = receiver.admit(value)
+                  if (first) { first = false; throw new IOException("Lost admission acknowledgement") }
+                  record
+                }
+              }
+              _ <- if (releaseBefore) ledger.release(owner, claim.fence).unit else ZIO.unit
+              delivery = new SessionDelivery(journal, fixture.service, clock)
+              first <- delivery.flush(directory, run, lossy).either
+              _ <- assertIO(first.left.exists(_.isInstanceOf[IOException]) && !Files.exists(child.resolve("receipt.json")))
+              decision <- admissions.get(owner, attempt.id)
+              _ <- assertIO(decision.decision == (if (releaseBefore) AdmissionDecision.Rejected(AdmissionRejection.ClaimLost) else AdmissionDecision.Accepted()))
+              before <- usage.summary(owner, UsageFilter.SessionOnly(owner.actor.session))
+              _ <- assertIO(before.direct.total.known == 131 && before.attempts.running == 1)
+              _ <- if (releaseBefore) ledger.acquire(owner, ClaimId(uuid), Set(member.id), 300000).unit else ledger.release(owner, claim.fence).unit
+              _ <- ZIO.attemptBlocking(Files.writeString(directory.resolve("payload").resolve(attempt.id.value.toString).resolve("stdout"), initialUsage.replace(":100", ":900")))
+              second <- delivery.flush(directory, run, lossy).either
+              _ <- assertIO(second.left.exists(_.isInstanceOf[IOException]) && !Files.exists(child.resolve("receipt.json")))
+              _ <- delivery.flush(directory, run, lossy)
+              status <- ZIO.attemptBlocking(HostFiles.read(child.resolve("receipt.json"), DispatchStatus_JsonCodec, 16384))
+              _ <- assertIO(status.usageDelivered && status.phase == (if (releaseBefore) DispatchPhase.Failed else DispatchPhase.Completed) && status.result.nonEmpty == !releaseBefore)
+              after <- usage.summary(owner, UsageFilter.SessionOnly(owner.actor.session))
+              _ <- assertIO(after.direct.total.known == 131 && after.attempts.running == 0)
+              outcomes <- usage.outcomes(owner, attempt.id, 0, 20)
+              _ <- assertIO(outcomes.entries.size == 1 && outcomes.entries.head.value.finishedAt == 2000 &&
+                outcomes.entries.head.value.state == (if (releaseBefore) AttemptState.Failed else AttemptState.Completed))
+              repeated <- delivery.flush(directory, run, lossy)
+              stable <- usage.summary(owner, UsageFilter.SessionOnly(owner.actor.session))
+              replay <- admissions.get(owner, attempt.id)
+              _ <- assertIO(repeated.acknowledged == 0 && stable == after && replay == decision)
+            } yield ()
+          }
+        }
+    }
+
     "recover pre-job tickets and partial output once while replaying committed results without readmission" in {
-      (ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], fixture: WorkspaceFixture) =>
+      (ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], fixture: WorkspaceFixture) =>
         val clock = Clock.systemUTC()
         val owner = Scope(ProjectId(UUID.randomUUID()), Actor("governor", SessionId(UUID.randomUUID()), Role.Governor))
         val collector = owner.copy(actor = owner.actor.copy(role = Role.Collector))
         val auth = new Authorization(AccessConfig("recovery-contract-root-token", "http://localhost"), clock)
         val rootAuthority = auth.authenticate("recovery-contract-root-token", Some(owner.actor.session.value.toString))
         val authority = auth.authenticate(auth.grant(rootAuthority, GrantRequest(owner.project, collector.actor, clock.millis() + 60000)).value, None)
-        val application = new Application(ledger, ledgerRepository, usage, artifacts, auth)
+        val application = new Application(ledger, ledgerRepository, usage, artifacts, admissions, auth)
         val assignment = Assignment(AssignmentId(UUID.randomUUID()), owner.project, Set.empty, Attribution.Unattributed, None, None)
         val governor = Attempt(AttemptId(UUID.randomUUID()), assignment.id, None, owner.actor.session, Role.Governor,
           Harness.Codex, "fixture", "fixture", "fixture", clock.millis())
@@ -89,6 +191,8 @@ abstract class SessionDeliveryTest extends SpecZIO with AssertZIO {
               queue.enqueue(0, DeliveryBatch(List(HostDelivery.Usage(HostUsageInput(owner.project, HostUsage.Assign(committed.assignment))),
                 HostDelivery.Usage(HostUsageInput(owner.project, HostUsage.Start(committed.attempt))))))
               val artifact = ArtifactUpload(owner.project, NativeArtifacts.id(committed.attempt.id, "result"), committed.attempt.id, ArtifactKind.Result, "text/plain", "Already committed result")
+              val partialEvidence = new DeliveryQueue(directory.resolve("children").resolve(missing.attempt.id.value.toString).resolve("publication-evidence"))
+              partialEvidence.commit(List(HostDelivery.Artifact(artifact.copy(attempt = missing.attempt.id, id = NativeArtifacts.id(missing.attempt.id, "result")))))
               queue.commit(List(HostDelivery.Artifact(artifact), HostDelivery.Usage(HostUsageInput(owner.project,
                 HostUsage.Finish(AttemptOutcome(RequestId(uuid), committed.attempt.id, AttemptState.Completed, clock.millis(), Nil, None))))))
               val payload = directory.resolve("payload").resolve(governor.id.value.toString)
@@ -132,6 +236,8 @@ abstract class SessionDeliveryTest extends SpecZIO with AssertZIO {
             _ <- assertIO(page.entries.find(_.attempt.id == committed.attempt.id).get.outcome.get.value.state == AttemptState.Completed)
             absent <- artifacts.metadata(owner, NativeArtifacts.id(governor.id, "result")).either
             _ <- assertIO(absent.isLeft)
+            unsealed <- artifacts.metadata(owner, NativeArtifacts.id(missing.attempt.id, "result")).either
+            _ <- assertIO(unsealed.isLeft)
             preserved <- artifacts.metadata(owner, NativeArtifacts.id(committed.attempt.id, "result"))
             _ <- assertIO(preserved.kind == ArtifactKind.Result)
             captured <- artifacts.metadata(owner, NativeArtifacts.id(governor.id, "stdout"))

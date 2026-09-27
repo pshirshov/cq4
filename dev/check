@@ -170,6 +170,8 @@ class Checks:
             self.run(["python3", "dev/cli-timeouts.py", *command], f"{name}-cli-timeouts", STARTUP_TIMEOUT)
             self.run(["python3", "dev/supervisor-check.py", *command], f"{name}-supervisor", STARTUP_TIMEOUT)
             self.run(["python3", "dev/dispatch-check.py", *command], f"{name}-dispatch", DISPATCH_FIXTURE_TIMEOUT)
+            self.environment["CQ_ADMISSION_EVIDENCE"] = str(self.evidence / f"{name}-admission")
+            self.run(["python3", "dev/admission-check.py", *command], f"{name}-admission", DISPATCH_FIXTURE_TIMEOUT)
             self.run(["python3", "dev/dispatch-shutdown-check.py", *command], f"{name}-dispatch-shutdown", DISPATCH_FIXTURE_TIMEOUT)
             if browser:
                 self.environment["CQ_BROWSER_EVIDENCE"] = str(self.evidence)
