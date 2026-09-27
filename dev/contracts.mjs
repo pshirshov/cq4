@@ -59,7 +59,22 @@ for (const tool of tools) {
   }
 }
 const content = validator.getValidator({ ...definitions.cq_api_Content, $defs: definitions });
-assert.equal(content({ Task: { status: 'Ready', acceptance: ['test'], validation: [] } }).valid, true);
+assert.equal(content({ Task: { status: 'Ready', acceptance: ['test'], result: null, validation: [] } }).valid, true);
+assert.equal(content({ Task: { status: 'Ready', acceptance: ['test'], validation: [] } }).valid, false);
 assert.equal(content({ status: 'Ready', acceptance: ['test'], validation: [] }).valid, false);
 assert.equal(content({ Task: { status: 'Ready', acceptance: ['test'], validation: [] }, Question: {} }).valid, false);
+const dispatchSchema = definitions.cq_api_DispatchRequest;
+const dispatch = validator.getValidator({ ...dispatchSchema, $defs: definitions });
+const request = fixture(dispatchSchema, definitions);
+assert.equal(dispatch(request).valid, true);
+assert.equal(dispatch({ ...request, prompt: 'Copied narrative' }).valid, false);
+assert.equal(dispatch({ ...request, limits: { ...request.limits, prompt: 'Nested narrative' } }).valid, false);
+assert.equal(dispatch({ ...request, work: { Reviewer: { prompt: 'Copied narrative' } } }).valid, false);
+const { previous, ...withoutPrevious } = request;
+assert.equal(dispatch(withoutPrevious).valid, false);
+assert.equal(dispatch({ ...request, members: [] }).valid, false);
+assert.equal(dispatch({ ...request, members: Array.from({ length: 17 }, (_, index) => ({
+  ...request.members[0], id: { ...request.members[0].id, number: String(index + 1) },
+})) }).valid, false);
+assert.equal(dispatch({ ...request, artifacts: Array(9).fill(request.artifacts[0]) }).valid, false);
 console.log(`TypeScript codec round trips, ${Object.keys(definitions).length} schema definitions and ${tools.length} MCP capabilities passed`);

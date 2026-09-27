@@ -25,6 +25,10 @@ def generate_schemas(root: Path):
         if not isinstance(value, dict):
             return value
         result = {key: normalize(child) for key, child in value.items()}
+        if result.get("type") == "object" and ("properties" in result or set(result) == {"type"}):
+            result["additionalProperties"] = False
+            if "properties" in result:
+                result["required"] = list(result["properties"])
         if "$ref" in result:
             result["$ref"] = result["$ref"].replace("#/components/schemas/", "#/$defs/")
         if result.get("format") == "int64":
@@ -36,6 +40,22 @@ def generate_schemas(root: Path):
             result["maximum"] = 2147483647
         return result
 
+    schemas = normalize(schemas)
+    bounds = {
+        "DispatchRequest": {
+            "members": {"minItems": 1, "maxItems": 16, "uniqueItems": True},
+            "guidance": {"maxItems": 16, "uniqueItems": True},
+            "artifacts": {"maxItems": 8, "uniqueItems": True},
+        },
+        "ChildReport_Work": {"members": {"minItems": 1, "maxItems": 16}},
+        "ChildReport_Review": {"members": {"minItems": 1, "maxItems": 16}},
+        "WorkMember": {"summary": {"minLength": 1, "maxLength": 8192}},
+        "ReviewMember": {"findings": {"maxItems": 32, "items": {"type": "string", "minLength": 1, "maxLength": 8192}}},
+    }
+    for name, fields in bounds.items():
+        for field, limits in fields.items():
+            schemas[f"cq_api_{name}"]["properties"][field].update(limits)
+
     target = root / "generated/resources/cq-schemas.json"
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(normalize(schemas), sort_keys=True, separators=(",", ":")) + "\n")
+    target.write_text(json.dumps(schemas, sort_keys=True, separators=(",", ":")) + "\n")

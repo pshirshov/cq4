@@ -321,3 +321,30 @@ root data SupervisorReceipt {
   session: SessionId attempt: AttemptId directory: str phase: JobPhase
   processSucceeded: bit result: opt[ArtifactId] usageDelivered: bit problem: opt[str]
 }
+
+enum WorkerMode { Implement Probe ResolveConflict }
+root adt DispatchWork {
+  data Worker { mode: WorkerMode }
+  data Reviewer {}
+}
+root data DispatchRequest {
+  request: RequestId work: DispatchWork harness: Harness members: lst[ItemRevision]
+  guidance: lst[ItemRevision] artifacts: lst[ArtifactId] previous: opt[ArtifactId]
+  fence: Fence limits: HostLimits
+}
+enum WorkDisposition { CandidateReady Blocked Failed }
+enum ReviewVerdict { Accepted ChangesRequested Blocked }
+root data WorkMember { item: ItemId disposition: WorkDisposition summary: str }
+root data ReviewMember { item: ItemId verdict: ReviewVerdict findings: lst[str] }
+root adt ChildReport {
+  data Work { members: lst[WorkMember] }
+  data Review { members: lst[ReviewMember] }
+}
+root data ChildResult {
+  attempt: AttemptId request: DispatchRequest base: GitCommit candidate: opt[GitCommit] report: ChildReport
+}
+root data ResolvedArtifact { metadata: ArtifactMetadata body: str }
+root data ChildInput {
+  project: ProjectId request: DispatchRequest members: lst[ItemView] guidance: lst[ItemView]
+  artifacts: lst[ResolvedArtifact] previous: opt[ChildResult]
+}
