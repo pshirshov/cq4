@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the native defect intake checkpoint; empirical continuation is a separate stage."""
+"""Run retained native defect intake and empirical investigation checkpoints."""
 import argparse
 import datetime
 import hashlib
@@ -8,16 +8,38 @@ import os
 from pathlib import Path
 import runpy
 import shutil
+import shlex
 import subprocess
 import sys
 import time
 import uuid
+import urllib.parse
+import urllib.request
+
+
+def snapshot(call, project, consumer, session):
+    found = call({"Search": {"input": {"project": project, "query": "archived:true OR archived:false", "after": None, "snapshot": None, "limit": 100}}})["Found"]["page"]
+    assert not found["hasMore"], "Defect snapshot exceeds its bound"
+    views, histories = [], []
+    def read(selection):
+        return call({"Read": {"input": {"project": project, "selection": selection}}})
+    for item in found["items"]:
+        views.append(read({"ItemDetail": {"id": item["id"]}})["Detail"]["view"])
+        histories.append({"id": item["id"], "page": read({"History": {"id": item["id"], "before": {"value": str(int(item["revision"]["value"]) + 1)}, "limit": 100}})["History"]["page"]})
+    claims = read({"Claims": {"members": [value["id"] for value in found["items"]]}})["Claims"]["preview"]
+    return {"views": views, "histories": histories, "claims": claims,
+        "git": {"value": subprocess.check_output(["git", "-C", str(consumer), "rev-parse", "HEAD"], text=True).strip()},
+        "clean": not subprocess.check_output(["git", "-C", str(consumer), "status", "--porcelain", "--untracked-files=all"], text=True).strip(),
+        "localIntegrations": [] if session is None else [json.loads(path.read_text()) for path in (session / "integrations").glob("*.json")]}
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("stage", choices=["begin"])
+    parser.add_argument("stage", choices=["begin", "probe", "research"])
+    parser.add_argument("--checkpoint", type=Path)
     arguments = parser.parse_args()
+    if (arguments.stage == "begin") != (arguments.checkpoint is None):
+        parser.error("probe/research require --checkpoint; begin does not accept one")
     root = Path(__file__).resolve().parent.parent
     os.chdir(root)
     if any(shutil.which(name) is None for name in ["java", "sbt", "pg_ctl"]):
@@ -28,6 +50,13 @@ def main():
     process = runpy.run_path(str(root / "dev/process-assess-evidence.py"))
     reconcile = runpy.run_path(str(root / "dev/process-evidence.py"))["reconcile_usage"]
     write, call = evaluation["write"], evaluation["call"]
+    original = None if arguments.checkpoint is None else arguments.checkpoint.resolve()
+    prior = None if original is None else predicates["checkpoint"](original)
+    if prior is not None:
+        assert prior["manifest"]["stage"] == ("begin" if arguments.stage == "probe" else "probe"), "Continuation requires the immediately preceding verified stage"
+        hashes = json.loads((original / "source-sha256.json").read_text())
+        for path in [*sorted((root / "dev/fixtures/defect").glob("*.py")), root / "dev/fixtures/defect/README.md", root / "dev/defect-oracle.py"]:
+            assert hashlib.sha256(path.read_bytes()).hexdigest() == hashes[str(path.relative_to(root))], "Fixture/oracle changed since checkpoint"
     identifier = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S") + "-defect-" + arguments.stage
     evidence = Path(os.environ.get("CQ_EVIDENCE_ROOT", "/srv/nvme/tmp/cq4-implementation")).resolve() / identifier
     evidence.mkdir(parents=True, mode=0o700)
@@ -37,14 +66,19 @@ def main():
     checks = support["Checks"](evidence, dict(os.environ))
     result = {"status": "running", "stage": arguments.stage, "implementation": subprocess.check_output(["git", "rev-parse", "HEAD"]).decode().strip(),
               "remaining": ["empirical probes and adjudication", "reviewed repair and integration", "upstream preparation", "independent process assessment"]}
+    if prior is not None:
+        result.update(baselineEvidence=str(original), baselineDumpSha256=prior["dumpSha256"])
     write(evidence / "result.json", result)
     try:
         consumer = evidence / "consumer"
-        shutil.copytree(root / "dev/fixtures/defect", consumer, ignore=shutil.ignore_patterns("__pycache__"))
-        checks.run(["git", "init", "--quiet", str(consumer)], "consumer-init", 10)
+        if prior is None:
+            shutil.copytree(root / "dev/fixtures/defect", consumer, ignore=shutil.ignore_patterns("__pycache__"))
+            checks.run(["git", "init", "--quiet", str(consumer)], "consumer-init", 10)
+            checks.run(["git", "-C", str(consumer), "add", "."], "consumer-stage", 10)
+            checks.run(["git", "-C", str(consumer), "-c", "user.name=CQ evaluation", "-c", "user.email=cq@example.invalid", "commit", "--quiet", "-m", "Synthetic dependency defect fixture"], "consumer-base", 10)
+        else:
+            checks.run(["git", "clone", "--quiet", "--no-hardlinks", str(original / "consumer"), str(consumer)], "consumer-clone", 30)
         (consumer / ".git/info/exclude").write_text("__pycache__/\n")
-        checks.run(["git", "-C", str(consumer), "add", "."], "consumer-stage", 10)
-        checks.run(["git", "-C", str(consumer), "-c", "user.name=CQ evaluation", "-c", "user.email=cq@example.invalid", "commit", "--quiet", "-m", "Synthetic dependency defect fixture"], "consumer-base", 10)
         base = {"value": subprocess.check_output(["git", "-C", str(consumer), "rev-parse", "HEAD"], text=True).strip()}
         reproduction = subprocess.run([sys.executable, "-m", "unittest", "-v"], cwd=consumer, text=True, capture_output=True, timeout=30)
         write(evidence / "reproduction.json", {"command": [sys.executable, "-m", "unittest", "-v"], "commit": base, "exit": reproduction.returncode,
@@ -70,6 +104,8 @@ def main():
                     "limits": {"startupMillis": "10000", "executionMillis": str(evaluation["EXECUTION_MILLIS"]), "heartbeatMillis": "2000",
                                "graceMillis": "1000", "killMillis": "3000", "outputBytes": 8388608}, "checks": [],
                     "evaluation": {"run": identifier, "scenario": "synthetic-dependency", "assessor": False}}
+        if prior is not None:
+            settings["evaluation"] = json.loads((original / "settings.json").read_text())["evaluation"]
         write(evidence / "settings.json", settings)
         request = (root / "dev/defect-begin.md").read_text() + "\n\n" + json.dumps({"fixtureCommit": base, "specification": (consumer / "README.md").read_text(),
             "reproduction": {"command": "python3 -m unittest -v", "exit": reproduction.returncode, "stdout": reproduction.stdout, "stderr": reproduction.stderr}}, ensure_ascii=False)
@@ -78,17 +114,74 @@ def main():
         checks.environment.update(CQ_HOST="127.0.0.1", CQ_PORT=str(port), CQ_ORIGIN=f"http://127.0.0.1:{port}",
                                   CQ_TOKEN=uuid.uuid4().hex + uuid.uuid4().hex, CQ_SESSION=str(uuid.uuid4()))
         with evaluation["database"](checks, evidence, support["free_port"]()):
+            if prior is not None:
+                parsed = urllib.parse.urlsplit(checks.environment["CQ_DATABASE_URL"].removeprefix("jdbc:"))
+                checks.run(["pg_restore", "--exit-on-error", "--clean", "--if-exists", "--host", parsed.hostname, "--port", str(parsed.port),
+                            "--username", checks.environment["CQ_DATABASE_USER"], "--dbname", parsed.path[1:], str(prior["dump"])], "database-restore", 60)
             with checks.server(command, "defect-server"):
                 environment = {name: value for name, value in checks.environment.items() if not name.startswith("CQ_")}
                 environment["CQ_TOKEN"] = checks.environment["CQ_TOKEN"]
+                init = ["init", "--endpoint", checks.environment["CQ_ORIGIN"]]
+                if prior is not None:
+                    project_config = prior["values"]["run"]["project"]
+                    init += ["--project-id", project_config["project"]["value"], "--name", project_config["name"]]
                 with (evidence / "cq-init.log").open("w") as log:
-                    subprocess.run(command + ["init", "--endpoint", checks.environment["CQ_ORIGIN"]], cwd=consumer,
+                    subprocess.run(command + init, cwd=consumer,
                                    env=environment, stdout=log, stderr=subprocess.STDOUT, timeout=30, check=True)
                 project = json.loads((consumer / ".git/cq/project.json").read_text())["project"]
+                api = lambda value: call(checks.environment, value)
+                def total_usage():
+                    return api({"Usage": {"input": {"project": project, "selection": {"Summary": {"filter": {"EvaluationOnly": {
+                        "run": settings["evaluation"]["run"], "scenario": settings["evaluation"]["scenario"]}}}}}}})
+                workflow = ["--workflow", "begin"]
+                if prior is not None:
+                    before = snapshot(api, project, consumer, None)
+                    write(evidence / "before.json", before)
+                    predicates["restored"](before, prior["values"]["snapshot"])
+                    assert base == prior["manifest"]["base"], "Restored Git base differs from its archive"
+                    restored = total_usage()
+                    write(evidence / "baseline-usage-summary.json", restored)
+                    reconcile([prior["usage"]], restored["UsageSummary"]["report"])
+                    intake = predicates["records"](before)
+                    members = intake["branches"] if arguments.stage == "probe" else [intake["research"]]
+                    guidance = [{"id": view["item"]["id"], "revision": view["item"]["revision"]} for view in before["views"] if view["item"]["id"] not in members]
+                    bundle = {"provenance": "Runner-provided empirical input, not human judgment or new HostObserved validation", "fixture": base}
+                    if arguments.stage == "probe":
+                        program = (root / "dev/defect-probe-capture.py").read_bytes()
+                        recorder_file = evidence / "probe-recorder.py"
+                        recorder_file.write_bytes(program)
+                        recorder = {"path": str(recorder_file), "sha256": hashlib.sha256(program).hexdigest()}
+                        probe_command = runpy.run_path(str(root / "dev/defect-probe-evidence.py"))["command"](recorder)
+                        bundle.update(recorder=recorder, command=shlex.join(probe_command),
+                            instructions="Execute the supplied short command exactly through your native command tool in the assigned workspace, without pipelines or modifications. It reads the retained recorder, checks its SHA-256, and executes those same bytes. Do not copy or rewrite the recorder into your workspace. If it cannot be read, report the blocker; do not substitute another program. It records R1's proposed observations and H3's nonconforming-token injection without requiring any causal verdict. Do not implement or adjudicate. Preserve cq-probe-observations.json. Interpret actual results for each assigned hypothesis and report ModelDeclared findings or honest inconclusive evidence, citing this input and retained observations.")
+                    else:
+                        bundle.update(observations=prior["manifest"]["proof"]["execution"]["observations"],
+                            nativeTranscript=prior["manifest"]["proof"]["transcript"], probeResult=prior["manifest"]["proof"]["result"],
+                            instructions="Compare these verified native observations with R1/H1/H2/H3, distinguishing observed behavior from causal conclusions and conditional contributions. Your interpretation remains ModelDeclared. Cite this input artifact and the Probe result. Do not execute, implement, mutate records or adjudicate the ledger; report findings or honest inconclusive limits for later reviewed planning.")
+                    body = json.dumps(bundle, ensure_ascii=False, separators=(",", ":"))
+                    assert len(body.encode()) <= 128 * 1024
+                    (evidence / "empirical-input.json").write_text(body)
+                    upload = {"project": project, "id": {"value": str(uuid.uuid4())}, "attempt": prior["values"]["run"]["attempt"]["id"], "kind": "Input", "mediaType": "application/json", "body": body}
+                    publication = urllib.request.Request(checks.environment["CQ_ORIGIN"] + "/api/artifact", data=json.dumps(upload).encode(), headers={
+                        "Authorization": "Bearer " + checks.environment["CQ_TOKEN"], "CQ-Session": checks.environment["CQ_SESSION"], "CQ-Protocol-Version": "0.1.0", "Content-Type": "application/json"})
+                    with urllib.request.urlopen(publication, timeout=15) as response:
+                        metadata = json.loads(response.read(32768))
+                    assert metadata["id"] == upload["id"] and metadata["sha256"] == hashlib.sha256(body.encode()).hexdigest() and metadata["actor"]["role"] == "Human"
+                    write(evidence / "bundle-publication.json", metadata)
+                    context = [upload["id"]]
+                    if arguments.stage == "research":
+                        context.append(prior["manifest"]["proof"]["result"])
+                    request = ("Advance only the supplied empirical assignment through Explore. Preserve every ledger record/revision/history and the fixture Git state: intake text about later probes is now actionable, but adjudication and repair belong to later reviewed stages. "
+                        "Use Select and StartChoice with the exact supplied roots, ALL guidance and artifact handles. The host supplies the recording/analysis instructions directly to the child through the input artifact; do not read or copy that body. "
+                        "Complete this assignment once, forward compact outcomes, release every claim and finish. Do not create records, apply proposals, start Planner/Reviewer/Implement, or infer a completed fix.\n" +
+                        json.dumps({"work": {"Worker": {"mode": "Probe"}} if arguments.stage == "probe" else {"Explorer": {"mode": "Research"}},
+                            "harness": "Codex" if arguments.stage == "probe" else "Pi", "roots": members, "guidance": guidance, "artifacts": context}))
+                    (evidence / "request.txt").write_text(request)
+                    workflow = ["--workflow", "advance", "--roots", "D" + intake["defect"]["number"], "--through", "explore"]
                 try:
                     began = time.monotonic()
                     with (evidence / "governor.stdout").open("w") as out, (evidence / "governor.stderr").open("w") as err:
-                        finished = subprocess.run(command + ["run", "claude", "--settings", str(evidence / "settings.json"), "--input", str(evidence / "request.txt"), "--workflow", "begin"],
+                        finished = subprocess.run(command + ["run", "claude", "--settings", str(evidence / "settings.json"), "--input", str(evidence / "request.txt")] + workflow,
                             cwd=consumer, env=environment, stdout=out, stderr=err, timeout=evaluation["EXECUTION_MILLIS"] / 1000 + 120)
                     result.update(exit=finished.returncode, elapsedSeconds=round(time.monotonic() - began, 3))
                     session, = (evidence / "sessions").iterdir()
@@ -97,39 +190,37 @@ def main():
                     write(evidence / "dispatch-statuses.json", statuses)
                     input_id = {"value": str(uuid.UUID(bytes=hashlib.md5((run["attempt"]["id"]["value"] + ":input").encode()).digest(), version=3))}
                     evaluation["artifacts"](checks.environment, evidence, session, statuses, [input_id])
-                    found = call(checks.environment, {"Search": {"input": {"project": project, "query": "archived:true OR archived:false", "after": None, "snapshot": None, "limit": 100}}})["Found"]["page"]
-                    assert not found["hasMore"], "Defect snapshot exceeds its bound"
-                    views, histories = [], []
-                    def read(selection):
-                        return call(checks.environment, {"Read": {"input": {"project": project, "selection": selection}}})
-                    for item in found["items"]:
-                        views.append(read({"ItemDetail": {"id": item["id"]}})["Detail"]["view"])
-                        histories.append({"id": item["id"], "page": read({"History": {"id": item["id"], "before": {"value": str(int(item["revision"]["value"]) + 1)}, "limit": 100}})["History"]["page"]})
-                    claims = read({"Claims": {"members": [value["id"] for value in found["items"]]}})["Claims"]["preview"]
-                    write(evidence / "after.json", {"views": views, "histories": histories, "claims": claims,
-                        "git": {"value": subprocess.check_output(["git", "-C", str(consumer), "rev-parse", "HEAD"], text=True).strip()},
-                        "clean": not subprocess.check_output(["git", "-C", str(consumer), "status", "--porcelain", "--untracked-files=all"], text=True).strip(),
-                        "localIntegrations": [json.loads(path.read_text()) for path in (session / "integrations").glob("*.json")]})
-                    assert finished.returncode == 0, "Defect governing session failed"
+                    write(evidence / "after.json", snapshot(api, project, consumer, session))
+                    if arguments.stage == "probe":
+                        native = runpy.run_path(str(root / "dev/defect-probe-evidence.py"))
+                        transcripts = {}
+                        for status in statuses:
+                            transcripts.update(native["export"](api, project, session, status["attempt"]))
+                        write(evidence / "native-artifacts.json", transcripts)
                 finally:
                     primary_failure = sys.exc_info()[0] is not None
                     result["archiveErrors"] = evaluation["archive"](checks, evidence)
                     if result["archiveErrors"] and not primary_failure:
                         raise RuntimeError("; ".join(result["archiveErrors"]))
                 values = process["stage_evidence"](evidence)
-                result["proof"] = predicates["begin"](values, settings)
-                total = call(checks.environment, {"Usage": {"input": {"project": project, "selection": {"Summary": {"filter": {"EvaluationOnly": {
-                    "run": settings["evaluation"]["run"], "scenario": settings["evaluation"]["scenario"]}}}}}}})
+                total = total_usage()
                 write(evidence / "combined-usage-summary.json", total)
-                reconcile([json.loads((evidence / "usage-summary.json").read_text())["UsageSummary"]["report"]], total["UsageSummary"]["report"])
-                result.update(status="begin-passed", accounting="reconciled", observedAttempts=len(values["attempts"]), base=base,
+                parts = [] if prior is None else [prior["usage"]]
+                parts.append(json.loads((evidence / "usage-summary.json").read_text())["UsageSummary"]["report"])
+                reconcile(parts, total["UsageSummary"]["report"])
+                result.update(accounting="reconciled", observedAttempts=len(values["attempts"]), base=base,
                               dumpSha256=hashlib.sha256((evidence / "cq-database.dump").read_bytes()).hexdigest())
+                if prior is not None:
+                    assert not set(prior["attemptIds"]) & {value["attempt"]["id"]["value"] for value in values["attempts"]}
+                assert finished.returncode == 0, "Defect governing session failed"
+                result["proof"] = predicates["begin"](values, settings) if prior is None else predicates["empirical"](evidence, values, settings, prior, arguments.stage)
+                result["status"] = arguments.stage + "-passed"
     except BaseException as error:
         result.update(status="failed", error=str(error))
         raise
     finally:
         write(evidence / "result.json", result)
-    print("BEGIN PASSED: empirical investigation and full process acceptance remain pending; evidence", evidence, flush=True)
+    print(arguments.stage.upper() + " PASSED: full process acceptance remains pending; evidence", evidence, flush=True)
 
 
 if __name__ == "__main__":

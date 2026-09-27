@@ -1,7 +1,9 @@
 import copy
+import hashlib
 import json
 from pathlib import Path
 import runpy
+import tempfile
 import unittest
 
 
@@ -10,6 +12,26 @@ predicates = runpy.run_path(str(Path(__file__).with_name("defect-evidence.py")))
 
 class DefectEvidenceCheck(unittest.TestCase):
     """Behavioral Active Blackbox Atomic: intake and reviewed application evidence."""
+
+    def test_restoration_compares_state_without_actor_bound_digest(self):
+        archived = {**self.snapshot(), "git": {"value": "base"}, "clean": True, "localIntegrations": [],
+            "claims": {"members": ["member"], "claims": [], "integrations": [],
+                       "snapshot": {"cursor": {"value": "4"}, "digest": "a" * 64}}}
+        restored = copy.deepcopy(archived)
+        restored["claims"]["snapshot"]["digest"] = "b" * 64
+        predicates["restored"](restored, archived)
+        mutations = [lambda v: v["claims"]["snapshot"]["cursor"].update(value="5"),
+                     lambda v: v["claims"]["members"].append("other"),
+                     lambda v: v["claims"]["claims"].append({"fence": "2"}),
+                     lambda v: v["claims"]["integrations"].append({}),
+                     lambda v: v["views"].pop(), lambda v: v["histories"].pop(),
+                     lambda v: v["git"].update(value="other"), lambda v: v.update(clean=False),
+                     lambda v: v["localIntegrations"].append({})]
+        for mutate in mutations:
+            altered = copy.deepcopy(restored)
+            mutate(altered)
+            with self.assertRaisesRegex(AssertionError, "Restored checkpoint"):
+                predicates["restored"](altered, archived)
 
     def snapshot(self):
         def item(ledger, number, content):
@@ -113,6 +135,74 @@ class DefectEvidenceCheck(unittest.TestCase):
         events[-1]["message"]["content"][0]["content"] = json.dumps({"Changed": {"ack": ack}})
         with self.assertRaisesRegex(AssertionError, "history"):
             predicates["reviewed_applications"](events, [plan])
+
+    def research(self, directory):
+        before = self.snapshot()
+        before.update(git={"value": "fixture"}, clean=True, localIntegrations=[],
+            claims={"claims": [], "integrations": [], "members": [{"id": view["item"]["id"], "revision": view["item"]["revision"]} for view in before["views"]]})
+        member = before["views"][1]
+        guidance = [view for view in before["views"] if view != member]
+        governor = {"id": {"value": "governor"}, "session": {"value": "session"}, "role": "Governor", "harness": "Claude", "parent": None}
+        child = {"id": {"value": "explorer"}, "session": governor["session"], "role": "Explorer", "harness": "Pi", "model": "configured", "parent": governor["id"]}
+        prior = {"values": {"snapshot": before, "run": {"attempt": {"id": {"value": "prior"}}}},
+                 "manifest": {"proof": {"result": {"value": "probe"}, "execution": {"observations": {"recorded": "actual observations"}}}}}
+        body = json.dumps({"observations": prior["manifest"]["proof"]["execution"]["observations"]})
+        context = {"id": {"value": "bundle"}, "attempt": {"value": "prior"}, "kind": "Input", "actor": {"role": "Human"}, "sha256": hashlib.sha256(body.encode()).hexdigest()}
+        settings = {"harnesses": [{"harness": "Pi", "model": "configured"}], "evaluation": {"run": "evaluation", "scenario": "fixture", "assessor": False}}
+        assignment = {"evaluation": settings["evaluation"], "members": [member["item"]["id"]]}
+        request = {"request": {"value": "request"}, "harness": "Pi", "work": {"Explorer": {"mode": "Research"}},
+                   "members": [{"id": member["item"]["id"], "revision": member["item"]["revision"]}], "previous": None,
+                   "guidance": [{"id": view["item"]["id"], "revision": view["item"]["revision"]} for view in guidance], "artifacts": [context["id"], {"value": "probe"}]}
+        report = {"request": request, "attempt": child["id"], "base": before["git"], "candidate": None, "validation": [],
+                  "report": {"Evidence": {"members": [{"item": member["item"]["id"], "disposition": "Findings", "evidence": [
+                      {"origin": "ModelDeclared", "citations": [{"Artifact": {"id": context["id"]}}]}]}]}}}
+        frozen = {"base": before["git"], "input": {"request": request, "members": [member], "guidance": guidance,
+            "artifacts": [{"metadata": context, "body": body}]}}
+        session = directory / "sessions" / "session"
+        child_dir = session / "children" / "explorer"
+        child_dir.mkdir(parents=True)
+        (session / "journal").mkdir()
+        def write(path, value):
+            path.write_text(json.dumps(value))
+        write(child_dir / "ticket.json", {"attempt": child, "assignment": assignment, "request": request})
+        write(session / "journal/explorer.json", {"workspace": {"attempt": child["id"], "owner": governor["session"], "base": before["git"]},
+            "phase": "Settled", "exit": {"settled": True, "code": 0, "reason": "Exited", "hostFailure": False}})
+        write(session / "receipt.json", {"processSucceeded": True, "usageDelivered": True, "report": {}})
+        write(directory / "bundle-publication.json", context)
+        (directory / "empirical-input.json").write_text(body)
+        values = {"snapshot": copy.deepcopy(before), "run": {"attempt": governor, "base": before["git"]}, "session": session,
+            "attempts": [{"attempt": governor, "assignment": {"evaluation": settings["evaluation"]}}, {"attempt": child, "assignment": assignment}],
+            "observations": [{"upload": {"observation": {"attempt": attempt["id"], "counters": {"input": {"value": "1", "measurement": "Observed"}, "output": {"value": "1", "measurement": "Observed"}}}}} for attempt in [governor, child]],
+            "statuses": [{"attempt": child["id"], "phase": "Completed", "usageDelivered": True, "request": request["request"], "result": {"value": "result"}}],
+            "artifacts": {"result": {"kind": "Result", "attempt": child["id"], "body": report},
+                "input": {"kind": "Input", "attempt": child["id"], "body": frozen}, "bundle": {**context, "body": json.loads(body)}},
+            "governing_input": {"body": {"integrationTarget": None, "workflow": {"request": {"Advance": {"roots": [before["views"][0]["item"]["id"]], "through": "Explore"}}}}}}
+        return {"directory": directory, "values": values, "settings": settings, "prior": prior, "stage": "research"}
+
+    def test_research_requires_exact_verified_observations_and_unchanged_scope(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = self.research(Path(temporary))
+            result = predicates["empirical"](**fixture)
+            self.assertEqual(result["probe"], {"value": "probe"})
+            self.assertEqual(result["observations"], {"value": "bundle"})
+            mutations = {
+                "changed history": lambda v: v["snapshot"]["histories"].pop(),
+                "changed current record": lambda v: v["snapshot"]["views"][0]["item"]["revision"].update(value="2"),
+                "retained claim": lambda v: v["snapshot"]["claims"]["claims"].append({}),
+                "changed git": lambda v: v["snapshot"]["git"].update(value="other"),
+                "wrong native role": lambda v: v["attempts"][1]["attempt"].update(role="Worker"),
+                "missing usage": lambda v: v["observations"].pop(),
+                "missing guidance": lambda v: v["artifacts"]["input"]["body"]["input"]["guidance"].pop(),
+                "different materialized observations": lambda v: v["artifacts"]["input"]["body"]["input"]["artifacts"][0].update(body='{"observations":"invented"}'),
+                "missing observation citation": lambda v: v["artifacts"]["result"]["body"]["report"]["Evidence"]["members"][0]["evidence"][0].update(citations=[{"File": {"path": "README.md", "revision": "fixture"}}]),
+                "fabricated host observation": lambda v: v["artifacts"]["result"]["body"]["report"]["Evidence"]["members"][0]["evidence"][0].update(origin="HostObserved"),
+            }
+            for name, mutate in mutations.items():
+                with self.subTest(name=name):
+                    altered = copy.deepcopy(fixture)
+                    mutate(altered["values"])
+                    with self.assertRaises(AssertionError):
+                        predicates["empirical"](**altered)
 
 
 if __name__ == "__main__":
