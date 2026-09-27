@@ -1,0 +1,185 @@
+package cq.core
+
+import cq.api.*
+import java.nio.charset.StandardCharsets.UTF_8
+import java.util.{Locale, UUID}
+import scala.util.Try
+
+object QueryCatalog {
+  val ledgers: Map[String, Ledger] = Ledger.all.map(value => value.toString.toLowerCase(Locale.ROOT) -> value).toMap
+  val relations: Map[String, Relation] = Relation.all.map(value => value.toString.replaceAll("([a-z])([A-Z])", "$1-$2").toLowerCase(Locale.ROOT) -> value).toMap
+  val statuses: Set[String] = (
+    MilestoneStatus.all.map(_.toString) ++ IdeaStatus.all.map(_.toString) ++ DefectStatus.all.map(_.toString) ++
+      GoalStatus.all.map(_.toString) ++ TaskStatus.all.map(_.toString) ++ ResearchStatus.all.map(_.toString) ++
+      HypothesisStatus.all.map(_.toString) ++ QuestionStatus.all.map(_.toString) ++ DecisionStatus.all.map(_.toString) ++
+      ReviewStatus.all.map(_.toString) ++ HandoffStatus.all.map(_.toString) ++ OperatorActionStatus.all.map(_.toString) ++
+      MemoryStatus.all.map(_.toString) ++ UpstreamStatus.all.map(_.toString)
+  ).map(_.toLowerCase(Locale.ROOT)).toSet
+  val fields: Set[String] = Set("id", "ledger", "status", "tag", "project", "archived") ++ relations.keySet
+}
+
+final class QueryParser {
+  private val MaxCharacters = 4096
+  private val MaxTokens = 512
+  private val MaxNodes = 128
+  private val MaxDepth = 16
+  private val MaxWords = 64
+  private val Identifier = "(?i)([a-z]+)([0-9]+)".r
+  private def isItem(value: String): Boolean = value match {
+    case Identifier(prefix, _) => Ledger.all.exists(ledger => LedgerPolicy.prefix(ledger).equalsIgnoreCase(prefix))
+    case _ => false
+  }
+  private enum Kind { case Word, Quoted, Left, Right, Colon, Minus, End }
+  private final case class Token(kind: Kind, value: String, span: QuerySpan)
+  private final case class Invalid(diagnostic: QueryDiagnostic) extends RuntimeException(diagnostic.message)
+  private def fail(span: QuerySpan, message: String): Nothing = throw Invalid(QueryDiagnostic(span, message))
+
+  def parse(source: String): Either[QueryDiagnostic, QueryExpression] = try {
+    if (source.length > MaxCharacters) fail(QuerySpan(0, source.length), s"Query exceeds $MaxCharacters UTF-16 characters")
+    if (!UTF_8.newEncoder().canEncode(source) || source.contains('\u0000')) fail(QuerySpan(0, source.length), "Query contains invalid Unicode or NUL")
+    val expression = new Parser(tokens(source)).parse()
+    Right(if (hasArchive(expression)) expression else QueryExpression.And(QueryExpression.Archive(ArchiveFilter.Active), expression))
+  } catch { case Invalid(diagnostic) => Left(diagnostic) }
+
+  private def hasArchive(value: QueryExpression): Boolean = value match {
+    case _: QueryExpression.Archive => true
+    case QueryExpression.And(left, right) => hasArchive(left) || hasArchive(right)
+    case QueryExpression.Or(left, right) => hasArchive(left) || hasArchive(right)
+    case QueryExpression.Not(inner) => hasArchive(inner)
+    case _ => false
+  }
+
+  private def tokens(source: String): Vector[Token] = {
+    val output = Vector.newBuilder[Token]
+    var index = 0
+    var count = 0
+    while (index < source.length) {
+      if (source(index).isWhitespace) index += 1
+      else {
+        val start = index
+        val token = source(index) match {
+          case '(' => index += 1; Token(Kind.Left, "(", QuerySpan(start, index))
+          case ')' => index += 1; Token(Kind.Right, ")", QuerySpan(start, index))
+          case ':' => index += 1; Token(Kind.Colon, ":", QuerySpan(start, index))
+          case '-' => index += 1; Token(Kind.Minus, "-", QuerySpan(start, index))
+          case '"' =>
+            index += 1
+            var closed = false
+            while (index < source.length && !closed) {
+              if (source(index) == '\\') index = math.min(index + 2, source.length)
+              else { closed = source(index) == '"'; index += 1 }
+            }
+            if (!closed) fail(QuerySpan(start, index), "Unterminated quoted value")
+            val span = QuerySpan(start, index)
+            val value = io.circe.parser.parse(source.substring(start, index)).flatMap(_.as[String])
+              .fold(_ => fail(span, "Quoted values use JSON string escaping"), identity)
+            if (!UTF_8.newEncoder().canEncode(value) || value.contains('\u0000')) fail(span, "Quoted value contains invalid Unicode or NUL")
+            Token(Kind.Quoted, value, span)
+          case _ =>
+            while (index < source.length && !source(index).isWhitespace && !"():\"".contains(source(index))) index += 1
+            val value = source.substring(start, index)
+            if (value.contains('\\')) fail(QuerySpan(start, index), "Quote values that require escaping")
+            Token(Kind.Word, value, QuerySpan(start, index))
+        }
+        count += 1
+        if (count > MaxTokens) fail(token.span, s"Query exceeds $MaxTokens tokens")
+        output += token
+      }
+    }
+    output += Token(Kind.End, "", QuerySpan(source.length, source.length))
+    output.result()
+  }
+
+  private final class Parser(input: Vector[Token]) {
+    private var offset = 0
+    private var nodes = 0
+    private def current: Token = input(offset)
+    private def take(): Token = { val result = current; offset += 1; result }
+    private def keyword(value: String): Boolean = current.kind == Kind.Word && current.value == value
+    private def node(value: QueryExpression, span: QuerySpan): QueryExpression = {
+      nodes += 1
+      if (nodes > MaxNodes) fail(span, s"Query exceeds $MaxNodes expression nodes")
+      value
+    }
+    def parse(): QueryExpression = {
+      val result = if (current.kind == Kind.End) QueryExpression.All() else disjunction(0)
+      if (current.kind != Kind.End) fail(current.span, "Unexpected token after query expression")
+      result
+    }
+    private def disjunction(depth: Int): QueryExpression = {
+      var value = conjunction(depth)
+      while (keyword("OR")) { val operator = take(); value = node(QueryExpression.Or(value, conjunction(depth)), operator.span) }
+      value
+    }
+    private def conjunction(depth: Int): QueryExpression = {
+      var value = unary(depth)
+      while (!keyword("OR") && current.kind != Kind.End && current.kind != Kind.Right) {
+        val span = current.span
+        if (keyword("AND")) take()
+        value = node(QueryExpression.And(value, unary(depth)), span)
+      }
+      value
+    }
+    private def unary(depth: Int): QueryExpression = {
+      if (depth > MaxDepth) fail(current.span, s"Query nesting exceeds $MaxDepth levels")
+      if (keyword("NOT") || current.kind == Kind.Minus) {
+        val operator = take()
+        node(QueryExpression.Not(unary(depth + 1)), operator.span)
+      } else if (current.kind == Kind.Left) {
+        take()
+        val value = disjunction(depth + 1)
+        if (current.kind != Kind.Right) fail(current.span, "Expected closing parenthesis")
+        take()
+        value
+      } else {
+        if (!Set(Kind.Word, Kind.Quoted).contains(current.kind) || keyword("AND") || keyword("OR")) fail(current.span, "Expected query term")
+        val token = take()
+        val value = if (token.kind == Kind.Word && current.kind == Kind.Colon) {
+          take()
+          if (!Set(Kind.Word, Kind.Quoted).contains(current.kind)) fail(current.span, "Expected attribute value")
+          attribute(token, take())
+        } else if (token.kind == Kind.Word && isItem(token.value)) QueryExpression.Id(item(token))
+        else text(token)
+        node(value, token.span)
+      }
+    }
+    private def item(token: Token): QueryItem = token.value match {
+      case Identifier(prefix, number) =>
+        val ledger = Ledger.all.find(value => LedgerPolicy.prefix(value).equalsIgnoreCase(prefix)).getOrElse(fail(token.span, "Unknown item prefix"))
+        val value = Try(number.toLong).toOption.filter(_ > 0).filter(_.toString == number).getOrElse(fail(token.span, "Item number must be a canonical positive 64-bit integer"))
+        QueryItem(ledger, value)
+      case _ => fail(token.span, "Expected item ID such as T42")
+    }
+    private def text(token: Token): QueryExpression = {
+      val words = SearchText.words(token.value)
+      if (words.isEmpty || words.size > MaxWords || !words.forall(SearchText.bounded))
+        fail(token.span, s"Text requires 1–$MaxWords words, each at most ${SearchText.MaxWordBytes} UTF-8 bytes")
+      QueryExpression.Text(words, token.kind == Kind.Quoted)
+    }
+    private def attribute(key: Token, value: Token): QueryExpression = {
+      val field = key.value.toLowerCase(Locale.ROOT)
+      val folded = value.value.toLowerCase(Locale.ROOT)
+      field match {
+        case "id" => QueryExpression.Id(item(value))
+        case "ledger" => QueryExpression.LedgerIs(QueryCatalog.ledgers.getOrElse(folded, fail(value.span, "Unknown ledger")))
+        case "status" =>
+          if (!QueryCatalog.statuses(folded)) fail(value.span, "Unknown ledger status")
+          QueryExpression.Status(folded)
+        case "tag" =>
+          if (value.value.trim.isEmpty || value.value.length > LedgerPolicy.MaxLabel) fail(value.span, "Invalid tag length or empty value")
+          QueryExpression.Tag(value.value)
+        case "project" =>
+          val id = Try(UUID.fromString(value.value)).toOption.filter(_.toString.equalsIgnoreCase(value.value)).getOrElse(fail(value.span, "Expected canonical project UUID"))
+          QueryExpression.Project(ProjectId(id))
+        case "archived" => QueryExpression.Archive(folded match {
+          case "false" => ArchiveFilter.Active
+          case "true" => ArchiveFilter.Archived
+          case "all" => ArchiveFilter.All
+          case _ => fail(value.span, "Archived must be true, false or all")
+        })
+        case relation if QueryCatalog.relations.contains(relation) => QueryExpression.Reference(QueryCatalog.relations(relation), item(value))
+        case _ => fail(key.span, "Unknown query attribute")
+      }
+    }
+  }
+}

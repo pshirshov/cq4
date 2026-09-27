@@ -99,6 +99,23 @@ root data ChangeEvent { cursor: ChangeCursor request: RequestId items: lst[ItemR
 root data ChangePage { cursor: ChangeCursor events: lst[ChangeEvent] hasMore: bit }
 enum ArchiveFilter { Active Archived All }
 root data ItemFilter { ledger: opt[Ledger] archived: ArchiveFilter }
+root data QuerySpan { start: i32 end: i32 }
+root data QueryDiagnostic { span: QuerySpan message: str }
+root data QueryItem { ledger: Ledger number: i64 }
+root adt QueryExpression {
+  data All {}
+  data Text { words: lst[str] phrase: bit }
+  data Id { item: QueryItem }
+  data LedgerIs { ledger: Ledger }
+  data Status { value: str }
+  data Tag { value: str }
+  data Project { id: ProjectId }
+  data Archive { value: ArchiveFilter }
+  data Reference { relation: Relation item: QueryItem }
+  data Not { expression: QueryExpression }
+  data And { left: QueryExpression right: QueryExpression }
+  data Or { left: QueryExpression right: QueryExpression }
+}
 root data ItemSummary { id: ItemId revision: Revision title: str status: str archived: bit labels: set[str] updatedAt: i64 }
 root data ItemPage { items: lst[ItemSummary] cursor: ChangeCursor after: opt[ItemId] hasMore: bit }
 root data HistoryPage { entries: lst[HistoryEntry] hasMore: bit }

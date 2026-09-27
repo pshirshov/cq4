@@ -7,7 +7,7 @@ Goal: complete the first CQ release under the [implementation plan](drafts/20260
 | M0 stack and contracts | Complete; Astra approved `1801c2a` | [Four checks and native artifact](validation/m0-stack.md) |
 | M1 durable core | Complete; Astra approved `439fc50` | [Milestone review](validation/m1-review.md); [Ledger/claim checks](validation/m1-core.md), [usage accounting checks](validation/m1-usage.md); [authenticated clients and CLI](validation/m1-interfaces.md); [browser foundation](validation/m1-browser.md) passes Chromium checks; remaining invariants follow |
 | M2 first usable agent slice | Technical implementation verified at `8c37c6c`; Astra approved; human acceptance pending | [Artifacts](validation/m2-artifacts.md), shared typed host HTTP client, [guardian/driver](validation/m2-process.md), [durable local jobs](validation/m2-jobs.md), [unified server/client roles](validation/m2-roles.md) and [native usage collection](validation/m2-collectors.md) and [three harness adapters](validation/m2-adapters.md) implemented; [batch supervisor role](validation/m2-supervisor-role.md) now executes through the same entrypoint; [reference assembly](validation/m2-dispatch-input.md) is implemented; [local dispatch](validation/m2-local-dispatch.md) now executes workers/reviewers by handle with host validation and bounded hierarchy exit; [recovery](validation/m2-recovery.md) passes; [M2 evidence and human checkpoint](validation/m2-review.md) |
-| M3 graph and concurrency | Not started | — |
+| M3 graph and concurrency | In progress; M2 human verdict pending | [Query grammar and typed parser](design/query-language.md) pass [78 fast scenarios and generated contract checks](validation/m3-query-parser.md); repository/client wiring and the remaining graph/concurrency work are pending |
 | M4 process and cohorts | Not started | — |
 | M5 complete UI | Not started | — |
 | M6 native release candidate | Not started | — |
@@ -53,4 +53,4 @@ Current evidence: [M0 manifest](validation/m0-stack.md), [M1 core increment](val
 
 Queued for M6 at the user's request: replace manual Baboon compiler downloading with a pinned upstream flake input, retaining deterministic generation and contract verification. Current implementation work continues first.
 
-M0 and M1 have independent Astra approval. M2 has technical Astra approval at `8c37c6c` and its [human evidence package](validation/m2-review.md) is ready. M2 human acceptance is pending; M6 evidence and human acceptance remain later work. No later milestone is complete.
+M0 and M1 have independent Astra approval. M2 has technical Astra approval at `8c37c6c` and its [human evidence package](validation/m2-review.md) is ready. The M2 human acceptance question has been presented with concrete evidence and is pending. Independent M3 query work continues; M6 evidence and human acceptance remain later work. No later milestone is complete.

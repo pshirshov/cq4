@@ -18,7 +18,7 @@ Requirements: [R01–R31](drafts/20260926-0957-cq-requirements-prompt.md). Miles
 | R12 PostgreSQL | M0, M1, M6 | In progress | Versioned DDL and real PostgreSQL transactions pass shared ledger scenarios; backup/restore remains M6; [increment evidence](validation/m1-core.md) |
 | R13 Lean MCP | M1, M4 | In progress | Five ordinary capabilities; generated schemas include only referenced definitions. Compact search projections and byte-bounded pages implemented; dispatch and measured token budgets remain. [Interface evidence](validation/m1-interfaces.md) |
 | R14 Archive attribute | M1 | Implemented; M1 approved | Archive field, default omission, direct read and restoration pass shared scenarios; browser/CLI archive filters implemented; [increment evidence](validation/m1-core.md) |
-| R15 Query language | M1, M3 | In progress | Typed ledger/archive filter and stable ID ordering implemented; complete shared grammar remains M3; [increment evidence](validation/m1-core.md) |
+| R15 Query language | M1, M3 | In progress | Bounded Boolean/text/ID/attribute/reference parser, generated recursive AST, UTF-16 diagnostics and shared normalization pass [parser and contract checks](validation/m3-query-parser.md). Repository compilation, unified clients, completion and query-plan evidence remain open; the endpoint still uses the M1 ledger/archive filter |
 | R16 Cohorts | M4 | Not started | — |
 | R17 Canonical refs | M1, M3 | In progress | Canonical/inverse rows, endpoint history, duplicate normalization and project checks implemented; graph checks remain; [increment evidence](validation/m1-core.md) |
 | R18 Worksets | M3 | Not started | — |
