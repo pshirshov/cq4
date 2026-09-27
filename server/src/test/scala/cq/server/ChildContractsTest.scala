@@ -31,7 +31,7 @@ final class ChildContractsLocal extends AnyWordSpec {
       assert(missing.getMessage.contains("previous"))
       intercept[IllegalArgumentException](ChildContracts.decodeRequest(project, wire.deepMerge(Json.obj("prompt" -> Json.fromString("Copied narrative")))))
       intercept[IllegalArgumentException](ChildContracts.decodeRequest(project, wire.deepMerge(Json.obj("limits" -> Json.obj("prompt" -> Json.fromString("Nested narrative"))))))
-      val result = ChildResult(AttemptId(UUID.randomUUID()), request, GitCommit("a" * 40), None, report)
+      val result = ChildResult(AttemptId(UUID.randomUUID()), request, GitCommit("a" * 40), None, report, Nil)
       intercept[IllegalArgumentException](ChildContracts.result(project, result))
       ChildContracts.result(project, result.copy(candidate = Some(GitCommit("b" * 40))))
     }

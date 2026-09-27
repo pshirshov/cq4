@@ -1,0 +1,37 @@
+# Local child dispatch
+
+The supervisor role exposes a private loopback MCP endpoint alongside the scoped domain MCP endpoint. The server owns durable domain state and artifacts; this local host owns subprocesses, workspaces, prompt assembly and publication. All contracts remain in the single mutable `cq.api` 0.1.0 model.
+
+## Parent and child boundaries
+
+The governor receives `GoverningInput`: project identity, configured model routes, check names, process limits and the human request. Its local `dispatch` tool accepts three generated commands:
+
+- `Start`: `DispatchRequest` with exact item revisions, guidance revisions, artifact handles, optional prior result handle, claim fence, harness, worker mode or reviewer role, and bounded process limits.
+- `Status`: owned attempt ID and a wait from zero to 20 seconds.
+- `Cancel`: owned attempt ID. Stop intent is applied immediately, with journal/cancellation work performed independently.
+
+There are no prompt/result narrative fields in the dispatch request. Identical request replay returns the same attempt; a changed request using the same ID conflicts. This slice permits one active child and at most 32 children per governing session. Member, guidance and artifact limits remain those of [input materialization](dispatch-input.md). Dispatch start waits at most one second for ticket persistence; a missed acknowledgement disables admission and requests cancellation.
+
+The host resolves input, loads installed worker/reviewer instructions, publishes input/prompt artifacts and launches the configured harness in a detached workspace. Claims are renewed every 20 seconds for three minutes. Claim ownership/membership and exact assigned revisions are checked again before result admission. Child limits cannot exceed the governing configuration. Configuration selects every model/provider explicitly and verifies the installed harness version.
+
+Children receive only the local `workspace` capability and their scoped domain read tools. Direct attempts to call local dispatch or mutate ledgers are denied. The workspace tool lists at most 200 entries or reads at most 8,192 Unicode code points. Files are bounded to 256 KiB of strict UTF-8; directories are bounded to 10,000 entries. Absolute paths, parent traversal, Git metadata and symlink traversal are denied. This implements the cooperative-agent misuse boundary; it does not claim adversarial operating-system isolation.
+
+## Candidate and validation evidence
+
+Worker reports are checked against their assigned identities and role. A `CandidateReady` report triggers host Git capture: verify the original worktree/common-directory identity and fixed HEAD, stage the isolated tree, reject submodules, write a commit with the frozen base as parent and atomically create an attempt-specific candidate ref. A worker that changes HEAD loses admission. Neither the governing checkout nor its index is used for capture.
+
+`SupervisorSettings.checks` contains up to eight named `ValidationCheck` records: `name`, argument-vector `command`, `executionMillis` and `outputBytes`. Commands are host configuration, not model-supplied shell strings. Each runs through the guardian in a separate workspace rooted at the candidate. Output manifests and `ValidationObservation` retain the exact command, candidate and process outcome. Unknown cleanup rejects child result admission; ordinary failed checks remain explicit failed validation evidence and direct the parent toward revision. No checks means no host checks were performed.
+
+The full immutable `ChildResult` contains request, candidate/base, structured per-member report and validation handles. A reviewer receives the previous result directly from its handle and reads that candidate through its assigned workspace. Reviewer outcomes remain model declarations; neither an accepted review nor a completed attempt constitutes final semantic acceptance or branch integration.
+
+The parent receives a `DispatchStatus` of at most 12 KiB: status, owned IDs, per-outcome counts, next action, optional 300-code-point blocker, result handle and publication coverage. Full successful narratives stay behind the result handle. Explicit bounded artifact reads support necessary semantic drill-down. This bounds dispatch traffic; actual model token efficiency still requires repeated consumer evaluations.
+
+## Delivery and shutdown
+
+Every child registers its frozen assignment and parent-linked attempt in the operational usage audit before launch. A multi-member assignment is shared attribution with a frozen cohort identity. Native collectors and immutable delivery batches use the same mechanism as the governing attempt. `cq job upload --session ...` replays both governing and child queues; it does not launch work. Publication failure with an existing spool returns `PublicationPending`, hides the result handle and requests delivery recovery.
+
+When the governor ends, the host requests child termination and joins normal collection/publication. A supervisor-only watchdog also observes the governor's in-memory guardian state independently of journal persistence. It is acquired before the job resources and disarmed only after their finalizers complete. Its initial absolute budget is configured startup + execution + grace + kill + ten seconds. Governor termination or failure-path finalization shortens the remaining deadline to grace + kill + ten seconds; repeated shutdown cannot extend it.
+
+Expiry forces the supervisor process to exit **75** without waiting for shutdown hooks or blocked I/O. This is an **unresolved shutdown**, not proof of process settlement, durable quarantine or delivered usage. It fences all retained JVM continuations. Guardian control-pipe closure separately starts bounded descendant cleanup; that additional drain is not included in the supervisor-exit claim. Preserve the entire session directory and inspect/reconcile unfinished records before reuse. Any earlier receipt describes the observation at its timestamp and does not override exit 75. Automatic reconciliation before publication spooling remains unfinished M2 work.
+
+Candidate integration, restart reconstruction of dispatch status, interactive collection, complete recovery and real consumer evaluation remain open. See [increment evidence](../validation/m2-local-dispatch.md).

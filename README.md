@@ -1,6 +1,6 @@
 # CQ
 
-CQ is being implemented under the [M0–M6 plan](docs/drafts/20260926-1549-cq-implementation-plan.md). The durable ledger/audit core and authenticated HTTP/MCP/WebSocket/CLI interfaces are implemented; [M1 has independent Astra approval](docs/validation/m1-review.md); M2 adapters pass real capability probes and the [batch supervisor role](docs/design/supervisor-role.md) is implemented; child handle dispatch and consumer evaluations are next. Release functionality, consumer evaluations and human acceptance are tracked in [implementation status](docs/implementation-status.md) and [requirement coverage](docs/requirement-coverage.md).
+CQ is being implemented under the [M0–M6 plan](docs/drafts/20260926-1549-cq-implementation-plan.md). The durable ledger/audit core and authenticated HTTP/MCP/WebSocket/CLI interfaces are implemented; [M1 has independent Astra approval](docs/validation/m1-review.md); M2 adapters pass real capability probes and the [batch supervisor role](docs/design/supervisor-role.md) is implemented; [child handle dispatch](docs/design/local-dispatch.md) is implemented; interruption recovery and consumer evaluations are next. Release functionality, consumer evaluations and human acceptance are tracked in [implementation status](docs/implementation-status.md) and [requirement coverage](docs/requirement-coverage.md).
 
 ## Development checks
 
@@ -64,7 +64,7 @@ curl --fail-with-body \
   http://127.0.0.1:8765/api/hello
 ```
 
-Expected body: `{"version":"0.1.0","supported":["0.1.0"]}`. `/api/call`, `/ws` and `/mcp` use the same ledger/audit application service; see [contracts](docs/design/contracts.md). Open the configured origin and sign in with the operator token. The minimal browser supports project selection/creation, schema-derived item forms, list/detail/history and usage/audit views. The process guardian, Scala driver and immutable artifact storage are implemented; a batch `cq run` role is implemented; child dispatch and the complete workflow remain pending.
+Expected body: `{"version":"0.1.0","supported":["0.1.0"]}`. `/api/call`, `/ws` and `/mcp` use the same ledger/audit application service; see [contracts](docs/design/contracts.md). Open the configured origin and sign in with the operator token. The minimal browser supports project selection/creation, schema-derived item forms, list/detail/history and usage/audit views. The process guardian, Scala driver and immutable artifact storage are implemented; a batch `cq run` role is implemented; worker/reviewer dispatch now runs with host validation and compact result handles; the complete workflow remains pending.
 
 Pins, local compatibility patches and their failure evidence are documented in [dependencies](docs/design/dependencies.md).
 

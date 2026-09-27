@@ -54,7 +54,7 @@ abstract class DispatchAssemblyTest extends SpecZIO with AssertZIO {
           limits = HostLimits(3000, 10000, 1000, 300, 2000, 262144)
           request = DispatchRequest(requestId, DispatchWork.Worker(WorkerMode.Implement), Harness.Codex, List(member), List(guidance), List(small.id), None, claim.fence, limits)
           stored = ChildResult(attempt.id, request, GitCommit("a" * 40), Some(GitCommit("b" * 40)),
-            ChildReport.Work(List(WorkMember(member.id, WorkDisposition.CandidateReady, "Candidate produced; validation is model-declared"))))
+            ChildReport.Work(List(WorkMember(member.id, WorkDisposition.CandidateReady, "Candidate produced; validation is model-declared"))), Nil)
           previous <- artifacts.upload(collector, ArtifactUpload(scope.project, ArtifactId(UUID.randomUUID()), attempt.id, ArtifactKind.Result,
             "application/json", Wire.encode(ChildResult_JsonCodec, stored)))
           _ <- ZIO.attemptBlocking {

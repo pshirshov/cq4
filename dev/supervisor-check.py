@@ -31,7 +31,7 @@ if sys.argv[1:] == ["--version"]:
 assert "CQ_TOKEN" not in os.environ and "CQ_DATABASE_URL" not in os.environ
 assert sys.argv[sys.argv.index("--sandbox") + 1] == "read-only"
 assert sys.argv[sys.argv.index("--model") + 1] == "fixture-model"
-prompt = sys.stdin.read()
+prompt = json.loads(sys.stdin.read())["request"]
 if prompt == "deadline input":
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
 target = pathlib.Path(sys.argv[sys.argv.index("--output-last-message") + 1])
@@ -52,7 +52,7 @@ if prompt == "uncertain input":
         executable.chmod(0o700)
         settings = root / "settings.json"
         settings.write_text(json.dumps({
-            "stateRoot": str(root / "sessions"), "guardian": str(guardian),
+            "stateRoot": str(root / "sessions"), "guardian": str(guardian), "checks": [],
             "harnesses": [{"harness": "Codex", "executable": str(executable), "model": "fixture-model", "provider": "fixture-provider",
                            "version": "0.156.1", "providerExtensions": [], "providerEnvironment": []}],
             "limits": {"startupMillis": "3000", "executionMillis": "15000", "heartbeatMillis": "1000",

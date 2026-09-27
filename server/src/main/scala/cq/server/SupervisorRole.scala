@@ -34,6 +34,21 @@ object SupervisorConfig {
   private val MaxOutputBytes = 32 * 1024 * 1024
   private val CredentialMargin = Duration.ofMinutes(10)
   private val MaxCredentialLifetime = Duration.ofHours(24)
+  def profile(value: HarnessSetting): HarnessProfile = HarnessProfile(value.harness, Path.of(value.executable), value.model, value.provider, value.version,
+    value.providerExtensions.map(Path.of(_)), value.providerEnvironment)
+  def limits(value: HostLimits): ExecutionLimits = ExecutionLimits(Duration.ofMillis(value.startupMillis), Duration.ofMillis(value.executionMillis),
+    Duration.ofMillis(value.heartbeatMillis), Duration.ofMillis(value.graceMillis), Duration.ofMillis(value.killMillis), value.outputBytes)
+  def within(value: HostLimits, ceiling: HostLimits): Unit = {
+    limits(value)
+    require(List(value.startupMillis -> ceiling.startupMillis, value.executionMillis -> ceiling.executionMillis,
+      value.heartbeatMillis -> ceiling.heartbeatMillis, value.graceMillis -> ceiling.graceMillis, value.killMillis -> ceiling.killMillis,
+      value.outputBytes.toLong -> ceiling.outputBytes.toLong).forall((actual, maximum) => actual <= maximum), "Child limits exceed the governing session's configured bounds")
+  }
+  def verifyProfile(config: SupervisorConfig, value: HarnessProfile): Unit = {
+    val version = new BoundedHostCommand(HarnessEnvironment.isolated(value, config.environment), Duration.ofSeconds(10), 4096)
+      .run(Path.of(config.run.repository), List(value.executable.toString, "--version"))
+    require(version.exit == 0 && version.text.split("[\\s()]+").contains(value.version), "Installed harness version differs from its configured verified route")
+  }
   def credentialLifetime(limits: ExecutionLimits): Duration = {
     val lifetime = limits.startup.plus(limits.execution).plus(limits.grace).plus(limits.kill).plus(CredentialMargin)
     require(lifetime.compareTo(MaxCredentialLifetime) <= 0, "Process deadline budget exceeds scoped credential lifetime")
@@ -48,15 +63,21 @@ object SupervisorConfig {
     require(pairs.map(_._1).toSet == Set("--settings", "--input"), "cq run requires exactly --settings FILE and --input FILE")
     val options = pairs.toMap
     val settings = HostFiles.read(context.directory.resolve(options("--settings")).normalize(), SupervisorSettings_JsonCodec, MaxConfigBytes)
-    val profiles = settings.harnesses.map(value => HarnessProfile(value.harness, Path.of(value.executable), value.model, value.provider, value.version,
-      value.providerExtensions.map(Path.of(_)), value.providerEnvironment))
+    val profiles = settings.harnesses.map(SupervisorConfig.profile)
     require(profiles.nonEmpty && profiles.map(_.harness).distinct.size == profiles.size, "Harness settings must have unique routes")
     val profile = profiles.find(_.harness == harness).getOrElse(throw new IllegalArgumentException("Governing harness route is not configured"))
-    val sourceLimits = settings.limits
-    val limits = ExecutionLimits(Duration.ofMillis(sourceLimits.startupMillis), Duration.ofMillis(sourceLimits.executionMillis),
-      Duration.ofMillis(sourceLimits.heartbeatMillis), Duration.ofMillis(sourceLimits.graceMillis), Duration.ofMillis(sourceLimits.killMillis), sourceLimits.outputBytes)
+    val limits = SupervisorConfig.limits(settings.limits)
     require(limits.outputBytes <= MaxOutputBytes, "Native output retention exceeds 32 MiB per stream")
     credentialLifetime(limits)
+    require(settings.checks.size <= 8 && settings.checks.map(_.name).distinct.size == settings.checks.size, "At most eight uniquely named validation checks are supported")
+    settings.checks.foreach { check =>
+      require(check.name.matches("[a-z][a-z0-9-]{0,49}") && check.command.nonEmpty && check.command.size <= 32 &&
+        check.command.forall(value => value.nonEmpty && value.length <= 4096 && !value.contains('\u0000')) &&
+        check.executionMillis > 0 && check.executionMillis <= settings.limits.executionMillis && check.outputBytes > 0 && check.outputBytes <= 1024 * 1024,
+        "Invalid configured validation check")
+    }
+    require(settings.checks.map(value => HostFiles.encode(ValidationCheck_JsonCodec, value).getBytes(java.nio.charset.StandardCharsets.UTF_8).length).sum <= 16384,
+      "Configured validation arguments exceed 16 KiB")
     val guardian = Path.of(settings.guardian)
     require(guardian.isAbsolute && guardian.normalize() == guardian && Files.isExecutable(guardian), "Explicit executable guardian required")
     val project = HostFiles.read(location.directory.resolve("project.json"), ProjectConfig_JsonCodec, MaxConfigBytes)
@@ -86,18 +107,17 @@ object SupervisorConfig {
   }
 }
 
-final class SupervisorJobs(config: SupervisorConfig, workspaces: WorkspaceService[IO], driver: ExecutionDriver, clock: Clock)
+final class SupervisorJobs(config: SupervisorConfig, workspaces: WorkspaceService[IO], driver: ExecutionDriver, clock: Clock, watchdog: SupervisorWatchdog)
   extends Lifecycle.Of[Task, JobSupervisor](
-    Lifecycle.make(zio.Scope.make)(_.close(zio.Exit.unit)).flatMap { scope =>
+    Lifecycle.make(zio.Scope.make)(scope => ZIO.succeed(watchdog.beginShutdown()) *> scope.close(zio.Exit.unit)).flatMap { scope =>
       Lifecycle.liftF(JobSupervisor.acquire(config.owner,
         ZIO.attemptBlocking(FileJobRepository.open(config.directory.resolve("journal"), config.project.project, config.run.attempt.session)),
         workspaces, driver, config.directory.resolve("payload"), clock).provideEnvironment(ZEnvironment(scope)))
     }
   )
 
-final class SupervisorProgram(config: SupervisorConfig, registry: HarnessRegistry, jobs: JobSupervisor,
-  schemas: McpSchemas, output: HarnessOutput, clock: Clock, context: CliContext) {
-  private val HttpDeadline = Duration.ofSeconds(10)
+final class SupervisorProgram(config: SupervisorConfig, registry: HarnessRegistry, jobs: JobSupervisor, authority: SupervisorAuthority,
+  local: LocalControlServer, access: LocalAccess, dispatch: DispatchController, schemas: McpSchemas, output: HarnessOutput, clock: Clock, context: CliContext) {
   private val MaxOutputBytes = 32 * 1024 * 1024
   private val MaxRecordBytes = 64 * 1024
   private val MaxSummaryCharacters = 8192
@@ -105,7 +125,12 @@ final class SupervisorProgram(config: SupervisorConfig, registry: HarnessRegistr
   private val MaxGapCharacters = 300
   private val DeliveryEntriesPerBatch = 32
   private val Instructions = "You govern CQ work. Use CQ tools for domain state and only the capabilities exposed to this session. " +
-    "Do not claim a process or validation ran unless its host evidence exists. Native session completion does not establish task acceptance. " +
+    "Your input names the attached project, configured routes, process limits, validation checks and human request. Create or select the required task records and claim their exact member set. " +
+    "Use the local dispatch tool to start a Worker using item revisions and handles only. The host owns prompt assembly, candidate capture and validation. Never read or compose child prompts or copy full results between children. " +
+    "Poll Status with waitMillis 20000. When a worker result is ready, pass its handle as previous to a Reviewer request with the same member revisions and current fence. Prefer another configured harness for independent review. " +
+    "Dispatch is sequential in this slice. Keep assignments distinct and use the compact status counts, next action and blockers. Explicit bounded CQ artifact reads are for necessary semantic drill-down. " +
+    "Children cannot write CQ ledgers or integrate candidates. You own those decisions. Candidate integration is not exposed yet; report retained reviewed candidates and that remaining step accurately. " +
+    "Do not claim a process or validation ran unless its host evidence exists. A completed child or accepted review does not establish final task acceptance. " +
     "Return exactly a JSON object with one string field, summary, describing the observed outcome and remaining work."
 
   def run: Task[Unit] = {
@@ -117,31 +142,30 @@ final class SupervisorProgram(config: SupervisorConfig, registry: HarnessRegistr
       prepared <- ZIO.attemptBlocking {
         HostFiles.directory(config.directory)
         HostFiles.immutable(config.directory.resolve("run.json"), HostFiles.encode(SupervisorRun_JsonCodec, config.run), MaxRecordBytes)
-        val root = new HttpServerApi(config.endpoint, config.environment.getOrElse("CQ_TOKEN", throw new IllegalArgumentException("CQ_TOKEN is required")),
-          attempt.session, HttpDeadline)
-        require(root.call(Command.Initialize(config.project)).isInstanceOf[Result.Initialized], "Project attachment failed")
-        val expires = clock.millis() + SupervisorConfig.credentialLifetime(config.limits).toMillis
-        val collectorToken = root.grant(GrantRequest(project, Actor("CQ host collector", attempt.session, Role.Collector), expires))
-        val collector = new HttpServerApi(config.endpoint, collectorToken.value, attempt.session, HttpDeadline)
+        HostFiles.immutable(config.directory.resolve("settings.json"), HostFiles.encode(SupervisorSettings_JsonCodec, config.settings), MaxRecordBytes)
+        val collector = authority.collector
+        val input = HostFiles.encode(GoverningInput_JsonCodec, GoverningInput(config.project,
+          config.settings.harnesses.map(value => HarnessRoute(value.harness, value.model, value.provider)), config.settings.checks.map(_.name), config.settings.limits, config.input))
         val queue = new DeliveryQueue(config.directory.resolve("delivery"))
         val initial = DeliveryBatch(List(
           HostDelivery.Usage(HostUsageInput(project, HostUsage.Assign(config.run.assignment))),
           HostDelivery.Usage(HostUsageInput(project, HostUsage.Start(attempt))),
-          HostDelivery.Artifact(ArtifactUpload(project, NativeArtifacts.id(attempt.id, "input"), attempt.id, ArtifactKind.Input, "text/plain", config.input)),
+          HostDelivery.Artifact(ArtifactUpload(project, NativeArtifacts.id(attempt.id, "input"), attempt.id, ArtifactKind.Input, "application/json", input)),
           HostDelivery.Artifact(ArtifactUpload(project, NativeArtifacts.id(attempt.id, "prompt"), attempt.id, ArtifactKind.Prompt, "text/plain", Instructions)),
         ))
         queue.enqueue(0, initial)
         queue.flush(collector)
-        val governor = root.grant(GrantRequest(project, config.owner.actor, expires))
         val invocation = HarnessInvocation(Role.Governor, attempt.id, Instructions, schemas.schema("GoverningReport"),
-          List(HarnessMcp(McpTarget.Domain, config.endpoint.resolve("/mcp"), governor)), assets)
+          List(HarnessMcp(McpTarget.Domain, config.endpoint.resolve("/mcp"), authority.governorToken),
+            HarnessMcp(McpTarget.Local, local.endpoint, access.issue(attempt.id, Role.Governor))), assets)
         val launch = registry(attempt.harness).launch(config.profile, invocation, config.environment)
         launch.install(assets)
-        (collector, queue, JobCommand(launch.arguments, launch.environment, config.input, config.limits))
+        (collector, queue, JobCommand(launch.arguments, launch.environment, input, config.limits))
       }
       (collector, queue, command) = prepared
       _ <- jobs.start(config.owner, WorkspaceSpec(project, attempt.session, attempt.id, config.run.repository, config.run.base), command)
       record <- jobs.await(config.owner, attempt.id)
+      _ <- dispatch.shutdown
       receipt <- ZIO.attemptBlocking {
         val stdout = if (Files.exists(payload.resolve("stdout"))) HostFiles.bytes(payload.resolve("stdout"), MaxOutputBytes) else Array.emptyByteArray
         val stderr = if (Files.exists(payload.resolve("stderr"))) HostFiles.bytes(payload.resolve("stderr"), MaxOutputBytes) else Array.emptyByteArray
@@ -200,8 +224,18 @@ object SupervisorPlugin extends PluginDef {
     many[HarnessAdapter].add[ClaudeAdapter].add[CodexAdapter].add[PiAdapter]
     make[HarnessRegistry]
     make[HarnessOutput]
+    make[ChildInstructions]
+    make[WorkspaceReader]
+    make[CandidateWorkspace]
+    make[SupervisorAuthority].fromEffect(SupervisorAuthority.acquire _)
+    make[LocalAccess]
+    make[ChildRunner]
+    make[DispatchController].fromResource[DispatchController.Resource]
+    make[LocalControl]
+    make[LocalControlServer].fromResource[LocalControlServer.Resource]
     make[SupervisorProgram]
-    make[ExecutionDriver].from { (config: SupervisorConfig) => new GuardianDriver(Path.of(config.settings.guardian)) }
+    make[SupervisorWatchdog].fromResource[SupervisorWatchdog.Resource]
+    make[ExecutionDriver].from[SupervisorDriver]
     make[WorkspaceService[IO]].from { (config: SupervisorConfig, clock: Clock) =>
       new WorkspaceService.Impl[IO](new GitWorkspaceRepository(config.directory.resolve("workspaces"),
         new BoundedHostCommand(GitEnvironment.isolated(config.environment), Duration.ofSeconds(10), 65536), clock))

@@ -77,6 +77,8 @@ object ChildContracts {
       case _: ChildReport.Review => true
     }
     require(!needsCandidate || value.candidate.nonEmpty, "Result requires its exact candidate commit")
+    require(value.validation.size <= 8 && value.validation.map(_.check).distinct.size == value.validation.size &&
+      value.validation.forall(_.check.matches("[a-z][a-z0-9-]{0,49}")), "Invalid host validation inventory")
     require(HostFiles.encode(ChildResult_JsonCodec, value).getBytes(UTF_8).length <= MaxResultBytes, "Stored child result exceeds its byte bound")
   }
 }

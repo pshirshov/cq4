@@ -2,7 +2,7 @@ package cq.server
 
 import cq.api.*
 import cq.core.LedgerPolicy
-import cq.host.{DeliveryQueue, HostFiles, HttpServerApi}
+import cq.host.{HostFiles, HttpServerApi, SessionDelivery}
 import java.io.PrintStream
 import java.net.URI
 import java.nio.channels.FileChannel
@@ -148,7 +148,7 @@ final class Cli(context: CliContext, location: ProjectLocation, clock: Clock) {
       val grant = rootApi.grant(GrantRequest(run.project.project, Actor("CQ host collector", run.attempt.session, Role.Collector),
         clock.millis() + Duration.ofHours(1).toMillis))
       val collector = new HttpServerApi(URI.create(run.project.endpoint), grant.value, run.attempt.session, RequestTimeout)
-      val delivered = new DeliveryQueue(root.resolve("delivery")).flush(collector)
+      val delivered = SessionDelivery.flush(root, run, collector)
       output.println(s"Acknowledged $delivered pending delivery batches from $root")
     case Nil | List("--help") => output.println("cq serve | init [--endpoint URL] [--project-id UUID] [--name TEXT] | web | run HARNESS --settings FILE --input FILE | job upload --session DIR | query [--ledger NAME] [--archived Active|Archived|All] [--after T1 --snapshot N] [--limit N] | status [audit|costs|attempts|outcomes] [--task T1|--cohort UUID|--session UUID] [--attempt UUID] [--after CURSOR] [--snapshot N] [--limit N]")
     case _ => throw new IllegalArgumentException("Unknown command; use cq --help")

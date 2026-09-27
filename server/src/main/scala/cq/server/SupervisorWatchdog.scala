@@ -1,0 +1,64 @@
+package cq.server
+
+import cq.host.{ExecutionDriver, ExecutionSpec, GuardianDriver, ManagedExecution, ProcessPhase}
+import distage.Lifecycle
+import java.nio.file.Path
+import java.time.Duration
+import zio.{Task, ZIO}
+
+final class SupervisorWatchdog(config: SupervisorConfig) extends AutoCloseable {
+  private val PollMillis = 20L
+  private val HostDrain = Duration.ofSeconds(10)
+  private val UnresolvedExit = 75
+  private val drain = config.limits.grace.plus(config.limits.kill).plus(HostDrain).toNanos
+  private var deadline = System.nanoTime() + config.limits.startup.plus(config.limits.execution).toNanos + drain
+  private var governor = Option.empty[ManagedExecution]
+  private var draining = false
+  private var closed = false
+  private val monitor = Thread.ofPlatform().daemon().name("cq-supervisor-deadline").start(() => {
+    var running = true
+    while (running) {
+      synchronized {
+        if (closed) running = false
+        else {
+          if (governor.exists(value => Set(ProcessPhase.Settled, ProcessPhase.Uncertain)(value.status.phase))) beginShutdown()
+          if (System.nanoTime() - deadline >= 0) {
+            // Forced process exit also fences retained I/O continuations; no settlement is inferred.
+            Runtime.getRuntime.halt(UnresolvedExit)
+          }
+        }
+      }
+      if (running) Thread.sleep(PollMillis)
+    }
+  })
+  def observe(value: ManagedExecution): Unit = synchronized {
+    require(governor.isEmpty && !closed, "Governing process observer is already bound or closed")
+    governor = Some(value)
+  }
+  def beginShutdown(): Unit = synchronized {
+    if (!draining) {
+      deadline = math.min(deadline, System.nanoTime() + drain)
+      draining = true
+    }
+  }
+  override def close(): Unit = {
+    synchronized { closed = true }
+    monitor.join()
+  }
+}
+
+object SupervisorWatchdog {
+  final class Resource(config: SupervisorConfig) extends Lifecycle.Of[Task, SupervisorWatchdog](
+    Lifecycle.make(ZIO.succeed(new SupervisorWatchdog(config)))(value => ZIO.attemptBlocking(value.close()).orDie)
+  )
+}
+
+final class SupervisorDriver(config: SupervisorConfig, watchdog: SupervisorWatchdog) extends ExecutionDriver {
+  private val delegate = new GuardianDriver(Path.of(config.settings.guardian))
+  private val governingInput = config.directory.resolve("payload").resolve(config.run.attempt.id.value.toString).resolve("input")
+  override def start(spec: ExecutionSpec): ManagedExecution = {
+    val execution = delegate.start(spec)
+    if (spec.input == governingInput) watchdog.observe(execution)
+    execution
+  }
+}

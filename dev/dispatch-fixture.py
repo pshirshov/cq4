@@ -1,0 +1,151 @@
+import json
+import os
+from pathlib import Path
+import signal
+import sys
+import time
+import urllib.request
+import uuid
+
+
+def identity():
+    return {"value": str(uuid.uuid4())}
+
+
+def main():
+    if sys.argv[1:] == ["--version"]:
+        print("codex-cli 0.156.1")
+        return
+    assert "CQ_TOKEN" not in os.environ and "CQ_DATABASE_URL" not in os.environ
+    arguments = sys.argv[1:]
+    data = json.load(sys.stdin)
+    child = "input" in data
+    sandbox = arguments[arguments.index("--sandbox") + 1]
+    target = Path(arguments[arguments.index("--output-last-message") + 1])
+
+    def emit(event):
+        print(json.dumps(event), flush=True)
+
+    def endpoint(name):
+        prefix = f"mcp_servers.{name}.url="
+        return json.loads(next(value.removeprefix(prefix) for value in arguments if value.startswith(prefix)))
+
+    def rpc(name, method, params):
+        packet = {"jsonrpc": "2.0", "id": str(uuid.uuid4()), "method": method, "params": params}
+        request = urllib.request.Request(endpoint(name), data=json.dumps(packet).encode(), headers={
+            "Authorization": "Bearer " + os.environ[f"CQ_MCP_{name.upper()}_TOKEN"],
+            "Content-Type": "application/json", "MCP-Protocol-Version": "2025-03-26",
+        })
+        with urllib.request.urlopen(request, timeout=25) as response:
+            return json.load(response)
+
+    def tool(name, tool_name, value, denied=False):
+        response = rpc(name, "tools/call", {"name": tool_name, "arguments": value})
+        if denied:
+            assert "error" in response or response["result"].get("isError"), response
+            return response
+        assert "error" not in response and not response["result"].get("isError"), response
+        body = response["result"]["structuredContent"]
+        if name == "cq_host" and tool_name == "dispatch":
+            emit({"type": "fixture.dispatch", "request": value, "reply": body})
+        return body
+
+    def finish(value):
+        target.write_text(json.dumps(value))
+        emit({"type": "turn.completed", "usage": {"input_tokens": 100, "cached_input_tokens": 20,
+              "cache_write_input_tokens": 0, "output_tokens": 31, "reasoning_output_tokens": 3}})
+
+    emit({"type": "thread.started", "thread_id": str(uuid.uuid4())})
+    emit({"type": "turn.started"})
+    for name in ["cq", "cq_host"]:
+        assert "result" in rpc(name, "initialize", {"protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": {"name": "fixture", "version": "1"}})
+    inventory = rpc("cq_host", "tools/list", {})["result"]["tools"]
+    assert [value["name"] for value in inventory] == (["workspace"] if child else ["dispatch"])
+
+    if child:
+        context = data["input"]
+        assignment = context["request"]
+        members = [value["id"] for value in assignment["members"]]
+        project = context["project"]
+        tool("cq_host", "dispatch", {"Status": {"attempt": identity(), "waitMillis": 0}}, denied=True)
+        tool("cq", "change", {"project": project, "change": {"request": identity(), "mutations": [], "fences": [], "reason": "forbidden"}}, denied=True)
+        tool("cq_host", "workspace", {"Read": {"path": "../outside", "offset": 0, "limit": 10}}, denied=True)
+        if "Worker" in assignment["work"]:
+            assert sandbox == "workspace-write"
+            Path("consumer.txt").write_text("candidate from isolated worker\n")
+            if assignment["work"]["Worker"]["mode"] == "Probe":
+                signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+            finish({"Work": {"members": [{"item": item, "disposition": "CandidateReady", "summary": "CHILD_ONLY_NARRATIVE " + "detail " * 1000} for item in members]}})
+            if assignment["work"]["Worker"]["mode"] == "Probe":
+                time.sleep(60)
+            else:
+                time.sleep(0.5)
+        else:
+            assert sandbox == "read-only" and context["previous"]["candidate"] is not None
+            listing = tool("cq_host", "workspace", {"Entries": {"path": ".", "after": None, "limit": 200}})
+            assert "consumer.txt" in [entry["name"] for entry in listing["Listed"]["page"]["entries"]]
+            text = tool("cq_host", "workspace", {"Read": {"path": "consumer.txt", "offset": 0, "limit": 8192}})
+            assert text["Text"]["page"]["text"] == "candidate from isolated worker\n"
+            tool("cq_host", "workspace", {"Read": {"path": ".git", "offset": 0, "limit": 10}}, denied=True)
+            assert context["previous"]["validation"] and all(value["state"] == "Passed" for value in context["previous"]["validation"])
+            finish({"Review": {"members": [{"item": item, "verdict": "Accepted", "findings": []} for item in members]}})
+        return
+
+    assert sandbox == "read-only"
+    project = data["project"]["project"]
+    draft = {"title": "Consumer fixture", "body": "Implement consumer.txt with the specified contents", "labels": [], "archived": False,
+             "content": {"Task": {"status": "Ready", "acceptance": ["Exact content verified"], "result": None, "validation": []}}, "citations": []}
+    created = tool("cq", "change", {"project": project, "change": {"request": identity(), "mutations": [{"Create": {"draft": draft}}], "fences": [], "reason": "Fixture task"}})
+    members = created["Changed"]["ack"]["items"]
+    claim = tool("cq", "claim", {"project": project, "action": {"Acquire": {"id": identity(), "members": [value["id"] for value in members], "durationMillis": "180000"}}})
+    request = {"request": identity(), "work": {"Worker": {"mode": "Implement"}}, "harness": "Codex", "members": members,
+               "guidance": [], "artifacts": [], "previous": None, "fence": claim["Claimed"]["claim"]["fence"], "limits": data["limits"]}
+    exiting = data["request"] == "exit-with-running-child"
+    if exiting:
+        request["work"] = {"Worker": {"mode": "Probe"}}
+    first = tool("cq_host", "dispatch", {"Start": {"request": request}})["Status"]["value"]
+    if exiting:
+        for _ in range(100):
+            running = tool("cq_host", "dispatch", {"Status": {"attempt": first["attempt"], "waitMillis": 0}})["Status"]["value"]
+            if running["process"] == "Running":
+                finish({"summary": "Governing fixture exits with a live child; host owns hierarchy termination"})
+                return
+            time.sleep(0.05)
+        raise AssertionError("Exit fixture child did not start")
+    replay = tool("cq_host", "dispatch", {"Start": {"request": request}})["Status"]["value"]
+    assert first["attempt"] == replay["attempt"]
+    changed = {**request, "work": {"Worker": {"mode": "Probe"}}}
+    tool("cq_host", "dispatch", {"Start": {"request": changed}}, denied=True)
+
+    def poll(attempt):
+        for _ in range(8):
+            value = tool("cq_host", "dispatch", {"Status": {"attempt": attempt, "waitMillis": 20000}})["Status"]["value"]
+            if value["phase"] not in ["Preparing", "Running", "Stopping", "Validating", "Publishing"]:
+                return value
+        raise AssertionError("Fixture child did not finish")
+
+    worker = poll(first["attempt"])
+    assert worker["phase"] == "Completed" and worker["counts"]["ready"] == 1 and worker["counts"]["validationFailed"] == 0, worker
+    assert worker["result"] and worker["usageDelivered"] and worker["detailsOmitted"]
+    assert poll(first["attempt"]) == worker
+    review_request = {**request, "request": identity(), "work": {"Reviewer": {}}, "previous": worker["result"]}
+    review = tool("cq_host", "dispatch", {"Start": {"request": review_request}})["Status"]["value"]
+    reviewed = poll(review["attempt"])
+    assert reviewed["phase"] == "Completed" and reviewed["counts"]["accepted"] == 1, reviewed
+    cancelled_request = {**request, "request": identity(), "work": {"Worker": {"mode": "Probe"}}}
+    cancelled = tool("cq_host", "dispatch", {"Start": {"request": cancelled_request}})["Status"]["value"]
+    for _ in range(100):
+        running = tool("cq_host", "dispatch", {"Status": {"attempt": cancelled["attempt"], "waitMillis": 0}})["Status"]["value"]
+        if running["process"] == "Running":
+            break
+        time.sleep(0.05)
+    else:
+        raise AssertionError("Cancellation fixture did not start")
+    tool("cq_host", "dispatch", {"Cancel": {"attempt": cancelled["attempt"]}})
+    stopped = poll(cancelled["attempt"])
+    assert stopped["phase"] == "Cancelled" and stopped["result"] is None and stopped["usageDelivered"], stopped
+    finish({"summary": "Worker candidate validated, reviewed by handle, cancellation and permissions verified; integration remains pending"})
+
+
+if __name__ == "__main__":
+    main()

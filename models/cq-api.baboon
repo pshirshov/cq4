@@ -305,8 +305,11 @@ root data HarnessSetting {
   providerExtensions: lst[str] providerEnvironment: set[str]
 }
 root data HostLimits { startupMillis: i64 executionMillis: i64 heartbeatMillis: i64 graceMillis: i64 killMillis: i64 outputBytes: i32 }
-root data SupervisorSettings { stateRoot: str guardian: str harnesses: lst[HarnessSetting] limits: HostLimits }
+root data ValidationCheck { name: str command: lst[str] executionMillis: i64 outputBytes: i32 }
+root data SupervisorSettings { stateRoot: str guardian: str harnesses: lst[HarnessSetting] limits: HostLimits checks: lst[ValidationCheck] }
 root data GoverningReport { summary: str }
+root data HarnessRoute { harness: Harness model: str provider: str }
+root data GoverningInput { project: ProjectConfig routes: lst[HarnessRoute] checks: lst[str] limits: HostLimits request: str }
 root data NativeManifest { encoding: str mediaType: str bytes: i64 sha256: str parts: lst[ArtifactId] }
 root adt HostDelivery {
   data Usage { value: HostUsageInput }
@@ -341,10 +344,44 @@ root adt ChildReport {
   data Review { members: lst[ReviewMember] }
 }
 root data ChildResult {
-  attempt: AttemptId request: DispatchRequest base: GitCommit candidate: opt[GitCommit] report: ChildReport
+  attempt: AttemptId request: DispatchRequest base: GitCommit candidate: opt[GitCommit] report: ChildReport validation: lst[ValidationEvidence]
 }
 root data ResolvedArtifact { metadata: ArtifactMetadata body: str }
 root data ChildInput {
   project: ProjectId request: DispatchRequest members: lst[ItemView] guidance: lst[ItemView]
   artifacts: lst[ResolvedArtifact] previous: opt[ChildResult]
+}
+root data ChildExecutionInput { input: ChildInput base: GitCommit checks: lst[ValidationCheck] }
+enum ValidationState { Passed Failed Unknown }
+root data ValidationEvidence { check: str state: ValidationState artifact: ArtifactId }
+root data ValidationObservation { check: ValidationCheck candidate: GitCommit job: JobRecord stdout: ArtifactId stderr: ArtifactId }
+enum DispatchPhase { Preparing Running Stopping Validating Publishing Completed Failed Cancelled Unknown PublicationPending }
+enum ChildNext { Wait Review Revise ResolveBlocker Retry ConsiderAcceptance InspectEvidence RetryDelivery }
+root data ChildCounts { ready: i32 accepted: i32 changesRequested: i32 blocked: i32 failed: i32 validationFailed: i32 validationUnknown: i32 }
+root data DispatchStatus {
+  request: RequestId attempt: AttemptId phase: DispatchPhase process: opt[JobPhase] members: lst[ItemId]
+  counts: ChildCounts next: ChildNext blocker: opt[str] result: opt[ArtifactId] detailsOmitted: bit usageDelivered: bit
+}
+root data DispatchTicket { request: DispatchRequest assignment: Assignment attempt: Attempt profile: HarnessSetting }
+root adt DispatchCommand {
+  data Start { request: DispatchRequest }
+  data Status { attempt: AttemptId waitMillis: i32 }
+  data Cancel { attempt: AttemptId }
+}
+root adt DispatchReply {
+  data Status { value: DispatchStatus }
+  data Failed { fault: Fault }
+}
+root adt WorkspaceCommand {
+  data Entries { path: str after: opt[str] limit: i32 }
+  data Read { path: str offset: i32 limit: i32 }
+}
+enum WorkspaceEntryKind { File Directory Symlink }
+root data WorkspaceEntry { name: str kind: WorkspaceEntryKind }
+root data WorkspacePage { entries: lst[WorkspaceEntry] after: opt[str] hasMore: bit }
+root data WorkspaceText { path: str offset: i32 next: i32 hasMore: bit text: str }
+root adt WorkspaceReply {
+  data Listed { page: WorkspacePage }
+  data Text { page: WorkspaceText }
+  data Failed { fault: Fault }
 }

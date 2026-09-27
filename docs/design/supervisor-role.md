@@ -2,7 +2,7 @@
 
 `cq.server.Main` registers `ServerRole`, `ClientRole` and `SupervisorRole` through the same distage `RoleAppMain`. `cq run HARNESS --settings FILE --input FILE` selects the supervisor task; `cq :supervisor -- HARNESS --settings FILE --input FILE` is equivalent. Its dependency graph contains injected harness adapters, the local job lifecycle and HTTP clients. It does not acquire a PostgreSQL connection or the CQ domain server.
 
-This increment runs one **batch governing session**. Local child dispatch/workspace tools, reference assembly and claim-bound result admission are subsequent M2 work. It is not yet the complete `cq run` workflow. The five scoped domain tools are available to the governor; no child dispatch capability is advertised before its service exists. Interactive sessions are not implemented.
+The role runs one **batch governing session**, with the five scoped domain tools and a private [local child dispatch service](local-dispatch.md). The host resolves referenced input, executes workers and reviewers, captures candidates and validation, and returns compact status/result handles. Interactive sessions and the complete `cq run` workflow remain unfinished.
 
 ## Configuration and run
 
@@ -30,7 +30,8 @@ Initialize the consumer with the existing `cq init --endpoint URL`. It must be a
     "graceMillis": "1000",
     "killMillis": "3000",
     "outputBytes": 1048576
-  }
+  },
+  "checks": []
 }
 ```
 
@@ -66,10 +67,10 @@ Retry already-spooled delivery using the same executable and a host-authorized c
 cq job upload --session /absolute/session-directory
 ```
 
-This acquires a fresh collector credential for the recorded logical session and replays pending batches. It never restarts a harness or rewrites an audit observation. The original receipt remains a historical snapshot; CLI replay reports newly acknowledged batches, and current audit queries show the acknowledged state.
+This acquires a fresh collector credential for the recorded logical session and replays pending governing and child batches. It never restarts a harness or rewrites an audit observation. The original receipt remains a historical snapshot; CLI replay reports newly acknowledged batches, and current audit queries show the acknowledged state.
 
 ## Remaining integration
 
-The durable job service already quarantines unfinished records on recovery and owns process-tree shutdown. This role has not yet connected child dispatch, hierarchy admission, claims, reference-based prompt/result chaining, consumer evaluations or interactive telemetry. Delivery recovery handles **already-spooled batches**: recovery of output after a host dies before producing those batches remains open. Preparation failures and interrupted collection still require a complete attempt-outcome reconciliation path. No automatic retention/deletion is implemented. Native distribution verification remains M6 work.
+The durable job service quarantines unfinished records on recovery and owns process-tree shutdown. The role now connects child dispatch, claims and reference-based prompt/result chaining. Candidate integration, consumer evaluations and interactive telemetry remain open. Delivery recovery handles **already-spooled batches**: recovery of output after a host dies before producing those batches remains open. Preparation failures and interrupted collection still require a complete attempt-outcome reconciliation path. No automatic retention/deletion is implemented. Native distribution verification remains M6 work. Forced shutdown exits 75 and requires reconciliation; see the [shutdown boundary](local-dispatch.md#delivery-and-shutdown).
 
 See [verification evidence](../validation/m2-supervisor-role.md).
