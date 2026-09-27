@@ -90,6 +90,12 @@ object SupervisorConfig {
       value.text.trim
     }
     val repository = Path.of(command("rev-parse", "--show-toplevel")).toRealPath()
+    settings.integrationTarget.foreach { target =>
+      require(target.length <= 4096 && target.startsWith("refs/heads/") && target.matches("[A-Za-z0-9][A-Za-z0-9._/-]*") &&
+        !target.contains("..") && target.split("/", -1).forall(part => part.nonEmpty && !part.startsWith(".") && !part.endsWith(".") && !part.endsWith(".lock")),
+        "Integration target must be an explicit full branch reference")
+      command("show-ref", "--verify", "--hash", target)
+    }
     val base = GitCommit(command("rev-parse", "--verify", "HEAD"))
     val stateRoot = Path.of(settings.stateRoot)
     HostFiles.directory(stateRoot)
@@ -119,7 +125,7 @@ final class SupervisorJobs(config: SupervisorConfig, workspaces: WorkspaceServic
   )
 
 final class SupervisorProgram(config: SupervisorConfig, registry: HarnessRegistry, jobs: JobSupervisor, authority: SupervisorAuthority,
-  local: LocalControlServer, access: LocalAccess, dispatch: DispatchController, schemas: McpSchemas, output: HarnessOutput, clock: Clock, context: CliContext) {
+  local: LocalControlServer, access: LocalAccess, dispatch: DispatchController, integrations: IntegrationController, schemas: McpSchemas, output: HarnessOutput, clock: Clock, context: CliContext) {
   private val MaxOutputBytes = 32 * 1024 * 1024
   private val MaxRecordBytes = 64 * 1024
   private val MaxSummaryCharacters = 8192
@@ -130,7 +136,7 @@ final class SupervisorProgram(config: SupervisorConfig, registry: HarnessRegistr
     "Use the local dispatch tool to start a Worker using item revisions and handles only. The host owns prompt assembly, candidate capture and validation. Never read or compose child prompts or copy full results between children. " +
     "Poll Status with waitMillis 20000. When a worker result is ready, pass its handle as previous to a Reviewer request with the same member revisions and current fence. Prefer another configured harness for independent review. " +
     "Dispatch is sequential in this slice. Keep assignments distinct and use the compact status counts, next action and blockers. Explicit bounded CQ artifact reads are for necessary semantic drill-down. " +
-    "Children cannot write CQ ledgers or integrate candidates. You own those decisions. Candidate integration is not exposed yet; report retained reviewed candidates and that remaining step accurately. " +
+    "Children cannot write CQ ledgers or integrate candidates. You own those decisions. When integrationTarget is configured, use PrepareIntegration with a fresh ID and the accepted reviewer handle. Poll IntegrationStatus, inspect the compact frozen preview, then Integrate its ID. Only Recorded establishes domain recording; Pending requires reconciliation, and NotApplied requires inspecting the blocker. Without a target, report the retained reviewed candidate. " +
     "Do not claim a process or validation ran unless its host evidence exists. A completed child or accepted review does not establish final task acceptance. " +
     "Return exactly a JSON object with one string field, summary, describing the observed outcome and remaining work."
 
@@ -146,7 +152,7 @@ final class SupervisorProgram(config: SupervisorConfig, registry: HarnessRegistr
         HostFiles.immutable(config.directory.resolve("settings.json"), HostFiles.encode(SupervisorSettings_JsonCodec, config.settings), MaxRecordBytes)
         val collector = authority.collector
         val input = HostFiles.encode(GoverningInput_JsonCodec, GoverningInput(config.project,
-          config.settings.harnesses.map(value => HarnessRoute(value.harness, value.model, value.provider)), config.settings.checks.map(_.name), config.settings.limits, config.input))
+          config.settings.harnesses.map(value => HarnessRoute(value.harness, value.model, value.provider)), config.settings.checks.map(_.name), config.settings.limits, config.settings.integrationTarget, config.input))
         val invocation = schemas.nativeInvocation(attempt.harness,
           HarnessInvocation(Role.Governor, attempt.id, Instructions, schemas.schema("GoverningReport"),
             List(HarnessMcp(McpTarget.Domain, config.endpoint.resolve("/mcp"), authority.governorToken),
@@ -167,7 +173,7 @@ final class SupervisorProgram(config: SupervisorConfig, registry: HarnessRegistr
       (collector, queue, command) = prepared
       _ <- jobs.start(config.owner, WorkspaceSpec(project, attempt.session, attempt.id, config.run.repository, config.run.base), command)
       record <- jobs.await(config.owner, attempt.id)
-      _ <- dispatch.shutdown
+      _ <- integrations.shutdown.zipPar(dispatch.shutdown)
       receipt <- ZIO.attemptBlocking {
         val stdout = if (Files.exists(payload.resolve("stdout"))) HostFiles.bytes(payload.resolve("stdout"), MaxOutputBytes) else Array.emptyByteArray
         val stderr = if (Files.exists(payload.resolve("stderr"))) HostFiles.bytes(payload.resolve("stderr"), MaxOutputBytes) else Array.emptyByteArray
@@ -233,6 +239,7 @@ object SupervisorPlugin extends PluginDef {
     make[LocalAccess]
     make[ChildRunner]
     make[DispatchController].fromResource[DispatchController.Resource]
+    make[IntegrationController].fromResource[IntegrationController.Resource]
     make[LocalControl]
     make[LocalControlServer].fromResource[LocalControlServer.Resource]
     make[SupervisorProgram]

@@ -181,7 +181,7 @@ def main():
         consumer.mkdir()
         checks.run(["git", "init", "--quiet", str(consumer)], "consumer-init", 10)
         checks.run(["git", "-C", str(consumer), "-c", "user.name=CQ evaluation", "-c", "user.email=cq@example.invalid", "commit", "--quiet", "--allow-empty", "-m", "Evaluation base"], "consumer-base", 10)
-        settings = {"stateRoot": str(evidence / "sessions"), "guardian": str(guardian), "harnesses": routes,
+        settings = {"integrationTarget": None, "stateRoot": str(evidence / "sessions"), "guardian": str(guardian), "harnesses": routes,
                     "limits": {"startupMillis": "10000", "executionMillis": str(EXECUTION_MILLIS), "heartbeatMillis": "2000",
                                "graceMillis": "1000", "killMillis": "3000", "outputBytes": 8 * 1024 * 1024},
                     "checks": [{"name": "consumer-oracle", "command": [sys.executable, str(ROOT / "dev/consumer-oracle.py"), language],

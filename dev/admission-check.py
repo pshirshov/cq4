@@ -63,7 +63,7 @@ def reproduce(checks, command, scenario):
     executable.chmod(0o700)
     settings = evidence / "settings.json"
     settings.write_text(json.dumps({
-        "stateRoot": str(evidence / "sessions"), "guardian": str(guardian),
+        "integrationTarget": None, "stateRoot": str(evidence / "sessions"), "guardian": str(guardian),
         "evaluation": {"run": "claim-admission-reproduction", "scenario": scenario, "assessor": False},
         "harnesses": [{"harness": "Codex", "executable": str(executable), "model": "fixture-model", "provider": "fixture-provider",
                        "version": "0.156.1", "providerExtensions": [], "providerEnvironment": []}],

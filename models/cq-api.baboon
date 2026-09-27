@@ -395,10 +395,10 @@ root data HarnessSetting {
 }
 root data HostLimits { startupMillis: i64 executionMillis: i64 heartbeatMillis: i64 graceMillis: i64 killMillis: i64 outputBytes: i32 }
 root data ValidationCheck { name: str command: lst[str] executionMillis: i64 outputBytes: i32 }
-root data SupervisorSettings { stateRoot: str guardian: str harnesses: lst[HarnessSetting] limits: HostLimits checks: lst[ValidationCheck] evaluation: opt[EvaluationScope] }
+root data SupervisorSettings { stateRoot: str guardian: str harnesses: lst[HarnessSetting] limits: HostLimits checks: lst[ValidationCheck] evaluation: opt[EvaluationScope] integrationTarget: opt[str] }
 root data GoverningReport { summary: str }
 root data HarnessRoute { harness: Harness model: str provider: str }
-root data GoverningInput { project: ProjectConfig routes: lst[HarnessRoute] checks: lst[str] limits: HostLimits request: str }
+root data GoverningInput { project: ProjectConfig routes: lst[HarnessRoute] checks: lst[str] limits: HostLimits integrationTarget: opt[str] request: str }
 root data NativeManifest { encoding: str mediaType: str bytes: i64 sha256: str parts: lst[ArtifactId] }
 root adt HostDelivery {
   data Usage { value: HostUsageInput }
@@ -465,6 +465,13 @@ root adt IntegrationResolution {
   data Recorded { acknowledgement: ChangeAck observedTarget: GitCommit }
 }
 root data IntegrationRecord { intent: IntegrationIntent resolution: IntegrationResolution reservedAt: i64 resolvedAt: opt[i64] }
+root data IntegrationTicket { id: IntegrationId reviewer: ArtifactId }
+root data IntegrationPreview {
+  id: IntegrationId reviewer: ArtifactId target: str expected: GitCommit candidate: GitCommit members: lst[ItemRevision]
+}
+enum IntegrationPhase { Preparing Ready Running Pending Recorded NotApplied Failed }
+enum IntegrationNext { Wait Confirm Reconcile InspectEvidence Complete }
+root data IntegrationStatus { id: IntegrationId phase: IntegrationPhase preview: opt[IntegrationPreview] next: IntegrationNext blocker: opt[str] }
 root data IntegrationLocal { intent: IntegrationIntent attempted: bit observation: opt[IntegrationObservation] }
 root adt HostIntegration {
   data Reserve { intent: IntegrationIntent }
@@ -492,9 +499,13 @@ root adt DispatchCommand {
   data Start { request: DispatchRequest }
   data Status { attempt: AttemptId waitMillis: i32 }
   data Cancel { attempt: AttemptId }
+  data PrepareIntegration { id: IntegrationId reviewer: ArtifactId }
+  data Integrate { id: IntegrationId }
+  data IntegrationStatus { id: IntegrationId waitMillis: i32 }
 }
 root adt DispatchReply {
   data Status { value: DispatchStatus }
+  data Integration { value: IntegrationStatus }
   data Failed { fault: Fault }
 }
 root adt WorkspaceCommand {

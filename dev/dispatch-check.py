@@ -1,9 +1,11 @@
+import contextlib
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.request
 import uuid
 
@@ -15,7 +17,10 @@ def main():
     environment["CQ_TOKEN"] = os.environ["CQ_TOKEN"]
     endpoint = os.environ["CQ_ORIGIN"]
     fixture = Path("dev/dispatch-fixture.py").read_text()
-    with tempfile.TemporaryDirectory(prefix="cq-dispatch-") as temporary:
+    retained = os.environ.get("CQ_DISPATCH_EVIDENCE")
+    if retained is not None:
+        Path(retained).mkdir(parents=True)
+    with (contextlib.nullcontext(retained) if retained is not None else tempfile.TemporaryDirectory(prefix="cq-dispatch-")) as temporary:
         root = Path(temporary)
         repository = root / "consumer"
         repository.mkdir()
@@ -29,7 +34,7 @@ def main():
         executable.chmod(0o700)
         settings = root / "settings.json"
         settings.write_text(json.dumps({
-            "stateRoot": str(root / "sessions"), "guardian": str(guardian),
+            "integrationTarget": None, "stateRoot": str(root / "sessions"), "guardian": str(guardian),
             "evaluation": {"run": "deterministic-dispatch", "scenario": "worker-reviewer", "assessor": False},
             "harnesses": [{"harness": "Codex", "executable": str(executable), "model": "fixture-model", "provider": "fixture-provider",
                            "version": "0.156.1", "providerExtensions": [], "providerEnvironment": []}],
@@ -86,7 +91,102 @@ def main():
         assert "Acknowledged 1" in run(["job", "upload", "--session", str(session)])
         assert api({"Summary": {"filter": filter_value}}) == before, "Child replay changed accounting or cursor"
         print(json.dumps({"session": receipt["session"], "children": statuses, "usage": before, "maxParentReplyBytes": max(len(json.dumps(value["reply"]).encode()) for value in traffic)}))
-    print("Local dispatch: idempotent start, host candidate/checks, handle-only review, workspace permissions, cancellation, parent/child audit and child delivery replay passed")
+        subprocess.run(["git", "-C", str(repository), "branch", "integration"], check=True)
+        (repository / "governing.txt").write_text("staged governing work\n")
+        subprocess.run(["git", "-C", str(repository), "add", "governing.txt"], check=True)
+        (repository / "untracked.txt").write_text("untracked governing work\n")
+        original_index = (repository / ".git/index").read_bytes()
+        original_head = subprocess.check_output(["git", "-C", str(repository), "rev-parse", "HEAD"], text=True).strip()
+        configured = json.loads(settings.read_text())
+        configured["integrationTarget"] = "refs/heads/integration"
+        settings.write_text(json.dumps(configured))
+        source.write_text("integrate-reviewed-candidate")
+        integrated = json.loads(run(["run", "codex", "--settings", str(settings), "--input", str(source)]))
+        integrated_session = Path(integrated["directory"])
+        native = (integrated_session / "payload" / integrated["attempt"]["value"] / "stdout").read_text()
+        assert "CHILD_ONLY_NARRATIVE" not in native
+        events = [json.loads(line) for line in native.splitlines()]
+        result = next(value for value in events if value.get("type") == "fixture.integration")
+        preview = result["recorded"]["preview"]
+        assert subprocess.check_output(["git", "-C", str(repository), "rev-parse", "refs/heads/integration"], text=True).strip() == preview["candidate"]["value"]
+        assert subprocess.check_output(["git", "-C", str(repository), "show", "refs/heads/integration:consumer.txt"], text=True) == "candidate from isolated worker\n"
+        assert subprocess.check_output(["git", "-C", str(repository), "rev-parse", "HEAD"], text=True).strip() == original_head
+        assert (repository / ".git/index").read_bytes() == original_index
+        assert (repository / "governing.txt").read_text() == "staged governing work\n"
+        assert (repository / "untracked.txt").read_text() == "untracked governing work\n"
+        assert not (repository / "consumer.txt").exists()
+        before_jobs = {path.name: path.read_bytes() for path in (integrated_session / "journal").glob("*.json")}
+        for _ in range(2):
+            recovered = run(["job", "upload", "--session", str(integrated_session)])
+            assert f'Integration {preview["id"]["value"]}: Recorded' in recovered
+        assert before_jobs == {path.name: path.read_bytes() for path in (integrated_session / "journal").glob("*.json")}
+        integration_traffic = [value for value in events if value.get("type") == "fixture.dispatch" and "Integration" in value["reply"]]
+        assert integration_traffic and max(len(json.dumps(value["reply"]).encode()) for value in integration_traffic) < 4096
+        print(json.dumps({"integration": result, "session": integrated["session"], "maxIntegrationReplyBytes": max(len(json.dumps(value["reply"]).encode()) for value in integration_traffic)}))
+        subprocess.run(["git", "-C", str(repository), "update-ref", "refs/heads/integration", original_head, preview["candidate"]["value"]], check=True)
+        preload = root / "integration-stall.so"
+        subprocess.run(["gcc", "-std=c17", "-shared", "-fPIC", "-Wall", "-Wextra", "-Werror", "-o", str(preload), "dev/shutdown-stall.c", "-ldl"], check=True)
+        latch = root / "integration-crash"
+        latch.mkdir()
+        injected = {**environment, "LD_PRELOAD": str(preload), "CQ_FIXTURE_STALL_ROOT": str(latch), "CQ_FIXTURE_STALL_MODE": "integration-observation"}
+        with (latch / "stdout").open("w") as out, (latch / "stderr").open("w") as err:
+            process = subprocess.Popen(command + ["run", "codex", "--settings", str(settings), "--input", str(source)],
+                                       cwd=repository, env=injected, stdout=out, stderr=err)
+            try:
+                deadline = time.monotonic() + 70
+                while not (latch / "entered").exists():
+                    assert process.poll() is None, (latch / "stderr").read_text()[-5000:]
+                    assert time.monotonic() < deadline, "Integration observation latch was not reached"
+                    time.sleep(0.05)
+                stalled = Path((latch / "entered").read_text())
+                crash_session = stalled.parent.parent
+                local_path = next((crash_session / "integrations").glob("*.json"))
+                local = json.loads(local_path.read_text())
+                assert local["attempted"] and local["observation"] is None, local
+                intent = local["intent"]
+                assert subprocess.check_output(["git", "-C", str(repository), "rev-parse", intent["target"]], text=True).strip() == intent["candidate"]["value"]
+                live_upload = subprocess.run(command + ["job", "upload", "--session", str(crash_session)], cwd=repository,
+                                             env=environment, capture_output=True, text=True, timeout=30)
+                assert live_upload.returncode != 0 and "already owned" in live_upload.stderr, live_upload.stderr
+                process.kill()
+                assert process.wait(timeout=10) == -9
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait(timeout=10)
+                (latch / "release").touch()
+        assert not (crash_session / "receipt.json").exists()
+        integration_job = crash_session / "journal" / (intent["id"]["value"] + ".json")
+        before_job = integration_job.read_bytes()
+        before_ids = sorted(path.name for path in (crash_session / "journal").glob("*.json"))
+        reflog = repository / ".git/logs/refs/heads/integration"
+        before_reflog = reflog.read_bytes()
+
+        def read(selection):
+            packet = {"Read": {"input": {"project": intent["project"], "selection": selection}}}
+            request = urllib.request.Request(endpoint + "/api/call", data=json.dumps(packet).encode(), headers={
+                "Authorization": "Bearer " + environment["CQ_TOKEN"], "CQ-Session": str(uuid.uuid4()),
+                "CQ-Protocol-Version": "0.1.0", "Content-Type": "application/json"})
+            with urllib.request.urlopen(request, timeout=10) as response:
+                return json.load(response)
+
+        assert read({"Integration": {"id": intent["id"]}})["Integration"]["record"]["resolution"] == {"Pending": {}}
+        recovery = run(["job", "upload", "--session", str(crash_session)])
+        assert f'Integration {intent["id"]["value"]}: Recorded' in recovery
+        recorded = read({"Integration": {"id": intent["id"]}})["Integration"]["record"]
+        acknowledgement = recorded["resolution"]["Recorded"]["acknowledgement"]
+        assert acknowledgement["request"] == intent["id"]
+        assert acknowledgement["items"] == [{**member, "revision": {"value": str(int(member["revision"]["value"]) + 1)}} for member in intent["members"]]
+        replay = run(["job", "upload", "--session", str(crash_session)])
+        assert "Acknowledged 0" in replay and "Recorded" in replay
+        assert read({"Integration": {"id": intent["id"]}})["Integration"]["record"] == recorded
+        assert integration_job.read_bytes() == before_job
+        assert sorted(path.name for path in (crash_session / "journal").glob("*.json")) == before_ids
+        assert reflog.read_bytes() == before_reflog
+        assert (repository / ".git/index").read_bytes() == original_index
+        print(json.dumps({"crashSession": str(crash_session), "killedAt": "Git incorporated, local observation uncommitted",
+                          "resolution": recorded["resolution"], "newGitJobsOnRecovery": 0, "additionalRefUpdates": 0}))
+    print("Local dispatch: idempotent start, host candidate/checks, handle-only review, workspace permissions, cancellation, parent/child audit, child delivery replay, reviewed integration, preserved checkout/index and reconcile-only CLI replay and actual SIGKILL incorporation recovery passed")
 
 
 if __name__ == "__main__":

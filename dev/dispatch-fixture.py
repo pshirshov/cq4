@@ -68,6 +68,7 @@ def main():
         members = [value["id"] for value in assignment["members"]]
         project = context["project"]
         tool("cq_host", "dispatch", {"Status": {"attempt": identity(), "waitMillis": 0}}, denied=True)
+        tool("cq_host", "dispatch", {"Integrate": {"id": identity()}}, denied=True)
         tool("cq", "change", {"project": project, "change": {"request": identity(), "mutations": [], "fences": [], "reason": "forbidden"}}, denied=True)
         tool("cq_host", "workspace", {"Read": {"path": "../outside", "offset": 0, "limit": 10}}, denied=True)
         if "Worker" in assignment["work"]:
@@ -132,6 +133,38 @@ def main():
     review = tool("cq_host", "dispatch", {"Start": {"request": review_request}})["Status"]["value"]
     reviewed = poll(review["attempt"])
     assert reviewed["phase"] == "Completed" and reviewed["counts"]["accepted"] == 1, reviewed
+    if data["request"] == "integrate-reviewed-candidate":
+        assert data["integrationTarget"] == "refs/heads/integration"
+        operation = identity()
+        prepared_request = {"PrepareIntegration": {"id": operation, "reviewer": reviewed["result"]}}
+        first = tool("cq_host", "dispatch", prepared_request)["Integration"]["value"]
+        assert first["phase"] in ["Preparing", "Ready"], first
+        tool("cq_host", "dispatch", prepared_request)
+        tool("cq_host", "dispatch", {"PrepareIntegration": {"id": operation, "reviewer": worker["result"]}}, denied=True)
+
+        def integration():
+            for _ in range(8):
+                value = tool("cq_host", "dispatch", {"IntegrationStatus": {"id": operation, "waitMillis": 20000}})["Integration"]["value"]
+                if value["phase"] not in ["Preparing", "Running"]:
+                    return value
+            raise AssertionError("Integration did not finish")
+
+        ready = integration()
+        assert ready["phase"] == "Ready" and ready["next"] == "Confirm", ready
+        assert ready["preview"]["members"] == members and ready["preview"]["reviewer"] == reviewed["result"]
+        tool("cq_host", "dispatch", {"Integrate": {"id": operation}})
+        recorded = integration()
+        assert recorded["phase"] == "Recorded" and recorded["next"] == "Complete" and recorded["blocker"] is None, recorded
+        assert tool("cq_host", "dispatch", {"Integrate": {"id": operation}})["Integration"]["value"] == recorded
+        assert tool("cq_host", "dispatch", prepared_request)["Integration"]["value"] == recorded
+        item = tool("cq", "read", {"project": project, "selection": {"ItemDetail": {"id": members[0]["id"]}}})["Detail"]["view"]["item"]
+        assert item["draft"]["content"]["Task"]["status"] == "Done", item
+        for name in ["title", "body", "labels", "archived", "citations"]:
+            assert item["draft"][name] == draft[name]
+        assert item["draft"]["content"]["Task"]["acceptance"] == draft["content"]["Task"]["acceptance"]
+        emit({"type": "fixture.integration", "recorded": recorded, "item": item})
+        finish({"summary": "Reviewed candidate integrated into the configured target and task completion recorded exactly once"})
+        return
     cancelled_request = {**request, "request": identity(), "work": {"Worker": {"mode": "Probe"}}}
     cancelled = tool("cq_host", "dispatch", {"Start": {"request": cancelled_request}})["Status"]["value"]
     for _ in range(100):

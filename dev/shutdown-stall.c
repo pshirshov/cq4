@@ -28,6 +28,15 @@ int fsync(int fd) {
             int match = strcmp(mode, "ticket") == 0 && strstr(path, "/children/") != NULL && strstr(path, "/.upload-") != NULL;
             if (strcmp(mode, "input") == 0 && strstr(path, "/payload/") != NULL && size >= 6 && strcmp(path + size - 6, "/input") == 0)
                 match = atomic_fetch_add(&input_count, 1) == 1;
+            if (strcmp(mode, "integration-observation") == 0 && strstr(path, "/integrations/.integration-") != NULL) {
+                int source = open(path, O_RDONLY);
+                ssize_t read_size = source < 0 ? -1 : read(source, content, sizeof(content) - 1);
+                if (source >= 0) close(source);
+                if (read_size > 0) {
+                    content[read_size] = 0;
+                    match = strstr(content, "\"observation\":{\"Incorporated\"") != NULL;
+                }
+            }
             if (strcmp(mode, "exit") == 0 && strstr(path, "/journal/") != NULL) {
                 int source = open(path, O_RDONLY);
                 ssize_t read_size = source < 0 ? -1 : read(source, content, sizeof(content) - 1);

@@ -76,6 +76,7 @@ def main():
         consumer = evidence / "consumer"
         checks.run(["git", "clone", "--quiet", "--no-hardlinks", str(original / "consumer"), str(consumer)], "consumer-clone", 30)
         checks.run(["git", "-C", str(consumer), "fetch", "--quiet", "origin", chain["candidate"]["value"]], "candidate-fetch", 30)
+        settings["integrationTarget"] = None
         settings["stateRoot"] = str(evidence / "sessions")
         settings["evaluation"]["assessor"] = not correcting
         for route in settings["harnesses"]:

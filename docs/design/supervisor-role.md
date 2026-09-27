@@ -32,7 +32,8 @@ Initialize the consumer with the existing `cq init --endpoint URL`. It must be a
     "outputBytes": 1048576
   },
   "checks": [],
-  "evaluation": null
+  "evaluation": null,
+  "integrationTarget": null
 }
 ```
 
@@ -51,6 +52,8 @@ cq run codex --settings /absolute/settings.json --input /absolute/request.txt
 ```
 
 The input is a nonempty UTF-8 file of at most 192 KiB. Settings/project records are bounded to 64 KiB. Native streams are independently bounded, up to 32 MiB each. The combined startup, execution and cleanup limits plus a ten-minute delivery margin must fit the server's 24-hour scoped-credential lifetime. Installed harness versions are checked before launch; missing or unverified routes fail explicitly. `CQ_TOKEN` must authorize host credential grants. It remains in the host and is excluded from the harness environment.
+
+Set `integrationTarget` to an explicit existing full branch reference such as `refs/heads/integration` to enable reviewed-candidate integration. The branch must not be checked out when applying the update. Use `null` for candidate-only sessions.
 
 For evaluation runs, set `evaluation` to `{"run":"run-identity","scenario":"scenario-identity","assessor":false}`. Both identifiers are nonempty and at most 300 characters. The identity is frozen in the governing and child assignments and can be queried through the existing evaluation usage filter. Use `assessor: true` only for actual assessment overhead; ordinary product work uses `null`.
 

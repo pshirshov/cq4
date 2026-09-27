@@ -13,7 +13,7 @@ import java.time.{Clock, Duration}
 import java.util.UUID
 import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger}
 import java.util.concurrent.{CountDownLatch, TimeUnit}
-import zio.{Task, ZIO}
+import zio.{Semaphore, Task, ZIO}
 
 final class IntegrationReceiver extends ServerApi {
   private var records = Map.empty[IntegrationId, IntegrationRecord]
@@ -73,7 +73,7 @@ final class MemoryIntegrationJournal(owner: Scope) extends IntegrationJournal {
 
 final case class IntegrationFixture(owner: Scope, repository: Path, target: String, base: GitCommit, first: GitCommit, second: GitCommit,
   combined: GitCommit, git: GitIntegration, journal: IntegrationJournal, freshJournal: Task[IntegrationJournal], rewrite: GitCommit => Task[Unit],
-  checkout: Task[Unit], isolation: Task[Unit]) {
+  checkout: Task[Unit], isolation: Task[Unit], closeAdmission: Task[Unit]) {
   val server = new IntegrationReceiver
   val executions = new AtomicInteger(0)
   val counted: GitIntegration = new GitIntegration {
@@ -106,6 +106,7 @@ final class DummyIntegrationHarness extends IntegrationHarness {
     val target = "refs/heads/integration"
     var current = base
     var checkedOut = false
+    var closed = false
     var executions = Map.empty[IntegrationId, IntegrationExecution]
     val lock = new Object
     val git = new GitIntegration {
@@ -113,6 +114,7 @@ final class DummyIntegrationHarness extends IntegrationHarness {
         IntegrationTarget(current, current == intent.candidate || (current == combined && Set(first, second)(intent.candidate)), checkedOut)
       })
       override def execute(intent: IntegrationIntent) = ZIO.attempt(lock.synchronized {
+        if (closed) throw new IntegrationAdmissionClosed
         val applied = current == intent.expected
         if (applied) current = intent.candidate
         val out = if (applied) "start: ok\nprepare: ok\ncommit: ok\n" else "start: ok\n"
@@ -125,7 +127,7 @@ final class DummyIntegrationHarness extends IntegrationHarness {
     }
     operation(IntegrationFixture(owner, repository, target, base, first, second, combined, git, new MemoryIntegrationJournal(owner),
       ZIO.succeed(new MemoryIntegrationJournal(owner)), value => ZIO.succeed(lock.synchronized { current = value }),
-      ZIO.succeed(lock.synchronized { checkedOut = true }), ZIO.unit))
+      ZIO.succeed(lock.synchronized { checkedOut = true }), ZIO.unit, ZIO.succeed(lock.synchronized { closed = true })))
   }
 }
 
@@ -160,7 +162,9 @@ final class RealIntegrationHarness(local: LocalWorkspaceFixture, guardian: Guard
       directory <- ZIO.attemptBlocking(Files.createTempDirectory(local.directory, "integration-owner-"))
       jobs <- JobSupervisor.acquire(owner, ZIO.attemptBlocking(FileJobRepository.open(directory.resolve("jobs"), owner.project, owner.actor.session)),
         local.fixture.service, new GuardianDriver(guardian.binary), directory.resolve("payload"), Clock.systemUTC())
-      git = new SupervisedGitIntegration(owner, local.source, target, local.command, jobs, directory.resolve("payload"), guardian.environment,
+      admission <- Semaphore.make(1)
+      controlled = new GovernedIntegrationJobs(owner, jobs, admission)
+      git = new SupervisedGitIntegration(owner, local.source, target, local.command, controlled, directory.resolve("payload"), guardian.environment,
         ExecutionLimits(Duration.ofSeconds(3), Duration.ofSeconds(10), Duration.ofSeconds(1), Duration.ofMillis(100), Duration.ofSeconds(2), 65536))
       result <- operation(IntegrationFixture(owner, local.source, target, local.base, first, second, combined, git,
         new FileIntegrationJournal(directory.resolve("integrations"), owner),
@@ -172,7 +176,7 @@ final class RealIntegrationHarness(local: LocalWorkspaceFixture, guardian: Guard
           assert(Files.readString(local.source.resolve("tracked.txt")) == "governing staged\n")
           assert(Files.readString(local.source.resolve("untracked.txt")) == "governing untracked\n")
           assert(local.git(local.source, "rev-parse", "HEAD") == local.base.value)
-        }))
+        }, controlled.shutdown))
     } yield result
   }
 }
@@ -345,6 +349,86 @@ abstract class IntegrationCoordinatorTest extends SpecZIO with AssertZIO {
         run <- f.coordinator(missing).run(intent.id).either
         prepare <- f.coordinator(missing).prepare(intent).either
         _ <- assertIO(run.isLeft && prepare.isLeft && f.executions.get() == 0)
+      } yield ()
+    } }
+
+    "recover prepared and reserved operations without acquiring a reservation or launching Git" in { (harness: IntegrationHarness) => harness.use { f =>
+      val intent = f.intent(f.base, f.first)
+      val coordinator = f.coordinator(f.journal)
+      for {
+        _ <- coordinator.prepare(intent)
+        prepared <- coordinator.recover(intent.id)
+        _ <- assertIO(prepared.isEmpty && f.executions.get() == 0)
+        absent <- ZIO.attempt(f.server.call(Command.Read(ReadInput(f.owner.project, ReadSelection.Integration(intent.id)))))
+        _ <- assertIO(absent.isInstanceOf[Result.Failed])
+        _ <- ZIO.attempt(f.server.integrate(HostIntegrationInput(f.owner.project, HostIntegration.Reserve(intent))))
+        released <- coordinator.recover(intent.id)
+        _ <- assertIO(released.exists(_.record.resolution.isInstanceOf[IntegrationResolution.NotApplied]) && f.executions.get() == 0)
+        replay <- coordinator.recover(intent.id)
+        _ <- assertIO(replay == released && f.server.observations.get() == 1)
+        _ <- f.isolation
+      } yield ()
+    } }
+
+    "refuse to classify missing server evidence as no effect after local execution admission" in { (harness: IntegrationHarness) => harness.use { f =>
+      val intent = f.intent(f.base, f.first)
+      val coordinator = f.coordinator(f.journal)
+      for {
+        _ <- coordinator.prepare(intent)
+        _ <- f.journal.locked(intent.id)(entry => ZIO.attempt(entry.write(entry.read.get.copy(attempted = true))))
+        recovered <- coordinator.recover(intent.id).either
+        _ <- assertIO(recovered.isLeft)
+        _ <- assertIO(f.executions.get() == 0 && f.server.observations.get() == 0)
+      } yield ()
+    } }
+
+    "resolve a shutdown admission refusal as no effect rather than leaving an unlaunched reservation pending" in { (harness: IntegrationHarness) => harness.use { f =>
+      val intent = f.intent(f.base, f.first)
+      val coordinator = f.coordinator(f.journal)
+      for {
+        _ <- coordinator.prepare(intent)
+        _ <- f.closeAdmission
+        stopped <- coordinator.run(intent.id)
+        receipt <- f.git.execution(intent)
+        _ <- assertIO(receipt.isEmpty)
+        _ <- assertIO(stopped.record.resolution.isInstanceOf[IntegrationResolution.NotApplied])
+        recovered <- coordinator.recover(intent.id)
+        _ <- assertIO(recovered.contains(stopped) && f.server.observations.get() == 1)
+        _ <- f.isolation
+      } yield ()
+    } }
+
+    "keep attempted recovery pending and reject missing local ownership evidence without launching" in { (harness: IntegrationHarness) => harness.use { f =>
+      val intent = f.intent(f.base, f.first)
+      val coordinator = f.coordinator(f.journal)
+      for {
+        _ <- coordinator.prepare(intent)
+        _ <- ZIO.attempt(f.server.integrate(HostIntegrationInput(f.owner.project, HostIntegration.Reserve(intent))))
+        _ <- f.journal.locked(intent.id)(entry => ZIO.attempt(entry.write(entry.read.get.copy(attempted = true))))
+        pending <- coordinator.recover(intent.id)
+        _ <- assertIO(pending.exists(value => value.record.resolution == IntegrationResolution.Pending() && value.blocker.nonEmpty))
+        missing <- f.freshJournal
+        rejected <- f.coordinator(missing).recover(intent.id).either
+        _ <- assertIO(rejected.isLeft && f.executions.get() == 0 && f.server.observations.get() == 0)
+      } yield ()
+    } }
+
+    "replay a retained incorporation through reconcile-only recovery after lost domain acknowledgements" in { (harness: IntegrationHarness) => harness.use { f =>
+      val intent = f.intent(f.base, f.first)
+      val coordinator = f.coordinator(f.journal)
+      for {
+        _ <- coordinator.prepare(intent)
+        _ <- ZIO.succeed(f.server.failRecording.set(true))
+        pending <- coordinator.run(intent.id)
+        _ <- assertIO(pending.record.resolution == IntegrationResolution.Pending())
+        _ <- ZIO.succeed(f.server.loseAcknowledgement.set(true))
+        lost <- coordinator.recover(intent.id)
+        _ <- assertIO(lost.exists(_.blocker.nonEmpty))
+        recovered <- coordinator.recover(intent.id)
+        replay <- coordinator.recover(intent.id)
+        _ <- assertIO(recovered == replay && recovered.exists(_.record.resolution.isInstanceOf[IntegrationResolution.Recorded]) &&
+          f.executions.get() == 1 && f.server.observations.get() == 1)
+        _ <- f.isolation
       } yield ()
     } }
 

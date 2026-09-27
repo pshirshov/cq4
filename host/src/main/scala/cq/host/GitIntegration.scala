@@ -18,7 +18,22 @@ trait GitIntegration {
   def execution(intent: IntegrationIntent): Task[Option[IntegrationExecution]]
 }
 
-final class SupervisedGitIntegration(owner: Scope, repository: Path, target: String, command: HostCommand, jobs: JobSupervisor,
+trait IntegrationJobs {
+  def execute(workspace: WorkspaceSpec, command: JobCommand): Task[Unit]
+  def status(id: AttemptId): Task[JobRecord]
+}
+
+final class IntegrationAdmissionClosed extends RuntimeException("Integration execution admission is closed before job registration")
+
+final class RetainedIntegrationJobs(journal: JobRepository) extends IntegrationJobs {
+  override def execute(workspace: WorkspaceSpec, command: JobCommand): Task[Unit] =
+    ZIO.fail(new IllegalStateException("Retained integration recovery cannot execute Git"))
+  override def status(id: AttemptId): Task[JobRecord] = ZIO.attemptBlocking {
+    journal.records.find(_.workspace.attempt == id).getOrElse(throw DomainFailure(Fault.Missing("Retained integration job is missing")))
+  }
+}
+
+final class SupervisedGitIntegration(owner: Scope, repository: Path, target: String, command: HostCommand, jobs: IntegrationJobs,
   payloadRoot: Path, environment: Map[String, String], limits: ExecutionLimits) extends GitIntegration {
   private val MaxProtocolBytes = 65536
   private val GitArguments = List("git", "--no-replace-objects", "--no-pager", "-c", "core.hooksPath=/dev/null", "-c", "submodule.recurse=false")
@@ -65,13 +80,12 @@ final class SupervisedGitIntegration(owner: Scope, repository: Path, target: Str
 
   override def execute(intent: IntegrationIntent): Task[Unit] = for {
     _ <- ZIO.attemptBlocking(identity(intent))
-    _ <- jobs.start(owner, workspace(intent), launch(intent))
-    _ <- jobs.await(owner, AttemptId(intent.id.value))
+    _ <- jobs.execute(workspace(intent), launch(intent))
   } yield ()
 
   override def execution(intent: IntegrationIntent): Task[Option[IntegrationExecution]] = {
     val id = AttemptId(intent.id.value)
-    jobs.status(owner, id).flatMap { record => ZIO.attemptBlocking {
+    jobs.status(id).flatMap { record => ZIO.attemptBlocking {
       require(record.workspace == workspace(intent) && record.fingerprint == launch(intent).fingerprint, "Git job differs from the frozen integration effect")
       val settled = record.phase == JobPhase.Settled && record.exit.exists(value => value.settled && !value.hostFailure)
       def output(name: String, bytes: Long): String = {

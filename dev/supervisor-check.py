@@ -56,7 +56,7 @@ if prompt == "recovery input":
         executable.chmod(0o700)
         settings = root / "settings.json"
         settings.write_text(json.dumps({
-            "stateRoot": str(root / "sessions"), "guardian": str(guardian), "checks": [], "evaluation": None,
+            "integrationTarget": None, "stateRoot": str(root / "sessions"), "guardian": str(guardian), "checks": [], "evaluation": None,
             "harnesses": [{"harness": "Codex", "executable": str(executable), "model": "fixture-model", "provider": "fixture-provider",
                            "version": "0.156.1", "providerExtensions": [], "providerEnvironment": []}],
             "limits": {"startupMillis": "3000", "executionMillis": "15000", "heartbeatMillis": "1000",

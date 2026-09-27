@@ -1,6 +1,6 @@
 # Git integration — next M3 increment
 
-Status: implementation contract independently approved by Astra; the [server reservation foundation](../validation/m3-integration-reservations.md) is verified and approved at `595acc3`. The [local Git/journal/coordinator foundation](../validation/m3-git-coordinator.md) is verified and independently approved; governor-facing integration and combined-candidate dispatch remain open. This records the next boundary after [result admission](result-admission.md), committed at `a9403af`. Design approval does not close R27; the real two-session workflow and acknowledgement reconciliation must pass.
+Status: implementation contract independently approved by Astra; the [server reservation foundation](../validation/m3-integration-reservations.md) is verified and approved at `595acc3`. The [local Git/journal/coordinator foundation](../validation/m3-git-coordinator.md) is verified and independently approved; [governor-facing integration](../validation/m3-connected-integration.md) passes all deterministic gates with independent Astra approval; combined-candidate dispatch remains open. This records the next boundary after [result admission](result-admission.md), committed at `a9403af`. Design approval does not close R27; the real two-session workflow and acknowledgement reconciliation must pass.
 
 ## Required behavior
 
@@ -47,6 +47,14 @@ The mutating Git executor needs the same supervisor-owned process-lifetime disci
 For target advancement, a host-generated `CombinationPlan` handle binds repository/target, observed target commit and original worker result. Only `Worker(ResolveConflict)` may consume it. Host preparation uses that frozen target as the isolated workspace base, applies/merges the original candidate, and supplies conflict state by handle. Capture a new candidate descending from the frozen target, rerun configured checks, and obtain a fresh independent reviewer result. Existing `ChildRunner` base selection must change for this path; it currently always chooses the previous candidate. A further target advance requires a new operation and combination/review round.
 
 The initial target is an explicitly configured branch not checked out in any worktree. Reject checked-out targets before attempting an update. This requires cooperating Git writers: a preflight worktree check does not fence an arbitrary external checkout performed concurrently. CQ never updates shared checkout files or indexes.
+
+### Governor operations and recovery ownership
+
+Supervisor settings carry an optional explicit full `integrationTarget`; `null` leaves candidate-only operation. The existing local `dispatch` tool exposes prepare/apply/status actions exclusively to the governor. Preparation takes an operation identity and admitted reviewer handle, resolves the original worker and exact member revisions, renews the full claim, and freezes the completion request behind a compact preview. Reusing that identity with another reviewer conflicts. Preparation performs no Git mutation; the governor applies the frozen identity explicitly.
+
+The host retains at most 32 integration requests per session. Background operations publish their compact request ticket before acknowledgement; status polling is bounded to 20 seconds. Shutdown closes execution admission, cancels registered Git jobs and joins outstanding coordination under the existing process watchdog. A dedicated closed-admission rejection proves that no job registration occurred and is sealed as `NotApplied`. Other launch errors do not establish that fact.
+
+The existing `job upload` command acquires exclusive session job ownership and runs a separate reconcile-only operation. Its retained-job adapter rejects execution. It never creates a reservation, rebuilds the completion request or renews an expired ordinary claim. With an existing reservation, an unattempted local intent can be sealed as not applied; an attempted one can only inspect retained execution/incorporation or replay an observation. A missing server record means preparation only when local execution and observation are both absent. Missing counterpart evidence after admission is unresolved.
 
 ### Local execution and reconciliation
 

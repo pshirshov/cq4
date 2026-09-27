@@ -17,7 +17,7 @@ import java.nio.charset.StandardCharsets.UTF_8
 import zio.{Task, ZIO}
 import zio.interop.catz.*
 
-final class LocalControl(dispatch: DispatchController, access: LocalAccess, schemas: McpSchemas, config: SupervisorConfig) extends Http4sDsl[Task] {
+final class LocalControl(dispatch: DispatchController, integrations: IntegrationController, access: LocalAccess, schemas: McpSchemas, config: SupervisorConfig) extends Http4sDsl[Task] {
   private val Versions = List("2025-03-26", "2025-06-18", "2025-11-25")
   private val MaxRequestBytes = 65536
   private val Context = BaboonCodecContext.Default
@@ -32,7 +32,7 @@ final class LocalControl(dispatch: DispatchController, access: LocalAccess, sche
     "name" -> Json.fromString(name), "description" -> Json.fromString(description), "inputSchema" -> schemas.schema(input), "outputSchema" -> schemas.schema(output),
     "annotations" -> Json.obj("readOnlyHint" -> Json.fromBoolean(readOnly), "openWorldHint" -> Json.False))
   private def advertised(capability: LocalCapability): Json = if (capability.role == Role.Governor)
-    tool("dispatch", "DispatchCommand", "DispatchReply", "Start one child using references only, poll its compact status with a bounded wait, or cancel it. Forward result handles directly to the next child; full prompts and results stay outside your context.", false)
+    tool("dispatch", "DispatchCommand", "DispatchReply", "Start one child using references only, poll its compact status with a bounded wait, or cancel it. Prepare integration from an accepted reviewer handle, apply its frozen preview, and poll its compact outcome. Forward result handles directly to the next child; full prompts and results stay outside your context.", false)
   else tool("workspace", "WorkspaceCommand", "WorkspaceReply", "List a bounded directory page or read a bounded Unicode text page in your assigned workspace. Relative paths only; Git metadata and symbolic-link traversal are denied.", true)
   private def decode[A](codec: BaboonJsonCodec[A], json: Json): Task[A] = ZIO.attempt {
     val value = codec.decode(Context, json).fold(throw _, identity)
@@ -47,11 +47,14 @@ final class LocalControl(dispatch: DispatchController, access: LocalAccess, sche
   private def call(capability: LocalCapability, name: String, arguments: Json): Task[(Json, Boolean)] = {
     if (capability.role == Role.Governor && name == "dispatch") {
       val operation = decode(DispatchCommand_JsonCodec, arguments).flatMap {
-        case DispatchCommand.Start(request) => ZIO.attempt(ChildContracts.request(config.project.project, request)) *> dispatch.start(request)
-        case DispatchCommand.Status(attempt, wait) => dispatch.status(attempt, wait)
-        case DispatchCommand.Cancel(attempt) => dispatch.cancel(attempt)
+        case DispatchCommand.Start(request) => ZIO.attempt(ChildContracts.request(config.project.project, request)) *> dispatch.start(request).map(DispatchReply.Status.apply)
+        case DispatchCommand.Status(attempt, wait) => dispatch.status(attempt, wait).map(DispatchReply.Status.apply)
+        case DispatchCommand.Cancel(attempt) => dispatch.cancel(attempt).map(DispatchReply.Status.apply)
+        case DispatchCommand.PrepareIntegration(id, reviewer) => integrations.prepare(IntegrationTicket(id, reviewer)).map(DispatchReply.Integration.apply)
+        case DispatchCommand.Integrate(id) => integrations(id).map(DispatchReply.Integration.apply)
+        case DispatchCommand.IntegrationStatus(id, wait) => integrations.status(id, wait).map(DispatchReply.Integration.apply)
       }
-      operation.map(value => (DispatchReply_JsonCodec.encode(Context, DispatchReply.Status(value)), false))
+      operation.map(value => (DispatchReply_JsonCodec.encode(Context, value), false))
         .catchAll(error => ZIO.succeed((DispatchReply_JsonCodec.encode(Context, DispatchReply.Failed(fault(error))), true)))
     } else if (Set(Role.Worker, Role.Reviewer)(capability.role) && name == "workspace") {
       decode(WorkspaceCommand_JsonCodec, arguments).flatMap(dispatch.workspace(capability.attempt, _))
