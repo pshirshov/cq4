@@ -1,0 +1,89 @@
+# Bounded adaptive execution cohorts
+
+Next M4 implementation contract after `6669db9`, independently approved by Astra after correction. Implements R16 using the existing four roles, transient worksets, claims, child results and operational usage audit. No new ledger, persistent item owner or model version. Runtime and evidence remain to be implemented.
+
+## Observable contract
+
+Before a managed workflow starts a child, the host considers a bounded pool of selected work for that role/mode. It returns groups with exact member revisions, a decision identity and short reasons. The governor claims one complete group and starts it using those references. Host admission verifies that the execution matches the choice. Full candidate narratives, compatibility comparisons and previous results stay outside the governor's context.
+
+Selection must establish these properties:
+
+- Only selected descendants are candidates. Contextual milestones never introduce sibling work.
+- The entire group shares a compatible operation and a common context witness; a chain of pairwise overlap is insufficient.
+- Every member remains separately identified and receives its own outcome.
+- A recommendation is neither a claim nor an execution. The ordinary atomic claim still decides concurrent ownership.
+- Membership is immutable once execution starts. A new round may produce different groups without changing earlier assignments or spend.
+- Decisions expose examined, excluded and unexamined counts. Savings remain unmeasured unless the evaluation has a matched accepted-quality comparison.
+
+## Protocol and ownership
+
+Extend the existing local `dispatch` protocol with an idempotent selection operation. Its input contains a fresh request identity, explicit roots, desired role/mode, optional previous result, guidance/artifact handles and bounded execution limits. Harness choice remains a configured route selected when starting the child. No additional user command or dispatched role is introduced.
+
+The compact reply contains a retained decision handle, candidate counts and a bounded list of choices. Each choice supplies a generated dispatch request identity, exact member revisions, role/mode, previous handle, cohort execution identity, context handles and reason codes. A Start using that identity must match the frozen selection; the parent does not reconstruct narrative input. Replaying an identical selection request returns its existing decision. Reusing its identity with different input is a conflict.
+
+Freeze selection inputs independently of the subsequently acquired claim fence. Start supplies that fence and a configured harness route, verifies current ownership of exactly the selected members, and repeats the existing claim/revision checks before execution and result admission. Acquiring another valid fence neither changes the selection nor resets progress history. Losing a claim never makes a recommendation authoritative.
+
+The host retains complete decision evidence through the existing collector/artifact boundary before advertising choices. Session-local choice state belongs to the supervisor. Restart does not resume its hierarchy; retained artifacts and immutable usage assignments remain inspectable. Direct `cq run` continues to support explicitly assigned work, while workflow runs require selection before new execution. Status, cancellation and existing integration reconciliation remain available.
+
+## Candidate bounds and scope
+
+Initial measurable limits:
+
+| Bound | Initial value |
+| --- | --- |
+| Selected/context closure | Existing 1,024-item graph limit |
+| Candidate pool per round | 32 items |
+| Group size | At most four members, below the existing 16-member dispatch ceiling |
+| Choices returned per round | At most eight |
+| Retained choices per governing session | 128 |
+| Full candidate content considered per round | 256 KiB |
+| Shared input budget | Existing child assembly byte limit, with explicit exclusion before dispatch |
+
+Use snapshot-consistent graph pages and bounded item/claim reads. The host may discover the existing bounded closure through summaries; only the candidate pool receives full content inspection. Fail explicitly on changed snapshots or unavailable data; do not reinterpret them as empty selections. Counts distinguish discovered summaries, candidates whose content was inspected, candidates excluded after inspection, and candidates whose content was not loaded because of the pool/byte limit. Narrower roots remain available when the graph itself exceeds its bound.
+
+Use existing readiness reasons for ordinary automatic selection. Active claims belonging to other sessions are excluded with their reason. Selection grants no lease; acquisition races return the ordinary conflict and require another round. Standalone review and a supplied exact previous candidate/proposal retain their frozen membership and existing applicability checks rather than silently selecting only the currently ready subset.
+
+## Whole-group compatibility
+
+Start with a conservative, language-independent policy. Shared labels, filename overlap and a shared milestone are never sufficient evidence.
+
+1. Explorer, Planner and Worker/Probe may share a direct producer context when every member is selected, ready for the same operation, free of intra-group dependency conflicts and within the collective input bound. The same producer must be present for every member. Additions are tested against the complete group, not merely the last member.
+2. Candidate/plan/audit review of a previous result preserves that exact result's member set and candidate/proposal identity. It cannot fuse independently produced candidates into one review. This shares review where the prior execution already established joint context.
+3. Fresh implementation uses a stored Planner compatibility assessment for the exact complete group. Compatible assessments permit an automatic shared Worker choice after structural validation. Unknown or incompatible assessments yield explicit singleton/split reasons. Labels or common checks alone never establish compatible edits or independent acceptance. Existing explicit multi-member worker execution remains supported, with its whole-member claim, isolated candidate, checks and independent per-member review.
+4. Conflict resolution preserves the combined plan's exact members and source identity. Regrouping cannot substitute members into that plan.
+
+### Planner compatibility evidence
+
+Extend the existing Planner report with bounded optional whole-group assessments and an Assessed member disposition distinct from Proposed ledger mutations. A compatibility-only report requires no fabricated ledger mutation. Each assessment records exact member revisions, Compatible/Unknown/Incompatible disposition, one shared change objective, dependencies and possible interference, and a separate acceptance/validation mapping for every member. Acceptance mappings reference the current frozen criteria; named checks must exist in the configured check inventory. Each assessment covers at least two members and at most the group bound, all within the Planner's assignment. Overlapping proposed groups are rejected rather than silently resolved.
+
+The host reads the admitted assessment result by handle, validates the entire group/revisions and bounds, and retains it with the selection evidence. It treats semantic compatibility as model-declared evidence; it is not permission to mutate, a passing check or task acceptance. A stale, malformed, incomplete, Unknown or Incompatible assessment cannot authorize automatic implementation fusion. One shared validation command never substitutes for the per-member mappings or subsequent independent review.
+
+When ordinary selection has related implementation candidates but no applicable assessment, it exposes a bounded Planner choice to assess them before selecting a shared Worker. Installed workflow/Planner instructions request that assessment automatically. Reviewer/Plan accepts either a ledger proposal or compatibility assessment as a reviewable subject; applying a ledger proposal still requires actual proposed mutations. No fifth role or extra user command is required.
+
+## Adaptation and progress
+
+Between rounds, re-read revisions, graph evidence, claims and compact prior outcomes. New producers or discriminating evidence can change the common context witness. An oversized group splits before input assembly. A blocked or failed member is separated from eligible independent work; later results still refer to the original immutable assignment.
+
+When a subgroup needs context from an earlier larger result, carry that result as an artifact handle. Do not put a smaller member set into the old exact-previous chain. A new execution receives its own identity, claim and per-member outcomes; historical group costs retain the old membership.
+
+Track selection/execution history within the governing session by member, mode and an operative-input fingerprint. Canonicalize member order, guidance order and evidence order. Exclude selection/request IDs, attempt IDs, fences, timestamps, harness choice and collector envelopes. Include operative item content/references, the exact candidate or proposal content and substantive evidence payloads. Re-uploading identical content under another artifact handle, or merely editing labels/provenance, does not reset deferral. This is a structural content comparison, not proof of semantic novelty.
+
+Include configured check definitions and candidate identity among operative host inputs. A changed validation command is a changed execution condition. Separate assessment applicability from progress: cosmetic revision changes can require exact-revision assessment refresh, but neither revision churn nor refreshed envelopes reset a failed Worker's eligibility. Only substantive assessment/input changes affect that fingerprint.
+
+An unchanged unsuccessful assignment is not repeatedly eligible. A changed operative item input, new admitted Explorer/Probe observation or independent review feedback permits reconsideration. A worker's own unchanged failed result is not new evidence authorizing its retry. Already produced work is not repeatedly selected for the same phase merely because integration has not changed the task's status. The reply explains deferred work and the condition needed to reconsider it.
+
+Choose least-attempted eligible members, then least-offered members, then their first-seen sequence and deterministic ID tie-breaking. Update offered history only for choices actually returned; inspecting an item without returning a choice cannot penalize it. Preserve this session-local history across graph snapshots and new selection request IDs. New arrivals do not displace equally eligible unoffered older work. With 32 inspected singleton candidates and eight returned choices, the next rounds offer the unreturned candidates before re-offering the first eight. Report remaining/unexamined counts. A blocked group cannot monopolize the next round; at most the existing child-attempt bound can execute in one governing session. Cancellation and exhausted limits yield an explicit remaining-work summary.
+
+## Usage and inspection
+
+Freeze the chosen execution identity and member set in the existing Assignment when a child actually starts. Shared assignments count once and expose references from every member. A following exact-member review may retain the same cohort execution identity; a split or regroup creates a new one. Unused recommendations produce no fictitious attempt or spend. Governing selection overhead remains unattributed unless an observed boundary supports narrower attribution.
+
+Retain the decision artifact link with the child ticket and expose it in bounded inspection. Record common witnesses, singleton/exclusion reasons, pool limits, exact revisions and applicable prior result handles. Usage summaries and evaluation reports consume the existing audit. Display actual shared/direct usage and coverage; do not invent a per-member split or equate fewer prompts with measured token savings.
+
+## Verification
+
+- Shared dummy/PostgreSQL cases: common whole-group producer; pairwise-chain rejection; labels/milestone-only rejection; contextual sibling exclusion; blocked/claimed members; revision drift; bounded scans and collective byte limits; exact whole-group compatibility/acceptance/check mapping and malformed/stale assessment refusal.
+- Actual supervisor fixtures: idempotent selection/start, mutation of choice membership/mode rejection before ticket/job creation, automatic shared exploration/planning, Compatible assessment → shared implementation/validation/exact-group review, Unknown assessment → singleton, unchanged-failure deferral despite fresh IDs/fences/harness/reordered handles, 32-to-eight fairness across changing snapshots, split/regroup without historical usage changes, per-member mixed outcomes and explicit unexamined counts.
+- Progress/applicability separation: a cosmetic member revision triggers assessment refresh while the unchanged failed Worker stays deferred; a substantive configured-check change permits reconsideration.
+- Real harness corpus: a related multi-item case exercises a shared investigation/planning/review execution and subsequent independent acceptance; collect actual hierarchy usage and retain singleton reasons where work cannot safely share execution. Reuse existing consumer quality oracles and the shared audit.
+- Independent Astra design and implementation review before calling this R16 complete. Full M4 still requires worked process examples, live named reviewer checks and all nine refreshed routes.
