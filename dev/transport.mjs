@@ -138,6 +138,16 @@ const mcpDiagnostic = await client.callTool({ name: 'search', arguments: malform
 assert.equal(mcpDiagnostic.isError, true);
 assert.deepEqual(mcpDiagnostic.structuredContent, httpDiagnostic);
 assert.deepEqual(httpDiagnostic.Failed.fault.QuerySyntax.diagnostic.span, { start: 9, end: 9 });
+const completion = { project: first, selection: { QueryComplete: { query: 'status:Re', cursor: 9, limit: 20 } } };
+const httpCompletion = await call({ Read: { input: completion } }, headers);
+const mcpCompletion = await client.callTool({ name: 'read', arguments: completion });
+assert.deepEqual(mcpCompletion.structuredContent, httpCompletion);
+assert.ok(httpCompletion.QueryAnalyzed.analysis.suggestions.some(value => value.text === 'ready'));
+assert.ok(httpCompletion.QueryAnalyzed.analysis.suggestions.every(value => value.span.start === 7 && value.span.end === 9));
+const references = await client.callTool({ name: 'read', arguments: { project: first,
+  selection: { QueryComplete: { query: 'blocked-by:T', cursor: 12, limit: 1 } } } });
+assert.equal(references.structuredContent.QueryAnalyzed.analysis.suggestions[0].text, 'T1');
+assert.equal(references.structuredContent.QueryAnalyzed.analysis.hasMore, true);
 const attempts = await client.callTool({ name: 'usage', arguments: { project: first, selection: { Attempts: { filter: { ProjectAll: {} }, after: null, snapshot: null, limit: 20 } } } });
 assert.deepEqual(attempts.structuredContent.UsageAttempts.page.entries, []);
 const costs = await client.callTool({ name: 'usage', arguments: { project: first, selection: { Costs: { filter: { ProjectAll: {} }, after: null, snapshot: null, limit: 20 } } } });
@@ -155,5 +165,8 @@ const crossProject = await restricted.callTool({ name: 'search', arguments: sear
 assert.equal(crossProject.isError, true);
 const scopedQuery = await restricted.callTool({ name: 'search', arguments: { ...search(first), query: `project:${second.value} OR archived:all` } });
 assert.ok(scopedQuery.structuredContent.Found.page.items.every(item => item.id.project.value === first.value));
+const crossCompletion = await restricted.callTool({ name: 'read', arguments: { ...completion, project: second } });
+assert.equal(crossCompletion.isError, true);
+assert.ok(crossCompletion.structuredContent.Failed.fault.Denied);
 await restricted.close();
 console.log('Two projects: HTTP/MCP/WS, signed role scope, browser cookie/origin, counters, idempotency, revisions, claims, history, committed events and usage reads passed');

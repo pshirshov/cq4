@@ -239,8 +239,8 @@ abstract class LedgerContractTest extends SpecZIO with AssertZIO {
       val owner = scope()
       val other = owner.copy(actor = owner.actor.copy(session = SessionId(UUID.randomUUID())))
       val start = 1000000L
-      val service = new LedgerService.Impl[IO](repository, Clock.fixed(Instant.ofEpochMilli(start), ZoneOffset.UTC), new QueryParser)
-      val later = new LedgerService.Impl[IO](repository, Clock.fixed(Instant.ofEpochMilli(start + 2000), ZoneOffset.UTC), new QueryParser)
+      val service = new LedgerService.Impl[IO](repository, Clock.fixed(Instant.ofEpochMilli(start), ZoneOffset.UTC), new QueryParser, new QueryCompleter(new QueryParser))
+      val later = new LedgerService.Impl[IO](repository, Clock.fixed(Instant.ofEpochMilli(start + 2000), ZoneOffset.UTC), new QueryParser, new QueryCompleter(new QueryParser))
       for {
         _ <- service.initialize(owner, "claims")
         left <- create(service, owner, task("One"))

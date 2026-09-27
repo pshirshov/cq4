@@ -13,6 +13,7 @@ trait LedgerService[F[_, _]] {
   def change(scope: Scope, request: ChangeRequest): F[Throwable, ChangeAck]
   def get(scope: Scope, id: ItemId): F[Throwable, ItemView]
   def search(scope: Scope, query: String, after: Option[ItemId], limit: Int): F[Throwable, ItemPage]
+  def complete(scope: Scope, query: String, cursor: Int, limit: Int): F[Throwable, QueryAnalysis]
   def history(scope: Scope, id: ItemId, before: Revision, limit: Int): F[Throwable, HistoryPage]
   def changes(scope: Scope, after: ChangeCursor, limit: Int): F[Throwable, ChangePage]
   def acquire(scope: Scope, id: ClaimId, members: Set[ItemId], durationMillis: Long): F[Throwable, Claim]
@@ -21,7 +22,7 @@ trait LedgerService[F[_, _]] {
 }
 
 object LedgerService {
-  final class Impl[F[+_, +_]: Error2](repository: LedgerRepository[F], clock: Clock, queries: QueryParser) extends LedgerService[F] {
+  final class Impl[F[+_, +_]: Error2](repository: LedgerRepository[F], clock: Clock, queries: QueryParser, completions: QueryCompleter) extends LedgerService[F] {
     import LedgerPolicy.*
 
     private def write(scope: Scope): Unit =
@@ -166,6 +167,9 @@ object LedgerService {
     }
 
     private def page(limit: Int): Unit = invalid(limit > 0 && limit <= MaxPage, s"Page size must be 1–$MaxPage")
+
+    override def complete(scope: Scope, query: String, cursor: Int, limit: Int): F[Throwable, QueryAnalysis] =
+      repository.transact(scope.project)(tx => completions.complete(tx, query, cursor, limit))
 
     override def search(scope: Scope, query: String, after: Option[ItemId], limit: Int): F[Throwable, ItemPage] = {
       import izumi.functional.bio.{F, *}

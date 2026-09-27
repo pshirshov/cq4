@@ -18,6 +18,12 @@ object QueryCatalog {
   val fields: Set[String] = Set("id", "ledger", "status", "tag", "project", "archived") ++ relations.keySet
 }
 
+enum QuerySite {
+  case Field(span: QuerySpan, prefix: String)
+  case Value(span: QuerySpan, prefix: String, field: String)
+  case Term(span: QuerySpan, prefix: String, afterExpression: Boolean, openGroup: Boolean)
+}
+
 final class QueryParser {
   private val MaxCharacters = 4096
   private val MaxTokens = 512
@@ -35,11 +41,66 @@ final class QueryParser {
   private def fail(span: QuerySpan, message: String): Nothing = throw Invalid(QueryDiagnostic(span, message))
 
   def parse(source: String): Either[QueryDiagnostic, QueryExpression] = try {
-    if (source.length > MaxCharacters) fail(QuerySpan(0, source.length), s"Query exceeds $MaxCharacters UTF-16 characters")
-    if (!UTF_8.newEncoder().canEncode(source) || source.contains('\u0000')) fail(QuerySpan(0, source.length), "Query contains invalid Unicode or NUL")
-    val expression = new Parser(tokens(source)).parse()
+    validateSource(source)
+    val expression = new Parser(tokens(source, false)).parse()
     Right(if (hasArchive(expression)) expression else QueryExpression.And(QueryExpression.Archive(ArchiveFilter.Active), expression))
   } catch { case Invalid(diagnostic) => Left(diagnostic) }
+
+  private def validateSource(source: String): Unit = {
+    if (source.length > MaxCharacters) fail(QuerySpan(0, source.length), s"Query exceeds $MaxCharacters UTF-16 characters")
+    if (!UTF_8.newEncoder().canEncode(source) || source.contains('\u0000')) fail(QuerySpan(0, source.length), "Query contains invalid Unicode or NUL")
+  }
+
+  def validCursor(source: String, cursor: Int): Boolean = cursor >= 0 && cursor <= source.length &&
+    !(cursor > 0 && cursor < source.length && Character.isHighSurrogate(source(cursor - 1)) && Character.isLowSurrogate(source(cursor)))
+
+  def completion(source: String, cursor: Int): Option[QuerySite] = {
+    require(validCursor(source, cursor), "Cursor must be a UTF-16 character boundary within the query")
+    try {
+      validateSource(source)
+      val before = tokens(source.take(cursor), true).dropRight(1)
+      val current = before.lastOption.filter(token => token.span.end == cursor && Set(Kind.Word, Kind.Quoted).contains(token.kind))
+      val previous = if (current.nonEmpty) before.dropRight(1) else before
+      val field = if (previous.lastOption.exists(_.kind == Kind.Colon)) previous.dropRight(1).lastOption
+        .filter(_.kind == Kind.Word).map(_.value.toLowerCase(Locale.ROOT)) else None
+      val start = current.fold(cursor)(_.span.start)
+      val prefix = current.fold("")(_.value)
+      val valueStart = if (current.isEmpty && field.nonEmpty) {
+        var index = cursor
+        while (index < source.length && source(index).isWhitespace) index += 1
+        index
+      } else start
+      val end = tokenEnd(source, valueStart)
+      val span = QuerySpan(start, end)
+      field match {
+        case Some(name) => Some(QuerySite.Value(span, prefix, name))
+        case None if current.exists(_.kind == Kind.Quoted) => None
+        case None =>
+          var next = end
+          while (next < source.length && source(next).isWhitespace) next += 1
+          if (next < source.length && source(next) == ':') Some(QuerySite.Field(span, prefix))
+          else {
+            val afterExpression = previous.lastOption.exists(token => token.kind == Kind.Right || token.kind == Kind.Quoted ||
+              (token.kind == Kind.Word && !Set("AND", "OR", "NOT").contains(token.value)))
+            val depth = previous.count(_.kind == Kind.Left) - previous.count(_.kind == Kind.Right)
+            Some(QuerySite.Term(span, prefix, afterExpression, depth > 0))
+          }
+      }
+    } catch { case _: Invalid => None }
+  }
+
+  private def tokenEnd(source: String, start: Int): Int = {
+    var index = start
+    if (index < source.length && source(index) == '"') {
+      index += 1
+      var closed = false
+      while (index < source.length && !closed) {
+        if (source(index) == '\\') index = math.min(index + 2, source.length)
+        else { closed = source(index) == '"'; index += 1 }
+      }
+    } else while (index < source.length && !source(index).isWhitespace && !"():\"".contains(source(index))) index += 1
+    index
+  }
 
   private def hasArchive(value: QueryExpression): Boolean = value match {
     case _: QueryExpression.Archive => true
@@ -49,7 +110,7 @@ final class QueryParser {
     case _ => false
   }
 
-  private def tokens(source: String): Vector[Token] = {
+  private def tokens(source: String, allowOpenQuote: Boolean): Vector[Token] = {
     val output = Vector.newBuilder[Token]
     var index = 0
     var count = 0
@@ -63,20 +124,16 @@ final class QueryParser {
           case ':' => index += 1; Token(Kind.Colon, ":", QuerySpan(start, index))
           case '-' => index += 1; Token(Kind.Minus, "-", QuerySpan(start, index))
           case '"' =>
-            index += 1
-            var closed = false
-            while (index < source.length && !closed) {
-              if (source(index) == '\\') index = math.min(index + 2, source.length)
-              else { closed = source(index) == '"'; index += 1 }
-            }
-            if (!closed) fail(QuerySpan(start, index), "Unterminated quoted value")
+            index = tokenEnd(source, start)
             val span = QuerySpan(start, index)
-            val value = io.circe.parser.parse(source.substring(start, index)).flatMap(_.as[String])
-              .fold(_ => fail(span, "Quoted values use JSON string escaping"), identity)
+            val literal = source.substring(start, index)
+            val decoded = io.circe.parser.parse(literal).flatMap(_.as[String])
+            val value = (if (allowOpenQuote && decoded.isLeft) io.circe.parser.parse(literal + "\"").flatMap(_.as[String]) else decoded)
+              .fold(_ => fail(span, if (index == source.length && !literal.endsWith("\"")) "Unterminated quoted value" else "Quoted values use JSON string escaping"), identity)
             if (!UTF_8.newEncoder().canEncode(value) || value.contains('\u0000')) fail(span, "Quoted value contains invalid Unicode or NUL")
             Token(Kind.Quoted, value, span)
           case _ =>
-            while (index < source.length && !source(index).isWhitespace && !"():\"".contains(source(index))) index += 1
+            index = tokenEnd(source, start)
             val value = source.substring(start, index)
             if (value.contains('\\')) fail(QuerySpan(start, index), "Quote values that require escaping")
             Token(Kind.Word, value, QuerySpan(start, index))

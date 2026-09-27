@@ -71,14 +71,26 @@ private final class PostgresLedgerTransaction(connection: Connection, override v
   override def get(id: ItemId): Option[Item] = sql.query("SELECT body::text FROM cq_items WHERE project_id = ? AND ledger = ? AND number = ?")(itemKey(_, id))(r => Wire.decode(Item_JsonCodec, r.getString(1))).headOption
 
   override def put(item: Item): Unit = {
-    sql.execute("INSERT INTO cq_items(project_id, ledger, number, revision, schema_version, archived, status, title, narrative, body, summary, search_text) " +
-      "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?::jsonb, ?) ON CONFLICT(project_id, ledger, number) DO UPDATE SET " +
+    val previous = sql.query("SELECT summary::text FROM cq_items WHERE project_id = ? AND ledger = ? AND number = ?")(itemKey(_, item.id))
+      (r => Wire.decode(ItemSummary_JsonCodec, r.getString(1))).headOption.fold(Set.empty[String])(_.labels)
+    sql.execute("INSERT INTO cq_items(project_id, ledger, number, revision, schema_version, archived, status, title, narrative, body, summary, search_text, display_id) " +
+      "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?::jsonb, ?, ?) ON CONFLICT(project_id, ledger, number) DO UPDATE SET " +
       "revision = EXCLUDED.revision, schema_version = EXCLUDED.schema_version, archived = EXCLUDED.archived, " +
       "status = EXCLUDED.status, title = EXCLUDED.title, narrative = EXCLUDED.narrative, body = EXCLUDED.body, summary = EXCLUDED.summary, search_text = EXCLUDED.search_text") { s =>
       itemKey(s, item.id); s.setLong(4, item.revision.value); s.setString(5, item.baboonDomainVersion)
       s.setBoolean(6, item.draft.archived); s.setString(7, LedgerPolicy.status(item.draft.content).toLowerCase(java.util.Locale.ROOT))
       s.setString(8, item.draft.title); s.setString(9, item.draft.body); s.setString(10, Wire.encode(Item_JsonCodec, item)); s.setString(11, Wire.encode(ItemSummary_JsonCodec, LedgerPolicy.summary(item)))
       s.setString(12, SearchText.document(item.draft.title, item.draft.body))
+      s.setString(13, LedgerPolicy.prefix(item.id.ledger) + item.id.number)
+    }
+    def labelKey(label: String)(statement: PreparedStatement): Unit = { projectKey(statement); statement.setString(2, label) }
+    (previous -- item.draft.labels).toList.sorted(SearchPrefix.ordering).foreach { label =>
+      val removed = sql.execute("DELETE FROM cq_labels WHERE project_id = ? AND label = ? AND members = 1")(labelKey(label))
+      if (removed == 0) require(sql.execute("UPDATE cq_labels SET members = members - 1 WHERE project_id = ? AND label = ? AND members > 1")(labelKey(label)) == 1,
+        "Label catalog is missing an existing item label")
+    }
+    (item.draft.labels -- previous).toList.sorted(SearchPrefix.ordering).foreach { label =>
+      sql.execute("INSERT INTO cq_labels(project_id, label, members) VALUES (?, ?, 1) ON CONFLICT(project_id, label) DO UPDATE SET members = cq_labels.members + 1")(labelKey(label))
     }
     ()
   }
@@ -155,6 +167,21 @@ private final class PostgresLedgerTransaction(connection: Connection, override v
       s.setInt(index, limit + 1)
     }
   }
+
+  private def prefixWhere(column: String, prefix: SearchPrefix): String = s"$column >= ?" + prefix.upper.fold("")(_ => s" AND $column < ?")
+  private def bindPrefix(prefix: SearchPrefix, limit: Int)(statement: PreparedStatement): Unit = {
+    projectKey(statement); statement.setString(2, prefix.value)
+    prefix.upper match {
+      case Some(upper) => statement.setString(3, upper); statement.setInt(4, limit)
+      case None => statement.setInt(3, limit)
+    }
+  }
+  override def completeItems(prefix: SearchPrefix, limit: Int): List[ItemSummary] =
+    sql.query(s"SELECT summary::text FROM cq_items WHERE project_id = ? AND ${prefixWhere("display_id", prefix)} ORDER BY display_id LIMIT ?")
+      (bindPrefix(prefix, limit))(r => Wire.decode(ItemSummary_JsonCodec, r.getString(1)))
+  override def completeLabels(prefix: SearchPrefix, limit: Int): List[String] =
+    sql.query(s"SELECT label FROM cq_labels WHERE project_id = ? AND ${prefixWhere("label", prefix)} ORDER BY label LIMIT ?")
+      (bindPrefix(prefix, limit))(_.getString(1))
 
   override def claim(id: ItemId): Option[Claim] =
     sql.query("SELECT c.body::text FROM cq_claim_members m JOIN cq_claims c USING(project_id, claim_id) WHERE m.project_id = ? AND m.ledger = ? AND m.number = ?")(itemKey(_, id))(r => Wire.decode(Claim_JsonCodec, r.getString(1))).headOption

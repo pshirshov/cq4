@@ -114,6 +114,11 @@ private final class DummyLedgerTransaction(initial: DummyLedgerState) extends Le
     }.toList.sortBy(i => LedgerPolicy.key(i.id)).iterator.map(LedgerPolicy.summary)
     ReadPage.select(candidates, limit, ItemSummary_JsonCodec)
   }
+  override def completeItems(prefix: SearchPrefix, limit: Int): List[ItemSummary] = state.items.valuesIterator
+    .filter(item => prefix.matches(LedgerPolicy.prefix(item.id.ledger) + item.id.number))
+    .toList.sortBy(item => LedgerPolicy.prefix(item.id.ledger) + item.id.number).take(limit).map(LedgerPolicy.summary)
+  override def completeLabels(prefix: SearchPrefix, limit: Int): List[String] = state.items.valuesIterator
+    .flatMap(_.draft.labels).filter(prefix.matches).toSet.toList.sorted(SearchPrefix.ordering).take(limit)
   override def claim(id: ItemId): Option[Claim] = state.members.get(id).flatMap(state.claims.get)
   override def claimById(id: ClaimId): Option[Claim] = state.claims.get(id)
   override def saveClaim(claim: Claim): Unit = {

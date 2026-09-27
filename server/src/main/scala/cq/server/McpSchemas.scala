@@ -21,7 +21,7 @@ final class McpSchemas {
   val tools: List[McpTool] = List(
     McpTool("search", "Read a bounded item page using text, quoted phrases, exact IDs (T42), ledger:, status:, tag:, project:, archived:true|false|all, or kebab-case relation:T42. Uppercase NOT/- binds before AND (also implicit), then OR; parentheses group. Active items are implicit unless archived: occurs. Continue with its snapshot cursor; restart on Resync. QuerySyntax returns UTF-16 source spans.", "SearchInput", Set("Found"), false,
       decoder(SearchInput_JsonCodec)(Command.Search.apply)),
-    McpTool("read", "Read an item, history or changes; inspect artifact metadata or explicitly drill down into bounded text pages by Unicode code-point offset.", "ReadInput", Set("Detail", "History", "Changes", "ArtifactInfo", "ArtifactText"), false,
+    McpTool("read", "Read an item, history or changes; complete query text at a UTF-16 cursor with bounded suggestions and syntax diagnostics; inspect artifact metadata or explicitly drill down into bounded text pages by Unicode code-point offset.", "ReadInput", Set("Detail", "History", "Changes", "ArtifactInfo", "ArtifactText", "QueryAnalyzed"), false,
       decoder(ReadInput_JsonCodec)(Command.Read.apply)),
     McpTool("change", "Commit an idempotent atomic change batch with expected revisions and claim fences. Governor authority required.", "ChangeInput", Set("Changed"), true,
       decoder(ChangeInput_JsonCodec)(Command.Change.apply)),

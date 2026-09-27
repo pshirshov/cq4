@@ -30,6 +30,8 @@ trait LedgerTransaction {
   def publish(request: RequestId, items: List[ItemRevision]): ChangeCursor
   def changes(after: ChangeCursor, limit: Int): ReadPage[ChangeEvent]
   def scan(query: QueryExpression, after: Option[ItemId], limit: Int): ReadPage[ItemSummary]
+  def completeItems(prefix: SearchPrefix, limit: Int): List[ItemSummary]
+  def completeLabels(prefix: SearchPrefix, limit: Int): List[String]
   def claim(id: ItemId): Option[Claim]
   def claimById(id: ClaimId): Option[Claim]
   def saveClaim(claim: Claim): Unit

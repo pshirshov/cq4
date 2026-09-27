@@ -14,6 +14,7 @@ CREATE TABLE cq_items (
   project_id uuid NOT NULL REFERENCES cq_projects,
   ledger text NOT NULL,
   number bigint NOT NULL CHECK (number > 0),
+  display_id text COLLATE "C" NOT NULL,
   revision bigint NOT NULL CHECK (revision > 0),
   schema_version text NOT NULL,
   archived boolean NOT NULL,
@@ -27,9 +28,16 @@ CREATE TABLE cq_items (
   PRIMARY KEY (project_id, ledger, number)
 );
 CREATE INDEX cq_items_active ON cq_items (project_id, ledger, number) WHERE NOT archived;
+CREATE UNIQUE INDEX cq_items_display ON cq_items (project_id, display_id);
 CREATE INDEX cq_items_status ON cq_items (project_id, status, ledger, number);
 CREATE INDEX cq_items_search ON cq_items USING gin (search_words);
 CREATE INDEX cq_items_labels ON cq_items USING gin ((summary->'labels'));
+CREATE TABLE cq_labels (
+  project_id uuid NOT NULL REFERENCES cq_projects,
+  label text COLLATE "C" NOT NULL,
+  members bigint NOT NULL CHECK (members > 0),
+  PRIMARY KEY (project_id, label)
+);
 CREATE TABLE cq_edges (
   project_id uuid NOT NULL,
   source_ledger text NOT NULL,

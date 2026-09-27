@@ -101,6 +101,9 @@ enum ArchiveFilter { Active Archived All }
 root data QuerySpan { start: i32 end: i32 }
 root data QueryDiagnostic { span: QuerySpan message: str }
 root data QueryItem { ledger: Ledger number: i64 }
+enum QuerySuggestionKind { Field Relation Operator Value Item }
+root data QuerySuggestion { kind: QuerySuggestionKind span: QuerySpan text: str label: str }
+root data QueryAnalysis { diagnostic: opt[QueryDiagnostic] suggestions: lst[QuerySuggestion] hasMore: bit }
 root adt QueryExpression {
   data All {}
   data Text { words: lst[str] phrase: bit }
@@ -212,6 +215,7 @@ root data ProjectPage { projects: lst[Project] after: opt[ProjectId] hasMore: bi
 root data ProjectConfig { project: ProjectId endpoint: str name: str }
 root data SearchInput { project: ProjectId query: str after: opt[ItemId] snapshot: opt[ChangeCursor] limit: i32 }
 root adt ReadSelection {
+  data QueryComplete { query: str cursor: i32 limit: i32 }
   data ArtifactInfo { id: ArtifactId }
   data ArtifactText { id: ArtifactId offset: i32 limit: i32 }
   data ItemDetail { id: ItemId }
@@ -245,6 +249,7 @@ root adt Command {
   data Usage { input: UsageInput }
 }
 root adt Result {
+  data QueryAnalyzed { analysis: QueryAnalysis }
   data ArtifactInfo { metadata: ArtifactMetadata }
   data ArtifactText { page: ArtifactPage }
   data Projects { page: ProjectPage }

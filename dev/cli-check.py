@@ -54,6 +54,10 @@ def main():
         assert json.loads(run(root, "query"))["Found"]["page"]["items"] == []
         assert json.loads(run(root, "query", "--query", 'ledger:Tasks ("retry deadline" OR status:Ready) archived:all'))["Found"]["page"]["items"] == []
         run(root, "query", "--query", "alpha AND", expected=1)
+        completed = json.loads(run(root, "query", "--query", "status:Re", "--complete", "9"))["QueryAnalyzed"]["analysis"]
+        assert any(value["text"] == "ready" and value["span"] == {"start": 7, "end": 9} for value in completed["suggestions"])
+        run(root, "query", "--complete", "999", expected=1)
+        run(root, "query", "--complete", "0", "--after", "T1", expected=1)
         assert json.loads(run(root, "status"))["UsageSummary"]["report"]["direct"]["total"]["known"] == "0"
         assert json.loads(run(root, "status", "audit", "--limit", "1"))["UsageAudit"]["page"]["entries"] == []
         assert json.loads(run(root, "status", "attempts", "--limit", "1"))["UsageAttempts"]["page"]["entries"] == []

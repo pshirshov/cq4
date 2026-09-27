@@ -140,7 +140,15 @@ object LedgerPolicy {
       case c: Content.Memory => text(c.knowledge, "knowledge"); text(c.applicability, "applicability")
       case c: Content.Upstream => text(c.component, "component"); text(c.version, "version"); text(c.reproduction, "reproduction"); c.report.foreach(citation); optional(c.outcome, "upstream outcome")
     }
-    val bytes = ItemDraft_JsonCodec.encode(baboon.runtime.shared.BaboonCodecContext.Default, draft).noSpaces.getBytes(java.nio.charset.StandardCharsets.UTF_8).length
+    val encoded = ItemDraft_JsonCodec.encode(baboon.runtime.shared.BaboonCodecContext.Default, draft)
+    val encoder = java.nio.charset.StandardCharsets.UTF_8.newEncoder()
+    def representable(value: io.circe.Json): Boolean = value.fold(
+      true, _ => true, _ => true,
+      text => !text.contains('\u0000') && encoder.canEncode(text),
+      _.forall(representable), _.values.forall(representable),
+    )
+    invalid(representable(encoded), "Item text must contain scalar Unicode without NUL")
+    val bytes = encoded.noSpaces.getBytes(java.nio.charset.StandardCharsets.UTF_8).length
     if (bytes > MaxDraftBytes) throw DomainFailure(Fault.Limit(s"Item draft exceeds $MaxDraftBytes UTF-8 bytes"))
   }
 

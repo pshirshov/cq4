@@ -1,6 +1,6 @@
 # Shared query language
 
-M3 implementation is in progress. Generated AST/diagnostic types, a bounded parser and shared text normalization now drive the single `SearchInput.query` operation. The CLI, MCP and browser submit the same query text. Completion and query-plan measurements remain pending. All contracts stay in the single mutable `cq.api` 0.1.0 model; the earlier `ItemFilter` contract is removed.
+M3 implementation is in progress. Generated AST/diagnostic types, a bounded parser and shared text normalization now drive the single `SearchInput.query` operation. The CLI, MCP and browser submit the same query text. Cursor-aware completion metadata is implemented; query-plan measurements remain pending. All contracts stay in the single mutable `cq.api` 0.1.0 model; the earlier `ItemFilter` contract is removed.
 
 ## Grammar and values
 
@@ -51,8 +51,16 @@ The SQL compiler emits only fixed operators/column names from the typed AST and 
 
 Pagination keeps the existing `(ledger, number)` order and project change cursor. Any committed item/reference change invalidates continuation; clients restart on `Resync`. Pages retain existing count/byte bounds. Counts, relevance ordering and snippets are not implicit page work. Positive text/reference queries can use their indexes; broad negations and `archived:all` may inspect many project rows. M3 verification must measure actual plans and affected-row write behavior at increasing unrelated sizes before claiming access-cost bounds. Updating search data must remain local to each changed item.
 
+## Completion metadata
+
+`ReadSelection.QueryComplete(query, cursor, limit)` uses the same parser and authorized project transaction. `QueryAnalysis` contains the ordinary full-query diagnostic, at most 50 suggestions and `hasMore`. Each suggestion supplies a kind, display label, insertion text and half-open UTF-16 replacement span. Cursor offsets outside the query or between surrogate halves are invalid. Incomplete quoted values may still have suggestions; syntax diagnostics remain visible independently.
+
+The local lexical context selects field/relation names, Boolean operators, known ledger/status/archive values, the current project UUID, labels or item IDs. Replacements consume the entire token around the cursor, preserve an existing colon and JSON-escape labels. Label prefixes are case-sensitive; identifiers and fixed vocabularies are case-insensitive. Archived IDs remain available for reference resolution and are marked in display labels. Completion does not claim whole-expression satisfiability or filter references by endpoint policy.
+
+PostgreSQL stores canonical display IDs with a project-scoped C-collated index. A project-scoped label catalog counts current item membership, including archived items. Edits update only removed/added labels within the item transaction; restore and rollback obey the same rules. Prefix lookups use a Unicode scalar successor range and `limit + 1`, without wildcard interpretation, full item bodies or total counts. The dummy uses matching UTF-8 byte ordering. Actual access plans still require measurement. All persisted draft strings must be scalar Unicode without NUL, so stored values retain a lossless JSON/database representation.
+
 ## Clients and remaining editor work
 
 MCP's `search` input accepts `query`; the administrative CLI accepts `cq query --query 'ledger:Tasks status:Ready'`; the browser has a search field and submit action. All use the shared server parser. Invalid queries return `Fault.QuerySyntax` with a bounded diagnostic; the browser preserves the entered text and displays its span. CLI errors return nonzero. Existing count/byte bounds and snapshot continuation rules apply.
 
-Cursor-aware completion still needs the field/status/relation catalog, source spans and bounded item-reference lookup under the same project scope. The full editor interaction belongs to M5; M3's analysis/completion contract remains open.
+HTTP and the existing MCP `read` capability expose completion. The CLI accepts `cq query --query 'status:Re' --complete 9 --limit 20`; completion cannot be combined with page/snapshot continuation. Positioned diagnostics are metadata in this response; invalid request bounds remain errors. M5 supplies the browser popup and keyboard interaction using this contract. [Verification and limits](../validation/m3-query-completion.md).

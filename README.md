@@ -112,6 +112,7 @@ cq init --endpoint http://127.0.0.1:8765
 cq init --project-id <existing-uuid> --endpoint <server-origin>
 cq init --name "New display name"
 cq query --query 'ledger:Tasks archived:all' --limit 20
+cq query --query 'status:Re' --complete 9 --limit 20
 cq status --task T1
 cq status audit --task T1 --limit 20
 cq status costs --task T1 --limit 20
@@ -124,7 +125,7 @@ cq job upload --session /absolute/session-directory
 
 Cost summaries include a bounded first page grouped by attribution, currency, cost basis and pricing version. Continue with `status costs --after '<after-object-as-JSON>' --snapshot <cursor> --limit 20` using the returned key and cursor; concurrent audit changes require restarting the listing. Raw observations retain original amounts and pricing evidence.
 
-The [query language](docs/design/query-language.md) is shared by CLI, MCP and browser. For example, `cq query --query 'ledger:Tasks status:Ready "retry deadline" NOT tag:blocked'`. Empty queries select active items; `archived:all` includes archived items. Continue with `--after T42 --snapshot <cursor>` from the returned page and restart on `Resync`. Invalid queries include UTF-16 source spans and return a nonzero CLI exit.
+The [query language](docs/design/query-language.md) is shared by CLI, MCP and browser. For example, `cq query --query 'ledger:Tasks status:Ready "retry deadline" NOT tag:blocked'`. Empty queries select active items; `archived:all` includes archived items. Continue with `--after T42 --snapshot <cursor>` from the returned page and restart on `Resync`. Invalid searches include UTF-16 source spans and return a nonzero CLI exit. `--complete <UTF-16 offset>` returns syntax diagnostics and up to 50 replacement suggestions through the existing read capability; it does not accept page continuation.
 
 `job upload` requires the supervisor to have released its session journal. It replays committed batches unchanged and reconciles interrupted attempts with partial usage and unknown outcomes. Incomplete child tickets are retained and explicitly reported with a nonzero exit after valid batches are replayed. See [recovery evidence](docs/validation/m2-recovery.md).
 
