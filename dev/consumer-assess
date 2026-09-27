@@ -161,7 +161,7 @@ def main():
                     session = sessions[0]
                     reviews = [json.loads(path.read_text()) for path in (session / "children").glob("*/receipt.json")]
                     write(evidence / "dispatch-statuses.json", reviews)
-                    retained = evaluation["artifacts"](checks.environment, evidence, session, reviews)
+                    retained = evaluation["artifacts"](checks.environment, evidence, session, reviews, [])
                     assert correcting or len(reviews) == 1, "Expected exactly one independent reviewer receipt"
                     if cohort_mode:
                         after = handoff("assessment-handoff.json")

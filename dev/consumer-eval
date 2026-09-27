@@ -76,10 +76,11 @@ def export(environment, evidence, session):
     return attempts["UsageAttempts"]["page"]["entries"]
 
 
-def artifacts(environment, evidence, session, statuses):
+def artifacts(environment, evidence, session, statuses, additional):
     project = json.loads((session / "run.json").read_text())["project"]["project"]
     found = {}
     pending = [value["result"] for value in statuses if value["result"] is not None]
+    pending.extend(additional)
     pending.extend(ticket["selection"] for path in (session / "children").glob("*/ticket.json")
                    if (ticket := json.loads(path.read_text()))["selection"] is not None)
     while pending:
@@ -239,7 +240,7 @@ def main():
                     session = sessions[0]
                     statuses = [json.loads(path.read_text()) for path in (session / "children").glob("*/receipt.json")]
                     write(evidence / "dispatch-statuses.json", statuses)
-                    values = artifacts(checks.environment, evidence, session, statuses)
+                    values = artifacts(checks.environment, evidence, session, statuses, [])
                     chain = runpy.run_path(str(ROOT / "dev/consumer-evidence.py"))["accepted_chain"](statuses, values, {value["name"]: value for value in settings["checks"]})
                     assert finished.returncode == 0, "Governing process did not complete successfully"
                     assert chain["workerHarness"] == PROFILES[worker][0] and chain["reviewerHarness"] == PROFILES[reviewer][0], "Accepted chain used another configured route"

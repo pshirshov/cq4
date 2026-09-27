@@ -54,3 +54,32 @@ CQ_EVIDENCE_ROOT=/srv/nvme/tmp/cq4-implementation ./dev/check fast
 This launches new real-model attempts and uses the actual retained reply. Full process assessment, standalone review, follow-up/reopening, defect investigation, upstream preparation, matched usage repetitions and human acceptance remain open.
 
 Astra independently verified the final source manifests, replay hashes, Human answer provenance and retained bytes, both oracle observations, exact current integration acknowledgements, clean handoff and usage totals. It approved this scoped increment for commit. It explicitly retained the applied ChangesRequested plan and subsequent governor edits as a process-quality gap; this approval does not close planning/application assessment or M4.
+
+## Independent process assessment runner
+
+`./dev/process-assess INTEGRATED_EVIDENCE_DIRECTORY` implements the [approved assessment sequence](../design/live-process-evaluations.md#integrated-go-assessment-and-standalone-review): replay the actual checkpoint and incorporation evidence, restore the database, check out the incorporated candidate, obtain one Pi Audit on current task revisions, then invoke the standalone `review --mode audit` workflow with that exact admitted subject and native Codex/Astra. A completed non-accepted Pi result is retained as a review subject; it is not relabeled accepted.
+
+The static [rubric](../../dev/process-assessment.md), original specification, full record history, actual supplied answer, integration observations, planning/application identities and hashed artifact index form a bounded, immutable Input artifact. It is published through the ordinary operator API with explicit runner-generated provenance. It is not a user judgment or new host validation. Both reviewers must receive the exact bundle directly; the previous result alone does not recursively supply it. Large original result bodies remain available through their stored handles.
+
+Predicates check exact request/input/member/guidance identities, workspace base, Audit-only execution, actual standalone workflow/subject, unchanged graph/history, detached HEAD and integration ref, no remaining claims/integration holds, observed usage and distinct attempt identities across the whole restored history. Baseline and both assessment sessions reconcile through the ordinary operational audit. Each stage retains its own native files, database dump and verdict; execution success and acceptance are separate fields.
+
+The bundle is 97,416 UTF-8 bytes for the current baseline. Before each stage, the runner measures the full encoded input context, including the escaped bundle and prior Pi body, and reserves the host's entire 16 KiB request allowance against the 192 KiB input limit. Five focused tests pass. Astra's integration-ref observation reproduced as false acceptance before correction (`process-assessment-reproductions/before.log`); `after.log` passes. Astra approved source execution after the fast gate.
+
+### First native assessment: correction required
+
+`20260927T204550-fast` passes 188 Scala scenarios, eleven process tests, five assessment tests and the existing bridge/evaluator checks. `20260927T204644-process-assess` matches it on all 232 non-documentation files (`process-assessment-source-verification.json` in the fast evidence directory). Both native stages execute and archive successfully; the final quality status is **assessment-not-accepted**.
+
+| Stage | Native reviewer | Elapsed | Quality verdict | Known reported tokens |
+| --- | --- | --- | --- | --- |
+| Precheck | Pi / gpt-5.5, attempt `a7affbf6-a08c-437d-b698-681e7131093b` | 123.129 s | Both tasks Accepted, with a stale-Handoff caveat | 831,371 |
+| Standalone review | Codex / gpt-6-astra, attempt `f005cb68-17ed-4f0b-bd1f-8eee0390c3ca` | 107.150 s | Both tasks ChangesRequested | 795,155 |
+
+Pi result `f0d52cf9-8b95-33cb-ab67-06052ffcddc8` is the exact standalone subject. Astra result `308ebad1-a928-32b6-abb2-d45565e6e4bb` rejects the stale Handoff: Handoff 1@3 still lists linking and integration as remaining although both are recorded as complete. Astra explicitly distinguishes assessment scope from mutation authority; Pi's narrower task verdict does not close this shared process defect. Correction must update the handoff with observed incorporation/validation and retain only genuinely outstanding work, preserving the earlier planning deviations.
+
+Astra also reports that it could not inspect candidate files with the tools it found. Its transcript contains CQ reads and empty MCP resource discovery, with no local `workspace` call. This is an unresolved inspection gap in this run, not proof that the adapter lacks workspace access: the configured Reviewer profile exposes that tool, and both earlier native Astra cohort Audits recorded successful `cq_host.workspace` calls. The next correction must make the inspection path explicit and retain actual file-read evidence.
+
+Both stages received the exact same bundle and frozen candidate `9cc3f9a999882735a635d7d14c2d2c653afcbced`; encoded input upper bounds are 145,989 and 150,403 bytes respectively. Current graph/history, detached HEAD, integration ref and claim-free handoff remain unchanged. There are no Worker or integration attempts in either assessment session. The combined audit reconciles baseline 6,516,662 plus both new sessions to **8,143,188** known tokens across 18 distinct attempts. All meters remain partial, with no absent meter; estimates/unknown costs retain their separate price bases. Neither the rejected assessment nor its usage is discarded.
+
+Each stage's `measure-parent-traffic.py` derives six dispatch calls from its hashed governing transcript. Precheck arguments/replies peak at 1,570/693 bytes; standalone at 1,450/1,851 bytes. The precheck governor reads one 1,916-byte Selection artifact; neither governor reads a Result body. The large evidence bundle stays behind its handle. These byte observations use the earlier stated exclusions and do not establish end-to-end token savings.
+
+Astra independently approved this scoped runner and negative-evidence increment for commit after verifying source/gate matches, both verdicts, input bounds, unchanged record/Git state, handoff and accounting. That approval retains Handoff correction and independent file inspection as open work; it does not accept the process outcome or M4.

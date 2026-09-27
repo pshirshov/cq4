@@ -187,7 +187,7 @@ def main():
                     statuses = [json.loads(path.read_text()) for path in (session / "children").glob("*/receipt.json")]
                     tickets = [json.loads(path.read_text()) for path in (session / "children").glob("*/ticket.json")]
                     write(evidence / "dispatch-statuses.json", statuses)
-                    artifacts = evaluation["artifacts"](checks.environment, evidence, session, statuses)
+                    artifacts = evaluation["artifacts"](checks.environment, evidence, session, statuses, [])
                     found = call(checks.environment, {"Search": {"input": {"project": project, "query": "archived:true OR archived:false", "after": None, "snapshot": None, "limit": 100}}})["Found"]["page"]
                     assert not found["hasMore"], "Worked-process snapshot exceeds its bound"
                     views, histories = [], []

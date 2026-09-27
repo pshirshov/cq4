@@ -1,0 +1,235 @@
+#!/usr/bin/env python3
+"""Inspect an integrated process, then exercise standalone review with native Astra."""
+import argparse
+import copy
+import datetime
+import hashlib
+import json
+import os
+from pathlib import Path
+import runpy
+import shutil
+import subprocess
+import sys
+import time
+import urllib.parse
+import urllib.request
+import uuid
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("checkpoint", type=Path)
+    original = parser.parse_args().checkpoint.resolve()
+    root = Path(__file__).resolve().parent.parent
+    os.chdir(root)
+    if any(shutil.which(name) is None for name in ["java", "sbt", "go"]):
+        os.execvp("nix", ["nix", "develop", "-c", str(root / "dev/process-assess"), str(original)])
+    evaluation = runpy.run_path(str(root / "dev/consumer-eval"))
+    support = runpy.run_path(str(root / "dev/check"))
+    predicates = runpy.run_path(str(root / "dev/process-assess-evidence.py"))
+    reconcile = runpy.run_path(str(root / "dev/process-evidence.py"))["reconcile_usage"]
+    write, call = evaluation["write"], evaluation["call"]
+    baseline = predicates["retained"](original)
+    source = json.loads((original / "source-sha256.json").read_text())
+    for name in ["dev/consumer-spec.md", "dev/consumer-oracle.py"]:
+        assert hashlib.sha256((root / name).read_bytes()).hexdigest() == source[name], "Consumer contract changed since checkpoint"
+    identifier = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S") + "-process-assess"
+    evidence = Path(os.environ.get("CQ_EVIDENCE_ROOT", "/srv/nvme/tmp/cq4-implementation")).resolve() / identifier
+    evidence.mkdir(parents=True, mode=0o700)
+    print("Evidence:", evidence, flush=True)
+    write(evidence / "baseline-replay.json", {"proof": baseline["proof"], "inputsSha256": baseline["inputsSha256"]})
+    files = subprocess.check_output(["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"]).decode().split("\0")
+    write(evidence / "source-sha256.json", {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in sorted(set(files)) if name and (root / name).is_file()})
+    checks = support["Checks"](evidence, dict(os.environ))
+    result = {"status": "running", "baselineEvidence": str(original), "candidate": baseline["proof"]["candidate"], "stages": [],
+              "implementation": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+              "scope": "intake-to-integration process and standalone review; historical planning deviations retained",
+              "remaining": ["follow-up/reopening", "defect/research/upstream example", "matched usage repetitions", "human acceptance"]}
+    write(evidence / "result.json", result)
+    try:
+        checks.generate()
+        command = ["java", "-cp", checks.classpath(), "cq.server.Main"]
+        guardian = evidence / "cq-guardian"
+        checks.run(["gcc", "-std=c17", "-O2", "-Wall", "-Wextra", "-Werror", "-o", str(guardian), "host/native/guardian.c"], "guardian-build", 60)
+        settings = copy.deepcopy(baseline["settings"])
+        settings.update(guardian=str(guardian), integrationTarget=None)
+        settings["evaluation"]["assessor"] = True
+        for route in settings["harnesses"]:
+            name = route["harness"].lower()
+            assert route["version"] in checks.run([route["executable"], "--version"], "version-" + name, 15)
+            if route["harness"] == "Codex":
+                route["model"] = "gpt-6-astra"
+        consumer = evidence / "consumer"
+        candidate = baseline["proof"]["candidate"]
+        checks.run(["git", "clone", "--quiet", "--no-hardlinks", str(original / "consumer"), str(consumer)], "consumer-clone", 30)
+        checks.run(["git", "-C", str(consumer), "fetch", "--quiet", "origin", candidate["value"]], "candidate-fetch", 30)
+        checks.run(["git", "-C", str(consumer), "checkout", "--quiet", "--detach", candidate["value"]], "candidate-checkout", 30)
+        checks.run(["git", "-C", str(consumer), "branch", "integration", candidate["value"]], "integration-ref", 10)
+        answer_bytes = (original / "supplied-answer.json").read_bytes()
+        assert (consumer / ".cq-evaluation/answer.json").read_bytes() == answer_bytes, "Candidate changed supplied answer bytes"
+        initial_session, = (original / "sessions").iterdir()
+        bundle_value = {"provenance": "Runner-generated assessment input exported from CQ; not a user judgment or new host validation",
+            "rubric": (root / "dev/process-assessment.md").read_text(), "specification": (root / "dev/consumer-spec.md").read_text(),
+            "candidate": candidate, "answer": baseline["answer"], "histories": baseline["histories"], "planning": baseline["planning"],
+            "integrations": baseline["integrations"], "governingReceipt": json.loads((initial_session / "receipt.json").read_text()),
+            "results": {key: {"kind": value["kind"], "sha256": value["sha256"], "attempt": value["attempt"]} for key, value in baseline["artifacts"].items() if value["kind"] in ["Result", "Validation"]},
+            "usage": json.loads((original / "combined-usage-summary.json").read_text()), "sourceHashes": baseline["inputsSha256"]}
+        bundle_text = json.dumps(bundle_value, ensure_ascii=False, separators=(",", ":"))
+        assert len(bundle_text.encode()) <= 128 * 1024, "Assessment bundle exceeds host artifact input bound"
+        (evidence / "assessment-bundle.json").write_text(bundle_text)
+        project = baseline["project"]["project"]
+        members = baseline["proof"]["tasks"]
+        member_views = [next(value for value in baseline["views"] if value["item"]["id"] == member["id"]) for member in members]
+        guidance_views = [value for value in baseline["views"] if value["item"]["id"] not in [member["id"] for member in members]]
+        guidance = [{"id": value["item"]["id"], "revision": value["item"]["revision"]} for value in guidance_views]
+        port = support["free_port"]()
+        checks.environment.update(CQ_HOST="127.0.0.1", CQ_PORT=str(port), CQ_ORIGIN=f"http://127.0.0.1:{port}",
+                                  CQ_TOKEN=uuid.uuid4().hex + uuid.uuid4().hex, CQ_SESSION=str(uuid.uuid4()))
+        with evaluation["database"](checks, evidence, support["free_port"]()):
+            parsed = urllib.parse.urlsplit(checks.environment["CQ_DATABASE_URL"].removeprefix("jdbc:"))
+            checks.run(["pg_restore", "--exit-on-error", "--clean", "--if-exists", "--host", parsed.hostname, "--port", str(parsed.port),
+                        "--username", checks.environment["CQ_DATABASE_USER"], "--dbname", parsed.path[1:], str(original / "cq-database.dump")], "database-restore", 60)
+            with checks.server(command, "process-assessor-server"):
+                environment = {name: value for name, value in checks.environment.items() if not name.startswith("CQ_")}
+                environment["CQ_TOKEN"] = checks.environment["CQ_TOKEN"]
+                with (evidence / "cq-init.log").open("w") as log:
+                    subprocess.run(command + ["init", "--endpoint", checks.environment["CQ_ORIGIN"], "--project-id", project["value"], "--name", baseline["project"]["name"]],
+                                   cwd=consumer, env=environment, stdout=log, stderr=subprocess.STDOUT, timeout=30, check=True)
+
+                def snapshot():
+                    found = call(checks.environment, {"Search": {"input": {"project": project, "query": "archived:true OR archived:false", "after": None, "snapshot": None, "limit": 100}}})["Found"]["page"]
+                    assert not found["hasMore"]
+                    views, histories = [], []
+                    for item in found["items"]:
+                        view = call(checks.environment, {"Read": {"input": {"project": project, "selection": {"ItemDetail": {"id": item["id"]}}}}})["Detail"]["view"]
+                        history = call(checks.environment, {"Read": {"input": {"project": project, "selection": {"History": {"id": item["id"], "before": {"value": str(int(item["revision"]["value"]) + 1)}, "limit": 100}}}}})["History"]["page"]
+                        views.append(view)
+                        histories.append({"id": item["id"], "page": history})
+                    claims = call(checks.environment, {"Read": {"input": {"project": project, "selection": {"Claims": {"members": [value["item"]["id"] for value in views]}}}}})["Claims"]["preview"]
+                    git = {"value": subprocess.check_output(["git", "-C", str(consumer), "rev-parse", "HEAD"], text=True).strip()}
+                    target = {"value": subprocess.check_output(["git", "-C", str(consumer), "rev-parse", "refs/heads/integration"], text=True).strip()}
+                    return {"views": views, "histories": histories, "claims": claims, "git": git, "target": target,
+                            "clean": not subprocess.check_output(["git", "-C", str(consumer), "status", "--porcelain", "--untracked-files=all"], text=True).strip()}
+
+                before = snapshot()
+                write(evidence / "before.json", before)
+                assert before["views"] == baseline["views"] and before["histories"] == baseline["histories"] and before["git"] == before["target"] == candidate and before["clean"]
+                assert not before["claims"]["claims"] and not before["claims"]["integrations"]
+                selection = {"Summary": {"filter": {"EvaluationOnly": {"run": settings["evaluation"]["run"], "scenario": settings["evaluation"]["scenario"]}}}}
+
+                def usage():
+                    return call(checks.environment, {"Usage": {"input": {"project": project, "selection": selection}}})
+
+                restored = usage()
+                write(evidence / "baseline-usage-summary.json", restored)
+                reconcile([bundle_value["usage"]["UsageSummary"]["report"]], restored["UsageSummary"]["report"])
+                upload = {"project": project, "id": {"value": str(uuid.uuid4())}, "attempt": baseline["run"]["attempt"]["id"], "kind": "Input", "mediaType": "application/json", "body": bundle_text}
+                request = urllib.request.Request(checks.environment["CQ_ORIGIN"] + "/api/artifact", data=json.dumps(upload).encode(), headers={
+                    "Authorization": "Bearer " + checks.environment["CQ_TOKEN"], "CQ-Session": checks.environment["CQ_SESSION"], "CQ-Protocol-Version": "0.1.0", "Content-Type": "application/json"})
+                with urllib.request.urlopen(request, timeout=15) as response:
+                    metadata = json.loads(response.read(32768))
+                assert metadata["id"] == upload["id"] and metadata["sha256"] == hashlib.sha256(bundle_text.encode()).hexdigest() and metadata["actor"]["role"] == "Human"
+                bundle = {"metadata": metadata, "body": bundle_text}
+                write(evidence / "bundle-publication.json", metadata)
+                context = [upload["id"], baseline["proof"]["finalChain"]["workerResult"], baseline["proof"]["finalChain"]["reviewResult"]]
+                resolved = [bundle]
+                for handle in context[1:]:
+                    offset, chunks, artifact_metadata = 0, [], None
+                    for _ in range(17):
+                        page = call(checks.environment, {"Read": {"input": {"project": project, "selection": {"ArtifactText": {"id": handle, "offset": offset, "limit": 8192}}}}})["ArtifactText"]["page"]
+                        assert page["offset"] == offset and page["next"] == offset + len(page["text"])
+                        assert artifact_metadata is None or artifact_metadata == page["metadata"]
+                        artifact_metadata = page["metadata"]
+                        chunks.append(page["text"])
+                        if not page["hasMore"]:
+                            break
+                        assert page["next"] > offset
+                        offset = page["next"]
+                    else:
+                        raise AssertionError("Assessment context exceeds its page bound")
+                    body = "".join(chunks)
+                    assert len(body.encode()) == artifact_metadata["bytes"] <= 128 * 1024 and hashlib.sha256(body.encode()).hexdigest() == artifact_metadata["sha256"]
+                    resolved.append({"metadata": artifact_metadata, "body": body})
+                previous = None
+                prior_body = None
+                parts = [restored["UsageSummary"]["report"]]
+                seen_attempts = set(baseline["attemptIds"])
+                for stage, harness in [("precheck", "Pi"), ("standalone", "Codex")]:
+                    directory = evidence / stage
+                    directory.mkdir()
+                    stage_checks = support["Checks"](directory, dict(checks.environment))
+                    stage_result = {"stage": stage, "status": "running", "previous": previous}
+                    result["stages"].append(stage_result)
+                    settings["stateRoot"] = str(directory / "sessions")
+                    write(directory / "settings.json", settings)
+                    route = next(value for value in settings["harnesses"] if value["harness"] == harness)
+                    expected = {"candidate": candidate, "members": members, "guidance": guidance, "memberViews": member_views, "guidanceViews": guidance_views,
+                        "bundle": bundle, "context": context, "harness": harness, "model": route["model"], "previous": previous,
+                        "views": baseline["views"], "histories": baseline["histories"], "evaluation": settings["evaluation"]}
+                    input_without_request = {"project": project, "members": member_views, "guidance": guidance_views, "artifacts": resolved, "previous": prior_body}
+                    body_bytes = len(json.dumps(input_without_request, ensure_ascii=False, separators=(",", ":")).encode())
+                    request_bound = 16 * 1024
+                    input_bound = 192 * 1024
+                    upper_bound = body_bytes + request_bound + len(',"request":'.encode())
+                    write(directory / "input-bound.json", {"bodyBytes": body_bytes, "requestByteBound": request_bound, "upperBound": upper_bound, "hostInputByteBound": input_bound})
+                    assert upper_bound <= input_bound, "Fully encoded child input may exceed host bound"
+                    request_text = (f"Obtain one {harness} Reviewer Audit on the exact current members and workspace below. Acquire their exact claim for at most 300000 ms. "
+                        "Include ALL guidance and artifacts explicitly, especially the runner-generated rubric/evidence bundle. Pass the exact previous handle when supplied. "
+                        "The reviewer must inspect the rubric, actual process history, planning/application deviations and incorporated deliverable. "
+                        "Audit cannot run checks: use original Candidate Review observations as contextual evidence. Do not mutate records, apply proposals, implement or integrate. "
+                        "Do not compose a child prompt or read/copy full result bodies. Release the claim after this single review, including if ChangesRequested or Blocked, "
+                        "and return a truthful bounded outcome. This is not human acceptance.\n" + json.dumps({"members": members, "guidance": guidance, "artifacts": context, "previous": previous}))
+                    (directory / "request.txt").write_text(request_text)
+                    workflow = [] if previous is None else ["--workflow", "review", "--mode", "audit", "--result", previous["value"]]
+                    try:
+                        began = time.monotonic()
+                        with (directory / "governor.stdout").open("w") as out, (directory / "governor.stderr").open("w") as err:
+                            finished = subprocess.run(command + ["run", "claude", "--settings", str(directory / "settings.json"), "--input", str(directory / "request.txt")] + workflow,
+                                cwd=consumer, env=environment, stdout=out, stderr=err, timeout=evaluation["EXECUTION_MILLIS"] / 1000 + 120)
+                        stage_result.update(exit=finished.returncode, elapsedSeconds=round(time.monotonic() - began, 3))
+                        session, = (directory / "sessions").iterdir()
+                        run = json.loads((session / "run.json").read_text())
+                        statuses = [json.loads(path.read_text()) for path in (session / "children").glob("*/receipt.json")]
+                        write(directory / "dispatch-statuses.json", statuses)
+                        input_id = {"value": str(uuid.UUID(bytes=hashlib.md5((run["attempt"]["id"]["value"] + ":input").encode()).digest(), version=3))}
+                        artifacts = evaluation["artifacts"](checks.environment, directory, session, statuses, [input_id])
+                        after = snapshot()
+                        after["localIntegrations"] = [json.loads(path.read_text()) for path in (session / "integrations").glob("*.json")]
+                        write(directory / "after.json", after)
+                        assert finished.returncode == 0, "Assessment governor failed"
+                    finally:
+                        failed = sys.exc_info()[0] is not None
+                        stage_result["archiveErrors"] = evaluation["archive"](stage_checks, directory)
+                        write(directory / "result.json", stage_result)
+                        if stage_result["archiveErrors"] and not failed:
+                            raise RuntimeError("; ".join(stage_result["archiveErrors"]))
+                    ticket_path, = (session / "children").glob("*/ticket.json")
+                    ticket = json.loads(ticket_path.read_text())
+                    job = json.loads((session / "journal" / (ticket["attempt"]["id"]["value"] + ".json")).read_text())
+                    attempts = json.loads((directory / "attempts.json").read_text())["UsageAttempts"]["page"]["entries"]
+                    observations = [value for path in directory.glob("usage-audit-*.json") for value in json.loads(path.read_text())["UsageAudit"]["page"]["entries"]]
+                    assessment = predicates["audit_stage"](expected, statuses, artifacts, ticket, run, job, artifacts[input_id["value"]], attempts, observations, after)
+                    current_ids = {value["attempt"]["id"]["value"] for value in attempts}
+                    assert not current_ids & seen_attempts, "Assessment reused prior attempts"
+                    seen_attempts.update(current_ids)
+                    parts.append(json.loads((directory / "usage-summary.json").read_text())["UsageSummary"]["report"])
+                    combined = usage()
+                    write(directory / "combined-usage-summary.json", combined)
+                    reconcile(parts, combined["UsageSummary"]["report"])
+                    stage_result.update(status="assessment-passed" if assessment["accepted"] else "assessment-not-accepted", assessment=assessment, accounting="reconciled")
+                    write(directory / "result.json", stage_result)
+                    write(evidence / "result.json", result)
+                    previous = assessment["result"]
+                    prior_body = artifacts[previous["value"]]["body"]
+                result.update(status="assessment-passed" if assessment["accepted"] else "assessment-not-accepted", accounting="reconciled")
+    except BaseException as error:
+        result.update(status="failed", error=str(error))
+        raise
+    finally:
+        write(evidence / "result.json", result)
+    print(result["status"].upper() + ": intake-to-integration assessment; other worked examples and human acceptance remain; evidence", evidence, flush=True)
+
+
+if __name__ == "__main__":
+    main()
