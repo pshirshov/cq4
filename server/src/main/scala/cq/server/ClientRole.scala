@@ -29,6 +29,7 @@ object ClientPlugin extends PluginDef {
     include(new RoleModuleDef { makeRole[ClientRole] })
     include(BundledRolesModule[Task])
     make[Cli]
+    make[ProjectLocation]
     make[CliContext].fromEffect(ZIO.attempt(CliContext(sys.env, Path.of("").toAbsolutePath.normalize(), System.out)))
   })
 }
@@ -36,6 +37,9 @@ object ClientPlugin extends PluginDef {
 final class CqCliParser(roles: CLIParserImpl) extends CLIParser {
   override def parse(args: Array[String]): Either[CLIParser.ParserError, RoleAppArgs] = args.headOption match {
     case Some("serve") => roles.parse(args.tail ++ Array(":" + ServerRole.id))
+    case Some("run") =>
+      val raw = args.tail.toVector
+      Right(RoleAppArgs(EntrypointArgs.empty, Vector(RoleArgs(SupervisorRole.id, EntrypointArgs(raw, Vector.empty, Vector.empty, raw)))))
     case Some(value) if value.startsWith(":") || (value.startsWith("-") && value != "--help") => roles.parse(args)
     case _ =>
       val raw = args.toVector

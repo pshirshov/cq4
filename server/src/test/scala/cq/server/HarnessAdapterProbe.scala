@@ -131,17 +131,7 @@ object HarnessAdapterProbe extends ZIOAppDefault {
         Files.writeString(directory.resolve("outcomes.json"), Wire.encode(Result_JsonCodec,
           api.call(Command.Usage(UsageInput(project, UsageSelection.Outcomes(attempt.id, 0, 200))))))
         require(completed && usage.terminalSeen && !usage.nativeFailure, "Harness did not finish successfully; inspect retained process output and usage")
-        val events = nativeText.split("\n").toList.filter(_.nonEmpty).map(value => io.circe.parser.parse(value).fold(throw _, identity))
-        val output = harness match {
-          case Harness.Claude => events.filter(_.hcursor.get[String]("type").contains("result")).last.hcursor.downField("structured_output").focus.get
-          case Harness.Codex => io.circe.parser.parse(Files.readString(directory.resolve("assets/last-message.json"))).fold(throw _, identity)
-          case Harness.Pi =>
-            val message = events.filter(value => value.hcursor.get[String]("type").contains("message_end") &&
-              value.hcursor.downField("message").get[String]("role").contains("assistant")).last.hcursor.downField("message")
-            val text = message.get[List[Json]]("content").toOption.get.filter(_.hcursor.get[String]("type").contains("text"))
-              .map(_.hcursor.get[String]("text").toOption.get).mkString
-            io.circe.parser.parse(text).fold(throw _, identity)
-        }
+        val output = new HarnessOutput().result(harness, native, directory.resolve("assets"))
         require(output.asObject.exists(_.keys.toSet == Set("status", "observed")) && output.hcursor.get[String]("status").contains("ok") &&
           output.hcursor.get[String]("observed").contains(marker), "Harness did not return the exact scoped CQ artifact text")
         val tree = directory.resolve("workspaces").resolve(attempt.id.value.toString).resolve("tree")

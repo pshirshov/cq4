@@ -1,6 +1,6 @@
 # CQ
 
-CQ is being implemented under the [M0–M6 plan](docs/drafts/20260926-1549-cq-implementation-plan.md). The durable ledger/audit core and authenticated HTTP/MCP/WebSocket/CLI interfaces are implemented; [M1 has independent Astra approval](docs/validation/m1-review.md); M2 supervisor and real-harness integration are starting. Release functionality, consumer evaluations and human acceptance are tracked in [implementation status](docs/implementation-status.md) and [requirement coverage](docs/requirement-coverage.md).
+CQ is being implemented under the [M0–M6 plan](docs/drafts/20260926-1549-cq-implementation-plan.md). The durable ledger/audit core and authenticated HTTP/MCP/WebSocket/CLI interfaces are implemented; [M1 has independent Astra approval](docs/validation/m1-review.md); M2 adapters pass real capability probes and the [batch supervisor role](docs/design/supervisor-role.md) is implemented; child handle dispatch and consumer evaluations are next. Release functionality, consumer evaluations and human acceptance are tracked in [implementation status](docs/implementation-status.md) and [requirement coverage](docs/requirement-coverage.md).
 
 ## Development checks
 
@@ -64,7 +64,7 @@ curl --fail-with-body \
   http://127.0.0.1:8765/api/hello
 ```
 
-Expected body: `{"version":"0.1.0","supported":["0.1.0"]}`. `/api/call`, `/ws` and `/mcp` use the same ledger/audit application service; see [contracts](docs/design/contracts.md). Open the configured origin and sign in with the operator token. The minimal browser supports project selection/creation, schema-derived item forms, list/detail/history and usage/audit views. The process guardian, Scala driver and immutable artifact storage are implemented; the complete `cq run` supervisor remains pending.
+Expected body: `{"version":"0.1.0","supported":["0.1.0"]}`. `/api/call`, `/ws` and `/mcp` use the same ledger/audit application service; see [contracts](docs/design/contracts.md). Open the configured origin and sign in with the operator token. The minimal browser supports project selection/creation, schema-derived item forms, list/detail/history and usage/audit views. The process guardian, Scala driver and immutable artifact storage are implemented; a batch `cq run` role is implemented; child dispatch and the complete workflow remain pending.
 
 Pins, local compatibility patches and their failure evidence are documented in [dependencies](docs/design/dependencies.md).
 
@@ -104,10 +104,12 @@ cq status costs --task T1 --limit 20
 cq status attempts --task T1 --limit 20
 cq status outcomes --attempt <attempt-uuid> --limit 20
 cq web
+cq run codex --settings /absolute/settings.json --input /absolute/request.txt
+cq job upload --session /absolute/session-directory
 ```
 
 Cost summaries include a bounded first page grouped by attribution, currency, cost basis and pricing version. Continue with `status costs --after '<after-object-as-JSON>' --snapshot <cursor> --limit 20` using the returned key and cursor; concurrent audit changes require restarting the listing. Raw observations retain original amounts and pricing evidence.
 
-Here `cq` denotes that JVM launcher until the current native package is built. Server and client commands use the same distage role entrypoint; native role syntax such as `cq :client -- web` and `cq :help` is also available. Client commands do not require local server/database configuration, and diagnostics go to stderr. [Role checks](docs/validation/m2-roles.md).
+Here `cq` denotes that JVM launcher until the current native package is built. Server, client and supervisor commands use the same distage role entrypoint; native role syntax such as `cq :client -- web` and `cq :help` is also available. Client commands do not require local server/database configuration, and diagnostics go to stderr. [Client role checks](docs/validation/m2-roles.md); [supervisor configuration, run instructions and limits](docs/design/supervisor-role.md).
 
 `web` prints the configured origin. Project configuration lives under the Git common directory (`cq/project.json`) or `.cq/project.json` outside Git. Worktrees share identity. Explicit `init --name` renames the server display; ordinary reattachment preserves that name and refreshes the local cache. `status` also supports `--cohort` and `--session`; omit scope flags for project totals. Commands emit generated JSON with lossless decimal strings. See [tested behavior and gaps](docs/validation/m1-interfaces.md).

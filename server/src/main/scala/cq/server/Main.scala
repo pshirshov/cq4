@@ -95,7 +95,7 @@ object CqPlugin extends PluginDef {
 }
 
 object Main extends RoleAppMain.LauncherBIO[IO] {
-  override def pluginConfig: PluginConfig = PluginConfig.const(List(CqPlugin, ClientPlugin))
+  override def pluginConfig: PluginConfig = PluginConfig.const(List(CqPlugin, ClientPlugin, SupervisorPlugin))
   override protected def roleAppBootOverrides(argv: RoleAppMain.ArgV): distage.Module =
     super.roleAppBootOverrides(argv) ++ new ModuleDef {
       make[Activation].named("default").fromValue(Activation(Repo -> Repo.Prod))

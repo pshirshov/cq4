@@ -163,6 +163,7 @@ class Checks:
             self.run(["python3", "dev/roles-check.py", *command], f"{name}-roles", STARTUP_TIMEOUT)
             self.run(["python3", "dev/cli-check.py", *command], f"{name}-cli", STARTUP_TIMEOUT)
             self.run(["python3", "dev/cli-timeouts.py", *command], f"{name}-cli-timeouts", STARTUP_TIMEOUT)
+            self.run(["python3", "dev/supervisor-check.py", *command], f"{name}-supervisor", STARTUP_TIMEOUT)
             if browser:
                 self.environment["CQ_BROWSER_EVIDENCE"] = str(self.evidence)
                 self.run(["node", "dev/browser.mjs"], f"{name}-browser", COMMAND_TIMEOUT)

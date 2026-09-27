@@ -33,7 +33,7 @@ Claims cover explicit item sets and carry monotonically increasing fences. Resul
 
 ## Process authority
 
-The executable uses one distage `RoleAppMain` composition root for the implemented server and CLI task roles. The manual CLI branch has been removed. Role selection acquires only the selected role's resources: [actual client checks](../validation/m2-roles.md) pass with all server/database/credential configuration removed. The local supervisor and injectable harness adapters will join this same graph. Early and runtime diagnostics go to stderr, preserving command output on stdout.
+The executable uses one distage `RoleAppMain` composition root for the implemented server and CLI task roles. The manual CLI branch has been removed. Role selection acquires only the selected role's resources: [actual client checks](../validation/m2-roles.md) pass with all server/database/credential configuration removed. The [local supervisor](supervisor-role.md) and injectable harness adapters share that graph; actual batch-role checks pass without local database configuration. Child control transport is still pending. Early and runtime diagnostics go to stderr, preserving command output on stdout.
 
 The local governing wrapper owns child processes and hierarchy cancellation. The server owns durable records, artifacts and operational usage observations; it never launches harness processes. Prompt assembly and result storage occur outside the parent model. Normal parent traffic contains references and bounded summaries. Claude, Codex and Pi adapters enforce the same role contract through their own tool and configuration mechanisms.
 

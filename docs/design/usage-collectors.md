@@ -32,6 +32,6 @@ The caller registers the attempt before collection, publishes native evidence, t
 
 ## Remaining integration
 
-The installed-format probes and HTTP/PostgreSQL replay establish parsing and audit compatibility. They do not establish a complete live CQ evaluation. Supervisor attachment, durable upload recovery, large-transcript manifests, interactive governing-session capture and actual consumer evaluations remain M2 work. Pi assistant-event coverage explicitly excludes auxiliary/compaction/tool-result usage until separate observations exist. Other provider extensions and resumed/forked native sessions need runtime capability evaluation.
+The installed-format probes and HTTP/PostgreSQL replay establish parsing and audit compatibility. They do not establish a complete live CQ evaluation. The [batch supervisor role](supervisor-role.md) attaches collection to a governing job, stores byte-preserving transcript manifests and replays already-spooled uploads. Recovery after interruption before capture/spooling, child attachment, interactive governing-session capture and actual consumer evaluations remain M2 work. Pi assistant-event coverage explicitly excludes auxiliary/compaction/tool-result usage until separate observations exist. Other provider extensions and resumed/forked native sessions need runtime capability evaluation.
 
 The [observability investigation](../drafts/20260926-usage-observability.md) records the primary sources and native probes. [Collector verification](../validation/m2-collectors.md) records executable evidence and remaining gaps.

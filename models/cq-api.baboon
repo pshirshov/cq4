@@ -299,3 +299,25 @@ root data JobRecord {
   workspace: WorkspaceSpec fingerprint: str target: JobTarget phase: JobPhase
   exit: opt[JobExit] problem: opt[str] revision: i64 createdAt: i64 updatedAt: i64
 }
+
+root data HarnessSetting {
+  harness: Harness executable: str model: str provider: str version: str
+  providerExtensions: lst[str] providerEnvironment: set[str]
+}
+root data HostLimits { startupMillis: i64 executionMillis: i64 heartbeatMillis: i64 graceMillis: i64 killMillis: i64 outputBytes: i32 }
+root data SupervisorSettings { stateRoot: str guardian: str harnesses: lst[HarnessSetting] limits: HostLimits }
+root data GoverningReport { summary: str }
+root data NativeManifest { encoding: str mediaType: str bytes: i64 sha256: str parts: lst[ArtifactId] }
+root adt HostDelivery {
+  data Usage { value: HostUsageInput }
+  data Artifact { value: ArtifactUpload }
+}
+root data DeliveryBatch { entries: lst[HostDelivery] }
+root data SupervisorRun {
+  project: ProjectConfig assignment: Assignment attempt: Attempt harnessVersion: str
+  repository: str base: GitCommit
+}
+root data SupervisorReceipt {
+  session: SessionId attempt: AttemptId directory: str phase: JobPhase
+  processSucceeded: bit result: opt[ArtifactId] usageDelivered: bit problem: opt[str]
+}

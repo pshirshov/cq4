@@ -2,25 +2,23 @@ package cq.server
 
 import cq.api.*
 import cq.core.LedgerPolicy
-import cq.host.{BoundedHostCommand, GitEnvironment, HttpServerApi}
+import cq.host.{DeliveryQueue, HostFiles, HttpServerApi}
 import java.io.PrintStream
 import java.net.URI
 import java.nio.channels.FileChannel
 import java.nio.file.{Files, Path, StandardCopyOption, StandardOpenOption}
-import java.time.Duration
+import java.time.{Clock, Duration}
 import java.util.UUID
 import scala.util.Using
 
 final case class CliContext(environment: Map[String, String], directory: Path, output: PrintStream)
 
-final class Cli(context: CliContext) {
+final class Cli(context: CliContext, location: ProjectLocation, clock: Clock) {
   private val environment = context.environment
   private val directory = context.directory
   private val output = context.output
   private val RequestTimeout = Duration.ofSeconds(30)
   private val DefaultPageSize = 50
-  private val GitTimeout = Duration.ofSeconds(10)
-  private val MaxGitOutputBytes = 8192
 
   private def options(args: List[String], allowed: Set[String]): Map[String, String] = {
     require(args.size % 2 == 0, "Options require values")
@@ -31,15 +29,7 @@ final class Cli(context: CliContext) {
     require(pairs.map(_._1).distinct.size == pairs.size, "Repeated option")
     pairs.toMap
   }
-  private def gitCommon: Option[Path] = {
-    val result = new BoundedHostCommand(GitEnvironment.isolated(environment), GitTimeout, MaxGitOutputBytes)
-      .run(directory, List("git", "rev-parse", "--path-format=absolute", "--git-common-dir"))
-    if (result.exit == 0) Some(Path.of(result.text.trim)) else None
-  }
-  private def configDirectory: Path = gitCommon match {
-    case Some(common) => common.resolve("cq")
-    case None => directory.resolve(".cq")
-  }
+  private def configDirectory: Path = location.directory
   private def validateEndpoint(value: String): String = {
     val uri = URI.create(value)
     require(Set("http", "https").contains(uri.getScheme) && uri.getHost != null && uri.getUserInfo == null &&
@@ -150,7 +140,17 @@ final class Cli(context: CliContext) {
       }
       output.println(Wire.encode(Result_JsonCodec, request(config, actorSession, Command.Usage(UsageInput(config.project, selection)))))
     case List("web") => output.println(configuration(configDirectory).endpoint)
-    case Nil | List("--help") => output.println("cq serve | init [--endpoint URL] [--project-id UUID] [--name TEXT] | web | query [--ledger NAME] [--archived Active|Archived|All] [--after T1 --snapshot N] [--limit N] | status [audit|costs|attempts|outcomes] [--task T1|--cohort UUID|--session UUID] [--attempt UUID] [--after CURSOR] [--snapshot N] [--limit N]")
+    case List("job", "upload", "--session", value) =>
+      val root = directory.resolve(value).normalize()
+      val run = HostFiles.read(root.resolve("run.json"), SupervisorRun_JsonCodec, 64 * 1024)
+      val rootApi = new HttpServerApi(URI.create(validateEndpoint(run.project.endpoint)), environment.getOrElse("CQ_TOKEN", throw new IllegalArgumentException("CQ_TOKEN is required")),
+        run.attempt.session, RequestTimeout)
+      val grant = rootApi.grant(GrantRequest(run.project.project, Actor("CQ host collector", run.attempt.session, Role.Collector),
+        clock.millis() + Duration.ofHours(1).toMillis))
+      val collector = new HttpServerApi(URI.create(run.project.endpoint), grant.value, run.attempt.session, RequestTimeout)
+      val delivered = new DeliveryQueue(root.resolve("delivery")).flush(collector)
+      output.println(s"Acknowledged $delivered pending delivery batches from $root")
+    case Nil | List("--help") => output.println("cq serve | init [--endpoint URL] [--project-id UUID] [--name TEXT] | web | run HARNESS --settings FILE --input FILE | job upload --session DIR | query [--ledger NAME] [--archived Active|Archived|All] [--after T1 --snapshot N] [--limit N] | status [audit|costs|attempts|outcomes] [--task T1|--cohort UUID|--session UUID] [--attempt UUID] [--after CURSOR] [--snapshot N] [--limit N]")
     case _ => throw new IllegalArgumentException("Unknown command; use cq --help")
   }
 }

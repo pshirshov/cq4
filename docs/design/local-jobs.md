@@ -1,6 +1,6 @@
 # Durable local jobs
 
-`JobSupervisor` connects the workspace service to the process driver. It is a host service; the CQ server never constructs it. The current interface is an in-process start/status/cancel API, pending the local transport and distage role wiring. Its `JobCommand` input is trusted host configuration, not a model-facing executable/environment interface. Reference-based harness dispatch will assemble that input outside the governing model.
+`JobSupervisor` connects the workspace service to the process driver. It is a host service; the CQ server never constructs it. The current interface is an in-process start/status/cancel API, used by the [distage batch supervisor role](supervisor-role.md); the local child-control transport is pending. Its `JobCommand` input is trusted host configuration, not a model-facing executable/environment interface. Reference-based harness dispatch will assemble that input outside the governing model.
 
 ## Ownership and launch
 
@@ -26,4 +26,4 @@ An Uncertain record is persisted before quarantine is attempted. Consumers must 
 
 [Evidence and correction loop](../validation/m2-jobs.md) cover shared dummy/filesystem journal behavior, actual Git/process execution, concurrent retries, authorization, cancellation races, lost acknowledgements, failed writes and recovery. The real owner-death fixture starts a separate JVM supervisor with a detached, TERM-ignoring descendant, kills the supervisor with SIGKILL, checks descendant termination, then reopens the journal and checks workspace quarantine.
 
-The next integration uses one distage role entrypoint for server, client tasks and the local supervisor. Harness adapters, reference assembly, artifact/usage publication, the local transport, claim-loss handling and consumer evaluations remain pending. The native distribution has not yet verified these job services.
+The [batch supervisor role](supervisor-role.md) now shares the server/client entrypoint, selects the verified adapters and publishes result artifacts/usage through a replayable queue. Reference assembly, child control transport, interrupted-capture recovery, claim-loss handling and consumer evaluations remain pending. The native distribution has not yet verified these job services.
