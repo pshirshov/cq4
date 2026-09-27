@@ -201,6 +201,7 @@ class Checks:
         self.generate()
         classpath = self.classpath()
         with self.database([]):
+            self.sbt(["server/testOnly *CohortSelectionPostgres"], "cohort-contract")
             port = free_port()
             self.environment.update(CQ_HOST="127.0.0.1", CQ_PORT=str(port), CQ_ORIGIN=f"http://127.0.0.1:{port}",
                                     CQ_TOKEN=uuid.uuid4().hex, CQ_SESSION=str(uuid.uuid4()),

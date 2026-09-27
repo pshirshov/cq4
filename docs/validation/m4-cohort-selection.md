@@ -67,4 +67,22 @@ The correction requires host Collector provenance, internally consistent workspa
 
 Both final gates match all 221 current non-documentation sources, with zero differences retained in `20260927T172020-postgres/m4-normalization-source-verification.json`. Contracts and process ownership were unchanged, so their prior foundation evidence remains applicable to those boundaries; this follow-up does not claim fresh runs of those gates. Astra independently verified both final PASS results and all 221 current source hashes, approving this scoped increment with no blocking or major finding. Cosmetic refresh, connected adaptation and full R16 acceptance remain open.
 
+## Exact assessment refresh follow-up
+
+Normalization is committed at `b345aee`. The following increment separates exact assessment applicability from semantic Worker retry eligibility. Stale assessment membership can identify a refresh subject without a common producer, while current exact groups take precedence. Only host-generated `AssessmentRequired` Planner choices use a key containing the whole group's semantic input and exact revision set. Every member uses that group key so a single changed revision refreshes the complete assessment. Selection and Start verification use the same retained reason. Ordinary Planner and Worker progress remains semantic.
+
+| Evidence directory | Observation |
+| --- | --- |
+| `20260927T173128-fast` | 182 pass, one fails: a cosmetic revision loses the only grouping witness and offers no assessment refresh |
+| `20260927T173252-fast` | First refresh and unchanged Worker deferral now pass; a second cosmetic revision still receives no refresh because the implicit Planner key ignores exact revisions |
+| `20260927T173442-fast` | All 183 scenarios pass, including a second round changing only one member, whole-group refresh, repeated-refresh suppression, Start verification and unchanged unsuccessful Worker deferral |
+| `20260927T173644-cohort` | All 12 shared PostgreSQL selector scenarios and actual ACK-replay, Compatible, Unknown and two-round cosmetic-refresh supervisor fixtures pass |
+| `20260927T173829-fast` | Final fast gate passes all 183 scenarios on the same sources as the PostgreSQL/actual cohort gate |
+
+Independent Astra approved the refinement, implementation source and final evidence. The targeted `cohort` gate now also runs the shared PostgreSQL selector scenarios. Its actual supervisor fixture completes two cosmetic revision rounds with one unsuccessful Worker and two subsequent assessment children. Together with the initial Planner this produces exactly four children, all Shared over the original two members, all with delivered usage. The second round changes only one member; the complete group is reassessed. Repeating a round offers no duplicate Planner, and refreshed assessments never re-enable the unchanged Worker.
+
+`20260927T173644-cohort/m4-assessment-refresh-fixtures.json` retains the child tickets, statuses, assignments and compact fixture events. Across Compatible, Unknown and refresh cases there are eight children; the largest structured parent reply is 1,442 bytes (1,073 bytes in the refresh case). Fixture counters are synthetic, with no token-efficiency or billing claim. Mixed-outcome split costs, connected fairness and live multi-item accepted-quality execution remain separate R16 requirements.
+
+Both final gates match all 221 non-documentation source files, with zero differences retained in `20260927T173644-cohort/m4-assessment-refresh-source-verification.json`. Independent Astra verified both PASS results and all 221 source hashes, and confirmed two-member refreshes at revision sets `(3,3)` then `(4,3)` with exactly one unsuccessful Worker. No blocking or major finding remains within this scope; full R16 remains open.
+
 Targeted fixture command: `CQ_EVIDENCE_ROOT=/srv/nvme/tmp/cq4-implementation ./dev/check cohort`. The same fixture is included in PostgreSQL/native transport verification. Reproduce the final gates with `./dev/check fast`, `./dev/check contracts`, `./dev/check postgres` and `./dev/check process`; set the same evidence-root variable to retain results outside the checkout.

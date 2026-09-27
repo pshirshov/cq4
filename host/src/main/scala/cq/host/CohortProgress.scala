@@ -43,6 +43,13 @@ final class CohortProgress {
 }
 
 object CohortFingerprint {
+  private def digest(value: Json): String =
+    HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value.noSpaces.getBytes(UTF_8)))
+
+  def assessment(semantic: String, members: List[ItemRevision]): String = digest(Json.obj("semantic" -> Json.fromString(semantic),
+    "assessment" -> Json.fromValues(members.sortBy(ref => LedgerPolicy.key(ref.id)).map(ref =>
+      ItemRevision_JsonCodec.encode(baboon.runtime.shared.BaboonCodecContext.Default, ref)))))
+
   private def canonical(value: Json): Json = value.arrayOrObject(value,
     values => Json.fromValues(values.map(canonical)),
     fields => Json.fromFields(fields.toList.sortBy(_._1).map((key, value) => key -> canonical(value))))
@@ -94,6 +101,6 @@ object CohortFingerprint {
     val value = canonical(Json.obj("work" -> DispatchWork_JsonCodec.encode(baboon.runtime.shared.BaboonCodecContext.Default, work),
       "members" -> items(members), "guidance" -> items(guidance), "evidence" -> Json.fromValues(evidence),
       "base" -> Json.fromString(base.value), "checks" -> Json.fromValues(checks.sortBy(_.name).map(value => ValidationCheck_JsonCodec.encode(baboon.runtime.shared.BaboonCodecContext.Default, value)))))
-    HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value.noSpaces.getBytes(UTF_8)))
+    digest(value)
   }
 }

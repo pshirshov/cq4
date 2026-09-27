@@ -105,13 +105,56 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
     input = ChildExecutionInput(ChildInput(f.scope.project, dispatch, views, Nil, Nil, previous.map(_.result)), base, f.checks)
     _ <- artifacts.upload(f.collector, ArtifactUpload(f.scope.project, NativeArtifacts.id(attempt.id, "input"), attempt.id, ArtifactKind.Input,
       "application/json", Wire.encode(ChildExecutionInput_JsonCodec, input)))
-    result = ChildResult(attempt.id, dispatch, base, Some(GitCommit("b" * 40)), report, validation)
+    result = ChildResult(attempt.id, dispatch, base, if (work == DispatchWork.Planner()) None else Some(GitCommit("b" * 40)), report, validation)
     stored <- artifacts.upload(f.collector, ArtifactUpload(f.scope.project, ArtifactId(uuid), attempt.id, ArtifactKind.Result, "application/json", Wire.encode(ChildResult_JsonCodec, result)))
     admitted <- admissions.admit(f.collector, HostAdmissionInput(f.scope.project, stored.id, f.scope.actor))
     _ <- assertIO(admitted.decision == AdmissionDecision.Accepted())
   } yield Published(result, stored.id)
 
   "Automatic cohort selection (Behavioral Active Blackbox; dummy Group / PostgreSQL Good Communication)" should {
+    "refresh exact assessment revisions without retrying an unchanged unsuccessful worker" in {
+      (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO]) => for {
+        runtime <- ZIO.runtime[Any]
+        fixture <- assessed(ledger, usage, artifacts, admissions, 2, CohortCompatibility.Compatible)
+        reads = new EvidenceApi(api(ledger, fixture.scope, runtime), artifacts, admissions, fixture.scope, runtime)
+        progress = new CohortProgress
+        planner = new CohortPlanner(reads, fixture.scope, fixture.base, fixture.checks, progress)
+        input = request(fixture.members.map(_.id).toSet, DispatchWork.Worker(WorkerMode.Implement))
+        initial <- ZIO.attemptBlocking(planner.plan(input.copy(artifacts = List(fixture.artifact)), ArtifactId(uuid)))
+        _ <- assertIO(initial.evidence.decision.choices.size == 1 && initial.evidence.decision.choices.head.members.size == 2)
+        _ <- ZIO.attempt(progress.started(initial.fingerprints(initial.evidence.decision.choices.head.id)))
+        worker <- publish(fixture, input.work, ChildReport.Work(fixture.members.map(ref => WorkMember(ref.id, WorkDisposition.Failed, "Observed failure"))),
+          None, Nil, ledger, usage, artifacts, admissions)
+        old <- ZIO.attemptBlocking(new ArtifactReader(reads.call, fixture.scope.project).result(fixture.artifact).value.report.asInstanceOf[ChildReport.Plan])
+        views <- ZIO.foreach(fixture.members)(ref => ledger.get(fixture.scope, ref.id))
+        changed <- ledger.change(fixture.scope, ChangeRequest(RequestId(uuid), views.map(view => Mutation.Replace(view.item.id, view.item.revision,
+          view.item.draft.copy(labels = Set("first cosmetic revision")))), List(fixture.fence), "Change labels only"))
+        refreshInput = input.copy(request = RequestId(uuid), artifacts = List(fixture.artifact, worker.id))
+        refresh <- ZIO.attemptBlocking(planner.plan(refreshInput, ArtifactId(uuid)))
+        _ <- assertIO(refresh.evidence.decision.choices.size == 1 && refresh.evidence.decision.choices.head.work == DispatchWork.Planner())
+        choice = refresh.evidence.decision.choices.head
+        _ <- assertIO(choice.reason == CohortReason.AssessmentRequired && choice.members.toSet == changed.items.toSet)
+        _ <- ZIO.attemptBlocking(planner.verify(refreshInput, choice, refresh.fingerprints(choice.id)))
+        _ <- ZIO.attempt(progress.started(refresh.fingerprints(choice.id)))
+        repeated <- ZIO.attemptBlocking(planner.plan(refreshInput.copy(request = RequestId(uuid)), ArtifactId(uuid)))
+        _ <- assertIO(repeated.evidence.decision.choices.isEmpty)
+        revisions = changed.items.map(ref => ref.id -> ref).toMap
+        freshReport = old.copy(assessments = old.assessments.map(group => group.copy(members = group.members.map(member =>
+          member.copy(member = revisions(member.member.id))))))
+        assessedAgain <- publish(fixture.copy(members = changed.items), DispatchWork.Planner(), freshReport, None, Nil, ledger, usage, artifacts, admissions)
+        reconsider = input.copy(request = RequestId(uuid), artifacts = List(assessedAgain.id, worker.id))
+        deferred <- ZIO.attemptBlocking(planner.plan(reconsider, ArtifactId(uuid)))
+        _ <- assertIO(deferred.evidence.decision.choices.isEmpty && deferred.evidence.considered.exists(_.reason == CohortReason.Deferred))
+        current <- ZIO.foreach(fixture.members)(ref => ledger.get(fixture.scope, ref.id))
+        changedAgain <- ledger.change(fixture.scope, ChangeRequest(RequestId(uuid), current.take(1).map(view => Mutation.Replace(view.item.id, view.item.revision,
+          view.item.draft.copy(labels = Set("second cosmetic revision")))), List(fixture.fence), "Change labels again"))
+        revisedMembers = current.map(view => changedAgain.items.find(_.id == view.item.id).getOrElse(ItemRevision(view.item.id, view.item.revision)))
+        second <- ZIO.attemptBlocking(planner.plan(reconsider.copy(request = RequestId(uuid)), ArtifactId(uuid)))
+        _ <- assertIO(second.evidence.decision.choices.size == 1 && second.evidence.decision.choices.head.work == DispatchWork.Planner() &&
+          second.evidence.decision.choices.head.members.toSet == revisedMembers.toSet)
+      } yield ()
+    }
+
     "retain deferral across republished validation but reconsider changed output" in {
       (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO]) => for {
         runtime <- ZIO.runtime[Any]

@@ -116,8 +116,10 @@ def main():
                 assert "Failed" not in value, value
                 return value["Changed"]["ack"]["items"]
 
-            for unknown in [False, True]:
-                draft = {"title": "Cohort task", "body": "Create consumer.txt", "labels": ["cohort-selected-unknown" if unknown else "cohort-selected"],
+            for name in ["compatible", "unknown", "refresh"]:
+                unknown = name == "unknown"
+                refresh = name == "refresh"
+                draft = {"title": "Cohort task", "body": "Create consumer.txt", "labels": ["cohort-selected-" + name],
                          "archived": False, "content": {"Task": {"status": "Ready", "acceptance": ["Exact content verified"], "result": None, "validation": []}}, "citations": []}
                 goal, *members = change([{"Create": {"draft": {**draft, "labels": [], "content": {"Goal": {
                     "status": "Open", "outcome": "Shared parser", "acceptance": ["Independent task acceptance"], "scope": "Consumer"}}}}},
@@ -126,21 +128,27 @@ def main():
                     linked = change([{"Reference": {"source": goal["id"], "expectedSource": goal["revision"], "relation": "Produces",
                         "target": member["id"], "expectedTarget": member["revision"], "present": True}}])
                     goal = next(value for value in linked if value["id"] == goal["id"])
-                source.write_text("cohort-flow:" + json.dumps({"roots": [goal["id"]], "unknown": unknown}))
+                source.write_text("cohort-flow:" + json.dumps({"roots": [goal["id"]], "unknown": unknown, "refresh": refresh}))
                 result = subprocess.run(command + ["run", "codex", "--settings", str(settings), "--input", str(source),
                     "--workflow", "advance", "--roots", "G" + goal["id"]["number"], "--through", "review"],
                     cwd=repository, env=environment, capture_output=True, text=True, timeout=110)
-                name = "unknown" if unknown else "compatible"
                 (root / (name + ".stdout")).write_text(result.stdout)
                 (root / (name + ".stderr")).write_text(result.stderr)
                 assert result.returncode == 0, f"{name} exited {result.returncode}; inspect {root}"
                 flow = json.loads(result.stdout)
                 assert flow["processSucceeded"] and flow["usageDelivered"]
                 assert not (repository / "consumer.txt").exists()
-                for child in (Path(flow["directory"]) / "children").iterdir():
+                children = list((Path(flow["directory"]) / "children").iterdir())
+                assert len(children) == (4 if refresh else 1 if unknown else 3)
+                workers = 0
+                for child in children:
                     ticket = json.loads((child / "ticket.json").read_text())
                     assert ticket["selection"] is not None and ticket["assignment"]["attribution"] == "Shared"
                     assert len(ticket["assignment"]["members"]) == 2
+                    workers += "Worker" in ticket["request"]["work"]
+                    assert json.loads((child / "receipt.json").read_text())["usageDelivered"]
+                if refresh:
+                    assert workers == 1, "Assessment refresh retried an unchanged Worker"
                 print(json.dumps({"scenario": name, "receipt": flow}))
         finally:
             proxy.shutdown()

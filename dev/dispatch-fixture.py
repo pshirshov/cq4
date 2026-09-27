@@ -133,7 +133,8 @@ def main():
             Path("consumer.txt").write_text("candidate from isolated worker\n")
             if assignment["work"]["Worker"]["mode"] == "Probe":
                 signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
-            finish({"Work": {"members": [{"item": item, "disposition": "CandidateReady", "summary": "CHILD_ONLY_NARRATIVE " + "detail " * 1000} for item in members]}})
+            disposition = "Failed" if labels and labels[0].startswith("cohort-selected-refresh") else "CandidateReady"
+            finish({"Work": {"members": [{"item": item, "disposition": disposition, "summary": "CHILD_ONLY_NARRATIVE " + "detail " * 1000} for item in members]}})
             if assignment["work"]["Worker"]["mode"] == "Probe":
                 time.sleep(60)
             else:
@@ -202,7 +203,35 @@ def main():
             return
         assert len(selected["choices"]) == 1 and selected["choices"][0]["reason"] == "CompatibleAssessment", selected
         worked = start(selected["choices"][0])
-        assert worked["phase"] == "Completed" and worked["counts"]["ready"] == 2, worked
+        assert worked["phase"] == "Completed" and worked["counts"]["failed" if scenario["refresh"] else "ready"] == 2, worked
+        if scenario["refresh"]:
+            refreshed = []
+            for round_number in [1, 2]:
+                mutations = []
+                for member in choice["members"] if round_number == 1 else choice["members"][:1]:
+                    view = tool("cq", "read", {"project": project, "selection": {"ItemDetail": {"id": member["id"]}}})["Detail"]["view"]
+                    item = view["item"]
+                    mutations.append({"Replace": {"id": item["id"], "expected": item["revision"], "draft": {
+                        **item["draft"], "labels": ["cohort-selected-refresh-" + str(round_number)]}}})
+                tool("cq", "change", {"project": project, "change": {"request": identity(), "mutations": mutations,
+                    "fences": [fence], "reason": "Cosmetic revision requires current assessment"}})
+                inputs = {**selection, "request": identity(), "artifacts": [planned["result"], worked["result"]]}
+                decision = tool("cq_host", "dispatch", {"Select": {"request": inputs}})["Selection"]["value"]
+                assert len(decision["choices"]) == 1, decision
+                refresh_choice = decision["choices"][0]
+                assert refresh_choice["work"] == {"Planner": {}} and refresh_choice["reason"] == "AssessmentRequired"
+                assert len(refresh_choice["members"]) == 2
+                planned = start(refresh_choice)
+                assert planned["phase"] == "Completed" and planned["counts"]["assessed"] == 2, planned
+                repeated = tool("cq_host", "dispatch", {"Select": {"request": {**inputs, "request": identity()}}})["Selection"]["value"]
+                assert repeated["choices"] == [], repeated
+                deferred = tool("cq_host", "dispatch", {"Select": {"request": {**inputs, "request": identity(),
+                    "artifacts": [planned["result"], worked["result"]]}}})["Selection"]["value"]
+                assert deferred["choices"] == [] and deferred["counts"]["excluded"] == 2, deferred
+                refreshed.append(planned)
+            emit({"type": "fixture.cohort-refresh", "worker": worked, "assessments": refreshed})
+            finish({"summary": "Two exact revision assessments refreshed without retrying unchanged unsuccessful work"})
+            return
         review = tool("cq_host", "dispatch", {"Select": {"request": {**selection, "request": identity(),
             "work": {"Reviewer": {"mode": "Candidate"}}, "previous": worked["result"]}}})["Selection"]["value"]
         assert len(review["choices"]) == 1 and review["choices"][0]["members"] == choice["members"], review

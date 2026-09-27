@@ -99,8 +99,14 @@ final class CohortPlanner(api: ServerApi, owner: Scope, base: GitCommit, checks:
     work != DispatchWork.Worker(WorkerMode.Implement) || id.ledger == Ledger.Tasks
   private def fingerprint(work: DispatchWork, members: List[ItemView], context: Context): String =
     CohortFingerprint(work, members, context.guidance, context.operative, context.operativeResults, context.executionBase, checks)
-  private def executionFingerprint(work: DispatchWork, members: List[ItemView], context: Context): CohortExecutionFingerprint =
-    CohortExecutionFingerprint(fingerprint(work, members, context), members.map(member => member.item.id -> fingerprint(work, List(member), context)).toMap)
+  private def executionFingerprint(work: DispatchWork, members: List[ItemView], context: Context, reason: CohortReason): CohortExecutionFingerprint = {
+    val semantic = fingerprint(work, members, context)
+    if (reason == CohortReason.AssessmentRequired) {
+      require(work == DispatchWork.Planner(), "Only an assessment Planner may use revision-specific progress")
+      val group = CohortFingerprint.assessment(semantic, members.map(member => ItemRevision(member.item.id, member.item.revision)))
+      CohortExecutionFingerprint(group, members.map(member => member.item.id -> group).toMap)
+    } else CohortExecutionFingerprint(semantic, members.map(member => member.item.id -> fingerprint(work, List(member), context)).toMap)
+  }
 
   private def assessments(context: Context): List[CohortAssessment] = context.assessments
     .filter(value => value.input.base == context.executionBase && value.input.checks.sortBy(_.name) == checks.sortBy(_.name))
@@ -114,9 +120,12 @@ final class CohortPlanner(api: ServerApi, owner: Scope, base: GitCommit, checks:
   }
 
   private def assessedGroup(first: ItemView, pending: List[ItemView], request: CohortRequest, context: Context): Option[List[ItemView]] = {
-    val current = pending.map(value => ItemRevision(value.item.id, value.item.revision) -> value).toMap
-    val groups = assessments(context).map(_.members.map(_.member).toSet).distinct.filter(refs =>
-      refs.exists(_.id == first.item.id) && refs.forall(current.contains)).map(refs => pending.filter(value => refs(ItemRevision(value.item.id, value.item.revision))))
+    val current = pending.map(value => value.item.id -> value).toMap
+    val candidates = assessments(context).map(_.members.map(_.member).toSet).distinct.filter(refs =>
+      refs.exists(_.id == first.item.id) && refs.forall(ref => current.contains(ref.id)))
+    val exact = candidates.filter(_.forall(ref => current(ref.id).item.revision == ref.revision))
+    val groups = (if (exact.nonEmpty) exact else candidates).map(_.map(_.id)).distinct
+      .map(ids => pending.filter(value => ids(value.item.id)))
       .filter(group => independent(group) && fits(request, request.work, group, context))
     require(groups.size <= 1, "Overlapping applicable cohort groups require an explicit narrower context")
     groups.headOption
@@ -188,12 +197,12 @@ final class CohortPlanner(api: ServerApi, owner: Scope, base: GitCommit, checks:
 
     def offer(group: List[ItemView], work: DispatchWork, reason: CohortReason, witness: Option[ItemId], inputs: CohortRequest, content: Context): Unit = {
       val refs = group.map(value => ItemRevision(value.item.id, value.item.revision))
-      val hash = executionFingerprint(work, group, content)
+      val hash = executionFingerprint(work, group, content, reason)
       val deferred = group.filter(member => progress.deferred(hash.members(member.item.id)))
       if (deferred.nonEmpty && deferred.size < group.size && inputs.previous.isEmpty) {
         considered :+= CohortConsidered(deferred.map(value => ItemRevision(value.item.id, value.item.revision)), CohortReason.Deferred, Some(hash.group))
         group.filterNot(deferred.contains).take(CohortBounds.Choices - offered).foreach(member =>
-          offer(List(member), work, CohortReason.Single, None, inputs, content))
+          offer(List(member), work, if (reason == CohortReason.AssessmentRequired) reason else CohortReason.Single, None, inputs, content))
       } else {
         val excluded = if (!fits(inputs, work, group, content)) Some(CohortReason.InputBound)
           else if (progress.deferred(hash.group) || deferred.nonEmpty) Some(CohortReason.Deferred) else None
@@ -283,7 +292,7 @@ final class CohortPlanner(api: ServerApi, owner: Scope, base: GitCommit, checks:
     require(loaded.omitted.isEmpty, "Selected cohort no longer fits its content budget")
     val inputs = request.copy(work = choice.work, guidance = choice.guidance, artifacts = choice.artifacts, previous = choice.previous)
     val ctx = context(call, inputs)
-    require(fits(inputs, choice.work, loaded.items, ctx) && executionFingerprint(choice.work, loaded.items, ctx) == expected,
+    require(fits(inputs, choice.work, loaded.items, ctx) && executionFingerprint(choice.work, loaded.items, ctx, choice.reason) == expected,
       "Cohort operative input changed; select again")
     call(Command.Graph(GraphInput(owner.project, request.roots, None, Some(snapshot), 1)))
   }
