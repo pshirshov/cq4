@@ -70,7 +70,47 @@ for (const [name, input, output] of [['dispatch', 'DispatchCommand', 'DispatchRe
   ToolSchema.parse({ name, inputSchema: definitions[`cq_api_${input}`], outputSchema: definitions[`cq_api_${output}`] });
 }
 const reports = JSON.parse(await readFile(`${directory}/child-report-schemas.json`, 'utf8'));
+const codexReports = JSON.parse(await readFile(`${directory}/codex-report-schemas.json`, 'utf8'));
+function canonicalUnion(schema, original) {
+  assert.equal('uniqueItems' in schema, false);
+  if (original.uniqueItems === true) {
+    assert.equal(schema.description, ('description' in original ? original.description + ' ' : '') + 'Items must be unique. CQ rejects duplicate set members.');
+    schema = { ...schema, uniqueItems: true };
+    if ('description' in original) schema.description = original.description;
+    else delete schema.description;
+  }
+  return Object.fromEntries(Object.entries(schema).map(([key, value]) => {
+    assert.notEqual(key, 'oneOf', 'Codex rejects nested oneOf');
+    switch (key) {
+      case 'anyOf': return ['oneOf', value.map((child, index) => canonicalUnion(child, original.oneOf[index]))];
+      case '$defs': case 'properties': return [key, Object.fromEntries(Object.entries(value).map(([name, child]) => [name, canonicalUnion(child, original[key][name])]))];
+      case 'items': return [key, canonicalUnion(value, original.items)];
+      default: return [key, value];
+    }
+  }));
+}
 for (const [tag, schema] of Object.entries(reports)) {
+  const native = codexReports[tag];
+  assert.deepEqual(canonicalUnion(native, schema), schema);
+  for (const [name, definition] of Object.entries(schema.$defs)) {
+    const originalCheck = validator.getValidator({ ...definition, $defs: schema.$defs });
+    const nativeCheck = validator.getValidator({ ...native.$defs[name], $defs: native.$defs });
+    const alternatives = definition.oneOf || [definition];
+    for (const branch of alternatives) {
+      const value = fixture(branch, schema.$defs);
+      assert.equal(originalCheck(value).valid, true, name);
+      assert.equal(nativeCheck(value).valid, true, name);
+      for (const invalid of [null, { ...value, extra: true }]) {
+        assert.equal(nativeCheck(invalid).valid, originalCheck(invalid).valid, name);
+      }
+    }
+    if (name === 'cq_api_CohortCriterion') {
+      const sample = fixture(definition, schema.$defs);
+      sample.checks.push(sample.checks[0]);
+      assert.equal(originalCheck(sample).valid, false);
+      assert.equal(nativeCheck(sample).valid, true, 'Uniqueness is enforced by CQ, not the provider dialect');
+    }
+  }
   assert.equal(schema.type, 'object');
   assert.equal(schema.additionalProperties, false);
   assert.deepEqual(schema.required, [tag]);

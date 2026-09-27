@@ -23,6 +23,33 @@ final class HarnessAdapterLocal extends AnyWordSpec {
     "PROVIDER_TOKEN" -> "configured-provider-secret", "UNRELATED_SECRET" -> "unrelated-secret")
 
   "Harness launch boundaries (Behavioral Active Blackbox; Group / filesystem Communication)" should {
+    "translate nested report unions for the Codex structured-output dialect" in {
+      val report = new McpSchemas().childReport(DispatchWork.Planner())
+      val launch = new CodexAdapter().launch(profile(Harness.Codex),
+        invocation(Role.Planner, Path.of("/test/assets")).copy(resultSchema = report), environment)
+      val native = io.circe.parser.parse(launch.assets.find(_.name == "result-schema.json").get.body).fold(throw _, identity)
+      def hasOneOf(value: Json): Boolean = value.arrayOrObject(false, _.exists(hasOneOf),
+        fields => fields.contains("oneOf") || fields.values.exists(hasOneOf))
+      assert(hasOneOf(report))
+      assert(!hasOneOf(native), "Codex rejects nested oneOf in the full Planner report schema")
+      val checks = native.hcursor.downField("$defs").downField("cq_api_CohortCriterion").downField("properties").downField("checks")
+      assert(!checks.downField("uniqueItems").succeeded)
+      assert(checks.get[String]("description") == Right(CodexSchema.UniqueItemsRule))
+      assert(launch.assets.find(_.name == "canonical-result-schema.json").get.body == report.noSpaces)
+    }
+
+    "reject output union translations whose alternatives can overlap" in {
+      def union(types: String*): Json = Json.obj("type" -> Json.fromString("object"), "properties" -> Json.obj(
+        "value" -> Json.obj("oneOf" -> Json.arr(types.map(value => Json.obj("type" -> Json.fromString(value)))*))))
+      intercept[IllegalArgumentException](CodexSchema.result(union("string", "string")))
+      intercept[IllegalArgumentException](CodexSchema.result(union("integer", "number")))
+      intercept[IllegalArgumentException](CodexSchema.result(Json.obj("oneOf" -> Json.arr(Json.obj("type" -> Json.fromString("string"))))))
+      val nullable = CodexSchema.result(union("string", "null"))
+      assert(nullable.hcursor.downField("properties").downField("value").downField("anyOf").succeeded)
+      val property = Json.obj("type" -> Json.fromString("object"), "properties" -> Json.obj("oneOf" -> Json.obj("type" -> Json.fromString("string"))))
+      assert(CodexSchema.result(property) == property)
+    }
+
     "isolate credentials and select explicit models without inherited harness control" in {
       adapters.foreach { adapter =>
         val launch = adapter.launch(profile(adapter.harness), invocation(Role.Worker, Path.of("/test/assets")), environment)

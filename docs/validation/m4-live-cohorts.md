@@ -1,0 +1,43 @@
+# M4 live consumer cohorts — in progress
+
+This extends the [M2 real consumer chains](m2-consumer-evaluations.md) using the [cohort evaluation contract](../design/consumer-cohorts.md). Those historical chains cover all six cross-harness governor-to-child pairs. The refreshed nine-route corpus requires actual accepted executions; configured routes alone are not evidence.
+
+The explicit runner is `CQ_EVIDENCE_ROOT=/srv/nvme/tmp/cq4-implementation ./dev/consumer-eval HARNESS python|go --cohort`. It seeds two distinct counting/CLI tasks with one shared specification, runs managed selection through review, exports selection and execution-input artifacts, and retains the PostgreSQL archive and operational usage audit. Candidate acceptance requires exact seeded revisions, applicable Planner mappings, actual parent-linked routes, frozen Shared assignments, per-member outcomes, fresh reviewer-authored oracle evidence, observed counters for every attempt, and an atomic final preview showing unchanged revisions and no active claims/integration holds. The ordinary 110-case oracle remains unchanged.
+
+## Evaluator verification
+
+| Evidence under `/srv/nvme/tmp/cq4-implementation/` | Observation |
+| --- | --- |
+| `20260927T182552-fast` | Initial evaluator predicate checks, existing bridge/evaluator checks and 185 Scala scenarios pass |
+| `cohort-evaluator-review-reproductions/estimated-before.log` | An all-estimated/non-null fixture incorrectly satisfies observed coverage; the new regression fails because no rejection occurs |
+| `cohort-evaluator-review-reproductions/handoff-reproduction.json` | Links the retained M2 Pi candidate acceptance followed by actual stale-revision dispatch rejection; no new model call is claimed for this reproduction |
+| `cohort-evaluator-review-reproductions/estimated-and-handoff-after.log` | Four test cases pass, including 14 negative execution-evidence cases, estimated-only rejection and three invalid handoff states |
+| `20260927T183008-fast` | Final evaluator corrections and all 185 Scala scenarios pass, together with the bridge, original candidate/correction and suite-runner checks |
+
+Astra independently reviewed the design, implementation and two corrections, and approved proceeding to live execution after the fast gate. The first Claude-governed run failed before implementation: the native Codex provider rejected the full Planner report schema because its nested `proposal` union uses `oneOf`. Evidence is retained at `20260927T183054-cohort-consumer-claude-python`, including the HTTP 400 native response, exact rejected schema, failed Planner attempt, operational usage and database archive. The governor reported the blocker and released claims without changing the two task revisions. The adapter correction and retry are pending. Independent candidate assessment, all three completed cohort runs, traffic/usage reports and final source/evidence approval remain pending. No live cohort quality, efficiency improvement or billed cost is established here.
+
+## Codex full-report schema correction
+
+The retained native HTTP 400 and `20260927T183630-fast` establish the failure before correction: the full Planner adapter asset contains nested `oneOf`; the new regression fails for that exact reason while the other 185 scenarios pass. `CodexSchema` translates only demonstrably disjoint unions to `anyOf` at the native output boundary. Ambiguous unions fail before launch; all other constraints and host validation remain unchanged.
+
+- `20260927T183826-fast`: 187 Scala scenarios and existing bridge/evaluator checks pass.
+- `20260927T183910-contracts`: deterministic generation, Scala/TypeScript, 465 definitions and adapter output-schema equivalence checks pass. Every branch of each reachable definition is validated against the canonical and native schema.
+- `20260927T183910-contracts/native-schema-source-verification.json`: both gates match all 226 current non-documentation sources.
+
+Astra independently approved the correction and source-matched gates with no blocking or major finding. The native retry is running; provider acceptance of the complete schema and live cohort quality remain unverified.
+
+The first retry (`20260927T184130-cohort-consumer-claude-python`) established the next native rejection: HTTP 400 for `uniqueItems` at `properties/checks`. The run again stopped before implementation and retained its audit and archive. Native output schemas now replace that unsupported constraint with a uniqueness description, retaining the original canonical schema as a separate launch asset. CQ continues to reject duplicates through its existing strict host report validator; the passing cohort contract scenario checks this exact nested-Set case. Native and host validation are therefore intentionally different at this boundary. Contract checks explicitly show a duplicate check list is admitted by the provider schema and rejected by the canonical schema. Astra approved this follow-up after inspecting both Set sites and host duplicate rejection. Final gates `20260927T184417-fast` (187 Scala scenarios plus bridge/evaluator checks) and `20260927T184508-contracts` (465 definitions and the explicit validation difference) pass. `native-schema-source-verification.json` in the latter directory matches all 226 non-documentation sources. Another live retry is running.
+
+## First accepted live cohort
+
+`20260927T184552-cohort-consumer-claude-python` passes on candidate `b665fd38ab877873eea408854d936ec63b5c792a` in 229.444 seconds: Claude governor → Codex Planner → Claude Worker → Pi Candidate Reviewer. All four attempts have observed token counters and all four meters have explicit coverage gaps. Both seeded tasks remain at revision 2; the final atomic preview has no active claims or integration holds. `accepted-cohort.json` links the exact selection, applicable compatibility/criterion mapping, frozen shared membership and fresh reviewer-authored `consumer-oracle` evidence. Both Worker and Reviewer check runs pass the unchanged 110-case oracle.
+
+`20260927T185011-assess-20260927T184552-cohort-consumer-claude-python` independently accepts that exact candidate and both member scopes using native Codex / `gpt-6-astra`. Its operational audit reconciliation includes the restored baseline and assessor activity exactly once. Human acceptance and integration remain pending.
+
+The baseline operational summary records 286,627 known shared tokens and 922,345 governing tokens, totaling 1,208,972. Provider estimates include USD 0.526847799999999998 shared and USD 0.4583298 governing; Codex monetary cost remains unknown. These are partial provider estimates, not a complete billed amount. Both earlier failed native-schema attempts remain separate retained runs with their own usage and missing-child-meter gaps; they are not included in this successful run's totals.
+
+`parent-traffic.json` derives measurements from the hashed native governor transcript: 14 dispatch calls, maximum 679-byte compact JSON arguments and 1,106-byte reply text. The governor additionally performs two explicit result drill-downs: the complete 1,455-byte Review and a 700-byte Worker slice at offset 1,300. Their ArtifactText replies are 2,237 and 1,264 bytes. The transcript states verification of the fresh oracle/per-member verdict and concern about reviewer base equaling candidate; the latter is normal host review behavior. No Planner body or child prompt is read. These measurements exclude native envelopes and model-specific tokenization. They do not establish zero body copies or any matched efficiency improvement. Astra verified these reads against the transcript. It recommends a later compact projection distinguishing fresh versus inherited validation and explaining that reviewer workspaces start at the candidate. Neither is a prerequisite for the remaining route evaluations; candidate correctness is established by actual inspection and oracle evidence, not result size.
+
+The Codex-governed Go cohort is next/in progress. Pi-governed Python, their independent assessments, final corpus usage/traffic analysis and complete M4 process evidence remain open.
+
+Astra independently approved this scoped increment for commit: final fast/contracts, live cohort and native assessment manifests match the current non-documentation sources; exact member acceptance, fresh reviewer oracle authorship, clean handoff and traffic observations were independently verified. No blocking or major finding remains in this increment. This establishes one successful route configuration and the schema correction, not full R16/M4 or efficiency improvement.

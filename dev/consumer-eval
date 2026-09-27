@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Explicit live-model consumer evaluation; accounting comes from CQ's audit."""
 import datetime
+import argparse
 import contextlib
 import getpass
 import hashlib
@@ -79,6 +80,8 @@ def artifacts(environment, evidence, session, statuses):
     project = json.loads((session / "run.json").read_text())["project"]["project"]
     found = {}
     pending = [value["result"] for value in statuses if value["result"] is not None]
+    pending.extend(ticket["selection"] for path in (session / "children").glob("*/ticket.json")
+                   if (ticket := json.loads(path.read_text()))["selection"] is not None)
     while pending:
         handle = pending.pop()
         if handle["value"] in found:
@@ -104,6 +107,8 @@ def artifacts(environment, evidence, session, statuses):
         value = {**metadata, "body": json.loads(text)}
         found[handle["value"]] = value
         if metadata["kind"] == "Result":
+            input_id = uuid.UUID(bytes=hashlib.md5((metadata["attempt"]["value"] + ":input").encode()).digest(), version=3)
+            pending.append({"value": str(input_id)})
             pending.extend(entry["artifact"] for entry in value["body"]["validation"])
             if value["body"]["request"]["previous"] is not None:
                 pending.append(value["body"]["request"]["previous"])
@@ -142,14 +147,22 @@ def archive(checks, evidence):
 
 
 def main():
-    if len(sys.argv) != 3 or sys.argv[1] not in PROFILES or sys.argv[2] not in ["python", "go"]:
-        raise SystemExit("Usage: ./dev/consumer-eval claude|codex|pi python|go (runs real models)")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("harness", choices=PROFILES)
+    parser.add_argument("language", choices=["python", "go"])
+    parser.add_argument("--cohort", action="store_true", help="Run managed two-task selection with Planner, shared Worker and fresh reviewer checks")
+    arguments = parser.parse_args()
     os.chdir(ROOT)
     if any(shutil.which(command) is None for command in ["java", "sbt", "go"]):
         os.execvp("nix", ["nix", "develop", "-c", str(ROOT / "dev/consumer-eval"), *sys.argv[1:]])
-    harness, language = sys.argv[1:]
+    harness, language = arguments.harness, arguments.language
+    cohort = runpy.run_path(str(ROOT / "dev/consumer-cohort.py"))
     worker, reviewer = ROUTES[harness]
-    identifier = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S") + f"-consumer-{harness}-{language}"
+    planner = worker
+    if arguments.cohort:
+        worker = harness
+    mode = "cohort-consumer" if arguments.cohort else "consumer"
+    identifier = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S") + f"-{mode}-{harness}-{language}"
     evidence = Path(os.environ.get("CQ_EVIDENCE_ROOT", str(ROOT / ".work/evidence"))).resolve() / identifier
     evidence.mkdir(parents=True, mode=0o700)
     print("Evidence:", evidence, flush=True)
@@ -166,6 +179,7 @@ def main():
                        "version": version, "providerExtensions": [], "providerEnvironment": []})
     result = {"status": "running", "baseline": subprocess.check_output(["git", "rev-parse", "HEAD"]).decode().strip(),
               "harness": harness, "language": language, "worker": worker, "reviewer": reviewer, "routes": routes,
+              "cohort": arguments.cohort, "planner": planner if arguments.cohort else None,
               "remaining": ["candidate integration", "independent evaluation assessment", "M2 human acceptance"],
               "scope": "real consumer candidate build and host validation; no efficiency conclusion from a single run"}
     write(evidence / "result.json", result)
@@ -177,6 +191,9 @@ def main():
         checks.run(["gcc", "-std=c17", "-O2", "-Wall", "-Wextra", "-Werror", "-o", str(guardian), "host/native/guardian.c"], "guardian-build", 60)
         checks.run(["go", "version"], "go-version", 10)
         checks.run(["python3", "--version"], "python-version", 10)
+        for route in routes:
+            observed = checks.run([route["executable"], "--version"], "version-" + route["harness"].lower(), 15)
+            assert route["version"] in observed, "Configured harness version differs from the installed executable"
         consumer = evidence / "consumer"
         consumer.mkdir()
         checks.run(["git", "init", "--quiet", str(consumer)], "consumer-init", 10)
@@ -186,7 +203,7 @@ def main():
                                "graceMillis": "1000", "killMillis": "3000", "outputBytes": 8 * 1024 * 1024},
                     "checks": [{"name": "consumer-oracle", "command": [sys.executable, str(ROOT / "dev/consumer-oracle.py"), language],
                                 "executionMillis": "180000", "outputBytes": 262144}],
-                    "evaluation": {"run": identifier, "scenario": "wordfreq-" + language, "assessor": False}}
+                    "evaluation": {"run": identifier, "scenario": ("cohort-wordfreq-" if arguments.cohort else "wordfreq-") + language, "assessor": False}}
         write(evidence / "settings.json", settings)
         request = (f"Build the following unrelated consumer in {language}. Create one CQ task containing the complete specification below and claim it. "
                    f"Dispatch {PROFILES[worker][0]} Worker Implement with that exact task revision; after host validation passes, dispatch {PROFILES[reviewer][0]} Reviewer using its result handle. "
@@ -204,9 +221,16 @@ def main():
                 with (evidence / "cq-init.log").open("w") as log:
                     subprocess.run(command + ["init", "--endpoint", checks.environment["CQ_ORIGIN"]], cwd=consumer, env=environment, stdout=log, stderr=subprocess.STDOUT, timeout=30, check=True)
                 try:
+                    workflow = []
+                    if arguments.cohort:
+                        project = json.loads((consumer / ".git/cq/project.json").read_text())["project"]
+                        seed = cohort["seed"](lambda body: call(checks.environment, body), project, language, (ROOT / "dev/consumer-spec.md").read_text())
+                        write(evidence / "cohort-seed.json", seed)
+                        (evidence / "request.txt").write_text(cohort["request"](seed, PROFILES[planner][0], PROFILES[worker][0], PROFILES[reviewer][0]))
+                        workflow = ["--workflow", "advance", "--roots", "G" + seed["goal"]["id"]["number"], "--through", "review"]
                     began = time.monotonic()
                     with (evidence / "governor.stdout").open("w") as out, (evidence / "governor.stderr").open("w") as err:
-                        finished = subprocess.run(command + ["run", harness, "--settings", str(evidence / "settings.json"), "--input", str(evidence / "request.txt")],
+                        finished = subprocess.run(command + ["run", harness, "--settings", str(evidence / "settings.json"), "--input", str(evidence / "request.txt")] + workflow,
                                                   cwd=consumer, env=environment, stdout=out, stderr=err, timeout=EXECUTION_MILLIS / 1000 + 120)
                     result.update(exit=finished.returncode, elapsedSeconds=round(time.monotonic() - began, 3))
                     sessions = list((evidence / "sessions").iterdir())
@@ -218,6 +242,11 @@ def main():
                     chain = runpy.run_path(str(ROOT / "dev/consumer-evidence.py"))["accepted_chain"](statuses, values, {value["name"]: value for value in settings["checks"]})
                     assert finished.returncode == 0, "Governing process did not complete successfully"
                     assert chain["workerHarness"] == PROFILES[worker][0] and chain["reviewerHarness"] == PROFILES[reviewer][0], "Accepted chain used another configured route"
+                    project = json.loads((session / "run.json").read_text())["project"]["project"]
+                    handoff = call(checks.environment, {"Read": {"input": {"project": project, "selection": {
+                        "Claims": {"members": [value["id"] for value in chain["members"]]}}}}})
+                    write(evidence / "assessment-handoff.json", handoff)
+                    cohort["assessment_handoff"]({"members": chain["members"]}, handoff["Claims"]["preview"])
                     write(evidence / "accepted-chain.json", chain)
                     result.update(status="candidate-passed", acceptedChain=chain)
                 finally:
@@ -229,6 +258,15 @@ def main():
                 assert all(value["assignment"]["evaluation"] == settings["evaluation"] for value in attempts), "Evaluation attribution was not inherited"
                 assert {value["attempt"]["harness"] for value in attempts} == set(value[0] for value in PROFILES.values()), "Evaluation did not use all required routes"
                 result["attempts"] = len(attempts)
+                if arguments.cohort:
+                    tickets = {ticket["attempt"]["id"]["value"]: ticket for path in (session / "children").glob("*/ticket.json")
+                               if (ticket := json.loads(path.read_text()))}
+                    observations = [entry for path in sorted(evidence.glob("usage-audit-*.json"))
+                                    for entry in json.loads(path.read_text())["UsageAudit"]["page"]["entries"]]
+                    governor = json.loads((session / "run.json").read_text())["attempt"]
+                    expected_routes = {"Governor": PROFILES[harness][0], "Planner": PROFILES[planner][0], "Worker": PROFILES[worker][0], "Reviewer": PROFILES[reviewer][0]}
+                    proof = cohort["accepted"](chain, statuses, values, tickets, attempts, observations, seed, governor, expected_routes)
+                    write(evidence / "accepted-cohort.json", proof)
     except BaseException as error:
         result.update(status="failed", error=str(error))
         raise

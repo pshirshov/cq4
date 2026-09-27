@@ -137,7 +137,8 @@ final class CodexAdapter extends HarnessAdapter {
       "--output-last-message", invocation.assets.resolve("last-message.json").toString) ++ restrictions ++ mcp ++ List("-")
     val scoped = invocation.endpoints.map(endpoint => endpoint.environmentKey -> endpoint.token.value).toMap
     HarnessLaunch(arguments, HarnessEnvironment.isolated(profile, environment) ++ scoped,
-      List(HarnessAsset("result-schema.json", invocation.resultSchema.noSpaces)))
+      List(HarnessAsset("result-schema.json", CodexSchema.result(invocation.resultSchema).noSpaces),
+        HarnessAsset("canonical-result-schema.json", invocation.resultSchema.noSpaces)))
   }
 }
 
