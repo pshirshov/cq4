@@ -1,6 +1,6 @@
 # CQ
 
-CQ is being implemented under the [M0–M6 plan](docs/drafts/20260926-1549-cq-implementation-plan.md). The durable ledger/audit core and authenticated HTTP/MCP/WebSocket/CLI interfaces are implemented; [M1 has independent Astra approval](docs/validation/m1-review.md). The [batch supervisor role](docs/design/supervisor-role.md) and [child handle dispatch](docs/design/local-dispatch.md) now run real consumer builds under all three harnesses. Independent assessments and interruption recovery are in progress. Release functionality and human acceptance are tracked in [implementation status](docs/implementation-status.md) and [requirement coverage](docs/requirement-coverage.md).
+CQ is being implemented under the [M0–M6 plan](docs/drafts/20260926-1549-cq-implementation-plan.md). The durable ledger/audit core and authenticated HTTP/MCP/WebSocket/CLI interfaces are implemented; [M1 has independent Astra approval](docs/validation/m1-review.md). The [batch supervisor role](docs/design/supervisor-role.md) and [child handle dispatch](docs/design/local-dispatch.md) now run real consumer builds under all three harnesses. All three routes have independently assessed candidates; interruption recovery passes the runtime checks. M2 has technical Astra approval and awaits human acceptance. Release functionality and human acceptance are tracked in [implementation status](docs/implementation-status.md) and [requirement coverage](docs/requirement-coverage.md).
 
 ## Development checks
 
@@ -30,7 +30,7 @@ CQ_TEST_DATABASE_PASSWORD=local-test-password \
 ./dev/check postgres
 ```
 
-The runner creates and drops a unique schema in that database. The account must have schema creation permission. With no provided URL, PostgreSQL is started as the current non-root user and stopped by the runner. Missing infrastructure fails the check. `browser` runs real Chromium UI and connection checks. `process` builds the Linux guardian and checks process-tree cleanup and the Scala driver; full supervisor and harness coverage remains pending. It requires Linux 5.9 or newer.
+The runner creates and drops a unique schema in that database. The account must have schema creation permission. With no provided URL, PostgreSQL is started as the current non-root user and stopped by the runner. Missing infrastructure fails the check. `browser` runs real Chromium UI and connection checks. `process` builds the Linux guardian and checks process-tree cleanup and the Scala driver; actual supervisor recovery and dispatch are covered by `postgres`; live harness evidence is retained separately. It requires Linux 5.9 or newer.
 
 ## Real consumer evaluations
 
@@ -123,6 +123,8 @@ cq job upload --session /absolute/session-directory
 ```
 
 Cost summaries include a bounded first page grouped by attribution, currency, cost basis and pricing version. Continue with `status costs --after '<after-object-as-JSON>' --snapshot <cursor> --limit 20` using the returned key and cursor; concurrent audit changes require restarting the listing. Raw observations retain original amounts and pricing evidence.
+
+`job upload` requires the supervisor to have released its session journal. It replays committed batches unchanged and reconciles interrupted attempts with partial usage and unknown outcomes. Incomplete child tickets are retained and explicitly reported with a nonzero exit after valid batches are replayed. See [recovery evidence](docs/validation/m2-recovery.md).
 
 Here `cq` denotes that JVM launcher until the current native package is built. Server, client and supervisor commands use the same distage role entrypoint; native role syntax such as `cq :client -- web` and `cq :help` is also available. Client commands do not require local server/database configuration, and diagnostics go to stderr. [Client role checks](docs/validation/m2-roles.md); [supervisor configuration, run instructions and limits](docs/design/supervisor-role.md).
 

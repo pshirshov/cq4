@@ -64,24 +64,28 @@ Stdout contains a generated `SupervisorReceipt`: session/attempt, retained local
 
 Host uploads are frozen in typed `DeliveryBatch` files before delivery. A queue accepts at most 512 batches, 16 MiB per batch and 512 MiB in total. Individual initial batches contain at most 8,192 entries; final publication groups entries in sets of 32. The complete final set is forced in a staging directory, atomically renamed to `final/`, and its parent forced before any final batch can be delivered. Existing final sets must pass that parent durability barrier on replay as well. A separate file lock serializes publication/replay. An acknowledgement is forced only after the entire batch succeeds. If a response is lost, replay uses the same artifact/usage/attempt identities; server idempotency prevents duplicate accounting. Acknowledged files remain available and changed identities are rejected.
 
-Retry already-spooled delivery using the same executable and a host-authorized credential:
+Reconcile interrupted publication and retry delivery using the same executable and a host-authorized credential:
 
 ```text
 cq job upload --session /absolute/session-directory
 ```
 
-This acquires a fresh collector credential for the recorded logical session and replays pending governing and child batches. It never restarts a harness or rewrites an audit observation. The original receipt remains a historical snapshot; CLI replay reports newly acknowledged batches, and current audit queries show the acknowledged state.
+This holds the session journal's exclusive owner lock throughout credential acquisition, reconciliation and replay. An active supervisor prevents upload. It acquires a fresh collector credential for the recorded logical session and replays committed governing and child batches unchanged. Attempts without committed final publication are reconciled as described below. The original receipt remains a historical snapshot; CLI replay reports newly acknowledged batches, and current audit queries show acknowledged outcomes and coverage.
 
 ## Remaining integration
 
-The durable job service quarantines unfinished records on recovery and owns process-tree shutdown. The role now connects child dispatch, claims and reference-based prompt/result chaining. Candidate integration, consumer evaluations and interactive telemetry remain open. Delivery recovery handles **already-spooled batches**: recovery of output after a host dies before producing those batches remains open. Preparation failures and interrupted collection still require a complete attempt-outcome reconciliation path. No automatic retention/deletion is implemented. Native distribution verification remains M6 work. Forced shutdown exits 75 and requires reconciliation; see the [shutdown boundary](local-dispatch.md#delivery-and-shutdown).
+The durable job service quarantines unfinished records on recovery and owns process-tree shutdown. The role connects child dispatch, claims and reference-based prompt/result chaining. All three governing routes have independently assessed consumer candidates. Candidate integration, interactive telemetry and native distribution remain later milestone work. No automatic retention/deletion is implemented. Forced shutdown exits 75 and requires reconciliation; see the [shutdown boundary](local-dispatch.md#delivery-and-shutdown).
 
 See [verification evidence](../validation/m2-supervisor-role.md).
 
-### Next increment: interrupted publication
+### Interrupted publication
 
 The implemented [atomic publication boundary](../validation/m2-publication.md) commits a complete set of final delivery batches. Initial assignment/input publication remains separate. Final artifact/usage/outcome batches become eligible for HTTP only after every batch and its staging directory are forced, the directory is atomically renamed, and its parent is forced. Replay uses the committed bytes and identities verbatim, including after ambiguous acknowledgement; uncommitted staging is ineligible for delivery.
 
-`cq job upload` will hold the session journal's exclusive owner lock throughout reconciliation and replay. Its bounded inventory must include the governing run and child tickets, including attempts interrupted before job creation. If final publication was not committed, recovery will retain a bounded byte snapshot of available native output, collect its observable usage, quarantine unresolved workspaces and publish an `Unknown` outcome with an explicit interruption/coverage gap. A journal lock does not prove guardians stopped writing; a quiet file cannot establish process settlement. Recovery will neither adopt saved PIDs nor admit an uncommitted candidate result.
+The bounded inventory includes the governing run and at most 32 child tickets, including attempts interrupted before job creation. If final publication was not committed, recovery retains a byte snapshot of available stdout/stderr (at most 32 MiB each), collects observable usage, quarantines unresolved workspaces and publishes an `Unknown` outcome with an explicit interruption/coverage gap. Missing streams produce an absence gap. Observations from a recovery snapshot cannot have complete coverage, even if the snapshot contains a native terminal event. Attempts without observable meters retain missing-meter coverage.
 
-Astra approved the atomic publication foundation. Reconciliation verification still requires interruption before commit, after commit and after server success but before acknowledgement; repeated recovery must not change recorded observation identities or totals. Output reconciliation described here remains planned.
+A journal lock does not prove guardians stopped writing; a quiet file cannot establish process settlement. Recovery does not adopt saved PIDs or admit an uncommitted candidate result. Nonterminal jobs become `Uncertain` with target `Stop`; separate unresolved validation workspaces are also quarantined without inventing model attempts. Once the recovery set commits, later output cannot change its bytes, timestamps, observation identities or totals on replay.
+
+A child directory whose ticket never committed has no trustworthy assignment identity. Recovery preserves and reports recognized partial ticket/cancellation writes, replays valid publications, and exits nonzero with the unresolved paths. It does not fabricate an audit attempt. Malformed committed tickets, unexpected files or a job lacking its required committed ticket fail explicitly.
+
+Astra approved atomic publication and reconciliation after the final runtime gates. [Reconciliation evidence](../validation/m2-recovery.md) covers interrupted capture, committed replay, lost acknowledgement, incomplete tickets, live ownership denial and actual JVM termination. M2 human acceptance remains a separate checkpoint.

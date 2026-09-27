@@ -91,6 +91,16 @@ def main():
                     time.sleep(0.05)
                 assert not active, (mode, "Owned guardian/harness hierarchy survived shutdown", active)
                 assert not list((session / "children").glob("*/receipt.json")), "Late publication occurred after releasing I/O"
+                retained = {child.name: sorted(path.name for path in child.iterdir()) for child in (session / "children").iterdir()}
+                replay = subprocess.run(command + ["job", "upload", "--session", str(session)], cwd=repository,
+                                        env=environment, capture_output=True, text=True, timeout=30)
+                print(json.dumps({"mode": mode, "retainedChildFiles": retained, "uploadExit": replay.returncode,
+                                  "uploadOutput": replay.stdout, "uploadError": replay.stderr[-2000:]}), flush=True)
+                assert replay.returncode == (1 if mode == "ticket" else 0), (mode, replay.stderr)
+                assert "Acknowledged" in replay.stdout and ("Unresolved child ticket" in replay.stdout) == (mode == "ticket"), (mode, replay.stderr)
+                repeated = subprocess.run(command + ["job", "upload", "--session", str(session)], cwd=repository,
+                                          env=environment, capture_output=True, text=True, timeout=30)
+                assert repeated.returncode == replay.returncode and "Acknowledged 0" in repeated.stdout, (mode, repeated.stderr)
     print("Supervisor shutdown: held ticket/input/governor-exit fsync exits 75; no late launch/publication; guardian drain and normal hierarchy cancellation passed")
 
 

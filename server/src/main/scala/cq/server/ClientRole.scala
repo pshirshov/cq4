@@ -12,7 +12,7 @@ import java.nio.file.Path
 import zio.{Task, ZIO}
 
 final class ClientRole(cli: Cli) extends RoleTask[Task] {
-  override def start(parameters: EntrypointArgs): Task[Unit] = ZIO.attemptBlocking {
+  override def start(parameters: EntrypointArgs): Task[Unit] = {
     val arguments = parameters.raw.toList
     cli.run(if (arguments.headOption.contains("--")) arguments.tail else arguments)
   }
@@ -29,6 +29,7 @@ object ClientPlugin extends PluginDef {
     include(new RoleModuleDef { makeRole[ClientRole] })
     include(BundledRolesModule[Task])
     make[Cli]
+    make[SessionUpload]
     make[ProjectLocation]
     make[CliContext].fromEffect(ZIO.attempt(CliContext(sys.env, Path.of("").toAbsolutePath.normalize(), System.out)))
   })

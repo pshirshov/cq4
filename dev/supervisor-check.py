@@ -4,6 +4,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.request
 import uuid
 
@@ -47,6 +48,9 @@ if prompt == "deadline input":
     time.sleep(30)
 if prompt == "uncertain input":
     os.kill(os.getppid(), signal.SIGKILL)
+    time.sleep(30)
+if prompt == "recovery input":
+    print('{"type":', end="", flush=True)
     time.sleep(30)
 ''')
         executable.chmod(0o700)
@@ -96,6 +100,47 @@ if prompt == "uncertain input":
         assert "Acknowledged 1" in run(["job", "upload", "--session", str(session)], 0).stdout
         replayed = api({"Usage": {"input": {"project": manifest["project"]["project"], "selection": selection}}})
         assert replayed == usage, "Replaying acknowledged native usage changed totals or audit cursor"
+
+        input_file.write_text("recovery input")
+        existing = set((root / "sessions").iterdir())
+        with (root / "interrupted.log").open("w") as log:
+            interrupted = subprocess.Popen(launcher + ["run", "codex", "--settings", str(settings), "--input", str(input_file)],
+                                           cwd=repository, env=environment, stdout=log, stderr=log)
+            try:
+                deadline = time.monotonic() + 20
+                while True:
+                    created = list(set((root / "sessions").iterdir()) - existing)
+                    outputs = list(created[0].glob("payload/*/stdout")) if len(created) == 1 else []
+                    if outputs and outputs[0].read_bytes().endswith(b'{"type":'):
+                        recovery = created[0]
+                        break
+                    assert interrupted.poll() is None and time.monotonic() < deadline, (root / "interrupted.log").read_text()
+                    time.sleep(0.05)
+                denied = run(["job", "upload", "--session", str(recovery)], 1)
+                assert "already owned by a supervisor" in denied.stderr, denied.stderr
+                assert not (recovery / "delivery/final").exists()
+            finally:
+                if interrupted.poll() is None:
+                    interrupted.kill()
+                interrupted.wait(timeout=10)
+        assert "Acknowledged 1" in run(["job", "upload", "--session", str(recovery)], 0).stdout
+        recovered_run = json.loads((recovery / "run.json").read_text())
+        recovered_query = {"Usage": {"input": {"project": recovered_run["project"]["project"], "selection": {
+            "Summary": {"filter": {"SessionOnly": {"id": recovered_run["attempt"]["session"]}}}}}}}
+        recovered_usage = api(recovered_query)
+        totals = recovered_usage["UsageSummary"]["report"]
+        assert totals["unattributed"]["total"]["known"] == "131" and totals["attempts"]["unknown"] == "1", totals
+        assert totals["incompleteMeters"] == "1" and totals["attempts"]["running"] == "0", totals
+        batches = [json.loads(path.read_text()) for path in (recovery / "delivery/final").glob("*.json")]
+        assert not any(entry.get("Artifact", {}).get("value", {}).get("kind") == "Result" for batch in batches for entry in batch["entries"])
+        journal = list((recovery / "journal").glob("*.json"))
+        assert len(journal) == 1 and json.loads(journal[0].read_text())["phase"] == "Uncertain"
+        workspace = list((recovery / "workspaces").glob("*/workspace.json"))
+        assert len(workspace) == 1 and json.loads(workspace[0].read_text())["admission"] == "Quarantined"
+        assert "Acknowledged 0" in run(["job", "upload", "--session", str(recovery)], 0).stdout
+        assert api(recovered_query) == recovered_usage
+        print(json.dumps({"case": "supervisor SIGKILL recovery", "usage": totals, "liveOwnerRejected": True,
+                          "journalUncertain": True, "workspaceQuarantined": True, "replayUnchanged": True}), flush=True)
 
         input_file.write_text("invalid result")
         invalid = run([":supervisor", "--", "codex", "--settings", str(settings), "--input", str(input_file)], 1)

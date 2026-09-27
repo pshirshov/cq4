@@ -2,18 +2,19 @@ package cq.server
 
 import cq.api.*
 import cq.core.LedgerPolicy
-import cq.host.{HostFiles, HttpServerApi, SessionDelivery}
+import cq.host.HttpServerApi
 import java.io.PrintStream
 import java.net.URI
 import java.nio.channels.FileChannel
 import java.nio.file.{Files, Path, StandardCopyOption, StandardOpenOption}
-import java.time.{Clock, Duration}
+import java.time.Duration
 import java.util.UUID
 import scala.util.Using
+import zio.{Task, ZIO}
 
 final case class CliContext(environment: Map[String, String], directory: Path, output: PrintStream)
 
-final class Cli(context: CliContext, location: ProjectLocation, clock: Clock) {
+final class Cli(context: CliContext, location: ProjectLocation, upload: SessionUpload) {
   private val environment = context.environment
   private val directory = context.directory
   private val output = context.output
@@ -71,7 +72,12 @@ final class Cli(context: CliContext, location: ProjectLocation, clock: Clock) {
     ItemId(project, found, number)
   }
 
-  def run(args: List[String]): Unit = args match {
+  def run(args: List[String]): Task[Unit] = args match {
+    case List("job", "upload", "--session", value) => upload.run(directory.resolve(value).normalize())
+    case _ => ZIO.attemptBlocking(runSynchronous(args))
+  }
+
+  private def runSynchronous(args: List[String]): Unit = args match {
     case "init" :: rest =>
       val opts = options(rest, Set("--endpoint", "--project-id", "--name"))
       val location = configDirectory
@@ -140,16 +146,6 @@ final class Cli(context: CliContext, location: ProjectLocation, clock: Clock) {
       }
       output.println(Wire.encode(Result_JsonCodec, request(config, actorSession, Command.Usage(UsageInput(config.project, selection)))))
     case List("web") => output.println(configuration(configDirectory).endpoint)
-    case List("job", "upload", "--session", value) =>
-      val root = directory.resolve(value).normalize()
-      val run = HostFiles.read(root.resolve("run.json"), SupervisorRun_JsonCodec, 64 * 1024)
-      val rootApi = new HttpServerApi(URI.create(validateEndpoint(run.project.endpoint)), environment.getOrElse("CQ_TOKEN", throw new IllegalArgumentException("CQ_TOKEN is required")),
-        run.attempt.session, RequestTimeout)
-      val grant = rootApi.grant(GrantRequest(run.project.project, Actor("CQ host collector", run.attempt.session, Role.Collector),
-        clock.millis() + Duration.ofHours(1).toMillis))
-      val collector = new HttpServerApi(URI.create(run.project.endpoint), grant.value, run.attempt.session, RequestTimeout)
-      val delivered = SessionDelivery.flush(root, run, collector)
-      output.println(s"Acknowledged $delivered pending delivery batches from $root")
     case Nil | List("--help") => output.println("cq serve | init [--endpoint URL] [--project-id UUID] [--name TEXT] | web | run HARNESS --settings FILE --input FILE | job upload --session DIR | query [--ledger NAME] [--archived Active|Archived|All] [--after T1 --snapshot N] [--limit N] | status [audit|costs|attempts|outcomes] [--task T1|--cohort UUID|--session UUID] [--attempt UUID] [--after CURSOR] [--snapshot N] [--limit N]")
     case _ => throw new IllegalArgumentException("Unknown command; use cq --help")
   }
