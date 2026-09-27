@@ -122,3 +122,57 @@ Run this continuation with:
 ```
 
 The final status remains **assessment-not-accepted**. Independent Astra reviewed the matching sources, sole Handoff acknowledgement, unchanged Git, claim-free handoff, seven-file inspection and accounting, and approved the correction-runner/evidence increment for commit. That approval does not close the new test/evidence findings, full process acceptance or M4.
+
+### Reopening the rejected task
+
+`./dev/process-assess INTEGRATED_EVIDENCE_DIRECTORY --reopen PRIOR_ASSESSMENT_DIRECTORY` adds a fresh claimed planning/implementation/integration session for the actual T1 finding, followed by a reviewed Handoff update and both whole-scope audits. Reopening retains the prior Done revision and unchanged acceptance criteria; predicates bind the accepted Ready replacement and the subsequent integration Done acknowledgement separately. T2 and all other records remain unchanged during T1 correction. The new candidate must descend from the incorporated baseline and change only `main_test.go` and/or `wordfreq_test.go`.
+
+The additional declared `empty-input-sensitivity` check copies the candidate into an isolated temporary directory, runs its tests unchanged, injects the pinned empty-input-only defect into the copy and requires the tests to fail for that precise reason. It leaves the candidate unchanged. The existing consumer oracle remains mandatory. Both checks require fresh Candidate Reviewer observations before integration. The gate fails on the retained original consumer (`empty-gate-before.log`) and passes on an explicitly synthetic verification fixture containing the missing test (`empty-gate-positive-fixture.log`); this fixture is not the CQ worker correction.
+
+The assessment bundle now supplies exact Git commands and outputs identifying the original and candidate answer blobs, byte counts and SHA-256 hashes, with explicit runner-measured provenance. This closes the evidence-presentation mechanism, not the prior review verdict. Replays bind those observations to the current candidate and preserve the original and correction integration evidence separately. Three new deterministic tests cover exact reopening/history/ACK/check rejection and actual Git diff/answer-byte boundaries. The existing nine assessment tests and retained 25-attempt replay pass. Astra approved the source for a scoped native run after the fast gate; live outcome is pending.
+
+
+The first reopening setup (`20260927T213636-process-assess`) fails before any native attempt because a newly owned clone already has an `integration` branch. Resetting that local ref after detached checkout fixes the setup; `integration-ref-correction.json` retains the checked HEAD/ref identities. `20260927T213745-fast` passes on all 235 sources used by `20260927T213832-process-assess`.
+
+That native run then exposes a product defect: Planner selection filters T1 Done@4 as Terminal, so the governor cannot obtain a selection-backed reopening proposal. It claims/releases T1 and exits with an honest blocker, without children, ledger/history changes or integration. The evaluator retains a failed outcome. Governor `3f7e2918-493b-4adb-800a-e3aaae9a16c1` adds 507,692 known tokens; the accumulated 26 attempts contain 10,873,870 known tokens. This is not a successful reopening.
+
+A new dual dummy/PostgreSQL selector regression fails before correction (`terminal-planner-reproduction` (copied from `.work/evidence/20260927T214550-fast`), 188 passing and one failing Scala scenario): no Planner choice is returned for an explicitly selected completed root. The correction allows only an explicitly rooted, selected, unarchived terminal Planner subject without unsatisfied blockers. Selection/start/counts share the predicate; Worker eligibility and terminal descendant exclusion remain unchanged. The regression also checks foreign claims, prerequisite drift at start, and archival.
+
+The continuation reader accepts this failed archive only after checking exact unchanged records/history/Git, a claim-free handoff, no child tickets/jobs/integrations, settled governor execution and delivered audit. It restores that actual database, retains the original failed manifest, and includes its distinct attempt and usage once in subsequent reconciliation. Four reopening predicate tests pass, including rejection of changed records/history, retained claims, child/integration attempts, unsettled execution and foreign usage. Astra approves the scoped source for targeted native retry after the fast and shared cohort gates; final live evidence remains pending.
+
+The corrected fast gate `20260927T214843-fast` passes 189 Scala scenarios, eleven process tests, nine assessment tests and four reopening tests. `20260927T214943-cohort` passes thirteen shared PostgreSQL selector scenarios and the actual supervisor cohort fixture. All 235 runtime/build/evaluator sources match `20260927T215146-process-assess`. Its reopening stage passes in 301.128 seconds: independently accepted proposal `bd2fa0d2-8f93-3bb8-b42e-d7837142ec0a` is acknowledged at T1 Ready@5, then Pi Worker/Codex Candidate Reviewer execute both fresh checks before Recorded integration `7a1c0e11-3b2d-4f5e-9a10-000000000201` acknowledges only T1 Done@6. Candidate `d6f61c11d8c29f71d34eba26f633aa5bea275964` descends from the prior integration and changes only `main_test.go`; production files and original answer bytes are unchanged. The stage adds 1,973,171 known tokens; subsequent Handoff and whole-process assessment are still running.
+
+
+The same native run completes the independently accepted Handoff-only correction at revision 5 in 143.732 seconds, then fails before either Audit because its inline-history bundle is 134,423 bytes, exceeding the existing 131,072-byte artifact limit. `bundle-bound-reproduction/oversized-bundle.json` and `before.json` reconstruct the exact failure; histories account for 83,803 bytes. Both completed stage archives and their failed parent manifest remain retained. Cumulative usage is 13,742,861 known tokens across 34 distinct attempts.
+
+The evaluator now references each item's complete history by project/item, latest revision, revision count and a canonical SHA-256 digest. Reviewers use ordinary bounded CQ History reads. Native Astra coverage checks compare every successful returned entry, including references/provenance, with the frozen full history; missing revisions, failed calls and duplicate partial pages cannot establish complete inspection. This reduces the bundle to approximately 52 KiB without changing host limits or omitting prior rejected findings, planning/application identities or integration observations. Ten assessment predicate tests pass.
+
+`--assess COMPLETED_CORRECTION_CHECKPOINT` replays the exact reopening/correction proofs, accepted-review-before-application acknowledgements, hierarchy, Git and cumulative accounting before restoring the last archived correction database. It adds only the two Audit stages. It does not repeat the completed correction or change the failed root manifest. The current source and fast verification are under independent review before this targeted continuation.
+
+
+### Accepted corrected process and bounded history inspection
+
+`20260927T220425-fast` passes 189 Scala scenarios, eleven process tests, ten assessment tests and four reopening tests. `20260927T220537-process-assess` matches all 236 runtime/build/evaluator sources; `process-history-source-verification.json` also verifies the runtime is unchanged from the passing PostgreSQL/actual-supervisor cohort gate. The continuation restores the completed correction database and runs only the two independent Audits.
+
+| Stage | Elapsed | Outcome | Known reported tokens |
+| --- | --- | --- | --- |
+| Pi Audit | 134.962 s | Both tasks Accepted | 928,087 |
+| Standalone Codex/Astra Audit | 140.386 s | Both tasks Accepted; complete file/history inspection | 977,472 |
+
+Pi result `a5c3f482-dad2-3f64-bdaa-7c67acea9b60` is the exact standalone subject. Astra result `8f569ff1-b761-3d58-ab88-6d9a7a70a2f9` independently accepts T1@6 and T2@4 on candidate `d6f61c11d8c29f71d34eba26f633aa5bea275964`. It confirms the genuine empty-input test, fresh host-recorded oracle/mutant checks, runner-measured answer-file identity, exact incorporation and corrected current graph. It preserves the original ChangesRequested proposal application and subsequent direct relationship edits as historical deviations; it does not retroactively accept them.
+
+The immutable materialized bundle is 52,705 bytes. `workspace-inspection.json` verifies successful reads of all seven tracked files. `history-inspection.json` verifies all 33 revisions across eight item histories against their exact frozen entries, including references and provenance. Current graph/history, Git candidate/target and claim-free handoff remain unchanged. No Worker or integration runs during these two Audits.
+
+Full continuation replay passes and reconciles **15,648,420 known tokens across 38 distinct attempts**, all partial meters and none absent. Original/rejected assessments, the unsuccessful terminal-root governor, the completed correction stages and both final Audits are included once. The original failed manifests are unchanged; complete billing and comparative efficiency remain unclaimed.
+
+Retained parent traffic: reopening/correction/precheck/standalone execute 21/10/7/7 dispatch calls, with maximum argument/reply text sizes of 1,440/1,778, 1,579/1,914, 1,669/693 and 1,548/1,949 bytes respectively. Reopening explicitly reads a 3,006-byte Result; correction and both Audit governors read no Result bodies. Precheck reads one Selection artifact. These observations exclude native envelopes and tokenization; full child usage remains in the shared audit.
+
+Run the assessment-only continuation with:
+
+```sh
+./dev/process-assess \
+  /srv/nvme/tmp/cq4-implementation/20260927T201449-process-resume \
+  --assess /srv/nvme/tmp/cq4-implementation/20260927T215146-process-assess
+```
+
+The final status is **assessment-passed** for intake through reviewed reopening and standalone review. The defect/research/upstream example, matched usage repetitions, full M4 review and designated human acceptance remain separate unfinished work. Independent Astra verified the source/gate match, current task/candidate identities, complete file/history inspection, unchanged claim-free handoff and accounting, and approved this scoped increment for commit with no blocking or major finding.

@@ -112,6 +112,48 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
   } yield Published(result, stored.id)
 
   "Automatic cohort selection (Behavioral Active Blackbox; dummy Group / PostgreSQL Good Communication)" should {
+    "offer an explicit completed root for planning its reopening without executing or rediscovering completed work" in { (ledger: LedgerService[IO]) =>
+      val scope = owner
+      val completed = task.copy(content = Content.Task(TaskStatus.Done, List("Independent acceptance"), None, Nil))
+      for {
+        runtime <- ZIO.runtime[Any]
+        _ <- ledger.initialize(scope, "Reviewed reopening")
+        created <- ledger.change(scope, ChangeRequest(RequestId(uuid), List(Mutation.Create(completed), Mutation.Create(completed)), Nil, "Completed work"))
+        root = created.items.head.id
+        descendant = created.items.last.id
+        _ <- link(ledger, scope, root, Relation.Produces, descendant)
+        _ <- link(ledger, scope, root, Relation.BlockedBy, descendant)
+        planner = new CohortPlanner(api(ledger, scope, runtime), scope, GitCommit("a" * 40), Nil, new CohortProgress)
+        input = request(Set(root), DispatchWork.Planner())
+        selected <- ZIO.attemptBlocking(planner.plan(input, ArtifactId(uuid)))
+        _ <- assertIO(selected.evidence.decision.choices.flatMap(_.members.map(_.id)) == List(root))
+        _ <- assertIO(selected.evidence.decision.counts.notReady == 1)
+        choice = selected.evidence.decision.choices.head
+        _ <- ZIO.attemptBlocking(planner.verify(input, choice, selected.fingerprints(choice.id)))
+        worker <- ZIO.attemptBlocking(planner.plan(input.copy(work = DispatchWork.Worker(WorkerMode.Implement)), ArtifactId(uuid)))
+        _ <- assertIO(worker.evidence.decision.choices.isEmpty && worker.evidence.decision.counts.notReady == 2)
+        foreign = scope.copy(actor = scope.actor.copy(session = SessionId(uuid)))
+        claim <- ledger.acquire(foreign, ClaimId(uuid), Set(root), 300000)
+        held <- ZIO.attemptBlocking(planner.plan(input, ArtifactId(uuid)))
+        _ <- assertIO(held.evidence.decision.choices.isEmpty && held.evidence.considered.exists(_.reason == CohortReason.Claimed))
+        _ <- ledger.release(foreign, claim.fence)
+        dependency <- ledger.get(scope, descendant)
+        changed <- ledger.change(scope, ChangeRequest(RequestId(uuid), List(Mutation.Replace(descendant, dependency.item.revision, task)), Nil, "Reopen prerequisite"))
+        blocked <- ZIO.attemptBlocking(planner.plan(input, ArtifactId(uuid)))
+        _ <- assertIO(!blocked.evidence.decision.choices.flatMap(_.members.map(_.id)).contains(root))
+        unavailable <- ZIO.attemptBlocking(planner.verify(input, choice, selected.fingerprints(choice.id))).either
+        _ <- assertIO(unavailable.left.exists(_.getMessage.contains("ready")))
+        _ <- ledger.change(scope, ChangeRequest(RequestId(uuid), List(Mutation.Replace(descendant, changed.items.head.revision, completed)), Nil, "Complete prerequisite"))
+        current <- ledger.get(scope, root)
+        _ <- ledger.change(scope, ChangeRequest(RequestId(uuid), List(Mutation.Replace(root, current.item.revision,
+          current.item.draft.copy(archived = true))), Nil, "Archive completed root"))
+        hidden <- ZIO.attemptBlocking(planner.plan(input, ArtifactId(uuid)))
+        _ <- assertIO(hidden.evidence.decision.choices.isEmpty)
+        stale <- ZIO.attemptBlocking(planner.verify(input, choice, selected.fingerprints(choice.id))).either
+        _ <- assertIO(stale.isLeft)
+      } yield ()
+    }
+
     "refresh exact assessment revisions without retrying an unchanged unsuccessful worker" in {
       (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO]) => for {
         runtime <- ZIO.runtime[Any]

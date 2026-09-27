@@ -14,6 +14,33 @@ predicates = runpy.run_path(str(Path(__file__).with_name("process-assess-evidenc
 class ProcessAssessmentCheck(unittest.TestCase):
     """Behavioral Active Blackbox Atomic: exact standalone inspection evidence."""
 
+    def test_history_reference_digest_and_complete_native_pagination(self):
+        history = runpy.run_path(str(Path(__file__).with_name("process-history-evidence.py")))
+        item = {"project": {"value": "project"}, "ledger": "Tasks", "number": "1"}
+        entries = [{"item": {"item": {"id": item, "revision": {"value": str(revision)}, "provenance": {"reason": "café"}}, "refs": []}} for revision in [3, 2, 1]]
+        histories = [{"id": item, "page": {"entries": entries, "hasMore": False}}]
+        def event(name, before, offset, count):
+            return {"type": "item.completed", "item": {"id": name, "type": "mcp_tool_call", "server": "cq", "tool": "read", "status": "completed", "error": None,
+                "arguments": {"project": item["project"], "selection": {"History": {"id": item, "before": {"value": str(before)}, "limit": count}}},
+                "result": {"structured_content": {"History": {"page": {"entries": copy.deepcopy(entries[offset:offset+count]), "hasMore": offset+count < len(entries)}}}}}}
+        events = [event("first", 4, 0, 2), event("last", 2, 2, 1)]
+        self.assertTrue(history["inspected"](events, histories)["complete"])
+        self.assertFalse(history["inspected"](events[:1] * 2, histories)["complete"])
+        self.assertFalse(history["inspected"](events[1:], histories)["complete"])
+        reordered = json.loads(json.dumps(histories, sort_keys=True))
+        self.assertEqual(history["references"](histories), history["references"](reordered))
+        altered = copy.deepcopy(events)
+        altered[0]["item"]["result"]["structured_content"]["History"]["page"]["entries"][0]["item"]["item"]["provenance"]["reason"] = "forged"
+        with self.assertRaisesRegex(AssertionError, "frozen"):
+            history["inspected"](altered, histories)
+        altered = copy.deepcopy(events)
+        altered[0]["item"]["result"]["structured_content"]["History"]["page"]["hasMore"] = False
+        with self.assertRaisesRegex(AssertionError, "completion"):
+            history["inspected"](altered, histories)
+        altered = copy.deepcopy(events)
+        altered[0]["item"]["status"] = "failed"
+        self.assertFalse(history["inspected"](altered, histories)["complete"])
+
     def fixture(self, standalone):
         values = runpy.run_path(str(Path(__file__).with_name("consumer-cohort-check.py")))["ConsumerCohortCheck"]().audit_fixture()
         request = values["ticket"]["request"]

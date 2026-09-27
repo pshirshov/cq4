@@ -319,6 +319,7 @@ def main():
             checks.run(["python3", "dev/consumer-cohort-check.py"], "consumer-cohort", STARTUP_TIMEOUT)
             checks.run(["python3", "dev/process-evidence-check.py"], "process-evidence", STARTUP_TIMEOUT)
             checks.run(["python3", "dev/process-assess-check.py"], "process-assess-evidence", STARTUP_TIMEOUT)
+            checks.run(["python3", "dev/process-reopening-check.py"], "process-reopening-evidence", STARTUP_TIMEOUT)
             checks.run(["python3", "dev/evaluate-check.py"], "evaluation-suite", STARTUP_TIMEOUT)
             checks.sbt(["server/testOnly *Dummy *Local"], "dummy-contract")
         else:

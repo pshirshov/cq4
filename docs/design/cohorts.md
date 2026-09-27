@@ -45,6 +45,8 @@ The bounded full-content read accepts at most 32 exact revisions and returns fit
 
 Use existing readiness reasons for ordinary automatic selection. Active claims belonging to other sessions are excluded with their reason. Selection grants no lease; acquisition races return the ordinary conflict and require another round. Standalone review and a supplied exact previous candidate/proposal retain their frozen membership and existing applicability checks rather than silently selecting only the currently ready subset.
 
+A Planner may also select an explicitly rooted terminal record to propose a reviewed correction or reopening. It must be unarchived and have no unsatisfied blockers; claim, reservation and content checks still apply. Terminal descendants are not automatically rediscovered, and Worker readiness is unchanged. Selection, start verification and readiness counts use this operation-specific predicate. The graph continues to report the record's terminal state.
+
 ## Whole-group compatibility
 
 Start with a conservative, language-independent policy. Shared labels, filename overlap and a shared milestone are never sufficient evidence.

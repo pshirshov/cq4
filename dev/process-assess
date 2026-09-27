@@ -20,10 +20,14 @@ import uuid
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("checkpoint", type=Path)
-    parser.add_argument("--correct", type=Path, help="Restore a prior process assessment and correct its Handoff finding before reassessment")
+    continuation = parser.add_mutually_exclusive_group()
+    continuation.add_argument("--reopen", type=Path, help="Restore a prior assessment, reopen T1 for its missing test, integrate and reassess")
+    continuation.add_argument("--correct", type=Path, help="Restore a prior process assessment and correct its Handoff finding before reassessment")
+    continuation.add_argument("--assess", type=Path, help="Assess a verified completed correction checkpoint without repeating its work")
     arguments = parser.parse_args()
     original = arguments.checkpoint.resolve()
-    prior_directory = None if arguments.correct is None else arguments.correct.resolve()
+    supplied = next((value for value in [arguments.reopen, arguments.correct, arguments.assess] if value is not None), None)
+    prior_directory = None if supplied is None else supplied.resolve()
     root = Path(__file__).resolve().parent.parent
     os.chdir(root)
     if any(shutil.which(name) is None for name in ["java", "sbt", "go"]):
@@ -31,12 +35,16 @@ def main():
     evaluation = runpy.run_path(str(root / "dev/consumer-eval"))
     support = runpy.run_path(str(root / "dev/check"))
     predicates = runpy.run_path(str(root / "dev/process-assess-evidence.py"))
+    reopening = runpy.run_path(str(root / "dev/process-reopening-evidence.py"))
+    history_evidence = runpy.run_path(str(root / "dev/process-history-evidence.py"))
     reconcile = runpy.run_path(str(root / "dev/process-evidence.py"))["reconcile_usage"]
     write, call = evaluation["write"], evaluation["call"]
     baseline = predicates["retained"](original)
     prior = None if prior_directory is None else predicates["retained_assessment"](prior_directory, baseline, original, 0)
+    if arguments.assess is not None:
+        assert "completedCorrectionPrefix" in prior and prior["completedCorrectionPrefix"], "Assessment-only continuation requires its verified correction checkpoint"
     restored_state = baseline if prior is None else prior["snapshot"]
-    restored_usage = json.loads((original / "combined-usage-summary.json").read_text()) if prior is None else prior["usage"]
+    restored_usage = [json.loads((original / "combined-usage-summary.json").read_text())["UsageSummary"]["report"]] if prior is None else prior["usageParts"]
     restored_ids = baseline["attemptIds"] if prior is None else prior["attemptIds"]
     restored_dump = original / "cq-database.dump" if prior is None else prior["dump"]
     source = json.loads((original / "source-sha256.json").read_text())
@@ -50,7 +58,7 @@ def main():
     files = subprocess.check_output(["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"]).decode().split("\0")
     write(evidence / "source-sha256.json", {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in sorted(set(files)) if name and (root / name).is_file()})
     checks = support["Checks"](evidence, dict(os.environ))
-    result = {"status": "running", "baselineEvidence": str(original), "restoredEvidence": None if prior_directory is None else str(prior_directory), "candidate": baseline["proof"]["candidate"], "stages": [],
+    result = {"status": "running", "baselineEvidence": str(original), "restoredEvidence": None if prior_directory is None else str(prior_directory), "candidate": baseline["proof"]["candidate"] if prior is None else prior["snapshot"]["git"], "stages": [],
               "implementation": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
               "scope": "intake-to-integration process and standalone review; historical planning deviations retained",
               "remaining": ["follow-up/reopening", "defect/research/upstream example", "matched usage repetitions", "human acceptance"]}
@@ -69,17 +77,18 @@ def main():
             if route["harness"] == "Codex":
                 route["model"] = "gpt-6-astra"
         consumer = evidence / "consumer"
-        candidate = baseline["proof"]["candidate"]
-        checks.run(["git", "clone", "--quiet", "--no-hardlinks", str(original / "consumer"), str(consumer)], "consumer-clone", 30)
+        candidate = baseline["proof"]["candidate"] if prior is None else prior["snapshot"]["git"]
+        checks.run(["git", "clone", "--quiet", "--no-hardlinks", str((original if prior is None else prior_directory) / "consumer"), str(consumer)], "consumer-clone", 30)
         checks.run(["git", "-C", str(consumer), "fetch", "--quiet", "origin", candidate["value"]], "candidate-fetch", 30)
         checks.run(["git", "-C", str(consumer), "checkout", "--quiet", "--detach", candidate["value"]], "candidate-checkout", 30)
-        checks.run(["git", "-C", str(consumer), "branch", "integration", candidate["value"]], "integration-ref", 10)
+        checks.run(["git", "-C", str(consumer), "branch", "--force", "integration", candidate["value"]], "integration-ref", 10)
         answer_bytes = (original / "supplied-answer.json").read_bytes()
         assert (consumer / ".cq-evaluation/answer.json").read_bytes() == answer_bytes, "Candidate changed supplied answer bytes"
         candidate_files = predicates["candidate_text"](consumer, candidate)
         initial_session, = (original / "sessions").iterdir()
         project = baseline["project"]["project"]
-        members = baseline["proof"]["tasks"]
+        retained_context = [baseline["proof"]["finalChain"][key] for key in ["workerResult", "reviewResult"]] if prior is None else prior["context"]
+        retained_integrations = baseline["integrations"] if prior is None else prior["integrations"]
         port = support["free_port"]()
         checks.environment.update(CQ_HOST="127.0.0.1", CQ_PORT=str(port), CQ_ORIGIN=f"http://127.0.0.1:{port}",
                                   CQ_TOKEN=uuid.uuid4().hex + uuid.uuid4().hex, CQ_SESSION=str(uuid.uuid4()))
@@ -120,7 +129,7 @@ def main():
 
                 restored = usage()
                 write(evidence / "baseline-usage-summary.json", restored)
-                reconcile([restored_usage["UsageSummary"]["report"]], restored["UsageSummary"]["report"])
+                reconcile(restored_usage, restored["UsageSummary"]["report"])
                 def execute(directory, stage_result, request_text, workflow):
                     stage_checks = support["Checks"](directory, dict(checks.environment))
                     settings["stateRoot"] = str(directory / "sessions")
@@ -138,9 +147,17 @@ def main():
                         write(directory / "dispatch-statuses.json", statuses)
                         input_id = {"value": str(uuid.UUID(bytes=hashlib.md5((run["attempt"]["id"]["value"] + ":input").encode()).digest(), version=3))}
                         artifacts = evaluation["artifacts"](checks.environment, directory, session, statuses, [input_id])
+                        if stage_result["stage"] == "reopening":
+                            advanced = snapshot()
+                            write(directory / "incorporation-before-checkout.json", advanced)
+                            assert advanced["git"] == candidate and advanced["clean"], "Reopening changed the governing worktree"
+                            checks.run(["git", "-C", str(consumer), "checkout", "--quiet", "--detach", advanced["target"]["value"]], "followup-checkout", 10)
                         after = snapshot()
                         after["localIntegrations"] = [json.loads(path.read_text()) for path in (session / "integrations").glob("*.json")]
                         write(directory / "after.json", after)
+                        integrations = [{"local": local, "record": call(checks.environment, {"Read": {"input": {"project": project,
+                            "selection": {"Integration": {"id": local["intent"]["id"]}}}}})["Integration"]["record"]} for local in after["localIntegrations"]]
+                        write(directory / "integrations.json", integrations)
                         assert finished.returncode == 0, "Assessment governor failed"
                     finally:
                         failed = sys.exc_info()[0] is not None
@@ -153,15 +170,72 @@ def main():
                 parts = [restored["UsageSummary"]["report"]]
                 seen_attempts = set(restored_ids)
                 current = before
-                correction = None
-                if prior is not None:
+                correction = prior["correction"] if arguments.assess is not None else None
+                reopened = prior["reopening"] if arguments.assess is not None else None
+                if reopened is not None:
+                    result["remaining"].remove("follow-up/reopening")
+                def account(directory, values):
+                    current_ids = {value["attempt"]["id"]["value"] for value in values["attempts"]}
+                    assert len(current_ids) == len(values["attempts"]) and not current_ids & seen_attempts
+                    seen_attempts.update(current_ids)
+                    parts.append(json.loads((directory / "usage-summary.json").read_text())["UsageSummary"]["report"])
+                    combined = usage()
+                    write(directory / "combined-usage-summary.json", combined)
+                    reconcile(parts, combined["UsageSummary"]["report"])
+
+                if arguments.reopen is not None:
+                    directory = evidence / "reopening"
+                    directory.mkdir()
+                    stage_result = {"stage": "reopening", "status": "running"}
+                    result["stages"].append(stage_result)
+                    task, = [value for value in current["views"] if value["item"]["id"]["ledger"] == "Tasks" and value["item"]["id"]["number"] == "1"]
+                    member = {"id": task["item"]["id"], "revision": task["item"]["revision"]}
+                    guidance = [{"id": value["item"]["id"], "revision": value["item"]["revision"]} for value in current["views"] if value != task]
+                    request_text = ("Correct the genuine missing-empty-input-test finding by ordinary reopening of Task 1 only. Claim its current Done revision. "
+                        "Obtain a new Codex Planner proposal replacing it with Ready and correction context, preserving all acceptance criteria, title, references and history. "
+                        "Pass the rejected Audit as context, not previous: its full assignment differs and becomes stale after reopening. "
+                        "Obtain an independent Pi Reviewer Plan on that exact NEW proposal, then preview/apply only after its Accepted verdict, using the stored handle. "
+                        "Read current Task 1 after acknowledgement. Select and run a Pi Worker Implement on its NEW Ready revision with the Audit finding and planning evidence as artifacts. "
+                        "Only main_test.go and wordfreq_test.go may change. Add a true zero-length-input case with successful exit and empty output streams. "
+                        "The production behavior is already correct; preserve all production files, README, module and original answer bytes. "
+                        "The empty-input-sensitivity check runs the tests on an isolated empty-input-only mutant and requires that they detect it; never integrate that mutant. "
+                        "Obtain an independent Codex Candidate Reviewer on the new Worker result and exact Ready revision. It must request BOTH fresh declared checks, "
+                        "empty-input-sensitivity and the unchanged consumer-oracle. Correct through handles if necessary. "
+                        "Integrate only Task 1 through the normal host prepare/status/preview/apply flow against refs/heads/integration; only Recorded establishes its new Done revision. "
+                        "Do not change Task 2, Handoff or other records. Do not add tasks or manually mark Done. Release all claims. "
+                        "Use compact outcomes and handles, without composing child prompts or copying full result bodies.\n" + json.dumps({"members": [member], "guidance": guidance,
+                            "artifacts": [prior["result"], *retained_context], "candidate": candidate}))
+                    settings["integrationTarget"] = "refs/heads/integration"
+                    settings["evaluation"]["assessor"] = False
+                    settings["checks"].append({"name": "empty-input-sensitivity", "command": [sys.executable, str(root / "dev/consumer-empty-check.py")], "executionMillis": "180000", "outputBytes": 262144})
+                    values = execute(directory, stage_result, request_text, ["--workflow", "advance", "--roots", "T1", "--through", "integrate"])
+                    integrations = json.loads((directory / "integrations.json").read_text())
+                    reopened = reopening["reopening_stage"](current, values, settings, integrations, prior["result"])
+                    predicates["correction_routes"](values, settings)
+                    transcript = values["session"] / "payload" / values["run"]["attempt"]["id"]["value"] / "stdout"
+                    acknowledgement = predicates["correction_ack"]([json.loads(line) for line in transcript.read_text().splitlines() if line.strip()], reopened)
+                    git_proof = reopening["test_only_candidate"](consumer, candidate, reopened["candidate"])
+                    account(directory, values)
+                    stage_result.update(status="reopening-passed", reopening=reopened, acknowledgement=acknowledgement, git=git_proof, accounting="reconciled")
+                    write(directory / "result.json", stage_result)
+                    current = values["snapshot"]
+                    candidate = reopened["candidate"]
+                    candidate_files = predicates["candidate_text"](consumer, candidate)
+                    result["candidate"] = candidate
+                    result["remaining"].remove("follow-up/reopening")
+                    retained_context.extend(reopened["chain"][key] for key in ["workerResult", "reviewResult"])
+                    retained_integrations.extend(integrations)
+                    write(evidence / "result.json", result)
+                    settings["integrationTarget"] = None
+                    settings["evaluation"]["assessor"] = True
+                if prior is not None and arguments.assess is None:
                     directory = evidence / "correction"
                     directory.mkdir()
                     stage_result = {"stage": "correction", "status": "running"}
                     result["stages"].append(stage_result)
-                    handoff, = [value for value in before["views"] if value["item"]["id"]["ledger"] == "Handoffs"]
+                    handoff, = [value for value in current["views"] if value["item"]["id"]["ledger"] == "Handoffs"]
                     member = {"id": handoff["item"]["id"], "revision": handoff["item"]["revision"]}
-                    guidance = [{"id": value["item"]["id"], "revision": value["item"]["revision"]} for value in before["views"] if value != handoff]
+                    guidance = [{"id": value["item"]["id"], "revision": value["item"]["revision"]} for value in current["views"] if value != handoff]
                     request_text = ("Correct only this Handoff through an ordinary new-session reviewed plan. Claim its exact current revision for at most 300000 ms. "
                         "Ask a Codex Planner to propose one Replace of this Handoff; give it ALL guidance and result artifacts below, with previous:null. "
                         "The independent Audit finding is contextual evidence assigned to other items; it is not this Planner's same-members previous or mutation authority. "
@@ -171,34 +245,35 @@ def main():
                         "only preview/apply a proposal with an Accepted exact Plan review. Apply by stored handle, never reconstruct drafts or edit directly. "
                         "Do not alter other records, add tasks, implement, execute checks or integrate. Release claims and return a compact outcome. "
                         "Do not compose child prompts or read/copy full result bodies.\n" + json.dumps({"members": [member], "guidance": guidance,
-                        "artifacts": [prior["result"], baseline["proof"]["finalChain"]["workerResult"], baseline["proof"]["finalChain"]["reviewResult"]],
-                        "integration": baseline["integrations"], "candidate": candidate}))
+                        "artifacts": [prior["result"], *retained_context],
+                        "integration": retained_integrations, "candidate": candidate}))
                     settings["evaluation"]["assessor"] = False
                     values = execute(directory, stage_result, request_text, ["--workflow", "advance", "--roots", "HO" + member["id"]["number"], "--through", "plan"])
-                    correction = predicates["correction_stage"](before, values["snapshot"], values["statuses"], values["artifacts"], values["run"], values["governing_input"], prior["result"])
-                    attempts = values["attempts"]
-                    current_ids = {value["attempt"]["id"]["value"] for value in attempts}
-                    assert len(current_ids) == len(attempts) and not current_ids & seen_attempts
+                    correction = predicates["correction_stage"](current, values["snapshot"], values["statuses"], values["artifacts"], values["run"], values["governing_input"], prior["result"])
                     predicates["correction_routes"](values, settings)
                     transcript = values["session"] / "payload" / values["run"]["attempt"]["id"]["value"] / "stdout"
                     acknowledgement = predicates["correction_ack"]([json.loads(line) for line in transcript.read_text().splitlines() if line.strip()], correction)
-                    seen_attempts.update(current_ids)
-                    parts.append(json.loads((directory / "usage-summary.json").read_text())["UsageSummary"]["report"])
-                    combined = usage()
-                    write(directory / "combined-usage-summary.json", combined)
-                    reconcile(parts, combined["UsageSummary"]["report"])
+                    account(directory, values)
                     current = values["snapshot"]
                     stage_result.update(status="correction-passed", correction=correction, acknowledgement=acknowledgement, accounting="reconciled")
                     write(directory / "result.json", stage_result)
                     write(evidence / "result.json", result)
                     settings["evaluation"]["assessor"] = True
+                members = [{"id": value["item"]["id"], "revision": value["item"]["revision"]} for value in current["views"] if value["item"]["id"]["ledger"] == "Tasks"]
+                question, = [view for view in baseline["views"] if view["item"]["id"]["ledger"] == "Questions"]
+                source_citation = next(value["File"] for value in question["item"]["draft"]["citations"] if "File" in value and value["File"]["path"] == ".cq-evaluation/answer.json")
+                answer_evidence = reopening["answer_comparison"](consumer, {"value": source_citation["revision"]}, candidate)
+                write(evidence / "answer-byte-comparison.json", answer_evidence)
                 bundle_value = {"provenance": "Runner-generated assessment input exported from CQ; not a user judgment or new host validation",
                     "rubric": (root / "dev/process-assessment.md").read_text(), "specification": (root / "dev/consumer-spec.md").read_text(),
-                    "candidate": candidate, "answer": baseline["answer"], "histories": current["histories"], "planning": baseline["planning"],
-                    "integrations": baseline["integrations"], "governingReceipt": json.loads((initial_session / "receipt.json").read_text()),
+                    "candidate": candidate, "answer": baseline["answer"], "answerByteComparison": answer_evidence,
+                    "historyReferences": history_evidence["references"](current["histories"]),
+                    "historyInstructions": "Read every referenced revision through cq.read History, starting before latest+1, following descending pages to revision 1. Compare exact history with planning/application evidence. Digests are SHA-256 of UTF-8 JSON entries with sorted object keys, compact separators, literal Unicode and preserved array order. All history must be inspected, not inferred from the current views.",
+                    "planning": baseline["planning"],
+                    "integrations": retained_integrations, "governingReceipt": json.loads((initial_session / "receipt.json").read_text()),
                     "results": {key: {"kind": value["kind"], "sha256": value["sha256"], "attempt": value["attempt"]} for key, value in baseline["artifacts"].items() if value["kind"] in ["Result", "Validation"]},
                     "usage": usage(), "sourceHashes": {"baselineReplay": hashlib.sha256((evidence / "baseline-replay.json").read_bytes()).hexdigest()},
-                    "correction": correction, "priorAssessment": None if prior is None else prior["assessment"],
+                    "correction": correction, "reopening": reopened, "priorAssessment": None if prior is None else prior["assessment"],
                     "requiredWorkspaceFiles": sorted(candidate_files)}
                 bundle_text = json.dumps(bundle_value, ensure_ascii=False, separators=(",", ":"))
                 assert len(bundle_text.encode()) <= 128 * 1024, "Assessment bundle exceeds host artifact input bound"
@@ -214,7 +289,7 @@ def main():
                 assert metadata["id"] == upload["id"] and metadata["sha256"] == hashlib.sha256(bundle_text.encode()).hexdigest() and metadata["actor"]["role"] == "Human"
                 bundle = {"metadata": metadata, "body": bundle_text}
                 write(evidence / "bundle-publication.json", metadata)
-                context = [upload["id"], baseline["proof"]["finalChain"]["workerResult"], baseline["proof"]["finalChain"]["reviewResult"]]
+                context = [upload["id"], *retained_context]
                 resolved = [bundle]
                 for handle in context[1:]:
                     offset, chunks, artifact_metadata = 0, [], None
@@ -270,15 +345,11 @@ def main():
                         events = [json.loads(line) for line in transcript.read_text().splitlines() if line.strip()]
                         inspection = predicates["inspected_files"](events, candidate_files)
                         write(directory / "workspace-inspection.json", {"candidate": candidate, "attempt": ticket["attempt"]["id"], **inspection})
-                    attempts = values["attempts"]
-                    current_ids = {value["attempt"]["id"]["value"] for value in attempts}
-                    assert not current_ids & seen_attempts, "Assessment reused prior attempts"
-                    seen_attempts.update(current_ids)
-                    parts.append(json.loads((directory / "usage-summary.json").read_text())["UsageSummary"]["report"])
-                    combined = usage()
-                    write(directory / "combined-usage-summary.json", combined)
-                    reconcile(parts, combined["UsageSummary"]["report"])
-                    stage_result.update(status="assessment-passed" if assessment["accepted"] and (inspection is None or inspection["complete"]) else "assessment-not-accepted", assessment=assessment, inspectionComplete=None if inspection is None else inspection["complete"], accounting="reconciled")
+                        history_inspection = history_evidence["inspected"](events, current["histories"])
+                        write(directory / "history-inspection.json", history_inspection)
+                        stage_result["historyInspectionComplete"] = history_inspection["complete"]
+                    account(directory, values)
+                    stage_result.update(status="assessment-passed" if assessment["accepted"] and (inspection is None or (inspection["complete"] and history_inspection["complete"])) else "assessment-not-accepted", assessment=assessment, inspectionComplete=None if inspection is None else inspection["complete"], accounting="reconciled")
                     write(directory / "result.json", stage_result)
                     write(evidence / "result.json", result)
                     previous = assessment["result"]

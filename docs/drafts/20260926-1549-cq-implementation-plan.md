@@ -130,6 +130,8 @@ Store concise result manifests in `docs/validation/` with commit/configuration, 
 - Complete `resilient-ws-ui` behavior with nonce liveness, deadlines, bounded jittered retry, sleep/lifecycle handling, teardown guards, and truthful terminal/deferred state. Keep synchronized-data state distinct from transport health.
 - Verify snapshot/replay/resync, late replies from old project generations, uncertain mutation acknowledgements, and no duplicated writes. Label metric freshness, shared attribution, estimated costs, and coverage.
 
+**Verification scope:** use checks for the behavior affected by each increment: browser interactions and rendering, generated API contracts when changed, and the relevant service checks. UI-only changes reuse the retained harness evidence. Run affected harness checks when adapters, dispatch, shared harness contracts or process behavior change; reserve the full expensive nine-route matrix for changes that require that scope and the packaged release verification in M6. This incorporates the user's 2026-09-27 clarification.
+
 **Exit:** actual browser checks and retained visual evidence cover editing while updates arrive, disconnect/reconnect across a committed mutation, stale cursor resnapshot, project switching with a draft, keyboard use, and narrow/overflow layouts. Audit uploads update usage views without producing item revisions. Source inspection alone cannot close these checks.
 
 ### M6 — Package and verify the complete release candidate

@@ -97,6 +97,9 @@ final class CohortPlanner(api: ServerApi, owner: Scope, base: GitCommit, checks:
   }
   private def supports(work: DispatchWork, id: ItemId): Boolean =
     work != DispatchWork.Worker(WorkerMode.Implement) || id.ledger == Ledger.Tasks
+  private def ready(work: DispatchWork, entry: WorksetEntry): Boolean =
+    entry.ready || (work == DispatchWork.Planner() && entry.role == WorksetRole.Selected && entry.root &&
+      entry.item.outcome.terminal && !entry.item.archived && !entry.reasons.exists(_.isInstanceOf[WorksetReason.Blocked]))
   private def fingerprint(work: DispatchWork, members: List[ItemView], context: Context): String =
     CohortFingerprint(work, members, context.guidance, context.operative, context.operativeResults, context.executionBase, checks)
   private def executionFingerprint(work: DispatchWork, members: List[ItemView], context: Context, reason: CohortReason): CohortExecutionFingerprint = {
@@ -173,7 +176,7 @@ final class CohortPlanner(api: ServerApi, owner: Scope, base: GitCommit, checks:
     val exact = originalContext.previous.map(_.request.members)
     exact.foreach(members => require(members.forall(ref => byId.get(ref.id).exists(_.item.revision == ref.revision) && supports(request.work, ref.id)),
       "Exact previous cohort is outside the selection, stale or incompatible with the operation"))
-    val eligible = order.filter(id => byId(id).ready && supports(request.work, id) && exact.forall(_.exists(_.id == id)))
+    val eligible = order.filter(id => ready(request.work, byId(id)) && supports(request.work, id) && exact.forall(_.exists(_.id == id)))
     val automatic = exact.isEmpty || partition
     val candidates = if (automatic) progress.pool(eligible, CohortBounds.Candidates).map(id => ItemRevision(id, byId(id).item.revision)) else exact.get
     val loaded = details(call, candidates)
@@ -274,8 +277,8 @@ final class CohortPlanner(api: ServerApi, owner: Scope, base: GitCommit, checks:
     val excluded = considered.filter(value => Set(CohortReason.Claimed, CohortReason.Deferred, CohortReason.InputBound,
       CohortReason.ReviewAccepted, CohortReason.ReviewBlocked, CohortReason.CandidateContinuity)(value.reason)).map(_.members.size).sum
     val counts = CohortCounts(entries.size, selected.size, loaded.items.size, excluded,
-      eligible.size - loaded.items.count(value => eligible.contains(value.item.id)), selected.count(!_.ready),
-      selected.count(entry => entry.ready && !supports(request.work, entry.item.id)), selected.size - chosen.map(_.members.size).sum)
+      eligible.size - loaded.items.count(value => eligible.contains(value.item.id)), selected.count(entry => !ready(request.work, entry)),
+      selected.count(entry => ready(request.work, entry) && !supports(request.work, entry.item.id)), selected.size - chosen.map(_.members.size).sum)
     val decision = CohortDecision(request.request, artifact, counts, chosen)
     require(HostFiles.encode(CohortDecision_JsonCodec, decision).getBytes(UTF_8).length <= CohortBounds.ReplyBytes, "Cohort reply exceeds its byte bound")
     if (automatic) progress.inspected(candidates.map(_.id), chosen.nonEmpty)
@@ -287,7 +290,7 @@ final class CohortPlanner(api: ServerApi, owner: Scope, base: GitCommit, checks:
     val (entries, snapshot) = graph(call, request)
     val current = entries.filter(_.role == WorksetRole.Selected).map(entry => entry.item.id -> entry).toMap
     require(choice.members.forall(ref => current.get(ref.id).exists(entry => entry.item.revision == ref.revision &&
-      (choice.previous.nonEmpty || entry.ready))), "Selected cohort is no longer selected, ready or current")
+      (choice.previous.nonEmpty || ready(choice.work, entry)))), "Selected cohort is no longer selected, ready or current")
     val loaded = details(call, choice.members)
     require(loaded.omitted.isEmpty, "Selected cohort no longer fits its content budget")
     val inputs = request.copy(work = choice.work, guidance = choice.guidance, artifacts = choice.artifacts, previous = choice.previous)
