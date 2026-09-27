@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include <dlfcn.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <stdatomic.h>
 #include <stdio.h>
@@ -19,6 +20,11 @@ int fsync(int fd) {
         ssize_t size = readlink(link, path, sizeof(path) - 1);
         if (size > 0) {
             path[size] = 0;
+            if (strcmp(mode, "publication") == 0 && strcmp(path, root) == 0) {
+                char release[4096];
+                snprintf(release, sizeof(release), "%s/release", root);
+                if (access(release, F_OK) != 0) { errno = EIO; return -1; }
+            }
             int match = strcmp(mode, "ticket") == 0 && strstr(path, "/children/") != NULL && strstr(path, "/.upload-") != NULL;
             if (strcmp(mode, "input") == 0 && strstr(path, "/payload/") != NULL && size >= 6 && strcmp(path + size - 6, "/input") == 0)
                 match = atomic_fetch_add(&input_count, 1) == 1;

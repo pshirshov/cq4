@@ -42,6 +42,7 @@ lazy val server = project.in(file("server")).dependsOn(core, host).settings(
   Compile / mainClass := Some("cq.server.Main"),
   Compile / run / fork := true,
   Test / fork := true,
+  Test / javaOptions += s"-Dcq.test.sourceRoot=${(ThisBuild / baseDirectory).value}",
   Test / javaOptions += {
     val converter = fileConverter.value
     "-Dcq.test.classpath=" + (Test / fullClasspath).value.map(entry => converter.toPath(entry.data).toString).mkString(java.io.File.pathSeparator)

@@ -82,7 +82,7 @@ def main():
         assert api({"Summary": {"filter": {"EvaluationOnly": {"run": "deterministic-dispatch", "scenario": "worker-reviewer"}}}}) == before
         assert before["UsageSummary"]["report"]["attempts"]["running"] == "0"
         assert "Acknowledged 0" in run(["job", "upload", "--session", str(session)])
-        (children[0] / "delivery/000002.ack").unlink()
+        (children[0] / "delivery/final/000000.ack").unlink()
         assert "Acknowledged 1" in run(["job", "upload", "--session", str(session)])
         assert api({"Summary": {"filter": filter_value}}) == before, "Child replay changed accounting or cursor"
         print(json.dumps({"session": receipt["session"], "children": statuses, "usage": before, "maxParentReplyBytes": max(len(json.dumps(value["reply"]).encode()) for value in traffic)}))

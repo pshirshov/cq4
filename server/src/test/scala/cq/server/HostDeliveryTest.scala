@@ -78,6 +78,50 @@ final class HostDeliveryLocal extends AnyWordSpec {
       intercept[IllegalArgumentException](queue.flush(receiver))
     }
 
+    "ignore uncommitted staging and replay a sealed complete publication after lost acknowledgement" in {
+      val directory = Files.createTempDirectory("cq-final-delivery-")
+      val queue = new DeliveryQueue(directory)
+      val p = project
+      val a = attempt
+      val abandoned = ArtifactUpload(p, ArtifactId(UUID.randomUUID()), a, ArtifactKind.Transcript, "text/plain", "uncommitted")
+      HostFiles.directory(directory.resolve("staging"))
+      HostFiles.immutable(directory.resolve("staging/000000.json"), HostFiles.encode(DeliveryBatch_JsonCodec,
+        DeliveryBatch(List(HostDelivery.Artifact(abandoned)))), 4096)
+      val receiver = new Receiver
+      assert(!queue.finalized && queue.flush(receiver) == 0 && receiver.calls == 0)
+      val count = 33
+      val uploads = List.tabulate(count)(index => ArtifactUpload(p, ArtifactId(UUID.randomUUID()), a,
+        ArtifactKind.Transcript, "text/plain", s"committed-$index"))
+      val entries = uploads.map(HostDelivery.Artifact.apply)
+      queue.commit(entries)
+      assert(queue.finalized && !Files.exists(directory.resolve("staging")))
+      intercept[IOException](queue.flush(receiver))
+      val reopened = new DeliveryQueue(directory)
+      reopened.commit(entries)
+      assert(reopened.finalized && reopened.flush(receiver) == 2)
+      assert(receiver.values == uploads.map(value => value.id -> value).toMap && receiver.calls == count + 1)
+      assert(reopened.flush(receiver) == 0)
+      intercept[IllegalArgumentException](reopened.commit(entries.dropRight(1)))
+      intercept[IllegalArgumentException](reopened.commit(entries :+ HostDelivery.Artifact(abandoned)))
+      intercept[IllegalArgumentException](reopened.enqueue(0, DeliveryBatch(List(HostDelivery.Artifact(abandoned)))))
+    }
+
+    "refuse replay after an ambiguous rename until parent directory durability is confirmed" in {
+      val root = Files.createTempDirectory("cq-publication-sync-")
+      val preload = root.resolve("failure.so")
+      val source = Path.of(System.getProperty("cq.test.sourceRoot"))
+      val command = new BoundedHostCommand(sys.env, Duration.ofSeconds(30), 8192)
+      val compile = command.run(source, List("gcc", "-std=c17", "-shared", "-fPIC", "-Wall", "-Wextra", "-Werror",
+        "-o", preload.toString, source.resolve("dev/shutdown-stall.c").toString, "-ldl"))
+      assert(compile.exit == 0, compile.text)
+      val queue = root.resolve("delivery")
+      val process = new BoundedHostCommand(sys.env ++ Map("LD_PRELOAD" -> preload.toString, "CQ_FIXTURE_STALL_ROOT" -> queue.toString,
+        "CQ_FIXTURE_STALL_MODE" -> "publication"), Duration.ofSeconds(15), 8192)
+      val result = process.run(root, List(Path.of(System.getProperty("java.home"), "bin", "java").toString,
+        "-cp", System.getProperty("cq.test.classpath"), "cq.server.PublicationDurabilityCheck", queue.toString))
+      assert(result.exit == 0 && result.text.contains("DURABLE_PUBLICATION_REPLAY"), result.text)
+    }
+
     "preserve malformed and multipart native bytes behind deterministic artifact handles" in {
       val bytes = Array.tabulate[Byte](400000)(index => (index % 256).toByte)
       val p = project
@@ -116,5 +160,36 @@ final class HostDeliveryLocal extends AnyWordSpec {
         List(java, "-Xmx64m", "-cp", System.getProperty("cq.test.classpath"), "cq.server.HarnessOutputBounds"))
       assert(value.exit == 0 && value.text.contains("BOUNDED_NATIVE_EVENT_REJECTION"), value.text)
     }
+  }
+}
+
+object PublicationDurabilityCheck {
+  def main(arguments: Array[String]): Unit = {
+    val root = Path.of(arguments(0))
+    val queue = new DeliveryQueue(root)
+    val project = ProjectId(UUID.randomUUID())
+    val attempt = AttemptId(UUID.randomUUID())
+    val upload = ArtifactUpload(project, ArtifactId(UUID.randomUUID()), attempt, ArtifactKind.Transcript, "text/plain", "retained")
+    val entries = List(HostDelivery.Artifact(upload))
+    var published = 0
+    val api = new ServerApi {
+      override def artifact(value: ArtifactUpload): ArtifactMetadata = {
+        published += 1
+        ArtifactMetadata(value.project, value.id, value.attempt, value.kind, value.mediaType, "fixture", value.body.getBytes(UTF_8).length,
+          value.body.length, Actor("fixture", SessionId(UUID.randomUUID()), Role.Collector), 1)
+      }
+      override def call(value: Command): Result = throw new IllegalStateException("Unexpected domain call")
+      override def usage(value: HostUsageInput): HostUsageResult = throw new IllegalStateException("Unexpected usage call")
+      override def grant(value: GrantRequest): AccessToken = throw new IllegalStateException("Unexpected grant")
+    }
+    def rejected[A](operation: => A): Boolean = try { operation; false } catch { case _: IOException => true }
+    require(rejected(queue.commit(entries)) && Files.isDirectory(root.resolve("final")), "Expected failure after rename")
+    require(rejected(queue.finalized), "Unforced final directory was reported durable")
+    require(rejected(queue.flush(api)) && published == 0, "Unforced final publication reached the server")
+    require(rejected(queue.commit(entries)), "Idempotent commit skipped the failed directory force")
+    Files.createFile(root.resolve("release"))
+    queue.commit(entries)
+    require(queue.finalized && queue.flush(api) == 1 && published == 1 && queue.flush(api) == 0)
+    println("DURABLE_PUBLICATION_REPLAY")
   }
 }

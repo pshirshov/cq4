@@ -125,7 +125,6 @@ final class SupervisorProgram(config: SupervisorConfig, registry: HarnessRegistr
   private val MaxSummaryCharacters = 8192
   private val MaxGaps = 32
   private val MaxGapCharacters = 300
-  private val DeliveryEntriesPerBatch = 32
   private val Instructions = "You govern CQ work. Use CQ tools for domain state and only the capabilities exposed to this session. " +
     "Your input names the attached project, configured routes, process limits, validation checks and human request. Create or select the required task records and claim their exact member set. " +
     "Use the local dispatch tool to start a Worker using item revisions and handles only. The host owns prompt assembly, candidate capture and validation. Never read or compose child prompts or copy full results between children. " +
@@ -197,7 +196,7 @@ final class SupervisorProgram(config: SupervisorConfig, registry: HarnessRegistr
           observed.withResult(report.isRight), collectedAt, gaps, None)
         val entries = artifacts.map(HostDelivery.Artifact.apply) ++ observations :+
           HostDelivery.Usage(HostUsageInput(project, HostUsage.Finish(outcome)))
-        entries.grouped(DeliveryEntriesPerBatch).zipWithIndex.foreach { case (batch, index) => queue.enqueue(index + 1, DeliveryBatch(batch)) }
+        queue.commit(entries)
         val delivered = Try(queue.flush(collector)).toEither
         val pending = delivered.left.toOption.map(_ => "Operational usage/artifact delivery is pending; retain the session directory and retry cq job upload")
         val receipt = SupervisorReceipt(attempt.session, attempt.id, config.directory.toString, record.phase, succeeded,

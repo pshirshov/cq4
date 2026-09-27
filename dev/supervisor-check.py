@@ -92,7 +92,7 @@ if prompt == "uncertain input":
             "ArtifactText": {"id": receipt["result"], "offset": 0, "limit": 8192}}}}})
         assert json.loads(result_page["ArtifactText"]["page"]["text"]) == {"summary": "Fixture governing result"}
         assert "Acknowledged 0" in run(["job", "upload", "--session", str(session)], 0).stdout
-        (session / "delivery/000001.ack").unlink()
+        (session / "delivery/final/000000.ack").unlink()
         assert "Acknowledged 1" in run(["job", "upload", "--session", str(session)], 0).stdout
         replayed = api({"Usage": {"input": {"project": manifest["project"]["project"], "selection": selection}}})
         assert replayed == usage, "Replaying acknowledged native usage changed totals or audit cursor"

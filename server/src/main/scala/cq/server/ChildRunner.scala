@@ -14,7 +14,6 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
   workspaces: WorkspaceService[IO], schemas: McpSchemas, output: HarnessOutput, instructions: ChildInstructions,
   candidates: CandidateWorkspace, reader: WorkspaceReader, access: LocalAccess, clock: Clock) {
   private val MaxOutputBytes = 32 * 1024 * 1024
-  private val DeliveryEntriesPerBatch = 32
   private val MaxGaps = 32
   private val ClaimMillis = Duration.ofMinutes(3).toMillis
   private val RenewalSeconds = 20L
@@ -202,7 +201,7 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
         val outcome = AttemptOutcome(RequestId(NativeArtifacts.id(attempt.id, "outcome").value), attempt.id, state, collectedAt,
           (problem.toList ++ observed.toList.flatMap(_.problem).map(DispatchProjection.concise) ++ usage.gaps).take(MaxGaps), None)
         val entries = allArtifacts.map(HostDelivery.Artifact.apply) ++ observations :+ HostDelivery.Usage(HostUsageInput(project, HostUsage.Finish(outcome)))
-        entries.grouped(DeliveryEntriesPerBatch).zipWithIndex.foreach { case (batch, index) => queue.enqueue(index + 2, DeliveryBatch(batch)) }
+        queue.commit(entries)
         val delivered = Try(queue.flush(authority.collector)).isSuccess
         val base = entry.status.copy(process = job.map(_.phase), blocker = problem, usageDelivered = delivered, detailsOmitted = true)
         val finalStatus = (valid, resultArtifact) match {
