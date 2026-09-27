@@ -17,7 +17,7 @@
 #include <time.h>
 #include <unistd.h>
 
-enum { POLL_MS = 20, BUFFER_BYTES = 8192, DRAIN_READS = 16, CHILD_BATCH = 4096 };
+enum { POLL_MS = 20, BUFFER_BYTES = 8192, DRAIN_READS = 16, CHILD_BATCH = 4096, CAPTURE_MAX_BYTES = 64 * 1024 * 1024 };
 typedef struct {
     int pipe, file;
     uint64_t bytes;
@@ -109,6 +109,36 @@ static bool write_all(int fd, const char *data, size_t size) {
     return true;
 }
 
+static int capture(const char *path, const char *limit) {
+    int64_t maximum = number(limit, CAPTURE_MAX_BYTES);
+    if (maximum < 0) return 2;
+    int file = open(path, O_WRONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
+    struct stat info;
+    if (file < 0) return 2;
+    bool valid = fstat(file, &info) == 0 && S_ISREG(info.st_mode) && info.st_size == 0 &&
+        info.st_uid == geteuid() && info.st_nlink == 1 && (info.st_mode & 0777) == 0600;
+    uint64_t bytes = 0;
+    char buffer[BUFFER_BYTES];
+    while (valid) {
+        ssize_t count = read(STDIN_FILENO, buffer, sizeof(buffer));
+        if (count < 0 && errno == EINTR) continue;
+        if (count == 0) break;
+        if (count < 0) { valid = false; break; }
+        size_t keep = (size_t)count;
+        if (keep > (uint64_t)maximum - bytes) keep = (size_t)((uint64_t)maximum - bytes);
+        if (keep > 0 && (!write_all(file, buffer, keep) || !write_all(STDOUT_FILENO, buffer, keep))) {
+            valid = false;
+            break;
+        }
+        bytes += keep;
+        if (keep != (size_t)count) { valid = false; break; }
+    }
+    if (valid && fsync(file) != 0) valid = false;
+    if (close(file) != 0) valid = false;
+    if (!valid) fputs("Bounded capture failed; retained diagnostics may be incomplete\n", stderr);
+    return valid ? 0 : 2;
+}
+
 static void drain(Output *output, uint64_t maximum) {
     char buffer[BUFFER_BYTES];
     for (int round = 0; !output->eof && round < DRAIN_READS; round++) {
@@ -167,6 +197,7 @@ static void child(int input, int out, int err, int acknowledgement, pid_t parent
 
 int main(int argc, char **argv) {
     if (close_range(3, UINT_MAX, 0) != 0 || !reset_signals()) return 2;
+    if (argc == 4 && strcmp(argv[1], "--capture") == 0) return capture(argv[2], argv[3]);
     if (argc < 12 || strcmp(argv[10], "--") != 0) {
         fputs("Usage: cq-guardian startup-ms run-ms heartbeat-ms grace-ms kill-ms max-output-bytes input stdout stderr -- command [args]\n", stderr);
         return 2;

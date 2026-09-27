@@ -55,6 +55,54 @@ class GuardianChecks(unittest.TestCase):
         process.wait(timeout=5)
         return self.result(process, None)
 
+    def capture(self, path, content, limit, output=subprocess.PIPE):
+        return subprocess.run([os.environ["CQ_GUARDIAN_TEST_BINARY"], "--capture", str(path), str(limit)],
+                              input=content, stdout=output, stderr=subprocess.PIPE, timeout=5)
+
+    def test_bounded_capture_preserves_bytes_and_fails_on_overflow(self):
+        content = b"merge report \xce\xbb\x00\xff\n"
+        for suffix, data, limit, expected in [("empty", b"", 100, 0), ("exact", content, len(content), 0),
+                                               ("overflow", content * 1000, len(content), 2)]:
+            path = self.directory / suffix
+            path.touch(mode=0o600)
+            result = self.capture(path, data, limit)
+            self.assertEqual(result.returncode, expected, result.stderr)
+            self.assertEqual(path.read_bytes(), data[:limit])
+            self.assertEqual(result.stdout, data[:limit])
+
+    def test_capture_rejects_unsafe_or_reused_files_and_invalid_limits(self):
+        missing = self.directory / "missing"
+        result = self.capture(missing, b"payload", 10)
+        self.assertEqual(result.returncode, 2)
+        self.assertFalse(missing.exists())
+        source = self.directory / "source"
+        source.touch(mode=0o600)
+        link = self.directory / "link"
+        link.symlink_to(source)
+        self.assertEqual(self.capture(link, b"payload", 10).returncode, 2)
+        hardlink = self.directory / "hardlink"
+        os.link(source, hardlink)
+        self.assertEqual(self.capture(source, b"payload", 10).returncode, 2)
+        hardlink.unlink()
+        for limit in ["0", "-1", "invalid", "67108865"]:
+            self.assertEqual(self.capture(source, b"payload", limit).returncode, 2)
+            self.assertEqual(source.read_bytes(), b"")
+        source.chmod(0o644)
+        self.assertEqual(self.capture(source, b"payload", 10).returncode, 2)
+        source.chmod(0o600)
+        source.write_bytes(b"retained")
+        self.assertEqual(self.capture(source, b"replacement", 100).returncode, 2)
+        self.assertEqual(source.read_bytes(), b"retained")
+        self.assertEqual(self.capture(self.directory, b"payload", 10).returncode, 2)
+
+    def test_capture_refuses_success_when_output_delivery_fails(self):
+        path = self.directory / "diagnostics"
+        path.touch(mode=0o600)
+        with open("/dev/full", "wb") as full:
+            result = self.capture(path, b"diagnostics", 100, output=full)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(b"capture failed", result.stderr)
+
     def test_separate_streams_and_prompt(self):
         process = self.launch([sys.executable, "-c", "import sys; print(sys.stdin.read(), end=''); sys.stderr.write('error λ\\n')"], 2000, 3000, 100000)
         terminal = self.wait_until_exited(process)

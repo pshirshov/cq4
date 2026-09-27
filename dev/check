@@ -212,6 +212,10 @@ class Checks:
                   "host/native/guardian.c"], "guardian-build", COMMAND_TIMEOUT)
         self.environment["CQ_GUARDIAN_TEST_BINARY"] = str(binary)
         self.run(["python3", "dev/guardian-check.py", "-v"], "guardian-process", STARTUP_TIMEOUT)
+        faults = self.evidence / "merge-fault.so"
+        self.run(["gcc", "-shared", "-fPIC", "-Wall", "-Wextra", "-Werror", "-o", str(faults),
+                  "dev/merge-fault.c", "-ldl"], "merge-fault-build", COMMAND_TIMEOUT)
+        self.environment["CQ_MERGE_FAULT_LIBRARY"] = str(faults)
         self.generate()
         self.sbt(["server/testOnly *Process"], "guardian-driver")
 
