@@ -24,7 +24,7 @@ def main():
         guardian = root / "cq-guardian"
         subprocess.run(["gcc", "-std=c17", "-O2", "-Wall", "-Wextra", "-Werror", "-o", str(guardian), "host/native/guardian.c"], check=True)
         executable = root / "fixture-harness"
-        executable.write_text(f"#!{sys.executable}\n" + '''import json, os, pathlib, sys
+        executable.write_text(f"#!{sys.executable}\n" + '''import json, os, pathlib, signal, sys, time
 if sys.argv[1:] == ["--version"]:
     print("codex-cli 0.156.1")
     raise SystemExit(0)
@@ -32,8 +32,10 @@ assert "CQ_TOKEN" not in os.environ and "CQ_DATABASE_URL" not in os.environ
 assert sys.argv[sys.argv.index("--sandbox") + 1] == "read-only"
 assert sys.argv[sys.argv.index("--model") + 1] == "fixture-model"
 prompt = sys.stdin.read()
+if prompt == "deadline input":
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
 target = pathlib.Path(sys.argv[sys.argv.index("--output-last-message") + 1])
-target.write_text(json.dumps({"summary": "Fixture governing result"} if prompt == "valid input" else {"unexpected": True}))
+target.write_text(json.dumps({"summary": "Fixture governing result"} if prompt != "invalid result" else {"unexpected": True}))
 for event in [
     {"type": "thread.started", "thread_id": "fixture-thread"},
     {"type": "turn.started"},
@@ -41,6 +43,11 @@ for event in [
         "cache_write_input_tokens": 0, "output_tokens": 31, "reasoning_output_tokens": 3}}
 ]:
     print(json.dumps(event), flush=True)
+if prompt == "deadline input":
+    time.sleep(30)
+if prompt == "uncertain input":
+    os.kill(os.getppid(), signal.SIGKILL)
+    time.sleep(30)
 ''')
         executable.chmod(0o700)
         settings = root / "settings.json"
@@ -94,6 +101,27 @@ for event in [
         invalid = run([":supervisor", "--", "codex", "--settings", str(settings), "--input", str(input_file)], 1)
         rejected = json.loads(invalid.stdout)
         assert rejected["processSucceeded"] and rejected["result"] is None and rejected["usageDelivered"] and rejected["problem"]
+        stopped_settings = json.loads(settings.read_text())
+        stopped_settings["limits"]["executionMillis"] = "1500"
+        settings.write_text(json.dumps(stopped_settings))
+        failures = []
+        for prompt, phase, unknown, reason in [
+            ("deadline input", "Settled", "0", "ExecutionDeadline"),
+            ("uncertain input", "Uncertain", "1", "Uncertain"),
+        ]:
+            input_file.write_text(prompt)
+            stopped = subprocess.run(launcher + ["run", "codex", "--settings", str(settings), "--input", str(input_file)],
+                                     cwd=repository, env=environment, capture_output=True, text=True, timeout=30)
+            stop_receipt = json.loads(stopped.stdout)
+            stop_manifest = json.loads((Path(stop_receipt["directory"]) / "run.json").read_text())
+            stop_usage = api({"Usage": {"input": {"project": stop_manifest["project"]["project"], "selection": {
+                "Summary": {"filter": {"SessionOnly": {"id": stop_receipt["session"]}}}}}}})["UsageSummary"]["report"]
+            print(json.dumps({"case": prompt, "exit": stopped.returncode, "receipt": stop_receipt, "usage": stop_usage}), flush=True)
+            if not (stopped.returncode == 1 and stop_receipt["phase"] == phase and not stop_receipt["processSucceeded"]
+                    and stop_receipt["result"] is None and stop_receipt["usageDelivered"]
+                    and reason in (stop_receipt["problem"] or "") and stop_usage["attempts"]["unknown"] == unknown):
+                failures.append(prompt)
+        assert not failures, f"Incorrect native stop classification: {failures}"
         excessive = json.loads(settings.read_text())
         excessive["limits"]["startupMillis"] = "86400000"
         settings.write_text(json.dumps(excessive))

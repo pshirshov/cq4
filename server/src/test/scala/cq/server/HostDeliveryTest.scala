@@ -31,6 +31,33 @@ final class HostDeliveryLocal extends AnyWordSpec {
   }
 
   "Host delivery (Behavioral Active Blackbox; Group / filesystem Communication)" should {
+    "admit only normal successful exits and retain cancellation and uncertain cleanup outcomes" in {
+      val spec = WorkspaceSpec(project, SessionId(UUID.randomUUID()), attempt, "/consumer", GitCommit("a" * 40))
+      val normal = JobRecord(spec, "fixture", JobTarget.Stop, JobPhase.Settled,
+        Some(JobExit(Some(0), None, StopReason.Exited, 0, 0, true, false)), None, 1, 1, 2)
+      StopReason.all.foreach { reason =>
+        val value = JobOutcome.observed(normal.copy(exit = normal.exit.map(_.copy(reason = reason))))
+        val expected = reason match {
+          case StopReason.Exited => AttemptState.Completed
+          case StopReason.Cancelled | StopReason.OwnerExited => AttemptState.Cancelled
+          case _ => AttemptState.Failed
+        }
+        assert(value.state == expected && value.succeeded == (reason == StopReason.Exited), reason.toString)
+        assert(value.withResult(false) == (if (expected == AttemptState.Completed) AttemptState.Failed else expected))
+        assert(value.problem.isEmpty == value.succeeded)
+        value.problem.foreach(message => assert(message.contains(reason.toString)))
+      }
+      List(normal.copy(phase = JobPhase.Uncertain), normal.copy(exit = None),
+        normal.copy(exit = normal.exit.map(_.copy(settled = false))),
+        normal.copy(exit = normal.exit.map(_.copy(hostFailure = true)))).foreach { record =>
+        val value = JobOutcome.observed(record)
+        assert(!value.succeeded && value.withResult(true) == AttemptState.Unknown && value.withResult(false) == AttemptState.Unknown)
+      }
+      assert(!JobOutcome.observed(normal.copy(exit = normal.exit.map(_.copy(code = Some(1))))).succeeded)
+      assert(!JobOutcome.observed(normal.copy(exit = normal.exit.map(_.copy(signal = Some(15))))).succeeded)
+      intercept[IllegalArgumentException](JobOutcome.observed(normal.copy(phase = JobPhase.Running)))
+    }
+
     "replay the same immutable batch after lost acknowledgement and preserve receipts across reopening" in {
       val directory = Files.createTempDirectory("cq-delivery-")
       val queue = new DeliveryQueue(directory)

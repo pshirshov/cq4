@@ -150,9 +150,11 @@ final class SupervisorProgram(config: SupervisorConfig, registry: HarnessRegistr
         val collectedAt = math.max(attempt.startedAt, clock.millis())
         val usage = new HarnessUsage().collect(new ByteArrayInputStream(stdout),
           UsageCollectionRequest(attempt.id, attempt.harness, config.profile.version, UsageOrigin.Fresh, collectedAt, nativeId))
-        val succeeded = record.phase == JobPhase.Settled && record.exit.exists(exit => exit.code.contains(0) && exit.settled && !exit.hostFailure)
+        val observed = JobOutcome.observed(record)
+        val succeeded = observed.succeeded
         val report = Try {
-          require(succeeded && usage.terminalSeen && !usage.nativeFailure, "Governing process did not complete successfully")
+          require(succeeded, observed.problem.getOrElse("Governing process did not complete successfully"))
+          require(usage.terminalSeen && !usage.nativeFailure, "Governing native output did not complete successfully")
           val json = output.result(attempt.harness, stdout, assets)
           val result = GoverningReport_JsonCodec.decode(baboon.runtime.shared.BaboonCodecContext.Default, json).fold(throw _, identity)
           require(json.asObject.exists(_.keys.toSet == Set("summary")) && result.summary.trim.nonEmpty && result.summary.length <= MaxSummaryCharacters,
@@ -165,7 +167,7 @@ final class SupervisorProgram(config: SupervisorConfig, registry: HarnessRegistr
           batch.observations.map(value => HostDelivery.Usage(HostUsageInput(project, HostUsage.Ingest(value)))))
         val gaps = (problem.toList ++ usage.gaps).take(MaxGaps)
         val outcome = AttemptOutcome(RequestId(NativeArtifacts.id(attempt.id, "outcome").value), attempt.id,
-          if (report.isRight) AttemptState.Completed else AttemptState.Failed, collectedAt, gaps, None)
+          observed.withResult(report.isRight), collectedAt, gaps, None)
         val entries = artifacts.map(HostDelivery.Artifact.apply) ++ observations :+
           HostDelivery.Usage(HostUsageInput(project, HostUsage.Finish(outcome)))
         entries.grouped(DeliveryEntriesPerBatch).zipWithIndex.foreach { case (batch, index) => queue.enqueue(index + 1, DeliveryBatch(batch)) }

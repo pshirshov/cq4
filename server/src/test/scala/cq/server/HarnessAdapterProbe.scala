@@ -117,9 +117,10 @@ object HarnessAdapterProbe extends ZIOAppDefault {
           collector.usage(HostUsageInput(project, HostUsage.Meter(batch.meter)))
           batch.observations.foreach(value => collector.usage(HostUsageInput(project, HostUsage.Ingest(value))))
         }
-        val completed = record.phase == JobPhase.Settled && record.exit.exists(value => value.code.contains(0) && value.settled && !value.hostFailure)
-        val state = if (completed) AttemptState.Completed else AttemptState.Failed
-        collector.usage(HostUsageInput(project, HostUsage.Finish(AttemptOutcome(RequestId(UUID.randomUUID()), attempt.id, state, clock.millis(), usage.gaps, None))))
+        val observed = JobOutcome.observed(record)
+        val completed = observed.succeeded
+        collector.usage(HostUsageInput(project, HostUsage.Finish(AttemptOutcome(RequestId(UUID.randomUUID()), attempt.id, observed.state,
+          clock.millis(), (observed.problem.toList.map(_.take(300)) ++ usage.gaps).take(32), None))))
         val summary = api.call(Command.Usage(UsageInput(project, UsageSelection.Summary(UsageFilter.ProjectAll()))))
         Files.writeString(directory.resolve("job.json"), Wire.encode(JobRecord_JsonCodec, record))
         Files.writeString(directory.resolve("usage-summary.json"), Wire.encode(Result_JsonCodec, summary))
