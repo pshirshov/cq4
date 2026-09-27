@@ -1,0 +1,11 @@
+# Synthetic dependency investigation intake
+
+Capture one Defect from the observed failure below, preserving expected/observed behavior, exact reproduction and the supplied fixture commit. This is a local synthetic dependency, not an external upstream submission. Leave it Open with no known cause or resolution. Use source/commit citations with honest provenance; runner observations do not authorize fabricated HostObserved or HumanReported evidence.
+
+Claim the Defect and run a Codex Explorer/Investigate to inspect the consumer and propose plausible competing causes and discriminating probes. Forward its stored result to Codex Planner as context. Obtain independent Pi Plan reviews before applying each stored proposal. First produce one empirical Research and one parent Hypothesis from the Defect. Then, using the allocated parent Hypothesis ID in a new reviewed round, produce at least two distinct child Hypotheses from that parent. Each Produce operation can allocate several children while changing the existing parent once; several Reference operations sharing a parent cannot be applied in one batch. Use actual server-allocated IDs in subsequent reviewed rounds. Preserve Proposed hypotheses with no adjudication or claimed probe evidence: executable investigation follows in a separate advance stage. The hypotheses must be plausible explanations of the observed behavior, not invented user preferences. Do not create a Question.
+
+Record exact discriminating observations to seek, including native commands, inputs, stdout/stderr and exit status. Research must distinguish token selection, normalization and aggregation only to the extent actual evidence supports those distinctions. Do not select a desired causal verdict in advance. A probe may honestly be inconclusive.
+
+Do not create a fix Goal, Task, Milestone, implementation candidate or upstream report yet. Keep the Defect outside milestone ownership. Release every claim. End with a bounded report of the actual Defect/Research/hypothesis identities and next empirical steps.
+
+Use compact outcomes and retained evidence/proposal/review handles. Do not compose child prompts or copy full result bodies. The host materializes assigned records and evidence for children; keep the consumer requirement and probe requirements in the retained records.
