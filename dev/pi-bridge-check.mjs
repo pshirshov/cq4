@@ -71,3 +71,45 @@ test("Pi bridge (Behavioral Active Blackbox; local HTTP Communication)", async (
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("Pi governor registers the complete domain inventory and local dispatch", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "cq-pi-governor-"));
+  const domain = ["search", "read", "graph", "change", "apply", "claim", "usage"];
+  const local = ["dispatch"];
+  const server = createServer(async (request, response) => {
+    let body = "";
+    for await (const part of request) body += part;
+    const call = JSON.parse(body);
+    const tools = request.url === "/domain" ? domain : local;
+    assert.equal(request.headers.authorization, "Bearer fixture-" + request.url.slice(1));
+    if (call.method === "notifications/initialized") { response.writeHead(202).end(); return; }
+    const result = call.method === "initialize" ? { protocolVersion: "2025-03-26" } :
+      { tools: tools.map(name => ({ name, description: "Fixture " + name, inputSchema: { type: "object", properties: {} } })) };
+    response.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ jsonrpc: "2.0", id: call.id, result }));
+  });
+  try {
+    await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    assert.notEqual(address, null);
+    const asset = join(directory, "pi-bridge.mjs");
+    await copyFile(new URL("../host/src/main/resources/cq/pi-bridge.mjs", import.meta.url), asset);
+    const endpoints = [
+      { name: "cq", url: `http://127.0.0.1:${address.port}/domain`, token: "fixture-domain", tools: domain },
+      { name: "cq_host", url: `http://127.0.0.1:${address.port}/local`, token: "fixture-local", tools: local },
+    ];
+    const configuration = join(directory, "pi-mcp.json");
+    await writeFile(configuration, JSON.stringify({ endpoints }));
+    const bridge = (await import(pathToFileURL(asset))).default;
+    const registered = [];
+    await bridge({ registerTool(tool) { registered.push(tool.name); } });
+    assert.deepEqual(registered, [...domain.map(name => "cq_" + name), "cq_host_dispatch"]);
+    for (const invalid of [[...domain, "read"], Array.from({ length: 11 }, (_, index) => "tool_" + String.fromCharCode(97 + index))]) {
+      await writeFile(configuration, JSON.stringify({ endpoints: [{ ...endpoints[0], tools: invalid }] }));
+      await assert.rejects(() => bridge({ registerTool() { assert.fail("Invalid inventory registered a tool"); } }), /Invalid scoped CQ Pi connection/);
+    }
+  } finally {
+    server.closeAllConnections();
+    await new Promise(resolve => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});

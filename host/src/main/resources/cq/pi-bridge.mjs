@@ -2,6 +2,7 @@ import { open } from "node:fs/promises";
 
 const MAX_CONFIG_BYTES = 262144;
 const MAX_MESSAGE_BYTES = 2097152;
+const MAX_TOOLS = 10;
 const REQUEST_MILLIS = 30000;
 const PROTOCOL = "2025-03-26";
 
@@ -81,7 +82,7 @@ export default async function (pi) {
   for (const endpoint of configuration.endpoints) {
     if (!/^(cq|cq_host)$/.test(endpoint.name) || names.has(endpoint.name) ||
         typeof endpoint.token !== "string" || endpoint.token.length === 0 || endpoint.token.length > 8192 ||
-        !Array.isArray(endpoint.tools) || endpoint.tools.length > 5 || new Set(endpoint.tools).size !== endpoint.tools.length ||
+        !Array.isArray(endpoint.tools) || endpoint.tools.length > MAX_TOOLS || new Set(endpoint.tools).size !== endpoint.tools.length ||
         !endpoint.tools.every(name => /^[a-z][a-z_]{0,30}$/.test(name)))
       throw new Error("Invalid scoped CQ Pi connection");
     const url = new URL(endpoint.url);
@@ -94,7 +95,7 @@ export default async function (pi) {
     if (handshake.protocolVersion !== PROTOCOL) throw new Error("CQ Pi MCP protocol mismatch");
     await initialized(endpoint);
     const listed = await rpc(endpoint, "tools/list", {}, undefined);
-    if (!Array.isArray(listed.tools) || listed.nextCursor !== undefined || listed.tools.length > 10)
+    if (!Array.isArray(listed.tools) || listed.nextCursor !== undefined || listed.tools.length > MAX_TOOLS)
       throw new Error("CQ Pi requires a complete bounded tool inventory");
     for (const name of endpoint.tools) {
       const matches = listed.tools.filter(tool => tool.name === name);

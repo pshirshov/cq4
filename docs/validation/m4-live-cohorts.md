@@ -72,3 +72,40 @@ The Audit accepts both T1@2 and T2@2 on `2fc3ca1529f7fc0949d3cf503f4381a38743580
 The 463.730-second original Go hierarchy records 2,444,584 known tokens: 417,617 Shared, 393,614 Direct correction work and 1,633,353 governing. The separate assessment adds 461,368 known tokens (214,813 Shared Audit and 246,555 governing), yielding 2,905,952 combined. Partial provider USD estimates are 0.379879000000000005 Shared and 0.1465128 Direct in the baseline, plus 0.16553479999999998 governing in the assessor; Codex monetary costs remain unknown. These descriptive cross-model totals include the original mixed review and correction, do not include earlier distinct failed runs, and establish no efficiency improvement or billed total. Full-corpus reporting must include those failed experiments explicitly.
 
 All six original attempts and both assessor attempts have observed counters and partial meters. The Pi Planner also records an explicit outcome coverage gap: assistant responses are covered; auxiliary, compaction and tool-result usage need separate observations. There are no attempts without meters. Astra independently approved the final increment for commit after verifying current source hashes, every replay-input hash, both Audit verdicts, successful exact-base job, clean handoffs and all 54 accounting quantities plus unknown-cost counts and grouped costs. This is scoped acceptance of the observed adaptive candidate, not full R16/M4 completion.
+
+
+## Pi governing inventory correction — verified
+
+After frontier commit `4ba5191`, `20260927T193031-cohort-consumer-pi-python` fails before dispatch (4.272 seconds, native exit 1). The native Pi extension reports `Invalid scoped CQ Pi connection`: its bridge configuration requests CQ's seven current domain tools, but bridge input validation retains an obsolete maximum of five. No child attempt or candidate exists; the failed run's operational audit and database archive are retained.
+
+`pi-governor-inventory/before.log` reproduces the same failure through the actual bridge and local HTTP endpoint; the earlier single-tool test still passes. The correction uses one named ten-tool bound for both requested and advertised inventories, matching the existing bounded MCP discovery limit. It retains duplicate/name/endpoint/credential/byte validation. `after.log` passes both bridge scenarios, including all seven governing domain tools plus local dispatch and rejection of duplicate/eleven-tool inventories. `20260927T193231-fast` passes all 188 Scala scenarios and bridge/evaluator checks. Astra approved the source for native retry. The retry completes successfully below.
+
+The retained Go native governor transcript is independently measurable through `measure-parent-traffic.py` and `parent-traffic.json` in its evidence directory: 28 dispatch calls, maximum 723-byte compact arguments and 1,106-byte reply text. Two complete Review result drill-downs return 3,172 and 2,560 body bytes; one complete Selection drill-down returns 1,359 bytes. A claim request exceeds the allowed duration once and is rejected before the governor corrects it. These reads/retries remain part of the observed run and its usage. As with the Claude measurements, byte counts exclude native envelopes, duplicated structured content and model tokenization.
+
+
+## Pi-governed cohort — independently accepted
+
+`20260927T193308-cohort-consumer-pi-python` passes in 242.466 seconds on candidate `00c21aa64e7c59466dbbf30ed9be2bed23cbd61b`: Pi governor → Claude Planner → Pi Worker → Codex Candidate Reviewer. Both exact seed tasks remain at revision 2. All four attempts have observed counters and partial meters; no attempt lacks a meter. The applicable two-member assessment, immutable Shared assignments, unchanged/claim-free handoff and fresh Codex-authored 110-case oracle are verified. The separate whole-scope native Astra Audit passes in `20260927T193758-assess-20260927T193308-cohort-consumer-pi-python`.
+
+The original hierarchy records 674,068 known tokens: 321,522 Shared and 352,546 governing. Partial provider estimates are USD 0.378927799999999994 Shared and 0.393838000000000002 governing; Codex monetary cost remains unknown. Pi's assistant-response coverage retains its explicit auxiliary/compaction/tool-result limitations. The earlier bridge-startup failure remains a separate failed run with no observed token meter. These are descriptive reported totals, not complete billing or an efficiency comparison.
+
+The hashed Pi transcript and retained `measure-parent-traffic.py`/`parent-traffic.json` show 15 dispatch calls (725-byte compact argument and 1,126-byte reply maxima), four claim calls and no ArtifactText reads. For this run, no child prompt/result body passed through a parent read operation. This does not establish total token savings.
+
+
+The 88.005-second Audit accepts both task revisions on `00c21aa64e7c59466dbbf30ed9be2bed23cbd61b`, with exact host input/workspace base, clean before/after handoffs and reconciled usage. It adds 478,961 known tokens (235,647 Shared and 243,314 governing) and a partial USD 0.1558062 governing provider estimate; Astra's monetary cost remains unknown. `20260927T193231-fast/pi-governor-source-verification.json` matches all 225 non-documentation sources across the final fast gate, native cohort and independent Audit.
+
+## Refreshed route corpus
+
+| Governor | Accepted Planner | Accepted Worker | Accepted Candidate Reviewer | Whole-scope independent acceptance |
+| --- | --- | --- | --- | --- |
+| Claude | Codex | Claude | Pi | Native Astra Candidate Review |
+| Codex | Pi | Codex | Claude | Native Astra Audit of final corrected candidate |
+| Pi | Claude | Pi | Codex | Native Astra Audit |
+
+These actual parent-linked attempts cover all nine directed governor/child pairs. The host predicates verify their role routes, scopes and evidence; the complete R08 worked-process examples remain separate.
+
+`/srv/nvme/tmp/cq4-implementation/20260927-m4-cohort-corpus/report.py` derives `summary.json` from hashed operational summaries, exact accepted/replayed process evidence, independent assessments and native traffic reports. It retains all seven producer experiments, including four failed experiments, plus all three independent assessors exactly once (30 distinct attempt IDs). The Go producer's original failed manifest is unchanged; its separate replay/Audit establishes acceptance. Known reported tokens total 6,497,152 across this corpus, including failed attempts and assessors. Four attempts in failed runs lack meters; 26 meters have partial coverage. The underlying totals' zero unknown-token entries do not account for attempts with no meter, so these cannot be treated as complete usage.
+
+The derived report includes input/output/cache/reasoning quantities, elapsed times, partial provider-cost groups, accepted-candidate denominator, and known reported tokens per accepted candidate. Sources/configuration changed between failed experiments and accepted runs, so these are not matched repetitions. Cross-model totals are descriptive. Matched repetition/variation, explicit usage regression tolerances, full process quality and human acceptance remain open; lower usage cannot excuse missing correctness or provenance.
+
+Astra independently approved the Pi bridge correction and scoped nine-route evidence for commit after checking all three source manifests, both final task verdicts, handoff, corpus hashes, 30 unique attempts, recomputed totals and native transcript bindings. No blocking or major finding remains in this increment. This approval does not close M4 or the outstanding repetition/efficiency requirements.
