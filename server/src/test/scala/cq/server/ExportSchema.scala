@@ -30,7 +30,7 @@ object ExportSchema {
       val invocation = HarnessInvocation(role, AttemptId(UUID.randomUUID()), (if (role == Role.Governor) SupervisorProgram.Instructions else "Role instructions"), Json.obj(), List(
         HarnessMcp(McpTarget.Domain, URI.create("http://127.0.0.1:1234/mcp"), AccessToken("fixture", 1)),
         HarnessMcp(McpTarget.Local, URI.create("http://127.0.0.1:1235/mcp"), AccessToken("fixture", 1))), Path.of("/fixture/assets"))
-      assert(schemas.nativeInvocation(Harness.Claude, invocation) == invocation && schemas.nativeInvocation(Harness.Pi, invocation) == invocation)
+      assert(schemas.nativeInvocation(Harness.Claude, invocation) == invocation)
       val prepared = schemas.nativeInvocation(Harness.Codex, invocation)
       assert(prepared.system.getBytes(java.nio.charset.StandardCharsets.UTF_8).length <= 32768)
       println(s"$role native instructions: ${prepared.system.getBytes(java.nio.charset.StandardCharsets.UTF_8).length} UTF-8 bytes")

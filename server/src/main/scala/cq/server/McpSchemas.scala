@@ -76,7 +76,11 @@ final class McpSchemas {
   }
 
   def nativeInvocation(harness: Harness, invocation: HarnessInvocation): HarnessInvocation = {
-    if (harness != Harness.Codex) invocation
+    if (harness == Harness.Pi) invocation.copy(system = invocation.system +
+      "\nReturn one JSON value matching this complete output schema, without Markdown. " +
+      "Preserve object wrappers and identifier fields exactly. Every declared property is required; use null only where permitted. " +
+      "Each $ref resolves against this schema's $defs. CQ validates the complete result before admission.\n" + invocation.resultSchema.noSpaces)
+    else if (harness != Harness.Codex) invocation
     else {
       // Codex 0.156.1 drops definitions above 5,000 normalized bytes; reserve room for its normalization.
       val GuideThresholdBytes = 4000

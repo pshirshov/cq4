@@ -23,6 +23,27 @@ final class HarnessAdapterLocal extends AnyWordSpec {
     "PROVIDER_TOKEN" -> "configured-provider-secret", "UNRELATED_SECRET" -> "unrelated-secret")
 
   "Harness launch boundaries (Behavioral Active Blackbox; Group / filesystem Communication)" should {
+    "deliver complete canonical output contracts through Pi's native system instructions" in {
+      val schemas = new McpSchemas()
+      val modes = ExplorerMode.all.map(DispatchWork.Explorer.apply) ++ List(DispatchWork.Planner()) ++
+        WorkerMode.all.map(DispatchWork.Worker.apply) ++ ReviewerMode.all.map(DispatchWork.Reviewer.apply)
+      val children = modes.map { mode =>
+        invocation(ChildContracts.role(mode), Path.of("/test/assets")).copy(
+          system = new ChildInstructions()(mode), resultSchema = schemas.childReport(mode))
+      }
+      val governor = invocation(Role.Governor, Path.of("/test/assets")).copy(
+        system = SupervisorProgram.Instructions, resultSchema = schemas.schema("GoverningReport"))
+      (governor :: children.toList).foreach { original =>
+        val prepared = schemas.nativeInvocation(Harness.Pi, original)
+        val launch = new PiAdapter().launch(profile(Harness.Pi), prepared, environment)
+        val system = launch.arguments(launch.arguments.indexOf("--system-prompt") + 1)
+        assert(system.startsWith(original.system + "\n"))
+        assert(io.circe.parser.parse(system.linesIterator.toList.last) == Right(original.resultSchema))
+        assert(prepared.copy(system = original.system) == original)
+        assert(system.getBytes(java.nio.charset.StandardCharsets.UTF_8).length <= 32768)
+      }
+    }
+
     "translate nested report unions for the Codex structured-output dialect" in {
       val report = new McpSchemas().childReport(DispatchWork.Planner())
       val launch = new CodexAdapter().launch(profile(Harness.Codex),
