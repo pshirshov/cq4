@@ -3,6 +3,7 @@ import hashlib
 import json
 from pathlib import Path
 import runpy
+import tempfile
 import unittest
 import uuid
 
@@ -111,6 +112,132 @@ class ProcessAssessmentCheck(unittest.TestCase):
         self.assertEqual(lineage[0]["applied"][0]["revision"], {"value": "2"})
         with self.assertRaisesRegex(AssertionError, "another session"):
             predicates["planning_lineage"](history, statuses, artifacts, {"value": "foreign"})
+
+    def read_event(self, path, text, offset, end):
+        return {"type": "item.completed", "item": {"id": f"{path}-{offset}", "type": "mcp_tool_call", "server": "cq_host", "tool": "workspace",
+            "arguments": {"Read": {"path": path, "offset": offset, "limit": 8192}}, "status": "completed", "error": None,
+            "result": {"structured_content": {"Text": {"page": {"path": path, "offset": offset, "next": end, "hasMore": end < len(text), "text": text[offset:end]}}}}}}
+
+    def test_inspection_requires_successful_complete_exact_reads(self):
+        files = {"main.go": "a🙂b", "README.md": "", ".cq-evaluation/answer.json": "Go"}
+        events = [self.read_event("main.go", files["main.go"], 0, 2), self.read_event("main.go", files["main.go"], 2, 3),
+                  self.read_event("README.md", "", 0, 0), self.read_event(".cq-evaluation/answer.json", "Go", 0, 2)]
+        self.assertTrue(predicates["inspected_files"](events, files)["complete"])
+        self.assertFalse(predicates["inspected_files"](events[1:], files)["complete"])
+        self.assertFalse(predicates["inspected_files"]([], files)["complete"])
+        events[0]["item"]["status"] = "failed"
+        self.assertFalse(predicates["inspected_files"](events, files)["complete"])
+        events[0]["item"]["status"] = "completed"
+        events[0]["item"]["result"]["structured_content"]["Text"]["page"]["text"] = "ax"
+        with self.assertRaisesRegex(AssertionError, "candidate bytes"):
+            predicates["inspected_files"](events, files)
+
+    def correction_fixture(self):
+        item_id = {"project": {"value": "project"}, "ledger": "Handoffs", "number": "1"}
+        member = {"id": item_id, "revision": {"value": "3"}}
+        candidate, session, governor = {"value": "candidate"}, {"value": "session"}, {"value": "governor"}
+        request_id = {"value": str(uuid.UUID(bytes=hashlib.md5(b"cq-proposal:plan").digest(), version=3))}
+        before_view = {"item": {**member, "createdAt": "0", "draft": {"body": "stale"}, "provenance": {"request": {"value": "old"}, "actor": {"session": {"value": "old-session"}}}},
+            "refs": [{"relation": "DerivedFrom", "target": "task"}]}
+        after_view = copy.deepcopy(before_view)
+        after_view["item"].update(revision={"value": "4"}, draft={"body": "observed outcome"}, provenance={"request": request_id, "actor": {"session": session}})
+        before_history = {"id": item_id, "page": {"hasMore": False, "entries": [{"item": before_view, "cursor": {"value": "1"}}]}}
+        after_history = copy.deepcopy(before_history)
+        after_history["page"]["entries"].insert(0, {"item": after_view, "cursor": {"value": "2"}})
+        before = {"views": [before_view], "histories": [before_history], "git": candidate, "target": candidate, "clean": True}
+        after = {"views": [after_view], "histories": [after_history], "git": candidate, "target": candidate, "clean": True,
+            "claims": {"claims": [], "integrations": []}, "localIntegrations": []}
+        finding = {"value": "old-audit"}
+        statuses, artifacts = [], {}
+        for name, work, previous in [("plan", {"Planner": {}}, None), ("review", {"Reviewer": {"mode": "Plan"}}, {"value": "plan"})]:
+            attempt = {"value": name + "-attempt"}
+            request = {"request": {"value": name + "-request"}, "work": work, "members": [member], "previous": previous, "artifacts": [finding]}
+            report = {"Plan": {"proposal": {"mutations": [{"Replace": {"id": item_id, "draft": after_view["item"]["draft"]}}]}}} if name == "plan" else {
+                "Review": {"members": [{"item": item_id, "verdict": "Accepted", "findings": []}]}}
+            artifacts[name] = {"attempt": attempt, "body": {"attempt": attempt, "request": request, "base": candidate, "candidate": None, "validation": [], "report": report}}
+            statuses.append({"phase": "Completed", "result": {"value": name}, "attempt": attempt, "request": request["request"], "usageDelivered": True})
+        return json.loads(json.dumps({"before": before, "after": after, "statuses": statuses, "artifacts": artifacts,
+            "run": {"base": candidate, "attempt": {"id": governor, "session": session}},
+            "governing_input": {"attempt": governor, "body": {"integrationTarget": None, "workflow": {"request": {"Advance": {"roots": [item_id], "through": "Plan"}}}}},
+            "finding": finding}))
+
+    def test_only_exact_reviewed_handoff_replacement_is_accepted(self):
+        self.assertEqual(predicates["correction_stage"](**self.correction_fixture())["member"]["revision"], {"value": "4"})
+        mutations = {
+            "unreviewed application": lambda f: f["artifacts"]["review"]["body"]["report"]["Review"]["members"][0].update(verdict="ChangesRequested"),
+            "reviewed different proposal": lambda f: f["artifacts"]["review"]["body"]["request"].update(previous={"value": "other"}),
+            "foreign authority": lambda f: f["after"]["histories"][0]["page"]["entries"][0]["item"]["item"]["provenance"]["actor"].update(session={"value": "foreign"}),
+            "stale member": lambda f: f["artifacts"]["plan"]["body"]["request"]["members"][0].update(revision={"value": "2"}),
+            "changed draft": lambda f: f["artifacts"]["plan"]["body"]["report"]["Plan"]["proposal"]["mutations"][0]["Replace"]["draft"].update(body="unreviewed"),
+            "rewritten history": lambda f: f["after"]["histories"][0]["page"]["entries"][1]["item"]["item"]["draft"].update(body="rewritten"),
+            "missing finding": lambda f: f["artifacts"]["plan"]["body"]["request"].update(artifacts=[]),
+            "foreign finding as previous": lambda f: f["artifacts"]["plan"]["body"]["request"].update(previous=f["finding"]),
+            "candidate change": lambda f: f["after"].update(target={"value": "other"}),
+            "worker": lambda f: f["artifacts"]["plan"]["body"]["request"].update(work={"Worker": {"mode": "Implement"}}),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(name=name):
+                fixture = self.correction_fixture()
+                mutate(fixture)
+                with self.assertRaises(AssertionError):
+                    predicates["correction_stage"](**fixture)
+
+    def test_application_ack_follows_exact_accepted_review(self):
+        correction = predicates["correction_stage"](**self.correction_fixture())
+        applied = correction["planning"][0]
+        ack = {"request": applied["request"], "items": [correction["member"]], "cursor": {"value": "2"}}
+        events = [
+            {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "review-poll", "name": "mcp__cq_host__dispatch", "input": {}}]}},
+            {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "review-poll", "content": json.dumps({"Status": {"value": {
+                "result": correction["review"], "phase": "Completed", "usageDelivered": True, "counts": {"accepted": 1, "changesRequested": 0, "blocked": 0}}}})}]}},
+            {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "apply", "name": "mcp__cq__apply", "input": {"result": applied["proposal"]}}]}},
+            {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "apply", "content": json.dumps({"Changed": {"ack": ack}})}]}},
+        ]
+        self.assertEqual(predicates["correction_ack"](events, correction), ack)
+        with self.assertRaisesRegex(AssertionError, "preceded"):
+            predicates["correction_ack"](events[2:] + events[:2], correction)
+        with self.assertRaisesRegex(AssertionError, "Missing"):
+            predicates["correction_ack"](events[:-1], correction)
+        ack["items"] = []
+        events[-1]["message"]["content"][0]["content"] = json.dumps({"Changed": {"ack": ack}})
+        with self.assertRaises(AssertionError):
+            predicates["correction_ack"](events, correction)
+
+    def test_correction_routes_bind_native_hierarchy_and_metering(self):
+        fixture = self.correction_fixture()
+        governor = fixture["run"]["attempt"]
+        governor["parent"] = None
+        evaluation = {"assessor": False, "run": "evaluation", "scenario": "worked-wordfreq"}
+        settings = {"evaluation": evaluation, "harnesses": [{"harness": "Codex", "model": "planner-model"}, {"harness": "Pi", "model": "review-model"}]}
+        with tempfile.TemporaryDirectory() as temporary:
+            session = Path(temporary)
+            values = {"run": fixture["run"], "session": session, "statuses": fixture["statuses"], "artifacts": fixture["artifacts"],
+                "attempts": [{"attempt": governor, "assignment": {"evaluation": evaluation}}], "observations": []}
+            for status, route in zip(values["statuses"], settings["harnesses"]):
+                result = values["artifacts"][status["result"]["value"]]["body"]
+                result["request"]["harness"] = route["harness"]
+                attempt = {"id": status["attempt"], "role": "Planner" if route["harness"] == "Codex" else "Reviewer", **route,
+                    "parent": governor["id"], "session": governor["session"]}
+                ticket = {"attempt": attempt, "assignment": {"evaluation": evaluation}, "request": result["request"]}
+                values["attempts"].append({"attempt": attempt, "assignment": ticket["assignment"]})
+                path = session / "children" / status["attempt"]["value"] / "ticket.json"
+                path.parent.mkdir(parents=True)
+                path.write_text(json.dumps(ticket))
+                job_path = session / "journal" / (status["attempt"]["value"] + ".json")
+                job_path.parent.mkdir(exist_ok=True)
+                job_path.write_text(json.dumps({"workspace": {"attempt": attempt["id"], "owner": attempt["session"], "base": fixture["run"]["base"]},
+                    "phase": "Settled", "exit": {"settled": True, "code": 0, "reason": "Exited", "hostFailure": False}}))
+            values["observations"] = [{"upload": {"observation": {"attempt": value["attempt"]["id"], "counters": {"input": {"value": "1", "measurement": "Observed"}}}}} for value in values["attempts"]]
+            predicates["correction_routes"](values, settings)
+            for field, replacement in [("harness", "Claude"), ("parent", {"value": "foreign"}), ("session", {"value": "foreign"}), ("model", "other-model")]:
+                changed = json.loads(path.read_text())
+                original = changed["attempt"][field]
+                changed["attempt"][field] = replacement
+                path.write_text(json.dumps(changed))
+                with self.subTest(field=field), self.assertRaises(AssertionError):
+                    predicates["correction_routes"](values, settings)
+                changed["attempt"][field] = original
+                path.write_text(json.dumps(changed))
 
 
 if __name__ == "__main__":

@@ -59,6 +59,10 @@ Astra independently verified the final source manifests, replay hashes, Human an
 
 `./dev/process-assess INTEGRATED_EVIDENCE_DIRECTORY` implements the [approved assessment sequence](../design/live-process-evaluations.md#integrated-go-assessment-and-standalone-review): replay the actual checkpoint and incorporation evidence, restore the database, check out the incorporated candidate, obtain one Pi Audit on current task revisions, then invoke the standalone `review --mode audit` workflow with that exact admitted subject and native Codex/Astra. A completed non-accepted Pi result is retained as a review subject; it is not relabeled accepted.
 
+The `--correct PRIOR_ASSESSMENT_DIRECTORY` continuation restores the latest standalone database, runs an ordinary Handoff-only planning correction, then repeats both audits. Predicates bind the Codex Planner/Pi Plan reviewer hierarchy, exact accepted replacement, native review-before-application ordering, sole Handoff acknowledgement and unchanged other records/history/Git. Native Astra workspace reads must successfully cover every tracked candidate file at the exact commit; paginated Unicode text is checked against Git contents. Continued archives replay these checks and include the preceding failed/non-accepted attempts in cumulative accounting. A file inspection proves delivery of exact file contents to the reviewer, not the correctness of its reasoning.
+
+The workspace-discovery failure and stale Handoff are retained in `process-handoff-correction-reproductions/before.json`. Source review exposed a continuation verification gap: a fabricated `inspectionComplete:true` was accepted without replaying native reads. `replay-before.log` captures that failure; `replay-after.log` rejects it after coverage and saved-outcome binding. Nine focused assessment tests pass. Astra approved the correction design and final source for native execution after the fast gate.
+
 The static [rubric](../../dev/process-assessment.md), original specification, full record history, actual supplied answer, integration observations, planning/application identities and hashed artifact index form a bounded, immutable Input artifact. It is published through the ordinary operator API with explicit runner-generated provenance. It is not a user judgment or new host validation. Both reviewers must receive the exact bundle directly; the previous result alone does not recursively supply it. Large original result bodies remain available through their stored handles.
 
 Predicates check exact request/input/member/guidance identities, workspace base, Audit-only execution, actual standalone workflow/subject, unchanged graph/history, detached HEAD and integration ref, no remaining claims/integration holds, observed usage and distinct attempt identities across the whole restored history. Baseline and both assessment sessions reconcile through the ordinary operational audit. Each stage retains its own native files, database dump and verdict; execution success and acceptance are separate fields.
@@ -83,3 +87,38 @@ Both stages received the exact same bundle and frozen candidate `9cc3f9a99988273
 Each stage's `measure-parent-traffic.py` derives six dispatch calls from its hashed governing transcript. Precheck arguments/replies peak at 1,570/693 bytes; standalone at 1,450/1,851 bytes. The precheck governor reads one 1,916-byte Selection artifact; neither governor reads a Result body. The large evidence bundle stays behind its handle. These byte observations use the earlier stated exclusions and do not establish end-to-end token savings.
 
 Astra independently approved this scoped runner and negative-evidence increment for commit after verifying source/gate matches, both verdicts, input bounds, unchanged record/Git state, handoff and accounting. That approval retains Handoff correction and independent file inspection as open work; it does not accept the process outcome or M4.
+
+### Reviewed Handoff correction and complete candidate inspection
+
+`20260927T211119-fast` passes 188 Scala scenarios, eleven process tests, nine assessment tests and the existing bridge/evaluator checks. `20260927T211207-process-assess` matches all 232 runtime/build/evaluator sources, including prompt resources (`process-correction-source-verification.json` in the fast directory). It restores the preceding standalone database, retaining all 18 previous attempts.
+
+| Stage | Elapsed | Outcome | Known reported tokens |
+| --- | --- | --- | --- |
+| Handoff correction | 145.504 s | Codex Planner proposal independently accepted by Pi and applied | 794,739 |
+| Pi Audit | 104.787 s | Both tasks Accepted | 688,851 |
+| Standalone Astra Audit | 108.893 s | T1 ChangesRequested; T2 Blocked | 739,400 |
+
+The correction applies proposal `00bf63f1-ca36-339c-b282-3266fbfdc271` after observing Pi's Accepted review `bedd33c8-d3af-3fec-a9ef-9f78392f6c43`. Native application acknowledgement `9505ae22-520e-3f57-9ee7-752578c402f0`, cursor 14, changes only Handoff 1 from revision 3 to 4. It records observed integration, attributes earlier validation and leaves independent inspection/follow-up pending. Every earlier history entry, other record, relationship, task revision, Git HEAD and integration ref is preserved. The new session releases its claims and creates no integration.
+
+Pi result `1bad2418-3425-3b26-80fd-3fa3c99ff7ab` becomes the exact standalone subject. Astra attempt `1dcedf43-4e65-4378-954b-38531bbbbb88` now successfully reads all seven tracked files at `9cc3f9a999882735a635d7d14c2d2c653afcbced`, including source, tests, README, module and `.cq-evaluation/answer.json`. `workspace-inspection.json` verifies complete returned ranges and exact text against Git contents. Seven rejected 18,000-code-point requests remain in the transcript, followed by successful requests at the supported 8,192 limit. The 102,274-byte bundle and both encoded input bounds remain below the host limits.
+
+Astra result `5ff8b5f3-087b-3579-8d36-23c9d22c47d8` confirms the Handoff correction and finds two additional gaps:
+
+- T1's required automated empty-input case is absent: `TestRunEmptyInputProducesNoRecords` actually supplies `123 !!!`. The consumer behaves correctly for genuinely empty input, and the external oracle tests it, but the specified Go test case is missing.
+- T2 remains blocked on evidence presentation: current answer contents agree with the recorded Go choice, but the assessment bundle does not provide original/candidate blob identities or an attributable byte comparison. The runner's existing byte equality assertion is not evidence the reviewer received.
+
+The next correction will use ordinary reopening and fresh exact-revision authority for T1, retain T2's current identity, and present the original/candidate answer comparison explicitly. A mutation reproduction already confirms the missing-test finding: `process-handoff-correction-reproductions/empty-test.py` leaves the original candidate untouched, runs its passing Go suite, then inserts an empty-input-only failure into a separate copy. The mutated command fails on empty input while the existing Go suite still passes; `empty-test-before.log` fails for that precise coverage gap. No consumer correction is claimed yet.
+
+All three new sessions archive normally. The cumulative audit reconciles **10,366,178** known tokens across **25 distinct attempts**, all partial meters, none absent. It includes the preceding rejected assessments once. Full retained-assessment replay passes, including successful native file coverage, exact correction hierarchy/application and cumulative accounting. No complete billing or efficiency claim is made.
+
+Each stage retains `measure-parent-traffic.py` and `parent-traffic.json`. Correction/precheck/standalone dispatch counts are 8/5/6; maximum argument/reply text sizes are 1,481/1,816, 1,570/693 and 1,450/1,851 bytes. The correction governor explicitly retrieves the entire 2,842-byte Plan review in two pages. The precheck reads one Selection artifact; neither new Audit governor reads a full Result body. These measurements retain actual drill-downs and exclude native envelopes and model tokenization.
+
+Run this continuation with:
+
+```sh
+./dev/process-assess \
+  /srv/nvme/tmp/cq4-implementation/20260927T201449-process-resume \
+  --correct /srv/nvme/tmp/cq4-implementation/20260927T204644-process-assess
+```
+
+The final status remains **assessment-not-accepted**. Independent Astra reviewed the matching sources, sole Handoff acknowledgement, unchanged Git, claim-free handoff, seven-file inspection and accounting, and approved the correction-runner/evidence increment for commit. That approval does not close the new test/evidence findings, full process acceptance or M4.

@@ -3,6 +3,7 @@ import hashlib
 import json
 from pathlib import Path
 import runpy
+import subprocess
 import uuid
 
 
@@ -143,3 +144,247 @@ def audit_stage(expected, statuses, artifacts, ticket, run, job, governing_input
     assert set(by_attempt) <= measured, "Assessment hierarchy lacks observed usage"
     return {"candidate": expected["candidate"], "members": expected["members"], "result": status["result"], "reports": reports,
             "accepted": all(value["verdict"] == "Accepted" for value in reports), "standalone": expected["previous"] is not None}
+
+
+def inspected_files(events, files):
+    """Successful native Codex reads must cover exact candidate text, including pagination."""
+    ranges = {path: set() for path in files}
+    completed = set()
+    calls = []
+    for event in events:
+        item = event.get("item", {})
+        if event.get("type") != "item.completed" or item.get("type") != "mcp_tool_call" or item.get("server") != "cq_host" or item.get("tool") != "workspace":
+            continue
+        if "Read" not in item["arguments"] or item["status"] != "completed" or item["error"] is not None:
+            continue
+        request = item["arguments"]["Read"]
+        path = request["path"]
+        if path not in files:
+            continue
+        reply = item["result"]["structured_content"]
+        assert "Text" in reply, "Successful workspace read lacks text"
+        page = reply["Text"]["page"]
+        offset, end = page["offset"], page["next"]
+        assert page["path"] == path and offset == request["offset"] and 0 <= offset <= end <= len(files[path])
+        assert end == offset + len(page["text"]) and end - offset <= request["limit"]
+        assert page["text"] == files[path][offset:end], "Workspace read differs from exact candidate bytes"
+        assert page["hasMore"] == (end < len(files[path])), "Workspace read has a false completion marker"
+        ranges[path].update(range(offset, end))
+        if not page["hasMore"]:
+            completed.add(path)
+        calls.append({"id": item["id"], "path": path, "offset": offset, "next": end})
+    missing = [path for path in files if len(ranges[path]) != len(files[path]) or path not in completed]
+    return {"complete": not missing, "missing": missing, "calls": calls,
+            "files": {path: {"sha256": hashlib.sha256(text.encode()).hexdigest(), "codePoints": len(text), "readCodePoints": len(ranges[path])} for path, text in files.items()}}
+
+
+def candidate_text(repository, candidate):
+    paths = subprocess.check_output(["git", "-C", str(repository), "ls-tree", "-r", "--name-only", "-z", candidate["value"]]).decode().split("\0")
+    return {path: subprocess.check_output(["git", "-C", str(repository), "show", candidate["value"] + ":" + path]).decode("utf-8") for path in paths if path}
+
+
+def correction_ack(events, correction):
+    applied, = [value for value in correction["planning"] if value["applied"]]
+    calls, acknowledgements = {}, []
+    reviewed = False
+    for event in events:
+        if event.get("type") not in ["assistant", "user"]:
+            continue
+        for block in event["message"]["content"]:
+            if block.get("type") == "tool_use":
+                calls[block["id"]] = block
+                if block["name"] == "mcp__cq__apply" and block["input"].get("result") == applied["proposal"]:
+                    assert reviewed, "Proposal application preceded its accepted review"
+            elif block.get("type") == "tool_result" and block["tool_use_id"] in calls:
+                call = calls[block["tool_use_id"]]
+                content = block["content"]
+                if not isinstance(content, str):
+                    content = "".join(value["text"] for value in content if value["type"] == "text")
+                try:
+                    reply = json.loads(content)
+                except ValueError:
+                    continue
+                if call["name"] == "mcp__cq_host__dispatch" and "Status" in reply:
+                    status = reply["Status"]["value"]
+                    if status["result"] == correction["review"] and status["phase"] == "Completed" and status["usageDelivered"]:
+                        assert status["counts"]["accepted"] == 1 and not status["counts"]["changesRequested"] and not status["counts"]["blocked"]
+                        reviewed = True
+                if call["name"] == "mcp__cq__apply" and call["input"].get("result") == applied["proposal"] and "Changed" in reply:
+                    ack = reply["Changed"]["ack"]
+                    assert ack["request"] == applied["request"] and ack["items"] == [correction["member"]]
+                    acknowledgements.append(ack)
+    assert acknowledgements and all(value == acknowledgements[0] for value in acknowledgements), "Missing or inconsistent stored proposal acknowledgement"
+    return acknowledgements[0]
+
+
+def correction_routes(values, settings):
+    run, session = values["run"], values["session"]
+    by_attempt = {value["attempt"]["id"]["value"]: value for value in values["attempts"]}
+    assert len(by_attempt) == len(values["attempts"]) == len(values["statuses"]) + 1
+    assert by_attempt[run["attempt"]["id"]["value"]]["attempt"] == run["attempt"] and run["attempt"]["parent"] is None
+    for status in values["statuses"]:
+        path = session / "children" / status["attempt"]["value"] / "ticket.json"
+        ticket = json.loads(path.read_text())
+        child = ticket["attempt"]
+        result = values["artifacts"][status["result"]["value"]]["body"]
+        role = "Planner" if result["request"]["work"] == {"Planner": {}} else "Reviewer"
+        harness = "Codex" if role == "Planner" else "Pi"
+        assert child["id"] == status["attempt"] and child["role"] == role and child["harness"] == result["request"]["harness"] == harness
+        assert child["model"] == next(value["model"] for value in settings["harnesses"] if value["harness"] == harness)
+        assert child["parent"] == run["attempt"]["id"] and child["session"] == run["attempt"]["session"]
+        assert by_attempt[child["id"]["value"]]["attempt"] == child and by_attempt[child["id"]["value"]]["assignment"] == ticket["assignment"]
+        assert result["request"] == ticket["request"]
+        job = json.loads((session / "journal" / (child["id"]["value"] + ".json")).read_text())
+        assert job["workspace"]["attempt"] == child["id"] and job["workspace"]["owner"] == child["session"] and job["workspace"]["base"] == run["base"]
+        assert job["phase"] == "Settled" and job["exit"]["settled"] and job["exit"]["code"] == 0 and job["exit"]["reason"] == "Exited" and not job["exit"]["hostFailure"]
+    assert all(value["assignment"]["evaluation"] == settings["evaluation"] for value in values["attempts"])
+    measured = {value["upload"]["observation"]["attempt"]["value"] for value in values["observations"] if any(
+        value["upload"]["observation"]["counters"][name]["value"] is not None and value["upload"]["observation"]["counters"][name]["measurement"] == "Observed" for name in ["input", "output"])}
+    assert set(by_attempt) <= measured, "Correction hierarchy lacks observed usage"
+
+
+def correction_stage(before, after, statuses, artifacts, run, governing_input, finding):
+    handoff, = [value for value in before["views"] if value["item"]["id"]["ledger"] == "Handoffs"]
+    member = {"id": handoff["item"]["id"], "revision": handoff["item"]["revision"]}
+    assert governing_input["body"]["workflow"]["request"] == {"Advance": {"roots": [member["id"]], "through": "Plan"}}
+    assert governing_input["attempt"] == run["attempt"]["id"] and governing_input["body"]["integrationTarget"] is None
+    assert run["base"] == before["git"] == before["target"] == after["git"] == after["target"] and before["clean"] and after["clean"]
+    assert not after["claims"]["claims"] and not after["claims"]["integrations"] and not after["localIntegrations"]
+    assert len(statuses) >= 2
+    for status in statuses:
+        assert status["phase"] == "Completed" and status["result"] is not None and status["usageDelivered"]
+        artifact = artifacts[status["result"]["value"]]
+        value = artifact["body"]
+        request = value["request"]
+        assert artifact["attempt"] == value["attempt"] == status["attempt"]
+        assert request["members"] == [member] and request["request"] == status["request"]
+        assert value["base"] == before["git"] and value["candidate"] is None and not value["validation"]
+        assert request["work"] in [{"Planner": {}}, {"Reviewer": {"mode": "Plan"}}], "Correction launched work outside planning"
+        if request["work"] == {"Planner": {}}:
+            assert finding in request["artifacts"], "Planner did not receive the independent finding"
+            assert request["previous"] != finding, "Foreign-scope finding used as mutation authority"
+    lineage = planning_lineage(after["histories"], statuses, artifacts, run["attempt"]["session"])
+    applied, = [value for value in lineage if value["applied"]]
+    new_member, = applied["applied"]
+    assert new_member == {"id": member["id"], "revision": {"value": str(int(member["revision"]["value"]) + 1)}}
+    accepted = [review for review in applied["reviews"] if len(review["verdicts"]) == 1 and review["verdicts"][0]["item"] == member["id"] and review["verdicts"][0]["verdict"] == "Accepted"]
+    assert accepted, "Applied correction lacks an Accepted review of the exact proposal"
+    replacement = next(value for value in after["views"] if value["item"]["id"] == member["id"])
+    proposal = artifacts[applied["proposal"]["value"]]["body"]["report"]["Plan"]["proposal"]
+    assert proposal["mutations"] == [{"Replace": {"id": member["id"], "draft": replacement["item"]["draft"]}}], "Applied draft differs from the reviewed proposal"
+    assert len(before["views"]) == len(after["views"]) and len(before["histories"]) == len(after["histories"])
+    for old, new in zip(before["views"], after["views"]):
+        if old != handoff:
+            assert new == old, "Correction changed another record"
+        else:
+            assert new["item"]["id"] == new_member["id"] and new["item"]["revision"] == new_member["revision"]
+            assert new["refs"] == old["refs"] and new["item"]["createdAt"] == old["item"]["createdAt"]
+    for old, new in zip(before["histories"], after["histories"]):
+        assert not old["page"]["hasMore"] and not new["page"]["hasMore"]
+        if old["id"] != member["id"]:
+            assert new == old, "Correction changed unrelated history"
+        else:
+            assert new["id"] == old["id"] and new["page"]["entries"][1:] == old["page"]["entries"], "Correction rewrote history"
+            assert new["page"]["entries"][0]["item"] == next(value for value in after["views"] if value["item"]["id"] == member["id"])
+    return {"member": new_member, "planning": lineage, "review": accepted[-1]["result"], "finding": finding}
+
+
+def stage_evidence(directory):
+    def read(path):
+        return json.loads(path.read_text())
+    session, = (directory / "sessions").iterdir()
+    run = read(session / "run.json")
+    artifacts = read(directory / "candidate-evidence.json")
+    governing, = [value for value in artifacts.values() if value["kind"] == "Input" and value["attempt"] == run["attempt"]["id"]]
+    return {"statuses": read(directory / "dispatch-statuses.json"), "artifacts": artifacts, "run": run,
+            "governing_input": governing, "attempts": read(directory / "attempts.json")["UsageAttempts"]["page"]["entries"],
+            "observations": [value for path in directory.glob("usage-audit-*.json") for value in read(path)["UsageAudit"]["page"]["entries"]],
+            "snapshot": read(directory / "after.json"), "session": session}
+
+
+def retained_assessment(directory, baseline, origin, depth):
+    assert depth < 16, "Assessment continuation chain exceeds its bound"
+    consumed = dict(baseline["inputsSha256"])
+
+    def read(path):
+        data = path.read_bytes()
+        consumed[str(path)] = hashlib.sha256(data).hexdigest()
+        return json.loads(data)
+
+    manifest = read(directory / "result.json")
+    assert manifest["status"] in ["assessment-passed", "assessment-not-accepted"] and manifest["accounting"] == "reconciled"
+    assert Path(manifest["baselineEvidence"]) == origin and manifest["candidate"] == baseline["proof"]["candidate"]
+    prior = retained_assessment(Path(manifest["restoredEvidence"]), baseline, origin, depth + 1) if manifest.get("restoredEvidence") is not None else None
+    if prior is not None:
+        consumed.update(prior["inputsSha256"])
+    before = read(directory / "before.json")
+    assert before["views"] == (baseline["views"] if prior is None else prior["snapshot"]["views"])
+    assert before["histories"] == (baseline["histories"] if prior is None else prior["snapshot"]["histories"])
+    ids = set(baseline["attemptIds"] if prior is None else prior["attemptIds"])
+    parts = [read(origin / "combined-usage-summary.json")["UsageSummary"]["report"] if prior is None else prior["usage"]["UsageSummary"]["report"]]
+    current = before
+    bundle_text = (directory / "assessment-bundle.json").read_text()
+    metadata = read(directory / "bundle-publication.json")
+    assert metadata["sha256"] == hashlib.sha256(bundle_text.encode()).hexdigest()
+    previous = None
+    correction = None
+    reconcile = runpy.run_path(str(Path(__file__).with_name("process-evidence.py")))["reconcile_usage"]
+    for stage in manifest["stages"]:
+        stage_dir = directory / stage["stage"]
+        for path in stage_dir.rglob("*.json"):
+            consumed[str(path)] = hashlib.sha256(path.read_bytes()).hexdigest()
+        values = stage_evidence(stage_dir)
+        settings = read(stage_dir / "settings.json")
+        saved = read(stage_dir / "result.json")
+        assert not saved["archiveErrors"] and saved["exit"] == 0 and saved["accounting"] == "reconciled"
+        if stage["stage"] == "correction":
+            assert prior is not None and correction is None and previous is None
+            correction = correction_stage(current, values["snapshot"], values["statuses"], values["artifacts"], values["run"], values["governing_input"], prior["result"])
+            assert saved["correction"] == correction
+            correction_routes(values, settings)
+            transcript = values["session"] / "payload" / values["run"]["attempt"]["id"]["value"] / "stdout"
+            consumed[str(transcript)] = hashlib.sha256(transcript.read_bytes()).hexdigest()
+            assert correction_ack([json.loads(line) for line in transcript.read_text().splitlines() if line.strip()], correction) == saved["acknowledgement"]
+            current = values["snapshot"]
+        else:
+            session = values.pop("session")
+            ticket_path, = (session / "children").glob("*/ticket.json")
+            ticket = read(ticket_path)
+            job = read(session / "journal" / (ticket["attempt"]["id"]["value"] + ".json"))
+            members = baseline["proof"]["tasks"]
+            member_views = [value for value in current["views"] if value["item"]["id"] in [member["id"] for member in members]]
+            guidance_views = [value for value in current["views"] if value not in member_views]
+            harness = "Pi" if stage["stage"] == "precheck" else "Codex"
+            expected = {"candidate": baseline["proof"]["candidate"], "members": members,
+                "guidance": [{"id": value["item"]["id"], "revision": value["item"]["revision"]} for value in guidance_views],
+                "memberViews": member_views, "guidanceViews": guidance_views, "bundle": {"metadata": metadata, "body": bundle_text},
+                "context": [metadata["id"], baseline["proof"]["finalChain"]["workerResult"], baseline["proof"]["finalChain"]["reviewResult"]],
+                "harness": harness, "model": next(value["model"] for value in settings["harnesses"] if value["harness"] == harness),
+                "previous": previous, "views": current["views"], "histories": current["histories"], "evaluation": settings["evaluation"]}
+            assessment = audit_stage(expected, ticket=ticket, job=job, **values)
+            assert assessment == saved["assessment"]
+            if stage["stage"] == "standalone":
+                if "inspectionComplete" in saved:
+                    transcript = session / "payload" / ticket["attempt"]["id"]["value"] / "stdout"
+                    consumed[str(transcript)] = hashlib.sha256(transcript.read_bytes()).hexdigest()
+                    inspection = inspected_files([json.loads(line) for line in transcript.read_text().splitlines() if line.strip()], candidate_text(origin / "consumer", baseline["proof"]["candidate"]))
+                    assert saved["inspectionComplete"] == inspection["complete"], "Retained inspection claim differs from native read coverage"
+                    assert read(stage_dir / "workspace-inspection.json") == {"candidate": baseline["proof"]["candidate"], "attempt": ticket["attempt"]["id"], **inspection}
+                    passed = assessment["accepted"] and inspection["complete"]
+                else:
+                    assert not assessment["accepted"], "Pre-coverage evidence cannot establish inspected acceptance"
+                    passed = False
+                assert saved["status"] == manifest["status"] == ("assessment-passed" if passed else "assessment-not-accepted")
+            previous = assessment["result"]
+        new_ids = [value["attempt"]["id"]["value"] for value in values["attempts"]]
+        assert len(set(new_ids)) == len(new_ids) and not ids.intersection(new_ids), "Continuation reused an attempt"
+        ids.update(new_ids)
+        parts.append(read(stage_dir / "usage-summary.json")["UsageSummary"]["report"])
+        combined = read(stage_dir / "combined-usage-summary.json")
+        reconcile(parts, combined["UsageSummary"]["report"])
+    assert [stage["stage"] for stage in manifest["stages"]] == (["correction"] if prior is not None else []) + ["precheck", "standalone"]
+    dump = directory / "standalone/cq-database.dump"
+    consumed[str(dump)] = hashlib.sha256(dump.read_bytes()).hexdigest()
+    consumed[str(directory / "assessment-bundle.json")] = hashlib.sha256(bundle_text.encode()).hexdigest()
+    return {"snapshot": current, "usage": combined, "attemptIds": sorted(ids), "dump": dump, "result": previous,
+            "assessment": assessment, "inputsSha256": consumed}
