@@ -14,6 +14,7 @@ trait LedgerService[F[_, _]] {
   def get(scope: Scope, id: ItemId): F[Throwable, ItemView]
   def search(scope: Scope, query: String, after: Option[ItemId], limit: Int): F[Throwable, ItemPage]
   def complete(scope: Scope, query: String, cursor: Int, limit: Int): F[Throwable, QueryAnalysis]
+  def termination(scope: Scope, roots: Set[ItemId], intent: TerminationIntent): F[Throwable, TerminationPreview]
   def workset(scope: Scope, roots: Set[ItemId], after: Option[ItemId], snapshot: Option[WorksetSnapshot], limit: Int): F[Throwable, WorksetPage]
   def history(scope: Scope, id: ItemId, before: Revision, limit: Int): F[Throwable, HistoryPage]
   def changes(scope: Scope, after: ChangeCursor, limit: Int): F[Throwable, ChangePage]
@@ -23,7 +24,7 @@ trait LedgerService[F[_, _]] {
 }
 
 object LedgerService {
-  final class Impl[F[+_, +_]: Error2](repository: LedgerRepository[F], clock: Clock, queries: QueryParser, completions: QueryCompleter, worksets: WorksetTraversal) extends LedgerService[F] {
+  final class Impl[F[+_, +_]: Error2](repository: LedgerRepository[F], clock: Clock, queries: QueryParser, completions: QueryCompleter, worksets: WorksetTraversal, terminationPlanner: TerminationPlanner) extends LedgerService[F] {
     import LedgerPolicy.*
 
     private def write(scope: Scope): Unit =
@@ -124,7 +125,27 @@ object LedgerService {
             }
             tx.edge(edge, present)
           }
+          invalid(!request.mutations.exists(_.isInstanceOf[Mutation.Terminate]) || request.mutations.size == 1,
+            "Termination must be the only mutation in its request")
           request.mutations.foreach {
+            case Mutation.Terminate(roots, intent, snapshot) =>
+              if (tx.cursor != snapshot.cursor) throw DomainFailure(Fault.Conflict("Termination graph changed; review a fresh preview"))
+              val preview = terminationPlanner.preview(tx, scope, roots, intent, now)
+              if (preview.snapshot != snapshot) throw DomainFailure(Fault.Conflict("Termination preview changed; review a fresh preview"))
+              if (!preview.plan.canApply) throw DomainFailure(Fault.Conflict("Termination preview has unresolved outcome or claim-owner conflicts"))
+              if (request.fences.toSet != preview.plan.claims.map(_.fence).toSet)
+                throw DomainFailure(Fault.StaleFence("Termination requires exactly the reviewed active claim fences"))
+              preview.plan.claims.foreach { reviewed =>
+                val claim = tx.claimById(reviewed.fence.claim).getOrElse(throw new IllegalStateException("Previewed claim disappeared inside transaction"))
+                tx.saveClaim(claim.copy(released = true))
+              }
+              preview.plan.entries.foreach { entry => entry.effect match {
+                case TerminationEffect.Change(status) =>
+                  val item = required(tx, scope, entry.item.id)
+                  expected(item, entry.item.revision)
+                  revise(item, item.draft.copy(content = terminationPlanner.applyStatus(item.draft.content, status)), None)
+                case _ => ()
+              }}
             case Mutation.Create(draft) =>
               validateDraft(draft, Nil)
               if (touched.size >= MaxTouchedItems) throw DomainFailure(Fault.Limit(s"A change touches at most $MaxTouchedItems items"))
@@ -171,6 +192,9 @@ object LedgerService {
 
     override def complete(scope: Scope, query: String, cursor: Int, limit: Int): F[Throwable, QueryAnalysis] =
       repository.transact(scope.project)(tx => completions.complete(tx, query, cursor, limit))
+
+    override def termination(scope: Scope, roots: Set[ItemId], intent: TerminationIntent): F[Throwable, TerminationPreview] =
+      repository.transact(scope.project)(tx => terminationPlanner.preview(tx, scope, roots, intent, clock.millis()))
 
     override def workset(scope: Scope, roots: Set[ItemId], after: Option[ItemId], snapshot: Option[WorksetSnapshot], limit: Int): F[Throwable, WorksetPage] =
       repository.transact(scope.project)(tx => worksets.page(tx, roots, after, snapshot, limit))

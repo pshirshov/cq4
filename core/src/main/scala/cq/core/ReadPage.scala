@@ -8,7 +8,7 @@ final case class ReadPage[A](entries: List[A], hasMore: Boolean)
 
 object ReadPage {
   val MaxBytes = 512 * 1024
-  private val EnvelopeBytes = 1024
+  private[core] val EnvelopeBytes = 1024
 
   def select[A](source: Iterator[A], limit: Int, codec: BaboonJsonCodec[A]): ReadPage[A] = {
     require(limit > 0 && limit <= LedgerPolicy.MaxPage, "Repository page limit invariant")

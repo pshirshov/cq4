@@ -10,25 +10,24 @@ object WorksetTraversal {
   val MaxItems = 1024
 }
 
+final case class WorksetGraph(entries: List[WorksetEntry], snapshot: WorksetSnapshot, references: Map[ItemId, List[ItemRef]])
+
 final class WorksetTraversal {
   import LedgerPolicy.{invalid, key}
   import WorksetTraversal.*
 
-  def page(tx: LedgerTransaction, roots: Set[ItemId], after: Option[ItemId], snapshot: Option[WorksetSnapshot], limit: Int): WorksetPage = {
+  def collect(tx: LedgerTransaction, roots: Set[ItemId], snapshot: Option[WorksetSnapshot]): WorksetGraph = {
     def inScope(id: ItemId): Unit = {
       if (id.project != tx.project.id) throw DomainFailure(Fault.Denied("Workset item belongs to another project"))
       invalid(id.number > 0, "Item number must be positive")
     }
     invalid(roots.size <= MaxRoots, s"A workset accepts at most $MaxRoots roots")
-    invalid(limit > 0 && limit <= LedgerPolicy.MaxPage, s"Page size must be 1–${LedgerPolicy.MaxPage}")
     roots.foreach(inScope)
-    after.foreach(inScope)
-    invalid(after.isEmpty || snapshot.nonEmpty, "Workset continuation requires its snapshot")
     val identity = tx.project.id.value.toString + roots.toList.sortBy(key).map(id => s"\n${id.ledger}/${id.number}").mkString
     val hash = MessageDigest.getInstance("SHA-256").digest(identity.getBytes(UTF_8)).map(b => f"${b & 0xff}%02x").mkString
     val current = WorksetSnapshot(tx.cursor, hash)
     snapshot.foreach { previous =>
-      invalid(previous.rootsHash == hash, "Workset roots differ from the continuation snapshot")
+      invalid(previous.rootsHash == current.rootsHash, "Workset roots differ from the continuation snapshot")
       if (previous.cursor != current.cursor) throw DomainFailure(Fault.Resync("Workset changed; restart traversal"))
     }
 
@@ -55,7 +54,6 @@ final class WorksetTraversal {
       }
     }
     visited.foreach(summary)
-    invalid(after.forall(visited.contains), "Workset continuation item is outside this selection")
     val context = mutable.Map.empty[ItemId, List[WorksetReason]]
     selected.toList.sortBy(key).foreach { id =>
       references(id).foreach { ref =>
@@ -78,8 +76,21 @@ final class WorksetTraversal {
         WorksetEntry(item, WorksetRole.Selected, roots.contains(id), state.isEmpty && blocked.isEmpty, state ++ blocked ++ shared)
       }
     }
-    val page = ReadPage.select(entries.iterator.filter(entry => after.forall(id => Ordering[(String, Long)].gt(key(entry.item.id), key(id)))), limit, WorksetEntry_JsonCodec)
-    WorksetPage(page.entries, current, page.entries.lastOption.map(_.item.id), page.hasMore,
-      selected.size, visited.size - selected.size, entries.count(_.ready))
+    WorksetGraph(entries, current, references.toMap)
+  }
+
+  def page(tx: LedgerTransaction, roots: Set[ItemId], after: Option[ItemId], snapshot: Option[WorksetSnapshot], limit: Int): WorksetPage = {
+    invalid(limit > 0 && limit <= LedgerPolicy.MaxPage, s"Page size must be 1–${LedgerPolicy.MaxPage}")
+    after.foreach { id =>
+      if (id.project != tx.project.id) throw DomainFailure(Fault.Denied("Workset item belongs to another project"))
+      invalid(id.number > 0, "Item number must be positive")
+    }
+    invalid(after.isEmpty || snapshot.nonEmpty, "Workset continuation requires its snapshot")
+    val graph = collect(tx, roots, snapshot)
+    invalid(after.forall(id => graph.entries.exists(_.item.id == id)), "Workset continuation item is outside this selection")
+    val page = ReadPage.select(graph.entries.iterator.filter(entry => after.forall(id => Ordering[(String, Long)].gt(key(entry.item.id), key(id)))), limit, WorksetEntry_JsonCodec)
+    val selected = graph.entries.count(_.role == WorksetRole.Selected)
+    WorksetPage(page.entries, graph.snapshot, page.entries.lastOption.map(_.item.id), page.hasMore,
+      selected, graph.entries.size - selected, graph.entries.count(_.ready))
   }
 }

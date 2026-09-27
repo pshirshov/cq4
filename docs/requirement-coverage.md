@@ -29,7 +29,7 @@ Requirements: [R01–R31](drafts/20260926-0957-cq-requirements-prompt.md). Miles
 | R23 Query editor | M3, M5 | In progress | [Cursor-aware metadata](validation/m3-query-completion.md) implemented; browser currently preserves submitted queries and positioned diagnostics. Popup, keyboard selection and full editor interaction remain M5 work |
 | R24 Three panes | M5 | Not started | — |
 | R25 Correction/reopening | M1, M4 | In progress | No transition gates; archive/status correction and content restoration pass; readiness/review applicability remains; [increment evidence](validation/m1-core.md) |
-| R26 Termination | M3 | Not started | — |
+| R26 Termination | M3 | Implemented; M3 review pending | [Preview/apply contract](design/termination.md) independently reviewed; typed mappings, protected selection, claim effects and atomic idempotent application implemented; [98 fast / 52 PostgreSQL scenarios, contracts, actual clients/processes and sampled access](validation/m3-termination.md) pass after two reproduced corrections; Astra approved the R26 increment |
 | R27 Claims/integration | M1, M3 | In progress | Atomic sets, monotonic fences, expiry, renewal/release foundation; retained release-retry regression; isolated detached workspaces, ownership and quarantine pass real Git checks; integration remains; [workspace evidence](validation/m1-workspaces.md); [increment evidence](validation/m1-core.md) |
 | R28 Roles | M2, M4 | In progress | Installed Worker implement/probe/conflict and Reviewer candidate instructions now execute through [local dispatch](validation/m2-local-dispatch.md); Explorer, Planner and complete process-specific modes remain M4 |
 | R29 Commands | M2, M4 | Not started | — |

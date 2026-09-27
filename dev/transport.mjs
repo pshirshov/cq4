@@ -165,6 +165,23 @@ assert.equal(graphPage.entries[0].root, true);
 const nextGraph = await client.callTool({ name: 'graph', arguments: { ...graphInput, after: graphPage.after, snapshot: graphPage.snapshot } });
 assert.deepEqual(nextGraph.structuredContent.Workset.page.entries.map(value => value.item.id), [child.id]);
 assert.equal(nextGraph.structuredContent.Workset.page.hasMore, false);
+const terminationRead = { project: first, selection: { Termination: { roots: [item.id], intent: 'Cancel' } } };
+const httpPreview = (await call({ Read: { input: terminationRead } }, headers)).Termination.preview;
+const mcpPreview = await client.callTool({ name: 'read', arguments: terminationRead });
+assert.deepEqual(mcpPreview.structuredContent.Termination.preview, httpPreview);
+assert.equal(httpPreview.plan.canApply, true);
+assert.equal(httpPreview.plan.entries.filter(entry => entry.effect.Change).length, 2);
+const terminationChange = { project: first, change: { request: id(), reason: 'Reviewed client termination', fences: [],
+  mutations: [{ Terminate: { roots: [item.id], intent: 'Cancel', snapshot: httpPreview.snapshot } }] } };
+assert.ok((await call({ Change: { input: terminationChange } }, worker)).Failed.fault.Denied);
+const terminationResult = await client.callTool({ name: 'change', arguments: terminationChange });
+assert.equal(terminationResult.structuredContent.Changed.ack.items.length, 2);
+assert.deepEqual(await call({ Change: { input: terminationChange } }, headers), terminationResult.structuredContent);
+const cancelledDetail = await client.callTool({ name: 'read', arguments: read(first) });
+assert.equal(cancelledDetail.structuredContent.Detail.view.item.draft.content.Task.status, 'Cancelled');
+const cancelledHistory = await call({ Read: { input: { project: first, selection: { History: { id: item.id,
+  before: { value: '9223372036854775807' }, limit: 20 } } } } }, headers);
+assert.equal(cancelledHistory.History.page.entries[0].reason, terminationChange.change.reason);
 const attempts = await client.callTool({ name: 'usage', arguments: { project: first, selection: { Attempts: { filter: { ProjectAll: {} }, after: null, snapshot: null, limit: 20 } } } });
 assert.deepEqual(attempts.structuredContent.UsageAttempts.page.entries, []);
 const costs = await client.callTool({ name: 'usage', arguments: { project: first, selection: { Costs: { filter: { ProjectAll: {} }, after: null, snapshot: null, limit: 20 } } } });

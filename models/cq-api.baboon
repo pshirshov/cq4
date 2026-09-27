@@ -39,7 +39,7 @@ root data Project { id: ProjectId name: str revision: Revision createdAt: i64 }
 
 enum MilestoneStatus { Open Complete Cancelled }
 enum IdeaStatus { Proposed Accepted Declined Withdrawn }
-enum DefectStatus { Open Resolved NotReproducible Rejected }
+enum DefectStatus { Open Resolved NotReproducible Rejected Withdrawn }
 enum GoalStatus { Open Achieved Abandoned }
 enum TaskStatus { Ready Active Done Cancelled }
 enum ResearchStatus { Open Active Concluded Inconclusive Cancelled }
@@ -85,7 +85,42 @@ root data ItemView { item: Item refs: lst[ItemRef] }
 root data HistoryEntry { item: ItemView cursor: ChangeCursor reason: str schemaVersion: str }
 root data Fence { claim: ClaimId generation: i64 }
 root data Claim { fence: Fence owner: Actor members: set[ItemId] expiresAt: i64 released: bit }
+enum TerminationIntent { Cancel Complete }
+root adt TerminalStatus {
+  data Milestone { value: MilestoneStatus }
+  data Idea { value: IdeaStatus }
+  data Defect { value: DefectStatus }
+  data Goal { value: GoalStatus }
+  data Task { value: TaskStatus }
+  data Research { value: ResearchStatus }
+  data Hypothesis { value: HypothesisStatus }
+  data Question { value: QuestionStatus }
+  data Decision { value: DecisionStatus }
+  data Review { value: ReviewStatus }
+  data Handoff { value: HandoffStatus }
+  data OperatorAction { value: OperatorActionStatus }
+  data Memory { value: MemoryStatus }
+  data Upstream { value: UpstreamStatus }
+}
+root adt TerminationExclusion {
+  data Context { source: ItemId relation: Relation }
+  data Shared { producer: ItemId }
+  data Prerequisite { consumer: ItemId }
+  data ExcludedBranch {}
+}
+root adt TerminationEffect {
+  data Change { status: TerminalStatus }
+  data Preserve {}
+  data Excluded { reasons: lst[TerminationExclusion] }
+  data Unsupported { message: str }
+}
+root data TerminationEntry { item: ItemSummary effect: TerminationEffect }
+root data TerminationClaim { fence: Fence owner: Actor members: lst[ItemId] affected: lst[ItemId] permitted: bit }
+root data TerminationPlan { roots: lst[ItemId] intent: TerminationIntent entries: lst[TerminationEntry] claims: lst[TerminationClaim] canApply: bit }
+root data TerminationSnapshot { cursor: ChangeCursor digest: str }
+root data TerminationPreview { plan: TerminationPlan snapshot: TerminationSnapshot }
 root adt Mutation {
+  data Terminate { roots: set[ItemId] intent: TerminationIntent snapshot: TerminationSnapshot }
   data Create { draft: ItemDraft }
   data Replace { id: ItemId expected: Revision draft: ItemDraft }
   data Reference { source: ItemId expectedSource: Revision relation: Relation target: ItemId expectedTarget: Revision present: bit }
@@ -228,6 +263,7 @@ root data ProjectConfig { project: ProjectId endpoint: str name: str }
 root data SearchInput { project: ProjectId query: str after: opt[ItemId] snapshot: opt[ChangeCursor] limit: i32 }
 root data GraphInput { project: ProjectId roots: set[ItemId] after: opt[ItemId] snapshot: opt[WorksetSnapshot] limit: i32 }
 root adt ReadSelection {
+  data Termination { roots: set[ItemId] intent: TerminationIntent }
   data QueryComplete { query: str cursor: i32 limit: i32 }
   data ArtifactInfo { id: ArtifactId }
   data ArtifactText { id: ArtifactId offset: i32 limit: i32 }
@@ -263,6 +299,7 @@ root adt Command {
   data Usage { input: UsageInput }
 }
 root adt Result {
+  data Termination { preview: TerminationPreview }
   data Workset { page: WorksetPage }
   data QueryAnalyzed { analysis: QueryAnalysis }
   data ArtifactInfo { metadata: ArtifactMetadata }

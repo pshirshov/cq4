@@ -12,7 +12,7 @@ The schema lists exact required, optional and collection fields. Every content b
 | --- | --- | --- | --- |
 | milestones/M | objective | Complete, Cancelled | Complete |
 | ideas/I | outcome, motivation | Accepted, Declined, Withdrawn | Accepted |
-| defects/D | severity, observed, expected, reproduction, optional cause, resolution evidence | Resolved, NotReproducible, Rejected | Resolved |
+| defects/D | severity, observed, expected, reproduction, optional cause, resolution evidence | Resolved, NotReproducible, Rejected, Withdrawn | Resolved |
 | goals/G | outcome, acceptance, scope | Achieved, Abandoned | Achieved |
 | tasks/T | acceptance, optional result, validation evidence | Done, Cancelled | Done |
 | researches/RS | question, findings, optional conclusion/recommendation | Concluded, Inconclusive, Cancelled | Concluded |
@@ -54,3 +54,5 @@ Only Human/Governor service scopes may mutate ledgers or claims. Authenticated s
 Claims atomically cover explicit sets of 1–64 existing items. The owner includes subject, session and role. Leases last at most five minutes and use monotonically increasing project fences. Overlapping active claims are rejected as a set; no partial acquisition remains. An active claim requires its owner and fence on edits. An explicitly supplied expired/released/replaced fence is rejected even if the item is otherwise unclaimed. Ordinary authorized corrections can proceed after a claim ends without supplying a stale job fence.
 
 Claim identity retries return the original active claim. Renewal checks ownership and expiry. Release replay does not rewrite membership, preventing an old release from displacing a new owner. A new acquisition after expiry/release needs a new claim identity. Producer/descendant coordination, takeover, host result admission, cancellation, filesystem isolation and Git integration are later work; these server checks alone do not fence OS processes.
+
+Whole-subgraph [termination](termination.md) uses the same transactional change journal and typed status policy. Its preview preserves factual artifacts, exposes exclusions and claim effects, and applies only the reviewed snapshot. It does not add a transition gate to ordinary corrections.

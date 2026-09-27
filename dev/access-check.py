@@ -118,6 +118,10 @@ COMMIT;
             workset = self.measured(f"{size}-graph", {"Graph": {"input": {"project": project,
                 "roots": [first], "after": None, "snapshot": None, "limit": 20}}})["Workset"]["page"]
             assert workset["selectedCount"] == 1 and workset["contextCount"] == 1 and not workset["hasMore"]
+            preview = self.measured(f"{size}-termination-preview", {"Read": {"input": {"project": project,
+                "selection": {"Termination": {"roots": [first], "intent": "Cancel"}}}}})["Termination"]["preview"]
+            assert preview["plan"]["canApply"] and len(preview["plan"]["entries"]) == 2
+            assert len([entry for entry in preview["plan"]["entries"] if "Change" in entry["effect"]]) == 1
             invariant = self.sql("""SELECT count(*), count(*) FILTER (WHERE revision <> 1) FROM cq_items WHERE number > 1000;
 SELECT count(*) FROM cq_history WHERE number > 1000;
 SELECT count(*) FROM cq_changes;
@@ -219,7 +223,7 @@ def report(evidence: Path):
             assert row["scanVisits"] <= MAX_COMPLETION_VISITS, row
         if row["name"].endswith("-search-reference") and not row["name"].startswith("100-"):
             assert row["scanVisits"] <= MAX_MUTATION_VISITS, row
-        if row["name"].endswith("-graph"):
+        if row["name"].endswith(("-graph", "-termination-preview")):
             visit_limit = MAX_SMALL_TABLE_VISITS if row["name"].startswith("100-") else MAX_MUTATION_VISITS
             assert row["scanVisits"] <= visit_limit and row["statements"] <= 8 and row["responseBytes"] < 4096, row
             selected = json.loads((evidence / (row["name"] + "-plans.json")).read_text())

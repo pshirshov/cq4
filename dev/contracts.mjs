@@ -86,9 +86,9 @@ for (const [tag, schema] of Object.entries(reports)) {
 }
 const guides = JSON.parse(await readFile(`${directory}/native-guides.json`, 'utf8'));
 for (const [role, guide] of Object.entries(guides)) {
-  assert.deepEqual(Object.keys(guide.tools).sort(), role === 'Governor' ? ['cq.change', 'cq.usage', 'cq_host.dispatch'] : ['cq.usage']);
+  assert.deepEqual(Object.keys(guide.tools).sort(), role === 'Governor' ? ['cq.change', 'cq.read', 'cq.usage', 'cq_host.dispatch'] : ['cq.read', 'cq.usage']);
   for (const [name, schema] of Object.entries(guide.tools)) {
-    const type = { 'cq.change': 'ChangeInput', 'cq.usage': 'UsageInput', 'cq_host.dispatch': 'DispatchCommand' }[name];
+    const type = { 'cq.read': 'ReadInput', 'cq.change': 'ChangeInput', 'cq.usage': 'UsageInput', 'cq_host.dispatch': 'DispatchCommand' }[name];
     assert.deepEqual(schema, definitions[`cq_api_${type}`]);
     for (const [key, value] of Object.entries(guide.$defs)) assert.deepEqual(value, definitions[key]);
     const sample = fixture(schema, guide.$defs);

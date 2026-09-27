@@ -153,6 +153,9 @@ abstract class WorksetContractTest extends SpecZIO with AssertZIO {
         full <- graph(service, owner, Set(ids.head))
         _ <- assertIO(full.selectedCount == 7 && full.contextCount == WorksetTraversal.MaxItems - 7 && full.hasMore)
         _ <- link(service, owner, ids.head, Relation.RelatesTo, ids.last)
+        staleBound <- service.workset(owner, Set(ids.head), full.after, Some(full.snapshot), 200).either
+        _ <- ZIO.succeed(println(s"Stale traversal observation: $staleBound"))
+        _ <- assertIO(staleBound match { case Left(DomainFailure(_: Fault.Resync)) => true; case _ => false })
         overflow <- graph(service, owner, Set(ids.head)).either
         _ <- assertIO(overflow match { case Left(DomainFailure(_: Fault.Limit)) => true; case _ => false })
         _ <- service.initialize(bulky, "byte bound")
