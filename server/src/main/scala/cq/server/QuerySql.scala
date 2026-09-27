@@ -23,14 +23,15 @@ private[server] object QuerySql {
     case Project(value: UUID)
   }
 
-  def compile(query: QueryExpression): QuerySql = {
+  def compile(query: QueryExpression, scope: ProjectId): QuerySql = {
     val parameters = List.newBuilder[Parameter]
     def text(value: String): String = { parameters += Parameter.Text(value); "?" }
     def number(value: Long): String = { parameters += Parameter.Number(value); "?" }
     def reference(relation: Relation, item: QueryItem, reverse: Boolean): String = {
       val (source, target) = if (reverse) ("target", "source") else ("source", "target")
-      s"EXISTS (SELECT 1 FROM cq_edges e WHERE e.project_id = i.project_id AND e.${source}_ledger = i.ledger AND e.${source}_number = i.number " +
-        s"AND e.relation = ${text(relation.toString)} AND e.${target}_ledger = ${text(item.ledger.toString)} AND e.${target}_number = ${number(item.number)})"
+      parameters += Parameter.Project(scope.value)
+      s"SELECT e.${source}_ledger, e.${source}_number FROM cq_edges e WHERE e.project_id = ? " +
+        s"AND e.relation = ${text(relation.toString)} AND e.${target}_ledger = ${text(item.ledger.toString)} AND e.${target}_number = ${number(item.number)}"
     }
     def expression(value: QueryExpression): String = value match {
       case QueryExpression.All() => "TRUE"
@@ -45,7 +46,8 @@ private[server] object QuerySql {
       case QueryExpression.Archive(ArchiveFilter.Active) => "NOT i.archived"
       case QueryExpression.Archive(ArchiveFilter.Archived) => "i.archived"
       case QueryExpression.Archive(ArchiveFilter.All) => "TRUE"
-      case QueryExpression.Reference(relation, item) => s"(${reference(relation, item, false)} OR ${reference(LedgerPolicy.inverse(relation), item, true)})"
+      case QueryExpression.Reference(relation, item) =>
+        s"(i.ledger, i.number) IN (${reference(relation, item, false)} UNION ${reference(LedgerPolicy.inverse(relation), item, true)})"
       case QueryExpression.Not(inner) => s"NOT (${expression(inner)})"
       case QueryExpression.And(left, right) => s"(${expression(left)} AND ${expression(right)})"
       case QueryExpression.Or(left, right) => s"(${expression(left)} OR ${expression(right)})"

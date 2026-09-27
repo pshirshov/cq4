@@ -71,20 +71,31 @@ abstract class QueryContractTest extends SpecZIO with AssertZIO {
 
     "resolve every relation and inverse view including archived targets and symmetric references" in { (service: LedgerService[IO]) =>
       val owner = scope()
+      val other = scope()
       val relations = List(Relation.DerivedFrom, Relation.PartOf, Relation.BlockedBy, Relation.Reviews,
         Relation.Supports, Relation.Contradicts, Relation.Supersedes, Relation.RelatesTo)
       def field(relation: Relation): String = QueryCatalog.relations.find(_._2 == relation).get._1
       for {
         _ <- service.initialize(owner, "reference query")
+        _ <- service.initialize(other, "other reference query")
         source <- create(service, owner, draft("Review", "Evidence", Set.empty, false).copy(content = Content.Review(ReviewStatus.Pending, Nil, Some(Citation.Commit("consumer", "abc123")), Nil, None)))
         target <- create(service, owner, draft("Milestone", "Release", Set.empty, true).copy(content = Content.Milestone(MilestoneStatus.Open, "Release")))
+        otherSource <- create(service, other, draft("Review", "Evidence", Set.empty, false).copy(content = Content.Review(ReviewStatus.Pending, Nil, Some(Citation.Commit("consumer", "abc123")), Nil, None)))
+        otherTarget <- create(service, other, draft("Milestone", "Release", Set.empty, true).copy(content = Content.Milestone(MilestoneStatus.Open, "Release")))
         _ <- ZIO.foreachDiscard(relations) { relation => for {
+          currentOtherSource <- service.get(other, otherSource.id)
+          currentOtherTarget <- service.get(other, otherTarget.id)
+          _ <- change(service, other, List(Mutation.Reference(otherSource.id, currentOtherSource.item.revision, relation, otherTarget.id, currentOtherTarget.item.revision, true)))
           current <- service.get(owner, source.id)
           beforeTarget <- service.get(owner, target.id)
           _ <- change(service, owner, List(Mutation.Reference(source.id, current.item.revision, relation, target.id, beforeTarget.item.revision, true)))
           _ <- matches(service, owner, s"${field(relation)}:M1", List(source.id))
           _ <- matches(service, owner, s"${field(LedgerPolicy.inverse(relation))}:R1 archived:all", List(target.id))
           _ <- matches(service, owner, s"${field(LedgerPolicy.inverse(relation))}:R1", Nil)
+          _ <- matches(service, owner, s"(${field(relation)}:M1 OR ${field(LedgerPolicy.inverse(relation))}:R1) archived:all", List(source.id, target.id))
+          _ <- matches(service, owner, s"NOT ${field(relation)}:M1 archived:all", List(target.id))
+          _ <- matches(service, owner, s"${field(relation)}:M1 AND NOT ${field(LedgerPolicy.inverse(relation))}:R1 archived:all", List(source.id))
+          _ <- matches(service, owner, s"NOT (${field(relation)}:M1 OR ${field(LedgerPolicy.inverse(relation))}:R1) archived:all", Nil)
           updated <- service.get(owner, target.id)
           updatedSource <- service.get(owner, source.id)
           _ <- change(service, owner, List(Mutation.Reference(target.id, updated.item.revision, LedgerPolicy.inverse(relation), source.id, updatedSource.item.revision, false)))

@@ -81,9 +81,11 @@ class Checks:
         self.sbt([f"contracts/Test/runMain cq.contracts.ContractCheck verify {fixtures}"], "scala-contract-verify")
 
     @contextlib.contextmanager
-    def database(self):
+    def database(self, settings: list[str]):
         provided = self.environment.get("CQ_TEST_DATABASE_URL")
         if provided is not None:
+            if settings:
+                raise ValueError("This check requires an isolated local PostgreSQL cluster with measurement settings")
             parsed = urllib.parse.urlsplit(provided.removeprefix("jdbc:"))
             if parsed.scheme != "postgresql" or parsed.username is not None or parsed.query:
                 raise ValueError("Provided database URL must be postgresql://host:port/database; supply credentials separately")
@@ -105,6 +107,8 @@ class Checks:
                 data = Path(temporary) / "data"
                 port = free_port()
                 self.run(["initdb", "-D", str(data), "--auth=trust", "--encoding=UTF8", "--no-locale"], "database-init", STARTUP_TIMEOUT)
+                with (data / "postgresql.conf").open("a") as configuration:
+                    configuration.write("\n" + "\n".join(settings) + "\n")
                 self.run(["pg_ctl", "-D", str(data), "-l", str(self.evidence / "postgres.log"),
                           "-o", f"-h 127.0.0.1 -p {port} -k {temporary}", "-w", "start"], "database-start", STARTUP_TIMEOUT)
                 self.environment.update(CQ_DATABASE_URL=f"jdbc:postgresql://127.0.0.1:{port}/postgres",
@@ -185,7 +189,7 @@ class Checks:
     def postgres(self):
         self.generate()
         classpath = self.classpath()
-        with self.database():
+        with self.database([]):
             self.sbt(["server/testOnly *Postgres"], "postgres-contract")
             self.transport(["java", "-cp", classpath, "cq.server.Main"], "jvm", False)
             self.restart(["java", "-cp", classpath, "cq.server.Main"])
@@ -193,7 +197,7 @@ class Checks:
     def browser(self):
         self.generate()
         classpath = self.classpath()
-        with self.database():
+        with self.database([]):
             self.transport(["java", "-cp", classpath, "cq.server.Main"], "browser", True)
 
     def process(self):
@@ -207,13 +211,31 @@ class Checks:
         self.generate()
         self.sbt(["server/testOnly *Process"], "guardian-driver")
 
+    def access(self):
+        self.generate()
+        classpath = self.classpath()
+        settings = ["shared_preload_libraries = 'auto_explain'", "auto_explain.log_min_duration = 0",
+                    "auto_explain.log_analyze = on", "auto_explain.log_buffers = on", "auto_explain.log_wal = on",
+                    "auto_explain.log_timing = off", "auto_explain.log_format = 'json'",
+                    "auto_explain.log_parameter_max_length = 0", "logging_collector = on",
+                    "log_destination = 'jsonlog'", "log_filename = 'access.log'", "log_timezone = 'UTC'",
+                    "log_directory = '" + str(self.evidence.resolve()).replace("'", "''") + "'"]
+        with self.database(settings):
+            port = free_port()
+            self.environment.update(CQ_HOST="127.0.0.1", CQ_PORT=str(port), CQ_ORIGIN=f"http://127.0.0.1:{port}",
+                                    CQ_TOKEN=uuid.uuid4().hex, CQ_SESSION=str(uuid.uuid4()))
+            self.environment["CQ_DATABASE_URL"] += "?ApplicationName=cq-access"
+            with self.server(["java", "-cp", classpath, "cq.server.Main"], "access"):
+                self.run(["python3", "dev/access-check.py", "run", str(self.evidence)], "access-workload", COMMAND_TIMEOUT)
+        self.run(["python3", "dev/access-check.py", "report", str(self.evidence)], "access-report", STARTUP_TIMEOUT)
+
     def native(self):
         self.generate()
         classpath = self.classpath()
         config = self.evidence / "native-config"
         config.mkdir()
         binary = self.evidence / "cq"
-        with self.database():
+        with self.database([]):
             self.transport(["java", f"-agentlib:native-image-agent=config-output-dir={config}",
                             "-cp", classpath, "cq.server.Main"], "native-agent", False)
             self.run(["native-image", "--no-fallback", "-march=compatibility", "-O1", "-J-Xmx8g",
@@ -242,8 +264,8 @@ def generated_hashes():
 
 
 def main():
-    if len(sys.argv) != 2 or sys.argv[1] not in ["contracts", "fast", "postgres", "process", "browser", "native"]:
-        raise SystemExit("Usage: ./dev/check contracts|fast|postgres|process|browser|native")
+    if len(sys.argv) != 2 or sys.argv[1] not in ["contracts", "fast", "postgres", "process", "browser", "native", "access"]:
+        raise SystemExit("Usage: ./dev/check contracts|fast|postgres|process|browser|native|access")
     if shutil.which("java") is None or shutil.which("sbt") is None:
         os.chdir(ROOT)
         os.execvp("nix", ["nix", "develop", "-c", str(ROOT / "dev/check"), sys.argv[1]])

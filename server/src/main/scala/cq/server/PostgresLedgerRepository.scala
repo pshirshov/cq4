@@ -158,7 +158,7 @@ private final class PostgresLedgerTransaction(connection: Connection, override v
     }
 
   override def scan(query: QueryExpression, after: Option[ItemId], limit: Int): ReadPage[ItemSummary] = {
-    val compiled = QuerySql.compile(query)
+    val compiled = QuerySql.compile(query, project.id)
     val pagination = after.fold("")(_ => " AND (i.ledger, i.number) > (?, ?)")
     sql.page(s"SELECT i.summary::text FROM cq_items i WHERE i.project_id = ? AND (${compiled.predicate})$pagination ORDER BY i.ledger, i.number LIMIT ?", limit, ItemSummary_JsonCodec) { s =>
       projectKey(s)
