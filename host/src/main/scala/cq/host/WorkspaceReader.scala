@@ -50,6 +50,7 @@ final class WorkspaceReader {
         val next = offset + limit.min(count - offset)
         WorkspaceReply.Text(WorkspaceText(path, offset, next, next < count,
           text.substring(text.offsetByCodePoints(0, offset), text.offsetByCodePoints(0, next))))
+      case _: WorkspaceCommand.MergeReport => throw new IllegalArgumentException("Merge report requires a prepared resolver workspace")
     }
   }
 }

@@ -2,14 +2,16 @@ package cq.server
 
 import cq.api.*
 import cq.core.*
+import cq.host.*
 import distage.{Activation, DIKey}
 import distage.StandardAxis.Repo
 import izumi.distage.plugins.PluginConfig
 import izumi.distage.testkit.scalatest.{AssertZIO, SpecZIO}
 import java.io.IOException
+import java.nio.file.Files
 import java.time.{Clock, Instant, ZoneOffset}
 import java.util.UUID
-import zio.{IO, ZIO}
+import zio.{IO, Task, Unsafe, ZIO}
 
 abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
   override def config = super.config.copy(pluginConfig = PluginConfig.const(List(CqPlugin)),
@@ -17,7 +19,7 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
   private def uuid: UUID = UUID.randomUUID()
   private def task: ItemDraft = ItemDraft("Integration task", "Preserved narrative", Set("consumer"), false,
     Content.Task(TaskStatus.Ready, List("Exact reviewed behavior"), None, Nil), Nil)
-  private final case class Fixture(owner: Scope, collector: Scope, claim: Claim, items: List[Item], worker: ChildResult,
+  private final case class Fixture(owner: Scope, collector: Scope, governor: AttemptId, claim: Claim, items: List[Item], worker: ChildResult,
     reviewer: ChildResult, intent: IntegrationIntent) {
     def fresh: IntegrationIntent = {
       val id = IntegrationId(uuid)
@@ -64,7 +66,7 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
       change = IntegrationPolicy.completion(id, "/consumer", "refs/heads/integration", candidate, workerArtifact, reviewArtifact, List(validation.id), claim.fence, items)
       intent = IntegrationIntent(id, owner.project, owner.actor, "/consumer", "refs/heads/integration", worker.base, candidate,
         workerArtifact, reviewArtifact, List(check), claim.fence, created.items, change)
-    } yield Fixture(owner, collector, claim, items, worker, reviewer, intent)
+    } yield Fixture(owner, collector, parent.id, claim, items, worker, reviewer, intent)
   }
   private def reject[A](operation: IO[Throwable, A], accepts: Fault => Boolean): IO[Throwable, Unit] = operation.either.flatMap { value =>
     assertIO(value match { case Left(DomainFailure(fault)) => accepts(fault); case _ => false }).unit
@@ -79,6 +81,94 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
   }
 
   "Integration reservations (Behavioral Active Blackbox; dummy Group / PostgreSQL Good Communication)" should {
+    "freeze combination publication across lost acknowledgement and admit only the exact resolver under current authority" in {
+      (ledger: LedgerService[IO], repository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO],
+        admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO]) => for {
+        f <- begin(ledger, usage, artifacts, admissions)
+        runtime <- ZIO.runtime[Any]
+        _ <- integrations.reserve(f.collector, f.intent)
+        _ <- ZIO.attemptBlocking {
+          val clock = Clock.systemUTC()
+          val auth = new Authorization(AccessConfig("combination-contract-root-token", "http://localhost"), clock)
+          val root = auth.authenticate("combination-contract-root-token", Some(f.owner.actor.session.value.toString))
+          val application = new Application(ledger, repository, usage, artifacts, admissions, integrations, auth)
+          def execute[A](effect: Task[A]): A = Unsafe.unsafe { implicit unsafe => runtime.unsafe.run(effect).getOrThrowFiberFailure() }
+          final class Api(scope: Scope, lose: Boolean) extends ServerApi {
+            private val authority = auth.authenticate(auth.grant(root, GrantRequest(scope.project, scope.actor, clock.millis() + 300000)).value, None)
+            private var lost = !lose
+            override def call(value: Command): Result = execute(application.execute(authority, value))
+            override def artifact(value: ArtifactUpload): ArtifactMetadata = {
+              val result = execute(application.upload(authority, value))
+              if (!lost) { lost = true; throw new IOException("Lost combination publication acknowledgement") }
+              result
+            }
+            override def usage(value: HostUsageInput): HostUsageResult = throw new IllegalStateException("Combination cannot publish usage")
+            override def grant(value: GrantRequest): AccessToken = throw new IllegalStateException("Combination cannot grant authority")
+            override def admit(value: HostAdmissionInput): ResultAdmission = throw new IllegalStateException("Combination cannot admit a result")
+            override def integrate(value: HostIntegrationInput): IntegrationRecord = throw new IllegalStateException("Combination cannot integrate")
+          }
+          val governor = new Api(f.owner, false)
+          val collector = new Api(f.collector, false)
+          val prepare = new CombinationPreparation(governor, f.owner, f.governor, f.intent.repository, f.intent.target, clock)
+          val ticket = CombinationTicket(RequestId(uuid), f.intent.id, f.claim.fence)
+          var observations = 0
+          def observe(candidate: GitCommit): GitCommit = { assert(candidate == f.intent.candidate); observations += 1; GitCommit("c" * 40) }
+          intercept[IllegalArgumentException](prepare.prepare(ticket, observe))
+          assert(observations == 0)
+          execute(integrations.observe(f.collector, f.intent.id, IntegrationObservation.NotApplied("Target advanced; old executor settled")))
+          val directory = Files.createTempDirectory("cq-combination-").resolve("combinations")
+          val publication = new CombinationPublication(directory, f.owner, f.governor, f.intent.repository, f.intent.target)
+          publication.retain(ticket)
+          val plan = publication.freeze(ticket)(prepare.prepare(ticket, observe))
+          assert(observations == 1 && plan.observedTarget == GitCommit("c" * 40))
+          intercept[IOException](publication.publish(ticket.id, new Api(f.collector, true)))
+          val originalMetadata = execute(artifacts.metadata(f.owner, CombinationPlans.artifact(plan)))
+          assert(publication.freeze(ticket)(throw new AssertionError("Replay must not observe a new target")) == plan)
+          assert(publication.publish(ticket.id, collector) == CombinationPlans.preview(plan))
+          assert(execute(artifacts.metadata(f.owner, CombinationPlans.artifact(plan))) == originalMetadata)
+          val reopened = new CombinationPublication(directory, f.owner, f.governor, f.intent.repository, f.intent.target)
+          assert(reopened.inventory == List(ticket.id) && reopened.publish(ticket.id, collector) == CombinationPlans.preview(plan))
+          intercept[IllegalArgumentException](reopened.retain(ticket.copy(source = IntegrationId(uuid))))
+          val request = f.worker.request.copy(request = RequestId(uuid), work = DispatchWork.Worker(WorkerMode.ResolveConflict),
+            previous = Some(f.intent.worker), artifacts = List(CombinationPlans.artifact(plan)))
+          val assembler = new InputAssembler(governor, f.owner, clock)
+          val input = assembler.assemble(request)
+          assert(prepare.consume(input).contains(plan))
+          List(DispatchWork.Worker(WorkerMode.Implement), DispatchWork.Worker(WorkerMode.Probe), DispatchWork.Reviewer()).foreach { work =>
+            intercept[IllegalArgumentException](prepare.consume(input.copy(request = request.copy(work = work))))
+          }
+          intercept[IllegalArgumentException](prepare.consume(input.copy(request = request.copy(previous = Some(f.intent.reviewer)))))
+          intercept[IllegalArgumentException](prepare.consume(input.copy(request = request.copy(members = request.members.take(1)))))
+          intercept[IllegalArgumentException](prepare.consume(input.copy(artifacts = input.artifacts ++ input.artifacts)))
+          val stored = input.artifacts.head
+          intercept[IllegalArgumentException](prepare.consume(input.copy(artifacts = List(stored.copy(metadata = stored.metadata.copy(
+            actor = stored.metadata.actor.copy(role = Role.Human)))))))
+          val anotherSession = f.owner.copy(actor = f.owner.actor.copy(session = SessionId(uuid)))
+          val foreign = new CombinationPreparation(new Api(anotherSession, false), anotherSession, AttemptId(uuid), f.intent.repository, f.intent.target, clock)
+          intercept[IllegalArgumentException](foreign.consume(input))
+          intercept[IllegalArgumentException](foreign.prepare(ticket, observe))
+          assert(prepare.consume(assembler.assemble(request.copy(artifacts = Nil))).isEmpty)
+          execute(ledger.release(f.owner, f.claim.fence))
+          assert(reopened.publish(ticket.id, collector) == CombinationPlans.preview(plan))
+          intercept[DomainFailure](prepare.consume(input))
+          val newer = execute(ledger.acquire(f.owner, ClaimId(uuid), f.claim.members, 300000))
+          intercept[DomainFailure](prepare.consume(input))
+          intercept[IllegalArgumentException](prepare.consume(input.copy(request = request.copy(fence = newer.fence))))
+          val newTicket = ticket.copy(id = RequestId(uuid), fence = newer.fence)
+          publication.retain(newTicket)
+          val fresh = publication.freeze(newTicket)(prepare.prepare(newTicket, _ => GitCommit("d" * 40)))
+          publication.publish(newTicket.id, collector)
+          val current = assembler.assemble(request.copy(fence = newer.fence, artifacts = List(CombinationPlans.artifact(fresh))))
+          assert(prepare.consume(current).contains(fresh) && fresh.observedTarget != plan.observedTarget && fresh.request.fence == newer.fence)
+          val item = f.items.head
+          execute(ledger.change(f.owner, ChangeRequest(RequestId(uuid), List(Mutation.Replace(item.id, item.revision,
+            item.draft.copy(body = "Changed requirements"))), List(newer.fence), "Revise")))
+          intercept[IllegalArgumentException](prepare.prepare(newTicket.copy(id = RequestId(uuid)), _ => throw new AssertionError("Changed revisions must precede target observation")))
+          intercept[IllegalArgumentException](assembler.assemble(current.request))
+        }
+      } yield ()
+    }
+
     "reserve the domain request identity even when an ordinary request touches only unrelated new items" in {
       (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO]) => for {
         f <- begin(ledger, usage, artifacts, admissions)

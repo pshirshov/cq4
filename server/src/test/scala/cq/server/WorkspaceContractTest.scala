@@ -27,7 +27,7 @@ final class DummyWorkspaceResource extends Lifecycle.LiftF[Task, WorkspaceFixtur
           case Some(value) =>
             if (value.spec != spec || value.admission != WorkspaceAdmission.Open || value.observed.isEmpty) throw DomainFailure(Fault.Conflict("Workspace cannot be reused"))
             value
-          case None => WorkspaceRecord(spec, "/dummy/" + spec.attempt.value, WorkspaceAdmission.Open, Some(WorkspaceObservation(spec.base, "/dummy/common", 1)), None)
+          case None => WorkspaceRecord(spec, "/dummy/" + spec.attempt.value, WorkspaceAdmission.Open, Some(WorkspaceObservation(spec.base, "/dummy/common", "/dummy/git/" + spec.attempt.value, 1)), None)
         }
         (value, records.updated(spec.attempt, value))
       } }

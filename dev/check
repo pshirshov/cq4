@@ -24,6 +24,7 @@ COMMAND_TIMEOUT = 600
 STARTUP_TIMEOUT = 60
 SHUTDOWN_TIMEOUT = 20
 DISPATCH_FIXTURE_TIMEOUT = 180
+COMBINATION_FIXTURE_TIMEOUT = 240
 
 
 class Checks:
@@ -172,6 +173,8 @@ class Checks:
             self.run(["python3", "dev/supervisor-check.py", *command], f"{name}-supervisor", STARTUP_TIMEOUT)
             self.environment["CQ_DISPATCH_EVIDENCE"] = str(self.evidence / f"{name}-dispatch")
             self.run(["python3", "dev/dispatch-check.py", *command], f"{name}-dispatch", DISPATCH_FIXTURE_TIMEOUT)
+            self.environment["CQ_COMBINATION_EVIDENCE"] = str(self.evidence / f"{name}-combination")
+            self.run(["python3", "dev/combination-check.py", *command], f"{name}-combination", COMBINATION_FIXTURE_TIMEOUT)
             self.environment["CQ_ADMISSION_EVIDENCE"] = str(self.evidence / f"{name}-admission")
             self.run(["python3", "dev/admission-check.py", *command], f"{name}-admission", DISPATCH_FIXTURE_TIMEOUT)
             self.run(["python3", "dev/dispatch-shutdown-check.py", *command], f"{name}-dispatch-shutdown", DISPATCH_FIXTURE_TIMEOUT)

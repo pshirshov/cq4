@@ -124,21 +124,23 @@ final class SupervisorJobs(config: SupervisorConfig, workspaces: WorkspaceServic
     }
   )
 
+object SupervisorProgram {
+  val Instructions = "Govern CQ through the exposed tools. Input identifies project, routes, limits, checks and human request. Select/create tasks and claim their exact members. " +
+    "Dispatch sequentially using item revisions and handles. The host assembles prompts, captures candidates and runs checks. Never read/compose child prompts or copy full results. Poll Status with waitMillis 20000; use compact outcomes and bounded artifact reads only for necessary drill-down. " +
+    "Pass the worker result handle as previous to a Reviewer with identical members and current fence; prefer another configured harness. Children cannot mutate CQ or integrate. " +
+    "With integrationTarget, PrepareIntegration using a fresh ID and accepted reviewer handle, poll IntegrationStatus, inspect its frozen preview, then Integrate that ID. Only Recorded establishes domain recording; reconcile Pending and inspect NotApplied. Without a target, report the retained reviewed candidate. " +
+    "After target advancement causes NotApplied, Combine a fresh ID, that integration ID and current full fence; poll CombinationStatus. Dispatch Worker ResolveConflict with Ready plan in artifacts, its worker as previous and exact preview members/fence. Obtain fresh validation and Reviewer from the new worker handle; omit the plan from reviewer artifacts. Integrate with a fresh ID. For PublicationPending, replay identical Combine or cq job upload. " +
+    "Claim execution only with host evidence. Child completion/review acceptance does not establish final task acceptance. Return exactly {\"summary\":\"observed outcome and remaining work\"}."
+}
+
 final class SupervisorProgram(config: SupervisorConfig, registry: HarnessRegistry, jobs: JobSupervisor, authority: SupervisorAuthority,
-  local: LocalControlServer, access: LocalAccess, dispatch: DispatchController, integrations: IntegrationController, schemas: McpSchemas, output: HarnessOutput, clock: Clock, context: CliContext) {
+  local: LocalControlServer, access: LocalAccess, dispatch: DispatchController, integrations: IntegrationController, combinations: CombinationController,
+  schemas: McpSchemas, output: HarnessOutput, clock: Clock, context: CliContext) {
   private val MaxOutputBytes = 32 * 1024 * 1024
   private val MaxRecordBytes = 64 * 1024
   private val MaxSummaryCharacters = 8192
   private val MaxGaps = 32
   private val MaxGapCharacters = 300
-  private val Instructions = "You govern CQ work. Use CQ tools for domain state and only the capabilities exposed to this session. " +
-    "Your input names the attached project, configured routes, process limits, validation checks and human request. Create or select the required task records and claim their exact member set. " +
-    "Use the local dispatch tool to start a Worker using item revisions and handles only. The host owns prompt assembly, candidate capture and validation. Never read or compose child prompts or copy full results between children. " +
-    "Poll Status with waitMillis 20000. When a worker result is ready, pass its handle as previous to a Reviewer request with the same member revisions and current fence. Prefer another configured harness for independent review. " +
-    "Dispatch is sequential in this slice. Keep assignments distinct and use the compact status counts, next action and blockers. Explicit bounded CQ artifact reads are for necessary semantic drill-down. " +
-    "Children cannot write CQ ledgers or integrate candidates. You own those decisions. When integrationTarget is configured, use PrepareIntegration with a fresh ID and the accepted reviewer handle. Poll IntegrationStatus, inspect the compact frozen preview, then Integrate its ID. Only Recorded establishes domain recording; Pending requires reconciliation, and NotApplied requires inspecting the blocker. Without a target, report the retained reviewed candidate. " +
-    "Do not claim a process or validation ran unless its host evidence exists. A completed child or accepted review does not establish final task acceptance. " +
-    "Return exactly a JSON object with one string field, summary, describing the observed outcome and remaining work."
 
   def run: Task[Unit] = {
     val attempt = config.run.attempt
@@ -154,7 +156,7 @@ final class SupervisorProgram(config: SupervisorConfig, registry: HarnessRegistr
         val input = HostFiles.encode(GoverningInput_JsonCodec, GoverningInput(config.project,
           config.settings.harnesses.map(value => HarnessRoute(value.harness, value.model, value.provider)), config.settings.checks.map(_.name), config.settings.limits, config.settings.integrationTarget, config.input))
         val invocation = schemas.nativeInvocation(attempt.harness,
-          HarnessInvocation(Role.Governor, attempt.id, Instructions, schemas.schema("GoverningReport"),
+          HarnessInvocation(Role.Governor, attempt.id, SupervisorProgram.Instructions, schemas.schema("GoverningReport"),
             List(HarnessMcp(McpTarget.Domain, config.endpoint.resolve("/mcp"), authority.governorToken),
               HarnessMcp(McpTarget.Local, local.endpoint, access.issue(attempt.id, Role.Governor))), assets))
         val queue = new DeliveryQueue(config.directory.resolve("delivery"))
@@ -173,7 +175,7 @@ final class SupervisorProgram(config: SupervisorConfig, registry: HarnessRegistr
       (collector, queue, command) = prepared
       _ <- jobs.start(config.owner, WorkspaceSpec(project, attempt.session, attempt.id, config.run.repository, config.run.base), command)
       record <- jobs.await(config.owner, attempt.id)
-      _ <- integrations.shutdown.zipPar(dispatch.shutdown)
+      _ <- integrations.shutdown.zipPar(combinations.shutdown).zipPar(dispatch.shutdown)
       receipt <- ZIO.attemptBlocking {
         val stdout = if (Files.exists(payload.resolve("stdout"))) HostFiles.bytes(payload.resolve("stdout"), MaxOutputBytes) else Array.emptyByteArray
         val stderr = if (Files.exists(payload.resolve("stderr"))) HostFiles.bytes(payload.resolve("stderr"), MaxOutputBytes) else Array.emptyByteArray
@@ -240,6 +242,7 @@ object SupervisorPlugin extends PluginDef {
     make[ChildRunner]
     make[DispatchController].fromResource[DispatchController.Resource]
     make[IntegrationController].fromResource[IntegrationController.Resource]
+    make[CombinationController].fromResource[CombinationController.Resource]
     make[LocalControl]
     make[LocalControlServer].fromResource[LocalControlServer.Resource]
     make[SupervisorProgram]

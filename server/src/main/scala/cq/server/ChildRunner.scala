@@ -57,7 +57,17 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
     record <- workspaces.get(config.owner, entry.ticket.attempt.id)
     result <- ZIO.attemptBlocking {
       require(record.admission == WorkspaceAdmission.Open && record.observed.nonEmpty, "Workspace is unavailable or quarantined")
-      reader(Path.of(record.directory), command)
+      command match {
+        case WorkspaceCommand.MergeReport(offset, limit) =>
+          require(entry.ticket.request.work == DispatchWork.Worker(WorkerMode.ResolveConflict), "Only a combination resolver has a merge report")
+          val plan = HostFiles.read(entry.directory.resolve("combination.json"), CombinationPlan_JsonCodec, CombinationPlans.MaxBytes)
+          require(plan.request.fence == entry.ticket.request.fence && plan.worker == entry.ticket.request.previous.get &&
+            plan.members == entry.ticket.request.members, "Merge report belongs to another assignment")
+          val assets = entry.directory.resolve("assets")
+          require(Set("0\n", "1\n")(HostFiles.text(assets.resolve("merge-ready"), 2)), "Merge diagnostics are unavailable or incomplete")
+          reader(assets, WorkspaceCommand.Read("merge.log", offset, limit))
+        case value => reader(Path.of(record.directory), value)
+      }
     }
   } yield result
 
@@ -80,8 +90,12 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
           val ticket = entry.ticket
           val profile = SupervisorConfig.profile(ticket.profile)
           SupervisorConfig.verifyProfile(config, profile)
-          val base = input.previous.flatMap(_.candidate).getOrElse(config.run.base)
-          candidates.verifyBase(base)
+          val combination = if (input.artifacts.exists(_.metadata.kind == ArtifactKind.Combination)) {
+            val target = config.settings.integrationTarget.getOrElse(throw new IllegalArgumentException("No integration target configured"))
+            new CombinationPreparation(authority.governor, config.owner, config.run.attempt.id, config.run.repository, target, clock).consume(input)
+          } else None
+          val base = combination.map(_.observedTarget).orElse(input.previous.flatMap(_.candidate)).getOrElse(config.run.base)
+          if (combination.isEmpty) candidates.verifyBase(base)
           val prompt = instructions(ticket.request.work)
           val body = HostFiles.encode(ChildExecutionInput_JsonCodec, ChildExecutionInput(input, base, config.settings.checks))
           val domain = authority.root.grant(GrantRequest(config.project.project,
@@ -91,16 +105,23 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
           val invocation = schemas.nativeInvocation(profile.harness,
             HarnessInvocation(ticket.attempt.role, ticket.attempt.id, prompt, schemas.childReport(ticket.request.work),
               List(HarnessMcp(McpTarget.Domain, config.endpoint.resolve("/mcp"), domain), HarnessMcp(McpTarget.Local, access.endpoint, local)), assets))
-          val launched = registry(profile.harness).launch(profile, invocation, config.environment)
+          val native = registry(profile.harness).launch(profile, invocation, config.environment)
+          val launched = combination match {
+            case None => native
+            case Some(plan) =>
+              val prepared = new MergePreparation(Path.of(config.settings.guardian)).wrap(native, assets, candidates.mergeInputs(plan, ticket.attempt.id))
+              HostFiles.immutable(entry.directory.resolve("combination.json"), HostFiles.encode(CombinationPlan_JsonCodec, plan), CombinationPlans.MaxBytes)
+              prepared
+          }
           launched.install(assets)
           val artifacts = List(
             ArtifactUpload(config.project.project, NativeArtifacts.id(ticket.attempt.id, "input"), ticket.attempt.id, ArtifactKind.Input, "application/json", body),
             ArtifactUpload(config.project.project, NativeArtifacts.id(ticket.attempt.id, "prompt"), ticket.attempt.id, ArtifactKind.Prompt, "text/markdown", invocation.system))
           queue.enqueue(1, DeliveryBatch(artifacts.map(HostDelivery.Artifact.apply)))
           queue.flush(authority.collector)
-          (base, JobCommand(launched.arguments, launched.environment, body, SupervisorConfig.limits(ticket.request.limits)))
+          (base, JobCommand(launched.arguments, launched.environment, body, SupervisorConfig.limits(ticket.request.limits)), combination)
         }
-        (base, command) = prepared
+        (base, command, combination) = prepared
         _ <- ZIO.succeed(entry.phase(DispatchPhase.Running))
         native <- launch(entry, entry.ticket.attempt.id, base, command)
         _ <- trace.update(_.copy(native = Some(native)))
@@ -119,7 +140,10 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
           case ChildReport.Work(members) if members.exists(_.disposition == WorkDisposition.CandidateReady) =>
             workspaces.get(config.owner, entry.ticket.attempt.id).flatMap { workspace => ZIO.attemptBlocking {
               entry.check()
-              val commit = candidates.capture(workspace)
+              combination.foreach { _ =>
+                require(Set("0\n", "1\n")(HostFiles.text(entry.directory.resolve("assets/merge-ready"), 2)), "Merge preparation was not confirmed")
+              }
+              val commit = candidates.capture(workspace, combination)
               HostFiles.immutable(entry.directory.resolve("candidate.json"), HostFiles.encode(GitCommit_JsonCodec, commit), 1024)
               Some(commit)
             }}

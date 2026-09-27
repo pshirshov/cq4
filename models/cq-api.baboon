@@ -372,10 +372,10 @@ root adt ServerFrame {
 root id GitCommit { value: str }
 root data WorkspaceSpec { project: ProjectId owner: SessionId attempt: AttemptId repository: str base: GitCommit }
 enum WorkspaceAdmission { Open Quarantined }
-root data WorkspaceObservation { head: GitCommit gitCommon: str verifiedAt: i64 }
+root data WorkspaceObservation { head: GitCommit gitCommon: str gitDirectory: str verifiedAt: i64 }
 root data WorkspaceRecord { spec: WorkspaceSpec directory: str admission: WorkspaceAdmission observed: opt[WorkspaceObservation] quarantineReason: opt[str] }
 
-enum ArtifactKind { Prompt Input Result Transcript Validation }
+enum ArtifactKind { Prompt Input Result Transcript Validation Combination }
 root data ArtifactUpload { project: ProjectId id: ArtifactId attempt: AttemptId kind: ArtifactKind mediaType: str body: str }
 root data ArtifactMetadata { project: ProjectId id: ArtifactId attempt: AttemptId kind: ArtifactKind mediaType: str sha256: str bytes: i32 codePoints: i32 actor: Actor receivedAt: i64 }
 root data ArtifactPage { metadata: ArtifactMetadata offset: i32 next: i32 hasMore: bit text: str }
@@ -473,6 +473,14 @@ enum IntegrationPhase { Preparing Ready Running Pending Recorded NotApplied Fail
 enum IntegrationNext { Wait Confirm Reconcile InspectEvidence Complete }
 root data IntegrationStatus { id: IntegrationId phase: IntegrationPhase preview: opt[IntegrationPreview] next: IntegrationNext blocker: opt[str] }
 root data IntegrationLocal { intent: IntegrationIntent attempted: bit observation: opt[IntegrationObservation] }
+root data CombinationTicket { id: RequestId source: IntegrationId fence: Fence }
+root data CombinationPlan {
+  request: CombinationTicket project: ProjectId owner: Actor governor: AttemptId repository: str target: str
+  observedTarget: GitCommit candidate: GitCommit worker: ArtifactId members: lst[ItemRevision]
+}
+root data CombinationPreview { plan: ArtifactId worker: ArtifactId members: lst[ItemRevision] fence: Fence target: GitCommit }
+enum CombinationPhase { Preparing Ready PublicationPending Failed }
+root data CombinationStatus { id: RequestId phase: CombinationPhase preview: opt[CombinationPreview] blocker: opt[str] }
 root adt HostIntegration {
   data Reserve { intent: IntegrationIntent }
   data Observe { id: IntegrationId observation: IntegrationObservation }
@@ -502,15 +510,19 @@ root adt DispatchCommand {
   data PrepareIntegration { id: IntegrationId reviewer: ArtifactId }
   data Integrate { id: IntegrationId }
   data IntegrationStatus { id: IntegrationId waitMillis: i32 }
+  data Combine { id: RequestId source: IntegrationId fence: Fence }
+  data CombinationStatus { id: RequestId waitMillis: i32 }
 }
 root adt DispatchReply {
   data Status { value: DispatchStatus }
   data Integration { value: IntegrationStatus }
+  data Combination { value: CombinationStatus }
   data Failed { fault: Fault }
 }
 root adt WorkspaceCommand {
   data Entries { path: str after: opt[str] limit: i32 }
   data Read { path: str offset: i32 limit: i32 }
+  data MergeReport { offset: i32 limit: i32 }
 }
 enum WorkspaceEntryKind { File Directory Symlink }
 root data WorkspaceEntry { name: str kind: WorkspaceEntryKind }

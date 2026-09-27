@@ -186,6 +186,18 @@ final class MergePreparationProcess extends SpecZIO with AssertZIO {
       }
     }}
 
+    "reject a Git directory replaced during preparation even when top, common and HEAD match" in { (fixture: GuardianFixture) => ZIO.attemptBlocking {
+      val prepared = prepare(fixture, "clean")
+      val gitDirectory = Path.of(prepared.git(prepared.tree, "rev-parse", "--absolute-git-dir"))
+      val redirected = gitDirectory.resolveSibling("redirected")
+      val environment = injectGit(prepared, """"$CQ_TEST_REAL_GIT" "$@" || exit $?
+cp -R "$CQ_TEST_GIT_DIRECTORY" "$CQ_TEST_REDIRECTED_DIRECTORY"
+printf 'gitdir: %s\n' "$CQ_TEST_REDIRECTED_DIRECTORY" > .git
+exit 0""") ++ Map("CQ_TEST_GIT_DIRECTORY" -> gitDirectory.toString, "CQ_TEST_REDIRECTED_DIRECTORY" -> redirected.toString)
+      val execution = spec(fixture, prepared, prepared.inputs, environment)
+      denied(prepared, execution, run(fixture, execution))
+    }}
+
     "cancel a running merge and settle its hierarchy without starting the native harness" in { (fixture: GuardianFixture) => ZIO.attemptBlocking {
       val prepared = prepare(fixture, "clean")
       val environment = injectGit(prepared, "printf 'started\\n' > \"$CQ_TEST_ASSETS/started\"\nsleep 30\nexit 1")

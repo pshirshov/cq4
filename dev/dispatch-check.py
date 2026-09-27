@@ -171,13 +171,32 @@ def main():
                 return json.load(response)
 
         assert read({"Integration": {"id": intent["id"]}})["Integration"]["record"]["resolution"] == {"Pending": {}}
-        recovery = run(["job", "upload", "--session", str(crash_session)])
+        incomplete_id = str(uuid.uuid4())
+        incomplete = crash_session / "combinations" / incomplete_id
+        incomplete.parent.mkdir(mode=0o700)
+        incomplete.mkdir(mode=0o700)
+        ticket = incomplete / "ticket.json"
+        ticket.write_text(json.dumps({"id": {"value": incomplete_id}, "source": intent["id"], "fence": intent["fence"]}))
+        ticket.chmod(0o600)
+
+        def recover_with_incomplete_plan():
+            result = subprocess.run(command + ["job", "upload", "--session", str(crash_session)], cwd=repository,
+                                    env=environment, capture_output=True, text=True, timeout=40)
+            (latch / "recovery.stdout").write_text(result.stdout)
+            (latch / "recovery.stderr").write_text(result.stderr)
+            assert result.returncode != 0 and "Unresolved" in result.stderr, result.stdout + result.stderr
+            resolution = read({"Integration": {"id": intent["id"]}})["Integration"]["record"]["resolution"]
+            assert "Recorded" in resolution, f"Incomplete combination blocked independent incorporation recovery: {resolution}"
+            assert ticket.exists() and not (incomplete / "plan.json").exists(), "Recovery prepared an unfrozen combination"
+            return result.stdout
+
+        recovery = recover_with_incomplete_plan()
         assert f'Integration {intent["id"]["value"]}: Recorded' in recovery
         recorded = read({"Integration": {"id": intent["id"]}})["Integration"]["record"]
         acknowledgement = recorded["resolution"]["Recorded"]["acknowledgement"]
         assert acknowledgement["request"] == intent["id"]
         assert acknowledgement["items"] == [{**member, "revision": {"value": str(int(member["revision"]["value"]) + 1)}} for member in intent["members"]]
-        replay = run(["job", "upload", "--session", str(crash_session)])
+        replay = recover_with_incomplete_plan()
         assert "Acknowledged 0" in replay and "Recorded" in replay
         assert read({"Integration": {"id": intent["id"]}})["Integration"]["record"] == recorded
         assert integration_job.read_bytes() == before_job

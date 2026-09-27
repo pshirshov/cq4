@@ -33,14 +33,40 @@ final class SessionUpload(context: CliContext, clock: Clock) {
         (collector, new SessionDelivery(journal, workspaces, clock))
       }
       (collector, delivery) = prepared
-      report <- delivery.flush(directory, run, collector)
-      _ <- integrations(directory, run, journal, collector)
-      _ <- ZIO.attempt {
+      delivered <- delivery.flush(directory, run, collector).flatMap { report => ZIO.attempt {
         context.output.println(s"Acknowledged ${report.acknowledged} pending delivery batches from $directory")
         report.incompleteTickets.foreach(path => context.output.println(s"Unresolved child ticket: $path; assignment and usage identity were never committed"))
         require(report.incompleteTickets.isEmpty, "Incomplete child tickets retained for inspection; valid publications were replayed")
+      }}.either
+      combined <- combinations(directory, run, collector).either
+      integrated <- integrations(directory, run, journal, collector).either
+      _ <- ZIO.attempt {
+        val failures = List("deliveries" -> delivered, "combinations" -> combined, "integrations" -> integrated)
+          .collect { case (phase, Left(error)) => (phase, error) }
+        if (failures.nonEmpty) {
+          val error = new IllegalStateException("Unresolved session recovery phases: " + failures.map(_._1).mkString(", "))
+          failures.foreach((_, cause) => error.addSuppressed(cause))
+          throw error
+        }
       }
     } yield ()
+  }
+
+  private def combinations(directory: Path, run: SupervisorRun, collector: ServerApi): Task[Unit] = ZIO.attemptBlocking {
+    val root = directory.resolve("combinations")
+    if (Files.exists(root)) {
+      val settings = HostFiles.read(directory.resolve("settings.json"), SupervisorSettings_JsonCodec, MaxRecordBytes)
+      val target = settings.integrationTarget.getOrElse(throw new IllegalArgumentException("Retained combination has no configured target"))
+      val owner = Scope(run.project.project, Actor("CQ governor", run.attempt.session, Role.Governor))
+      val publication = new CombinationPublication(root, owner, run.attempt.id, run.repository, target)
+      val results = publication.inventory.map { id =>
+        val result = scala.util.Try(publication.publish(id, collector))
+        result.fold(error => context.output.println(s"Combination ${id.value}: unresolved frozen publication (${error.getClass.getSimpleName})"),
+          preview => context.output.println(s"Combination ${id.value}: published frozen plan ${preview.plan.value}; execution requires its current claim"))
+        result.isSuccess
+      }
+      require(results.forall(identity), "Unresolved combinations retained; recovery did not prepare or launch work")
+    }
   }
 
   private def integrations(directory: Path, run: SupervisorRun, journal: JobRepository, collector: ServerApi): Task[Unit] = for {

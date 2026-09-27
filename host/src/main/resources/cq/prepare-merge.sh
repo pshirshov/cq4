@@ -26,14 +26,19 @@ verify_identity() {
     actual_common=$(git_cq rev-parse --path-format=absolute --git-common-dir) || fail 'repository is unavailable'
     actual_common=$(cd "$actual_common" && pwd -P) || fail 'repository path is unavailable'
     actual_head=$(git_cq rev-parse --verify HEAD) || fail 'HEAD is unavailable'
-    [ "$actual_top" = "$workspace" ] && [ "$actual_common" = "$common" ] && [ "$actual_head" = "$base" ] ||
-        fail 'worktree, repository or HEAD changed'
+    actual_git_directory=$(git_cq rev-parse --absolute-git-dir) || fail 'Git directory is unavailable'
+    actual_git_directory=$(cd "$actual_git_directory" && pwd -P) || fail 'Git directory path is unavailable'
+    [ "$actual_top" = "$workspace" ] && [ "$actual_common" = "$common" ] && [ "$actual_head" = "$base" ] &&
+        [ "$actual_git_directory" = "$git_directory" ] || fail 'worktree, Git directory, repository or HEAD changed'
 }
 
 [ "$(pwd -P)" = "$workspace" ] || fail 'incorrect working directory'
 for name in merge.log merge-status merge-ready; do
     [ -f "$assets/$name" ] && [ ! -L "$assets/$name" ] && [ ! -s "$assets/$name" ] || fail 'diagnostic asset is unavailable or reused'
 done
+git_directory=$(git_cq rev-parse --absolute-git-dir) || fail 'Git directory is unavailable'
+git_directory=$(cd "$git_directory" && pwd -P) || fail 'Git directory path is unavailable'
+[ "$git_directory" != "$common" ] || fail 'worktree requires its own Git directory'
 verify_identity
 merge_head=$(git_cq rev-parse --path-format=absolute --git-path MERGE_HEAD) || fail 'merge path is unavailable'
 [ ! -e "$merge_head" ] && [ ! -L "$merge_head" ] || fail 'workspace has an existing merge'

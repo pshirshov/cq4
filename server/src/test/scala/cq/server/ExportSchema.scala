@@ -17,12 +17,13 @@ object ExportSchema {
       "Review" -> schemas.childReport(DispatchWork.Reviewer()),
     ).noSpaces)
     val guides = List(Role.Governor, Role.Worker, Role.Reviewer).map { role =>
-      val invocation = HarnessInvocation(role, AttemptId(UUID.randomUUID()), "Role instructions", Json.obj(), List(
+      val invocation = HarnessInvocation(role, AttemptId(UUID.randomUUID()), (if (role == Role.Governor) SupervisorProgram.Instructions else "Role instructions"), Json.obj(), List(
         HarnessMcp(McpTarget.Domain, URI.create("http://127.0.0.1:1234/mcp"), AccessToken("fixture", 1)),
         HarnessMcp(McpTarget.Local, URI.create("http://127.0.0.1:1235/mcp"), AccessToken("fixture", 1))), Path.of("/fixture/assets"))
       assert(schemas.nativeInvocation(Harness.Claude, invocation) == invocation && schemas.nativeInvocation(Harness.Pi, invocation) == invocation)
       val prepared = schemas.nativeInvocation(Harness.Codex, invocation)
       assert(prepared.system.getBytes(java.nio.charset.StandardCharsets.UTF_8).length <= 32768)
+      println(s"$role native instructions: ${prepared.system.getBytes(java.nio.charset.StandardCharsets.UTF_8).length} UTF-8 bytes")
       role.toString -> parser.parse(prepared.system.linesIterator.toList.last).fold(throw _, identity)
     }
     Files.writeString(Path.of(args(0)).resolveSibling("native-guides.json"), Json.obj(guides*).noSpaces)

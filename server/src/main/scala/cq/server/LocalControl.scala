@@ -17,7 +17,8 @@ import java.nio.charset.StandardCharsets.UTF_8
 import zio.{Task, ZIO}
 import zio.interop.catz.*
 
-final class LocalControl(dispatch: DispatchController, integrations: IntegrationController, access: LocalAccess, schemas: McpSchemas, config: SupervisorConfig) extends Http4sDsl[Task] {
+final class LocalControl(dispatch: DispatchController, integrations: IntegrationController, combinations: CombinationController,
+  access: LocalAccess, schemas: McpSchemas, config: SupervisorConfig) extends Http4sDsl[Task] {
   private val Versions = List("2025-03-26", "2025-06-18", "2025-11-25")
   private val MaxRequestBytes = 65536
   private val Context = BaboonCodecContext.Default
@@ -32,8 +33,8 @@ final class LocalControl(dispatch: DispatchController, integrations: Integration
     "name" -> Json.fromString(name), "description" -> Json.fromString(description), "inputSchema" -> schemas.schema(input), "outputSchema" -> schemas.schema(output),
     "annotations" -> Json.obj("readOnlyHint" -> Json.fromBoolean(readOnly), "openWorldHint" -> Json.False))
   private def advertised(capability: LocalCapability): Json = if (capability.role == Role.Governor)
-    tool("dispatch", "DispatchCommand", "DispatchReply", "Start one child using references only, poll its compact status with a bounded wait, or cancel it. Prepare integration from an accepted reviewer handle, apply its frozen preview, and poll its compact outcome. Forward result handles directly to the next child; full prompts and results stay outside your context.", false)
-  else tool("workspace", "WorkspaceCommand", "WorkspaceReply", "List a bounded directory page or read a bounded Unicode text page in your assigned workspace. Relative paths only; Git metadata and symbolic-link traversal are denied.", true)
+    tool("dispatch", "DispatchCommand", "DispatchReply", "Start one child using references only, poll its compact status with a bounded wait, or cancel it. Prepare/apply reviewed integration; Combine a NotApplied integration into a frozen resolver plan and poll CombinationStatus. Forward handles directly; full prompts and results stay outside your context.", false)
+  else tool("workspace", "WorkspaceCommand", "WorkspaceReply", "List a bounded directory page or read a bounded Unicode text page in your assigned workspace. A prepared combination resolver may read MergeReport. Relative paths only; Git metadata and symbolic-link traversal are denied.", true)
   private def decode[A](codec: BaboonJsonCodec[A], json: Json): Task[A] = ZIO.attempt {
     val value = codec.decode(Context, json).fold(throw _, identity)
     require(codec.encode(Context, value) == json, "Local command contains undeclared or noncanonical fields")
@@ -53,6 +54,8 @@ final class LocalControl(dispatch: DispatchController, integrations: Integration
         case DispatchCommand.PrepareIntegration(id, reviewer) => integrations.prepare(IntegrationTicket(id, reviewer)).map(DispatchReply.Integration.apply)
         case DispatchCommand.Integrate(id) => integrations(id).map(DispatchReply.Integration.apply)
         case DispatchCommand.IntegrationStatus(id, wait) => integrations.status(id, wait).map(DispatchReply.Integration.apply)
+        case DispatchCommand.Combine(id, source, fence) => combinations.prepare(CombinationTicket(id, source, fence)).map(DispatchReply.Combination.apply)
+        case DispatchCommand.CombinationStatus(id, wait) => combinations.status(id, wait).map(DispatchReply.Combination.apply)
       }
       operation.map(value => (DispatchReply_JsonCodec.encode(Context, value), false))
         .catchAll(error => ZIO.succeed((DispatchReply_JsonCodec.encode(Context, DispatchReply.Failed(fault(error))), true)))

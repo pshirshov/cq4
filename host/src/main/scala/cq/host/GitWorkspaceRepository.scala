@@ -70,7 +70,9 @@ final class GitWorkspaceRepository(configuredRoot: Path, command: HostCommand, c
             val directory = Path.of(existing.directory)
             val top = Path.of(git(directory, "rev-parse", "--show-toplevel")).toRealPath()
             val common = Path.of(git(directory, "rev-parse", "--path-format=absolute", "--git-common-dir")).toRealPath()
-            require(top == directory && common.toString == existing.observed.get.gitCommon, "Prepared workspace directory no longer belongs to its recorded Git worktree")
+            val gitDirectory = Path.of(git(directory, "rev-parse", "--absolute-git-dir")).toRealPath()
+            require(top == directory && common.toString == existing.observed.get.gitCommon &&
+              gitDirectory.toString == existing.observed.get.gitDirectory, "Prepared workspace directory no longer belongs to its recorded Git worktree")
             existing
           } catch {
             case failure: Exception =>
@@ -91,7 +93,9 @@ final class GitWorkspaceRepository(configuredRoot: Path, command: HostCommand, c
             val observedHead = git(directory, "rev-parse", "HEAD")
             val observedCommon = Path.of(git(directory, "rev-parse", "--path-format=absolute", "--git-common-dir")).toRealPath()
             require(observedHead == base && observedCommon == common, "Prepared worktree differs from its requested repository/base")
-            val ready = pending.copy(observed = Some(WorkspaceObservation(GitCommit(observedHead), common.toString, clock.millis())))
+            val gitDirectory = Path.of(git(directory, "rev-parse", "--absolute-git-dir")).toRealPath()
+            require(gitDirectory != common, "Prepared workspace must have its own Git directory")
+            val ready = pending.copy(observed = Some(WorkspaceObservation(GitCommit(observedHead), common.toString, gitDirectory.toString, clock.millis())))
             write(ready)
             ready
           } catch {
