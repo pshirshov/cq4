@@ -54,3 +54,13 @@ def accepted_chain(statuses, artifacts, checks):
                     "workerHarness": worker["request"]["harness"], "reviewerHarness": review["request"]["harness"],
                     "workerResult": previous, "reviewResult": status["result"], "validation": worker["validation"]}
     raise AssertionError("No fully accepted review linked to the same host-validated worker candidate and assignment")
+
+
+def corrected_chain(statuses, artifacts, checks, baseline, rejected_review, worker_harness, reviewer_harness):
+    chain = accepted_chain(statuses, artifacts, checks)
+    worker = artifacts[chain["workerResult"]["value"]]["body"]
+    assert chain["worker"] != baseline["worker"] and chain["workerHarness"] == worker_harness and chain["reviewerHarness"] == reviewer_harness, "Correction did not produce the configured new worker/reviewer chain"
+    assert worker["request"]["previous"] == rejected_review, "Correction did not consume the rejected review handle"
+    assert worker["request"]["members"] == baseline["members"], "Correction changed the original assignment revisions"
+    assert worker["base"] == baseline["candidate"], "Correction did not start from the rejected candidate"
+    return chain

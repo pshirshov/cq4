@@ -59,7 +59,8 @@ def main():
                 code, out, err = execute(command + options, source, 5)
                 assert (code, out, err) == (0, expected(source, top), ""), (options, source[:100], code, out, err)
                 count += 1
-        for options in [["--top"], ["--top", "0"], ["--top", "-1"], ["--top", "1001"], ["--top", "oops"], ["--unknown"], ["extra"]]:
+        for options in [["--top"], ["--top", "0"], ["--top", "-1"], ["--top", "1001"], ["--top", "oops"],
+                        ["--top", "9" * 5000], ["--unknown"], ["--t", "1"], ["--to", "1"], ["--h"], ["--he"], ["--hel"], ["extra"]]:
             code, out, err = execute(command + options, "a", 5)
             assert code == 2 and out == "" and err.strip(), (options, code, out, err)
             count += 1

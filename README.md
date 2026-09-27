@@ -1,6 +1,6 @@
 # CQ
 
-CQ is being implemented under the [M0–M6 plan](docs/drafts/20260926-1549-cq-implementation-plan.md). The durable ledger/audit core and authenticated HTTP/MCP/WebSocket/CLI interfaces are implemented; [M1 has independent Astra approval](docs/validation/m1-review.md); M2 adapters pass real capability probes and the [batch supervisor role](docs/design/supervisor-role.md) is implemented; [child handle dispatch](docs/design/local-dispatch.md) is implemented; interruption recovery and consumer evaluations are next. Release functionality, consumer evaluations and human acceptance are tracked in [implementation status](docs/implementation-status.md) and [requirement coverage](docs/requirement-coverage.md).
+CQ is being implemented under the [M0–M6 plan](docs/drafts/20260926-1549-cq-implementation-plan.md). The durable ledger/audit core and authenticated HTTP/MCP/WebSocket/CLI interfaces are implemented; [M1 has independent Astra approval](docs/validation/m1-review.md). The [batch supervisor role](docs/design/supervisor-role.md) and [child handle dispatch](docs/design/local-dispatch.md) now run real consumer builds under all three harnesses. Independent assessments and interruption recovery are in progress. Release functionality and human acceptance are tracked in [implementation status](docs/implementation-status.md) and [requirement coverage](docs/requirement-coverage.md).
 
 ## Development checks
 
@@ -31,6 +31,20 @@ CQ_TEST_DATABASE_PASSWORD=local-test-password \
 ```
 
 The runner creates and drops a unique schema in that database. The account must have schema creation permission. With no provided URL, PostgreSQL is started as the current non-root user and stopped by the runner. Missing infrastructure fails the check. `browser` runs real Chromium UI and connection checks. `process` builds the Linux guardian and checks process-tree cleanup and the Scala driver; full supervisor and harness coverage remains pending. It requires Linux 5.9 or newer.
+
+## Real consumer evaluations
+
+These explicit commands use configured Claude, Codex and Pi model access and incur model usage:
+
+```sh
+CQ_EVIDENCE_ROOT=/srv/nvme/tmp/cq4-implementation ./dev/evaluate --suite first-slice
+```
+
+The suite runs Python and Go consumer builds with each harness governing once, followed by a separate Codex/Astra assessment of each exact candidate. It retains model routes, native output, candidate/check/review artifacts, operational usage and database dumps. Assessment attempts use `assessor: true` in the same evaluation audit. `suite.json` links each stage; use the assessment's combined usage report for baseline plus assessment accounting. Integration and human milestone acceptance remain separate. The release suite is not implemented and fails explicitly.
+
+For a targeted run, use `./dev/consumer-eval claude|codex|pi python|go`, then `./dev/consumer-assess <printed-evidence-directory>`. The deferred assessment requires unchanged task revisions and the same consumer specification/oracle as the baseline. [Observed results, failures and limits](docs/validation/m2-consumer-evaluations.md).
+
+If an assessment requests changes, run `./dev/consumer-assess --correct <rejected-assessment-directory>`. This starts the original governing/worker/reviewer routes, passing the retained review handle to the worker. It records correction usage with `assessor: false`; run a new independent assessment on the resulting candidate directory. Earlier failed builds and assessments remain in the combined audit.
 
 ## Run the current development server
 

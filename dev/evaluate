@@ -1,0 +1,69 @@
+#!/usr/bin/env python3
+"""Run the first usable-slice consumer corpus and independent assessments."""
+import argparse
+import datetime
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+
+ROOT = Path(__file__).resolve().parent.parent
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--suite", required=True, choices=["first-slice", "release"])
+    arguments = parser.parse_args()
+    if arguments.suite == "release":
+        parser.error("The M4/M6 release corpus is not implemented")
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S")
+    evidence = Path(os.environ.get("CQ_EVIDENCE_ROOT", str(ROOT / ".work/evidence"))).resolve() / (stamp + "-first-slice")
+    evidence.mkdir(parents=True, mode=0o700)
+    environment = dict(os.environ, CQ_EVIDENCE_ROOT=str(evidence))
+    report = {"suite": arguments.suite, "status": "running", "scenarios": [],
+              "scope": "candidate validation and independent assessment; no efficiency conclusion",
+              "remaining": ["integration", "M2 milestone review and human acceptance"]}
+
+    def save():
+        (evidence / "suite.json").write_text(json.dumps(report, indent=2) + "\n")
+
+    def run(command, scenario, field):
+        with subprocess.Popen(command, cwd=ROOT, env=environment, stdout=subprocess.PIPE,
+                              stderr=subprocess.STDOUT, text=True) as process:
+            for line in process.stdout:
+                print(line, end="", flush=True)
+                if line.startswith("Evidence: "):
+                    assert field not in scenario, "Runner emitted multiple evidence directories"
+                    location = Path(line.removeprefix("Evidence: ").strip()).resolve()
+                    assert location.parent == evidence, "Runner evidence escaped the suite directory"
+                    scenario[field] = str(location)
+                    save()
+            assert process.wait() == 0, "Consumer stage failed; inspect retained scenario evidence"
+        assert field in scenario, "Runner omitted its evidence directory"
+        location = Path(scenario[field])
+        status = json.loads((location / "result.json").read_text())["status"]
+        assert status == ("candidate-passed" if field == "candidate" else "assessment-passed"), "Consumer stage did not satisfy its acceptance gate"
+        return location
+
+    save()
+    print("Suite evidence:", evidence, flush=True)
+    try:
+        for harness, language in [("claude", "python"), ("codex", "go"), ("pi", "python")]:
+            scenario = {"harness": harness, "language": language}
+            report["scenarios"].append(scenario)
+            save()
+            candidate = run([str(ROOT / "dev/consumer-eval"), harness, language], scenario, "candidate")
+            run([str(ROOT / "dev/consumer-assess"), str(candidate)], scenario, "assessment")
+        report["status"] = "candidates-assessed"
+    except BaseException as error:
+        report.update(status="failed", error=str(error))
+        raise
+    finally:
+        save()
+    print("PASS: three governing routes and independent assessments; milestone acceptance remains pending", flush=True)
+
+
+if __name__ == "__main__":
+    main()

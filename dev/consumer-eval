@@ -191,6 +191,7 @@ def main():
         request = (f"Build the following unrelated consumer in {language}. Create one CQ task containing the complete specification below and claim it. "
                    f"Dispatch {PROFILES[worker][0]} Worker Implement with that exact task revision; after host validation passes, dispatch {PROFILES[reviewer][0]} Reviewer using its result handle. "
                    "Use references only; do not read or compose child prompts or read full child result bodies. Use compact status for correction loops when necessary. "
+                   "After the accepted review, retain the exact reviewed task revision for the separate assessment step: release its claim and report handles without editing the task. "
                    "Keep process startup at 10000 ms, heartbeat at 2000 ms, grace at 1000 ms, kill at 3000 ms and output at 8388608 bytes; execution may use the supplied session limit. "
                    "Return after a host-validated candidate and accepted review, or report the concrete blocker. Integration is pending and must not be claimed.\n\n" + (ROOT / "dev/consumer-spec.md").read_text())
         (evidence / "request.txt").write_text(request)

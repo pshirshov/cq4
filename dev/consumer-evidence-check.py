@@ -6,6 +6,7 @@ import unittest
 
 
 accept = runpy.run_path(str(Path(__file__).with_name("consumer-evidence.py")))["accepted_chain"]
+correct = runpy.run_path(str(Path(__file__).with_name("consumer-evidence.py")))["corrected_chain"]
 
 
 class ConsumerEvidenceCheck(unittest.TestCase):
@@ -34,6 +35,29 @@ class ConsumerEvidenceCheck(unittest.TestCase):
         result = accept(statuses, artifacts, checks)
         self.assertEqual(result["candidate"], {"value": "a" * 40})
         self.assertEqual(result["workerResult"], {"value": "worker-result"})
+
+    def test_correction_requires_the_rejected_handle_assignment_and_base(self):
+        statuses, artifacts, checks = self.fixture()
+        baseline = {"worker": {"value": "original-worker"}, "members": copy.deepcopy(artifacts["worker-result"]["body"]["request"]["members"]), "candidate": {"value": "b" * 40}}
+        previous = {"value": "rejected-review"}
+        original_worker = artifacts["worker-result"]["body"]
+        original_worker["request"]["previous"] = previous
+        original_worker["base"] = baseline["candidate"]
+        self.assertEqual(correct(statuses, artifacts, checks, baseline, previous, "Codex", "Pi"), accept(statuses, artifacts, checks))
+        for mutation in ["previous", "assignment", "base"]:
+            with self.subTest(mutation=mutation):
+                changed = copy.deepcopy(artifacts)
+                worker = changed["worker-result"]["body"]
+                if mutation == "previous":
+                    worker["request"]["previous"] = None
+                elif mutation == "assignment":
+                    worker["request"]["members"][0]["revision"]["value"] = "2"
+                    changed["review-result"]["body"]["request"]["members"] = copy.deepcopy(worker["request"]["members"])
+                else:
+                    worker["base"] = {"value": "0" * 40}
+                accept(statuses, changed, checks)
+                with self.assertRaises(AssertionError):
+                    correct(statuses, changed, checks, baseline, previous, "Codex", "Pi")
 
     def test_other_candidate_or_assignment_is_rejected(self):
         statuses, artifacts, checks = self.fixture()
