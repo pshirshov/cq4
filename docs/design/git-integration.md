@@ -1,6 +1,6 @@
 # Git integration — next M3 increment
 
-Status: implementation contract independently approved by Astra; the [server reservation foundation](../validation/m3-integration-reservations.md) is implemented and under verification. Host Git execution and the connected workflow remain open. This records the next boundary after [result admission](result-admission.md), committed at `a9403af`. Design approval does not close R27; the real two-session workflow and acknowledgement reconciliation must pass.
+Status: implementation contract independently approved by Astra; the [server reservation foundation](../validation/m3-integration-reservations.md) is verified and approved at `595acc3`. The [local Git/journal/coordinator foundation](../validation/m3-git-coordinator.md) is verified and independently approved; governor-facing integration and combined-candidate dispatch remain open. This records the next boundary after [result admission](result-admission.md), committed at `a9403af`. Design approval does not close R27; the real two-session workflow and acknowledgement reconciliation must pass.
 
 ## Required behavior
 
@@ -47,6 +47,16 @@ The mutating Git executor needs the same supervisor-owned process-lifetime disci
 For target advancement, a host-generated `CombinationPlan` handle binds repository/target, observed target commit and original worker result. Only `Worker(ResolveConflict)` may consume it. Host preparation uses that frozen target as the isolated workspace base, applies/merges the original candidate, and supplies conflict state by handle. Capture a new candidate descending from the frozen target, rerun configured checks, and obtain a fresh independent reviewer result. Existing `ChildRunner` base selection must change for this path; it currently always chooses the previous candidate. A further target advance requires a new operation and combination/review round.
 
 The initial target is an explicitly configured branch not checked out in any worktree. Reject checked-out targets before attempting an update. This requires cooperating Git writers: a preflight worktree check does not fence an arbitrary external checkout performed concurrently. CQ never updates shared checkout files or indexes.
+
+### Local execution and reconciliation
+
+The host journal holds one coordinator lock per session, with a bounded inventory. It forces the intent before server reservation and an execution-admission marker before starting a guardian-owned Git job in a detached workspace. A missing local journal cannot be reconstructed when a server integration already exists. If execution was admitted, recovery only inspects retained execution and target evidence; it never launches that effect again. A crash between admission persistence and process launch can therefore leave an explicit unresolved operation.
+
+The job sends one direct-branch update with full expected/candidate object IDs through Git's `start`, `prepare`, `commit` protocol. Git documents that preparation locks the queued references and aborts when a lock cannot be acquired; commit performs the updates. [Git update-ref manual](https://git-scm.com/docs/git-update-ref).
+
+The observed Git 2.55 implementation prints and flushes an acknowledgement for each successful phase and exits from a failed preparation before reaching commit. CQ classifies a refusal only with settled, fully retained output, a nonzero ordinary exit, exactly the start acknowledgement and the explicit preparation-failure diagnostic. A commit-stage failure stays unresolved unless target incorporation is observed. This classification follows the inspected implementation and is checked against real Git; it is not inferred from a nonzero exit alone. [Git 2.55 implementation](https://github.com/git/git/blob/v2.55.0/builtin/update-ref.c#L555-L614).
+
+After a complete local observation is forced, subsequent runs only deliver or replay server recording. A failed recording and a lost acknowledgement remain distinguishable from an uncertain Git effect. The current checks address process interruption and journal persistence; they do not establish power-loss durability of Git refs and candidate objects. No transaction spans Git and PostgreSQL.
 
 ## Preliminary Git observation
 

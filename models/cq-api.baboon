@@ -465,6 +465,7 @@ root adt IntegrationResolution {
   data Recorded { acknowledgement: ChangeAck observedTarget: GitCommit }
 }
 root data IntegrationRecord { intent: IntegrationIntent resolution: IntegrationResolution reservedAt: i64 resolvedAt: opt[i64] }
+root data IntegrationLocal { intent: IntegrationIntent attempted: bit observation: opt[IntegrationObservation] }
 root adt HostIntegration {
   data Reserve { intent: IntegrationIntent }
   data Observe { id: IntegrationId observation: IntegrationObservation }
