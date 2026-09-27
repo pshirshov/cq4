@@ -2,7 +2,7 @@
 
 `cq.server.Main` registers `ServerRole`, `ClientRole` and `SupervisorRole` through the same distage `RoleAppMain`. `cq run HARNESS --settings FILE --input FILE` selects the supervisor task; `cq :supervisor -- HARNESS --settings FILE --input FILE` is equivalent. Its dependency graph contains injected harness adapters, the local job lifecycle and HTTP clients. It does not acquire a PostgreSQL connection or the CQ domain server.
 
-The role runs one **batch governing session**, with the five scoped domain tools and a private [local child dispatch service](local-dispatch.md). The host resolves referenced input, executes workers and reviewers, captures candidates and validation, and returns compact status/result handles. Interactive sessions and the complete `cq run` workflow remain unfinished.
+The role runs one **batch governing session**, with the six scoped domain tools and a private [local child dispatch service](local-dispatch.md). The host resolves referenced input, executes workers and reviewers, captures candidates and validation, and returns compact status/result handles. Interactive sessions and the complete `cq run` workflow remain unfinished.
 
 ## Configuration and run
 

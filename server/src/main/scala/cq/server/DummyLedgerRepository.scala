@@ -61,6 +61,7 @@ private final class DummyLedgerTransaction(initial: DummyLedgerState) extends Le
     ItemId(project.id, ledger, next)
   }
   override def get(id: ItemId): Option[Item] = state.items.get(id)
+  override def summary(id: ItemId): Option[ItemSummary] = state.items.get(id).map(LedgerPolicy.summary)
   override def put(item: Item): Unit = { state = state.copy(items = state.items.updated(item.id, item)) }
   override def refs(id: ItemId): List[ItemRef] = state.edges.toList.flatMap { edge =>
     if (edge.source == id) List(ItemRef(edge.relation, edge.target))

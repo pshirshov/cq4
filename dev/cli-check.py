@@ -6,6 +6,8 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import urllib.request
+import uuid
 
 
 def main():
@@ -58,6 +60,21 @@ def main():
         assert any(value["text"] == "ready" and value["span"] == {"start": 7, "end": 9} for value in completed["suggestions"])
         run(root, "query", "--complete", "999", expected=1)
         run(root, "query", "--complete", "0", "--after", "T1", expected=1)
+        assert json.loads(run(root, "query", "--roots", ""))["Workset"]["page"]["entries"] == []
+        draft = {"title": "CLI workset", "body": "Context", "labels": [], "archived": False,
+                 "content": {"Task": {"status": "Ready", "acceptance": ["Visible"], "result": None, "validation": []}}, "citations": []}
+        command_body = {"Change": {"input": {"project": config["project"], "change": {"request": {"value": str(uuid.uuid4())},
+            "mutations": [{"Create": {"draft": draft}}, {"Create": {"draft": draft}}], "fences": [], "reason": "CLI workset"}}}}
+        seed = urllib.request.Request(environment["CQ_ORIGIN"] + "/api/call", data=json.dumps(command_body).encode(), headers={
+            "Authorization": "Bearer " + environment["CQ_TOKEN"], "CQ-Session": environment["CQ_SESSION"],
+            "CQ-Protocol-Version": "0.1.0", "Content-Type": "application/json"})
+        with urllib.request.urlopen(seed, timeout=10) as response:
+            assert "Changed" in json.load(response)
+        workset = json.loads(run(root, "query", "--roots", "T1,T2", "--limit", "1"))["Workset"]["page"]
+        assert workset["selectedCount"] == 2 and workset["hasMore"] and workset["entries"][0]["root"]
+        continued = json.loads(run(root, "query", "--roots", "T2,T1", "--after", "T1", "--snapshot", json.dumps(workset["snapshot"])))["Workset"]["page"]
+        assert [value["item"]["id"]["number"] for value in continued["entries"]] == ["2"] and not continued["hasMore"]
+        run(root, "query", "--roots", "T1", "--query", "T1", expected=1)
         assert json.loads(run(root, "status"))["UsageSummary"]["report"]["direct"]["total"]["known"] == "0"
         assert json.loads(run(root, "status", "audit", "--limit", "1"))["UsageAudit"]["page"]["entries"] == []
         assert json.loads(run(root, "status", "attempts", "--limit", "1"))["UsageAttempts"]["page"]["entries"] == []

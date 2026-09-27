@@ -114,6 +114,7 @@ cq init --project-id <existing-uuid> --endpoint <server-origin>
 cq init --name "New display name"
 cq query --query 'ledger:Tasks archived:all' --limit 20
 cq query --query 'status:Re' --complete 9 --limit 20
+cq query --roots T1,M1 --limit 50
 cq status --task T1
 cq status audit --task T1 --limit 20
 cq status costs --task T1 --limit 20

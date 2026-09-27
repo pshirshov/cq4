@@ -70,6 +70,8 @@ private final class PostgresLedgerTransaction(connection: Connection, override v
 
   override def get(id: ItemId): Option[Item] = sql.query("SELECT body::text FROM cq_items WHERE project_id = ? AND ledger = ? AND number = ?")(itemKey(_, id))(r => Wire.decode(Item_JsonCodec, r.getString(1))).headOption
 
+  override def summary(id: ItemId): Option[ItemSummary] = sql.query("SELECT summary::text FROM cq_items WHERE project_id = ? AND ledger = ? AND number = ?")(itemKey(_, id))(r => Wire.decode(ItemSummary_JsonCodec, r.getString(1))).headOption
+
   override def put(item: Item): Unit = {
     val previous = sql.query("SELECT summary::text FROM cq_items WHERE project_id = ? AND ledger = ? AND number = ?")(itemKey(_, item.id))
       (r => Wire.decode(ItemSummary_JsonCodec, r.getString(1))).headOption.fold(Set.empty[String])(_.labels)

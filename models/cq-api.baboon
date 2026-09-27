@@ -118,8 +118,20 @@ root adt QueryExpression {
   data And { left: QueryExpression right: QueryExpression }
   data Or { left: QueryExpression right: QueryExpression }
 }
-root data ItemSummary { id: ItemId revision: Revision title: str status: str archived: bit labels: set[str] updatedAt: i64 }
+root data ItemOutcome { terminal: bit satisfiesDependency: bit }
+root data ItemSummary { id: ItemId revision: Revision title: str status: str archived: bit labels: set[str] updatedAt: i64 outcome: ItemOutcome }
 root data ItemPage { items: lst[ItemSummary] cursor: ChangeCursor after: opt[ItemId] hasMore: bit }
+enum WorksetRole { Selected Context }
+root adt WorksetReason {
+  data Archived {}
+  data Terminal {}
+  data Blocked { prerequisite: ItemId }
+  data Shared { producer: ItemId }
+  data Context { source: ItemId relation: Relation }
+}
+root data WorksetEntry { item: ItemSummary role: WorksetRole root: bit ready: bit reasons: lst[WorksetReason] }
+root data WorksetSnapshot { cursor: ChangeCursor rootsHash: str }
+root data WorksetPage { entries: lst[WorksetEntry] snapshot: WorksetSnapshot after: opt[ItemId] hasMore: bit selectedCount: i32 contextCount: i32 readyCount: i32 }
 root data HistoryPage { entries: lst[HistoryEntry] hasMore: bit }
 root adt Fault {
   data Invalid { message: str }
@@ -214,6 +226,7 @@ root data UsagePage { entries: lst[RecordedUsage] after: i64 hasMore: bit cursor
 root data ProjectPage { projects: lst[Project] after: opt[ProjectId] hasMore: bit }
 root data ProjectConfig { project: ProjectId endpoint: str name: str }
 root data SearchInput { project: ProjectId query: str after: opt[ItemId] snapshot: opt[ChangeCursor] limit: i32 }
+root data GraphInput { project: ProjectId roots: set[ItemId] after: opt[ItemId] snapshot: opt[WorksetSnapshot] limit: i32 }
 root adt ReadSelection {
   data QueryComplete { query: str cursor: i32 limit: i32 }
   data ArtifactInfo { id: ArtifactId }
@@ -243,12 +256,14 @@ root adt Command {
   data Initialize { config: ProjectConfig }
   data RenameProject { project: ProjectId expected: Revision name: str }
   data Search { input: SearchInput }
+  data Graph { input: GraphInput }
   data Read { input: ReadInput }
   data Change { input: ChangeInput }
   data ClaimWork { input: ClaimInput }
   data Usage { input: UsageInput }
 }
 root adt Result {
+  data Workset { page: WorksetPage }
   data QueryAnalyzed { analysis: QueryAnalysis }
   data ArtifactInfo { metadata: ArtifactMetadata }
   data ArtifactText { page: ArtifactPage }

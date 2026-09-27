@@ -111,12 +111,17 @@ final class Cli(context: CliContext, location: ProjectLocation, upload: SessionU
       output.println(Wire.encode(Result_JsonCodec, initialized))
       output.println(s"Configuration: ${location.resolve("project.json")}")
     case "query" :: rest =>
-      val opts = options(rest, Set("--query", "--complete", "--after", "--snapshot", "--limit"))
+      val opts = options(rest, Set("--query", "--complete", "--roots", "--after", "--snapshot", "--limit"))
       val location = configDirectory
       val (config, actorSession) = locked(location)((configuration(location), session(location)))
       val query = opts.getOrElse("--query", "")
       val limit = opts.get("--limit").map(_.toInt).getOrElse(DefaultPageSize)
-      val command = opts.get("--complete") match {
+      val command = if (opts.contains("--roots")) {
+        require(!opts.contains("--query") && !opts.contains("--complete"), "Workset roots cannot be combined with query text or completion")
+        val roots = opts("--roots")
+        Command.Graph(GraphInput(config.project, if (roots.isEmpty) Set.empty else roots.split(",", -1).map(item(config.project, _)).toSet,
+          opts.get("--after").map(item(config.project, _)), opts.get("--snapshot").map(Wire.decode(WorksetSnapshot_JsonCodec, _)), limit))
+      } else opts.get("--complete") match {
         case Some(cursor) =>
           require(!opts.contains("--after") && !opts.contains("--snapshot"), "Query completion does not accept page continuation")
           Command.Read(ReadInput(config.project, ReadSelection.QueryComplete(query, cursor.toInt, limit)))
@@ -151,7 +156,7 @@ final class Cli(context: CliContext, location: ProjectLocation, upload: SessionU
       }
       output.println(Wire.encode(Result_JsonCodec, request(config, actorSession, Command.Usage(UsageInput(config.project, selection)))))
     case List("web") => output.println(configuration(configDirectory).endpoint)
-    case Nil | List("--help") => output.println("cq serve | init [--endpoint URL] [--project-id UUID] [--name TEXT] | web | run HARNESS --settings FILE --input FILE | job upload --session DIR | query [--query TEXT] [--complete UTF16_OFFSET] [--after T1 --snapshot N] [--limit N] | status [audit|costs|attempts|outcomes] [--task T1|--cohort UUID|--session UUID] [--attempt UUID] [--after CURSOR] [--snapshot N] [--limit N]")
+    case Nil | List("--help") => output.println("cq serve | init [--endpoint URL] [--project-id UUID] [--name TEXT] | web | run HARNESS --settings FILE --input FILE | job upload --session DIR | query [--query TEXT] [--complete UTF16_OFFSET] [--roots T1,M1] [--after T1 --snapshot CURSOR] [--limit N] | status [audit|costs|attempts|outcomes] [--task T1|--cohort UUID|--session UUID] [--attempt UUID] [--after CURSOR] [--snapshot N] [--limit N]")
     case _ => throw new IllegalArgumentException("Unknown command; use cq --help")
   }
 }

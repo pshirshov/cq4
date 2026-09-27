@@ -3,7 +3,6 @@ package cq.core
 import cq.api.*
 
 object LedgerPolicy {
-  final case class Outcome(terminal: Boolean, satisfiesDependency: Boolean)
   val MaxBatch = 64
   val MaxPage = 200
   val MaxBody = 65536
@@ -71,21 +70,21 @@ object LedgerPolicy {
     case c: Content.Upstream => c.status.toString
   }
 
-  def outcome(value: Content): Outcome = value match {
-    case c: Content.Milestone => Outcome(c.status != MilestoneStatus.Open, c.status == MilestoneStatus.Complete)
-    case c: Content.Idea => Outcome(c.status != IdeaStatus.Proposed, c.status == IdeaStatus.Accepted)
-    case c: Content.Defect => Outcome(c.status != DefectStatus.Open, c.status == DefectStatus.Resolved)
-    case c: Content.Goal => Outcome(c.status != GoalStatus.Open, c.status == GoalStatus.Achieved)
-    case c: Content.Task => Outcome(Set[TaskStatus](TaskStatus.Done, TaskStatus.Cancelled).contains(c.status), c.status == TaskStatus.Done)
-    case c: Content.Research => Outcome(Set[ResearchStatus](ResearchStatus.Concluded, ResearchStatus.Inconclusive, ResearchStatus.Cancelled).contains(c.status), c.status == ResearchStatus.Concluded)
-    case c: Content.Hypothesis => Outcome(!Set[HypothesisStatus](HypothesisStatus.Proposed, HypothesisStatus.Investigating).contains(c.status), Set[HypothesisStatus](HypothesisStatus.Supported, HypothesisStatus.Refuted).contains(c.status))
-    case c: Content.Question => Outcome(c.status != QuestionStatus.Open, c.status == QuestionStatus.Answered)
-    case c: Content.Decision => Outcome(c.status != DecisionStatus.Proposed, c.status == DecisionStatus.Adopted)
-    case c: Content.Review => Outcome(!Set[ReviewStatus](ReviewStatus.Pending, ReviewStatus.Active).contains(c.status), c.status == ReviewStatus.Approved)
-    case c: Content.Handoff => Outcome(c.status != HandoffStatus.Open, c.status == HandoffStatus.Accepted)
-    case c: Content.OperatorAction => Outcome(!Set[OperatorActionStatus](OperatorActionStatus.Requested, OperatorActionStatus.Confirmed).contains(c.status), c.status == OperatorActionStatus.Observed)
-    case c: Content.Memory => Outcome(true, c.status == MemoryStatus.Current)
-    case c: Content.Upstream => Outcome(!Set[UpstreamStatus](UpstreamStatus.Identified, UpstreamStatus.Reported).contains(c.status), c.status == UpstreamStatus.Resolved)
+  def outcome(value: Content): ItemOutcome = value match {
+    case c: Content.Milestone => ItemOutcome(c.status != MilestoneStatus.Open, c.status == MilestoneStatus.Complete)
+    case c: Content.Idea => ItemOutcome(c.status != IdeaStatus.Proposed, c.status == IdeaStatus.Accepted)
+    case c: Content.Defect => ItemOutcome(c.status != DefectStatus.Open, c.status == DefectStatus.Resolved)
+    case c: Content.Goal => ItemOutcome(c.status != GoalStatus.Open, c.status == GoalStatus.Achieved)
+    case c: Content.Task => ItemOutcome(Set[TaskStatus](TaskStatus.Done, TaskStatus.Cancelled).contains(c.status), c.status == TaskStatus.Done)
+    case c: Content.Research => ItemOutcome(Set[ResearchStatus](ResearchStatus.Concluded, ResearchStatus.Inconclusive, ResearchStatus.Cancelled).contains(c.status), c.status == ResearchStatus.Concluded)
+    case c: Content.Hypothesis => ItemOutcome(!Set[HypothesisStatus](HypothesisStatus.Proposed, HypothesisStatus.Investigating).contains(c.status), Set[HypothesisStatus](HypothesisStatus.Supported, HypothesisStatus.Refuted).contains(c.status))
+    case c: Content.Question => ItemOutcome(c.status != QuestionStatus.Open, c.status == QuestionStatus.Answered)
+    case c: Content.Decision => ItemOutcome(c.status != DecisionStatus.Proposed, c.status == DecisionStatus.Adopted)
+    case c: Content.Review => ItemOutcome(!Set[ReviewStatus](ReviewStatus.Pending, ReviewStatus.Active).contains(c.status), c.status == ReviewStatus.Approved)
+    case c: Content.Handoff => ItemOutcome(c.status != HandoffStatus.Open, c.status == HandoffStatus.Accepted)
+    case c: Content.OperatorAction => ItemOutcome(!Set[OperatorActionStatus](OperatorActionStatus.Requested, OperatorActionStatus.Confirmed).contains(c.status), c.status == OperatorActionStatus.Observed)
+    case c: Content.Memory => ItemOutcome(true, c.status == MemoryStatus.Current)
+    case c: Content.Upstream => ItemOutcome(!Set[UpstreamStatus](UpstreamStatus.Identified, UpstreamStatus.Reported).contains(c.status), c.status == UpstreamStatus.Resolved)
   }
 
   def validate(draft: ItemDraft): Unit = {
@@ -182,7 +181,7 @@ object LedgerPolicy {
   }
 
   def summary(item: Item): ItemSummary = ItemSummary(item.id, item.revision, item.draft.title,
-    status(item.draft.content), item.draft.archived, item.draft.labels, item.updatedAt)
+    status(item.draft.content), item.draft.archived, item.draft.labels, item.updatedAt, outcome(item.draft.content))
 
   def inverse(relation: Relation): Relation = relation match {
     case Relation.DerivedFrom => Relation.Produces

@@ -116,7 +116,7 @@ assert.equal((await closed)[0], 1007);
 const client = new Client({ name: 'cq-ledger-client', version: '0.1.0' });
 await client.connect(new StreamableHTTPClientTransport(new URL(`${origin}/mcp`), { requestInit: { headers } }));
 const listed = await client.listTools();
-assert.deepEqual(listed.tools.map(t => t.name), ['search', 'read', 'change', 'claim', 'usage']);
+assert.deepEqual(listed.tools.map(t => t.name), ['search', 'read', 'graph', 'change', 'claim', 'usage']);
 const schema = listed.tools.find(t => t.name === 'change');
 const validator = new AjvJsonSchemaValidator().getValidator(schema.inputSchema);
 const mcpChange = change('MCP created');
@@ -148,6 +148,23 @@ const references = await client.callTool({ name: 'read', arguments: { project: f
   selection: { QueryComplete: { query: 'blocked-by:T', cursor: 12, limit: 1 } } } });
 assert.equal(references.structuredContent.QueryAnalyzed.analysis.suggestions[0].text, 'T1');
 assert.equal(references.structuredContent.QueryAnalyzed.analysis.hasMore, true);
+const child = mcpResult.structuredContent.Changed.ack.items[0];
+await call({ Change: { input: { project: first, change: { request: id(), fences: [], reason: 'Workset topology', mutations: [{ Reference: {
+  source: item.id, expectedSource: mcpRead.structuredContent.Detail.view.item.revision, relation: 'Produces',
+  target: child.id, expectedTarget: child.revision, present: true,
+} }] } } } }, headers);
+const graphInput = { project: first, roots: [item.id], after: null, snapshot: null, limit: 1 };
+const httpGraph = await call({ Graph: { input: graphInput } }, headers);
+const mcpGraph = await client.callTool({ name: 'graph', arguments: graphInput });
+assert.deepEqual(mcpGraph.structuredContent, httpGraph);
+const graphPage = httpGraph.Workset.page;
+assert.equal(graphPage.selectedCount, 2);
+assert.equal(graphPage.contextCount, 0);
+assert.equal(graphPage.hasMore, true);
+assert.equal(graphPage.entries[0].root, true);
+const nextGraph = await client.callTool({ name: 'graph', arguments: { ...graphInput, after: graphPage.after, snapshot: graphPage.snapshot } });
+assert.deepEqual(nextGraph.structuredContent.Workset.page.entries.map(value => value.item.id), [child.id]);
+assert.equal(nextGraph.structuredContent.Workset.page.hasMore, false);
 const attempts = await client.callTool({ name: 'usage', arguments: { project: first, selection: { Attempts: { filter: { ProjectAll: {} }, after: null, snapshot: null, limit: 20 } } } });
 assert.deepEqual(attempts.structuredContent.UsageAttempts.page.entries, []);
 const costs = await client.callTool({ name: 'usage', arguments: { project: first, selection: { Costs: { filter: { ProjectAll: {} }, after: null, snapshot: null, limit: 20 } } } });
@@ -159,7 +176,7 @@ assert.equal(usage.structuredContent.UsageSummary.report.direct.total.known, '0'
 await client.close();
 const restricted = new Client({ name: 'cq-worker-client', version: '0.1.0' });
 await restricted.connect(new StreamableHTTPClientTransport(new URL(`${origin}/mcp`), { requestInit: { headers: worker } }));
-assert.deepEqual((await restricted.listTools()).tools.map(t => t.name), ['search', 'read', 'usage']);
+assert.deepEqual((await restricted.listTools()).tools.map(t => t.name), ['search', 'read', 'graph', 'usage']);
 await assert.rejects(restricted.callTool({ name: 'change', arguments: change('Unavailable') }));
 const crossProject = await restricted.callTool({ name: 'search', arguments: search(second) });
 assert.equal(crossProject.isError, true);
@@ -168,5 +185,8 @@ assert.ok(scopedQuery.structuredContent.Found.page.items.every(item => item.id.p
 const crossCompletion = await restricted.callTool({ name: 'read', arguments: { ...completion, project: second } });
 assert.equal(crossCompletion.isError, true);
 assert.ok(crossCompletion.structuredContent.Failed.fault.Denied);
+const crossGraph = await restricted.callTool({ name: 'graph', arguments: { ...graphInput, roots: [secondCreated.Changed.ack.items[0].id] } });
+assert.equal(crossGraph.isError, true);
+assert.ok(crossGraph.structuredContent.Failed.fault.Denied);
 await restricted.close();
 console.log('Two projects: HTTP/MCP/WS, signed role scope, browser cookie/origin, counters, idempotency, revisions, claims, history, committed events and usage reads passed');

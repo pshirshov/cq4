@@ -51,7 +51,7 @@ abstract class ApplicationContractTest extends SpecZIO with AssertZIO {
           assignment = Assignment(AssignmentId(UUID.randomUUID()), first, Set.empty, Attribution.Unattributed, None, None)
           host <- application.ingest(worker, HostUsageInput(first, HostUsage.Assign(assignment))).either
           _ <- assertIO(host match { case Left(DomainFailure(_: Fault.Denied)) => true; case _ => false })
-          _ <- assertIO(new McpSchemas().visible(worker).map(_.name).toSet == Set("search", "read", "usage"))
+          _ <- assertIO(new McpSchemas().visible(worker).map(_.name).toSet == Set("search", "read", "graph", "usage"))
           _ <- assertIO(authorization(Now + 1).authenticate(token.value, None).scope(first).actor == workerActor)
           _ <- assertIO(scala.util.Try(auth.grant(worker, GrantRequest(first, workerActor, Now + 10000))).isFailure)
           _ <- assertIO(scala.util.Try(authorization(Now + 10000).authenticate(token.value, None)).isFailure)

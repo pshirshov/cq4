@@ -19,6 +19,7 @@ trait LedgerTransaction {
   def cursor: ChangeCursor
   def allocate(ledger: Ledger): ItemId
   def get(id: ItemId): Option[Item]
+  def summary(id: ItemId): Option[ItemSummary]
   def put(item: Item): Unit
   def refs(id: ItemId): List[ItemRef]
   def edge(edge: CanonicalEdge, present: Boolean): Boolean

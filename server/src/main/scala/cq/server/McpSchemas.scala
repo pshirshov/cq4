@@ -23,6 +23,8 @@ final class McpSchemas {
       decoder(SearchInput_JsonCodec)(Command.Search.apply)),
     McpTool("read", "Read an item, history or changes; complete query text at a UTF-16 cursor with bounded suggestions and syntax diagnostics; inspect artifact metadata or explicitly drill down into bounded text pages by Unicode code-point offset.", "ReadInput", Set("Detail", "History", "Changes", "ArtifactInfo", "ArtifactText", "QueryAnalyzed"), false,
       decoder(ReadInput_JsonCodec)(Command.Read.apply)),
+    McpTool("graph", "Enumerate a transient workset from explicit roots: selected produced work and milestone members, separate one-hop context, and informational readiness reasons. Empty roots select nothing. Context does not expand siblings. Maximum 64 roots and 1024 visited items; Limit fails explicitly. Continue with the returned roots-bound snapshot; restart on Resync. Worksets do not acquire claims.", "GraphInput", Set("Workset"), false,
+      decoder(GraphInput_JsonCodec)(Command.Graph.apply)),
     McpTool("change", "Commit an idempotent atomic change batch with expected revisions and claim fences. Governor authority required.", "ChangeInput", Set("Changed"), true,
       decoder(ChangeInput_JsonCodec)(Command.Change.apply)),
     McpTool("claim", "Acquire, renew or release an explicit item-set claim. Governor authority required.", "ClaimInput", Set("Claimed"), true,

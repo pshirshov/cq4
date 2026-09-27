@@ -14,6 +14,7 @@ trait LedgerService[F[_, _]] {
   def get(scope: Scope, id: ItemId): F[Throwable, ItemView]
   def search(scope: Scope, query: String, after: Option[ItemId], limit: Int): F[Throwable, ItemPage]
   def complete(scope: Scope, query: String, cursor: Int, limit: Int): F[Throwable, QueryAnalysis]
+  def workset(scope: Scope, roots: Set[ItemId], after: Option[ItemId], snapshot: Option[WorksetSnapshot], limit: Int): F[Throwable, WorksetPage]
   def history(scope: Scope, id: ItemId, before: Revision, limit: Int): F[Throwable, HistoryPage]
   def changes(scope: Scope, after: ChangeCursor, limit: Int): F[Throwable, ChangePage]
   def acquire(scope: Scope, id: ClaimId, members: Set[ItemId], durationMillis: Long): F[Throwable, Claim]
@@ -22,7 +23,7 @@ trait LedgerService[F[_, _]] {
 }
 
 object LedgerService {
-  final class Impl[F[+_, +_]: Error2](repository: LedgerRepository[F], clock: Clock, queries: QueryParser, completions: QueryCompleter) extends LedgerService[F] {
+  final class Impl[F[+_, +_]: Error2](repository: LedgerRepository[F], clock: Clock, queries: QueryParser, completions: QueryCompleter, worksets: WorksetTraversal) extends LedgerService[F] {
     import LedgerPolicy.*
 
     private def write(scope: Scope): Unit =
@@ -170,6 +171,9 @@ object LedgerService {
 
     override def complete(scope: Scope, query: String, cursor: Int, limit: Int): F[Throwable, QueryAnalysis] =
       repository.transact(scope.project)(tx => completions.complete(tx, query, cursor, limit))
+
+    override def workset(scope: Scope, roots: Set[ItemId], after: Option[ItemId], snapshot: Option[WorksetSnapshot], limit: Int): F[Throwable, WorksetPage] =
+      repository.transact(scope.project)(tx => worksets.page(tx, roots, after, snapshot, limit))
 
     override def search(scope: Scope, query: String, after: Option[ItemId], limit: Int): F[Throwable, ItemPage] = {
       import izumi.functional.bio.{F, *}

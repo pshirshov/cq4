@@ -34,6 +34,9 @@ final class Application(ledger: LedgerService[IO], repository: LedgerRepository[
         case ReadSelection.History(id, before, limit) => ledger.history(scope, id, before, limit).map(Result.History.apply)
         case ReadSelection.Changes(after, limit) => ledger.changes(scope, after, limit).map(Result.Changes.apply)
       }}
+      case Command.Graph(input) => scoped(authority, input.project) { scope =>
+        ledger.workset(scope, input.roots, input.after, input.snapshot, input.limit).map(Result.Workset.apply)
+      }
       case Command.Change(input) => scoped(authority, input.project)(scope => ledger.change(scope, input.change).map(Result.Changed.apply))
       case Command.ClaimWork(input) => scoped(authority, input.project) { scope => input.action match {
         case ClaimAction.Acquire(id, members, duration) => ledger.acquire(scope, id, members, duration).map(Result.Claimed.apply)
