@@ -40,5 +40,9 @@ trait LedgerTransaction {
   def updateClaim(claim: Claim): Unit
   def admission(attempt: AttemptId): Option[ResultAdmission]
   def insertAdmission(value: ResultAdmission): Unit
+  def integration(id: IntegrationId): Option[IntegrationRecord]
+  def pendingIntegration(item: ItemId): Option[IntegrationHold]
+  def insertIntegration(value: IntegrationRecord): Unit
+  def resolveIntegration(value: IntegrationRecord): Unit
   def nextFence(): Long
 }

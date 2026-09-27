@@ -90,7 +90,7 @@ root adt ClaimOrigin {
   data Takeover { actor: Actor snapshot: ClaimSnapshot durationMillis: i64 }
 }
 root data Claim { fence: Fence owner: Actor members: set[ItemId] expiresAt: i64 released: bit origin: ClaimOrigin }
-root data ClaimPreview { members: lst[ItemRevision] claims: lst[Claim] snapshot: ClaimSnapshot }
+root data ClaimPreview { members: lst[ItemRevision] claims: lst[Claim] integrations: lst[IntegrationHold] snapshot: ClaimSnapshot }
 enum TerminationIntent { Cancel Complete }
 root adt TerminalStatus {
   data Milestone { value: MilestoneStatus }
@@ -122,7 +122,7 @@ root adt TerminationEffect {
 }
 root data TerminationEntry { item: ItemSummary effect: TerminationEffect }
 root data TerminationClaim { fence: Fence owner: Actor members: lst[ItemId] affected: lst[ItemId] permitted: bit }
-root data TerminationPlan { roots: lst[ItemId] intent: TerminationIntent entries: lst[TerminationEntry] claims: lst[TerminationClaim] canApply: bit }
+root data TerminationPlan { roots: lst[ItemId] intent: TerminationIntent entries: lst[TerminationEntry] claims: lst[TerminationClaim] integrations: lst[IntegrationHold] canApply: bit }
 root data TerminationSnapshot { cursor: ChangeCursor digest: str }
 root data TerminationPreview { plan: TerminationPlan snapshot: TerminationSnapshot }
 root adt Mutation {
@@ -176,6 +176,7 @@ root data WorksetSnapshot { cursor: ChangeCursor rootsHash: str }
 root data WorksetPage { entries: lst[WorksetEntry] snapshot: WorksetSnapshot after: opt[ItemId] hasMore: bit selectedCount: i32 contextCount: i32 readyCount: i32 }
 root data HistoryPage { entries: lst[HistoryEntry] hasMore: bit }
 root adt Fault {
+  data IntegrationPending { id: IntegrationId }
   data Invalid { message: str }
   data QuerySyntax { diagnostic: QueryDiagnostic }
   data Denied { message: str }
@@ -270,6 +271,7 @@ root data ProjectConfig { project: ProjectId endpoint: str name: str }
 root data SearchInput { project: ProjectId query: str after: opt[ItemId] snapshot: opt[ChangeCursor] limit: i32 }
 root data GraphInput { project: ProjectId roots: set[ItemId] after: opt[ItemId] snapshot: opt[WorksetSnapshot] limit: i32 }
 root adt ReadSelection {
+  data Integration { id: IntegrationId }
   data Admission { attempt: AttemptId }
   data Claims { members: set[ItemId] }
   data Termination { roots: set[ItemId] intent: TerminationIntent }
@@ -309,6 +311,7 @@ root adt Command {
   data Usage { input: UsageInput }
 }
 root adt Result {
+  data Integration { record: IntegrationRecord }
   data Admission { record: ResultAdmission }
   data Claims { preview: ClaimPreview }
   data Termination { preview: TerminationPreview }
@@ -444,6 +447,29 @@ root data HostAdmissionInput { project: ProjectId artifact: ArtifactId owner: Ac
 root data ResultAdmission {
   artifact: ArtifactMetadata owner: Actor fence: Fence members: lst[ItemRevision] decision: AdmissionDecision decidedAt: i64
 }
+root id IntegrationId { value: uid }
+root data IntegrationIntent {
+  id: IntegrationId project: ProjectId owner: Actor repository: str target: str expected: GitCommit candidate: GitCommit
+  worker: ArtifactId reviewer: ArtifactId checks: lst[ValidationCheck] fence: Fence members: lst[ItemRevision] change: ChangeRequest
+}
+root data IntegrationHold {
+  id: IntegrationId owner: Actor target: str expected: GitCommit candidate: GitCommit members: lst[ItemRevision]
+}
+root adt IntegrationObservation {
+  data Incorporated { target: GitCommit }
+  data NotApplied { reason: str }
+}
+root adt IntegrationResolution {
+  data Pending {}
+  data NotApplied { reason: str }
+  data Recorded { acknowledgement: ChangeAck observedTarget: GitCommit }
+}
+root data IntegrationRecord { intent: IntegrationIntent resolution: IntegrationResolution reservedAt: i64 resolvedAt: opt[i64] }
+root adt HostIntegration {
+  data Reserve { intent: IntegrationIntent }
+  data Observe { id: IntegrationId observation: IntegrationObservation }
+}
+root data HostIntegrationInput { project: ProjectId operation: HostIntegration }
 root data ResolvedArtifact { metadata: ArtifactMetadata body: str }
 root data ChildInput {
   project: ProjectId request: DispatchRequest members: lst[ItemView] guidance: lst[ItemView]

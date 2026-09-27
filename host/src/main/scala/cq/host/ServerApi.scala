@@ -16,6 +16,7 @@ trait ServerApi {
   def artifact(input: ArtifactUpload): ArtifactMetadata
   def grant(input: GrantRequest): AccessToken
   def admit(input: HostAdmissionInput): ResultAdmission
+  def integrate(input: HostIntegrationInput): IntegrationRecord
 }
 
 final class HttpServerApi(endpoint: URI, token: String, session: SessionId, timeout: Duration) extends ServerApi {
@@ -62,4 +63,5 @@ final class HttpServerApi(endpoint: URI, token: String, session: SessionId, time
   override def artifact(input: ArtifactUpload): ArtifactMetadata = post("/api/artifact", ArtifactUpload_JsonCodec, input, ArtifactMetadata_JsonCodec)
   override def grant(input: GrantRequest): AccessToken = post("/api/grant", GrantRequest_JsonCodec, input, AccessToken_JsonCodec)
   override def admit(input: HostAdmissionInput): ResultAdmission = post("/api/admission", HostAdmissionInput_JsonCodec, input, ResultAdmission_JsonCodec)
+  override def integrate(input: HostIntegrationInput): IntegrationRecord = post("/api/integration", HostIntegrationInput_JsonCodec, input, IntegrationRecord_JsonCodec)
 }

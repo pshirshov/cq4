@@ -1,6 +1,6 @@
 # Git integration — next M3 increment
 
-Status: implementation contract independently approved by Astra; no integration capability is implemented. This records the next boundary after [result admission](result-admission.md), committed at `a9403af`. Design approval does not close R27; the real two-session workflow and acknowledgement reconciliation must pass.
+Status: implementation contract independently approved by Astra; the [server reservation foundation](../validation/m3-integration-reservations.md) is implemented and under verification. Host Git execution and the connected workflow remain open. This records the next boundary after [result admission](result-admission.md), committed at `a9403af`. Design approval does not close R27; the real two-session workflow and acknowledgement reconciliation must pass.
 
 ## Required behavior
 

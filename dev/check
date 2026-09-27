@@ -165,6 +165,7 @@ class Checks:
             self.run(["node", "dev/transport.mjs"], f"{name}-transport", STARTUP_TIMEOUT)
             self.run(["node", "dev/artifacts.mjs"], f"{name}-artifacts", STARTUP_TIMEOUT)
             self.sbt(["server/Test/runMain cq.server.ServerApiCheck"], f"{name}-host-api")
+            self.sbt(["server/Test/runMain cq.server.IntegrationApiCheck"], f"{name}-integration-api")
             self.run(["python3", "dev/roles-check.py", *command], f"{name}-roles", STARTUP_TIMEOUT)
             self.run(["python3", "dev/cli-check.py", *command], f"{name}-cli", STARTUP_TIMEOUT)
             self.run(["python3", "dev/cli-timeouts.py", *command], f"{name}-cli-timeouts", STARTUP_TIMEOUT)

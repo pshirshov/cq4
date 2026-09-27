@@ -22,6 +22,7 @@ abstract class DispatchAssemblyTest extends SpecZIO with AssertZIO {
     override def usage(value: HostUsageInput): HostUsageResult = throw new IllegalStateException("Assembly cannot publish usage")
     override def artifact(value: ArtifactUpload): ArtifactMetadata = throw new IllegalStateException("Assembly cannot publish artifacts")
     override def admit(value: HostAdmissionInput): ResultAdmission = throw new IllegalStateException("Assembly cannot admit results")
+    override def integrate(value: HostIntegrationInput): IntegrationRecord = throw new IllegalStateException("Assembly cannot integrate candidates")
     override def grant(value: GrantRequest): AccessToken = throw new IllegalStateException("Assembly cannot issue credentials")
   }
   private def requestId: RequestId = RequestId(UUID.randomUUID())
@@ -30,14 +31,14 @@ abstract class DispatchAssemblyTest extends SpecZIO with AssertZIO {
 
   "Reference assembly (Behavioral Active Blackbox; dummy Group / PostgreSQL Good Communication)" should {
     "resolve paginated Unicode and chain an exact candidate by handle while enforcing revisions and claim ownership" in {
-      (ledger: LedgerService[IO], repository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO]) =>
+      (ledger: LedgerService[IO], repository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO]) =>
         val clock = Clock.systemUTC()
         val scope = Scope(ProjectId(UUID.randomUUID()), Actor("assembly governor", SessionId(UUID.randomUUID()), Role.Governor))
         val collector = scope.copy(actor = scope.actor.copy(subject = "assembly collector", role = Role.Collector))
         val authorization = new Authorization(AccessConfig("assembly-contract-test-root", "http://localhost"), clock)
         val root = authorization.authenticate("assembly-contract-test-root", Some(scope.actor.session.value.toString))
         val authority = authorization.authenticate(authorization.grant(root, GrantRequest(scope.project, scope.actor, clock.millis() + 60000)).value, None)
-        val application = new Application(ledger, repository, usage, artifacts, admissions, authorization)
+        val application = new Application(ledger, repository, usage, artifacts, admissions, integrations, authorization)
         val narrative = "Consumer specification λ😀" * 1000
         val largeBody = "evidence λ😀\n" * 5000
         for {

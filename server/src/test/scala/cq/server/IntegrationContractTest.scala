@@ -1,0 +1,260 @@
+package cq.server
+
+import cq.api.*
+import cq.core.*
+import distage.{Activation, DIKey}
+import distage.StandardAxis.Repo
+import izumi.distage.plugins.PluginConfig
+import izumi.distage.testkit.scalatest.{AssertZIO, SpecZIO}
+import java.io.IOException
+import java.time.{Clock, Instant, ZoneOffset}
+import java.util.UUID
+import zio.{IO, ZIO}
+
+abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
+  override def config = super.config.copy(pluginConfig = PluginConfig.const(List(CqPlugin)),
+    memoizationRoots = Set(DIKey[LedgerService[IO]], DIKey[UsageService[IO]], DIKey[ArtifactService[IO]], DIKey[IntegrationService[IO]]))
+  private def uuid: UUID = UUID.randomUUID()
+  private def task: ItemDraft = ItemDraft("Integration task", "Preserved narrative", Set("consumer"), false,
+    Content.Task(TaskStatus.Ready, List("Exact reviewed behavior"), None, Nil), Nil)
+  private final case class Fixture(owner: Scope, collector: Scope, claim: Claim, items: List[Item], worker: ChildResult,
+    reviewer: ChildResult, intent: IntegrationIntent) {
+    def fresh: IntegrationIntent = {
+      val id = IntegrationId(uuid)
+      intent.copy(id = id, change = IntegrationPolicy.completion(id, intent.repository, intent.target, intent.candidate,
+        intent.worker, intent.reviewer, worker.validation.map(_.artifact), intent.fence, items))
+    }
+  }
+  private def publish(scope: Scope, value: ChildResult, artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO]): IO[Throwable, ArtifactId] = for {
+    artifact <- artifacts.upload(scope, ArtifactUpload(scope.project, ArtifactId(uuid), value.attempt, ArtifactKind.Result,
+      "application/json", Wire.encode(ChildResult_JsonCodec, value)))
+    admitted <- admissions.admit(scope, HostAdmissionInput(scope.project, artifact.id, scope.actor.copy(subject = "integration governor", role = Role.Governor)))
+    _ <- assertIO(admitted.decision == AdmissionDecision.Accepted())
+  } yield artifact.id
+
+  private def begin(ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO]): IO[Throwable, Fixture] = {
+    val owner = Scope(ProjectId(uuid), Actor("integration governor", SessionId(uuid), Role.Governor))
+    val collector = owner.copy(actor = owner.actor.copy(subject = "host collector", role = Role.Collector))
+    val candidate = GitCommit("b" * 40)
+    val check = ValidationCheck("consumer", List("consumer-check"), 1000, 65536)
+    for {
+      _ <- ledger.initialize(owner, "Integration")
+      created <- ledger.change(owner, ChangeRequest(RequestId(uuid), List.fill(2)(Mutation.Create(task)), Nil, "Consumer tasks"))
+      items <- ZIO.foreach(created.items)(ref => ledger.get(owner, ref.id).map(_.item))
+      claim <- ledger.acquire(owner, ClaimId(uuid), created.items.map(_.id).toSet, 300000)
+      parentAssignment <- usage.assign(collector, Assignment(AssignmentId(uuid), owner.project, Set.empty, Attribution.Unattributed, None, None))
+      parent <- usage.start(collector, Attempt(AttemptId(uuid), parentAssignment.id, None, owner.actor.session, Role.Governor, Harness.Codex, "fixture", "fixture", "fixture", 1000))
+      workerAssignment <- usage.assign(collector, Assignment(AssignmentId(uuid), owner.project, claim.members, Attribution.Shared, Some(uuid), None))
+      workerAttempt <- usage.start(collector, parent.copy(id = AttemptId(uuid), assignment = workerAssignment.id, parent = Some(parent.id), role = Role.Worker))
+      job = JobRecord(WorkspaceSpec(owner.project, owner.actor.session, AttemptId(uuid), "/consumer", candidate), "fixture", JobTarget.Run,
+        JobPhase.Settled, Some(JobExit(Some(0), None, StopReason.Exited, 0, 0, true, false)), None, 1, 1000, 1001)
+      validation <- artifacts.upload(collector, ArtifactUpload(owner.project, ArtifactId(uuid), workerAttempt.id, ArtifactKind.Validation, "application/json",
+        Wire.encode(ValidationObservation_JsonCodec, ValidationObservation(check, candidate, job, ArtifactId(uuid), ArtifactId(uuid)))))
+      request = DispatchRequest(RequestId(uuid), DispatchWork.Worker(WorkerMode.Implement), Harness.Codex, created.items, Nil, Nil, None,
+        claim.fence, HostLimits(3000, 10000, 1000, 300, 2000, 262144))
+      worker = ChildResult(workerAttempt.id, request, GitCommit("a" * 40), Some(candidate),
+        ChildReport.Work(created.items.map(ref => WorkMember(ref.id, WorkDisposition.CandidateReady, "Ready"))), List(ValidationEvidence(check.name, ValidationState.Passed, validation.id)))
+      workerArtifact <- publish(collector, worker, artifacts, admissions)
+      reviewAssignment <- usage.assign(collector, workerAssignment.copy(id = AssignmentId(uuid), cohort = Some(uuid)))
+      reviewAttempt <- usage.start(collector, workerAttempt.copy(id = AttemptId(uuid), assignment = reviewAssignment.id, role = Role.Reviewer))
+      reviewer = ChildResult(reviewAttempt.id, request.copy(request = RequestId(uuid), work = DispatchWork.Reviewer(), previous = Some(workerArtifact)),
+        candidate, Some(candidate), ChildReport.Review(created.items.map(ref => ReviewMember(ref.id, ReviewVerdict.Accepted, Nil))), worker.validation)
+      reviewArtifact <- publish(collector, reviewer, artifacts, admissions)
+      id = IntegrationId(uuid)
+      change = IntegrationPolicy.completion(id, "/consumer", "refs/heads/integration", candidate, workerArtifact, reviewArtifact, List(validation.id), claim.fence, items)
+      intent = IntegrationIntent(id, owner.project, owner.actor, "/consumer", "refs/heads/integration", worker.base, candidate,
+        workerArtifact, reviewArtifact, List(check), claim.fence, created.items, change)
+    } yield Fixture(owner, collector, claim, items, worker, reviewer, intent)
+  }
+  private def reject[A](operation: IO[Throwable, A], accepts: Fault => Boolean): IO[Throwable, Unit] = operation.either.flatMap { value =>
+    assertIO(value match { case Left(DomainFailure(fault)) => accepts(fault); case _ => false }).unit
+  }
+  private def pending(id: IntegrationId)(fault: Fault): Boolean = fault == Fault.IntegrationPending(id)
+  private def fixed(repository: LedgerRepository[IO], millis: Long): LedgerService[IO] = {
+    val parser = new QueryParser
+    val worksets = new WorksetTraversal
+    val termination = new TerminationPlanner(worksets)
+    new LedgerService.Impl[IO](repository, Clock.fixed(Instant.ofEpochMilli(millis), ZoneOffset.UTC), parser,
+      new QueryCompleter(parser), worksets, termination, new ClaimPlanner, new LedgerMutation(termination))
+  }
+
+  "Integration reservations (Behavioral Active Blackbox; dummy Group / PostgreSQL Good Communication)" should {
+    "reserve the domain request identity even when an ordinary request touches only unrelated new items" in {
+      (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO]) => for {
+        f <- begin(ledger, usage, artifacts, admissions)
+        _ <- integrations.reserve(f.collector, f.intent)
+        before <- ledger.changes(f.owner, ChangeCursor(0), 20)
+        ordinary = ChangeRequest(f.intent.change.request, List(Mutation.Create(task.copy(title = "Unrelated identity reuse"))), Nil, "Ordinary creation")
+        result <- ledger.change(f.owner, ordinary).either
+        _ <- ZIO.succeed(println(s"Ordinary change using reserved integration request identity: $result"))
+        _ <- assertIO(result == Left(DomainFailure(Fault.IntegrationPending(f.intent.id))))
+        unchanged <- ledger.changes(f.owner, ChangeCursor(0), 20)
+        _ <- assertIO(unchanged == before)
+        independent <- ledger.change(f.owner, ordinary.copy(request = RequestId(uuid)))
+        _ <- assertIO(independent.items.map(_.id.number) == List(3L))
+        recorded <- integrations.observe(f.collector, f.intent.id, IntegrationObservation.Incorporated(f.intent.candidate))
+        _ <- assertIO(recorded.resolution.isInstanceOf[IntegrationResolution.Recorded])
+      } yield ()
+    }
+
+    "freeze exact task membership and exclude ordinary edits, release, takeover and termination while preserving unrelated work" in {
+      (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO]) => for {
+        f <- begin(ledger, usage, artifacts, admissions)
+        before <- ledger.changes(f.owner, ChangeCursor(0), 20)
+        records <- ZIO.collectAllPar(List.fill(2)(integrations.reserve(f.collector, f.intent)))
+        _ <- assertIO(records.distinct.size == 1 && records.head.resolution == IntegrationResolution.Pending())
+        after <- ledger.changes(f.owner, ChangeCursor(0), 20)
+        _ <- assertIO(after == before)
+        _ <- reject(ledger.change(f.owner, f.intent.change), pending(f.intent.id))
+        member = f.items.head
+        _ <- reject(ledger.change(f.owner, ChangeRequest(RequestId(uuid), List(Mutation.Replace(member.id, member.revision,
+          member.draft.copy(title = "Forbidden"))), List(f.claim.fence), "Same owner edit")), pending(f.intent.id))
+        _ <- reject(ledger.change(f.owner, ChangeRequest(RequestId(uuid), List(Mutation.Restore(member.id, member.revision, member.revision, Nil)), List(f.claim.fence), "Restore")), pending(f.intent.id))
+        _ <- reject(ledger.change(f.owner, ChangeRequest(RequestId(uuid), List(Mutation.Produce(member.id, member.revision, List(task))), List(f.claim.fence), "Produce")), pending(f.intent.id))
+        _ <- reject(ledger.release(f.owner, f.claim.fence), pending(f.intent.id))
+        human = f.owner.copy(actor = f.owner.actor.copy(role = Role.Human))
+        preview <- ledger.claimPreview(human, Set(member.id))
+        _ <- assertIO(preview.integrations == List(IntegrationPolicy.hold(f.intent)))
+        _ <- reject(ledger.takeover(human, ClaimId(uuid), human.actor, Set(member.id), 300000, preview.snapshot), pending(f.intent.id))
+        termination <- ledger.termination(human, f.claim.members, TerminationIntent.Cancel)
+        _ <- assertIO(!termination.plan.canApply && termination.plan.integrations == preview.integrations)
+        _ <- reject(ledger.change(human, ChangeRequest(RequestId(uuid), List(Mutation.Terminate(f.claim.members, TerminationIntent.Cancel, termination.snapshot)),
+          List(f.claim.fence), "Terminate")), pending(f.intent.id))
+        separate <- ledger.change(f.owner, ChangeRequest(RequestId(uuid), List(Mutation.Create(task.copy(title = "Independent"))), Nil, "Independent work"))
+        other = f.owner.copy(actor = f.owner.actor.copy(session = SessionId(uuid)))
+        _ <- ledger.acquire(other, ClaimId(uuid), separate.items.map(_.id).toSet, 300000)
+        _ <- reject(ledger.change(f.owner, ChangeRequest(RequestId(uuid), List(Mutation.Reference(member.id, member.revision, Relation.RelatesTo,
+          separate.items.head.id, separate.items.head.revision, true)), List(f.claim.fence), "Reserved endpoint")), pending(f.intent.id))
+      } yield ()
+    }
+
+    "record one exact completion after claim expiry without reviving the lease or duplicating history" in {
+      (ledger: LedgerService[IO], repository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], artifactRepository: ArtifactRepository[IO],
+        admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], mutations: LedgerMutation) => for {
+        f <- begin(ledger, usage, artifacts, admissions)
+        first <- integrations.reserve(f.collector, f.intent)
+        expired = fixed(repository, f.claim.expiresAt + 1)
+        _ <- reject(expired.acquire(f.owner, ClaimId(uuid), f.claim.members, 300000), pending(f.intent.id))
+        _ <- reject(expired.change(f.owner, f.intent.change), pending(f.intent.id))
+        _ <- reject(expired.renew(f.owner, f.claim.fence, 300000), _.isInstanceOf[Fault.StaleFence])
+        late = new IntegrationServiceImpl[IO](repository, artifactRepository, mutations, Clock.fixed(Instant.ofEpochMilli(f.claim.expiresAt + 1), ZoneOffset.UTC))
+        replay <- late.reserve(f.collector, f.intent)
+        _ <- assertIO(replay == first)
+        _ <- reject(late.reserve(f.collector, f.fresh), _.isInstanceOf[Fault.StaleFence])
+        recorded <- ZIO.collectAllPar(List.fill(2)(late.observe(f.collector, f.intent.id, IntegrationObservation.Incorporated(f.intent.candidate))))
+        _ <- assertIO(recorded.distinct.size == 1 && recorded.head.resolution.isInstanceOf[IntegrationResolution.Recorded])
+        acknowledgement = recorded.head.resolution.asInstanceOf[IntegrationResolution.Recorded].acknowledgement
+        ordinaryReplay <- expired.change(f.owner, f.intent.change)
+        _ <- assertIO(ordinaryReplay == acknowledgement)
+        items <- ZIO.foreach(f.items)(item => ledger.get(f.owner, item.id))
+        histories <- ZIO.foreach(f.items)(item => ledger.history(f.owner, item.id, Revision(Long.MaxValue), 20))
+        _ <- assertIO(items.forall(item => item.item.revision == Revision(2) && item.item.draft.body == task.body && item.item.draft.labels == task.labels &&
+          item.item.draft.content.asInstanceOf[Content.Task].status == TaskStatus.Done && item.item.draft.content.asInstanceOf[Content.Task].validation.last.origin == EvidenceOrigin.HostObserved))
+        _ <- assertIO(histories.forall(page => page.entries.size == 2 && page.entries.head.cursor == acknowledgement.cursor))
+        preview <- expired.claimPreview(f.owner, f.claim.members)
+        _ <- assertIO(preview.claims.isEmpty && preview.integrations.isEmpty)
+        _ <- expired.acquire(f.owner, ClaimId(uuid), f.claim.members, 300000)
+        _ <- reject(late.observe(f.collector, f.intent.id, IntegrationObservation.NotApplied("Changed observation")), _.isInstanceOf[Fault.Conflict])
+      } yield ()
+    }
+
+    "retain settled non-application, reject changed intent and permit replacement only after resolution" in {
+      (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO]) => for {
+        f <- begin(ledger, usage, artifacts, admissions)
+        candidates <- ZIO.collectAllPar(List(f.intent, f.fresh).map(intent => integrations.reserve(f.collector, intent).either))
+        _ <- assertIO(candidates.count(_.isRight) == 1 && candidates.exists { case Left(DomainFailure(_: Fault.IntegrationPending)) => true; case _ => false })
+        kept = candidates.collectFirst { case Right(value) => value }.get
+        _ <- reject(integrations.reserve(f.collector, kept.intent.copy(target = "refs/heads/changed")), _.isInstanceOf[Fault.Conflict])
+        observed = IntegrationObservation.NotApplied("Conditional update lost; executor settled")
+        resolved <- integrations.observe(f.collector, kept.intent.id, observed)
+        replay <- integrations.observe(f.collector, kept.intent.id, observed)
+        reservedReplay <- integrations.reserve(f.collector, kept.intent)
+        _ <- assertIO(resolved == replay && replay == reservedReplay && resolved.resolution == IntegrationResolution.NotApplied(observed.reason))
+        unchanged <- ZIO.foreach(f.items)(item => ledger.get(f.owner, item.id).map(_.item))
+        _ <- assertIO(unchanged == f.items)
+        _ <- reject(integrations.observe(f.collector, kept.intent.id, IntegrationObservation.Incorporated(f.intent.candidate)), _.isInstanceOf[Fault.Conflict])
+        _ <- ledger.release(f.owner, f.claim.fence)
+        _ <- ledger.acquire(f.owner.copy(actor = f.owner.actor.copy(session = SessionId(uuid))), ClaimId(uuid), f.claim.members, 300000)
+      } yield ()
+    }
+
+    "serialize reservation against release and takeover in both orders" in {
+      (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO]) => for {
+        released <- begin(ledger, usage, artifacts, admissions)
+        _ <- ledger.release(released.owner, released.claim.fence)
+        _ <- reject(integrations.reserve(released.collector, released.intent), _.isInstanceOf[Fault.StaleFence])
+        taken <- begin(ledger, usage, artifacts, admissions)
+        human = taken.owner.copy(actor = taken.owner.actor.copy(role = Role.Human))
+        preview <- ledger.claimPreview(human, taken.claim.members)
+        _ <- ledger.takeover(human, ClaimId(uuid), human.actor, taken.claim.members, 300000, preview.snapshot)
+        _ <- reject(integrations.reserve(taken.collector, taken.intent), _.isInstanceOf[Fault.StaleFence])
+        raced <- begin(ledger, usage, artifacts, admissions)
+        results <- integrations.reserve(raced.collector, raced.intent).either.zipPar(ledger.release(raced.owner, raced.claim.fence).either)
+        _ <- assertIO(results match {
+          case (Right(_), Left(DomainFailure(_: Fault.IntegrationPending))) => true
+          case (Left(DomainFailure(_: Fault.StaleFence)), Right(_)) => true
+          case _ => false
+        })
+      } yield ()
+    }
+
+    "deny model roles and foreign owners and reject altered domain requests and validation evidence before reservation" in {
+      (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO]) => for {
+        f <- begin(ledger, usage, artifacts, admissions)
+        _ <- ZIO.foreachDiscard(List(Role.Human, Role.Governor, Role.Worker, Role.Reviewer, Role.Explorer, Role.Planner)) { role =>
+          reject(integrations.reserve(f.collector.copy(actor = f.collector.actor.copy(role = role)), f.intent), _.isInstanceOf[Fault.Denied])
+        }
+        _ <- reject(integrations.reserve(f.collector.copy(actor = f.collector.actor.copy(session = SessionId(uuid))), f.intent), _.isInstanceOf[Fault.Denied])
+        _ <- reject(integrations.reserve(f.collector, f.intent.copy(project = ProjectId(uuid))), _.isInstanceOf[Fault.Denied])
+        _ <- reject(integrations.reserve(f.collector, f.intent.copy(change = f.intent.change.copy(mutations = List(Mutation.Create(task))))), _.isInstanceOf[Fault.Invalid])
+        _ <- reject(integrations.reserve(f.collector, f.intent.copy(checks = Nil)), _.isInstanceOf[Fault.Invalid])
+        _ <- reject(integrations.reserve(f.collector, f.intent.copy(checks = f.intent.checks.map(_.copy(command = List("another-check"))))), _.isInstanceOf[Fault.Invalid])
+        _ <- reject(integrations.reserve(f.collector, f.intent.copy(candidate = GitCommit("c" * 40))), _.isInstanceOf[Fault.Invalid])
+        _ <- reject(integrations.get(f.owner, f.intent.id), _.isInstanceOf[Fault.Missing])
+        preview <- ledger.claimPreview(f.owner, f.claim.members)
+        _ <- assertIO(preview.integrations.isEmpty)
+        _ <- integrations.reserve(f.collector, f.intent)
+        _ <- reject(integrations.observe(f.owner, f.intent.id, IntegrationObservation.Incorporated(f.intent.candidate)), _.isInstanceOf[Fault.Denied])
+        _ <- reject(integrations.observe(f.collector.copy(actor = f.collector.actor.copy(session = SessionId(uuid))), f.intent.id,
+          IntegrationObservation.NotApplied("Unauthorized")), _.isInstanceOf[Fault.Denied])
+      } yield ()
+    }
+
+    "roll back failed recording and replay a lost acknowledgement without duplicate completion" in {
+      (ledger: LedgerService[IO], repository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], artifactRepository: ArtifactRepository[IO],
+        admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], mutations: LedgerMutation) =>
+        ZIO.foreachDiscard(List(true, false)) { abort =>
+          val failing = new LedgerRepository[IO] {
+            override def initialize(value: Project): IO[Throwable, Project] = repository.initialize(value)
+            override def projects(after: Option[ProjectId], limit: Int): IO[Throwable, List[Project]] = repository.projects(after, limit)
+            override def transact[A](project: ProjectId)(operation: LedgerTransaction => A): IO[Throwable, A] =
+              if (abort) repository.transact(project) { tx => operation(tx); throw new IOException("Recording transaction failed after applying changes") }
+              else repository.transact(project)(operation).flatMap(_ => ZIO.fail(new IOException("Recording acknowledgement lost after commit")))
+          }
+          val lossy = new IntegrationServiceImpl[IO](failing, artifactRepository, mutations, Clock.systemUTC())
+          for {
+            f <- begin(ledger, usage, artifacts, admissions)
+            _ <- integrations.reserve(f.collector, f.intent)
+            result <- lossy.observe(f.collector, f.intent.id, IntegrationObservation.Incorporated(f.intent.candidate)).either
+            _ <- assertIO(result.left.exists(_.isInstanceOf[IOException]))
+            before <- integrations.get(f.owner, f.intent.id)
+            _ <- assertIO(before.resolution.isInstanceOf[IntegrationResolution.Pending] == abort)
+            items <- ZIO.foreach(f.items)(item => ledger.get(f.owner, item.id))
+            _ <- assertIO(items.forall(_.item.revision == Revision(if (abort) 1 else 2)))
+            recorded <- integrations.observe(f.collector, f.intent.id, IntegrationObservation.Incorporated(f.intent.candidate))
+            replay <- integrations.observe(f.collector, f.intent.id, IntegrationObservation.Incorporated(f.intent.candidate))
+            _ <- assertIO(recorded == replay)
+            history <- ledger.history(f.owner, f.items.head.id, Revision(Long.MaxValue), 20)
+            _ <- assertIO(history.entries.size == 2)
+          } yield ()
+        }
+    }
+  }
+}
+
+final class IntegrationContractDummy extends IntegrationContractTest {
+  override def config = super.config.copy(activation = Activation(Repo -> Repo.Dummy))
+}
+final class IntegrationContractPostgres extends IntegrationContractTest {
+  override def config = super.config.copy(activation = Activation(Repo -> Repo.Prod))
+}

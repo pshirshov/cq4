@@ -16,7 +16,7 @@ final class DummyLedgerResource extends Lifecycle.LiftF[Task, LedgerRepository[I
         current.get(project.id) match {
           case Some(existing) => (existing.project, current)
           case None =>
-            val state = DummyLedgerState(project, 0L, 0L, Map.empty, Map.empty, Set.empty, Map.empty, Map.empty, List.empty, Map.empty, Map.empty, Map.empty)
+            val state = DummyLedgerState(project, 0L, 0L, Map.empty, Map.empty, Set.empty, Map.empty, Map.empty, List.empty, Map.empty, Map.empty, Map.empty, Map.empty, Map.empty)
             (project, current.updated(project.id, state))
         }
       }
@@ -45,6 +45,8 @@ private final case class DummyLedgerState(
   claims: Map[ClaimId, Claim],
   members: Map[ItemId, ClaimId],
   admissions: Map[AttemptId, ResultAdmission],
+  integrations: Map[IntegrationId, IntegrationRecord],
+  reserved: Map[ItemId, IntegrationId],
 )
 
 private final class DummyLedgerTransaction(initial: DummyLedgerState) extends LedgerTransaction {
@@ -142,5 +144,20 @@ private final class DummyLedgerTransaction(initial: DummyLedgerState) extends Le
     val next = Math.addExact(state.fence, 1L)
     state = state.copy(fence = next)
     next
+  }
+  override def integration(id: IntegrationId): Option[IntegrationRecord] = state.integrations.get(id)
+  override def pendingIntegration(item: ItemId): Option[IntegrationHold] =
+    state.reserved.get(item).map(id => IntegrationPolicy.hold(state.integrations(id).intent))
+  override def insertIntegration(value: IntegrationRecord): Unit = {
+    require(!state.integrations.contains(value.intent.id) && value.resolution == IntegrationResolution.Pending(), "Integration is already registered or resolved")
+    require(value.intent.members.forall(ref => !state.reserved.contains(ref.id)), "Integration overlaps reserved work")
+    state = state.copy(integrations = state.integrations.updated(value.intent.id, value),
+      reserved = state.reserved ++ value.intent.members.map(ref => ref.id -> value.intent.id))
+  }
+  override def resolveIntegration(value: IntegrationRecord): Unit = {
+    require(state.integrations.get(value.intent.id).exists(old => old.intent == value.intent && old.resolution == IntegrationResolution.Pending()) &&
+      value.resolution != IntegrationResolution.Pending(), "Integration resolution requires the exact pending intent")
+    require(value.intent.members.forall(ref => state.reserved.get(ref.id).contains(value.intent.id)), "Integration membership is inconsistent")
+    state = state.copy(integrations = state.integrations.updated(value.intent.id, value), reserved = state.reserved -- value.intent.members.map(_.id))
   }
 }

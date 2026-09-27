@@ -57,8 +57,9 @@ final class TerminationPlanner(worksets: WorksetTraversal) {
         TerminationClaim(claim.fence, claim.owner, claim.members.toList.sortBy(key), claim.members.intersect(selected).toList.sortBy(key),
           scope.actor.role == Role.Human || scope.actor == claim.owner)
       }
-    val plan = TerminationPlan(roots.toList.sortBy(key), intent, entries, claims,
-      !entries.exists(_.effect.isInstanceOf[TerminationEffect.Unsupported]) && claims.forall(_.permitted))
+    val integrations = IntegrationPolicy.pending(tx, selected ++ claims.flatMap(_.members))
+    val plan = TerminationPlan(roots.toList.sortBy(key), intent, entries, claims, integrations,
+      integrations.isEmpty && !entries.exists(_.effect.isInstanceOf[TerminationEffect.Unsupported]) && claims.forall(_.permitted))
     val encoded = TerminationPlan_JsonCodec.encode(BaboonCodecContext.Default, plan)
     val digest = PreviewDigest(scope, encoded)
     val result = TerminationPreview(plan, TerminationSnapshot(graph.snapshot.cursor, digest))

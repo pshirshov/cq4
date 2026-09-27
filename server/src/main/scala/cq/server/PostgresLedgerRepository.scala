@@ -235,4 +235,40 @@ private final class PostgresLedgerTransaction(connection: Connection, override v
   }
 
   override def nextFence(): Long = sql.query("UPDATE cq_projects SET fence_counter = fence_counter + 1 WHERE project_id = ? RETURNING fence_counter")(projectKey)(_.getLong(1)).head
+
+  override def integration(id: IntegrationId): Option[IntegrationRecord] =
+    sql.query("SELECT body::text FROM cq_integrations WHERE project_id = ? AND integration_id = ?") { s =>
+      projectKey(s); s.setObject(2, id.value)
+    }(r => Wire.decode(IntegrationRecord_JsonCodec, r.getString(1))).headOption
+
+  override def pendingIntegration(item: ItemId): Option[IntegrationHold] =
+    sql.query("SELECT i.hold::text FROM cq_integration_members m JOIN cq_integrations i USING(project_id, integration_id) WHERE m.project_id = ? AND m.ledger = ? AND m.item_number = ?") { s =>
+      itemKey(s, item)
+    }(r => Wire.decode(IntegrationHold_JsonCodec, r.getString(1))).headOption
+
+  override def insertIntegration(value: IntegrationRecord): Unit = {
+    require(value.resolution == IntegrationResolution.Pending(), "New integration must be pending")
+    sql.execute("INSERT INTO cq_integrations(project_id, integration_id, body, hold) VALUES (?, ?, ?::jsonb, ?::jsonb)") { s =>
+      projectKey(s); s.setObject(2, value.intent.id.value); s.setString(3, Wire.encode(IntegrationRecord_JsonCodec, value))
+      s.setString(4, Wire.encode(IntegrationHold_JsonCodec, IntegrationPolicy.hold(value.intent)))
+    }
+    value.intent.members.foreach { ref =>
+      sql.execute("INSERT INTO cq_integration_members(project_id, ledger, item_number, integration_id) VALUES (?, ?, ?, ?)") { s =>
+        itemKey(s, ref.id); s.setObject(4, value.intent.id.value)
+      }
+    }
+  }
+
+  override def resolveIntegration(value: IntegrationRecord): Unit = {
+    require(integration(value.intent.id).exists(old => old.intent == value.intent && old.resolution == IntegrationResolution.Pending()) &&
+      value.resolution != IntegrationResolution.Pending(), "Integration resolution requires the exact pending intent")
+    val count = sql.execute("DELETE FROM cq_integration_members WHERE project_id = ? AND integration_id = ?") { s =>
+      projectKey(s); s.setObject(2, value.intent.id.value)
+    }
+    require(count == value.intent.members.size, "Integration membership is inconsistent")
+    val changed = sql.execute("UPDATE cq_integrations SET body = ?::jsonb WHERE project_id = ? AND integration_id = ?") { s =>
+      s.setString(1, Wire.encode(IntegrationRecord_JsonCodec, value)); s.setObject(2, project.id.value); s.setObject(3, value.intent.id.value)
+    }
+    require(changed == 1, "Integration record disappeared")
+  }
 }

@@ -28,6 +28,7 @@ final class HostDeliveryLocal extends AnyWordSpec {
     override def call(value: Command): Result = throw new IllegalStateException("Not a publication operation")
     override def usage(value: HostUsageInput): HostUsageResult = throw new IllegalStateException("Not used in artifact replay scenario")
     override def admit(value: HostAdmissionInput): ResultAdmission = throw new IllegalStateException("This publication has no admission request")
+    override def integrate(value: HostIntegrationInput): IntegrationRecord = throw new IllegalStateException("Publication cannot integrate candidates")
     override def grant(value: GrantRequest): AccessToken = throw new IllegalStateException("Publication queue cannot grant authority")
   }
 
@@ -203,6 +204,7 @@ object PublicationDurabilityCheck {
       override def call(value: Command): Result = throw new IllegalStateException("Unexpected domain call")
       override def usage(value: HostUsageInput): HostUsageResult = throw new IllegalStateException("Unexpected usage call")
       override def admit(value: HostAdmissionInput): ResultAdmission = throw new IllegalStateException("This publication has no admission request")
+      override def integrate(value: HostIntegrationInput): IntegrationRecord = throw new IllegalStateException("Publication cannot integrate candidates")
     override def grant(value: GrantRequest): AccessToken = throw new IllegalStateException("Unexpected grant")
     }
     def rejected[A](operation: => A): Boolean = try { operation; false } catch { case _: IOException => true }

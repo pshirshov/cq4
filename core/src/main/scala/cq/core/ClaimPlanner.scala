@@ -15,9 +15,11 @@ final class ClaimPlanner {
       ItemRevision(item.id, item.revision)
     }
     val claims = ClaimPolicy.overlapping(tx, members, now)
+    val integrations = IntegrationPolicy.pending(tx, members ++ claims.flatMap(_.members))
     val plan = Json.obj("members" -> Json.fromValues(revisions.map(ItemRevision_JsonCodec.encode(BaboonCodecContext.Default, _))),
+      "integrations" -> Json.fromValues(integrations.map(IntegrationHold_JsonCodec.encode(BaboonCodecContext.Default, _))),
       "claims" -> Json.fromValues(claims.map(c => Claim_JsonCodec.encode(BaboonCodecContext.Default, c).mapObject(_.remove("expiresAt")))))
-    val result = ClaimPreview(revisions, claims, ClaimSnapshot(tx.cursor, PreviewDigest(scope, plan)))
+    val result = ClaimPreview(revisions, claims, integrations, ClaimSnapshot(tx.cursor, PreviewDigest(scope, plan)))
     if (ClaimPreview_JsonCodec.encode(BaboonCodecContext.Default, result).noSpaces.getBytes(UTF_8).length > ReadPage.MaxBytes - ReadPage.EnvelopeBytes)
       throw DomainFailure(Fault.Limit("Claim preview exceeds the encoded-byte bound; choose fewer members"))
     result

@@ -219,3 +219,20 @@ CREATE TABLE cq_result_admissions (
   FOREIGN KEY (project_id, attempt_id) REFERENCES cq_usage_attempts,
   FOREIGN KEY (project_id, artifact_id) REFERENCES cq_artifacts
 );
+CREATE TABLE cq_integrations (
+  project_id uuid NOT NULL REFERENCES cq_projects,
+  integration_id uuid NOT NULL,
+  body jsonb NOT NULL,
+  hold jsonb NOT NULL,
+  PRIMARY KEY (project_id, integration_id)
+);
+CREATE TABLE cq_integration_members (
+  project_id uuid NOT NULL,
+  ledger text NOT NULL,
+  item_number bigint NOT NULL,
+  integration_id uuid NOT NULL,
+  PRIMARY KEY (project_id, ledger, item_number),
+  FOREIGN KEY (project_id, integration_id) REFERENCES cq_integrations,
+  FOREIGN KEY (project_id, ledger, item_number) REFERENCES cq_items
+);
+CREATE INDEX cq_integration_members_owner ON cq_integration_members(project_id, integration_id);
