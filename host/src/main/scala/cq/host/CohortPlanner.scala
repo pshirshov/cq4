@@ -12,8 +12,8 @@ final class CohortPlanner(api: ServerApi, owner: Scope, base: GitCommit, checks:
   private val DeadlineNanos = Duration.ofSeconds(60).toNanos
   private val PageSize = 200
   private val RequestBytes = 16 * 1024
-  private final case class Context(guidance: List[ItemView], artifacts: List[ResolvedArtifact], results: List[AdmittedResult],
-    assessments: List[ExecutedResult], reviews: List[ExecutedResult], previous: Option[ChildResult]) {
+  private final case class Context(guidance: List[ItemView], artifacts: List[ResolvedArtifact], operative: List[CohortArtifactFingerprint], results: List[AdmittedResult],
+    operativeResults: List[CohortResultFingerprint], assessments: List[ExecutedResult], reviews: List[ExecutedResult], previous: Option[ChildResult]) {
     def executionBase: GitCommit = previous.flatMap(_.candidate).getOrElse(base)
   }
 
@@ -83,7 +83,11 @@ final class CohortPlanner(api: ServerApi, owner: Scope, base: GitCommit, checks:
       case _ => false
     } => reader.assessment(value.metadata.id) }
     val reviews = sources.filter(_.value.request.work == DispatchWork.Reviewer(ReviewerMode.Candidate)).map(value => reader.review(value.metadata.id))
-    Context(guidance.items, artifacts, results, assessments, reviews, previous.map(_.value))
+    val cache = scala.collection.mutable.Map.from(artifacts.map(value => value.metadata.id -> value))
+    def read(id: ArtifactId): ResolvedArtifact = cache.getOrElseUpdate(id, reader.read(id))
+    val operative = artifacts.map(value => CohortArtifacts(value, read))
+    val operativeResults = sources.map(value => CohortArtifacts.result(value, read))
+    Context(guidance.items, artifacts, operative, results, operativeResults, assessments, reviews, previous.map(_.value))
   }
 
   private def producers(value: ItemView): Set[ItemId] = value.refs.collect { case ItemRef(Relation.DerivedFrom, id) => id }.toSet
@@ -94,7 +98,7 @@ final class CohortPlanner(api: ServerApi, owner: Scope, base: GitCommit, checks:
   private def supports(work: DispatchWork, id: ItemId): Boolean =
     work != DispatchWork.Worker(WorkerMode.Implement) || id.ledger == Ledger.Tasks
   private def fingerprint(work: DispatchWork, members: List[ItemView], context: Context): String =
-    CohortFingerprint(work, members, context.guidance, context.artifacts, context.results, context.previous, context.executionBase, checks)
+    CohortFingerprint(work, members, context.guidance, context.operative, context.operativeResults, context.executionBase, checks)
   private def executionFingerprint(work: DispatchWork, members: List[ItemView], context: Context): CohortExecutionFingerprint =
     CohortExecutionFingerprint(fingerprint(work, members, context), members.map(member => member.item.id -> fingerprint(work, List(member), context)).toMap)
 

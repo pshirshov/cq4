@@ -59,8 +59,8 @@ object CohortFingerprint {
       })
     })
 
-  def apply(work: DispatchWork, members: List[ItemView], guidance: List[ItemView], artifacts: List[ResolvedArtifact],
-    results: List[AdmittedResult], previous: Option[ChildResult], base: GitCommit, checks: List[ValidationCheck]): String = {
+  def apply(work: DispatchWork, members: List[ItemView], guidance: List[ItemView], artifacts: List[CohortArtifactFingerprint],
+    results: List[CohortResultFingerprint], base: GitCommit, checks: List[ValidationCheck]): String = {
     val ids = members.map(_.item.id).toSet
     def project(value: ChildReport): ChildReport = value match {
       case evidence: ChildReport.Evidence => evidence.copy(members = evidence.members.filter(member => ids(member.item)))
@@ -75,19 +75,22 @@ object CohortFingerprint {
         "draft" -> ItemDraft_JsonCodec.encode(baboon.runtime.shared.BaboonCodecContext.Default, view.item.draft).mapObject(_.remove("labels")),
         "refs" -> Json.fromValues(view.refs.map(ref => ItemRef_JsonCodec.encode(baboon.runtime.shared.BaboonCodecContext.Default, ref)).sortBy(_.noSpaces)))
     })
-    def result(value: ChildResult): Option[Json] = {
+    def result(source: CohortResultFingerprint): Option[Json] = {
+      val value = source.value
       val overlapping = value.request.members.exists(member => ids(member.id))
       if (overlapping && value.request.work == work) None
       else Some(Json.obj(
         "report" -> report(ChildReport_JsonCodec.encode(baboon.runtime.shared.BaboonCodecContext.Default,
           if (overlapping) project(value.report) else value.report)),
         "candidate" -> value.candidate.fold(Json.Null)(value => Json.fromString(value.value)),
+        "observations" -> Json.fromValues(source.validation.map(_.content).map(canonical).sortBy(_.noSpaces)),
         "validation" -> Json.fromValues(value.validation.sortBy(_.check).map(value => Json.obj(
           "check" -> Json.fromString(value.check), "state" -> Json.fromString(value.state.toString))))))
     }
-    val evidence = (results.flatMap(value => result(value.value)) ++ previous.flatMap(result).toList ++
-      artifacts.filterNot(value => Set(ArtifactKind.Result, ArtifactKind.Selection)(value.metadata.kind))
-        .map(value => Json.fromString(value.body))).map(canonical).distinct.sortBy(_.noSpaces)
+    val evidence = (results.flatMap(result) ++
+      artifacts.filterNot(value => Set(ArtifactKind.Result, ArtifactKind.Selection)(value.kind))
+        .map(value => Json.obj("kind" -> Json.fromString(value.kind.toString), "mediaType" -> Json.fromString(value.mediaType),
+          "content" -> value.content))).map(canonical).distinct.sortBy(_.noSpaces)
     val value = canonical(Json.obj("work" -> DispatchWork_JsonCodec.encode(baboon.runtime.shared.BaboonCodecContext.Default, work),
       "members" -> items(members), "guidance" -> items(guidance), "evidence" -> Json.fromValues(evidence),
       "base" -> Json.fromString(base.value), "checks" -> Json.fromValues(checks.sortBy(_.name).map(value => ValidationCheck_JsonCodec.encode(baboon.runtime.shared.BaboonCodecContext.Default, value)))))

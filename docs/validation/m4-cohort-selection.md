@@ -46,6 +46,25 @@ All four final gates match the same 220 current non-documentation source files. 
 
 Independent Astra identified the ACK-replay and excluded-pool starvation cases before their reproductions. Further focused reviews identified large-prior-plan partitioning, member-specific feedback, explicit candidate continuity, review applicability and shared-context fingerprints; their corrections have retained evidence above. Astra approved the final selector-foundation increment with no blocking or major findings after independently checking all four PASS results, all 220 current source hashes and connected fixture evidence. This is scoped approval, not R16 or M4 completion.
 
-The no-progress implementation currently normalizes admitted result envelopes, member order, cosmetic item metadata and independent per-member feedback. It does **not** yet normalize collector envelopes embedded in explicitly supplied raw `Validation` or `Combination` artifact bodies. Such envelope changes can still change the fingerprint; this is an unresolved R16 gap. Connected mixed-outcome splitting with historical-cost invariance, connected fairness/cosmetic-refresh scenarios, and real multi-item accepted-quality evaluations also remain required. This increment does not establish full R16 acceptance or measured token savings.
+At foundation commit `9e74e8a`, the no-progress implementation normalized admitted result envelopes, member order, cosmetic item metadata and independent per-member feedback. Collector envelopes in raw `Validation` and `Combination` artifacts remained an R16 gap; the follow-up below addresses that boundary. Connected mixed-outcome splitting with historical-cost invariance, connected fairness/cosmetic-refresh scenarios, and real multi-item accepted-quality evaluations remain required. This increment does not establish full R16 acceptance or measured token savings.
+
+## Structured evidence normalization follow-up
+
+Implementation now separates substantive Validation/Combination evidence from publication metadata. Validation retains configured check details, candidate, job outcome and output digests; Combination retains repository/target, observed target, candidate and member identities. Referenced validation in independent admitted results uses the same normalization. Original stored bytes and metadata remain unchanged, and own-result suppression still prevents a failed Worker from making its own result count as independent feedback.
+
+| Evidence directory | Observation |
+| --- | --- |
+| `20260927T170803-fast` | Three expected failures: Validation job metadata and Combination publication metadata change progress fingerprints; republishing identical validation makes deferred work eligible |
+| `20260927T171022-fast` | Initial correction passes all 180 scenarios, including changed output permitting reconsideration |
+| `20260927T171440-fast` | Test syntax failure while adding malformed/provenance cases; not a product reproduction |
+| `20260927T171615-fast` | Astra-directed regressions reproduce Human Validation acceptance and ignored changed output referenced only through an admitted Reviewer result; 180 pass, two fail |
+| `20260927T171714-fast` | Extended fail-first assertion confirms all five invalid inputs accepted: workspace project, owner and base mismatches, Human Validation and Human Combination; nested changed-output failure repeats |
+| `20260927T171852-fast` | Test syntax failure after updating the fingerprint input type; not a product reproduction |
+| `20260927T171923-fast` | All 182 scenarios pass, including five provenance inconsistencies, malformed manifests, foreign output and changed observations reached through admitted Reviewer results |
+| `20260927T172020-postgres` | All 98 PostgreSQL scenarios and actual transport/CLI/role/supervisor/workflow/cohort/dispatch/combination/admission/shutdown/restart fixtures pass |
+
+The correction requires host Collector provenance, internally consistent workspace/combination identity and matching result check/candidate references. Malformed manifests and foreign output provenance are rejected. Repeated references are cached within selection. The host manifest's declared output digest is trusted; transcript chunks are not reconstructed during selection. This is a progress comparison, not validation/integration acceptance.
+
+Both final gates match all 221 current non-documentation sources, with zero differences retained in `20260927T172020-postgres/m4-normalization-source-verification.json`. Contracts and process ownership were unchanged, so their prior foundation evidence remains applicable to those boundaries; this follow-up does not claim fresh runs of those gates. Astra independently verified both final PASS results and all 221 current source hashes, approving this scoped increment with no blocking or major finding. Cosmetic refresh, connected adaptation and full R16 acceptance remain open.
 
 Targeted fixture command: `CQ_EVIDENCE_ROOT=/srv/nvme/tmp/cq4-implementation ./dev/check cohort`. The same fixture is included in PostgreSQL/native transport verification. Reproduce the final gates with `./dev/check fast`, `./dev/check contracts`, `./dev/check postgres` and `./dev/check process`; set the same evidence-root variable to retain results outside the checkout.

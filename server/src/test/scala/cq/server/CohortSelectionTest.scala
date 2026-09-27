@@ -94,7 +94,7 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
   }
 
   private final case class Published(result: ChildResult, id: ArtifactId)
-  private def publish(f: Assessed, work: DispatchWork, report: ChildReport, previous: Option[Published], ledger: LedgerService[IO], usage: UsageService[IO],
+  private def publish(f: Assessed, work: DispatchWork, report: ChildReport, previous: Option[Published], validation: List[ValidationEvidence], ledger: LedgerService[IO], usage: UsageService[IO],
     artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO]): IO[Throwable, Published] = for {
     assignment <- usage.assign(f.collector, Assignment(AssignmentId(uuid), f.scope.project, f.members.map(_.id).toSet, Attribution.Shared, Some(uuid), None))
     attempt <- usage.start(f.collector, Attempt(AttemptId(uuid), assignment.id, Some(f.parent), f.scope.actor.session, ChildContracts.role(work), Harness.Codex, "fixture", "fixture", "fixture", 1002))
@@ -105,13 +105,53 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
     input = ChildExecutionInput(ChildInput(f.scope.project, dispatch, views, Nil, Nil, previous.map(_.result)), base, f.checks)
     _ <- artifacts.upload(f.collector, ArtifactUpload(f.scope.project, NativeArtifacts.id(attempt.id, "input"), attempt.id, ArtifactKind.Input,
       "application/json", Wire.encode(ChildExecutionInput_JsonCodec, input)))
-    result = ChildResult(attempt.id, dispatch, base, Some(GitCommit("b" * 40)), report, Nil)
+    result = ChildResult(attempt.id, dispatch, base, Some(GitCommit("b" * 40)), report, validation)
     stored <- artifacts.upload(f.collector, ArtifactUpload(f.scope.project, ArtifactId(uuid), attempt.id, ArtifactKind.Result, "application/json", Wire.encode(ChildResult_JsonCodec, result)))
     admitted <- admissions.admit(f.collector, HostAdmissionInput(f.scope.project, stored.id, f.scope.actor))
     _ <- assertIO(admitted.decision == AdmissionDecision.Accepted())
   } yield Published(result, stored.id)
 
   "Automatic cohort selection (Behavioral Active Blackbox; dummy Group / PostgreSQL Good Communication)" should {
+    "retain deferral across republished validation but reconsider changed output" in {
+      (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO]) => for {
+        runtime <- ZIO.runtime[Any]
+        fixture <- assessed(ledger, usage, artifacts, admissions, 6, CohortCompatibility.Compatible)
+        worker <- publish(fixture, DispatchWork.Worker(WorkerMode.Implement), ChildReport.Work(fixture.members.map(ref =>
+          WorkMember(ref.id, WorkDisposition.Failed, "Observed failure"))), None, Nil, ledger, usage, artifacts, admissions)
+        observed <- ZIO.foreach(List(("original", "same failure"), ("replay", "same failure"), ("changed", "new failure"))) { (name, body) =>
+          val bytes = body.getBytes(java.nio.charset.StandardCharsets.UTF_8)
+          val (out, uploads) = NativeArtifacts.binary(fixture.scope.project, worker.result.attempt, name, "text/plain", bytes)
+          val spec = WorkspaceSpec(fixture.scope.project, fixture.scope.actor.session, AttemptId(uuid), "/consumer", GitCommit("b" * 40))
+          val job = JobRecord(spec, uuid.toString, JobTarget.Run, JobPhase.Settled,
+            Some(JobExit(Some(1), None, StopReason.Exited, bytes.length.toLong, bytes.length.toLong, true, false)), None, 1, 1, 2)
+          val value = ValidationObservation(fixture.checks.head, spec.base, job, out, out)
+          ZIO.foreachDiscard(uploads)(artifacts.upload(fixture.collector, _)) *>
+            artifacts.upload(fixture.collector, ArtifactUpload(fixture.scope.project, ArtifactId(uuid), worker.result.attempt, ArtifactKind.Validation,
+              "application/json", Wire.encode(ValidationObservation_JsonCodec, value))).map(_.id)
+        }
+        reads = new EvidenceApi(api(ledger, fixture.scope, runtime), artifacts, admissions, fixture.scope, runtime)
+        progress = new CohortProgress
+        planner = new CohortPlanner(reads, fixture.scope, fixture.base, fixture.checks, progress)
+        input = request(Set(fixture.members.head.id), DispatchWork.Explorer(ExplorerMode.Investigate))
+        first <- ZIO.attemptBlocking(planner.plan(input.copy(artifacts = List(observed.head)), ArtifactId(uuid)))
+        _ <- ZIO.attempt(progress.started(first.fingerprints(first.evidence.decision.choices.head.id)))
+        replay <- ZIO.attemptBlocking(planner.plan(input.copy(request = RequestId(uuid), artifacts = List(observed(1))), ArtifactId(uuid)))
+        changed <- ZIO.attemptBlocking(planner.plan(input.copy(request = RequestId(uuid), artifacts = List(observed(2))), ArtifactId(uuid)))
+        _ <- assertIO(replay.evidence.decision.choices.isEmpty && changed.evidence.decision.choices.size == 1)
+        reviews <- ZIO.foreach(observed)(id => publish(fixture, DispatchWork.Reviewer(ReviewerMode.Candidate),
+          ChildReport.Review(fixture.members.map(ref => ReviewMember(ref.id, ReviewVerdict.ChangesRequested, List("Correct the failure"))), None),
+          Some(worker), List(ValidationEvidence(fixture.checks.head.name, ValidationState.Failed, id)), ledger, usage, artifacts, admissions))
+        nestedProgress = new CohortProgress
+        nested = new CohortPlanner(reads, fixture.scope, fixture.base, fixture.checks, nestedProgress)
+        initial <- ZIO.attemptBlocking(nested.plan(input.copy(artifacts = List(reviews.head.id)), ArtifactId(uuid)))
+        _ <- ZIO.attempt(nestedProgress.started(initial.fingerprints(initial.evidence.decision.choices.head.id)))
+        repeated <- ZIO.attemptBlocking(nested.plan(input.copy(request = RequestId(uuid), artifacts = List(reviews(1).id)), ArtifactId(uuid)))
+        revised <- ZIO.attemptBlocking(nested.plan(input.copy(request = RequestId(uuid), artifacts = List(reviews(2).id)), ArtifactId(uuid)))
+        _ <- assertIO(repeated.evidence.decision.choices.isEmpty)
+        _ <- assertIO(revised.evidence.decision.choices.size == 1)
+      } yield ()
+    }
+
     "offer every singleton from a large unknown prior plan before repeating its first eight" in {
       (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO]) => for {
         runtime <- ZIO.runtime[Any]
@@ -135,11 +175,11 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
         prepared <- assessed(ledger, usage, artifacts, admissions, 6, CohortCompatibility.Compatible)
         fixture = prepared.copy(checks = Nil)
         worker <- publish(fixture, DispatchWork.Worker(WorkerMode.Implement), ChildReport.Work(fixture.members.map(ref =>
-          WorkMember(ref.id, WorkDisposition.CandidateReady, "Candidate"))), None, ledger, usage, artifacts, admissions)
+          WorkMember(ref.id, WorkDisposition.CandidateReady, "Candidate"))), None, Nil, ledger, usage, artifacts, admissions)
         reviewer <- publish(fixture, DispatchWork.Reviewer(ReviewerMode.Candidate), ChildReport.Review(fixture.members.zipWithIndex.map { (ref, index) =>
           if (index == 0) ReviewMember(ref.id, ReviewVerdict.ChangesRequested, List("Fix this task"))
           else ReviewMember(ref.id, ReviewVerdict.Accepted, Nil)
-        }, None), Some(worker), ledger, usage, artifacts, admissions)
+        }, None), Some(worker), Nil, ledger, usage, artifacts, admissions)
         reads = new EvidenceApi(api(ledger, fixture.scope, runtime), artifacts, admissions, fixture.scope, runtime)
         planner = new CohortPlanner(reads, fixture.scope, fixture.base, fixture.checks, new CohortProgress)
         input = request(fixture.members.map(_.id).toSet, DispatchWork.Worker(WorkerMode.Implement))
