@@ -1,6 +1,6 @@
 # M4 synthetic dependency investigation
 
-This evaluation exercises the defect/research/hypothesis and upstream workflow alongside the [accepted Go worked process](m4-worked-process.md). The component is explicitly synthetic and local; there is no external upstream submission endpoint. Native intake, exact probe execution, research and archived checkpoint replay now pass. Independent Astra approved the scoped source and evidence; rejected experiments remain explicit. Adjudication, repair, upstream preparation and full process acceptance are pending.
+This evaluation exercises the defect/research/hypothesis and upstream workflow alongside the [accepted Go worked process](m4-worked-process.md). The component is explicitly synthetic and local; there is no external upstream submission endpoint. Native intake, exact probe execution, research and reviewed adjudication/repair planning now pass retained verification. Independent Astra approved the scoped source and evidence; rejected experiments and corrected checker failures remain explicit. Implementation, integration, upstream preparation and full process acceptance are pending.
 
 ## Reproduction and stages
 
@@ -92,6 +92,32 @@ Full `checkpoint()` replay follows research → probe → intake, verifies all p
 
 Independent Astra replayed the complete chain, inspected the exact bootstrap, successful Git diagnostics, native observations, Collector bytes and Pi interpretation, verified source hashes and retained failures, and approved this scoped empirical increment with no blocking or major finding. Reviewed adjudication/repair, upstream/operator evidence and independent full-process assessment remain open.
 
+## Reviewed adjudication and repair planning
+
+The plan stage restores the research checkpoint and invokes ordinary `advance --through plan` on D1. It permits Codex Planners and independent Pi Plan reviewers, with no Worker or integration. Every child receives the exact frozen investigation, verified observations, immutable observation Input, Probe/Research results and stage instructions. All new revisions, including D1's producer revisions, must belong to stored proposals with an observed Accepted review before an acknowledged application.
+
+The target graph adds one fix Goal derived from D1, one Task and Milestone derived from the Goal, and the Task's PartOf relationship to the Milestone. D1 and the Goal remain outside milestone ownership. D1/Goal/Milestone remain Open and the Task Ready; original reproduction/specification and all prior history remain intact. R1's conclusion and hypothesis adjudications cite the observed evidence with ModelDeclared provenance. Semantic correctness remains subject to independent review, rather than matching required prose in a deterministic checker.
+
+Astra inspected the original R1 question and H3 claim: normalization was a pre-probe alternative in R1, while H3 describes conditional propagation. The reviewed conclusion must distinguish the observed selection cause from the rejected proposition that normalization introduced the offending characters in this reproduced case. H3 must not be relabeled Refuted to manufacture an alternative; this example does not claim coverage of a Refuted Hypothesis transition.
+
+During source review Astra reproduced a false-acceptance path: an intermediate revision could replace a hypothesis claim, refute that substitute, then restore the original. `defect-plan-preparation/history-before.log` captures four failing variants before correction. The checker now preserves the original hypothesis claims/tree, Research question and Defect observed/expected/reproduction/severity across every appended revision, including intermediate states. The corrected initial fast gate, `.work/evidence/20260927T233814-fast`, passes 189 Scala scenarios and six plan tests; Astra approved targeted native execution.
+
+### Native execution and citation-checker correction
+
+`20260927T233851-defect-plan` completed in 473.807 seconds with five reviewed applications, then failed the original checker with `Adjudication omitted verified evidence handles`. Its manifest and native source snapshot remain unchanged. R1/H1/H2/H3 cite the current plan Input `01d0c875-26b0-4b4b-953f-6a4e5ca25259` plus the exact Probe and Research results. That Input contains the same verified observation JSON and transcript identity as the prior observation Input, while the checker required the prior Input ID specifically. Astra independently confirmed this false rejection.
+
+`233851/citation-before.log` reproduces the valid-current-Input rejection before correction. The checker now accepts either observation Input only after verifying the current publication/body/hash, exact retained observations/transcript and every child's materialized context; the Probe and Research result citations remain mandatory. The final fast gate, `.work/evidence/20260927T235216-fast`, passes 189 Scala scenarios, twelve intake/research tests, eight probe tests and nine plan/re-verification tests.
+
+`verify-plan` replays the complete archived proof and accounting before writing `233851/plan-verification.json`. It is restricted to this exact citation failure with successful native exit, complete archives and reconciled accounting. The derived verification binds 70 original evidence files and 41 verifier source files; continuation checks those inputs and recomputes the full proof. It preserves the original failed `result.json` and records corrected acceptance separately. No model execution was repeated for this evaluator defect.
+
+- The five accepted applications adjudicate R1/H1, adjudicate H2/H3, produce G1 from D1, produce M1/T1 from G1, then attach T1 PartOf M1. All eleven appended revisions have accepted-review-before-ACK provenance. The eight prior revisions remain unchanged.
+- Current records are D1@4 Open, G1@2 Open, H1@3/H2@2/H3@2 Supported, M1@2 Open, R1@2 Concluded and T1@2 Ready. R1 explicitly rejects normalization introducing the offending characters in the reproduced case. H3 remains conditionally supported downstream preservation, with the original claim intact. The Goal and Task retain the original ASCII behavior, failing-test reproduction, regression coverage and unchanged external-oracle requirement.
+- Git remains at `e1144c242fd3a25737a843d2fd4004553e3f457f`, clean and without an implementation candidate. Claims are released. The database digest is `9d353e054c890995a683c14b0d273bac0908f7ebbda6dba3b23568e3b8aa0152`.
+- Eleven new attempts reconcile to 3,568,353 known tokens, eleven partial meters and zero absent meters. Full retained replay covers 23 distinct chain attempts and 6,780,965 known tokens. This stage is counted once despite its raw checker failure and separate re-verification. Including the previously retained rejected experiments gives 35 distinct attempts and 10,538,076 known tokens; these are not matched repetitions.
+- Parent traffic retains 46 dispatch calls with 1,290/2,351-byte argument/reply maxima, five compact Proposal previews, no artifact-body reads, and one rejected claim-duration request. Byte counts exclude native envelopes and tokenization.
+
+The native run matches all 251 sources in its initial fast gate. Final corrected fast verification matches 252 sources; `233851/verification-source-comparison.json` identifies four changed evaluator/checker/test files and the added replay helper. Product code, prompts and stage instructions are unchanged. Independent Astra verified these exact differences, all bound evidence, complete replay, actual conclusions and review/application ordering, and approved the scoped increment with no blocking or major finding. Implementation, integration, upstream/operator evidence and independent full-process assessment remain open.
+
 ## Run
 
 From the repository root:
@@ -101,6 +127,13 @@ From the repository root:
 ./dev/defect-eval begin
 ./dev/defect-eval probe --checkpoint /path/to/passed-defect-begin
 ./dev/defect-eval research --checkpoint /path/to/passed-defect-probe
+./dev/defect-eval plan --checkpoint /path/to/passed-defect-research
+```
+
+To verify the retained citation-checker failure without rerunning models:
+
+```sh
+./dev/defect-eval verify-plan --checkpoint /srv/nvme/tmp/cq4-implementation/20260927T233851-defect-plan
 ```
 
 On this host, while its default Claude differs from the pin, the exact invocation is:

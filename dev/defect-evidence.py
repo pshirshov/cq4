@@ -235,10 +235,16 @@ def checkpoint(directory):
 
 
 def retained(directory, depth):
+    manifest = json.loads((directory / "result.json").read_text())
+    if manifest["status"] == "failed":
+        manifest = runpy.run_path(str(Path(__file__).with_name("defect-plan-replay.py")))["effective"](directory, manifest)
+    return checked(directory, depth, manifest)
+
+
+def checked(directory, depth, manifest):
     assert depth < 8, "Defect checkpoint chain exceeds its bound"
     read = lambda path: json.loads(path.read_text())
-    manifest = read(directory / "result.json")
-    assert manifest["status"] in ["begin-passed", "probe-passed", "research-passed"] and not manifest["archiveErrors"] and manifest["accounting"] == "reconciled"
+    assert manifest["status"] in ["begin-passed", "probe-passed", "research-passed", "plan-passed"] and not manifest["archiveErrors"] and manifest["accounting"] == "reconciled"
     support = runpy.run_path(str(Path(__file__).with_name("process-assess-evidence.py")))
     values = support["stage_evidence"](directory)
     prior = retained(Path(manifest["baselineEvidence"]), depth + 1) if manifest["stage"] != "begin" else None
@@ -248,7 +254,10 @@ def retained(directory, depth):
     else:
         assert manifest["baselineDumpSha256"] == prior["dumpSha256"]
         restored(read(directory / "before.json"), prior["values"]["snapshot"])
-        assert empirical(directory, values, settings, prior, manifest["stage"]) == manifest["proof"]
+        if manifest["stage"] == "plan":
+            assert runpy.run_path(str(Path(__file__).with_name("defect-plan-evidence.py")))["plan"](directory, values, settings, prior) == manifest["proof"]
+        else:
+            assert empirical(directory, values, settings, prior, manifest["stage"]) == manifest["proof"]
     usage_parts = [] if prior is None else [prior["usage"]]
     usage_parts.append(read(directory / "usage-summary.json")["UsageSummary"]["report"])
     combined = read(directory / "combined-usage-summary.json")["UsageSummary"]["report"]

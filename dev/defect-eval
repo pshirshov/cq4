@@ -35,13 +35,17 @@ def snapshot(call, project, consumer, session):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("stage", choices=["begin", "probe", "research"])
+    parser.add_argument("stage", choices=["begin", "probe", "research", "plan", "verify-plan"])
     parser.add_argument("--checkpoint", type=Path)
     arguments = parser.parse_args()
     if (arguments.stage == "begin") != (arguments.checkpoint is None):
-        parser.error("probe/research require --checkpoint; begin does not accept one")
+        parser.error("continuations and verify-plan require --checkpoint; begin does not accept one")
     root = Path(__file__).resolve().parent.parent
     os.chdir(root)
+    if arguments.stage == "verify-plan":
+        verified = runpy.run_path(str(root / "dev/defect-plan-replay.py"))["verify"](arguments.checkpoint.resolve())
+        print("PLAN RE-VERIFIED:", len(verified["attemptIds"]), "distinct chain attempts; original failed manifest preserved", flush=True)
+        return
     if any(shutil.which(name) is None for name in ["java", "sbt", "pg_ctl"]):
         os.execvp("nix", ["nix", "develop", "-c", str(root / "dev/defect-eval"), *sys.argv[1:]])
     evaluation = runpy.run_path(str(root / "dev/consumer-eval"))
@@ -53,7 +57,7 @@ def main():
     original = None if arguments.checkpoint is None else arguments.checkpoint.resolve()
     prior = None if original is None else predicates["checkpoint"](original)
     if prior is not None:
-        assert prior["manifest"]["stage"] == ("begin" if arguments.stage == "probe" else "probe"), "Continuation requires the immediately preceding verified stage"
+        assert prior["manifest"]["stage"] == {"probe": "begin", "research": "probe", "plan": "research"}[arguments.stage], "Continuation requires the immediately preceding verified stage"
         hashes = json.loads((original / "source-sha256.json").read_text())
         for path in [*sorted((root / "dev/fixtures/defect").glob("*.py")), root / "dev/fixtures/defect/README.md", root / "dev/defect-oracle.py"]:
             assert hashlib.sha256(path.read_bytes()).hexdigest() == hashes[str(path.relative_to(root))], "Fixture/oracle changed since checkpoint"
@@ -154,10 +158,15 @@ def main():
                         probe_command = runpy.run_path(str(root / "dev/defect-probe-evidence.py"))["command"](recorder)
                         bundle.update(recorder=recorder, command=shlex.join(probe_command),
                             instructions="Execute the supplied short command exactly through your native command tool in the assigned workspace, without pipelines or modifications. It reads the retained recorder, checks its SHA-256, and executes those same bytes. Do not copy or rewrite the recorder into your workspace. If it cannot be read, report the blocker; do not substitute another program. It records R1's proposed observations and H3's nonconforming-token injection without requiring any causal verdict. Do not implement or adjudicate. Preserve cq-probe-observations.json. Interpret actual results for each assigned hypothesis and report ModelDeclared findings or honest inconclusive evidence, citing this input and retained observations.")
-                    else:
+                    elif arguments.stage == "research":
                         bundle.update(observations=prior["manifest"]["proof"]["execution"]["observations"],
                             nativeTranscript=prior["manifest"]["proof"]["transcript"], probeResult=prior["manifest"]["proof"]["result"],
                             instructions="Compare these verified native observations with R1/H1/H2/H3, distinguishing observed behavior from causal conclusions and conditional contributions. Your interpretation remains ModelDeclared. Cite this input artifact and the Probe result. Do not execute, implement, mutate records or adjudicate the ledger; report findings or honest inconclusive limits for later reviewed planning.")
+                    else:
+                        observed = prior["values"]["artifacts"][prior["manifest"]["proof"]["observations"]["value"]]["body"]
+                        bundle.update(observations=observed["observations"], nativeTranscript=observed["nativeTranscript"], investigation=before["views"],
+                            probeResult=prior["manifest"]["proof"]["probe"], researchResult=prior["manifest"]["proof"]["result"],
+                            instructions=(root / "dev/defect-plan.md").read_text())
                     body = json.dumps(bundle, ensure_ascii=False, separators=(",", ":"))
                     assert len(body.encode()) <= 128 * 1024
                     (evidence / "empirical-input.json").write_text(body)
@@ -178,6 +187,19 @@ def main():
                             "harness": "Codex" if arguments.stage == "probe" else "Pi", "roots": members, "guidance": guidance, "artifacts": context}))
                     (evidence / "request.txt").write_text(request)
                     workflow = ["--workflow", "advance", "--roots", "D" + intake["defect"]["number"], "--through", "explore"]
+                    if arguments.stage == "plan":
+                        context += [prior["manifest"]["proof"][key] for key in ["observations", "probe", "result"]]
+                        request = ("Advance D1 through Plan only. Intake and empirical exploration are complete; earlier intake-only restrictions are historical. "
+                            "Use Codex Planners and independent Pi Plan reviews for every stored proposal before applying it. "
+                            "First adjudicate existing R1/H1/H2/H3 from the empirical evidence; preserve their question/claims. "
+                            "Then Produce one fix Goal from D1; in a fresh round Produce one Milestone and one Task from that Goal; "
+                            "finally connect Task PartOf Milestone using both allocated endpoints as assigned members. No direct ledger changes. "
+                            "Pass ALL supplied artifact handles to EVERY Planner and Reviewer; the host materializes the exact instructions, investigation and observations. "
+                            "Do not read or copy those bodies. Use current revisions and claims for each round; a failed proposal requires new planning/review. "
+                            "Preserve Git, leave D1/Goal/Milestone Open and Task Ready, release all claims. No Worker, implementation or integration.\n" +
+                            json.dumps({"root": intake["defect"], "investigation": [{"id": view["item"]["id"], "revision": view["item"]["revision"]} for view in before["views"]], "artifacts": context}))
+                        (evidence / "request.txt").write_text(request)
+                        workflow[-1] = "plan"
                 try:
                     began = time.monotonic()
                     with (evidence / "governor.stdout").open("w") as out, (evidence / "governor.stderr").open("w") as err:
@@ -213,7 +235,10 @@ def main():
                 if prior is not None:
                     assert not set(prior["attemptIds"]) & {value["attempt"]["id"]["value"] for value in values["attempts"]}
                 assert finished.returncode == 0, "Defect governing session failed"
-                result["proof"] = predicates["begin"](values, settings) if prior is None else predicates["empirical"](evidence, values, settings, prior, arguments.stage)
+                if arguments.stage == "plan":
+                    result["proof"] = runpy.run_path(str(root / "dev/defect-plan-evidence.py"))["plan"](evidence, values, settings, prior)
+                else:
+                    result["proof"] = predicates["begin"](values, settings) if prior is None else predicates["empirical"](evidence, values, settings, prior, arguments.stage)
                 result["status"] = arguments.stage + "-passed"
     except BaseException as error:
         result.update(status="failed", error=str(error))
