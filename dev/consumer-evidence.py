@@ -1,7 +1,7 @@
 """Acceptance of a linked worker/reviewer candidate using host artifact evidence."""
 
 
-def accepted_chain(statuses, artifacts, checks):
+def reviewed_chains(statuses, artifacts, checks):
     assert checks, "Consumer acceptance requires configured host checks"
 
     def identities(values):
@@ -22,7 +22,7 @@ def accepted_chain(statuses, artifacts, checks):
             continue
         members = review["request"]["members"]
         reports = review["report"]["Review"]["members"]
-        if not reports or len(reports) != len(members) or any(value["verdict"] != "Accepted" for value in reports):
+        if not reports or len(reports) != len(members):
             continue
         if identities(value["item"] for value in reports) != identities(value["id"] for value in members):
             continue
@@ -53,9 +53,22 @@ def accepted_chain(statuses, artifacts, checks):
                               job["workspace"]["base"] == worker["candidate"] and job["phase"] == "Settled" and observed is not None and
                               observed["settled"] and not observed["hostFailure"] and observed["reason"] == "Exited" and observed["code"] == 0 and observed["signal"] is None)
         if valid:
-            return {"worker": worker["attempt"], "reviewer": review["attempt"], "candidate": worker["candidate"], "members": members,
+            yield {"worker": worker["attempt"], "reviewer": review["attempt"], "candidate": worker["candidate"], "members": members,
                     "workerHarness": worker["request"]["harness"], "reviewerHarness": review["request"]["harness"],
                     "workerResult": previous, "reviewResult": status["result"], "validation": [value for value, _ in applicable]}
+
+
+def reviewed_chain(statuses, artifacts, checks, review):
+    matches = [chain for chain in reviewed_chains(statuses, artifacts, checks) if chain["reviewResult"] == review]
+    assert len(matches) == 1, "No unique host-validated candidate pair for review handle"
+    return matches[0]
+
+
+def accepted_chain(statuses, artifacts, checks):
+    for chain in reviewed_chains(statuses, artifacts, checks):
+        reports = artifacts[chain["reviewResult"]["value"]]["body"]["report"]["Review"]["members"]
+        if all(value["verdict"] == "Accepted" for value in reports):
+            return chain
     raise AssertionError("No fully accepted review linked to the same host-validated worker candidate and assignment")
 
 

@@ -1,5 +1,7 @@
 """Two-task live consumer fixture and evidence predicates; no separate accounting."""
 import json
+from pathlib import Path
+import runpy
 import uuid
 
 
@@ -62,8 +64,9 @@ def assessment_handoff(seed, preview):
     assert not preview["claims"] and not preview["integrations"], "Cohort retains an active claim or integration hold"
 
 
-def accepted(chain, statuses, artifacts, tickets, attempts, observations, seed, governor, routes):
-    """Strengthen an already validated accepted_chain with cohort/process evidence."""
+def accepted(chain, statuses, artifacts, tickets, attempts, observations, seed, governor, routes, checks, base):
+    """Prove shared execution and any correction frontier; whole-scope Audit remains separate."""
+    predicates = runpy.run_path(str(Path(__file__).with_name("consumer-evidence.py")))
     def identity(item):
         return item["project"]["value"], item["ledger"], int(item["number"])
 
@@ -72,7 +75,7 @@ def accepted(chain, statuses, artifacts, tickets, attempts, observations, seed, 
 
     expected = references(seed["members"])
     assert len(expected) == 2 and len(set(value[0] for value in expected)) == 2, "Cohort requires two distinct seeded tasks"
-    assert references(chain["members"]) == expected, "Accepted cohort differs from exact seeded members"
+    assert chain == predicates["accepted_chain"](statuses, artifacts, checks), "Final accepted chain changed"
     by_attempt = {value["attempt"]["id"]["value"]: value for value in attempts}
     assert len(by_attempt) == len(attempts) and governor["id"]["value"] in by_attempt, "Missing or duplicate governing attempt"
     assert by_attempt[governor["id"]["value"]]["attempt"] == governor and governor["role"] == "Governor" and governor["parent"] is None
@@ -94,16 +97,17 @@ def accepted(chain, statuses, artifacts, tickets, attempts, observations, seed, 
         assert value["kind"] == "Result" and value["body"]["attempt"] == value["attempt"]
         return value["body"]
 
-    def execution(value, role):
+    def execution(value, role, required):
         attempt = value["attempt"]["value"]
         view = by_attempt[attempt]
         ticket = tickets[attempt]
         assert view["attempt"] == ticket["attempt"] and view["assignment"] == ticket["assignment"], "Ticket differs from operational assignment"
         assert view["attempt"]["role"] == role and view["attempt"]["harness"] == routes[role], "Child used another role/harness route"
-        assert ticket["request"] == value["request"] and references(value["request"]["members"]) == expected, "Execution differs from exact cohort request"
+        assert ticket["request"] == value["request"] and references(value["request"]["members"]) == required, "Execution differs from exact cohort request"
         work = {"Planner": {"Planner": {}}, "Worker": {"Worker": {"mode": "Implement"}}, "Reviewer": {"Reviewer": {"mode": "Candidate"}}}[role]
         assert value["request"]["work"] == work, "Execution used another role mode"
-        assert view["assignment"]["attribution"] == "Shared" and sorted(map(identity, view["assignment"]["members"])) == [item for item, _ in expected]
+        attribution = "Shared" if len(required) > 1 else "Direct"
+        assert view["assignment"]["attribution"] == attribution and sorted(map(identity, view["assignment"]["members"])) == [item for item, _ in required]
         assert value["request"]["harness"] == routes[role] and ticket["selection"] is not None, "Missing selection-backed route"
         selected = artifacts[ticket["selection"]["value"]]
         assert selected["kind"] == "Selection" and selected["attempt"] == governor["id"], "Selection has another owner"
@@ -113,24 +117,56 @@ def accepted(chain, statuses, artifacts, tickets, attempts, observations, seed, 
         assert len(choices) == 1, "Execution has no unique retained choice"
         choice = choices[0]
         assert all(choice[field] == value["request"][field] for field in ["work", "members", "guidance", "artifacts", "previous", "limits"]), "Execution differs from selected choice"
-        assert choice["cohort"] is not None and choice["cohort"] == view["assignment"]["cohort"], "Execution cohort identity changed"
+        assert (choice["cohort"] is not None) == (len(required) > 1) and choice["cohort"] == view["assignment"]["cohort"], "Execution cohort identity changed"
         inputs = [artifact["body"] for artifact in artifacts.values() if artifact["kind"] == "Input" and artifact["attempt"] == value["attempt"]]
         assert len(inputs) == 1 and inputs[0]["input"]["request"] == value["request"] and inputs[0]["base"] == value["base"], "Missing exact execution input"
-        assert inputs[0]["checks"] and references([{"id": item["item"]["id"], "revision": item["item"]["revision"]} for item in inputs[0]["input"]["members"]]) == expected
+        assert inputs[0]["checks"] and references([{"id": item["item"]["id"], "revision": item["item"]["revision"]} for item in inputs[0]["input"]["members"]]) == required
         return choice, inputs[0]
 
-    worker, reviewer = evidence(chain["workerResult"]), evidence(chain["reviewResult"])
-    worker_choice, worker_input = execution(worker, "Worker")
-    _, reviewer_input = execution(reviewer, "Reviewer")
-    assert worker_choice["reason"] == "CompatibleAssessment", "Shared Worker lacks an applicable compatibility decision"
-    assert reviewer["base"] == worker["candidate"] and reviewer_input["checks"] == worker_input["checks"]
+    lineage = []
+    current = chain
+    seen = set()
+    while True:
+        handle = current["reviewResult"]["value"]
+        assert handle not in seen, "Cyclic correction lineage"
+        seen.add(handle)
+        lineage.append(current)
+        required = references(current["members"])
+        assert required and set(required) <= set(expected), "Correction changed seeded identities or revisions"
+        worker, reviewer = evidence(current["workerResult"]), evidence(current["reviewResult"])
+        worker_choice, worker_input = execution(worker, "Worker", required)
+        _, reviewer_input = execution(reviewer, "Reviewer", required)
+        assert reviewer["base"] == worker["candidate"] and reviewer_input["checks"] == worker_input["checks"] == list(checks.values())
+        fresh = [value for value in reviewer["validation"] if value["check"] == "consumer-oracle"]
+        assert len(fresh) == 1 and artifacts[fresh[0]["artifact"]["value"]]["attempt"] == reviewer["attempt"], "Reviewer did not author a fresh oracle observation"
+        if worker_choice["reason"] == "CompatibleAssessment":
+            assert required == expected and worker["base"] == base, "Shared Worker changed original members or base"
+            break
+        previous = worker["request"]["previous"]
+        if previous is not None:
+            prior = predicates["reviewed_chain"](statuses, artifacts, checks, previous)
+            assert prior["members"] == current["members"] and worker["base"] == prior["candidate"], "Correction changed assignment or candidate base"
+            assert worker_choice["reason"] == "ExactPrevious", "Correction lacks an exact previous choice"
+        else:
+            assert worker_choice["reason"] == "FreshFromBase" and worker["base"] == base, "Split lacks explicit fresh-base selection"
+            contexts = worker["request"]["artifacts"]
+            candidates = [pair for pair in predicates["reviewed_chains"](statuses, artifacts, checks)
+                          if pair["reviewResult"] in contexts and pair["workerResult"] in contexts and
+                          set(required) < set(references(pair["members"]))]
+            assert len(candidates) == 1, "Split lacks unique original Worker and Review context"
+            prior = candidates[0]
+        reports = evidence(prior["reviewResult"])["report"]["Review"]["members"]
+        pending = {identity(value["item"]) for value in reports if value["verdict"] == "ChangesRequested"}
+        assert pending == {item for item, _ in required}, "Correction does not cover exactly the rejected members"
+        assert all(value["verdict"] in ["Accepted", "ChangesRequested"] for value in reports), "Blocked member has no completed correction"
+        current = prior
     plans = []
     for handle in worker["request"]["artifacts"]:
         stored = artifacts[handle["value"]]
         if stored["kind"] != "Result" or "Plan" not in stored["body"]["report"]:
             continue
         plan = evidence(handle)
-        _, plan_input = execution(plan, "Planner")
+        _, plan_input = execution(plan, "Planner", expected)
         assert plan_input["base"] == worker_input["base"] and plan_input["checks"] == worker_input["checks"], "Assessment base/check inventory changed"
         groups = [group for group in plan["report"]["Plan"]["assessments"] if references([member["member"] for member in group["members"]]) == expected]
         assert len(groups) == 1 and groups[0]["compatibility"] == "Compatible", "No exact compatible assessment"
@@ -143,7 +179,73 @@ def accepted(chain, statuses, artifacts, tickets, attempts, observations, seed, 
         assert len(matching) == 1 and matching[0]["phase"] == "Completed" and matching[0]["usageDelivered"]
         plans.append(handle)
     assert len(plans) == 1, "Worker requires one qualifying Planner assessment"
-    fresh = [value for value in reviewer["validation"] if value["check"] == "consumer-oracle"]
-    assert len(fresh) == 1 and artifacts[fresh[0]["artifact"]["value"]]["attempt"] == reviewer["attempt"], "Reviewer did not author a fresh oracle observation"
-    return {"plannerResult": plans[0], "workerResult": chain["workerResult"], "reviewResult": chain["reviewResult"],
-            "members": chain["members"], "routes": routes, "attempts": len(attempts), "meteredAttempts": len(metered)}
+    return {"plannerResult": plans[0], "workerResult": current["workerResult"], "reviewResult": current["reviewResult"],
+            "finalWorkerResult": chain["workerResult"], "finalReviewResult": chain["reviewResult"], "candidate": chain["candidate"],
+            "lineage": list(reversed(lineage)), "members": seed["members"], "finalMembers": chain["members"],
+            "independentAssessment": "pending", "routes": routes, "attempts": len(attempts), "meteredAttempts": len(metered)}
+
+
+def retained(directory):
+    """Replay retained process evidence without modifying its original manifest."""
+    def read(path):
+        return json.loads(path.read_text())
+
+    sessions = list((directory / "sessions").iterdir())
+    assert len(sessions) == 1, "Expected one retained cohort session"
+    session = sessions[0]
+    run = read(session / "run.json")
+    result, settings = read(directory / "result.json"), read(directory / "settings.json")
+    assert result["cohort"] and result["exit"] == 0 and not result["archiveErrors"], "Incomplete native cohort execution/archive"
+    assert result["status"] == "candidate-passed" or (result["status"] == "failed" and result["error"] == "Accepted cohort differs from exact seeded members"), "Unresolved evaluation failure"
+    chain = read(directory / "accepted-chain.json")
+    assert chain == result["acceptedChain"], "Retained candidate chain changed"
+    tickets = {value["attempt"]["id"]["value"]: value for path in (session / "children").glob("*/ticket.json") if (value := read(path))}
+    observations = [entry for path in sorted(directory.glob("usage-audit-*.json")) for entry in read(path)["UsageAudit"]["page"]["entries"]]
+    routes = {role: result[field].capitalize() for role, field in [("Governor", "harness"), ("Planner", "planner"), ("Worker", "worker"), ("Reviewer", "reviewer")]}
+    return accepted(chain, read(directory / "dispatch-statuses.json"), read(directory / "candidate-evidence.json"), tickets,
+                    read(directory / "attempts.json")["UsageAttempts"]["page"]["entries"], observations, read(directory / "cohort-seed.json"),
+                    run["attempt"], routes, {value["name"]: value for value in settings["checks"]}, run["base"])
+
+
+def audited(proof, seed, statuses, artifacts, ticket, run, job, attempts, observations, before, after):
+    """Whole-scope inspection acceptance; executable evidence belongs to the Candidate Review."""
+    assessment_handoff(seed, before)
+    assessment_handoff(seed, after)
+    assert len(statuses) == 1, "Expected one whole-scope Audit"
+    status = statuses[0]
+    assert status["phase"] == "Completed" and status["usageDelivered"] and status["result"] is not None
+    artifact = artifacts[status["result"]["value"]]
+    result = artifact["body"]
+    assert artifact["kind"] == "Result" and artifact["attempt"] == result["attempt"] == status["attempt"] == ticket["attempt"]["id"]
+    request = result["request"]
+    assert request == ticket["request"] and request["request"] == status["request"]
+    assert request["work"] == {"Reviewer": {"mode": "Audit"}} and request["harness"] == "Codex"
+    assert sorted(map(lambda value: json.dumps(value, sort_keys=True), request["members"])) == sorted(map(lambda value: json.dumps(value, sort_keys=True), seed["members"]))
+    assert request["previous"] is None and request["guidance"] == [seed["goal"]]
+    required = [proof[field] for field in ["plannerResult", "workerResult", "reviewResult", "finalWorkerResult", "finalReviewResult"]]
+    assert all(handle in request["artifacts"] for handle in required), "Audit omitted original or final context"
+    assert result["base"] == run["base"] == job["workspace"]["base"] == proof["candidate"], "Audit inspected another candidate"
+    assert job["workspace"]["attempt"] == result["attempt"] and job["workspace"]["owner"] == run["attempt"]["session"] and job["workspace"]["repository"] == run["repository"]
+    observed = job["exit"]
+    assert job["phase"] == "Settled" and observed is not None and observed["settled"] and not observed["hostFailure"] and observed["reason"] == "Exited" and observed["code"] == 0 and observed["signal"] is None
+    assert result["candidate"] is None and result["validation"] == [], "Audit falsely supplied executable evidence"
+    inputs = [value["body"] for value in artifacts.values() if value["kind"] == "Input" and value["attempt"] == result["attempt"]]
+    assert len(inputs) == 1 and inputs[0]["base"] == proof["candidate"] and inputs[0]["input"]["request"] == request
+    frozen = [{"id": value["item"]["id"], "revision": value["item"]["revision"]} for value in inputs[0]["input"]["members"]]
+    assessment_handoff(seed, {"members": frozen, "claims": [], "integrations": []})
+    reports = result["report"]["Review"]["members"]
+    identities = lambda values: sorted(json.dumps(value, sort_keys=True) for value in values)
+    assert identities(value["item"] for value in reports) == identities(value["id"] for value in seed["members"])
+    assert all(value["verdict"] == "Accepted" for value in reports) and result["report"]["Review"]["proposal"] is None, "Whole-scope Audit did not accept both tasks"
+    child, governor = ticket["attempt"], run["attempt"]
+    assert child["role"] == "Reviewer" and child["harness"] == "Codex" and child["model"] == "gpt-6-astra"
+    assert governor["role"] == "Governor" and governor["parent"] is None and child["parent"] == governor["id"] and child["session"] == governor["session"]
+    assert ticket["assignment"]["attribution"] == "Shared" and identities(ticket["assignment"]["members"]) == identities(value["id"] for value in seed["members"])
+    by_attempt = {value["attempt"]["id"]["value"]: value for value in attempts}
+    assert len(attempts) == len(by_attempt) == 2 and all(by_attempt[child["id"]["value"]][field] == ticket[field] for field in ["attempt", "assignment"])
+    assert by_attempt[governor["id"]["value"]]["attempt"] == governor
+    measured = {entry["upload"]["observation"]["attempt"]["value"] for entry in observations if any(
+        entry["upload"]["observation"]["counters"][name]["value"] is not None and entry["upload"]["observation"]["counters"][name]["measurement"] == "Observed" for name in ["input", "output"])}
+    assert set(by_attempt) <= measured, "Audit hierarchy lacks observed usage"
+    return {"candidate": proof["candidate"], "members": seed["members"], "auditResult": status["result"],
+            "executableWitness": proof["finalReviewResult"], "inspectionWitness": status["result"], "wholeScopeAccepted": True}

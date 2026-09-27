@@ -20,7 +20,8 @@ ROOT = Path(__file__).resolve().parent.parent
 
 def main():
     correcting = len(sys.argv) == 3 and sys.argv[1] == "--correct"
-    assert len(sys.argv) == 2 or correcting, "Usage: ./dev/consumer-assess [--correct] EVIDENCE_DIRECTORY (runs real models)"
+    cohort_mode = len(sys.argv) == 3 and sys.argv[1] == "--cohort"
+    assert len(sys.argv) == 2 or correcting or cohort_mode, "Usage: ./dev/consumer-assess [--correct | --cohort] EVIDENCE_DIRECTORY (runs real models)"
     supplied = Path(sys.argv[-1]).resolve()
     os.chdir(ROOT)
     if any(shutil.which(name) is None for name in ["java", "sbt", "go"]):
@@ -32,13 +33,17 @@ def main():
     accepted_chain = predicates["accepted_chain"]
     write, call = evaluation["write"], evaluation["call"]
     baseline = json.loads((original / "result.json").read_text())
-    assert baseline["status"] == "candidate-passed", "Assessment requires a passed retained candidate"
+    assert cohort_mode or baseline["status"] == "candidate-passed", "Assessment requires a passed retained candidate"
     settings = json.loads((original / "settings.json").read_text())
     statuses = json.loads((original / "dispatch-statuses.json").read_text())
     values = json.loads((original / "candidate-evidence.json").read_text())
     checks_by_name = {value["name"]: value for value in settings["checks"]}
     chain = accepted_chain(statuses, values, checks_by_name)
     assert chain == baseline["acceptedChain"], "Retained baseline chain changed"
+    cohort = runpy.run_path(str(ROOT / "dev/consumer-cohort.py"))
+    proof = cohort["retained"](original) if cohort_mode else None
+    seed = json.loads((original / "cohort-seed.json").read_text()) if cohort_mode else None
+    members = seed["members"] if cohort_mode else chain["members"]
     previous = chain["workerResult"]
     if correcting:
         rejected = json.loads((supplied / "dispatch-statuses.json").read_text())
@@ -58,6 +63,14 @@ def main():
     evidence = original.parent / (stamp + ("-correct-" if correcting else "-assess-") + original.name)
     evidence.mkdir(mode=0o700)
     print("Evidence:", evidence, flush=True)
+    if cohort_mode:
+        consumed = [original / name for name in ["result.json", "settings.json", "dispatch-statuses.json", "candidate-evidence.json",
+            "accepted-chain.json", "cohort-seed.json", "attempts.json", "cq-database.dump", "source-sha256.json"]]
+        consumed.extend(original.glob("usage-audit-*.json"))
+        consumed.extend((original / "sessions").glob("*/run.json"))
+        consumed.extend((original / "sessions").glob("*/children/*/ticket.json"))
+        write(evidence / "cohort-replay.json", {"proof": proof, "originalStatus": baseline["status"], "inputsSha256": {
+            str(path.relative_to(original)): hashlib.sha256(path.read_bytes()).hexdigest() for path in sorted(consumed)}})
     files = subprocess.check_output(["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"]).decode().split("\0")
     write(evidence / "source-sha256.json", {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in sorted(set(files)) if name and (ROOT / name).is_file()})
     checks = support["Checks"](evidence, dict(os.environ))
@@ -76,6 +89,8 @@ def main():
         consumer = evidence / "consumer"
         checks.run(["git", "clone", "--quiet", "--no-hardlinks", str(original / "consumer"), str(consumer)], "consumer-clone", 30)
         checks.run(["git", "-C", str(consumer), "fetch", "--quiet", "origin", chain["candidate"]["value"]], "candidate-fetch", 30)
+        if cohort_mode:
+            checks.run(["git", "-C", str(consumer), "checkout", "--quiet", "--detach", chain["candidate"]["value"]], "candidate-checkout", 30)
         settings["integrationTarget"] = None
         settings["stateRoot"] = str(evidence / "sessions")
         settings["evaluation"]["assessor"] = not correcting
@@ -89,6 +104,15 @@ def main():
                    "Dispatch one Codex Reviewer with these member revisions and previous worker result handle; use compact status only, "
                    "without reading full result bodies or composing a child prompt. After the review finishes, release the claim and report its outcome. "
                    "This assessment is separate from final human acceptance.\n" + json.dumps({"members": chain["members"], "previous": chain["workerResult"]}))
+        if cohort_mode:
+            context = list({proof[field]["value"]: proof[field] for field in ["plannerResult", "workerResult", "reviewResult", "finalWorkerResult", "finalReviewResult"]}.values())
+            request = ("Obtain an independent whole-scope assessment on this repository's exact current base, using one Codex/Astra Reviewer in Audit mode. "
+                       "Acquire BOTH exact original task revisions below for at most 300000 ms; include the exact goal guidance and ALL supplied result artifacts. "
+                       "Set previous:null: the final Worker may cover only a corrected subset. Audit must inspect both complete task scopes on the current workspace, "
+                       "including tests and README, using final Candidate Review oracle observations as executable evidence. Earlier acceptance belongs to earlier candidates. "
+                       "Audit is inspection-only and cannot execute named checks. Do not create or change tasks, launch workers, or integrate. "
+                       "Use compact status and handles; do not read full results or compose child prompts. Release the whole claim after the single Audit finishes. "
+                       "This is separate from human acceptance.\n" + json.dumps({"members": members, "guidance": [seed["goal"]], "artifacts": context, "previous": None}))
         if correcting:
             worker, reviewer = evaluation["PROFILES"][baseline["worker"]][0], evaluation["PROFILES"][baseline["reviewer"]][0]
             request = (f"Correct this retained candidate after independent assessment requested changes. Acquire the exact member set below for at most 300000 ms. "
@@ -111,7 +135,16 @@ def main():
                 with (evidence / "cq-init.log").open("w") as log:
                     subprocess.run(command + ["init", "--endpoint", checks.environment["CQ_ORIGIN"], "--project-id", project["project"]["value"], "--name", project["name"]],
                                    cwd=consumer, env=environment, stdout=log, stderr=subprocess.STDOUT, timeout=30, check=True)
-                for member in chain["members"]:
+                def handoff(name):
+                    value = call(checks.environment, {"Read": {"input": {"project": project["project"], "selection": {
+                        "Claims": {"members": [member["id"] for member in members]}}}}})
+                    write(evidence / name, value)
+                    cohort["assessment_handoff"]({"members": members}, value["Claims"]["preview"])
+                    return value["Claims"]["preview"]
+
+                if cohort_mode:
+                    before = handoff("assessment-before.json")
+                for member in members:
                     detail = call(checks.environment, {"Read": {"input": {"project": project["project"], "selection": {"ItemDetail": {"id": member["id"]}}}}})
                     assert detail["Detail"]["view"]["item"]["revision"] == member["revision"], "Baseline task changed after candidate review; a fresh evaluation is required for exact-revision assessment"
                 selection = {"Summary": {"filter": {"EvaluationOnly": {"run": settings["evaluation"]["run"], "scenario": settings["evaluation"]["scenario"]}}}}
@@ -130,6 +163,9 @@ def main():
                     write(evidence / "dispatch-statuses.json", reviews)
                     retained = evaluation["artifacts"](checks.environment, evidence, session, reviews)
                     assert correcting or len(reviews) == 1, "Expected exactly one independent reviewer receipt"
+                    if cohort_mode:
+                        after = handoff("assessment-handoff.json")
+                        assert all(retained[handle] == value for handle, value in values.items() if handle in retained), "Restored baseline artifact changed"
                 finally:
                     primary_failure = sys.exc_info()[0] is not None
                     result["archiveErrors"] = evaluation["archive"](checks, evidence)
@@ -166,14 +202,25 @@ def main():
                 result.update(attempts=len(attempts), accounting="reconciled")
                 if not correcting:
                     assert reviews[0]["phase"] == "Completed" and reviews[0]["result"] is not None, "Independent reviewer did not complete: " + str(reviews[0]["blocker"])
-                assessment = predicates["corrected_chain"](workers + reviews, retained, checks_by_name, chain, previous, worker, reviewer) if correcting else accepted_chain(workers + reviews, retained, checks_by_name)
                 assert finished.returncode == 0, "Governing run failed"
-                assert assessment["reviewer"] in [value["attempt"] for value in reviews]
-                if not correcting:
-                    assert assessment["candidate"] == chain["candidate"] and assessment["reviewerHarness"] == "Codex", "Independent assessment changed its candidate or route"
-                write(evidence / "accepted-chain.json", assessment)
-                result["acceptedChain"] = assessment
-                result.update(status="candidate-passed" if correcting else "assessment-passed", candidate=assessment["candidate"], attempts=len(attempts))
+                if cohort_mode:
+                    ticket = json.loads((session / "children" / reviews[0]["attempt"]["value"] / "ticket.json").read_text())
+                    run = json.loads((session / "run.json").read_text())
+                    job = json.loads((session / "journal" / (reviews[0]["attempt"]["value"] + ".json")).read_text())
+                    observations = [entry for path in sorted(evidence.glob("usage-audit-*.json"))
+                                    for entry in json.loads(path.read_text())["UsageAudit"]["page"]["entries"]]
+                    assessment = cohort["audited"](proof, seed, reviews, retained, ticket, run, job, attempts, observations, before, after)
+                    write(evidence / "accepted-cohort-audit.json", assessment)
+                    result.update(status="assessment-passed", cohortAssessment=assessment,
+                                  scope="whole-scope Audit on exact final candidate plus linked Candidate Review executable evidence; no efficiency verdict")
+                else:
+                    assessment = predicates["corrected_chain"](workers + reviews, retained, checks_by_name, chain, previous, worker, reviewer) if correcting else accepted_chain(workers + reviews, retained, checks_by_name)
+                    assert assessment["reviewer"] in [value["attempt"] for value in reviews]
+                    if not correcting:
+                        assert assessment["candidate"] == chain["candidate"] and assessment["reviewerHarness"] == "Codex", "Independent assessment changed its candidate or route"
+                    write(evidence / "accepted-chain.json", assessment)
+                    result["acceptedChain"] = assessment
+                    result.update(status="candidate-passed" if correcting else "assessment-passed", candidate=assessment["candidate"], attempts=len(attempts))
     except BaseException as error:
         result.update(status="failed", error=str(error))
         raise

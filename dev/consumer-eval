@@ -110,6 +110,7 @@ def artifacts(environment, evidence, session, statuses):
             input_id = uuid.UUID(bytes=hashlib.md5((metadata["attempt"]["value"] + ":input").encode()).digest(), version=3)
             pending.append({"value": str(input_id)})
             pending.extend(entry["artifact"] for entry in value["body"]["validation"])
+            pending.extend(value["body"]["request"]["artifacts"])
             if value["body"]["request"]["previous"] is not None:
                 pending.append(value["body"]["request"]["previous"])
     write(evidence / "candidate-evidence.json", found)
@@ -243,10 +244,11 @@ def main():
                     assert finished.returncode == 0, "Governing process did not complete successfully"
                     assert chain["workerHarness"] == PROFILES[worker][0] and chain["reviewerHarness"] == PROFILES[reviewer][0], "Accepted chain used another configured route"
                     project = json.loads((session / "run.json").read_text())["project"]["project"]
+                    assessment_members = seed["members"] if arguments.cohort else chain["members"]
                     handoff = call(checks.environment, {"Read": {"input": {"project": project, "selection": {
-                        "Claims": {"members": [value["id"] for value in chain["members"]]}}}}})
+                        "Claims": {"members": [value["id"] for value in assessment_members]}}}}})
                     write(evidence / "assessment-handoff.json", handoff)
-                    cohort["assessment_handoff"]({"members": chain["members"]}, handoff["Claims"]["preview"])
+                    cohort["assessment_handoff"]({"members": assessment_members}, handoff["Claims"]["preview"])
                     write(evidence / "accepted-chain.json", chain)
                     result.update(status="candidate-passed", acceptedChain=chain)
                 finally:
@@ -265,7 +267,8 @@ def main():
                                     for entry in json.loads(path.read_text())["UsageAudit"]["page"]["entries"]]
                     governor = json.loads((session / "run.json").read_text())["attempt"]
                     expected_routes = {"Governor": PROFILES[harness][0], "Planner": PROFILES[planner][0], "Worker": PROFILES[worker][0], "Reviewer": PROFILES[reviewer][0]}
-                    proof = cohort["accepted"](chain, statuses, values, tickets, attempts, observations, seed, governor, expected_routes)
+                    proof = cohort["accepted"](chain, statuses, values, tickets, attempts, observations, seed, governor, expected_routes, {value["name"]: value for value in settings["checks"]},
+                                               json.loads((session / "run.json").read_text())["base"])
                     write(evidence / "accepted-cohort.json", proof)
     except BaseException as error:
         result.update(status="failed", error=str(error))
