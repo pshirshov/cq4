@@ -36,6 +36,32 @@ class ConsumerEvidenceCheck(unittest.TestCase):
         self.assertEqual(result["candidate"], {"value": "a" * 40})
         self.assertEqual(result["workerResult"], {"value": "worker-result"})
 
+    def test_independent_reviewer_check_is_accepted_and_retained(self):
+        statuses, artifacts, checks = self.fixture()
+        reviewer = artifacts["review-result"]["body"]
+        fresh = copy.deepcopy(artifacts["validation"])
+        fresh["attempt"] = reviewer["attempt"]
+        artifacts["review-validation"] = fresh
+        reviewer["validation"][0]["artifact"] = {"value": "review-validation"}
+        result = accept(statuses, artifacts, checks)
+        self.assertEqual([value["artifact"]["value"] for value in result["validation"]], ["validation", "review-validation"])
+        for mutation in ["author", "failed", "candidate", "command", "extra-name"]:
+            with self.subTest(mutation=mutation):
+                changed = copy.deepcopy(artifacts)
+                observation = changed["review-validation"]
+                if mutation == "author":
+                    observation["attempt"] = changed["worker-result"]["body"]["attempt"]
+                elif mutation == "failed":
+                    observation["body"]["job"]["exit"]["code"] = 1
+                elif mutation == "candidate":
+                    observation["body"]["candidate"] = {"value": "b" * 40}
+                elif mutation == "command":
+                    observation["body"]["check"]["command"] = ["different-command"]
+                else:
+                    changed["review-result"]["body"]["validation"][0]["check"] = "different-name"
+                with self.assertRaises(AssertionError):
+                    accept(statuses, changed, checks)
+
     def test_correction_requires_the_rejected_handle_assignment_and_base(self):
         statuses, artifacts, checks = self.fixture()
         baseline = {"worker": {"value": "original-worker"}, "members": copy.deepcopy(artifacts["worker-result"]["body"]["request"]["members"]), "candidate": {"value": "b" * 40}}

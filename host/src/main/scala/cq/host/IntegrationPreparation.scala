@@ -31,14 +31,17 @@ final class IntegrationPreparation(api: ServerApi, owner: Scope, repository: Str
     }
     require(worker.request.work.isInstanceOf[DispatchWork.Worker] && worker.request.work != DispatchWork.Worker(WorkerMode.Probe) &&
       reviewer.attempt != worker.attempt && reviewer.request.members == worker.request.members && reviewer.request.fence == worker.request.fence &&
-      worker.candidate.nonEmpty && reviewer.candidate == worker.candidate && reviewer.base == worker.candidate.get &&
-      reviewer.validation == worker.validation, "Integration requires independently reviewed exact worker output")
+      worker.candidate.nonEmpty && reviewer.candidate == worker.candidate && reviewer.base == worker.candidate.get,
+      "Integration requires independently reviewed exact worker output")
     require(worker.report match { case ChildReport.Work(members) => members.forall(_.disposition == WorkDisposition.CandidateReady); case _ => false },
       "Integration requires every worker member to be ready")
     require(reviewer.report match { case ChildReport.Review(members, _) => members.forall(_.verdict == ReviewVerdict.Accepted); case _ => false },
       "Integration requires every reviewer member to be accepted")
-    require(worker.validation.map(_.check) == checks.map(_.name) && worker.validation.forall(_.state == ValidationState.Passed),
-      "Integration requires all configured checks to pass")
+    IntegrationValidation.applicable(worker, reviewer, checks).foreach { expected =>
+      val stored = reader.read(expected.evidence.artifact)
+      IntegrationValidation.verify(owner.project, owner.actor.session, worker.candidate.get, expected,
+        stored.metadata, IntegrationValidation.decode(stored))
+    }
     def renew(): Unit = call(Command.ClaimWork(ClaimInput(owner.project, ClaimAction.Renew(worker.request.fence, ClaimMillis)))) match {
       case Result.Claimed(claim) => require(claim.owner == owner.actor && claim.fence == worker.request.fence && !claim.released &&
         claim.members == worker.request.members.map(_.id).toSet && claim.expiresAt > clock.millis(), "Integration claim no longer covers this assignment")
@@ -54,7 +57,7 @@ final class IntegrationPreparation(api: ServerApi, owner: Scope, repository: Str
       }
     }
     val change = IntegrationPolicy.completion(ticket.id, repository, target, worker.candidate.get, workerId, ticket.reviewer,
-      worker.validation.map(_.artifact), worker.request.fence, items)
+      IntegrationValidation.citations(worker, reviewer), worker.request.fence, items)
     renew()
     IntegrationIntent(ticket.id, owner.project, owner.actor, repository, target, worker.base, worker.candidate.get,
       workerId, ticket.reviewer, checks, worker.request.fence, worker.request.members, change)

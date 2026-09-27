@@ -51,6 +51,7 @@ final class WorkspaceReader {
         WorkspaceReply.Text(WorkspaceText(path, offset, next, next < count,
           text.substring(text.offsetByCodePoints(0, offset), text.offsetByCodePoints(0, next))))
       case _: WorkspaceCommand.MergeReport => throw new IllegalArgumentException("Merge report requires a prepared resolver workspace")
+      case _: WorkspaceCommand.Check => throw new IllegalArgumentException("Declared checks require their candidate reviewer lifecycle")
     }
   }
 }

@@ -97,7 +97,7 @@ def main():
                 print(json.dumps({"mode": mode, "retainedChildFiles": retained, "uploadExit": replay.returncode,
                                   "uploadOutput": replay.stdout, "uploadError": replay.stderr[-2000:]}), flush=True)
                 assert replay.returncode == (1 if mode == "ticket" else 0), (mode, replay.stderr)
-                assert "Acknowledged" in replay.stdout and ("Unresolved child ticket" in replay.stdout) == (mode == "ticket"), (mode, replay.stderr)
+                assert "Acknowledged" in replay.stdout and ("Unresolved child/check ticket" in replay.stdout) == (mode == "ticket"), (mode, replay.stderr)
                 repeated = subprocess.run(command + ["job", "upload", "--session", str(session)], cwd=repository,
                                           env=environment, capture_output=True, text=True, timeout=30)
                 assert repeated.returncode == replay.returncode and "Acknowledged 0" in repeated.stdout, (mode, repeated.stderr)

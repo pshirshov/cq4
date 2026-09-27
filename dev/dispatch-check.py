@@ -40,7 +40,7 @@ def main():
                            "version": "0.156.1", "providerExtensions": [], "providerEnvironment": []}],
             "limits": {"startupMillis": "5000", "executionMillis": "90000", "heartbeatMillis": "1000",
                        "graceMillis": "300", "killMillis": "2000", "outputBytes": 262144},
-            "checks": [{"name": "consumer-content", "command": [sys.executable, "-c", "from pathlib import Path; assert Path('consumer.txt').read_text() == 'candidate from isolated worker\\n'"],
+            "checks": [{"name": "consumer-content", "command": [sys.executable, "-c", "from pathlib import Path; assert Path('consumer.txt').read_text() == 'candidate from isolated worker\\n'; Path('check-private').write_text('isolated check')"],
                         "executionMillis": "5000", "outputBytes": 65536}],
         }))
         source = root / "request.txt"
@@ -134,6 +134,72 @@ def main():
         assert sorted(value["attempt"]["role"] for value in proposal_usage) == ["Explorer", "Explorer", "Governor", "Planner", "Reviewer", "Reviewer", "Worker"]
         assert not (repository / "probe.txt").exists()
         print(json.dumps({"proposalSession": str(proposal_session), "proposal": proposal, "cliReplay": True, "directRolesDenied": 5}))
+        ordinary_settings = settings.read_text()
+        for mode in ["failed", "cancel", "hold"]:
+            marker = root / f"reviewer-check-{mode}-started"
+            counter = root / f"reviewer-check-{mode}-count"
+            script = (f"from pathlib import Path; import os,sys,time; counter=Path({str(counter)!r}); "
+                      "n=int(counter.read_text())+1 if counter.exists() else 1; counter.write_text(str(n)); "
+                      "assert Path('consumer.txt').read_text() == 'candidate from isolated worker\\n';\n"
+                      f"if n == 2:\n Path({str(marker)!r}).write_text(str(os.getpid()))\n print('live-reviewer-check', flush=True)\n " +
+                      ("sys.exit(1)\n" if mode == "failed" else "time.sleep(60)\n"))
+            configured = json.loads(ordinary_settings)
+            configured["checks"][0].update(command=[sys.executable, "-c", script], executionMillis="70000")
+            settings.write_text(json.dumps(configured))
+            source.write_text(f"reviewer-check-{mode}:{marker}")
+            if mode != "hold":
+                cancelled_receipt = json.loads(run(["run", "codex", "--settings", str(settings), "--input", str(source)]))
+                interrupted_session = Path(cancelled_receipt["directory"])
+                review_directory = next(path for path in (interrupted_session / "children").iterdir()
+                                        if json.loads((path / "ticket.json").read_text())["attempt"]["role"] == "Reviewer")
+                review_status = json.loads((review_directory / "receipt.json").read_text())
+                assert review_status["phase"] == ("Cancelled" if mode == "cancel" else "Completed")
+                jobs = [json.loads(path.read_text()) for path in (interrupted_session / "journal").glob("*.json")]
+                native_id = json.loads((review_directory / "ticket.json").read_text())["attempt"]["id"]
+                check_id = json.loads((review_directory / "checks/consumer-content/ticket.json").read_text())["workspace"]["attempt"]
+                owned = [job for job in jobs if job["workspace"]["attempt"] in [native_id, check_id]]
+                assert len(owned) == 2 and all(job["phase"] == "Settled" for job in owned), owned
+                if mode == "cancel":
+                    assert all(job["target"] == "Stop" for job in owned), owned
+                else:
+                    assert review_status["counts"]["accepted"] == 1 and review_status["counts"]["validationFailed"] == 1 and review_status["next"] == "Revise"
+            else:
+                with (root / "reviewer-check-kill.stdout").open("w") as out, (root / "reviewer-check-kill.stderr").open("w") as err:
+                    process = subprocess.Popen(command + ["run", "codex", "--settings", str(settings), "--input", str(source)],
+                                               cwd=repository, env=environment, stdout=out, stderr=err)
+                    try:
+                        deadline = time.monotonic() + 40
+                        while not marker.exists():
+                            assert process.poll() is None, (root / "reviewer-check-kill.stderr").read_text()[-4000:]
+                            assert time.monotonic() < deadline, "Live reviewer check marker missing"
+                            time.sleep(0.05)
+                        check_ticket = next(path for path in (root / "sessions").glob("*/children/*/checks/*/ticket.json")
+                                            if json.loads(path.read_text())["check"]["command"][-1] == script)
+                        review_directory = check_ticket.parents[2]
+                        interrupted_session = review_directory.parents[1]
+                        process.kill()
+                        assert process.wait(timeout=10) == -9
+                    finally:
+                        if process.poll() is None:
+                            process.kill()
+                            process.wait(timeout=10)
+                before_jobs = sorted(path.name for path in (interrupted_session / "journal").glob("*.json"))
+                run(["job", "upload", "--session", str(interrupted_session)])
+                assert "Acknowledged 0" in run(["job", "upload", "--session", str(interrupted_session)])
+                state = json.loads((review_directory / "checks/consumer-content/result.json").read_text())
+                assert state["phase"] == "Unknown" and state["evidence"]["state"] == "Unknown", state
+                assert not (review_directory / "receipt.json").exists()
+                assert sorted(path.name for path in (interrupted_session / "journal").glob("*.json")) == before_jobs
+            assert counter.read_text() == "2", "Recovery or duplicate polling executed another check"
+            check_pid = int(marker.read_text())
+            deadline = time.monotonic() + 5
+            while Path(f"/proc/{check_pid}/stat").exists():
+                if Path(f"/proc/{check_pid}/stat").read_text().split(") ", 1)[1].startswith("Z "):
+                    break
+                assert time.monotonic() < deadline, "Reviewer check process survived hierarchy termination"
+                time.sleep(0.05)
+            print(json.dumps({"reviewerCheckInterruption": mode, "session": str(interrupted_session), "executions": 2}))
+        settings.write_text(ordinary_settings)
         subprocess.run(["git", "-C", str(repository), "branch", "integration"], check=True)
         (repository / "governing.txt").write_text("staged governing work\n")
         subprocess.run(["git", "-C", str(repository), "add", "governing.txt"], check=True)

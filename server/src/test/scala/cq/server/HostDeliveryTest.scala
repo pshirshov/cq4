@@ -33,6 +33,74 @@ final class HostDeliveryLocal extends AnyWordSpec {
   }
 
   "Host delivery (Behavioral Active Blackbox; Group / filesystem Communication)" should {
+    "reject fresh reviewer checks that would disappear from the inherited inventory" in {
+      val inherited = List(ValidationEvidence("original", ValidationState.Passed, ArtifactId(UUID.randomUUID())))
+      val extra = ValidationEvidence("newly-configured", ValidationState.Failed, ArtifactId(UUID.randomUUID()))
+      intercept[IllegalArgumentException](ReviewerValidation.overlay(inherited, List(extra)))
+      intercept[IllegalArgumentException](ReviewerValidation.inventory(inherited,
+        List("original", "newly-configured").map(name => ValidationCheck(name, List("verify"), 1000, 65536))))
+      val failed = inherited.head.copy(state = ValidationState.Failed, artifact = ArtifactId(UUID.randomUUID()))
+      assert(ReviewerValidation.overlay(inherited, List(failed)) == List(failed))
+    }
+
+    "replay sealed reviewer check evidence after a lost acknowledgement without rereading payload" in {
+      val root = Files.createTempDirectory("cq-review-check-replay-")
+      val spec = WorkspaceSpec(project, SessionId(UUID.randomUUID()), attempt, "/consumer", GitCommit("a" * 40))
+      val ticket = DeclaredCheckTicket(attempt, ValidationCheck("verify", List("verify"), 1000, 65536), spec, "a" * 64)
+      val record = JobRecord(spec, ticket.fingerprint, JobTarget.Run, JobPhase.Settled,
+        Some(JobExit(Some(0), None, StopReason.Exited, 4, 0, true, false)), None, 1, 1, 2)
+      val payload = root.resolve("payload").resolve(spec.attempt.value.toString)
+      HostFiles.directory(payload)
+      Files.writeString(payload.resolve("stdout"), "pass")
+      val directory = root.resolve("check")
+      HostFiles.directory(directory)
+      val publication = new DeclaredCheckPublication(directory, ticket, root.resolve("payload"))
+      publication.seal(Some(record), None)
+      val receiver = new Receiver
+      intercept[IOException](publication.finish(receiver))
+      Files.writeString(payload.resolve("stdout"), "different output after interruption")
+      val reopened = new DeclaredCheckPublication(directory, ticket, root.resolve("payload"))
+      reopened.reconcile(Some(record))
+      val receipt = reopened.finish(receiver)
+      assert(receipt.status.phase == DeclaredCheckPhase.Completed && receipt.status.evidence.exists(_.state == ValidationState.Passed))
+      assert(receipt.acknowledged == 1 && reopened.finish(receiver).acknowledged == 0)
+      val retained = receiver.values(NativeArtifacts.id(ticket.parent, "review-check-verify-stdout-part-0"))
+      assert(new String(Base64.getDecoder.decode(retained.body), UTF_8) == "pass")
+      intercept[IllegalArgumentException](reopened.reconcile(Some(record.copy(fingerprint = "b" * 64))))
+      intercept[IllegalArgumentException](reopened.reconcile(Some(record.copy(workspace = spec.copy(base = GitCommit("b" * 40))))))
+    }
+
+    "preserve unknown reviewer checks without inventing observations when no job was committed" in {
+      val root = Files.createTempDirectory("cq-review-check-missing-")
+      val spec = WorkspaceSpec(project, SessionId(UUID.randomUUID()), attempt, "/consumer", GitCommit("a" * 40))
+      val ticket = DeclaredCheckTicket(attempt, ValidationCheck("verify", List("verify"), 1000, 65536), spec, "a" * 64)
+      val publication = new DeclaredCheckPublication(root, ticket, root.resolve("payload"))
+      publication.reconcile(None)
+      val receiver = new Receiver
+      receiver.loseAcknowledgement = false
+      val receipt = publication.finish(receiver)
+      assert(receipt.status.phase == DeclaredCheckPhase.Unknown && receipt.status.evidence.isEmpty)
+      assert(receiver.values.values.forall(_.kind != ArtifactKind.Validation))
+      assert(publication.finish(receiver).acknowledged == 0)
+    }
+
+    "mark truncated check output unknown and never rebuild a sealed queue after an interrupted status write" in {
+      val root = Files.createTempDirectory("cq-review-check-partial-")
+      val spec = WorkspaceSpec(project, SessionId(UUID.randomUUID()), attempt, "/consumer", GitCommit("a" * 40))
+      val ticket = DeclaredCheckTicket(attempt, ValidationCheck("verify", List("verify"), 1000, 65536), spec, "a" * 64)
+      val record = JobRecord(spec, ticket.fingerprint, JobTarget.Run, JobPhase.Settled,
+        Some(JobExit(Some(0), None, StopReason.Exited, 10, 0, true, false)), None, 1, 1, 2)
+      val publication = new DeclaredCheckPublication(root, ticket, root.resolve("payload"))
+      publication.seal(Some(record), None)
+      val receiver = new Receiver
+      receiver.loseAcknowledgement = false
+      assert(publication.finish(receiver).status.evidence.exists(_.state == ValidationState.Unknown))
+      Files.delete(root.resolve("result.json"))
+      publication.reconcile(Some(record))
+      val recovered = publication.finish(receiver)
+      assert(recovered.status.phase == DeclaredCheckPhase.Unknown && recovered.status.evidence.isEmpty && recovered.acknowledged == 0)
+    }
+
     "reject independently supplied result bytes that disagree with the sealed publication" in {
       val p = project
       val a = attempt

@@ -102,6 +102,61 @@ final class SessionDelivery(journal: JobRepository, workspaces: WorkspaceService
       (outParts ++ errParts).map(HostDelivery.Artifact.apply) ++ observations :+ entry(HostUsage.Finish(outcome)))
   }
 
+  private def independent[A](values: List[Either[Throwable, A]]): Task[List[A]] = ZIO.attempt {
+    val failures = values.collect { case Left(error) => error }
+    if (failures.nonEmpty) {
+      val error = failures.head
+      failures.tail.filterNot(_ eq error).foreach(error.addSuppressed)
+      throw error
+    }
+    values.collect { case Right(value) => value }
+  }
+
+  private def checks(directory: Path, run: SupervisorRun, publication: Publication, api: ServerApi): Task[SessionDeliveryReport] = {
+    val root = directory.resolve("children").resolve(publication.attempt.id.value.toString).resolve("checks")
+    for {
+      paths <- ZIO.attemptBlocking {
+        if (publication.child.isEmpty || !Files.exists(root)) Nil
+        else {
+          require(!Files.isSymbolicLink(root) && Files.isDirectory(root), "Declared check inventory must be a directory")
+          val found = Using.resource(Files.list(root))(_.iterator().asScala.take(9).toList)
+          require(found.size <= 8 && found.forall(path => !Files.isSymbolicLink(path) && Files.isDirectory(path) &&
+            path.getFileName.toString.matches("[a-z][a-z0-9-]{0,49}")), "Invalid declared check inventory")
+          found.sortBy(_.getFileName.toString)
+        }
+      }
+      results <- ZIO.foreach(paths) { path => ZIO.attemptBlocking {
+        val name = path.getFileName.toString
+        val id = AttemptId(NativeArtifacts.id(publication.attempt.id, "declared-check-job-" + name).value)
+        val records = journal.records
+        val record = records.find(_.workspace.attempt == id)
+        val ticketFile = path.resolve("ticket.json")
+        if (!Files.exists(ticketFile)) {
+          val files = Using.resource(Files.list(path))(_.iterator().asScala.take(MaxPartialTicketFiles + 1).toList)
+          require(record.isEmpty && files.size <= MaxPartialTicketFiles && files.forall(file => Files.isRegularFile(file) &&
+            !Files.isSymbolicLink(file) && file.getFileName.toString.matches("\\.upload-.+\\.pending") && Files.size(file) <= MaxRecordBytes),
+            "Uncommitted declared check ticket has unexpected evidence")
+          SessionDeliveryReport(0, List(path))
+        } else {
+          val ticket = HostFiles.read(ticketFile, DeclaredCheckTicket_JsonCodec, MaxRecordBytes)
+          val dispatch = HostFiles.read(root.getParent.resolve("ticket.json"), DispatchTicket_JsonCodec, MaxRecordBytes)
+          val settings = HostFiles.read(directory.resolve("settings.json"), SupervisorSettings_JsonCodec, MaxRecordBytes)
+          val native = records.find(_.workspace.attempt == publication.attempt.id)
+            .getOrElse(throw new IllegalStateException("Declared check has no governing reviewer job"))
+          require(dispatch.request.work == DispatchWork.Reviewer(ReviewerMode.Candidate) && ticket.parent == publication.attempt.id &&
+            ticket.check.name == name && settings.checks.find(_.name == name).contains(ticket.check) &&
+            ticket.check.outputBytes > 0 && ticket.check.outputBytes <= 1024 * 1024 && ticket.fingerprint.matches("[0-9a-f]{64}") &&
+            ticket.workspace == WorkspaceSpec(run.project.project, run.attempt.session, id, run.repository, native.workspace.base),
+            "Declared check ticket differs from its owner, configuration or reviewed candidate")
+          val pending = new DeclaredCheckPublication(path, ticket, directory.resolve("payload"))
+          pending.reconcile(record)
+          SessionDeliveryReport(pending.finish(api).acknowledged, Nil)
+        }
+      }.either }
+      recovered <- independent(results)
+    } yield SessionDeliveryReport(recovered.map(_.acknowledged).sum, recovered.flatMap(_.incompleteTickets))
+  }
+
   def flush(directory: Path, run: SupervisorRun, api: ServerApi): Task[SessionDeliveryReport] = for {
     inventory <- ZIO.attemptBlocking(inventory(directory, run))
     owner = Scope(run.project.project, Actor("CQ recovery", run.attempt.session, Role.Governor))
@@ -117,8 +172,9 @@ final class SessionDelivery(journal: JobRepository, workspaces: WorkspaceService
           problem = Some(Interrupted), revision = Math.addExact(record.revision, 1), updatedAt = math.max(record.updatedAt, clock.millis())))
       } *> quarantine(owner, record.workspace.attempt)
     }
+    checked <- ZIO.foreach(inventory.publications)(publication => checks(directory, run, publication, api).either)
     delivered <- ZIO.foreach(inventory.publications) { publication =>
-      publication.child.filter(_.sealedIntent) match {
+      (publication.child.filter(_.sealedIntent) match {
         case Some(child) => for {
           receipt <- ZIO.attemptBlocking(child.finish(api))
           _ <- if (receipt.status.phase == DispatchPhase.Completed) ZIO.unit else quarantine(owner, publication.attempt.id)
@@ -128,7 +184,8 @@ final class SessionDelivery(journal: JobRepository, workspaces: WorkspaceService
           _ <- if (committed) ZIO.unit else quarantine(owner, publication.attempt.id) *> ZIO.attemptBlocking(reconcile(directory, publication))
           count <- ZIO.attemptBlocking(publication.queue.flush(api))
         } yield count
-      }
+      }).either
     }
-  } yield SessionDeliveryReport(delivered.sum, inventory.incompleteTickets)
+    recovered <- independent(checked ++ delivered.map(_.map(count => SessionDeliveryReport(count, Nil))))
+  } yield SessionDeliveryReport(recovered.map(_.acknowledged).sum, inventory.incompleteTickets ++ recovered.flatMap(_.incompleteTickets))
 }

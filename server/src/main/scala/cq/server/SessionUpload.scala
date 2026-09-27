@@ -35,8 +35,8 @@ final class SessionUpload(context: CliContext, clock: Clock) {
       (collector, delivery) = prepared
       delivered <- delivery.flush(directory, run, collector).flatMap { report => ZIO.attempt {
         context.output.println(s"Acknowledged ${report.acknowledged} pending delivery batches from $directory")
-        report.incompleteTickets.foreach(path => context.output.println(s"Unresolved child ticket: $path; assignment and usage identity were never committed"))
-        require(report.incompleteTickets.isEmpty, "Incomplete child tickets retained for inspection; valid publications were replayed")
+        report.incompleteTickets.foreach(path => context.output.println(s"Unresolved child/check ticket: $path; its execution identity was never committed"))
+        require(report.incompleteTickets.isEmpty, "Incomplete child/check tickets retained for inspection; valid publications were replayed")
       }}.either
       combined <- combinations(directory, run, collector).either
       integrated <- integrations(directory, run, journal, collector).either

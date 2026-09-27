@@ -34,7 +34,8 @@ final class LocalControl(dispatch: DispatchController, integrations: Integration
     "annotations" -> Json.obj("readOnlyHint" -> Json.fromBoolean(readOnly), "openWorldHint" -> Json.False))
   private def advertised(capability: LocalCapability): Json = if (capability.role == Role.Governor)
     tool("dispatch", "DispatchCommand", "DispatchReply", "Start one child using references only, poll its compact status with a bounded wait, or cancel it. Prepare/apply reviewed integration; Combine a NotApplied integration into a frozen resolver plan and poll CombinationStatus. Forward handles directly; full prompts and results stay outside your context.", false)
-  else tool("workspace", "WorkspaceCommand", "WorkspaceReply", "List a bounded directory page or read a bounded Unicode text page in your assigned workspace. A prepared combination resolver may read MergeReport. Relative paths only; Git metadata and symbolic-link traversal are denied.", true)
+  else tool("workspace", "WorkspaceCommand", "WorkspaceReply", "List or read bounded pages in your assigned workspace. A prepared resolver may read MergeReport. A candidate reviewer may request a configured Check by name and poll the same operation; wait for Completed evidence before returning. Relative paths only; Git metadata and symlink traversal are denied.", capability.role != Role.Reviewer)
+    .mapObject(_.add("inputSchema", schemas.workspace(capability.role)))
   private def decode[A](codec: BaboonJsonCodec[A], json: Json): Task[A] = ZIO.attempt {
     val value = codec.decode(Context, json).fold(throw _, identity)
     require(codec.encode(Context, value) == json, "Local command contains undeclared or noncanonical fields")

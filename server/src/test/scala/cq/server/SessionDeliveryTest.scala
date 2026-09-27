@@ -39,6 +39,99 @@ abstract class SessionDeliveryTest extends SpecZIO with AssertZIO {
   }
 
   "Interrupted publication (Behavioral Active Blackbox; dummy Group / PostgreSQL and Git Good Communication)" should {
+    "recover independent reviewer checks despite a lost upload acknowledgement without launching or completing the review" in {
+      (ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO],
+        admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO], fixture: WorkspaceFixture) =>
+      val clock = Clock.systemUTC()
+      def uuid: UUID = UUID.randomUUID()
+      val owner = Scope(ProjectId(uuid), Actor("CQ governor", SessionId(uuid), Role.Governor))
+      val collector = owner.copy(actor = owner.actor.copy(role = Role.Collector))
+      val auth = new Authorization(AccessConfig("reviewer-check-recovery-root-token", "http://localhost"), clock)
+      val root = auth.authenticate("reviewer-check-recovery-root-token", Some(owner.actor.session.value.toString))
+      val authority = auth.authenticate(auth.grant(root, GrantRequest(owner.project, collector.actor, clock.millis() + 60000)).value, None)
+      val application = new Application(ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, auth)
+      ZIO.scoped { for {
+        runtime <- ZIO.runtime[Any]
+        _ <- ledger.initialize(owner, "Check recovery")
+        created <- ledger.change(owner, ChangeRequest(RequestId(uuid), List(Mutation.Create(ItemDraft("Task", "Review", Set.empty, false,
+          Content.Task(TaskStatus.Ready, List("Verified"), None, Nil), Nil))), Nil, "Fixture"))
+        assignment <- usage.assign(collector, Assignment(AssignmentId(uuid), owner.project, Set.empty, Attribution.Unattributed, None, None))
+        governor <- usage.start(collector, Attempt(AttemptId(uuid), assignment.id, None, owner.actor.session, Role.Governor,
+          Harness.Codex, "fixture", "fixture", "fixture", 1000))
+        childAssignment <- usage.assign(collector, Assignment(AssignmentId(uuid), owner.project, created.items.map(_.id).toSet, Attribution.Direct, None, None))
+        reviewer <- usage.start(collector, governor.copy(id = AttemptId(uuid), assignment = childAssignment.id, parent = Some(governor.id), role = Role.Reviewer))
+        limits = HostLimits(3000, 10000, 1000, 300, 2000, 65536)
+        profile = HarnessSetting(Harness.Codex, "/fixture", "fixture", "fixture", "0.156.1", Nil, Set.empty)
+        request = DispatchRequest(RequestId(uuid), DispatchWork.Reviewer(ReviewerMode.Candidate), Harness.Codex, created.items, Nil, Nil,
+          Some(ArtifactId(uuid)), Fence(ClaimId(uuid), 1), limits)
+        ticket = DispatchTicket(request, childAssignment, reviewer, profile)
+        run = SupervisorRun(ProjectConfig(owner.project, "http://localhost", "Check recovery"), assignment, governor, profile.version, fixture.source.toString, fixture.base)
+        declarations = List("a-sealed", "b-interrupted", "c-unstarted").map(name => ValidationCheck(name, List("verify"), 1000, 65536))
+        directory <- ZIO.attemptBlocking(Files.createTempDirectory("cq-check-recovery-"))
+        journal <- ZIO.acquireRelease(ZIO.attemptBlocking(FileJobRepository.open(directory.resolve("journal"), owner.project, owner.actor.session)))(value => ZIO.attemptBlocking(value.close()).orDie)
+        _ <- ZIO.attemptBlocking {
+          val child = directory.resolve("children").resolve(reviewer.id.value.toString)
+          HostFiles.directory(child)
+          HostFiles.immutable(child.resolve("ticket.json"), HostFiles.encode(DispatchTicket_JsonCodec, ticket), 65536)
+          val settings = SupervisorSettings(directory.toString, "/guardian", List(profile), limits, declarations, None, None)
+          HostFiles.immutable(directory.resolve("settings.json"), HostFiles.encode(SupervisorSettings_JsonCodec, settings), 65536)
+          val native = WorkspaceSpec(owner.project, owner.actor.session, reviewer.id, fixture.source.toString, fixture.base)
+          journal.reserve(native, "a" * 64, 1000)
+          declarations.zipWithIndex.foreach { case (check, index) =>
+            val id = AttemptId(NativeArtifacts.id(reviewer.id, "declared-check-job-" + check.name).value)
+            val spec = native.copy(attempt = id)
+            val retained = DeclaredCheckTicket(reviewer.id, check, spec, "b" * 64)
+            val path = child.resolve("checks").resolve(check.name)
+            HostFiles.directory(path)
+            HostFiles.immutable(path.resolve("ticket.json"), HostFiles.encode(DeclaredCheckTicket_JsonCodec, retained), 32768)
+            if (index < 2) {
+              val reserved = journal.reserve(spec, retained.fingerprint, 1000)._1
+              if (index == 0) {
+                val settled = reserved.copy(phase = JobPhase.Settled, exit = Some(JobExit(Some(0), None, StopReason.Exited, 0, 0, true, false)), revision = 2, updatedAt = 1001)
+                journal.replace(reserved, settled)
+                new DeclaredCheckPublication(path, retained, directory.resolve("payload")).seal(Some(settled), None)
+              }
+            }
+          }
+        }
+        receiver = new Receiver(application, authority, runtime, AttemptId(uuid))
+        lostArtifact = NativeArtifacts.id(reviewer.id, "review-check-a-sealed")
+        lossy = new ServerApi {
+          private var lost = false
+          override def artifact(value: ArtifactUpload): ArtifactMetadata = {
+            val stored = receiver.artifact(value)
+            if (value.id == lostArtifact && !lost) { lost = true; throw new IOException("Lost reviewer check acknowledgement") }
+            stored
+          }
+          override def usage(value: HostUsageInput): HostUsageResult = receiver.usage(value)
+          override def call(value: Command): Result = receiver.call(value)
+          override def grant(value: GrantRequest): AccessToken = receiver.grant(value)
+          override def admit(value: HostAdmissionInput): ResultAdmission = receiver.admit(value)
+          override def integrate(value: HostIntegrationInput): IntegrationRecord = receiver.integrate(value)
+        }
+        delivery = new SessionDelivery(journal, fixture.service, clock)
+        before = journal.records.map(_.workspace.attempt)
+        failed <- delivery.flush(directory, run, lossy).either
+        _ <- assertIO(failed.left.exists(_.isInstanceOf[IOException]))
+        independent <- artifacts.metadata(owner, NativeArtifacts.id(reviewer.id, "review-check-b-interrupted"))
+        unstarted <- artifacts.metadata(owner, NativeArtifacts.id(reviewer.id, "review-check-c-unstarted-status"))
+        noObservation <- artifacts.metadata(owner, NativeArtifacts.id(reviewer.id, "review-check-c-unstarted")).either
+        _ <- assertIO(independent.kind == ArtifactKind.Validation && unstarted.kind == ArtifactKind.Transcript && noObservation.isLeft)
+        outcome <- usage.outcomes(owner, reviewer.id, 0, 20)
+        _ <- assertIO(outcome.entries.size == 1 && outcome.entries.head.value.state == AttemptState.Unknown)
+        recovered <- delivery.flush(directory, run, lossy)
+        repeated <- delivery.flush(directory, run, lossy)
+        _ <- assertIO(recovered.acknowledged == 1 && repeated.acknowledged == 0 && journal.records.map(_.workspace.attempt) == before)
+        _ <- ZIO.attemptBlocking {
+          val child = directory.resolve("children").resolve(reviewer.id.value.toString)
+          val states = declarations.map(check => HostFiles.read(child.resolve("checks").resolve(check.name).resolve("result.json"), DeclaredCheckStatus_JsonCodec, 4096))
+          assert(states.map(_.phase) == List(DeclaredCheckPhase.Completed, DeclaredCheckPhase.Unknown, DeclaredCheckPhase.Unknown))
+          assert(states(1).evidence.exists(_.state == ValidationState.Unknown) && states(2).evidence.isEmpty)
+          assert(!Files.exists(child.resolve("receipt.json")))
+        }
+      } yield () }
+    }
+
     "recover sealed child publications after lost admission and outcome acknowledgements without rereading output" in {
       (ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO], fixture: WorkspaceFixture) =>
         ZIO.foreachDiscard(List(false, true)) { releaseBefore =>
@@ -222,12 +315,12 @@ abstract class SessionDeliveryTest extends SpecZIO with AssertZIO {
             first <- delivery.flush(directory, run, receiver).either
             _ <- ZIO.attempt(assert(first.left.exists(_.isInstanceOf[IOException]), first.toString))
             before <- usage.summary(owner, UsageFilter.SessionOnly(owner.actor.session))
-            _ <- assertIO(before.unattributed.total.known == 131 && before.attempts.unknown == 1 && before.incompleteMeters == 1)
+            _ <- assertIO(before.unattributed.total.known == 131 && before.attempts.unknown == 2 && before.incompleteMeters == 1 && before.attempts.running == 0)
             _ <- ZIO.attemptBlocking {
               Files.writeString(directory.resolve("payload").resolve(governor.id.value.toString).resolve("stdout"), native(900), StandardOpenOption.TRUNCATE_EXISTING)
             }
             count <- delivery.flush(directory, run, receiver)
-            _ <- assertIO(count.acknowledged >= 3 && count.incompleteTickets.size == 1)
+            _ <- assertIO(count.acknowledged == 1 && count.incompleteTickets.size == 1)
             stable <- usage.summary(owner, UsageFilter.SessionOnly(owner.actor.session))
             _ <- assertIO(stable.unattributed.total.known == 131 && stable.attempts.unknown == 2 && stable.attempts.running == 0 && stable.attemptsWithoutMeters == 2)
             repeated <- delivery.flush(directory, run, receiver)

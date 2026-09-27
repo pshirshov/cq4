@@ -16,8 +16,13 @@ private[server] final class DispatchExecution(val ticket: DispatchTicket, val di
   private var stop = Option.empty[String]
   private var publishing = false
   private var job = Option.empty[AttemptId]
+  private var owned = Set.empty[AttemptId]
+  private var reviewer = Option.empty[ReviewerChecks]
   def status: DispatchStatus = synchronized(view)
   def activeJob: Option[AttemptId] = synchronized(job)
+  def ownedJobs: Set[AttemptId] = synchronized(owned)
+  def reviewerChecks: Option[ReviewerChecks] = synchronized(reviewer)
+  def installChecks(value: ReviewerChecks): Unit = synchronized { require(reviewer.isEmpty, "Reviewer check owner already installed"); reviewer = Some(value) }
   def stopReason: Option[String] = synchronized(stop)
   def check(): Unit = synchronized { stop.foreach(value => throw new IllegalStateException(value)) }
   def requestStop(reason: String): Boolean = synchronized {
@@ -29,7 +34,8 @@ private[server] final class DispatchExecution(val ticket: DispatchTicket, val di
     }
   }
   def phase(value: DispatchPhase): Unit = synchronized { view = view.copy(phase = if (stop.nonEmpty) DispatchPhase.Stopping else value) }
-  def active(value: AttemptId): Unit = synchronized { job = Some(value) }
+  def own(value: AttemptId): Unit = synchronized { check(); owned += value }
+  def active(value: AttemptId): Unit = synchronized { own(value); job = Some(value) }
   def freeze(): Option[String] = synchronized { publishing = true; view = view.copy(phase = DispatchPhase.Publishing); stop }
   def finish(value: DispatchStatus): Unit = synchronized { view = DispatchProjection.bounded(value); publishing = true }
 }
@@ -110,7 +116,7 @@ final class DispatchController(config: SupervisorConfig, runner: ChildRunner, jo
     if (!requested) ZIO.unit else {
       ZIO.attemptBlocking(HostFiles.immutable(entry.directory.resolve("cancel.txt"), "stop\n", 32)).catchAll { error =>
         ZIO.succeed { disabled.set(true); entry.requestStop("Cancellation record failed: " + error.getClass.getSimpleName) }
-      }.forkDaemon.unit *> ZIO.foreachDiscard(entry.activeJob) { id =>
+      }.forkDaemon.unit *> ZIO.foreachDiscard(entry.ownedJobs) { id =>
         jobs.cancel(config.owner, id).unit.catchSome { case DomainFailure(_: Fault.Missing) => ZIO.unit }
           .catchAll(error => ZIO.succeed { disabled.set(true); entry.requestStop("Cancellation acknowledgement failed: " + error.getClass.getSimpleName) }).forkDaemon.unit
       }

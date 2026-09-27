@@ -42,7 +42,7 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
   private def maintain(entry: DispatchExecution): Task[Unit] = {
     val refresh = ZIO.attemptBlocking(claim(entry, false)).catchAll { failure =>
       ZIO.succeed(entry.requestStop("Work claim refresh failed: " + Option(failure.getMessage).getOrElse(failure.getClass.getSimpleName))) *>
-        ZIO.foreachDiscard(entry.activeJob)(id => jobs.cancel(config.owner, id).unit.catchSome { case DomainFailure(_: Fault.Missing) => ZIO.unit })
+        ZIO.foreachDiscard(entry.ownedJobs)(id => jobs.cancel(config.owner, id).unit.catchSome { case DomainFailure(_: Fault.Missing) => ZIO.unit })
     }
     (ZIO.sleep(zio.Duration.fromSeconds(RenewalSeconds)) *> refresh).forever
   }
@@ -53,7 +53,13 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
     record <- jobs.await(config.owner, id)
   } yield record
 
-  def workspace(entry: DispatchExecution, command: WorkspaceCommand): Task[WorkspaceReply] = for {
+  def workspace(entry: DispatchExecution, command: WorkspaceCommand): Task[WorkspaceReply] = command match {
+    case WorkspaceCommand.Check(name, waitMillis) =>
+      if (entry.ticket.request.work != DispatchWork.Reviewer(ReviewerMode.Candidate))
+        ZIO.fail(DomainFailure(Fault.Denied("Only a candidate reviewer may execute declared checks")))
+      else ZIO.fromOption(entry.reviewerChecks).orElseFail(new IllegalStateException("Reviewer check owner is unavailable"))
+        .flatMap(_.request(name, waitMillis)).map(WorkspaceReply.Check.apply)
+    case _ => for {
     record <- workspaces.get(config.owner, entry.ticket.attempt.id)
     result <- ZIO.attemptBlocking {
       require(record.admission == WorkspaceAdmission.Open && record.observed.nonEmpty, "Workspace is unavailable or quarantined")
@@ -69,7 +75,8 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
         case value => reader(Path.of(record.directory), value)
       }
     }
-  } yield result
+    } yield result
+  }
 
   def run(entry: DispatchExecution): Task[Unit] = for {
     trace <- Ref.make(Trace(None, Nil, false))
@@ -89,6 +96,8 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
           entry.check()
           val ticket = entry.ticket
           val profile = SupervisorConfig.profile(ticket.profile)
+          if (ticket.request.work == DispatchWork.Reviewer(ReviewerMode.Candidate))
+            ReviewerValidation.inventory(input.previous.toList.flatMap(_.validation), config.settings.checks)
           SupervisorConfig.verifyProfile(config, profile)
           val combination = if (input.artifacts.exists(_.metadata.kind == ArtifactKind.Combination)) {
             val target = config.settings.integrationTarget.getOrElse(throw new IllegalArgumentException("No integration target configured"))
@@ -122,9 +131,15 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
           (base, JobCommand(launched.arguments, launched.environment, body, SupervisorConfig.limits(ticket.request.limits)), combination)
         }
         (base, command, combination) = prepared
+        _ <- ZIO.succeed {
+          if (entry.ticket.request.work == DispatchWork.Reviewer(ReviewerMode.Candidate))
+            entry.installChecks(new ReviewerChecks(entry, base, config, authority.collector, jobs))
+        }
         _ <- ZIO.succeed(entry.phase(DispatchPhase.Running))
         native <- launch(entry, entry.ticket.attempt.id, base, command)
         _ <- trace.update(_.copy(native = Some(native)))
+        checks <- closeChecks(entry, trace)
+        _ <- ZIO.attempt(require(!checks.pending && !checks.uncertain, "Reviewer exited without terminal published evidence for every requested check"))
         report <- ZIO.attemptBlocking {
           entry.check()
           val observed = JobOutcome.observed(native)
@@ -155,7 +170,9 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
           ZIO.succeed(entry.phase(DispatchPhase.Validating)) *> ZIO.foreach(config.settings.checks.zipWithIndex) { case (check, index) =>
             validate(entry, candidate.get, check, index, trace)
           }
-        } else if (entry.ticket.request.work == DispatchWork.Reviewer(ReviewerMode.Candidate)) ZIO.succeed(input.previous.toList.flatMap(_.validation))
+        } else if (entry.ticket.request.work == DispatchWork.Reviewer(ReviewerMode.Candidate)) ZIO.succeed {
+          ReviewerValidation.overlay(input.previous.toList.flatMap(_.validation), checks.evidence)
+        }
         else ZIO.succeed(Nil)
         stored <- ZIO.attemptBlocking {
           entry.check()
@@ -166,6 +183,7 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
         }
       } yield stored
     }.either
+    _ <- closeChecks(entry, trace)
     _ <- if (result.isLeft || entry.stopReason.nonEmpty) {
       workspaces.quarantine(config.owner, entry.ticket.attempt.id, "Child result failed, was cancelled or lost admission; inspect retained evidence").unit
         .catchSome { case DomainFailure(_: Fault.Missing) => ZIO.unit }
@@ -173,6 +191,11 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
     observed <- trace.get
     _ <- publish(entry, result, observed).ensuring(ZIO.succeed(access.revoke(entry.ticket.attempt.id)))
   } yield ()
+
+  private def closeChecks(entry: DispatchExecution, trace: Ref[Trace]): Task[ClosedReviewerChecks] = for {
+    closed <- entry.reviewerChecks.fold(ZIO.succeed(ClosedReviewerChecks(Nil, false, false)))(_.close)
+    _ <- trace.update(value => value.copy(uncertain = value.uncertain || closed.uncertain))
+  } yield closed
 
   private def validate(entry: DispatchExecution, candidate: GitCommit, check: ValidationCheck, index: Int, trace: Ref[Trace]): Task[ValidationEvidence] = for {
     id <- ZIO.succeed(AttemptId(UUID.randomUUID()))

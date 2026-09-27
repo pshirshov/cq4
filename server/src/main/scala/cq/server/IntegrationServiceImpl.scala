@@ -3,7 +3,7 @@ package cq.server
 import baboon.runtime.shared.{BaboonCodecContext, BaboonJsonCodec}
 import cq.api.*
 import cq.core.*
-import cq.host.{ChildContracts, JobOutcome}
+import cq.host.{ChildContracts, IntegrationValidation}
 import io.circe.parser
 import izumi.functional.bio.{Error2, F, *}
 import java.nio.charset.StandardCharsets.UTF_8
@@ -66,18 +66,15 @@ final class IntegrationServiceImpl[F[+_, +_]: Error2](ledger: LedgerRepository[F
         review.request.work == DispatchWork.Reviewer(ReviewerMode.Candidate) && review.request.previous.contains(intent.worker) &&
         work.request.members == intent.members && review.request.members == intent.members &&
         work.request.fence == intent.fence && review.request.fence == intent.fence && work.base == intent.expected &&
-        work.candidate.contains(intent.candidate) && review.candidate == work.candidate && review.base == intent.candidate && review.validation == work.validation,
+        work.candidate.contains(intent.candidate) && review.candidate == work.candidate && review.base == intent.candidate,
         "Integration requires an independently reviewed exact worker candidate and assignment")
       invalid(work.report match { case ChildReport.Work(members) => members.forall(_.disposition == WorkDisposition.CandidateReady); case _ => false }, "Every integration member must be candidate-ready")
       invalid(review.report match { case ChildReport.Review(members, _) => members.forall(_.verdict == ReviewVerdict.Accepted); case _ => false }, "Every integration member must be independently accepted")
-      invalid(work.validation.map(_.check) == intent.checks.map(_.name) && work.validation.forall(_.state == ValidationState.Passed), "Applicable integration checks have not all passed")
     }.toEither)
-    _ <- F.traverse_(worker._2.validation.zip(intent.checks)) { case (evidence, check) =>
-      artifact(scope, evidence.artifact, ArtifactKind.Validation, ValidationObservation_JsonCodec).flatMap { case (metadata, observed) => F.fromEither(Try {
-        invalid(metadata.attempt == worker._2.attempt && observed.check == check && observed.candidate == intent.candidate &&
-          observed.job.workspace.project == scope.project && observed.job.workspace.owner == scope.actor.session &&
-          observed.job.workspace.base == intent.candidate && observed.job.phase == JobPhase.Settled && JobOutcome.observed(observed.job).succeeded,
-          "Validation observation does not establish success for this candidate/check")
+    applicable <- F.fromEither(Try(IntegrationValidation.applicable(worker._2, reviewer._2, intent.checks)).toEither)
+    _ <- F.traverse_(applicable) { expected =>
+      artifact(scope, expected.evidence.artifact, ArtifactKind.Validation, ValidationObservation_JsonCodec).flatMap { case (metadata, observed) => F.fromEither(Try {
+        IntegrationValidation.verify(scope.project, scope.actor.session, intent.candidate, expected, metadata, observed)
       }.toEither) }
     }
     result <- ledger.transact(scope.project) { tx =>
@@ -101,7 +98,7 @@ final class IntegrationServiceImpl[F[+_, +_]: Error2](ledger: LedgerRepository[F
             item
           }
           val change = IntegrationPolicy.completion(intent.id, intent.repository, intent.target, intent.candidate, intent.worker, intent.reviewer,
-            worker._2.validation.map(_.artifact), intent.fence, items)
+            IntegrationValidation.citations(worker._2, reviewer._2), intent.fence, items)
           invalid(intent.change == change, "Integration may only apply the exact narrative-preserving task completion request")
           if (tx.request(intent.owner, change.request).nonEmpty) throw DomainFailure(Fault.Conflict("Integration domain request was already used"))
           val value = IntegrationRecord(intent, IntegrationResolution.Pending(), now, None)

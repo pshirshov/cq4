@@ -24,7 +24,7 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
     def fresh: IntegrationIntent = {
       val id = IntegrationId(uuid)
       intent.copy(id = id, change = IntegrationPolicy.completion(id, intent.repository, intent.target, intent.candidate,
-        intent.worker, intent.reviewer, worker.validation.map(_.artifact), intent.fence, items))
+        intent.worker, intent.reviewer, IntegrationValidation.citations(worker, reviewer), intent.fence, items))
     }
   }
   private def publish(scope: Scope, value: ChildResult, artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO]): IO[Throwable, ArtifactId] = for {
@@ -71,6 +71,26 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
   private def reject[A](operation: IO[Throwable, A], accepts: Fault => Boolean): IO[Throwable, Unit] = operation.either.flatMap { value =>
     assertIO(value match { case Left(DomainFailure(fault)) => accepts(fault); case _ => false }).unit
   }
+  private final case class ReviewValidation(author: AttemptId, observation: ValidationObservation, evidence: List[ValidationEvidence])
+  private def checkedReview(f: Fixture, usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO],
+    alter: ReviewValidation => ReviewValidation): Task[Fixture] = for {
+    assignment <- usage.assign(f.collector, Assignment(AssignmentId(uuid), f.owner.project, f.claim.members, Attribution.Shared, Some(uuid), None))
+    attempt <- usage.start(f.collector, Attempt(AttemptId(uuid), assignment.id, Some(f.governor), f.owner.actor.session, Role.Reviewer,
+      Harness.Pi, "fixture", "fixture", "fixture", 1000))
+    artifact = ArtifactId(uuid)
+    job = JobRecord(WorkspaceSpec(f.owner.project, f.owner.actor.session, AttemptId(uuid), f.intent.repository, f.intent.candidate),
+      "reviewer-check", JobTarget.Run, JobPhase.Settled, Some(JobExit(Some(0), None, StopReason.Exited, 0, 0, true, false)), None, 1, 1000, 1001)
+    value = alter(ReviewValidation(attempt.id, ValidationObservation(f.intent.checks.head, f.intent.candidate, job, ArtifactId(uuid), ArtifactId(uuid)),
+      List(ValidationEvidence(f.intent.checks.head.name, ValidationState.Passed, artifact))))
+    _ <- artifacts.upload(f.collector, ArtifactUpload(f.owner.project, artifact, value.author, ArtifactKind.Validation, "application/json",
+      Wire.encode(ValidationObservation_JsonCodec, value.observation)))
+    review = f.reviewer.copy(attempt = attempt.id, validation = value.evidence,
+      request = f.reviewer.request.copy(request = RequestId(uuid), harness = Harness.Pi))
+    handle <- publish(f.collector, review, artifacts, admissions)
+    id = IntegrationId(uuid)
+    change = IntegrationPolicy.completion(id, f.intent.repository, f.intent.target, f.intent.candidate, f.intent.worker, handle,
+      IntegrationValidation.citations(f.worker, review), f.intent.fence, f.items)
+  } yield f.copy(reviewer = review, intent = f.intent.copy(id = id, reviewer = handle, change = change))
   private def pending(id: IntegrationId)(fault: Fault): Boolean = fault == Fault.IntegrationPending(id)
   private def fixed(repository: LedgerRepository[IO], millis: Long): LedgerService[IO] = {
     val parser = new QueryParser
@@ -81,6 +101,53 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
   }
 
   "Integration reservations (Behavioral Active Blackbox; dummy Group / PostgreSQL Good Communication)" should {
+    "retain distinct worker and independently executed reviewer checks in exact completion" in {
+      (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO],
+        integrations: IntegrationService[IO]) => for {
+        original <- begin(ledger, usage, artifacts, admissions)
+        f <- checkedReview(original, usage, artifacts, admissions, identity)
+        reserved <- integrations.reserve(f.collector, f.intent)
+        _ <- assertIO(reserved.resolution == IntegrationResolution.Pending() && f.worker.validation != f.reviewer.validation)
+        _ <- integrations.observe(f.collector, f.intent.id, IntegrationObservation.Incorporated(f.intent.candidate))
+        completed <- ZIO.foreach(f.items)(item => ledger.get(f.owner, item.id).map(_.item))
+        _ <- assertIO(completed.forall { item =>
+          val validation = item.draft.content.asInstanceOf[Content.Task].validation.last
+          validation.citations.collect { case Citation.Artifact(id) => id }.toSet == (List(f.intent.worker, f.intent.reviewer) ++
+            IntegrationValidation.citations(f.worker, f.reviewer)).toSet
+        })
+      } yield ()
+    }
+
+    "reject reviewer checks with foreign authors, changed candidates or declarations, incomplete inventory and unsuccessful jobs" in {
+      (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO],
+        integrations: IntegrationService[IO]) => for {
+        original <- begin(ledger, usage, artifacts, admissions)
+        changes = List[ReviewValidation => ReviewValidation](
+          value => value.copy(author = original.worker.attempt),
+          value => value.copy(observation = value.observation.copy(candidate = GitCommit("c" * 40))),
+          value => value.copy(observation = value.observation.copy(check = value.observation.check.copy(command = List("different-command")))),
+          value => value.copy(observation = value.observation.copy(job = value.observation.job.copy(
+            workspace = value.observation.job.workspace.copy(base = GitCommit("c" * 40))))),
+          value => value.copy(observation = value.observation.copy(job = value.observation.job.copy(
+            workspace = value.observation.job.workspace.copy(owner = SessionId(uuid))))),
+          value => value.copy(observation = value.observation.copy(job = value.observation.job.copy(
+            exit = value.observation.job.exit.map(_.copy(code = Some(1)))))),
+          value => value.copy(observation = value.observation.copy(job = value.observation.job.copy(phase = JobPhase.Uncertain))),
+          value => value.copy(evidence = Nil),
+          value => value.copy(evidence = value.evidence.map(_.copy(check = "another-check"))),
+          value => value.copy(evidence = value.evidence.map(_.copy(state = ValidationState.Failed))),
+          value => value.copy(evidence = value.evidence.map(_.copy(state = ValidationState.Unknown))))
+        _ <- ZIO.foreachDiscard(changes) { alter => for {
+          f <- checkedReview(original, usage, artifacts, admissions, alter)
+          _ <- reject(integrations.reserve(f.collector, f.intent), _.isInstanceOf[Fault.Invalid])
+          _ <- reject(integrations.get(f.owner, f.intent.id), _.isInstanceOf[Fault.Missing])
+        } yield () }
+        unchanged <- ledger.claimPreview(original.owner, original.claim.members)
+        _ <- assertIO(unchanged.integrations.isEmpty)
+        _ <- integrations.reserve(original.collector, original.intent)
+      } yield ()
+    }
+
     "prevent create-only proposal application while any assigned member has a pending integration" in {
       (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO],
         integrations: IntegrationService[IO], proposals: ProposalService[IO]) => for {

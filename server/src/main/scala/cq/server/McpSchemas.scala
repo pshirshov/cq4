@@ -57,6 +57,16 @@ final class McpSchemas {
 
   def schema(name: String): Json = closure(definitions(s"cq_api_$name").get)
 
+  def workspace(role: Role): Json = {
+    val root = definitions("cq_api_WorkspaceCommand").get
+    if (role == Role.Reviewer) closure(root)
+    else {
+      val branches = root.hcursor.get[Vector[Json]]("oneOf").fold(throw _, identity)
+        .filterNot(_.hcursor.get[List[String]]("required") == Right(List("Check")))
+      closure(root.mapObject(_.add("oneOf", Json.arr(branches*))))
+    }
+  }
+
   def childReport(work: DispatchWork): Json = {
     val tag = ChildContracts.reportTag(work)
     val branches = definitions("cq_api_ChildReport").get.hcursor.get[Vector[Json]]("oneOf").fold(throw _, identity)
@@ -74,11 +84,11 @@ final class McpSchemas {
         invocation.tools(endpoint.target).map { name =>
           val input = endpoint.target match {
             case McpTarget.Domain => advertised(tools.find(_.name == name).get).hcursor.downField("inputSchema").focus.get
-            case McpTarget.Local => schema(name match {
-              case "dispatch" => "DispatchCommand"
-              case "workspace" => "WorkspaceCommand"
+            case McpTarget.Local => name match {
+              case "dispatch" => schema("DispatchCommand")
+              case "workspace" => workspace(invocation.role)
               case _ => throw new IllegalArgumentException("Unknown local tool schema")
-            })
+            }
           }
           s"${endpoint.name}.$name" -> input
         }

@@ -533,6 +533,9 @@ root data ChildExecutionInput { input: ChildInput base: GitCommit checks: lst[Va
 enum ValidationState { Passed Failed Unknown }
 root data ValidationEvidence { check: str state: ValidationState artifact: ArtifactId }
 root data ValidationObservation { check: ValidationCheck candidate: GitCommit job: JobRecord stdout: ArtifactId stderr: ArtifactId }
+enum DeclaredCheckPhase { Starting Running Publishing Completed Failed Unknown }
+root data DeclaredCheckTicket { parent: AttemptId check: ValidationCheck workspace: WorkspaceSpec fingerprint: str }
+root data DeclaredCheckStatus { name: str job: AttemptId phase: DeclaredCheckPhase evidence: opt[ValidationEvidence] blocker: opt[str] }
 enum DispatchPhase { Preparing Running Stopping Validating Publishing Completed Failed Cancelled Unknown PublicationPending }
 enum ChildNext { Wait Plan Review Revise ResolveBlocker Retry ConsiderAcceptance ConsiderProposal InspectEvidence RetryDelivery }
 root data ChildCounts {
@@ -564,6 +567,7 @@ root adt WorkspaceCommand {
   data Entries { path: str after: opt[str] limit: i32 }
   data Read { path: str offset: i32 limit: i32 }
   data MergeReport { offset: i32 limit: i32 }
+  data Check { name: str waitMillis: i32 }
 }
 enum WorkspaceEntryKind { File Directory Symlink }
 root data WorkspaceEntry { name: str kind: WorkspaceEntryKind }
@@ -572,5 +576,6 @@ root data WorkspaceText { path: str offset: i32 next: i32 hasMore: bit text: str
 root adt WorkspaceReply {
   data Listed { page: WorkspacePage }
   data Text { page: WorkspaceText }
+  data Check { value: DeclaredCheckStatus }
   data Failed { fault: Fault }
 }

@@ -37,22 +37,25 @@ def accepted_chain(statuses, artifacts, checks):
             continue
         if identities(value["item"] for value in worker["report"]["Work"]["members"]) != identities(value["id"] for value in members):
             continue
-        if review["validation"] != worker["validation"] or sorted(value["check"] for value in worker["validation"]) != sorted(checks):
+        if any(sorted(value["check"] for value in result["validation"]) != sorted(checks) for result in [worker, review]):
             continue
+        inherited = {value["check"]: value for value in worker["validation"]}
+        applicable = [(value, worker["attempt"]) for value in worker["validation"]]
+        applicable.extend((value, review["attempt"]) for value in review["validation"] if value != inherited[value["check"]])
         valid = True
-        for evidence in worker["validation"]:
+        for evidence, author in applicable:
             artifact = artifacts[evidence["artifact"]["value"]]
             observation = artifact["body"]
             job = observation["job"]
             observed = job["exit"]
-            valid = valid and (evidence["state"] == "Passed" and artifact["kind"] == "Validation" and artifact["attempt"] == worker["attempt"] and
+            valid = valid and (evidence["state"] == "Passed" and artifact["kind"] == "Validation" and artifact["attempt"] == author and
                               observation["check"] == checks[evidence["check"]] and observation["candidate"] == worker["candidate"] and
                               job["workspace"]["base"] == worker["candidate"] and job["phase"] == "Settled" and observed is not None and
                               observed["settled"] and not observed["hostFailure"] and observed["reason"] == "Exited" and observed["code"] == 0 and observed["signal"] is None)
         if valid:
             return {"worker": worker["attempt"], "reviewer": review["attempt"], "candidate": worker["candidate"], "members": members,
                     "workerHarness": worker["request"]["harness"], "reviewerHarness": review["request"]["harness"],
-                    "workerResult": previous, "reviewResult": status["result"], "validation": worker["validation"]}
+                    "workerResult": previous, "reviewResult": status["result"], "validation": [value for value, _ in applicable]}
     raise AssertionError("No fully accepted review linked to the same host-validated worker candidate and assignment")
 
 

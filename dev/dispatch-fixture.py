@@ -80,6 +80,10 @@ def main():
         tool("cq", "change", {"project": project, "change": {"request": identity(), "mutations": [], "fences": [], "reason": "forbidden"}}, denied=True)
         tool("cq_host", "workspace", {"Read": {"path": "../outside", "offset": 0, "limit": 10}}, denied=True)
         role = next(iter(assignment["work"]))
+        advertised_checks = any(branch["required"] == ["Check"] for branch in inventory[0]["inputSchema"]["oneOf"])
+        assert advertised_checks == (role == "Reviewer")
+        if assignment["work"] != {"Reviewer": {"mode": "Candidate"}}:
+            tool("cq_host", "workspace", {"Check": {"name": "consumer-content", "waitMillis": 0}}, denied=True)
         proposal_fixture = context["members"][0]["item"]["draft"]["labels"] == ["proposal-fixture"]
         if proposal_fixture:
             assert sandbox == ("workspace-write" if role == "Worker" else "read-only")
@@ -123,6 +127,20 @@ def main():
             assert text["Text"]["page"]["text"] == "candidate from isolated worker\n"
             tool("cq_host", "workspace", {"Read": {"path": ".git", "offset": 0, "limit": 10}}, denied=True)
             assert context["previous"]["validation"] and all(value["state"] == "Passed" for value in context["previous"]["validation"])
+            tool("cq_host", "workspace", {"Check": {"name": "undeclared", "waitMillis": 0}}, denied=True)
+            tool("cq_host", "workspace", {"Check": {"name": "consumer-content", "waitMillis": 20001}}, denied=True)
+            check = tool("cq_host", "workspace", {"Check": {"name": "consumer-content", "waitMillis": 0}})["Check"]["value"]
+            job = check["job"]
+            deadline = time.monotonic() + 20
+            while check["phase"] != "Completed":
+                assert time.monotonic() < deadline and check["phase"] not in ["Failed", "Unknown"], check
+                check = tool("cq_host", "workspace", {"Check": {"name": "consumer-content", "waitMillis": 1000}})["Check"]["value"]
+                assert check["job"] == job
+            expected = "Failed" if "failed-reviewer-check" in context["members"][0]["item"]["draft"]["labels"] else "Passed"
+            assert check["evidence"]["state"] == expected and check["evidence"] != context["previous"]["validation"][0]
+            assert not Path("check-private").exists()
+            assert tool("cq_host", "workspace", {"Check": {"name": "consumer-content", "waitMillis": 0}})["Check"]["value"] == check
+            emit({"type": "fixture.reviewer-check", "value": check})
             finish({"Review": {"proposal": None, "members": [{"item": item, "verdict": "Accepted", "findings": []} for item in members]}})
         return
 
@@ -132,6 +150,8 @@ def main():
              "content": {"Task": {"status": "Ready", "acceptance": ["Exact content verified"], "result": None, "validation": []}}, "citations": []}
     if data["request"] == "proposal-workflow":
         draft["labels"] = ["proposal-fixture"]
+    if data["request"].startswith("reviewer-check-failed:"):
+        draft["labels"] = ["failed-reviewer-check"]
     created = tool("cq", "change", {"project": project, "change": {"request": identity(), "mutations": [{"Create": {"draft": draft}}], "fences": [], "reason": "Fixture task"}})
     members = created["Changed"]["ack"]["items"]
     claim = tool("cq", "claim", {"project": project, "action": {"Acquire": {"id": identity(), "members": [value["id"] for value in members], "durationMillis": "180000"}}})
@@ -186,6 +206,27 @@ def main():
     assert poll(first["attempt"]) == worker
     review_request = {**request, "request": identity(), "work": {"Reviewer": {"mode": "Candidate"}}, "previous": worker["result"]}
     review = tool("cq_host", "dispatch", {"Start": {"request": review_request}})["Status"]["value"]
+    if data["request"].startswith(("reviewer-check-failed:", "reviewer-check-cancel:", "reviewer-check-hold:")):
+        mode, marker = data["request"].split(":", 1)
+        deadline = time.monotonic() + 30
+        while not Path(marker).exists():
+            assert time.monotonic() < deadline, "Reviewer check did not become live"
+            time.sleep(0.05)
+        if mode == "reviewer-check-failed":
+            reviewed = poll(review["attempt"])
+            assert reviewed["phase"] == "Completed" and reviewed["counts"]["accepted"] == 1 and reviewed["counts"]["validationFailed"] == 1, reviewed
+            assert reviewed["next"] == "Revise" and reviewed["blocker"] == "Host check consumer-content: Failed", reviewed
+            finish({"summary": "Fresh host check failure remains visible despite the Accepted model verdict"})
+            return
+        if mode == "reviewer-check-hold":
+            time.sleep(60)
+            raise AssertionError("Supervisor was not killed during the check")
+        tool("cq_host", "dispatch", {"Cancel": {"attempt": review["attempt"]}})
+        cancelled = poll(review["attempt"])
+        assert cancelled["phase"] == "Cancelled" and cancelled["result"] is None, cancelled
+        emit({"type": "fixture.cancelled-reviewer-check", "status": cancelled})
+        finish({"summary": "Native reviewer and its live check cancelled together"})
+        return
     reviewed = poll(review["attempt"])
     assert reviewed["phase"] == "Completed" and reviewed["counts"]["accepted"] == 1, reviewed
     if data["request"] == "integrate-reviewed-candidate":
