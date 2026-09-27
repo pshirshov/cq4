@@ -84,6 +84,24 @@ def main():
         assert advertised_checks == (role == "Reviewer")
         if assignment["work"] != {"Reviewer": {"mode": "Candidate"}}:
             tool("cq_host", "workspace", {"Check": {"name": "consumer-content", "waitMillis": 0}}, denied=True)
+        labels = context["members"][0]["item"]["draft"]["labels"]
+        if labels and labels[0].startswith("cohort-assessment"):
+            assert sandbox == "read-only" and len(members) == 2
+            if role == "Planner":
+                check = "not-configured" if labels == ["cohort-assessment-unknown-check"] else data["checks"][0]["name"]
+                assessment = {"compatibility": "Unknown" if labels == ["cohort-assessment-unknown"] else "Compatible",
+                              "objective": "PRIVATE_ASSESSMENT " * 400, "dependencies": "No intra-group dependencies",
+                              "interference": "Separate acceptance observations required", "members": [
+                    {"member": member, "acceptance": [{"criterion": 0, "checks": [check], "inspection": "Inspect each task result"}]}
+                    for member in assignment["members"]]}
+                finish({"Plan": {"members": [{"item": item, "disposition": "Assessed", "summary": "Compatibility assessed"} for item in members],
+                                 "proposal": None, "assessments": [assessment]}})
+            else:
+                assert assignment["work"] == {"Reviewer": {"mode": "Plan"}}
+                assert context["previous"]["report"]["Plan"]["proposal"] is None
+                assert len(context["previous"]["report"]["Plan"]["assessments"][0]["members"]) == 2
+                finish({"Review": {"members": [{"item": item, "verdict": "Accepted", "findings": []} for item in members], "proposal": None}})
+            return
         proposal_fixture = context["members"][0]["item"]["draft"]["labels"] == ["proposal-fixture"]
         if proposal_fixture:
             assert sandbox == ("workspace-write" if role == "Worker" else "read-only")
@@ -101,7 +119,7 @@ def main():
                 proposal = {"mutations": [{"Produce": {"producer": members[0], "drafts": [draft]}}], "reason": "Create follow-up"}
                 if role == "Planner":
                     assert "Evidence" in context["previous"]["report"]
-                    finish({"Plan": {"members": [{"item": item, "disposition": "Proposed", "summary": narrative} for item in members], "proposal": proposal}})
+                    finish({"Plan": {"members": [{"item": item, "disposition": "Proposed", "summary": narrative} for item in members], "proposal": proposal, "assessments": []}})
                 elif assignment["work"][role]["mode"] == "Plan":
                     assert context["previous"]["report"]["Plan"]["proposal"] == proposal
                     finish({"Review": {"members": [{"item": item, "verdict": "Accepted", "findings": []} for item in members], "proposal": None}})
@@ -170,11 +188,33 @@ def main():
         draft["labels"] = ["proposal-fixture"]
     if data["request"].startswith("reviewer-check-failed:"):
         draft["labels"] = ["failed-reviewer-check"]
-    created = tool("cq", "change", {"project": project, "change": {"request": identity(), "mutations": [{"Create": {"draft": draft}}], "fences": [], "reason": "Fixture task"}})
+    cohort = data["request"].startswith("cohort-assessment")
+    if cohort:
+        draft["labels"] = [data["request"]]
+    created = tool("cq", "change", {"project": project, "change": {"request": identity(),
+        "mutations": [{"Create": {"draft": draft}} for _ in range(2 if cohort else 1)], "fences": [], "reason": "Fixture task"}})
     members = created["Changed"]["ack"]["items"]
     claim = tool("cq", "claim", {"project": project, "action": {"Acquire": {"id": identity(), "members": [value["id"] for value in members], "durationMillis": "180000"}}})
     request = {"request": identity(), "work": {"Worker": {"mode": "Implement"}}, "harness": "Codex", "members": members,
                "guidance": [], "artifacts": [], "previous": None, "fence": claim["Claimed"]["claim"]["fence"], "limits": data["limits"]}
+    if cohort:
+        planned = tool("cq_host", "dispatch", {"Start": {"request": {**request, "work": {"Planner": {}}}}})["Status"]["value"]
+        planned = poll(planned["attempt"])
+        if data["request"] == "cohort-assessment-unknown-check":
+            assert planned["phase"] == "Failed" and planned["result"] is None and "unconfigured check" in planned["blocker"], planned
+            emit({"type": "fixture.assessment", "statuses": [planned]})
+            finish({"summary": "Unconfigured assessment checks were rejected"})
+            return
+        assert planned["phase"] == "Completed" and planned["counts"]["assessed"] == 2 and planned["next"] == "ConsiderGrouping", planned
+        assert planned["counts"]["ready"] == 0 and planned["counts"]["accepted"] == 0
+        tool("cq", "apply", {"project": project, "result": planned["result"]}, denied=True)
+        reviewed = tool("cq_host", "dispatch", {"Start": {"request": {**request, "request": identity(),
+            "work": {"Reviewer": {"mode": "Plan"}}, "previous": planned["result"]}}})["Status"]["value"]
+        reviewed = poll(reviewed["attempt"])
+        assert reviewed["phase"] == "Completed" and reviewed["counts"]["accepted"] == 2, reviewed
+        emit({"type": "fixture.assessment", "statuses": [planned, reviewed]})
+        finish({"summary": "Compatibility-only plan reviewed by handle; no ledger proposal applied"})
+        return
     if data["request"] == "proposal-workflow":
         previous = None
         results = []

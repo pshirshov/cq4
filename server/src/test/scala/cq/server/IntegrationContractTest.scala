@@ -156,7 +156,7 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
         attempt <- usage.start(f.collector, Attempt(AttemptId(uuid), assignment.id, Some(f.governor), f.owner.actor.session, Role.Planner,
           Harness.Codex, "fixture", "fixture", "fixture", 1000))
         report = ChildReport.Plan(f.intent.members.map(ref => PlanMember(ref.id, PlanDisposition.Proposed, "Follow-up")),
-          Some(LedgerProposal(List(ProposedMutation.Create(task)), "Create after integration settles")))
+          Some(LedgerProposal(List(ProposedMutation.Create(task)), "Create after integration settles")), Nil)
         result = f.worker.copy(attempt = attempt.id, candidate = None, report = report, validation = Nil,
           request = f.worker.request.copy(request = RequestId(uuid), work = DispatchWork.Planner()))
         handle <- publish(f.collector, result, artifacts, admissions)

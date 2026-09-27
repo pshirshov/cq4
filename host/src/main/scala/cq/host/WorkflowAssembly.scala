@@ -1,7 +1,7 @@
 package cq.host
 
 import cq.api.*
-import cq.core.{DomainFailure, ProposalPolicy}
+import cq.core.{CohortAssessmentPolicy, DomainFailure}
 import java.time.Duration
 
 final class WorkflowAssembly(api: ServerApi, project: ProjectId, assets: WorkflowAssets) {
@@ -29,8 +29,8 @@ final class WorkflowAssembly(api: ServerApi, project: ProjectId, assets: Workflo
         mode match {
           case ReviewerMode.Candidate => require(value.report.isInstanceOf[ChildReport.Work] && value.candidate.nonEmpty,
             "Candidate review requires a worker result with a candidate")
-          case ReviewerMode.Plan => require(ProposalPolicy.prepare(value.request.work, value.request.members, value.report).nonEmpty,
-            "Plan review requires a stored proposal")
+          case ReviewerMode.Plan => require(CohortAssessmentPolicy.reviewable(value.request.work, value.request.members, value.report),
+            "Plan review requires a stored proposal or cohort assessment")
           case ReviewerMode.Audit => ()
         }
         value.request.members.foreach { member =>

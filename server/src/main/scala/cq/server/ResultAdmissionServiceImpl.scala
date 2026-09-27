@@ -60,7 +60,13 @@ final class ResultAdmissionServiceImpl[F[+_, +_]: Error2](ledger: LedgerReposito
           val decision = if (!owned) AdmissionDecision.Rejected(AdmissionRejection.ClaimLost)
           else if (!result.request.members.forall(ref => tx.summary(ref.id).exists(_.revision == ref.revision)))
             AdmissionDecision.Rejected(AdmissionRejection.RevisionsChanged)
-          else AdmissionDecision.Accepted()
+          else {
+            result.report match {
+              case plan: ChildReport.Plan => CohortAssessmentPolicy.criteria(plan, id => tx.get(id).getOrElse(throw new IllegalStateException("Admission member disappeared")))
+              case _ => ()
+            }
+            AdmissionDecision.Accepted()
+          }
           val value = ResultAdmission(artifact.metadata, input.owner, result.request.fence, result.request.members, decision, now)
           tx.insertAdmission(value)
           value

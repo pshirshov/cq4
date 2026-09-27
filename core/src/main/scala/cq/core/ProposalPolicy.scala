@@ -13,7 +13,7 @@ object ProposalPolicy {
 
   def prepare(work: DispatchWork, members: List[ItemRevision], report: ChildReport): Option[PreparedProposal] = {
     val (proposal, eligible) = (work, report) match {
-      case (_: DispatchWork.Planner, ChildReport.Plan(entries, value)) =>
+      case (_: DispatchWork.Planner, ChildReport.Plan(entries, value, _)) =>
         invalid(!entries.exists(_.disposition == PlanDisposition.Proposed) || value.nonEmpty, "Proposed members require a stored proposal")
         (value, entries.filter(_.disposition == PlanDisposition.Proposed).map(_.item).toSet)
       case (DispatchWork.Reviewer(mode), ChildReport.Review(entries, value)) =>

@@ -1,6 +1,6 @@
 # Bounded adaptive execution cohorts
 
-Next M4 implementation contract after `6669db9`, independently approved by Astra after correction. Implements R16 using the existing four roles, transient worksets, claims, child results and operational usage audit. No new ledger, persistent item owner or model version. Runtime and evidence remain to be implemented.
+M4 implementation contract after `6669db9`, independently approved by Astra after correction. Implements R16 using the existing four roles, transient worksets, claims, child results and operational usage audit. No new ledger, persistent item owner or model version. The [Planner assessment boundary](../validation/m4-cohort-assessments.md) is implemented; automatic selection, progress and fairness remain to be implemented and verified.
 
 ## Observable contract
 
@@ -55,6 +55,8 @@ Start with a conservative, language-independent policy. Shared labels, filename 
 ### Planner compatibility evidence
 
 Extend the existing Planner report with bounded optional whole-group assessments and an Assessed member disposition distinct from Proposed ledger mutations. A compatibility-only report requires no fabricated ledger mutation. Each assessment records exact member revisions, Compatible/Unknown/Incompatible disposition, one shared change objective, dependencies and possible interference, and a separate acceptance/validation mapping for every member. Acceptance mappings reference the current frozen criteria; named checks must exist in the configured check inventory. Each assessment covers at least two members and at most the group bound, all within the Planner's assignment. Overlapping proposed groups are rejected rather than silently resolved.
+
+The wire mapping uses zero-based criterion indexes into the exact frozen task acceptance list. Every index must occur exactly once. This supports repeated or large criterion text without copying it into the assessment. Each mapping names its configured checks and includes an explicit inspection method. Host validation uses the materialized original task content and configured check inventory; server result admission independently verifies current task revisions and criterion coverage. Assessment applicability must also compare the original host input's check definitions and Git base with the intended execution, not merely match check names.
 
 The host reads the admitted assessment result by handle, validates the entire group/revisions and bounds, and retains it with the selection evidence. It treats semantic compatibility as model-declared evidence; it is not permission to mutate, a passing check or task acceptance. A stale, malformed, incomplete, Unknown or Incompatible assessment cannot authorize automatic implementation fusion. One shared validation command never substitutes for the per-member mappings or subsequent independent review.
 

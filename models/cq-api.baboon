@@ -444,7 +444,13 @@ root data DispatchRequest {
 }
 enum WorkDisposition { CandidateReady Blocked Failed }
 enum ReviewVerdict { Accepted ChangesRequested Blocked }
-enum PlanDisposition { Proposed Blocked Abstained }
+enum PlanDisposition { Proposed Assessed Blocked Abstained }
+enum CohortCompatibility { Compatible Unknown Incompatible }
+root data CohortCriterion { criterion: i32 checks: set[str] inspection: str }
+root data CohortMemberAssessment { member: ItemRevision acceptance: lst[CohortCriterion] }
+root data CohortAssessment {
+  compatibility: CohortCompatibility objective: str dependencies: str interference: str members: lst[CohortMemberAssessment]
+}
 enum EvidenceDisposition { Findings Inconclusive Blocked Failed }
 root data WorkMember { item: ItemId disposition: WorkDisposition summary: str }
 root data ReviewMember { item: ItemId verdict: ReviewVerdict findings: lst[str] }
@@ -476,7 +482,7 @@ root data ProposalPreview {
 }
 root adt ChildReport {
   data Evidence { members: lst[EvidenceMember] }
-  data Plan { members: lst[PlanMember] proposal: opt[LedgerProposal] }
+  data Plan { members: lst[PlanMember] proposal: opt[LedgerProposal] assessments: lst[CohortAssessment] }
   data Work { members: lst[WorkMember] }
   data Review { members: lst[ReviewMember] proposal: opt[LedgerProposal] }
 }
@@ -547,10 +553,10 @@ enum DeclaredCheckPhase { Starting Running Publishing Completed Failed Unknown }
 root data DeclaredCheckTicket { parent: AttemptId check: ValidationCheck workspace: WorkspaceSpec fingerprint: str }
 root data DeclaredCheckStatus { name: str job: AttemptId phase: DeclaredCheckPhase evidence: opt[ValidationEvidence] blocker: opt[str] }
 enum DispatchPhase { Preparing Running Stopping Validating Publishing Completed Failed Cancelled Unknown PublicationPending }
-enum ChildNext { Wait Plan Review Revise ResolveBlocker Retry ConsiderAcceptance ConsiderProposal InspectEvidence RetryDelivery }
+enum ChildNext { Wait Plan Review Revise ResolveBlocker Retry ConsiderAcceptance ConsiderProposal ConsiderGrouping InspectEvidence RetryDelivery }
 root data ChildCounts {
   ready: i32 accepted: i32 changesRequested: i32 blocked: i32 failed: i32 validationFailed: i32 validationUnknown: i32
-  proposed: i32 evidence: i32 abstained: i32
+  proposed: i32 evidence: i32 abstained: i32 assessed: i32
 }
 root data DispatchStatus {
   request: RequestId attempt: AttemptId phase: DispatchPhase process: opt[JobPhase] members: lst[ItemId]

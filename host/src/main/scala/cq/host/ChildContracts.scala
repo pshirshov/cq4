@@ -2,7 +2,7 @@ package cq.host
 
 import baboon.runtime.shared.BaboonCodecContext
 import cq.api.*
-import cq.core.{LedgerPolicy, ProposalPolicy}
+import cq.core.{CohortAssessmentPolicy, LedgerPolicy, ProposalPolicy}
 import io.circe.Json
 import java.nio.charset.StandardCharsets.UTF_8
 import java.time.Duration
@@ -78,9 +78,10 @@ object ChildContracts {
           (entry.uncertainties ++ entry.requestedProbes).foreach(narrative)
         }
         entries.map(_.item)
-      case (_: DispatchWork.Planner, ChildReport.Plan(entries, _)) =>
-        entries.foreach(entry => narrative(entry.summary))
-        entries.map(_.item)
+      case (_: DispatchWork.Planner, plan: ChildReport.Plan) =>
+        plan.members.foreach(entry => narrative(entry.summary))
+        CohortAssessmentPolicy.shape(members, plan)
+        plan.members.map(_.item)
       case (assigned: DispatchWork.Worker, ChildReport.Work(entries)) if assigned.mode != WorkerMode.Probe =>
         entries.foreach(entry => narrative(entry.summary))
         entries.map(_.item)

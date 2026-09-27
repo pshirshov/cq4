@@ -43,8 +43,8 @@ final class InputAssembler(api: ServerApi, owner: Scope, clock: Clock) {
       if (request.work == DispatchWork.Reviewer(ReviewerMode.Candidate))
         require(value.report.isInstanceOf[ChildReport.Work] && value.candidate.nonEmpty, "Candidate review requires a worker result with a candidate")
       if (request.work == DispatchWork.Reviewer(ReviewerMode.Plan))
-        require(cq.core.ProposalPolicy.prepare(value.request.work, value.request.members, value.report).nonEmpty,
-          "Plan review requires a result containing a typed proposal")
+        require(cq.core.CohortAssessmentPolicy.reviewable(value.request.work, value.request.members, value.report),
+          "Plan review requires a result containing a typed proposal or cohort assessment")
       value
     }
     val input = ChildInput(owner.project, request, members, guidance, artifacts, previous)

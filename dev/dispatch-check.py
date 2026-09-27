@@ -110,6 +110,19 @@ def main():
                                    capture_output=True, text=True, timeout=20)
         assert forbidden.returncode != 0 and "Denied" in forbidden.stderr
 
+        for scenario in ["cohort-assessment", "cohort-assessment-unknown", "cohort-assessment-unknown-check"]:
+            source.write_text(scenario)
+            assessed = json.loads(run(["run", "codex", "--settings", str(settings), "--input", str(source)]))
+            assessment_session = Path(assessed["directory"])
+            native = (assessment_session / "payload" / assessed["attempt"]["value"] / "stdout").read_text()
+            assert "PRIVATE_ASSESSMENT" not in native
+            events = [json.loads(line) for line in native.splitlines()]
+            result = next(value for value in events if value.get("type") == "fixture.assessment")
+            assert len(result["statuses"]) == (1 if scenario.endswith("unknown-check") else 2)
+            assert all(value["usageDelivered"] for value in result["statuses"])
+            assert not (repository / "consumer.txt").exists()
+            print(json.dumps({"scenario": scenario, "session": assessed["session"], "assessment": result}))
+
         def request(path, body, token):
             packet = urllib.request.Request(endpoint + path, data=json.dumps(body).encode(), headers={
                 "Authorization": "Bearer " + token, "CQ-Session": str(uuid.uuid4()),

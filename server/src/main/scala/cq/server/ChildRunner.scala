@@ -148,8 +148,16 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
           val usage = new HarnessUsage().collect(new ByteArrayInputStream(stdout), UsageCollectionRequest(entry.ticket.attempt.id,
             entry.ticket.attempt.harness, entry.ticket.profile.version, UsageOrigin.Fresh, clock.millis(), NativeArtifacts.id(entry.ticket.attempt.id, "stdout")))
           require(usage.terminalSeen && !usage.nativeFailure, "Child native output did not complete successfully")
-          ChildContracts.report(entry.ticket.request.work, entry.ticket.request.members,
+          val report = ChildContracts.report(entry.ticket.request.work, entry.ticket.request.members,
             output.result(entry.ticket.attempt.harness, stdout, entry.directory.resolve("assets")))
+          report match {
+            case plan: ChildReport.Plan =>
+              val members = input.members.map(value => value.item.id -> value.item).toMap
+              cq.core.CohortAssessmentPolicy.criteria(plan, members.apply)
+              cq.core.CohortAssessmentPolicy.checks(plan, config.settings.checks)
+            case _ => ()
+          }
+          report
         }
         candidate <- report match {
           case ChildReport.Work(members) if members.exists(_.disposition == WorkDisposition.CandidateReady) =>

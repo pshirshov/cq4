@@ -35,7 +35,7 @@ abstract class ProposalContractTest extends SpecZIO with AssertZIO {
   }
 
   private def plan(f: Fixture, mutations: List[ProposedMutation]): ChildReport.Plan = ChildReport.Plan(
-    f.members.map(ref => PlanMember(ref.id, PlanDisposition.Proposed, "Proposed next step")), Some(LedgerProposal(mutations, "Apply the proposed next step")))
+    f.members.map(ref => PlanMember(ref.id, PlanDisposition.Proposed, "Proposed next step")), Some(LedgerProposal(mutations, "Apply the proposed next step")), Nil)
 
   private def publish(f: Fixture, work: DispatchWork, report: ChildReport, usage: UsageService[IO], artifacts: ArtifactService[IO]): IO[Throwable, Published] = for {
     assignment <- usage.assign(f.collector, Assignment(AssignmentId(uuid), f.owner.project, f.claim.members, Attribution.Shared, Some(uuid), None))
@@ -56,6 +56,27 @@ abstract class ProposalContractTest extends SpecZIO with AssertZIO {
     operation.either.flatMap(value => assertIO(value match { case Left(DomainFailure(fault)) => accepts(fault); case _ => false })).unit
 
   "Stored proposals (Behavioral Active Blackbox; dummy Group / PostgreSQL Good Communication)" should {
+    "admit compatibility evidence without ledger writes and reject incorrect frozen acceptance mappings" in {
+      (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], proposals: ProposalService[IO]) => for {
+        f <- begin(ledger, usage)
+        before <- ledger.changes(f.owner, ChangeCursor(0), 20)
+        group = CohortAssessment(CohortCompatibility.Compatible, "Shared implementation", "No intra-group dependency", "Acceptance remains per member",
+          f.members.map(member => CohortMemberAssessment(member, List(CohortCriterion(0, Set.empty, "Inspect each member's acceptance")))))
+        report = ChildReport.Plan(f.members.map(member => PlanMember(member.id, PlanDisposition.Assessed, "Compatibility assessed")), None, List(group))
+        value <- publish(f, DispatchWork.Planner(), report, usage, artifacts)
+        _ <- admit(f, value, admissions)
+        _ <- rejected(proposals.preview(f.owner, value.artifact.id), _.isInstanceOf[Fault.Invalid])
+        _ <- rejected(proposals(f.owner, value.artifact.id), _.isInstanceOf[Fault.Invalid])
+        wrongMembers = group.members.map(member => member.copy(acceptance = List(CohortCriterion(1, Set.empty, "Does not cover criterion zero"))))
+        malformed = report.copy(assessments = List(group.copy(members = wrongMembers)))
+        bad <- publish(f, DispatchWork.Planner(), malformed, usage, artifacts)
+        _ <- rejected(admissions.admit(f.collector, HostAdmissionInput(f.owner.project, bad.artifact.id, f.owner.actor)),
+          _ == Fault.Invalid("Cohort assessment: mapping must cover every frozen acceptance criterion exactly"))
+        after <- ledger.changes(f.owner, ChangeCursor(0), 20)
+        _ <- assertIO(before == after)
+      } yield ()
+    }
+
     "preview semantic changes without narratives and commit once across concurrent retry, later edits and claim release" in {
       (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], proposals: ProposalService[IO]) => for {
         f <- begin(ledger, usage)

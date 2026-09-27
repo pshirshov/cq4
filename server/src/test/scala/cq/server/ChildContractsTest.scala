@@ -27,7 +27,7 @@ final class ChildContractsLocal extends AnyWordSpec {
         intercept[IllegalArgumentException](ChildContracts.report(work, List(member), encoded(ChildReport.Evidence(List(finding.copy(summary = ""))))))
         intercept[IllegalArgumentException](ChildContracts.report(work, List(member), encoded(ChildReport.Evidence(List(finding.copy(item = member.id.copy(number = 2)))))))
       }
-      val plan = ChildReport.Plan(List(PlanMember(member.id, PlanDisposition.Abstained, "No proposal")), None)
+      val plan = ChildReport.Plan(List(PlanMember(member.id, PlanDisposition.Abstained, "No proposal")), None, Nil)
       val review = ChildReport.Review(List(ReviewMember(member.id, ReviewVerdict.Accepted, Nil)), None)
       val cases = modes.map(_ -> evidenceReport) ++ List(DispatchWork.Planner() -> plan,
         DispatchWork.Reviewer(ReviewerMode.Plan) -> review, DispatchWork.Reviewer(ReviewerMode.Audit) -> review)
@@ -68,7 +68,7 @@ final class ChildContractsLocal extends AnyWordSpec {
         DispatchProjection.EmptyCounts, ChildNext.Wait, None, None, false, true)
       val reports = List(
         ChildReport.Evidence(members.map(ref => EvidenceMember(ref.id, EvidenceDisposition.Inconclusive, "🙂" * 3000, Nil, Nil, Nil))),
-        ChildReport.Plan(members.map(ref => PlanMember(ref.id, PlanDisposition.Abstained, "🙂" * 3000)), None),
+        ChildReport.Plan(members.map(ref => PlanMember(ref.id, PlanDisposition.Abstained, "🙂" * 3000)), None, Nil),
         ChildReport.Review(members.map(ref => ReviewMember(ref.id, ReviewVerdict.ChangesRequested, List("🙂" * 3000))), None))
       reports.foreach { report =>
         val result = ChildResult(attempt, request, GitCommit("a" * 40), None, report, Nil)
