@@ -94,7 +94,7 @@ def main():
             if scenario == "conflict":
                 page = tool("cq_host", "workspace", {"Read": {"path": "shared.txt", "offset": 0, "limit": 64}})["Text"]["page"]
                 assert page["text"] == ("alpha\nbeta\n" if combined else actor + "\n")
-            finish({"Review": {"members": [{"item": member, "verdict": "Accepted", "findings": []}]}})
+            finish({"Review": {"proposal": None, "members": [{"item": member, "verdict": "Accepted", "findings": []}]}})
         return
 
     assert sandbox == "read-only"
@@ -149,7 +149,7 @@ def main():
         return poll("IntegrationStatus", "id", ready["id"], "Integration", ["Preparing", "Running"])
 
     worker = child_result({"Worker": {"mode": "Implement"}}, None, [])
-    review = child_result({"Reviewer": {}}, worker["result"], [])
+    review = child_result({"Reviewer": {"mode": "Candidate"}}, worker["result"], [])
     prepared = prepare(review)
     emit({"type": "fixture.prepared", "actor": actor, "integration": prepared})
     wait(actor + "-initial")
@@ -169,7 +169,7 @@ def main():
             preview = ready["preview"]
             assert preview["members"] == members and preview["fence"] == claim["fence"]
             worker = child_result({"Worker": {"mode": "ResolveConflict"}}, preview["worker"], [preview["plan"]])
-            review = child_result({"Reviewer": {}}, worker["result"], [])
+            review = child_result({"Reviewer": {"mode": "Candidate"}}, worker["result"], [])
             prepared = prepare(review)
             emit({"type": "fixture.combined_ready", "round": index, "plan": preview, "worker": worker, "review": review, "integration": prepared})
             wait("beta-combined-" + str(index))

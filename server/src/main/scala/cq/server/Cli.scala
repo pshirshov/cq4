@@ -129,6 +129,13 @@ final class Cli(context: CliContext, location: ProjectLocation, upload: SessionU
           opts.get("--snapshot").map(v => ChangeCursor(v.toLong)), limit))
       }
       output.println(Wire.encode(Result_JsonCodec, request(config, actorSession, command)))
+    case "proposal" :: action :: result :: Nil if Set("preview", "apply")(action) =>
+      val location = configDirectory
+      val (config, actorSession) = locked(location)((configuration(location), session(location)))
+      val handle = ArtifactId(UUID.fromString(result))
+      val command = if (action == "preview") Command.Read(ReadInput(config.project, ReadSelection.Proposal(handle)))
+        else Command.ApplyProposal(ProposalApplyInput(config.project, handle))
+      output.println(Wire.encode(Result_JsonCodec, request(config, actorSession, command)))
     case "status" :: rest =>
       val mode = rest.headOption.filter(Set("audit", "costs", "attempts", "outcomes")).getOrElse("summary")
       val scopes = Set("--task", "--cohort", "--session")
@@ -156,7 +163,7 @@ final class Cli(context: CliContext, location: ProjectLocation, upload: SessionU
       }
       output.println(Wire.encode(Result_JsonCodec, request(config, actorSession, Command.Usage(UsageInput(config.project, selection)))))
     case List("web") => output.println(configuration(configDirectory).endpoint)
-    case Nil | List("--help") => output.println("cq serve | init [--endpoint URL] [--project-id UUID] [--name TEXT] | web | run HARNESS --settings FILE --input FILE | job upload --session DIR | query [--query TEXT] [--complete UTF16_OFFSET] [--roots T1,M1] [--after T1 --snapshot CURSOR] [--limit N] | status [audit|costs|attempts|outcomes] [--task T1|--cohort UUID|--session UUID] [--attempt UUID] [--after CURSOR] [--snapshot N] [--limit N]")
+    case Nil | List("--help") => output.println("cq serve | init [--endpoint URL] [--project-id UUID] [--name TEXT] | web | run HARNESS --settings FILE --input FILE | job upload --session DIR | query [--query TEXT] [--complete UTF16_OFFSET] [--roots T1,M1] [--after T1 --snapshot CURSOR] [--limit N] | proposal preview|apply RESULT_UUID | status [audit|costs|attempts|outcomes] [--task T1|--cohort UUID|--session UUID] [--attempt UUID] [--after CURSOR] [--snapshot N] [--limit N]")
     case _ => throw new IllegalArgumentException("Unknown command; use cq --help")
   }
 }

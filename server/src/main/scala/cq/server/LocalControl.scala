@@ -59,7 +59,7 @@ final class LocalControl(dispatch: DispatchController, integrations: Integration
       }
       operation.map(value => (DispatchReply_JsonCodec.encode(Context, value), false))
         .catchAll(error => ZIO.succeed((DispatchReply_JsonCodec.encode(Context, DispatchReply.Failed(fault(error))), true)))
-    } else if (Set(Role.Worker, Role.Reviewer)(capability.role) && name == "workspace") {
+    } else if (Set(Role.Explorer, Role.Planner, Role.Worker, Role.Reviewer)(capability.role) && name == "workspace") {
       decode(WorkspaceCommand_JsonCodec, arguments).flatMap(dispatch.workspace(capability.attempt, _))
         .map(value => (WorkspaceReply_JsonCodec.encode(Context, value), false))
         .catchAll(error => ZIO.succeed((WorkspaceReply_JsonCodec.encode(Context, WorkspaceReply.Failed(fault(error))), true)))

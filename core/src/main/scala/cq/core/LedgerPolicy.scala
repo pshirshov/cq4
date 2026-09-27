@@ -87,6 +87,21 @@ object LedgerPolicy {
     case c: Content.Upstream => ItemOutcome(!Set[UpstreamStatus](UpstreamStatus.Identified, UpstreamStatus.Reported).contains(c.status), c.status == UpstreamStatus.Resolved)
   }
 
+  def validateCitation(value: Citation): Unit = value match {
+    case Citation.Url(address) =>
+      invalid(address.length <= MaxLocation && scala.util.Try {
+        val uri = java.net.URI.create(address)
+        Set("http", "https").contains(uri.getScheme) && uri.getHost != null
+      }.getOrElse(false), "Citation URL must be an absolute HTTP(S) address")
+    case Citation.File(path, revision) =>
+      invalid(path.trim.nonEmpty && path.length <= MaxLocation && !path.contains('\u0000'), "Invalid cited file path")
+      revision.foreach(r => invalid(r.trim.nonEmpty && r.length <= MaxLocation, "Invalid cited file revision"))
+    case Citation.Commit(repository, hash) =>
+      invalid(repository.trim.nonEmpty && repository.length <= MaxLocation, "Invalid cited repository")
+      invalid(hash.matches("[0-9a-fA-F]{4,64}"), "Invalid cited commit hash")
+    case _: Citation.Artifact => ()
+  }
+
   def validate(draft: ItemDraft): Unit = {
     invalid(draft.title.trim.nonEmpty && draft.title.length <= MaxTitle, s"Title must contain 1–$MaxTitle characters")
     invalid(draft.body.length <= MaxBody, s"Body exceeds $MaxBody characters")
@@ -97,23 +112,9 @@ object LedgerPolicy {
       values.foreach(text(_, field))
     }
     def optional(value: Option[String], field: String): Unit = value.foreach(text(_, field))
-    def citation(value: Citation): Unit = value match {
-      case Citation.Url(address) =>
-        invalid(address.length <= MaxLocation && scala.util.Try {
-          val uri = java.net.URI.create(address)
-          Set("http", "https").contains(uri.getScheme) && uri.getHost != null
-        }.getOrElse(false), "Citation URL must be an absolute HTTP(S) address")
-      case Citation.File(path, revision) =>
-        invalid(path.trim.nonEmpty && path.length <= MaxLocation && !path.contains('\u0000'), "Invalid cited file path")
-        revision.foreach(r => invalid(r.trim.nonEmpty && r.length <= MaxLocation, "Invalid cited file revision"))
-      case Citation.Commit(repository, hash) =>
-        invalid(repository.trim.nonEmpty && repository.length <= MaxLocation, "Invalid cited repository")
-        invalid(hash.matches("[0-9a-fA-F]{4,64}"), "Invalid cited commit hash")
-      case _: Citation.Artifact => ()
-    }
     def citations(values: List[Citation]): Unit = {
       invalid(values.size <= MaxNestedEntries, "Too many citations")
-      values.foreach(citation)
+      values.foreach(validateCitation)
     }
     citations(draft.citations)
     val observations = evidence(draft.content)
@@ -133,11 +134,11 @@ object LedgerPolicy {
         invalid(c.subjects.nonEmpty || c.candidate.nonEmpty, "Review requires an item revision or candidate commit")
         invalid(c.subjects.size <= MaxNestedEntries && c.subjects.distinct.size == c.subjects.size, "Invalid reviewed subjects")
         c.subjects.foreach(s => invalid(s.item.number > 0 && s.revision.value > 0, "Invalid reviewed revision"))
-        c.candidate.foreach(citation); optional(c.summary, "summary")
+        c.candidate.foreach(validateCitation); optional(c.summary, "summary")
       case c: Content.Handoff => text(c.outcome, "outcome"); texts(c.remaining, "remaining work"); texts(c.blockers, "blockers")
       case c: Content.OperatorAction => text(c.action, "action"); text(c.expectedEvidence, "expected evidence"); optional(c.confirmation, "confirmation")
       case c: Content.Memory => text(c.knowledge, "knowledge"); text(c.applicability, "applicability")
-      case c: Content.Upstream => text(c.component, "component"); text(c.version, "version"); text(c.reproduction, "reproduction"); c.report.foreach(citation); optional(c.outcome, "upstream outcome")
+      case c: Content.Upstream => text(c.component, "component"); text(c.version, "version"); text(c.reproduction, "reproduction"); c.report.foreach(validateCitation); optional(c.outcome, "upstream outcome")
     }
     val encoded = ItemDraft_JsonCodec.encode(baboon.runtime.shared.BaboonCodecContext.Default, draft)
     val encoder = java.nio.charset.StandardCharsets.UTF_8.newEncoder()

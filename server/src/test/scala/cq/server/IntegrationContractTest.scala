@@ -59,8 +59,8 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
       workerArtifact <- publish(collector, worker, artifacts, admissions)
       reviewAssignment <- usage.assign(collector, workerAssignment.copy(id = AssignmentId(uuid), cohort = Some(uuid)))
       reviewAttempt <- usage.start(collector, workerAttempt.copy(id = AttemptId(uuid), assignment = reviewAssignment.id, role = Role.Reviewer))
-      reviewer = ChildResult(reviewAttempt.id, request.copy(request = RequestId(uuid), work = DispatchWork.Reviewer(), previous = Some(workerArtifact)),
-        candidate, Some(candidate), ChildReport.Review(created.items.map(ref => ReviewMember(ref.id, ReviewVerdict.Accepted, Nil))), worker.validation)
+      reviewer = ChildResult(reviewAttempt.id, request.copy(request = RequestId(uuid), work = DispatchWork.Reviewer(ReviewerMode.Candidate), previous = Some(workerArtifact)),
+        candidate, Some(candidate), ChildReport.Review(created.items.map(ref => ReviewMember(ref.id, ReviewVerdict.Accepted, Nil)), None), worker.validation)
       reviewArtifact <- publish(collector, reviewer, artifacts, admissions)
       id = IntegrationId(uuid)
       change = IntegrationPolicy.completion(id, "/consumer", "refs/heads/integration", candidate, workerArtifact, reviewArtifact, List(validation.id), claim.fence, items)
@@ -81,9 +81,31 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
   }
 
   "Integration reservations (Behavioral Active Blackbox; dummy Group / PostgreSQL Good Communication)" should {
+    "prevent create-only proposal application while any assigned member has a pending integration" in {
+      (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO],
+        integrations: IntegrationService[IO], proposals: ProposalService[IO]) => for {
+        f <- begin(ledger, usage, artifacts, admissions)
+        assignment <- usage.assign(f.collector, Assignment(AssignmentId(uuid), f.owner.project, f.claim.members, Attribution.Shared, Some(uuid), None))
+        attempt <- usage.start(f.collector, Attempt(AttemptId(uuid), assignment.id, Some(f.governor), f.owner.actor.session, Role.Planner,
+          Harness.Codex, "fixture", "fixture", "fixture", 1000))
+        report = ChildReport.Plan(f.intent.members.map(ref => PlanMember(ref.id, PlanDisposition.Proposed, "Follow-up")),
+          Some(LedgerProposal(List(ProposedMutation.Create(task)), "Create after integration settles")))
+        result = f.worker.copy(attempt = attempt.id, candidate = None, report = report, validation = Nil,
+          request = f.worker.request.copy(request = RequestId(uuid), work = DispatchWork.Planner()))
+        handle <- publish(f.collector, result, artifacts, admissions)
+        _ <- integrations.reserve(f.collector, f.intent)
+        _ <- reject(proposals(f.owner, handle), pending(f.intent.id))
+        before <- ledger.changes(f.owner, ChangeCursor(0), 20)
+        _ <- assertIO(before.events.size == 1)
+        _ <- integrations.observe(f.collector, f.intent.id, IntegrationObservation.NotApplied("Target unchanged; executor settled"))
+        ack <- proposals(f.owner, handle)
+        _ <- assertIO(ack.items.map(_.id.number) == List(3))
+      } yield ()
+    }
+
     "freeze combination publication across lost acknowledgement and admit only the exact resolver under current authority" in {
       (ledger: LedgerService[IO], repository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO],
-        admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO]) => for {
+        admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) => for {
         f <- begin(ledger, usage, artifacts, admissions)
         runtime <- ZIO.runtime[Any]
         _ <- integrations.reserve(f.collector, f.intent)
@@ -91,7 +113,7 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
           val clock = Clock.systemUTC()
           val auth = new Authorization(AccessConfig("combination-contract-root-token", "http://localhost"), clock)
           val root = auth.authenticate("combination-contract-root-token", Some(f.owner.actor.session.value.toString))
-          val application = new Application(ledger, repository, usage, artifacts, admissions, integrations, auth)
+          val application = new Application(ledger, repository, usage, artifacts, admissions, integrations, proposals, auth)
           def execute[A](effect: Task[A]): A = Unsafe.unsafe { implicit unsafe => runtime.unsafe.run(effect).getOrThrowFiberFailure() }
           final class Api(scope: Scope, lose: Boolean) extends ServerApi {
             private val authority = auth.authenticate(auth.grant(root, GrantRequest(scope.project, scope.actor, clock.millis() + 300000)).value, None)
@@ -134,7 +156,7 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
           val assembler = new InputAssembler(governor, f.owner, clock)
           val input = assembler.assemble(request)
           assert(prepare.consume(input).contains(plan))
-          List(DispatchWork.Worker(WorkerMode.Implement), DispatchWork.Worker(WorkerMode.Probe), DispatchWork.Reviewer()).foreach { work =>
+          List(DispatchWork.Worker(WorkerMode.Implement), DispatchWork.Worker(WorkerMode.Probe), DispatchWork.Reviewer(ReviewerMode.Candidate)).foreach { work =>
             intercept[IllegalArgumentException](prepare.consume(input.copy(request = request.copy(work = work))))
           }
           intercept[IllegalArgumentException](prepare.consume(input.copy(request = request.copy(previous = Some(f.intent.reviewer)))))

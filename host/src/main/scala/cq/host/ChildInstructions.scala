@@ -8,8 +8,11 @@ final class ChildInstructions {
   private val MaxBytes = 16384
   def apply(work: DispatchWork): String = {
     val name = work match {
+      case _: DispatchWork.Explorer => "explore"
+      case _: DispatchWork.Planner => "plan"
       case DispatchWork.Worker(mode) => mode.toString.toLowerCase
-      case _: DispatchWork.Reviewer => "review-candidate"
+      case DispatchWork.Reviewer(ReviewerMode.Candidate) => "review-candidate"
+      case _: DispatchWork.Reviewer => "review-proposal"
     }
     Using.resource(Option(getClass.getResourceAsStream(s"/cq/prompts/$name.md"))
       .getOrElse(throw new IllegalStateException("Installed child prompt is missing"))) { stream =>

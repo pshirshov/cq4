@@ -271,6 +271,7 @@ root data ProjectConfig { project: ProjectId endpoint: str name: str }
 root data SearchInput { project: ProjectId query: str after: opt[ItemId] snapshot: opt[ChangeCursor] limit: i32 }
 root data GraphInput { project: ProjectId roots: set[ItemId] after: opt[ItemId] snapshot: opt[WorksetSnapshot] limit: i32 }
 root adt ReadSelection {
+  data Proposal { id: ArtifactId }
   data Integration { id: IntegrationId }
   data Admission { attempt: AttemptId }
   data Claims { members: set[ItemId] }
@@ -284,6 +285,7 @@ root adt ReadSelection {
 }
 root data ReadInput { project: ProjectId selection: ReadSelection }
 root data ChangeInput { project: ProjectId change: ChangeRequest }
+root data ProposalApplyInput { project: ProjectId result: ArtifactId }
 root adt ClaimAction {
   data Takeover { id: ClaimId owner: Actor members: set[ItemId] durationMillis: i64 snapshot: ClaimSnapshot }
   data Acquire { id: ClaimId members: set[ItemId] durationMillis: i64 }
@@ -307,10 +309,12 @@ root adt Command {
   data Graph { input: GraphInput }
   data Read { input: ReadInput }
   data Change { input: ChangeInput }
+  data ApplyProposal { input: ProposalApplyInput }
   data ClaimWork { input: ClaimInput }
   data Usage { input: UsageInput }
 }
 root adt Result {
+  data Proposal { preview: ProposalPreview }
   data Integration { record: IntegrationRecord }
   data Admission { record: ResultAdmission }
   data Claims { preview: ClaimPreview }
@@ -415,9 +419,13 @@ root data SupervisorReceipt {
 }
 
 enum WorkerMode { Implement Probe ResolveConflict }
+enum ExplorerMode { Investigate Research }
+enum ReviewerMode { Candidate Plan Audit }
 root adt DispatchWork {
+  data Explorer { mode: ExplorerMode }
+  data Planner {}
   data Worker { mode: WorkerMode }
-  data Reviewer {}
+  data Reviewer { mode: ReviewerMode }
 }
 root data DispatchRequest {
   request: RequestId work: DispatchWork harness: Harness members: lst[ItemRevision]
@@ -426,11 +434,41 @@ root data DispatchRequest {
 }
 enum WorkDisposition { CandidateReady Blocked Failed }
 enum ReviewVerdict { Accepted ChangesRequested Blocked }
+enum PlanDisposition { Proposed Blocked Abstained }
+enum EvidenceDisposition { Findings Inconclusive Blocked Failed }
 root data WorkMember { item: ItemId disposition: WorkDisposition summary: str }
 root data ReviewMember { item: ItemId verdict: ReviewVerdict findings: lst[str] }
+root data PlanMember { item: ItemId disposition: PlanDisposition summary: str }
+root data EvidenceMember {
+  item: ItemId disposition: EvidenceDisposition summary: str evidence: lst[Evidence]
+  uncertainties: lst[str] requestedProbes: lst[str]
+}
+root adt ProposedMutation {
+  data Create { draft: ItemDraft }
+  data Replace { id: ItemId draft: ItemDraft }
+  data Produce { producer: ItemId drafts: lst[ItemDraft] }
+  data Reference { source: ItemId relation: Relation target: ItemId present: bit }
+}
+root data LedgerProposal { mutations: lst[ProposedMutation] reason: str }
+root data ProposalDraftSummary { ledger: Ledger title: str status: TerminalStatus archived: bit }
+root data ProposalFieldChanges {
+  body: bit labels: bit content: bit citations: bit evidence: bit provenance: bit operatorConfirmation: bit
+}
+root adt ProposalOperationSummary {
+  data Create { draft: ProposalDraftSummary }
+  data Replace { id: ItemId before: ProposalDraftSummary after: ProposalDraftSummary fields: ProposalFieldChanges }
+  data Produce { producer: ItemId drafts: lst[ProposalDraftSummary] }
+  data Reference { source: ItemId relation: Relation target: ItemId present: bit }
+}
+root data ProposalPreview {
+  result: ArtifactId request: RequestId role: Role members: lst[ItemRevision]
+  operations: lst[ProposalOperationSummary] detailsOmitted: bit
+}
 root adt ChildReport {
+  data Evidence { members: lst[EvidenceMember] }
+  data Plan { members: lst[PlanMember] proposal: opt[LedgerProposal] }
   data Work { members: lst[WorkMember] }
-  data Review { members: lst[ReviewMember] }
+  data Review { members: lst[ReviewMember] proposal: opt[LedgerProposal] }
 }
 root data ChildResult {
   attempt: AttemptId request: DispatchRequest base: GitCommit candidate: opt[GitCommit] report: ChildReport validation: lst[ValidationEvidence]
@@ -496,8 +534,11 @@ enum ValidationState { Passed Failed Unknown }
 root data ValidationEvidence { check: str state: ValidationState artifact: ArtifactId }
 root data ValidationObservation { check: ValidationCheck candidate: GitCommit job: JobRecord stdout: ArtifactId stderr: ArtifactId }
 enum DispatchPhase { Preparing Running Stopping Validating Publishing Completed Failed Cancelled Unknown PublicationPending }
-enum ChildNext { Wait Review Revise ResolveBlocker Retry ConsiderAcceptance InspectEvidence RetryDelivery }
-root data ChildCounts { ready: i32 accepted: i32 changesRequested: i32 blocked: i32 failed: i32 validationFailed: i32 validationUnknown: i32 }
+enum ChildNext { Wait Plan Review Revise ResolveBlocker Retry ConsiderAcceptance ConsiderProposal InspectEvidence RetryDelivery }
+root data ChildCounts {
+  ready: i32 accepted: i32 changesRequested: i32 blocked: i32 failed: i32 validationFailed: i32 validationUnknown: i32
+  proposed: i32 evidence: i32 abstained: i32
+}
 root data DispatchStatus {
   request: RequestId attempt: AttemptId phase: DispatchPhase process: opt[JobPhase] members: lst[ItemId]
   counts: ChildCounts next: ChildNext blocker: opt[str] result: opt[ArtifactId] detailsOmitted: bit usageDelivered: bit

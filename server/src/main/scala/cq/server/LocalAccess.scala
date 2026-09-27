@@ -20,7 +20,7 @@ final class LocalAccess(authority: SupervisorAuthority, clock: Clock) {
   }
   def endpoint: URI = synchronized(address.getOrElse(throw new IllegalStateException("Local control service has not started")))
   def issue(attempt: AttemptId, role: Role): AccessToken = synchronized {
-    require(Set(Role.Governor, Role.Worker, Role.Reviewer)(role), "Unsupported local capability role")
+    require(Set(Role.Governor, Role.Explorer, Role.Planner, Role.Worker, Role.Reviewer)(role), "Unsupported local capability role")
     val capability = LocalCapability(attempt, role)
     grants.getOrElse(capability, {
       require(grants.size < MaxCapabilities, "Local capability inventory exhausted")

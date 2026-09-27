@@ -22,7 +22,7 @@ The same current schema remains 0.1.0. Proposed changes, compact previews and ch
 
 Preview is informational and leaves no durable approval token. Immutability identifies the content, and application repeats the necessary checks under the transaction lock. A stale result is retained for inspection; the host must obtain a current assignment/result before it can be applied. Manual schema-valid corrections keep their ordinary permissions.
 
-The public surface adds `apply`, taking only project and admitted result handle, and exposes preview through `read/Proposal`. This yields seven domain MCP capabilities plus the existing local `dispatch` capability for governors. `apply` is denied to child roles even on direct calls; ordinary `change` retains its existing semantics. The ten-capability ceiling and native advertised-schema size gate remain enforced. The host never sends full proposal bodies through the parent as application arguments.
+The public surface adds `apply`, taking only project and admitted result handle, and exposes preview through `read/Proposal`. `cq proposal preview RESULT_UUID` inspects the same summary; `cq proposal apply RESULT_UUID` uses the same server operation and requires the original governor scoped credential. Operator/root credentials can preview but cannot impersonate the applying governor. This administrative artifact operation is separate from the four agent workflow commands. This yields seven domain MCP capabilities plus the existing local `dispatch` capability for governors. `apply` is denied to child roles even on direct calls; ordinary `change` retains its existing semantics. The ten-capability ceiling and native advertised-schema size gate remain enforced. The host never sends full proposal bodies through the parent as application arguments.
 
 ## Four roles, one lifecycle
 
@@ -41,9 +41,10 @@ Proposal eligibility is explicit:
 
 | Role/mode | Report | Applicable proposal |
 | --- | --- | --- |
-| Explorer / Investigate, Research | Exploration | None; evidence/probe requests can feed a planner by handle |
+| Explorer / Investigate, Research | Evidence | None; evidence/probe requests can feed a planner by handle |
 | Planner / Plan | Plan | Optional; at least one member must be Proposed. Existing mutation endpoints must belong to Proposed members; Blocked/Abstained members remain untouched |
-| Worker / all modes | Work | None; candidate/probe evidence feeds planning or review by handle |
+| Worker / Implement, ResolveConflict | Work | None; candidate evidence feeds planning or review by handle |
+| Worker / Probe | Evidence | None; experiments feed planning/review without publishing an implementation candidate |
 | Reviewer / Candidate | Review | None; verdict/findings refer to the exact existing candidate |
 | Reviewer / Plan, Audit | Review | Optional follow-up; at least one member must be ChangesRequested. Existing mutation endpoints must belong to ChangesRequested members; Accepted/Blocked members remain untouched |
 

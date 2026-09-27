@@ -2,7 +2,7 @@ package cq.server
 
 import baboon.runtime.shared.{BaboonCodecContext, BaboonJsonCodec}
 import cq.api.*
-import cq.host.{HarnessInvocation, McpTarget}
+import cq.host.{ChildContracts, HarnessInvocation, McpTarget}
 import io.circe.{Json, JsonObject, parser}
 import java.nio.charset.StandardCharsets.UTF_8
 
@@ -21,12 +21,14 @@ final class McpSchemas {
   val tools: List[McpTool] = List(
     McpTool("search", "Read a bounded item page using text, quoted phrases, exact IDs (T42), ledger:, status:, tag:, project:, archived:true|false|all, or kebab-case relation:T42. Uppercase NOT/- binds before AND (also implicit), then OR; parentheses group. Active items are implicit unless archived: occurs. Continue with its snapshot cursor; restart on Resync. QuerySyntax returns UTF-16 source spans.", "SearchInput", Set("Found"), false,
       decoder(SearchInput_JsonCodec)(Command.Search.apply)),
-    McpTool("read", "Read integration reservations and durable result admission; inspect explicit claim membership and collateral overlap for reviewed human takeover; preview exact whole-subgraph termination with typed effects, exclusions and active claims; read an item, history or changes; complete query text at a UTF-16 cursor with bounded suggestions and syntax diagnostics; inspect artifact metadata or explicitly drill down into bounded text pages by Unicode code-point offset.", "ReadInput", Set("Integration", "Admission", "Detail", "History", "Changes", "ArtifactInfo", "ArtifactText", "QueryAnalyzed", "Termination", "Claims"), false,
+    McpTool("read", "Preview a stored proposal by result handle; read integration reservations and durable result admission; inspect explicit claim membership and collateral overlap for reviewed human takeover; preview exact whole-subgraph termination with typed effects, exclusions and active claims; read an item, history or changes; complete query text at a UTF-16 cursor with bounded suggestions and syntax diagnostics; inspect artifact metadata or explicitly drill down into bounded text pages by Unicode code-point offset.", "ReadInput", Set("Proposal", "Integration", "Admission", "Detail", "History", "Changes", "ArtifactInfo", "ArtifactText", "QueryAnalyzed", "Termination", "Claims"), false,
       decoder(ReadInput_JsonCodec)(Command.Read.apply)),
     McpTool("graph", "Enumerate a transient workset from explicit roots: selected produced work and milestone members, separate one-hop context, and informational readiness reasons. Empty roots select nothing. Context does not expand siblings. Maximum 64 roots and 1024 visited items; Limit fails explicitly. Continue with the returned roots-bound snapshot; restart on Resync. Worksets do not acquire claims.", "GraphInput", Set("Workset"), false,
       decoder(GraphInput_JsonCodec)(Command.Graph.apply)),
     McpTool("change", "Commit an idempotent atomic change batch with expected revisions and claim fences. Produce creates and attaches descendants atomically under the producer revision and active owned fence. A Terminate mutation must stand alone, use a freshly reviewed read/Termination snapshot, and echo all previewed claim fences; stale/conflicted plans fail atomically. Governor authority required.", "ChangeInput", Set("Changed"), true,
       decoder(ChangeInput_JsonCodec)(Command.Change.apply)),
+    McpTool("apply", "Apply the typed proposal in an admitted result by handle after inspecting read/Proposal. Only the original governor can apply it. Current exact assignment revisions/claim are required; an exact committed retry returns its original acknowledgement. Drafts and authority are resolved by the server.", "ProposalApplyInput", Set("Changed"), true,
+      decoder(ProposalApplyInput_JsonCodec)(Command.ApplyProposal.apply)),
     McpTool("claim", "Acquire, renew or release an explicit item-set claim. Governor authority required. Takeover requires Human authority and a freshly reviewed read/Claims snapshot; replaced claims lose their entire membership.", "ClaimInput", Set("Claimed"), true,
       decoder(ClaimInput_JsonCodec)(Command.ClaimWork.apply)),
     McpTool("usage", "Read task, cohort, session, evaluation or project usage totals and bounded cost, observation, attempt and outcome audit pages. Shared totals are not per-member allocations.", "UsageInput", Set("UsageSummary", "UsageCosts", "UsageAudit", "UsageAttempts", "UsageOutcomes"), false,
@@ -56,10 +58,7 @@ final class McpSchemas {
   def schema(name: String): Json = closure(definitions(s"cq_api_$name").get)
 
   def childReport(work: DispatchWork): Json = {
-    val tag = work match {
-      case _: DispatchWork.Worker => "Work"
-      case _: DispatchWork.Reviewer => "Review"
-    }
+    val tag = ChildContracts.reportTag(work)
     val branches = definitions("cq_api_ChildReport").get.hcursor.get[Vector[Json]]("oneOf").fold(throw _, identity)
       .filter(_.hcursor.get[List[String]]("required") == Right(List(tag)))
     require(branches.size == 1, s"Expected one generated ChildReport.$tag schema")
@@ -91,8 +90,13 @@ final class McpSchemas {
           require(selected.get(key).forall(_ == value), s"Conflicting native tool schema definition $key")
           selected.update(key, value)
         }}
-        val guide = Json.obj("tools" -> Json.obj(inputs.map { case (name, value) => name -> value.mapObject(_.remove("$defs")) }*),
-          "$defs" -> Json.fromJsonObject(JsonObject.fromIterable(selected)))
+        def localNames(value: Json): Json = value.arrayOrObject(value,
+          values => Json.fromValues(values.map(localNames)),
+          fields => Json.fromJsonObject(JsonObject.fromIterable(fields.toList.map { case (key, child) =>
+            key -> (if (key == "$ref") Json.fromString(child.asString.get.replace("#/$defs/cq_api_", "#/$defs/")) else localNames(child))
+          })))
+        val guide = Json.obj("tools" -> Json.obj(inputs.map { case (name, value) => name -> localNames(value.mapObject(_.remove("$defs"))) }*),
+          "$defs" -> Json.fromJsonObject(JsonObject.fromIterable(selected.map { case (name, value) => name.stripPrefix("cq_api_") -> localNames(value) })))
         invocation.copy(system = invocation.system + "\nCanonical argument schemas for CQ tools affected by native schema compaction. " +
           "Use these complete contracts when constructing tool arguments. Each $ref resolves against this document's $defs. " +
           "They do not grant additional permissions.\n" + guide.noSpaces)

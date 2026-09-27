@@ -40,7 +40,7 @@ abstract class SessionDeliveryTest extends SpecZIO with AssertZIO {
 
   "Interrupted publication (Behavioral Active Blackbox; dummy Group / PostgreSQL and Git Good Communication)" should {
     "recover sealed child publications after lost admission and outcome acknowledgements without rereading output" in {
-      (ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], fixture: WorkspaceFixture) =>
+      (ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO], fixture: WorkspaceFixture) =>
         ZIO.foreachDiscard(List(false, true)) { releaseBefore =>
           val clock = Clock.systemUTC()
           val owner = Scope(ProjectId(UUID.randomUUID()), Actor("governor", SessionId(UUID.randomUUID()), Role.Governor))
@@ -48,7 +48,7 @@ abstract class SessionDeliveryTest extends SpecZIO with AssertZIO {
           val auth = new Authorization(AccessConfig("sealed-publication-root-token", "http://localhost"), clock)
           val root = auth.authenticate("sealed-publication-root-token", Some(owner.actor.session.value.toString))
           val authority = auth.authenticate(auth.grant(root, GrantRequest(owner.project, collector.actor, clock.millis() + 60000)).value, None)
-          val application = new Application(ledger, ledgerRepository, usage, artifacts, admissions, integrations, auth)
+          val application = new Application(ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, auth)
           val initialUsage = """{"type":"thread.started","thread_id":"sealed-thread"}
 {"type":"turn.completed","usage":{"input_tokens":100,"cached_input_tokens":20,"cache_write_input_tokens":0,"output_tokens":31,"reasoning_output_tokens":3}}
 """
@@ -142,14 +142,14 @@ abstract class SessionDeliveryTest extends SpecZIO with AssertZIO {
     }
 
     "recover pre-job tickets and partial output once while replaying committed results without readmission" in {
-      (ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], fixture: WorkspaceFixture) =>
+      (ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO], fixture: WorkspaceFixture) =>
         val clock = Clock.systemUTC()
         val owner = Scope(ProjectId(UUID.randomUUID()), Actor("governor", SessionId(UUID.randomUUID()), Role.Governor))
         val collector = owner.copy(actor = owner.actor.copy(role = Role.Collector))
         val auth = new Authorization(AccessConfig("recovery-contract-root-token", "http://localhost"), clock)
         val rootAuthority = auth.authenticate("recovery-contract-root-token", Some(owner.actor.session.value.toString))
         val authority = auth.authenticate(auth.grant(rootAuthority, GrantRequest(owner.project, collector.actor, clock.millis() + 60000)).value, None)
-        val application = new Application(ledger, ledgerRepository, usage, artifacts, admissions, integrations, auth)
+        val application = new Application(ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, auth)
         val assignment = Assignment(AssignmentId(UUID.randomUUID()), owner.project, Set.empty, Attribution.Unattributed, None, None)
         val governor = Attempt(AttemptId(UUID.randomUUID()), assignment.id, None, owner.actor.session, Role.Governor,
           Harness.Codex, "fixture", "fixture", "fixture", clock.millis())

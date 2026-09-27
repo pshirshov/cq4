@@ -148,13 +148,15 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
               Some(commit)
             }}
           case _: ChildReport.Work => ZIO.succeed(None)
-          case _: ChildReport.Review => ZIO.succeed(input.previous.flatMap(_.candidate))
+          case _: ChildReport.Review if entry.ticket.request.work == DispatchWork.Reviewer(ReviewerMode.Candidate) => ZIO.succeed(input.previous.flatMap(_.candidate))
+          case _: ChildReport.Review | _: ChildReport.Plan | _: ChildReport.Evidence => ZIO.succeed(None)
         }
         validation <- if (entry.ticket.attempt.role == Role.Worker && candidate.nonEmpty) {
           ZIO.succeed(entry.phase(DispatchPhase.Validating)) *> ZIO.foreach(config.settings.checks.zipWithIndex) { case (check, index) =>
             validate(entry, candidate.get, check, index, trace)
           }
-        } else ZIO.succeed(input.previous.toList.flatMap(_.validation))
+        } else if (entry.ticket.request.work == DispatchWork.Reviewer(ReviewerMode.Candidate)) ZIO.succeed(input.previous.toList.flatMap(_.validation))
+        else ZIO.succeed(Nil)
         stored <- ZIO.attemptBlocking {
           entry.check()
           claim(entry, true)

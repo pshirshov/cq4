@@ -20,7 +20,7 @@ final class IntegrationPreparation(api: ServerApi, owner: Scope, repository: Str
     }
     val reader = new ArtifactReader(call, owner.project)
     val review = reader.result(ticket.reviewer)
-    require(review.value.request.work == DispatchWork.Reviewer(), "Integration requires a reviewer result handle")
+    require(review.value.request.work == DispatchWork.Reviewer(ReviewerMode.Candidate), "Integration requires a reviewer result handle")
     val workerId = review.value.request.previous.getOrElse(throw new IllegalArgumentException("Review has no worker handle"))
     val work = reader.result(workerId)
     val worker = work.value
@@ -35,7 +35,7 @@ final class IntegrationPreparation(api: ServerApi, owner: Scope, repository: Str
       reviewer.validation == worker.validation, "Integration requires independently reviewed exact worker output")
     require(worker.report match { case ChildReport.Work(members) => members.forall(_.disposition == WorkDisposition.CandidateReady); case _ => false },
       "Integration requires every worker member to be ready")
-    require(reviewer.report match { case ChildReport.Review(members) => members.forall(_.verdict == ReviewVerdict.Accepted); case _ => false },
+    require(reviewer.report match { case ChildReport.Review(members, _) => members.forall(_.verdict == ReviewVerdict.Accepted); case _ => false },
       "Integration requires every reviewer member to be accepted")
     require(worker.validation.map(_.check) == checks.map(_.name) && worker.validation.forall(_.state == ValidationState.Passed),
       "Integration requires all configured checks to pass")

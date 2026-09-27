@@ -55,6 +55,13 @@ def main():
         emit({"type": "turn.completed", "usage": {"input_tokens": 100, "cached_input_tokens": 20,
               "cache_write_input_tokens": 0, "output_tokens": 31, "reasoning_output_tokens": 3}})
 
+    def poll(attempt):
+        for _ in range(8):
+            value = tool("cq_host", "dispatch", {"Status": {"attempt": attempt, "waitMillis": 20000}})["Status"]["value"]
+            if value["phase"] not in ["Preparing", "Running", "Stopping", "Validating", "Publishing"]:
+                return value
+        raise AssertionError("Fixture child did not finish")
+
     emit({"type": "thread.started", "thread_id": str(uuid.uuid4())})
     emit({"type": "turn.started"})
     for name in ["cq", "cq_host"]:
@@ -69,8 +76,35 @@ def main():
         project = context["project"]
         tool("cq_host", "dispatch", {"Status": {"attempt": identity(), "waitMillis": 0}}, denied=True)
         tool("cq_host", "dispatch", {"Integrate": {"id": identity()}}, denied=True)
+        tool("cq", "apply", {"project": project, "result": identity()}, denied=True)
         tool("cq", "change", {"project": project, "change": {"request": identity(), "mutations": [], "fences": [], "reason": "forbidden"}}, denied=True)
         tool("cq_host", "workspace", {"Read": {"path": "../outside", "offset": 0, "limit": 10}}, denied=True)
+        role = next(iter(assignment["work"]))
+        proposal_fixture = context["members"][0]["item"]["draft"]["labels"] == ["proposal-fixture"]
+        if proposal_fixture:
+            assert sandbox == ("workspace-write" if role == "Worker" else "read-only")
+            tool("cq_host", "workspace", {"Entries": {"path": ".", "after": None, "limit": 20}})
+            narrative = "CHILD_ONLY_NARRATIVE " + "detail " * 800
+            if role in ["Explorer", "Worker"]:
+                if role == "Worker":
+                    assert assignment["work"][role]["mode"] == "Probe"
+                    Path("probe.txt").write_text("isolated probe evidence")
+                finish({"Evidence": {"members": [{"item": item, "disposition": "Findings", "summary": narrative,
+                    "evidence": [{"description": narrative, "origin": "ModelDeclared", "citations": []}],
+                    "uncertainties": ["Probe observations require interpretation"], "requestedProbes": []} for item in members]}})
+            else:
+                draft = {**context["members"][0]["item"]["draft"], "title": "Proposed follow-up", "body": narrative}
+                proposal = {"mutations": [{"Produce": {"producer": members[0], "drafts": [draft]}}], "reason": "Create follow-up"}
+                if role == "Planner":
+                    assert "Evidence" in context["previous"]["report"]
+                    finish({"Plan": {"members": [{"item": item, "disposition": "Proposed", "summary": narrative} for item in members], "proposal": proposal}})
+                elif assignment["work"][role]["mode"] == "Plan":
+                    assert context["previous"]["report"]["Plan"]["proposal"] == proposal
+                    finish({"Review": {"members": [{"item": item, "verdict": "Accepted", "findings": []} for item in members], "proposal": None}})
+                else:
+                    assert assignment["work"][role]["mode"] == "Audit"
+                    finish({"Review": {"members": [{"item": item, "verdict": "ChangesRequested", "findings": ["Follow-up required", narrative]} for item in members], "proposal": proposal}})
+            return
         if "Worker" in assignment["work"]:
             assert sandbox == "workspace-write"
             Path("consumer.txt").write_text("candidate from isolated worker\n")
@@ -89,18 +123,46 @@ def main():
             assert text["Text"]["page"]["text"] == "candidate from isolated worker\n"
             tool("cq_host", "workspace", {"Read": {"path": ".git", "offset": 0, "limit": 10}}, denied=True)
             assert context["previous"]["validation"] and all(value["state"] == "Passed" for value in context["previous"]["validation"])
-            finish({"Review": {"members": [{"item": item, "verdict": "Accepted", "findings": []} for item in members]}})
+            finish({"Review": {"proposal": None, "members": [{"item": item, "verdict": "Accepted", "findings": []} for item in members]}})
         return
 
     assert sandbox == "read-only"
     project = data["project"]["project"]
     draft = {"title": "Consumer fixture", "body": "Implement consumer.txt with the specified contents", "labels": [], "archived": False,
              "content": {"Task": {"status": "Ready", "acceptance": ["Exact content verified"], "result": None, "validation": []}}, "citations": []}
+    if data["request"] == "proposal-workflow":
+        draft["labels"] = ["proposal-fixture"]
     created = tool("cq", "change", {"project": project, "change": {"request": identity(), "mutations": [{"Create": {"draft": draft}}], "fences": [], "reason": "Fixture task"}})
     members = created["Changed"]["ack"]["items"]
     claim = tool("cq", "claim", {"project": project, "action": {"Acquire": {"id": identity(), "members": [value["id"] for value in members], "durationMillis": "180000"}}})
     request = {"request": identity(), "work": {"Worker": {"mode": "Implement"}}, "harness": "Codex", "members": members,
                "guidance": [], "artifacts": [], "previous": None, "fence": claim["Claimed"]["claim"]["fence"], "limits": data["limits"]}
+    if data["request"] == "proposal-workflow":
+        previous = None
+        results = []
+        for work in [{"Explorer": {"mode": "Investigate"}}, {"Explorer": {"mode": "Research"}},
+                     {"Worker": {"mode": "Probe"}}, {"Planner": {}}, {"Reviewer": {"mode": "Plan"}}, {"Reviewer": {"mode": "Audit"}}]:
+            current = {**request, "request": identity(), "work": work, "previous": previous}
+            started = tool("cq_host", "dispatch", {"Start": {"request": current}})["Status"]["value"]
+            settled = poll(started["attempt"])
+            assert settled["phase"] == "Completed" and settled["result"] and settled["usageDelivered"], settled
+            results.append(settled)
+            previous = settled["result"]
+        assert results[2]["counts"]["evidence"] == 1 and results[2]["counts"]["ready"] == 0
+        assert results[3]["counts"]["proposed"] == 1 and results[3]["next"] == "ConsiderProposal"
+        assert results[4]["counts"]["accepted"] == 1
+        # Both proposals share the frozen producer; applying one makes the other stale.
+        handle = results[3]["result"]
+        preview = tool("cq", "read", {"project": project, "selection": {"Proposal": {"id": handle}}})["Proposal"]["preview"]
+        assert preview["members"] == members and preview["detailsOmitted"] and len(preview["operations"]) == 1
+        apply_input = {"project": project, "result": handle}
+        ack = tool("cq", "apply", apply_input)["Changed"]["ack"]
+        assert tool("cq", "apply", apply_input)["Changed"]["ack"] == ack
+        tool("cq", "apply", {"project": project, "result": results[5]["result"]}, denied=True)
+        emit({"type": "fixture.proposal", "handle": handle, "preview": preview, "ack": ack, "statuses": results,
+              "applyBytes": len(json.dumps(apply_input).encode())})
+        finish({"summary": "Evidence and probe results planned and reviewed by handle; typed proposal applied once and stale follow-up rejected"})
+        return
     exiting = data["request"] == "exit-with-running-child"
     if exiting:
         request["work"] = {"Worker": {"mode": "Probe"}}
@@ -118,18 +180,11 @@ def main():
     changed = {**request, "work": {"Worker": {"mode": "Probe"}}}
     tool("cq_host", "dispatch", {"Start": {"request": changed}}, denied=True)
 
-    def poll(attempt):
-        for _ in range(8):
-            value = tool("cq_host", "dispatch", {"Status": {"attempt": attempt, "waitMillis": 20000}})["Status"]["value"]
-            if value["phase"] not in ["Preparing", "Running", "Stopping", "Validating", "Publishing"]:
-                return value
-        raise AssertionError("Fixture child did not finish")
-
     worker = poll(first["attempt"])
     assert worker["phase"] == "Completed" and worker["counts"]["ready"] == 1 and worker["counts"]["validationFailed"] == 0, worker
     assert worker["result"] and worker["usageDelivered"] and worker["detailsOmitted"]
     assert poll(first["attempt"]) == worker
-    review_request = {**request, "request": identity(), "work": {"Reviewer": {}}, "previous": worker["result"]}
+    review_request = {**request, "request": identity(), "work": {"Reviewer": {"mode": "Candidate"}}, "previous": worker["result"]}
     review = tool("cq_host", "dispatch", {"Start": {"request": review_request}})["Status"]["value"]
     reviewed = poll(review["attempt"])
     assert reviewed["phase"] == "Completed" and reviewed["counts"]["accepted"] == 1, reviewed

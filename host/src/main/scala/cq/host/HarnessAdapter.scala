@@ -37,7 +37,7 @@ final case class HarnessInvocation(role: Role, attempt: AttemptId, system: Strin
   require(endpoints.map(_.target).distinct.size == endpoints.size, "Duplicate MCP target")
   def edits: Boolean = role == Role.Worker
   def tools(target: McpTarget): List[String] = target match {
-    case McpTarget.Domain => if (role == Role.Governor) List("search", "read", "graph", "change", "claim", "usage") else List("search", "read", "usage")
+    case McpTarget.Domain => if (role == Role.Governor) List("search", "read", "graph", "change", "apply", "claim", "usage") else List("search", "read", "usage")
     case McpTarget.Local => if (role == Role.Governor) List("dispatch") else List("workspace")
   }
 }

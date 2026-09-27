@@ -91,6 +91,49 @@ def main():
         assert "Acknowledged 1" in run(["job", "upload", "--session", str(session)])
         assert api({"Summary": {"filter": filter_value}}) == before, "Child replay changed accounting or cursor"
         print(json.dumps({"session": receipt["session"], "children": statuses, "usage": before, "maxParentReplyBytes": max(len(json.dumps(value["reply"]).encode()) for value in traffic)}))
+        source.write_text("proposal-workflow")
+        proposed = json.loads(run(["run", "codex", "--settings", str(settings), "--input", str(source)]))
+        proposal_session = Path(proposed["directory"])
+        proposal_native = (proposal_session / "payload" / proposed["attempt"]["value"] / "stdout").read_text()
+        assert "CHILD_ONLY_NARRATIVE" not in proposal_native
+        proposal_events = [json.loads(line) for line in proposal_native.splitlines()]
+        proposal = next(event for event in proposal_events if event.get("type") == "fixture.proposal")
+        assert len(proposal["statuses"]) == 6 and proposed["processSucceeded"] and proposed["usageDelivered"]
+        assert proposal["applyBytes"] < 160
+        for child in (proposal_session / "children").iterdir():
+            child_result = json.loads((child / "publication.json").read_text())["result"]
+            assert child_result["candidate"] is None and child_result["validation"] == []
+        handle = proposal["handle"]["value"]
+        preview = json.loads(run(["proposal", "preview", handle]))["Proposal"]["preview"]
+        assert preview == proposal["preview"] and len(json.dumps(preview).encode()) < 2048
+        forbidden = subprocess.run(command + ["proposal", "apply", handle], cwd=repository, env=environment,
+                                   capture_output=True, text=True, timeout=20)
+        assert forbidden.returncode != 0 and "Denied" in forbidden.stderr
+
+        def request(path, body, token):
+            packet = urllib.request.Request(endpoint + path, data=json.dumps(body).encode(), headers={
+                "Authorization": "Bearer " + token, "CQ-Session": str(uuid.uuid4()),
+                "CQ-Protocol-Version": "0.1.0", "Content-Type": "application/json"})
+            with urllib.request.urlopen(packet, timeout=10) as response:
+                return json.load(response)
+
+        actor = {"subject": "CQ governor", "session": proposed["session"], "role": "Governor"}
+        project = manifest["project"]["project"]
+        def grant(value):
+            return request("/api/grant", {"project": project, "actor": value, "expiresAt": str(int(time.time() * 1000) + 300000)}, environment["CQ_TOKEN"])["value"]
+        owning_token = grant(actor)
+        replay = subprocess.run(command + ["proposal", "apply", handle], cwd=repository,
+                                env={**environment, "CQ_TOKEN": owning_token}, capture_output=True, text=True, timeout=20)
+        assert replay.returncode == 0 and json.loads(replay.stdout)["Changed"]["ack"] == proposal["ack"]
+        application = {"ApplyProposal": {"input": {"project": project, "result": proposal["handle"]}}}
+        for role in ["Explorer", "Planner", "Worker", "Reviewer", "Collector"]:
+            denied = request("/api/call", application, grant({**actor, "role": role}))
+            assert "Denied" in denied["Failed"]["fault"]
+        proposal_usage = api({"Attempts": {"filter": {"SessionOnly": {"id": proposed["session"]}}, "after": None, "snapshot": None, "limit": 20}})["UsageAttempts"]["page"]["entries"]
+        assert len(proposal_usage) == 7 and sum(value["attempt"]["parent"] == proposed["attempt"] for value in proposal_usage) == 6
+        assert sorted(value["attempt"]["role"] for value in proposal_usage) == ["Explorer", "Explorer", "Governor", "Planner", "Reviewer", "Reviewer", "Worker"]
+        assert not (repository / "probe.txt").exists()
+        print(json.dumps({"proposalSession": str(proposal_session), "proposal": proposal, "cliReplay": True, "directRolesDenied": 5}))
         subprocess.run(["git", "-C", str(repository), "branch", "integration"], check=True)
         (repository / "governing.txt").write_text("staged governing work\n")
         subprocess.run(["git", "-C", str(repository), "add", "governing.txt"], check=True)

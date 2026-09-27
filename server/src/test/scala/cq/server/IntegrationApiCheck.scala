@@ -56,8 +56,8 @@ object IntegrationApiCheck {
       ChildReport.Work(members.map(ref => WorkMember(ref.id, WorkDisposition.CandidateReady, "Ready"))), Nil)
     val workerHandle = publish(workerResult)
     val reviewerHandle = publish(ChildResult(reviewer.id,
-      request.copy(request = RequestId(uuid), work = DispatchWork.Reviewer(), previous = Some(workerHandle)), candidate, Some(candidate),
-      ChildReport.Review(members.map(ref => ReviewMember(ref.id, ReviewVerdict.Accepted, Nil))), Nil))
+      request.copy(request = RequestId(uuid), work = DispatchWork.Reviewer(ReviewerMode.Candidate), previous = Some(workerHandle)), candidate, Some(candidate),
+      ChildReport.Review(members.map(ref => ReviewMember(ref.id, ReviewVerdict.Accepted, Nil)), None), Nil))
     val id = IntegrationId(uuid)
     val repository = "/http-fixture"
     val target = "refs/heads/integration"

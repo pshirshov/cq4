@@ -63,13 +63,13 @@ final class IntegrationServiceImpl[F[+_, +_]: Error2](ledger: LedgerRepository[F
       }.get
       invalid(work.attempt == worker._1.attempt && review.attempt == reviewer._1.attempt && work.attempt != review.attempt &&
         work.request.work.isInstanceOf[DispatchWork.Worker] && work.request.work != DispatchWork.Worker(WorkerMode.Probe) &&
-        review.request.work == DispatchWork.Reviewer() && review.request.previous.contains(intent.worker) &&
+        review.request.work == DispatchWork.Reviewer(ReviewerMode.Candidate) && review.request.previous.contains(intent.worker) &&
         work.request.members == intent.members && review.request.members == intent.members &&
         work.request.fence == intent.fence && review.request.fence == intent.fence && work.base == intent.expected &&
         work.candidate.contains(intent.candidate) && review.candidate == work.candidate && review.base == intent.candidate && review.validation == work.validation,
         "Integration requires an independently reviewed exact worker candidate and assignment")
       invalid(work.report match { case ChildReport.Work(members) => members.forall(_.disposition == WorkDisposition.CandidateReady); case _ => false }, "Every integration member must be candidate-ready")
-      invalid(review.report match { case ChildReport.Review(members) => members.forall(_.verdict == ReviewVerdict.Accepted); case _ => false }, "Every integration member must be independently accepted")
+      invalid(review.report match { case ChildReport.Review(members, _) => members.forall(_.verdict == ReviewVerdict.Accepted); case _ => false }, "Every integration member must be independently accepted")
       invalid(work.validation.map(_.check) == intent.checks.map(_.name) && work.validation.forall(_.state == ValidationState.Passed), "Applicable integration checks have not all passed")
     }.toEither)
     _ <- F.traverse_(worker._2.validation.zip(intent.checks)) { case (evidence, check) =>

@@ -116,7 +116,7 @@ assert.equal((await closed)[0], 1007);
 const client = new Client({ name: 'cq-ledger-client', version: '0.1.0' });
 await client.connect(new StreamableHTTPClientTransport(new URL(`${origin}/mcp`), { requestInit: { headers } }));
 const listed = await client.listTools();
-assert.deepEqual(listed.tools.map(t => t.name), ['search', 'read', 'graph', 'change', 'claim', 'usage']);
+assert.deepEqual(listed.tools.map(t => t.name), ['search', 'read', 'graph', 'change', 'apply', 'claim', 'usage']);
 const schema = listed.tools.find(t => t.name === 'change');
 const validator = new AjvJsonSchemaValidator().getValidator(schema.inputSchema);
 const mcpChange = change('MCP created');

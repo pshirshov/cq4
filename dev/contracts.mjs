@@ -74,8 +74,8 @@ for (const [tag, schema] of Object.entries(reports)) {
   assert.equal(schema.type, 'object');
   assert.equal(schema.additionalProperties, false);
   assert.deepEqual(schema.required, [tag]);
-  assert.equal(JSON.stringify(schema).includes('"oneOf"'), false);
-  assert.equal(JSON.stringify(schema).includes('"anyOf"'), false);
+  assert.equal('oneOf' in schema, false);
+  assert.equal('anyOf' in schema, false);
   const sample = fixture(schema, schema.$defs);
   const check = validator.getValidator(schema);
   assert.equal(check(sample).valid, true);
@@ -85,12 +85,18 @@ for (const [tag, schema] of Object.entries(reports)) {
   assert.deepEqual(contracts.ChildReport_JsonCodec.instance.encode(context, contracts.ChildReport_JsonCodec.instance.decode(context, sample)), sample);
 }
 const guides = JSON.parse(await readFile(`${directory}/native-guides.json`, 'utf8'));
+function qualified(value) {
+  if (Array.isArray(value)) return value.map(qualified);
+  if (value !== null && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, child]) =>
+    [key, key === '$ref' ? child.replace('#/$defs/', '#/$defs/cq_api_') : qualified(child)]));
+  return value;
+}
 for (const [role, guide] of Object.entries(guides)) {
   assert.deepEqual(Object.keys(guide.tools).sort(), role === 'Governor' ? ['cq.change', 'cq.read', 'cq.usage', 'cq_host.dispatch'] : ['cq.read', 'cq.usage']);
   for (const [name, schema] of Object.entries(guide.tools)) {
     const type = { 'cq.read': 'ReadInput', 'cq.change': 'ChangeInput', 'cq.usage': 'UsageInput', 'cq_host.dispatch': 'DispatchCommand' }[name];
-    assert.deepEqual(schema, definitions[`cq_api_${type}`]);
-    for (const [key, value] of Object.entries(guide.$defs)) assert.deepEqual(value, definitions[key]);
+    assert.deepEqual(qualified(schema), definitions[`cq_api_${type}`]);
+    for (const [key, value] of Object.entries(guide.$defs)) assert.deepEqual(qualified(value), definitions[`cq_api_${key}`]);
     const sample = fixture(schema, guide.$defs);
     const codec = contracts[`${type}_JsonCodec`].instance;
     assert.deepEqual(codec.encode(context, codec.decode(context, sample)), sample);

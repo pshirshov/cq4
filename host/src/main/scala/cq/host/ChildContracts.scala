@@ -2,6 +2,7 @@ package cq.host
 
 import baboon.runtime.shared.BaboonCodecContext
 import cq.api.*
+import cq.core.{LedgerPolicy, ProposalPolicy}
 import io.circe.Json
 import java.nio.charset.StandardCharsets.UTF_8
 import java.time.Duration
@@ -18,8 +19,17 @@ object ChildContracts {
   private val MaxOutputBytes = 32 * 1024 * 1024
 
   def role(work: DispatchWork): Role = work match {
+    case _: DispatchWork.Explorer => Role.Explorer
+    case _: DispatchWork.Planner => Role.Planner
     case _: DispatchWork.Worker => Role.Worker
     case _: DispatchWork.Reviewer => Role.Reviewer
+  }
+
+  def reportTag(work: DispatchWork): String = work match {
+    case _: DispatchWork.Explorer | DispatchWork.Worker(WorkerMode.Probe) => "Evidence"
+    case _: DispatchWork.Planner => "Plan"
+    case _: DispatchWork.Worker => "Work"
+    case _: DispatchWork.Reviewer => "Review"
   }
 
   def decodeRequest(project: ProjectId, json: Json): DispatchRequest = {
@@ -38,7 +48,8 @@ object ChildContracts {
     require(references.map(_.id).distinct.size == references.size && value.artifacts.distinct.size == value.artifacts.size,
       "Dispatch references must be distinct")
     require(value.fence.generation > 0, "Dispatch requires a claim fence")
-    require(role(value.work) != Role.Reviewer || value.previous.nonEmpty, "Candidate review requires a previous worker result handle")
+    require(!Set[DispatchWork](DispatchWork.Reviewer(ReviewerMode.Candidate), DispatchWork.Reviewer(ReviewerMode.Plan))(value.work) || value.previous.nonEmpty,
+      "Candidate or plan review requires its previous result handle")
     require(HostFiles.encode(DispatchRequest_JsonCodec, value).getBytes(UTF_8).length <= MaxRequestBytes, "Dispatch request exceeds its byte bound")
     val limits = value.limits
     ExecutionLimits(Duration.ofMillis(limits.startupMillis), Duration.ofMillis(limits.executionMillis), Duration.ofMillis(limits.heartbeatMillis),
@@ -52,10 +63,28 @@ object ChildContracts {
     require(ChildReport_JsonCodec.encode(BaboonCodecContext.Default, value) == json, "Child report contains undeclared or noncanonical fields")
     def narrative(text: String): Unit = require(text.trim.nonEmpty && text.length <= MaxNarrativeCharacters, "Invalid child narrative bound")
     val reported = (work, value) match {
-      case (_: DispatchWork.Worker, ChildReport.Work(entries)) =>
+      case (assigned, ChildReport.Evidence(entries)) if reportTag(assigned) == "Evidence" =>
+        entries.foreach { entry =>
+          narrative(entry.summary)
+          require(entry.evidence.size <= MaxFindings && entry.uncertainties.size <= MaxFindings && entry.requestedProbes.size <= MaxFindings,
+            "Evidence report exceeds its entry bounds")
+          require(entry.disposition != EvidenceDisposition.Findings || entry.evidence.nonEmpty, "Findings require evidence")
+          entry.evidence.foreach { evidence =>
+            narrative(evidence.description)
+            require(evidence.origin == EvidenceOrigin.ModelDeclared && evidence.citations.size <= MaxFindings,
+              "Child evidence cannot declare host or human provenance")
+            evidence.citations.foreach(LedgerPolicy.validateCitation)
+          }
+          (entry.uncertainties ++ entry.requestedProbes).foreach(narrative)
+        }
+        entries.map(_.item)
+      case (_: DispatchWork.Planner, ChildReport.Plan(entries, _)) =>
         entries.foreach(entry => narrative(entry.summary))
         entries.map(_.item)
-      case (_: DispatchWork.Reviewer, ChildReport.Review(entries)) =>
+      case (assigned: DispatchWork.Worker, ChildReport.Work(entries)) if assigned.mode != WorkerMode.Probe =>
+        entries.foreach(entry => narrative(entry.summary))
+        entries.map(_.item)
+      case (_: DispatchWork.Reviewer, ChildReport.Review(entries, _)) =>
         entries.foreach { entry =>
           require(entry.findings.size <= MaxFindings && (entry.verdict == ReviewVerdict.Accepted || entry.findings.nonEmpty),
             "Non-accepted review requires bounded findings")
@@ -65,6 +94,7 @@ object ChildContracts {
       case _ => throw new IllegalArgumentException("Child report does not match its assigned role")
     }
     require(reported.distinct.size == reported.size && reported.toSet == members.map(_.id).toSet, "Child report must cover each assigned member exactly once")
+    ProposalPolicy.prepare(work, members, value)
     value
   }
 
@@ -74,9 +104,12 @@ object ChildContracts {
     require((value.base :: value.candidate.toList).forall(_.value.matches("[0-9a-f]{40}|[0-9a-f]{64}")), "Result commits must be full object IDs")
     val needsCandidate = value.report match {
       case ChildReport.Work(members) => members.exists(_.disposition == WorkDisposition.CandidateReady)
-      case _: ChildReport.Review => true
+      case _: ChildReport.Review => value.request.work == DispatchWork.Reviewer(ReviewerMode.Candidate)
+      case _: ChildReport.Evidence | _: ChildReport.Plan => false
     }
     require(!needsCandidate || value.candidate.nonEmpty, "Result requires its exact candidate commit")
+    require(value.report.isInstanceOf[ChildReport.Work] || value.request.work == DispatchWork.Reviewer(ReviewerMode.Candidate) ||
+      (value.candidate.isEmpty && value.validation.isEmpty), "Non-candidate results cannot inherit candidate validation")
     require(value.validation.size <= 8 && value.validation.map(_.check).distinct.size == value.validation.size &&
       value.validation.forall(_.check.matches("[a-z][a-z0-9-]{0,49}")), "Invalid host validation inventory")
     require(HostFiles.encode(ChildResult_JsonCodec, value).getBytes(UTF_8).length <= MaxResultBytes, "Stored child result exceeds its byte bound")

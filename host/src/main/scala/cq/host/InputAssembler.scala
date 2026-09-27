@@ -40,8 +40,11 @@ final class InputAssembler(api: ServerApi, owner: Scope, clock: Clock) {
     val previous = request.previous.map { id =>
       val value = reader.result(id).value
       require(value.request.members.toSet == request.members.toSet, "Prior result belongs to another assignment revision")
-      if (ChildContracts.role(request.work) == Role.Reviewer)
+      if (request.work == DispatchWork.Reviewer(ReviewerMode.Candidate))
         require(value.report.isInstanceOf[ChildReport.Work] && value.candidate.nonEmpty, "Candidate review requires a worker result with a candidate")
+      if (request.work == DispatchWork.Reviewer(ReviewerMode.Plan))
+        require(cq.core.ProposalPolicy.prepare(value.request.work, value.request.members, value.report).nonEmpty,
+          "Plan review requires a result containing a typed proposal")
       value
     }
     val input = ChildInput(owner.project, request, members, guidance, artifacts, previous)

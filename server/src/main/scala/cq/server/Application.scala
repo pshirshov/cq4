@@ -1,10 +1,10 @@
 package cq.server
 
 import cq.api.*
-import cq.core.{ArtifactService, DomainFailure, LedgerRepository, LedgerService, ResultAdmissionService, IntegrationService, UsageService}
+import cq.core.{ArtifactService, DomainFailure, LedgerRepository, LedgerService, ResultAdmissionService, IntegrationService, ProposalService, UsageService}
 import zio.{IO, Task, ZIO}
 
-final class Application(ledger: LedgerService[IO], repository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], authorization: Authorization) {
+final class Application(ledger: LedgerService[IO], repository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO], authorization: Authorization) {
   def execute(authority: Authority, command: Command): Task[Result] = ZIO.attempt(authorization.check(authority)).flatMap { _ =>
     command match {
       case Command.Projects(after, limit) =>
@@ -27,6 +27,7 @@ final class Application(ledger: LedgerService[IO], repository: LedgerRepository[
         }
       }
       case Command.Read(input) => scoped(authority, input.project) { scope => input.selection match {
+        case ReadSelection.Proposal(id) => proposals.preview(scope, id).map(Result.Proposal.apply)
         case ReadSelection.Integration(id) => integrations.get(scope, id).map(Result.Integration.apply)
         case ReadSelection.Admission(attempt) => admissions.get(scope, attempt).map(Result.Admission.apply)
         case ReadSelection.Claims(members) => ledger.claimPreview(scope, members).map(Result.Claims.apply)
@@ -42,6 +43,7 @@ final class Application(ledger: LedgerService[IO], repository: LedgerRepository[
         ledger.workset(scope, input.roots, input.after, input.snapshot, input.limit).map(Result.Workset.apply)
       }
       case Command.Change(input) => scoped(authority, input.project)(scope => ledger.change(scope, input.change).map(Result.Changed.apply))
+      case Command.ApplyProposal(input) => scoped(authority, input.project)(scope => proposals(scope, input.result).map(Result.Changed.apply))
       case Command.ClaimWork(input) => scoped(authority, input.project) { scope => input.action match {
         case ClaimAction.Takeover(id, owner, members, duration, snapshot) => ledger.takeover(scope, id, owner, members, duration, snapshot).map(Result.Claimed.apply)
         case ClaimAction.Acquire(id, members, duration) => ledger.acquire(scope, id, members, duration).map(Result.Claimed.apply)
