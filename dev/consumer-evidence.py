@@ -1,0 +1,56 @@
+"""Acceptance of a linked worker/reviewer candidate using host artifact evidence."""
+
+
+def accepted_chain(statuses, artifacts, checks):
+    assert checks, "Consumer acceptance requires configured host checks"
+
+    def identities(values):
+        return sorted((value["project"]["value"], value["ledger"], int(value["number"])) for value in values)
+
+    def result(status):
+        artifact = artifacts[status["result"]["value"]]
+        assert artifact["kind"] == "Result" and artifact["attempt"] == status["attempt"], "Result artifact ownership mismatch"
+        value = artifact["body"]
+        assert value["attempt"] == status["attempt"] and value["request"]["request"] == status["request"], "Result/status identity mismatch"
+        return value
+
+    for status in statuses:
+        if status["phase"] != "Completed" or status["result"] is None or not status["usageDelivered"]:
+            continue
+        review = result(status)
+        if "Review" not in review["report"]:
+            continue
+        members = review["request"]["members"]
+        reports = review["report"]["Review"]["members"]
+        if not reports or len(reports) != len(members) or any(value["verdict"] != "Accepted" for value in reports):
+            continue
+        if identities(value["item"] for value in reports) != identities(value["id"] for value in members):
+            continue
+        previous = review["request"]["previous"]
+        workers = [entry for entry in statuses if entry["phase"] == "Completed" and entry["result"] == previous and entry["usageDelivered"]]
+        if len(workers) != 1:
+            continue
+        worker = result(workers[0])
+        if worker["candidate"] is None or review["candidate"] != worker["candidate"] or members != worker["request"]["members"]:
+            continue
+        if "Work" not in worker["report"] or any(value["disposition"] != "CandidateReady" for value in worker["report"]["Work"]["members"]):
+            continue
+        if identities(value["item"] for value in worker["report"]["Work"]["members"]) != identities(value["id"] for value in members):
+            continue
+        if review["validation"] != worker["validation"] or sorted(value["check"] for value in worker["validation"]) != sorted(checks):
+            continue
+        valid = True
+        for evidence in worker["validation"]:
+            artifact = artifacts[evidence["artifact"]["value"]]
+            observation = artifact["body"]
+            job = observation["job"]
+            observed = job["exit"]
+            valid = valid and (evidence["state"] == "Passed" and artifact["kind"] == "Validation" and artifact["attempt"] == worker["attempt"] and
+                              observation["check"] == checks[evidence["check"]] and observation["candidate"] == worker["candidate"] and
+                              job["workspace"]["base"] == worker["candidate"] and job["phase"] == "Settled" and observed is not None and
+                              observed["settled"] and not observed["hostFailure"] and observed["reason"] == "Exited" and observed["code"] == 0 and observed["signal"] is None)
+        if valid:
+            return {"worker": worker["attempt"], "reviewer": review["attempt"], "candidate": worker["candidate"], "members": members,
+                    "workerHarness": worker["request"]["harness"], "reviewerHarness": review["request"]["harness"],
+                    "workerResult": previous, "reviewResult": status["result"], "validation": worker["validation"]}
+    raise AssertionError("No fully accepted review linked to the same host-validated worker candidate and assignment")

@@ -89,7 +89,7 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
             Actor("CQ child " + ticket.attempt.id.value, ticket.attempt.session, ticket.attempt.role), authority.expiresAt))
           val local = access.issue(ticket.attempt.id, ticket.attempt.role)
           val assets = entry.directory.resolve("assets")
-          val invocation = HarnessInvocation(ticket.attempt.role, ticket.attempt.id, prompt, schemas.schema("ChildReport"),
+          val invocation = HarnessInvocation(ticket.attempt.role, ticket.attempt.id, prompt, schemas.childReport(ticket.request.work),
             List(HarnessMcp(McpTarget.Domain, config.endpoint.resolve("/mcp"), domain), HarnessMcp(McpTarget.Local, access.endpoint, local)), assets)
           val launched = registry(profile.harness).launch(profile, invocation, config.environment)
           launched.install(assets)

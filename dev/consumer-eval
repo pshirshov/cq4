@@ -1,0 +1,240 @@
+#!/usr/bin/env python3
+"""Explicit live-model consumer evaluation; accounting comes from CQ's audit."""
+import datetime
+import contextlib
+import getpass
+import hashlib
+import json
+import os
+from pathlib import Path
+import runpy
+import shutil
+import subprocess
+import sys
+import time
+import urllib.parse
+import urllib.request
+import uuid
+
+
+ROOT = Path(__file__).resolve().parent.parent
+PROFILES = {
+    "claude": ("Claude", "claude-opus-5-5", "anthropic", "2.1.280"),
+    "codex": ("Codex", "gpt-6-sol", "openai", "0.156.1"),
+    "pi": ("Pi", "gpt-5.5", "openai-codex", "0.87.1"),
+}
+ROUTES = {"claude": ("codex", "pi"), "codex": ("pi", "claude"), "pi": ("claude", "codex")}
+EXECUTION_MILLIS = 900000
+MAX_PAGES = 200
+
+
+def write(path, value):
+    path.write_text(json.dumps(value, indent=2) + "\n")
+
+
+def call(environment, body):
+    request = urllib.request.Request(environment["CQ_ORIGIN"] + "/api/call", data=json.dumps(body).encode(), headers={
+        "Authorization": "Bearer " + environment["CQ_TOKEN"], "CQ-Session": environment["CQ_SESSION"],
+        "CQ-Protocol-Version": "0.1.0", "Content-Type": "application/json"})
+    with urllib.request.urlopen(request, timeout=15) as response:
+        payload = response.read(2 * 1024 * 1024 + 1)
+        assert len(payload) <= 2 * 1024 * 1024, "Evaluation export response exceeded its byte bound"
+        result = json.loads(payload)
+        assert "Failed" not in result, result
+        return result
+
+
+def export(environment, evidence, session):
+    run = json.loads((session / "run.json").read_text())
+    project = run["project"]["project"]
+    filter_value = {"SessionOnly": {"id": run["attempt"]["session"]}}
+
+    def usage(selection):
+        return call(environment, {"Usage": {"input": {"project": project, "selection": selection}}})
+
+    write(evidence / "usage-summary.json", usage({"Summary": {"filter": filter_value}}))
+    attempts = usage({"Attempts": {"filter": filter_value, "after": None, "snapshot": None, "limit": 100}})
+    assert not attempts["UsageAttempts"]["page"]["hasMore"], "Attempt export exceeds configured child bound"
+    write(evidence / "attempts.json", attempts)
+    for value in attempts["UsageAttempts"]["page"]["entries"]:
+        attempt = value["attempt"]["id"]
+        page = usage({"Outcomes": {"attempt": attempt, "after": "0", "limit": 200}})
+        assert not page["UsageOutcomes"]["page"]["hasMore"], "Outcome export exceeded its bound"
+        write(evidence / ("outcomes-" + attempt["value"] + ".json"), page)
+    after = "0"
+    for index in range(MAX_PAGES):
+        page = usage({"Audit": {"filter": filter_value, "after": after, "limit": 200}})
+        write(evidence / f"usage-audit-{index:03d}.json", page)
+        body = page["UsageAudit"]["page"]
+        if not body["hasMore"]:
+            break
+        assert int(body["after"]) > int(after), "Audit export made no progress"
+        after = body["after"]
+    else:
+        raise AssertionError("Audit export exceeded its page bound")
+    return attempts["UsageAttempts"]["page"]["entries"]
+
+
+def artifacts(environment, evidence, session, statuses):
+    project = json.loads((session / "run.json").read_text())["project"]["project"]
+    found = {}
+    pending = [value["result"] for value in statuses if value["result"] is not None]
+    while pending:
+        handle = pending.pop()
+        if handle["value"] in found:
+            continue
+        assert len(found) < 300, "Consumer result/validation export exceeded its bound"
+        metadata = call(environment, {"Read": {"input": {"project": project, "selection": {"ArtifactInfo": {"id": handle}}}}})["ArtifactInfo"]["metadata"]
+        assert metadata["bytes"] <= 256 * 1024 and metadata["mediaType"] == "application/json"
+        parts = []
+        offset = 0
+        for _ in range(33):
+            page = call(environment, {"Read": {"input": {"project": project, "selection": {"ArtifactText": {"id": handle, "offset": offset, "limit": 8192}}}}})["ArtifactText"]["page"]
+            assert page["metadata"] == metadata and page["offset"] == offset and page["next"] == offset + len(page["text"])
+            parts.append(page["text"])
+            if not page["hasMore"]:
+                break
+            assert page["next"] > offset
+            offset = page["next"]
+        else:
+            raise AssertionError("Artifact export exceeded its page bound")
+        text = "".join(parts)
+        body = text.encode()
+        assert len(text) == metadata["codePoints"] and len(body) == metadata["bytes"] and hashlib.sha256(body).hexdigest() == metadata["sha256"]
+        value = {**metadata, "body": json.loads(text)}
+        found[handle["value"]] = value
+        if metadata["kind"] == "Result":
+            pending.extend(entry["artifact"] for entry in value["body"]["validation"])
+            if value["body"]["request"]["previous"] is not None:
+                pending.append(value["body"]["request"]["previous"])
+    write(evidence / "candidate-evidence.json", found)
+    return found
+
+
+@contextlib.contextmanager
+def database(checks, evidence, port):
+    data = evidence / "postgres-data"
+    checks.run(["initdb", "-D", str(data), "--auth=trust", "--encoding=UTF8", "--no-locale"], "database-init", 60)
+    checks.run(["pg_ctl", "-D", str(data), "-l", str(evidence / "postgres.log"), "-o", f"-h 127.0.0.1 -p {port} -k ''", "-w", "start"], "database-start", 60)
+    checks.environment.update(CQ_DATABASE_URL=f"jdbc:postgresql://127.0.0.1:{port}/postgres", CQ_DATABASE_USER=getpass.getuser(), CQ_DATABASE_PASSWORD="")
+    try:
+        yield
+    finally:
+        checks.run(["pg_ctl", "-D", str(data), "-m", "fast", "-w", "stop"], "database-stop", 20)
+
+
+def archive(checks, evidence):
+    errors = []
+    try:
+        sessions = list((evidence / "sessions").iterdir())
+        assert len(sessions) == 1, "Expected one retained governing session"
+        export(checks.environment, evidence, sessions[0])
+    except Exception as error:
+        errors.append("Audit export: " + str(error))
+    try:
+        parsed = urllib.parse.urlsplit(checks.environment["CQ_DATABASE_URL"].removeprefix("jdbc:"))
+        checks.run(["pg_dump", "--host", parsed.hostname, "--port", str(parsed.port), "--username", checks.environment["CQ_DATABASE_USER"],
+                    "--dbname", parsed.path[1:], "--format=custom", "--file", str(evidence / "cq-database.dump")], "database-export", 60)
+    except Exception as error:
+        errors.append("Database archive: " + str(error))
+    write(evidence / "archive.json", {"errors": errors, "retainedDatabase": str(evidence / "postgres-data")})
+    return errors
+
+
+def main():
+    if len(sys.argv) != 3 or sys.argv[1] not in PROFILES or sys.argv[2] not in ["python", "go"]:
+        raise SystemExit("Usage: ./dev/consumer-eval claude|codex|pi python|go (runs real models)")
+    os.chdir(ROOT)
+    if any(shutil.which(command) is None for command in ["java", "sbt", "go"]):
+        os.execvp("nix", ["nix", "develop", "-c", str(ROOT / "dev/consumer-eval"), *sys.argv[1:]])
+    harness, language = sys.argv[1:]
+    worker, reviewer = ROUTES[harness]
+    identifier = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S") + f"-consumer-{harness}-{language}"
+    evidence = Path(os.environ.get("CQ_EVIDENCE_ROOT", str(ROOT / ".work/evidence"))).resolve() / identifier
+    evidence.mkdir(parents=True, mode=0o700)
+    print("Evidence:", evidence, flush=True)
+    files = subprocess.check_output(["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"]).decode().split("\0")
+    write(evidence / "source-sha256.json", {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in sorted(set(files)) if name and (ROOT / name).is_file()})
+    module = runpy.run_path(str(ROOT / "dev/check"))
+    checks = module["Checks"](evidence, dict(os.environ))
+    routes = []
+    for key, (native, model, provider, version) in PROFILES.items():
+        executable = shutil.which(key)
+        assert executable is not None, f"Configured harness missing: {key}"
+        routes.append({"harness": native, "executable": executable,
+                       "model": os.environ.get(f"CQ_{key.upper()}_MODEL", model), "provider": os.environ.get(f"CQ_{key.upper()}_PROVIDER", provider),
+                       "version": version, "providerExtensions": [], "providerEnvironment": []})
+    result = {"status": "running", "baseline": subprocess.check_output(["git", "rev-parse", "HEAD"]).decode().strip(),
+              "harness": harness, "language": language, "worker": worker, "reviewer": reviewer, "routes": routes,
+              "remaining": ["candidate integration", "independent evaluation assessment", "M2 human acceptance"],
+              "scope": "real consumer candidate build and host validation; no efficiency conclusion from a single run"}
+    write(evidence / "result.json", result)
+    try:
+        checks.generate()
+        classpath = checks.classpath()
+        command = ["java", "-cp", classpath, "cq.server.Main"]
+        guardian = evidence / "cq-guardian"
+        checks.run(["gcc", "-std=c17", "-O2", "-Wall", "-Wextra", "-Werror", "-o", str(guardian), "host/native/guardian.c"], "guardian-build", 60)
+        checks.run(["go", "version"], "go-version", 10)
+        checks.run(["python3", "--version"], "python-version", 10)
+        consumer = evidence / "consumer"
+        consumer.mkdir()
+        checks.run(["git", "init", "--quiet", str(consumer)], "consumer-init", 10)
+        checks.run(["git", "-C", str(consumer), "-c", "user.name=CQ evaluation", "-c", "user.email=cq@example.invalid", "commit", "--quiet", "--allow-empty", "-m", "Evaluation base"], "consumer-base", 10)
+        settings = {"stateRoot": str(evidence / "sessions"), "guardian": str(guardian), "harnesses": routes,
+                    "limits": {"startupMillis": "10000", "executionMillis": str(EXECUTION_MILLIS), "heartbeatMillis": "2000",
+                               "graceMillis": "1000", "killMillis": "3000", "outputBytes": 8 * 1024 * 1024},
+                    "checks": [{"name": "consumer-oracle", "command": [sys.executable, str(ROOT / "dev/consumer-oracle.py"), language],
+                                "executionMillis": "180000", "outputBytes": 262144}],
+                    "evaluation": {"run": identifier, "scenario": "wordfreq-" + language, "assessor": False}}
+        write(evidence / "settings.json", settings)
+        request = (f"Build the following unrelated consumer in {language}. Create one CQ task containing the complete specification below and claim it. "
+                   f"Dispatch {PROFILES[worker][0]} Worker Implement with that exact task revision; after host validation passes, dispatch {PROFILES[reviewer][0]} Reviewer using its result handle. "
+                   "Use references only; do not read or compose child prompts or read full child result bodies. Use compact status for correction loops when necessary. "
+                   "Keep process startup at 10000 ms, heartbeat at 2000 ms, grace at 1000 ms, kill at 3000 ms and output at 8388608 bytes; execution may use the supplied session limit. "
+                   "Return after a host-validated candidate and accepted review, or report the concrete blocker. Integration is pending and must not be claimed.\n\n" + (ROOT / "dev/consumer-spec.md").read_text())
+        (evidence / "request.txt").write_text(request)
+        port = module["free_port"]()
+        checks.environment.update(CQ_HOST="127.0.0.1", CQ_PORT=str(port), CQ_ORIGIN=f"http://127.0.0.1:{port}", CQ_TOKEN=uuid.uuid4().hex + uuid.uuid4().hex, CQ_SESSION=str(uuid.uuid4()))
+        with database(checks, evidence, module["free_port"]()):
+            with checks.server(command, "consumer-server"):
+                environment = {name: value for name, value in checks.environment.items() if not name.startswith("CQ_")}
+                environment["CQ_TOKEN"] = checks.environment["CQ_TOKEN"]
+                with (evidence / "cq-init.log").open("w") as log:
+                    subprocess.run(command + ["init", "--endpoint", checks.environment["CQ_ORIGIN"]], cwd=consumer, env=environment, stdout=log, stderr=subprocess.STDOUT, timeout=30, check=True)
+                try:
+                    began = time.monotonic()
+                    with (evidence / "governor.stdout").open("w") as out, (evidence / "governor.stderr").open("w") as err:
+                        finished = subprocess.run(command + ["run", harness, "--settings", str(evidence / "settings.json"), "--input", str(evidence / "request.txt")],
+                                                  cwd=consumer, env=environment, stdout=out, stderr=err, timeout=EXECUTION_MILLIS / 1000 + 120)
+                    result.update(exit=finished.returncode, elapsedSeconds=round(time.monotonic() - began, 3))
+                    sessions = list((evidence / "sessions").iterdir())
+                    assert len(sessions) == 1, "Expected one retained governing session"
+                    session = sessions[0]
+                    statuses = [json.loads(path.read_text()) for path in (session / "children").glob("*/receipt.json")]
+                    write(evidence / "dispatch-statuses.json", statuses)
+                    values = artifacts(checks.environment, evidence, session, statuses)
+                    chain = runpy.run_path(str(ROOT / "dev/consumer-evidence.py"))["accepted_chain"](statuses, values, {value["name"]: value for value in settings["checks"]})
+                    assert finished.returncode == 0, "Governing process did not complete successfully"
+                    assert chain["workerHarness"] == PROFILES[worker][0] and chain["reviewerHarness"] == PROFILES[reviewer][0], "Accepted chain used another configured route"
+                    write(evidence / "accepted-chain.json", chain)
+                    result.update(status="candidate-passed", acceptedChain=chain)
+                finally:
+                    primary_failure = sys.exc_info()[0] is not None
+                    result["archiveErrors"] = archive(checks, evidence)
+                    if result["archiveErrors"] and not primary_failure:
+                        raise RuntimeError("; ".join(result["archiveErrors"]))
+                attempts = json.loads((evidence / "attempts.json").read_text())["UsageAttempts"]["page"]["entries"]
+                assert all(value["assignment"]["evaluation"] == settings["evaluation"] for value in attempts), "Evaluation attribution was not inherited"
+                assert {value["attempt"]["harness"] for value in attempts} == set(value[0] for value in PROFILES.values()), "Evaluation did not use all required routes"
+                result["attempts"] = len(attempts)
+    except BaseException as error:
+        result.update(status="failed", error=str(error))
+        raise
+    finally:
+        write(evidence / "result.json", result)
+    print(f"PASS: {harness}/{language} real consumer candidate; integration and milestone acceptance remain pending; evidence {evidence}", flush=True)
+
+
+if __name__ == "__main__":
+    main()

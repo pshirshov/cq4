@@ -16,6 +16,9 @@ Versions were resolved from the published Maven/npm metadata, Baboon release met
 | GraalVM CE | 25.3.4.1, Java/native-image 25.0.4.1 |
 | Node / TypeScript / esbuild | 24.20.0 / 7.0.2 / 0.28.2 |
 | MCP test SDK / WebSocket test client | 1.30.1 / ws 8.22.0 |
+| Go consumer-evaluation runtime | 1.27.1 (`go_1_27` from the existing Nixpkgs pin) |
+
+The Go runtime was added for the required consumer evaluation corpus on 2026-09-27. The existing Nix input resolves `go_1_27.version` to 1.27.1, matching the stable release reported by the [official Go download metadata](https://go.dev/dl/?mode=json). The Nixpkgs input was not upgraded.
 
 ## Reproduced incompatibilities
 

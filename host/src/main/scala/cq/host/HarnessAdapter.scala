@@ -78,7 +78,7 @@ object HarnessEnvironment {
   private val Runtime = Set("HOME", "PATH", "LANG", "LC_ALL", "TERM", "TMPDIR", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME",
     "XDG_RUNTIME_DIR", "SSL_CERT_FILE", "SSL_CERT_DIR", "NIX_SSL_CERT_FILE", "NODE_EXTRA_CA_CERTS", "CURL_CA_BUNDLE",
     "HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "NO_PROXY", "https_proxy", "http_proxy", "all_proxy", "no_proxy",
-    "CODEX_HOME", "CLAUDE_CONFIG_DIR", "PI_CODING_AGENT_DIR")
+    "CODEX_HOME", "CLAUDE_CONFIG_DIR", "PI_CODING_AGENT_DIR", "__NIXOS_SET_ENVIRONMENT_DONE")
   def isolated(profile: HarnessProfile, environment: Map[String, String]): Map[String, String] = {
     val allowed = Runtime ++ profile.providerEnvironment
     val selected = environment.filter((name, _) => allowed(name))

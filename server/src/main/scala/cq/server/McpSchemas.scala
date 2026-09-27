@@ -52,6 +52,17 @@ final class McpSchemas {
 
   def schema(name: String): Json = closure(definitions(s"cq_api_$name").get)
 
+  def childReport(work: DispatchWork): Json = {
+    val tag = work match {
+      case _: DispatchWork.Worker => "Work"
+      case _: DispatchWork.Reviewer => "Review"
+    }
+    val branches = definitions("cq_api_ChildReport").get.hcursor.get[Vector[Json]]("oneOf").fold(throw _, identity)
+      .filter(_.hcursor.get[List[String]]("required") == Right(List(tag)))
+    require(branches.size == 1, s"Expected one generated ChildReport.$tag schema")
+    closure(branches.head)
+  }
+
   private def closure(root: Json): Json = {
     val selected = scala.collection.mutable.LinkedHashMap.empty[String, Json]
     def visit(value: Json): Unit = {

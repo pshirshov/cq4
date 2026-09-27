@@ -306,7 +306,7 @@ root data HarnessSetting {
 }
 root data HostLimits { startupMillis: i64 executionMillis: i64 heartbeatMillis: i64 graceMillis: i64 killMillis: i64 outputBytes: i32 }
 root data ValidationCheck { name: str command: lst[str] executionMillis: i64 outputBytes: i32 }
-root data SupervisorSettings { stateRoot: str guardian: str harnesses: lst[HarnessSetting] limits: HostLimits checks: lst[ValidationCheck] }
+root data SupervisorSettings { stateRoot: str guardian: str harnesses: lst[HarnessSetting] limits: HostLimits checks: lst[ValidationCheck] evaluation: opt[EvaluationScope] }
 root data GoverningReport { summary: str }
 root data HarnessRoute { harness: Harness model: str provider: str }
 root data GoverningInput { project: ProjectConfig routes: lst[HarnessRoute] checks: lst[str] limits: HostLimits request: str }

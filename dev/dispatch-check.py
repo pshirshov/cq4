@@ -30,6 +30,7 @@ def main():
         settings = root / "settings.json"
         settings.write_text(json.dumps({
             "stateRoot": str(root / "sessions"), "guardian": str(guardian),
+            "evaluation": {"run": "deterministic-dispatch", "scenario": "worker-reviewer", "assessor": False},
             "harnesses": [{"harness": "Codex", "executable": str(executable), "model": "fixture-model", "provider": "fixture-provider",
                            "version": "0.156.1", "providerExtensions": [], "providerEnvironment": []}],
             "limits": {"startupMillis": "5000", "executionMillis": "90000", "heartbeatMillis": "1000",
@@ -77,6 +78,8 @@ def main():
         before = api({"Summary": {"filter": filter_value}})
         attempts = api({"Attempts": {"filter": filter_value, "after": None, "snapshot": None, "limit": 20}})["UsageAttempts"]["page"]["entries"]
         assert len(attempts) == 4 and sum(value["attempt"]["parent"] == receipt["attempt"] for value in attempts) == 3
+        assert all(value["assignment"]["evaluation"] == {"run": "deterministic-dispatch", "scenario": "worker-reviewer", "assessor": False} for value in attempts)
+        assert api({"Summary": {"filter": {"EvaluationOnly": {"run": "deterministic-dispatch", "scenario": "worker-reviewer"}}}}) == before
         assert before["UsageSummary"]["report"]["attempts"]["running"] == "0"
         assert "Acknowledged 0" in run(["job", "upload", "--session", str(session)])
         (children[0] / "delivery/000002.ack").unlink()

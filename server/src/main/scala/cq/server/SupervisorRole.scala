@@ -69,6 +69,8 @@ object SupervisorConfig {
     val limits = SupervisorConfig.limits(settings.limits)
     require(limits.outputBytes <= MaxOutputBytes, "Native output retention exceeds 32 MiB per stream")
     credentialLifetime(limits)
+    require(settings.evaluation.forall(value => List(value.run, value.scenario).forall(text => text.trim.nonEmpty && text.length <= 300)),
+      "Evaluation identity must contain a bounded run and scenario")
     require(settings.checks.size <= 8 && settings.checks.map(_.name).distinct.size == settings.checks.size, "At most eight uniquely named validation checks are supported")
     settings.checks.foreach { check =>
       require(check.name.matches("[a-z][a-z0-9-]{0,49}") && check.command.nonEmpty && check.command.size <= 32 &&
@@ -94,7 +96,7 @@ object SupervisorConfig {
     require(!stateRoot.toRealPath().startsWith(repository), "Supervisor state root must be outside the source checkout")
     val session = SessionId(UUID.randomUUID())
     val directory = stateRoot.resolve(session.value.toString)
-    val assignment = Assignment(AssignmentId(UUID.randomUUID()), project.project, Set.empty, Attribution.Unattributed, None, None)
+    val assignment = Assignment(AssignmentId(UUID.randomUUID()), project.project, Set.empty, Attribution.Unattributed, None, settings.evaluation)
     val attempt = Attempt(AttemptId(UUID.randomUUID()), assignment.id, None, session, Role.Governor, harness,
       profile.provider, profile.model, "CQ native collector 0.1.0", clock.millis())
     val run = SupervisorRun(project, assignment, attempt, profile.version, repository.toString, base)

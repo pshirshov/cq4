@@ -18,6 +18,7 @@
               pkgs.nodejs_24
               pkgs.postgresql_18
               pkgs.python3
+              pkgs.go_1_27
               pkgs.curl
               pkgs.gcc
               pkgs.zlib

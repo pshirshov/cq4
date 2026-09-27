@@ -6,6 +6,7 @@ import io.circe.Json
 import java.net.URI
 import java.nio.file.{Files, Path}
 import java.nio.file.attribute.PosixFilePermissions
+import java.time.Duration
 import java.util.UUID
 import org.scalatest.wordspec.AnyWordSpec
 
@@ -52,6 +53,24 @@ final class HarnessAdapterLocal extends AnyWordSpec {
       }
       intercept[IllegalArgumentException](invocation(Role.Human, root))
       intercept[IllegalArgumentException](invocation(Role.Collector, root))
+    }
+
+    "preserve configured toolchain discovery in child shells" in {
+      val root = Files.createTempDirectory("cq-toolchain-").toAbsolutePath
+      val probe = root.resolve("cq-toolchain-probe")
+      try {
+        Files.writeString(probe, "#!/bin/sh\nexit 0\n")
+        Files.setPosixFilePermissions(probe, PosixFilePermissions.fromString("rwx------"))
+        val source = sys.env.updated("PATH", root.toString + ":" + sys.env("PATH"))
+        val environments = HostEnvironment.runtime(source) :: adapters.map { adapter =>
+          adapter.launch(profile(adapter.harness).copy(providerEnvironment = Set.empty), invocation(Role.Worker, root), source).environment
+        }
+        environments.foreach { value =>
+          val result = new BoundedHostCommand(value, Duration.ofSeconds(5), 4096)
+            .run(root, List(sys.env("SHELL"), "-lc", "command -v cq-toolchain-probe"))
+          assert(result.exit == 0 && result.text.trim == probe.toString, result)
+        }
+      } finally { Files.deleteIfExists(probe); Files.deleteIfExists(root) }
     }
 
     "materialize private immutable assets and reject divergent retries or symbolic replacements" in {

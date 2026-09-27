@@ -265,6 +265,7 @@ def main():
         if command == "fast":
             checks.generate()
             checks.run(["node", "--test", "dev/pi-bridge-check.mjs"], "pi-bridge", STARTUP_TIMEOUT)
+            checks.run(["python3", "dev/consumer-evidence-check.py"], "consumer-evidence", STARTUP_TIMEOUT)
             checks.sbt(["server/testOnly *Dummy *Local"], "dummy-contract")
         else:
             getattr(checks, command)()

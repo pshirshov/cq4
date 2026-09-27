@@ -29,7 +29,7 @@ def main():
         executable.chmod(0o700)
         settings = root / "settings.json"
         settings.write_text(json.dumps({
-            "stateRoot": str(root / "sessions"), "guardian": str(guardian),
+            "stateRoot": str(root / "sessions"), "guardian": str(guardian), "evaluation": None,
             "harnesses": [{"harness": "Codex", "executable": str(executable), "model": "fixture-model", "provider": "fixture-provider",
                            "version": "0.156.1", "providerExtensions": [], "providerEnvironment": []}],
             "limits": {"startupMillis": "5000", "executionMillis": "60000", "heartbeatMillis": "1000",

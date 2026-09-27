@@ -31,7 +31,8 @@ Initialize the consumer with the existing `cq init --endpoint URL`. It must be a
     "killMillis": "3000",
     "outputBytes": 1048576
   },
-  "checks": []
+  "checks": [],
+  "evaluation": null
 }
 ```
 
@@ -50,6 +51,8 @@ cq run codex --settings /absolute/settings.json --input /absolute/request.txt
 ```
 
 The input is a nonempty UTF-8 file of at most 192 KiB. Settings/project records are bounded to 64 KiB. Native streams are independently bounded, up to 32 MiB each. The combined startup, execution and cleanup limits plus a ten-minute delivery margin must fit the server's 24-hour scoped-credential lifetime. Installed harness versions are checked before launch; missing or unverified routes fail explicitly. `CQ_TOKEN` must authorize host credential grants. It remains in the host and is excluded from the harness environment.
+
+For evaluation runs, set `evaluation` to `{"run":"run-identity","scenario":"scenario-identity","assessor":false}`. Both identifiers are nonempty and at most 300 characters. The identity is frozen in the governing and child assignments and can be queried through the existing evaluation usage filter. Use `assessor: true` only for actual assessment overhead; ordinary product work uses `null`.
 
 The role publishes its input and installed instructions as immutable artifacts, registers an unattributed governing assignment/attempt, then starts the native job through the existing guardian. Process success requires confirmed cleanup, normal `Exited` termination, exit code zero, no signal and no host failure. A zero exit after a deadline or cancellation cannot admit a result. Native completion and the bounded `GoverningReport` schema are checked separately. Valid reports become result artifacts; invalid reports retain their native evidence and a failed audit outcome. Unconfirmed cleanup remains `Unknown` in the audit, while confirmed cancellation or owner exit becomes `Cancelled`; other unsuccessful stops become `Failed`. Receipts and audit gaps retain the observed stop reason. Neither a valid report nor `AttemptState.Completed` establishes semantic task acceptance.
 

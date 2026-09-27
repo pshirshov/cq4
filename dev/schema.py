@@ -17,6 +17,7 @@ def generate_schemas(root: Path):
                 wrapped.append({"type": "object", "required": [tag], "properties": {tag: branch},
                                 "additionalProperties": False})
             schema["oneOf"] = wrapped
+            schema["type"] = "object"
             del schema["description"]
 
     def normalize(value):

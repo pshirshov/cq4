@@ -4,6 +4,7 @@ import { Probe_JsonCodec, ApiError_JsonCodec } from '../.work/contracts.mjs';
 import * as contracts from '../.work/contracts.mjs';
 import { BaboonCodecContext } from '../.work/contract-runtime.mjs';
 import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv';
+import { ToolSchema } from '@modelcontextprotocol/sdk/types.js';
 
 const directory = process.argv[2];
 assert.ok(directory, 'Expected fixture directory');
@@ -51,12 +52,31 @@ for (const [name, schema] of Object.entries(definitions)) {
 }
 const tools = JSON.parse(await readFile(`${directory}/mcp-tools.json`, 'utf8'));
 for (const tool of tools) {
+  ToolSchema.parse(tool);
   const input = fixture(tool.inputSchema, tool.inputSchema.$defs);
   assert.equal(validator.getValidator(tool.inputSchema)(input).valid, true, tool.name);
   for (const branch of tool.outputSchema.oneOf) {
     const output = fixture(branch, tool.outputSchema.$defs);
     assert.equal(validator.getValidator(tool.outputSchema)(output).valid, true, tool.name);
   }
+}
+for (const [name, input, output] of [['dispatch', 'DispatchCommand', 'DispatchReply'], ['workspace', 'WorkspaceCommand', 'WorkspaceReply']]) {
+  ToolSchema.parse({ name, inputSchema: definitions[`cq_api_${input}`], outputSchema: definitions[`cq_api_${output}`] });
+}
+const reports = JSON.parse(await readFile(`${directory}/child-report-schemas.json`, 'utf8'));
+for (const [tag, schema] of Object.entries(reports)) {
+  assert.equal(schema.type, 'object');
+  assert.equal(schema.additionalProperties, false);
+  assert.deepEqual(schema.required, [tag]);
+  assert.equal(JSON.stringify(schema).includes('"oneOf"'), false);
+  assert.equal(JSON.stringify(schema).includes('"anyOf"'), false);
+  const sample = fixture(schema, schema.$defs);
+  const check = validator.getValidator(schema);
+  assert.equal(check(sample).valid, true);
+  assert.equal(check(fixture(reports[tag === 'Work' ? 'Review' : 'Work'], definitions)).valid, false);
+  assert.equal(check({ ...sample, extra: true }).valid, false);
+  assert.equal(check({ [tag]: { members: [] } }).valid, false);
+  assert.deepEqual(contracts.ChildReport_JsonCodec.instance.encode(context, contracts.ChildReport_JsonCodec.instance.decode(context, sample)), sample);
 }
 const content = validator.getValidator({ ...definitions.cq_api_Content, $defs: definitions });
 assert.equal(content({ Task: { status: 'Ready', acceptance: ['test'], result: null, validation: [] } }).valid, true);
