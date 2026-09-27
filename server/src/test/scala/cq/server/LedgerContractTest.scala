@@ -97,7 +97,7 @@ abstract class LedgerContractTest extends SpecZIO with AssertZIO {
         _ <- service.initialize(owner, "nested validation")
         results <- ZIO.foreach(invalidDrafts)(draft => create(service, owner, draft).either)
         _ <- assertIO(results.forall(_.isLeft))
-        snapshot <- service.search(owner, ItemFilter(None, ArchiveFilter.All), None, 200)
+        snapshot <- service.search(owner, "archived:all", None, 200)
         _ <- assertIO(snapshot.items.isEmpty && snapshot.cursor.value == 0)
         human = owner.copy(actor = owner.actor.copy(role = Role.Human))
         accepted = task("Human report").copy(content = Content.Task(TaskStatus.Ready, List("Acceptance"), None,
@@ -131,11 +131,11 @@ abstract class LedgerContractTest extends SpecZIO with AssertZIO {
         first <- create(service, owner, initial)
         failed = request(List(Mutation.Create(task("Must roll back")), Mutation.Replace(first.id, Revision(9), initial)), Nil)
         _ <- denied(service.change(owner, failed))(_.isInstanceOf[Fault.Conflict])
-        afterFailure <- service.search(owner, ItemFilter(None, ArchiveFilter.All), None, 200)
+        afterFailure <- service.search(owner, "archived:all", None, 200)
         _ <- assertIO(afterFailure.items.size == 1 && afterFailure.cursor.value == 1)
         archived = initial.copy(archived = true, content = Content.Task(TaskStatus.Done, List("Observable result"), Some("Done"), Nil))
         _ <- service.change(owner, request(List(Mutation.Replace(first.id, Revision(1), archived)), Nil))
-        hidden <- service.search(owner, ItemFilter(None, ArchiveFilter.Active), None, 200)
+        hidden <- service.search(owner, "", None, 200)
         _ <- assertIO(hidden.items.isEmpty)
         direct <- service.get(owner, first.id)
         _ <- assertIO(direct.item.draft.archived)
@@ -175,7 +175,7 @@ abstract class LedgerContractTest extends SpecZIO with AssertZIO {
       for {
         _ <- service.initialize(owner, "stream")
         first <- create(service, owner, task("Before snapshot"))
-        snapshot <- service.search(owner, ItemFilter(None, ArchiveFilter.All), None, 200)
+        snapshot <- service.search(owner, "archived:all", None, 200)
         second <- create(service, owner, task("After snapshot"))
         third <- create(service, owner, task("Later"))
         page <- service.changes(owner, snapshot.cursor, 1)
@@ -195,7 +195,7 @@ abstract class LedgerContractTest extends SpecZIO with AssertZIO {
         first <- create(service, owner, large)
         _ <- ZIO.foreach((1L to 5L).toList)(revision => service.change(owner,
           request(List(Mutation.Replace(first.id, Revision(revision), large.copy(title = s"Revision ${revision + 1}"))), Nil)))
-        discovery <- service.search(owner, ItemFilter(None, ArchiveFilter.All), None, 200)
+        discovery <- service.search(owner, "archived:all", None, 200)
         _ <- assertIO(Wire.encode(ItemPage_JsonCodec, discovery).getBytes(java.nio.charset.StandardCharsets.UTF_8).length < 4096)
         one <- service.history(owner, first.id, Revision(Long.MaxValue), 200)
         historyCount = one.entries.size
@@ -239,8 +239,8 @@ abstract class LedgerContractTest extends SpecZIO with AssertZIO {
       val owner = scope()
       val other = owner.copy(actor = owner.actor.copy(session = SessionId(UUID.randomUUID())))
       val start = 1000000L
-      val service = new LedgerService.Impl[IO](repository, Clock.fixed(Instant.ofEpochMilli(start), ZoneOffset.UTC))
-      val later = new LedgerService.Impl[IO](repository, Clock.fixed(Instant.ofEpochMilli(start + 2000), ZoneOffset.UTC))
+      val service = new LedgerService.Impl[IO](repository, Clock.fixed(Instant.ofEpochMilli(start), ZoneOffset.UTC), new QueryParser)
+      val later = new LedgerService.Impl[IO](repository, Clock.fixed(Instant.ofEpochMilli(start + 2000), ZoneOffset.UTC), new QueryParser)
       for {
         _ <- service.initialize(owner, "claims")
         left <- create(service, owner, task("One"))

@@ -29,7 +29,7 @@ trait LedgerTransaction {
   def acknowledge(actor: Actor, value: StoredRequest): Unit
   def publish(request: RequestId, items: List[ItemRevision]): ChangeCursor
   def changes(after: ChangeCursor, limit: Int): ReadPage[ChangeEvent]
-  def scan(filter: ItemFilter, after: Option[ItemId], limit: Int): ReadPage[ItemSummary]
+  def scan(query: QueryExpression, after: Option[ItemId], limit: Int): ReadPage[ItemSummary]
   def claim(id: ItemId): Option[Claim]
   def claimById(id: ClaimId): Option[Claim]
   def saveClaim(claim: Claim): Unit

@@ -5,6 +5,7 @@ import { button, edit, element, Editor, Json } from './editor.js';
 
 const CONTEXT = BaboonCodecContext.Default;
 const PAGE_SIZE = 40;
+const MAX_QUERY_CHARACTERS = 4096;
 const PREFIX: Record<api.Ledger, string> = { Milestones: 'M', Ideas: 'I', Defects: 'D', Goals: 'G', Tasks: 'T', Researches: 'RS',
   Hypothesis: 'H', Questions: 'Q', Decisions: 'K', Reviews: 'R', Handoffs: 'HO', OperatorActions: 'OA', Memories: 'MEM', Upstream: 'U' };
 function itemName(id: api.ItemId): string { return PREFIX[id.ledger] + id.number; }
@@ -17,8 +18,8 @@ function readResult(result: api.Result): api.Result {
 class App {
   private manager: ConnectionManager | null = null;
   private readonly projects = element('select', '');
-  private readonly ledger = element('select', '');
-  private readonly archived = element('select', '');
+  private readonly query = element('input', '');
+  private activeQuery = '';
   private readonly items = element('div', '');
   private readonly detail = element('section', '');
   private readonly editorPanel = element('section', '');
@@ -85,13 +86,15 @@ class App {
     health.append(summary, this.healthDetails, button('Retry connection', () => this.connection().retry()));
     header.append(element('h1', 'CQ'), health, this.sync);
     const main = element('main', ''); const side = element('nav', ''); const list = element('section', ''); const content = element('article', '');
-    this.projects.setAttribute('aria-label', 'Project'); this.ledger.setAttribute('aria-label', 'Ledger'); this.archived.setAttribute('aria-label', 'Archive filter');
+    this.projects.setAttribute('aria-label', 'Project'); this.query.setAttribute('aria-label', 'Search query');
     this.projects.addEventListener('change', () => this.action(async () => { this.project = new api.ProjectId(this.projects.value); this.reset(); await this.refresh(); }));
-    this.ledger.append(element('option', 'All ledgers')); this.ledger.options[0].value = '';
-    for (const ledger of Object.values(api.Ledger)) { const option = element('option', ledger); option.value = ledger; this.ledger.append(option); }
-    for (const value of Object.values(api.ArchiveFilter)) { const option = element('option', value); option.value = value; this.archived.append(option); }
-    this.archived.value = api.ArchiveFilter.Active;
-    for (const control of [this.ledger, this.archived]) control.addEventListener('change', () => this.action(async () => { this.after = undefined; this.snapshot = undefined; await this.refresh(); }));
+    const search = element('form', ''); const submitQuery = element('button', 'Search'); submitQuery.type = 'submit';
+    this.query.placeholder = 'ledger:Tasks status:Ready'; this.query.maxLength = MAX_QUERY_CHARACTERS;
+    search.append(this.query, submitQuery);
+    search.addEventListener('submit', event => { event.preventDefault(); this.action(async () => {
+      this.activeQuery = this.query.value; this.epoch++; this.subscription = null; this.after = undefined; this.snapshot = undefined;
+      this.notice.textContent = ''; this.query.removeAttribute('aria-invalid'); await this.refresh();
+    }); });
     const newProject = element('form', ''); const name = element('input', ''); name.placeholder = 'New project name'; name.setAttribute('aria-label', 'New project name'); name.required = true;
     const add = element('button', 'Create project'); add.type = 'submit'; newProject.append(name, add);
     newProject.addEventListener('submit', event => { event.preventDefault(); this.action(async () => {
@@ -99,7 +102,7 @@ class App {
       await this.call(new api.Command_Initialize(new api.ProjectConfig(project, location.origin, name.value)));
       this.project = project; this.reset(); await this.loadProjects(); await this.refresh(); name.value = '';
     }); });
-    side.append(element('h2', 'Workspace'), this.projects, newProject, this.ledger, this.archived,
+    side.append(element('h2', 'Workspace'), this.projects, newProject, search,
       button('New item', () => { this.openEditor(null); }), button('Project usage', () => this.action(async () => { this.selected = null; this.auditAfter = 0n; await this.loadUsage(); })));
     const pages = element('div', ''); pages.className = 'actions';
     pages.append(button('First page', () => this.action(async () => { this.after = undefined; this.snapshot = undefined; await this.refresh(); })),
@@ -156,12 +159,16 @@ class App {
     const project = this.project; const epoch = this.epoch;
     this.sync.textContent = 'Data: synchronizing';
     try {
-      const input = new api.SearchInput(project, new api.ItemFilter(this.ledger.value === '' ? undefined : this.ledger.value as api.Ledger,
-        this.archived.value as api.ArchiveFilter), this.after, this.snapshot, PAGE_SIZE);
+      const input = new api.SearchInput(project, this.activeQuery, this.after, this.snapshot, PAGE_SIZE);
       const response = await this.connection().call(new api.Command_Search(input));
       if (epoch !== this.epoch || this.project.value !== project.value) return;
       if (response instanceof api.Result_Failed && response.fault instanceof api.Fault_Resync) {
         this.after = undefined; this.snapshot = undefined; this.dirty = true; return;
+      }
+      if (response instanceof api.Result_Failed && response.fault instanceof api.Fault_QuerySyntax) {
+        const error = response.fault.diagnostic;
+        this.sync.textContent = 'Data: invalid query'; this.query.setAttribute('aria-invalid', 'true');
+        this.showError(`${error.message} (${error.span.start}–${error.span.end})`); return;
       }
       const result = readResult(response);
       if (!(result instanceof api.Result_Found)) throw new Error('Unexpected item page');

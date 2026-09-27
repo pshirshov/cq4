@@ -90,7 +90,7 @@ export async function draftChecks(browser, storageState, origin, evidence) {
         assert.equal(await page.getByLabel('title', { exact: true }).inputValue(), 'Uncertain create');
         await page.getByRole('button', { name: 'Save item', exact: true }).click();
         await page.getByText('Saved', { exact: true }).waitFor();
-        const actual = await call({ Search: { input: { project, filter: { ledger: 'Tasks', archived: 'All' }, after: null, snapshot: null, limit: 20 } } });
+        const actual = await call({ Search: { input: { project, query: 'ledger:Tasks archived:all', after: null, snapshot: null, limit: 20 } } });
         assert.equal(actual.Found.page.items.length, 1, 'Reloaded uncertain create must reuse its persisted request identity');
       }
       console.log(`Chromium draft recovery passed: ${scenario}`);

@@ -92,13 +92,25 @@ private final class DummyLedgerTransaction(initial: DummyLedgerState) extends Le
     next
   }
   override def changes(after: ChangeCursor, limit: Int): ReadPage[ChangeEvent] = ReadPage.select(state.events.iterator.filter(_.cursor.value > after.value), limit, ChangeEvent_JsonCodec)
-  override def scan(filter: ItemFilter, after: Option[ItemId], limit: Int): ReadPage[ItemSummary] = {
+  private def matches(query: QueryExpression, item: Item): Boolean = query match {
+    case QueryExpression.All() => true
+    case QueryExpression.Text(words, phrase) => SearchText.contains(SearchText.document(item.draft.title, item.draft.body), words, phrase)
+    case QueryExpression.Id(id) => item.id.ledger == id.ledger && item.id.number == id.number
+    case QueryExpression.LedgerIs(ledger) => item.id.ledger == ledger
+    case QueryExpression.Status(value) => LedgerPolicy.status(item.draft.content).equalsIgnoreCase(value)
+    case QueryExpression.Tag(value) => item.draft.labels.contains(value)
+    case QueryExpression.Project(id) => item.id.project == id
+    case QueryExpression.Archive(ArchiveFilter.Active) => !item.draft.archived
+    case QueryExpression.Archive(ArchiveFilter.Archived) => item.draft.archived
+    case QueryExpression.Archive(ArchiveFilter.All) => true
+    case QueryExpression.Reference(relation, target) => refs(item.id).contains(ItemRef(relation, ItemId(project.id, target.ledger, target.number)))
+    case QueryExpression.Not(expression) => !matches(expression, item)
+    case QueryExpression.And(left, right) => matches(left, item) && matches(right, item)
+    case QueryExpression.Or(left, right) => matches(left, item) || matches(right, item)
+  }
+  override def scan(query: QueryExpression, after: Option[ItemId], limit: Int): ReadPage[ItemSummary] = {
     val candidates = state.items.valuesIterator.filter { item =>
-      filter.ledger.forall(_ == item.id.ledger) && (filter.archived match {
-        case ArchiveFilter.Active => !item.draft.archived
-        case ArchiveFilter.Archived => item.draft.archived
-        case ArchiveFilter.All => true
-      }) && after.forall(id => Ordering[(String, Long)].gt(LedgerPolicy.key(item.id), LedgerPolicy.key(id)))
+      matches(query, item) && after.forall(id => Ordering[(String, Long)].gt(LedgerPolicy.key(item.id), LedgerPolicy.key(id)))
     }.toList.sortBy(i => LedgerPolicy.key(i.id)).iterator.map(LedgerPolicy.summary)
     ReadPage.select(candidates, limit, ItemSummary_JsonCodec)
   }

@@ -20,7 +20,7 @@ final class Application(ledger: LedgerService[IO], repository: LedgerRepository[
       case Command.RenameProject(project, expected, name) =>
         ZIO.attempt { authority.requireRoot(); authority.scope(project) }.flatMap(ledger.rename(_, expected, name)).map(Result.Initialized.apply)
       case Command.Search(input) => scoped(authority, input.project) { scope =>
-        ledger.search(scope, input.filter, input.after, input.limit).flatMap { page =>
+        ledger.search(scope, input.query, input.after, input.limit).flatMap { page =>
           if (input.snapshot.exists(_ != page.cursor)) ZIO.fail(DomainFailure(Fault.Resync("Snapshot changed; restart search")))
           else if (input.after.nonEmpty && input.snapshot.isEmpty) ZIO.fail(DomainFailure(Fault.Invalid("Continuation requires snapshot cursor")))
           else ZIO.succeed(Result.Found(page))

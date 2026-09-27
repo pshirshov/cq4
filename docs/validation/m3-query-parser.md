@@ -1,6 +1,6 @@
 # M3 query parser foundation
 
-The [shared query language](../design/query-language.md) now has generated recursive AST/diagnostic types, a bounded parser and shared Unicode text normalization. It remains in `cq.api` 0.1.0. Repository compilation, client wiring, completion and measured query plans are still open; R15 and M3 are incomplete.
+The [shared query language](../design/query-language.md) gained generated recursive AST/diagnostic types, a bounded parser and shared Unicode text normalization at `73fa965`. It remains in `cq.api` 0.1.0. At this checkpoint repository compilation, client wiring, completion and measured query plans remained open. The subsequent [search increment](m3-query-search.md) records further work; R15 and M3 are incomplete.
 
 Evidence root: `/srv/nvme/tmp/cq4-implementation`.
 

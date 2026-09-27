@@ -20,14 +20,16 @@ CREATE TABLE cq_items (
   status text NOT NULL,
   title text NOT NULL,
   narrative text NOT NULL,
-  search_vector tsvector GENERATED ALWAYS AS (to_tsvector('simple', title || ' ' || narrative)) STORED,
+  search_text text NOT NULL,
+  search_words text[] GENERATED ALWAYS AS (string_to_array(btrim(search_text), ' ')) STORED,
   body jsonb NOT NULL,
   summary jsonb NOT NULL,
   PRIMARY KEY (project_id, ledger, number)
 );
 CREATE INDEX cq_items_active ON cq_items (project_id, ledger, number) WHERE NOT archived;
 CREATE INDEX cq_items_status ON cq_items (project_id, status, ledger, number);
-CREATE INDEX cq_items_search ON cq_items USING gin (search_vector);
+CREATE INDEX cq_items_search ON cq_items USING gin (search_words);
+CREATE INDEX cq_items_labels ON cq_items USING gin ((summary->'labels'));
 CREATE TABLE cq_edges (
   project_id uuid NOT NULL,
   source_ledger text NOT NULL,

@@ -1,6 +1,6 @@
 # Shared query language
 
-M3 implementation is in progress. The first increment introduces generated AST/diagnostic types, a bounded parser and shared text normalization. Repository compilation, client wiring, completion and query-plan measurements remain pending. The M2 search endpoint still uses its earlier ledger/archive filter until that wiring is complete. All contracts stay in the single mutable `cq.api` 0.1.0 model.
+M3 implementation is in progress. Generated AST/diagnostic types, a bounded parser and shared text normalization now drive the single `SearchInput.query` operation. The CLI, MCP and browser submit the same query text. Completion and query-plan measurements remain pending. All contracts stay in the single mutable `cq.api` 0.1.0 model; the earlier `ItemFilter` contract is removed.
 
 ## Grammar and values
 
@@ -43,14 +43,16 @@ Queries are bounded to 4,096 UTF-16 characters, 512 lexical tokens, 128 explicit
 
 The shared tokenizer normalizes NFKC, lowercases with the root locale and identifies Unicode letter/number words with subsequent combining marks. Punctuation separates words. Search covers title followed by the common narrative body. Unquoted text requires every normalized word; a quoted phrase requires their contiguous sequence. There is no stemming, fuzzy match, substring match, relevance ranking or locale-dependent segmentation. Labels retain their separate exact-value semantics.
 
-The intended PostgreSQL representation is a normalized word stream plus a GIN-indexed text array. Array containment supplies indexed word candidates; phrase predicates also check the normalized stream. The dummy evaluates the same normalized words and phrase rule. PostgreSQL documents GIN support for array containment and its set-like duplicate handling. [GIN operator classes](https://www.postgresql.org/docs/18/gin.html#GIN-BUILTIN-OPCLASSES), [array operators](https://www.postgresql.org/docs/18/functions-array.html).
+PostgreSQL stores a normalized word stream plus a generated, GIN-indexed text array. Array containment supplies word candidates; phrase predicates also check the normalized stream. The dummy evaluates the same normalized words and phrase rule. PostgreSQL documents GIN support for array containment and its set-like duplicate handling. [GIN operator classes](https://www.postgresql.org/docs/18/gin.html#GIN-BUILTIN-OPCLASSES), [array operators](https://www.postgresql.org/docs/18/functions-array.html).
 
 This representation is selected to preserve phrases late in permitted narratives and after many repetitions: native `tsvector` positions are limited to 16,383, with at most 256 positions per lexeme. [PostgreSQL text-search limits](https://www.postgresql.org/docs/18/textsearch-limitations.html). A document word exceeding the searchable-word limit retains a non-queryable marker in the stream, preventing phrase matches from joining words across the excluded word. Queries containing oversized words fail explicitly.
 
-The SQL compiler will emit only fixed operators/column names from the typed AST and bind all query values. Canonical/inverse relationship filters will use project-scoped indexed edge probes. Authorization remains an independent outer predicate. A project attribute cannot widen access, and item numbers never identify items outside the selected project.
+The SQL compiler emits only fixed operators/column names from the typed AST and binds all query values. Canonical/inverse relationship filters use two project-scoped edge probes, one in each direction; this also covers symmetric references. Authorization remains an independent outer predicate. A project attribute cannot widen access, and item numbers never identify items outside the selected project. Status values are stored lowercase for the existing project/status index. Exact tags use a GIN index over the summary's labels array. These are available access paths; actual planner choices still require measurement.
 
 Pagination keeps the existing `(ledger, number)` order and project change cursor. Any committed item/reference change invalidates continuation; clients restart on `Resync`. Pages retain existing count/byte bounds. Counts, relevance ordering and snippets are not implicit page work. Positive text/reference queries can use their indexes; broad negations and `archived:all` may inspect many project rows. M3 verification must measure actual plans and affected-row write behavior at increasing unrelated sizes before claiming access-cost bounds. Updating search data must remain local to each changed item.
 
-## Client integration still required
+## Clients and remaining editor work
 
-MCP, CLI and browser will submit the same query string to the shared parser. Cursor-aware completion will use this field/status/relation catalog, source spans and bounded item-reference lookup under the same project scope. Invalid queries will preserve the entered text and report diagnostics. The full editor interaction belongs to M5; M3 provides its parser/analysis contract and one query path.
+MCP's `search` input accepts `query`; the administrative CLI accepts `cq query --query 'ledger:Tasks status:Ready'`; the browser has a search field and submit action. All use the shared server parser. Invalid queries return `Fault.QuerySyntax` with a bounded diagnostic; the browser preserves the entered text and displays its span. CLI errors return nonzero. Existing count/byte bounds and snapshot continuation rules apply.
+
+Cursor-aware completion still needs the field/status/relation catalog, source spans and bounded item-reference lookup under the same project scope. The full editor interaction belongs to M5; M3's analysis/completion contract remains open.

@@ -111,12 +111,10 @@ final class Cli(context: CliContext, location: ProjectLocation, upload: SessionU
       output.println(Wire.encode(Result_JsonCodec, initialized))
       output.println(s"Configuration: ${location.resolve("project.json")}")
     case "query" :: rest =>
-      val opts = options(rest, Set("--ledger", "--archived", "--after", "--snapshot", "--limit"))
+      val opts = options(rest, Set("--query", "--after", "--snapshot", "--limit"))
       val location = configDirectory
       val (config, actorSession) = locked(location)((configuration(location), session(location)))
-      val ledger = opts.get("--ledger").map(v => Ledger.all.find(_.toString.equalsIgnoreCase(v)).getOrElse(throw new IllegalArgumentException("Unknown ledger")))
-      val archived = opts.get("--archived").map(v => ArchiveFilter.parse(v).getOrElse(throw new IllegalArgumentException("Archive filter must be Active, Archived or All"))).getOrElse(ArchiveFilter.Active)
-      val input = SearchInput(config.project, ItemFilter(ledger, archived), opts.get("--after").map(item(config.project, _)),
+      val input = SearchInput(config.project, opts.getOrElse("--query", ""), opts.get("--after").map(item(config.project, _)),
         opts.get("--snapshot").map(v => ChangeCursor(v.toLong)), opts.get("--limit").map(_.toInt).getOrElse(DefaultPageSize))
       output.println(Wire.encode(Result_JsonCodec, request(config, actorSession, Command.Search(input))))
     case "status" :: rest =>
@@ -146,7 +144,7 @@ final class Cli(context: CliContext, location: ProjectLocation, upload: SessionU
       }
       output.println(Wire.encode(Result_JsonCodec, request(config, actorSession, Command.Usage(UsageInput(config.project, selection)))))
     case List("web") => output.println(configuration(configDirectory).endpoint)
-    case Nil | List("--help") => output.println("cq serve | init [--endpoint URL] [--project-id UUID] [--name TEXT] | web | run HARNESS --settings FILE --input FILE | job upload --session DIR | query [--ledger NAME] [--archived Active|Archived|All] [--after T1 --snapshot N] [--limit N] | status [audit|costs|attempts|outcomes] [--task T1|--cohort UUID|--session UUID] [--attempt UUID] [--after CURSOR] [--snapshot N] [--limit N]")
+    case Nil | List("--help") => output.println("cq serve | init [--endpoint URL] [--project-id UUID] [--name TEXT] | web | run HARNESS --settings FILE --input FILE | job upload --session DIR | query [--query TEXT] [--after T1 --snapshot N] [--limit N] | status [audit|costs|attempts|outcomes] [--task T1|--cohort UUID|--session UUID] [--attempt UUID] [--after CURSOR] [--snapshot N] [--limit N]")
     case _ => throw new IllegalArgumentException("Unknown command; use cq --help")
   }
 }

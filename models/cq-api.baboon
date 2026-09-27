@@ -98,7 +98,6 @@ root data ChangeAck { request: RequestId cursor: ChangeCursor items: lst[ItemRev
 root data ChangeEvent { cursor: ChangeCursor request: RequestId items: lst[ItemRevision] }
 root data ChangePage { cursor: ChangeCursor events: lst[ChangeEvent] hasMore: bit }
 enum ArchiveFilter { Active Archived All }
-root data ItemFilter { ledger: opt[Ledger] archived: ArchiveFilter }
 root data QuerySpan { start: i32 end: i32 }
 root data QueryDiagnostic { span: QuerySpan message: str }
 root data QueryItem { ledger: Ledger number: i64 }
@@ -121,6 +120,7 @@ root data ItemPage { items: lst[ItemSummary] cursor: ChangeCursor after: opt[Ite
 root data HistoryPage { entries: lst[HistoryEntry] hasMore: bit }
 root adt Fault {
   data Invalid { message: str }
+  data QuerySyntax { diagnostic: QueryDiagnostic }
   data Denied { message: str }
   data Missing { message: str }
   data Conflict { message: str }
@@ -210,7 +210,7 @@ root data UsagePage { entries: lst[RecordedUsage] after: i64 hasMore: bit cursor
 
 root data ProjectPage { projects: lst[Project] after: opt[ProjectId] hasMore: bit }
 root data ProjectConfig { project: ProjectId endpoint: str name: str }
-root data SearchInput { project: ProjectId filter: ItemFilter after: opt[ItemId] snapshot: opt[ChangeCursor] limit: i32 }
+root data SearchInput { project: ProjectId query: str after: opt[ItemId] snapshot: opt[ChangeCursor] limit: i32 }
 root adt ReadSelection {
   data ArtifactInfo { id: ArtifactId }
   data ArtifactText { id: ArtifactId offset: i32 limit: i32 }

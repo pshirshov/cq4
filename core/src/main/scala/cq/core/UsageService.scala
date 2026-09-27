@@ -50,7 +50,7 @@ object UsageService {
         }
         value.evaluation.foreach { e => text(e.run, "evaluation run"); text(e.scenario, "evaluation scenario") }
       }.toEither)
-      _ <- ledger.search(scope, ItemFilter(None, ArchiveFilter.All), None, 1)
+      _ <- ledger.search(scope, "archived:all", None, 1)
       _ <- value.members.foldLeft(F.pure(())) { (previous, id) => previous.flatMap(_ => ledger.get(scope, id).map(_ => ())) }
       assigned <- repository.transact(scope.project) { tx =>
         if (!same(tx.assignment(value.id), value)) tx.putAssignment(value, scope.actor, clock.millis())

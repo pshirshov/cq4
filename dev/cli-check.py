@@ -52,6 +52,8 @@ def main():
         assert attached == first
         assert run(worktree, "web").strip() == environment["CQ_ORIGIN"]
         assert json.loads(run(root, "query"))["Found"]["page"]["items"] == []
+        assert json.loads(run(root, "query", "--query", 'ledger:Tasks ("retry deadline" OR status:Ready) archived:all'))["Found"]["page"]["items"] == []
+        run(root, "query", "--query", "alpha AND", expected=1)
         assert json.loads(run(root, "status"))["UsageSummary"]["report"]["direct"]["total"]["known"] == "0"
         assert json.loads(run(root, "status", "audit", "--limit", "1"))["UsageAudit"]["page"]["entries"] == []
         assert json.loads(run(root, "status", "attempts", "--limit", "1"))["UsageAttempts"]["page"]["entries"] == []
