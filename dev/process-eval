@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Start a real worked-process evaluation and retain its genuine user-choice checkpoint."""
+"""Run and resume a real worked-process evaluation across an actual user-choice checkpoint."""
 import argparse
 import datetime
 import hashlib
@@ -12,12 +12,21 @@ import subprocess
 import sys
 import time
 import uuid
+import urllib.parse
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("stage", choices=["begin"])
-    parser.parse_args()
+    parser.add_argument("stage", choices=["begin", "resume"])
+    parser.add_argument("--checkpoint", type=Path)
+    parser.add_argument("--answer-file", type=Path)
+    arguments = parser.parse_args()
+    if arguments.stage == "begin" and (arguments.checkpoint is not None or arguments.answer_file is not None):
+        parser.error("begin does not accept a checkpoint or answer")
+    if arguments.stage == "resume" and (arguments.checkpoint is None or arguments.answer_file is None):
+        parser.error("resume requires --checkpoint and --answer-file with an actual supplied reply")
+    original = arguments.checkpoint.resolve() if arguments.stage == "resume" else None
+    answer_path = arguments.answer_file.resolve() if arguments.stage == "resume" else None
     root = Path(__file__).resolve().parent.parent
     os.chdir(root)
     if any(shutil.which(name) is None for name in ["java", "sbt", "go"]):
@@ -26,7 +35,23 @@ def main():
     support = runpy.run_path(str(root / "dev/check"))
     predicates = runpy.run_path(str(root / "dev/process-evidence.py"))
     write, call = evaluation["write"], evaluation["call"]
-    identifier = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S") + "-process-begin"
+    if original is not None:
+        baseline = json.loads((original / "result.json").read_text())
+        assert baseline["status"] == "awaiting-user-answer" and not baseline["archiveErrors"], "Resume requires an archived pending question"
+        prior_session, = (original / "sessions").iterdir()
+        checkpoint = predicates["question_checkpoint"](json.loads((original / "items.json").read_text()), json.loads((original / "histories.json").read_text()),
+            [json.loads(path.read_text()) for path in (prior_session / "children").glob("*/ticket.json")],
+            json.loads((prior_session / "receipt.json").read_text()), json.loads((original / "checkpoint-handoff.json").read_text())["Claims"]["preview"])
+        assert checkpoint == baseline["checkpoint"], "Archived checkpoint changed"
+        with answer_path.open("rb") as source:
+            answer_bytes = source.read(32769)
+        assert len(answer_bytes) <= 32768, "Answer record exceeds its byte bound"
+        answer = json.loads(answer_bytes)
+        language = predicates["supplied_answer"](checkpoint, answer)
+        source = json.loads((original / "source-sha256.json").read_text())
+        for name in ["dev/consumer-spec.md", "dev/consumer-oracle.py"]:
+            assert hashlib.sha256((root / name).read_bytes()).hexdigest() == source[name], "Consumer contract changed since checkpoint"
+    identifier = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S") + "-process-" + arguments.stage
     evidence = Path(os.environ.get("CQ_EVIDENCE_ROOT", "/srv/nvme/tmp/cq4-implementation")).resolve() / identifier
     evidence.mkdir(parents=True, mode=0o700)
     print("Evidence:", evidence, flush=True)
@@ -34,7 +59,18 @@ def main():
     write(evidence / "source-sha256.json", {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in sorted(set(files)) if name and (root / name).is_file()})
     checks = support["Checks"](evidence, dict(os.environ))
     result = {"status": "running", "implementation": subprocess.check_output(["git", "rev-parse", "HEAD"]).decode().strip(),
-              "stage": "begin", "remaining": ["actual language answer", "planning/work/review/integration", "process quality assessment", "human acceptance"]}
+              "stage": arguments.stage, "remaining": ["full worked-process acceptance", "independent process quality assessment", "human acceptance"]}
+    if original is not None:
+        result["baselineEvidence"] = str(original)
+        result["language"] = language
+        result["baselineDumpSha256"] = hashlib.sha256((original / "cq-database.dump").read_bytes()).hexdigest()
+        (evidence / "supplied-answer.json").write_bytes(answer_bytes)
+        consumed = [original / name for name in ["result.json", "items.json", "histories.json", "checkpoint-handoff.json", "settings.json", "source-sha256.json", "cq-database.dump", "usage-summary.json", "attempts.json"]]
+        consumed += [prior_session / name for name in ["run.json", "receipt.json"]]
+        consumed.extend((prior_session / "children").glob("*/ticket.json"))
+        consumed.extend(original.glob("usage-audit-*.json"))
+        write(evidence / "checkpoint-replay.json", {"checkpoint": checkpoint, "inputsSha256": {
+            str(path.relative_to(original)): hashlib.sha256(path.read_bytes()).hexdigest() for path in sorted(consumed)}})
     write(evidence / "result.json", result)
     try:
         checks.generate()
@@ -50,13 +86,29 @@ def main():
             routes.append({"harness": harness, "executable": executable, "model": model, "provider": provider, "version": version,
                            "providerExtensions": [], "providerEnvironment": []})
         consumer = evidence / "consumer"
-        consumer.mkdir()
-        checks.run(["git", "init", "--quiet", str(consumer)], "consumer-init", 10)
-        checks.run(["git", "-C", str(consumer), "-c", "user.name=CQ evaluation", "-c", "user.email=cq@example.invalid", "commit", "--quiet", "--allow-empty", "-m", "Worked-process base"], "consumer-base", 10)
+        if original is None:
+            consumer.mkdir()
+            checks.run(["git", "init", "--quiet", str(consumer)], "consumer-init", 10)
+            checks.run(["git", "-C", str(consumer), "-c", "user.name=CQ evaluation", "-c", "user.email=cq@example.invalid", "commit", "--quiet", "--allow-empty", "-m", "Worked-process base"], "consumer-base", 10)
+        else:
+            checks.run(["git", "clone", "--quiet", "--no-hardlinks", str(original / "consumer"), str(consumer)], "consumer-clone", 30)
+            context = consumer / ".cq-evaluation"
+            context.mkdir()
+            (context / "answer.json").write_bytes(answer_bytes)
+            checks.run(["git", "-C", str(consumer), "add", ".cq-evaluation/answer.json"], "answer-stage", 10)
+            checks.run(["git", "-C", str(consumer), "-c", "user.name=CQ evaluation", "-c", "user.email=cq@example.invalid", "commit", "--quiet", "-m", "Record supplied evaluation language answer"], "answer-commit", 10)
+            answer_commit = subprocess.check_output(["git", "-C", str(consumer), "rev-parse", "HEAD"], text=True).strip()
+            answer_citation = {"File": {"path": ".cq-evaluation/answer.json", "revision": answer_commit}}
+            checks.run(["git", "-C", str(consumer), "branch", "integration"], "integration-branch", 10)
         settings = {"integrationTarget": None, "stateRoot": str(evidence / "sessions"), "guardian": str(guardian), "harnesses": routes,
                     "limits": {"startupMillis": "10000", "executionMillis": str(evaluation["EXECUTION_MILLIS"]), "heartbeatMillis": "2000",
                                "graceMillis": "1000", "killMillis": "3000", "outputBytes": 8388608}, "checks": [],
                     "evaluation": {"run": identifier, "scenario": "worked-wordfreq", "assessor": False}}
+        if original is not None:
+            settings["evaluation"] = json.loads((original / "settings.json").read_text())["evaluation"]
+            settings["integrationTarget"] = "refs/heads/integration"
+            settings["checks"] = [{"name": "consumer-oracle", "command": [sys.executable, str(root / "dev/consumer-oracle.py"), language],
+                                   "executionMillis": "180000", "outputBytes": 262144}]
         write(evidence / "settings.json", settings)
         request = ("Begin a new word-frequency consumer project from the specification below. Its implementation language is a genuine user preference and has not been chosen. "
                    "Capture exactly one Idea without a milestone. Claim it and ask a Codex Planner to propose exactly one language-neutral Goal derived from it, preserving the complete specification. "
@@ -66,21 +118,65 @@ def main():
                    "Release every claim and end this checkpoint with a bounded report containing the actual Question ID and both alternatives. "
                    "Use configured limits, exact revisions, compact status and result handles. Do not compose child prompts or copy full results. "
                    "The ordinary consumer build and oracle will follow only after the actual answer.\n\n" + (root / "dev/consumer-spec.md").read_text())
+        if original is not None:
+            request = ("Resume this existing word-frequency project after the actual supplied language answer below. This is a NEW governing session: claim current records, "
+                       "re-read them and obtain NEW Codex Planner proposals and independent Pi Plan reviews before applying any new proposal. Historical handles do not grant current publication authority. "
+                       "The host has recorded the answer in the Question using the supplied reply and committed its source record at .cq-evaluation/answer.json. "
+                       "Record an adopted Decision derived from the answered Question and cite that exact file/commit. Preserve its bytes in every candidate. "
+                       "From the existing Goal, produce exactly two tasks: counting/tokenization/sorting and command-line/top/error/help. Both include relevant automated tests and README requirements. "
+                       "Preserve the complete original specification and chosen language; do not invent another choice or change the recorded answer. "
+                       "Organize those tasks under one Milestone; do not give the Idea or Goal milestone ownership. Create one Handoff shared through DerivedFrom relationships to BOTH tasks, "
+                       "describing their combined outcome and any remaining operator work. Use actual server-allocated IDs. "
+                       "Select compatible work using the normal Planner assessment and selection path, then run Pi Worker Implement and independent Codex Candidate Reviewer. "
+                       "The candidate reviewer must request a fresh consumer-oracle check. Correct through handles as needed. "
+                       "Integrate accepted work through PrepareIntegration/status/preview/Integrate against the configured target; only Recorded establishes incorporation. "
+                       "Do not mark tasks Done manually or infer completion from process exit. Release remaining claims at the end and report exact result/integration handles. "
+                       "Use compact outcomes and handles; do not compose child prompts or copy full results. Finish with all task scopes incorporated and a truthful remaining-work summary.\n" +
+                       json.dumps({"goal": checkpoint["goal"], "question": checkpoint["question"]["id"], "answer": answer,
+                                   "answerCitation": answer_citation}))
         (evidence / "request.txt").write_text(request)
         port = support["free_port"]()
         checks.environment.update(CQ_HOST="127.0.0.1", CQ_PORT=str(port), CQ_ORIGIN=f"http://127.0.0.1:{port}",
                                   CQ_TOKEN=uuid.uuid4().hex + uuid.uuid4().hex, CQ_SESSION=str(uuid.uuid4()))
         with evaluation["database"](checks, evidence, support["free_port"]()):
+            if original is not None:
+                parsed = urllib.parse.urlsplit(checks.environment["CQ_DATABASE_URL"].removeprefix("jdbc:"))
+                checks.run(["pg_restore", "--exit-on-error", "--clean", "--if-exists", "--host", parsed.hostname, "--port", str(parsed.port),
+                            "--username", checks.environment["CQ_DATABASE_USER"], "--dbname", parsed.path[1:], str(original / "cq-database.dump")], "database-restore", 60)
             with checks.server(command, "process-server"):
                 environment = {name: value for name, value in checks.environment.items() if not name.startswith("CQ_")}
                 environment["CQ_TOKEN"] = checks.environment["CQ_TOKEN"]
+                init = ["init", "--endpoint", checks.environment["CQ_ORIGIN"]]
+                if original is not None:
+                    project_config = json.loads((prior_session / "run.json").read_text())["project"]
+                    init += ["--project-id", project_config["project"]["value"], "--name", project_config["name"]]
                 with (evidence / "cq-init.log").open("w") as log:
-                    subprocess.run(command + ["init", "--endpoint", checks.environment["CQ_ORIGIN"]], cwd=consumer,
+                    subprocess.run(command + init, cwd=consumer,
                                    env=environment, stdout=log, stderr=subprocess.STDOUT, timeout=30, check=True)
+                if original is not None:
+                    usage_selection = {"Summary": {"filter": {"EvaluationOnly": {"run": settings["evaluation"]["run"], "scenario": settings["evaluation"]["scenario"]}}}}
+                    def total_usage():
+                        return call(checks.environment, {"Usage": {"input": {"project": project_config["project"], "selection": usage_selection}}})
+                    restored_usage = total_usage()
+                    write(evidence / "baseline-usage-summary.json", restored_usage)
+                    predicates["reconcile_usage"]([json.loads((original / "usage-summary.json").read_text())["UsageSummary"]["report"]], restored_usage["UsageSummary"]["report"])
                 try:
+                    workflow = ["--workflow", "begin"]
+                    if original is not None:
+                        project = project_config["project"]
+                        current = call(checks.environment, {"Read": {"input": {"project": project, "selection": {"ItemDetail": {"id": checkpoint["question"]["id"]}}}}})["Detail"]["view"]["item"]
+                        assert current["revision"] == checkpoint["question"]["revision"] and current["draft"]["content"]["Question"]["answer"] is None, "Question changed since checkpoint"
+                        draft = current["draft"]
+                        draft["content"]["Question"].update(status="Answered", answer=answer["answer"])
+                        draft["citations"].append(answer_citation)
+                        change = {"Change": {"input": {"project": project, "change": {"request": {"value": str(uuid.uuid4())},
+                            "mutations": [{"Replace": {"id": current["id"], "expected": current["revision"], "draft": draft}}], "fences": [],
+                            "reason": "Record actual supplied language reply; source retained in versioned evaluation input"}}}}
+                        write(evidence / "answer-change.json", {"command": change, "result": call(checks.environment, change)})
+                        workflow = ["--workflow", "advance", "--roots", "G" + checkpoint["goal"]["id"]["number"], "--through", "integrate"]
                     began = time.monotonic()
                     with (evidence / "governor.stdout").open("w") as out, (evidence / "governor.stderr").open("w") as err:
-                        finished = subprocess.run(command + ["run", "claude", "--settings", str(evidence / "settings.json"), "--input", str(evidence / "request.txt"), "--workflow", "begin"],
+                        finished = subprocess.run(command + ["run", "claude", "--settings", str(evidence / "settings.json"), "--input", str(evidence / "request.txt")] + workflow,
                             cwd=consumer, env=environment, stdout=out, stderr=err, timeout=evaluation["EXECUTION_MILLIS"] / 1000 + 120)
                     result.update(exit=finished.returncode, elapsedSeconds=round(time.monotonic() - began, 3))
                     sessions = list((evidence / "sessions").iterdir())
@@ -91,7 +187,7 @@ def main():
                     statuses = [json.loads(path.read_text()) for path in (session / "children").glob("*/receipt.json")]
                     tickets = [json.loads(path.read_text()) for path in (session / "children").glob("*/ticket.json")]
                     write(evidence / "dispatch-statuses.json", statuses)
-                    evaluation["artifacts"](checks.environment, evidence, session, statuses)
+                    artifacts = evaluation["artifacts"](checks.environment, evidence, session, statuses)
                     found = call(checks.environment, {"Search": {"input": {"project": project, "query": "archived:true OR archived:false", "after": None, "snapshot": None, "limit": 100}}})["Found"]["page"]
                     assert not found["hasMore"], "Worked-process snapshot exceeds its bound"
                     views, histories = [], []
@@ -105,10 +201,25 @@ def main():
                     handoff = call(checks.environment, {"Read": {"input": {"project": project, "selection": {"Claims": {"members": [value["id"] for value in found["items"]]}}}}})
                     write(evidence / "checkpoint-handoff.json", handoff)
                     receipt = json.loads((session / "receipt.json").read_text())
-                    assert finished.returncode == 0, "Begin governing session failed"
-                    checkpoint = predicates["question_checkpoint"](views, histories, tickets, receipt, handoff["Claims"]["preview"])
-                    write(evidence / "question-checkpoint.json", checkpoint)
-                    result.update(status=checkpoint["status"], checkpoint=checkpoint)
+                    assert finished.returncode == 0, "Worked-process governing session failed"
+                    if original is None:
+                        checkpoint = predicates["question_checkpoint"](views, histories, tickets, receipt, handoff["Claims"]["preview"])
+                        write(evidence / "question-checkpoint.json", checkpoint)
+                        result.update(status=checkpoint["status"], checkpoint=checkpoint)
+                    else:
+                        integrations = []
+                        for path in (session / "integrations").glob("*.json"):
+                            local = json.loads(path.read_text())
+                            record = call(checks.environment, {"Read": {"input": {"project": project, "selection": {"Integration": {"id": local["intent"]["id"]}}}}})["Integration"]["record"]
+                            integrations.append({"local": local, "record": record})
+                        write(evidence / "integrations.json", integrations)
+                        target = subprocess.check_output(["git", "-C", str(consumer), "rev-parse", "refs/heads/integration"], text=True).strip()
+                        captured_answer = subprocess.check_output(["git", "-C", str(consumer), "show", target + ":.cq-evaluation/answer.json"])
+                        assert captured_answer == answer_bytes, "Integrated candidate changed the actual answer record"
+                        progress = predicates["integrated_resume"](checkpoint, answer, answer_citation, views, histories, statuses, artifacts, integrations,
+                            run, {"value": target}, handoff["Claims"]["preview"], {value["name"]: value for value in settings["checks"]})
+                        write(evidence / "integrated-process.json", progress)
+                        result.update(status="integrated-candidate-passed", candidate={"value": target}, progress=progress)
                 finally:
                     primary_failure = sys.exc_info()[0] is not None
                     result["archiveErrors"] = evaluation["archive"](checks, evidence)
@@ -122,12 +233,19 @@ def main():
                     entry["upload"]["observation"]["counters"][name]["value"] is not None and entry["upload"]["observation"]["counters"][name]["measurement"] == "Observed" for name in ["input", "output"])}
                 assert attempts and all(value["attempt"]["id"]["value"] in measured for value in attempts), "Stage attempt lacks observed input/output usage"
                 result["observedAttempts"] = len(attempts)
+                if original is not None:
+                    combined = total_usage()
+                    write(evidence / "combined-usage-summary.json", combined)
+                    predicates["reconcile_usage"]([restored_usage["UsageSummary"]["report"], json.loads((evidence / "usage-summary.json").read_text())["UsageSummary"]["report"]], combined["UsageSummary"]["report"])
+                    baseline_attempts = json.loads((original / "attempts.json").read_text())["UsageAttempts"]["page"]["entries"]
+                    assert not {value["attempt"]["id"]["value"] for value in baseline_attempts} & {value["attempt"]["id"]["value"] for value in attempts}, "Resume reused a baseline attempt"
+                    result["accounting"] = "reconciled"
     except BaseException as error:
         result.update(status="failed", error=str(error))
         raise
     finally:
         write(evidence / "result.json", result)
-    print("CHECKPOINT: actual user answer required; complete process acceptance remains pending; evidence", evidence, flush=True)
+    print("CHECKPOINT:" if original is None else "INTEGRATED CANDIDATE:", "complete process acceptance remains pending; evidence", evidence, flush=True)
 
 
 if __name__ == "__main__":
