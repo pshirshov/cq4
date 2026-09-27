@@ -1,0 +1,20 @@
+# M4 worked-process evaluations — in progress
+
+The [evaluation contract](../design/live-process-evaluations.md) follows the accepted nine-route cohort corpus at `d224f3f`. It requires full intake/planning/work/review/integration and defect-investigation/upstream examples. This increment starts only the persisted language-question checkpoint; later stages and independent process-quality assessment remain open.
+
+`./dev/process-eval begin` creates an unrelated empty consumer/project, invokes the installed begin workflow with native Claude/Codex/Pi routes, and archives item views, full revision histories, child artifacts, native transcripts, the database and ordinary operational usage before returning a pending question. Python versus Go is intentionally left unanswered; both use the existing unchanged word-frequency contract and oracle. No actual user reply has been supplied for this fixture.
+
+The structural checkpoint requires Idea → Goal → Question derivations, no intake/goal milestone ownership, no task/milestone creation, an Open unanswered question whose ID/options appear in the bounded receipt, complete histories matching current views, no earlier fabricated answer/adopted decision, no implementation/conflict-resolution workers, and unchanged revisions without claims/integration holds. Exports explicitly include archived records. Every recorded stage attempt must have an observed input/output counter with correct evaluation attribution; coverage gaps remain visible in the shared audit.
+
+Astra found that checking only current state would accept an invented answer later cleared or an adopted decision later reverted. `/srv/nvme/tmp/cq4-implementation/process-checkpoint-reproductions/before.log` records those failures plus conflict-resolution and premature task/milestone cases before correction. `after.log` passes six tests with focused negative cases. Astra independently approved the corrected source for native execution conditional on the fast gate. Structural checkpoint acceptance does not establish that planning was independently approved, the complete specification was preserved, or the full process succeeded; those are required later checks.
+
+
+## Initial native checkpoint
+
+`20260927T195027-fast` passes all 188 Scala scenarios and bridge/evaluator checks, including the six process predicate tests. `20260927T195115-process-begin` passes the structural checkpoint in 158.433 seconds with native Claude governor, Codex Planner and Pi Plan Reviewer. All three attempts have observed input/output counters and ordinary evaluation attribution. The two source manifests match all 228 non-documentation files in `process-checkpoint-source-verification.json`.
+
+The retained graph is I1@3 → G1@2 → Q1@4. Q1 remains Open with no answer and alternatives Python/Go; its prompt asks which implementation language the consumer should use. The host export contains complete histories and an atomic unchanged-revision preview without claims/integration holds. All processes and the isolated database have exited normally; the archive supports a new governing session after the actual reply. The real Q1 choice has now been presented to the user.
+
+The governing report explicitly records that the reviewed proposal also produced Q1 linked to I1, then the governor edited its alternatives and reattached it to G1. Those changes were outside the prior Pi review and remain in history. The checkpoint predicate establishes the final pending-choice structure and absence of earlier fabricated answers; it does not relabel those later edits as independently reviewed. Full planning/application/specification quality remains subject to the later process evidence and independent assessment.
+
+Astra independently approved this scoped checkpoint increment for commit after verifying matching source manifests, the fast gate, complete revision sequences, continuously unanswered Q1 history, exact claim-free handoff and expected native roles. Resume requires the actual user reply and fresh-session authority.
