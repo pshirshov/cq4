@@ -78,6 +78,19 @@ for (const [tag, schema] of Object.entries(reports)) {
   assert.equal(check({ [tag]: { members: [] } }).valid, false);
   assert.deepEqual(contracts.ChildReport_JsonCodec.instance.encode(context, contracts.ChildReport_JsonCodec.instance.decode(context, sample)), sample);
 }
+const guides = JSON.parse(await readFile(`${directory}/native-guides.json`, 'utf8'));
+for (const [role, guide] of Object.entries(guides)) {
+  assert.deepEqual(Object.keys(guide.tools).sort(), role === 'Governor' ? ['cq.change', 'cq.usage', 'cq_host.dispatch'] : ['cq.usage']);
+  for (const [name, schema] of Object.entries(guide.tools)) {
+    const type = { 'cq.change': 'ChangeInput', 'cq.usage': 'UsageInput', 'cq_host.dispatch': 'DispatchCommand' }[name];
+    assert.deepEqual(schema, definitions[`cq_api_${type}`]);
+    for (const [key, value] of Object.entries(guide.$defs)) assert.deepEqual(value, definitions[key]);
+    const sample = fixture(schema, guide.$defs);
+    const codec = contracts[`${type}_JsonCodec`].instance;
+    assert.deepEqual(codec.encode(context, codec.decode(context, sample)), sample);
+    assert.equal(validator.getValidator({ ...schema, $defs: guide.$defs })(sample).valid, true);
+  }
+}
 const content = validator.getValidator({ ...definitions.cq_api_Content, $defs: definitions });
 assert.equal(content({ Task: { status: 'Ready', acceptance: ['test'], result: null, validation: [] } }).valid, true);
 assert.equal(content({ Task: { status: 'Ready', acceptance: ['test'], validation: [] } }).valid, false);

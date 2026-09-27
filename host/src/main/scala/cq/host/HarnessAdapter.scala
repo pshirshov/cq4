@@ -129,7 +129,7 @@ final class CodexAdapter extends HarnessAdapter {
         config(prefix + "bearer_token_env_var", Json.fromString(endpoint.environmentKey)) ++
         config(prefix + "enabled_tools", Json.arr(invocation.tools(endpoint.target).map(Json.fromString)*)) ++
         config(prefix + "required", Json.True) ++ config(prefix + "startup_timeout_sec", Json.fromInt(10)) ++
-        config(prefix + "tool_timeout_sec", Json.fromInt(30)) ++ config(prefix + "default_tools_approval_mode", Json.fromString("auto"))
+        config(prefix + "tool_timeout_sec", Json.fromInt(30)) ++ config(prefix + "default_tools_approval_mode", Json.fromString("approve"))
     }
     val arguments = List(profile.executable.toString, "exec", "--json", "--ephemeral", "--ignore-user-config", "--ignore-rules", "--strict-config",
       "--model", profile.model, "--sandbox", if (invocation.edits) "workspace-write" else "read-only",

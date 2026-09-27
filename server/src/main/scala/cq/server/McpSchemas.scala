@@ -2,6 +2,7 @@ package cq.server
 
 import baboon.runtime.shared.{BaboonCodecContext, BaboonJsonCodec}
 import cq.api.*
+import cq.host.{HarnessInvocation, McpTarget}
 import io.circe.{Json, JsonObject, parser}
 import java.nio.charset.StandardCharsets.UTF_8
 
@@ -61,6 +62,40 @@ final class McpSchemas {
       .filter(_.hcursor.get[List[String]]("required") == Right(List(tag)))
     require(branches.size == 1, s"Expected one generated ChildReport.$tag schema")
     closure(branches.head)
+  }
+
+  def nativeInvocation(harness: Harness, invocation: HarnessInvocation): HarnessInvocation = {
+    if (harness != Harness.Codex) invocation
+    else {
+      // Codex 0.156.1 drops definitions above 5,000 normalized bytes; reserve room for its normalization.
+      val GuideThresholdBytes = 4000
+      val inputs = invocation.endpoints.flatMap { endpoint =>
+        invocation.tools(endpoint.target).map { name =>
+          val input = endpoint.target match {
+            case McpTarget.Domain => advertised(tools.find(_.name == name).get).hcursor.downField("inputSchema").focus.get
+            case McpTarget.Local => schema(name match {
+              case "dispatch" => "DispatchCommand"
+              case "workspace" => "WorkspaceCommand"
+              case _ => throw new IllegalArgumentException("Unknown local tool schema")
+            })
+          }
+          s"${endpoint.name}.$name" -> input
+        }
+      }.filter(_._2.noSpaces.getBytes(UTF_8).length > GuideThresholdBytes)
+      if (inputs.isEmpty) invocation
+      else {
+        val selected = scala.collection.mutable.LinkedHashMap.empty[String, Json]
+        inputs.foreach { case (_, input) => input.hcursor.downField("$defs").focus.get.asObject.get.toList.foreach { case (key, value) =>
+          require(selected.get(key).forall(_ == value), s"Conflicting native tool schema definition $key")
+          selected.update(key, value)
+        }}
+        val guide = Json.obj("tools" -> Json.obj(inputs.map { case (name, value) => name -> value.mapObject(_.remove("$defs")) }*),
+          "$defs" -> Json.fromJsonObject(JsonObject.fromIterable(selected)))
+        invocation.copy(system = invocation.system + "\nCanonical argument schemas for CQ tools affected by native schema compaction. " +
+          "Use these complete contracts when constructing tool arguments. Each $ref resolves against this document's $defs. " +
+          "They do not grant additional permissions.\n" + guide.noSpaces)
+      }
+    }
   }
 
   private def closure(root: Json): Json = {

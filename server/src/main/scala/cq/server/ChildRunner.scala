@@ -89,13 +89,14 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
             Actor("CQ child " + ticket.attempt.id.value, ticket.attempt.session, ticket.attempt.role), authority.expiresAt))
           val local = access.issue(ticket.attempt.id, ticket.attempt.role)
           val assets = entry.directory.resolve("assets")
-          val invocation = HarnessInvocation(ticket.attempt.role, ticket.attempt.id, prompt, schemas.childReport(ticket.request.work),
-            List(HarnessMcp(McpTarget.Domain, config.endpoint.resolve("/mcp"), domain), HarnessMcp(McpTarget.Local, access.endpoint, local)), assets)
+          val invocation = schemas.nativeInvocation(profile.harness,
+            HarnessInvocation(ticket.attempt.role, ticket.attempt.id, prompt, schemas.childReport(ticket.request.work),
+              List(HarnessMcp(McpTarget.Domain, config.endpoint.resolve("/mcp"), domain), HarnessMcp(McpTarget.Local, access.endpoint, local)), assets))
           val launched = registry(profile.harness).launch(profile, invocation, config.environment)
           launched.install(assets)
           val artifacts = List(
             ArtifactUpload(config.project.project, NativeArtifacts.id(ticket.attempt.id, "input"), ticket.attempt.id, ArtifactKind.Input, "application/json", body),
-            ArtifactUpload(config.project.project, NativeArtifacts.id(ticket.attempt.id, "prompt"), ticket.attempt.id, ArtifactKind.Prompt, "text/markdown", prompt))
+            ArtifactUpload(config.project.project, NativeArtifacts.id(ticket.attempt.id, "prompt"), ticket.attempt.id, ArtifactKind.Prompt, "text/markdown", invocation.system))
           queue.enqueue(1, DeliveryBatch(artifacts.map(HostDelivery.Artifact.apply)))
           queue.flush(authority.collector)
           (base, JobCommand(launched.arguments, launched.environment, body, SupervisorConfig.limits(ticket.request.limits)))

@@ -17,6 +17,11 @@ Evidence root: `/srv/nvme/tmp/cq4-implementation/`.
 | `20260927T015412-consumer-claude-python` | PASS real Claude governor → Codex worker → Pi reviewer, candidate `eaba3d0a199f98e98157233c8775fad76f68c993`, consumer tests and 104 host behavior cases; 155.851 seconds, three metered attempts, audit and database retained |
 | `nixos-child-environment/reproduction.json`, `before.log` | Reproduced loss of Git/Python/Go discovery in filtered NixOS shells and the failing production-adapter regression |
 | `20260927T015808-fast` | PASS 69 Scala scenarios, Node bridge and four evaluator acceptance scenarios; preserving the inherited Nix initialization marker fixes child toolchain discovery |
+| `20260927T020004-consumer-codex-go` | Codex governor stopped because native `auto` MCP approval mode requested approval for writes under `never`; no child launched, audit and database retained |
+| `20260927T020244-consumer-codex-go` | Explicit approval fixed that boundary; governor then guessed change-request fields and failed schema validation. Pinned Codex compaction source explains loss of definitions above its 5,000-byte threshold |
+| `20260927T020754-contracts` | PASS role-scoped generated Codex schema guides, full-definition equality, codec round trips and AJV validation, alongside the existing 282-definition checks |
+| `20260927T020845-consumer-codex-go` | PASS real Codex governor → Pi worker → Claude reviewer, candidate `614a6a5bbc52cf4f204ed0958b3b7a3ef529b62a`, consumer tests and 104 host behavior cases; 167.222 seconds, three metered attempts, audit and database retained |
+| `20260927T021206-fast` | PASS 69 Scala scenarios, Node bridge and four evaluator acceptance scenarios after Codex approval/schema corrections |
 | `evaluator-acceptance/before.log` | Reproduced acceptance of a host-passed candidate A alongside review of a different failed candidate B |
 | `evaluator-acceptance/after-corrected-fixture.log` | PASS four predicate scenarios requiring linked candidate/assignment, applicable configured checks, observed host success and complete review acceptance |
 | `evaluator-archive-before.log` | Reproduced missing database archive after injected audit-export failure; temporary database removed |
@@ -32,6 +37,8 @@ The first successful candidate run reports 171,771 known direct task tokens and 
 
 The successful worker exposed a NixOS shell-environment defect: filtering `__NIXOS_SET_ENVIRONMENT_DONE` caused shell startup to replace the supplied toolchain PATH. The worker used the configured absolute Python executable and still passed. A separate production-adapter test reproduced failure before both harness and validation environment filters were corrected to retain that inherited marker. The full fast gate passes. Astra approved the evaluated foundation and corrections for commit after replaying the retained candidate acceptance evidence. Independent evaluation assessment and the M2 checkpoint remain open.
 
+The passing Codex-governed run uses the [native schema guide](../design/harness-adapters.md#codex-tool-approval-and-schema-compaction). Its retained prompt is 24,739 UTF-8 bytes, including 23,340 bytes of guide/header overhead; SHA-256 is `9cd181b68ed8667ba3f025c545a03a80f2c8e0bbfda7b89c6b1a398edd20f64c`. `parent-traffic.json` records eight dispatch calls, maximum 582-byte arguments and 648-byte result content, excluding native envelopes and duplicated structured content. There were no domain `read` calls. The audit reports 103,768 known direct tokens and 397,310 unattributed governing tokens, totaling 501,078. All three meters remain partial; Codex monetary cost is unknown. The child routes reported USD 0.355567600000000011 in provider estimates. Different harnesses, languages and this schema overhead prevent interpreting the two successful runs as a matched efficiency comparison. Astra approved this correction after verifying the accepted chain, fast gate, source hashes and retained prompt hash.
+
 Re-run explicitly (these commands call configured models):
 
 ```sh
@@ -40,4 +47,4 @@ CQ_EVIDENCE_ROOT=/srv/nvme/tmp/cq4-implementation ./dev/consumer-eval codex go
 CQ_EVIDENCE_ROOT=/srv/nvme/tmp/cq4-implementation ./dev/consumer-eval pi python
 ```
 
-Repeat equivalent runs per harness/model configuration before interpreting efficiency variation. One consumer candidate has passed; the other governing routes, independent assessment, integration and M2 human acceptance remain pending.
+Repeat equivalent runs per harness/model configuration before interpreting efficiency variation. Two consumer candidates have passed; Pi governing, independent assessment, integration and M2 human acceptance remain pending.

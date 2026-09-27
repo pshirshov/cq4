@@ -148,18 +148,19 @@ final class SupervisorProgram(config: SupervisorConfig, registry: HarnessRegistr
         val collector = authority.collector
         val input = HostFiles.encode(GoverningInput_JsonCodec, GoverningInput(config.project,
           config.settings.harnesses.map(value => HarnessRoute(value.harness, value.model, value.provider)), config.settings.checks.map(_.name), config.settings.limits, config.input))
+        val invocation = schemas.nativeInvocation(attempt.harness,
+          HarnessInvocation(Role.Governor, attempt.id, Instructions, schemas.schema("GoverningReport"),
+            List(HarnessMcp(McpTarget.Domain, config.endpoint.resolve("/mcp"), authority.governorToken),
+              HarnessMcp(McpTarget.Local, local.endpoint, access.issue(attempt.id, Role.Governor))), assets))
         val queue = new DeliveryQueue(config.directory.resolve("delivery"))
         val initial = DeliveryBatch(List(
           HostDelivery.Usage(HostUsageInput(project, HostUsage.Assign(config.run.assignment))),
           HostDelivery.Usage(HostUsageInput(project, HostUsage.Start(attempt))),
           HostDelivery.Artifact(ArtifactUpload(project, NativeArtifacts.id(attempt.id, "input"), attempt.id, ArtifactKind.Input, "application/json", input)),
-          HostDelivery.Artifact(ArtifactUpload(project, NativeArtifacts.id(attempt.id, "prompt"), attempt.id, ArtifactKind.Prompt, "text/plain", Instructions)),
+          HostDelivery.Artifact(ArtifactUpload(project, NativeArtifacts.id(attempt.id, "prompt"), attempt.id, ArtifactKind.Prompt, "text/plain", invocation.system)),
         ))
         queue.enqueue(0, initial)
         queue.flush(collector)
-        val invocation = HarnessInvocation(Role.Governor, attempt.id, Instructions, schemas.schema("GoverningReport"),
-          List(HarnessMcp(McpTarget.Domain, config.endpoint.resolve("/mcp"), authority.governorToken),
-            HarnessMcp(McpTarget.Local, local.endpoint, access.issue(attempt.id, Role.Governor))), assets)
         val launch = registry(attempt.harness).launch(config.profile, invocation, config.environment)
         launch.install(assets)
         (collector, queue, JobCommand(launch.arguments, launch.environment, input, config.limits))
