@@ -48,6 +48,32 @@ def main():
         source.write_text("cohort-choice-ack")
         publications = []
         lost = False
+        priced = False
+        attempts = {}
+        price_receipts = {}
+        audit_session = str(uuid.uuid4())
+
+        def price(project, attempt):
+            def host(operation):
+                request = urllib.request.Request(backend + "/api/usage", data=json.dumps({"project": project, "operation": operation}).encode(), headers={
+                    "Authorization": "Bearer " + environment["CQ_TOKEN"], "CQ-Session": audit_session,
+                    "CQ-Protocol-Version": "0.1.0", "Content-Type": "application/json"})
+                with urllib.request.urlopen(request, timeout=10) as response:
+                    result = json.load(response)
+                assert "Failed" not in result, result
+                return result
+            zero = {name: {"value": "0", "measurement": "Observed"} for name in ["input", "output", "cacheRead", "cacheWrite", "reasoning"]}
+            meter = "synthetic-cohort-price"
+            host({"Meter": {"value": {"key": meter, "attempt": attempt["id"], "scope": "Increment", "baseline": zero,
+                "baselineCost": {"amount": None, "currency": None, "basis": "Unknown", "pricingVersion": None}}}})
+            observation = {"id": {"value": str(uuid.uuid5(uuid.UUID(attempt["id"]["value"]), meter))}, "attempt": attempt["id"],
+                "source": meter, "position": "1", "occurredAt": attempt["startedAt"], "receivedAt": "0", "scope": "Increment",
+                "counters": zero, "inputIncludesCache": True, "outputIncludesReasoning": True,
+                "cost": {"amount": {"value": "0.125"}, "currency": "USD", "basis": "PriceTable", "pricingVersion": "synthetic-cohort-fixture"},
+                "completeness": "Complete", "gaps": [], "evidence": None, "supersedes": None}
+            receipt = host({"Ingest": {"value": {"observation": observation, "meter": meter, "disposition": "Contribution", "detailReason": None}}})
+            price_receipts[attempt["id"]["value"]] = {"observation": observation, "receipt": receipt}
+            (root / "synthetic-prices.json").write_text(json.dumps(price_receipts, indent=2) + "\n")
 
         class Proxy(http.server.BaseHTTPRequestHandler):
             def log_message(self, *_):
@@ -71,6 +97,15 @@ def main():
                 with response:
                     status, media, body = response.status, response.headers.get("Content-Type", "application/json"), response.read()
                 value = json.loads(payload) if payload is not None else {}
+                if self.path == "/api/usage" and status == 200:
+                    operation = value["operation"]
+                    if "Start" in operation:
+                        attempt = operation["Start"]["value"]
+                        attempts[attempt["id"]["value"]] = attempt
+                    if priced and "Finish" in operation:
+                        attempt = attempts[operation["Finish"]["value"]["attempt"]["value"]]
+                        if attempt["parent"] is not None:
+                            price(value["project"], attempt)
                 if self.path == "/api/artifact" and value["kind"] == "Selection":
                     publications.append({"upload": value, "status": status, "response": json.loads(body)})
                     (root / "selection-publications.json").write_text(json.dumps(publications, indent=2) + "\n")
@@ -105,20 +140,24 @@ def main():
             print(json.dumps({"scenario": "lost-selection-ack", "decision": decision, "session": receipt["session"]}))
             project = json.loads((repository / ".git/cq/project.json").read_text())["project"]
 
-            def change(mutations):
-                payload = {"Change": {"input": {"project": project, "change": {"request": {"value": str(uuid.uuid4())},
-                    "mutations": mutations, "fences": [], "reason": "Cohort flow fixture"}}}}
+            def api(payload):
                 request = urllib.request.Request(backend + "/api/call", data=json.dumps(payload).encode(), headers={
                     "Authorization": "Bearer " + environment["CQ_TOKEN"], "CQ-Session": str(uuid.uuid4()),
                     "CQ-Protocol-Version": "0.1.0", "Content-Type": "application/json"})
                 with urllib.request.urlopen(request, timeout=10) as response:
                     value = json.load(response)
                 assert "Failed" not in value, value
+                return value
+
+            def change(mutations):
+                value = api({"Change": {"input": {"project": project, "change": {"request": {"value": str(uuid.uuid4())},
+                    "mutations": mutations, "fences": [], "reason": "Cohort flow fixture"}}}})
                 return value["Changed"]["ack"]["items"]
 
-            for name in ["compatible", "unknown", "refresh"]:
+            for name in ["compatible", "unknown", "refresh", "mixed"]:
                 unknown = name == "unknown"
                 refresh = name == "refresh"
+                priced = name == "mixed"
                 draft = {"title": "Cohort task", "body": "Create consumer.txt", "labels": ["cohort-selected-" + name],
                          "archived": False, "content": {"Task": {"status": "Ready", "acceptance": ["Exact content verified"], "result": None, "validation": []}}, "citations": []}
                 goal, *members = change([{"Create": {"draft": {**draft, "labels": [], "content": {"Goal": {
@@ -128,7 +167,7 @@ def main():
                     linked = change([{"Reference": {"source": goal["id"], "expectedSource": goal["revision"], "relation": "Produces",
                         "target": member["id"], "expectedTarget": member["revision"], "present": True}}])
                     goal = next(value for value in linked if value["id"] == goal["id"])
-                source.write_text("cohort-flow:" + json.dumps({"roots": [goal["id"]], "unknown": unknown, "refresh": refresh}))
+                source.write_text("cohort-flow:" + json.dumps({"roots": [goal["id"]], "unknown": unknown, "refresh": refresh, "mixed": priced}))
                 result = subprocess.run(command + ["run", "codex", "--settings", str(settings), "--input", str(source),
                     "--workflow", "advance", "--roots", "G" + goal["id"]["number"], "--through", "review"],
                     cwd=repository, env=environment, capture_output=True, text=True, timeout=110)
@@ -139,16 +178,48 @@ def main():
                 assert flow["processSucceeded"] and flow["usageDelivered"]
                 assert not (repository / "consumer.txt").exists()
                 children = list((Path(flow["directory"]) / "children").iterdir())
-                assert len(children) == (4 if refresh else 1 if unknown else 3)
+                assert len(children) == (5 if priced else 4 if refresh else 1 if unknown else 3)
                 workers = 0
+                shared = 0
+                direct = 0
                 for child in children:
                     ticket = json.loads((child / "ticket.json").read_text())
-                    assert ticket["selection"] is not None and ticket["assignment"]["attribution"] == "Shared"
-                    assert len(ticket["assignment"]["members"]) == 2
+                    assert ticket["selection"] is not None
+                    attribution = ticket["assignment"]["attribution"]
+                    assert attribution in ["Shared", "Direct"]
+                    assert len(ticket["assignment"]["members"]) == (2 if attribution == "Shared" else 1)
+                    shared += attribution == "Shared"
+                    direct += attribution == "Direct"
                     workers += "Worker" in ticket["request"]["work"]
                     assert json.loads((child / "receipt.json").read_text())["usageDelivered"]
                 if refresh:
                     assert workers == 1, "Assessment refresh retried an unchanged Worker"
+                assert (shared, direct) == ((3, 2) if priced else (len(children), 0))
+                print(json.dumps({"scenario": name, "receipt": flow}))
+            priced = False
+            for blocked in [False, True]:
+                name = "claimed-pool" if blocked else "fairness"
+                draft = {"title": "Independent task", "body": "Inspect this independent requirement", "labels": [], "archived": False,
+                         "content": {"Task": {"status": "Ready", "acceptance": ["Separate observation"], "result": None, "validation": []}}, "citations": []}
+                members = change([{"Create": {"draft": draft}} for _ in range(32)])
+                free = None
+                if blocked:
+                    free = change([{"Create": {"draft": draft}}])[0]
+                    change([{"Reference": {"source": members[0]["id"], "expectedSource": members[0]["revision"], "relation": "Produces",
+                        "target": free["id"], "expectedTarget": free["revision"], "present": True}}])
+                    api({"ClaimWork": {"input": {"project": project, "action": {"Acquire": {"id": {"value": str(uuid.uuid4())},
+                        "members": [member["id"] for member in members], "durationMillis": "180000"}}}}})
+                roots = [member["id"] for member in members]
+                source.write_text("cohort-fairness:" + json.dumps({"roots": roots, "blocked": blocked, "free": free}))
+                result = subprocess.run(command + ["run", "codex", "--settings", str(settings), "--input", str(source), "--workflow", "advance",
+                    "--roots", ",".join("T" + member["number"] for member in roots), "--through", "explore"],
+                    cwd=repository, env=environment, capture_output=True, text=True, timeout=110)
+                (root / (name + ".stdout")).write_text(result.stdout)
+                (root / (name + ".stderr")).write_text(result.stderr)
+                assert result.returncode == 0, f"{name} exited {result.returncode}; inspect {root}"
+                flow = json.loads(result.stdout)
+                assert flow["processSucceeded"] and flow["usageDelivered"]
+                assert not list((Path(flow["directory"]) / "children").glob("*")), "Unused choices created a child"
                 print(json.dumps({"scenario": name, "receipt": flow}))
         finally:
             proxy.shutdown()

@@ -1,4 +1,5 @@
 import json
+from decimal import Decimal
 import os
 from pathlib import Path
 import signal
@@ -161,11 +162,58 @@ def main():
             assert not Path("check-private").exists()
             assert tool("cq_host", "workspace", {"Check": {"name": "consumer-content", "waitMillis": 0}})["Check"]["value"] == check
             emit({"type": "fixture.reviewer-check", "value": check})
-            finish({"Review": {"proposal": None, "members": [{"item": item, "verdict": "Accepted", "findings": []} for item in members]}})
+            mixed = labels == ["cohort-selected-mixed"] and len(members) > 1
+            finish({"Review": {"proposal": None, "members": [{"item": item,
+                "verdict": "ChangesRequested" if mixed and index == 0 else "Accepted",
+                "findings": ["Correct this member separately"] if mixed and index == 0 else []} for index, item in enumerate(members)]}})
         return
 
     assert sandbox == "read-only"
     project = data["project"]["project"]
+    if data["request"].startswith("cohort-fairness:"):
+        scenario = json.loads(data["request"].split(":", 1)[1])
+        selection = {"roots": scenario["roots"], "work": {"Explorer": {"mode": "Investigate"}},
+                     "guidance": [], "artifacts": [], "previous": None, "limits": data["limits"]}
+
+        def select():
+            return tool("cq_host", "dispatch", {"Select": {"request": {**selection, "request": identity()}}})["Selection"]["value"]
+
+        first = select()
+        assert first["counts"]["inspected"] == 32
+        if scenario["blocked"]:
+            assert first["choices"] == [] and first["counts"]["unexamined"] == 1 and first["counts"]["excluded"] == 32, first
+            advanced = select()
+            assert len(advanced["choices"]) == 1 and advanced["choices"][0]["members"][0]["id"] == scenario["free"]["id"], advanced
+            assert advanced["counts"]["inspected"] == 32 and advanced["counts"]["unexamined"] == 1
+            emit({"type": "fixture.cohort-claimed-pool", "first": first, "advanced": advanced})
+            finish({"summary": "Selection advanced beyond 32 foreign-claimed candidates to the unclaimed descendant"})
+            return
+
+        def offered(decision):
+            assert len(decision["choices"]) == 8 and all(len(value["members"]) == 1 for value in decision["choices"]), decision
+            return [value["members"][0]["id"]["number"] for value in decision["choices"]]
+
+        rounds = [offered(first)]
+        assert first["counts"]["selected"] == 32 and first["counts"]["unexamined"] == 0
+        root = tool("cq", "read", {"project": project, "selection": {"ItemDetail": {"id": scenario["roots"][0]}}})["Detail"]["view"]["item"]
+        created = tool("cq", "change", {"project": project, "change": {"request": identity(), "mutations": [{"Create": {
+            "draft": {**root["draft"], "title": "New arrival"}}}], "fences": [], "reason": "New independent descendant"}})["Changed"]["ack"]["items"][0]
+        tool("cq", "change", {"project": project, "change": {"request": identity(), "mutations": [{"Reference": {
+            "source": root["id"], "expectedSource": root["revision"], "relation": "Produces", "target": created["id"],
+            "expectedTarget": created["revision"], "present": True}}], "fences": [], "reason": "Select the new descendant"}})
+        for _ in range(3):
+            decision = select()
+            values = offered(decision)
+            assert decision["counts"]["selected"] == 33 and decision["counts"]["unexamined"] == 1
+            assert not set(values).intersection(value for previous in rounds for value in previous)
+            assert created["id"]["number"] not in values, "New arrival displaced equally eligible older work"
+            rounds.append(values)
+        assert {value for previous in rounds for value in previous} == {value["number"] for value in scenario["roots"]}
+        following = offered(select())
+        assert following[0] == created["id"]["number"], "Unreturned arrival was starved by previously offered work"
+        emit({"type": "fixture.cohort-fairness", "rounds": rounds, "following": following, "arrival": created["id"]})
+        finish({"summary": "All 32 older singletons were offered before repeats; the new descendant was offered next"})
+        return
     if data["request"].startswith("cohort-flow:"):
         scenario = json.loads(data["request"].split(":", 1)[1])
         selection = {"request": identity(), "roots": scenario["roots"], "work": {"Worker": {"mode": "Implement"}},
@@ -202,7 +250,8 @@ def main():
             finish({"summary": "Unknown compatibility split the automatic implementation choices"})
             return
         assert len(selected["choices"]) == 1 and selected["choices"][0]["reason"] == "CompatibleAssessment", selected
-        worked = start(selected["choices"][0])
+        worker_choice = selected["choices"][0]
+        worked = start(worker_choice)
         assert worked["phase"] == "Completed" and worked["counts"]["failed" if scenario["refresh"] else "ready"] == 2, worked
         if scenario["refresh"]:
             refreshed = []
@@ -236,7 +285,60 @@ def main():
             "work": {"Reviewer": {"mode": "Candidate"}}, "previous": worked["result"]}}})["Selection"]["value"]
         assert len(review["choices"]) == 1 and review["choices"][0]["members"] == choice["members"], review
         reviewed = start(review["choices"][0])
-        assert reviewed["phase"] == "Completed" and reviewed["counts"]["accepted"] == 2, reviewed
+        assert reviewed["phase"] == "Completed" and reviewed["counts"]["accepted"] == (1 if scenario["mixed"] else 2), reviewed
+        if scenario["mixed"]:
+            assert reviewed["counts"]["changesRequested"] == 1
+
+            def snapshot(filter_value):
+                def usage(selection):
+                    return tool("cq", "usage", {"project": project, "selection": selection})
+                summary = usage({"Summary": {"filter": filter_value}})["UsageSummary"]["report"]
+                assignments = usage({"Attempts": {"filter": filter_value, "after": None, "snapshot": None, "limit": 20}})["UsageAttempts"]["page"]
+                audit = usage({"Audit": {"filter": filter_value, "after": "0", "limit": 100}})["UsageAudit"]["page"]
+                assert not assignments["hasMore"] and not audit["hasMore"] and not summary["costs"]["hasMore"]
+                del summary["cursor"]
+                del summary["costs"]["cursor"]
+                return {"summary": summary, "attempts": assignments["entries"], "audit": audit["entries"]}
+
+            def cost(snapshot, attribution):
+                entries = snapshot["summary"]["costs"]["entries"]
+                assert all(entry["group"]["pricingVersion"] == "synthetic-cohort-fixture" for entry in entries)
+                return sum((Decimal(entry["amount"]["value"]) for entry in entries if entry["group"]["attribution"] == attribution), Decimal(0))
+
+            original_filter = {"CohortOnly": {"execution": worker_choice["cohort"]}}
+            task_filter = {"TaskOnly": {"item": choice["members"][0]["id"]}}
+            original = snapshot(original_filter)
+            before = snapshot(task_filter)
+            assert cost(original, "Shared") == Decimal("0.125") and cost(before, "Shared") == Decimal("0.375")
+            exact = tool("cq_host", "dispatch", {"Select": {"request": {**selection, "request": identity(),
+                "artifacts": [planned["result"]], "previous": reviewed["result"]}}})["Selection"]["value"]
+            assert exact["choices"] == [] and exact["counts"]["excluded"] == 2, exact
+            fresh = tool("cq_host", "dispatch", {"Select": {"request": {**selection, "request": identity(),
+                "artifacts": [planned["result"], reviewed["result"]]}}})["Selection"]["value"]
+            assert len(fresh["choices"]) == 1 and fresh["choices"][0]["members"] == choice["members"][:1], fresh
+            assert fresh["choices"][0]["reason"] == "FreshFromBase" and fresh["choices"][0]["previous"] is None
+            tool("cq", "claim", {"project": project, "action": {"Release": {"fence": fence}}})
+            claim = tool("cq", "claim", {"project": project, "action": {"Acquire": {"id": identity(),
+                "members": [choice["members"][0]["id"]], "durationMillis": "180000"}}})["Claimed"]["claim"]
+            fence = claim["fence"]
+            corrected = start(fresh["choices"][0])
+            assert corrected["phase"] == "Completed" and corrected["counts"]["ready"] == 1, corrected
+            independent = tool("cq_host", "dispatch", {"Select": {"request": {**selection, "request": identity(),
+                "work": {"Reviewer": {"mode": "Candidate"}}, "previous": corrected["result"]}}})["Selection"]["value"]
+            assert len(independent["choices"]) == 1 and independent["choices"][0]["members"] == choice["members"][:1]
+            accepted = start(independent["choices"][0])
+            assert accepted["phase"] == "Completed" and accepted["counts"]["accepted"] == 1, accepted
+            after = snapshot(task_filter)
+            historical = snapshot(original_filter)
+            assert historical == original, "Split changed earlier shared accounting, membership or outcomes"
+            assert after["summary"]["shared"] == before["summary"]["shared"]
+            assert cost(after, "Shared") == Decimal("0.375") and cost(after, "Direct") == Decimal("0.250")
+            original_attempts = {value["attempt"]["id"]["value"]: value for value in before["attempts"]}
+            assert {value["attempt"]["id"]["value"]: value for value in after["attempts"] if value["attempt"]["id"]["value"] in original_attempts} == original_attempts
+            emit({"type": "fixture.cohort-split", "original": original, "historical": historical,
+                  "before": before, "after": after, "corrected": corrected, "reviewed": accepted})
+            finish({"summary": "Mixed outcomes split by handle without rewriting historical assignments, usage or exact costs"})
+            return
         emit({"type": "fixture.cohort", "planner": planned, "worker": worked, "reviewer": reviewed})
         finish({"summary": "Automatic whole-group Planner, Worker, validation and independent candidate review completed by handles"})
         return

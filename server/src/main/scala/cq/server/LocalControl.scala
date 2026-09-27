@@ -3,6 +3,7 @@ package cq.server
 import baboon.runtime.shared.{BaboonCodecContext, BaboonJsonCodec}
 import com.comcast.ip4s.{Host, Port}
 import cq.api.*
+import cq.core.JsonRoundtrip
 import cq.core.DomainFailure
 import cq.host.{ChildContracts, DispatchProjection, WorkflowExecution}
 import distage.Lifecycle
@@ -38,7 +39,7 @@ final class LocalControl(dispatch: DispatchController, cohorts: CohortController
     .mapObject(_.add("inputSchema", schemas.workspace(capability.role)))
   private def decode[A](codec: BaboonJsonCodec[A], json: Json): Task[A] = ZIO.attempt {
     val value = codec.decode(Context, json).fold(throw _, identity)
-    require(codec.encode(Context, value) == json, "Local command contains undeclared or noncanonical fields")
+    require(JsonRoundtrip.lossless(json, codec.encode(Context, value)), "Local command contains undeclared or noncanonical fields")
     value
   }
   private def fault(error: Throwable): Fault = error match {

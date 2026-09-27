@@ -27,7 +27,7 @@ final class ProposalServiceImpl[F[+_, +_]: Error2](ledger: LedgerRepository[F], 
       val json = parser.parse(stored.body).fold(_ => throw DomainFailure(Fault.Invalid("Proposal result is not JSON")), identity)
       val result = ChildResult_JsonCodec.decode(BaboonCodecContext.Default, json)
         .fold(_ => throw DomainFailure(Fault.Invalid("Proposal result does not match its schema")), identity)
-      LedgerPolicy.invalid(ChildResult_JsonCodec.encode(BaboonCodecContext.Default, result) == json, "Proposal result has undeclared or noncanonical fields")
+      LedgerPolicy.invalid(JsonRoundtrip.lossless(json, ChildResult_JsonCodec.encode(BaboonCodecContext.Default, result)), "Proposal result has undeclared or noncanonical fields")
       Try(ChildContracts.result(scope.project, result)).recover { case error: IllegalArgumentException => throw DomainFailure(Fault.Invalid(error.getMessage)) }.get
       LedgerPolicy.invalid(result.attempt == stored.metadata.attempt, "Proposal result attempt differs from its artifact")
       val prepared = ProposalPolicy.prepare(result.request.work, result.request.members, result.report)

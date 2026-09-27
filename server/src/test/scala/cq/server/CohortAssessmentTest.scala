@@ -3,6 +3,7 @@ package cq.server
 import cq.api.*
 import cq.core.{CohortAssessmentPolicy, DomainFailure, ProposalPolicy}
 import cq.host.{ChildContracts, DispatchProjection, HostFiles}
+import io.circe.{Json, JsonObject}
 import java.util.UUID
 import org.scalatest.wordspec.AnyWordSpec
 
@@ -21,6 +22,35 @@ final class CohortAssessmentLocal extends AnyWordSpec {
   }
 
   "Cohort assessment contracts (Behavioral Active Blackbox Atomic)" should {
+    "accept arbitrary check-set order while preserving ordered report members" in {
+      val names = (1 to 8).map(index => s"check-$index").toSet
+      val value = report.copy(members = report.members.reverse, assessments = List(assessment.copy(
+        members = assessment.members.map(member => member.copy(acceptance = List(CohortCriterion(0, names, "Inspect this member")))))))
+      val encoded = ChildReport_JsonCodec.encode(baboon.runtime.shared.BaboonCodecContext.Default, value)
+      def editCriteria(json: Json)(edit: JsonObject => JsonObject): Json = json.arrayOrObject(json,
+        values => Json.fromValues(values.map(value => editCriteria(value)(edit))),
+        fields => Json.fromJsonObject {
+          val nested = fields.mapValues(value => editCriteria(value)(edit))
+          if (nested.contains("checks")) edit(nested) else nested
+        })
+      val reordered = editCriteria(encoded)(fields => fields.add("checks", Json.fromValues(fields("checks").get.asArray.get.reverse)))
+      assert(reordered != encoded)
+      assert(ChildReport_JsonCodec.decode(baboon.runtime.shared.BaboonCodecContext.Default, reordered) == Right(value))
+      assert(ChildContracts.report(DispatchWork.Planner(), members, reordered) == value)
+      val duplicate = editCriteria(reordered) { fields =>
+        val checks = fields("checks").get.asArray.get
+        fields.add("checks", Json.fromValues(checks :+ checks.head))
+      }
+      assert(ChildReport_JsonCodec.decode(baboon.runtime.shared.BaboonCodecContext.Default, duplicate) == Right(value))
+      intercept[IllegalArgumentException](ChildContracts.report(DispatchWork.Planner(), members, duplicate))
+      val unknown = editCriteria(reordered)(_.add("undeclared", Json.True))
+      intercept[IllegalArgumentException](ChildContracts.report(DispatchWork.Planner(), members, unknown))
+      val noncanonical = reordered.hcursor.downField("Plan").downField("assessments").downArray.downField("members")
+        .downArray.downField("member").downField("revision").downField("value").withFocus(_ => Json.fromString("01")).top.get
+      assert(ChildReport_JsonCodec.decode(baboon.runtime.shared.BaboonCodecContext.Default, noncanonical) == Right(value))
+      intercept[IllegalArgumentException](ChildContracts.report(DispatchWork.Planner(), members, noncanonical))
+    }
+
     "review compatibility without inventing a ledger proposal and reject incomplete or overlapping groups" in {
       val value = report
       ChildContracts.report(DispatchWork.Planner(), members, ChildReport_JsonCodec.encode(baboon.runtime.shared.BaboonCodecContext.Default, value))

@@ -32,7 +32,7 @@ final class IntegrationServiceImpl[F[+_, +_]: Error2](ledger: LedgerRepository[F
       invalid(metadata.kind == kind && metadata.mediaType == "application/json", "Unexpected integration evidence artifact type")
       val json = parser.parse(stored.body).fold(_ => throw DomainFailure(Fault.Invalid("Integration evidence is not JSON")), identity)
       val value = codec.decode(BaboonCodecContext.Default, json).fold(_ => throw DomainFailure(Fault.Invalid("Integration evidence differs from its schema")), identity)
-      invalid(codec.encode(BaboonCodecContext.Default, value) == json, "Integration evidence has undeclared or noncanonical fields")
+      invalid(JsonRoundtrip.lossless(json, codec.encode(BaboonCodecContext.Default, value)), "Integration evidence has undeclared or noncanonical fields")
       (metadata, value)
     }.toEither)
   } yield result

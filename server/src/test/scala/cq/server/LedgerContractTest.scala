@@ -77,6 +77,19 @@ abstract class LedgerContractTest extends SpecZIO with AssertZIO {
       } yield ()
     }
 
+    "reject reordered mutations on immutable request replay without repeating side effects" in { (service: LedgerService[IO]) =>
+      val owner = scope()
+      val ordered = request(List(Mutation.Create(task("First")), Mutation.Create(task("Second"))), Nil)
+      for {
+        _ <- service.initialize(owner, "ordered-request")
+        first <- service.change(owner, ordered)
+        _ <- denied(service.change(owner, ordered.copy(mutations = ordered.mutations.reverse)))(_.isInstanceOf[Fault.Conflict])
+        replay <- service.change(owner, ordered)
+        events <- service.changes(owner, ChangeCursor(0), 200)
+        _ <- assertIO(replay == first && events.events.map(_.items) == List(first.items) && first.items.map(_.id.number) == List(1L, 2L))
+      } yield ()
+    }
+
     "reject fabricated observation provenance and invalid nested content without allocating items" in { (service: LedgerService[IO]) =>
       val owner = scope()
       val invalidDrafts = List(

@@ -2,6 +2,7 @@ package cq.host
 
 import baboon.runtime.shared.BaboonCodecContext
 import cq.api.*
+import cq.core.JsonRoundtrip
 import cq.core.{DomainFailure, Scope}
 import io.circe.parser
 import java.time.{Clock, Duration}
@@ -84,7 +85,7 @@ final class CombinationPreparation(api: ServerApi, owner: Scope, governor: Attem
     artifacts.headOption.map { artifact => bounded { call =>
       val json = parser.parse(artifact.body).fold(throw _, identity)
       val plan = CombinationPlan_JsonCodec.decode(BaboonCodecContext.Default, json).fold(throw _, identity)
-      require(CombinationPlan_JsonCodec.encode(BaboonCodecContext.Default, plan) == json, "Combination plan contains undeclared or noncanonical fields")
+      require(JsonRoundtrip.lossless(json, CombinationPlan_JsonCodec.encode(BaboonCodecContext.Default, plan)), "Combination plan contains undeclared or noncanonical fields")
       CombinationPlans.validate(plan, owner, governor, repository, target)
       require(artifact.metadata.id == CombinationPlans.artifact(plan) && artifact.metadata.project == owner.project &&
         artifact.metadata.attempt == governor && artifact.metadata.actor.session == owner.actor.session &&

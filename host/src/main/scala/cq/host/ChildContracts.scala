@@ -2,6 +2,7 @@ package cq.host
 
 import baboon.runtime.shared.BaboonCodecContext
 import cq.api.*
+import cq.core.JsonRoundtrip
 import cq.core.{CohortAssessmentPolicy, LedgerPolicy, ProposalPolicy}
 import io.circe.Json
 import java.nio.charset.StandardCharsets.UTF_8
@@ -35,7 +36,7 @@ object ChildContracts {
   def decodeRequest(project: ProjectId, json: Json): DispatchRequest = {
     require(json.noSpaces.getBytes(UTF_8).length <= MaxRequestBytes, "Dispatch request exceeds its byte bound")
     val value = DispatchRequest_JsonCodec.decode(BaboonCodecContext.Default, json).fold(throw _, identity)
-    require(DispatchRequest_JsonCodec.encode(BaboonCodecContext.Default, value) == json, "Dispatch request contains undeclared or noncanonical fields")
+    require(JsonRoundtrip.lossless(json, DispatchRequest_JsonCodec.encode(BaboonCodecContext.Default, value)), "Dispatch request contains undeclared or noncanonical fields")
     request(project, value)
     value
   }
@@ -60,7 +61,7 @@ object ChildContracts {
   def report(work: DispatchWork, members: List[ItemRevision], json: Json): ChildReport = {
     require(json.noSpaces.getBytes(UTF_8).length <= MaxResultBytes, "Child report exceeds its byte bound")
     val value = ChildReport_JsonCodec.decode(BaboonCodecContext.Default, json).fold(throw _, identity)
-    require(ChildReport_JsonCodec.encode(BaboonCodecContext.Default, value) == json, "Child report contains undeclared or noncanonical fields")
+    require(JsonRoundtrip.lossless(json, ChildReport_JsonCodec.encode(BaboonCodecContext.Default, value)), "Child report contains undeclared or noncanonical fields")
     def narrative(text: String): Unit = require(text.trim.nonEmpty && text.length <= MaxNarrativeCharacters, "Invalid child narrative bound")
     val reported = (work, value) match {
       case (assigned, ChildReport.Evidence(entries)) if reportTag(assigned) == "Evidence" =>

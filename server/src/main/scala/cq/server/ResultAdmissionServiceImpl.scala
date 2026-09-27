@@ -29,7 +29,7 @@ final class ResultAdmissionServiceImpl[F[+_, +_]: Error2](ledger: LedgerReposito
       val json = parser.parse(artifact.body).fold(_ => throw DomainFailure(Fault.Invalid("Result artifact is not JSON")), identity)
       val value = ChildResult_JsonCodec.decode(BaboonCodecContext.Default, json)
         .fold(_ => throw DomainFailure(Fault.Invalid("Result artifact does not match its schema")), identity)
-      LedgerPolicy.invalid(ChildResult_JsonCodec.encode(BaboonCodecContext.Default, value) == json, "Result artifact has undeclared or noncanonical fields")
+      LedgerPolicy.invalid(JsonRoundtrip.lossless(json, ChildResult_JsonCodec.encode(BaboonCodecContext.Default, value)), "Result artifact has undeclared or noncanonical fields")
       Try(ChildContracts.result(scope.project, value)).recover { case failure: IllegalArgumentException =>
         throw DomainFailure(Fault.Invalid(failure.getMessage))
       }.get

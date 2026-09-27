@@ -2,6 +2,7 @@ package cq.host
 
 import baboon.runtime.shared.BaboonCodecContext
 import cq.api.*
+import cq.core.JsonRoundtrip
 import cq.core.IntegrationPolicy
 import cq.core.LedgerPolicy.invalid
 import io.circe.parser
@@ -37,7 +38,7 @@ object IntegrationValidation {
   def decode(value: ResolvedArtifact): ValidationObservation = {
     val json = parser.parse(value.body).fold(throw _, identity)
     val observed = ValidationObservation_JsonCodec.decode(BaboonCodecContext.Default, json).fold(throw _, identity)
-    invalid(ValidationObservation_JsonCodec.encode(BaboonCodecContext.Default, observed) == json,
+    invalid(JsonRoundtrip.lossless(json, ValidationObservation_JsonCodec.encode(BaboonCodecContext.Default, observed)),
       "Validation observation contains undeclared or noncanonical fields")
     observed
   }

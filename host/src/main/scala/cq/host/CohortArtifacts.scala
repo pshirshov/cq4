@@ -2,6 +2,7 @@ package cq.host
 
 import baboon.runtime.shared.{BaboonCodecContext, BaboonJsonCodec}
 import cq.api.*
+import cq.core.JsonRoundtrip
 import cq.core.{LedgerPolicy, Scope}
 import io.circe.{Json, parser}
 
@@ -16,7 +17,7 @@ object CohortArtifacts {
     require(stored.metadata.mediaType == "application/json", "Structured cohort evidence requires JSON")
     val json = parser.parse(stored.body).fold(throw _, identity)
     val value = codec.decode(BaboonCodecContext.Default, json).fold(throw _, identity)
-    require(encode(codec, value) == json, "Structured cohort evidence contains undeclared or noncanonical fields")
+    require(JsonRoundtrip.lossless(json, encode(codec, value)), "Structured cohort evidence contains undeclared or noncanonical fields")
     value
   }
 

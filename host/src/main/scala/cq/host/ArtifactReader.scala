@@ -2,6 +2,7 @@ package cq.host
 
 import baboon.runtime.shared.BaboonCodecContext
 import cq.api.*
+import cq.core.JsonRoundtrip
 import io.circe.parser
 import java.nio.charset.StandardCharsets.UTF_8
 import java.security.MessageDigest
@@ -50,7 +51,7 @@ final class ArtifactReader(call: Command => Result, project: ProjectId) {
     require(stored.metadata.kind == ArtifactKind.Result && stored.metadata.mediaType == "application/json", "Prior handle must contain a structured child result")
     val json = parser.parse(stored.body).fold(throw _, identity)
     val value = ChildResult_JsonCodec.decode(BaboonCodecContext.Default, json).fold(throw _, identity)
-    require(ChildResult_JsonCodec.encode(BaboonCodecContext.Default, value) == json, "Prior result contains undeclared or noncanonical fields")
+    require(JsonRoundtrip.lossless(json, ChildResult_JsonCodec.encode(BaboonCodecContext.Default, value)), "Prior result contains undeclared or noncanonical fields")
     ChildContracts.result(project, value)
     val admission = call(Command.Read(ReadInput(project, ReadSelection.Admission(value.attempt)))) match {
       case Result.Admission(record) => record
@@ -71,7 +72,7 @@ final class ArtifactReader(call: Command => Result, project: ProjectId) {
       "Execution input has different host provenance")
     val json = parser.parse(stored.body).fold(throw _, identity)
     val input = ChildExecutionInput_JsonCodec.decode(BaboonCodecContext.Default, json).fold(throw _, identity)
-    require(ChildExecutionInput_JsonCodec.encode(BaboonCodecContext.Default, input) == json && input.input.project == project &&
+    require(JsonRoundtrip.lossless(json, ChildExecutionInput_JsonCodec.encode(BaboonCodecContext.Default, input)) && input.input.project == project &&
       input.input.request == value.request && input.base == value.base, "Input differs from its admitted execution")
     require(input.input.members.map(view => ItemRevision(view.item.id, view.item.revision)) == value.request.members,
       "Input members differ from the frozen assignment")
