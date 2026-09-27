@@ -20,7 +20,7 @@ object HarnessAdapterProbe extends ZIOAppDefault {
     args <- getArgs
     _ <- ZIO.attempt(require(args.size == 2, "HarnessAdapterProbe requires harness and role"))
     harness <- ZIO.attempt(Harness.all.find(_.toString.equalsIgnoreCase(args(0))).get)
-    role <- ZIO.attempt(Role.all.find(_.toString.equalsIgnoreCase(args(1))).filter(Set(Role.Worker, Role.Reviewer)).get)
+    role <- ZIO.attempt(Role.all.find(_.toString.equalsIgnoreCase(args(1))).filter(Set(Role.Explorer, Role.Planner, Role.Worker, Role.Reviewer)).get)
     _ <- probe(harness, role)
   } yield ()
 
@@ -132,12 +132,13 @@ object HarnessAdapterProbe extends ZIOAppDefault {
         Files.writeString(directory.resolve("outcomes.json"), Wire.encode(Result_JsonCodec,
           api.call(Command.Usage(UsageInput(project, UsageSelection.Outcomes(attempt.id, 0, 200))))))
         require(completed && usage.terminalSeen && !usage.nativeFailure, "Harness did not finish successfully; inspect retained process output and usage")
+        require(usage.meters.nonEmpty && usage.meters.exists(_.observations.nonEmpty), "Native probe must retain operational usage observations")
         val output = new HarnessOutput().result(harness, native, directory.resolve("assets"))
         require(output.asObject.exists(_.keys.toSet == Set("status", "observed")) && output.hcursor.get[String]("status").contains("ok") &&
           output.hcursor.get[String]("observed").contains(marker), "Harness did not return the exact scoped CQ artifact text")
         val tree = directory.resolve("workspaces").resolve(attempt.id.value.toString).resolve("tree")
         if (role == Role.Worker) require(Files.readString(tree.resolve("observed.txt")) == marker, "Worker did not materialize the retrieved text")
-        else require(!Files.exists(tree.resolve("forbidden.txt")), "Restricted reviewer wrote a file")
+        else require(!Files.exists(tree.resolve("forbidden.txt")), "Restricted role wrote a file")
         Files.writeString(directory.resolve("result.json"), Json.obj("harness" -> Json.fromString(harness.toString), "role" -> Json.fromString(role.toString),
           "status" -> Json.fromString("passed"), "attempt" -> Json.fromString(attempt.id.value.toString), "project" -> Json.fromString(project.value.toString)).spaces2)
         println(s"Live adapter probe: $harness $role passed; scoped CQ read, filesystem policy and operational usage retained")

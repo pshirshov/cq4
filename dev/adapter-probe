@@ -21,8 +21,8 @@ MODEL_PROFILES = {
 
 
 def main():
-    if len(sys.argv) != 3 or sys.argv[1] not in MODEL_PROFILES or sys.argv[2] not in ["Worker", "Reviewer"]:
-        raise SystemExit("Usage: ./dev/adapter-probe claude|codex|pi Worker|Reviewer (runs a real model)")
+    if len(sys.argv) != 3 or sys.argv[1] not in MODEL_PROFILES or sys.argv[2] not in ["Explorer", "Planner", "Worker", "Reviewer"]:
+        raise SystemExit("Usage: ./dev/adapter-probe claude|codex|pi Explorer|Planner|Worker|Reviewer (runs a real model)")
     os.chdir(ROOT)
     if shutil.which("sbt") is None or shutil.which("java") is None:
         os.execvp("nix", ["nix", "develop", "-c", str(ROOT / "dev/adapter-probe"), *sys.argv[1:]])
@@ -57,7 +57,7 @@ def main():
         port = module["free_port"]()
         checks.environment.update(CQ_HOST="127.0.0.1", CQ_PORT=str(port), CQ_ORIGIN=f"http://127.0.0.1:{port}",
                                   CQ_TOKEN=uuid.uuid4().hex + uuid.uuid4().hex, CQ_SESSION=str(uuid.uuid4()))
-        with checks.database():
+        with checks.database([]):
             with checks.server(["java", "-cp", classpath, "cq.server.Main"], "adapter"):
                 checks.sbt([f"server/Test/runMain cq.server.HarnessAdapterProbe {harness} {role}"], "live-probe")
         result["status"] = "passed"
