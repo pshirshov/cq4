@@ -1,7 +1,7 @@
 package cq.server
 
 import com.comcast.ip4s.{Host, Port}
-import cq.core.{ArtifactRepository, ArtifactService, LedgerRepository, LedgerService, ProbeRepository, ProbeService, QueryCompleter, QueryParser, TerminationPlanner, UsageRepository, UsageService, WorksetTraversal}
+import cq.core.{ArtifactRepository, ArtifactService, ClaimPlanner, LedgerRepository, LedgerService, ProbeRepository, ProbeService, QueryCompleter, QueryParser, TerminationPlanner, UsageRepository, UsageService, WorksetTraversal}
 import distage.{Activation, Lifecycle, ModuleDef}
 import distage.StandardAxis.Repo
 import izumi.distage.plugins.{PluginConfig, PluginDef}
@@ -51,6 +51,7 @@ object CqPlugin extends PluginDef {
   make[QueryCompleter]
   make[WorksetTraversal]
     make[TerminationPlanner]
+    make[ClaimPlanner]
   make[UsageService[IO]].from[UsageService.Impl[IO]]
   make[ArtifactService[IO]].from[ArtifactService.Impl[IO]]
   make[Clock].fromValue(Clock.systemUTC())

@@ -94,6 +94,7 @@ CREATE TABLE cq_claim_members (
   FOREIGN KEY (project_id, ledger, number) REFERENCES cq_items,
   FOREIGN KEY (project_id, claim_id) REFERENCES cq_claims
 );
+CREATE INDEX cq_claim_members_owner ON cq_claim_members (project_id, claim_id);
 
 CREATE TABLE cq_usage_clock (
   project_id uuid PRIMARY KEY REFERENCES cq_projects,

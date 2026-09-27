@@ -122,8 +122,15 @@ private final class DummyLedgerTransaction(initial: DummyLedgerState) extends Le
     .flatMap(_.draft.labels).filter(prefix.matches).toSet.toList.sorted(SearchPrefix.ordering).take(limit)
   override def claim(id: ItemId): Option[Claim] = state.members.get(id).flatMap(state.claims.get)
   override def claimById(id: ClaimId): Option[Claim] = state.claims.get(id)
-  override def saveClaim(claim: Claim): Unit = {
+  override def claimMembers(id: ClaimId): Set[ItemId] =
+    state.claims.get(id).toList.flatMap(_.members).filter(item => state.members.get(item).contains(id)).toSet
+  override def insertClaim(claim: Claim): Unit = {
+    require(!state.claims.contains(claim.fence.claim), "Claim identity already exists")
     state = state.copy(claims = state.claims.updated(claim.fence.claim, claim), members = state.members ++ claim.members.map(_ -> claim.fence.claim))
+  }
+  override def updateClaim(claim: Claim): Unit = {
+    require(state.claims.get(claim.fence.claim).exists(_.fence == claim.fence), "Claim fence does not exist")
+    state = state.copy(claims = state.claims.updated(claim.fence.claim, claim))
   }
   override def nextFence(): Long = {
     val next = Math.addExact(state.fence, 1L)

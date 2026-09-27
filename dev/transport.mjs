@@ -182,6 +182,39 @@ assert.equal(cancelledDetail.structuredContent.Detail.view.item.draft.content.Ta
 const cancelledHistory = await call({ Read: { input: { project: first, selection: { History: { id: item.id,
   before: { value: '9223372036854775807' }, limit: 20 } } } } }, headers);
 assert.equal(cancelledHistory.History.page.entries[0].reason, terminationChange.change.reason);
+const producer = (await call({ Change: { input: change('Claimed producer') } }, headers)).Changed.ack.items[0];
+const producerClaim = (await client.callTool({ name: 'claim', arguments: { project: first,
+  action: { Acquire: { id: id(), members: [producer.id], durationMillis: '300000' } } } })).structuredContent.Claimed.claim;
+const production = { project: first, change: { request: id(), reason: 'Atomic client production', fences: [producerClaim.fence],
+  mutations: [{ Produce: { producer: producer.id, expected: producer.revision, drafts: [draft('Produced one'), draft('Produced two')] } }] } };
+const produced = (await client.callTool({ name: 'change', arguments: production })).structuredContent;
+assert.equal(produced.Changed.ack.items.length, 3);
+assert.deepEqual(await call({ Change: { input: production } }, headers), produced);
+const producedChildren = produced.Changed.ack.items.filter(value => value.id.number !== producer.id.number);
+const producedDetail = (await call({ Read: { input: { project: first, selection: { ItemDetail: { id: producer.id } } } } }, headers)).Detail.view;
+assert.equal(producedDetail.item.revision.value, '2');
+assert.deepEqual(producedDetail.refs.map(ref => ref.target), producedChildren.map(value => value.id));
+await call({ ClaimWork: { input: { project: first, action: { Release: { fence: producerClaim.fence } } } } }, headers);
+const governor = await grant('Governor');
+const governingClaim = (await call({ ClaimWork: { input: { project: first,
+  action: { Acquire: { id: id(), members: [producer.id, producedChildren[0].id], durationMillis: '300000' } } } } }, governor)).Claimed.claim;
+const claimsRead = { project: first, selection: { Claims: { members: [producer.id] } } };
+const claimsPreview = (await client.callTool({ name: 'read', arguments: claimsRead })).structuredContent.Claims.preview;
+assert.deepEqual((await call({ Read: { input: claimsRead } }, headers)).Claims.preview, claimsPreview);
+assert.deepEqual(claimsPreview.claims, [governingClaim]);
+assert.equal(claimsPreview.claims[0].members.length, 2);
+const takeover = { project: first, action: { Takeover: { id: id(), owner: claim.owner, members: [producer.id],
+  durationMillis: '300000', snapshot: claimsPreview.snapshot } } };
+assert.ok((await call({ ClaimWork: { input: takeover } }, governor)).Failed.fault.Denied);
+const taken = (await client.callTool({ name: 'claim', arguments: takeover })).structuredContent;
+assert.deepEqual(await call({ ClaimWork: { input: takeover } }, headers), taken);
+assert.deepEqual(taken.Claimed.claim.members, [producer.id]);
+assert.ok(taken.Claimed.claim.origin.Takeover);
+assert.ok((await call({ ClaimWork: { input: { project: first,
+  action: { Renew: { fence: governingClaim.fence, durationMillis: '300000' } } } } }, governor)).Failed.fault.StaleFence);
+const collateral = (await call({ Read: { input: { project: first, selection: { Claims: { members: [producedChildren[0].id] } } } } }, headers)).Claims.preview;
+assert.deepEqual(collateral.claims, []);
+assert.deepEqual(collateral.members, [producedChildren[0]]);
 const attempts = await client.callTool({ name: 'usage', arguments: { project: first, selection: { Attempts: { filter: { ProjectAll: {} }, after: null, snapshot: null, limit: 20 } } } });
 assert.deepEqual(attempts.structuredContent.UsageAttempts.page.entries, []);
 const costs = await client.callTool({ name: 'usage', arguments: { project: first, selection: { Costs: { filter: { ProjectAll: {} }, after: null, snapshot: null, limit: 20 } } } });

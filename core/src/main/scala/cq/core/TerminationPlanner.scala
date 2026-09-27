@@ -3,7 +3,6 @@ package cq.core
 import baboon.runtime.shared.BaboonCodecContext
 import cq.api.*
 import java.nio.charset.StandardCharsets.UTF_8
-import java.security.MessageDigest
 import scala.collection.mutable
 
 final class TerminationPlanner(worksets: WorksetTraversal) {
@@ -54,23 +53,14 @@ final class TerminationPlanner(worksets: WorksetTraversal) {
     }
     if (entries.count(_.effect.isInstanceOf[TerminationEffect.Change]) > LedgerPolicy.MaxTouchedItems)
       throw DomainFailure(Fault.Limit(s"Termination changes at most ${LedgerPolicy.MaxTouchedItems} items; choose narrower roots"))
-    val claims = selected.toList.sortBy(key).flatMap(tx.claim).filter(c => !c.released && c.expiresAt > now)
-      .groupBy(_.fence.claim).values.map { versions =>
-        require(versions.distinct.size == 1, "Inconsistent claim membership observations")
-        val claim = versions.head
+    val claims = ClaimPolicy.overlapping(tx, selected, now).map { claim =>
         TerminationClaim(claim.fence, claim.owner, claim.members.toList.sortBy(key), claim.members.intersect(selected).toList.sortBy(key),
           scope.actor.role == Role.Human || scope.actor == claim.owner)
-      }.toList.sortBy(_.fence.claim.value.toString)
+      }
     val plan = TerminationPlan(roots.toList.sortBy(key), intent, entries, claims,
       !entries.exists(_.effect.isInstanceOf[TerminationEffect.Unsupported]) && claims.forall(_.permitted))
     val encoded = TerminationPlan_JsonCodec.encode(BaboonCodecContext.Default, plan)
-    val identity = io.circe.Json.obj("project" -> ProjectId_JsonCodec.encode(BaboonCodecContext.Default, scope.project),
-      "actor" -> Actor_JsonCodec.encode(BaboonCodecContext.Default, scope.actor), "plan" -> encoded)
-    // Sets in item summaries are unordered across processes; canonicalize JSON recursively before hashing.
-    def canonical(value: io.circe.Json): io.circe.Json = value.arrayOrObject(value,
-      values => io.circe.Json.fromValues(values.map(canonical).sortBy(_.noSpaces)),
-      fields => io.circe.Json.fromFields(fields.toList.sortBy(_._1).map { case (name, item) => name -> canonical(item) }))
-    val digest = MessageDigest.getInstance("SHA-256").digest(canonical(identity).noSpaces.getBytes(UTF_8)).map(b => f"${b & 0xff}%02x").mkString
+    val digest = PreviewDigest(scope, encoded)
     val result = TerminationPreview(plan, TerminationSnapshot(graph.snapshot.cursor, digest))
     if (TerminationPreview_JsonCodec.encode(BaboonCodecContext.Default, result).noSpaces.getBytes(UTF_8).length > ReadPage.MaxBytes - ReadPage.EnvelopeBytes)
       throw DomainFailure(Fault.Limit("Termination preview exceeds the encoded-byte bound; choose narrower roots"))

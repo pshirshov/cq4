@@ -39,7 +39,7 @@ abstract class TerminationContractTest extends SpecZIO with AssertZIO {
     val parser = new QueryParser
     val worksets = new WorksetTraversal
     new LedgerService.Impl[IO](repository, Clock.fixed(Instant.ofEpochMilli(millis), ZoneOffset.UTC), parser,
-      new QueryCompleter(parser), worksets, new TerminationPlanner(worksets))
+      new QueryCompleter(parser), worksets, new TerminationPlanner(worksets), new ClaimPlanner)
   }
 
   "Whole-subgraph termination (Behavioral Active Blackbox; dummy Group / PostgreSQL Good Communication)" should {

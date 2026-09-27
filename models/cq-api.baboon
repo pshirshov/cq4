@@ -84,7 +84,13 @@ root data ItemRef { relation: Relation target: ItemId }
 root data ItemView { item: Item refs: lst[ItemRef] }
 root data HistoryEntry { item: ItemView cursor: ChangeCursor reason: str schemaVersion: str }
 root data Fence { claim: ClaimId generation: i64 }
-root data Claim { fence: Fence owner: Actor members: set[ItemId] expiresAt: i64 released: bit }
+root data ClaimSnapshot { cursor: ChangeCursor digest: str }
+root adt ClaimOrigin {
+  data Acquire { durationMillis: i64 }
+  data Takeover { actor: Actor snapshot: ClaimSnapshot durationMillis: i64 }
+}
+root data Claim { fence: Fence owner: Actor members: set[ItemId] expiresAt: i64 released: bit origin: ClaimOrigin }
+root data ClaimPreview { members: lst[ItemRevision] claims: lst[Claim] snapshot: ClaimSnapshot }
 enum TerminationIntent { Cancel Complete }
 root adt TerminalStatus {
   data Milestone { value: MilestoneStatus }
@@ -120,6 +126,7 @@ root data TerminationPlan { roots: lst[ItemId] intent: TerminationIntent entries
 root data TerminationSnapshot { cursor: ChangeCursor digest: str }
 root data TerminationPreview { plan: TerminationPlan snapshot: TerminationSnapshot }
 root adt Mutation {
+  data Produce { producer: ItemId expected: Revision drafts: lst[ItemDraft] }
   data Terminate { roots: set[ItemId] intent: TerminationIntent snapshot: TerminationSnapshot }
   data Create { draft: ItemDraft }
   data Replace { id: ItemId expected: Revision draft: ItemDraft }
@@ -263,6 +270,7 @@ root data ProjectConfig { project: ProjectId endpoint: str name: str }
 root data SearchInput { project: ProjectId query: str after: opt[ItemId] snapshot: opt[ChangeCursor] limit: i32 }
 root data GraphInput { project: ProjectId roots: set[ItemId] after: opt[ItemId] snapshot: opt[WorksetSnapshot] limit: i32 }
 root adt ReadSelection {
+  data Claims { members: set[ItemId] }
   data Termination { roots: set[ItemId] intent: TerminationIntent }
   data QueryComplete { query: str cursor: i32 limit: i32 }
   data ArtifactInfo { id: ArtifactId }
@@ -274,6 +282,7 @@ root adt ReadSelection {
 root data ReadInput { project: ProjectId selection: ReadSelection }
 root data ChangeInput { project: ProjectId change: ChangeRequest }
 root adt ClaimAction {
+  data Takeover { id: ClaimId owner: Actor members: set[ItemId] durationMillis: i64 snapshot: ClaimSnapshot }
   data Acquire { id: ClaimId members: set[ItemId] durationMillis: i64 }
   data Renew { fence: Fence durationMillis: i64 }
   data Release { fence: Fence }
@@ -299,6 +308,7 @@ root adt Command {
   data Usage { input: UsageInput }
 }
 root adt Result {
+  data Claims { preview: ClaimPreview }
   data Termination { preview: TerminationPreview }
   data Workset { page: WorksetPage }
   data QueryAnalyzed { analysis: QueryAnalysis }

@@ -193,9 +193,16 @@ private final class PostgresLedgerTransaction(connection: Connection, override v
       projectKey(s); s.setObject(2, id.value)
     }(r => Wire.decode(Claim_JsonCodec, r.getString(1))).headOption
 
-  override def saveClaim(claim: Claim): Unit = {
-    sql.execute("INSERT INTO cq_claims(project_id, claim_id, generation, expires_at, released, body) VALUES (?, ?, ?, ?, ?, ?::jsonb) " +
-      "ON CONFLICT(project_id, claim_id) DO UPDATE SET expires_at = EXCLUDED.expires_at, released = EXCLUDED.released, body = EXCLUDED.body") { s =>
+  override def claimMembers(id: ClaimId): Set[ItemId] = {
+    val members = sql.query("SELECT ledger, number FROM cq_claim_members WHERE project_id = ? AND claim_id = ? LIMIT ?") { s =>
+      projectKey(s); s.setObject(2, id.value); s.setInt(3, LedgerPolicy.MaxBatch + 1)
+    }(r => ItemId(project.id, ledger(r.getString(1)), r.getLong(2)))
+    require(members.size <= LedgerPolicy.MaxBatch, "Persisted claim membership exceeds its bound")
+    members.toSet
+  }
+
+  override def insertClaim(claim: Claim): Unit = {
+    sql.execute("INSERT INTO cq_claims(project_id, claim_id, generation, expires_at, released, body) VALUES (?, ?, ?, ?, ?, ?::jsonb)") { s =>
       projectKey(s); s.setObject(2, claim.fence.claim.value); s.setLong(3, claim.fence.generation)
       s.setLong(4, claim.expiresAt); s.setBoolean(5, claim.released); s.setString(6, Wire.encode(Claim_JsonCodec, claim))
     }
@@ -204,6 +211,14 @@ private final class PostgresLedgerTransaction(connection: Connection, override v
         itemKey(s, id); s.setObject(4, claim.fence.claim.value)
       }
     }
+  }
+
+  override def updateClaim(claim: Claim): Unit = {
+    val changed = sql.execute("UPDATE cq_claims SET expires_at = ?, released = ?, body = ?::jsonb WHERE project_id = ? AND claim_id = ? AND generation = ?") { s =>
+      s.setLong(1, claim.expiresAt); s.setBoolean(2, claim.released); s.setString(3, Wire.encode(Claim_JsonCodec, claim))
+      s.setObject(4, project.id.value); s.setObject(5, claim.fence.claim.value); s.setLong(6, claim.fence.generation)
+    }
+    require(changed == 1, "Claim fence does not exist")
   }
 
   override def nextFence(): Long = sql.query("UPDATE cq_projects SET fence_counter = fence_counter + 1 WHERE project_id = ? RETURNING fence_counter")(projectKey)(_.getLong(1)).head

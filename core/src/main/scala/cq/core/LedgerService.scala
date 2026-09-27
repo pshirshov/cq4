@@ -18,13 +18,15 @@ trait LedgerService[F[_, _]] {
   def workset(scope: Scope, roots: Set[ItemId], after: Option[ItemId], snapshot: Option[WorksetSnapshot], limit: Int): F[Throwable, WorksetPage]
   def history(scope: Scope, id: ItemId, before: Revision, limit: Int): F[Throwable, HistoryPage]
   def changes(scope: Scope, after: ChangeCursor, limit: Int): F[Throwable, ChangePage]
+  def claimPreview(scope: Scope, members: Set[ItemId]): F[Throwable, ClaimPreview]
+  def takeover(scope: Scope, id: ClaimId, owner: Actor, members: Set[ItemId], durationMillis: Long, snapshot: ClaimSnapshot): F[Throwable, Claim]
   def acquire(scope: Scope, id: ClaimId, members: Set[ItemId], durationMillis: Long): F[Throwable, Claim]
   def renew(scope: Scope, fence: Fence, durationMillis: Long): F[Throwable, Claim]
   def release(scope: Scope, fence: Fence): F[Throwable, Claim]
 }
 
 object LedgerService {
-  final class Impl[F[+_, +_]: Error2](repository: LedgerRepository[F], clock: Clock, queries: QueryParser, completions: QueryCompleter, worksets: WorksetTraversal, terminationPlanner: TerminationPlanner) extends LedgerService[F] {
+  final class Impl[F[+_, +_]: Error2](repository: LedgerRepository[F], clock: Clock, queries: QueryParser, completions: QueryCompleter, worksets: WorksetTraversal, terminationPlanner: TerminationPlanner, claimPlanner: ClaimPlanner) extends LedgerService[F] {
     import LedgerPolicy.*
 
     private def write(scope: Scope): Unit =
@@ -44,13 +46,13 @@ object LedgerService {
       if (item.revision != revision) throw DomainFailure(Fault.Conflict(s"Expected revision ${revision.value}, actual ${item.revision.value}"))
 
     private def fenced(tx: LedgerTransaction, scope: Scope, item: ItemId, fences: List[Fence], now: Long): Unit = {
-      val active = tx.claim(item).filter(c => !c.released && c.expiresAt > now)
+      val active = tx.claim(item).filter(ClaimPolicy.active(tx, _, now))
       active.foreach { c =>
         if (c.owner != scope.actor || !fences.contains(c.fence)) throw DomainFailure(Fault.StaleFence("Item has an active claim; current owner and fence required"))
       }
       fences.foreach { fence =>
         val c = tx.claimById(fence.claim).getOrElse(throw DomainFailure(Fault.StaleFence("Unknown claim")))
-        if (c.members.contains(item) && (c.fence != fence || c.released || c.expiresAt <= now || c.owner != scope.actor))
+        if (c.members.contains(item) && (c.fence != fence || !ClaimPolicy.active(tx, c, now) || c.owner != scope.actor))
           throw DomainFailure(Fault.StaleFence("Claim is expired, released, replaced, or belongs to another actor"))
       }
     }
@@ -125,6 +127,15 @@ object LedgerService {
             }
             tx.edge(edge, present)
           }
+          def create(draft: ItemDraft): Item = {
+            validateDraft(draft, Nil)
+            if (touched.size >= MaxTouchedItems) throw DomainFailure(Fault.Limit(s"A change touches at most $MaxTouchedItems items"))
+            val id = tx.allocate(ledger(draft.content))
+            val item = Item(id, Revision(1), draft, now, now, provenance)
+            tx.put(item)
+            touched.update(id, item)
+            item
+          }
           invalid(!request.mutations.exists(_.isInstanceOf[Mutation.Terminate]) || request.mutations.size == 1,
             "Termination must be the only mutation in its request")
           request.mutations.foreach {
@@ -137,7 +148,7 @@ object LedgerService {
                 throw DomainFailure(Fault.StaleFence("Termination requires exactly the reviewed active claim fences"))
               preview.plan.claims.foreach { reviewed =>
                 val claim = tx.claimById(reviewed.fence.claim).getOrElse(throw new IllegalStateException("Previewed claim disappeared inside transaction"))
-                tx.saveClaim(claim.copy(released = true))
+                tx.updateClaim(claim.copy(released = true))
               }
               preview.plan.entries.foreach { entry => entry.effect match {
                 case TerminationEffect.Change(status) =>
@@ -146,13 +157,19 @@ object LedgerService {
                   revise(item, item.draft.copy(content = terminationPlanner.applyStatus(item.draft.content, status)), None)
                 case _ => ()
               }}
-            case Mutation.Create(draft) =>
-              validateDraft(draft, Nil)
-              if (touched.size >= MaxTouchedItems) throw DomainFailure(Fault.Limit(s"A change touches at most $MaxTouchedItems items"))
-              val id = tx.allocate(ledger(draft.content))
-              val item = Item(id, Revision(1), draft, now, now, provenance)
-              tx.put(item)
-              touched.update(id, item)
+            case Mutation.Produce(producer, revision, drafts) =>
+              val parent = check(producer, revision)
+              invalid(drafts.nonEmpty && drafts.size <= MaxBatch, s"Production requires 1–$MaxBatch drafts")
+              val claim = tx.claim(producer).filter(ClaimPolicy.active(tx, _, now))
+                .getOrElse(throw DomainFailure(Fault.StaleFence("Production requires an active producer claim")))
+              if (claim.owner != scope.actor || !request.fences.contains(claim.fence))
+                throw DomainFailure(Fault.StaleFence("Production requires the current producer owner and fence"))
+              drafts.foreach { draft =>
+                val child = create(draft)
+                edgeChange(canonical(child.id, Relation.DerivedFrom, producer), true)
+              }
+              revise(parent, parent.draft, None)
+            case Mutation.Create(draft) => create(draft); ()
             case Mutation.Replace(id, revision, draft) => revise(check(id, revision), draft, None)
             case Mutation.Restore(id, revision, historical, neighbors) =>
               val item = check(id, revision)
@@ -234,16 +251,46 @@ object LedgerService {
       val now = clock.millis()
       tx.claimById(id) match {
         case Some(c) =>
-          if (c.owner != scope.actor || c.members != members) throw DomainFailure(Fault.Conflict("Claim identity reused with different scope"))
-          if (c.released || c.expiresAt <= now) throw DomainFailure(Fault.StaleFence("Acquire a new claim identity after expiry or release"))
+          if (c.owner != scope.actor || c.members != members || c.origin != ClaimOrigin.Acquire(durationMillis))
+            throw DomainFailure(Fault.Conflict("Claim identity reused with different acquisition intent"))
+          if (!ClaimPolicy.active(tx, c, now)) throw DomainFailure(Fault.StaleFence("Acquire a new claim identity after expiry or release"))
           c
         case None =>
           members.foreach { item =>
             required(tx, scope, item)
-            if (tx.claim(item).exists(c => !c.released && c.expiresAt > now)) throw DomainFailure(Fault.Conflict("Claim overlaps active work"))
+            if (tx.claim(item).exists(ClaimPolicy.active(tx, _, now))) throw DomainFailure(Fault.Conflict("Claim overlaps active work"))
           }
-          val claim = Claim(Fence(id, tx.nextFence()), scope.actor, members, Math.addExact(now, durationMillis), false)
-          tx.saveClaim(claim)
+          val claim = Claim(Fence(id, tx.nextFence()), scope.actor, members, Math.addExact(now, durationMillis), false, ClaimOrigin.Acquire(durationMillis))
+          tx.insertClaim(claim)
+          claim
+      }
+    }
+
+    override def claimPreview(scope: Scope, members: Set[ItemId]): F[Throwable, ClaimPreview] =
+      repository.transact(scope.project)(tx => claimPlanner.preview(tx, scope, members, clock.millis()))
+
+    override def takeover(scope: Scope, id: ClaimId, owner: Actor, members: Set[ItemId], durationMillis: Long, snapshot: ClaimSnapshot): F[Throwable, Claim] = repository.transact(scope.project) { tx =>
+      if (scope.actor.role != Role.Human) throw DomainFailure(Fault.Denied("Claim takeover requires human authority"))
+      if (!Set[Role](Role.Human, Role.Governor).contains(owner.role)) throw DomainFailure(Fault.Denied("Claim owner must be a human or governor"))
+      invalid(owner.subject.trim.nonEmpty && owner.subject.length <= MaxTitle && !owner.subject.contains('\u0000') &&
+        StandardCharsets.UTF_8.newEncoder().canEncode(owner.subject), "Invalid claim owner subject")
+      duration(durationMillis)
+      invalid(members.nonEmpty && members.size <= MaxBatch, "Invalid claim membership")
+      val now = clock.millis()
+      val origin = ClaimOrigin.Takeover(scope.actor, snapshot, durationMillis)
+      tx.claimById(id) match {
+        case Some(claim) =>
+          if (claim.owner != owner || claim.members != members || claim.origin != origin)
+            throw DomainFailure(Fault.Conflict("Claim identity reused with different takeover intent"))
+          if (!ClaimPolicy.active(tx, claim, now)) throw DomainFailure(Fault.StaleFence("Acquire a new claim identity after expiry or release"))
+          claim
+        case None =>
+          if (tx.cursor != snapshot.cursor) throw DomainFailure(Fault.Conflict("Claim preview items changed; review a fresh preview"))
+          val preview = claimPlanner.preview(tx, scope, members, now)
+          if (preview.snapshot != snapshot) throw DomainFailure(Fault.Conflict("Claim preview changed; review a fresh preview"))
+          preview.claims.foreach(c => tx.updateClaim(c.copy(released = true)))
+          val claim = Claim(Fence(id, tx.nextFence()), owner, members, Math.addExact(now, durationMillis), false, origin)
+          tx.insertClaim(claim)
           claim
       }
     }
@@ -252,6 +299,7 @@ object LedgerService {
       write(scope)
       val c = tx.claimById(fence.claim).getOrElse(throw DomainFailure(Fault.StaleFence("Unknown claim")))
       if (c.owner != scope.actor || c.fence != fence || c.expiresAt <= clock.millis()) throw DomainFailure(Fault.StaleFence("Claim no longer owned"))
+      if (!c.released && !ClaimPolicy.active(tx, c, clock.millis())) throw DomainFailure(Fault.StaleFence("Claim membership replaced"))
       c
     }
 
@@ -260,14 +308,14 @@ object LedgerService {
       val c = owned(tx, scope, fence)
       if (c.released) throw DomainFailure(Fault.StaleFence("Claim released"))
       val next = c.copy(expiresAt = Math.addExact(clock.millis(), durationMillis))
-      tx.saveClaim(next)
+      tx.updateClaim(next)
       next
     }
 
     override def release(scope: Scope, fence: Fence): F[Throwable, Claim] = repository.transact(scope.project) { tx =>
       val current = owned(tx, scope, fence)
       val next = current.copy(released = true)
-      if (!current.released) tx.saveClaim(next)
+      if (!current.released) tx.updateClaim(next)
       next
     }
   }

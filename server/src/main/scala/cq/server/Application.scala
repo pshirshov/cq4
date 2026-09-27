@@ -27,6 +27,7 @@ final class Application(ledger: LedgerService[IO], repository: LedgerRepository[
         }
       }
       case Command.Read(input) => scoped(authority, input.project) { scope => input.selection match {
+        case ReadSelection.Claims(members) => ledger.claimPreview(scope, members).map(Result.Claims.apply)
         case ReadSelection.Termination(roots, intent) => ledger.termination(scope, roots, intent).map(Result.Termination.apply)
         case ReadSelection.QueryComplete(query, cursor, limit) => ledger.complete(scope, query, cursor, limit).map(Result.QueryAnalyzed.apply)
         case ReadSelection.ArtifactInfo(id) => artifacts.metadata(scope, id).map(Result.ArtifactInfo.apply)
@@ -40,6 +41,7 @@ final class Application(ledger: LedgerService[IO], repository: LedgerRepository[
       }
       case Command.Change(input) => scoped(authority, input.project)(scope => ledger.change(scope, input.change).map(Result.Changed.apply))
       case Command.ClaimWork(input) => scoped(authority, input.project) { scope => input.action match {
+        case ClaimAction.Takeover(id, owner, members, duration, snapshot) => ledger.takeover(scope, id, owner, members, duration, snapshot).map(Result.Claimed.apply)
         case ClaimAction.Acquire(id, members, duration) => ledger.acquire(scope, id, members, duration).map(Result.Claimed.apply)
         case ClaimAction.Renew(fence, duration) => ledger.renew(scope, fence, duration).map(Result.Claimed.apply)
         case ClaimAction.Release(fence) => ledger.release(scope, fence).map(Result.Claimed.apply)

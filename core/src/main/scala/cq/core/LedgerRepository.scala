@@ -35,6 +35,8 @@ trait LedgerTransaction {
   def completeLabels(prefix: SearchPrefix, limit: Int): List[String]
   def claim(id: ItemId): Option[Claim]
   def claimById(id: ClaimId): Option[Claim]
-  def saveClaim(claim: Claim): Unit
+  def claimMembers(id: ClaimId): Set[ItemId]
+  def insertClaim(claim: Claim): Unit
+  def updateClaim(claim: Claim): Unit
   def nextFence(): Long
 }

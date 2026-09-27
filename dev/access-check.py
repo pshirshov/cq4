@@ -76,6 +76,18 @@ SELECT i.project_id, i.ledger, i.number, 1, i.schema_version,
        jsonb_set(h.body, '{item,item}', i.body)
 FROM cq_items i JOIN cq_history h ON h.project_id = i.project_id AND h.ledger = 'Tasks' AND h.number = 3 AND h.revision = 1
 WHERE i.project_id = :'project'::uuid AND i.number BETWEEN :lower + 1000 AND :upper + 1000;
+WITH template AS (SELECT body FROM cq_claims WHERE project_id = :'project'::uuid AND generation = 1),
+identities AS (SELECT n, gen_random_uuid() id FROM generate_series(:lower, :upper) n)
+INSERT INTO cq_claims(project_id, claim_id, generation, expires_at, released, body)
+SELECT :'project'::uuid, id, (n + 1000) * 100, 0, true,
+       body || jsonb_build_object('fence', jsonb_build_object('claim', jsonb_build_object('value', id::text),
+           'generation', ((n + 1000) * 100)::text), 'expiresAt', '0', 'released', true,
+           'members', jsonb_build_array(jsonb_build_object('project', jsonb_build_object('value', :'project'),
+               'ledger', 'Tasks', 'number', (n + 1000)::text)))
+FROM template CROSS JOIN identities;
+INSERT INTO cq_claim_members SELECT project_id, 'Tasks', generation / 100, claim_id FROM cq_claims
+WHERE project_id = :'project'::uuid AND generation BETWEEN (:lower + 1000) * 100 AND (:upper + 1000) * 100;
+UPDATE cq_projects SET fence_counter = (:upper + 1000) * 100 WHERE project_id = :'project'::uuid;
 COMMIT;
 """, {"project": project["value"], "lower": str(lower), "upper": str(upper)})
 
@@ -85,6 +97,9 @@ COMMIT;
         for project in projects:
             self.call({"Initialize": {"config": {"project": project, "endpoint": self.environment["CQ_ORIGIN"], "name": "Access measurement"}}})
             self.call(change(project, [{"Create": {"draft": value}} for value in drafts]))
+            template = self.call({"ClaimWork": {"input": {"project": project, "action": {"Acquire": {
+                "id": {"value": str(uuid.uuid4())}, "members": [item_id(project, 3)], "durationMillis": "300000"}}}}})["Claimed"]["claim"]
+            self.call({"ClaimWork": {"input": {"project": project, "action": {"Release": {"fence": template["fence"]}}}}})
         project = projects[0]
         first, second = [item_id(project, number) for number in (1, 2)]
         linked = self.call(change(project, [{"Reference": {"source": first, "expectedSource": {"value": "1"}, "relation": "BlockedBy",
@@ -94,7 +109,7 @@ COMMIT;
         for size in SIZES:
             for scope in projects:
                 self.seed(scope, previous + 1, size)
-            self.sql("ANALYZE cq_items; ANALYZE cq_edges; ANALYZE cq_labels; ANALYZE cq_history;", {})
+            self.sql("ANALYZE cq_items; ANALYZE cq_edges; ANALYZE cq_labels; ANALYZE cq_history; ANALYZE cq_claims; ANALYZE cq_claim_members;", {})
             for repetition in range(REPETITIONS):
                 value = {**draft("needleword"), "labels": [f"needle{size}-{repetition}"]}
                 request = change(project, [{"Replace": {"id": first, "expected": revision, "draft": value}}])
@@ -122,6 +137,15 @@ COMMIT;
                 "selection": {"Termination": {"roots": [first], "intent": "Cancel"}}}}})["Termination"]["preview"]
             assert preview["plan"]["canApply"] and len(preview["plan"]["entries"]) == 2
             assert len([entry for entry in preview["plan"]["entries"] if "Change" in entry["effect"]]) == 1
+            acquired = self.call({"ClaimWork": {"input": {"project": project, "action": {"Acquire": {
+                "id": {"value": str(uuid.uuid4())}, "members": [first, second], "durationMillis": "300000"}}}}})["Claimed"]["claim"]
+            claims = self.measured(f"{size}-claim-preview", {"Read": {"input": {"project": project,
+                "selection": {"Claims": {"members": [first]}}}}})["Claims"]["preview"]
+            assert claims["claims"] == [acquired] and len(claims["members"]) == 1
+            renewed = self.measured(f"{size}-claim-renew", {"ClaimWork": {"input": {"project": project,
+                "action": {"Renew": {"fence": acquired["fence"], "durationMillis": "300000"}}}}})["Claimed"]["claim"]
+            assert renewed["fence"] == acquired["fence"] and renewed["members"] == acquired["members"]
+            self.call({"ClaimWork": {"input": {"project": project, "action": {"Release": {"fence": acquired["fence"]}}}}})
             invariant = self.sql("""SELECT count(*), count(*) FILTER (WHERE revision <> 1) FROM cq_items WHERE number > 1000;
 SELECT count(*) FROM cq_history WHERE number > 1000;
 SELECT count(*) FROM cq_changes;
@@ -130,7 +154,7 @@ SELECT count(*) FROM cq_history WHERE project_id = :'project'::uuid AND ledger =
             assert invariant.splitlines() == [f"{size * 2}|0", str(size * 2), str(3 + stage * REPETITIONS), str(2 + stage * REPETITIONS)], invariant
             previous = size
         self.contention(projects)
-        print("Actual HTTP mutation/retry/search/completion workloads passed at 100, 10000 and 100000 unrelated items per project")
+        print("Actual HTTP mutation/retry/search/completion/claim workloads passed at 100, 10000 and 100000 unrelated items and claims per project")
 
     def contention(self, projects: list[dict]):
         holder = subprocess.Popen(self.psql + ["--set", "project=" + projects[0]["value"]], env=self.database_environment,
@@ -228,6 +252,11 @@ def report(evidence: Path):
             assert row["scanVisits"] <= visit_limit and row["statements"] <= 8 and row["responseBytes"] < 4096, row
             selected = json.loads((evidence / (row["name"] + "-plans.json")).read_text())
             assert not any("SELECT body::text FROM cq_items" in plan["Query Text"] for plan in selected), row
+        if row["name"].endswith(("-claim-preview", "-claim-renew")):
+            visit_limit = MAX_SMALL_TABLE_VISITS if row["name"].startswith("100-") else MAX_MUTATION_VISITS
+            assert row["scanVisits"] <= visit_limit and row["statements"] <= 8 and row["responseBytes"] < 4096, row
+            if not row["name"].startswith("100-"):
+                assert "cq_claim_members_owner" in row["indexes"], row
         print(f'{row["name"]}: {row["statements"]} statements, {row["scanVisits"]} scan visits, {row["sharedBuffers"]} buffers, {row["elapsedMs"]:.1f} ms')
 
 
