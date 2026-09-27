@@ -10,6 +10,7 @@ trait LedgerService[F[_, _]] {
   def rename(scope: Scope, expected: Revision, name: String): F[Throwable, Project]
   def change(scope: Scope, request: ChangeRequest): F[Throwable, ChangeAck]
   def get(scope: Scope, id: ItemId): F[Throwable, ItemView]
+  def details(scope: Scope, members: List[ItemRevision], bytes: Int): F[Throwable, ItemViews]
   def search(scope: Scope, query: String, after: Option[ItemId], limit: Int): F[Throwable, ItemPage]
   def complete(scope: Scope, query: String, cursor: Int, limit: Int): F[Throwable, QueryAnalysis]
   def termination(scope: Scope, roots: Set[ItemId], intent: TerminationIntent): F[Throwable, TerminationPreview]
@@ -53,6 +54,22 @@ object LedgerService {
 
     override def get(scope: Scope, id: ItemId): F[Throwable, ItemView] = repository.transact(scope.project) { tx =>
       ItemView(required(tx, scope, id), tx.refs(id))
+    }
+
+    override def details(scope: Scope, members: List[ItemRevision], bytes: Int): F[Throwable, ItemViews] = repository.transact(scope.project) { tx =>
+      invalid(members.nonEmpty && members.size <= CohortBounds.Candidates && members.map(_.id).distinct.size == members.size, "Batch read requires 1–32 distinct members")
+      invalid(bytes > 0 && bytes <= CohortBounds.CandidateBytes, "Batch read content budget must be 1–262144 bytes")
+      val items = List.newBuilder[ItemView]
+      val omitted = List.newBuilder[ItemRevision]
+      var remaining = bytes
+      members.foreach { member =>
+        val item = required(tx, scope, member.id)
+        if (item.revision != member.revision) throw DomainFailure(Fault.Conflict("Batch read member revision changed"))
+        val view = ItemView(item, tx.refs(member.id))
+        val size = ItemView_JsonCodec.encode(baboon.runtime.shared.BaboonCodecContext.Default, view).noSpaces.getBytes(StandardCharsets.UTF_8).length
+        if (size <= remaining) { items += view; remaining -= size } else omitted += member
+      }
+      ItemViews(items.result(), omitted.result())
     }
 
     private def page(limit: Int): Unit = invalid(limit > 0 && limit <= MaxPage, s"Page size must be 1–$MaxPage")

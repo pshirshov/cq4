@@ -36,6 +36,23 @@ abstract class WorksetContractTest extends SpecZIO with AssertZIO {
     else service.workset(owner, roots, page.after, Some(page.snapshot), 200).flatMap(next => pages(service, owner, roots, next)).map(page.entries ++ _)
 
   "Transient worksets (Behavioral Active Blackbox; dummy Group / PostgreSQL Good Communication)" should {
+    "bound full candidate content before sending it to a selector and preserve explicit omitted revisions" in { (service: LedgerService[IO]) =>
+      val owner = scope()
+      for {
+        _ <- service.initialize(owner, "bounded candidates")
+        created <- change(service, owner, List.fill(6)(Mutation.Create(task("Large task").copy(body = "x" * 50000))))
+        page <- service.details(owner, created.items, 80000)
+        _ <- assertIO(page.items.size == 1 && page.omitted == created.items.tail &&
+          page.items.map(view => Wire.encode(ItemView_JsonCodec, view).getBytes(UTF_8).length).sum <= 80000)
+        empty <- service.details(owner, created.items, 1)
+        _ <- assertIO(empty.items.isEmpty && empty.omitted == created.items)
+        stale <- service.details(owner, created.items.map(_.copy(revision = Revision(2))), CohortBounds.CandidateBytes).either
+        _ <- assertIO(stale.left.exists { case DomainFailure(_: Fault.Conflict) => true; case _ => false })
+        duplicate <- service.details(owner, List(created.items.head, created.items.head), 1000).either
+        _ <- assertIO(duplicate.left.exists { case DomainFailure(_: Fault.Invalid) => true; case _ => false })
+      } yield ()
+    }
+
     "separate produced work from non-expanding context and retain shared members once" in { (service: LedgerService[IO]) =>
       val owner = scope()
       for {

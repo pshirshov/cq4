@@ -173,6 +173,8 @@ class Checks:
             self.run(["python3", "dev/supervisor-check.py", *command], f"{name}-supervisor", STARTUP_TIMEOUT)
             self.environment["CQ_WORKFLOW_EVIDENCE"] = str(self.evidence / f"{name}-workflow")
             self.run(["python3", "dev/workflow-check.py", *command], f"{name}-workflow", DISPATCH_FIXTURE_TIMEOUT)
+            self.environment["CQ_COHORT_EVIDENCE"] = str(self.evidence / f"{name}-cohort")
+            self.run(["python3", "dev/cohort-check.py", *command], f"{name}-cohort", DISPATCH_FIXTURE_TIMEOUT)
             self.environment["CQ_DISPATCH_EVIDENCE"] = str(self.evidence / f"{name}-dispatch")
             self.run(["python3", "dev/dispatch-check.py", *command], f"{name}-dispatch", DISPATCH_FIXTURE_TIMEOUT)
             self.environment["CQ_COMBINATION_EVIDENCE"] = str(self.evidence / f"{name}-combination")
@@ -194,6 +196,18 @@ class Checks:
                 raise RuntimeError("Restart scenario did not terminate the original server with SIGKILL")
         with self.server(command, "after-crash"):
             self.run(["node", "dev/restart.mjs", "verify", fixture], "restart-verify", STARTUP_TIMEOUT)
+
+    def cohort(self):
+        self.generate()
+        classpath = self.classpath()
+        with self.database([]):
+            port = free_port()
+            self.environment.update(CQ_HOST="127.0.0.1", CQ_PORT=str(port), CQ_ORIGIN=f"http://127.0.0.1:{port}",
+                                    CQ_TOKEN=uuid.uuid4().hex, CQ_SESSION=str(uuid.uuid4()),
+                                    CQ_COHORT_EVIDENCE=str(self.evidence / "fixture"))
+            command = ["java", "-cp", classpath, "cq.server.Main"]
+            with self.server(command, "cohort"):
+                self.run(["python3", "dev/cohort-check.py", *command], "cohort-check", DISPATCH_FIXTURE_TIMEOUT)
 
     def postgres(self):
         self.generate()
@@ -277,8 +291,8 @@ def generated_hashes():
 
 
 def main():
-    if len(sys.argv) != 2 or sys.argv[1] not in ["contracts", "fast", "postgres", "process", "browser", "native", "access"]:
-        raise SystemExit("Usage: ./dev/check contracts|fast|postgres|process|browser|native|access")
+    if len(sys.argv) != 2 or sys.argv[1] not in ["contracts", "fast", "postgres", "process", "browser", "native", "access", "cohort"]:
+        raise SystemExit("Usage: ./dev/check contracts|fast|postgres|process|browser|native|access|cohort")
     if shutil.which("java") is None or shutil.which("sbt") is None:
         os.chdir(ROOT)
         os.execvp("nix", ["nix", "develop", "-c", str(ROOT / "dev/check"), sys.argv[1]])

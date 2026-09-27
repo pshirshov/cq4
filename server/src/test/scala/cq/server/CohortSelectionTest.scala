@@ -1,0 +1,315 @@
+package cq.server
+
+import cq.api.*
+import cq.core.*
+import cq.host.*
+import distage.{Activation, DIKey}
+import distage.StandardAxis.Repo
+import izumi.distage.plugins.PluginConfig
+import izumi.distage.testkit.scalatest.{AssertZIO, SpecZIO}
+import java.util.UUID
+import zio.{IO, Runtime, Unsafe, ZIO}
+
+abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
+  override def config = super.config.copy(pluginConfig = PluginConfig.const(List(CqPlugin)),
+    memoizationRoots = Set(DIKey[LedgerService[IO]]))
+  private def uuid: UUID = UUID.randomUUID()
+  private def owner: Scope = Scope(ProjectId(uuid), Actor("cohort governor", SessionId(uuid), Role.Governor))
+  private def task: ItemDraft = ItemDraft("Work", "Required behavior", Set("shared-label"), false,
+    Content.Task(TaskStatus.Ready, List("Independent acceptance"), None, Nil), Nil)
+  private def request(roots: Set[ItemId], work: DispatchWork): CohortRequest = CohortRequest(RequestId(uuid), roots, work, Nil, Nil, None,
+    HostLimits(3000, 10000, 1000, 300, 2000, 262144))
+  private def link(ledger: LedgerService[IO], scope: Scope, source: ItemId, relation: Relation, target: ItemId): IO[Throwable, Unit] = for {
+    a <- ledger.get(scope, source)
+    b <- ledger.get(scope, target)
+    _ <- ledger.change(scope, ChangeRequest(RequestId(uuid), List(Mutation.Reference(source, a.item.revision, relation, target, b.item.revision, true)), Nil, "Context"))
+  } yield ()
+  private def api(ledger: LedgerService[IO], scope: Scope, runtime: Runtime[Any]): ServerApi = new ServerApi {
+    override def call(command: Command): Result = {
+      val effect = command match {
+        case Command.Graph(input) => ledger.workset(scope, input.roots, input.after, input.snapshot, input.limit).map(Result.Workset.apply)
+        case Command.Read(ReadInput(_, ReadSelection.ItemDetails(members, bytes))) => ledger.details(scope, members, bytes).map(Result.Details.apply)
+        case Command.Read(ReadInput(_, ReadSelection.Claims(members))) => ledger.claimPreview(scope, members).map(Result.Claims.apply)
+        case _ => ZIO.fail(new IllegalStateException("Unexpected selection read"))
+      }
+      Unsafe.unsafe { implicit unsafe => runtime.unsafe.run(effect.either).getOrThrowFiberFailure() } match {
+        case Right(value) => value
+        case Left(DomainFailure(fault)) => Result.Failed(fault)
+        case Left(error) => throw error
+      }
+    }
+    override def usage(input: HostUsageInput): HostUsageResult = throw new IllegalStateException("Selection cannot write usage")
+    override def artifact(input: ArtifactUpload): ArtifactMetadata = throw new IllegalStateException("Planner cannot publish directly")
+    override def grant(input: GrantRequest): AccessToken = throw new IllegalStateException("Selection cannot issue credentials")
+    override def admit(input: HostAdmissionInput): ResultAdmission = throw new IllegalStateException("Selection cannot admit a child")
+    override def integrate(input: HostIntegrationInput): IntegrationRecord = throw new IllegalStateException("Selection cannot integrate")
+  }
+
+  private final class EvidenceApi(underlying: ServerApi, artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], scope: Scope, runtime: Runtime[Any]) extends ServerApi {
+    override def call(command: Command): Result = {
+      val read = command match {
+        case Command.Read(ReadInput(_, ReadSelection.ArtifactInfo(id))) => Some(artifacts.metadata(scope, id).map(Result.ArtifactInfo.apply))
+        case Command.Read(ReadInput(_, ReadSelection.ArtifactText(id, offset, limit))) => Some(artifacts.page(scope, id, offset, limit).map(Result.ArtifactText.apply))
+        case Command.Read(ReadInput(_, ReadSelection.Admission(attempt))) => Some(admissions.get(scope, attempt).map(Result.Admission.apply))
+        case _ => None
+      }
+      read.fold(underlying.call(command))(effect => Unsafe.unsafe { implicit unsafe => runtime.unsafe.run(effect).getOrThrowFiberFailure() })
+    }
+    override def usage(input: HostUsageInput): HostUsageResult = underlying.usage(input)
+    override def artifact(input: ArtifactUpload): ArtifactMetadata = underlying.artifact(input)
+    override def grant(input: GrantRequest): AccessToken = underlying.grant(input)
+    override def admit(input: HostAdmissionInput): ResultAdmission = underlying.admit(input)
+    override def integrate(input: HostIntegrationInput): IntegrationRecord = underlying.integrate(input)
+  }
+
+  private final case class Assessed(scope: Scope, members: List[ItemRevision], artifact: ArtifactId, checks: List[ValidationCheck], base: GitCommit,
+    collector: Scope, parent: AttemptId, fence: Fence)
+  private def assessed(ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], count: Int, compatibility: CohortCompatibility): IO[Throwable, Assessed] = {
+    val scope = owner
+    val collector = scope.copy(actor = scope.actor.copy(subject = "host", role = Role.Collector))
+    val checks = List(ValidationCheck("acceptance", List("verify"), 5000, 4096))
+    val base = GitCommit("a" * 40)
+    for {
+      _ <- ledger.initialize(scope, "Assessment selection")
+      created <- ledger.change(scope, ChangeRequest(RequestId(uuid), List.fill(count)(Mutation.Create(task)), Nil, "Candidates"))
+      claim <- ledger.acquire(scope, ClaimId(uuid), created.items.map(_.id).toSet, 300000)
+      governing <- usage.assign(collector, Assignment(AssignmentId(uuid), scope.project, Set.empty, Attribution.Unattributed, None, None))
+      parent <- usage.start(collector, Attempt(AttemptId(uuid), governing.id, None, scope.actor.session, Role.Governor, Harness.Codex, "fixture", "fixture", "fixture", 1000))
+      assignment <- usage.assign(collector, Assignment(AssignmentId(uuid), scope.project, claim.members, Attribution.Shared, Some(uuid), None))
+      attempt <- usage.start(collector, Attempt(AttemptId(uuid), assignment.id, Some(parent.id), scope.actor.session, Role.Planner, Harness.Codex, "fixture", "fixture", "fixture", 1001))
+      dispatch = DispatchRequest(RequestId(uuid), DispatchWork.Planner(), Harness.Codex, created.items, Nil, Nil, None, claim.fence,
+        HostLimits(3000, 10000, 1000, 300, 2000, 262144))
+      views <- ZIO.foreach(created.items)(ref => ledger.get(scope, ref.id))
+      input = ChildExecutionInput(ChildInput(scope.project, dispatch, views, Nil, Nil, None), base, checks)
+      _ <- artifacts.upload(collector, ArtifactUpload(scope.project, NativeArtifacts.id(attempt.id, "input"), attempt.id, ArtifactKind.Input,
+        "application/json", Wire.encode(ChildExecutionInput_JsonCodec, input)))
+      groups = created.items.grouped(2).map(members => CohortAssessment(compatibility, "Share implementation", "No dependency conflict", "Separate acceptance",
+        members.map(member => CohortMemberAssessment(member, List(CohortCriterion(0, Set("acceptance"), "Inspect this task")))))).toList
+      report = ChildReport.Plan(created.items.map(ref => PlanMember(ref.id, PlanDisposition.Assessed, "Assessed")), None, groups)
+      result = ChildResult(attempt.id, dispatch, base, None, report, Nil)
+      stored <- artifacts.upload(collector, ArtifactUpload(scope.project, ArtifactId(uuid), attempt.id, ArtifactKind.Result, "application/json", Wire.encode(ChildResult_JsonCodec, result)))
+      admitted <- admissions.admit(collector, HostAdmissionInput(scope.project, stored.id, scope.actor))
+      _ <- assertIO(admitted.decision == AdmissionDecision.Accepted())
+    } yield Assessed(scope, created.items, stored.id, checks, base, collector, parent.id, claim.fence)
+  }
+
+  private final case class Published(result: ChildResult, id: ArtifactId)
+  private def publish(f: Assessed, work: DispatchWork, report: ChildReport, previous: Option[Published], ledger: LedgerService[IO], usage: UsageService[IO],
+    artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO]): IO[Throwable, Published] = for {
+    assignment <- usage.assign(f.collector, Assignment(AssignmentId(uuid), f.scope.project, f.members.map(_.id).toSet, Attribution.Shared, Some(uuid), None))
+    attempt <- usage.start(f.collector, Attempt(AttemptId(uuid), assignment.id, Some(f.parent), f.scope.actor.session, ChildContracts.role(work), Harness.Codex, "fixture", "fixture", "fixture", 1002))
+    dispatch = DispatchRequest(RequestId(uuid), work, Harness.Codex, f.members, Nil, Nil, previous.map(_.id), f.fence,
+      HostLimits(3000, 10000, 1000, 300, 2000, 262144))
+    base = previous.flatMap(_.result.candidate).getOrElse(f.base)
+    views <- ZIO.foreach(f.members)(ref => ledger.get(f.scope, ref.id))
+    input = ChildExecutionInput(ChildInput(f.scope.project, dispatch, views, Nil, Nil, previous.map(_.result)), base, f.checks)
+    _ <- artifacts.upload(f.collector, ArtifactUpload(f.scope.project, NativeArtifacts.id(attempt.id, "input"), attempt.id, ArtifactKind.Input,
+      "application/json", Wire.encode(ChildExecutionInput_JsonCodec, input)))
+    result = ChildResult(attempt.id, dispatch, base, Some(GitCommit("b" * 40)), report, Nil)
+    stored <- artifacts.upload(f.collector, ArtifactUpload(f.scope.project, ArtifactId(uuid), attempt.id, ArtifactKind.Result, "application/json", Wire.encode(ChildResult_JsonCodec, result)))
+    admitted <- admissions.admit(f.collector, HostAdmissionInput(f.scope.project, stored.id, f.scope.actor))
+    _ <- assertIO(admitted.decision == AdmissionDecision.Accepted())
+  } yield Published(result, stored.id)
+
+  "Automatic cohort selection (Behavioral Active Blackbox; dummy Group / PostgreSQL Good Communication)" should {
+    "offer every singleton from a large unknown prior plan before repeating its first eight" in {
+      (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO]) => for {
+        runtime <- ZIO.runtime[Any]
+        fixture <- assessed(ledger, usage, artifacts, admissions, 16, CohortCompatibility.Unknown)
+        reads = new EvidenceApi(api(ledger, fixture.scope, runtime), artifacts, admissions, fixture.scope, runtime)
+        progress = new CohortProgress
+        planner = new CohortPlanner(reads, fixture.scope, fixture.base, fixture.checks, progress)
+        input = request(fixture.members.map(_.id).toSet, DispatchWork.Worker(WorkerMode.Implement)).copy(previous = Some(fixture.artifact))
+        rounds <- ZIO.foreach(1 to 2) { _ => ZIO.attemptBlocking {
+          val choices = planner.plan(input.copy(request = RequestId(uuid)), ArtifactId(uuid)).evidence.decision.choices
+          progress.offered(choices.flatMap(_.members.map(_.id)))
+          choices
+        }}
+        _ <- assertIO(rounds.forall(_.size == 8) && rounds.flatten.flatMap(_.members.map(_.id)).distinct.size == 16)
+      } yield ()
+    }
+
+    "separate accepted members from corrections and require explicit fresh selection to abandon a candidate" in {
+      (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO]) => for {
+        runtime <- ZIO.runtime[Any]
+        prepared <- assessed(ledger, usage, artifacts, admissions, 6, CohortCompatibility.Compatible)
+        fixture = prepared.copy(checks = Nil)
+        worker <- publish(fixture, DispatchWork.Worker(WorkerMode.Implement), ChildReport.Work(fixture.members.map(ref =>
+          WorkMember(ref.id, WorkDisposition.CandidateReady, "Candidate"))), None, ledger, usage, artifacts, admissions)
+        reviewer <- publish(fixture, DispatchWork.Reviewer(ReviewerMode.Candidate), ChildReport.Review(fixture.members.zipWithIndex.map { (ref, index) =>
+          if (index == 0) ReviewMember(ref.id, ReviewVerdict.ChangesRequested, List("Fix this task"))
+          else ReviewMember(ref.id, ReviewVerdict.Accepted, Nil)
+        }, None), Some(worker), ledger, usage, artifacts, admissions)
+        reads = new EvidenceApi(api(ledger, fixture.scope, runtime), artifacts, admissions, fixture.scope, runtime)
+        planner = new CohortPlanner(reads, fixture.scope, fixture.base, fixture.checks, new CohortProgress)
+        input = request(fixture.members.map(_.id).toSet, DispatchWork.Worker(WorkerMode.Implement))
+        fresh <- ZIO.attemptBlocking(planner.plan(input.copy(artifacts = List(reviewer.id)), ArtifactId(uuid)))
+        exact <- ZIO.attemptBlocking(planner.plan(input.copy(previous = Some(reviewer.id)), ArtifactId(uuid)))
+        _ <- assertIO(exact.evidence.decision.choices.isEmpty && exact.evidence.decision.counts.excluded == fixture.members.size)
+        _ <- assertIO(fresh.evidence.decision.choices.flatMap(_.members.map(_.id)) == List(fixture.members.head.id) &&
+          fresh.evidence.decision.choices.head.reason == CohortReason.FreshFromBase)
+        changed <- ZIO.attemptBlocking(new CohortPlanner(reads, fixture.scope, fixture.base, prepared.checks, new CohortProgress)
+          .plan(input.copy(artifacts = List(reviewer.id)), ArtifactId(uuid)))
+        _ <- assertIO(changed.evidence.decision.choices.flatMap(_.members.map(_.id)).toSet == fixture.members.map(_.id).toSet)
+      } yield ()
+    }
+
+    "use exact whole-group assessment evidence without requiring a common producer" in {
+      (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO]) => for {
+        runtime <- ZIO.runtime[Any]
+        fixture <- assessed(ledger, usage, artifacts, admissions, 6, CohortCompatibility.Compatible)
+        reads = new EvidenceApi(api(ledger, fixture.scope, runtime), artifacts, admissions, fixture.scope, runtime)
+        input = request(fixture.members.map(_.id).toSet, DispatchWork.Worker(WorkerMode.Implement)).copy(artifacts = List(fixture.artifact))
+        choices <- ZIO.attemptBlocking {
+          def select(base: GitCommit, checks: List[ValidationCheck]) = new CohortPlanner(reads, fixture.scope, base, checks, new CohortProgress)
+            .plan(input, ArtifactId(uuid)).evidence.decision.choices
+          val compatible = select(fixture.base, fixture.checks)
+          val changedBase = select(GitCommit("b" * 40), fixture.checks)
+          val changedCheck = select(fixture.base, fixture.checks.map(_.copy(command = List("different-verifier"))))
+          (compatible, changedBase, changedCheck)
+        }
+        _ <- assertIO(choices._1.map(_.members.toSet).toSet == fixture.members.grouped(2).map(_.toSet).toSet &&
+          choices._1.forall(_.reason == CohortReason.CompatibleAssessment))
+        _ <- assertIO(choices._2.size == 6 && choices._3.size == 6 && (choices._2 ++ choices._3).forall(_.members.size == 1))
+      } yield ()
+    }
+
+    "partition a larger prior plan through its assessments while preserving the original artifact" in {
+      (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO]) => for {
+        runtime <- ZIO.runtime[Any]
+        fixture <- assessed(ledger, usage, artifacts, admissions, 6, CohortCompatibility.Compatible)
+        reads = new EvidenceApi(api(ledger, fixture.scope, runtime), artifacts, admissions, fixture.scope, runtime)
+        planner = new CohortPlanner(reads, fixture.scope, fixture.base, fixture.checks, new CohortProgress)
+        input = request(fixture.members.map(_.id).toSet, DispatchWork.Worker(WorkerMode.Implement)).copy(previous = Some(fixture.artifact))
+        result <- ZIO.attemptBlocking(planner.plan(input, ArtifactId(uuid)))
+        choices = result.evidence.decision.choices
+        _ <- assertIO(choices.map(_.members.toSet).toSet == fixture.members.grouped(2).map(_.toSet).toSet &&
+          choices.forall(choice => choice.work == input.work && choice.previous.isEmpty && choice.artifacts == List(fixture.artifact)))
+      } yield ()
+    }
+
+    "require one common producer for the complete group and exclude contextual siblings" in { (ledger: LedgerService[IO]) =>
+      val scope = owner
+      for {
+        runtime <- ZIO.runtime[Any]
+        _ <- ledger.initialize(scope, "whole group")
+        created <- ledger.change(scope, ChangeRequest(RequestId(uuid), List.fill(6)(Mutation.Create(task)) :+
+          Mutation.Create(task.copy(content = Content.Milestone(MilestoneStatus.Open, "Release"))), Nil, "Candidates and contexts"))
+        ids = created.items.map(_.id)
+        _ <- ZIO.foreachDiscard(List((4, 0), (4, 1), (5, 1), (5, 2), (5, 3))) { (a, b) => link(ledger, scope, ids(a), Relation.Produces, ids(b)) }
+        _ <- link(ledger, scope, ids(6), Relation.Contains, ids(0))
+        _ <- link(ledger, scope, ids(6), Relation.Contains, ids(3))
+        planner = new CohortPlanner(api(ledger, scope, runtime), scope, GitCommit("a" * 40), Nil, new CohortProgress)
+        result <- ZIO.attemptBlocking(planner.plan(request(ids.take(3).toSet, DispatchWork.Explorer(ExplorerMode.Investigate)), ArtifactId(uuid)))
+        choices = result.evidence.decision.choices
+        _ <- assertIO(choices.map(_.members.map(_.id).toSet) == List(ids.take(2).toSet, Set(ids(2))) &&
+          choices.head.witness.contains(ids(4)) && result.evidence.decision.counts.selected == 3)
+      } yield ()
+    }
+
+    "keep fresh audit reviews separate without an exact prior joint result" in { (ledger: LedgerService[IO]) =>
+      val scope = owner
+      for {
+        runtime <- ZIO.runtime[Any]
+        _ <- ledger.initialize(scope, "audit grouping")
+        created <- ledger.change(scope, ChangeRequest(RequestId(uuid), List.fill(3)(Mutation.Create(task)), Nil, "Candidates"))
+        ids = created.items.map(_.id)
+        _ <- ZIO.foreachDiscard(ids.tail)(id => link(ledger, scope, ids.head, Relation.Produces, id))
+        planner = new CohortPlanner(api(ledger, scope, runtime), scope, GitCommit("a" * 40), Nil, new CohortProgress)
+        result <- ZIO.attemptBlocking(planner.plan(request(ids.tail.toSet, DispatchWork.Reviewer(ReviewerMode.Audit)), ArtifactId(uuid)))
+        _ <- assertIO(result.evidence.decision.choices.size == 2 && result.evidence.decision.choices.forall(_.members.size == 1))
+      } yield ()
+    }
+
+    "defer unchanged members when a later round narrows or regroups an executed assignment" in { (ledger: LedgerService[IO]) =>
+      val scope = owner
+      for {
+        runtime <- ZIO.runtime[Any]
+        _ <- ledger.initialize(scope, "member progress")
+        created <- ledger.change(scope, ChangeRequest(RequestId(uuid), List.fill(4)(Mutation.Create(task)), Nil, "Candidates"))
+        ids = created.items.map(_.id)
+        _ <- ZIO.foreachDiscard(ids.tail)(id => link(ledger, scope, ids.head, Relation.Produces, id))
+        progress = new CohortProgress
+        planner = new CohortPlanner(api(ledger, scope, runtime), scope, GitCommit("a" * 40), Nil, progress)
+        initial <- ZIO.attemptBlocking(planner.plan(request(ids.slice(1, 3).toSet, DispatchWork.Explorer(ExplorerMode.Investigate)), ArtifactId(uuid)))
+        choice = initial.evidence.decision.choices.head
+        _ <- ZIO.attempt(progress.started(initial.fingerprints(choice.id)))
+        narrowed <- ZIO.attemptBlocking(planner.plan(request(Set(ids(1)), DispatchWork.Explorer(ExplorerMode.Investigate)), ArtifactId(uuid)))
+        regrouped <- ZIO.attemptBlocking(planner.plan(request(ids.tail.toSet, DispatchWork.Explorer(ExplorerMode.Investigate)), ArtifactId(uuid)))
+        _ <- assertIO(narrowed.evidence.decision.choices.isEmpty &&
+          regrouped.evidence.decision.choices.flatMap(_.members.map(_.id)) == List(ids(3)))
+      } yield ()
+    }
+
+    "recheck prerequisite readiness before starting an otherwise unchanged choice" in { (ledger: LedgerService[IO]) =>
+      val scope = owner
+      for {
+        runtime <- ZIO.runtime[Any]
+        _ <- ledger.initialize(scope, "readiness drift")
+        created <- ledger.change(scope, ChangeRequest(RequestId(uuid), List(Mutation.Create(task),
+          Mutation.Create(task.copy(content = Content.Task(TaskStatus.Done, List("Independent acceptance"), None, Nil)))), Nil, "Candidates"))
+        member = created.items.head.id
+        dependency = created.items.last.id
+        _ <- link(ledger, scope, member, Relation.BlockedBy, dependency)
+        planner = new CohortPlanner(api(ledger, scope, runtime), scope, GitCommit("a" * 40), Nil, new CohortProgress)
+        input = request(Set(member), DispatchWork.Explorer(ExplorerMode.Investigate))
+        selected <- ZIO.attemptBlocking(planner.plan(input, ArtifactId(uuid)))
+        choice = selected.evidence.decision.choices.head
+        before <- ledger.get(scope, member)
+        current <- ledger.get(scope, dependency)
+        _ <- ledger.change(scope, ChangeRequest(RequestId(uuid), List(Mutation.Replace(dependency, current.item.revision, task)), Nil, "Prerequisite reopened"))
+        after <- ledger.get(scope, member)
+        _ <- assertIO(after == before)
+        checked <- ZIO.attemptBlocking(planner.verify(input, choice, selected.fingerprints(choice.id))).either
+        _ <- assertIO(checked.left.exists(_.getMessage.contains("ready")))
+      } yield ()
+    }
+
+    "offer all 32 independent candidates before repeats as the graph changes" in { (ledger: LedgerService[IO]) =>
+      val scope = owner
+      for {
+        runtime <- ZIO.runtime[Any]
+        _ <- ledger.initialize(scope, "fairness")
+        created <- ledger.change(scope, ChangeRequest(RequestId(uuid), List.fill(32)(Mutation.Create(task)), Nil, "Candidates"))
+        progress = new CohortProgress
+        planner = new CohortPlanner(api(ledger, scope, runtime), scope, GitCommit("a" * 40), Nil, progress)
+        first <- ZIO.attemptBlocking(planner.plan(request(created.items.map(_.id).toSet, DispatchWork.Explorer(ExplorerMode.Investigate)), ArtifactId(uuid)))
+        _ <- ZIO.attempt(progress.offered(first.evidence.decision.choices.flatMap(_.members.map(_.id))))
+        extra <- ledger.change(scope, ChangeRequest(RequestId(uuid), List(Mutation.Create(task)), Nil, "Later arrival"))
+        roots = (created.items ++ extra.items).map(_.id).toSet
+        next <- ZIO.foreach(1 to 3) { _ => ZIO.attemptBlocking {
+          val value = planner.plan(request(roots, DispatchWork.Explorer(ExplorerMode.Investigate)), ArtifactId(uuid))
+          progress.offered(value.evidence.decision.choices.flatMap(_.members.map(_.id)))
+          value
+        }}
+        offered = (first :: next.toList).flatMap(_.evidence.decision.choices.flatMap(_.members.map(_.id)))
+        _ <- assertIO(offered.size == 32 && offered.toSet == created.items.map(_.id).toSet &&
+          (first :: next.toList).forall(_.evidence.decision.choices.forall(_.members.size == 1)))
+      } yield ()
+    }
+
+    "advance beyond a full inspected pool claimed by another governor" in { (ledger: LedgerService[IO]) =>
+      val scope = owner
+      for {
+        runtime <- ZIO.runtime[Any]
+        _ <- ledger.initialize(scope, "excluded pool")
+        created <- ledger.change(scope, ChangeRequest(RequestId(uuid), List.fill(33)(Mutation.Create(task)), Nil, "Candidates"))
+        foreign = scope.copy(actor = scope.actor.copy(session = SessionId(uuid)))
+        _ <- ledger.acquire(foreign, ClaimId(uuid), created.items.take(32).map(_.id).toSet, 300000)
+        progress = new CohortProgress
+        planner = new CohortPlanner(api(ledger, scope, runtime), scope, GitCommit("a" * 40), Nil, progress)
+        decisions <- ZIO.foreach(1 to 2) { _ => ZIO.attemptBlocking(planner.plan(
+          request(created.items.map(_.id).toSet, DispatchWork.Explorer(ExplorerMode.Investigate)), ArtifactId(uuid))) }
+        offered = decisions.flatMap(_.evidence.decision.choices.flatMap(_.members.map(_.id)))
+        _ <- assertIO(offered.contains(created.items.last.id))
+      } yield ()
+    }
+  }
+}
+
+final class CohortSelectionDummy extends CohortSelectionTest {
+  override def config = super.config.copy(activation = Activation(Repo -> Repo.Dummy))
+}
+final class CohortSelectionPostgres extends CohortSelectionTest {
+  override def config = super.config.copy(activation = Activation(Repo -> Repo.Prod))
+}

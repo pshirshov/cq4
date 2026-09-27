@@ -85,23 +85,41 @@ for (const [tag, schema] of Object.entries(reports)) {
   assert.deepEqual(contracts.ChildReport_JsonCodec.instance.encode(context, contracts.ChildReport_JsonCodec.instance.decode(context, sample)), sample);
 }
 const guides = JSON.parse(await readFile(`${directory}/native-guides.json`, 'utf8'));
-function qualified(value) {
-  if (Array.isArray(value)) return value.map(qualified);
-  if (value !== null && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, child]) =>
-    [key, key === '$ref' ? child.replace('#/$defs/', '#/$defs/cq_api_') : qualified(child)]));
-  return value;
-}
 for (const [role, guide] of Object.entries(guides)) {
+  const references = new Map();
+  function equivalent(expected, actual) {
+    if (Array.isArray(expected)) {
+      assert(Array.isArray(actual));
+      assert.equal(actual.length, expected.length);
+      expected.forEach((value, index) => equivalent(value, actual[index]));
+    } else if (expected !== null && typeof expected === 'object') {
+      assert.deepEqual(Object.keys(actual).sort(), Object.keys(expected).sort());
+      for (const [key, value] of Object.entries(expected)) {
+        if (key !== '$ref') equivalent(value, actual[key]);
+        else {
+          const source = value.replace('#/$defs/', '');
+          const alias = actual[key].replace('#/$defs/', '');
+          assert(definitions[source] && guide.$defs[alias]);
+          if (references.has(alias)) assert.equal(references.get(alias), source);
+          else {
+            assert(!Array.from(references.values()).includes(source));
+            references.set(alias, source);
+            equivalent(definitions[source], guide.$defs[alias]);
+          }
+        }
+      }
+    } else assert.deepEqual(actual, expected);
+  }
   assert.deepEqual(Object.keys(guide.tools).sort(), role === 'Governor' ? ['cq.change', 'cq.read', 'cq.usage', 'cq_host.dispatch'] : ['cq.read', 'cq.usage']);
   for (const [name, schema] of Object.entries(guide.tools)) {
     const type = { 'cq.read': 'ReadInput', 'cq.change': 'ChangeInput', 'cq.usage': 'UsageInput', 'cq_host.dispatch': 'DispatchCommand' }[name];
-    assert.deepEqual(qualified(schema), definitions[`cq_api_${type}`]);
-    for (const [key, value] of Object.entries(guide.$defs)) assert.deepEqual(qualified(value), definitions[`cq_api_${key}`]);
+    equivalent(definitions[`cq_api_${type}`], schema);
     const sample = fixture(schema, guide.$defs);
     const codec = contracts[`${type}_JsonCodec`].instance;
     assert.deepEqual(codec.encode(context, codec.decode(context, sample)), sample);
     assert.equal(validator.getValidator({ ...schema, $defs: guide.$defs })(sample).valid, true);
   }
+  assert.equal(references.size, Object.keys(guide.$defs).length);
 }
 const content = validator.getValidator({ ...definitions.cq_api_Content, $defs: definitions });
 assert.equal(content({ Task: { status: 'Ready', acceptance: ['test'], result: null, validation: [] } }).valid, true);

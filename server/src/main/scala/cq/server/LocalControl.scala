@@ -17,7 +17,7 @@ import java.nio.charset.StandardCharsets.UTF_8
 import zio.{Task, ZIO}
 import zio.interop.catz.*
 
-final class LocalControl(dispatch: DispatchController, integrations: IntegrationController, combinations: CombinationController,
+final class LocalControl(dispatch: DispatchController, cohorts: CohortController, integrations: IntegrationController, combinations: CombinationController,
   access: LocalAccess, schemas: McpSchemas, config: SupervisorConfig, workflow: WorkflowExecution) extends Http4sDsl[Task] {
   private val Versions = List("2025-03-26", "2025-06-18", "2025-11-25")
   private val MaxRequestBytes = 65536
@@ -33,7 +33,7 @@ final class LocalControl(dispatch: DispatchController, integrations: Integration
     "name" -> Json.fromString(name), "description" -> Json.fromString(description), "inputSchema" -> schemas.schema(input), "outputSchema" -> schemas.schema(output),
     "annotations" -> Json.obj("readOnlyHint" -> Json.fromBoolean(readOnly), "openWorldHint" -> Json.False))
   private def advertised(capability: LocalCapability): Json = if (capability.role == Role.Governor)
-    tool("dispatch", "DispatchCommand", "DispatchReply", "Start one child using references only, poll its compact status with a bounded wait, or cancel it. Prepare/apply reviewed integration; Combine a NotApplied integration into a frozen resolver plan and poll CombinationStatus. Forward handles directly; full prompts and results stay outside your context.", false)
+    tool("dispatch", "DispatchCommand", "DispatchReply", "Select bounded cohorts, claim one complete choice, then StartChoice by ID, harness and fence. Workflow runs require choices; direct Start supports explicitly assigned non-workflow runs. Poll compact Status or cancel. Prepare/apply reviewed integration; Combine a NotApplied integration and poll CombinationStatus. Forward handles directly; full prompts/results stay outside your context.", false)
   else tool("workspace", "WorkspaceCommand", "WorkspaceReply", "List or read bounded pages in your assigned workspace. A prepared resolver may read MergeReport. A candidate reviewer may request a configured Check by name and poll the same operation; wait for Completed evidence before returning. Relative paths only; Git metadata and symlink traversal are denied.", capability.role != Role.Reviewer)
     .mapObject(_.add("inputSchema", schemas.workspace(capability.role)))
   private def decode[A](codec: BaboonJsonCodec[A], json: Json): Task[A] = ZIO.attempt {
@@ -49,7 +49,12 @@ final class LocalControl(dispatch: DispatchController, integrations: Integration
   private def call(capability: LocalCapability, name: String, arguments: Json): Task[(Json, Boolean)] = {
     if (capability.role == Role.Governor && name == "dispatch") {
       val operation = decode(DispatchCommand_JsonCodec, arguments).tap(command => ZIO.attemptBlocking(workflow.authorize(command))).flatMap {
-        case DispatchCommand.Start(request) => ZIO.attempt(ChildContracts.request(config.project.project, request)) *> dispatch.start(request).map(DispatchReply.Status.apply)
+        case DispatchCommand.Select(request) => cohorts.select(request).map(DispatchReply.Selection.apply)
+        case DispatchCommand.StartChoice(choice, harness, fence) => cohorts.start(choice, harness, fence).map(DispatchReply.Status.apply)
+        case DispatchCommand.Start(request) => ZIO.attempt {
+          require(config.workflow.isEmpty, "Managed workflow execution requires a retained cohort choice")
+          ChildContracts.request(config.project.project, request)
+        } *> dispatch.start(request).map(DispatchReply.Status.apply)
         case DispatchCommand.Status(attempt, wait) => dispatch.status(attempt, wait).map(DispatchReply.Status.apply)
         case DispatchCommand.Cancel(attempt) => dispatch.cancel(attempt).map(DispatchReply.Status.apply)
         case DispatchCommand.PrepareIntegration(id, reviewer) => integrations.prepare(IntegrationTicket(id, reviewer)).map(DispatchReply.Integration.apply)

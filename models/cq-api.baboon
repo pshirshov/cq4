@@ -82,6 +82,7 @@ root data Item { id: ItemId revision: Revision draft: ItemDraft createdAt: i64 u
 enum Relation { DerivedFrom Produces PartOf Contains BlockedBy Blocks Reviews ReviewedBy Supports SupportedBy Contradicts ContradictedBy Supersedes SupersededBy RelatesTo }
 root data ItemRef { relation: Relation target: ItemId }
 root data ItemView { item: Item refs: lst[ItemRef] }
+root data ItemViews { items: lst[ItemView] omitted: lst[ItemRevision] }
 root data HistoryEntry { item: ItemView cursor: ChangeCursor reason: str schemaVersion: str }
 root data Fence { claim: ClaimId generation: i64 }
 root data ClaimSnapshot { cursor: ChangeCursor digest: str }
@@ -280,6 +281,7 @@ root adt ReadSelection {
   data ArtifactInfo { id: ArtifactId }
   data ArtifactText { id: ArtifactId offset: i32 limit: i32 }
   data ItemDetail { id: ItemId }
+  data ItemDetails { members: lst[ItemRevision] bytes: i32 }
   data History { id: ItemId before: Revision limit: i32 }
   data Changes { after: ChangeCursor limit: i32 }
 }
@@ -314,6 +316,7 @@ root adt Command {
   data Usage { input: UsageInput }
 }
 root adt Result {
+  data Details { page: ItemViews }
   data Proposal { preview: ProposalPreview }
   data Integration { record: IntegrationRecord }
   data Admission { record: ResultAdmission }
@@ -379,7 +382,7 @@ enum WorkspaceAdmission { Open Quarantined }
 root data WorkspaceObservation { head: GitCommit gitCommon: str gitDirectory: str verifiedAt: i64 }
 root data WorkspaceRecord { spec: WorkspaceSpec directory: str admission: WorkspaceAdmission observed: opt[WorkspaceObservation] quarantineReason: opt[str] }
 
-enum ArtifactKind { Prompt Input Result Transcript Validation Combination }
+enum ArtifactKind { Prompt Input Result Transcript Validation Combination Selection }
 root data ArtifactUpload { project: ProjectId id: ArtifactId attempt: AttemptId kind: ArtifactKind mediaType: str body: str }
 root data ArtifactMetadata { project: ProjectId id: ArtifactId attempt: AttemptId kind: ArtifactKind mediaType: str sha256: str bytes: i32 codePoints: i32 actor: Actor receivedAt: i64 }
 root data ArtifactPage { metadata: ArtifactMetadata offset: i32 next: i32 hasMore: bit text: str }
@@ -562,8 +565,26 @@ root data DispatchStatus {
   request: RequestId attempt: AttemptId phase: DispatchPhase process: opt[JobPhase] members: lst[ItemId]
   counts: ChildCounts next: ChildNext blocker: opt[str] result: opt[ArtifactId] detailsOmitted: bit usageDelivered: bit
 }
-root data DispatchTicket { request: DispatchRequest assignment: Assignment attempt: Attempt profile: HarnessSetting }
+root data DispatchTicket { request: DispatchRequest assignment: Assignment attempt: Attempt profile: HarnessSetting selection: opt[ArtifactId] }
+root data CohortRequest {
+  request: RequestId roots: set[ItemId] work: DispatchWork guidance: lst[ItemRevision] artifacts: lst[ArtifactId]
+  previous: opt[ArtifactId] limits: HostLimits
+}
+enum CohortReason {
+  CommonProducer CompatibleAssessment AssessmentRequired UnknownAssessment IncompatibleAssessment
+  NoCommonProducer ExactPrevious Single InputBound Claimed Deferred NotReady ReviewAccepted ReviewBlocked FreshFromBase CandidateContinuity
+}
+root data CohortChoice {
+  id: RequestId work: DispatchWork members: lst[ItemRevision] guidance: lst[ItemRevision] artifacts: lst[ArtifactId]
+  previous: opt[ArtifactId] limits: HostLimits cohort: opt[uid] reason: CohortReason witness: opt[ItemId]
+}
+root data CohortCounts { discovered: i32 selected: i32 inspected: i32 excluded: i32 unexamined: i32 notReady: i32 ineligible: i32 remaining: i32 }
+root data CohortDecision { id: RequestId artifact: ArtifactId counts: CohortCounts choices: lst[CohortChoice] }
+root data CohortConsidered { members: lst[ItemRevision] reason: CohortReason fingerprint: opt[str] }
+root data CohortEvidence { request: CohortRequest decision: CohortDecision considered: lst[CohortConsidered] }
 root adt DispatchCommand {
+  data Select { request: CohortRequest }
+  data StartChoice { choice: RequestId harness: Harness fence: Fence }
   data Start { request: DispatchRequest }
   data Status { attempt: AttemptId waitMillis: i32 }
   data Cancel { attempt: AttemptId }
@@ -574,6 +595,7 @@ root adt DispatchCommand {
   data CombinationStatus { id: RequestId waitMillis: i32 }
 }
 root adt DispatchReply {
+  data Selection { value: CohortDecision }
   data Status { value: DispatchStatus }
   data Integration { value: IntegrationStatus }
   data Combination { value: CombinationStatus }

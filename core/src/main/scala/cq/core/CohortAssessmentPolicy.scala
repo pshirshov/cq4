@@ -3,7 +3,7 @@ package cq.core
 import cq.api.*
 
 object CohortAssessmentPolicy {
-  val MaxMembers = 4
+  val MaxMembers = CohortBounds.Members
   private val MaxAssessments = 8
   private val MaxText = 8192
   private val MaxCriteria = LedgerPolicy.MaxNestedEntries

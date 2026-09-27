@@ -23,10 +23,10 @@ final class WorkflowExecution(api: ServerApi, project: ProjectId, session: Sessi
     order.indexOf(actual) <= order.indexOf(limit)
   }
 
-  private def selected(call: Command => Result, roots: Set[ItemId], members: List[ItemRevision]): Unit = {
+  private def selected(call: Command => Result, roots: Set[ItemId], members: Set[ItemId]): Unit = {
     var after = Option.empty[ItemId]
     var snapshot = Option.empty[WorksetSnapshot]
-    var remaining = members.map(_.id).toSet
+    var remaining = members
     var visited = 0
     var more = true
     while (more && remaining.nonEmpty) {
@@ -45,8 +45,8 @@ final class WorkflowExecution(api: ServerApi, project: ProjectId, session: Sessi
     permit(remaining.isEmpty, "child or integration members are outside the selected descendants")
   }
 
-  private def newIntake(call: Command => Result, members: List[ItemRevision]): Unit = members.foreach { member =>
-    val created = call(Command.Read(ReadInput(project, ReadSelection.History(member.id, Revision(2), 1)))) match {
+  private def newIntake(call: Command => Result, members: Set[ItemId]): Unit = members.foreach { member =>
+    val created = call(Command.Read(ReadInput(project, ReadSelection.History(member, Revision(2), 1)))) match {
       case Result.History(page) =>
         require(page.entries.size == 1 && page.entries.head.item.item.revision == Revision(1), "Workflow creation history is unavailable")
         page.entries.head.item.item
@@ -54,6 +54,29 @@ final class WorkflowExecution(api: ServerApi, project: ProjectId, session: Sessi
     }
     permit(created.provenance.actor.session == session && created.provenance.actor.role == Role.Governor,
       "begin without roots may execute only records created by this governing session")
+  }
+
+  private def allowed(work: DispatchWork, request: WorkflowRequest, previous: Option[ArtifactId]): Unit = request match {
+    case WorkflowRequest.Review(result, mode) => permit(work == DispatchWork.Reviewer(mode) && previous.contains(result), "standalone review requires its exact subject and mode")
+    case WorkflowRequest.Advance(_, through) => permit(within(phase(work), through), "child exceeds the requested phase")
+    case _: WorkflowRequest.Begin | _: WorkflowRequest.Upstream => permit(within(phase(work), WorkflowPhase.Plan), "this command permits exploration and planning only")
+  }
+
+  def selection(value: CohortRequest): Unit = workflow.foreach { request =>
+    allowed(value.work, request, value.previous)
+    val began = System.nanoTime()
+    def call(command: Command): Result = {
+      require(System.nanoTime() - began < DeadlineNanos, "Workflow selection deadline exceeded")
+      api.call(command) match { case Result.Failed(fault) => throw DomainFailure(fault); case result => result }
+    }
+    request match {
+      case WorkflowRequest.Begin(roots) if roots.isEmpty => newIntake(call, value.roots)
+      case WorkflowRequest.Begin(roots) => selected(call, roots, value.roots)
+      case WorkflowRequest.Advance(roots, _) => selected(call, roots, value.roots)
+      case WorkflowRequest.Upstream(roots, _) => selected(call, roots, value.roots)
+      case WorkflowRequest.Review(result, _) => permit(value.roots == new ArtifactReader(call, project).result(result).value.request.members.map(_.id).toSet,
+        "standalone review selection differs from its exact subject")
+    }
   }
 
   def authorize(command: DispatchCommand): Unit = workflow.foreach { request =>
@@ -66,10 +89,10 @@ final class WorkflowExecution(api: ServerApi, project: ProjectId, session: Sessi
       }
     }
     def members(values: List[ItemRevision]): Unit = request match {
-      case WorkflowRequest.Begin(roots) if roots.isEmpty => newIntake(call, values)
-      case WorkflowRequest.Begin(roots) => selected(call, roots, values)
-      case WorkflowRequest.Advance(roots, _) => selected(call, roots, values)
-      case WorkflowRequest.Upstream(roots, _) => selected(call, roots, values)
+      case WorkflowRequest.Begin(roots) if roots.isEmpty => newIntake(call, values.map(_.id).toSet)
+      case WorkflowRequest.Begin(roots) => selected(call, roots, values.map(_.id).toSet)
+      case WorkflowRequest.Advance(roots, _) => selected(call, roots, values.map(_.id).toSet)
+      case WorkflowRequest.Upstream(roots, _) => selected(call, roots, values.map(_.id).toSet)
       case WorkflowRequest.Review(result, _) =>
         permit(values == new ArtifactReader(call, project).result(result).value.request.members, "standalone review members differ from its exact subject")
     }
@@ -79,13 +102,9 @@ final class WorkflowExecution(api: ServerApi, project: ProjectId, session: Sessi
     }, "integration and combination require advance through integrate")
     command match {
       case DispatchCommand.Start(value) =>
-        request match {
-          case WorkflowRequest.Review(result, mode) =>
-            permit(value.work == DispatchWork.Reviewer(mode) && value.previous.contains(result), "standalone review requires its exact subject and mode")
-          case WorkflowRequest.Advance(_, through) => permit(within(phase(value.work), through), "child exceeds the requested phase")
-          case _: WorkflowRequest.Begin | _: WorkflowRequest.Upstream => permit(within(phase(value.work), WorkflowPhase.Plan), "this command permits exploration and planning only")
-        }
+        allowed(value.work, request, value.previous)
         members(value.members)
+      case _: DispatchCommand.Select | _: DispatchCommand.StartChoice => ()
       case DispatchCommand.PrepareIntegration(_, reviewer) =>
         integration()
         members(new ArtifactReader(call, project).result(reviewer).value.request.members)

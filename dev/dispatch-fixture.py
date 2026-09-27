@@ -85,11 +85,12 @@ def main():
         if assignment["work"] != {"Reviewer": {"mode": "Candidate"}}:
             tool("cq_host", "workspace", {"Check": {"name": "consumer-content", "waitMillis": 0}}, denied=True)
         labels = context["members"][0]["item"]["draft"]["labels"]
-        if labels and labels[0].startswith("cohort-assessment"):
+        assessment_flow = labels and labels[0].startswith("cohort-selected") and (role == "Planner" or assignment["work"] == {"Reviewer": {"mode": "Plan"}})
+        if (labels and labels[0].startswith("cohort-assessment")) or assessment_flow:
             assert sandbox == "read-only" and len(members) == 2
             if role == "Planner":
                 check = "not-configured" if labels == ["cohort-assessment-unknown-check"] else data["checks"][0]["name"]
-                assessment = {"compatibility": "Unknown" if labels == ["cohort-assessment-unknown"] else "Compatible",
+                assessment = {"compatibility": "Unknown" if labels in [["cohort-assessment-unknown"], ["cohort-selected-unknown"]] else "Compatible",
                               "objective": "PRIVATE_ASSESSMENT " * 400, "dependencies": "No intra-group dependencies",
                               "interference": "Separate acceptance observations required", "members": [
                     {"member": member, "acceptance": [{"criterion": 0, "checks": [check], "inspection": "Inspect each task result"}]}
@@ -164,6 +165,52 @@ def main():
 
     assert sandbox == "read-only"
     project = data["project"]["project"]
+    if data["request"].startswith("cohort-flow:"):
+        scenario = json.loads(data["request"].split(":", 1)[1])
+        selection = {"request": identity(), "roots": scenario["roots"], "work": {"Worker": {"mode": "Implement"}},
+                     "guidance": [], "artifacts": [], "previous": None, "limits": data["limits"]}
+        first = tool("cq_host", "dispatch", {"Select": {"request": selection}})["Selection"]["value"]
+        assert len(first["choices"]) == 1 and first["choices"][0]["work"] == {"Planner": {}}, first
+        choice = first["choices"][0]
+        assert len(choice["members"]) == 2 and choice["reason"] == "AssessmentRequired", choice
+        claim = tool("cq", "claim", {"project": project, "action": {"Acquire": {
+            "id": identity(), "members": [member["id"] for member in choice["members"]], "durationMillis": "180000"}}})["Claimed"]["claim"]
+        fence = claim["fence"]
+        direct = {"request": choice["id"], "work": choice["work"], "harness": "Codex", "members": choice["members"],
+                  "guidance": [], "artifacts": [], "previous": None, "fence": fence, "limits": data["limits"]}
+        tool("cq_host", "dispatch", {"Start": {"request": direct}}, denied=True)
+        tool("cq_host", "dispatch", {"StartChoice": {"choice": choice["id"], "harness": "Codex", "fence": {"claim": identity(), "generation": "1"}}}, denied=True)
+        tool("cq_host", "dispatch", {"StartChoice": {"choice": choice["id"], "harness": "Codex", "fence": fence, "members": []}}, denied=True)
+
+        def start(selected):
+            command = {"StartChoice": {"choice": selected["id"], "harness": "Codex", "fence": fence}}
+            value = tool("cq_host", "dispatch", command)["Status"]["value"]
+            assert tool("cq_host", "dispatch", command)["Status"]["value"]["attempt"] == value["attempt"]
+            return poll(value["attempt"])
+
+        planned = start(choice)
+        assert planned["phase"] == "Completed" and planned["counts"]["assessed"] == 2, planned
+        unchanged = tool("cq_host", "dispatch", {"Select": {"request": {**selection, "request": identity()}}})["Selection"]["value"]
+        assert unchanged["choices"] == [] and unchanged["counts"]["excluded"] == 2, unchanged
+        assessed = {**selection, "request": identity(), "artifacts": [planned["result"]]}
+        selected = tool("cq_host", "dispatch", {"Select": {"request": assessed}})["Selection"]["value"]
+        if scenario["unknown"]:
+            assert len(selected["choices"]) == 2 and all(len(value["members"]) == 1 for value in selected["choices"]), selected
+            exact = tool("cq_host", "dispatch", {"Select": {"request": {**selection, "request": identity(), "previous": planned["result"]}}})["Selection"]["value"]
+            assert not any(value["work"] == {"Worker": {"mode": "Implement"}} and len(value["members"]) > 1 for value in exact["choices"]), exact
+            finish({"summary": "Unknown compatibility split the automatic implementation choices"})
+            return
+        assert len(selected["choices"]) == 1 and selected["choices"][0]["reason"] == "CompatibleAssessment", selected
+        worked = start(selected["choices"][0])
+        assert worked["phase"] == "Completed" and worked["counts"]["ready"] == 2, worked
+        review = tool("cq_host", "dispatch", {"Select": {"request": {**selection, "request": identity(),
+            "work": {"Reviewer": {"mode": "Candidate"}}, "previous": worked["result"]}}})["Selection"]["value"]
+        assert len(review["choices"]) == 1 and review["choices"][0]["members"] == choice["members"], review
+        reviewed = start(review["choices"][0])
+        assert reviewed["phase"] == "Completed" and reviewed["counts"]["accepted"] == 2, reviewed
+        emit({"type": "fixture.cohort", "planner": planned, "worker": worked, "reviewer": reviewed})
+        finish({"summary": "Automatic whole-group Planner, Worker, validation and independent candidate review completed by handles"})
+        return
     if data["request"].startswith("workflow-denial:"):
         selection = json.loads(data["request"].split(":", 1)[1])
         members = selection["members"]
@@ -197,6 +244,16 @@ def main():
     claim = tool("cq", "claim", {"project": project, "action": {"Acquire": {"id": identity(), "members": [value["id"] for value in members], "durationMillis": "180000"}}})
     request = {"request": identity(), "work": {"Worker": {"mode": "Implement"}}, "harness": "Codex", "members": members,
                "guidance": [], "artifacts": [], "previous": None, "fence": claim["Claimed"]["claim"]["fence"], "limits": data["limits"]}
+    if data["request"] == "cohort-choice-ack":
+        selection = {"request": identity(), "roots": [member["id"] for member in members], "work": request["work"],
+                     "guidance": [], "artifacts": [], "previous": None, "limits": data["limits"]}
+        tool("cq_host", "dispatch", {"Select": {"request": selection}}, denied=True)
+        selected = tool("cq_host", "dispatch", {"Select": {"request": selection}})["Selection"]["value"]
+        assert selected == tool("cq_host", "dispatch", {"Select": {"request": selection}})["Selection"]["value"]
+        assert len(selected["choices"]) == 1 and selected["choices"][0]["members"] == members, selected
+        emit({"type": "fixture.selection", "value": selected})
+        finish({"summary": "Selection publication acknowledgement replay preserved exact choice identity"})
+        return
     if cohort:
         planned = tool("cq_host", "dispatch", {"Start": {"request": {**request, "work": {"Planner": {}}}}})["Status"]["value"]
         planned = poll(planned["attempt"])

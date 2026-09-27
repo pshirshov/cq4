@@ -36,6 +36,7 @@ final class Application(ledger: LedgerService[IO], repository: LedgerRepository[
         case ReadSelection.ArtifactInfo(id) => artifacts.metadata(scope, id).map(Result.ArtifactInfo.apply)
         case ReadSelection.ArtifactText(id, offset, limit) => artifacts.page(scope, id, offset, limit).map(Result.ArtifactText.apply)
         case ReadSelection.ItemDetail(id) => ledger.get(scope, id).map(Result.Detail.apply)
+        case ReadSelection.ItemDetails(members, bytes) => ledger.details(scope, members, bytes).map(Result.Details.apply)
         case ReadSelection.History(id, before, limit) => ledger.history(scope, id, before, limit).map(Result.History.apply)
         case ReadSelection.Changes(after, limit) => ledger.changes(scope, after, limit).map(Result.Changes.apply)
       }}

@@ -21,7 +21,7 @@ final class McpSchemas {
   val tools: List[McpTool] = List(
     McpTool("search", "Read a bounded item page using text, quoted phrases, exact IDs (T42), ledger:, status:, tag:, project:, archived:true|false|all, or kebab-case relation:T42. Uppercase NOT/- binds before AND (also implicit), then OR; parentheses group. Active items are implicit unless archived: occurs. Continue with its snapshot cursor; restart on Resync. QuerySyntax returns UTF-16 source spans.", "SearchInput", Set("Found"), false,
       decoder(SearchInput_JsonCodec)(Command.Search.apply)),
-    McpTool("read", "Preview a stored proposal by result handle; read integration reservations and durable result admission; inspect explicit claim membership and collateral overlap for reviewed human takeover; preview exact whole-subgraph termination with typed effects, exclusions and active claims; read an item, history or changes; complete query text at a UTF-16 cursor with bounded suggestions and syntax diagnostics; inspect artifact metadata or explicitly drill down into bounded text pages by Unicode code-point offset.", "ReadInput", Set("Proposal", "Integration", "Admission", "Detail", "History", "Changes", "ArtifactInfo", "ArtifactText", "QueryAnalyzed", "Termination", "Claims"), false,
+    McpTool("read", "Preview a stored proposal by result handle; read integration reservations and durable result admission; inspect explicit claim membership and collateral overlap for reviewed human takeover; preview exact whole-subgraph termination with typed effects, exclusions and active claims; read an item, bounded exact-revision batch, history or changes; complete query text at a UTF-16 cursor with bounded suggestions and syntax diagnostics; inspect artifact metadata or explicitly drill down into bounded text pages by Unicode code-point offset.", "ReadInput", Set("Proposal", "Integration", "Admission", "Detail", "Details", "History", "Changes", "ArtifactInfo", "ArtifactText", "QueryAnalyzed", "Termination", "Claims"), false,
       decoder(ReadInput_JsonCodec)(Command.Read.apply)),
     McpTool("graph", "Enumerate a transient workset from explicit roots: selected produced work and milestone members, separate one-hop context, and informational readiness reasons. Empty roots select nothing. Context does not expand siblings. Maximum 64 roots and 1024 visited items; Limit fails explicitly. Continue with the returned roots-bound snapshot; restart on Resync. Worksets do not acquire claims.", "GraphInput", Set("Workset"), false,
       decoder(GraphInput_JsonCodec)(Command.Graph.apply)),
@@ -100,13 +100,14 @@ final class McpSchemas {
           require(selected.get(key).forall(_ == value), s"Conflicting native tool schema definition $key")
           selected.update(key, value)
         }}
+        val aliases = selected.keys.zipWithIndex.map((name, index) => name -> ("d" + Integer.toString(index, Character.MAX_RADIX))).toMap
         def localNames(value: Json): Json = value.arrayOrObject(value,
           values => Json.fromValues(values.map(localNames)),
           fields => Json.fromJsonObject(JsonObject.fromIterable(fields.toList.map { case (key, child) =>
-            key -> (if (key == "$ref") Json.fromString(child.asString.get.replace("#/$defs/cq_api_", "#/$defs/")) else localNames(child))
+            key -> (if (key == "$ref") Json.fromString("#/$defs/" + aliases(child.asString.get.stripPrefix("#/$defs/"))) else localNames(child))
           })))
         val guide = Json.obj("tools" -> Json.obj(inputs.map { case (name, value) => name -> localNames(value.mapObject(_.remove("$defs"))) }*),
-          "$defs" -> Json.fromJsonObject(JsonObject.fromIterable(selected.map { case (name, value) => name.stripPrefix("cq_api_") -> localNames(value) })))
+          "$defs" -> Json.fromJsonObject(JsonObject.fromIterable(selected.map { case (name, value) => aliases(name) -> localNames(value) })))
         invocation.copy(system = invocation.system + "\nCanonical argument schemas for CQ tools affected by native schema compaction. " +
           "Use these complete contracts when constructing tool arguments. Each $ref resolves against this document's $defs. " +
           "They do not grant additional permissions.\n" + guide.noSpaces)

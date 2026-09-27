@@ -64,7 +64,7 @@ abstract class SessionDeliveryTest extends SpecZIO with AssertZIO {
         profile = HarnessSetting(Harness.Codex, "/fixture", "fixture", "fixture", "0.156.1", Nil, Set.empty)
         request = DispatchRequest(RequestId(uuid), DispatchWork.Reviewer(ReviewerMode.Candidate), Harness.Codex, created.items, Nil, Nil,
           Some(ArtifactId(uuid)), Fence(ClaimId(uuid), 1), limits)
-        ticket = DispatchTicket(request, childAssignment, reviewer, profile)
+        ticket = DispatchTicket(request, childAssignment, reviewer, profile, None)
         run = SupervisorRun(ProjectConfig(owner.project, "http://localhost", "Check recovery"), assignment, governor, profile.version, fixture.source.toString, fixture.base)
         declarations = List("a-sealed", "b-interrupted", "c-unstarted").map(name => ValidationCheck(name, List("verify"), 1000, 65536))
         directory <- ZIO.attemptBlocking(Files.createTempDirectory("cq-check-recovery-"))
@@ -162,7 +162,7 @@ abstract class SessionDeliveryTest extends SpecZIO with AssertZIO {
               attempt = governor.copy(id = AttemptId(uuid), assignment = childAssignment.id, parent = Some(governor.id), role = Role.Worker, startedAt = 1001)
               request = DispatchRequest(RequestId(uuid), DispatchWork.Worker(WorkerMode.Implement), Harness.Codex, List(member), Nil, Nil, None,
                 claim.fence, HostLimits(3000, 10000, 1000, 300, 2000, 262144))
-              ticket = DispatchTicket(request, childAssignment, attempt, HarnessSetting(Harness.Codex, "/fixture", "fixture", "fixture", "0.156.1", Nil, Set.empty))
+              ticket = DispatchTicket(request, childAssignment, attempt, HarnessSetting(Harness.Codex, "/fixture", "fixture", "fixture", "0.156.1", Nil, Set.empty), None)
               result = ChildResult(attempt.id, request, fixture.base, Some(fixture.base),
                 ChildReport.Work(List(WorkMember(member.id, WorkDisposition.CandidateReady, "Candidate"))), Nil)
               directory <- ZIO.attemptBlocking(Files.createTempDirectory("cq-sealed-recovery-"))
@@ -269,7 +269,7 @@ abstract class SessionDeliveryTest extends SpecZIO with AssertZIO {
                 val assigned = Assignment(AssignmentId(uuid), owner.project, Set(member.id), Attribution.Direct, None, None)
                 val attempt = governor.copy(id = AttemptId(uuid), assignment = assigned.id, parent = Some(governor.id), role = Role.Worker)
                 val request = DispatchRequest(RequestId(uuid), DispatchWork.Worker(WorkerMode.Implement), Harness.Codex, List(member), Nil, Nil, None, fence.fence, limits)
-                val value = DispatchTicket(request, assigned, attempt, profile)
+                val value = DispatchTicket(request, assigned, attempt, profile, None)
                 val child = directory.resolve("children").resolve(attempt.id.value.toString)
                 HostFiles.directory(child)
                 HostFiles.immutable(child.resolve("ticket.json"), HostFiles.encode(DispatchTicket_JsonCodec, value), 65536)

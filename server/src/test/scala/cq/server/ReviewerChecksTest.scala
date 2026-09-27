@@ -75,7 +75,7 @@ final class ReviewerChecksProcess extends SpecZIO with AssertZIO {
       attempt = governor.copy(id = AttemptId(uuid), assignment = childAssignment.id, parent = Some(governor.id), role = Role.Reviewer)
       request = DispatchRequest(RequestId(uuid), DispatchWork.Reviewer(ReviewerMode.Candidate), Harness.Codex, List(item), Nil, Nil,
         Some(ArtifactId(uuid)), Fence(ClaimId(uuid), 1), limits)
-      ticket = DispatchTicket(request, childAssignment, attempt, profile)
+      ticket = DispatchTicket(request, childAssignment, attempt, profile, None)
       entry = new DispatchExecution(ticket, directory.resolve("children").resolve(attempt.id.value.toString), ready, done)
       receiver = new Receiver(governor.session, hook)
       checks = new ReviewerChecks(entry, local.base, config, receiver, jobs)

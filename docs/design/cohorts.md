@@ -1,6 +1,6 @@
 # Bounded adaptive execution cohorts
 
-M4 implementation contract after `6669db9`, independently approved by Astra after correction. Implements R16 using the existing four roles, transient worksets, claims, child results and operational usage audit. No new ledger, persistent item owner or model version. The [Planner assessment boundary](../validation/m4-cohort-assessments.md) is implemented; automatic selection, progress and fairness remain to be implemented and verified.
+M4 implementation contract after `6669db9`, independently approved by Astra after correction. Implements R16 using the existing four roles, transient worksets, claims, child results and operational usage audit. No new ledger, persistent item owner or model version. The [Planner assessment boundary](../validation/m4-cohort-assessments.md) and [selector foundation](../validation/m4-cohort-selection.md) are implemented. The latter records the remaining normalization, connected adaptation and real-evaluation acceptance work.
 
 ## Observable contract
 
@@ -41,6 +41,8 @@ Initial measurable limits:
 
 Use snapshot-consistent graph pages and bounded item/claim reads. The host may discover the existing bounded closure through summaries; only the candidate pool receives full content inspection. Fail explicitly on changed snapshots or unavailable data; do not reinterpret them as empty selections. Counts distinguish discovered summaries, candidates whose content was inspected, candidates excluded after inspection, and candidates whose content was not loaded because of the pool/byte limit. Narrower roots remain available when the graph itself exceeds its bound.
 
+The bounded full-content read accepts at most 32 exact revisions and returns fitting views plus explicit omitted revisions. The server visits only those requested records; the host receives at most 256 KiB of encoded candidate views. Ready records incompatible with the requested operation have a separate count; automatic Worker implementation considers tasks. When an inspected pool yields no choices, a separate inspection cursor advances to later candidates without incrementing their offer history.
+
 Use existing readiness reasons for ordinary automatic selection. Active claims belonging to other sessions are excluded with their reason. Selection grants no lease; acquisition races return the ordinary conflict and require another round. Standalone review and a supplied exact previous candidate/proposal retain their frozen membership and existing applicability checks rather than silently selecting only the currently ready subset.
 
 ## Whole-group compatibility
@@ -68,9 +70,13 @@ Between rounds, re-read revisions, graph evidence, claims and compact prior outc
 
 When a subgroup needs context from an earlier larger result, carry that result as an artifact handle. Do not put a smaller member set into the old exact-previous chain. A new execution receives its own identity, claim and per-member outcomes; historical group costs retain the old membership.
 
+A prior Planner assignment may partition into its declared non-overlapping assessment groups; the original plan is retained as an artifact. A previous candidate requires explicit continuity: if mixed outcomes or incompatible grouping prevent an intact correction, selection returns `CandidateContinuity` instead of silently changing the Git base. A fresh request with the candidate/review as an artifact starts from the governing session's base and advertises `FreshFromBase`. The host never derives a new execution base from artifact ordering. Review-declared accepted members are excluded from further implementation selection while the matching revisions and passing reported checks apply; this is a phase decision, not ledger acceptance or a substitute for integration checks.
+
 Track selection/execution history within the governing session by member, mode and an operative-input fingerprint. Canonicalize member order, guidance order and evidence order. Exclude selection/request IDs, attempt IDs, fences, timestamps, harness choice and collector envelopes. Include operative item content/references, the exact candidate or proposal content and substantive evidence payloads. Re-uploading identical content under another artifact handle, or merely editing labels/provenance, does not reset deferral. This is a structural content comparison, not proof of semantic novelty.
 
 Include configured check definitions and candidate identity among operative host inputs. A changed validation command is a changed execution condition. Separate assessment applicability from progress: cosmetic revision changes can require exact-revision assessment refresh, but neither revision churn nor refreshed envelopes reset a failed Worker's eligibility. Only substantive assessment/input changes affect that fingerprint.
+
+Record both the group fingerprint and one fingerprint per assigned member, so changing the requested grouping cannot reset an unchanged member's history. Per-member fingerprints project independent feedback onto that member while retaining genuinely shared candidate and check conditions. Feedback about one member does not by itself enable retries of another.
 
 An unchanged unsuccessful assignment is not repeatedly eligible. A changed operative item input, new admitted Explorer/Probe observation or independent review feedback permits reconsideration. A worker's own unchanged failed result is not new evidence authorizing its retry. Already produced work is not repeatedly selected for the same phase merely because integration has not changed the task's status. The reply explains deferred work and the condition needed to reconsider it.
 

@@ -40,6 +40,8 @@ private[server] final class DispatchExecution(val ticket: DispatchTicket, val di
   def finish(value: DispatchStatus): Unit = synchronized { view = DispatchProjection.bounded(value); publishing = true }
 }
 
+final case class SelectedDispatch(cohort: Option[UUID], evidence: ArtifactId, admit: () => Unit)
+
 final class DispatchController(config: SupervisorConfig, runner: ChildRunner, jobs: JobSupervisor, clock: Clock) {
   private val AcknowledgementMillis = 1000L
   private val MaxChildren = 32
@@ -50,7 +52,7 @@ final class DispatchController(config: SupervisorConfig, runner: ChildRunner, jo
   private def found(attempt: AttemptId): DispatchExecution = synchronized {
     entries.values.find(_.ticket.attempt.id == attempt).getOrElse(throw DomainFailure(Fault.Missing("Child attempt is not owned by this governing session")))
   }
-  private def register(request: DispatchRequest, ready: Promise[Throwable, Unit], done: Promise[Nothing, Unit]): (DispatchExecution, Boolean) = synchronized {
+  private def register(request: DispatchRequest, selection: Option[SelectedDispatch], ready: Promise[Throwable, Unit], done: Promise[Nothing, Unit]): (DispatchExecution, Boolean) = synchronized {
     entries.get(request.request) match {
       case Some(existing) =>
         if (existing.ticket.request != request) throw DomainFailure(Fault.Conflict("Dispatch request identity changed"))
@@ -66,18 +68,22 @@ final class DispatchController(config: SupervisorConfig, runner: ChildRunner, jo
         val id = AttemptId(UUID.randomUUID())
         val members = request.members.map(_.id).toSet
         val assignment = Assignment(AssignmentId(UUID.randomUUID()), config.project.project, members,
-          if (members.size == 1) Attribution.Direct else Attribution.Shared, if (members.size == 1) None else Some(UUID.randomUUID()), config.run.assignment.evaluation)
+          if (members.size == 1) Attribution.Direct else Attribution.Shared,
+          selection.fold(if (members.size == 1) None else Some(UUID.randomUUID()))(_.cohort), config.run.assignment.evaluation)
         val attempt = Attempt(id, assignment.id, Some(config.run.attempt.id), config.run.attempt.session, ChildContracts.role(request.work),
           profile.harness, profile.provider, profile.model, "CQ native collector 0.1.0", clock.millis())
-        val entry = new DispatchExecution(DispatchTicket(request, assignment, attempt, profile), config.directory.resolve("children").resolve(id.value.toString), ready, done)
+        selection.foreach(_.admit())
+        val entry = new DispatchExecution(DispatchTicket(request, assignment, attempt, profile, selection.map(_.evidence)), config.directory.resolve("children").resolve(id.value.toString), ready, done)
         entries = entries.updated(request.request, entry)
         (entry, true)
     }
   }
-  def start(request: DispatchRequest): Task[DispatchStatus] = for {
+  def start(request: DispatchRequest): Task[DispatchStatus] = execute(request, None)
+  def startSelected(request: DispatchRequest, selection: SelectedDispatch): Task[DispatchStatus] = execute(request, Some(selection))
+  private def execute(request: DispatchRequest, selection: Option[SelectedDispatch]): Task[DispatchStatus] = for {
     ready <- Promise.make[Throwable, Unit]
     done <- Promise.make[Nothing, Unit]
-    registered <- ZIO.attempt(register(request, ready, done))
+    registered <- ZIO.attemptBlocking(register(request, selection, ready, done))
     (entry, fresh) = registered
     _ <- if (!fresh) ZIO.unit else {
       val execute = (ZIO.attemptBlocking {

@@ -1,0 +1,69 @@
+package cq.server
+
+import cq.api.*
+import cq.core.{ArtifactService, CohortBounds, DomainFailure}
+import cq.host.*
+import java.time.Clock
+import zio.{Task, ZIO}
+
+final class CohortController(config: SupervisorConfig, authority: SupervisorAuthority, workflow: WorkflowExecution,
+  dispatch: DispatchController, clock: Clock) {
+  private val progress = new CohortProgress
+  private val planner = new CohortPlanner(authority.governor, config.owner, config.run.base, config.settings.checks, progress)
+  private var decisions = Map.empty[RequestId, CohortPlan]
+  private var advertised = Set.empty[RequestId]
+
+  def select(request: CohortRequest): Task[CohortDecision] = ZIO.attemptBlocking(synchronized {
+    val value = decisions.get(request.request) match {
+      case Some(existing) =>
+        if (existing.evidence.request != request) throw DomainFailure(Fault.Conflict("Cohort selection identity changed"))
+        existing
+      case None =>
+        workflow.selection(request)
+        SupervisorConfig.within(request.limits, config.settings.limits)
+        require(decisions.size < CohortBounds.RetainedDecisions &&
+          decisions.values.map(_.evidence.decision.choices.size).sum + CohortBounds.Choices <= CohortBounds.RetainedChoices,
+          "Governing session reached its retained cohort decision bound")
+        val artifact = NativeArtifacts.id(config.run.attempt.id, "selection-" + request.request.value)
+        val value = planner.plan(request, artifact)
+        val body = HostFiles.encode(CohortEvidence_JsonCodec, value.evidence)
+        require(body.getBytes(java.nio.charset.StandardCharsets.UTF_8).length <= ArtifactService.MaxBytes, "Cohort evidence exceeds its artifact bound")
+        val directory = config.directory.resolve("selections")
+        HostFiles.directory(directory)
+        HostFiles.immutable(directory.resolve(request.request.value.toString + ".json"), body, ArtifactService.MaxBytes)
+        decisions += request.request -> value
+        value
+    }
+    if (!advertised(request.request)) {
+      val metadata = authority.collector.artifact(ArtifactUpload(config.project.project, value.evidence.decision.artifact, config.run.attempt.id,
+        ArtifactKind.Selection, "application/json", HostFiles.encode(CohortEvidence_JsonCodec, value.evidence)))
+      require(metadata.id == value.evidence.decision.artifact && metadata.attempt == config.run.attempt.id, "Cohort evidence publication changed identity")
+      advertised += request.request
+      progress.offered(value.evidence.decision.choices.flatMap(_.members.map(_.id)))
+    }
+    value.evidence.decision
+  })
+
+  def start(id: RequestId, harness: Harness, fence: Fence): Task[DispatchStatus] = {
+    val resolved = ZIO.attemptBlocking(synchronized {
+      val (plan, choice) = decisions.values.filter(plan => advertised(plan.evidence.request.request)).toList.flatMap(plan => plan.evidence.decision.choices.map(plan -> _)).find(_._2.id == id)
+        .getOrElse(throw DomainFailure(Fault.Missing("Cohort choice is not owned by this governing session")))
+      val request = DispatchRequest(choice.id, choice.work, harness, choice.members, choice.guidance, choice.artifacts, choice.previous, fence, choice.limits)
+      workflow.authorize(DispatchCommand.Start(request))
+      val admission = () => {
+        planner.verify(plan.evidence.request, choice, plan.fingerprints(id))
+        val preview = authority.governor.call(Command.Read(ReadInput(config.project.project, ReadSelection.Claims(choice.members.map(_.id).toSet)))) match {
+          case Result.Claims(value) => value
+          case Result.Failed(fault) => throw DomainFailure(fault)
+          case _ => throw new IllegalStateException("Cohort start claim read returned an unexpected result")
+        }
+        require(preview.members.toSet == choice.members.toSet && preview.integrations.isEmpty && preview.claims.exists(claim =>
+          claim.fence == fence && claim.owner == config.owner.actor && claim.members == choice.members.map(_.id).toSet &&
+          !claim.released && claim.expiresAt > clock.millis()), "Cohort start requires its exact current governing claim")
+        progress.started(plan.fingerprints(id))
+      }
+      request -> SelectedDispatch(choice.cohort, plan.evidence.decision.artifact, admission)
+    })
+    resolved.flatMap((request, selected) => dispatch.startSelected(request, selected))
+  }
+}

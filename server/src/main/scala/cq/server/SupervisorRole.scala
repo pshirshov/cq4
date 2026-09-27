@@ -128,8 +128,10 @@ final class SupervisorJobs(config: SupervisorConfig, workspaces: WorkspaceServic
   )
 
 object SupervisorProgram {
-  val Instructions = "Govern CQ through the exposed tools. Input identifies project, routes, limits, checks and human request. Select/create tasks and claim their exact members. " +
+  val Instructions = "Govern CQ through the exposed tools. Input identifies project, routes, limits, checks and human request. Discover/create work. " +
     "When workflow is present, follow its host-installed instructions and typed scope. " +
+    "Before a child, dispatch Select with explicit roots, desired work, guidance/artifact handles, optional previous and limits. Claim all members of one returned choice, then StartChoice with its ID, configured harness and current fence. Choices fix membership and work; selection itself acquires no claim. Workflow runs require choices. Read excluded/unexamined/ineligible counts. " +
+    "An implementation selection may return Planner for compatibility assessment. Forward that result in artifacts to a fresh Worker Implement Select. Unknown/incompatible groups split; acquire each split's exact claim. Pass larger prior results as artifacts when selecting subgroups. Unchanged executed input is deferred; obtain substantive evidence or changed conditions. " +
     "Dispatch sequentially using item revisions and handles. The host assembles prompts, captures candidates and runs checks. Never read/compose child prompts or copy full results. Poll Status with waitMillis 20000; use compact outcomes and bounded artifact reads only for necessary drill-down. " +
     "Use Explorer Investigate/Research for evidence, Worker Probe for experiments, Planner for typed proposals and Reviewer Plan/Audit for independent findings. Pass previous result handles with identical members and current fence. Preview read/Proposal, then apply by result handle; never reconstruct drafts. Children cannot mutate CQ or integrate. " +
     "Pass worker candidates to Reviewer Candidate; prefer another configured harness. " +
@@ -252,6 +254,7 @@ object SupervisorPlugin extends PluginDef {
     make[LocalAccess]
     make[ChildRunner]
     make[DispatchController].fromResource[DispatchController.Resource]
+    make[CohortController]
     make[IntegrationController].fromResource[IntegrationController.Resource]
     make[CombinationController].fromResource[CombinationController.Resource]
     make[LocalControl]
