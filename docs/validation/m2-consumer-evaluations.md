@@ -14,7 +14,7 @@ Evidence root: `/srv/nvme/tmp/cq4-implementation/`.
 | Codex | `614a6a5bbc52cf4f204ed0958b3b7a3ef529b62a` | Build `20260927T020845-consumer-codex-go`; Astra assessment `20260927T022737-assess-20260927T020845-consumer-codex-go` |
 | Pi | `2246cedae57ad401f77db5736fae354e7288dd24` | Correction `20260927T024220-correct-20260927T023433-consumer-pi-python`; Astra assessment `20260927T024602-assess-20260927T024220-correct-20260927T023433-consumer-pi-python` |
 
-All three exact candidates pass the current 110-case oracle. The Claude and Go candidates have supplemental 110-case checks after their original 109/104-case host validation; the Pi correction's configured host validation itself runs all 110. Independent assessments accept the exact retained candidates. These are candidate/specification verdicts; interruption reconciliation, the complete M2 milestone review and human acceptance remain open.
+All three exact candidates pass the current 110-case oracle. The Claude and Go candidates have supplemental 110-case checks after their original 109/104-case host validation; the Pi correction's configured host validation itself runs all 110. Independent assessments accept the exact retained candidates. These are candidate/specification verdicts. Interrupted reconciliation and the M2 technical review now pass at `8c37c6c`; the [human checkpoint](m2-review.md) remains pending.
 
 ## Evidence and correction history
 
@@ -96,4 +96,4 @@ Astra identified a missing lineage constraint in the initial correction predicat
 
 The Pi correction records 369,843 direct plus 105,160 governing known tokens (475,003 total). Its estimates are USD 0.1421702 direct and USD 0.167287000000000006 governing, with Codex cost unknown. The final assessment adds 140,836 direct plus 126,424 governing known tokens (267,260 total); its governor estimate is USD 0.08912540000000001 and Astra cost is unknown. The final restored evaluation totals 1,441,775 known tokens across the original build, rejected assessment, correction and accepted assessment. Each new session reconciles against its complete preceding evaluation, including failure costs; these partial observations are not a billed total or an efficiency comparison.
 
-Astra independently approved this evaluator increment after verifying the retained lineage replay, final assessment/accounting evidence, supplementary 110-case checks, passing fast gate and source-manifest agreement. This approval covers the evaluator increment; recovery, full M2 review and human acceptance remain outstanding.
+Astra independently approved this evaluator increment after verifying the retained lineage replay, final assessment/accounting evidence, supplementary 110-case checks, passing fast gate and source-manifest agreement. This approval covers the evaluator increment. Subsequent recovery and full M2 technical approval are recorded in the [milestone evidence package](m2-review.md); human acceptance remains outstanding.
