@@ -254,7 +254,7 @@ def retained(directory, depth):
 def checked(directory, depth, manifest):
     assert depth < 8, "Defect checkpoint chain exceeds its bound"
     read = lambda path: json.loads(path.read_text())
-    assert manifest["status"] in ["begin-passed", "probe-passed", "research-passed", "plan-passed", "integrate-passed", "upstream-passed"] and not manifest["archiveErrors"] and manifest["accounting"] == "reconciled"
+    assert manifest["status"] in ["begin-passed", "probe-passed", "research-passed", "plan-passed", "integrate-passed", "upstream-passed", "assess-passed", "assess-not-accepted"] and not manifest["archiveErrors"] and manifest["accounting"] == "reconciled"
     support = runpy.run_path(str(Path(__file__).with_name("process-assess-evidence.py")))
     values = support["stage_evidence"](directory)
     prior = retained(Path(manifest["baselineEvidence"]), depth + 1) if manifest["stage"] != "begin" else None
@@ -270,6 +270,9 @@ def checked(directory, depth, manifest):
             assert runpy.run_path(str(Path(__file__).with_name("defect-integrate-evidence.py")))["integrate"](directory, values, settings, prior) == manifest["proof"]
         elif manifest["stage"] == "upstream":
             assert runpy.run_path(str(Path(__file__).with_name("defect-upstream-evidence.py")))["upstream"](directory, values, settings, prior) == manifest["proof"]
+        elif manifest["stage"] == "assess":
+            proof = runpy.run_path(str(Path(__file__).with_name("defect-assess-evidence.py")))["assess"](directory, values, settings, prior)
+            assert proof == manifest["proof"] and proof["accepted"] == (manifest["status"] == "assess-passed")
         else:
             assert empirical(directory, values, settings, prior, manifest["stage"]) == manifest["proof"]
     usage_parts = [] if prior is None else [prior["usage"]]

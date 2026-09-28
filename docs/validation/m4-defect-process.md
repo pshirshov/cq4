@@ -1,6 +1,6 @@
 # M4 synthetic dependency investigation
 
-This evaluation exercises the defect/research/hypothesis and upstream workflow alongside the [accepted Go worked process](m4-worked-process.md). The component is explicitly synthetic and local; there is no external upstream submission endpoint. Native intake, exact probe execution, research, reviewed adjudication/repair planning, repair integration and upstream preparation/local closeout now pass retained verification. Independent Astra approved the source and retained evidence through upstream preparation. Rejected experiments and corrected checker failures remain explicit. Independent whole-process assessment and full process acceptance are pending.
+This evaluation exercises the defect/research/hypothesis and upstream workflow alongside the [accepted Go worked process](m4-worked-process.md). The component is explicitly synthetic and local; there is no external upstream submission endpoint. Native intake, exact probe execution, research, reviewed adjudication/repair planning, repair integration and upstream preparation/local closeout now pass retained verification. Independent Astra approved the source and retained evidence through upstream preparation. Rejected experiments and corrected checker failures remain explicit. Independent native whole-process assessment now passes. Full M4 acceptance remains pending.
 
 ## Reproduction and stages
 
@@ -163,6 +163,24 @@ The full database and audit remain archived, with nine attempts reconciling to 3
 
 Independent Astra verified all 258 source hashes, replayed the full 35-attempt chain, inspected the four accepted-review-before-application acknowledgements, preserved investigation history and all seven guidance records for every child, and reviewed the resulting prose. It approved this scoped commit with no blocking or major finding. All 56 experimental attempts remain distinct and accounted. Full native process assessment, matched usage repetitions, M4 review and designated human acceptance remain open.
 
+## Whole-process assessment preparation
+
+The `assess` continuation restores the passed upstream checkpoint at its incorporated candidate and dispatches one independent native Codex/gpt-6-astra Reviewer Audit. T1 bears the verdict; all eleven other current records are explicit guidance. The rubric covers the entire investigation, empirical interpretation, adjudication, planning/application history, repair/integration, local closeout and external-action boundary. Every tracked candidate file and every referenced history revision must have a successful exact native read; inspection coverage alone does not establish review quality.
+
+The runner binds its input to all six verified stage proofs, original test execution, prior Probe/Research/Worker/Candidate Review and validation artifacts, operational usage, and the retained rejected-experiment report. It verifies the report against original manifest/usage hashes and distinct attempts. The read-only assessment must preserve all records/history and Git, release its claim, and reconcile its two attempts exactly once. ChangesRequested/Blocked and incomplete inspection remain unaccepted outcomes with retained accounting. Three focused checks cover historical mutation, experimental tampering/deduplication, and encoded child-input size. Fast gate `.work/evidence/20260928T005740-fast` passes with 189 Scala scenarios and the three new boundary checks; independent Astra approved the source with no blocking or major finding. Native execution is underway on 261 matching sources.
+
+### Passed whole-process assessment
+
+`20260928T005841-defect-assess` passes in 191.139 seconds with one Claude governor and one native Codex/gpt-6-astra Reviewer Audit. The retained input is 59,815 bytes; its fully encoded child-input upper bound is 142,622 bytes against the 196,608-byte host limit. `source-comparison.json` matches all 261 runtime/build/evaluator sources to the fast gate and current tree, excluding only documentation and the root README.
+
+Astra's result `ca56a2f6-e2b6-390b-b7a7-842b065c932c` accepts T1 revision 3 and the entire defect-to-upstream-preparation process with eight substantive findings. Native transcript checks confirm complete exact reads of all five tracked candidate files and all 28 revisions across twelve records. Its findings evaluate the ASCII selection correction, intact original tests and added regressions, measured host validation, bounded causal interpretation and unchanged hypotheses, accepted reviews before applications, exact Recorded integration, truthful local/external boundaries and retained rejected experiments. The review explicitly gives neither whole-M4 nor human acceptance.
+
+The assessment preserves all record/history and Git state at `46694494a847f4d64587ff84c3ef3058d66796de`, performs no new integration and releases its claim. Database digest: `a2f629bc6a0c658385dc0d389b627742739c68c5583d44495cb44085efacff35`. Native exit is zero and archive errors are empty. Full archived checkpoint replay passes.
+
+Two new attempts reconcile to 1,562,880 known tokens, two partial meters and zero absent meters. The complete successful chain contains 37 distinct attempts and 13,420,323 known tokens. The derived `upstream-experiments.json` at this assessment directory appends these attempts exactly once to the prior report: all 58 experimental attempts, including rejected branches, total 20,990,768 known tokens. Missing optional counters/pricing remain unknown; this is neither a matched comparison nor complete billing.
+
+Parent traffic retains nine dispatch calls with 2,292/602-byte maximum compact arguments/replies, no artifact/result reads and no tool errors. This measures payloads, not token savings. Independent Astra verified all source hashes, full 37-attempt replay, native inspection coverage, actual review findings, unchanged state and all 58 distinct experimental attempts. It approved this scoped source/evidence commit with no blocking or major finding. The controlled R30 traffic-growth fixture, three matched usage repetitions, full M4 review and designated human acceptance remain open.
+
 ## Run
 
 From the repository root:
@@ -175,6 +193,7 @@ From the repository root:
 ./dev/defect-eval plan --checkpoint /path/to/passed-defect-research
 ./dev/defect-eval integrate --checkpoint /path/to/verified-defect-plan
 ./dev/defect-eval upstream --checkpoint /path/to/passed-defect-integrate
+./dev/defect-eval assess --checkpoint /path/to/passed-defect-upstream --experiments /path/to/upstream-experiments.json
 ```
 
 To verify the retained citation-checker failure without rerunning models:

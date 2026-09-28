@@ -35,11 +35,14 @@ def snapshot(call, project, consumer, session):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("stage", choices=["begin", "probe", "research", "plan", "integrate", "upstream", "verify-plan"])
+    parser.add_argument("stage", choices=["begin", "probe", "research", "plan", "integrate", "upstream", "assess", "verify-plan"])
     parser.add_argument("--checkpoint", type=Path)
+    parser.add_argument("--experiments", type=Path, help="Retained experimental usage report, required only for assess")
     arguments = parser.parse_args()
     if (arguments.stage == "begin") != (arguments.checkpoint is None):
         parser.error("continuations and verify-plan require --checkpoint; begin does not accept one")
+    if (arguments.stage == "assess") != (arguments.experiments is not None):
+        parser.error("assess requires --experiments; other stages do not accept it")
     root = Path(__file__).resolve().parent.parent
     os.chdir(root)
     if arguments.stage == "verify-plan":
@@ -57,7 +60,7 @@ def main():
     original = None if arguments.checkpoint is None else arguments.checkpoint.resolve()
     prior = None if original is None else predicates["checkpoint"](original)
     if prior is not None:
-        assert prior["manifest"]["stage"] == {"probe": "begin", "research": "probe", "plan": "research", "integrate": "plan", "upstream": "integrate"}[arguments.stage], "Continuation requires the immediately preceding verified stage"
+        assert prior["manifest"]["stage"] == {"probe": "begin", "research": "probe", "plan": "research", "integrate": "plan", "upstream": "integrate", "assess": "upstream"}[arguments.stage], "Continuation requires the immediately preceding verified stage"
         hashes = json.loads((original / "source-sha256.json").read_text())
         for path in [*sorted((root / "dev/fixtures/defect").glob("*.py")), root / "dev/fixtures/defect/README.md", root / "dev/defect-oracle.py"]:
             assert hashlib.sha256(path.read_bytes()).hexdigest() == hashes[str(path.relative_to(root))], "Fixture/oracle changed since checkpoint"
@@ -82,21 +85,21 @@ def main():
             checks.run(["git", "-C", str(consumer), "-c", "user.name=CQ evaluation", "-c", "user.email=cq@example.invalid", "commit", "--quiet", "-m", "Synthetic dependency defect fixture"], "consumer-base", 10)
         else:
             checks.run(["git", "clone", "--quiet", "--no-hardlinks", str(original / "consumer"), str(consumer)], "consumer-clone", 30)
-        if arguments.stage == "upstream":
+        if arguments.stage in ["upstream", "assess"]:
             checks.run(["git", "-C", str(consumer), "checkout", "--quiet", "--detach", prior["manifest"]["proof"]["candidate"]["value"]], "consumer-candidate", 10)
         (consumer / ".git/info/exclude").write_text("__pycache__/\n")
         base = {"value": subprocess.check_output(["git", "-C", str(consumer), "rev-parse", "HEAD"], text=True).strip()}
         reproduction = subprocess.run([sys.executable, "-m", "unittest", "-v"], cwd=consumer, text=True, capture_output=True, timeout=30)
         write(evidence / "reproduction.json", {"command": [sys.executable, "-m", "unittest", "-v"], "commit": base, "exit": reproduction.returncode,
                                                "stdout": reproduction.stdout, "stderr": reproduction.stderr})
-        if arguments.stage == "upstream":
+        if arguments.stage in ["upstream", "assess"]:
             assert reproduction.returncode == 0, "Incorporated consumer no longer passes its tests"
         else:
             assert reproduction.returncode == 1 and "FAIL: test_ascii_delimiters" in reproduction.stderr and "Ran 4 tests" in reproduction.stderr and "FAILED (failures=1)" in reproduction.stderr, "Fixture did not reproduce its intended defect"
         oracle = subprocess.run([sys.executable, str(root / "dev/defect-oracle.py")], cwd=consumer, text=True, capture_output=True, timeout=60)
         write(evidence / "oracle-before.json", {"exit": oracle.returncode, "stdout": oracle.stdout, "stderr": oracle.stderr,
                                                 "sha256": hashlib.sha256((root / "dev/defect-oracle.py").read_bytes()).hexdigest()})
-        if arguments.stage == "upstream":
+        if arguments.stage in ["upstream", "assess"]:
             assert oracle.returncode == 0 and json.loads(oracle.stdout) == {"status": "passed", "cases": 26, "consumerTests": "passed"}, "Incorporated consumer no longer passes the unchanged oracle"
         else:
             assert oracle.returncode == 1 and "'case': 1" in oracle.stderr and "AssertionError" in oracle.stderr, "Oracle did not reproduce the ASCII contract failure"
@@ -118,6 +121,9 @@ def main():
                     "evaluation": {"run": identifier, "scenario": "synthetic-dependency", "assessor": False}}
         if prior is not None:
             settings["evaluation"] = json.loads((original / "settings.json").read_text())["evaluation"]
+        if arguments.stage == "assess":
+            settings["evaluation"]["assessor"] = True
+            next(route for route in routes if route["harness"] == "Codex")["model"] = "gpt-6-astra"
         if arguments.stage == "integrate":
             checks.run(["git", "-C", str(consumer), "branch", "integration"], "integration-branch", 10)
             settings["integrationTarget"] = "refs/heads/integration"
@@ -160,12 +166,12 @@ def main():
                     restored = total_usage()
                     write(evidence / "baseline-usage-summary.json", restored)
                     reconcile([prior["usage"]], restored["UsageSummary"]["report"])
-                    if arguments.stage == "upstream":
+                    if arguments.stage in ["upstream", "assess"]:
                         intake = runpy.run_path(str(root / "dev/defect-upstream-evidence.py"))["scope"](before)
                     else:
                         intake = prior["manifest"]["proof"] if arguments.stage == "integrate" else predicates["records"](before)
                     members = intake["branches"] if arguments.stage == "probe" else [intake["research"]]
-                    if arguments.stage == "integrate":
+                    if arguments.stage in ["integrate", "assess"]:
                         members = [intake["task"]]
                     if arguments.stage == "upstream":
                         members = [intake[key] for key in ["defect", "goal", "milestone"]]
@@ -191,10 +197,14 @@ def main():
                     elif arguments.stage == "integrate":
                         bundle.update(investigation=before["views"], task=intake["task"],
                             instructions=(root / "dev/defect-integrate.md").read_text())
-                    else:
+                    elif arguments.stage == "upstream":
                         bundle.update(investigation=before["views"], incorporation=prior["manifest"]["proof"],
                             integration=json.loads((original / "integrations.json").read_text()),
                             instructions=(root / "dev/defect-upstream.md").read_text())
+                    else:
+                        assessment = runpy.run_path(str(root / "dev/defect-assess-evidence.py"))
+                        prepared = assessment["inputs"](prior, arguments.experiments.resolve(), (root / "dev/defect-assessment.md").read_text())
+                        bundle = prepared["bundle"]
                     body = json.dumps(bundle, ensure_ascii=False, separators=(",", ":"))
                     assert len(body.encode()) <= 128 * 1024
                     (evidence / "empirical-input.json").write_text(body)
@@ -256,6 +266,20 @@ def main():
                                 "originalRecords": before["claims"]["members"], "artifacts": context}))
                         (evidence / "request.txt").write_text(request)
                         workflow = ["--workflow", "upstream", "--roots", "D" + intake["defect"]["number"], "--action", "prepare"]
+                    if arguments.stage == "assess":
+                        context += prepared["handles"]
+                        write(evidence / "input-bound.json", assessment["bound"](before, metadata, body, prepared))
+                        request = ("Obtain exactly one Codex Reviewer Audit on the current T1 and exact incorporated workspace below. "
+                            "Use direct Start with the exact current members, ALL guidance and artifact handles, and previous:null. Acquire their exact claim for at most 300000 ms. "
+                            "The host materializes the whole-process rubric and evidence; do not compose a child prompt or read/copy these bodies. "
+                            "The reviewer must inspect the entire defect-to-upstream process, every referenced historical revision and every tracked candidate file. "
+                            "Audit cannot execute checks; prior host observations are context. No ledger changes, proposals, implementation, integration or external action. "
+                            "Release claims after this single review, including ChangesRequested or Blocked, and return its truthful bounded outcome. This is not human acceptance.\n" +
+                            json.dumps({"work": {"Reviewer": {"mode": "Audit"}}, "harness": "Codex",
+                                "members": [{"id": view["item"]["id"], "revision": view["item"]["revision"]} for view in before["views"] if view["item"]["id"] in members],
+                                "guidance": guidance, "artifacts": context, "previous": None}))
+                        (evidence / "request.txt").write_text(request)
+                        workflow = []
                 try:
                     began = time.monotonic()
                     with (evidence / "governor.stdout").open("w") as out, (evidence / "governor.stderr").open("w") as err:
@@ -307,15 +331,20 @@ def main():
                     result["proof"] = implementation["integrate"](evidence, values, settings, prior)
                 elif arguments.stage == "upstream":
                     result["proof"] = runpy.run_path(str(root / "dev/defect-upstream-evidence.py"))["upstream"](evidence, values, settings, prior)
+                elif arguments.stage == "assess":
+                    result["proof"] = assessment["assess"](evidence, values, settings, prior)
                 else:
                     result["proof"] = predicates["begin"](values, settings) if prior is None else predicates["empirical"](evidence, values, settings, prior, arguments.stage)
                 result["status"] = arguments.stage + "-passed"
+                if arguments.stage == "assess":
+                    result["status"] = "assess-passed" if result["proof"]["accepted"] else "assess-not-accepted"
+                    result["remaining"] = ["matched usage repetitions", "full M4 review", "human acceptance"]
     except BaseException as error:
         result.update(status="failed", error=str(error))
         raise
     finally:
         write(evidence / "result.json", result)
-    print(arguments.stage.upper() + " PASSED: full process acceptance remains pending; evidence", evidence, flush=True)
+    print(result["status"].upper() + ": full milestone and human acceptance remain pending; evidence", evidence, flush=True)
 
 
 if __name__ == "__main__":
