@@ -6,14 +6,27 @@ The interactive harness is the Governor. It starts `cq host` automatically; that
 
 Keep the server running with `./run-local.sh` in a separate host terminal. After a package update, stop it with Ctrl-C, wait for `CQ stopped`, and start it again.
 
-The local integration uses `.local/release/bin/cq` and `.local/interactive/settings.json`. The prepared settings enable reviewed integration into `refs/heads/main` and declare `cq-ui`: `nix develop -c ./dev/check ui` (ten-minute deadline). This runs scoped UI/browser verification without the model evaluation matrix. Backend/CLI changes need appropriate additional checks before their implementation; this UI check is not evidence of backend correctness. Setup installs project-local commands and native configuration:
+The local integration uses `.local/release/bin/cq` and `.local/interactive/settings.json`. The prepared settings enable reviewed integration into `refs/heads/main` and declare `cq-ui`: `nix develop -c ./dev/check ui` (ten-minute deadline). This runs scoped UI/browser verification without the model evaluation matrix. Backend/CLI changes need appropriate additional checks before their implementation; this UI check is not evidence of backend correctness. All three integrations are installed in this checkout. On a fresh checkout, setup installs project-local commands and native configuration:
 
 ```sh
 cd /home/pavel/work/safe/cq4/cq4
 ./.local/release/bin/cq configure codex --settings "$PWD/.local/interactive/settings.json"
 ```
 
-Launch directly from that checkout:
+### Integration into main
+
+CQ refuses to update an integration target that is checked out in **any** worktree. This checkout is prepared in detached HEAD at the committed `main` tip; `main` remains the integration target. CQ workers edit isolated worktrees, and reviewed integration advances `main` without modifying the governing checkout's files.
+
+Before a new session, with the previous harness stopped and your working tree clean:
+
+```sh
+git switch --detach main
+git worktree list --porcelain
+```
+
+The listing must contain no `branch refs/heads/main` entry. If another worktree has `main` checked out, detach it or switch it to another branch before integrating. Preserve any uncommitted work; do not discard it. After integration, `git diff HEAD main` shows the changes; stop the harness and run `git switch --detach main` to refresh the governing checkout before starting the next session. The session's committed base is fixed at startup. To resume ordinary manual development after CQ stops, `git switch main` reattaches the checkout.
+
+Launch directly from this detached checkout:
 
 ```sh
 yolo --env CQ_TOKEN_FILE=/srv/nvme/tmp/cq4-playground/token codex
@@ -62,7 +75,7 @@ CQ_TOKEN_FILE=/srv/nvme/tmp/cq4-playground/token \
   --settings /absolute/settings-for-that-project.json
 ```
 
-Choose that project's validation checks and integration branch in its settings. If that package/settings path is outside the checkout and yolo's existing binds, expose it explicitly:
+Choose that project's validation checks and integration branch in its settings. Keep that branch unchecked out across all worktrees, as described above. If that package/settings path is outside the checkout and yolo's existing binds, expose it explicitly:
 
 ```sh
 yolo --ro /home/pavel/work/safe/cq4/cq4/.local \

@@ -1,6 +1,6 @@
 # Agent roles, real inputs and protocol
 
-Inspected 2026-09-28 against implementation `39f4d29` and retained native consumer executions; the supervisor/dispatch implementation was rechecked after the evaluation corrections. The recorded prompt/report examples in sections 1–4 are from batch executions. The accepted interactive mode in section 5 is now implemented and undergoing native release verification; see [current evidence](../validation/attached-host.md).
+Inspected 2026-09-28 against implementation `39f4d29` and retained native consumer executions; the supervisor/dispatch implementation was rechecked after the evaluation corrections. The recorded prompt/report examples in sections 1–4 are from batch executions. The accepted interactive mode in section 5 is implemented and installed with native/package verification; see [current evidence](../validation/attached-host.md).
 
 ## 1. Inventory
 
@@ -8,7 +8,7 @@ CQ has **four dispatched child roles and one governing model role**. A role is i
 
 | Role | Modes | Job | Final model report |
 | --- | --- | --- | --- |
-| Governor | Optional Begin, Advance, Review or Upstream workflow | Select work, acquire claims, dispatch by handles, apply proposals and request reviewed integration | `GoverningReport`: `{"summary":"…"}` |
+| Governor | Optional Begin, Advance, Review or Upstream workflow | Select work, acquire claims, dispatch by handles, apply proposals and request reviewed integration | Interactive: normal user-facing reply. Batch: `GoverningReport`, `{"summary":"…"}` |
 | Explorer | Investigate, Research | Inspect evidence, distinguish explanations, identify uncertainty and useful experiments | `ChildReport.Evidence` |
 | Planner | One mode; planning and cohort compatibility are two uses | Propose ledger changes or assess a complete group's ability to share implementation | `ChildReport.Plan` |
 | Worker | Implement, Probe, ResolveConflict | Execute/edit in an isolated worktree; implement, experiment or resolve a prepared combination | `ChildReport.Work`; Probe returns `Evidence` |
@@ -24,7 +24,9 @@ Sources: [role/mode/report contracts](../../models/cq-api.baboon), [prompt selec
 
 The host supplies both **instructions** and **input data**. A short user request alone is not the full input.
 
-For the Governor, instructions come from `SupervisorProgram.Instructions`. Its stdin is a generated `GoverningInput` with project identity/endpoint, configured routes, named checks, execution limits, optional integration target, the user's request, and optional typed workflow plus its installed instructions. It receives check names; child execution input contains the configured check commands.
+An attached Governor starts with its existing interactive conversation. Its first CQ call is `session Context`, which supplies governing instructions, project identity, routes, checks, limits and the complete argument guide where needed. `session Workflow` returns the selected workflow instructions and scope. It does not receive a second host-authored batch Governor prompt or emit a `GoverningReport`; child inputs/reports remain as described below. The complete retained examples in section 3 are batch examples.
+
+For a batch Governor, instructions come from `SupervisorProgram.Instructions`. Its stdin is a generated `GoverningInput` with project identity/endpoint, configured routes, named checks, execution limits, optional integration target, the user's request, and optional typed workflow plus its installed instructions. It receives check names; child execution input contains the configured check commands.
 
 For every child, the host loads the role/mode resource and constructs:
 
@@ -114,12 +116,14 @@ Candidate may request named host checks. Requesting a check is not universally m
 
 ## 4. Endpoints and required calls
 
-There are two different MCP servers. Both use `POST /mcp` with scoped bearer credentials:
+Managed batch Governors and children use two MCP servers. Both use `POST /mcp` with scoped bearer credentials:
 
 | Server | Location | Agent-visible tools |
 | --- | --- | --- |
 | `cq` | Durable CQ server, configured project endpoint | Governor: `search`, `read`, `graph`, `change`, `apply`, `claim`, `usage`; children: `search`, `read`, `usage` |
 | `cq_host` | Private loopback port owned by this supervisor process | Governor: `dispatch`; children: `workspace` |
+
+An attached interactive Governor uses one harness-owned **stdio** MCP connection named `cq`, exposing the seven Governor domain tools plus `session` and `dispatch`. Its dispatch calls use `cq.dispatch` in place of `cq_host.dispatch` in the table below. Pi presents these as `cq_session`, `cq_dispatch`, etc. Children still use the two scoped HTTP servers above. The Pi extension's private `cq/piUsage` RPC carries native usage metadata; it is not a model tool or a required agent call.
 
 These are tool names within MCP, not paths such as `/dispatch`. The harness/bridge performs MCP initialization and discovery. The model invokes tools through its harness. For example, a workspace read has this transport shape:
 
@@ -133,8 +137,9 @@ Claude presents names such as `mcp__cq_host__workspace`; Pi registers `cq_host_w
 
 | Actor / operation | Protocol obligation |
 | --- | --- |
+| Attached Governor starting work | `cq.session.Context` → consume instructions and project identity → `cq.session.Workflow` with a fresh activation UUID and explicit typed scope. Retain the ID/request for identical retries. |
 | Governor dispatching a workflow child | `cq_host.dispatch.Select` with explicit roots/work/context → `cq.claim` for all members of one choice → `cq_host.dispatch.StartChoice` with choice ID, route and current fence → `Status` until settled. Selection itself acquires no claim. Reuse/renew a valid owned claim; do not acquire overlapping claims blindly. |
-| Governor in a direct non-workflow run | May use exact-assignment `dispatch.Start`; managed workflows reject that bypass. |
+| Batch Governor in a direct non-workflow run | May use exact-assignment `dispatch.Start`; managed workflows reject that bypass. |
 | Governor applying a Planner proposal | Obtain the process-required independent Plan review; inspect `cq.read` selection `Proposal`, then `cq.apply` by result handle under current authority. Do not copy drafts into `change`. |
 | Governor correcting a rejected result | Forward result/review handles to the next Planner/Worker; obtain fresh independent review of the corrected identity. |
 | Governor integrating | `PrepareIntegration` with reviewer handle → poll `IntegrationStatus` → inspect frozen preview → `Integrate`; only `Recorded` establishes domain recording. No configured target means no integration. |
@@ -165,7 +170,7 @@ Thus the literal command spelling is not inherently necessary, but the execution
 | Design | User experience | Status / consequence |
 | --- | --- | --- |
 | Batch execution | Invoke `cq run` for a bounded unattended request | Implemented; launches and meters a separate Governor. |
-| Local CQ host started and owned by the interactive harness | Start `codex`, `claude` or `pi` normally; that session acts as Governor through CQ tools | Implemented; native consumer routes pass and release verification is in progress. The host and managed children belong under the harness process, inside the same sandbox. No separate batch Governor or detached host daemon. |
+| Local CQ host started and owned by the interactive harness | Start `codex`, `claude` or `pi` normally; that session acts as Governor through CQ tools | Implemented and installed; packaged native consumer routes and lifecycle checks pass. The host and managed children belong under the harness process, inside the same sandbox. No separate batch Governor or detached host daemon. |
 | CQ server owns execution | Browser/CLI submits work; a server-side worker starts harnesses against configured repositories | Proposed and requires changing R21, which says the durable CQ server never starts/holds harness processes. Repository access, credentials and process ownership move to that machine. A separately owned worker could preserve the server boundary. |
 
 The `host` distage role opens a fresh governing session beneath its native owner. Claude/Codex use project stdio MCP; Pi uses a project extension. `session Context` returns project, routes, checks, limits, session directory and instructions. `session Workflow` activates idempotent typed scope; dispatch uses retained choices and current claims. EOF, owner death, heartbeat loss and operation deadlines close admission and terminate the hierarchy. Retained publication can be replayed by `cq job upload`; reconnection never adopts uncertain processes. See [lifecycle and accounting evidence](../validation/attached-host.md).
@@ -199,4 +204,4 @@ Implementation requirements:
 7. Collect child usage as today. Observe outer interactive usage where the native harness permits it, with separate attribution and explicit missing/unsupported coverage. Do not treat an unobserved outer session as zero cost.
 8. Verify direct startup inside yolo on all three harnesses, actual child routes, compact prompt/result traffic, owner shutdown/failure, durable audit gaps and unchanged batch use. Native integration details and telemetry coverage remain unverified for the proposed mode until those checks pass.
 
-The design is implemented; its remaining package and interactive verification is tracked in the [evidence record](../validation/attached-host.md). The UI/CLI redesign stays queued for the new CQ session.
+The design is implemented and installed. Package/native lifecycle verification and the remaining human yolo trial are tracked in the [evidence record](../validation/attached-host.md). The UI/CLI redesign stays queued for the new CQ session.

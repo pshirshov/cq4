@@ -37,7 +37,7 @@ Project backup/restore is not implemented by the current delivery's one-time, wh
 
 ## Launcher and runtime follow-ups
 
-- **I1 Accepted / K1 Adopted**: start the interactive harness directly; it starts and owns the local CQ host, which owns guardians and child harnesses inside the same yolo sandbox. No extra batch Governor or detached local daemon. Retain `cq run` for batch use. The [accepted lifecycle](agent-protocol.md#accepted-interactive-lifecycle) specifies boundaries and required native verification; implementation is underway with [deterministic evidence](../validation/attached-host.md); native harness and release checks remain pending. The durable server and its `run-local.sh` helper remain separate.
+- **I1 Accepted / K1 Adopted**: start the interactive harness directly; it starts and owns the local CQ host, which owns guardians and child harnesses inside the same yolo sandbox. No extra batch Governor or detached local daemon. Retain `cq run` for batch use. The [accepted lifecycle](agent-protocol.md#accepted-interactive-lifecycle) specifies boundaries and required native verification; implementation is installed with [native/package and real harness evidence](../validation/attached-host.md); the human yolo trial remains pending. [Direct startup instructions](../interactive.md) include environment forwarding and detached-checkout preparation for reviewed integration into main. The durable server and its `run-local.sh` helper remain separate.
 - **D25**: [Scala lazy-value warning](../validation/scala-lazyvals-warning.md). Replacing the runtime with Scala 3.10.0-RC3 did not remove the warning from already-compiled izumi-reflect bytecode. No compiler upgrade or upstream report has been made.
 
 ## Next-session execution
