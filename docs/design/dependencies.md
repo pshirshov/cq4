@@ -12,7 +12,7 @@ Versions were resolved from the published Maven/npm metadata, Baboon release met
 | http4s | 0.23.37 |
 | Circe | 0.14.16 |
 | PostgreSQL server / JDBC | 18.6 / 42.7.13 |
-| Baboon | 0.0.196, compiler commit `c003b03a64b1e2ccdc060d20072c56f010beb111` |
+| Baboon | 0.0.196, upstream flake/compiler commit `c003b03a64b1e2ccdc060d20072c56f010beb111`, `baboon-jvm` package |
 | GraalVM CE | 25.3.4.1, Java/native-image 25.0.4.1 |
 | Node / TypeScript / esbuild | 24.20.0 / 7.0.2 / 0.28.2 |
 | MCP test SDK / WebSocket test client | 1.30.1 / ws 8.22.0 |
@@ -36,3 +36,7 @@ Initial failure logs are retained under `/srv/nvme/tmp/cq4-implementation/m0/` a
 Playwright 1.63.0 is pinned in `package-lock.json`. On 2026-09-26, `npm view playwright version engines --json` reported stable 1.63.0 and Node >=20; the pinned Nixpkgs `playwright-driver.version` also resolves to 1.63.0. The project uses Node 24.20.0. Linux development shells expose that Nixpkgs driver's matching browser bundle through `PLAYWRIGHT_BROWSERS_PATH`. Browser executables and their libraries come from the pinned Nix closure; the Ubuntu-oriented host package validation is disabled, while launch and real browser execution remain required checks. No system package installation is performed.
 
 The [Playwright browser documentation](https://playwright.dev/docs/browsers) requires browser binaries matching the Playwright release. `dev/browser.mjs` uses Chromium, captures traces/screenshots, and checks real CQ HTTP/WebSocket operation. `dev/connection-browser.mjs` intercepts the real WebSocket connection to inject heartbeat/protocol faults; it is separate from real-model consumer evaluations.
+
+## Baboon flake packaging
+
+M6 replaces the manual compiler download with the upstream pinned flake package, preserving the existing compiler version/commit and CQ Nixpkgs pin. All 524 generated non-resource files match the previous compiler output byte-for-byte; generated contracts pass. [Package, platform and verification evidence](../validation/m6-toolchain.md). Upstream compiler dependencies retain their own lock; CQ does not override them with its development runtime.

@@ -1,16 +1,13 @@
 #!/usr/bin/env python3
-import hashlib
 import os
 from pathlib import Path
 import shutil
 import subprocess
-import urllib.request
 from schema import generate_schemas
 
 
 ROOT = Path(__file__).resolve().parent.parent
 VERSION = "0.0.196"
-SHA256 = "9b4b5dd4b8756e5485b95dd2b1631cba4e262e412987c457666c37ced2e3279c"
 
 
 def replace_once(path, before, after):
@@ -42,18 +39,14 @@ def scala3_runtime():
 
 
 def main():
-    binary = Path(os.environ.get("CQ_BABOON", str(ROOT / ".tools" / f"baboon-{VERSION}")))
-    if not binary.exists():
-        binary.parent.mkdir(parents=True, exist_ok=True)
-        url = f"https://github.com/7mind/baboon/releases/download/v{VERSION}/baboon-linux-amd64"
-        with urllib.request.urlopen(url) as response:
-            content = response.read()
-        if hashlib.sha256(content).hexdigest() != SHA256:
-            raise RuntimeError("Baboon download checksum mismatch")
-        binary.write_bytes(content)
-        binary.chmod(0o755)
-    if hashlib.sha256(binary.read_bytes()).hexdigest() != SHA256:
-        raise RuntimeError("Baboon binary checksum mismatch")
+    compiler = os.environ.get("CQ_BABOON")
+    if compiler is None:
+        os.execvp("nix", ["nix", "develop", str(ROOT), "-c", str(ROOT / "dev/generate")])
+    binary = Path(compiler)
+    banner = subprocess.run([str(binary), "--help"], check=True, stdout=subprocess.PIPE, text=True).stdout
+    if not banner.startswith(f"Baboon {VERSION} @ "):
+        raise RuntimeError(f"Expected Baboon {VERSION}; compiler reported {banner[:200]!r}")
+    print(f"Compiler: {binary}\n{banner.splitlines()[0]}", flush=True)
     models = list((ROOT / "models").glob("*.baboon"))
     if models != [ROOT / "models/cq-api.baboon"]:
         raise RuntimeError("Keep one CQ model; version bumps require explicit user instruction")
