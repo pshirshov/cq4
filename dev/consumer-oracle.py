@@ -61,9 +61,10 @@ def main():
                 count += 1
         for options in [["--top"], ["--top", "0"], ["--top", "-1"], ["--top", "1001"], ["--top", "oops"],
                         ["--top", "9" * 5000], ["--unknown"], ["--t", "1"], ["--to", "1"], ["--h"], ["--he"], ["--hel"], ["extra"]]:
-            code, out, err = execute(command + options, "a", 5)
-            assert code == 2 and out == "" and err.strip(), (options, code, out, err)
-            count += 1
+            for arguments in [options, ["--help", *options], [*options, "--help"]]:
+                code, out, err = execute(command + arguments, "a", 5)
+                assert code == 2 and out == "" and err.strip(), (arguments, code, out, err)
+                count += 1
         code, out, err = execute(command + ["--help"], "", 5)
         assert code == 0 and "usage" in out.lower() and err == "", ("help", code, out, err)
         print(json.dumps({"language": language, "behaviorCases": count + 1, "consumerTests": "passed", "status": "passed"}))

@@ -1,5 +1,9 @@
 # M4 live consumer cohorts — in progress
 
+## Later quality qualification — 2026-09-28
+
+The [mixed-help oracle correction](m4-usage-repetitions.md) preserves this corpus's original route-execution, permissions, accounting and assessment evidence. Exact-candidate rechecks against the clarified 136-case contract pass the Codex/Go candidate and reject the Claude/Python and Pi/Python candidates. Their historical quality verdicts are qualified pending renewed native Python evidence; the original records below are unchanged.
+
 This extends the [M2 real consumer chains](m2-consumer-evaluations.md) using the [cohort evaluation contract](../design/consumer-cohorts.md). Those historical chains cover all six cross-harness governor-to-child pairs. The refreshed nine-route corpus requires actual accepted executions; configured routes alone are not evidence.
 
 The explicit runner is `CQ_EVIDENCE_ROOT=/srv/nvme/tmp/cq4-implementation ./dev/consumer-eval HARNESS python|go --cohort`. It seeds two distinct counting/CLI tasks with one shared specification, runs managed selection through review, exports selection and execution-input artifacts, and retains the PostgreSQL archive and operational usage audit. Candidate acceptance requires exact seeded revisions, applicable Planner mappings, actual parent-linked routes, frozen Shared assignments, per-member outcomes, fresh reviewer-authored oracle evidence, observed counters for every attempt, and an atomic final preview showing unchanged revisions and no active claims/integration holds. The ordinary 110-case oracle remains unchanged.

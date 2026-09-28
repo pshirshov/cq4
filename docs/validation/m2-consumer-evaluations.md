@@ -1,5 +1,7 @@
 # M2 consumer evaluations — in progress
 
+**Later qualification, 2026-09-28:** the [mixed-help oracle correction](m4-usage-repetitions.md) expands the host check to 136 cases and explicitly gives argument errors precedence over help. Exact-candidate rechecks retain the Codex/Go and corrected Pi/Python passes; the earlier Claude/Python candidate fails. Historical results below remain unchanged. Renewed Claude/Python quality evidence and human acceptance are pending.
+
 The explicit `dev/consumer-eval HARNESS python|go` runner starts a real governing harness, a different worker and a third reviewer. `dev/consumer-spec.md` defines the unrelated word-frequency CLI; the host oracle runs consumer tests and 110 independent input/output cases (104 before the prefix-option correction, then 109 before the oversized-number correction below). Candidate validation and review remain distinct from integration, independent evaluation assessment and human acceptance.
 
 Evaluation identity is part of `SupervisorSettings` (`evaluation: null` for ordinary work). The governing assignment and every dispatched child inherit the run/scenario identity. Accounting is exported from the operational audit; there is no second token collector. Model/provider routes, source hashes, commands, elapsed time, native session directories, audit exports and a PostgreSQL archive accompany each evaluation. Current runs also retain the stopped PostgreSQL data directory, including when export fails.
