@@ -113,7 +113,9 @@ def hierarchy(values, settings, routes):
             artifact = values["artifacts"][status["result"]["value"]]
             result = artifact["body"]
             assert artifact["kind"] == "Result" and artifact["attempt"] == result["attempt"] == child["id"]
-            assert result["request"] == request and result["base"] == values["run"]["base"] and result["candidate"] is None and not result["validation"]
+            assert result["request"] == request
+            if request["work"] not in [{"Worker": {"mode": "Implement"}}, {"Reviewer": {"mode": "Candidate"}}]:
+                assert result["base"] == values["run"]["base"] and result["candidate"] is None and not result["validation"]
             job = json.loads((session / "journal" / (child["id"]["value"] + ".json")).read_text())
             assert job["workspace"]["attempt"] == child["id"] and job["workspace"]["owner"] == child["session"] and job["workspace"]["base"] == result["base"]
             assert job["phase"] == "Settled" and job["exit"]["settled"] and job["exit"]["code"] == 0 and job["exit"]["reason"] == "Exited" and not job["exit"]["hostFailure"]
@@ -244,7 +246,7 @@ def retained(directory, depth):
 def checked(directory, depth, manifest):
     assert depth < 8, "Defect checkpoint chain exceeds its bound"
     read = lambda path: json.loads(path.read_text())
-    assert manifest["status"] in ["begin-passed", "probe-passed", "research-passed", "plan-passed"] and not manifest["archiveErrors"] and manifest["accounting"] == "reconciled"
+    assert manifest["status"] in ["begin-passed", "probe-passed", "research-passed", "plan-passed", "integrate-passed"] and not manifest["archiveErrors"] and manifest["accounting"] == "reconciled"
     support = runpy.run_path(str(Path(__file__).with_name("process-assess-evidence.py")))
     values = support["stage_evidence"](directory)
     prior = retained(Path(manifest["baselineEvidence"]), depth + 1) if manifest["stage"] != "begin" else None
@@ -256,6 +258,8 @@ def checked(directory, depth, manifest):
         restored(read(directory / "before.json"), prior["values"]["snapshot"])
         if manifest["stage"] == "plan":
             assert runpy.run_path(str(Path(__file__).with_name("defect-plan-evidence.py")))["plan"](directory, values, settings, prior) == manifest["proof"]
+        elif manifest["stage"] == "integrate":
+            assert runpy.run_path(str(Path(__file__).with_name("defect-integrate-evidence.py")))["integrate"](directory, values, settings, prior) == manifest["proof"]
         else:
             assert empirical(directory, values, settings, prior, manifest["stage"]) == manifest["proof"]
     usage_parts = [] if prior is None else [prior["usage"]]

@@ -1,6 +1,6 @@
 # M4 synthetic dependency investigation
 
-This evaluation exercises the defect/research/hypothesis and upstream workflow alongside the [accepted Go worked process](m4-worked-process.md). The component is explicitly synthetic and local; there is no external upstream submission endpoint. Native intake, exact probe execution, research and reviewed adjudication/repair planning now pass retained verification. Independent Astra approved the scoped source and evidence; rejected experiments and corrected checker failures remain explicit. Implementation, integration, upstream preparation and full process acceptance are pending.
+This evaluation exercises the defect/research/hypothesis and upstream workflow alongside the [accepted Go worked process](m4-worked-process.md). The component is explicitly synthetic and local; there is no external upstream submission endpoint. Native intake, exact probe execution, research, reviewed adjudication/repair planning and repair integration now pass retained verification. Independent Astra approved the scoped source and evidence through integration. Rejected experiments and corrected checker failures remain explicit. Upstream preparation, reviewed closeout and full process acceptance are pending.
 
 ## Reproduction and stages
 
@@ -118,6 +118,25 @@ During source review Astra reproduced a false-acceptance path: an intermediate r
 
 The native run matches all 251 sources in its initial fast gate. Final corrected fast verification matches 252 sources; `233851/verification-source-comparison.json` identifies four changed evaluator/checker/test files and the added replay helper. Product code, prompts and stage instructions are unchanged. Independent Astra verified these exact differences, all bound evidence, complete replay, actual conclusions and review/application ordering, and approved the scoped increment with no blocking or major finding. Implementation, integration, upstream/operator evidence and independent full-process assessment remain open.
 
+## Integration continuation preparation
+
+`integrate` restores the verified repair plan into a fresh database and consumer clone. It creates an unoccupied integration branch at the fixture commit, repeats the original failing reproduction before model work, then runs ordinary `advance --roots T1 --through integrate`. Pi implements; Codex independently reviews and executes a fresh unchanged `defect-oracle` check. Optional Codex Planner work is limited to selector assessment. The input supplies the reviewed investigation as guidance without requiring the governor to read or compose child prompts.
+
+Acceptance binds the exact task assignment, candidate, worker/reviewer result handles, host checks, Recorded integration, acknowledgement and history cursor. Only T1 may change Ready→Done; every other record/history and the task contract remain unchanged. The checkout remains at the original fixture while `refs/heads/integration` advances. Claims must be released and all attempts must reconcile through the existing audit.
+
+Astra reproduced a checker gap: adding a class-level `unittest.skip` decorator left the original method ASTs unchanged and could pass the oracle's test-process exit check. The fail-first regression is retained at `/srv/nvme/tmp/cq4-implementation/defect-integration-preparation/skip-before.log`. The corrected checker preserves the original test module byte-for-byte, requires additional tests in a separate file, and records a direct run of the four original tests in a fresh clone of the actual incorporated candidate. All four must report `ok`, with no skips. The oracle itself is unchanged. Five focused checks pass, including actual Git scope/preservation, stale revisions, altered history, acknowledgement mismatch and inherited reviewer validation. The source correction passed independent Astra review before native execution; final source/evidence approval is recorded below.
+
+## Passed native repair integration
+
+`20260928T001028-defect-integrate` passes in 153.742 seconds. Final fast verification `.work/evidence/20260928T000953-fast` passes 189 Scala scenarios, five integration checks and the existing evaluator checks. All 255 runtime/build/evaluator sources match the native run; docs and README are excluded from this comparison, while runtime prompt/workflow Markdown is included.
+
+- Pi Worker `e5bd4b16-6ff0-499c-b41a-b59898947dcc` produces candidate `46694494a847f4d64587ff84c3ef3058d66796de`; Codex Reviewer `1b9aef85-1533-4382-8ff7-98b70d30e20c` accepts that exact candidate and assignment. Their separate HostObserved `defect-oracle` validations pass the unchanged 26-case oracle and consumer suite. The repair changes only `synthetic_tokens.py` and adds `test_synthetic_tokens_regression.py`: the helper selects `[A-Za-z]+`; regression cases exercise the reported digits/underscore/non-ASCII boundaries and punctuation boundaries. README, CLI and original tests remain unchanged. The separate `original-test-execution.json` records all four original tests executing successfully at the candidate.
+- Integration `7a9e4c10-2b6d-4f3e-9c88-000000000001` is Recorded with that candidate as the observed target. The exact acknowledgement at cursor 10 changes only T1@2 to Done@3. D1, G1 and M1 remain Open; Research and Hypothesis conclusions/history are unchanged. The host completion preserves the original Task contract and cites both result handles. Claims are released; the original checkout remains clean at the fixture commit. The database SHA-256 is `5d9305cc5160534e87fbc0b6f0cda2087b9d0c14b3ddde73bbc10246f3187ced`.
+- Three new attempts reconcile through the operational audit to 1,296,719 known tokens: 476,949 directly attributed to T1, plus 819,770 governing overhead. All three meters are partial and none absent; missing optional counters/prices remain explicit. Full checkpoint replay retains 26 distinct attempts and 8,077,684 known tokens. Including earlier rejected experiments, `integration-experiments.json` retains 38 attempts and 11,834,795 known tokens, counting every original session once. These differing configurations are not matched repetitions.
+- `parent-traffic.json` records twelve dispatch calls with 1,399/1,734-byte argument/reply maxima. The governor explicitly reads one Candidate Reviewer result through ArtifactText (limit 2,400); this drill-down is retained separately from compact dispatch traffic. One claim request exceeds the documented duration limit and is rejected before a corrected request. No token-savings claim follows from these payload measurements.
+
+Independent Astra matched all 255 current sources against the fast/native manifests, replayed the full 26-attempt chain, inspected the actual candidate and meaningful added regressions, and validated the exact Recorded identity, fresh checks and original-test execution. The new regressions exercise `tokens()` and `counts()`; CLI coverage comes from the original CLI test and unchanged external oracle. It approved this scoped commit with no blocking or major finding. This establishes the repair/integration stage; upstream/operator work, reviewed closeout, independent whole-process assessment and M4 acceptance remain open.
+
 ## Run
 
 From the repository root:
@@ -128,6 +147,7 @@ From the repository root:
 ./dev/defect-eval probe --checkpoint /path/to/passed-defect-begin
 ./dev/defect-eval research --checkpoint /path/to/passed-defect-probe
 ./dev/defect-eval plan --checkpoint /path/to/passed-defect-research
+./dev/defect-eval integrate --checkpoint /path/to/verified-defect-plan
 ```
 
 To verify the retained citation-checker failure without rerunning models:

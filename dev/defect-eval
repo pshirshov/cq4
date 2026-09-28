@@ -35,7 +35,7 @@ def snapshot(call, project, consumer, session):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("stage", choices=["begin", "probe", "research", "plan", "verify-plan"])
+    parser.add_argument("stage", choices=["begin", "probe", "research", "plan", "integrate", "verify-plan"])
     parser.add_argument("--checkpoint", type=Path)
     arguments = parser.parse_args()
     if (arguments.stage == "begin") != (arguments.checkpoint is None):
@@ -57,7 +57,7 @@ def main():
     original = None if arguments.checkpoint is None else arguments.checkpoint.resolve()
     prior = None if original is None else predicates["checkpoint"](original)
     if prior is not None:
-        assert prior["manifest"]["stage"] == {"probe": "begin", "research": "probe", "plan": "research"}[arguments.stage], "Continuation requires the immediately preceding verified stage"
+        assert prior["manifest"]["stage"] == {"probe": "begin", "research": "probe", "plan": "research", "integrate": "plan"}[arguments.stage], "Continuation requires the immediately preceding verified stage"
         hashes = json.loads((original / "source-sha256.json").read_text())
         for path in [*sorted((root / "dev/fixtures/defect").glob("*.py")), root / "dev/fixtures/defect/README.md", root / "dev/defect-oracle.py"]:
             assert hashlib.sha256(path.read_bytes()).hexdigest() == hashes[str(path.relative_to(root))], "Fixture/oracle changed since checkpoint"
@@ -110,6 +110,11 @@ def main():
                     "evaluation": {"run": identifier, "scenario": "synthetic-dependency", "assessor": False}}
         if prior is not None:
             settings["evaluation"] = json.loads((original / "settings.json").read_text())["evaluation"]
+        if arguments.stage == "integrate":
+            checks.run(["git", "-C", str(consumer), "branch", "integration"], "integration-branch", 10)
+            settings["integrationTarget"] = "refs/heads/integration"
+            settings["checks"] = [{"name": "defect-oracle", "command": [sys.executable, str(root / "dev/defect-oracle.py")],
+                                   "executionMillis": "180000", "outputBytes": 262144}]
         write(evidence / "settings.json", settings)
         request = (root / "dev/defect-begin.md").read_text() + "\n\n" + json.dumps({"fixtureCommit": base, "specification": (consumer / "README.md").read_text(),
             "reproduction": {"command": "python3 -m unittest -v", "exit": reproduction.returncode, "stdout": reproduction.stdout, "stderr": reproduction.stderr}}, ensure_ascii=False)
@@ -146,8 +151,10 @@ def main():
                     restored = total_usage()
                     write(evidence / "baseline-usage-summary.json", restored)
                     reconcile([prior["usage"]], restored["UsageSummary"]["report"])
-                    intake = predicates["records"](before)
+                    intake = prior["manifest"]["proof"] if arguments.stage == "integrate" else predicates["records"](before)
                     members = intake["branches"] if arguments.stage == "probe" else [intake["research"]]
+                    if arguments.stage == "integrate":
+                        members = [intake["task"]]
                     guidance = [{"id": view["item"]["id"], "revision": view["item"]["revision"]} for view in before["views"] if view["item"]["id"] not in members]
                     bundle = {"provenance": "Runner-provided empirical input, not human judgment or new HostObserved validation", "fixture": base}
                     if arguments.stage == "probe":
@@ -162,11 +169,14 @@ def main():
                         bundle.update(observations=prior["manifest"]["proof"]["execution"]["observations"],
                             nativeTranscript=prior["manifest"]["proof"]["transcript"], probeResult=prior["manifest"]["proof"]["result"],
                             instructions="Compare these verified native observations with R1/H1/H2/H3, distinguishing observed behavior from causal conclusions and conditional contributions. Your interpretation remains ModelDeclared. Cite this input artifact and the Probe result. Do not execute, implement, mutate records or adjudicate the ledger; report findings or honest inconclusive limits for later reviewed planning.")
-                    else:
+                    elif arguments.stage == "plan":
                         observed = prior["values"]["artifacts"][prior["manifest"]["proof"]["observations"]["value"]]["body"]
                         bundle.update(observations=observed["observations"], nativeTranscript=observed["nativeTranscript"], investigation=before["views"],
                             probeResult=prior["manifest"]["proof"]["probe"], researchResult=prior["manifest"]["proof"]["result"],
                             instructions=(root / "dev/defect-plan.md").read_text())
+                    else:
+                        bundle.update(investigation=before["views"], task=intake["task"],
+                            instructions=(root / "dev/defect-integrate.md").read_text())
                     body = json.dumps(bundle, ensure_ascii=False, separators=(",", ":"))
                     assert len(body.encode()) <= 128 * 1024
                     (evidence / "empirical-input.json").write_text(body)
@@ -200,6 +210,16 @@ def main():
                             json.dumps({"root": intake["defect"], "investigation": [{"id": view["item"]["id"], "revision": view["item"]["revision"]} for view in before["views"]], "artifacts": context}))
                         (evidence / "request.txt").write_text(request)
                         workflow[-1] = "plan"
+                    if arguments.stage == "integrate":
+                        request = ("Advance the single supplied Ready Task through Integrate. The reviewed investigation and plan are complete; earlier intake/plan-only restrictions are historical. "
+                            "Use Pi Worker/Implement and independent Codex Reviewer/Candidate. Both must execute the fresh named defect-oracle check on the candidate. "
+                            "Use Select/StartChoice and current revisions; pass the supplied Input handle and ALL guidance to each child without reading/copying its body. "
+                            "If selection requires Planner assessment, use Codex for assessment only with the same context; no proposals or ledger edits. "
+                            "Correct through review handles and repeat independent review as necessary. Integrate the accepted exact candidate using host dispatch; no direct completion edits. "
+                            "Only the Task may change to Done. Leave D1, Goal and Milestone Open, preserve all other records/history and release all claims. "
+                            "No upstream work in this stage.\n" + json.dumps({"roots": members, "guidance": guidance, "artifacts": context}))
+                        (evidence / "request.txt").write_text(request)
+                        workflow = ["--workflow", "advance", "--roots", "T" + intake["task"]["number"], "--through", "integrate"]
                 try:
                     began = time.monotonic()
                     with (evidence / "governor.stdout").open("w") as out, (evidence / "governor.stderr").open("w") as err:
@@ -213,6 +233,14 @@ def main():
                     input_id = {"value": str(uuid.UUID(bytes=hashlib.md5((run["attempt"]["id"]["value"] + ":input").encode()).digest(), version=3))}
                     evaluation["artifacts"](checks.environment, evidence, session, statuses, [input_id])
                     write(evidence / "after.json", snapshot(api, project, consumer, session))
+                    if arguments.stage == "integrate":
+                        integrations = []
+                        for path in (session / "integrations").glob("*.json"):
+                            local = json.loads(path.read_text())
+                            record = api({"Read": {"input": {"project": project, "selection": {"Integration": {"id": local["intent"]["id"]}}}}})["Integration"]["record"]
+                            integrations.append({"local": local, "record": record})
+                        write(evidence / "integrations.json", integrations)
+                        write(evidence / "target.json", {"value": subprocess.check_output(["git", "-C", str(consumer), "rev-parse", "refs/heads/integration"], text=True).strip()})
                     if arguments.stage == "probe":
                         native = runpy.run_path(str(root / "dev/defect-probe-evidence.py"))
                         transcripts = {}
@@ -237,6 +265,10 @@ def main():
                 assert finished.returncode == 0, "Defect governing session failed"
                 if arguments.stage == "plan":
                     result["proof"] = runpy.run_path(str(root / "dev/defect-plan-evidence.py"))["plan"](evidence, values, settings, prior)
+                elif arguments.stage == "integrate":
+                    implementation = runpy.run_path(str(root / "dev/defect-integrate-evidence.py"))
+                    implementation["execute_original"](evidence, json.loads((evidence / "target.json").read_text()), sys.executable)
+                    result["proof"] = implementation["integrate"](evidence, values, settings, prior)
                 else:
                     result["proof"] = predicates["begin"](values, settings) if prior is None else predicates["empirical"](evidence, values, settings, prior, arguments.stage)
                 result["status"] = arguments.stage + "-passed"
