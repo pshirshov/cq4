@@ -2,10 +2,13 @@
 
 Current R09/R31 follow-up: [D42](validation/attached-codex-usage.md) correlates
 interactive Codex response records through native MCP thread identity and replays
-durable canonical samples. Ten focused checks pass with Astra source approval;
+durable canonical samples. Ten focused checks, connected MCP/PostgreSQL/shutdown
+checks and current contracts pass with Astra source approval;
 an exploratory real consumer reconciles its observed subset. Outer task/model
 grouping, native cost and final-tail coverage remain explicitly incomplete.
-Final connected/native/operator delivery is pending.
+Final native/operator delivery is pending. D25's dependency transformation was
+rejected after a reproduced startup hang; [its open blocker](validation/scala-lazyvals-warning.md#rejected-remedy-2026-09-29)
+does not weaken the runtime requirements or represent a completed correction.
 
 Current R27/R30 follow-up: [D41 checked-out integration](validation/checked-out-integration.md)
 preserves dirty layers without detaching HEAD. Dual coordinator and real Git
