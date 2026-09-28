@@ -4,6 +4,8 @@ Tested implementation: **`8c37c6c`**. Independent Astra verdict: **approved**, w
 
 ## Current acceptance evidence
 
+The user defers human evaluation until all planned technical milestones are finished (2026-09-28). This page is part of that final combined evidence package; M2 acceptance remains pending and is not inferred from the instruction to continue.
+
 The sections below retain the original M2 technical review. Later [mixed-help reproduction](m4-usage-repetitions.md) invalidates the original Claude/Python candidate under the clarified current oracle; its old acceptance is historical. Replacement M4 evidence restores the clarified-oracle baseline. The original packaged artifact was later rejected for missing workflow resources. The [corrected-artifact cohort evidence](m6-package.md#corrected-artifact-live-progress) now provides independently accepted Python/Go candidates covering all nine routes, with Astra-approved scoped accounting. The new Go pair still awaits formal admission into the running aggregate release suite; its exact producer/Audit proofs already replay successfully. Human M2 acceptance is still pending and must use that qualified/current evidence. The current native distribution and exact startup/recovery instructions are linked from the [operations guide](../design/operations.md).
 
 | Governing harness | Current accepted candidate |
