@@ -1,6 +1,6 @@
 # Combined M2 and M6 human review
 
-**Technical release candidate approved by independent Astra.** Human M2 and M6 verdicts remain pending. Per the user's instruction, this guide combines both evaluation scopes.
+**HTTP browser correction under verification.** Human evaluation exposed a remote-HTTP login defect in the previous artifact; see the [reproduction and correction](http-ui.md). Its earlier technical review remains historical. Human M2 and M6 verdicts remain pending. Per the user's instruction, this guide combines both evaluation scopes.
 
 ## Artifact and scope
 

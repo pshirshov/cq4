@@ -137,7 +137,8 @@ class Checks:
         with (self.evidence / f"{name}-server.log").open("w") as log, self.server_process(command, log, name) as process:
             try:
                 deadline = time.monotonic() + STARTUP_TIMEOUT
-                request = urllib.request.Request(self.environment["CQ_ORIGIN"] + "/api/hello",
+                health_origin = f"http://{self.environment['CQ_HOST']}:{self.environment['CQ_PORT']}"
+                request = urllib.request.Request(health_origin + "/api/hello",
                                                  headers={"Authorization": "Bearer " + self.environment["CQ_TOKEN"], "CQ-Session": self.environment["CQ_SESSION"]})
                 while True:
                     if process.poll() is not None:
@@ -191,6 +192,18 @@ class Checks:
             if browser:
                 self.environment["CQ_BROWSER_EVIDENCE"] = str(self.evidence)
                 self.run(["node", "dev/browser.mjs"], f"{name}-browser", COMMAND_TIMEOUT)
+        if browser:
+            self.http_browser(command, name)
+
+    def http_browser(self, command: list[str], name: str):
+        saved = {key: self.environment[key] for key in ["CQ_HOST", "CQ_PORT", "CQ_ORIGIN"]}
+        try:
+            port = free_port()
+            self.environment.update(CQ_HOST="127.0.0.1", CQ_PORT=str(port), CQ_ORIGIN=f"http://cq-http.test:{port}")
+            with self.server(command, f"{name}-http"):
+                self.run(["node", "dev/http-browser.mjs"], f"{name}-http-browser", COMMAND_TIMEOUT)
+        finally:
+            self.environment.update(saved)
 
     def restart(self, command: list[str]):
         fixture = str(self.evidence / "restart-fixture.json")
@@ -263,6 +276,7 @@ class Checks:
                 if usage:
                     self.run(["node", "dev/usage-watch.mjs"], "usage-watch", STARTUP_TIMEOUT)
                 self.run(["node", "dev/browser.mjs"], "ui-browser", COMMAND_TIMEOUT)
+            self.http_browser(command, "ui")
 
     def process(self):
         if sys.platform != "linux":

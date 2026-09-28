@@ -1,3 +1,4 @@
+import { uuidV4 } from './uuid.js';
 import * as api from '../../generated/typescript/cq/api/index.js';
 import { BaboonCodecContext } from '../../generated/typescript/BaboonSharedRuntime.js';
 import { button, element } from './editor.js';
@@ -51,7 +52,7 @@ export class GraphActions {
   private key(project: api.ProjectId): string { return `cq-graph-change:${project.value}`; }
   private encode(input: api.ChangeInput): string { return JSON.stringify(api.ChangeInput_JsonCodec.instance.encode(CONTEXT, input)); }
   private request(project: api.ProjectId, mutation: api.Mutation, reason: string): api.ChangeInput {
-    return new api.ChangeInput(project, new api.ChangeRequest(new api.RequestId(crypto.randomUUID()), [mutation], [], reason));
+    return new api.ChangeInput(project, new api.ChangeRequest(new api.RequestId(uuidV4(crypto)), [mutation], [], reason));
   }
   private async detail(id: api.ItemId, generation: number): Promise<api.ItemView | null> {
     try {

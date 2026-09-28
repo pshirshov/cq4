@@ -1,3 +1,4 @@
+import { uuidV4 } from './uuid.js';
 import { BaboonCodecContext } from '../../generated/typescript/BaboonSharedRuntime.js';
 import {
   ClientFrame, ClientFrame_Call, ClientFrame_Subscribe, ClientFrame_WatchUsage, ClientFrame_Ping, ClientFrame_Pong, ClientFrame_JsonCodec,
@@ -189,7 +190,7 @@ export class ConnectionManager {
   }
   private ping(connection: Connection): void {
     if (connection.socket.readyState !== WebSocket.OPEN || connection.pings.size >= 3) return;
-    const nonce = crypto.randomUUID();
+    const nonce = uuidV4(crypto);
     const now = Date.now();
     connection.pings.set(nonce, { sent: now, deadline: now + PONG_TIMEOUT, missed: false });
     connection.lastPing = now; connection.sent++;
@@ -267,15 +268,15 @@ export class ConnectionManager {
       this.send(connection, frame);
     });
   }
-  call(command: Command): Promise<Result> { return this.exchange(new ClientFrame_Call(new RequestId(crypto.randomUUID()), command)); }
+  call(command: Command): Promise<Result> { return this.exchange(new ClientFrame_Call(new RequestId(uuidV4(crypto)), command)); }
   subscribe(project: ProjectId, after: ChangeCursor): { id: RequestId; result: Promise<Result> } {
-    const id = new RequestId(crypto.randomUUID());
+    const id = new RequestId(uuidV4(crypto));
     return { id, result: this.exchange(new ClientFrame_Subscribe(id, project, after)) };
   }
   watchUsage(project: ProjectId): RequestId {
     const connection = this.activeConnection();
     if (connection === undefined || connection.state !== 'ALIVE') throw new Error('No verified connection');
-    const id = new RequestId(crypto.randomUUID());
+    const id = new RequestId(uuidV4(crypto));
     this.send(connection, new ClientFrame_WatchUsage(id, project)); return id;
   }
   retry(): void {

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { build } from 'esbuild';
 import { runInNewContext } from 'node:vm';
-import { randomUUID } from 'node:crypto';
+import { webcrypto } from 'node:crypto';
 
 // Behavioral / Effectual / Atomic: controlled browser boundaries, public manager API and listener only.
 const bundle = await build({ entryPoints: ['web/src/connection.ts'], bundle: true, format: 'iife', globalName: 'CQ', write: false });
@@ -23,7 +23,7 @@ function fixture() {
   }
   const scope = { document, window, navigator: { connection: network }, WebSocket: Socket, EventTarget, AbortController, TextEncoder, TextDecoder,
     Date: class extends Date { constructor(...args) { super(...(args.length ? args : [now])); } static now() { return now; } },
-    crypto: { randomUUID }, setInterval: callback => { timers.add(callback); return callback; }, clearInterval: callback => timers.delete(callback),
+    crypto: webcrypto, setInterval: callback => { timers.add(callback); return callback; }, clearInterval: callback => timers.delete(callback),
     Math: Object.assign(Object.create(Math), { random: () => 0.5 }) };
   runInNewContext(bundle.outputFiles[0].text, scope);
   const manager = new scope.CQ.ConnectionManager('ws://fixture', { status: value => { status = value; updates++; },

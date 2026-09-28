@@ -1,3 +1,4 @@
+import { uuidV4 } from './uuid.js';
 import * as api from '../../generated/typescript/cq/api/index.js';
 import { BaboonCodecContext } from '../../generated/typescript/BaboonSharedRuntime.js';
 import { ConnectionManager } from './connection.js';
@@ -125,7 +126,7 @@ class App {
     form.append(element('h1', 'CQ'), element('p', 'Connect to your project workspace.'), label, submit, this.notice);
     form.addEventListener('submit', event => { event.preventDefault(); this.action(async () => {
       let session = localStorage.getItem('cq-browser-session');
-      if (session === null) { session = crypto.randomUUID(); localStorage.setItem('cq-browser-session', session); }
+      if (session === null) { session = uuidV4(crypto); localStorage.setItem('cq-browser-session', session); }
       const response = await fetch('/api/login', { method: 'POST', headers: { Authorization: `Bearer ${token.value}`, 'CQ-Session': session } });
       if (!response.ok) throw new Error(`Sign in failed (${response.status})`);
       token.value = ''; this.notice.textContent = ''; await this.start();
@@ -145,7 +146,7 @@ class App {
     const newProject = element('form', ''); const name = element('input', ''); name.placeholder = 'New project name'; name.setAttribute('aria-label', 'New project name'); name.required = true;
     const add = element('button', 'Create project'); add.type = 'submit'; newProject.append(name, add);
     newProject.addEventListener('submit', event => { event.preventDefault(); this.action(async () => {
-      const project = new api.ProjectId(crypto.randomUUID());
+      const project = new api.ProjectId(uuidV4(crypto));
       await this.call(new api.Command_Initialize(new api.ProjectConfig(project, location.origin, name.value)));
       this.project = project; this.reset(); await this.loadProjects(); await this.refresh(); name.value = '';
     }); });
@@ -386,7 +387,7 @@ class App {
       const draft = api.ItemDraft_JsonCodec.instance.decode(CONTEXT, editor.form.read());
       const base = editor.record.item;
       const mutation = base === undefined ? new api.Mutation_Create(draft) : new api.Mutation_Replace(base.id, base.revision, draft);
-      const pending = new api.ChangeRequest(new api.RequestId(crypto.randomUUID()), [mutation], [], 'Browser edit');
+      const pending = new api.ChangeRequest(new api.RequestId(uuidV4(crypto)), [mutation], [], 'Browser edit');
       editor.record = new api.BrowserDraft(editor.record.project, base, draft, pending);
     }
     this.storeDraft(editor);

@@ -13,9 +13,20 @@ nix develop -c bash docs/examples/launch-local.sh \
   /srv/nvme/tmp/cq4-playground
 ```
 
-The [launcher](examples/launch-local.sh) creates a private PostgreSQL cluster, generates persistent credentials, starts the native server and waits for its authenticated health response. It prints `CQ ready: http://127.0.0.1:8080`. Leave this terminal open. PostgreSQL listens on loopback port 55432 with password authentication. To choose other ports, prefix the command with `CQ_LOCAL_PORT=8081 CQ_LOCAL_DB_PORT=55433`.
+The [launcher](examples/launch-local.sh) creates a private PostgreSQL cluster, generates persistent credentials, starts the native server and waits for its authenticated health response. CQ listens on **0.0.0.0:8080**. Leave this terminal open. PostgreSQL listens on loopback port 55432 with password authentication. To choose other ports, prefix the command with `CQ_LOCAL_PORT=8081 CQ_LOCAL_DB_PORT=55433`.
 
-Open **http://127.0.0.1:8080**. Obtain the browser login token in another terminal:
+For a browser on another machine, set `CQ_ORIGIN` to the exact browser URL, including scheme and port (without a trailing slash). For example, on this host:
+
+```sh
+CQ_ORIGIN=http://vm.home.7mind.io:8080 \
+nix develop -c bash docs/examples/launch-local.sh \
+  /srv/nvme/tmp/cq4-implementation/cq-release-workflow-resources \
+  /srv/nvme/tmp/cq4-playground
+```
+
+Use that same URL in the browser. CQ checks browser origins; binding all interfaces alone does not change the permitted origin. Startup health checks always use loopback, so they do not require the browser hostname to resolve locally. CLI configuration in `client.env` uses the configured origin. Changing an existing instance requires stopping and restarting the launcher.
+
+With no `CQ_ORIGIN` override, open **http://127.0.0.1:8080**. Obtain the browser login token in another terminal:
 
 ```sh
 cat /srv/nvme/tmp/cq4-playground/token

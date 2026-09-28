@@ -1,5 +1,5 @@
 {
-  "state": "technical-release-approved-human-acceptance-pending",
+  "state": "http-ui-correction-under-verification",
   "implementationCommit": "302bf34",
   "modelVersion": "0.1.0",
   "platform": "x86_64-linux",
@@ -133,6 +133,9 @@
   ],
   "running": [],
   "pending": [
+    "rebuilt native including insecure HTTP",
+    "installed source-isolated package including insecure HTTP",
+    "final correction review",
     "designated M2 human acceptance",
     "designated M6 human acceptance"
   ],
@@ -554,5 +557,18 @@
       "astra-review.json": "0e7bcff7f6d325061bbe2de0ea5e5b6e319c1fb65ba8c15ff4cf710955b1adca"
     },
     "qualification": "User-requested operator helper added after technical release review; actual native/PostgreSQL lifecycle/setup smoke and independent Astra review pass. Application, package and evaluator inputs unchanged; no new model calls; human acceptance remains pending."
+  },
+  "activeCorrection": {
+    "kind": "remote-http-browser-uuid",
+    "reproduction": "/srv/nvme/tmp/cq4-http-ui-20260928/before",
+    "scope": "Eight browser UUID call sites; launcher bind/origin; regression fixtures",
+    "sourceReview": "Independent Astra approved correction and scoped reuse of paid harness evidence",
+    "required": [
+      "rebuilt native including insecure HTTP",
+      "installed source-isolated package including insecure HTTP",
+      "final correction review"
+    ],
+    "qualification": "Prior native package reproduces user-reported login TypeError on non-localhost plain HTTP; previous review remains historical and does not supply current acceptance.",
+    "uiEvidence": "/srv/nvme/tmp/cq4-http-ui-20260928/20260928T102222-ui"
   }
 }

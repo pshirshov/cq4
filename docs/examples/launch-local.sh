@@ -5,6 +5,7 @@ umask 077
 if [[ $# != 2 ]]; then
   echo "Usage: $0 RELEASE_DIRECTORY STATE_DIRECTORY" >&2
   echo "Optional ports: CQ_LOCAL_PORT=8080 CQ_LOCAL_DB_PORT=55432" >&2
+  echo "Optional browser address: CQ_ORIGIN=http://server-address:8080" >&2
   exit 2
 fi
 for command in realpath flock initdb pg_ctl python3 curl; do
@@ -39,7 +40,8 @@ export CQ_TOKEN="$(cat "$state/token")"
 export CQ_DATABASE_PASSWORD="$(cat "$state/database-password")"
 export CQ_DATABASE_USER=cq
 export CQ_DATABASE_URL="jdbc:postgresql://127.0.0.1:$db_port/postgres"
-export CQ_HOST=127.0.0.1 CQ_PORT="$port" CQ_ORIGIN="http://127.0.0.1:$port"
+health_origin="http://127.0.0.1:$port"
+export CQ_HOST=0.0.0.0 CQ_PORT="$port" CQ_ORIGIN="${CQ_ORIGIN:-$health_origin}"
 export CQ_BIN="$release/bin/cq" CQ_LOCAL_STATE="$state"
 {
   printf 'export CQ_TOKEN=%q\n' "$CQ_TOKEN"
@@ -108,7 +110,7 @@ for ((attempt=0; attempt<60; attempt++)); do
   kill -0 "$server_pid" 2>/dev/null || break
   if curl --silent --fail --max-time 1 \
     -H "Authorization: Bearer $CQ_TOKEN" -H 'CQ-Session: 00000000-0000-0000-0000-000000000001' \
-    "$CQ_ORIGIN/api/hello" > "$state/hello.json"; then
+    "$health_origin/api/hello" > "$state/hello.json"; then
     ready=1
     break
   fi
@@ -117,6 +119,7 @@ done
 [[ $ready == 1 ]] || { echo "CQ startup failed; inspect $state/logs/cq-server.log" >&2; exit 1; }
 python3 -c 'import json,sys; assert json.load(open(sys.argv[1])) == {"version":"0.1.0","supported":["0.1.0"]}' "$state/hello.json"
 printf '\nCQ ready: %s\nBrowser login token: cat %q\nSecond terminal: source %q\n' "$CQ_ORIGIN" "$state/token" "$state/client.env"
+printf 'Listening on %s:%s; browser origin must match CQ_ORIGIN.\n' "$CQ_HOST" "$CQ_PORT"
 echo 'Leave this terminal open. Stop consumer runs before pressing Ctrl-C. Reuse the same command to restart.'
 wait "$server_pid"
 server_pid=
