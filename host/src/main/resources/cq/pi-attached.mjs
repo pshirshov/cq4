@@ -103,8 +103,12 @@ export default async function (pi) {
       typeof configuration.directory !== "string" || !Array.isArray(configuration.tools) || configuration.tools.length !== 9)
     throw new Error("Invalid CQ attached configuration");
   let connection;
+  let sequence = 0;
+  let turn = 0;
   pi.on("session_start", async () => {
     if (connection !== undefined) throw new Error("CQ connection is already active");
+    sequence = 0;
+    turn = 0;
     const started = new Connection(configuration);
     connection = started;
     try {
@@ -124,8 +128,6 @@ export default async function (pi) {
     connection = undefined;
     if (active !== undefined) await active.close();
   });
-  let sequence = 0;
-  let turn = 0;
   pi.on("turn_start", () => { turn += 1; });
   pi.on("message_end", async (event, context) => {
     const message = event.message;

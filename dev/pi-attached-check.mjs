@@ -58,6 +58,16 @@ assert.equal(usage.reasoning, null);
 assert.deepEqual(usage.costUSD, { value: "0.001" });
 assert(!JSON.stringify(seen).includes("PRIVATE_ASSISTANT_TEXT"));
 await assert.rejects(() => pi.registered.get("cq_session").execute("after-close", {}, undefined), /unavailable/);
+await pi.handlers.get("session_start")();
+pi.handlers.get("turn_start")();
+await pi.handlers.get("message_end")({ message: { role: "assistant", provider: "provider", model: "model", timestamp: 2000, stopReason: "stop",
+  usage: { input: 5, output: 2, cacheRead: 0, cacheWrite: 0, totalTokens: 7 } } },
+{ sessionManager: { getSessionId: () => "next-native-session" } });
+await pi.handlers.get("session_shutdown")();
+const restarted = JSON.parse(await readFile(join(root, "observed.json"), "utf8")).find(value => value.method === "cq/piUsage").params;
+assert.equal(restarted.sequence, "1", "New CQ host must receive its own contiguous sequence");
+assert.equal(restarted.turn, "1");
+assert.equal(restarted.session, "next-native-session");
 const interrupted = runtime();
 await load(interrupted);
 await interrupted.handlers.get("session_start")();
@@ -66,4 +76,4 @@ const request = interrupted.registered.get("cq_session").execute("aborted", { ho
 controller.abort();
 await assert.rejects(() => request, /interrupted/);
 await interrupted.handlers.get("session_shutdown")();
-console.log(JSON.stringify({ stdio: "passed", heartbeat: "passed", usageMetadataOnly: "passed", shutdown: "passed", abort: "passed" }));
+console.log(JSON.stringify({ stdio: "passed", heartbeat: "passed", usageMetadataOnly: "passed", shutdown: "passed", restart: "passed", abort: "passed" }));

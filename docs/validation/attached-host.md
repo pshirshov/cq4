@@ -1,12 +1,12 @@
 # Harness-owned interactive CQ host
 
-Implementation in progress, 2026-09-28. Implements accepted I1/K1. The installed operator package has **not** yet been replaced. Native harness evaluations, native packaging and the user's yolo trial are pending.
+Implementation in progress, 2026-09-28. Implements accepted I1/K1. The installed operator package has **not** yet been replaced. Native consumer routes pass; interactive failure checks, native packaging and the user's yolo trial remain in progress.
 
 ## Implemented development interface
 
 - `cq host HARNESS [--settings FILE]` is a stdio MCP distage role started by the harness. `CQ_SETTINGS` can supply the settings path. The existing interactive assistant is the Governor; no second Governor process is launched.
 - `cq configure HARNESS --settings FILE [--executable FILE] [--directory DIR] [--replace]` installs the integration and four workflow commands. An installed native binary discovers its own executable; a development JVM invocation requires an executable wrapper explicitly.
-- Claude: project `.mcp.json`, preserving unrelated entries. Codex: project `.codex/config.toml`; a user-owned existing file is refused, even with `--replace`. Export into an empty directory and merge its `mcp_servers.cq` table manually in that case. Pi: project `.pi/extensions/cq-host.mjs` plus generated tool configuration.
+- Claude: project `.mcp.json`, preserving unrelated entries. Codex: project `.codex/config.toml`; a user-owned existing file is refused, even with `--replace`. Export into an empty directory and merge its `mcp_servers.cq` table manually in that case. Pi: project `.pi/extensions/cq-host.js` plus generated tool configuration.
 - `CQ_TOKEN_FILE` accepts an absolute credential-file path. `CQ_TOKEN` remains supported and takes precedence. Generated configurations contain environment **names**, not credential values. Managed children retain their existing restricted environment and scoped tools.
 - The outer connection exposes the seven Governor domain tools, `session` and `dispatch`. `session Context` supplies project/routes/checks/limits and instructions, including Codex's complete argument guide. `session Workflow` activates typed scope. The command exports use these tools directly. `cq run` remains the batch path.
 - Workflow receipts are idempotent. A new activation requires quiescent child/check/integration/combination work. Old cohort selections and integration/combination identities cannot cross activation generations. Retrying an older activation returns its receipt without reactivating it. Context reports the active workflow. Status/cancel remain available.
@@ -20,7 +20,7 @@ yolo → interactive Claude/Codex/Pi → cq host → guardian → child harness
                                             ↘ durable CQ API (separate server)
 ```
 
-The actual native parent chains and native configuration discovery still require the checks below before this is a verified product claim.
+Native project configuration discovery and cross-harness dispatch pass in the evaluations below. Interactive TUI parent chains are being measured separately.
 
 ## Verified development checks
 
@@ -44,10 +44,36 @@ These are deterministic process/service checks, not real model evaluations. The 
 
 All three pass in `core-6`. Astra approved these scoped lifecycle corrections; overall integration approval is still pending.
 
+## Real native consumers
+
+All runs use the configured, authenticated harness executables inside the existing yolo sandbox. Each creates one task through the installed tools and dispatches one Explorer child by retained choice and claim. No extra Governor is started.
+
+| Evidence directory | Actual route | Result |
+| --- | --- | --- |
+| `native-claude-2` | Claude → Codex | Completed child, durable result marker, no surviving CQ descendants; explicit final publication recovery acknowledges one batch, repeat zero. |
+| `native-codex-3` | Codex → Pi | Same checks pass; explicit interrupted-publication recovery, repeat zero. |
+| `native-pi-3` | Pi → Claude | Same checks pass; normal exit publishes final outcome; native finalized-assistant usage samples recorded. |
+
+Claude/Codex native teardown can terminate their stdio host before its final audit publication. This is an interrupted outer outcome, not an observed model completion. Once the owner has stopped, `cq job upload --session DIR` replays retained records without adopting or launching processes. `session Context` supplies DIR; it is also the session UUID directory beneath the configured stateRoot. Partial/incomplete records produce an explicit failure after valid publications are replayed.
+
+Failed runs are retained: `native-codex-1` exceeded the claim limit; the tool description now publishes the existing 300,000 ms bound. `native-claude-1` completed its child but failed an evaluator assertion that incorrectly required native exit to publish synchronously. `native-pi-1/2` did not load the extension: installed Pi discovers `.js`/`.ts`, and its `--no-approve` flag ignores project files. The generated filename is corrected and the evaluator uses `--approve`. `native-codex-2` correctly rejected a Pi report claiming HostObserved provenance. Its role-specific output schema now permits only ModelDeclared; `provenance-schema-before.log` reproduces the mismatch and `provenance-schema-after.log` passes eight adapter checks. No failed spending is represented as zero; failed native transcripts are retained, including runs that never attached to CQ.
+
+Pi restart checks reproduced sequence reuse across new hosts (`pi-restart-before.log`) and now pass (`pi-restart-after.log`). Astra also identified an incomplete final Pi sample preventing recovery of earlier committed samples. `pi-tail-before.log` reproduces it; `pi-tail-after.log` passes 21 focused tests. Recovery now replays earlier samples, preserves the bounded incomplete tail, reports its path and does not invent counters. The PostgreSQL variant passes in `core-7/usage-postgres.log`; Astra approved this correction.
+
+## Interactive TUI ownership
+
+Actual TUI runs (no model requests) initialized MCP, stayed connected beyond the startup/heartbeat deadlines, and then froze or killed the native owner. Each host's immediate parent was the actual interactive harness process. Recovery was idempotent; a restart created a distinct session.
+
+| Evidence | Frozen owner: host exit | Killed owner: host exit |
+| --- | --- | --- |
+| `tui-claude-5` | 39.717 s | 0.354 s |
+| `tui-codex-4` | 40.598 s | 0.836 s |
+| `tui-pi-1` | 40.409 s | 0.579 s |
+
+These checks used the JVM development executable. Earlier Claude/Codex TUI attempts stopped at native trust/permission dialogs or terminal capability queries; their transcripts are retained. The driver now implements those terminal responses and explicitly trusts only its own generated test checkout. Packaged native checks remain below.
+
 ## Remaining verification
 
-- Actual Claude/Codex/Pi project integration, Context consumption, cross-harness child dispatch and Pi native usage observations.
-- Interactive process ownership, frozen/dead owners, disconnect/restart and descendant cleanup for the actual three integrations.
 - A release artifact including the added role/resources; installed setup and affected batch/workflow/integration checks.
 - Concrete yolo commands with non-secret environment forwarding and required binds, followed by the user's trial.
 

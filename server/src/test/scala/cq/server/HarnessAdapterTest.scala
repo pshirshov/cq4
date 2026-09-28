@@ -23,6 +23,16 @@ final class HarnessAdapterLocal extends AnyWordSpec {
     "PROVIDER_TOKEN" -> "configured-provider-secret", "UNRELATED_SECRET" -> "unrelated-secret")
 
   "Harness launch boundaries (Behavioral Active Blackbox; Group / filesystem Communication)" should {
+    "restrict child-authored evidence to model-declared provenance in the output contract" in {
+      val schemas = new McpSchemas()
+      val modes = ExplorerMode.all.map(DispatchWork.Explorer.apply) :+ DispatchWork.Worker(WorkerMode.Probe)
+      modes.foreach { mode =>
+        val schema = schemas.childReport(mode)
+        assert(schema.hcursor.downField("$defs").downField("cq_api_EvidenceOrigin").get[List[String]]("enum") == Right(List("ModelDeclared")))
+      }
+      assert(schemas.schema("EvidenceOrigin").hcursor.get[List[String]]("enum").toOption.get.toSet == EvidenceOrigin.all.map(_.toString).toSet)
+    }
+
     "deliver complete canonical output contracts through Pi's native system instructions" in {
       val schemas = new McpSchemas()
       val modes = ExplorerMode.all.map(DispatchWork.Explorer.apply) ++ List(DispatchWork.Planner()) ++

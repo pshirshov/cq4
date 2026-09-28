@@ -43,7 +43,7 @@ final class AttachedAssets(schemas: McpSchemas, workflows: WorkflowAssets) {
           "Existing .codex/config.toml is user-owned. Export into an empty directory and merge its mcp_servers.cq table into this file; CQ will not overwrite unrelated TOML settings")
         List(CommandAsset(Path.of(".codex/config.toml"), body))
       case Harness.Pi =>
-        List(CommandAsset(Path.of(".pi/extensions/cq-host.mjs"), resource),
+        List(CommandAsset(Path.of(".pi/extensions/cq-host.js"), resource),
           CommandAsset(Path.of(".pi/extensions/cq-host.json"), command.deepMerge(Json.obj("directory" -> Json.fromString(root.toString),
             "tools" -> Json.arr(schemas.attachedTools*))).spaces2 + "\n"))
     }

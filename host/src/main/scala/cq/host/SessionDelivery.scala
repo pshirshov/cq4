@@ -196,7 +196,7 @@ final class SessionDelivery(journal: JobRepository, workspaces: WorkspaceService
         } yield count
       }).either
     }
-    attached <- (if (run.ownership == SessionOwnership.Attached) ZIO.attemptBlocking(new AttachedUsage(directory, run, clock).recover(api)) else ZIO.succeed(0)).either
-    recovered <- independent(checked ++ (delivered :+ attached).map(_.map(count => SessionDeliveryReport(count, Nil))))
+    attached <- (if (run.ownership == SessionOwnership.Attached) ZIO.attemptBlocking(new AttachedUsage(directory, run, clock).recover(api)) else ZIO.succeed(SessionDeliveryReport(0, Nil))).either
+    recovered <- independent(checked ++ delivered.map(_.map(count => SessionDeliveryReport(count, Nil))) :+ attached)
   } yield SessionDeliveryReport(recovered.map(_.acknowledged).sum, inventory.incompleteTickets ++ recovered.flatMap(_.incompleteTickets))
 }

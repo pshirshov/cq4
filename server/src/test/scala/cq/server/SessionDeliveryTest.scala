@@ -76,12 +76,18 @@ abstract class SessionDeliveryTest extends SpecZIO with AssertZIO {
         }
         before <- usage.summary(owner, UsageFilter.SessionOnly(owner.actor.session))
         _ <- assertIO(before.unattributed.total.known == 155 && before.attemptsWithoutMeters == 0 && before.incompleteMeters == 1)
-        _ <- ZIO.attemptBlocking(Files.delete(directory.resolve("pi-usage/0002/delivery/final/000000.ack")))
+        _ <- ZIO.attemptBlocking {
+          Files.delete(directory.resolve("pi-usage/0002/delivery/final/000000.ack"))
+          HostFiles.directory(directory.resolve("pi-usage/0004"))
+          Files.writeString(directory.resolve("pi-usage/0004/.upload-interrupted.pending"), "{\"partial")
+        }
         recovered <- new SessionDelivery(journal, fixture.service, clock).flush(directory, run, receiver)
         after <- usage.summary(owner, UsageFilter.SessionOnly(owner.actor.session))
         _ <- assertIO(recovered.acknowledged == 2 && after.unattributed.total.known == 155 && after.attempts.unknown == 1 && after.attempts.running == 0)
+        _ <- assertIO(recovered.incompleteTickets == List(directory.resolve("pi-usage/0004")))
         repeated <- new SessionDelivery(journal, fixture.service, clock).flush(directory, run, receiver)
         _ <- assertIO(repeated.acknowledged == 0)
+        _ <- assertIO(repeated.incompleteTickets == recovered.incompleteTickets && Files.exists(directory.resolve("pi-usage/0004/.upload-interrupted.pending")))
         missing <- artifacts.metadata(owner, NativeArtifacts.id(attempt.id, "stdout")).either
         _ <- assertIO(missing.isLeft && journal.records.isEmpty)
         metadata <- artifacts.metadata(owner, NativeArtifacts.id(attempt.id, "attached-pi-1"))

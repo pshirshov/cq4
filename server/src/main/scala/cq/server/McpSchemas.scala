@@ -29,7 +29,7 @@ final class McpSchemas {
       decoder(ChangeInput_JsonCodec)(Command.Change.apply)),
     McpTool("apply", "Apply the typed proposal in an admitted result by handle after inspecting read/Proposal. Only the original governor can apply it. Current exact assignment revisions/claim are required; an exact committed retry returns its original acknowledgement. Drafts and authority are resolved by the server.", "ProposalApplyInput", Set("Changed"), true,
       decoder(ProposalApplyInput_JsonCodec)(Command.ApplyProposal.apply)),
-    McpTool("claim", "Acquire, renew or release an explicit item-set claim. Governor authority required. Takeover requires Human authority and a freshly reviewed read/Claims snapshot; replaced claims lose their entire membership.", "ClaimInput", Set("Claimed"), true,
+    McpTool("claim", s"Acquire, renew or release an explicit item-set claim. Duration is 1–${cq.core.LedgerPolicy.MaxClaimMillis} ms; renew before expiry during longer work. Governor authority required. Takeover requires Human authority and a freshly reviewed read/Claims snapshot; replaced claims lose their entire membership.", "ClaimInput", Set("Claimed"), true,
       decoder(ClaimInput_JsonCodec)(Command.ClaimWork.apply)),
     McpTool("usage", "Read task, cohort, session, evaluation or project usage totals and bounded cost, observation, attempt and outcome audit pages. Shared totals are not per-member allocations.", "UsageInput", Set("UsageSummary", "UsageCosts", "UsageAudit", "UsageAttempts", "UsageOutcomes"), false,
       decoder(UsageInput_JsonCodec)(Command.Usage.apply)),
@@ -72,7 +72,12 @@ final class McpSchemas {
     val branches = definitions("cq_api_ChildReport").get.hcursor.get[Vector[Json]]("oneOf").fold(throw _, identity)
       .filter(_.hcursor.get[List[String]]("required") == Right(List(tag)))
     require(branches.size == 1, s"Expected one generated ChildReport.$tag schema")
-    closure(branches.head)
+    val result = closure(branches.head)
+    if (tag != "Evidence") result
+    else result.mapObject(_.add("$defs", result.hcursor.downField("$defs").focus.get.mapObject { values =>
+      values.add("cq_api_EvidenceOrigin", values("cq_api_EvidenceOrigin").get.mapObject(
+        _.add("enum", Json.arr(Json.fromString(EvidenceOrigin.ModelDeclared.toString)))))
+    }))
   }
 
   def nativeInvocation(harness: Harness, invocation: HarnessInvocation): HarnessInvocation = {
