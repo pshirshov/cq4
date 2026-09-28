@@ -20,6 +20,7 @@ import uuid
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("checkpoint", type=Path)
+    parser.add_argument("--release", type=Path)
     continuation = parser.add_mutually_exclusive_group()
     continuation.add_argument("--reopen", type=Path, help="Restore a prior assessment, reopen T1 for its missing test, integrate and reassess")
     continuation.add_argument("--correct", type=Path, help="Restore a prior process assessment and correct its Handoff finding before reassessment")
@@ -29,9 +30,11 @@ def main():
     supplied = next((value for value in [arguments.reopen, arguments.correct, arguments.assess] if value is not None), None)
     prior_directory = None if supplied is None else supplied.resolve()
     root = Path(__file__).resolve().parent.parent
+    required = ["go", "initdb"] + (["java", "sbt"] if arguments.release is None else [])
+    if any(shutil.which(name) is None for name in required):
+        os.execvp("nix", ["nix", "develop", str(root), "-c", str(root / "dev/process-assess"), *sys.argv[1:]])
+    arguments.release = arguments.release.resolve() if arguments.release is not None else None
     os.chdir(root)
-    if any(shutil.which(name) is None for name in ["java", "sbt", "go"]):
-        os.execvp("nix", ["nix", "develop", "-c", str(root / "dev/process-assess"), *sys.argv[1:]])
     evaluation = runpy.run_path(str(root / "dev/consumer-eval"))
     support = runpy.run_path(str(root / "dev/check"))
     predicates = runpy.run_path(str(root / "dev/process-assess-evidence.py"))
@@ -64,10 +67,13 @@ def main():
               "remaining": ["follow-up/reopening", "defect/research/upstream example", "matched usage repetitions", "human acceptance"]}
     write(evidence / "result.json", result)
     try:
-        checks.generate()
-        command = ["java", "-cp", checks.classpath(), "cq.server.Main"]
-        guardian = evidence / "cq-guardian"
-        checks.run(["gcc", "-std=c17", "-O2", "-Wall", "-Wextra", "-Werror", "-o", str(guardian), "host/native/guardian.c"], "guardian-build", 60)
+        previous = json.loads((original / "result.json").read_text()).get("release")
+        assert (arguments.release is None) == (previous is None), "Assessment must use the checkpoint's recorded runtime kind"
+        if prior_directory is not None:
+            restored = json.loads((prior_directory / "result.json").read_text()).get("release")
+            assert evaluation["same_runtime"](restored, previous), "Restored assessment changed the producer runtime"
+        command, guardian, result["release"] = evaluation["runtime"](checks, arguments.release, previous)
+        write(evidence / "result.json", result)
         settings = copy.deepcopy(baseline["settings"])
         settings.update(guardian=str(guardian), integrationTarget=None)
         settings["evaluation"]["assessor"] = True

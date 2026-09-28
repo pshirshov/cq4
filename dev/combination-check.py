@@ -1,4 +1,5 @@
 import json
+from fixture_runtime import guardian_binary
 import os
 from pathlib import Path
 import subprocess
@@ -19,8 +20,7 @@ def main():
     environment = {name: value for name, value in os.environ.items() if not name.startswith("CQ_")}
     environment["CQ_TOKEN"] = os.environ["CQ_TOKEN"]
     endpoint = os.environ["CQ_ORIGIN"]
-    guardian = root / "cq-guardian"
-    subprocess.run(["gcc", "-std=c17", "-O2", "-Wall", "-Wextra", "-Werror", "-o", str(guardian), "host/native/guardian.c"], check=True)
+    guardian = guardian_binary(root, os.environ.get("CQ_GUARDIAN_TEST_BINARY"))
     preload = root / "integration-stall.so"
     subprocess.run(["gcc", "-std=c17", "-shared", "-fPIC", "-Wall", "-Wextra", "-Werror", "-o", str(preload), "dev/shutdown-stall.c", "-ldl"], check=True)
     executable = root / "fixture-harness"

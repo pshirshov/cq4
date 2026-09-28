@@ -24,6 +24,19 @@ Development uses one CQ schema version, `0.1.0`. Edit it in place and run `./dev
 
 Each invocation prints its evidence directory, normally `.work/evidence/<timestamp>-<check>`. Set `CQ_EVIDENCE_ROOT` to retain logs elsewhere. `result.json`, `commands.json` and `source-sha256.json` distinguish pass/failure and identify the tested source. Native proof output is `<evidence-directory>/cq`; it is currently a development artifact.
 
+## Native distribution
+
+The M6 candidate is `/srv/nvme/tmp/cq4-implementation/cq-release`. The complete native runtime and installed deterministic gates pass; live release verification is tracked in [package evidence](docs/validation/m6-package.md). Its single native executable serves every role, with `bin/cq-guardian` beside it. The distribution README documents the exported Nix runtime closure, trusted import on multi-user installations, GC roots, external PostgreSQL/harness dependencies and configuration examples.
+
+From this checkout, assemble and verify a distribution using the evidence directory printed by a passing native gate:
+
+```sh
+./dev/package --native-evidence /absolute/passed-native-evidence --output /absolute/new-distribution
+./dev/package-check --release /absolute/new-distribution --evidence-root /absolute/evidence-outside-cq
+```
+
+The verifier needs the development shell, built test clients and Linux bubblewrap. It relocates the artifact, imports its closure into a private Nix store, mounts those libraries, and hides the CQ checkout/build and Coursier classpath from CQ. Test clients and configured consumer tools remain external. The same native binary is exercised through transport, roles, supervision, integration, browser, restart and settled backup/restore.
+
 Provided PostgreSQL can be selected with all three variables:
 
 ```sh
@@ -35,6 +48,8 @@ CQ_TEST_DATABASE_PASSWORD=local-test-password \
 
 The runner creates and drops a unique schema in that database. The account must have schema creation permission. With no provided URL, PostgreSQL is started as the current non-root user and stopped by the runner. Missing infrastructure fails the check. `access` requires that local cluster and records actual query plans and mutation/completion access budgets as unrelated data grows; [measurement scope and evidence](docs/validation/m3-query-access.md). `ui` type-checks the frontend and runs real Chromium UI/connection checks against the server and PostgreSQL, without model consumers or supervisor fixtures. Use it for UI-only increments. `usage` adds the dummy/PostgreSQL audit-service checks and actual usage-watch protocol/SQL measurements to the browser gate; it requires an isolated local cluster. `browser` includes the broader transport/supervisor fixtures before those browser checks. `process` builds the Linux guardian and checks process-tree cleanup and the Scala driver; actual supervisor recovery and dispatch are covered by `postgres`; live harness evidence is retained separately. It requires Linux 5.9 or newer.
 
+For exact startup, session reconciliation, settled database backup/restore and retention boundaries, use the [operations guide](docs/design/operations.md).
+
 ## Real consumer evaluations
 
 These explicit commands use configured Claude, Codex and Pi model access and incur model usage:
@@ -43,7 +58,9 @@ These explicit commands use configured Claude, Codex and Pi model access and inc
 CQ_EVIDENCE_ROOT=/srv/nvme/tmp/cq4-implementation ./dev/evaluate --suite first-slice
 ```
 
-The suite runs Python and Go consumer builds with each harness governing once, followed by a separate Codex/Astra assessment of each exact candidate. It retains model routes, native output, candidate/check/review artifacts, operational usage and database dumps. Assessment attempts use `assessor: true` in the same evaluation audit. `suite.json` links each stage; use the assessment's combined usage report for baseline plus assessment accounting. Integration and human milestone acceptance remain separate. The release suite is not implemented and fails explicitly.
+The first-slice suite runs Python and Go consumer builds with each harness governing once, followed by a separate Codex/Astra assessment of each exact candidate. It retains model routes, native output, candidate/check/review artifacts, operational usage and database dumps. Assessment attempts use `assessor: true` in the same evaluation audit. `suite.json` links each stage; use the assessment's combined usage report for baseline plus assessment accounting. Integration and human milestone acceptance remain separate.
+
+The packaged release suite is implemented and independently reviewed; the installed deterministic corpus passes and live execution is next. After creating a verified distribution, use `./dev/evaluate --suite release --release /absolute/distribution`. It runs all nine parent/child routes through three cohorts, their independent audits, and both complete worked processes. Resume with `--resume /absolute/suite`; the actual question checkpoint also needs `--answer-file /absolute/answer.json`. Successful stages are replayed without new model calls. `--report-only` recomputes retained evidence; explicit retries/adopted corrections preserve failed spending. See [package verification and release suite](docs/validation/m6-package.md).
 
 For a targeted run, use `./dev/consumer-eval claude|codex|pi python|go`, then `./dev/consumer-assess <printed-evidence-directory>`. The deferred assessment requires unchanged task revisions and the same consumer specification/oracle as the baseline. [Observed results, failures and limits](docs/validation/m2-consumer-evaluations.md).
 
@@ -72,7 +89,7 @@ CQ_TOKEN=0123456789abcdef0123456789abcdef \
 nix develop -c sbt --server --batch 'server/run serve'
 ```
 
-Use your own local credential in place of the example token. All variables are required, including the database password (which may be empty for local trust authentication). The server initializes the current ledger/audit schema in an empty database. Existing development databases may require recreation after schema edits; no upgrade compatibility is promised. The previously retained native artifact covers M0, not this current increment.
+Use your own local credential in place of the example token. All variables are required, including the database password (which may be empty for local trust authentication). The server initializes the current ledger/audit schema in an empty database. Existing development databases may require recreation after schema edits; no upgrade compatibility is promised. The same environment variables configure the [current native executable](docs/validation/m6-native.md); run its absolute path with `serve` in place of the sbt invocation.
 
 ```sh
 curl --fail-with-body \
@@ -142,6 +159,6 @@ The [query language](docs/design/query-language.md) is shared by CLI, MCP and br
 
 With an explicit `integrationTarget` in supervisor settings, the governor can prepare and apply a reviewed candidate. When the target advances, `Combine` returns a frozen plan handle for a conflict-resolution worker; the combined candidate requires fresh validation and review. Full prompts, merge diagnostics and worker results remain behind handles. [Integration contract](docs/design/git-integration.md).
 
-Here `cq` denotes that JVM launcher until the current native package is built. Server, client and supervisor commands use the same distage role entrypoint; native role syntax such as `cq :client -- web` and `cq :help` is also available. Client commands do not require local server/database configuration, and diagnostics go to stderr. [Client role checks](docs/validation/m2-roles.md); [supervisor configuration, run instructions and limits](docs/design/supervisor-role.md).
+Here `cq` denotes the installed `bin/cq` executable or the JVM launcher above. Server, client and supervisor commands use the same distage role entrypoint; native role syntax such as `cq :client -- web` and `cq :help` is also available. Client commands do not require local server/database configuration, and diagnostics go to stderr. [Client role checks](docs/validation/m2-roles.md); [supervisor configuration, run instructions and limits](docs/design/supervisor-role.md).
 
 `web` prints the configured origin. Project configuration lives under the Git common directory (`cq/project.json`) or `.cq/project.json` outside Git. Worktrees share identity. Explicit `init --name` renames the server display; ordinary reattachment preserves that name and refreshes the local cache. `status` also supports `--cohort` and `--session`; omit scope flags for project totals. Commands emit generated JSON with lossless decimal strings. See [tested behavior and gaps](docs/validation/m1-interfaces.md).

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the first usable-slice consumer corpus and independent assessments."""
+"""Run the first usable-slice or packaged release corpus and independent assessments."""
 import argparse
 import datetime
 import json
@@ -15,9 +15,11 @@ ROOT = Path(__file__).resolve().parent.parent
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--suite", required=True, choices=["first-slice", "release"])
-    arguments = parser.parse_args()
+    arguments, remaining = parser.parse_known_args()
     if arguments.suite == "release":
-        parser.error("The M4/M6 release corpus is not implemented")
+        os.execv(sys.executable, [sys.executable, str(ROOT / "dev/release-evaluate"), *remaining])
+    if remaining:
+        parser.error("Unknown first-slice arguments: " + " ".join(remaining))
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S")
     evidence = Path(os.environ.get("CQ_EVIDENCE_ROOT", str(ROOT / ".work/evidence"))).resolve() / (stamp + "-first-slice")
     evidence.mkdir(parents=True, mode=0o700)

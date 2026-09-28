@@ -1,0 +1,222 @@
+#!/usr/bin/env python3
+"""Run/resume the packaged release corpus without repeating accepted stages."""
+import argparse
+import datetime
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import runpy
+import subprocess
+import time
+
+
+ROOT = Path(__file__).resolve().parent.parent
+
+
+def read(path):
+    return json.loads(path.read_text())
+
+
+def write(path, value):
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(value, indent=2) + "\n")
+    temporary.replace(path)
+
+
+def digest(path):
+    with path.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def stages():
+    result = []
+    for harness, language in [("claude", "python"), ("codex", "go"), ("pi", "python")]:
+        producer = "cohort-" + harness
+        result += [{"name": producer, "runner": "consumer-eval", "arguments": [harness, language, "--cohort"],
+                    "dependency": None, "expected": "candidate-passed"},
+                   {"name": producer + "-assess", "runner": "consumer-assess", "arguments": ["--cohort"],
+                    "dependency": producer, "expected": "assessment-passed"}]
+    result += [{"name": "process-begin", "runner": "process-eval", "arguments": ["begin"], "dependency": None, "expected": "awaiting-user-answer"},
+               {"name": "process-resume", "runner": "process-eval", "arguments": ["resume"], "dependency": "process-begin", "expected": "integrated-candidate-passed"},
+               {"name": "process-assess", "runner": "process-assess", "arguments": [], "dependency": "process-resume", "expected": "assessment-passed"}]
+    previous = None
+    for stage in ["begin", "probe", "research", "plan", "integrate", "upstream", "assess"]:
+        name = "defect-" + stage
+        result.append({"name": name, "runner": "defect-eval", "arguments": [stage], "dependency": previous, "expected": stage + "-passed"})
+        previous = name
+    return result
+
+
+def replay(stage, directory, predecessor, identity):
+    result = read(directory / "result.json")
+    same = runpy.run_path(str(ROOT / "dev/consumer-eval"))["same_runtime"]
+    assert same(result.get("release"), identity), "Stage used a different release"
+    assert result["status"] == stage["expected"], "Stage did not satisfy its acceptance gate: " + result["status"]
+    if predecessor is not None:
+        assert Path(result["baselineEvidence"]).resolve() == predecessor, "Stage used a different predecessor"
+    if stage["runner"] == "consumer-eval":
+        proof = runpy.run_path(str(ROOT / "dev/consumer-cohort.py"))["retained"](directory)
+        assert result["harness"] == stage["arguments"][0] and result["language"] == stage["arguments"][1]
+        return proof
+    if stage["runner"] == "consumer-assess":
+        cohort = runpy.run_path(str(ROOT / "dev/consumer-cohort.py"))
+        proof = cohort["retained"](predecessor)
+        session, = (directory / "sessions").iterdir()
+        statuses = read(directory / "dispatch-statuses.json")
+        ticket = read(session / "children" / statuses[0]["attempt"]["value"] / "ticket.json")
+        audit = cohort["audited"](proof, read(predecessor / "cohort-seed.json"), statuses, read(directory / "candidate-evidence.json"),
+            ticket, read(session / "run.json"), read(session / "journal" / (ticket["attempt"]["id"]["value"] + ".json")),
+            read(directory / "attempts.json")["UsageAttempts"]["page"]["entries"],
+            [entry for path in sorted(directory.glob("usage-audit-*.json")) for entry in read(path)["UsageAudit"]["page"]["entries"]],
+            read(directory / "assessment-before.json")["Claims"]["preview"], read(directory / "assessment-handoff.json")["Claims"]["preview"])
+        assert audit == read(directory / "accepted-cohort-audit.json") == result["cohortAssessment"]
+        return audit
+    if stage["name"] == "process-begin":
+        session, = (directory / "sessions").iterdir()
+        proof = runpy.run_path(str(ROOT / "dev/process-evidence.py"))["question_checkpoint"](read(directory / "items.json"), read(directory / "histories.json"),
+            [read(path) for path in (session / "children").glob("*/ticket.json")], read(session / "receipt.json"), read(directory / "checkpoint-handoff.json")["Claims"]["preview"])
+        assert proof == result["checkpoint"] and not result["archiveErrors"]
+        return proof
+    if stage["name"] == "process-resume":
+        return runpy.run_path(str(ROOT / "dev/process-assess-evidence.py"))["retained"](directory)["proof"]
+    if stage["name"] == "process-assess":
+        helper = runpy.run_path(str(ROOT / "dev/process-assess-evidence.py"))
+        proof = helper["retained_assessment"](directory, helper["retained"](predecessor), predecessor, 0)
+        return {"attemptIds": proof["attemptIds"]}
+    return runpy.run_path(str(ROOT / "dev/defect-evidence.py"))["checkpoint"](directory)["manifest"]["proof"]
+
+
+def invocation(command, environment, directory, attempt, save):
+    start = time.monotonic()
+    with (directory / (attempt["id"] + ".log")).open("w") as log:
+        with subprocess.Popen(command, cwd=ROOT, env=environment, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True) as process:
+            for line in process.stdout:
+                log.write(line)
+                log.flush()
+                print(line, end="", flush=True)
+                if line.startswith("Evidence: "):
+                    assert "evidence" not in attempt, "Stage emitted multiple evidence directories"
+                    location = Path(line.removeprefix("Evidence: ").strip()).resolve()
+                    assert location.parent == directory, "Stage evidence escaped the suite directory"
+                    attempt["evidence"] = str(location)
+                    save()
+            attempt["exit"] = process.wait()
+    attempt["elapsedSeconds"] = time.monotonic() - start
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--release", type=Path, required=True)
+    parser.add_argument("--resume", type=Path)
+    parser.add_argument("--answer-file", type=Path)
+    parser.add_argument("--retry", action="append", default=[], metavar="STAGE=REASON")
+    parser.add_argument("--adopt", action="append", default=[], metavar="STAGE=EVIDENCE")
+    parser.add_argument("--report-only", action="store_true")
+    arguments = parser.parse_args()
+    release = arguments.release.resolve(strict=True)
+    package = runpy.run_path(str(ROOT / "dev/package"))
+    _, _, identity = package["load_release"](release)
+    sources = runpy.run_path(str(ROOT / "dev/package-check"))["verifier_sources"]()
+    configuration = {key: value for key, value in os.environ.items() if key.startswith(("CQ_CLAUDE_", "CQ_CODEX_", "CQ_PI_"))}
+    plan = stages()
+    names = {stage["name"] for stage in plan}
+    retry = dict(value.split("=", 1) for value in arguments.retry)
+    adopted = dict(value.split("=", 1) for value in arguments.adopt)
+    assert retry.keys() <= names and adopted.keys() <= names and not retry.keys() & adopted.keys()
+    assert all(reason.strip() for reason in retry.values()), "Explicit retry reason required"
+    if arguments.report_only:
+        assert arguments.resume is not None and not retry and not adopted
+    if arguments.resume is None:
+        stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S")
+        directory = Path(os.environ.get("CQ_EVIDENCE_ROOT", "/srv/nvme/tmp/cq4-implementation")).resolve() / (stamp + "-release")
+        directory.mkdir(parents=True, mode=0o700)
+        report = {"suite": "release", "status": "running", "release": identity, "sourceSha256": sources,
+                  "configuration": configuration, "plan": plan, "attempts": [], "remaining": ["independent release review", "human acceptance"]}
+        write(directory / "suite.json", report)
+    else:
+        directory = arguments.resume.resolve(strict=True)
+    with (directory / ".lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        report = read(directory / "suite.json")
+        assert report["sourceSha256"] == sources and report["plan"] == plan and report["configuration"] == configuration, "Frozen release evaluation inputs changed"
+        assert runpy.run_path(str(ROOT / "dev/consumer-eval"))["same_runtime"](report["release"], identity)
+        for attempt in report["attempts"]:
+            if "resultSha256" in attempt:
+                assert digest(Path(attempt["evidence"]) / "result.json") == attempt["resultSha256"], "Retained invocation manifest changed"
+            for name, expected in attempt.get("lineageSha256", {}).items():
+                assert digest(Path(name) / "result.json") == expected, "Retained correction lineage changed"
+        save = lambda: write(directory / "suite.json", report)
+        environment = dict(os.environ, CQ_EVIDENCE_ROOT=str(directory))
+        print("Suite evidence:", directory, flush=True)
+        selected = {}
+        for stage in plan:
+            name, dependency = stage["name"], stage["dependency"]
+            if dependency is not None and dependency not in selected:
+                continue
+            prior = selected[dependency] if dependency is not None else None
+            predecessor = Path(prior["evidence"]) if prior is not None else None
+            dependency_id = prior["id"] if prior is not None else None
+            matches = [attempt for attempt in report["attempts"] if attempt["stage"] == name and attempt["dependency"] == dependency_id]
+            attempt = matches[-1] if matches else None
+            if name in retry or name in adopted or attempt is None:
+                if arguments.report_only:
+                    continue
+                if name == "process-resume" and arguments.answer_file is None and name not in adopted:
+                    continue
+                command = [str(ROOT / "dev" / stage["runner"]), *stage["arguments"], "--release", str(release)]
+                if predecessor is not None:
+                    command += (["--checkpoint"] if stage["runner"] in ["process-eval", "defect-eval"] else []) + [str(predecessor)]
+                if name == "process-resume" and name not in adopted:
+                    command += ["--answer-file", str(arguments.answer_file.resolve(strict=True))]
+                if name == "defect-assess":
+                    analysis = runpy.run_path(str(ROOT / "dev/release-report.py"))
+                    experiments = analysis["experimental_usage"](report, "defect-")
+                    path = directory / ("defect-experiments-" + str(len(report["attempts"])) + ".json")
+                    write(path, experiments)
+                    command += ["--experiments", str(path)]
+                attempt = {"id": f"stage-{len(report['attempts']) + 1:03d}", "stage": name, "dependency": dependency_id,
+                           "status": "running", "command": command, "reason": retry.get(name), "origin": "adopted" if name in adopted else "invoked"}
+                report["attempts"].append(attempt)
+                save()
+                try:
+                    if name in adopted:
+                        attempt.update(evidence=str(Path(adopted[name]).resolve(strict=True)), exit=0, elapsedSeconds=None)
+                    else:
+                        invocation(command, environment, directory, attempt, save)
+                    assert attempt["exit"] == 0, "Stage process failed"
+                    lineage = runpy.run_path(str(ROOT / "dev/release-report.py"))["lineage_roots"](Path(attempt["evidence"]))
+                    for path in lineage:
+                        stage_sources = read(path / "source-sha256.json")
+                        assert {name: stage_sources.get(name) for name in sources} == sources, "Stage used different source inputs"
+                        assert runpy.run_path(str(ROOT / "dev/consumer-eval"))["same_runtime"](read(path / "result.json").get("release"), identity), "Correction lineage used another release"
+                    attempt["lineageSha256"] = {str(path): value for path, value in lineage.items()}
+                    attempt["proof"] = replay(stage, Path(attempt["evidence"]), predecessor, identity)
+                    attempt["status"] = "accepted"
+                except Exception as error:
+                    attempt.update(status="rejected", error=str(error))
+                finally:
+                    if "evidence" in attempt and (Path(attempt["evidence"]) / "result.json").is_file():
+                        attempt["resultSha256"] = digest(Path(attempt["evidence"]) / "result.json")
+                    save()
+            if attempt["status"] == "accepted":
+                assert digest(Path(attempt["evidence"]) / "result.json") == attempt["resultSha256"], "Retained stage manifest changed"
+                assert replay(stage, Path(attempt["evidence"]), predecessor, identity) == attempt["proof"], "Retained stage proof changed"
+                selected[name] = attempt
+        report["selected"] = {name: attempt["id"] for name, attempt in selected.items()}
+        report["pending"] = [stage["name"] for stage in plan if stage["name"] not in selected]
+        report["status"] = "corpus-passed" if not report["pending"] else "incomplete"
+        assert runpy.run_path(str(ROOT / "dev/package-check"))["verifier_sources"]() == sources, "Release evaluator changed during execution"
+        save()
+        analysis = runpy.run_path(str(ROOT / "dev/release-report.py"))
+        metrics = analysis["report"](directory)
+        if report["status"] == "corpus-passed" and metrics["status"] != "release-corpus-observed":
+            report["status"] = "corpus-usage-incomplete"
+            save()
+            analysis["report"](directory)
+        print(report["status"], "pending:", report["pending"], flush=True)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,149 @@
+#!/usr/bin/env python3
+"""Package a verified native CQ executable with its guardian and Nix runtime closure."""
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import sys
+
+
+ROOT = Path(__file__).resolve().parent.parent
+BUILD_FILES = {"build.sbt", "project/build.properties", "flake.nix", "flake.lock", "package.json",
+               "package-lock.json", "tsconfig.json", "dev/generate", "dev/build-web.mjs"}
+RUNTIME_PREFIXES = ("project/", "models/", "contracts/src/main/", "core/src/main/", "host/src/main/", "host/native/", "server/src/main/", "web/")
+
+
+def digest(path):
+    with path.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def runtime_sources(root):
+    files = subprocess.check_output(["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"], cwd=root).decode().split("\0")
+    return {name: digest(root / name) for name in sorted(set(files))
+            if (name in BUILD_FILES or name.startswith(RUNTIME_PREFIXES)) and (root / name).is_file()}
+
+
+def verified_native(evidence):
+    result = json.loads((evidence / "result.json").read_text())
+    assert result["check"] == "native" and result["status"] == "passed", "Native gate must pass before packaging"
+    source = json.loads((evidence / "source-sha256.json").read_text())
+    recorded = {name: value for name, value in source.items() if name in BUILD_FILES or name.startswith(RUNTIME_PREFIXES)}
+    assert recorded == runtime_sources(ROOT), "Native build inputs differ from the current source"
+    artifact = json.loads((evidence / "native-artifact.json").read_text())
+    binary = evidence / "cq"
+    assert binary.is_file() and digest(binary) == artifact["sha256"], "Verified native executable changed"
+    with binary.open("rb") as stream:
+        assert stream.read(4) == b"\x7fELF", "Release requires an ELF executable"
+    return binary, recorded
+
+
+def load_release(directory):
+    directory = directory.resolve(strict=True)
+    manifest = json.loads((directory / "manifest.json").read_text())
+    assert manifest["modelVersion"] == "0.1.0" and manifest["platform"] == "x86_64-linux"
+    assert manifest["runtimeSourceSha256"] == runtime_sources(ROOT), "Release runtime sources differ from this evaluator checkout"
+    for name, expected in manifest["filesSha256"].items():
+        path = (directory / name).resolve(strict=True)
+        assert path.is_relative_to(directory) and digest(path) == expected, f"Release file changed: {name}"
+    assert {"bin/cq", "bin/cq-guardian", "runtime.nar", "runtime-paths.txt"} <= manifest["filesSha256"].keys()
+    for name in ["cq", "cq-guardian"]:
+        assert os.access(directory / "bin" / name, os.X_OK), f"Release executable is not executable: {name}"
+    return [str(directory / "bin/cq")], directory / "bin/cq-guardian", {
+        "directory": str(directory), "manifestSha256": digest(directory / "manifest.json"),
+        "executableSha256": manifest["filesSha256"]["bin/cq"],
+        "guardianSha256": manifest["filesSha256"]["bin/cq-guardian"],
+    }
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--native-evidence", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    arguments = parser.parse_args()
+    if "CQ_BABOON" not in os.environ:
+        os.execvp("nix", ["nix", "develop", str(ROOT), "-c", str(ROOT / "dev/package"), *sys.argv[1:]])
+    assert sys.platform == "linux" and os.uname().machine == "x86_64", "First native release targets Linux x86-64"
+    evidence = arguments.native_evidence.resolve(strict=True)
+    binary, sources = verified_native(evidence)
+    output = arguments.output.resolve()
+    output.mkdir(parents=True, exist_ok=False)
+    (output / "bin").mkdir()
+    shutil.copy2(binary, output / "bin/cq")
+    guardian = output / "bin/cq-guardian"
+    subprocess.run(["gcc", "-std=c17", "-O2", "-Wall", "-Wextra", "-Werror", "-o", str(guardian),
+                    str(ROOT / "host/native/guardian.c")], check=True, timeout=60)
+    direct = set()
+    for executable in [output / "bin/cq", guardian]:
+        libraries = subprocess.check_output(["ldd", str(executable)], text=True, timeout=15)
+        assert "not found" not in libraries, libraries
+        (output / (executable.name + "-libraries.txt")).write_text(libraries)
+        for path in re.findall(r"/nix/store/[^\s()]+", libraries):
+            direct.add(str(Path(*Path(path).resolve(strict=True).parts[:4])))
+    assert direct, "Expected pinned Nix runtime libraries"
+    closure = sorted(set(subprocess.check_output(["nix-store", "--query", "--requisites", *sorted(direct)], text=True, timeout=60).splitlines()))
+    (output / "runtime-paths.txt").write_text("\n".join(closure) + "\n")
+    with (output / "runtime.nar").open("wb") as stream:
+        subprocess.run(["nix-store", "--export", *closure], stdout=stream, check=True, timeout=300)
+    examples = output / "examples"
+    examples.mkdir()
+    (examples / "server.env").write_text("""export CQ_DATABASE_URL=jdbc:postgresql://127.0.0.1:5432/cq
+export CQ_DATABASE_USER=cq
+export CQ_DATABASE_PASSWORD=replace-with-database-password
+export CQ_TOKEN=replace-with-a-private-token-of-at-least-32-characters
+export CQ_HOST=127.0.0.1
+export CQ_PORT=8080
+export CQ_ORIGIN=http://127.0.0.1:8080
+""")
+    (examples / "supervisor.json").write_text(json.dumps({
+        "integrationTarget": None, "stateRoot": "/absolute/private/cq-sessions", "guardian": str(guardian),
+        "harnesses": [{"harness": "Codex", "executable": "/absolute/path/codex", "model": "gpt-6-sol",
+                       "provider": "openai", "version": "0.156.1", "providerExtensions": [], "providerEnvironment": []}],
+        "limits": {"startupMillis": "10000", "executionMillis": "600000", "heartbeatMillis": "2000",
+                   "graceMillis": "1000", "killMillis": "3000", "outputBytes": 1048576},
+        "checks": [], "evaluation": None,
+    }, indent=2) + "\n")
+    (output / "README.md").write_text("""# CQ native installation
+
+Linux x86-64; Linux 5.9 or newer is required by the guardian. No Java runtime or CQ source checkout is needed by these executables. Browser assets, schemas, role instructions and harness bridges are embedded in CQ.
+
+Install the recorded runtime closure into a local Nix installation before running. This local archive is unsigned; a multi-user Nix daemon requires a trusted importing user (for example, run the import with `sudo`). Single-user Nix owners can import directly:
+
+```sh
+nix-store --import < runtime.nar
+./bin/cq --help
+```
+
+Retain these store paths while using CQ (import alone does not create GC roots):
+
+```sh
+mkdir -p runtime-roots
+while IFS= read -r runtime_path; do
+  nix-store --realise "$runtime_path" --add-root "$PWD/runtime-roots/${runtime_path##*/}" --indirect
+done < runtime-paths.txt
+```
+
+CQ needs an external PostgreSQL server. Copy and edit `examples/server.env` with private values, then source it and run `./bin/cq serve`. Configure CQ_DATABASE_URL (JDBC PostgreSQL URL), CQ_DATABASE_USER, CQ_DATABASE_PASSWORD, CQ_TOKEN (at least 32 characters), CQ_HOST, CQ_PORT and CQ_ORIGIN. Open CQ_ORIGIN in a browser and use CQ_TOKEN to sign in.
+
+From an unrelated consumer checkout, invoke the absolute installed `bin/cq init --endpoint URL`; the same binary supplies `web`, `query`, `status`, `commands export`, `run` and `job upload`. Export local workflows with `cq commands export codex --directory /absolute/consumer`; select `claude` or `pi` for those harnesses. Copy and edit `examples/supervisor.json`: it must name the installed absolute `bin/cq-guardian` path (update after relocating), private stateRoot, harness executable/model/provider/version, limits and named validation checks. Run `cq run codex --settings /absolute/settings.json --input /absolute/request.txt` with CQ_TOKEN set in the host environment.
+
+Git and the configured Claude/Codex/Pi executables and their credentials remain external dependencies. Node is needed by the Pi bridge; Python, Go or other consumer tools are needed when selected by the consumer checks. Installing this archive does not install or authenticate harnesses.
+
+Retain PostgreSQL data, supervisor journals and consumer Git repositories. Database-only backup requires settled supervisors and no unresolved integration reservation. There is no automatic audit/artifact deletion. This package manifest binds artifacts to native gate evidence; final release evaluation and human acceptance are recorded separately.
+""")
+    manifest = {"modelVersion": "0.1.0", "platform": "x86_64-linux", "minimumKernel": "5.9",
+                "nativeEvidence": str(evidence), "nativeResultSha256": digest(evidence / "result.json"),
+                "nativeSourceManifestSha256": digest(evidence / "source-sha256.json"),
+                "runtimeSourceSha256": sources, "runtimeClosure": closure,
+                "filesSha256": {str(path.relative_to(output)): digest(path) for path in sorted(output.rglob("*")) if path.is_file()}}
+    (output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    load_release(output)
+    print(output)
+
+
+if __name__ == "__main__":
+    main()

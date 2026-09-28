@@ -129,9 +129,12 @@ class Checks:
         return paths[0]
 
     @contextlib.contextmanager
+    def server_process(self, command, log, name):
+        yield subprocess.Popen(command + ["serve"], cwd=ROOT, env=self.environment, stdout=log, stderr=subprocess.STDOUT)
+
+    @contextlib.contextmanager
     def server(self, command: list[str], name: str):
-        with (self.evidence / f"{name}-server.log").open("w") as log:
-            process = subprocess.Popen(command + ["serve"], cwd=ROOT, env=self.environment, stdout=log, stderr=subprocess.STDOUT)
+        with (self.evidence / f"{name}-server.log").open("w") as log, self.server_process(command, log, name) as process:
             try:
                 deadline = time.monotonic() + STARTUP_TIMEOUT
                 request = urllib.request.Request(self.environment["CQ_ORIGIN"] + "/api/hello",
@@ -299,19 +302,11 @@ class Checks:
         classpath = self.classpath()
         traces = self.evidence / "native-traces"
         traces.mkdir()
-        config = self.evidence / "native-config"
-        config.mkdir()
         binary = self.evidence / "cq"
         with self.database([]):
             self.transport(["java", f"-agentlib:native-image-agent=config-output-dir={traces}/{{pid}}-{{datetime}},config-write-period-secs=1",
                             "-cp", classpath, "cq.server.Main"], "native-agent", False, TRACE_FIXTURE_SCALE)
-            inputs = sorted(path for path in traces.iterdir() if path.is_dir())
-            inventory = [{"directory": str(path), "files": sorted(file.name for file in path.glob("*.json"))} for path in inputs]
-            (self.evidence / "native-trace-inventory.json").write_text(json.dumps(inventory, indent=2) + "\n")
-            if len(inputs) < 2 or not all(entry["files"] for entry in inventory):
-                raise RuntimeError("Required native metadata collection is absent or incomplete; inspect trace inventory")
-            self.run(["native-image-utils", "generate", *[f"--input-dir={path}" for path in inputs],
-                      f"--output-dir={config}"], "native-config-merge", COMMAND_TIMEOUT)
+            config = self.native_config(traces)
             self.run(["native-image", "--no-fallback", "-march=compatibility", "-O1", "-J-Xmx8g",
                       f"-H:ConfigurationFileDirectories={config}", "-cp", classpath,
                       "cq.server.Main", str(binary)], "native-image", COMMAND_TIMEOUT)
@@ -323,6 +318,46 @@ class Checks:
                 "path": str(binary), "sha256": built, "bytes": binary.stat().st_size,
                 "sourceManifest": "source-sha256.json", "metadataInventory": "native-trace-inventory.json",
             }, indent=2) + "\n")
+
+    def native_config(self, traces: Path):
+        inputs = sorted(path for path in traces.iterdir() if path.is_dir())
+        inventory = [{"directory": str(path), "files": sorted(file.name for file in path.glob("*.json"))} for path in inputs]
+        record = self.evidence / "native-trace-inventory.json"
+        record.write_text(json.dumps(inventory, indent=2) + "\n")
+        if len(inputs) < 2 or not all(entry["files"] for entry in inventory):
+            raise RuntimeError("Required native metadata collection is absent or incomplete; inspect trace inventory")
+        snapshots = self.evidence / "native-merge-inputs"
+        snapshots.mkdir()
+        for source, entry in zip(inputs, inventory):
+            pid = int(source.name.split("-", 1)[0])
+            lock = source / ".lock"
+            if lock.exists() and lock.read_text().strip() != str(pid):
+                raise RuntimeError(f"Native trace owner differs from its directory: {source}")
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                pass
+            else:
+                raise RuntimeError(f"Native trace owner {pid} still exists; metadata cannot be merged")
+            if any(path.name != ".lock" and (not path.is_file() or path.suffix != ".json") for path in source.iterdir()):
+                raise RuntimeError(f"Unexpected native trace entries require explicit handling: {source}")
+            snapshot = snapshots / source.name
+            snapshot.mkdir()
+            hashes = {}
+            for name in entry["files"]:
+                content = (source / name).read_bytes()
+                json.loads(content)
+                hashes[name] = hashlib.sha256(content).hexdigest()
+                (snapshot / name).write_bytes(content)
+            if hashes != {name: hashlib.sha256((source / name).read_bytes()).hexdigest() for name in entry["files"]}:
+                raise RuntimeError(f"Native metadata changed while being snapshotted: {source}")
+            entry.update(ownerPid=pid, ownerExited=True, staleLockRetained=lock.exists(), snapshot=str(snapshot), sha256=hashes)
+            record.write_text(json.dumps(inventory, indent=2) + "\n")
+        config = self.evidence / "native-config"
+        config.mkdir()
+        self.run(["native-image-utils", "generate", *[f"--input-dir={snapshots / path.name}" for path in inputs],
+                  f"--output-dir={config}"], "native-config-merge", COMMAND_TIMEOUT)
+        return config
 
 
 def verify_test_report(output: str):
@@ -380,6 +415,10 @@ def main():
             checks.run(["python3", "dev/defect-upstream-check.py"], "defect-upstream", STARTUP_TIMEOUT)
             checks.run(["python3", "dev/defect-assess-check.py"], "defect-assess", STARTUP_TIMEOUT)
             checks.run(["python3", "dev/evaluate-check.py"], "evaluation-suite", STARTUP_TIMEOUT)
+            checks.run(["python3", "dev/release-check.py"], "release-provenance", STARTUP_TIMEOUT)
+            checks.run(["python3", "dev/release-evaluate-check.py"], "release-scheduling", STARTUP_TIMEOUT)
+            checks.run(["python3", "dev/release-report-check.py"], "release-accounting", STARTUP_TIMEOUT)
+            checks.run(["python3", "dev/release-metrics-check.py"], "release-metrics", STARTUP_TIMEOUT)
             checks.sbt(["server/testOnly *Dummy *Local"], "dummy-contract")
         else:
             getattr(checks, command)()

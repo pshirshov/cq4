@@ -38,19 +38,26 @@ def main():
     parser.add_argument("stage", choices=["begin", "probe", "research", "plan", "integrate", "upstream", "assess", "verify-plan"])
     parser.add_argument("--checkpoint", type=Path)
     parser.add_argument("--experiments", type=Path, help="Retained experimental usage report, required only for assess")
+    parser.add_argument("--release", type=Path)
     arguments = parser.parse_args()
     if (arguments.stage == "begin") != (arguments.checkpoint is None):
         parser.error("continuations and verify-plan require --checkpoint; begin does not accept one")
     if (arguments.stage == "assess") != (arguments.experiments is not None):
         parser.error("assess requires --experiments; other stages do not accept it")
     root = Path(__file__).resolve().parent.parent
-    os.chdir(root)
     if arguments.stage == "verify-plan":
+        if arguments.release is not None:
+            parser.error("verify-plan replays retained evidence without a runtime; --release applies to executable stages")
         verified = runpy.run_path(str(root / "dev/defect-plan-replay.py"))["verify"](arguments.checkpoint.resolve())
         print("PLAN RE-VERIFIED:", len(verified["attemptIds"]), "distinct chain attempts; original failed manifest preserved", flush=True)
         return
-    if any(shutil.which(name) is None for name in ["java", "sbt", "pg_ctl"]):
-        os.execvp("nix", ["nix", "develop", "-c", str(root / "dev/defect-eval"), *sys.argv[1:]])
+    required = ["pg_ctl"] + (["java", "sbt"] if arguments.release is None else [])
+    if any(shutil.which(name) is None for name in required):
+        os.execvp("nix", ["nix", "develop", str(root), "-c", str(root / "dev/defect-eval"), *sys.argv[1:]])
+    arguments.release = arguments.release.resolve() if arguments.release is not None else None
+    arguments.checkpoint = arguments.checkpoint.resolve() if arguments.checkpoint is not None else None
+    arguments.experiments = arguments.experiments.resolve() if arguments.experiments is not None else None
+    os.chdir(root)
     evaluation = runpy.run_path(str(root / "dev/consumer-eval"))
     support = runpy.run_path(str(root / "dev/check"))
     predicates = runpy.run_path(str(root / "dev/defect-evidence.py"))
@@ -103,10 +110,11 @@ def main():
             assert oracle.returncode == 0 and json.loads(oracle.stdout) == {"status": "passed", "cases": 26, "consumerTests": "passed"}, "Incorporated consumer no longer passes the unchanged oracle"
         else:
             assert oracle.returncode == 1 and "'case': 1" in oracle.stderr and "AssertionError" in oracle.stderr, "Oracle did not reproduce the ASCII contract failure"
-        checks.generate()
-        command = ["java", "-cp", checks.classpath(), "cq.server.Main"]
-        guardian = evidence / "cq-guardian"
-        checks.run(["gcc", "-std=c17", "-O2", "-Wall", "-Wextra", "-Werror", "-o", str(guardian), "host/native/guardian.c"], "guardian-build", 60)
+        previous = prior["manifest"].get("release") if prior is not None else None
+        if prior is not None:
+            assert (arguments.release is None) == (previous is None), "Continuation must use the checkpoint's recorded runtime kind"
+        command, guardian, result["release"] = evaluation["runtime"](checks, arguments.release, previous)
+        write(evidence / "result.json", result)
         routes = []
         for name, (harness, model, provider, version) in evaluation["PROFILES"].items():
             executable = shutil.which(name)

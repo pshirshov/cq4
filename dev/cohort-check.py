@@ -1,6 +1,7 @@
 import contextlib
 import http.server
 import json
+from fixture_runtime import guardian_binary
 import os
 from pathlib import Path
 import subprocess
@@ -28,8 +29,7 @@ def main():
         subprocess.run(["git", "init", "--quiet", str(repository)], check=True)
         subprocess.run(["git", "-C", str(repository), "-c", "user.name=CQ fixture", "-c", "user.email=cq@example.invalid",
                         "commit", "--quiet", "--allow-empty", "-m", "Cohort fixture"], check=True)
-        guardian = root / "cq-guardian"
-        subprocess.run(["gcc", "-std=c17", "-O2", "-Wall", "-Wextra", "-Werror", "-o", str(guardian), "host/native/guardian.c"], check=True)
+        guardian = guardian_binary(root, os.environ.get("CQ_GUARDIAN_TEST_BINARY"))
         executable = root / "fixture-harness"
         executable.write_text(f"#!{sys.executable}\n" + Path("dev/dispatch-fixture.py").read_text())
         executable.chmod(0o700)

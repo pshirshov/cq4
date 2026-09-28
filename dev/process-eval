@@ -20,6 +20,7 @@ def main():
     parser.add_argument("stage", choices=["begin", "resume"])
     parser.add_argument("--checkpoint", type=Path)
     parser.add_argument("--answer-file", type=Path)
+    parser.add_argument("--release", type=Path)
     arguments = parser.parse_args()
     if arguments.stage == "begin" and (arguments.checkpoint is not None or arguments.answer_file is not None):
         parser.error("begin does not accept a checkpoint or answer")
@@ -28,9 +29,11 @@ def main():
     original = arguments.checkpoint.resolve() if arguments.stage == "resume" else None
     answer_path = arguments.answer_file.resolve() if arguments.stage == "resume" else None
     root = Path(__file__).resolve().parent.parent
+    required = ["go", "initdb"] + (["java", "sbt"] if arguments.release is None else [])
+    if any(shutil.which(name) is None for name in required):
+        os.execvp("nix", ["nix", "develop", str(root), "-c", str(root / "dev/process-eval"), *sys.argv[1:]])
+    arguments.release = arguments.release.resolve() if arguments.release is not None else None
     os.chdir(root)
-    if any(shutil.which(name) is None for name in ["java", "sbt", "go"]):
-        os.execvp("nix", ["nix", "develop", "-c", str(root / "dev/process-eval"), *sys.argv[1:]])
     evaluation = runpy.run_path(str(root / "dev/consumer-eval"))
     support = runpy.run_path(str(root / "dev/check"))
     predicates = runpy.run_path(str(root / "dev/process-evidence.py"))
@@ -73,10 +76,11 @@ def main():
             str(path.relative_to(original)): hashlib.sha256(path.read_bytes()).hexdigest() for path in sorted(consumed)}})
     write(evidence / "result.json", result)
     try:
-        checks.generate()
-        command = ["java", "-cp", checks.classpath(), "cq.server.Main"]
-        guardian = evidence / "cq-guardian"
-        checks.run(["gcc", "-std=c17", "-O2", "-Wall", "-Wextra", "-Werror", "-o", str(guardian), "host/native/guardian.c"], "guardian-build", 60)
+        previous = baseline.get("release") if original is not None else None
+        if original is not None:
+            assert (arguments.release is None) == (previous is None), "Resume must use the checkpoint's recorded runtime kind"
+        command, guardian, result["release"] = evaluation["runtime"](checks, arguments.release, previous)
+        write(evidence / "result.json", result)
         routes = []
         for name, (harness, model, provider, version) in evaluation["PROFILES"].items():
             executable = shutil.which(name)

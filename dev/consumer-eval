@@ -33,6 +33,26 @@ def write(path, value):
     path.write_text(json.dumps(value, indent=2) + "\n")
 
 
+def same_runtime(first, second):
+    if first is None or second is None:
+        return first is second
+    return all(first[key] == second[key] for key in ["manifestSha256", "executableSha256", "guardianSha256"])
+
+
+def runtime(checks, release, previous):
+    if release is not None:
+        command, guardian, identity = runpy.run_path(str(ROOT / "dev/package"))["load_release"](release)
+        if previous is not None:
+            assert same_runtime(identity, previous), "Release differs from the retained producer artifact"
+        return command, guardian, identity
+    assert previous is None, "A packaged baseline requires an explicit --release for every later stage"
+    checks.generate()
+    command = ["java", "-cp", checks.classpath(), "cq.server.Main"]
+    guardian = checks.evidence / "cq-guardian"
+    checks.run(["gcc", "-std=c17", "-O2", "-Wall", "-Wextra", "-Werror", "-o", str(guardian), "host/native/guardian.c"], "guardian-build", 60)
+    return command, guardian, None
+
+
 def call(environment, body):
     request = urllib.request.Request(environment["CQ_ORIGIN"] + "/api/call", data=json.dumps(body).encode(), headers={
         "Authorization": "Bearer " + environment["CQ_TOKEN"], "CQ-Session": environment["CQ_SESSION"],
@@ -73,7 +93,24 @@ def export(environment, evidence, session):
         after = body["after"]
     else:
         raise AssertionError("Audit export exceeded its page bound")
+    export_meters(environment, evidence, project, run["attempt"]["session"])
     return attempts["UsageAttempts"]["page"]["entries"]
+
+
+def export_meters(environment, evidence, project, session):
+    parsed = urllib.parse.urlsplit(environment["CQ_DATABASE_URL"].removeprefix("jdbc:"))
+    assert not parsed.query, "Evaluation meter export requires its isolated database"
+    project_id, session_id = uuid.UUID(project["value"]), uuid.UUID(session["value"])
+    query = f"""SELECT coalesce(jsonb_agg(jsonb_build_object('assignment',a.body,'attempt',t.body,'meter',m.body,'projection',m.projection)
+      ORDER BY m.attempt_id,m.meter),'[]'::jsonb)
+      FROM cq_usage_meters m JOIN cq_usage_attempts t USING(project_id,attempt_id)
+      JOIN cq_usage_assignments a ON a.project_id=t.project_id AND a.assignment_id=t.assignment_id
+      WHERE t.project_id='{project_id}'::uuid AND t.session_id='{session_id}'::uuid"""
+    output = subprocess.check_output(["psql", "--no-psqlrc", "--set", "ON_ERROR_STOP=1", "--tuples-only", "--no-align",
+        "--host", parsed.hostname, "--port", str(parsed.port), "--username", environment["CQ_DATABASE_USER"], "--dbname", parsed.path[1:],
+        "--command", query], env=dict(environment, PGPASSWORD=environment["CQ_DATABASE_PASSWORD"]), text=True, timeout=30)
+    write(evidence / "usage-meters.json", {"source": "CQ operational meter projections, read from the isolated evaluation database",
+                                          "project": project, "session": session, "entries": json.loads(output)})
 
 
 def artifacts(environment, evidence, session, statuses, additional):
@@ -153,10 +190,13 @@ def main():
     parser.add_argument("harness", choices=PROFILES)
     parser.add_argument("language", choices=["python", "go"])
     parser.add_argument("--cohort", action="store_true", help="Run managed two-task selection with Planner, shared Worker and fresh reviewer checks")
+    parser.add_argument("--release", type=Path, help="Use this native distribution without generation or JVM/guardian builds")
     arguments = parser.parse_args()
+    required = ["go", "initdb"] + (["java", "sbt"] if arguments.release is None else [])
+    if any(shutil.which(command) is None for command in required):
+        os.execvp("nix", ["nix", "develop", str(ROOT), "-c", str(ROOT / "dev/consumer-eval"), *sys.argv[1:]])
+    arguments.release = arguments.release.resolve() if arguments.release is not None else None
     os.chdir(ROOT)
-    if any(shutil.which(command) is None for command in ["java", "sbt", "go"]):
-        os.execvp("nix", ["nix", "develop", "-c", str(ROOT / "dev/consumer-eval"), *sys.argv[1:]])
     harness, language = arguments.harness, arguments.language
     cohort = runpy.run_path(str(ROOT / "dev/consumer-cohort.py"))
     worker, reviewer = ROUTES[harness]
@@ -186,11 +226,8 @@ def main():
               "scope": "real consumer candidate build and host validation; no efficiency conclusion from a single run"}
     write(evidence / "result.json", result)
     try:
-        checks.generate()
-        classpath = checks.classpath()
-        command = ["java", "-cp", classpath, "cq.server.Main"]
-        guardian = evidence / "cq-guardian"
-        checks.run(["gcc", "-std=c17", "-O2", "-Wall", "-Wextra", "-Werror", "-o", str(guardian), "host/native/guardian.c"], "guardian-build", 60)
+        command, guardian, result["release"] = runtime(checks, arguments.release, None)
+        write(evidence / "result.json", result)
         checks.run(["go", "version"], "go-version", 10)
         checks.run(["python3", "--version"], "python-version", 10)
         for route in routes:

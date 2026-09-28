@@ -1,0 +1,218 @@
+#!/usr/bin/env python3
+"""Verify a relocated native distribution while hiding CQ source/build and JVM classpath files."""
+import argparse
+import contextlib
+import datetime
+import json
+import os
+from pathlib import Path
+import runpy
+import select
+import shutil
+import signal
+import subprocess
+import sys
+import hashlib
+import time
+
+
+ROOT = Path(__file__).resolve().parent.parent
+
+
+class WrappedProcess:
+    """Control the application child while Bubblewrap retains namespace ownership."""
+    def __init__(self, command, environment, log, evidence, startup_timeout, shutdown_timeout):
+        self.child = None
+        self.killed = False
+        self.evidence = evidence
+        self.shutdown_timeout = shutdown_timeout
+        self.observations = {"signals": []}
+        reader, writer = os.pipe()
+        try:
+            self.wrapper = subprocess.Popen([command[0], "--info-fd", str(writer), *command[1:]],
+                cwd=ROOT, env=environment, stdout=log, stderr=subprocess.STDOUT, pass_fds=[writer])
+        except BaseException:
+            os.close(reader)
+            raise
+        finally:
+            os.close(writer)
+        try:
+            deadline = time.monotonic() + startup_timeout
+            metadata = bytearray()
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or not select.select([reader], [], [], remaining)[0]:
+                    raise RuntimeError("Bubblewrap child identity deadline exceeded")
+                chunk = os.read(reader, 4096)
+                if not chunk:
+                    break
+                metadata.extend(chunk)
+                assert len(metadata) <= 65536, "Oversized Bubblewrap metadata"
+            self.observations["metadata"] = json.loads(metadata)
+            pid = self.observations["metadata"]["child-pid"]
+            self.child = os.pidfd_open(pid)
+            parent = int(Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[1])
+            assert parent == self.wrapper.pid, "Bubblewrap reported an unrelated process"
+        except BaseException:
+            if self.child is not None:
+                os.close(self.child)
+                self.child = None
+            self.wrapper.kill()
+            self.wrapper.wait(timeout=shutdown_timeout)
+            raise
+        finally:
+            os.close(reader)
+
+    def child_exited(self):
+        return bool(select.select([self.child], [], [], 0)[0])
+
+    @property
+    def returncode(self):
+        code = self.wrapper.returncode
+        return -signal.SIGKILL if self.killed and code == 128 + signal.SIGKILL and self.child_exited() else code
+
+    def poll(self):
+        if self.wrapper.poll() is None or not self.child_exited():
+            return None
+        return self.returncode
+
+    def wait(self, timeout):
+        deadline = time.monotonic() + timeout
+        self.wrapper.wait(timeout=timeout)
+        if not select.select([self.child], [], [], max(0, deadline - time.monotonic()))[0]:
+            raise subprocess.TimeoutExpired("Bubblewrap application child", timeout)
+        return self.returncode
+
+    def send_signal(self, value):
+        try:
+            signal.pidfd_send_signal(self.child, value)
+        except ProcessLookupError:
+            assert self.child_exited(), "Child signal failed before observed termination"
+            return
+        self.observations["signals"].append(int(value))
+        if value == signal.SIGKILL:
+            self.killed = True
+
+    def terminate(self):
+        self.send_signal(signal.SIGTERM)
+
+    def kill(self):
+        self.send_signal(signal.SIGKILL)
+
+    def close(self):
+        try:
+            if not self.child_exited():
+                self.kill()
+            self.wait(self.shutdown_timeout)
+        except subprocess.TimeoutExpired:
+            self.observations["cleanupTimeout"] = True
+            self.wrapper.kill()
+            self.wrapper.wait(timeout=self.shutdown_timeout)
+            raise
+        finally:
+            self.observations.update(wrapperExit=self.wrapper.poll(), childExited=self.child_exited(), returncode=self.returncode)
+            self.evidence.write_text(json.dumps(self.observations, indent=2) + "\n")
+            os.close(self.child)
+
+
+def installed_checks(support, evidence, environment):
+    class InstalledChecks(support["Checks"]):
+        @contextlib.contextmanager
+        def server_process(self, command, log, name):
+            process = WrappedProcess(command + ["serve"], self.environment, log, self.evidence / f"{name}-process.json",
+                                     support["STARTUP_TIMEOUT"], support["SHUTDOWN_TIMEOUT"])
+            try:
+                yield process
+            finally:
+                process.close()
+    return InstalledChecks(evidence, environment)
+
+
+def verifier_sources():
+    files = subprocess.check_output(["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"], cwd=ROOT).decode().split("\0")
+    return {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in sorted(set(files))
+            if name and name != "README.md" and not name.startswith("docs/") and (ROOT / name).is_file()}
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--release", type=Path, required=True)
+    parser.add_argument("--evidence-root", type=Path, required=True)
+    arguments = parser.parse_args()
+    if any(shutil.which(name) is None for name in ["java", "sbt", "initdb", "node"]):
+        os.execvp("nix", ["nix", "develop", str(ROOT), "-c", str(ROOT / "dev/package-check"), *sys.argv[1:]])
+    release = arguments.release.resolve(strict=True)
+    destination = arguments.evidence_root.resolve()
+    assert not destination.is_relative_to(ROOT), "Source-isolated verification evidence must be outside the CQ checkout"
+    bubblewrap = shutil.which("bwrap")
+    assert bubblewrap is not None, "Source-isolated Linux verification requires bubblewrap"
+    os.chdir(ROOT)
+    sources = verifier_sources()
+    package = runpy.run_path(str(ROOT / "dev/package"))
+    _, _, original = package["load_release"](release)
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S")
+    evidence = destination / (stamp + "-installed")
+    evidence.mkdir(parents=True)
+    print("Evidence:", evidence, flush=True)
+    (evidence / "source-sha256.json").write_text(json.dumps(sources, indent=2) + "\n")
+    installed = evidence / "installed"
+    shutil.copytree(release, installed)
+    command, guardian, identity = package["load_release"](installed)
+    same_runtime = runpy.run_path(str(ROOT / "dev/consumer-eval"))["same_runtime"]
+    assert same_runtime(original, identity), "Relocation changed the distribution"
+    support = runpy.run_path(str(ROOT / "dev/check"))
+    checks = installed_checks(support, evidence, {**os.environ, "CQ_GUARDIAN_TEST_BINARY": str(guardian)})
+    hidden = [ROOT, Path.home() / ".cache/coursier"]
+    prefix = [bubblewrap, "--die-with-parent", "--bind", "/", "/", "--dev-bind", "/dev", "/dev"]
+    for path in hidden:
+        assert path.is_dir(), f"Expected source/classpath directory is absent: {path}"
+        prefix.extend(["--tmpfs", str(path)])
+    result = {"status": "running", "release": identity, "hiddenPaths": [str(path) for path in hidden],
+              "sourceManifest": "source-sha256.json",
+              "scope": "relocated guardian and native transport/roles/supervisor/dispatch/browser/restart corpus with source and classpath unavailable",
+              "remaining": ["packaged live consumer corpus", "independent release review", "human acceptance"]}
+    write = runpy.run_path(str(ROOT / "dev/consumer-eval"))["write"]
+    write(evidence / "result.json", result)
+    try:
+        checks.run(["python3", "dev/package-process-check.py", "-v"], "wrapper-process", support["STARTUP_TIMEOUT"])
+        import_root = evidence / "runtime-store"
+        store = "local?root=" + str(import_root)
+        with (installed / "runtime.nar").open("rb") as archive, (evidence / "runtime-import.log").open("w") as log:
+            imported = subprocess.run(["nix-store", "--store", store, "--import"], stdin=archive, stdout=subprocess.PIPE, stderr=log, text=True, timeout=300)
+        paths = imported.stdout.splitlines()
+        result["runtimeImport"] = {"exit": imported.returncode, "paths": paths, "root": str(import_root),
+                                   "scope": "Fresh private Nix store; imported runtime paths mounted over their original locations for native execution"}
+        assert imported.returncode == 0 and sorted(paths) == sorted(json.loads((installed / "manifest.json").read_text())["runtimeClosure"]), "Runtime closure import failed or omitted paths"
+        for path in paths:
+            prefix.extend(["--ro-bind", str(import_root / path.removeprefix("/")), path])
+        probe = "import pathlib,sys; assert all(pathlib.Path(p).is_dir() and not list(pathlib.Path(p).iterdir()) for p in sys.argv[1:])"
+        checks.run(prefix + ["--chdir", str(evidence), sys.executable, "-c", probe, *map(str, hidden)], "source-isolation", 15)
+        checks.run(["python3", "dev/guardian-check.py", "-v"], "installed-guardian", support["STARTUP_TIMEOUT"])
+        with checks.database([]):
+            checks.transport(prefix + command, "installed", True, 1)
+            checks.restart(prefix + command)
+            backup_evidence = evidence / "backup"
+            backup_evidence.mkdir()
+            backup_checks = installed_checks(support, backup_evidence, dict(checks.environment))
+            result["backup"] = runpy.run_path(str(ROOT / "dev/backup-check.py"))["verify"](backup_checks, prefix + command)
+        _, _, verified = package["load_release"](installed)
+        assert same_runtime(identity, verified), "Distribution changed during verification"
+        result["status"] = "package-checked"
+    except BaseException as error:
+        result.update(status="failed", error=str(error))
+        raise
+    finally:
+        after = verifier_sources()
+        write(evidence / "source-after-sha256.json", after)
+        changed = sorted(name for name in sources.keys() | after.keys() if sources.get(name) != after.get(name))
+        result["changedSources"] = changed
+        if changed:
+            result["status"] = "failed"
+        write(evidence / "result.json", result)
+        if changed:
+            raise RuntimeError("Verifier inputs changed during installed verification: " + ", ".join(changed))
+    print("PASS: installed deterministic corpus; live consumers and release acceptance remain pending", flush=True)
+
+
+if __name__ == "__main__":
+    main()
