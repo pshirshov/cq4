@@ -43,6 +43,6 @@ Project backup/restore is not implemented by the current delivery's one-time, wh
 ## Next-session execution
 
 1. Read the CQ records and this intake; reproduce reported defects and inspect the previous UI without changing reference snapshots.
-2. Follow the accepted launcher ownership decision; implement and verify that interactive mode before relying on it. Make the semantic UI design concrete before starting the redesign. Record unresolved backup/restore semantics in CQ.
+2. Use the delivered interactive mode and complete the human yolo startup trial. Make the semantic UI design concrete before starting the redesign. Record unresolved backup/restore semantics in CQ.
 3. Use CQ discipline to plan, implement and review coherent increments. Preserve user-reported requirements and distinguish technical checks from human evaluation.
 4. Run affected browser/CLI/service checks. UI-only increments do not require the expensive three-by-three harness matrix.

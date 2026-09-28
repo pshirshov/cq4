@@ -132,3 +132,11 @@ The user selected reviewed integration into `refs/heads/main` with the scoped UI
 ### Integration-target review correction
 
 Astra found that `refs/heads/main` was still checked out in the governing worktree. `operator-target-before.json` captures the failed precondition; `IntegrationCoordinator` correctly refuses such an update. Delivery keeps the chosen target and safety check: finish source commits on `main`, detach the governing checkout at that tip, and verify no worktree has `main` checked out. The guide documents the unchanged governing files after integration, refresh between sessions and return to manual development. This is a setup correction, not a change to Git integration behavior.
+
+## Independent delivery review and operator check
+
+Astra approved the scoped delivery at `11f3829` on 2026-09-28 with no remaining blocking or major findings. The reviewer independently confirmed package hashes, the installed gate, clean detached HEAD and no checked-out `main`, and accurate startup/recovery/usage instructions. `operator-target-after.json` records the corrected target precondition; final documentation bookkeeping is followed by the same check in `operator-target-final.json`.
+
+`operator-smoke/result.json` uses the installed generated Codex command/settings against the actual `cq4` server: nine expected tools, Context with `refs/heads/main` and `cq-ui`, scoped I1 read, EOF cleanup and two uploads acknowledging zero pending batches. It creates an operational audit attempt but launches no model or managed child and edits no ledger item. `operator-ledger/` separately retains the expected-revision update and readback of I1 revision 3 and K1 revision 2, recording delivery while preserving Accepted/Adopted status and the pending human trial.
+
+The reviewer’s approval covers this attached-host delivery, not the queued redesign or human release acceptance. The final bookkeeping commit changes documentation only; installed runtime source hashes remain unchanged.
