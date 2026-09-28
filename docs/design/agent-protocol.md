@@ -1,6 +1,6 @@
 # Agent roles, real inputs and protocol
 
-Inspected 2026-09-28 against implementation `39f4d29` and retained native consumer executions. This describes the implemented system. The alternative session design at the end is a proposal, not an available mode.
+Inspected 2026-09-28 against implementation `39f4d29` and retained native consumer executions; the supervisor/dispatch implementation was rechecked after the evaluation corrections. Sections 1–4 describe the implemented system. The interactive session design in section 5 was subsequently accepted by the user; it is not yet an available mode.
 
 ## 1. Inventory
 
@@ -165,11 +165,38 @@ Thus the literal command spelling is not inherently necessary, but the execution
 | Design | User experience | Status / consequence |
 | --- | --- | --- |
 | Current generated workflow commands | Start the harness normally; use the exported CQ skill/command and supply settings/scope | Implemented. It invokes `cq run` for you and surfaces a bounded receipt. There is still a separate batch Governor and unmetered outer-session overhead. See [exact native invocation paths](workflows.md#entry-points-and-execution). |
-| Local CQ host service, launched on demand by MCP or as a daemon | Start `codex`, `claude` or `pi` normally; the existing interactive session acts as Governor through CQ tools | Proposed. Move session creation and dispatch ownership behind a local service; keep existing child execution, handle passing, validation and integration machinery. This removes the extra batch Governor, not the host. |
+| Local CQ host started and owned by the interactive harness | Start `codex`, `claude` or `pi` normally; that session acts as Governor through CQ tools | Accepted design, not implemented. The host and managed children belong under the harness process, inside the same sandbox. Reuse child execution, handle passing, validation and integration machinery. No separate batch Governor or detached host daemon. |
 | CQ server owns execution | Browser/CLI submits work; a server-side worker starts harnesses against configured repositories | Proposed and requires changing R21, which says the durable CQ server never starts/holds harness processes. Repository access, credentials and process ownership move to that machine. A separately owned worker could preserve the server boundary. |
 
-For the second option, the concrete missing boundary is **attach/open/close a governing session**: bind a project, repository, routes, limits and permitted scope; issue private per-session authority; expose dispatch to the existing harness; define heartbeat/disconnect/cancellation and retained recovery. A stdio MCP host could live with the harness, avoiding a manually started daemon. Pi would still need its CQ extension/bridge. The existing model-independent services could be reused through another distage role. This preserves [R21's separation](../drafts/20260926-0957-cq-requirements-prompt.md#r21--cross-harness-dispatch-and-bounded-process-ownership) between durable server and local execution ownership.
+For the accepted option, the concrete missing boundary is **open/close a governing session owned by the interactive harness**: bind a project, repository, routes, limits and permitted scope; issue private per-session authority; expose dispatch to the existing harness; define heartbeat/disconnect/cancellation and retained recovery. Use harness-started stdio MCP integration for Claude/Codex and the corresponding Pi extension/bridge; exact lifecycle hooks still require native verification. Reuse the existing model-independent services through another distage role in the same executable. This preserves [R21's separation](../drafts/20260926-0957-cq-requirements-prompt.md#r21--cross-harness-dispatch-and-bounded-process-ownership) between durable server and local execution ownership.
 
 The tradeoff is that CQ no longer controls the outer harness's startup flags, native tools or all of its usage events. Server permissions and child restrictions remain enforceable, but the interactive Governor could have unrelated shell/tools. Usage must distinguish observable child spending from unavailable outer-session spending, with harness-specific collectors where supported. Session attachment must not silently reuse old claims or result-publication authority.
 
-**My recommendation:** retain the current batch path for automation and add an attachable local host for interactive use if avoiding a second Governor is the desired UX. The current extra governing session is an implementation choice, not a fundamental requirement of handle-based dispatch. This document does not implement or authorize that architectural change.
+### Accepted interactive lifecycle
+
+User decision, 2026-09-28: “If I run harness directly and the rest exists under the harness process - it's just what I want. having cq run for other purposes is fine.”
+
+Recorded in the `cq4` project as **K1 Adopted**, with **I1 Accepted**. Request, acknowledgement and readback are retained at `/srv/nvme/tmp/cq4-human-evaluation-20260928/launcher-decision`.
+
+The selected execution tree is:
+
+```text
+directly started interactive harness (Governor, inside yolo)
+└── local CQ host (started automatically by the harness integration)
+    └── owned guardians and dispatched child harnesses
+```
+
+The durable CQ server/PostgreSQL remain separate services, reached over HTTP. “Under the harness” applies to local execution ownership; it does not move the durable database under the interactive process.
+
+Implementation requirements:
+
+1. Ordinary interactive startup requires no outer `cq run`, extra governing model session, or independently managed local daemon. The internal executable invocation is installed in the harness integration. Keep `cq run` for batch/unattended use.
+2. The host inherits the harness's sandbox and filesystem visibility. Repository, session state and worktree paths must be available inside that sandbox; children remain within it. Keep the existing explicit isolation of child environments and credentials.
+3. Separate the reusable execution/session services from `SupervisorProgram` launching and awaiting a batch Governor. Scope resources through distage lifecycle management. Interactive session identity must not fabricate a host-launched Governor process or depend on its final JSON report.
+4. Install the interactive workflow instructions/tools into the existing session. Workflow entrypoints use its CQ tools directly; they do not silently invoke the batch wrapper. Prompt/result assembly, typed proposals and compact handle dispatch remain host responsibilities.
+5. On owner exit or confirmed owner-connection loss, stop accepting work and terminate owned children within explicit bounds. Whole-hierarchy cancellation is accepted; preserve completed artifacts and publication journals. Frozen-owner/host failure detection and abrupt exits need actual lifecycle tests, not an assumption that process ancestry alone prevents orphans. A new connection receives fresh authority and does not adopt uncertain children or stale claims.
+6. Keep managed-child permissions, result validation, idempotency and reviewed integration. The ordinary interactive Governor retains its own tools; CQ must not claim to restrict those tools through this attachment.
+7. Collect child usage as today. Observe outer interactive usage where the native harness permits it, with separate attribution and explicit missing/unsupported coverage. Do not treat an unobserved outer session as zero cost.
+8. Verify direct startup inside yolo on all three harnesses, actual child routes, compact prompt/result traffic, owner shutdown/failure, durable audit gaps and unchanged batch use. Native integration details and telemetry coverage remain unverified for the proposed mode until those checks pass.
+
+The design is accepted; implementation and its native verification remain outstanding. The UI/CLI redesign stays queued for the new CQ session.

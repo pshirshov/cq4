@@ -2,7 +2,7 @@
 
 Intake: 2026-09-28. Project `cq4`, UUID `20eb436e-1a4d-4bb6-a4b4-d151e5c1dc04`. These are user-reported defects and requirements, not claims of independently reproduced behavior or completed implementation. Creation receipts and individual readback are retained at `/srv/nvme/tmp/cq4-human-evaluation-20260928/redesign-*`.
 
-The user considers the current UI a prototype, not an acceptable release interface. Earlier technical gate results remain evidence of the behaviors those gates checked; they do not establish usability acceptance. M2/M6 human acceptance remains outstanding. Finish delivery of D1–D8 first, then discuss the launcher design. The user explicitly confirmed “Queue for the new CQ session”: implement this UI/CLI redesign batch in a new session using CQ discipline.
+The user considers the current UI a prototype, not an acceptable release interface. Earlier technical gate results remain evidence of the behaviors those gates checked; they do not establish usability acceptance. M2/M6 human acceptance remains outstanding. D1–D8 are delivered and resolved. The user has accepted the interactive launcher design below and explicitly confirmed “Queue for the new CQ session”: implement this UI/CLI redesign batch in a new session using CQ discipline.
 
 ## UI acceptance requirements
 
@@ -37,12 +37,12 @@ Project backup/restore is not implemented by the current delivery's one-time, wh
 
 ## Launcher and runtime follow-ups
 
-- **I1**: remove the need for an outer `cq run codex/claude/pi` batch wrapper during ordinary interactive use, especially inside yolo. Review the [current ownership and protocol analysis](agent-protocol.md#5-why-cq-run-codex--exists). The local server helper `run-local.sh` is a different concern. An alternative must keep host-owned prompt/result assembly, restricted child capabilities, execution ownership and explicit accounting gaps.
+- **I1 Accepted / K1 Adopted**: start the interactive harness directly; it starts and owns the local CQ host, which owns guardians and child harnesses inside the same yolo sandbox. No extra batch Governor or detached local daemon. Retain `cq run` for batch use. The [accepted lifecycle](agent-protocol.md#accepted-interactive-lifecycle) specifies boundaries and required native verification; implementation is outstanding. The durable server and its `run-local.sh` helper remain separate.
 - **D25**: [Scala lazy-value warning](../validation/scala-lazyvals-warning.md). Replacing the runtime with Scala 3.10.0-RC3 did not remove the warning from already-compiled izumi-reflect bytecode. No compiler upgrade or upstream report has been made.
 
 ## Next-session execution
 
 1. Read the CQ records and this intake; reproduce reported defects and inspect the previous UI without changing reference snapshots.
-2. Resolve launcher execution ownership and make the semantic UI design concrete before starting the redesign. Record decisions and unresolved backup/restore semantics in CQ.
+2. Follow the accepted launcher ownership decision; implement and verify that interactive mode before relying on it. Make the semantic UI design concrete before starting the redesign. Record unresolved backup/restore semantics in CQ.
 3. Use CQ discipline to plan, implement and review coherent increments. Preserve user-reported requirements and distinguish technical checks from human evaluation.
 4. Run affected browser/CLI/service checks. UI-only increments do not require the expensive three-by-three harness matrix.
