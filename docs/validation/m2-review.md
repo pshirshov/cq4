@@ -52,7 +52,7 @@ Each directory retains `result.json`, candidate/check/review artifacts, native s
 
 ## Run and inspect
 
-The current native distribution is `/srv/nvme/tmp/cq4-implementation/cq-release-http-ui`; use the [operations guide](../design/operations.md) for exact install/start/consumer/recovery commands. [JVM development instructions](../../README.md#run-the-current-development-server) remain available. The old M0 native executable is only a historical stack proof.
+The current native distribution is `/home/pavel/work/safe/cq4/cq4/.local/release`; `./run-local.sh` starts it with existing playground state as described in the [quickstart](../quickstart.md); use the [operations guide](../design/operations.md) for exact install/start/consumer/recovery commands. [JVM development instructions](../../README.md#run-the-current-development-server) remain available. The old M0 native executable is only a historical stack proof.
 
 Re-run deterministic gates from the CQ checkout:
 

@@ -34,3 +34,7 @@ This changes the operator helper only. The prior network/browser proof above ret
 Independent Astra approves the descriptor-inheritance correction and before/after evidence. The final helper SHA-256 is `670f9800a9d1c6438e4ff67eac6005f972a127754f38c4003cf4311066d5bc2f`; the verdict is retained as `astra-review.json` beside the reproduction.
 
 The user then ran the prepared host recovery script. It verifies the recorded postmaster PID, executable, data directory and inherited descriptor, opens a pidfd, and requests PostgreSQL fast shutdown through that stable handle. After observing process exit and lock release, it starts `cq-release-http-ui` with the existing state. `host-recovery.json` binds the diagnostic, script/output and actual browser verification. CQ listens on all interfaces at 8080, PostgreSQL on loopback at 55432. Login with the existing token and the ALIVE connection pass on `http://vm.home.7mind.io:8080` with `randomUUID` unavailable and no browser errors. The browser check makes no project mutations.
+
+## Permanent repository launcher
+
+`run-local.sh` now selects `.local/release`, the existing playground state and the VM hostname origin automatically. The [compact delivery record](compact-ui.md) includes actual invocation from an unrelated directory, native HTTP login, both laptop sizes, persistent project/credentials, duplicate rejection and owned SIGTERM/Ctrl-C cleanup. The underlying helper and its descriptor correction remain unchanged.

@@ -1,6 +1,6 @@
 {
   "state": "technical-release-approved-awaiting-human-acceptance",
-  "implementationCommit": "39f4d29",
+  "implementationCommit": "b551e0b",
   "modelVersion": "0.1.0",
   "platform": "x86_64-linux",
   "verifiedGates": [
@@ -139,7 +139,7 @@
         "commands.json": "c317b0ebc921dbc291d94f3b2687a13e2ee561fc814a63c852c63d35f3b3b29f",
         "source-sha256.json": "eb405caa68d58a956454ef1d6392728011f03155b5b32011612d663c3adf0428"
       },
-      "applicability": "Current browser correction. Includes actual insecure HTTP with missing randomUUID, login, live connection, project/tasks and relationship mutation. No model calls."
+      "applicability": "Preceding HTTP correction evidence, retained under original artifact identity. Compact CSS delivery is separately verified below."
     },
     {
       "name": "native-http-ui",
@@ -151,7 +151,7 @@
         "source-sha256.json": "d58af9540048d3deba1614a8aa6b027c561abd2e9229affd16da714a69263e26",
         "native-artifact.json": "6e361169bb93d3d827efe16c2ab867c55ab88c54afcab75f1cda6bfaa84622fb"
       },
-      "applicability": "Current browser correction. Includes actual insecure HTTP with missing randomUUID, login, live connection, project/tasks and relationship mutation. No model calls."
+      "applicability": "Preceding HTTP correction evidence, retained under original artifact identity. Compact CSS delivery is separately verified below."
     },
     {
       "name": "installed-http-ui",
@@ -162,7 +162,46 @@
         "commands.json": "fb6d9b367f4cb46cfea00633ba52cd9fec68582254007ab168c3e5e6f7243873",
         "source-sha256.json": "073629678fdde5dbc45b61328f550e44898664d3f2efe25fe93113c348478f23"
       },
-      "applicability": "Current browser correction. Includes actual insecure HTTP with missing randomUUID, login, live connection, project/tasks and relationship mutation. No model calls."
+      "applicability": "Preceding HTTP correction evidence, retained under original artifact identity. Compact CSS delivery is separately verified below."
+    },
+    {
+      "name": "compact-ui",
+      "directory": "/srv/nvme/tmp/cq4-compact-ui-20260928/20260928T112045-ui",
+      "status": "passed",
+      "evidenceSha256": {
+        "result.json": "2bd55f071760af50302326ec053504dd5c1aa16bed39842dd677e9d41e2c09e9",
+        "commands.json": "1670f6919cb6ebc5de8b6b96c817edc814cab14d7b33482326fe0e36f94239e1",
+        "source-sha256.json": "41c82e900c635adf371beb757f3379fd7341b490debe851532d93277f535af8c",
+        "density-results.json": "f57339b0210771ba5b499e357e820b03f34796e1428b7380f17ce135bd3178da"
+      },
+      "applicability": "Current compact UI sources; full gate runtime/browser corpus. Native tracing is explicitly reused from verified immutable snapshots; see trace-reuse.json. No model calls."
+    },
+    {
+      "name": "native-compact-ui",
+      "directory": "/srv/nvme/tmp/cq4-compact-ui-20260928/20260928T112548-native",
+      "status": "passed",
+      "evidenceSha256": {
+        "result.json": "092a035d63e8a118dab8b06670c1887982471f7851c4954528fd4b7ce2e1586e",
+        "commands.json": "eeee9aa76bd449cc8dcddd1147efd4638540e3869a8c85bc222cfc19b25347e4",
+        "source-sha256.json": "41c82e900c635adf371beb757f3379fd7341b490debe851532d93277f535af8c",
+        "native-artifact.json": "f135772565c2a6c63b2c4f915ae0c1b81f56dd32a7ad092a44004095dd5d98a1",
+        "trace-reuse.json": "e92fa74cc926950f4a03c9d2cd835c3fe48931562141cb44a8132cfa20ce62f0",
+        "native-trace-inventory.json": "3b1c4ee22bebdac79b287f55f2267035c0d9d86d0ef0df9f36bf55b20c295319",
+        "density-results.json": "f57339b0210771ba5b499e357e820b03f34796e1428b7380f17ce135bd3178da"
+      },
+      "applicability": "Current compact UI sources; full gate runtime/browser corpus. Native tracing is explicitly reused from verified immutable snapshots; see trace-reuse.json. No model calls."
+    },
+    {
+      "name": "installed-compact-ui",
+      "directory": "/srv/nvme/tmp/cq4-compact-ui-20260928/20260928T113259-installed",
+      "status": "package-checked",
+      "evidenceSha256": {
+        "result.json": "646ddd804525e9a4a43c287cd2d2883e954c2bb667fcba1b29090bc6aa2ec2cd",
+        "commands.json": "c0f551f8ba96464c96daacd2f2280e171eb44357e48a218fe815dbc3518b5411",
+        "source-sha256.json": "1c5558745119dc5b03e90aaae986e8b619b38f72959e6bbe81e1e8ebfa02e8fe",
+        "density-results.json": "f57339b0210771ba5b499e357e820b03f34796e1428b7380f17ce135bd3178da"
+      },
+      "applicability": "Current compact UI sources; full gate runtime/browser corpus. Native tracing is explicitly reused from verified immutable snapshots; see trace-reuse.json. No model calls."
     }
   ],
   "running": [],
@@ -225,20 +264,20 @@
     "qualification": "Historical artifact rejected after missing native Review/Upstream workflow resources; preserve unchanged, do not treat as final release."
   },
   "artifact": {
-    "directory": "/srv/nvme/tmp/cq4-implementation/cq-release-http-ui",
-    "manifestSha256": "02718ef5bee3c1333a2f50667a9d39d8ea8aad98d31adf0acc67a0e72061e2f0",
-    "executableSha256": "065d83c13f7758cbaabc995b2d517f16d75641173d09ca7da1a80f927e4ee431",
+    "directory": "/home/pavel/work/safe/cq4/cq4/.local/release",
+    "manifestSha256": "b41ebd161f73d0036edf66aefcb29220b557db8e7b7b8e9e94ab32cab3ae43ba",
+    "executableSha256": "2597ad8a0207a54a62444cf5cc410b65c82ffd1cb9dad90c21f0ad4efcc64ea7",
     "guardianSha256": "f56efb4626cb8e0fab0cc4b27b1460e75cea275890b5209df0a7f312ddf029bc",
-    "qualification": "Current Linux x86-64 HTTP-corrected technical release candidate approved by independent Astra. Focused UI, native, installed and actual hostname launcher/browser checks pass. Prior harness corpus retains its original package identity with approved browser-only source applicability. Model stays 0.1.0; human M2/M6 acceptance pending."
+    "qualification": "Current compact UI delivery. Focused UI, fresh native runtime, source-isolated installed corpus and permanent wrapper lifecycle/browser smoke pass. Explicit immutable JVM trace reuse and paid harness applicability preserve original identities. Final scoped Astra review approved; human M2/M6 acceptance remains pending."
   },
   "correctedVerification": {
-    "native": "/srv/nvme/tmp/cq4-http-ui-20260928/20260928T102507-native",
-    "installed": "/srv/nvme/tmp/cq4-http-ui-20260928/20260928T104927-installed",
+    "native": "/srv/nvme/tmp/cq4-compact-ui-20260928/20260928T112548-native",
+    "installed": "/srv/nvme/tmp/cq4-compact-ui-20260928/20260928T113259-installed",
     "installedStatus": "package-checked",
     "liveStatus": "corpus-usage-incomplete",
     "liveSuite": "/srv/nvme/tmp/cq4-implementation/20260928T074651-release",
     "liveArtifact": "/srv/nvme/tmp/cq4-implementation/cq-release-workflow-resources",
-    "liveApplicability": "Paid harness executions retain the preceding package identity. Scoped reuse for four browser files is independently approved; no new-artifact harness execution is claimed."
+    "liveApplicability": "Paid harness executions retain the workflow-resource package identity. Reviewed browser-only source applicability continues through the CSS-only delta; no new-artifact harness execution is claimed."
   },
   "historicalLiveProgress": {
     "suite": "/srv/nvme/tmp/cq4-implementation/20260928T060135-release",
@@ -597,8 +636,8 @@
     },
     "networkProtocolEvidence": "/srv/nvme/tmp/cq4-launcher-network-20260928/result.json",
     "networkProtocolSha256": "9290edd5b5fa7ce6502c388dba942fe7cbc8d1633fdcef38f428f6058a6eb4fb",
-    "currentDeliveryEvidence": "/srv/nvme/tmp/cq4-http-ui-20260928/delivery/result.json",
-    "currentDeliverySha256": "63b57688078c683012138d0576cdb1f9a46446e06dd49df56a5c7088490947f6",
+    "currentDeliveryEvidence": "/srv/nvme/tmp/cq4-compact-ui-20260928/delivery/result.json",
+    "currentDeliverySha256": "42685d0bd746a7a74d63b5f2bc6d5f9665362c7d53f1fa493b4004c49ffd34b5",
     "qualification": "Current launcher binds all interfaces, preserves explicit browser origin, keeps PostgreSQL/readiness on loopback. Actual corrected-package hostname browser check and owned shutdown pass. No model calls. A subsequent descriptor-inheritance correction has separate before/after evidence; preceding network/browser evidence retains its original launcher hash.",
     "networkVerificationLauncherSha256": "0fd02ab5dec83c6a372e2f696c9fcf543df1c9e4fd4898961cac651bcab69629",
     "lockInheritanceCorrection": {
@@ -610,9 +649,31 @@
       "operatorRecoveryStatus": "Recovered on host; corrected package running on all interfaces; actual plain-HTTP login and ALIVE connection verified with existing token, no project mutations",
       "operatorRecoveryEvidence": "/srv/nvme/tmp/cq4-launcher-lock-20260928/host-recovery.json",
       "operatorRecoverySha256": "e287da49341f907b795acaef368bc60e6b6a64729cbe8551672709dfed0ec70b"
-    }
+    },
+    "permanentWrapper": {
+      "file": "run-local.sh",
+      "sha256": "414b74f4b4738742734dee80be2e09e5c888f86768df25c57bfaaae99c5b2727",
+      "evidence": "/srv/nvme/tmp/cq4-compact-ui-20260928/delivery/result.json",
+      "evidenceSha256": "42685d0bd746a7a74d63b5f2bc6d5f9665362c7d53f1fa493b4004c49ffd34b5"
+    },
+    "previousDeliveryEvidence": "/srv/nvme/tmp/cq4-http-ui-20260928/delivery/result.json",
+    "previousDeliverySha256": "63b57688078c683012138d0576cdb1f9a46446e06dd49df56a5c7088490947f6"
   },
-  "activeCorrection": {
+  "previousArtifact": {
+    "directory": "/srv/nvme/tmp/cq4-implementation/cq-release-workflow-resources",
+    "manifestSha256": "3159173b19f4a9db92a4903429f12f8507d63ad55f5dc05d21bef5ab4d5f82f6",
+    "executableSha256": "2178d813e17ebce0693209d308d8cc082ae4ebc55b93860f8d985efd31c9f555",
+    "guardianSha256": "f56efb4626cb8e0fab0cc4b27b1460e75cea275890b5209df0a7f312ddf029bc",
+    "qualification": "Previous technically approved workflow-resource package. Real harness executions and their exact original artifact identity remain retained; remote-HTTP browser login defect is corrected by the current package."
+  },
+  "previousHttpArtifact": {
+    "directory": "/srv/nvme/tmp/cq4-implementation/cq-release-http-ui",
+    "manifestSha256": "02718ef5bee3c1333a2f50667a9d39d8ea8aad98d31adf0acc67a0e72061e2f0",
+    "executableSha256": "065d83c13f7758cbaabc995b2d517f16d75641173d09ca7da1a80f927e4ee431",
+    "guardianSha256": "f56efb4626cb8e0fab0cc4b27b1460e75cea275890b5209df0a7f312ddf029bc",
+    "qualification": "Preceding verified HTTP correction. Original artifact and evidence retained unchanged; superseded by compact CSS delivery."
+  },
+  "previousHttpCorrection": {
     "kind": "remote-http-browser-uuid",
     "reproduction": "/srv/nvme/tmp/cq4-http-ui-20260928/before",
     "scope": "Eight browser UUID call sites; launcher bind/origin; regression fixtures",
@@ -633,11 +694,29 @@
       "verdict": "http-login-correction-and-delivery-approved"
     }
   },
-  "previousArtifact": {
-    "directory": "/srv/nvme/tmp/cq4-implementation/cq-release-workflow-resources",
-    "manifestSha256": "3159173b19f4a9db92a4903429f12f8507d63ad55f5dc05d21bef5ab4d5f82f6",
-    "executableSha256": "2178d813e17ebce0693209d308d8cc082ae4ebc55b93860f8d985efd31c9f555",
-    "guardianSha256": "f56efb4626cb8e0fab0cc4b27b1460e75cea275890b5209df0a7f312ddf029bc",
-    "qualification": "Previous technically approved workflow-resource package. Real harness executions and their exact original artifact identity remain retained; remote-HTTP browser login defect is corrected by the current package."
+  "activeCorrection": {
+    "kind": "compact-laptop-ui-and-permanent-launcher",
+    "sourceCommit": "b551e0b",
+    "runtimeDelta": [
+      "web/style.css"
+    ],
+    "reproduction": "/srv/nvme/tmp/cq4-compact-ui-20260928/baseline",
+    "uiEvidence": "/srv/nvme/tmp/cq4-compact-ui-20260928/20260928T112045-ui",
+    "nativeEvidence": "/srv/nvme/tmp/cq4-compact-ui-20260928/20260928T112548-native",
+    "installedEvidence": "/srv/nvme/tmp/cq4-compact-ui-20260928/20260928T113259-installed",
+    "deliveryEvidence": "/srv/nvme/tmp/cq4-compact-ui-20260928/delivery",
+    "traceReuse": "/srv/nvme/tmp/cq4-compact-ui-20260928/20260928T112548-native/trace-reuse.json",
+    "traceReuseSha256": "e92fa74cc926950f4a03c9d2cd835c3fe48931562141cb44a8132cfa20ce62f0",
+    "runner": "/srv/nvme/tmp/cq4-compact-ui-20260928/build-native.py",
+    "runnerSha256": "b0f0e650375fcd7758b2cd7e5bb4fb23d4be4dd658d9ddf08aaf1b104ac3ea54",
+    "sourceReview": "Independent Astra approved source and scoped immutable trace reuse",
+    "required": [],
+    "qualification": "Before-fix native density reproduction fails; corrected buttons fit 1366x768 and 1280x720. Complete new runtime/browser, installed and permanent-wrapper smoke pass. JVM trace collection reused explicitly; no fresh paid harness executions.",
+    "verificationScopeCorrection": "Full native runtime and installed suites were excessive for this CSS-only change. User clarified future simple frontend changes require focused frontend and delivered launch/browser smoke checks; asset rebundling alone does not justify backend gates. Already-started checks completed; no further backend checks launched.",
+    "finalReview": {
+      "file": "/srv/nvme/tmp/cq4-compact-ui-20260928/final-review.json",
+      "sha256": "26fbfb043a48c521f54ee13e656449f5f00eca790558b62deb9ea152b7724d68",
+      "verdict": "compact-ui-and-permanent-launcher-delivery-approved"
+    }
   }
 }

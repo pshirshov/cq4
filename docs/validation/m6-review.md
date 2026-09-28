@@ -1,16 +1,16 @@
 # Combined M2 and M6 human review
 
-**HTTP browser correction verified and independently approved.** Human evaluation exposed a remote-HTTP login defect in the previous artifact; the [correction](http-ui.md) passes focused UI, native, installed and actual hostname browser checks. Earlier harness executions retain their original artifact identities with independently reviewed source applicability. Human M2 and M6 verdicts remain pending. Per the user's instruction, this guide combines both evaluation scopes.
+**Compact laptop UI and permanent launcher verified and independently approved.** Human evaluation exposed a remote-HTTP login defect in the previous artifact; the [correction](http-ui.md) passes focused UI, native, installed and actual hostname browser checks. Earlier harness executions retain their original artifact identities with independently reviewed source applicability. Human M2 and M6 verdicts remain pending. Per the user's instruction, this guide combines both evaluation scopes.
 
 ## Artifact and scope
 
 The locally runnable Linux x86-64 distribution is:
 
 ```text
-/srv/nvme/tmp/cq4-implementation/cq-release-http-ui
+/home/pavel/work/safe/cq4/cq4/.local/release
 ```
 
-Its native executable SHA-256 is `065d83c13f7758cbaabc995b2d517f16d75641173d09ca7da1a80f927e4ee431`; its manifest SHA-256 is `02718ef5bee3c1333a2f50667a9d39d8ea8aad98d31adf0acc67a0e72061e2f0`. Browser correction commit: `39f4d29`. The preceding product correction and evaluator epochs retain their original identities; paid harness results apply through independently reviewed browser-only source scope. CQ has one model version, `0.1.0`.
+Its native executable SHA-256 is `2597ad8a0207a54a62444cf5cc410b65c82ffd1cb9dad90c21f0ad4efcc64ea7`; its manifest SHA-256 is `b41ebd161f73d0036edf66aefcb29220b557db8e7b7b8e9e94ab32cab3ae43ba`. HTTP correction commit: `39f4d29`; compact CSS and permanent launcher: `b551e0b`. The preceding product correction and evaluator epochs retain their original identities; paid harness results apply through independently reviewed browser-only source scope. CQ has one model version, `0.1.0`.
 
 The same native entrypoint provides the server, CLI and supervisor. The release includes the web workspace, fourteen fixed ledgers, query/history/relationship operations, claims and reviewed integration, automatic bounded cohorts, four subagent roles, four workflow entrypoints and the shared operational usage audit. The [requirement coverage](../requirement-coverage.md) maps every R01–R31 entry to implementation and retained evidence. [Roles and commands](../design/workflows.md) describe their inventory and harness differences.
 
@@ -21,8 +21,8 @@ The same native entrypoint provides the server, CLI and supervisor. The release 
 | Contracts and service behavior | Deterministic generated contracts; 190 fast Scala scenarios; 102 PostgreSQL scenarios and actual client/process checks |
 | Database access | 126 measured operations across 100, 10,000 and 100,000 unrelated items; sampled budgets pass |
 | Web workspace | Chromium checks for editing, history/relationships, query completion, delayed replies, reconnect/resnapshot, project drafts, usage updates and narrow layouts; [M5 review](m5-review.md) |
-| Native runtime | 41 commands pass, including all four workflows and the actual insecure-HTTP browser scenario; `20260928T102507-native` |
-| Installed distribution | 25 root commands pass with source/classpath hidden, imported runtime closure, native HTTP browser/restart and settled 24-table backup/restore; `20260928T104927-installed` |
+| Native runtime | 26 commands pass for fresh build and complete native runtime, including all four workflows, laptop density and insecure HTTP; immutable JVM tracing snapshots explicitly reused; `20260928T112548-native` |
+| Installed distribution | 25 root commands pass with source/classpath hidden, imported runtime closure, native HTTP browser/restart and settled 24-table backup/restore; `20260928T113259-installed` |
 | Native harness routes | Three independently accepted Python/Go cohorts cover all nine governing/child routes; [current candidates and inspection](m2-review.md#current-acceptance-evidence) |
 | Complete processes | Go and defect processes pass native independent whole-process assessments and Astra replay; Go includes a bounded new-session Handoff closeout preserving its failed producer |
 
@@ -32,7 +32,7 @@ The paid harness corpus is reused for the browser-only correction; its execution
 
 ## Run and verify
 
-The [local quickstart](../quickstart.md) supplies a persistent database/server launch script and a small project walkthrough for hands-on evaluation.
+Run `./run-local.sh` from the CQ repository. The [local quickstart](../quickstart.md) supplies the permanent database/server launcher and a small project walkthrough. [Compact delivery evidence](compact-ui.md) records current checks and exact trace reuse.
 
 Follow the distribution's `README.md` to import and retain the exported Nix runtime closure. The application requires no Java runtime or CQ checkout. PostgreSQL, Git, configured harness credentials and consumer build tools are external dependencies.
 
@@ -41,7 +41,7 @@ The [operations guide](../design/operations.md) gives exact commands for configu
 Inspect the manifest and executable locally:
 
 ```sh
-cd /srv/nvme/tmp/cq4-implementation/cq-release-http-ui
+cd /home/pavel/work/safe/cq4/cq4/.local/release
 sha256sum manifest.json bin/cq
 ./bin/cq --help
 ```

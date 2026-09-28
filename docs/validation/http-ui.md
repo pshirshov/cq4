@@ -18,8 +18,10 @@ The earlier live release corpus replays successfully from its exact evaluator ch
 
 Native gate `20260928T102507-native` passes all 41 commands. Installed gate `20260928T104927-installed` passes all 25 root commands with the source/classpath hidden, imported Nix runtime, actual native browser checks including insecure HTTP, restart and settled database backup/restore. Both are under `/srv/nvme/tmp/cq4-http-ui-20260928`.
 
-The current package is `/srv/nvme/tmp/cq4-implementation/cq-release-http-ui`, built from browser correction `39f4d29`. Manifest SHA-256: `02718ef5bee3c1333a2f50667a9d39d8ea8aad98d31adf0acc67a0e72061e2f0`. Executable SHA-256: `065d83c13f7758cbaabc995b2d517f16d75641173d09ca7da1a80f927e4ee431`.
+The HTTP-correction package was `/srv/nvme/tmp/cq4-implementation/cq-release-http-ui`, built from browser correction `39f4d29`. Manifest SHA-256: `02718ef5bee3c1333a2f50667a9d39d8ea8aad98d31adf0acc67a0e72061e2f0`. Executable SHA-256: `065d83c13f7758cbaabc995b2d517f16d75641173d09ca7da1a80f927e4ee431`.
 
 `delivery/result.json` verifies the current launcher/package at `http://vm.home.7mind.io:39063`, resolving to `192.168.10.15`: actual insecure-context login, live connection, project creation, task saves and relationship edit pass. The listening CQ socket accepts all interfaces, PostgreSQL stays on loopback, and owned shutdown completes with the database stopped. This used a private scratch state and no model calls. It does not assert reachability through a different client's DNS/firewall configuration.
 
 Stop the old launcher and use the [updated quickstart](../quickstart.md) with the same state directory; then reload the browser. No token or data reset is needed. The earlier package remains unchanged for its original evidence.
+
+The subsequent [compact laptop UI delivery](compact-ui.md) is current. This document preserves the HTTP correction’s original artifact identities and evidence.

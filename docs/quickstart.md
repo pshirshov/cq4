@@ -4,37 +4,32 @@ This walkthrough starts a persistent local CQ server and drives a small Go proje
 
 ## 1. Start CQ — terminal one
 
-On this machine, the verified native package and its Nix runtime libraries are already present:
+The permanent launcher and native package are in this repository:
 
 ```sh
 cd /home/pavel/work/safe/cq4/cq4
-nix develop -c bash docs/examples/launch-local.sh \
-  /srv/nvme/tmp/cq4-implementation/cq-release-http-ui \
-  /srv/nvme/tmp/cq4-playground
+./run-local.sh
 ```
 
-The [launcher](examples/launch-local.sh) creates a private PostgreSQL cluster, generates persistent credentials, starts the native server and waits for its authenticated health response. CQ listens on **0.0.0.0:8080**. Leave this terminal open. PostgreSQL listens on loopback port 55432 with password authentication. To choose other ports, prefix the command with `CQ_LOCAL_PORT=8081 CQ_LOCAL_DB_PORT=55433`.
+You can also invoke `/home/pavel/work/safe/cq4/cq4/run-local.sh` from any directory. The [wrapper](../run-local.sh) enters the pinned Nix environment and starts the package at `.local/release` through the [database/server launcher](examples/launch-local.sh). It generates persistent credentials on first use and waits for authenticated server readiness.
 
-For a browser on another machine, set `CQ_ORIGIN` to the exact browser URL, including scheme and port (without a trailing slash). For example, on this host:
-
-```sh
-CQ_ORIGIN=http://vm.home.7mind.io:8080 \
-nix develop -c bash docs/examples/launch-local.sh \
-  /srv/nvme/tmp/cq4-implementation/cq-release-http-ui \
-  /srv/nvme/tmp/cq4-playground
-```
-
-Use that same URL in the browser. CQ checks browser origins; binding all interfaces alone does not change the permitted origin. Startup health checks always use loopback, so they do not require the browser hostname to resolve locally. CLI configuration in `client.env` uses the configured origin. Changing an existing instance requires stopping and restarting the launcher.
-
-With no `CQ_ORIGIN` override, open **http://127.0.0.1:8080**. Obtain the browser login token in another terminal:
+CQ listens on **0.0.0.0:8080**; open **http://vm.home.7mind.io:8080**. Leave the terminal open. PostgreSQL listens on loopback port 55432 with password authentication. Obtain the browser login token in another terminal:
 
 ```sh
 cat /srv/nvme/tmp/cq4-playground/token
 ```
 
-State, credentials, logs and subsequent session journals live under `/srv/nvme/tmp/cq4-playground`. Reusing the launch command preserves them. A concurrently running launcher or database in the same state directory is rejected. On another machine, first install the package's `runtime.nar` as described in its README. The launcher requires Linux, Bash, Python, curl, flock and PostgreSQL; `nix develop` supplies the pinned PostgreSQL and Go tools here.
+State, credentials, logs and subsequent session journals stay under `/srv/nvme/tmp/cq4-playground`. Reusing the command preserves them. Stop an existing launcher with Ctrl-C before starting this one, then reload the browser to load the compact UI. Re-source `client.env` in existing CLI terminals to select the current package.
 
-If the earlier package showed `crypto.randomUUID is not a function`, stop its launcher with Ctrl-C, run the command above with `cq-release-http-ui` and the same state directory, then reload the browser. Credentials and project data are retained. Re-source `client.env` in an existing CLI terminal to select the corrected package. [Reproduction and verification](validation/http-ui.md).
+For another browser URL, set `CQ_ORIGIN` to its exact scheme, hostname and port, without a trailing slash. For example, for a browser on this machine:
+
+```sh
+CQ_ORIGIN=http://127.0.0.1:8080 ./run-local.sh
+```
+
+Optional overrides are `CQ_LOCAL_STATE`, `CQ_LOCAL_PORT` and `CQ_LOCAL_DB_PORT`. If changing the HTTP port, the default origin uses that port; an explicit `CQ_ORIGIN` must match. CQ checks browser origins. Startup health checks use loopback, so they do not require the browser hostname to resolve locally. CLI configuration in `client.env` uses the configured origin. Changing an existing instance requires stopping and restarting its launcher.
+
+The wrapper selects this machine's already-built package. On another machine, build/install a distribution and import its `runtime.nar` as described in the package README, then use `docs/examples/launch-local.sh RELEASE_DIR STATE_DIR` inside `nix develop`. Linux, Bash, Python, curl, flock and PostgreSQL are required; the pinned environment supplies PostgreSQL and Go here. [Compact UI and launcher verification](validation/compact-ui.md) records the current delivery; [HTTP login verification](validation/http-ui.md) records the earlier correction.
 
 If startup reports “A launcher already owns”, another process holds the state lock. Stop the original launcher before restarting; do not delete `launcher.lock`. Earlier helper revisions could leak this lock into PostgreSQL after launcher termination. The corrected helper prevents that inheritance, but an already-running orphaned database needs identified, explicit cleanup before relaunch. [Reproduction and correction](validation/local-quickstart.md#detached-database-lock-inheritance).
 
