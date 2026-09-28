@@ -1,6 +1,6 @@
 # Agent roles, real inputs and protocol
 
-Inspected 2026-09-28 against implementation `39f4d29` and retained native consumer executions; the supervisor/dispatch implementation was rechecked after the evaluation corrections. Sections 1–4 describe the implemented system. The interactive session design in section 5 was subsequently accepted by the user; it is not yet an available mode.
+Inspected 2026-09-28 against implementation `39f4d29` and retained native consumer executions; the supervisor/dispatch implementation was rechecked after the evaluation corrections. The recorded prompt/report examples in sections 1–4 are from batch executions. The accepted interactive mode in section 5 is now implemented and undergoing native release verification; see [current evidence](../validation/attached-host.md).
 
 ## 1. Inventory
 
@@ -16,7 +16,7 @@ CQ has **four dispatched child roles and one governing model role**. A role is i
 
 `Human` and `Collector` also appear in the authorization enum. They are operator and host identities, not model agents. The supervisor, guardian, cohort selector, input assembler and usage collector are program components. There is no separate researcher, investigator, merger, tester or cohort-manager agent. The release evaluator's independent assessment uses another managed Governor/Reviewer run; “assessor” is usage attribution, not an additional CQ role.
 
-An existing interactive assistant can be an **outer caller**. The exported four workflow commands currently ask it to invoke `cq run`; the managed Governor is another session. Begin/Advance/Review/Upstream are workflows, not four more agents. Development-time Astra reviewers of CQ itself are outside this product inventory.
+An existing interactive assistant is the **Governor** when configured with `cq configure`. The exported four workflow commands call its harness-owned CQ host directly. Batch `cq run` still launches a managed Governor. Begin/Advance/Review/Upstream are workflows, not four more agents. Development-time Astra reviewers of CQ itself are outside this product inventory.
 
 Sources: [role/mode/report contracts](../../models/cq-api.baboon), [prompt selection](../../host/src/main/scala/cq/host/ChildInstructions.scala), [workflow entrypoints](workflows.md).
 
@@ -152,11 +152,11 @@ The host, not the model, calls `/api/grant`, `/api/artifact`, `/api/usage`, `/ap
 
 ## 5. Why `cq run codex …` exists
 
-The current syntax is `cq run codex --settings … --input …`; the same executable has server, client and supervisor roles. The shell script in the quickstart merely starts PostgreSQL and `cq serve`. It is optional convenience and is separate from the managed-session launcher discussed here.
+Batch syntax remains `cq run codex --settings … --input …`; the same executable has server, client, supervisor and attached-host roles. Interactive use starts the harness directly after `cq configure HARNESS --settings …`. The shell script in the quickstart merely starts PostgreSQL and `cq serve`. It is optional convenience and is separate from the managed-session launcher discussed here.
 
 `cq run` establishes a local **execution owner** with the consumer repository, integration target, route configuration, credentials and session directory. It starts the private MCP service, creates isolated worktrees, materializes prompts/results, applies harness restrictions, owns process deadlines/termination, captures candidates/checks, and journals usage/publication for recovery. The durable server alone cannot safely infer that local context or access the consumer's Git repository and harness credentials.
 
-In the current implementation, the supervisor also launches the Governor as a batch child. When that Governor exits, its child hierarchy is terminated and reconciled. The private dispatch endpoint belongs to that managed session; it is not a persistent service that an arbitrary existing interactive session can attach to.
+In batch mode, the supervisor also launches the Governor as a batch child. When that Governor exits, its child hierarchy is terminated and reconciled. The private dispatch endpoint belongs to that managed session; it is not a persistent service that an arbitrary existing interactive session can attach to.
 
 Thus the literal command spelling is not inherently necessary, but the execution-owner responsibilities must live somewhere. Connecting an ordinary unrestricted harness to the durable domain MCP alone does not supply local dispatch, host prompt assembly, isolated execution, review/integration or managed usage accounting.
 
@@ -164,11 +164,11 @@ Thus the literal command spelling is not inherently necessary, but the execution
 
 | Design | User experience | Status / consequence |
 | --- | --- | --- |
-| Current generated workflow commands | Start the harness normally; use the exported CQ skill/command and supply settings/scope | Implemented. It invokes `cq run` for you and surfaces a bounded receipt. There is still a separate batch Governor and unmetered outer-session overhead. See [exact native invocation paths](workflows.md#entry-points-and-execution). |
-| Local CQ host started and owned by the interactive harness | Start `codex`, `claude` or `pi` normally; that session acts as Governor through CQ tools | Accepted design, not implemented. The host and managed children belong under the harness process, inside the same sandbox. Reuse child execution, handle passing, validation and integration machinery. No separate batch Governor or detached host daemon. |
+| Batch execution | Invoke `cq run` for a bounded unattended request | Implemented; launches and meters a separate Governor. |
+| Local CQ host started and owned by the interactive harness | Start `codex`, `claude` or `pi` normally; that session acts as Governor through CQ tools | Implemented; native consumer routes pass and release verification is in progress. The host and managed children belong under the harness process, inside the same sandbox. No separate batch Governor or detached host daemon. |
 | CQ server owns execution | Browser/CLI submits work; a server-side worker starts harnesses against configured repositories | Proposed and requires changing R21, which says the durable CQ server never starts/holds harness processes. Repository access, credentials and process ownership move to that machine. A separately owned worker could preserve the server boundary. |
 
-For the accepted option, the concrete missing boundary is **open/close a governing session owned by the interactive harness**: bind a project, repository, routes, limits and permitted scope; issue private per-session authority; expose dispatch to the existing harness; define heartbeat/disconnect/cancellation and retained recovery. Use harness-started stdio MCP integration for Claude/Codex and the corresponding Pi extension/bridge; exact lifecycle hooks still require native verification. Reuse the existing model-independent services through another distage role in the same executable. This preserves [R21's separation](../drafts/20260926-0957-cq-requirements-prompt.md#r21--cross-harness-dispatch-and-bounded-process-ownership) between durable server and local execution ownership.
+The `host` distage role opens a fresh governing session beneath its native owner. Claude/Codex use project stdio MCP; Pi uses a project extension. `session Context` returns project, routes, checks, limits, session directory and instructions. `session Workflow` activates idempotent typed scope; dispatch uses retained choices and current claims. EOF, owner death, heartbeat loss and operation deadlines close admission and terminate the hierarchy. Retained publication can be replayed by `cq job upload`; reconnection never adopts uncertain processes. See [lifecycle and accounting evidence](../validation/attached-host.md).
 
 The tradeoff is that CQ no longer controls the outer harness's startup flags, native tools or all of its usage events. Server permissions and child restrictions remain enforceable, but the interactive Governor could have unrelated shell/tools. Usage must distinguish observable child spending from unavailable outer-session spending, with harness-specific collectors where supported. Session attachment must not silently reuse old claims or result-publication authority.
 
@@ -199,4 +199,4 @@ Implementation requirements:
 7. Collect child usage as today. Observe outer interactive usage where the native harness permits it, with separate attribution and explicit missing/unsupported coverage. Do not treat an unobserved outer session as zero cost.
 8. Verify direct startup inside yolo on all three harnesses, actual child routes, compact prompt/result traffic, owner shutdown/failure, durable audit gaps and unchanged batch use. Native integration details and telemetry coverage remain unverified for the proposed mode until those checks pass.
 
-The design is accepted; implementation and its native verification remain outstanding. The UI/CLI redesign stays queued for the new CQ session.
+The design is implemented; its remaining package and interactive verification is tracked in the [evidence record](../validation/attached-host.md). The UI/CLI redesign stays queued for the new CQ session.

@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import queue
+import shlex
 import subprocess
 import sys
 import threading
@@ -87,18 +88,24 @@ def main():
     env["CQ_TOKEN_FILE"] = str(token)
     guardian = guardian_binary(root, os.environ.get("CQ_GUARDIAN_TEST_BINARY"))
     native = root / "fixture-harness"
-    native.write_text(f"#!{sys.executable}\n" + Path("dev/dispatch-fixture.py").read_text())
+    native.write_text(f"#!{sys.executable}\n" + Path("dev/dispatch-fixture.py").read_text().replace('print("codex-cli 0.156.1")', 'print("fixture 0.156.1 2.1.280 0.87.1")'))
     native.chmod(0o700)
     limits = {"startupMillis": "5000", "executionMillis": "60000", "heartbeatMillis": "1000", "graceMillis": "300", "killMillis": "2000", "outputBytes": 262144}
     settings = root / "settings.json"
     settings.write_text(json.dumps({"integrationTarget": None, "stateRoot": str(root / "sessions"), "guardian": str(guardian), "checks": [], "evaluation": None,
-        "harnesses": [{"harness": "Codex", "executable": str(native), "model": "fixture-model", "provider": "fixture-provider", "version": "0.156.1", "providerExtensions": [], "providerEnvironment": []}], "limits": limits}))
+        "harnesses": [{"harness": name, "executable": str(native), "model": "fixture-model", "provider": provider, "version": version, "providerExtensions": [], "providerEnvironment": []}
+                      for name, provider, version in [("Codex", "fixture-provider", "0.156.1"), ("Claude", "anthropic", "2.1.280"), ("Pi", "fixture-provider", "0.87.1")]], "limits": limits}))
     env["CQ_SETTINGS"] = str(settings)
     def cli(arguments):
         result = subprocess.run(command + arguments, cwd=repository, env=env, capture_output=True, text=True, timeout=30)
         assert result.returncode == 0, result.stderr + result.stdout
         return result.stdout
     cli(["init", "--endpoint", os.environ["CQ_ORIGIN"]])
+    wrapper = root / "cq-fixture-entrypoint"
+    wrapper.write_text("#!/bin/sh\nexec " + shlex.join(command) + ' "$@"\n')
+    wrapper.chmod(0o700)
+    for harness in ["claude", "codex", "pi"]:
+        cli(["configure", harness, "--settings", str(settings), "--executable", str(wrapper)])
     with (root / "host.log").open("w") as log:
         peer = Peer(command + ["host", "codex"], repository, env, log)
         try:
@@ -153,6 +160,42 @@ def main():
     totals = json.loads(cli(["status", "--session", context["session"]["value"]]))["UsageSummary"]["report"]
     assert totals["attempts"]["unknown"] == "1" and totals["attempts"]["running"] == "0" and totals["attemptsWithoutMeters"] == "1", totals
     print(json.dumps({"attachedSession": context["session"], "child": status, "usage": totals, "activationFence": True, "tokenFile": True, "replay": True}))
+
+    with (root / "pi-host.log").open("w") as log:
+        pi = Peer(command + ["host", "pi"], repository, env, log)
+        try:
+            pi_context = pi.tool("session", {"Context": {}})["Context"]["value"]
+            sample = {"sequence": "1", "session": "fixture-native-pi", "turn": "1", "provider": "fixture-provider", "model": "fixture-model",
+                      "timestamp": "1000", "responseId": "response-1", "stopReason": "stop", "input": "10", "output": "3", "cacheRead": "2",
+                      "cacheWrite": "0", "reasoning": None, "totalTokens": "15", "costUSD": {"value": "0.001"}}
+            pi.rpc("cq/piUsage", sample)
+            pi.rpc("cq/piUsage", sample)
+        finally:
+            pi.close()
+    pi_totals = json.loads(cli(["status", "--session", pi_context["session"]["value"]]))["UsageSummary"]["report"]
+    assert pi_totals["unattributed"]["total"]["known"] == "15" and pi_totals["incompleteMeters"] == "1", pi_totals
+    assert "Acknowledged 0" in cli(["job", "upload", "--session", pi_context["directory"]])
+    print(json.dumps({"attachedPiUsage": "deduplicated-partial", "integrationExports": ["claude", "codex", "pi"]}))
+
+    with (root / "closing-host.log").open("w") as log:
+        closing = Peer(command + ["host", "codex"], repository, env, log)
+        try:
+            closing_context = closing.tool("session", {"Context": {}})["Context"]["value"]
+            closing.tool("session", {"Workflow": {"id": identity(), "request": {"Begin": {"roots": []}}}})
+            created = closing.tool("change", {"project": project, "change": {"request": identity(), "mutations": [{"Create": {"draft": {**draft, "labels": []}}}], "fences": [], "reason": "Owned child shutdown"}})["Changed"]["ack"]["items"][0]
+            selected, = closing.tool("dispatch", {"Select": {"request": {**selection, "request": identity(), "roots": [created["id"]], "work": {"Worker": {"mode": "Probe"}}}}})["Selection"]["value"]["choices"]
+            owned = closing.tool("claim", {"project": project, "action": {"Acquire": {"id": identity(), "members": [created["id"]], "durationMillis": "180000"}}})["Claimed"]["claim"]
+            running = closing.tool("dispatch", {"StartChoice": {"choice": selected["id"], "harness": "Codex", "fence": owned["fence"]}})["Status"]["value"]
+            deadline = time.monotonic() + 20
+            while running["process"] != "Running" and time.monotonic() < deadline:
+                running = closing.tool("dispatch", {"Status": {"attempt": running["attempt"], "waitMillis": 100}})["Status"]["value"]
+            assert running["process"] == "Running", running
+        finally:
+            closing.close()
+    child_directory = Path(closing_context["directory"]) / "children" / running["attempt"]["value"]
+    stopped = json.loads((child_directory / "receipt.json").read_text())
+    assert stopped["phase"] == "Cancelled" and stopped["process"] == "Settled" and stopped["result"] is None and stopped["usageDelivered"], stopped
+    print(json.dumps({"disconnectWithRunningChild": "cancelled-and-accounted"}))
 
     preload = root / "stall.so"
     subprocess.run(["gcc", "-std=c17", "-shared", "-fPIC", "-Wall", "-Wextra", "-Werror", "-o", str(preload), "dev/shutdown-stall.c", "-ldl"], check=True)

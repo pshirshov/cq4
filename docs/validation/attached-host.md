@@ -80,3 +80,7 @@ These checks used the JVM development executable. Earlier Claude/Codex TUI attem
 The installed yolo script uses `--clearenv`: exporting CQ variables in the host shell is insufficient. Its `--env KEY=VALUE`, `--ro PATH` and `--rw PATH` options must precede `codex`, `claude` or `pi`. The intended credential forwarding is `--env CQ_TOKEN_FILE=/absolute/token`, with that file readable inside the sandbox. Exact verified setup/run commands will be supplied with the package.
 
 Configuration references inspected: [Codex stdio MCP](https://learn.chatgpt.com/docs/extend/mcp?surface=cli), [Claude project MCP](https://code.claude.com/docs/en/mcp), and the installed Pi 0.87.1 extension declarations/docs. These establish configuration/hook APIs; they do not substitute for native lifecycle measurements.
+
+### Yolo invocation boundary
+
+The native consumers and TUI checks above ran inside the current yolo sandbox. A nested invocation of the actual `yolo --env CQ_TOKEN_FILE=… cmd …` script was attempted (`yolo-visibility.log`); it failed before executing CQ because the outer sandbox lacks `/run/nscd`, which the host-level yolo script binds. This does not establish a failure of the host invocation. Host-level yolo startup remains the user's trial; the installed script was inspected for explicit environment forwarding, project/state binds and native launch flags. No host processes or configuration were modified to bypass this boundary.
