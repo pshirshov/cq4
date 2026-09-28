@@ -51,14 +51,19 @@ function field(unresolved: Schema, value: Json | undefined, label: string): Edit
     for (const branch of branches) { const option = element('option', branch.name); option.value = branch.name; choice.append(option); }
     choice.value = selected === undefined ? branches[0].name : selected.name;
     const body = element('div', '');
+    let branchName = choice.value;
     const build = (): Editor => {
-      const branch = required(branches.find(b => b.name === choice.value), 'selected branch');
+      const branch = required(branches.find(b => b.name === branchName), 'selected branch');
       return field(branch.schema, object(value)[branch.name], branch.name);
     };
     let inner = build(); body.append(inner.element);
-    choice.addEventListener('change', () => { inner = build(); body.replaceChildren(inner.element); });
+    const select = (): void => {
+      if (branchName === choice.value) return;
+      branchName = choice.value; inner = build(); body.replaceChildren(inner.element);
+    };
+    choice.addEventListener('input', select); choice.addEventListener('change', select);
     container.append(choice, body);
-    return { element: container, read: () => ({ [choice.value]: inner.read() }) };
+    return { element: container, read: () => ({ [branchName]: inner.read() }) };
   }
   if (schema.type === 'object') {
     const fields = Object.entries(schema.properties === undefined ? {} : schema.properties).map(([key, child]) => ({ key, editor: field(required(child, key), object(value)[key], key) }));

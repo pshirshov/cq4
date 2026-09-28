@@ -2,6 +2,7 @@ import { ConnectionStats } from './connection.js';
 import { button, element } from './editor.js';
 
 const RENDER_INTERVAL = 100;
+const POPOVER_LEAVE_DELAY = 200;
 function seconds(ms: number): string { return `${Math.max(0, ms / 1000).toFixed(1)}s`; }
 
 export class ConnectionIndicator {
@@ -17,6 +18,7 @@ export class ConnectionIndicator {
   private animation: number | null = null;
   private lastRender = 0;
   private destroyed = false;
+  private closeTimer: number | null = null;
 
   constructor(retry: () => void) {
     this.element.className = 'connection-indicator';
@@ -28,6 +30,28 @@ export class ConnectionIndicator {
       element('p', 'Heartbeats run while the page can execute. Browser suspension delays detection. Heartbeat deadline misses are not a measurement of network packet loss. RTT windows retain at most 512 samples per connection.'),
       element('h3', 'Connection events'), this.log);
     this.element.append(summary, details);
+    const keepOpen = (): void => {
+      this.cancelClose(); this.element.open = true;
+    };
+    this.element.addEventListener('pointerenter', event => { if (event.pointerType !== 'touch') keepOpen(); });
+    this.element.addEventListener('pointerleave', () => {
+      this.cancelClose();
+      this.closeTimer = window.setTimeout(() => {
+        this.closeTimer = null;
+        if (!this.element.contains(document.activeElement)) this.element.open = false;
+      }, POPOVER_LEAVE_DELAY);
+    });
+    this.element.addEventListener('focusin', keepOpen);
+    this.element.addEventListener('focusout', event => {
+      if (!(event.relatedTarget instanceof Node && this.element.contains(event.relatedTarget)) && !this.element.matches(':hover')) this.element.open = false;
+    });
+    summary.addEventListener('click', event => { event.preventDefault(); keepOpen(); });
+    this.element.addEventListener('keydown', event => {
+      if (event.key === 'Escape') { event.preventDefault(); summary.focus(); this.cancelClose(); this.element.open = false; }
+    });
+    document.addEventListener('pointerdown', event => {
+      if (event.target instanceof Node && !this.element.contains(event.target)) { this.cancelClose(); this.element.open = false; }
+    }, { signal: this.lifecycle.signal });
     this.element.addEventListener('toggle', () => this.render(Date.now()));
     window.addEventListener('pagehide', () => this.cancel(), { signal: this.lifecycle.signal });
     window.addEventListener('pageshow', () => this.animate(), { signal: this.lifecycle.signal });
@@ -75,5 +99,6 @@ export class ConnectionIndicator {
     this.log.textContent = stats.events.join('\n');
   }
   private cancel(): void { if (this.animation !== null) cancelAnimationFrame(this.animation); this.animation = null; }
-  destroy(): void { this.destroyed = true; this.lifecycle.abort(); this.cancel(); }
+  private cancelClose(): void { if (this.closeTimer !== null) window.clearTimeout(this.closeTimer); this.closeTimer = null; }
+  destroy(): void { this.destroyed = true; this.lifecycle.abort(); this.cancel(); this.cancelClose(); }
 }

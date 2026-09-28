@@ -91,7 +91,10 @@ export class QueryEditor {
     try {
       const result = await this.complete(source, cursor);
       if (!current()) return;
-      this.showDiagnostic(result.diagnostic, source);
+      const diagnostic = result.diagnostic;
+      const completingError = diagnostic !== undefined && diagnostic.span.start < diagnostic.span.end && result.suggestions.some(suggestion =>
+        suggestion.span.start < suggestion.span.end && suggestion.span.start <= diagnostic.span.start && suggestion.span.end >= diagnostic.span.end);
+      this.showDiagnostic(completingError ? undefined : diagnostic, source);
       this.suggestions = result.suggestions;
       for (const [index, suggestion] of this.suggestions.entries()) {
         const option = button(`${suggestion.label} · ${suggestion.kind}`, () => this.accept(suggestion));

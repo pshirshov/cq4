@@ -1,5 +1,7 @@
 # Requirement coverage
 
+Human evaluation follow-up: [D1/D2/D3/D7/D8](validation/human-evaluation.md#verified-frontend-increment) have verified frontend corrections for scrolling, connection diagnostics, typed drafts and query hints; installed delivery is pending. Live catalogue and open usage views remain under correction. This does not change the pending human acceptance verdict.
+
 Requirements: [R01–R31](drafts/20260926-0957-cq-requirements-prompt.md). Milestones: [implementation plan](drafts/20260926-1549-cq-implementation-plan.md). Planned ownership is not implementation evidence.
 
 Hands-on evaluation: the [local launch script and small-project walkthrough](quickstart.md) have [actual startup, shutdown, persistence and setup evidence](validation/local-quickstart.md). They use the approved native package; the user's designated acceptance remains pending.

@@ -50,7 +50,7 @@ export async function resyncChecks(browser, storageState, origin, evidence) {
     await page.getByLabel('Project', { exact: true }).selectOption(project.value);
     await page.getByText('40 items · more available', { exact: true }).waitFor();
     await page.getByText('Data: current', { exact: true }).waitFor(); await settledRequests(page);
-    await page.getByRole('button', { name: 'Next page', exact: true }).click();
+    await page.getByRole('region', { name: 'Results', exact: true }).evaluate(node => { node.scrollTop = node.scrollHeight; });
     let timer;
     try { await Promise.race([captured, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Missing search continuation')), 10000); })]); }
     finally { clearTimeout(timer); }
@@ -65,8 +65,10 @@ export async function resyncChecks(browser, storageState, origin, evidence) {
     assert.notEqual(continuation.after, null); assert.notEqual(continuation.snapshot, null);
     const recovery = exchanges.slice(exchanges.indexOf(rejected) + 1).find(entry => entry.direction === 'sent');
     assert.notEqual(recovery, undefined); assert.equal(recovery.frame.Call.command.Search.input.after, null); assert.equal(recovery.frame.Call.command.Search.input.snapshot, null);
-    assert.equal(await page.locator('.item-row').count(), 40);
-    assert.equal(await page.getByRole('button', { name: 'T41 · Snapshot 41', exact: true }).count(), 0);
+    const count = await page.locator('.item-row').count();
+    assert.ok(count === 40 || count === 50, 'Recovery retains a complete first page and may refill at the current scroll position');
+    const rows = await page.locator('.item-row').evaluateAll(nodes => nodes.map(node => node.dataset.item));
+    assert.equal(new Set(rows).size, count);
     assert.deepEqual(errors, []); cases.push('actual stale continuation rejection restarts first page without mixing snapshots');
   } finally {
     await writeFile(`${evidence}/resync-results.json`, JSON.stringify({ cases, errors, exchanges }, null, 2));

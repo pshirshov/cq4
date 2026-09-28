@@ -2,6 +2,8 @@
 
 Goal: complete the first CQ release under the [implementation plan](drafts/20260926-1549-cq-implementation-plan.md). Planning baseline: `7e3076a`.
 
+Human evaluation corrections: D1/D2/D3/D7/D8 pass the affected UI corpus and independent Astra review; native delivery remains pending. CQ_ORIGIN and unified catalogue/item/usage updates are in progress. [Defect records and evidence](validation/human-evaluation.md); [Scala warning investigation](validation/scala-lazyvals-warning.md). Human release acceptance is still pending.
+
 | Milestone | State | Evidence |
 | --- | --- | --- |
 | M0 stack and contracts | Complete; Astra approved `1801c2a` | [Four checks and native artifact](validation/m0-stack.md) |

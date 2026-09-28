@@ -4,6 +4,7 @@ body { margin: 0; }
 #app { display: flex; flex-direction: column; height: 100dvh; }
 header { position: relative; z-index: 2; display: flex; flex-direction: column; flex: none; gap: 5px; padding: 6px 12px; background: #1c2630; border-bottom: 1px solid #435364; }
 .top-identity { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; min-width: 0; }
+.connection-indicator { margin-left: auto; }
 .project-control { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 160px; max-width: 440px; }
 .project-control select { width: 100%; min-width: 0; }
 .top-metrics { display: flex; flex-wrap: wrap; gap: 4px 20px; font-size: 12px; color: #a4c1d3; overflow-wrap: anywhere; }
@@ -60,7 +61,8 @@ progress { width: 50px; height: 6px; margin-left: 12px; }
   #results-pane { max-height: 45vh; }
   .query-shortcuts { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 0 8px; }
   header { padding: 6px 12px; }
-  .project-control { max-width: 100%; }
+  .top-identity { display: grid; grid-template-columns: minmax(0, 1fr) auto; }
+  .project-control { max-width: 100%; grid-column: 1 / -1; grid-row: 2; }
 }
 
 .query-editor { position: relative; min-width: 0; }

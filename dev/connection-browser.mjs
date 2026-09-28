@@ -32,7 +32,7 @@ export async function connectionChecks(browser, storage, origin, evidence) {
     assert.equal(routes.length, 1, 'The heartbeat fixture must intercept the actual socket');
     await page.getByText('Connection: STALE', { exact: true }).waitFor();
     assert.equal(routes.length, 2, 'Stale connection must start one bounded replacement');
-    await page.locator('header summary').click();
+    await page.locator('header summary').hover();
     const diagnostics = page.getByRole('region', { name: 'Connection diagnostics', exact: true });
     async function unobscured() {
       const result = await diagnostics.evaluate(node => {

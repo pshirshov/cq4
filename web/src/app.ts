@@ -11,6 +11,7 @@ import { itemName } from './items.js';
 
 const CONTEXT = BaboonCodecContext.Default;
 const PAGE_SIZE = 40;
+const LOAD_MORE_DISTANCE = 120;
 const MAX_QUERY_CHARACTERS = 4096;
 const COMPLETION_LIMIT = 30;
 function describe(value: unknown): string { return typeof value === 'string' ? value : JSON.stringify(value, null, 2); }
@@ -36,6 +37,8 @@ class App {
   private activeQuery = '';
   private readonly items = element('div', '');
   private readonly rows = new Map<string, ResultRow>();
+  private loadedItems: api.ItemSummary[] = [];
+  private resultsPane: HTMLElement | null = null;
   private readonly emptyResults = element('p', 'No matching items.');
   private readonly resultStatus = element('p', 'No project selected');
   private readonly usageMetric = element('span', 'Usage: not loaded');
@@ -136,10 +139,13 @@ class App {
   private mount(): void {
     const header = element('header', ''); const identity = element('div', ''); identity.className = 'top-identity';
     const projectLabel = element('label', 'Project'); projectLabel.className = 'project-control'; projectLabel.append(this.projects);
-    identity.append(element('h1', 'CQ'), projectLabel, this.health.element, this.sync);
+    identity.append(element('h1', 'CQ'), projectLabel, this.health.element);
     const metrics = element('div', ''); metrics.className = 'top-metrics'; metrics.setAttribute('role', 'region'); metrics.setAttribute('aria-label', 'Usage metrics');
-    metrics.append(this.usageMetric, this.usageFreshness); header.append(identity, this.queryEditor.element, metrics);
+    metrics.append(this.sync, this.usageMetric, this.usageFreshness); header.append(identity, this.queryEditor.element, metrics);
     const workspace = new Workspace(this.root); const side = workspace.navigation; const list = workspace.results; const content = workspace.content;
+    this.resultsPane = list;
+    list.addEventListener('scroll', () => this.loadMore());
+    window.addEventListener('resize', () => this.loadMore());
     this.projects.setAttribute('aria-label', 'Project'); this.query.setAttribute('aria-label', 'Search query');
     this.projects.addEventListener('change', () => this.action(async () => { this.project = new api.ProjectId(this.projects.value); this.reset(); await this.refresh(); }));
     this.query.placeholder = 'ledger:Tasks status:Ready'; this.query.maxLength = MAX_QUERY_CHARACTERS;
@@ -170,13 +176,8 @@ class App {
       if (event.key === 'Escape') { event.preventDefault(); const row = this.items.querySelector<HTMLButtonElement>('[aria-current=true]'); (row === null ? this.items : row).focus(); }
     });
     this.root.addEventListener('keydown', event => { if (event.ctrlKey && event.key.toLowerCase() === 'k') { event.preventDefault(); this.query.focus(); } });
-    const pages = element('div', ''); pages.className = 'actions';
-    pages.append(button('First page', () => this.action(async () => { this.after = undefined; this.snapshot = undefined; await this.refresh(); })),
-      button('Next page', () => this.action(async () => {
-        if (this.page !== null && this.page.hasMore) { this.after = this.page.after; this.snapshot = this.page.cursor; await this.refresh(); }
-      })));
     this.resultStatus.setAttribute('role', 'status');
-    list.append(element('h2', 'Items'), this.resultStatus, this.items, pages);
+    list.append(element('h2', 'Items'), this.resultStatus, this.items);
     content.append(this.notice, this.detail, this.editorPanel, this.conflictPanel, this.graph.element, this.historyPanel, this.usagePanel, this.auditPanel);
     this.root.replaceChildren(header, workspace.element); workspace.fit();
     this.manager = new ConnectionManager(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`, {
@@ -210,6 +211,8 @@ class App {
   }
   private async search(): Promise<void> {
     this.activeQuery = this.query.value; this.epoch++; this.subscription = null; this.after = undefined; this.snapshot = undefined;
+    this.loadedItems = []; this.page = null;
+    if (this.resultsPane !== null) this.resultsPane.scrollTop = 0;
     this.notice.textContent = ''; this.queryEditor.showDiagnostic(undefined, this.query.value); await this.refresh();
   }
   private reset(): void {
@@ -217,7 +220,8 @@ class App {
     this.epoch++; this.selectionGeneration++; this.selection = null; this.selected = null; this.editor = null; this.after = undefined; this.snapshot = undefined; this.subscription = null;
     this.resetUsageWatch();
     this.graph.setScope(this.project, null);
-    this.rows.clear(); this.items.replaceChildren(); this.page = null; this.resultStatus.textContent = 'Loading items…';
+    this.rows.clear(); this.items.replaceChildren(); this.loadedItems = []; this.page = null; this.resultStatus.textContent = 'Loading items…';
+    if (this.resultsPane !== null) this.resultsPane.scrollTop = 0;
     this.detail.replaceChildren(); this.editorPanel.replaceChildren(); this.conflictPanel.replaceChildren(); this.historyPanel.replaceChildren(); this.usagePanel.replaceChildren(); this.auditPanel.replaceChildren();
     this.notice.textContent = ''; this.setUsageScope(new api.UsageFilter_ProjectAll());
   }
@@ -236,6 +240,13 @@ class App {
     this.graph.setScope(this.project, this.selected);
     if (after !== undefined) this.showError('Project selector reached 1,000 entries; use CLI for additional projects');
   }
+  private loadMore(): void {
+    const pane = this.resultsPane;
+    if (pane === null || this.refreshing || this.page === null || !this.page.hasMore || this.project === null) return;
+    if (pane.scrollHeight - pane.scrollTop - pane.clientHeight > LOAD_MORE_DISTANCE) return;
+    this.after = this.page.after; this.snapshot = this.page.cursor;
+    this.action(() => this.refresh());
+  }
   private async refresh(): Promise<void> {
     if (this.project === null) return;
     if (this.usageSubscription === null && !this.usageWatchRejected) this.usageSubscription = this.connection().watchUsage(this.project).value;
@@ -243,25 +254,32 @@ class App {
     this.refreshing = true; this.dirty = false;
     const project = this.project; const epoch = this.epoch;
     const current = () => epoch === this.epoch && this.project === project;
+    const append = this.after !== undefined;
+    const items = append ? [...this.loadedItems] : [];
+    const target = append ? items.length + PAGE_SIZE : Math.max(PAGE_SIZE, this.loadedItems.length);
+    let after = this.after; let snapshot = this.snapshot; let completed = false;
+    this.after = undefined; this.snapshot = undefined;
     this.sync.textContent = 'Data: synchronizing'; this.items.setAttribute('aria-busy', 'true');
     try {
-      const input = new api.SearchInput(project, this.activeQuery, this.after, this.snapshot, PAGE_SIZE);
-      const response = await this.connection().call(new api.Command_Search(input));
-      if (!current()) return;
-      if (response instanceof api.Result_Failed && response.fault instanceof api.Fault_Resync) {
-        this.after = undefined; this.snapshot = undefined; this.dirty = true; return;
-      }
-      if (response instanceof api.Result_Failed && response.fault instanceof api.Fault_QuerySyntax) {
-        const error = response.fault.diagnostic;
-        this.sync.textContent = 'Data: invalid query'; this.queryEditor.showDiagnostic(error, this.activeQuery);
-        this.showError(`${error.message} (${error.span.start}–${error.span.end})`); return;
-      }
-      const result = readResult(response);
-      if (!(result instanceof api.Result_Found)) throw new Error('Unexpected item page');
-      this.page = result.page;
-      this.renderItems(result.page.items);
-      this.resultStatus.textContent = `${result.page.items.length} items${result.page.hasMore ? ' · more available' : ''}`;
-      const subscription = this.connection().subscribe(project, result.page.cursor); this.subscription = subscription.id.value;
+      let page: api.ItemPage;
+      do {
+        const input = new api.SearchInput(project, this.activeQuery, after, snapshot, PAGE_SIZE);
+        const response = await this.connection().call(new api.Command_Search(input));
+        if (!current()) return;
+        if (response instanceof api.Result_Failed && response.fault instanceof api.Fault_Resync) { this.dirty = true; return; }
+        if (response instanceof api.Result_Failed && response.fault instanceof api.Fault_QuerySyntax) {
+          const error = response.fault.diagnostic; this.page = null;
+          this.sync.textContent = 'Data: invalid query'; this.queryEditor.showDiagnostic(error, this.activeQuery);
+          this.showError(`${error.message} (${error.span.start}–${error.span.end})`); return;
+        }
+        const result = readResult(response);
+        if (!(result instanceof api.Result_Found)) throw new Error('Unexpected item page');
+        page = result.page; items.push(...page.items); after = page.after; snapshot = page.cursor;
+      } while (page.hasMore && items.length < target);
+      this.page = page; this.loadedItems = items;
+      this.renderItems(items);
+      this.resultStatus.textContent = `${items.length} items${page.hasMore ? ' · more available' : ''}`;
+      const subscription = this.connection().subscribe(project, page.cursor); this.subscription = subscription.id.value;
       const acknowledgement = await subscription.result;
       if (!current()) return;
       const replay = readResult(acknowledgement);
@@ -270,10 +288,12 @@ class App {
       else this.sync.textContent = 'Data: current';
       if (this.selection !== null) await this.select(this.selection);
       await this.loadUsage();
+      completed = true;
     } catch (error) { if (current()) { this.sync.textContent = 'Data: stale'; throw error; } }
     finally {
       this.refreshing = false; this.items.setAttribute('aria-busy', 'false');
       if (this.dirty) { this.dirty = false; this.action(() => this.refresh()); }
+      else if (completed && current()) requestAnimationFrame(() => this.loadMore());
     }
   }
   private renderItems(items: api.ItemSummary[]): void {

@@ -14,6 +14,8 @@ import { resyncChecks } from './resync-browser.mjs';
 import { usageScopeChecks } from './usage-scope-browser.mjs';
 import { usageLiveChecks } from './usage-live-browser.mjs';
 import { densityChecks } from './density-browser.mjs';
+import { scrollChecks } from './scroll-browser.mjs';
+import { interactionChecks } from './interaction-browser.mjs';
 
 const origin = process.env.CQ_ORIGIN;
 const evidence = process.env.CQ_BROWSER_EVIDENCE;
@@ -108,6 +110,8 @@ try {
   assert.deepEqual(errors, []);
   console.log('Chromium: login, project creation, all 14 forms, persisted draft, create/edit/history, usage audit, external live update and offline recovery passed');
   await editChecks(browser, await context.storageState(), origin, evidence);
+  await scrollChecks(browser, await context.storageState(), origin, evidence);
+  await interactionChecks(browser, await context.storageState(), origin, evidence);
   await graphChecks(browser, await context.storageState(), origin, evidence);
   await resyncChecks(browser, await context.storageState(), origin, evidence);
   await usageScopeChecks(browser, await context.storageState(), origin, evidence);
