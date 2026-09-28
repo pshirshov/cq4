@@ -283,14 +283,29 @@
     },
     "pendingAdoptions": [
       "cohort-codex",
-      "cohort-codex-assess"
+      "cohort-codex-assess",
+      "process-resume (failed; retain accounting)"
     ],
     "workedProcess": {
       "checkpoint": "20260928T080611-process-begin",
       "answer": "Go",
       "source": "Original actual Go reply plus explicit reuse confirmation call_FTCGWZinwe7DEVI87FxqboBc item0",
       "resume": "20260928T081149-process-resume",
-      "status": "running"
+      "status": "failed-execution-deadline",
+      "instructionCorrection": {
+        "commit": "bb1ccc7ede6d9d0f73ef4d88d44bdb02021db2fa",
+        "review": "Independent Astra accepted; isolated source, not yet admitted",
+        "checks": 12,
+        "pending": "Adopt old-source external evidence after suite lock settles, then admit amendment and retry only process continuation/assessment"
+      },
+      "usage": {
+        "lineageAttempts": 16,
+        "knownTokens": 2044506,
+        "attemptsWithoutMeters": 2,
+        "instrumentation": "incomplete",
+        "reason": "Both started attempts terminated before supported authoritative usage events; Claude retains an unverified possible partial source, Codex stream has no counters",
+        "completeSpendingOrEfficiencyClaim": false
+      }
     }
   }
 }
