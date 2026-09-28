@@ -71,6 +71,13 @@ final class Cli(context: CliContext, location: ProjectLocation, upload: SessionU
     require(number > 0, "Item number must be positive")
     ItemId(project, found, number)
   }
+  private def archiveClient(opts: Map[String, String]): ArchiveClient = {
+    val file = configDirectory.resolve("project.json")
+    val saved = if (Files.exists(file)) Some(configuration(file.getParent).endpoint) else None
+    val endpoint = validateEndpoint(opts.get("--endpoint").orElse(saved).orElse(environment.get("CQ_ORIGIN"))
+      .orElse(environment.get("CQ_ENDPOINT")).getOrElse(throw new IllegalArgumentException("Archive command requires --endpoint, saved endpoint or CQ_ORIGIN")))
+    new ArchiveClient(URI.create(endpoint), cq.host.HostCredential.read(environment), SessionId(UUID.randomUUID()))
+  }
 
   def run(args: List[String]): Task[Unit] =
     if (CliHelp.requested(args)) ZIO.attempt(output.println(CliHelp.render(args)))
@@ -81,6 +88,14 @@ final class Cli(context: CliContext, location: ProjectLocation, upload: SessionU
     }}
 
   private def runSynchronous(args: List[String], renderer: CliOutput): Unit = args match {
+    case "backup" :: project :: file :: rest =>
+      val client = archiveClient(options(rest, Set("--endpoint")))
+      val path = directory.resolve(file).normalize()
+      renderer.archive(client.backup(ProjectId(UUID.fromString(project)), path), "Saved", path)
+    case "restore" :: file :: rest =>
+      val client = archiveClient(options(rest, Set("--endpoint")))
+      val path = directory.resolve(file).normalize()
+      renderer.archive(client.restore(path), "Restored", path)
     case "configure" :: harness :: rest =>
       val replace = rest.lastOption.contains("--replace")
       val opts = options(if (replace) rest.dropRight(1) else rest, Set("--settings", "--executable", "--directory"))

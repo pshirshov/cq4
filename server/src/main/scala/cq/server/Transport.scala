@@ -13,7 +13,7 @@ import zio.{Task, ZIO}
 import zio.interop.catz.*
 import java.nio.charset.StandardCharsets.UTF_8
 
-final class Transport(application: Application, authorization: Authorization, access: AccessConfig, schemas: McpSchemas, live: LiveSession, assets: StaticAssets)
+final class Transport(application: Application, authorization: Authorization, access: AccessConfig, schemas: McpSchemas, live: LiveSession, assets: StaticAssets, archives: ArchiveTransport)
     extends Http4sDsl[Task] {
   private val context = BaboonCodecContext.Default
   private val protocolVersions = List("2025-03-26", "2025-06-18", "2025-11-25")
@@ -89,6 +89,22 @@ final class Transport(application: Application, authorization: Authorization, ac
         command <- decode(Command_JsonCodec, json)
         result <- application.execute(authority, command)
         response <- encoded(Status.Ok, Result_JsonCodec, result)
+      } yield response
+    }
+    case request @ GET -> Root / "api" / "backup" / project => guarded {
+      for {
+        authority <- authenticate(request)
+        _ <- ZIO.attempt(authority.requireRoot()) *> version(request)
+        id <- ZIO.fromTry(scala.util.Try(ProjectId(java.util.UUID.fromString(project))))
+          .mapError(_ => DomainFailure(Fault.Invalid("Backup requires a project UUID")))
+        response <- archives.backup(id)
+      } yield response
+    }
+    case request @ POST -> Root / "api" / "restore" => guarded {
+      for {
+        authority <- authenticate(request)
+        _ <- ZIO.attempt(authority.requireRoot()) *> version(request)
+        response <- archives.restore(request)
       } yield response
     }
     case request @ POST -> Root / "api" / "integration" => guarded {

@@ -36,6 +36,9 @@ enum Role { Human Governor Explorer Planner Worker Reviewer Collector }
 root data Actor { subject: str session: SessionId role: Role }
 root data Provenance { actor: Actor receivedAt: i64 request: RequestId }
 root data Project { id: ProjectId name: str revision: Revision createdAt: i64 }
+enum BackupTable { Projects Counters Items Labels Edges History Requests Changes Claims ClaimMembers UsageClock UsageAssignments UsageMembers UsageAttempts UsageMeters UsageCosts UsageRecords UsageHeads UsageOutcomes Artifacts ResultAdmissions Integrations IntegrationMembers }
+root data BackupEntry { table: BackupTable rows: i64 bytes: i64 sha256: str }
+root data BackupManifest { project: ProjectId schemaSha256: str postgresMajor: i32 createdAt: i64 entries: lst[BackupEntry] }
 
 enum MilestoneStatus { Open Complete Cancelled }
 enum IdeaStatus { Proposed Accepted Declined Withdrawn }

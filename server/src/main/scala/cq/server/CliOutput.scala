@@ -28,6 +28,13 @@ object CliArguments {
 }
 
 final class CliOutput(output: PrintStream, format: CliFormat, invocation: List[String]) {
+  def archive(manifest: BackupManifest, action: String, path: Path): Unit = format match {
+    case CliFormat.Json => output.println(Wire.encode(BackupManifest_JsonCodec, manifest))
+    case CliFormat.Human =>
+      line(s"$action project ${manifest.project.value}: $path")
+      line(s"${manifest.entries.map(_.rows).sum} records in ${manifest.entries.size} tables; snapshot ${instant(manifest.createdAt)}")
+      line("Archive includes stored project history, usage and artifacts. Git checkouts and local harness journals are separate.")
+  }
   private val CellLimit = 80
   private def clean(value: String): String = value.replaceAll("[\\p{Cc}]", " ")
   private def cell(value: String): String = {

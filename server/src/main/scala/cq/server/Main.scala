@@ -60,6 +60,8 @@ object CqPlugin extends PluginDef {
   make[ProposalService[IO]].from[ProposalServiceImpl[IO]]
   make[Clock].fromValue(Clock.systemUTC())
   make[LedgerDatabase]
+  make[ProjectArchives].from[PostgresProjectArchives]
+  make[ArchiveTransport]
   make[Transport]
   make[Authorization]
   make[Application]

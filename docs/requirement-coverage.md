@@ -1,5 +1,10 @@
 # Requirement coverage
 
+Current R20/R31 operator extension I2: [project archives](validation/project-backup.md)
+preserve identity, history, usage and artifacts in a consistent snapshot. Actual
+store/CLI checks and contracts pass with Astra source approval. External Git and
+harness journals are excluded explicitly; native/operator delivery remains open.
+
 Current R29/R31 operator follow-up: [D38/D39/D40](validation/operator-cli.md)
 provides command help, readable scoped usage and explicit JSON output. Actual
 process and PostgreSQL checks pass, including copied page continuations and

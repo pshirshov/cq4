@@ -17,6 +17,8 @@ Operator commands (readable output by default; add --json for automation):
   query             Find items, inspect a workset or complete a query
   status            Inspect token usage, costs, attempts and audit records
   proposal          Preview or apply a reviewed ledger proposal
+  backup            Save a settled project, history, usage and artifacts
+  restore           Restore a project archive without overwriting an existing ID
   web               Print this project's browser URL
   configure         Install integration for a directly launched harness
   commands export   Write native CQ workflow commands/skills
@@ -47,6 +49,24 @@ Machine-readable commands with --json emit one JSON value and no prose on stdout
 """
     topic match {
       case None => overview
+      case Some("backup") | Some("restore") => """Usage: cq backup PROJECT_UUID FILE [--endpoint URL] [--json]
+       cq restore FILE [--endpoint URL] [--json]
+
+Save or restore a settled project, including history, usage audit and artifacts.
+The project UUID is preserved. Restore refuses an existing UUID; backup refuses
+an existing file. Use an empty server or a server without that project to restore.
+  --endpoint URL   Otherwise saved endpoint, CQ_ORIGIN, then CQ_ENDPOINT
+  --json           Emit the archive manifest instead of an operator summary
+
+Requires operator credentials. Stop project sessions and settle active claims,
+running attempts and pending integrations first. Backups capture one database
+snapshot; later updates are not included. Only restore trusted CQ archives with
+the same current schema and PostgreSQL major version. Maximum archive and expanded
+payload: 512 MiB; transfer deadline: five minutes. Store archives privately.
+Git repositories, harness journals, settings and credentials are not included.
+Restore does not attach the current checkout: use cq init --project-id UUID after
+restoring. If a restore reply is lost, inspect the project before retrying.
+"""
       case Some("init") => """Usage: cq init [--endpoint URL] [--project-id UUID] [--name TEXT] [--json]
 
 Create a project or attach this checkout to one. Git worktrees share identity.

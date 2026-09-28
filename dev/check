@@ -198,6 +198,7 @@ class Checks:
                 self.run(["node", "dev/browser.mjs"], f"{name}-browser", COMMAND_TIMEOUT)
         if browser:
             self.http_browser(command, name)
+        runpy.run_path(str(ROOT / "dev/project-archive-check.py"))["verify"](self, command, name)
 
     def http_browser(self, command: list[str], name: str):
         saved = {key: self.environment[key] for key in ["CQ_HOST", "CQ_PORT", "CQ_ORIGIN"]}
