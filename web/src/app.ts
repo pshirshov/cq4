@@ -3,6 +3,7 @@ import { BaboonCodecContext } from '../../generated/typescript/BaboonSharedRunti
 import { ConnectionManager, ConnectionStats } from './connection.js';
 import { button, edit, element, Editor, Json } from './editor.js';
 import { QueryEditor } from './query.js';
+import { Workspace } from './workspace.js';
 
 const CONTEXT = BaboonCodecContext.Default;
 const PAGE_SIZE = 40;
@@ -18,6 +19,7 @@ function readResult(result: api.Result): api.Result {
 }
 
 type Panel = 'detail' | 'history' | 'usage' | 'audit';
+interface ResultRow { button: HTMLButtonElement; caption: HTMLSpanElement; status: HTMLSpanElement }
 
 class App {
   private manager: ConnectionManager | null = null;
@@ -30,6 +32,12 @@ class App {
   private readonly query = this.queryEditor.input;
   private activeQuery = '';
   private readonly items = element('div', '');
+  private readonly rows = new Map<string, ResultRow>();
+  private readonly emptyResults = element('p', 'No matching items.');
+  private readonly resultStatus = element('p', 'No project selected');
+  private readonly usageMetric = element('span', 'Usage: not loaded');
+  private readonly usageFreshness = element('span', '');
+  private usageObserved = 'No successful observation';
   private readonly detail = element('section', '');
   private readonly editorPanel = element('section', '');
   private readonly historyPanel = element('section', '');
@@ -77,7 +85,7 @@ class App {
     if (this.selection === null ? id === null : id !== null && this.selection.project.value === id.project.value && itemName(this.selection) === itemName(id)) return;
     this.selection = id; this.selectionGeneration++; this.selected = null;
     this.detail.replaceChildren(); this.historyPanel.replaceChildren(); this.usagePanel.replaceChildren(); this.auditPanel.replaceChildren();
-    this.auditAfter = 0n;
+    this.auditAfter = 0n; this.markSelection(); this.resetUsage();
   }
 
   private async start(): Promise<void> {
@@ -106,12 +114,15 @@ class App {
     this.root.replaceChildren(form);
   }
   private mount(): void {
-    const header = element('header', '');
+    const header = element('header', ''); const identity = element('div', ''); identity.className = 'top-identity';
     const health = element('details', ''); const summary = element('summary', '');
     summary.append(this.health, this.deadline); this.deadline.max = 100;
     health.append(summary, this.healthDetails, button('Retry connection', () => this.connection().retry()));
-    header.append(element('h1', 'CQ'), health, this.sync);
-    const main = element('main', ''); const side = element('nav', ''); const list = element('section', ''); const content = element('article', '');
+    const projectLabel = element('label', 'Project'); projectLabel.className = 'project-control'; projectLabel.append(this.projects);
+    identity.append(element('h1', 'CQ'), projectLabel, health, this.sync);
+    const metrics = element('div', ''); metrics.className = 'top-metrics'; metrics.setAttribute('role', 'region'); metrics.setAttribute('aria-label', 'Usage metrics');
+    metrics.append(this.usageMetric, this.usageFreshness); header.append(identity, this.queryEditor.element, metrics);
+    const workspace = new Workspace(this.root); const side = workspace.navigation; const list = workspace.results; const content = workspace.content;
     this.projects.setAttribute('aria-label', 'Project'); this.query.setAttribute('aria-label', 'Search query');
     this.projects.addEventListener('change', () => this.action(async () => { this.project = new api.ProjectId(this.projects.value); this.reset(); await this.refresh(); }));
     this.query.placeholder = 'ledger:Tasks status:Ready'; this.query.maxLength = MAX_QUERY_CHARACTERS;
@@ -122,20 +133,39 @@ class App {
       await this.call(new api.Command_Initialize(new api.ProjectConfig(project, location.origin, name.value)));
       this.project = project; this.reset(); await this.loadProjects(); await this.refresh(); name.value = '';
     }); });
-    side.append(element('h2', 'Workspace'), this.projects, newProject, this.queryEditor.element,
-      button('New item', () => { this.openEditor(null); }), button('Project usage', () => this.action(async () => { this.choose(null); await this.loadUsage(); })));
+    const shortcuts = element('div', ''); shortcuts.className = 'query-shortcuts';
+    for (const [label, query] of [['All items', ''], ...api.Ledger_values.map(ledger => [ledger, `ledger:${ledger}`])]) {
+      shortcuts.append(button(label, () => this.action(async () => { this.queryEditor.invalidate(); this.query.value = query; await this.search(); })));
+    }
+    side.append(element('h2', 'Workspace'), button('New item', () => { this.openEditor(null); }),
+      button('Project usage', () => this.action(async () => { this.choose(null); await this.loadUsage(); })),
+      element('h3', 'Browse'), shortcuts, element('h3', 'Projects'), newProject,
+      element('p', 'Ctrl+K: query · F6: next pane · Shift+F6: previous pane. Results: ↑/↓ to move, Enter to select, → for detail, Escape to return.'));
+    this.items.tabIndex = -1; this.items.setAttribute('aria-label', 'Result items'); this.items.setAttribute('role', 'group');
+    this.items.addEventListener('keydown', event => {
+      const rows = Array.from(this.items.querySelectorAll<HTMLButtonElement>('button')); const index = rows.indexOf(document.activeElement as HTMLButtonElement);
+      const target = event.key === 'ArrowDown' ? Math.min(rows.length - 1, index + 1) : event.key === 'ArrowUp' ? Math.max(0, index - 1)
+        : event.key === 'Home' ? 0 : event.key === 'End' ? rows.length - 1 : null;
+      if (target !== null && rows.length > 0) { event.preventDefault(); rows[target].focus(); }
+      else if (event.key === 'ArrowRight') { event.preventDefault(); content.focus(); }
+    });
+    content.addEventListener('keydown', event => {
+      if (event.key === 'Escape') { event.preventDefault(); const row = this.items.querySelector<HTMLButtonElement>('[aria-current=true]'); (row === null ? this.items : row).focus(); }
+    });
+    this.root.addEventListener('keydown', event => { if (event.ctrlKey && event.key.toLowerCase() === 'k') { event.preventDefault(); this.query.focus(); } });
     const pages = element('div', ''); pages.className = 'actions';
     pages.append(button('First page', () => this.action(async () => { this.after = undefined; this.snapshot = undefined; await this.refresh(); })),
       button('Next page', () => this.action(async () => {
         if (this.page !== null && this.page.hasMore) { this.after = this.page.after; this.snapshot = this.page.cursor; await this.refresh(); }
       })));
-    list.append(element('h2', 'Items'), this.items, pages);
+    this.resultStatus.setAttribute('role', 'status');
+    list.append(element('h2', 'Items'), this.resultStatus, this.items, pages);
     content.append(this.notice, this.detail, this.editorPanel, this.historyPanel, this.usagePanel, this.auditPanel);
-    main.append(side, list, content); this.root.replaceChildren(header, main);
+    this.root.replaceChildren(header, workspace.element); workspace.fit();
     this.manager = new ConnectionManager(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`, {
       status: stats => this.connectionStatus(stats),
       active: () => this.action(async () => { await this.loadProjects(); this.after = undefined; this.snapshot = undefined; await this.refresh(); }),
-      disconnected: () => { this.queryEditor.invalidate(); this.sync.textContent = 'Data: stale'; this.epoch++; this.subscription = null; },
+      disconnected: () => { this.usageFreshness.textContent = `Stale · ${this.usageObserved}`; this.queryEditor.invalidate(); this.sync.textContent = 'Data: stale'; this.epoch++; this.subscription = null; },
       event: frame => {
         if (frame instanceof api.ServerFrame_Changes && frame.subscription.value === this.subscription) {
           if (frame.page.events.length > 0) { this.after = undefined; this.snapshot = undefined; this.action(() => this.refresh()); }
@@ -161,7 +191,7 @@ class App {
     this.queryEditor.invalidate(); this.queryEditor.showDiagnostic(undefined, this.query.value);
     this.epoch++; this.selectionGeneration++; this.selection = null; this.selected = null; this.editor = null; this.after = undefined; this.snapshot = undefined; this.subscription = null;
     this.detail.replaceChildren(); this.editorPanel.replaceChildren(); this.historyPanel.replaceChildren(); this.usagePanel.replaceChildren(); this.auditPanel.replaceChildren();
-    this.auditAfter = 0n; this.notice.textContent = '';
+    this.auditAfter = 0n; this.notice.textContent = ''; this.resetUsage();
   }
   private async loadProjects(): Promise<void> {
     const projects: api.Project[] = [];
@@ -182,7 +212,7 @@ class App {
     if (this.refreshing) { this.dirty = true; return; }
     this.refreshing = true; this.dirty = false;
     const project = this.project; const epoch = this.epoch;
-    this.sync.textContent = 'Data: synchronizing';
+    this.sync.textContent = 'Data: synchronizing'; this.items.setAttribute('aria-busy', 'true');
     try {
       const input = new api.SearchInput(project, this.activeQuery, this.after, this.snapshot, PAGE_SIZE);
       const response = await this.connection().call(new api.Command_Search(input));
@@ -198,12 +228,8 @@ class App {
       const result = readResult(response);
       if (!(result instanceof api.Result_Found)) throw new Error('Unexpected item page');
       this.page = result.page;
-      this.items.replaceChildren();
-      if (result.page.items.length === 0) this.items.append(element('p', 'No matching items.'));
-      for (const item of result.page.items) {
-        const row = button(`${itemName(item.id)} · ${item.title}${item.archived ? ' · archived' : ''}`, () => this.action(() => this.select(item.id)));
-        row.className = 'item-row'; this.items.append(row);
-      }
+      this.renderItems(result.page.items);
+      this.resultStatus.textContent = `${result.page.items.length} items${result.page.hasMore ? ' · more available' : ''}`;
       const subscription = this.connection().subscribe(project, result.page.cursor); this.subscription = subscription.id.value;
       const replay = readResult(await subscription.result);
       if (epoch !== this.epoch) return;
@@ -214,9 +240,39 @@ class App {
       await this.loadUsage();
     } catch (error) { this.sync.textContent = 'Data: stale'; throw error; }
     finally {
-      this.refreshing = false;
+      this.refreshing = false; this.items.setAttribute('aria-busy', 'false');
       if (this.dirty) { this.dirty = false; this.action(() => this.refresh()); }
     }
+  }
+  private renderItems(items: api.ItemSummary[]): void {
+    const focused = this.items.contains(document.activeElement) ? document.activeElement as HTMLElement : null;
+    const retained = new Set<string>();
+    this.emptyResults.remove();
+    for (const [index, item] of items.entries()) {
+      const key = `${item.id.project.value}-${itemName(item.id)}`; retained.add(key);
+      let row = this.rows.get(key);
+      if (row === undefined) {
+        const node = button('', () => this.action(() => this.select(item.id))); node.className = 'item-row'; node.dataset.item = key;
+        const caption = element('span', ''); const status = element('span', ''); status.className = 'item-status'; status.id = `status-${key}`;
+        node.setAttribute('aria-describedby', status.id); node.append(caption, status); row = { button: node, caption, status }; this.rows.set(key, row);
+      }
+      const caption = `${itemName(item.id)} · ${item.title}${item.archived ? ' · archived' : ''}`;
+      row.caption.textContent = caption; row.status.textContent = item.status; row.button.setAttribute('aria-label', caption);
+      const before = this.items.children.item(index);
+      if (before !== row.button) this.items.insertBefore(row.button, before);
+    }
+    for (const [key, row] of this.rows) if (!retained.has(key)) { row.button.remove(); this.rows.delete(key); }
+    if (items.length === 0) this.items.append(this.emptyResults);
+    this.markSelection();
+    if (focused !== null && document.activeElement !== focused) (focused.isConnected ? focused : this.items).focus();
+  }
+  private markSelection(): void {
+    const key = this.selection === null ? null : `${this.selection.project.value}-${itemName(this.selection)}`;
+    for (const [id, row] of this.rows) row.button.setAttribute('aria-current', String(id === key));
+  }
+  private usageScope(): string { return this.selection === null ? 'project' : itemName(this.selection); }
+  private resetUsage(): void {
+    this.usageMetric.textContent = `Usage · ${this.usageScope()}: not loaded`; this.usageObserved = 'No successful observation'; this.usageFreshness.textContent = this.usageObserved;
   }
   private async select(id: api.ItemId): Promise<void> {
     this.choose(id);
@@ -321,10 +377,17 @@ class App {
   }
   private usageFilter(): api.UsageFilter { return this.selection === null ? new api.UsageFilter_ProjectAll() : new api.UsageFilter_TaskOnly(this.selection); }
   private async loadUsage(): Promise<void> {
-    const filter = this.usageFilter();
-    const result = await this.readPanel('usage', new api.Command_Usage(new api.UsageInput(this.currentProject(), new api.UsageSelection_Summary(filter))));
+    const filter = this.usageFilter(); this.usageFreshness.textContent = `Loading · ${this.usageObserved}`;
+    let result: api.Result | null;
+    try { result = await this.readPanel('usage', new api.Command_Usage(new api.UsageInput(this.currentProject(), new api.UsageSelection_Summary(filter)))); }
+    catch (error) { this.usageFreshness.textContent = `Unavailable · ${this.usageObserved}`; throw error; }
     if (result === null) return;
     if (!(result instanceof api.Result_UsageSummary)) throw new Error('Unexpected usage response');
+    this.usageMetric.textContent = `Usage · ${this.usageScope()}: ${result.report.direct.total.known} direct · ${result.report.shared.total.known} shared · ${result.report.unattributed.total.known} unattributed known tokens`;
+    const totals = [result.report.direct.total, result.report.shared.total, result.report.unattributed.total];
+    this.usageMetric.textContent += ` · ${totals.reduce((sum, value) => sum + value.unknown, 0n)} unknown measurements · ${totals.reduce((sum, value) => sum + value.estimated, 0n)} estimated measurements`;
+    this.usageObserved = `Observed ${new Date().toLocaleTimeString()} · cursor ${result.report.cursor}`;
+    this.usageFreshness.textContent = this.usageObserved;
     this.usagePanel.replaceChildren(element('h3', `Usage · ${this.selection === null ? 'project' : itemName(this.selection)}`));
     for (const [label, totals] of [['Direct', result.report.direct], ['Shared', result.report.shared], ['Unattributed', result.report.unattributed]] as const) {
       this.usagePanel.append(element('p', `${label}: ${totals.total.known} known tokens; ${totals.total.unknown} unknown measurements; ${totals.total.estimated} estimated measurements`));

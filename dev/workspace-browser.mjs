@@ -1,0 +1,124 @@
+import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
+import { writeFile } from 'node:fs/promises';
+
+export async function workspaceChecks(browser, storageState, origin, evidence) {
+  const headers = { Authorization: `Bearer ${process.env.CQ_TOKEN}`, 'CQ-Session': randomUUID(),
+    'CQ-Protocol-Version': '0.1.0', 'Content-Type': 'application/json' };
+  async function post(command) {
+    const response = await fetch(`${origin}/api/call`, { method: 'POST', headers, body: JSON.stringify(command) });
+    assert.equal(response.status, 200, await response.clone().text());
+    const result = await response.json(); assert.equal(result.Failed, undefined); return result;
+  }
+  const project = { value: randomUUID() };
+  await post({ Initialize: { config: { project, endpoint: origin, name: `Workspace ${project.value}` } } });
+  const draft = title => ({ title, body: 'Workspace interaction fixture', labels: [], archived: false, citations: [],
+    content: { Task: { status: 'Ready', acceptance: ['Keep keyboard context during updates'], result: null, validation: [] } } });
+  const change = mutations => post({ Change: { input: { project, change: { request: { value: randomUUID() }, fences: [], reason: 'Workspace fixture', mutations } } } });
+  const created = await change(['Keyboard A', 'Keyboard B'].map(title => ({ Create: { draft: draft(title) } })));
+  const context = await browser.newContext({ storageState, viewport: { width: 1440, height: 900 } });
+  await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
+  const page = await context.newPage(); const errors = []; const cases = [];
+  page.on('pageerror', error => errors.push(String(error)));
+  try {
+    await page.goto(origin); await page.getByText('Connection: ALIVE', { exact: true }).waitFor();
+    await page.getByLabel('Project', { exact: true }).selectOption(project.value);
+    const first = page.getByRole('button', { name: 'T1 · Keyboard A', exact: true });
+    await first.waitFor(); await page.getByText('Data: current', { exact: true }).waitFor();
+    await first.focus();
+    const second = created.Changed.ack.items[1];
+    await change([{ Replace: { id: second.id, expected: second.revision, draft: draft('Keyboard B updated') } }]);
+    await page.getByRole('button', { name: 'T2 · Keyboard B updated', exact: true }).waitFor();
+    assert.equal(await first.evaluate(node => node === document.activeElement), true, 'Live result refresh must retain keyboard focus');
+    cases.push('focus during live update');
+    await first.press('ArrowDown');
+    const secondRow = page.getByRole('button', { name: 'T2 · Keyboard B updated', exact: true });
+    assert.equal(await secondRow.evaluate(node => node === document.activeElement), true);
+    await secondRow.press('Enter'); await page.getByRole('heading', { name: 'T2 · Keyboard B updated', exact: true }).waitFor();
+    assert.equal(await secondRow.getAttribute('aria-current'), 'true');
+    assert.equal(await secondRow.locator('.item-status').textContent(), 'Ready');
+    const detail = page.getByRole('article', { name: 'Item workspace', exact: true });
+    await secondRow.press('ArrowRight'); assert.equal(await detail.evaluate(node => node === document.activeElement), true);
+    await detail.press('Escape'); assert.equal(await secondRow.evaluate(node => node === document.activeElement), true);
+    await secondRow.press('F6'); assert.equal(await detail.evaluate(node => node === document.activeElement), true);
+    await detail.press('Shift+F6'); assert.equal(await page.getByRole('region', { name: 'Results', exact: true }).evaluate(node => node === document.activeElement), true);
+    await page.keyboard.press('Control+k');
+    const query = page.getByRole('combobox', { name: 'Search query', exact: true });
+    assert.equal(await query.evaluate(node => node === document.activeElement && node.closest('header') !== null), true);
+    assert.equal(await page.getByLabel('Project', { exact: true }).evaluate(node => node.closest('header') !== null), true);
+    cases.push('keyboard selection, detail return and pane/query focus');
+    await page.getByRole('button', { name: 'Tasks', exact: true }).click();
+    assert.equal(await query.inputValue(), 'ledger:Tasks');
+    await page.getByText('Data: current', { exact: true }).waitFor();
+    await page.getByRole('button', { name: 'All items', exact: true }).click(); assert.equal(await query.inputValue(), '');
+    cases.push('navigation writes visible query');
+    const navigation = page.getByRole('navigation', { name: 'Navigation', exact: true });
+    const results = page.getByRole('region', { name: 'Results', exact: true });
+    const navSplitter = page.getByRole('separator', { name: 'Resize navigation', exact: true });
+    const resultSplitter = page.getByRole('separator', { name: 'Resize results', exact: true });
+    const width = locator => locator.evaluate(node => node.getBoundingClientRect().width);
+    const initialWidth = await width(navigation);
+    await navSplitter.focus(); await navSplitter.press('ArrowRight'); assert.equal(await width(navigation), initialWidth + 16);
+    await navSplitter.press('Home'); assert.equal(await width(navigation), Number(await navSplitter.getAttribute('aria-valuemin')));
+    await navSplitter.press('End'); assert.equal(await width(navigation), Number(await navSplitter.getAttribute('aria-valuemax')));
+    assert.ok(await width(detail) >= 300);
+    await page.setViewportSize({ width: 980, height: 900 });
+    await page.waitForFunction(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth);
+    assert.ok(await width(detail) >= 300);
+    await page.setViewportSize({ width: 1440, height: 900 }); await navSplitter.press('Home'); await navSplitter.press('ArrowRight');
+    const beforeDrag = await width(results); const box = await resultSplitter.boundingBox(); assert.notEqual(box, null);
+    await page.mouse.move(box.x + box.width / 2, box.y + 40); await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 + 84, box.y + 40); await page.mouse.up();
+    assert.equal(await width(results), beforeDrag + 84); cases.push('keyboard/pointer resizing and viewport bounds');
+    await change(Array.from({ length: 48 }, (_, index) => ({ Create: { draft: draft(`Long row ${index} ` + 'unbroken'.repeat(12)) } })));
+    await page.getByText('40 items · more available', { exact: true }).waitFor();
+    const resultBox = await results.boundingBox(); assert.notEqual(resultBox, null);
+    const navigationScroll = await navigation.evaluate(node => node.scrollTop);
+    await page.mouse.move(resultBox.x + resultBox.width / 2, resultBox.y + 100); await page.mouse.wheel(0, 1400);
+    await page.waitForFunction(() => document.getElementById('results-pane').scrollTop > 0);
+    assert.equal(await navigation.evaluate(node => node.scrollTop), navigationScroll);
+    assert.equal(await page.evaluate(() => document.scrollingElement.scrollTop), 0);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), true);
+    cases.push('independent result scrolling');
+    await first.click(); await page.getByRole('heading', { name: 'T1 · Keyboard A', exact: true }).waitFor();
+    const metrics = page.getByRole('region', { name: 'Usage metrics', exact: true });
+    await metrics.getByText(/^Usage · T1:/).waitFor(); await metrics.getByText(/^Observed /).waitFor();
+    assert.match(await metrics.textContent(), /known tokens.*unknown measurements.*estimated measurements.*cursor/);
+    await page.screenshot({ path: `${evidence}/workspace-desktop.png`, fullPage: true });
+    await page.getByRole('button', { name: 'Edit current revision', exact: true }).click();
+    const body = page.getByLabel('body', { exact: true }); const local = 'Unsaved local text: ' + 'unbroken'.repeat(240);
+    await body.fill(local);
+    await change([{ Replace: { id: second.id, expected: { value: '2' }, draft: draft('Live update while typing') } }]);
+    await page.getByRole('button', { name: 'T2 · Live update while typing', exact: true }).waitFor();
+    assert.equal(await body.inputValue(), local); assert.equal(await body.evaluate(node => node === document.activeElement), true);
+    cases.push('live edits preserve draft and text focus');
+    for (const viewportWidth of [920, 390, 320]) {
+      await page.setViewportSize({ width: viewportWidth, height: 844 });
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), true, `Page overflow at ${viewportWidth}`);
+      assert.equal(await page.getByRole('separator').count(), 0, 'Narrow layout must hide separator focus targets');
+      assert.equal(await body.inputValue(), local);
+      const bounds = await page.locator('.pane').evaluateAll(nodes => nodes.map(node => ({ id: node.id, width: node.clientWidth, scroll: node.scrollWidth })));
+      assert.ok(bounds.every(value => value.scroll <= value.width + 1), JSON.stringify(bounds));
+      if (viewportWidth === 390) await page.screenshot({ path: `${evidence}/workspace-narrow.png`, fullPage: true });
+    }
+    cases.push('narrow layouts and unbroken draft overflow');
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const other = { value: randomUUID() };
+    await post({ Initialize: { config: { project: other, endpoint: origin, name: `Other ${other.value}` } } });
+    await page.reload(); await page.getByText('Connection: ALIVE', { exact: true }).waitFor();
+    await page.getByLabel('Project', { exact: true }).selectOption(other.value);
+    await page.getByText('No matching items.', { exact: true }).waitFor();
+    await page.getByLabel('Project', { exact: true }).selectOption(project.value);
+    await first.click(); await page.getByRole('button', { name: 'Edit current revision', exact: true }).click();
+    assert.equal(await body.inputValue(), local); cases.push('draft survives reload and project switching');
+    await metrics.getByText(/^Observed /).waitFor(); await context.setOffline(true);
+    await metrics.getByText(/^Stale · Observed /).waitFor(); await context.setOffline(false);
+    await metrics.getByText(/^Observed /).waitFor(); cases.push('usage observation and stale labels');
+    console.log('Chromium workspace: live focus, keyboard navigation, query shortcuts, resizing, independent scrolling, narrow overflow, draft preservation and metric freshness passed');
+    assert.deepEqual(errors, []);
+  } finally {
+    await writeFile(`${evidence}/workspace-results.json`, JSON.stringify({ cases, errors }, null, 2));
+    await page.screenshot({ path: `${evidence}/workspace-last.png`, fullPage: true });
+    await context.tracing.stop({ path: `${evidence}/workspace-trace.zip` }); await context.close();
+  }
+}
