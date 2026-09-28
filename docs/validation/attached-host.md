@@ -84,3 +84,21 @@ Configuration references inspected: [Codex stdio MCP](https://learn.chatgpt.com/
 ### Yolo invocation boundary
 
 The native consumers and TUI checks above ran inside the current yolo sandbox. A nested invocation of the actual `yolo --env CQ_TOKEN_FILE=… cmd …` script was attempted (`yolo-visibility.log`); it failed before executing CQ because the outer sandbox lacks `/run/nscd`, which the host-level yolo script binds. This does not establish a failure of the host invocation. Host-level yolo startup remains the user's trial; the installed script was inspected for explicit environment forwarding, project/state binds and native launch flags. No host processes or configuration were modified to bypass this boundary.
+
+## Reproduction commands
+
+From the CQ checkout:
+
+```sh
+node dev/pi-attached-check.mjs
+nix develop -c sbt --batch --no-colors ';server/testOnly *StdioPeerLocal *AttachedAssetsLocal *HarnessAdapterLocal *WorkflowLocal *SessionDeliveryDummy;exit'
+nix develop -c env CQ_EVIDENCE_ROOT=/srv/nvme/tmp/cq-attached-verification ./dev/check native
+```
+
+The native gate now includes `dev/attached-check.py` against both the tracing JVM and produced executable: all integration exports, Pi metadata collection/replay, running-child disconnect, activation fences and blocked-I/O deadlines. The existing batch/workflow/dispatch/integration checks run in the same gate. Source-isolated installed verification uses `nix develop -c ./dev/package-check --release /absolute/package --evidence-root /srv/nvme/tmp/cq-installed-verification`.
+
+For real model evaluations, `dev/attached-native-eval HARNESS --cq /absolute/package/bin/cq --guardian /absolute/package/bin/cq-guardian --evidence /absolute/new-evidence-directory` requires `CQ_CLAUDE_EXECUTABLE`, `CQ_CODEX_EXECUTABLE`, `CQ_PI_EXECUTABLE` to name the verified route binaries. Run under `nix develop -c env ...` with normal authenticated harness homes available. Add `--lifecycle` for interactive TUI ownership checks without model requests. Evidence directories must be fresh. The evaluator records executable hashes and runtime source hashes; these evaluations spend model tokens unless `--lifecycle` is selected.
+
+### Prepared validation policy
+
+The user selected reviewed integration into `refs/heads/main` with the scoped UI check. `.local/interactive/settings.json` declares `cq-ui` as `nix develop -c ./dev/check ui`, with a ten-minute deadline. That exact command passed from a fresh detached checkout at `3318a1b`; immutable copied evidence is `prepared-ui-evidence/`. The temporary checkout was removed after byte-for-byte evidence verification. No model matrix runs as part of this check. Backend/CLI work requires additional relevant validation declarations.

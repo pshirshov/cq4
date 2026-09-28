@@ -87,7 +87,10 @@ Return a concise summary with CQ session ID, task ID, child attempt ID, phase an
         with checks.database([]):
             with checks.server([str(binary)], "native"):
                 client(["init", "--endpoint", env["CQ_ORIGIN"]], "init")
-                client(["configure", args.harness, "--settings", str(settings), "--executable", str(binary)], "configure")
+                with binary.open("rb") as executable_stream:
+                    native_binary = executable_stream.read(4) == b"\x7fELF"
+                setup = ["configure", args.harness, "--settings", str(settings)]
+                client(setup if native_binary else setup + ["--executable", str(binary)], "configure")
                 executable = next(route["executable"] for route in routes if route["harness"] == PROFILES[args.harness][0])
                 if args.harness == "codex":
                     command = [executable, "exec", "--json", "--ephemeral", "--model", PROFILES[args.harness][1], "--dangerously-bypass-approvals-and-sandbox",

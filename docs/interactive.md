@@ -6,7 +6,7 @@ The interactive harness is the Governor. It starts `cq host` automatically; that
 
 Keep the server running with `./run-local.sh` in a separate host terminal. After a package update, stop it with Ctrl-C, wait for `CQ stopped`, and start it again.
 
-The local integration uses `.local/release/bin/cq` and `.local/interactive/settings.json`. The prepared trial settings have no validation checks or integration target: intake, investigation and planning are ready; choose project checks and an explicit branch before implementing/integrating code. Setup installs project-local commands and native configuration:
+The local integration uses `.local/release/bin/cq` and `.local/interactive/settings.json`. The prepared settings enable reviewed integration into `refs/heads/main` and declare `cq-ui`: `nix develop -c ./dev/check ui` (ten-minute deadline). This runs scoped UI/browser verification without the model evaluation matrix. Backend/CLI changes need appropriate additional checks before their implementation; this UI check is not evidence of backend correctness. Setup installs project-local commands and native configuration:
 
 ```sh
 cd /home/pavel/work/safe/cq4/cq4
@@ -53,7 +53,16 @@ Yolo clears inherited environment variables. An ordinary host-shell `export CQ_T
 | Session state | Must be writable and outside the source checkout. This setup uses `/srv/nvme/tmp/cq4-interactive-sessions`, already visible to this yolo configuration. |
 | Harness credentials | Use the normal yolo harness authentication. Managed children receive only the permitted environment and scoped CQ tools. |
 
-For another checkout, initialize it with `cq init --endpoint http://vm.home.7mind.io:8080`, then configure it using an absolute settings path. If that package/settings path is outside the checkout and yolo's existing binds, expose it explicitly:
+For another checkout, initialize and configure it with the installed binary:
+
+```sh
+CQ_TOKEN_FILE=/srv/nvme/tmp/cq4-playground/token \
+  /home/pavel/work/safe/cq4/cq4/.local/release/bin/cq init --endpoint http://vm.home.7mind.io:8080
+/home/pavel/work/safe/cq4/cq4/.local/release/bin/cq configure codex \
+  --settings /absolute/settings-for-that-project.json
+```
+
+Choose that project's validation checks and integration branch in its settings. If that package/settings path is outside the checkout and yolo's existing binds, expose it explicitly:
 
 ```sh
 yolo --ro /home/pavel/work/safe/cq4/cq4/.local \
