@@ -14,6 +14,8 @@ Goal: complete the first CQ release under the [implementation plan](drafts/20260
 
 ## Current increment
 
+A subsequent relaunch failure exposed PostgreSQL inheriting the operator launcher’s lock descriptor. An actual scratch reproduction fails before closing that descriptor on `pg_ctl start` and passes afterward; independent Astra approves this helper-only correction. [Lock evidence](validation/local-quickstart.md#detached-database-lock-inheritance) is retained. Diagnosis/recovery of the user’s existing host processes awaits the required host-side diagnostic; no user process has been signaled.
+
 Human evaluation exposed a remote-HTTP login defect: browsers do not expose `crypto.randomUUID` in insecure contexts. Actual Chromium reproduction matches the user’s TypeError. A shared WebCrypto-based UUID v4 correction covers all eight browser call sites; focused UI, rebuilt native, source-isolated installed and direct hostname browser verification pass. Current delivery is `/srv/nvme/tmp/cq4-implementation/cq-release-http-ui`; final independent Astra review approves the correction and delivery. The [HTTP correction record](validation/http-ui.md) tracks delivery. Prior paid harness evidence retains scoped applicability because harness/server semantics are unchanged; Astra approved that reuse. Human acceptance remains pending.
 
 Human-review timing: the user requests completion of all planned technical milestones before one combined evaluation. M2/M6 human acceptance stays pending; the [combined review guide](validation/m6-review.md) presents both scopes, the artifact and exact operating instructions.

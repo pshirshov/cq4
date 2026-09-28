@@ -102,7 +102,7 @@ trap 'exit 143' TERM
 # Disable Unix sockets so the only connection path uses loopback password authentication.
 database_owned=1
 pg_ctl -D "$data" -l "$state/logs/postgres.log" \
-  -o "-h 127.0.0.1 -p $db_port -c unix_socket_directories=''" -w -t 30 start >> "$state/logs/postgres-control.log" 2>&1
+  -o "-h 127.0.0.1 -p $db_port -c unix_socket_directories=''" -w -t 30 start >> "$state/logs/postgres-control.log" 2>&1 9>&-
 "$CQ_BIN" serve >> "$state/logs/cq-server.log" 2>&1 9>&- &
 server_pid=$!
 ready=0

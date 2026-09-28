@@ -580,7 +580,7 @@
   "operatorQuickstart": {
     "guide": "docs/quickstart.md",
     "launcher": "docs/examples/launch-local.sh",
-    "launcherSha256": "0fd02ab5dec83c6a372e2f696c9fcf543df1c9e4fd4898961cac651bcab69629",
+    "launcherSha256": "670f9800a9d1c6438e4ff67eac6005f972a127754f38c4003cf4311066d5bc2f",
     "lifecycleBaseline": {
       "guide": "docs/quickstart.md",
       "launcher": "docs/examples/launch-local.sh",
@@ -599,7 +599,16 @@
     "networkProtocolSha256": "9290edd5b5fa7ce6502c388dba942fe7cbc8d1633fdcef38f428f6058a6eb4fb",
     "currentDeliveryEvidence": "/srv/nvme/tmp/cq4-http-ui-20260928/delivery/result.json",
     "currentDeliverySha256": "63b57688078c683012138d0576cdb1f9a46446e06dd49df56a5c7088490947f6",
-    "qualification": "Current launcher binds all interfaces, preserves explicit browser origin, keeps PostgreSQL/readiness on loopback. Actual corrected-package hostname browser check and owned shutdown pass. No model calls."
+    "qualification": "Current launcher binds all interfaces, preserves explicit browser origin, keeps PostgreSQL/readiness on loopback. Actual corrected-package hostname browser check and owned shutdown pass. No model calls. A subsequent descriptor-inheritance correction has separate before/after evidence; preceding network/browser evidence retains its original launcher hash.",
+    "networkVerificationLauncherSha256": "0fd02ab5dec83c6a372e2f696c9fcf543df1c9e4fd4898961cac651bcab69629",
+    "lockInheritanceCorrection": {
+      "evidence": "/srv/nvme/tmp/cq4-launcher-lock-20260928/verification.json",
+      "sha256": "f7b5b713cbbf78e511273dc2b17a5d151f5040a3f608b19418507b2453ad17ef",
+      "review": "Independent Astra approved",
+      "reviewFile": "/srv/nvme/tmp/cq4-launcher-lock-20260928/astra-review.json",
+      "reviewSha256": "befe7242dafb08c3df777356efc06258c608984932ec1bd73f69f81177c08cf9",
+      "operatorRecoveryStatus": "Host-process diagnostic pending; no user process signaled"
+    }
   },
   "activeCorrection": {
     "kind": "remote-http-browser-uuid",

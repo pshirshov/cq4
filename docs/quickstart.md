@@ -36,6 +36,8 @@ State, credentials, logs and subsequent session journals live under `/srv/nvme/t
 
 If the earlier package showed `crypto.randomUUID is not a function`, stop its launcher with Ctrl-C, run the command above with `cq-release-http-ui` and the same state directory, then reload the browser. Credentials and project data are retained. Re-source `client.env` in an existing CLI terminal to select the corrected package. [Reproduction and verification](validation/http-ui.md).
 
+If startup reports “A launcher already owns”, another process holds the state lock. Stop the original launcher before restarting; do not delete `launcher.lock`. Earlier helper revisions could leak this lock into PostgreSQL after launcher termination. The corrected helper prevents that inheritance, but an already-running orphaned database needs identified, explicit cleanup before relaunch. [Reproduction and correction](validation/local-quickstart.md#detached-database-lock-inheritance).
+
 ## 2. Prepare an unrelated project — terminal two
 
 ```sh
