@@ -1,6 +1,6 @@
 {
-  "state": "in-progress-installed-correction",
-  "implementationCommit": "94f4a5288d7282dae09c162a6b42f226a0be4949",
+  "state": "in-progress-corrected-live-corpus",
+  "implementationCommit": "302bf34",
   "modelVersion": "0.1.0",
   "platform": "x86_64-linux",
   "verifiedGates": [
@@ -118,12 +118,23 @@
         "native-artifact.json": "c125567b1f2929e0d4803aef76ab6faac86cf3e56e2502f1c6905c9c0931b23b"
       },
       "applicability": "All 40 commands pass including tracing and native execution of all four workflows. Application/build and executed fixture sources match; later dev/process-eval instruction clarification is outside this gate. Independent Astra approved."
+    },
+    {
+      "name": "installed-corrected",
+      "directory": "/srv/nvme/tmp/cq4-implementation/20260928T074034-installed",
+      "status": "package-checked",
+      "evidenceSha256": {
+        "result.json": "7d39eb56fe8d2966eda7dcff2fd3697edbd1554d66124b3e8d31d817cf987ea8",
+        "commands.json": "4139dad94649e9bbf38e43cb383d5980f8fc5790f2cf36e36339b2b81043b4e2",
+        "source-sha256.json": "6d0b296b95d27396a546ddccca7c8a321ae0f6d791e7041bf9a00cc000b843f1"
+      },
+      "applicability": "24 commands pass with 292 unchanged source hashes. Source/classpath isolation, imported runtime, all four workflows, browser, restart and settled 24-table backup pass. Delivery/relocated artifact hashes match; independent Astra approved."
     }
   ],
   "running": [
     {
-      "name": "corrected-native",
-      "directory": "/srv/nvme/tmp/cq4-implementation/20260928T071654-native"
+      "name": "corrected-packaged-release",
+      "directory": "/srv/nvme/tmp/cq4-implementation/20260928T074651-release"
     }
   ],
   "pending": [
@@ -139,7 +150,53 @@
     "Token/cost observations preserve unavailable fields and do not establish provider billing or matched efficiency savings.",
     "Managed CQ batch sessions collect governor and child usage. Arbitrary existing interactive sessions do not have universal collection coverage; unsupported paths remain explicit."
   ],
-  "liveProgress": {
+  "evaluatorAmendments": [
+    {
+      "directory": "/srv/nvme/tmp/cq4-implementation/m6-package/probe-amendment",
+      "scope": "Five evaluator-only files; product, fixture, recorder, oracle, acceptance predicates and package unchanged. Retained deterministic gates apply to product baseline.",
+      "review": "Independent Astra approved",
+      "evidenceSha256": {
+        "amendment.json": "8dce4066a67d9034204f4fe5b31518362366e81b86563268afb8cfd1a104a2e5",
+        "astra-review.json": "ec1af7109585cd1d4eeca84d7ca8f85c60ca2a226cc11824d9e9cb079b838c4c",
+        "admission-proof.json": "672370af088fe42809dc5e64b0960a4ad6bf9c3c2001dbbb7500026b9a49f0e2",
+        "retained-replay.json": "ec8ff77344b0063faa9e8b3fef4de7559defce8a35cb5fa02f1f291de9f3e6d0",
+        "after.log": "ed814a77b9b3fd1040c13d0cbf1e21d5c2bee46dfe8e930b66bac650b5e0cea7"
+      }
+    }
+  ],
+  "historicalAccounting": {
+    "directory": "/srv/nvme/tmp/cq4-implementation/m6-package/rejected-artifact-accounting",
+    "knownTokens": 21547362,
+    "distinctAttempts": 62,
+    "scope": "Old artifact only; includes all failed/successful attempts. Corrected candidate acceptance remains separate."
+  },
+  "retainedGateApplicability": {
+    "sourceDelta": "/srv/nvme/tmp/cq4-implementation/m6-package/native-correction-source-delta.json",
+    "sha256": "403962096f905ba34797147b63ddd17e4f3b49f9be9926d4df3a1e2a82f74c02",
+    "review": "Independent Astra approved scoped reuse; corrected native/installed and fresh same-artifact live corpus remain required."
+  },
+  "historicalArtifact": {
+    "directory": "/srv/nvme/tmp/cq4-implementation/cq-release",
+    "manifestSha256": "d8656dd57434db5fddef0e62b6080692fe4d080ea132d1161ee91f4867f0de71",
+    "executableSha256": "b25dfa22e2aff84282b9dcdf755ba1a2226b75a467dd167413e361428b6761b0",
+    "guardianSha256": "f56efb4626cb8e0fab0cc4b27b1460e75cea275890b5209df0a7f312ddf029bc",
+    "qualification": "Historical artifact rejected after missing native Review/Upstream workflow resources; preserve unchanged, do not treat as final release."
+  },
+  "artifact": {
+    "directory": "/srv/nvme/tmp/cq4-implementation/cq-release-workflow-resources",
+    "manifestSha256": "3159173b19f4a9db92a4903429f12f8507d63ad55f5dc05d21bef5ab4d5f82f6",
+    "executableSha256": "2178d813e17ebce0693209d308d8cc082ae4ebc55b93860f8d985efd31c9f555",
+    "guardianSha256": "f56efb4626cb8e0fab0cc4b27b1460e75cea275890b5209df0a7f312ddf029bc",
+    "qualification": "Corrected native and source-isolated installed gates pass with independent Astra approval. Fresh same-artifact live corpus running; release acceptance pending."
+  },
+  "correctedVerification": {
+    "native": "/srv/nvme/tmp/cq4-implementation/20260928T071654-native",
+    "installed": "/srv/nvme/tmp/cq4-implementation/20260928T074034-installed",
+    "installedStatus": "package-checked",
+    "liveStatus": "running",
+    "liveSuite": "/srv/nvme/tmp/cq4-implementation/20260928T074651-release"
+  },
+  "historicalLiveProgress": {
     "suite": "/srv/nvme/tmp/cq4-implementation/20260928T060135-release",
     "acceptedStages": [
       "cohort-claude",
@@ -156,7 +213,7 @@
       "defect-integrate"
     ],
     "runningStage": null,
-    "scope": "Progress snapshot; consult suite.json for current state. Full corpus and human acceptance remain pending.",
+    "scope": "Historical rejected-artifact corpus; preserve executions and spending, exclude from corrected-artifact acceptance.",
     "verifiedRoutes": 9,
     "scopedAccounting": {
       "attempts": 18,
@@ -202,49 +259,9 @@
     ],
     "correction": "Probe correction passed; original artifact now rejected for missing native workflow resources. Fresh same-artifact corpus required after rebuild."
   },
-  "evaluatorAmendments": [
-    {
-      "directory": "/srv/nvme/tmp/cq4-implementation/m6-package/probe-amendment",
-      "scope": "Five evaluator-only files; product, fixture, recorder, oracle, acceptance predicates and package unchanged. Retained deterministic gates apply to product baseline.",
-      "review": "Independent Astra approved",
-      "evidenceSha256": {
-        "amendment.json": "8dce4066a67d9034204f4fe5b31518362366e81b86563268afb8cfd1a104a2e5",
-        "astra-review.json": "ec1af7109585cd1d4eeca84d7ca8f85c60ca2a226cc11824d9e9cb079b838c4c",
-        "admission-proof.json": "672370af088fe42809dc5e64b0960a4ad6bf9c3c2001dbbb7500026b9a49f0e2",
-        "retained-replay.json": "ec8ff77344b0063faa9e8b3fef4de7559defce8a35cb5fa02f1f291de9f3e6d0",
-        "after.log": "ed814a77b9b3fd1040c13d0cbf1e21d5c2bee46dfe8e930b66bac650b5e0cea7"
-      }
-    }
-  ],
-  "historicalAccounting": {
-    "directory": "/srv/nvme/tmp/cq4-implementation/m6-package/rejected-artifact-accounting",
-    "knownTokens": 21547362,
-    "distinctAttempts": 62,
-    "scope": "Old artifact only; includes all failed/successful attempts. Corrected candidate acceptance remains separate."
-  },
-  "retainedGateApplicability": {
-    "sourceDelta": "/srv/nvme/tmp/cq4-implementation/m6-package/native-correction-source-delta.json",
-    "sha256": "403962096f905ba34797147b63ddd17e4f3b49f9be9926d4df3a1e2a82f74c02",
-    "review": "Independent Astra approved scoped reuse; corrected native/installed and fresh same-artifact live corpus remain required."
-  },
-  "historicalArtifact": {
-    "directory": "/srv/nvme/tmp/cq4-implementation/cq-release",
-    "manifestSha256": "d8656dd57434db5fddef0e62b6080692fe4d080ea132d1161ee91f4867f0de71",
-    "executableSha256": "b25dfa22e2aff84282b9dcdf755ba1a2226b75a467dd167413e361428b6761b0",
-    "guardianSha256": "f56efb4626cb8e0fab0cc4b27b1460e75cea275890b5209df0a7f312ddf029bc",
-    "qualification": "Historical artifact rejected after missing native Review/Upstream workflow resources; preserve unchanged, do not treat as final release."
-  },
-  "artifact": {
-    "directory": "/srv/nvme/tmp/cq4-implementation/cq-release-workflow-resources",
-    "manifestSha256": "3159173b19f4a9db92a4903429f12f8507d63ad55f5dc05d21bef5ab4d5f82f6",
-    "executableSha256": "2178d813e17ebce0693209d308d8cc082ae4ebc55b93860f8d985efd31c9f555",
-    "guardianSha256": "f56efb4626cb8e0fab0cc4b27b1460e75cea275890b5209df0a7f312ddf029bc",
-    "qualification": "Corrected workflow resources; full native gate and scoped Astra review pass. Installed verification and fresh same-artifact live corpus pending."
-  },
-  "correctedVerification": {
-    "native": "/srv/nvme/tmp/cq4-implementation/20260928T071654-native",
-    "installed": "/srv/nvme/tmp/cq4-implementation/20260928T074034-installed",
-    "installedStatus": "running",
-    "liveStatus": "not-started"
+  "liveProgress": {
+    "suite": "/srv/nvme/tmp/cq4-implementation/20260928T074651-release",
+    "status": "running",
+    "scope": "Fresh corrected-artifact corpus; old-artifact acceptance and spending remain separate."
   }
 }
