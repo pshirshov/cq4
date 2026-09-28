@@ -2,7 +2,7 @@
 
 The original native distribution passed its then-current native/installed checks and nine-route cohort corpus. A later packaged Upstream startup exposed missing workflow resources; that artifact is not an accepted release candidate. The reproduced correction and fresh verification are described below.
 
-Current artifact: `/srv/nvme/tmp/cq4-implementation/cq-release`. It contains the 109,250,776-byte native CQ executable, 26,208-byte guardian and 37,719,072-byte Nix archive for four runtime paths (glibc, libgcc, libidn2 and libunistring), plus hashed instructions/examples. `dev/package` validates its source and artifact identities. The coherent installed gate passes at `20260928T055336-installed` with a fresh private Nix store; imported runtime paths are mounted over their original locations for native execution. External fixture tools still use the existing host installation.
+Historical artifact: `/srv/nvme/tmp/cq4-implementation/cq-release`. It contains the 109,250,776-byte native CQ executable, 26,208-byte guardian and 37,719,072-byte Nix archive for four runtime paths (glibc, libgcc, libidn2 and libunistring), plus hashed instructions/examples. `dev/package` validates source and artifact identities. The recorded installed gate passed at `20260928T055336-installed` with a fresh private Nix store; imported runtime paths were mounted over their original locations for native execution. External fixture tools used the existing host installation. The later missing-resource reproduction limits this gate's coverage as described below.
 
 ## Implemented preparation
 
@@ -25,6 +25,8 @@ Independent Astra found no blocking/major source finding in the package assemble
 ## Remaining gates
 
 Execute the complete release consumer suite using the same artifact across producers, assessments and recovery; reconcile spending through CQ's shared usage audit; finish operational instructions and independent release review; present concrete evidence for human acceptance.
+
+The corrected distribution is `/srv/nvme/tmp/cq4-implementation/cq-release-workflow-resources`, built from the passing full native gate `20260928T071654-native`. Its executable SHA-256 is `2178d813e17ebce0693209d308d8cc082ae4ebc55b93860f8d985efd31c9f555`; the guardian and runtime closure are unchanged. The fresh installed gate is `20260928T074034-installed` (running). The original artifact and original release suite remain historical evidence. No corrected-artifact live corpus has started yet.
 
 ## Settled database backup
 

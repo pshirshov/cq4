@@ -26,7 +26,7 @@ Each invocation prints its evidence directory, normally `.work/evidence/<timesta
 
 ## Native distribution
 
-The M6 candidate is `/srv/nvme/tmp/cq4-implementation/cq-release`. The complete native runtime and installed deterministic gates pass; live release verification is tracked in [package evidence](docs/validation/m6-package.md). Its single native executable serves every role, with `bin/cq-guardian` beside it. The distribution README documents the exported Nix runtime closure, trusted import on multi-user installations, GC roots, external PostgreSQL/harness dependencies and configuration examples.
+The first M6 artifact at `/srv/nvme/tmp/cq4-implementation/cq-release` is retained for historical evidence. Later workflow execution exposed omitted native instructions; it is not the final release candidate. The corrected artifact at `/srv/nvme/tmp/cq4-implementation/cq-release-workflow-resources` passes the full native gate; installed verification is running. See [package evidence](docs/validation/m6-package.md). The distribution uses one native executable for every role, with `bin/cq-guardian` beside it. Its README documents the exported Nix runtime closure, trusted import on multi-user installations, GC roots, external PostgreSQL/harness dependencies and configuration examples.
 
 From this checkout, assemble and verify a distribution using the evidence directory printed by a passing native gate:
 

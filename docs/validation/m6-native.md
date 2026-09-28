@@ -4,6 +4,12 @@ Later qualification: the packaged Upstream run exposed missing native Review/Ups
 
 The complete native release is **not yet verified**. This log records the baseline failures and corrections being checked before packaging under the [release boundary](../design/native-release.md).
 
+## Corrected workflow resources
+
+The fresh full gate at `/srv/nvme/tmp/cq4-implementation/20260928T071654-native` passes all 40 commands: tracing, metadata merge, compilation and the actual native transport/supervisor/browser corpus. Both traced and native workflow checks launch Begin, Advance, Review and Upstream and verify the exact common-plus-specific instruction hashes. Review consumes the result admitted by the Begin fixture. The old binary's retained reproduction fails exactly Review/Upstream; the corrected binary passes both.
+
+The executable is 109,316,312 bytes, SHA-256 `2178d813e17ebce0693209d308d8cc082ae4ebc55b93860f8d985efd31c9f555`. `source-applicability.json` records only the later `dev/process-eval` Handoff instruction clarification; that evaluator is not invoked by the native gate. Application/build and executed fixture inputs match. Independent Astra approved this complete corrected native increment. Corrected installed verification and the same-artifact live release corpus remain required.
+
 ## Reproduced baseline failures
 
 1. `.work/evidence/20260928T040554-native`: the traced server starts and actual transport/artifact/host API checks pass. The first traced client fails before application startup because both processes share `native-config`; GraalVM rejects the second writer's locked directory. `dev/check native` now allocates `{pid}-{datetime}` directories, writes periodic metadata for interruption fixtures and inventories/merges the settled process outputs with `native-image-utils`. Missing process metadata fails explicitly.

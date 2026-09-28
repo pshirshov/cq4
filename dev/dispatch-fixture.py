@@ -1,3 +1,4 @@
+import hashlib
 import json
 from decimal import Decimal
 import os
@@ -186,6 +187,32 @@ def main():
 
     assert sandbox == "read-only"
     project = data["project"]["project"]
+    if data["request"].startswith("workflow-assets:"):
+        scenario = json.loads(data["request"].split(":", 1)[1])
+        workflow = data["workflow"]
+        assert hashlib.sha256(workflow["instructions"].encode()).hexdigest() == scenario["instructionsSha256"]
+        assert list(workflow["request"]) == [scenario["name"].capitalize()]
+        result = None
+        if scenario["name"] == "begin":
+            member = scenario["member"]
+            selected = tool("cq_host", "dispatch", {"Select": {"request": {"request": identity(), "roots": [member["id"]],
+                "work": {"Explorer": {"mode": "Investigate"}}, "guidance": [], "artifacts": [], "previous": None,
+                "limits": data["limits"]}}})["Selection"]["value"]
+            choice, = selected["choices"]
+            assert choice["members"] == [member]
+            claim = tool("cq", "claim", {"project": project, "action": {"Acquire": {
+                "id": identity(), "members": [member["id"]], "durationMillis": "180000"}}})["Claimed"]["claim"]
+            started = tool("cq_host", "dispatch", {"StartChoice": {"choice": choice["id"], "harness": "Codex", "fence": claim["fence"]}})["Status"]["value"]
+            settled = poll(started["attempt"])
+            assert settled["phase"] == "Completed" and settled["result"] and settled["usageDelivered"], settled
+            result = settled["result"]
+            tool("cq", "claim", {"project": project, "action": {"Release": {"fence": claim["fence"]}}})
+        if scenario["name"] == "review":
+            assert workflow["subject"]["result"] == scenario["subject"]
+            assert workflow["subject"]["members"] == [scenario["member"]]
+        emit({"type": "fixture.workflow", "name": scenario["name"], "instructionsSha256": scenario["instructionsSha256"], "result": result})
+        finish({"summary": "Installed workflow instructions and current admitted subject verified"})
+        return
     if data["request"].startswith("traffic-growth:"):
         scenario = json.loads(data["request"].split(":", 1)[1])
         members = scenario["members"]

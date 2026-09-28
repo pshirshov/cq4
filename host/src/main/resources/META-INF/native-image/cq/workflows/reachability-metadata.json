@@ -1,0 +1,5 @@
+{
+  "resources": [
+    { "glob": "cq/workflows/*.md" }
+  ]
+}

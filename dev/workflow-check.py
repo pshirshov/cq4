@@ -1,4 +1,5 @@
 import contextlib
+import hashlib
 import json
 from fixture_runtime import guardian_binary
 import os
@@ -68,8 +69,8 @@ def main():
             return api({"Change": {"input": {"project": project, "change": {
                 "request": identity(), "mutations": mutations, "fences": [], "reason": "Workflow boundary fixture"}}}})["Changed"]["ack"]["items"]
 
-        def task():
-            return change([{"Create": {"draft": {"title": "Workflow task", "body": "Selected work", "labels": [], "archived": False,
+        def task(labels):
+            return change([{"Create": {"draft": {"title": "Workflow task", "body": "Selected work", "labels": labels, "archived": False,
                 "content": {"Task": {"status": "Ready", "acceptance": ["Verified"], "result": None, "validation": []}}, "citations": []}}}])[0]
 
         def denied(name, member, roots, phase, work):
@@ -84,9 +85,9 @@ def main():
             assert len(list((session / "journal").glob("*.json"))) == 1, "Workflow denial launched another job"
             print(json.dumps({"scenario": name, "receipt": receipt}))
 
-        member = task()
+        member = task([])
         denied("phase", member, "T" + member["id"]["number"], "explore", {"Worker": {"mode": "Implement"}})
-        selected, sibling = task(), task()
+        selected, sibling = task([]), task([])
         milestone = change([{"Create": {"draft": {"title": "Context milestone", "body": "Organization", "labels": [], "archived": False,
             "content": {"Milestone": {"status": "Open", "objective": "Organize work"}}, "citations": []}}}])[0]
         for item in [selected, sibling]:
@@ -96,6 +97,39 @@ def main():
         sibling = api({"Read": {"input": {"project": project, "selection": {"ItemDetail": {"id": sibling["id"]}}}}})["Detail"]["view"]["item"]
         denied("contextual-milestone-sibling", {"id": sibling["id"], "revision": sibling["revision"]},
                "T" + selected["id"]["number"], "plan", {"Planner": {}})
+
+        member = task(["proposal-fixture"])
+        resources = Path("host/src/main/resources/cq/workflows")
+        subject, failures = None, []
+        for name in ["begin", "advance", "review", "upstream"]:
+            instructions = (resources / "common.md").read_text() + "\n" + (resources / (name + ".md")).read_text()
+            scenario = {"name": name, "member": member, "subject": subject,
+                        "instructionsSha256": hashlib.sha256(instructions.encode()).hexdigest()}
+            source.write_text("workflow-assets:" + json.dumps(scenario))
+            arguments = ["--workflow", name]
+            if name == "review":
+                assert subject is not None, "Review fixture requires an actually admitted result"
+                arguments += ["--result", subject["value"], "--mode", "audit"]
+            else:
+                arguments += ["--roots", "T" + member["id"]["number"]]
+                if name == "advance":
+                    arguments += ["--through", "explore"]
+                if name == "upstream":
+                    arguments += ["--action", "prepare"]
+            try:
+                receipt = json.loads(run(["run", "codex", "--settings", str(settings), "--input", str(source), *arguments]))
+                assert receipt["problem"] is None and receipt["usageDelivered"] and receipt["report"] is not None, receipt
+                session = Path(receipt["directory"])
+                events = [json.loads(line) for path in (session / "payload").glob("*/stdout") for line in path.read_text().splitlines()]
+                observed, = [event for event in events if event["type"] == "fixture.workflow"]
+                assert observed["name"] == name and observed["instructionsSha256"] == scenario["instructionsSha256"]
+                if name == "begin":
+                    subject = observed["result"]
+                print(json.dumps({"scenario": "installed-" + name, "receipt": receipt, "observed": observed}))
+            except AssertionError as error:
+                failures.append({"workflow": name, "error": str(error)})
+        (root / "workflow-resource-failures.json").write_text(json.dumps(failures, indent=2) + "\n")
+        assert not failures, failures
 
 
 if __name__ == "__main__":

@@ -1,15 +1,8 @@
 {
-  "state": "in-progress-native-correction",
+  "state": "in-progress-installed-correction",
   "implementationCommit": "94f4a5288d7282dae09c162a6b42f226a0be4949",
   "modelVersion": "0.1.0",
   "platform": "x86_64-linux",
-  "artifact": {
-    "directory": "/srv/nvme/tmp/cq4-implementation/cq-release",
-    "manifestSha256": "d8656dd57434db5fddef0e62b6080692fe4d080ea132d1161ee91f4867f0de71",
-    "executableSha256": "b25dfa22e2aff84282b9dcdf755ba1a2226b75a467dd167413e361428b6761b0",
-    "guardianSha256": "f56efb4626cb8e0fab0cc4b27b1460e75cea275890b5209df0a7f312ddf029bc",
-    "qualification": "Historical artifact rejected after missing native Review/Upstream workflow resources; preserve unchanged, do not treat as final release."
-  },
   "verifiedGates": [
     {
       "name": "contracts",
@@ -20,7 +13,7 @@
         "commands.json": "394bf212c05deccfc5444e150c635250d053de814e5d142d13eee3841b063199",
         "source-sha256.json": "d99ac546df49192f71137c413221725179eec9aad0900cd264ac99a7b2ab2f26"
       },
-      "applicability": "Retained; all current non-dev inputs match."
+      "applicability": "Retained contract/codegen evidence; sole later runtime delta is workflow native resource metadata. Evaluator changes do not affect generated contracts. Scoped Astra reuse approved."
     },
     {
       "name": "fast",
@@ -31,7 +24,7 @@
         "commands.json": "0a99809e009f89828ad05049bc46c05fe642a7a04b25ac11bf76d116c64bbb86",
         "source-sha256.json": "21b90e713dbb5c133ff082e228eb4ce77756e17ef3bbe30a9a0e1c65cefb12dc"
       },
-      "applicability": "Retained; all current non-dev inputs match. Later server-process hook and installed signal controller verified by installed gate."
+      "applicability": "Retained 190-scenario/bridge proof for unchanged application behavior. Later evaluator checks and installed process controller have separate recorded evidence; workflow resource metadata is checked by corrected native/installed gates. Scoped Astra reuse approved."
     },
     {
       "name": "ui",
@@ -42,7 +35,7 @@
         "commands.json": "52ee7d43ba4a50a0668457e9369e5fdb35e232ec905c8a64faef8a06ddeea2a7",
         "source-sha256.json": "b40088ae4a75c96289cfc6f3319f65fba19877d0ad6db3fefc6ce7c06e019ed8"
       },
-      "applicability": "Retained; UI inputs unchanged. Compiler flake change separately verified. Current native/installed browser corpus also passes."
+      "applicability": "Retained UI evidence; browser sources unchanged since this gate. Compiler flake verified separately; workflow native metadata is outside UI scope. Scoped Astra reuse approved."
     },
     {
       "name": "usage",
@@ -53,7 +46,7 @@
         "commands.json": "3651e5b84b9555a54a2326fc3294c73268de173483988e3f322fb801a53f5bc1",
         "source-sha256.json": "83dd18484e4e832eb3ab48ae9f230238ae24c68e220cea1d027e5b69a6c76c85"
       },
-      "applicability": "Retained usage watch/SQL proof. Later connection UI changes verified by UI and current native/installed browser corpus."
+      "applicability": "Retained usage-watch/SQL proof. Later connection UI changes have the approved UI gate; workflow native metadata does not change audit behavior. Scoped Astra reuse approved."
     },
     {
       "name": "process",
@@ -64,7 +57,7 @@
         "commands.json": "9bfd9aa382d53859ebe794a4f3d98591ffb01f22b14fa44749ef6d39f5d8d479",
         "source-sha256.json": "7be22f3848b041771e0d024ff68cb58c885ca3222292895573b963b83aff3c2d"
       },
-      "applicability": "Retained failure-injection evidence for unchanged lifecycle/coordinator/guardian/merge implementations. Changed contracts/support paths covered by current contracts/fast/native/installed gates; scoped Astra applicability approval."
+      "applicability": "Retained failure-injection evidence for unchanged lifecycle/coordinator/guardian/merge implementations. Intervening contracts/support changes have recorded contracts/fast/native evidence; resource metadata requires corrected native/installed verification. Scoped Astra reuse approved."
     },
     {
       "name": "native",
@@ -75,7 +68,7 @@
         "commands.json": "8b2c392395e9a56fd657884cf46a505c89e388551f900cc2a4063a17bcd08559",
         "source-sha256.json": "3506ecbd6d245ba3bd0965cff6032a8516b41f700d7ad5938a2224e4e7fdebfc"
       },
-      "applicability": "Complete native tracing/build/runtime/browser gate. Application/build sources match current candidate; later verifier process hook covered by installed gate."
+      "applicability": "Superseded artifact evidence: this gate passed its then-current corpus but omitted actual Review/Upstream instruction startup. Original binary is rejected for release; corrected native gate must pass."
     },
     {
       "name": "installed",
@@ -86,7 +79,7 @@
         "commands.json": "d7c066d59f27770fb96765ee7154c6af305d441ec2ec5019525511157781a160",
         "source-sha256.json": "d5bed71aa0e8ee3828eda693b98321184d4c568300c590bfe704ad8c0d349672"
       },
-      "applicability": "Complete source-isolated relocated native/guardian corpus and settled backup; all291 verifier sources unchanged; Astra approved."
+      "applicability": "Superseded artifact evidence: original source-isolated installed corpus passed but lacked actual Review/Upstream instruction startup. Corrected package requires a fresh installed gate."
     },
     {
       "name": "postgres",
@@ -98,7 +91,7 @@
         "source-sha256.json": "16cb42fdcb8149fee4fa39df9003e1741f4a49bd5073af6f70ee8bb64d6f9737",
         "source-applicability.json": "b65d0b626f2806574cd01cd5fd4e7c9a6520fe3f1f91e1e75ee0667f6bd03976"
       },
-      "applicability": "All 291 current non-documentation inputs match. 102 PostgreSQL scenarios plus complete JVM transport/process/restart corpus pass."
+      "applicability": "Retained 102 PostgreSQL scenarios and full JVM client/process/restart corpus. Sole later runtime delta is native workflow inclusion metadata; changed workflow fixture is covered by corrected tracing/native/installed runs. Evaluator changes have separate checks. Scoped Astra reuse approved."
     },
     {
       "name": "access",
@@ -111,7 +104,20 @@
         "source-applicability.json": "b65d0b626f2806574cd01cd5fd4e7c9a6520fe3f1f91e1e75ee0667f6bd03976",
         "access-report.json": "38af35efb517f6809b488c113bb019fba7d90f82bf112aa38797ac562773b6fd"
       },
-      "applicability": "All 291 current non-documentation inputs match. Query/mutation/closure/integration/usage access budgets pass through 100,000 unrelated items."
+      "applicability": "Retained 126 measured operations through 100,000 background items. Sole later runtime delta is native workflow inclusion metadata; query/service/build inputs for this gate are unchanged. Scoped Astra reuse approved."
+    },
+    {
+      "name": "native-corrected",
+      "directory": "/srv/nvme/tmp/cq4-implementation/20260928T071654-native",
+      "status": "passed",
+      "evidenceSha256": {
+        "result.json": "2b847b2d7512a450162f1a93771c5d2c4021d0e90b0c509923b75eabf7970ea8",
+        "commands.json": "79ffba76078161fc817f3715e60f9602cebc3c588f1897cf610505a3acf33c7a",
+        "source-sha256.json": "bdd28ba99764503ce542a80b2c4f69cb5c2d9aa1eef574806520bba80f14d057",
+        "source-applicability.json": "26090ae66116923c6ac5c8fd9945c3e3bddf34165a845ccc179b99821153767a",
+        "native-artifact.json": "c125567b1f2929e0d4803aef76ab6faac86cf3e56e2502f1c6905c9c0931b23b"
+      },
+      "applicability": "All 40 commands pass including tracing and native execution of all four workflows. Application/build and executed fixture sources match; later dev/process-eval instruction clarification is outside this gate. Independent Astra approved."
     }
   ],
   "running": [
@@ -215,5 +221,30 @@
     "knownTokens": 21547362,
     "distinctAttempts": 62,
     "scope": "Old artifact only; includes all failed/successful attempts. Corrected candidate acceptance remains separate."
+  },
+  "retainedGateApplicability": {
+    "sourceDelta": "/srv/nvme/tmp/cq4-implementation/m6-package/native-correction-source-delta.json",
+    "sha256": "403962096f905ba34797147b63ddd17e4f3b49f9be9926d4df3a1e2a82f74c02",
+    "review": "Independent Astra approved scoped reuse; corrected native/installed and fresh same-artifact live corpus remain required."
+  },
+  "historicalArtifact": {
+    "directory": "/srv/nvme/tmp/cq4-implementation/cq-release",
+    "manifestSha256": "d8656dd57434db5fddef0e62b6080692fe4d080ea132d1161ee91f4867f0de71",
+    "executableSha256": "b25dfa22e2aff84282b9dcdf755ba1a2226b75a467dd167413e361428b6761b0",
+    "guardianSha256": "f56efb4626cb8e0fab0cc4b27b1460e75cea275890b5209df0a7f312ddf029bc",
+    "qualification": "Historical artifact rejected after missing native Review/Upstream workflow resources; preserve unchanged, do not treat as final release."
+  },
+  "artifact": {
+    "directory": "/srv/nvme/tmp/cq4-implementation/cq-release-workflow-resources",
+    "manifestSha256": "3159173b19f4a9db92a4903429f12f8507d63ad55f5dc05d21bef5ab4d5f82f6",
+    "executableSha256": "2178d813e17ebce0693209d308d8cc082ae4ebc55b93860f8d985efd31c9f555",
+    "guardianSha256": "f56efb4626cb8e0fab0cc4b27b1460e75cea275890b5209df0a7f312ddf029bc",
+    "qualification": "Corrected workflow resources; full native gate and scoped Astra review pass. Installed verification and fresh same-artifact live corpus pending."
+  },
+  "correctedVerification": {
+    "native": "/srv/nvme/tmp/cq4-implementation/20260928T071654-native",
+    "installed": "/srv/nvme/tmp/cq4-implementation/20260928T074034-installed",
+    "installedStatus": "running",
+    "liveStatus": "not-started"
   }
 }
