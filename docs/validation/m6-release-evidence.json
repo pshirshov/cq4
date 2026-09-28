@@ -1,5 +1,5 @@
 {
-  "state": "in-progress-final-process-assessment",
+  "state": "technical-release-approved-human-acceptance-pending",
   "implementationCommit": "302bf34",
   "modelVersion": "0.1.0",
   "platform": "x86_64-linux",
@@ -131,15 +131,8 @@
       "applicability": "24 commands pass with 292 unchanged source hashes. Source/classpath isolation, imported runtime, all four workflows, browser, restart and settled 24-table backup pass. Delivery/relocated artifact hashes match; independent Astra approved."
     }
   ],
-  "running": [
-    {
-      "name": "corrected-packaged-process-assess",
-      "directory": "/srv/nvme/tmp/cq4-implementation/20260928T074651-release/20260928T092821-process-assess"
-    }
-  ],
+  "running": [],
   "pending": [
-    "packaged live acceptance and usage report",
-    "final independent Astra release review",
     "designated M2 human acceptance",
     "designated M6 human acceptance"
   ],
@@ -148,7 +141,8 @@
     "Linux x86-64 native distribution; guardian requires Linux 5.9+.",
     "Database-only backup is verified for settled state; running host recovery additionally requires retained session and Git state.",
     "Token/cost observations preserve unavailable fields and do not establish provider billing or matched efficiency savings.",
-    "Managed CQ batch sessions collect governor and child usage. Arbitrary existing interactive sessions do not have universal collection coverage; unsupported paths remain explicit."
+    "Managed CQ batch sessions collect governor and child usage. Arbitrary existing interactive sessions do not have universal collection coverage; unsupported paths remain explicit.",
+    "Current live suite has three interrupted attempts without supported authoritative meters, 88 partially populated meters and 40 unknown-cost contributions; corpus-usage-incomplete is retained. A possible Claude partial source has unverified accounting semantics."
   ],
   "evaluatorAmendments": [
     {
@@ -187,7 +181,7 @@
   "retainedGateApplicability": {
     "sourceDelta": "/srv/nvme/tmp/cq4-implementation/m6-package/native-correction-source-delta.json",
     "sha256": "403962096f905ba34797147b63ddd17e4f3b49f9be9926d4df3a1e2a82f74c02",
-    "review": "Independent Astra approved scoped reuse; corrected native/installed and fresh same-artifact live corpus remain required."
+    "review": "Independent Astra approved scoped reuse; corrected native/installed and fresh same-artifact live functional corpus now pass. Three interrupted attempts keep aggregate instrumentation incomplete."
   },
   "historicalArtifact": {
     "directory": "/srv/nvme/tmp/cq4-implementation/cq-release",
@@ -201,13 +195,13 @@
     "manifestSha256": "3159173b19f4a9db92a4903429f12f8507d63ad55f5dc05d21bef5ab4d5f82f6",
     "executableSha256": "2178d813e17ebce0693209d308d8cc082ae4ebc55b93860f8d985efd31c9f555",
     "guardianSha256": "f56efb4626cb8e0fab0cc4b27b1460e75cea275890b5209df0a7f312ddf029bc",
-    "qualification": "Corrected native and source-isolated installed gates pass with independent Astra approval. Fresh same-artifact live corpus running; release acceptance pending."
+    "qualification": "Corrected Linux x86-64 technical release candidate approved by independent Astra across M0\u2013M6/R01\u2013R31. Native, installed and complete same-artifact functional corpus pass; aggregate instrumentation remains incomplete. Human M2/M6 acceptance pending."
   },
   "correctedVerification": {
     "native": "/srv/nvme/tmp/cq4-implementation/20260928T071654-native",
     "installed": "/srv/nvme/tmp/cq4-implementation/20260928T074034-installed",
     "installedStatus": "package-checked",
-    "liveStatus": "running-process-assessment",
+    "liveStatus": "corpus-usage-incomplete",
     "liveSuite": "/srv/nvme/tmp/cq4-implementation/20260928T074651-release"
   },
   "historicalLiveProgress": {
@@ -275,7 +269,7 @@
   },
   "liveProgress": {
     "suite": "/srv/nvme/tmp/cq4-implementation/20260928T074651-release",
-    "status": "running-process-assessment",
+    "status": "corpus-usage-incomplete",
     "scope": "Fresh corrected-artifact corpus; old-artifact acceptance and spending remain separate.",
     "independentlyAcceptedCohorts": [
       "claude",
@@ -304,9 +298,9 @@
       "status": "failed-execution-deadline",
       "instructionCorrection": {
         "commit": "bb1ccc7ede6d9d0f73ef4d88d44bdb02021db2fa",
-        "review": "Independent Astra accepted; source epoch admitted and targeted retry running",
+        "review": "Independent Astra accepted; source epoch admitted and targeted retry retained",
         "checks": 12,
-        "pending": "Retry integrated its candidate then timed out at Handoff closeout; bounded closeout source approved, native continuation pending",
+        "pending": null,
         "admissionCommit": "da5470e"
       },
       "usage": {
@@ -322,7 +316,7 @@
         "status": "failed-execution-deadline",
         "candidate": "3100f651eb12ad5170346ccc104d8b6549bffcd7",
         "tasks": "T1@5 and T2@4 Done; exact Recorded ACK",
-        "remaining": "Handoff closeout and independent whole-process assessment",
+        "remaining": "Failed producer preserved; separate bounded closeout and native whole-process assessment now pass",
         "knownTokens": 957199,
         "modelAttempts": 7,
         "attemptsWithoutMeters": 1
@@ -343,7 +337,18 @@
       },
       "assessment": {
         "directory": "20260928T092821-process-assess",
-        "status": "running"
+        "status": "assessment-passed",
+        "candidate": "3100f651eb12ad5170346ccc104d8b6549bffcd7",
+        "newAttempts": 4,
+        "newKnownTokens": 1898332,
+        "inspectedFiles": 7,
+        "inspectedRevisions": 25,
+        "inspectedHistories": 8,
+        "lineageAttempts": 17,
+        "lineageKnownTokens": 4345362,
+        "lineageAttemptsWithoutMeters": 1,
+        "review": "Native Pi precheck and standalone Codex/Astra accept both tasks; independent Astra replay approved",
+        "qualification": "Lineage follows question, second failed producer, closeout and assessment. First failed continuation remains separately counted in aggregate."
       }
     },
     "defectProcess": {
@@ -361,6 +366,179 @@
       "knownTokens": 26096325,
       "attemptsWithoutMeters": 3,
       "completeSpendingOrEfficiencyClaim": false
+    },
+    "acceptedSelectedStages": 16,
+    "selected": {
+      "cohort-claude": "stage-001",
+      "cohort-claude-assess": "stage-002",
+      "cohort-codex": "stage-015",
+      "cohort-codex-assess": "stage-016",
+      "cohort-pi": "stage-005",
+      "cohort-pi-assess": "stage-006",
+      "process-begin": "stage-007",
+      "process-resume": "stage-019",
+      "process-assess": "stage-020",
+      "defect-begin": "stage-008",
+      "defect-probe": "stage-009",
+      "defect-research": "stage-010",
+      "defect-plan": "stage-011",
+      "defect-integrate": "stage-012",
+      "defect-upstream": "stage-013",
+      "defect-assess": "stage-014"
+    },
+    "pendingStages": [],
+    "invocationRecords": 20,
+    "evidenceSnapshots": 20,
+    "sourceEpochs": 3,
+    "acceptedTracks": [
+      "cohort-claude-assess",
+      "cohort-codex-assess",
+      "cohort-pi-assess",
+      "process-assess",
+      "defect-assess"
+    ],
+    "evidenceSha256": {
+      "suite.json": "b76dc928b6cbaf2102a48a9e6add449637654c159214642540e1a35110ab40bd",
+      "usage-report.json": "637e621f3dfead0f08d8d52c176fd972448fe7574274f46ef7dbf7259ea58b0e",
+      "20260928T092821-process-assess/result.json": "c9e44d768f20955f724ffa31ce38e74eb0580f12d572264a4573ed5f5d10f2bc"
+    },
+    "aggregate": {
+      "attempts": 91,
+      "knownTokens": 28271431,
+      "incompleteMeters": 88,
+      "attemptsWithoutMeters": 3,
+      "unknownCostContributions": 40,
+      "usageReportStatus": "incomplete",
+      "completeSpendingOrEfficiencyClaim": false,
+      "countersByAttribution": {
+        "direct": {
+          "input": {
+            "known": 5398787,
+            "unknown": 0,
+            "estimated": 0
+          },
+          "output": {
+            "known": 53924,
+            "unknown": 0,
+            "estimated": 0
+          },
+          "cacheRead": {
+            "known": 4353214,
+            "unknown": 5,
+            "estimated": 0
+          },
+          "cacheWrite": {
+            "known": 11629,
+            "unknown": 70,
+            "estimated": 0
+          },
+          "reasoning": {
+            "known": 15691,
+            "unknown": 9,
+            "estimated": 0
+          },
+          "total": {
+            "known": 5452711,
+            "unknown": 0,
+            "estimated": 0
+          }
+        },
+        "shared": {
+          "input": {
+            "known": 4809456,
+            "unknown": 0,
+            "estimated": 0
+          },
+          "output": {
+            "known": 62432,
+            "unknown": 0,
+            "estimated": 0
+          },
+          "cacheRead": {
+            "known": 3941729,
+            "unknown": 2,
+            "estimated": 0
+          },
+          "cacheWrite": {
+            "known": 91580,
+            "unknown": 57,
+            "estimated": 0
+          },
+          "reasoning": {
+            "known": 10564,
+            "unknown": 7,
+            "estimated": 0
+          },
+          "total": {
+            "known": 4871888,
+            "unknown": 0,
+            "estimated": 0
+          }
+        },
+        "unattributed": {
+          "input": {
+            "known": 17829202,
+            "unknown": 0,
+            "estimated": 0
+          },
+          "output": {
+            "known": 117630,
+            "unknown": 0,
+            "estimated": 0
+          },
+          "cacheRead": {
+            "known": 17363576,
+            "unknown": 1,
+            "estimated": 0
+          },
+          "cacheWrite": {
+            "known": 329693,
+            "unknown": 23,
+            "estimated": 0
+          },
+          "reasoning": {
+            "known": 5711,
+            "unknown": 7,
+            "estimated": 0
+          },
+          "total": {
+            "known": 17946832,
+            "unknown": 0,
+            "estimated": 0
+          }
+        }
+      },
+      "instrumentationGaps": [
+        {
+          "directory": "/srv/nvme/tmp/cq4-implementation/20260928T074651-release/20260928T081149-process-resume",
+          "reason": "Required observed input/output instrumentation incomplete"
+        },
+        {
+          "directory": "/srv/nvme/tmp/cq4-implementation/20260928T074651-release/20260928T085152-process-resume",
+          "reason": "Required observed input/output instrumentation incomplete"
+        }
+      ]
     }
+  },
+  "evaluatorCommit": "02c0846",
+  "minorFindings": [
+    {
+      "source": "dev/process-assessment.md:7",
+      "finding": "Inherited rubric falsely asserts a ChangesRequested proposal was applied in the current Go process.",
+      "observedRebuttal": "Standalone native assessment inspects original Accepted Plan artifacts, names proposal 9937675c-0f25-3f5b-9250-30572055aa23 and application fefa88f4-4672-34b5-9b31-b03928e074c8, and separately qualifies later direct governor edits.",
+      "consequence": "Preserve frozen inputs/transcript. Do not reuse the historical premise as a fact in a fresh experiment. Independent Astra accepts explicit disclosure; no assessment rerun required solely for this sentence.",
+      "evidence": "/srv/nvme/tmp/cq4-implementation/20260928T074651-release/20260928T092821-process-assess/result.json"
+    }
+  ],
+  "finalIndependentReview": {
+    "file": "/srv/nvme/tmp/cq4-implementation/m6-package/final-release-review/astra-review.json",
+    "sha256": "d13d62f1b018328b357e7cc7103736550d2d18d699abc2f43ee7b2b8516f1d52",
+    "verdict": "technical-release-approved",
+    "reviewer": "/root/astra_review",
+    "model": "gpt-6-astra",
+    "blockingFindings": 0,
+    "majorFindings": 0,
+    "scope": "M0\u2013M6/R01\u2013R31; artifact, retained gate applicability, final corpus and derived documents",
+    "qualification": "Minor rubric limitation retained; usage verdict unchanged; human M2/M6 acceptance pending. Runner remaining labels do not ingest this external release-review verdict."
   }
 }

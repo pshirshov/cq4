@@ -1,6 +1,6 @@
 # Combined M2 and M6 human review
 
-**Preparation in progress.** The packaged Go Handoff closeout/assessment, aggregate reporting and final independent release review remain open. This page does not request or record acceptance yet. Per the user's instruction, both human verdicts will be requested together after the technical work is finished.
+**Technical release candidate approved by independent Astra.** Human M2 and M6 verdicts remain pending. Per the user's instruction, this guide combines both evaluation scopes.
 
 ## Artifact and scope
 
@@ -24,7 +24,9 @@ The same native entrypoint provides the server, CLI and supervisor. The release 
 | Native runtime | 40 commands pass, including actual startup of all four workflows; `20260928T071654-native` |
 | Installed distribution | 24 root commands pass with source/classpath hidden, imported runtime closure, native browser/restart and settled 24-table backup/restore; `20260928T074034-installed` |
 | Native harness routes | Three independently accepted Python/Go cohorts cover all nine governing/child routes; [current candidates and inspection](m2-review.md#current-acceptance-evidence) |
-| Complete processes | Current defect process passes native independent whole-process assessment and Astra replay; Go implementation/review/integration and bounded Handoff closeout pass; native independent whole-process assessment is running |
+| Complete processes | Go and defect processes pass native independent whole-process assessments and Astra replay; Go includes a bounded new-session Handoff closeout preserving its failed producer |
+
+The final same-artifact suite has **16 accepted selected stages, no pending stages and five independently accepted tracks**. Its shared audit retains **91 attempts / 28,271,431 known tokens**. The instrumentation verdict is **`corpus-usage-incomplete`**, with three absent meters, 88 partially populated meters and 40 unknown-cost contributions. Accepted quality does not make those spending observations complete. [Final corpus details](m6-package.md#final-native-process-assessment-and-release-corpus) preserve all rejected branches and process deviations.
 
 The [release evidence manifest](m6-release-evidence.json) binds exact evidence hashes and explains retained checks' source applicability. Earlier artifact and consumer failures remain historical evidence; their later replacements do not change their original verdicts.
 
@@ -42,7 +44,7 @@ sha256sum manifest.json bin/cq
 ./bin/cq --help
 ```
 
-After all active evaluations settle, replay the release evidence without new model calls from the CQ checkout:
+Replay the settled release evidence without new model calls from the CQ checkout:
 
 ```sh
 cd /home/pavel/work/safe/cq4/cq4
@@ -60,6 +62,7 @@ The replay verifies retained proofs and provenance and regenerates reports. It p
 - Linux x86-64 is the verified release platform; the guardian requires Linux 5.9 or newer.
 - The original native artifact is rejected for omitted workflow resources. Use the corrected artifact above.
 - The failed Go continuations have three started attempts without supported authoritative usage events. Known spending remains incomplete; the possible Claude partial source has unverified accounting semantics. [Exact interruption evidence](m6-package.md#reviewed-go-continuation-correction-and-interrupted-usage) remains in the report.
+- The inherited Go assessment rubric contains a stale ChangesRequested premise; the native assessor checked the actual Accepted Plan artifacts and explicitly rejected it. Later direct governor edits remain disclosed. Frozen evidence is retained, and this historical premise must not be reused as a fact in a fresh experiment.
 - Provider estimates are not billing. Unknown counters/prices remain unknown. No token-efficiency improvement is claimed.
 - Managed batch sessions collect governing and child usage; universal collection for arbitrary existing interactive sessions is not claimed.
 - A database-only backup covers settled state. Session reconciliation additionally requires the retained journals, artifacts/workspaces and consumer Git repositories. There is no automatic retention/deletion job.
@@ -67,4 +70,4 @@ The replay verifies retained proofs and provenance and regenerates reports. It p
 
 ## Human verdicts
 
-M2 first usable slice: **pending**. M6 complete release candidate: **pending**. Independent technical approval and permission to implement cannot supply either verdict.
+M2 first usable slice: **pending**. M6 complete release candidate: **pending**. Independent technical approval and permission to implement cannot supply either verdict. The implementation plan requires these designated human verdicts before the overall goal can be completed.

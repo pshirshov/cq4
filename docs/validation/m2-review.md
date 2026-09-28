@@ -1,10 +1,10 @@
 # M2 technical review and human checkpoint
 
-Tested implementation: **`8c37c6c`**. Independent Astra verdict: **approved**, with no outstanding blocking or major technical findings in M2 scope. **Human acceptance: pending.** This milestone is the first usable agent slice; the complete release remains unfinished.
+Tested implementation: **`8c37c6c`**. Independent Astra verdict: **approved**, with no outstanding blocking or major technical findings in M2 scope. **Human acceptance: pending.** This milestone is the first usable agent slice; the combined M2/M6 human verdict remains pending.
 
 ## Current acceptance evidence
 
-The user defers human evaluation until all planned technical milestones are finished (2026-09-28). This page is part of that final combined evidence package; M2 acceptance remains pending and is not inferred from the instruction to continue.
+The user defers human evaluation until all planned technical milestones are finished (2026-09-28). This page is part of the [final combined evidence package](m6-review.md); M2 acceptance remains pending and is not inferred from the instruction to continue.
 
 The sections below retain the original M2 technical review. Later [mixed-help reproduction](m4-usage-repetitions.md) invalidates the original Claude/Python candidate under the clarified current oracle; its old acceptance is historical. Replacement M4 evidence restores the clarified-oracle baseline. The original packaged artifact was later rejected for missing workflow resources. The [corrected-artifact cohort evidence](m6-package.md#corrected-artifact-live-progress) now provides independently accepted Python/Go candidates covering all nine routes, with Astra-approved scoped accounting. The new Go pair is formally adopted into the aggregate release suite; its exact producer/Audit proofs replay successfully. Human M2 acceptance is still pending and must use that qualified/current evidence. The current native distribution and exact startup/recovery instructions are linked from the [operations guide](../design/operations.md).
 
@@ -76,4 +76,4 @@ Expected oracle result: 136 behavior cases, consumer tests passed, status passed
 
 ## Acceptance scope and remaining work
 
-The requested verdict is acceptance of **M2's first usable agent slice and its evidence**. M3–M5 technical reviews are approved. M6 native packaging, installed verification and scoped nine-route assessments pass; the new Go pair is admitted and the complete packaged defect process is independently accepted. The targeted packaged Go process continuation, final release review and designated M6 acceptance remain open. Interactive usage collection and matched efficiency comparisons are not claimed. Human acceptance of M2 does not complete the release goal or replace the later M6 checkpoint.
+The requested verdict is acceptance of **M2's first usable agent slice and its evidence**. M3–M5 technical reviews are approved. M6 native packaging, installed verification and scoped nine-route assessments pass; the new Go pair is admitted and the complete packaged defect process is independently accepted. The complete packaged Go process and aggregate functional proofs now pass. Final independent Astra release review is approved; the combined M2/M6 human verdict remains open. Interactive usage collection and matched efficiency comparisons are not claimed. The combined review requests both designated verdicts; M2 alone does not complete the release goal.
