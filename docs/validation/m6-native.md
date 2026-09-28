@@ -1,5 +1,7 @@
 # M6 native runtime baseline
 
+Later qualification: the packaged Upstream run exposed missing native Review/Upstream resources after this gate passed. These results remain historical observations of this artifact; they do not establish complete workflow-resource coverage. See the [reproduction, correction and fresh candidate verification](m6-package.md#native-workflow-resource-failure-and-corrected-candidate).
+
 The complete native release is **not yet verified**. This log records the baseline failures and corrections being checked before packaging under the [release boundary](../design/native-release.md).
 
 ## Reproduced baseline failures

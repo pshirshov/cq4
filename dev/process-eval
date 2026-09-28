@@ -130,11 +130,12 @@ def main():
                        "From the existing Goal, produce exactly two tasks: counting/tokenization/sorting and command-line/top/error/help. Both include relevant automated tests and README requirements. "
                        "Preserve the complete original specification and chosen language; do not invent another choice or change the recorded answer. "
                        "Organize those tasks under one Milestone; do not give the Idea or Goal milestone ownership. Create one Handoff shared through DerivedFrom relationships to BOTH tasks, "
-                       "describing their combined outcome and any remaining operator work. Use actual server-allocated IDs. "
+                       "using truthful pending content before implementation/review/integration. Establish BOTH task-to-Handoff relationships before integration, because each link also revises its task. Use actual server-allocated IDs. "
                        "Select compatible work using the normal Planner assessment and selection path, then run Pi Worker Implement and independent Codex Candidate Reviewer. "
                        "The candidate reviewer must request a fresh consumer-oracle check. Correct through handles as needed. "
                        "Integrate accepted work through PrepareIntegration/status/preview/Integrate against the configured target; only Recorded establishes incorporation. "
-                       "Do not mark tasks Done manually or infer completion from process exit. Release remaining claims at the end and report exact result/integration handles. "
+                       "Do not mark tasks Done manually or infer completion from process exit. Once integration is Recorded, preserve the tasks at their acknowledged revisions: no further task edits or relationship changes. "
+                       "Update only the existing Handoff content to describe observed combined outcomes and remaining operator work, preserving its relationships. Release remaining claims at the end and report exact result/integration handles. "
                        "Use compact outcomes and handles; do not compose child prompts or copy full results. Finish with all task scopes incorporated and a truthful remaining-work summary.\n" +
                        json.dumps({"goal": checkpoint["goal"], "question": checkpoint["question"]["id"], "answer": answer,
                                    "answerCitation": answer_citation}))

@@ -1,5 +1,5 @@
 {
-  "state": "in-progress",
+  "state": "in-progress-native-correction",
   "implementationCommit": "94f4a5288d7282dae09c162a6b42f226a0be4949",
   "modelVersion": "0.1.0",
   "platform": "x86_64-linux",
@@ -7,7 +7,8 @@
     "directory": "/srv/nvme/tmp/cq4-implementation/cq-release",
     "manifestSha256": "d8656dd57434db5fddef0e62b6080692fe4d080ea132d1161ee91f4867f0de71",
     "executableSha256": "b25dfa22e2aff84282b9dcdf755ba1a2226b75a467dd167413e361428b6761b0",
-    "guardianSha256": "f56efb4626cb8e0fab0cc4b27b1460e75cea275890b5209df0a7f312ddf029bc"
+    "guardianSha256": "f56efb4626cb8e0fab0cc4b27b1460e75cea275890b5209df0a7f312ddf029bc",
+    "qualification": "Historical artifact rejected after missing native Review/Upstream workflow resources; preserve unchanged, do not treat as final release."
   },
   "verifiedGates": [
     {
@@ -115,13 +116,8 @@
   ],
   "running": [
     {
-      "name": "packaged-live",
-      "directory": "/srv/nvme/tmp/cq4-implementation/20260928T060135-release"
-    },
-    {
-      "name": "packaged-process-resume",
-      "directory": "/srv/nvme/tmp/cq4-implementation/20260928T060135-release/20260928T070043-process-resume",
-      "admission": "Separate concurrent run; suite adoption after completion and validation."
+      "name": "corrected-native",
+      "directory": "/srv/nvme/tmp/cq4-implementation/20260928T071654-native"
     }
   ],
   "pending": [
@@ -149,9 +145,11 @@
       "process-begin",
       "defect-begin",
       "defect-probe",
-      "defect-research"
+      "defect-research",
+      "defect-plan",
+      "defect-integrate"
     ],
-    "runningStage": "defect-plan",
+    "runningStage": null,
     "scope": "Progress snapshot; consult suite.json for current state. Full corpus and human acceptance remain pending.",
     "verifiedRoutes": 9,
     "scopedAccounting": {
@@ -184,9 +182,19 @@
         "stage": "defect-probe",
         "directory": "/srv/nvme/tmp/cq4-implementation/20260928T060135-release/20260928T063520-defect-probe",
         "error": "Stage process failed"
+      },
+      {
+        "stage": "defect-upstream",
+        "directory": "/srv/nvme/tmp/cq4-implementation/20260928T060135-release/20260928T070858-defect-upstream",
+        "error": "Native Installed workflow resource is missing; no model transcript created."
+      },
+      {
+        "stage": "process-resume",
+        "directory": "/srv/nvme/tmp/cq4-implementation/20260928T060135-release/20260928T070043-process-resume",
+        "error": "Task changed after recorded integration; separately invoked and included in derived historical accounting."
       }
     ],
-    "correction": "Astra-approved amendment admitted; unchanged original evidence/accounting verified. Targeted probe retry and research pass; plan in progress. Accepted cohorts reused."
+    "correction": "Probe correction passed; original artifact now rejected for missing native workflow resources. Fresh same-artifact corpus required after rebuild."
   },
   "evaluatorAmendments": [
     {
@@ -201,5 +209,11 @@
         "after.log": "ed814a77b9b3fd1040c13d0cbf1e21d5c2bee46dfe8e930b66bac650b5e0cea7"
       }
     }
-  ]
+  ],
+  "historicalAccounting": {
+    "directory": "/srv/nvme/tmp/cq4-implementation/m6-package/rejected-artifact-accounting",
+    "knownTokens": 21547362,
+    "distinctAttempts": 62,
+    "scope": "Old artifact only; includes all failed/successful attempts. Corrected candidate acceptance remains separate."
+  }
 }

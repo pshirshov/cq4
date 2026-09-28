@@ -1,6 +1,6 @@
 # M6 distribution preparation
 
-The native distribution has been assembled from the [approved native gate](m6-native.md). The coherent installed deterministic gate passes with independent Astra approval; packaged live evaluations remain pending.
+The original native distribution passed its then-current native/installed checks and nine-route cohort corpus. A later packaged Upstream startup exposed missing workflow resources; that artifact is not an accepted release candidate. The reproduced correction and fresh verification are described below.
 
 Current artifact: `/srv/nvme/tmp/cq4-implementation/cq-release`. It contains the 109,250,776-byte native CQ executable, 26,208-byte guardian and 37,719,072-byte Nix archive for four runtime paths (glibc, libgcc, libidn2 and libunistring), plus hashed instructions/examples. `dev/package` validates its source and artifact identities. The coherent installed gate passes at `20260928T055336-installed` with a fresh private Nix store; imported runtime paths are mounted over their original locations for native execution. External fixture tools still use the existing host installation.
 
@@ -130,3 +130,19 @@ The targeted retry at `20260928T065309-defect-probe` passes the unchanged strict
 
 
 The prior actual user reply **Go** to `call_npnylia4LEY7tw7W2K76AA0p` supplies the same word-frequency preference. Independent Astra confirmed there is no per-rerun fresh-reply requirement; the earlier carry-forward confirmation request was unnecessary. `supplied-go-answer.json` in the suite binds that actual verbatim reply and identifiable original source to the new Q1@1, explicitly stating that no fresh reply or milestone acceptance occurred. `supplied_answer()` validates all four fields. The separate packaged resume starts at `20260928T070043-process-resume` while the defect chain runs; it will be explicitly adopted into the suite with the same source/package and predecessor checks. No answer is inferred from elapsed time.
+
+
+## Native workflow-resource failure and corrected candidate
+
+The original artifact fails `20260928T070858-defect-upstream` before a model starts: `WorkflowAssets.instructions` cannot load the installed Upstream instructions. Its tracing metadata retained Begin, Advance, common and entrypoint assets but omitted Review and Upstream. Command export reads only the entrypoint template, so successful exports did not prove instruction inclusion. The original artifact, metadata and failed attempt remain unchanged.
+
+A new deterministic fixture runs all four workflows through actual supervisor startup. Begin dispatches an Explorer through Select/StartChoice and retains its admitted result; Review uses that real current subject. Each harness verifies the exact hash of common plus workflow-specific instructions and successful receipt/publication. Against the old binary, `/srv/nvme/tmp/cq4-implementation/m6-package/workflow-resources-before` passes Begin/Advance and fails exactly Review/Upstream with the expected missing-resource error. The correction explicitly includes `cq/workflows/*.md` through native-image reachability metadata. Astra approves the source/regression design conditional on corrected native/installed execution. The new native gate is `20260928T071654-native` (running).
+
+The original nine-route corpus remains historical evidence for its actual artifact. Under the same-artifact M6 contract, the rebuilt candidate requires fresh packaged routes, assessments and worked processes; old successes cannot be relabeled as new-artifact execution. JVM/service/UI evidence retains scoped applicability where inputs are unchanged. The single CQ model stays `0.1.0`.
+
+The old-artifact Go resume `20260928T070043-process-resume` also fails its acceptance predicate: both tasks advance from integrated Done@3 to Done@4 when the shared Handoff relationships are added. It is retained as a failed experiment, not current quality acceptance. Its actual supplied Go provenance remains valid for the same preference in the fresh run.
+
+The missing native transcript additionally reproduced a reporter `FileNotFoundError`. The fail-first correction preserves failed-attempt accounting with unavailable traffic and an unknown (`null`) byte count; a successful stage with no transcript still fails reporting. Five focused checks pass and Astra approves. Original reports remain unchanged. A separate derived report at `/srv/nvme/tmp/cq4-implementation/m6-package/rejected-artifact-accounting` includes the external Go run and all original suite stages/lineage: **62 distinct attempts / 21,547,362 known tokens**, with the missing upstream transcript explicitly reported. `analysis-provenance.json` binds original inputs and corrected reporter hashes. This is historical experimental spending, separate from the corrected candidate’s acceptance denominator.
+
+
+Astra inspected both task histories and approved an instruction-only clarification for the fresh suite: create the shared Handoff relationships with truthful pending content before implementation/review/integration; afterward preserve the acknowledged task revisions and update only Handoff content. The task-revision predicate and consumer oracle remain unchanged. Eleven release scheduling/provenance checks and five reporting checks pass. Astra independently replays the historical accounting total and verifies every recorded provenance hash; both derived analysis statuses remain incomplete.

@@ -112,7 +112,6 @@ def report(directory):
         session, = (path / "sessions").iterdir()
         run = read(session / "run.json")
         transcript = session / "payload" / run["attempt"]["id"]["value"] / "stdout"
-        consumed[str(transcript)] = digest(transcript)
         meters = path / "usage-meters.json"
         breakdown = None
         if meters.is_file():
@@ -120,15 +119,18 @@ def report(directory):
             breakdown = metrics["meter_totals"](read(meters)["entries"], read(path / "attempts.json")["UsageAttempts"]["page"]["entries"], usage)
         else:
             gaps.append({"directory": str(path), "reason": "No operational meter export for parent/child/assessor accounting"})
+        transcript_bytes = None
         try:
+            consumed[str(transcript)] = digest(transcript)
+            transcript_bytes = transcript.stat().st_size
             parent_traffic = {"coverage": "observed", **metrics["traffic"]([json.loads(line) for line in transcript.read_text().splitlines() if line.strip()], run["attempt"]["harness"])}
-        except (ValueError, KeyError, TypeError, AssertionError) as error:
+        except (FileNotFoundError, ValueError, KeyError, TypeError, AssertionError) as error:
             if entry["status"] not in ["failed", "assessment-not-accepted", "assess-not-accepted"]:
                 raise
             parent_traffic = {"coverage": "unavailable", "reason": type(error).__name__ + ": " + str(error)}
             gaps.append({"directory": str(path), "reason": "Failed-attempt traffic cannot be completely decoded; accounting retained", "error": parent_traffic["reason"]})
         sessions.append({"directory": str(path), "governorHarness": run["attempt"]["harness"],
-                         "governorTranscriptBytes": transcript.stat().st_size,
+                         "governorTranscriptBytes": transcript_bytes,
                          "operationalBreakdown": breakdown, "parentTraffic": parent_traffic,
                          "knownTokens": entry["knownTokens"], "status": entry["status"]})
     chosen = {attempt["stage"]: attempt for attempt in suite["attempts"] if suite["selected"].get(attempt["stage"]) == attempt["id"]}

@@ -52,7 +52,7 @@ class ReleaseReportTests(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, "twice"):
             self.module["experimental_usage"](self.suite([first, second]), "")
 
-    def test_truncated_failed_transcript_preserves_accounting_and_marks_traffic_unavailable(self):
+    def failed_transcript(self, transcript):
         path = self.session("failed", ["a"], None)
         (path / "result.json").write_text(json.dumps({"status": "failed"}))
         totals = {name: {"known": "100" if name in ["input", "total"] else "0", "unknown": "0", "estimated": "0"}
@@ -67,17 +67,33 @@ class ReleaseReportTests(unittest.TestCase):
         payload = session / "payload/a"
         payload.mkdir(parents=True)
         (session / "run.json").write_text(json.dumps({"attempt": {"id": {"value": "a"}, "harness": "Claude"}}))
-        (payload / "stdout").write_text('{"type":"assistant"')
+        if transcript is not None:
+            (payload / "stdout").write_text(transcript)
         amendment = {"reason": "Retained evaluator correction", "beforeSources": {"instruction": "original"}, "afterSources": {"instruction": "clarified"}}
         suite = {**self.suite([path]), "selected": {}, "status": "incomplete", "sourceSha256": amendment["beforeSources"], "amendments": [amendment]}
         suite["attempts"][0]["sourceEpoch"] = 1
         (self.root / "suite.json").write_text(json.dumps(suite))
+        return path, amendment
+
+    def test_truncated_failed_transcript_preserves_accounting_and_marks_traffic_unavailable(self):
+        _, amendment = self.failed_transcript('{"type":"assistant"')
         report = self.module["report"](self.root)
         self.assertEqual(report["experiments"]["knownTokens"], 100)
         self.assertEqual(report["sourceProvenance"]["amendments"], [amendment])
         self.assertEqual(report["sourceProvenance"]["invocations"][0]["sourceEpoch"], 1)
         self.assertEqual(report["sessions"][0]["parentTraffic"]["coverage"], "unavailable")
         self.assertTrue(any("traffic" in gap["reason"] for gap in report["instrumentationGaps"]))
+
+    def test_missing_failed_transcript_preserves_accounting_without_inventing_bytes(self):
+        path, _ = self.failed_transcript(None)
+        report = self.module["report"](self.root)
+        self.assertEqual(report["experiments"]["knownTokens"], 100)
+        self.assertEqual(report["sessions"][0]["parentTraffic"]["coverage"], "unavailable")
+        self.assertIsNone(report["sessions"][0]["governorTranscriptBytes"])
+        self.assertEqual(report["status"], "incomplete")
+        (path / "result.json").write_text(json.dumps({"status": "candidate-passed"}))
+        with self.assertRaises(FileNotFoundError):
+            self.module["report"](self.root)
 
 
 if __name__ == "__main__":
