@@ -148,3 +148,10 @@ The missing native transcript additionally reproduced a reporter `FileNotFoundEr
 
 
 Astra inspected both task histories and approved an instruction-only clarification for the fresh suite: create the shared Handoff relationships with truthful pending content before implementation/review/integration; afterward preserve the acknowledged task revisions and update only Handoff content. The task-revision predicate and consumer oracle remain unchanged. Eleven release scheduling/provenance checks and five reporting checks pass. Astra independently replays the historical accounting total and verifies every recorded provenance hash; both derived analysis statuses remain incomplete.
+
+
+## Corrected-artifact live progress
+
+The fresh suite at `20260928T074651-release` accepts the Claude/Python producer and independent assessment: six attempts / 1,426,557 known tokens, with no missing meters. The first Codex/Go producer passes the 136-case behavior oracle, but its independent whole-scope Audit at `20260928T075831-assess-20260928T075230-cohort-consumer-codex-go` rejects T2: the README omits the explicitly required option-prefix and oversized-number examples. T1 is accepted. This is retained candidate-quality rejection, not evidence of a CQ runtime defect.
+
+Astra approves a declared targeted additional Go experiment with the same frozen sources/specification/oracle/artifact. The separate producer at `20260928T080347-cohort-consumer-codex-go` is running while independent suite tracks continue. Its new candidate requires host checks and an independent whole-scope Audit; all original and new spending remains included. It will be explicitly adopted after the active suite invocation settles. `m6-package/corrected-codex-retry.json` records the scope and pending admission. Manual outer invocation duration was not measured; the evaluator retains governor duration. This is not a corrected original candidate, first-pass success or matched efficiency sample.
