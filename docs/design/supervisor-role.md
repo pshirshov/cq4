@@ -2,7 +2,7 @@
 
 `cq.server.Main` registers `ServerRole`, `ClientRole` and `SupervisorRole` through the same distage `RoleAppMain`. `cq run HARNESS --settings FILE --input FILE` selects the supervisor task; `cq :supervisor -- HARNESS --settings FILE --input FILE` is equivalent. Its dependency graph contains injected harness adapters, the local job lifecycle and HTTP clients. It does not acquire a PostgreSQL connection or the CQ domain server.
 
-The role runs one **batch governing session**, with the six scoped domain tools and a private [local child dispatch service](local-dispatch.md). The host resolves referenced input, executes workers and reviewers, captures candidates and validation, and returns compact status/result handles. Interactive sessions and the complete `cq run` workflow remain unfinished.
+The role runs one **batch governing session**, with the seven scoped domain tools and a private [local child dispatch service](local-dispatch.md). The host resolves referenced input, executes Explorers, Planners, Workers and Reviewers, captures candidates and validation, and returns compact status/result handles. The four workflows and reviewed candidate integration are implemented and [M4 technically approved](../validation/m4-review.md). Interactive outer-session telemetry retains the declared harness coverage limits; native distribution remains pending.
 
 ## Configuration and run
 
@@ -75,9 +75,9 @@ cq job upload --session /absolute/session-directory
 
 This holds the session journal's exclusive owner lock throughout credential acquisition, reconciliation and replay. An active supervisor prevents upload. It acquires a fresh collector credential for the recorded logical session and replays committed governing and child batches unchanged. Attempts without committed final publication are reconciled as described below. The original receipt remains a historical snapshot; CLI replay reports newly acknowledged batches, and current audit queries show acknowledged outcomes and coverage.
 
-## Remaining integration
+## Runtime scope and remaining release work
 
-The durable job service quarantines unfinished records on recovery and owns process-tree shutdown. The role connects child dispatch, claims and reference-based prompt/result chaining. All three governing routes have independently assessed consumer candidates. Candidate integration, interactive telemetry and native distribution remain later milestone work. No automatic retention/deletion is implemented. Forced shutdown exits 75 and requires reconciliation; see the [shutdown boundary](local-dispatch.md#delivery-and-shutdown).
+The durable job service quarantines unfinished records on recovery and owns process-tree shutdown. The role connects child dispatch, claims and reference-based prompt/result chaining. All three governing routes have independent consumer assessments, qualified by the [current clarified-oracle evidence](../validation/m4-usage-repetitions.md). Reviewed integration and combination/reconciliation are implemented. Interactive outer-session telemetry retains its declared coverage limits; native distribution and packaged verification remain pending. No automatic retention/deletion is implemented. Forced shutdown exits 75 and requires reconciliation; see the [shutdown boundary](local-dispatch.md#delivery-and-shutdown).
 
 See [verification evidence](../validation/m2-supervisor-role.md).
 
