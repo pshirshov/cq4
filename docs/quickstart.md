@@ -135,6 +135,6 @@ Expected last output: `Hello, Ada!`. Your checkout stays unchanged until the exp
 
 Let consumer runs finish (or stop and reconcile them using the [operations guide](design/operations.md#stop-and-reconcile-a-session)) before stopping the server. Press **Ctrl-C in terminal one** to stop CQ and its private PostgreSQL instance. Data is retained; no cleanup command deletes it.
 
-Shutdown gives CQ ten seconds after SIGTERM, then sends SIGKILL if needed and observes it for up to five more seconds. Unconfirmed server settlement exits 75 and leaves PostgreSQL available for investigation; it does not report successful cleanup. PostgreSQL's own shutdown wait is bounded at thirty seconds.
+Shutdown gives CQ ten seconds after SIGTERM, then sends SIGKILL if needed and observes it for up to five more seconds. Unconfirmed server settlement exits 75 and leaves PostgreSQL available for investigation; it does not report successful cleanup. PostgreSQL's own shutdown wait is bounded at thirty seconds. Repeated Ctrl-C presses during cleanup are ignored so they cannot strand the database. Cleanup diagnostics are retained in `logs/launcher-cleanup.log`, even if a terminal output pipe closes.
 
 To return, repeat step 1. In terminal two enter `nix develop`, source `client.env`, return to the existing `greeting` checkout and export `CQ_SETTINGS` again. Skip project/settings creation and continue from the existing records. Logs are in `logs/cq-server.log`, `logs/postgres.log` and your run-specific files; session directories are under `sessions/`.

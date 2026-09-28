@@ -38,3 +38,13 @@ The user then ran the prepared host recovery script. It verifies the recorded po
 ## Permanent repository launcher
 
 `run-local.sh` now selects `.local/release`, the existing playground state and the VM hostname origin automatically. The [compact delivery record](compact-ui.md) includes actual invocation from an unrelated directory, native HTTP login, both laptop sizes, persistent project/credentials, duplicate rejection and owned SIGTERM/Ctrl-C cleanup. The underlying helper and its descriptor correction remain unchanged.
+
+## Repeated interrupts during cleanup
+
+The user reported a leftover private database after pressing Ctrl-C twice. The launcher reset SIGINT/SIGTERM handling on cleanup entry. A second interrupt could therefore terminate it before stopping PostgreSQL. A separate reproduction showed that a closed `tee` reader could terminate cleanup on its timeout diagnostic. The old host recovery script used that pipeline form.
+
+Both failures were reproduced before correction using actual private PostgreSQL and a deliberately suspended, owned native CQ server. Evidence is `/srv/nvme/tmp/cq4-launcher-terminal-20260928`: `double-before/result.json` and `pipeline-before/result.json` retain the database after interruption; both corresponding `*-after/result.json` checks stop it. Suspension makes the cleanup window deterministic; the user's exact host timing was not observed. Normal single-interrupt cleanup passed before the change. The first stalled fixture failed in its process-list traversal; that is a fixture error, not a product reproduction.
+
+Cleanup now ignores repeated INT/TERM and broken-pipe signals, writes diagnostics to `logs/launcher-cleanup.log`, and sends a final best-effort terminal notification. Existing server/database deadlines are unchanged. Both corrected cases finish with exit 130 and no PostgreSQL PID file. No backend suites, native rebuilds or model calls were run. `verification.json` binds the source and retained observations. Independent Astra approves the correction with no blocking or major findings (`astra-review.json`).
+
+The existing host database is idle with no connected clients, and CQ's port is closed. It remains outside the sandbox PID namespace. A prepared host recovery script verifies the recorded PID/start time, executable, owner, data directory, free HTTP port and absent database clients while holding the launcher lock, then uses a pidfd for bounded clean shutdown. Host execution and subsequent login verification are pending.

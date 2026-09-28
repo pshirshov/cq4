@@ -619,7 +619,7 @@
   "operatorQuickstart": {
     "guide": "docs/quickstart.md",
     "launcher": "docs/examples/launch-local.sh",
-    "launcherSha256": "670f9800a9d1c6438e4ff67eac6005f972a127754f38c4003cf4311066d5bc2f",
+    "launcherSha256": "c149bcdf7d923c754f5f46bd59b8acef37fe5dfb362e6fac64c915014f040555",
     "lifecycleBaseline": {
       "guide": "docs/quickstart.md",
       "launcher": "docs/examples/launch-local.sh",
@@ -657,7 +657,17 @@
       "evidenceSha256": "42685d0bd746a7a74d63b5f2bc6d5f9665362c7d53f1fa493b4004c49ffd34b5"
     },
     "previousDeliveryEvidence": "/srv/nvme/tmp/cq4-http-ui-20260928/delivery/result.json",
-    "previousDeliverySha256": "63b57688078c683012138d0576cdb1f9a46446e06dd49df56a5c7088490947f6"
+    "previousDeliverySha256": "63b57688078c683012138d0576cdb1f9a46446e06dd49df56a5c7088490947f6",
+    "interruptedCleanupCorrection": {
+      "evidence": "/srv/nvme/tmp/cq4-launcher-terminal-20260928/verification.json",
+      "sha256": "596fbd5aaf9f713bc9285d3aa0d59a6bf9b7d397885a20284389790a9cb5b0dc",
+      "qualification": "Both focused before/after lifecycle cases pass; independent Astra approves. No application/package change or broader gate rerun. Host recovery pending.",
+      "review": {
+        "file": "/srv/nvme/tmp/cq4-launcher-terminal-20260928/astra-review.json",
+        "sha256": "747b536987c0621d22f6d927773e1437210bebb0df7438fbd716b32515cee8d9",
+        "verdict": "launcher-cleanup-correction-approved"
+      }
+    }
   },
   "previousArtifact": {
     "directory": "/srv/nvme/tmp/cq4-implementation/cq-release-workflow-resources",

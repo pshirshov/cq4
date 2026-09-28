@@ -73,7 +73,12 @@ await_server_exit() {
 }
 cleanup() {
   result=$?
-  trap - EXIT INT TERM
+  trap - EXIT
+  trap '' INT TERM PIPE
+  local terminal_output
+  exec {terminal_output}>&1
+  # Cleanup must survive repeated interrupts and a pipeline reader exiting.
+  exec >>"$state/logs/launcher-cleanup.log" 2>&1
   if [[ -n $server_pid ]]; then
     kill -TERM "$server_pid" 2>/dev/null || true
     if ! await_server_exit "$SERVER_GRACE_SECONDS"; then
@@ -93,6 +98,7 @@ cleanup() {
     }
   fi
   echo "CQ stopped. Data and logs retained in $state"
+  printf 'CQ stopped. Data and logs retained in %s\n' "$state" >&"$terminal_output" || true
   exit "$result"
 }
 trap cleanup EXIT
