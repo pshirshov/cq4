@@ -31,6 +31,10 @@ textarea { width: 100%; resize: vertical; min-height: 35px; }
 .array-row { display: flex; align-items: flex-start; gap: 8px; }
 .array-row > fieldset { flex: 1; }
 section > button { margin: 5px; }
+.graph-form { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; }
+.graph-form label { display: flex; flex-direction: column; gap: 4px; max-width: 100%; }
+.graph-form input, .graph-form select { max-width: 100%; }
+.graph-preview:focus-visible { outline: 2px solid #68c7ec; outline-offset: 2px; }
 article > section { margin-bottom: 20px; }
 pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 500px; overflow: auto; font: 13px ui-monospace, monospace; }
 dt { font-weight: 600; color: #a4c1d3; }

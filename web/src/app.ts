@@ -4,14 +4,13 @@ import { ConnectionManager, ConnectionStats } from './connection.js';
 import { button, edit, element, Editor, Json } from './editor.js';
 import { QueryEditor } from './query.js';
 import { Workspace } from './workspace.js';
+import { GraphActions } from './graph.js';
+import { itemName } from './items.js';
 
 const CONTEXT = BaboonCodecContext.Default;
 const PAGE_SIZE = 40;
 const MAX_QUERY_CHARACTERS = 4096;
 const COMPLETION_LIMIT = 30;
-const PREFIX: Record<api.Ledger, string> = { Milestones: 'M', Ideas: 'I', Defects: 'D', Goals: 'G', Tasks: 'T', Researches: 'RS',
-  Hypothesis: 'H', Questions: 'Q', Decisions: 'K', Reviews: 'R', Handoffs: 'HO', OperatorActions: 'OA', Memories: 'MEM', Upstream: 'U' };
-function itemName(id: api.ItemId): string { return PREFIX[id.ledger] + id.number; }
 function describe(value: unknown): string { return typeof value === 'string' ? value : JSON.stringify(value, null, 2); }
 function readResult(result: api.Result): api.Result {
   if (result instanceof api.Result_Failed) throw new Error(describe(api.Fault_JsonCodec.instance.encode(CONTEXT, result.fault)));
@@ -41,6 +40,14 @@ class App {
   private readonly detail = element('section', '');
   private readonly editorPanel = element('section', '');
   private readonly conflictPanel = element('section', '');
+  private readonly graph = new GraphActions({
+    call: command => this.connection().call(command), select: id => this.select(id), error: error => this.showError(error),
+    committed: async (project, ack) => {
+      this.notice.setAttribute('role', 'status');
+      this.notice.textContent = `Graph change saved in project ${project.value}: ${ack.items.length === 0 ? 'no revision changes' : ack.items.map(item => `${itemName(item.id)} @ ${item.revision.value}`).join('; ')}.`;
+      if (this.project !== null && this.project.value === project.value) { this.after = undefined; this.snapshot = undefined; await this.refresh(); }
+    },
+  });
   private readonly historyPanel = element('section', '');
   private readonly usagePanel = element('section', '');
   private readonly auditPanel = element('section', '');
@@ -85,6 +92,7 @@ class App {
   private choose(id: api.ItemId | null): void {
     if (this.selection === null ? id === null : id !== null && this.selection.project.value === id.project.value && itemName(this.selection) === itemName(id)) return;
     this.selection = id; this.selectionGeneration++; this.selected = null;
+    this.graph.setScope(this.project, null);
     this.detail.replaceChildren(); this.historyPanel.replaceChildren(); this.usagePanel.replaceChildren(); this.auditPanel.replaceChildren();
     this.auditAfter = 0n; this.markSelection(); this.resetUsage();
   }
@@ -161,7 +169,7 @@ class App {
       })));
     this.resultStatus.setAttribute('role', 'status');
     list.append(element('h2', 'Items'), this.resultStatus, this.items, pages);
-    content.append(this.notice, this.detail, this.editorPanel, this.conflictPanel, this.historyPanel, this.usagePanel, this.auditPanel);
+    content.append(this.notice, this.detail, this.editorPanel, this.conflictPanel, this.graph.element, this.historyPanel, this.usagePanel, this.auditPanel);
     this.root.replaceChildren(header, workspace.element); workspace.fit();
     this.manager = new ConnectionManager(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`, {
       status: stats => this.connectionStatus(stats),
@@ -191,6 +199,7 @@ class App {
   private reset(): void {
     this.queryEditor.invalidate(); this.queryEditor.showDiagnostic(undefined, this.query.value);
     this.epoch++; this.selectionGeneration++; this.selection = null; this.selected = null; this.editor = null; this.after = undefined; this.snapshot = undefined; this.subscription = null;
+    this.graph.setScope(this.project, null);
     this.detail.replaceChildren(); this.editorPanel.replaceChildren(); this.conflictPanel.replaceChildren(); this.historyPanel.replaceChildren(); this.usagePanel.replaceChildren(); this.auditPanel.replaceChildren();
     this.auditAfter = 0n; this.notice.textContent = ''; this.resetUsage();
   }
@@ -206,6 +215,7 @@ class App {
     for (const project of projects) { const option = element('option', project.name); option.value = project.id.value; this.projects.append(option); }
     if (this.project === null && projects.length > 0) this.project = projects[0].id;
     if (this.project !== null) this.projects.value = this.project.value;
+    this.graph.setScope(this.project, this.selected);
     if (after !== undefined) this.showError('Project selector reached 1,000 entries; use CLI for additional projects');
   }
   private async refresh(): Promise<void> {
@@ -291,7 +301,7 @@ class App {
       fields.append(element('dt', 'Ledger'), element('dd', kind));
       for (const [key, value] of Object.entries(values)) if (value !== null) fields.append(element('dt', key), element('dd', describe(value)));
     }
-    this.detail.append(fields, element('p', result.view.refs.map(ref => `${ref.relation} ${itemName(ref.target)}`).join(' · ')));
+    this.detail.append(fields); this.graph.setScope(this.project, result.view);
     await this.loadUsage();
   }
   private storeDraft(editor: NonNullable<App['editor']>): void {
@@ -395,6 +405,7 @@ class App {
     for (const entry of result.page.entries) {
       const item = entry.item.item; const row = element('details', '');
       row.append(element('summary', `Revision ${item.revision.value} · ${entry.reason}`), element('pre', describe(api.ItemView_JsonCodec.instance.encode(CONTEXT, entry.item))));
+      row.append(button(`Preview restore revision ${item.revision.value}`, () => this.action(() => this.graph.restore(entry.item))));
       this.historyPanel.append(row);
     }
     if (result.page.hasMore) this.historyPanel.append(button('Older history', () => this.action(async () => {
