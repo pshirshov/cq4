@@ -140,3 +140,9 @@ Astra approved the scoped delivery at `11f3829` on 2026-09-28 with no remaining 
 `operator-smoke/result.json` uses the installed generated Codex command/settings against the actual `cq4` server: nine expected tools, Context with `refs/heads/main` and `cq-ui`, scoped I1 read, EOF cleanup and two uploads acknowledging zero pending batches. It creates an operational audit attempt but launches no model or managed child and edits no ledger item. `operator-ledger/` separately retains the expected-revision update and readback of I1 revision 3 and K1 revision 2, recording delivery while preserving Accepted/Adopted status and the pending human trial.
 
 The reviewer’s approval covers this attached-host delivery, not the queued redesign or human release acceptance. The final bookkeeping commit changes documentation only; installed runtime source hashes remain unchanged.
+
+## Superseding operator decision: keep main checked out
+
+After delivery, the user rejected detached HEAD and requested reattachment, integration and a defect record. `HEAD` and `refs/heads/main` both already pointed at `1083344`; `git switch main` reattached the checkout and the ancestry check confirmed all implementation commits were included. No merge, reset or history rewrite was needed. This supersedes the earlier detached-checkout operator setup, while preserving its historical verification evidence.
+
+**D41 Open / High** records safe reviewed integration into the normal checked-out target branch. The current runtime guard remains intact and will refuse that automatic integration until the defect is corrected. `operator-main-defect/` contains checkout observations, the creation receipt and readback, plus corrected I1 revision 4 / K1 revision 3. The direct harness startup remains available; the product integration limitation remains unresolved.

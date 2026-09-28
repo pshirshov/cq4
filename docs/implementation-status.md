@@ -6,6 +6,8 @@ Human evaluation corrections: D1–D8 pass affected browser, CLI, service/protoc
 
 Interactive launcher follow-up I1/K1 is implemented and installed: the stdio role, native setup, activation fences, owner/deadline shutdown and partial Pi accounting pass focused checks, fresh native/relocated package gates and three packaged consumer/TUI routes. Project-local integrations and the requested main-branch/scoped-UI policy are prepared. The user’s host-level yolo trial remains pending. [Evidence and remaining work](validation/attached-host.md). The UI/CLI redesign batch remains queued for its separate session.
 
+Operator correction: the user rejected detached HEAD. The checkout is restored to `main`, with all implementation commits included. **D41 Open / High** tracks support for reviewed integration into the checked-out target branch; automatic integration there currently remains blocked. The guide and I1/K1 notes are corrected.
+
 | Milestone | State | Evidence |
 | --- | --- | --- |
 | M0 stack and contracts | Complete; Astra approved `1801c2a` | [Four checks and native artifact](validation/m0-stack.md) |

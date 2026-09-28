@@ -15,18 +15,11 @@ cd /home/pavel/work/safe/cq4/cq4
 
 ### Integration into main
 
-CQ refuses to update an integration target that is checked out in **any** worktree. This checkout is prepared in detached HEAD at the committed `main` tip; `main` remains the integration target. CQ workers edit isolated worktrees, and reviewed integration advances `main` without modifying the governing checkout's files.
+This checkout remains on `main`, as requested by the user. The detached-HEAD setup previously documented here was rejected and has been withdrawn. All attached-host implementation commits are included in `main`.
 
-Before a new session, with the previous harness stopped and your working tree clean:
+**D41 is open:** CQ currently refuses to update an integration target checked out in any worktree. Settings still select `refs/heads/main` and `cq-ui`, but automatic integration into this checked-out branch will return `NotApplied` until D41 is corrected. Intake, investigation, planning, candidate work and review remain available. Preserve the reviewed candidate and report the integration blocker. Do not detach the operator checkout or remove the Git safety guard to bypass it.
 
-```sh
-git switch --detach main
-git worktree list --porcelain
-```
-
-The listing must contain no `branch refs/heads/main` entry. If another worktree has `main` checked out, detach it or switch it to another branch before integrating. Preserve any uncommitted work; do not discard it. After integration, `git diff HEAD main` shows the changes; stop the harness and run `git switch --detach main` to refresh the governing checkout before starting the next session. The session's committed base is fixed at startup. To resume ordinary manual development after CQ stops, `git switch main` reattaches the checkout.
-
-Launch directly from this detached checkout:
+Launch directly from the normal checkout:
 
 ```sh
 yolo --env CQ_TOKEN_FILE=/srv/nvme/tmp/cq4-playground/token codex
@@ -75,7 +68,7 @@ CQ_TOKEN_FILE=/srv/nvme/tmp/cq4-playground/token \
   --settings /absolute/settings-for-that-project.json
 ```
 
-Choose that project's validation checks and integration branch in its settings. Keep that branch unchecked out across all worktrees, as described above. If that package/settings path is outside the checkout and yolo's existing binds, expose it explicitly:
+Choose that project's validation checks and integration branch in its settings. Account for the current checked-out-target limitation described above. If that package/settings path is outside the checkout and yolo's existing binds, expose it explicitly:
 
 ```sh
 yolo --ro /home/pavel/work/safe/cq4/cq4/.local \
