@@ -19,7 +19,7 @@ CQ listens on **0.0.0.0:8080**; open **http://vm.home.7mind.io:8080**. Leave the
 cat /srv/nvme/tmp/cq4-playground/token
 ```
 
-State, credentials, logs and subsequent session journals stay under `/srv/nvme/tmp/cq4-playground`. Reusing the command preserves them. Stop an existing launcher with Ctrl-C before starting this one, then reload the browser to load the compact UI. Re-source `client.env` in existing CLI terminals to select the current package.
+State, credentials, logs and subsequent session journals stay under `/srv/nvme/tmp/cq4-playground`. Reusing the command preserves them. Stop an existing launcher with Ctrl-C before starting this one, then reload the browser to load the current UI. Re-source `client.env` in existing CLI terminals to select the current package.
 
 For another browser URL, set `CQ_ORIGIN` to its exact scheme, hostname and port, without a trailing slash. For example, for a browser on this machine:
 
@@ -29,7 +29,7 @@ CQ_ORIGIN=http://127.0.0.1:8080 ./run-local.sh
 
 Optional overrides are `CQ_LOCAL_STATE`, `CQ_LOCAL_PORT` and `CQ_LOCAL_DB_PORT`. If changing the HTTP port, the default origin uses that port; an explicit `CQ_ORIGIN` must match. CQ checks browser origins. Startup health checks use loopback, so they do not require the browser hostname to resolve locally. CLI configuration in `client.env` uses the configured origin. Changing an existing instance requires stopping and restarting its launcher.
 
-The wrapper selects this machine's already-built package. On another machine, build/install a distribution and import its `runtime.nar` as described in the package README, then use `docs/examples/launch-local.sh RELEASE_DIR STATE_DIR` inside `nix develop`. Linux, Bash, Python, curl, flock and PostgreSQL are required; the pinned environment supplies PostgreSQL and Go here. [Compact UI and launcher verification](validation/compact-ui.md) records the current delivery; [HTTP login verification](validation/http-ui.md) records the earlier correction.
+The wrapper selects this machine's already-built package. On another machine, build/install a distribution and import its `runtime.nar` as described in the package README, then use `docs/examples/launch-local.sh RELEASE_DIR STATE_DIR` inside `nix develop`. Linux, Bash, Python, curl, flock and PostgreSQL are required; the pinned environment supplies PostgreSQL and Go here. [Human evaluation corrections](validation/human-evaluation.md#actual-operator-delivery-verification) record the current delivery; [compact UI and launcher verification](validation/compact-ui.md) and [HTTP login verification](validation/http-ui.md) retain earlier evidence.
 
 If startup reports “A launcher already owns”, another process holds the state lock. Stop the original launcher before restarting; do not delete `launcher.lock`. Earlier helper revisions could leak this lock into PostgreSQL after launcher termination. The corrected helper prevents that inheritance, but an already-running orphaned database needs identified, explicit cleanup before relaunch. [Reproduction and correction](validation/local-quickstart.md#detached-database-lock-inheritance).
 
@@ -46,7 +46,7 @@ printf '# Greeting demo\n\nA small Go command, managed through CQ.\n' > README.m
 git add README.md
 git commit -m 'Start greeting demo'
 git branch cq-result
-cq init --endpoint "$CQ_ORIGIN" --name 'Greeting demo'
+cq init --name 'Greeting demo'
 ```
 
 Use your normal Git identity; if `git commit` asks for one, configure it for this demo repository and repeat the commit. `cq-result` is deliberately **not checked out**: CQ's reviewed integration updates that branch without changing your working files or index.

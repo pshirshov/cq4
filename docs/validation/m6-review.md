@@ -1,6 +1,6 @@
 # Combined M2 and M6 human review
 
-**Compact laptop UI and permanent launcher verified and independently approved.** Human evaluation exposed a remote-HTTP login defect in the previous artifact; the [correction](http-ui.md) passes focused UI, native, installed and actual hostname browser checks. Earlier harness executions retain their original artifact identities with independently reviewed source applicability. Human M2 and M6 verdicts remain pending. Per the user's instruction, this guide combines both evaluation scopes.
+**D1–D8 evaluation corrections are delivered and independently approved.** The [delivery record](human-evaluation.md) covers scoped service/protocol, browser, CLI, native and actual hostname checks. The user considers the current UI a prototype requiring the [queued redesign](../design/evaluation-follow-up.md); earlier technical approvals do not establish usability acceptance. Earlier harness executions retain their original artifact identities with independently reviewed source applicability. Human M2 and M6 verdicts remain pending. Per the user's instruction, this guide combines both evaluation scopes.
 
 ## Artifact and scope
 
@@ -10,7 +10,7 @@ The locally runnable Linux x86-64 distribution is:
 /home/pavel/work/safe/cq4/cq4/.local/release
 ```
 
-Its native executable SHA-256 is `2597ad8a0207a54a62444cf5cc410b65c82ffd1cb9dad90c21f0ad4efcc64ea7`; its manifest SHA-256 is `b41ebd161f73d0036edf66aefcb29220b557db8e7b7b8e9e94ab32cab3ae43ba`. HTTP correction commit: `39f4d29`; compact CSS and permanent launcher: `b551e0b`. The preceding product correction and evaluator epochs retain their original identities; paid harness results apply through independently reviewed browser-only source scope. CQ has one model version, `0.1.0`.
+Its native executable SHA-256 is `10e1befb1d48038dc7e002095f24a0dca0ffc406392b6fe3166179380d794619`; its manifest SHA-256 is `efd72ac4d62a4c54fccf320a638da64965224bac385009bd0cac6d0a002bbdd8`. Current correction commits: browser interactions `3080c5e`, CLI endpoint lookup `acf8f0f`, unified live updates `f4ab727`. HTTP login, compact CSS and permanent launcher corrections remain included. The current increment changes browser interactions, catalogue/item/usage subscriptions and CLI endpoint lookup; it has fresh checks for those service/protocol paths. Harness launch, dispatch and workflow implementations are unchanged. Historical paid evaluations retain their original artifact identities; no new paid harness matrix was run for this correction. CQ has one mutable model version, `0.1.0`.
 
 The same native entrypoint provides the server, CLI and supervisor. The release includes the web workspace, fourteen fixed ledgers, query/history/relationship operations, claims and reviewed integration, automatic bounded cohorts, four subagent roles, four workflow entrypoints and the shared operational usage audit. The [requirement coverage](../requirement-coverage.md) maps every R01–R31 entry to implementation and retained evidence. [Roles and commands](../design/workflows.md) describe their inventory and harness differences.
 
@@ -21,18 +21,18 @@ The same native entrypoint provides the server, CLI and supervisor. The release 
 | Contracts and service behavior | Deterministic generated contracts; 190 fast Scala scenarios; 102 PostgreSQL scenarios and actual client/process checks |
 | Database access | 126 measured operations across 100, 10,000 and 100,000 unrelated items; sampled budgets pass |
 | Web workspace | Chromium checks for editing, history/relationships, query completion, delayed replies, reconnect/resnapshot, project drafts, usage updates and narrow layouts; [M5 review](m5-review.md) |
-| Native runtime | 26 commands pass for fresh build and complete native runtime, including all four workflows, laptop density and insecure HTTP; immutable JVM tracing snapshots explicitly reused; `20260928T112548-native` |
-| Installed distribution | 25 root commands pass with source/classpath hidden, imported runtime closure, native HTTP browser/restart and settled 24-table backup/restore; `20260928T113259-installed` |
+| Native runtime | Current scoped native transport/CLI/watch/browser checks pass at `20260928T155140-native`, with fresh changed-path tracing and verified reuse for unchanged paths. The preceding full native gate at `20260928T112548-native` retains its original identity. |
+| Installed distribution | Current package hashes, all 182 content-type transitions, explicit data-preserving update/backup proof and actual hostname delivery pass; [exact evidence](human-evaluation.md). The preceding source-isolated 25-command installed gate at `20260928T113259-installed` retains its original identity. |
 | Native harness routes | Three independently accepted Python/Go cohorts cover all nine governing/child routes; [current candidates and inspection](m2-review.md#current-acceptance-evidence) |
 | Complete processes | Go and defect processes pass native independent whole-process assessments and Astra replay; Go includes a bounded new-session Handoff closeout preserving its failed producer |
 
 The retained suite, executed on `cq-release-workflow-resources`, has **16 accepted selected stages, no pending stages and five independently accepted tracks**. Its shared audit retains **91 attempts / 28,271,431 known tokens**. The instrumentation verdict is **`corpus-usage-incomplete`**, with three absent meters, 88 partially populated meters and 40 unknown-cost contributions. Accepted quality does not make those spending observations complete. [Final corpus details](m6-package.md#final-native-process-assessment-and-release-corpus) preserve all rejected branches and process deviations.
 
-The paid harness corpus is reused for the browser-only correction; its executions keep their original package identity. New native, installed and direct non-loopback browser evidence covers the changed delivery. The [release evidence manifest](m6-release-evidence.json) binds exact evidence hashes and explains retained checks' source applicability. Earlier artifact and consumer failures remain historical evidence; their later replacements do not change their original verdicts.
+The paid harness corpus retains its original package identity and reviewed applicability to unchanged harness paths. The [current correction evidence](human-evaluation.md) records the changed service/protocol and browser behavior, scoped native checks and operator installation. The preceding [release evidence manifest](m6-release-evidence.json) remains a historical record of its exact artifacts and source applicability. Earlier artifact and consumer failures remain historical evidence; later replacements do not change their original verdicts.
 
 ## Run and verify
 
-Run `./run-local.sh` from the CQ repository. The [local quickstart](../quickstart.md) supplies the permanent database/server launcher and a small project walkthrough. [Compact delivery evidence](compact-ui.md) records current checks and exact trace reuse.
+Run `./run-local.sh` from the CQ repository. The [local quickstart](../quickstart.md) supplies the permanent database/server launcher and a small project walkthrough. [Human evaluation corrections](human-evaluation.md) record current checks, trace reuse, backup and installed identities.
 
 Follow the distribution's `README.md` to import and retain the exported Nix runtime closure. The application requires no Java runtime or CQ checkout. PostgreSQL, Git, configured harness credentials and consumer build tools are external dependencies.
 

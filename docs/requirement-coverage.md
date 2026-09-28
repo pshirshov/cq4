@@ -1,6 +1,6 @@
 # Requirement coverage
 
-Human evaluation follow-up: [D1–D8](validation/human-evaluation.md#unified-live-updates-and-native-candidate) pass the affected source, service/protocol, browser and fresh native checks, with independent Astra approval. Operator installation remains pending. The [new UI/CLI batch](design/evaluation-follow-up.md) is filed as D26–D40 and I2; the user regards the UI as a prototype requiring redesign. Earlier technical approvals do not establish usability acceptance.
+Human evaluation follow-up: [D1–D8](validation/human-evaluation.md#unified-live-updates-and-native-candidate) pass the affected source, service/protocol, browser and fresh native checks, with independent Astra approval. Operator installation and actual hostname browser checks pass; D1–D8 are resolved with evidence. The [new UI/CLI batch](design/evaluation-follow-up.md) is filed as D26–D40 and I2; the user regards the UI as a prototype requiring redesign. Earlier technical approvals do not establish usability acceptance.
 
 Requirements: [R01–R31](drafts/20260926-0957-cq-requirements-prompt.md). Milestones: [implementation plan](drafts/20260926-1549-cq-implementation-plan.md). Planned ownership is not implementation evidence.
 
