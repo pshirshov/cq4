@@ -157,7 +157,7 @@ def main():
     assert "Acknowledged 0" in cli(["job", "upload", "--session", str(session)])
     (session / "delivery/final/000000.ack").unlink()
     assert "Acknowledged 1" in cli(["job", "upload", "--session", str(session)])
-    totals = json.loads(cli(["status", "--session", context["session"]["value"]]))["UsageSummary"]["report"]
+    totals = json.loads(cli(["status", "--session", context["session"]["value"], "--json"]))["UsageSummary"]["report"]
     assert totals["attempts"]["unknown"] == "1" and totals["attempts"]["running"] == "0" and totals["attemptsWithoutMeters"] == "1", totals
     print(json.dumps({"attachedSession": context["session"], "child": status, "usage": totals, "activationFence": True, "tokenFile": True, "replay": True}))
 
@@ -172,7 +172,7 @@ def main():
             pi.rpc("cq/piUsage", sample)
         finally:
             pi.close()
-    pi_totals = json.loads(cli(["status", "--session", pi_context["session"]["value"]]))["UsageSummary"]["report"]
+    pi_totals = json.loads(cli(["status", "--session", pi_context["session"]["value"], "--json"]))["UsageSummary"]["report"]
     assert pi_totals["unattributed"]["total"]["known"] == "15" and pi_totals["incompleteMeters"] == "1", pi_totals
     assert "Acknowledged 0" in cli(["job", "upload", "--session", pi_context["directory"]])
     print(json.dumps({"attachedPiUsage": "deduplicated-partial", "integrationExports": ["claude", "codex", "pi"]}))

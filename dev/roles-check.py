@@ -27,7 +27,7 @@ def main():
         assert run([":client", "web"], 0).stdout.strip() == endpoint
         assert run([":client", "--", "web"], 0).stdout.strip() == endpoint
         assert run(["--log-level-root", "error", ":client", "web"], 0).stdout.strip() == endpoint
-        assert run(["--help"], 0).stdout.startswith("cq serve |")
+        assert "Usage: cq" in run(["--help"], 0).stdout
         for harness in ["claude", "codex", "pi"]:
             exported = run(["commands", "export", harness, "--directory", str(root)], 0).stdout.splitlines()
             assert len(exported) == 4 and all(Path(path).is_file() for path in exported)

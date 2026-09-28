@@ -1,5 +1,10 @@
 # Requirement coverage
 
+Current R29/R31 operator follow-up: [D38/D39/D40](validation/operator-cli.md)
+provides command help, readable scoped usage and explicit JSON output. Actual
+process and PostgreSQL checks pass, including copied page continuations and
+automation callers. Astra approves the source increment; delivery is pending.
+
 Current R02/R15/R19/R24 UI follow-up: [D29/D30](validation/results-table.md) adds
 whole-query sorting, a semantic results table and independently live project
 counts. Dual repository and full scoped browser checks pass; Astra approves the

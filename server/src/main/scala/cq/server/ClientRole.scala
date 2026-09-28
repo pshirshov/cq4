@@ -39,6 +39,12 @@ object ClientPlugin extends PluginDef {
 
 final class CqCliParser(roles: CLIParserImpl) extends CLIParser {
   override def parse(args: Array[String]): Either[CLIParser.ParserError, RoleAppArgs] = args.headOption match {
+    case Some("--diagnostics") => parse(args.tail).flatMap { parsed =>
+      roles.parse(Array("--log-level-root", "debug", ":client")).map(logging => parsed.copy(globalParameters = logging.globalParameters))
+    }
+    case _ if CliHelp.requested(args.toList) =>
+      val raw = args.toVector
+      Right(RoleAppArgs(EntrypointArgs.empty, Vector(RoleArgs(ClientRole.id, EntrypointArgs(raw, Vector.empty, Vector.empty, raw)))))
     case Some("serve") => roles.parse(args.tail ++ Array(":" + ServerRole.id))
     case Some("run") =>
       val raw = args.tail.toVector

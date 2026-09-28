@@ -59,7 +59,7 @@ def main():
                 process.communicate(timeout=CLI_CLEANUP_SECONDS)
                 thread.join(timeout=5)
         saved = json.loads((Path(temporary) / ".cq/project.json").read_text())
-        recovered = subprocess.run(command + ["init", "--endpoint", os.environ["CQ_ORIGIN"]], cwd=temporary,
+        recovered = subprocess.run(command + ["init", "--endpoint", os.environ["CQ_ORIGIN"], "--json"], cwd=temporary,
                                    capture_output=True, text=True, timeout=15)
         assert recovered.returncode == 0, recovered.stdout + recovered.stderr
         assert json.loads(recovered.stdout.splitlines()[0])["Initialized"]["project"]["id"] == saved["project"]

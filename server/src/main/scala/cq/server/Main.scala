@@ -111,6 +111,7 @@ object Main extends RoleAppMain.LauncherBIO[IO] {
       make[CLIParserImpl]
       make[CLIParser].from[CqCliParser]
       make[DiagnosticOutput].fromValue(DiagnosticOutput(System.err))
+      make[izumi.logstage.api.Log.Level].named("early").fromValue(izumi.logstage.api.Log.Level.Warn)
       make[EarlyLoggerFactory].from[EarlyDiagnostics]
       make[RouterFactory].from[DiagnosticRouter]
     }

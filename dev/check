@@ -173,6 +173,8 @@ class Checks:
             self.sbt(["server/Test/runMain cq.server.ServerApiCheck"], f"{name}-host-api")
             self.sbt(["server/Test/runMain cq.server.IntegrationApiCheck"], f"{name}-integration-api")
             self.run(["python3", "dev/roles-check.py", *command], f"{name}-roles", STARTUP_TIMEOUT * fixture_scale)
+            self.environment["CQ_CLI_EVIDENCE"] = str(self.evidence / f"{name}-cli-output")
+            self.run(["python3", "dev/cli-output-check.py", *command], f"{name}-cli-output", COMMAND_TIMEOUT)
             self.run(["python3", "dev/cli-check.py", *command], f"{name}-cli", STARTUP_TIMEOUT * fixture_scale)
             self.run(["python3", "dev/cli-timeouts.py", *command], f"{name}-cli-timeouts", STARTUP_TIMEOUT * fixture_scale)
             self.run(["python3", "dev/supervisor-check.py", *command], f"{name}-supervisor", STARTUP_TIMEOUT * fixture_scale)

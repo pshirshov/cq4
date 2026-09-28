@@ -56,7 +56,8 @@ def main():
                         "commit", "--quiet", "--allow-empty", "-m", "initial"], check=True)
 
         def run(cwd, *args, expected=0):
-            result = subprocess.run(command + list(args), cwd=cwd, env=environment, capture_output=True, text=True, timeout=20)
+            machine = ["--json"] if args[0] in {"init", "query", "status"} else []
+            result = subprocess.run(command + list(args) + machine, cwd=cwd, env=environment, capture_output=True, text=True, timeout=20)
             assert result.returncode == expected, result.stdout + result.stderr
             return result.stdout
 

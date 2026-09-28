@@ -104,7 +104,9 @@ def main():
             child_result = json.loads((child / "publication.json").read_text())["result"]
             assert child_result["candidate"] is None and child_result["validation"] == []
         handle = proposal["handle"]["value"]
-        preview = json.loads(run(["proposal", "preview", handle]))["Proposal"]["preview"]
+        human_preview = run(["proposal", "preview", handle])
+        assert human_preview.startswith("Proposal ") and "Members:" in human_preview and "Produce from " in human_preview
+        preview = json.loads(run(["proposal", "preview", handle, "--json"]))["Proposal"]["preview"]
         assert preview == proposal["preview"] and len(json.dumps(preview).encode()) < 2048
         forbidden = subprocess.run(command + ["proposal", "apply", handle], cwd=repository, env=environment,
                                    capture_output=True, text=True, timeout=20)
@@ -135,7 +137,7 @@ def main():
         def grant(value):
             return request("/api/grant", {"project": project, "actor": value, "expiresAt": str(int(time.time() * 1000) + 300000)}, environment["CQ_TOKEN"])["value"]
         owning_token = grant(actor)
-        replay = subprocess.run(command + ["proposal", "apply", handle], cwd=repository,
+        replay = subprocess.run(command + ["proposal", "apply", handle, "--json"], cwd=repository,
                                 env={**environment, "CQ_TOKEN": owning_token}, capture_output=True, text=True, timeout=20)
         assert replay.returncode == 0 and json.loads(replay.stdout)["Changed"]["ack"] == proposal["ack"]
         application = {"ApplyProposal": {"input": {"project": project, "result": proposal["handle"]}}}

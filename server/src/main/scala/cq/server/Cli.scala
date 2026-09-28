@@ -72,12 +72,15 @@ final class Cli(context: CliContext, location: ProjectLocation, upload: SessionU
     ItemId(project, found, number)
   }
 
-  def run(args: List[String]): Task[Unit] = args match {
-    case List("job", "upload", "--session", value) => upload.run(directory.resolve(value).normalize())
-    case _ => ZIO.attemptBlocking(runSynchronous(args))
-  }
+  def run(args: List[String]): Task[Unit] =
+    if (CliHelp.requested(args)) ZIO.attempt(output.println(CliHelp.render(args)))
+    else ZIO.attempt(CliArguments.parse(args)).flatMap { parsed => parsed.values match {
+      case List("job", "upload", "--session", value) =>
+        ZIO.attempt(require(parsed.format == CliFormat.Human, "job upload reports operator text; --json is not supported")) *> upload.run(directory.resolve(value).normalize())
+      case values => ZIO.attemptBlocking(runSynchronous(values, new CliOutput(output, parsed.format, values)))
+    }}
 
-  private def runSynchronous(args: List[String]): Unit = args match {
+  private def runSynchronous(args: List[String], renderer: CliOutput): Unit = args match {
     case "configure" :: harness :: rest =>
       val replace = rest.lastOption.contains("--replace")
       val opts = options(if (replace) rest.dropRight(1) else rest, Set("--settings", "--executable", "--directory"))
@@ -86,14 +89,14 @@ final class Cli(context: CliContext, location: ProjectLocation, upload: SessionU
       val native = Harness.all.find(_.toString.toLowerCase == harness).getOrElse(throw new IllegalArgumentException("Unknown attached harness"))
       val executable = opts.get("--executable").getOrElse(ProcessHandle.current().info().command().orElseThrow())
       require(Path.of(executable).getFileName.toString != "java", "JVM configure requires --executable pointing to an installed CQ binary or exec wrapper")
-      attached.write(native, opts.get("--directory").fold(directory)(value => directory.resolve(value).normalize()),
-        directory.resolve(settings).normalize(), directory.resolve(executable).normalize(), replace).foreach(output.println)
+      renderer.paths(attached.write(native, opts.get("--directory").fold(directory)(value => directory.resolve(value).normalize()),
+        directory.resolve(settings).normalize(), directory.resolve(executable).normalize(), replace))
     case "commands" :: "export" :: harness :: rest =>
       val replace = rest.lastOption.contains("--replace")
       val opts = options(if (replace) rest.dropRight(1) else rest, Set("--directory"))
       require(opts.keySet == Set("--directory"), "Command export requires --directory DIR [--replace]")
       val native = Harness.all.find(_.toString.toLowerCase == harness).getOrElse(throw new IllegalArgumentException("Unknown command harness"))
-      workflows.writeCommands(native, directory.resolve(opts("--directory")).normalize(), replace).foreach(output.println)
+      renderer.paths(workflows.writeCommands(native, directory.resolve(opts("--directory")).normalize(), replace))
     case "init" :: rest =>
       val opts = options(rest, Set("--endpoint", "--project-id", "--name"))
       val location = configDirectory
@@ -125,8 +128,8 @@ final class Cli(context: CliContext, location: ProjectLocation, upload: SessionU
         atomicWrite(file, Wire.encode(ProjectConfig_JsonCodec, config.copy(name = current.name)))
         result
       }
-      output.println(Wire.encode(Result_JsonCodec, initialized))
-      output.println(s"Configuration: ${location.resolve("project.json")}")
+      renderer.result(initialized)
+      renderer.configuration(location.resolve("project.json"))
     case "query" :: rest =>
       val opts = options(rest, Set("--query", "--complete", "--roots", "--after", "--snapshot", "--limit"))
       val location = configDirectory
@@ -145,14 +148,14 @@ final class Cli(context: CliContext, location: ProjectLocation, upload: SessionU
         case None => Command.Search(SearchInput(config.project, query, opts.get("--after").map(item(config.project, _)),
           opts.get("--snapshot").map(v => ChangeCursor(v.toLong)), limit))
       }
-      output.println(Wire.encode(Result_JsonCodec, request(config, actorSession, command)))
+      renderer.result(request(config, actorSession, command))
     case "proposal" :: action :: result :: Nil if Set("preview", "apply")(action) =>
       val location = configDirectory
       val (config, actorSession) = locked(location)((configuration(location), session(location)))
       val handle = ArtifactId(UUID.fromString(result))
       val command = if (action == "preview") Command.Read(ReadInput(config.project, ReadSelection.Proposal(handle)))
         else Command.ApplyProposal(ProposalApplyInput(config.project, handle))
-      output.println(Wire.encode(Result_JsonCodec, request(config, actorSession, command)))
+      renderer.result(request(config, actorSession, command))
     case "status" :: rest =>
       val mode = rest.headOption.filter(Set("audit", "costs", "attempts", "outcomes")).getOrElse("summary")
       val scopes = Set("--task", "--cohort", "--session")
@@ -178,9 +181,8 @@ final class Cli(context: CliContext, location: ProjectLocation, upload: SessionU
         case "attempts" => UsageSelection.Attempts(filter, opts.get("--after").map(v => AttemptId(UUID.fromString(v))), opts.get("--snapshot").map(_.toLong), limit)
         case "outcomes" => UsageSelection.Outcomes(AttemptId(UUID.fromString(opts.getOrElse("--attempt", throw new IllegalArgumentException("status outcomes requires --attempt UUID")))), opts.get("--after").map(_.toLong).getOrElse(0L), limit)
       }
-      output.println(Wire.encode(Result_JsonCodec, request(config, actorSession, Command.Usage(UsageInput(config.project, selection)))))
-    case List("web") => output.println(configuration(configDirectory).endpoint)
-    case Nil | List("--help") => output.println("cq serve | init [--endpoint URL] [--project-id UUID] [--name TEXT] | web | run HARNESS --settings FILE --input FILE [--workflow begin|advance|review|upstream ...] | host HARNESS [--settings FILE] | configure HARNESS --settings FILE [--executable FILE] [--directory DIR] [--replace] | commands export HARNESS --directory DIR [--replace] | job upload --session DIR | query [--query TEXT] [--complete UTF16_OFFSET] [--roots T1,M1] [--after T1 --snapshot CURSOR] [--limit N] | proposal preview|apply RESULT_UUID | status [audit|costs|attempts|outcomes] [--task T1|--cohort UUID|--session UUID] [--attempt UUID] [--after CURSOR] [--snapshot N] [--limit N]")
+      renderer.result(request(config, actorSession, Command.Usage(UsageInput(config.project, selection))))
+    case List("web") => renderer.endpoint(configuration(configDirectory).endpoint)
     case _ => throw new IllegalArgumentException("Unknown command; use cq --help")
   }
 }

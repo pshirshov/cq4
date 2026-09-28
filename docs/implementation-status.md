@@ -1,5 +1,11 @@
 # Implementation status
 
+Current D38/D39/D40 follow-up: [operator CLI](validation/operator-cli.md) provides
+structured help, human output with explicit machine JSON, and quiet startup with
+opt-in diagnostics. Actual CLI/PostgreSQL and deterministic dispatch checks pass;
+Astra approves the corrected increment. D25 remains separate. Native delivery
+and the remaining backup/integration/usage work are pending.
+
 Goal: complete the first CQ release under the [implementation plan](drafts/20260926-1549-cq-implementation-plan.md). Planning baseline: `7e3076a`.
 
 Current follow-up: the user authorizes all remaining open defects except D26/D27,
