@@ -45,3 +45,5 @@ D1, D2, D3, D7 and D8 pass the affected Chromium corpus and TypeScript checks at
 - **D25**: [legacy dependency lazy-value warning](scala-lazyvals-warning.md); investigated, still Open.
 - **I1**: an attachable interactive CQ host for yolo use; Proposed for design discussion. The existing [launcher analysis](../design/agent-protocol.md#5-why-cq-run-codex--exists) distinguishes execution ownership from the current batch Governor wrapper.
 - D13–D24 are archived duplicate filings. Re-running the original filing script with a different actor session did not reuse its request identity; canonical D1–D12 remain unchanged. Exact duplicate/archive receipts and readback are retained in the human-evaluation evidence directory.
+
+D5 source verification passes in `after-cli` beside the reproductions: first init with CQ_ORIGIN, explicit endpoint precedence, saved endpoint precedence, legacy CQ_ENDPOINT-only use, conflicting environment variables, concurrent init and common-Git-directory behavior. Installed delivery remains pending.

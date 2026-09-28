@@ -19,7 +19,7 @@ CLI_CLEANUP_SECONDS = 3
 def main():
     command = sys.argv[1:]
     environment = dict(os.environ)
-    environment["CQ_ENDPOINT"] = environment["CQ_ORIGIN"]
+    environment.pop("CQ_ENDPOINT", None)
     with tempfile.TemporaryDirectory(prefix="cq-cli-") as temporary:
         fake_bin = Path(temporary) / "silent-git"
         fake_bin.mkdir()
@@ -67,6 +67,24 @@ def main():
         assert first == second
         config = json.loads((root / ".git/cq/project.json").read_text())
         assert first["id"] == config["project"]
+        origin = environment["CQ_ORIGIN"]
+        assert config["endpoint"] == origin
+        environment["CQ_ORIGIN"] = "http://127.0.0.1:1"
+        assert json.loads(run(root, "init").splitlines()[0])["Initialized"]["project"] == first
+        explicit = Path(temporary) / "explicit"
+        explicit.mkdir()
+        run(explicit, "init", "--endpoint", origin)
+        environment.pop("CQ_ORIGIN")
+        environment["CQ_ENDPOINT"] = origin
+        legacy = Path(temporary) / "endpoint"
+        legacy.mkdir()
+        run(legacy, "init")
+        environment["CQ_ORIGIN"] = origin
+        environment["CQ_ENDPOINT"] = "http://127.0.0.1:1"
+        canonical = Path(temporary) / "origin"
+        canonical.mkdir()
+        run(canonical, "init")
+        environment.pop("CQ_ENDPOINT")
         worktree = Path(temporary) / "worktree"
         subprocess.run(["git", "-C", str(root), "worktree", "add", "--quiet", "-b", "isolated", str(worktree)], check=True)
         attached = json.loads(run(worktree, "init").splitlines()[0])["Initialized"]["project"]

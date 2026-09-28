@@ -92,8 +92,9 @@ final class Cli(context: CliContext, location: ProjectLocation, upload: SessionU
         val existing = if (Files.exists(file)) Some(configuration(location)) else None
         val project = opts.get("--project-id").map(v => ProjectId(UUID.fromString(v))).orElse(existing.map(_.project)).getOrElse(ProjectId(UUID.randomUUID()))
         require(existing.forall(_.project == project), "Project identity differs; use a separate checkout to initialize a different project")
-        val endpoint = validateEndpoint(opts.get("--endpoint").orElse(existing.map(_.endpoint)).orElse(environment.get("CQ_ENDPOINT"))
-          .getOrElse(throw new IllegalArgumentException("First init requires --endpoint or CQ_ENDPOINT")))
+        val endpoint = validateEndpoint(opts.get("--endpoint").orElse(existing.map(_.endpoint))
+          .orElse(environment.get("CQ_ORIGIN")).orElse(environment.get("CQ_ENDPOINT"))
+          .getOrElse(throw new IllegalArgumentException("First init requires --endpoint, CQ_ORIGIN or CQ_ENDPOINT")))
         val name = opts.get("--name").orElse(existing.map(_.name)).getOrElse(directory.getFileName.toString)
         require(name.trim.nonEmpty && name.length <= LedgerPolicy.MaxTitle, "Invalid project name")
         val config = ProjectConfig(project, endpoint, name)
