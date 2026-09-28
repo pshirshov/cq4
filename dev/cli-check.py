@@ -1,13 +1,19 @@
 import concurrent.futures
 import json
 import os
+import shlex
 import signal
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.request
 import uuid
+
+CLI_STARTUP_SECONDS = 15
+GIT_DEADLINE_WATCHDOG_SECONDS = 12
+CLI_CLEANUP_SECONDS = 3
 
 
 def main():
@@ -18,18 +24,31 @@ def main():
         fake_bin = Path(temporary) / "silent-git"
         fake_bin.mkdir()
         fake_git = fake_bin / "git"
-        fake_git.write_text("#!/bin/sh\nexec sleep 30\n")
+        git_started = Path(temporary) / "git-started"
+        fake_git.write_text(f"#!/bin/sh\n: > {shlex.quote(str(git_started))}\nexec sleep 30\n")
         fake_git.chmod(0o700)
         timeout_environment = {**environment, "PATH": str(fake_bin) + os.pathsep + environment["PATH"]}
+        began = time.monotonic()
         silent = subprocess.Popen(command + ["web"], cwd=temporary, env=timeout_environment,
                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
         try:
-            stdout, stderr = silent.communicate(timeout=12)
+            while not git_started.exists() and silent.poll() is None and time.monotonic() - began < CLI_STARTUP_SECONDS:
+                time.sleep(0.01)
+            if not git_started.exists():
+                raise AssertionError("CLI did not start its Git lookup within the separate startup deadline")
+            operation_started = time.monotonic()
+            stdout, stderr = silent.communicate(timeout=GIT_DEADLINE_WATCHDOG_SECONDS)
             assert silent.returncode == 1 and "deadline exceeded" in stderr, stdout + stderr
+            print(json.dumps({"case": "bounded Git lookup", "startupSeconds": operation_started - began,
+                              "gitAndExitSeconds": time.monotonic() - operation_started}), flush=True)
         except subprocess.TimeoutExpired:
-            os.killpg(silent.pid, signal.SIGKILL)
-            silent.communicate()
             raise AssertionError("CLI Git lookup exceeded its 10-second deadline while waiting for stdout")
+        finally:
+            try:
+                os.killpg(silent.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            silent.communicate(timeout=CLI_CLEANUP_SECONDS)
         root = Path(temporary) / "consumer"
         root.mkdir()
         subprocess.run(["git", "init", "--quiet", str(root)], check=True)

@@ -25,6 +25,7 @@ STARTUP_TIMEOUT = 60
 SHUTDOWN_TIMEOUT = 20
 DISPATCH_FIXTURE_TIMEOUT = 180
 COMBINATION_FIXTURE_TIMEOUT = 240
+TRACE_FIXTURE_SCALE = 3
 
 
 class Checks:
@@ -158,7 +159,7 @@ class Checks:
                         process.wait(timeout=SHUTDOWN_TIMEOUT)
                         raise RuntimeError(f"{name} server failed graceful shutdown")
 
-    def transport(self, command: list[str], name: str, browser: bool):
+    def transport(self, command: list[str], name: str, browser: bool, fixture_scale: int):
         port = free_port()
         self.environment.update(CQ_HOST="127.0.0.1", CQ_PORT=str(port), CQ_ORIGIN=f"http://127.0.0.1:{port}",
                                 CQ_TOKEN=uuid.uuid4().hex, CQ_SESSION=str(uuid.uuid4()))
@@ -167,23 +168,23 @@ class Checks:
             self.run(["node", "dev/artifacts.mjs"], f"{name}-artifacts", STARTUP_TIMEOUT)
             self.sbt(["server/Test/runMain cq.server.ServerApiCheck"], f"{name}-host-api")
             self.sbt(["server/Test/runMain cq.server.IntegrationApiCheck"], f"{name}-integration-api")
-            self.run(["python3", "dev/roles-check.py", *command], f"{name}-roles", STARTUP_TIMEOUT)
-            self.run(["python3", "dev/cli-check.py", *command], f"{name}-cli", STARTUP_TIMEOUT)
-            self.run(["python3", "dev/cli-timeouts.py", *command], f"{name}-cli-timeouts", STARTUP_TIMEOUT)
-            self.run(["python3", "dev/supervisor-check.py", *command], f"{name}-supervisor", STARTUP_TIMEOUT)
+            self.run(["python3", "dev/roles-check.py", *command], f"{name}-roles", STARTUP_TIMEOUT * fixture_scale)
+            self.run(["python3", "dev/cli-check.py", *command], f"{name}-cli", STARTUP_TIMEOUT * fixture_scale)
+            self.run(["python3", "dev/cli-timeouts.py", *command], f"{name}-cli-timeouts", STARTUP_TIMEOUT * fixture_scale)
+            self.run(["python3", "dev/supervisor-check.py", *command], f"{name}-supervisor", STARTUP_TIMEOUT * fixture_scale)
             self.environment["CQ_WORKFLOW_EVIDENCE"] = str(self.evidence / f"{name}-workflow")
-            self.run(["python3", "dev/workflow-check.py", *command], f"{name}-workflow", DISPATCH_FIXTURE_TIMEOUT)
+            self.run(["python3", "dev/workflow-check.py", *command], f"{name}-workflow", DISPATCH_FIXTURE_TIMEOUT * fixture_scale)
             self.environment["CQ_COHORT_EVIDENCE"] = str(self.evidence / f"{name}-cohort")
-            self.run(["python3", "dev/cohort-check.py", *command], f"{name}-cohort", DISPATCH_FIXTURE_TIMEOUT)
+            self.run(["python3", "dev/cohort-check.py", *command], f"{name}-cohort", DISPATCH_FIXTURE_TIMEOUT * fixture_scale)
             self.environment["CQ_DISPATCH_EVIDENCE"] = str(self.evidence / f"{name}-dispatch")
-            self.run(["python3", "dev/dispatch-check.py", *command], f"{name}-dispatch", DISPATCH_FIXTURE_TIMEOUT)
+            self.run(["python3", "dev/dispatch-check.py", *command], f"{name}-dispatch", DISPATCH_FIXTURE_TIMEOUT * fixture_scale)
             self.environment["CQ_GROWTH_EVIDENCE"] = str(self.evidence / f"{name}-growth")
-            self.run(["python3", "dev/dispatch-growth-check.py", *command], f"{name}-growth", DISPATCH_FIXTURE_TIMEOUT)
+            self.run(["python3", "dev/dispatch-growth-check.py", *command], f"{name}-growth", DISPATCH_FIXTURE_TIMEOUT * fixture_scale)
             self.environment["CQ_COMBINATION_EVIDENCE"] = str(self.evidence / f"{name}-combination")
-            self.run(["python3", "dev/combination-check.py", *command], f"{name}-combination", COMBINATION_FIXTURE_TIMEOUT)
+            self.run(["python3", "dev/combination-check.py", *command], f"{name}-combination", COMBINATION_FIXTURE_TIMEOUT * fixture_scale)
             self.environment["CQ_ADMISSION_EVIDENCE"] = str(self.evidence / f"{name}-admission")
-            self.run(["python3", "dev/admission-check.py", *command], f"{name}-admission", DISPATCH_FIXTURE_TIMEOUT)
-            self.run(["python3", "dev/dispatch-shutdown-check.py", *command], f"{name}-dispatch-shutdown", DISPATCH_FIXTURE_TIMEOUT)
+            self.run(["python3", "dev/admission-check.py", *command], f"{name}-admission", DISPATCH_FIXTURE_TIMEOUT * fixture_scale)
+            self.run(["python3", "dev/dispatch-shutdown-check.py", *command], f"{name}-dispatch-shutdown", DISPATCH_FIXTURE_TIMEOUT * fixture_scale)
             if browser:
                 self.environment["CQ_BROWSER_EVIDENCE"] = str(self.evidence)
                 self.run(["node", "dev/browser.mjs"], f"{name}-browser", COMMAND_TIMEOUT)
@@ -227,14 +228,14 @@ class Checks:
         classpath = self.classpath()
         with self.database([]):
             self.sbt(["server/testOnly *Postgres"], "postgres-contract")
-            self.transport(["java", "-cp", classpath, "cq.server.Main"], "jvm", False)
+            self.transport(["java", "-cp", classpath, "cq.server.Main"], "jvm", False, 1)
             self.restart(["java", "-cp", classpath, "cq.server.Main"])
 
     def browser(self):
         self.generate()
         classpath = self.classpath()
         with self.database([]):
-            self.transport(["java", "-cp", classpath, "cq.server.Main"], "browser", True)
+            self.transport(["java", "-cp", classpath, "cq.server.Main"], "browser", True, 1)
 
     def ui(self):
         self.ui_checks(False)
@@ -296,16 +297,32 @@ class Checks:
     def native(self):
         self.generate()
         classpath = self.classpath()
+        traces = self.evidence / "native-traces"
+        traces.mkdir()
         config = self.evidence / "native-config"
         config.mkdir()
         binary = self.evidence / "cq"
         with self.database([]):
-            self.transport(["java", f"-agentlib:native-image-agent=config-output-dir={config}",
-                            "-cp", classpath, "cq.server.Main"], "native-agent", False)
+            self.transport(["java", f"-agentlib:native-image-agent=config-output-dir={traces}/{{pid}}-{{datetime}},config-write-period-secs=1",
+                            "-cp", classpath, "cq.server.Main"], "native-agent", False, TRACE_FIXTURE_SCALE)
+            inputs = sorted(path for path in traces.iterdir() if path.is_dir())
+            inventory = [{"directory": str(path), "files": sorted(file.name for file in path.glob("*.json"))} for path in inputs]
+            (self.evidence / "native-trace-inventory.json").write_text(json.dumps(inventory, indent=2) + "\n")
+            if len(inputs) < 2 or not all(entry["files"] for entry in inventory):
+                raise RuntimeError("Required native metadata collection is absent or incomplete; inspect trace inventory")
+            self.run(["native-image-utils", "generate", *[f"--input-dir={path}" for path in inputs],
+                      f"--output-dir={config}"], "native-config-merge", COMMAND_TIMEOUT)
             self.run(["native-image", "--no-fallback", "-march=compatibility", "-O1", "-J-Xmx8g",
                       f"-H:ConfigurationFileDirectories={config}", "-cp", classpath,
                       "cq.server.Main", str(binary)], "native-image", COMMAND_TIMEOUT)
-            self.transport([str(binary)], "native", False)
+            built = hashlib.sha256(binary.read_bytes()).hexdigest()
+            self.transport([str(binary)], "native", True, 1)
+            if hashlib.sha256(binary.read_bytes()).hexdigest() != built:
+                raise RuntimeError("Native executable changed during verification")
+            (self.evidence / "native-artifact.json").write_text(json.dumps({
+                "path": str(binary), "sha256": built, "bytes": binary.stat().st_size,
+                "sourceManifest": "source-sha256.json", "metadataInventory": "native-trace-inventory.json",
+            }, indent=2) + "\n")
 
 
 def verify_test_report(output: str):

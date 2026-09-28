@@ -1,0 +1,32 @@
+# Native release completion
+
+M6 follows the [implementation plan](../drafts/20260926-1549-cq-implementation-plan.md). This is the execution boundary for the remaining release work, not completed evidence. The Baboon flake increment is separately [verified](../validation/m6-toolchain.md).
+
+## Distribution boundary
+
+The first verified release artifact targets Linux x86-64 and the documented Linux 5.9+ guardian requirement. CQ keeps one `0.1.0` model and one distage roles entrypoint for server, supervisor and CLI. Build the C guardian separately and ship it beside the native CQ executable. Browser assets, generated schemas, role/workflow instructions and harness bridge resources must be included in the native runtime or distribution and exercised after installation.
+
+Produce an installable directory/archive with executables, exact runtime dependency information, examples, run/verification instructions and a manifest binding source, model/toolchain pins, artifact hashes and test evidence. Nix-linked runtime dependencies must be explicit and retained/exportable; copying an ELF file alone does not establish that another machine can run it. Verify execution from an unrelated directory with source/build paths made unavailable to the process, explicit project and supervisor configuration, and no access to the build classpath. An unrelated current directory alone does not establish source independence. Declare external PostgreSQL, Git, Node, Python and native harness dependencies separately. No source dependency or Java runtime may be required by the installed application.
+
+ARM development-shell/compiler output evaluation is not a claim of a native CQ release on ARM Linux or macOS. Publishing/distributing externally is separate from delivering the local verified artifact.
+
+## Native reachability and runtime proof
+
+1. Exercise the full current deterministic transport/role/supervisor corpus with the tracing JVM. Each traced process owns its output directory; collect periodic snapshots for fixtures that deliberately interrupt processes and merge only after all owned processes settle. Retain an inventory and incomplete-collection failures. The original shared-directory collision is retained at `.work/evidence/20260928T040554-native`.
+2. Build with the existing compatibility CPU target and no JVM fallback. Do not broaden reflection registration speculatively: reproduce native failures and identify the missing reachable behavior/resource before changing metadata or implementation.
+3. Run native HTTP/MCP/CLI, dispatch/cohort/integration/recovery/shutdown scenarios and the browser corpus against the native server. Verify the packaged guardian and installed resource paths. Retain the resulting executable hash and metadata inputs.
+
+The GraalVM [tracing documentation](https://www.graalvm.org/jdk25/reference-manual/native-image/metadata/AutomaticMetadataCollection/) supports per-process output placeholders and explicit metadata merging. Tracing observes exercised paths only; the native runtime and real packaged consumer corpus remain acceptance gates.
+
+## Release verification
+
+- Complete the deterministic contract, service, PostgreSQL access, process, browser/usage and native surfaces. Scope repetitions to changed behavior and required final release gates.
+- Fresh initialization, current-version acceptance/rejection and PostgreSQL backup/restore must preserve items/history, relationships/claims/reservations as applicable, artifact bytes and immutable usage/correction/frozen-membership records. Exercise shutdown and recovery on owned scratch resources. Declare the backup acceptance scope: a database-only backup requires settled supervisors and no unresolved integration reservations; recovery of pending work also requires its durable session journals, artifacts/workspaces and Git repositories. Test those states separately and never infer that a restored database restores host reconciliation state.
+- Document and verify actual retention behavior. No existing numeric accounting or historical membership may disappear because a task/cohort ends. Preserve optional-evidence availability semantics. Do not claim an automatic deletion policy when no such policy exists.
+- Extend the existing consumer, independent assessor and restore/recovery runners to take the same recorded packaged launcher/guardian explicitly; no stage may rebuild or substitute a JVM/source-checkout launcher. The `release` suite must reject missing or source-mismatched artifacts, run the nine governing/child harness routes over the declared small corpus, independently assess exact candidates and reconcile all attempts through the shared CQ audit. Preserve failures/corrections and explicit coverage/cost gaps. Do not present unmatched totals as an efficiency improvement.
+- Verify locally exported Claude/Codex/Pi commands/skills from the installation, using the existing four-command/role policy. Keep configured harness differences, permissions and native schemas intact.
+- Complete requirement coverage and the release evidence manifest, including exact install/start/consumer/verification commands and known limits. Independent Astra reviews the candidate and any required correction loop. Present concrete evidence and request the designated human verdict; technical reviews do not supply that verdict.
+
+## Completion state
+
+Baboon integration is committed and verified. The [native baseline log](../validation/m6-native.md) preserves tracing-directory and instrumentation timing reproductions and their scoped fixture corrections. Native verification now includes the browser corpus and executable hash binding. A package assembler has independent source review: it checks passing native evidence and current build inputs, includes the guardian, exports the Nix library closure and supplies configuration/run instructions. Execution from a relocated installation, packaged guardian/resources, recovery, the consumer matrix and human acceptance remain unverified. Independent Astra approved this release boundary with the source-isolation and backup-scope clarifications above.
