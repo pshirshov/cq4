@@ -9,7 +9,7 @@ On this machine, the verified native package and its Nix runtime libraries are a
 ```sh
 cd /home/pavel/work/safe/cq4/cq4
 nix develop -c bash docs/examples/launch-local.sh \
-  /srv/nvme/tmp/cq4-implementation/cq-release-workflow-resources \
+  /srv/nvme/tmp/cq4-implementation/cq-release-http-ui \
   /srv/nvme/tmp/cq4-playground
 ```
 
@@ -20,7 +20,7 @@ For a browser on another machine, set `CQ_ORIGIN` to the exact browser URL, incl
 ```sh
 CQ_ORIGIN=http://vm.home.7mind.io:8080 \
 nix develop -c bash docs/examples/launch-local.sh \
-  /srv/nvme/tmp/cq4-implementation/cq-release-workflow-resources \
+  /srv/nvme/tmp/cq4-implementation/cq-release-http-ui \
   /srv/nvme/tmp/cq4-playground
 ```
 
@@ -33,6 +33,8 @@ cat /srv/nvme/tmp/cq4-playground/token
 ```
 
 State, credentials, logs and subsequent session journals live under `/srv/nvme/tmp/cq4-playground`. Reusing the launch command preserves them. A concurrently running launcher or database in the same state directory is rejected. On another machine, first install the package's `runtime.nar` as described in its README. The launcher requires Linux, Bash, Python, curl, flock and PostgreSQL; `nix develop` supplies the pinned PostgreSQL and Go tools here.
+
+If the earlier package showed `crypto.randomUUID is not a function`, stop its launcher with Ctrl-C, run the command above with `cq-release-http-ui` and the same state directory, then reload the browser. Credentials and project data are retained. Re-source `client.env` in an existing CLI terminal to select the corrected package. [Reproduction and verification](validation/http-ui.md).
 
 ## 2. Prepare an unrelated project — terminal two
 

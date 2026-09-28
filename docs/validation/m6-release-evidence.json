@@ -1,6 +1,6 @@
 {
-  "state": "http-ui-correction-under-verification",
-  "implementationCommit": "302bf34",
+  "state": "technical-release-approved-awaiting-human-acceptance",
+  "implementationCommit": "39f4d29",
   "modelVersion": "0.1.0",
   "platform": "x86_64-linux",
   "verifiedGates": [
@@ -13,7 +13,7 @@
         "commands.json": "394bf212c05deccfc5444e150c635250d053de814e5d142d13eee3841b063199",
         "source-sha256.json": "d99ac546df49192f71137c413221725179eec9aad0900cd264ac99a7b2ab2f26"
       },
-      "applicability": "Retained contract/codegen evidence; sole later runtime delta is workflow native resource metadata. Evaluator changes do not affect generated contracts. Scoped Astra reuse approved."
+      "applicability": "Retained non-browser evidence accepted in the prior release review. The subsequent source-delta proof changes only four browser files; this gate's contracts/core/host/server behavior remains unchanged. Native and installed verification covers the current bundle."
     },
     {
       "name": "fast",
@@ -24,7 +24,7 @@
         "commands.json": "0a99809e009f89828ad05049bc46c05fe642a7a04b25ac11bf76d116c64bbb86",
         "source-sha256.json": "21b90e713dbb5c133ff082e228eb4ce77756e17ef3bbe30a9a0e1c65cefb12dc"
       },
-      "applicability": "Retained 190-scenario/bridge proof for unchanged application behavior. Later evaluator checks and installed process controller have separate recorded evidence; workflow resource metadata is checked by corrected native/installed gates. Scoped Astra reuse approved."
+      "applicability": "Retained non-browser evidence accepted in the prior release review. The subsequent source-delta proof changes only four browser files; this gate's contracts/core/host/server behavior remains unchanged. Native and installed verification covers the current bundle."
     },
     {
       "name": "ui",
@@ -35,7 +35,7 @@
         "commands.json": "52ee7d43ba4a50a0668457e9369e5fdb35e232ec905c8a64faef8a06ddeea2a7",
         "source-sha256.json": "b40088ae4a75c96289cfc6f3319f65fba19877d0ad6db3fefc6ce7c06e019ed8"
       },
-      "applicability": "Retained UI evidence; browser sources unchanged since this gate. Compiler flake verified separately; workflow native metadata is outside UI scope. Scoped Astra reuse approved."
+      "applicability": "Historical UI proof, superseded for current browser sources by http-ui below."
     },
     {
       "name": "usage",
@@ -46,7 +46,7 @@
         "commands.json": "3651e5b84b9555a54a2326fc3294c73268de173483988e3f322fb801a53f5bc1",
         "source-sha256.json": "83dd18484e4e832eb3ab48ae9f230238ae24c68e220cea1d027e5b69a6c76c85"
       },
-      "applicability": "Retained usage-watch/SQL proof. Later connection UI changes have the approved UI gate; workflow native metadata does not change audit behavior. Scoped Astra reuse approved."
+      "applicability": "Retained non-browser evidence accepted in the prior release review. The subsequent source-delta proof changes only four browser files; this gate's contracts/core/host/server behavior remains unchanged. Native and installed verification covers the current bundle."
     },
     {
       "name": "process",
@@ -57,7 +57,7 @@
         "commands.json": "9bfd9aa382d53859ebe794a4f3d98591ffb01f22b14fa44749ef6d39f5d8d479",
         "source-sha256.json": "7be22f3848b041771e0d024ff68cb58c885ca3222292895573b963b83aff3c2d"
       },
-      "applicability": "Retained failure-injection evidence for unchanged lifecycle/coordinator/guardian/merge implementations. Intervening contracts/support changes have recorded contracts/fast/native evidence; resource metadata requires corrected native/installed verification. Scoped Astra reuse approved."
+      "applicability": "Retained non-browser evidence accepted in the prior release review. The subsequent source-delta proof changes only four browser files; this gate's contracts/core/host/server behavior remains unchanged. Native and installed verification covers the current bundle."
     },
     {
       "name": "native",
@@ -91,7 +91,7 @@
         "source-sha256.json": "16cb42fdcb8149fee4fa39df9003e1741f4a49bd5073af6f70ee8bb64d6f9737",
         "source-applicability.json": "b65d0b626f2806574cd01cd5fd4e7c9a6520fe3f1f91e1e75ee0667f6bd03976"
       },
-      "applicability": "Retained 102 PostgreSQL scenarios and full JVM client/process/restart corpus. Sole later runtime delta is native workflow inclusion metadata; changed workflow fixture is covered by corrected tracing/native/installed runs. Evaluator changes have separate checks. Scoped Astra reuse approved."
+      "applicability": "Retained non-browser evidence accepted in the prior release review. The subsequent source-delta proof changes only four browser files; this gate's contracts/core/host/server behavior remains unchanged. Native and installed verification covers the current bundle."
     },
     {
       "name": "access",
@@ -104,7 +104,7 @@
         "source-applicability.json": "b65d0b626f2806574cd01cd5fd4e7c9a6520fe3f1f91e1e75ee0667f6bd03976",
         "access-report.json": "38af35efb517f6809b488c113bb019fba7d90f82bf112aa38797ac562773b6fd"
       },
-      "applicability": "Retained 126 measured operations through 100,000 background items. Sole later runtime delta is native workflow inclusion metadata; query/service/build inputs for this gate are unchanged. Scoped Astra reuse approved."
+      "applicability": "Retained non-browser evidence accepted in the prior release review. The subsequent source-delta proof changes only four browser files; this gate's contracts/core/host/server behavior remains unchanged. Native and installed verification covers the current bundle."
     },
     {
       "name": "native-corrected",
@@ -117,7 +117,7 @@
         "source-applicability.json": "26090ae66116923c6ac5c8fd9945c3e3bddf34165a845ccc179b99821153767a",
         "native-artifact.json": "c125567b1f2929e0d4803aef76ab6faac86cf3e56e2502f1c6905c9c0931b23b"
       },
-      "applicability": "All 40 commands pass including tracing and native execution of all four workflows. Application/build and executed fixture sources match; later dev/process-eval instruction clarification is outside this gate. Independent Astra approved."
+      "applicability": "All 40 commands pass including tracing and native execution of all four workflows. Application/build and executed fixture sources match; later dev/process-eval instruction clarification is outside this gate. Independent Astra approved. Applies to the preceding workflow-resource package; current HTTP browser delivery is separately verified below."
     },
     {
       "name": "installed-corrected",
@@ -128,14 +128,45 @@
         "commands.json": "4139dad94649e9bbf38e43cb383d5980f8fc5790f2cf36e36339b2b81043b4e2",
         "source-sha256.json": "6d0b296b95d27396a546ddccca7c8a321ae0f6d791e7041bf9a00cc000b843f1"
       },
-      "applicability": "24 commands pass with 292 unchanged source hashes. Source/classpath isolation, imported runtime, all four workflows, browser, restart and settled 24-table backup pass. Delivery/relocated artifact hashes match; independent Astra approved."
+      "applicability": "24 commands pass with 292 unchanged source hashes. Source/classpath isolation, imported runtime, all four workflows, browser, restart and settled 24-table backup pass. Delivery/relocated artifact hashes match; independent Astra approved. Applies to the preceding workflow-resource package; current HTTP browser delivery is separately verified below."
+    },
+    {
+      "name": "http-ui",
+      "directory": "/srv/nvme/tmp/cq4-http-ui-20260928/20260928T102222-ui",
+      "status": "passed",
+      "evidenceSha256": {
+        "result.json": "f974e97b46277a65f812caadfdc683954eba4aa7d0b143df7b1584bb59f35cab",
+        "commands.json": "c317b0ebc921dbc291d94f3b2687a13e2ee561fc814a63c852c63d35f3b3b29f",
+        "source-sha256.json": "eb405caa68d58a956454ef1d6392728011f03155b5b32011612d663c3adf0428"
+      },
+      "applicability": "Current browser correction. Includes actual insecure HTTP with missing randomUUID, login, live connection, project/tasks and relationship mutation. No model calls."
+    },
+    {
+      "name": "native-http-ui",
+      "directory": "/srv/nvme/tmp/cq4-http-ui-20260928/20260928T102507-native",
+      "status": "passed",
+      "evidenceSha256": {
+        "result.json": "43758d0d67a9752ac2953ba1c7cae8e947a521d82155cc736430e3f0c5f9700d",
+        "commands.json": "53adb1e8e8b53318195aac82645681801d0eecf200ac453c7ad456e25103d2cd",
+        "source-sha256.json": "d58af9540048d3deba1614a8aa6b027c561abd2e9229affd16da714a69263e26",
+        "native-artifact.json": "6e361169bb93d3d827efe16c2ab867c55ab88c54afcab75f1cda6bfaa84622fb"
+      },
+      "applicability": "Current browser correction. Includes actual insecure HTTP with missing randomUUID, login, live connection, project/tasks and relationship mutation. No model calls."
+    },
+    {
+      "name": "installed-http-ui",
+      "directory": "/srv/nvme/tmp/cq4-http-ui-20260928/20260928T104927-installed",
+      "status": "package-checked",
+      "evidenceSha256": {
+        "result.json": "5c788ba789fe32f2aad3636f34c8347a69167adeb27be437f5addcf72258bcbd",
+        "commands.json": "fb6d9b367f4cb46cfea00633ba52cd9fec68582254007ab168c3e5e6f7243873",
+        "source-sha256.json": "073629678fdde5dbc45b61328f550e44898664d3f2efe25fe93113c348478f23"
+      },
+      "applicability": "Current browser correction. Includes actual insecure HTTP with missing randomUUID, login, live connection, project/tasks and relationship mutation. No model calls."
     }
   ],
   "running": [],
   "pending": [
-    "rebuilt native including insecure HTTP",
-    "installed source-isolated package including insecure HTTP",
-    "final correction review",
     "designated M2 human acceptance",
     "designated M6 human acceptance"
   ],
@@ -194,18 +225,20 @@
     "qualification": "Historical artifact rejected after missing native Review/Upstream workflow resources; preserve unchanged, do not treat as final release."
   },
   "artifact": {
-    "directory": "/srv/nvme/tmp/cq4-implementation/cq-release-workflow-resources",
-    "manifestSha256": "3159173b19f4a9db92a4903429f12f8507d63ad55f5dc05d21bef5ab4d5f82f6",
-    "executableSha256": "2178d813e17ebce0693209d308d8cc082ae4ebc55b93860f8d985efd31c9f555",
+    "directory": "/srv/nvme/tmp/cq4-implementation/cq-release-http-ui",
+    "manifestSha256": "02718ef5bee3c1333a2f50667a9d39d8ea8aad98d31adf0acc67a0e72061e2f0",
+    "executableSha256": "065d83c13f7758cbaabc995b2d517f16d75641173d09ca7da1a80f927e4ee431",
     "guardianSha256": "f56efb4626cb8e0fab0cc4b27b1460e75cea275890b5209df0a7f312ddf029bc",
-    "qualification": "Corrected Linux x86-64 technical release candidate approved by independent Astra across M0\u2013M6/R01\u2013R31. Native, installed and complete same-artifact functional corpus pass; aggregate instrumentation remains incomplete. Human M2/M6 acceptance pending."
+    "qualification": "Current Linux x86-64 HTTP-corrected technical release candidate approved by independent Astra. Focused UI, native, installed and actual hostname launcher/browser checks pass. Prior harness corpus retains its original package identity with approved browser-only source applicability. Model stays 0.1.0; human M2/M6 acceptance pending."
   },
   "correctedVerification": {
-    "native": "/srv/nvme/tmp/cq4-implementation/20260928T071654-native",
-    "installed": "/srv/nvme/tmp/cq4-implementation/20260928T074034-installed",
+    "native": "/srv/nvme/tmp/cq4-http-ui-20260928/20260928T102507-native",
+    "installed": "/srv/nvme/tmp/cq4-http-ui-20260928/20260928T104927-installed",
     "installedStatus": "package-checked",
     "liveStatus": "corpus-usage-incomplete",
-    "liveSuite": "/srv/nvme/tmp/cq4-implementation/20260928T074651-release"
+    "liveSuite": "/srv/nvme/tmp/cq4-implementation/20260928T074651-release",
+    "liveArtifact": "/srv/nvme/tmp/cq4-implementation/cq-release-workflow-resources",
+    "liveApplicability": "Paid harness executions retain the preceding package identity. Scoped reuse for four browser files is independently approved; no new-artifact harness execution is claimed."
   },
   "historicalLiveProgress": {
     "suite": "/srv/nvme/tmp/cq4-implementation/20260928T060135-release",
@@ -273,7 +306,7 @@
   "liveProgress": {
     "suite": "/srv/nvme/tmp/cq4-implementation/20260928T074651-release",
     "status": "corpus-usage-incomplete",
-    "scope": "Fresh corrected-artifact corpus; old-artifact acceptance and spending remain separate.",
+    "scope": "Retained live corpus on cq-release-workflow-resources. Original execution/artifact/source identities preserved. Browser-only correction uses separately reviewed scoped applicability.",
     "independentlyAcceptedCohorts": [
       "claude",
       "codex",
@@ -542,33 +575,58 @@
     "blockingFindings": 0,
     "majorFindings": 0,
     "scope": "M0\u2013M6/R01\u2013R31; artifact, retained gate applicability, final corpus and derived documents",
-    "qualification": "Minor rubric limitation retained; usage verdict unchanged; human M2/M6 acceptance pending. Runner remaining labels do not ingest this external release-review verdict."
+    "qualification": "Minor rubric limitation retained; usage verdict unchanged; human M2/M6 acceptance pending. Runner remaining labels do not ingest this external release-review verdict. This is the preceding package review; current HTTP correction has a separate scoped review."
   },
   "operatorQuickstart": {
     "guide": "docs/quickstart.md",
     "launcher": "docs/examples/launch-local.sh",
-    "launcherSha256": "3a8c5561f7d72a7d049ca9970b1eb619c423ce25b1bbbc18f9646206817b4ecc",
-    "evidenceDirectory": "/srv/nvme/tmp/cq4-launcher-smoke-20260928/verification",
-    "evidenceSha256": {
-      "result.json": "3606bf36e8f5738227a210ccfdcac2fa738103a34b3abc927faaaf699af42656",
-      "shutdown-before.json": "47b44e2068ab0360ff02cfb7d08381f721dd81340d5628aaae6497345b611404",
-      "check.py": "72a801105afacfd51902238de99ee5882f5660654d764fa8636dd60c26c4610d",
-      "setup.sh": "72a2871bb09d9bfb5fe656fafba6376edf1ea2da18b8ed2466bb50879552e538",
-      "astra-review.json": "0e7bcff7f6d325061bbe2de0ea5e5b6e319c1fb65ba8c15ff4cf710955b1adca"
+    "launcherSha256": "0fd02ab5dec83c6a372e2f696c9fcf543df1c9e4fd4898961cac651bcab69629",
+    "lifecycleBaseline": {
+      "guide": "docs/quickstart.md",
+      "launcher": "docs/examples/launch-local.sh",
+      "launcherSha256": "3a8c5561f7d72a7d049ca9970b1eb619c423ce25b1bbbc18f9646206817b4ecc",
+      "evidenceDirectory": "/srv/nvme/tmp/cq4-launcher-smoke-20260928/verification",
+      "evidenceSha256": {
+        "result.json": "3606bf36e8f5738227a210ccfdcac2fa738103a34b3abc927faaaf699af42656",
+        "shutdown-before.json": "47b44e2068ab0360ff02cfb7d08381f721dd81340d5628aaae6497345b611404",
+        "check.py": "72a801105afacfd51902238de99ee5882f5660654d764fa8636dd60c26c4610d",
+        "setup.sh": "72a2871bb09d9bfb5fe656fafba6376edf1ea2da18b8ed2466bb50879552e538",
+        "astra-review.json": "0e7bcff7f6d325061bbe2de0ea5e5b6e319c1fb65ba8c15ff4cf710955b1adca"
+      },
+      "qualification": "User-requested operator helper added after technical release review; actual native/PostgreSQL lifecycle/setup smoke and independent Astra review pass. Application, package and evaluator inputs unchanged; no new model calls; human acceptance remains pending."
     },
-    "qualification": "User-requested operator helper added after technical release review; actual native/PostgreSQL lifecycle/setup smoke and independent Astra review pass. Application, package and evaluator inputs unchanged; no new model calls; human acceptance remains pending."
+    "networkProtocolEvidence": "/srv/nvme/tmp/cq4-launcher-network-20260928/result.json",
+    "networkProtocolSha256": "9290edd5b5fa7ce6502c388dba942fe7cbc8d1633fdcef38f428f6058a6eb4fb",
+    "currentDeliveryEvidence": "/srv/nvme/tmp/cq4-http-ui-20260928/delivery/result.json",
+    "currentDeliverySha256": "63b57688078c683012138d0576cdb1f9a46446e06dd49df56a5c7088490947f6",
+    "qualification": "Current launcher binds all interfaces, preserves explicit browser origin, keeps PostgreSQL/readiness on loopback. Actual corrected-package hostname browser check and owned shutdown pass. No model calls."
   },
   "activeCorrection": {
     "kind": "remote-http-browser-uuid",
     "reproduction": "/srv/nvme/tmp/cq4-http-ui-20260928/before",
     "scope": "Eight browser UUID call sites; launcher bind/origin; regression fixtures",
     "sourceReview": "Independent Astra approved correction and scoped reuse of paid harness evidence",
-    "required": [
-      "rebuilt native including insecure HTTP",
-      "installed source-isolated package including insecure HTTP",
-      "final correction review"
-    ],
-    "qualification": "Prior native package reproduces user-reported login TypeError on non-localhost plain HTTP; previous review remains historical and does not supply current acceptance.",
-    "uiEvidence": "/srv/nvme/tmp/cq4-http-ui-20260928/20260928T102222-ui"
+    "required": [],
+    "qualification": "Reproduced before correction; focused UI, native, installed and direct non-loopback browser delivery pass; final scoped Astra review approved. Human acceptance remains pending.",
+    "uiEvidence": "/srv/nvme/tmp/cq4-http-ui-20260928/20260928T102222-ui",
+    "sourceDelta": "/srv/nvme/tmp/cq4-http-ui-20260928/source-delta.json",
+    "sourceDeltaSha256": "acbe38f58797db3b5647e53cab48f1bb08352ac7f4fe33d81cbe9a2292012536",
+    "retainedReplay": "/srv/nvme/tmp/cq4-http-ui-20260928/retained-replay.log",
+    "retainedReplaySha256": "13573bed39d4086b149acbafe4a3ffbf6e6e1ccb711f5262930683d329322ce7",
+    "nativeEvidence": "/srv/nvme/tmp/cq4-http-ui-20260928/20260928T102507-native",
+    "installedEvidence": "/srv/nvme/tmp/cq4-http-ui-20260928/20260928T104927-installed",
+    "deliveryEvidence": "/srv/nvme/tmp/cq4-http-ui-20260928/delivery",
+    "finalReview": {
+      "file": "/srv/nvme/tmp/cq4-http-ui-20260928/final-review.json",
+      "sha256": "f2fb89adb857b529331a718dbfeddede1be77c1032ca63a8c8d31b98c102170a",
+      "verdict": "http-login-correction-and-delivery-approved"
+    }
+  },
+  "previousArtifact": {
+    "directory": "/srv/nvme/tmp/cq4-implementation/cq-release-workflow-resources",
+    "manifestSha256": "3159173b19f4a9db92a4903429f12f8507d63ad55f5dc05d21bef5ab4d5f82f6",
+    "executableSha256": "2178d813e17ebce0693209d308d8cc082ae4ebc55b93860f8d985efd31c9f555",
+    "guardianSha256": "f56efb4626cb8e0fab0cc4b27b1460e75cea275890b5209df0a7f312ddf029bc",
+    "qualification": "Previous technically approved workflow-resource package. Real harness executions and their exact original artifact identity remain retained; remote-HTTP browser login defect is corrected by the current package."
   }
 }

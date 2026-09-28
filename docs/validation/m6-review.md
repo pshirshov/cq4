@@ -1,16 +1,16 @@
 # Combined M2 and M6 human review
 
-**HTTP browser correction under verification.** Human evaluation exposed a remote-HTTP login defect in the previous artifact; see the [reproduction and correction](http-ui.md). Its earlier technical review remains historical. Human M2 and M6 verdicts remain pending. Per the user's instruction, this guide combines both evaluation scopes.
+**HTTP browser correction verified and independently approved.** Human evaluation exposed a remote-HTTP login defect in the previous artifact; the [correction](http-ui.md) passes focused UI, native, installed and actual hostname browser checks. Earlier harness executions retain their original artifact identities with independently reviewed source applicability. Human M2 and M6 verdicts remain pending. Per the user's instruction, this guide combines both evaluation scopes.
 
 ## Artifact and scope
 
 The locally runnable Linux x86-64 distribution is:
 
 ```text
-/srv/nvme/tmp/cq4-implementation/cq-release-workflow-resources
+/srv/nvme/tmp/cq4-implementation/cq-release-http-ui
 ```
 
-Its native executable SHA-256 is `2178d813e17ebce0693209d308d8cc082ae4ebc55b93860f8d985efd31c9f555`; its manifest SHA-256 is `3159173b19f4a9db92a4903429f12f8507d63ad55f5dc05d21bef5ab4d5f82f6`. Product correction commit: `302bf34`. Subsequent evaluator corrections retain their own reviewed source epochs. CQ has one model version, `0.1.0`.
+Its native executable SHA-256 is `065d83c13f7758cbaabc995b2d517f16d75641173d09ca7da1a80f927e4ee431`; its manifest SHA-256 is `02718ef5bee3c1333a2f50667a9d39d8ea8aad98d31adf0acc67a0e72061e2f0`. Browser correction commit: `39f4d29`. The preceding product correction and evaluator epochs retain their original identities; paid harness results apply through independently reviewed browser-only source scope. CQ has one model version, `0.1.0`.
 
 The same native entrypoint provides the server, CLI and supervisor. The release includes the web workspace, fourteen fixed ledgers, query/history/relationship operations, claims and reviewed integration, automatic bounded cohorts, four subagent roles, four workflow entrypoints and the shared operational usage audit. The [requirement coverage](../requirement-coverage.md) maps every R01–R31 entry to implementation and retained evidence. [Roles and commands](../design/workflows.md) describe their inventory and harness differences.
 
@@ -21,14 +21,14 @@ The same native entrypoint provides the server, CLI and supervisor. The release 
 | Contracts and service behavior | Deterministic generated contracts; 190 fast Scala scenarios; 102 PostgreSQL scenarios and actual client/process checks |
 | Database access | 126 measured operations across 100, 10,000 and 100,000 unrelated items; sampled budgets pass |
 | Web workspace | Chromium checks for editing, history/relationships, query completion, delayed replies, reconnect/resnapshot, project drafts, usage updates and narrow layouts; [M5 review](m5-review.md) |
-| Native runtime | 40 commands pass, including actual startup of all four workflows; `20260928T071654-native` |
-| Installed distribution | 24 root commands pass with source/classpath hidden, imported runtime closure, native browser/restart and settled 24-table backup/restore; `20260928T074034-installed` |
+| Native runtime | 41 commands pass, including all four workflows and the actual insecure-HTTP browser scenario; `20260928T102507-native` |
+| Installed distribution | 25 root commands pass with source/classpath hidden, imported runtime closure, native HTTP browser/restart and settled 24-table backup/restore; `20260928T104927-installed` |
 | Native harness routes | Three independently accepted Python/Go cohorts cover all nine governing/child routes; [current candidates and inspection](m2-review.md#current-acceptance-evidence) |
 | Complete processes | Go and defect processes pass native independent whole-process assessments and Astra replay; Go includes a bounded new-session Handoff closeout preserving its failed producer |
 
-The final same-artifact suite has **16 accepted selected stages, no pending stages and five independently accepted tracks**. Its shared audit retains **91 attempts / 28,271,431 known tokens**. The instrumentation verdict is **`corpus-usage-incomplete`**, with three absent meters, 88 partially populated meters and 40 unknown-cost contributions. Accepted quality does not make those spending observations complete. [Final corpus details](m6-package.md#final-native-process-assessment-and-release-corpus) preserve all rejected branches and process deviations.
+The retained suite, executed on `cq-release-workflow-resources`, has **16 accepted selected stages, no pending stages and five independently accepted tracks**. Its shared audit retains **91 attempts / 28,271,431 known tokens**. The instrumentation verdict is **`corpus-usage-incomplete`**, with three absent meters, 88 partially populated meters and 40 unknown-cost contributions. Accepted quality does not make those spending observations complete. [Final corpus details](m6-package.md#final-native-process-assessment-and-release-corpus) preserve all rejected branches and process deviations.
 
-The [release evidence manifest](m6-release-evidence.json) binds exact evidence hashes and explains retained checks' source applicability. Earlier artifact and consumer failures remain historical evidence; their later replacements do not change their original verdicts.
+The paid harness corpus is reused for the browser-only correction; its executions keep their original package identity. New native, installed and direct non-loopback browser evidence covers the changed delivery. The [release evidence manifest](m6-release-evidence.json) binds exact evidence hashes and explains retained checks' source applicability. Earlier artifact and consumer failures remain historical evidence; their later replacements do not change their original verdicts.
 
 ## Run and verify
 
@@ -41,15 +41,17 @@ The [operations guide](../design/operations.md) gives exact commands for configu
 Inspect the manifest and executable locally:
 
 ```sh
-cd /srv/nvme/tmp/cq4-implementation/cq-release-workflow-resources
+cd /srv/nvme/tmp/cq4-implementation/cq-release-http-ui
 sha256sum manifest.json bin/cq
 ./bin/cq --help
 ```
 
-Replay the settled release evidence without new model calls from the CQ checkout:
+Replay the settled harness evidence without new model calls from its recorded evaluator checkout. This preserves the original package identity; the later browser correction uses scoped evidence reuse:
 
 ```sh
 cd /home/pavel/work/safe/cq4/cq4
+git worktree add --detach /srv/nvme/tmp/cq4-release-replay 02c0846
+cd /srv/nvme/tmp/cq4-release-replay
 PATH=/srv/nvme/tmp/cq4-implementation/m6-harness-bin:$PATH \
 ./dev/evaluate --suite release \
   --release /srv/nvme/tmp/cq4-implementation/cq-release-workflow-resources \
@@ -57,7 +59,7 @@ PATH=/srv/nvme/tmp/cq4-implementation/m6-harness-bin:$PATH \
   --report-only
 ```
 
-The replay verifies retained proofs and provenance and regenerates reports. It preserves instrumentation gaps and does not provide a human acceptance verdict. The source tree must match the latest admitted evaluator snapshot.
+The replay verifies retained proofs and provenance and regenerates reports. It preserves instrumentation gaps and does not provide a human acceptance verdict. The source tree must match the latest admitted evaluator snapshot. The replay worktree above is already prepared on this machine; skip its creation when reusing it. A fresh replay after the HTTP correction exits successfully, retaining `corpus-usage-incomplete` and no pending stages; its output is `/srv/nvme/tmp/cq4-http-ui-20260928/retained-replay.log`.
 
 ## Limits to retain in the verdict
 

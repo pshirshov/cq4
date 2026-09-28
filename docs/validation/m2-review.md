@@ -6,7 +6,7 @@ Tested implementation: **`8c37c6c`**. Independent Astra verdict: **approved**, w
 
 The user defers human evaluation until all planned technical milestones are finished (2026-09-28). This page is part of the [final combined evidence package](m6-review.md); M2 acceptance remains pending and is not inferred from the instruction to continue.
 
-The sections below retain the original M2 technical review. Later [mixed-help reproduction](m4-usage-repetitions.md) invalidates the original Claude/Python candidate under the clarified current oracle; its old acceptance is historical. Replacement M4 evidence restores the clarified-oracle baseline. The original packaged artifact was later rejected for missing workflow resources. The [corrected-artifact cohort evidence](m6-package.md#corrected-artifact-live-progress) now provides independently accepted Python/Go candidates covering all nine routes, with Astra-approved scoped accounting. The new Go pair is formally adopted into the aggregate release suite; its exact producer/Audit proofs replay successfully. Human M2 acceptance is still pending and must use that qualified/current evidence. The current native distribution and exact startup/recovery instructions are linked from the [operations guide](../design/operations.md).
+The sections below retain the original M2 technical review. Later [mixed-help reproduction](m4-usage-repetitions.md) invalidates the original Claude/Python candidate under the clarified current oracle; its old acceptance is historical. Replacement M4 evidence restores the clarified-oracle baseline. The original packaged artifact was later rejected for missing workflow resources. The [corrected-artifact cohort evidence](m6-package.md#corrected-artifact-live-progress) now provides independently accepted Python/Go candidates covering all nine routes, with Astra-approved scoped accounting. The new Go pair is formally adopted into the aggregate release suite; its exact producer/Audit proofs replay successfully. Human M2 acceptance is still pending and must use that qualified/current evidence. The current native distribution and exact startup/recovery instructions are linked from the [operations guide](../design/operations.md). The later [HTTP browser correction](http-ui.md) reuses these original harness executions through approved source applicability; it does not relabel their package identity.
 
 | Governing harness | Current accepted candidate |
 | --- | --- |
@@ -52,7 +52,7 @@ Each directory retains `result.json`, candidate/check/review artifacts, native s
 
 ## Run and inspect
 
-The current native distribution is `/srv/nvme/tmp/cq4-implementation/cq-release-workflow-resources`; use the [operations guide](../design/operations.md) for exact install/start/consumer/recovery commands. [JVM development instructions](../../README.md#run-the-current-development-server) remain available. The old M0 native executable is only a historical stack proof.
+The current native distribution is `/srv/nvme/tmp/cq4-implementation/cq-release-http-ui`; use the [operations guide](../design/operations.md) for exact install/start/consumer/recovery commands. [JVM development instructions](../../README.md#run-the-current-development-server) remain available. The old M0 native executable is only a historical stack proof.
 
 Re-run deterministic gates from the CQ checkout:
 

@@ -20,3 +20,7 @@ The shutdown reproduction precedes its correction and is retained in `shutdown-b
 These are Behavioral/Active, Effectual, Good Communication checks against actual owned services. No fresh paid consumer evaluation was launched: the walkthrough leaves those commands for the user's evaluation. Existing release evidence covers the unchanged managed workflows; this smoke check establishes the new helper's lifecycle and setup behavior. Human acceptance remains pending.
 
 Independent Astra approves the final launcher and walkthrough, including the reproduced shutdown correction and retained native smoke evidence. Its verdict is retained as `astra-review.json` and bound in the release evidence manifest.
+
+## Subsequent network/browser correction
+
+The launcher now binds CQ to `0.0.0.0`, accepts an explicit browser `CQ_ORIGIN`, and keeps database/readiness traffic on loopback. Its current SHA-256 is `0fd02ab5dec83c6a372e2f696c9fcf543df1c9e4fd4898961cac651bcab69629`. The lifecycle table above remains evidence for the earlier helper revision. `/srv/nvme/tmp/cq4-launcher-network-20260928/result.json` verifies non-loopback protocol access and origin enforcement. `/srv/nvme/tmp/cq4-http-ui-20260928/delivery/result.json` verifies the corrected native package through the current launcher: actual hostname Chromium login, live connection, project/tasks and relationships pass; CQ listens on all interfaces, PostgreSQL on loopback, and owned shutdown completes. The original plain-HTTP browser failure and correction are retained in the [HTTP record](http-ui.md).
