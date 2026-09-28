@@ -11,6 +11,7 @@ import { workspaceChecks } from './workspace-browser.mjs';
 import { editChecks } from './edit-browser.mjs';
 import { graphChecks } from './graph-browser.mjs';
 import { resyncChecks } from './resync-browser.mjs';
+import { usageScopeChecks } from './usage-scope-browser.mjs';
 
 const origin = process.env.CQ_ORIGIN;
 const evidence = process.env.CQ_BROWSER_EVIDENCE;
@@ -106,6 +107,7 @@ try {
   await editChecks(browser, await context.storageState(), origin, evidence);
   await graphChecks(browser, await context.storageState(), origin, evidence);
   await resyncChecks(browser, await context.storageState(), origin, evidence);
+  await usageScopeChecks(browser, await context.storageState(), origin, evidence);
   await workspaceChecks(browser, await context.storageState(), origin, evidence);
   await queryChecks(browser, await context.storageState(), origin, evidence);
   await draftChecks(browser, await context.storageState(), origin, evidence);

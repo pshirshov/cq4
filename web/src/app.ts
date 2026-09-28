@@ -18,6 +18,7 @@ function readResult(result: api.Result): api.Result {
 }
 
 type Panel = 'detail' | 'history' | 'usage' | 'audit';
+type UsageScope = api.UsageFilter_ProjectAll | api.UsageFilter_TaskOnly | api.UsageFilter_CohortOnly | api.UsageFilter_SessionOnly;
 interface ResultRow { button: HTMLButtonElement; caption: HTMLSpanElement; status: HTMLSpanElement }
 
 class App {
@@ -37,6 +38,7 @@ class App {
   private readonly usageMetric = element('span', 'Usage: not loaded');
   private readonly usageFreshness = element('span', '');
   private usageObserved = 'No successful observation';
+  private usageSelection: UsageScope = new api.UsageFilter_ProjectAll();
   private readonly detail = element('section', '');
   private readonly editorPanel = element('section', '');
   private readonly conflictPanel = element('section', '');
@@ -94,7 +96,7 @@ class App {
     this.selection = id; this.selectionGeneration++; this.selected = null;
     this.graph.setScope(this.project, null);
     this.detail.replaceChildren(); this.historyPanel.replaceChildren(); this.usagePanel.replaceChildren(); this.auditPanel.replaceChildren();
-    this.auditAfter = 0n; this.markSelection(); this.resetUsage();
+    this.markSelection(); this.setUsageScope(id === null ? new api.UsageFilter_ProjectAll() : new api.UsageFilter_TaskOnly(id));
   }
 
   private async start(): Promise<void> {
@@ -147,7 +149,7 @@ class App {
       shortcuts.append(button(label, () => this.action(async () => { this.queryEditor.invalidate(); this.query.value = query; await this.search(); })));
     }
     side.append(element('h2', 'Workspace'), button('New item', () => { this.openEditor(null); }),
-      button('Project usage', () => this.action(async () => { this.choose(null); await this.loadUsage(); })),
+      button('Project usage', () => this.action(async () => { this.choose(null); await this.selectUsage(new api.UsageFilter_ProjectAll()); })),
       element('h3', 'Browse'), shortcuts, element('h3', 'Projects'), newProject,
       element('p', 'Ctrl+K: query · F6: next pane · Shift+F6: previous pane. Results: ↑/↓ to move, Enter to select, → for detail, Escape to return.'));
     this.items.tabIndex = -1; this.items.setAttribute('aria-label', 'Result items'); this.items.setAttribute('role', 'group');
@@ -201,7 +203,7 @@ class App {
     this.epoch++; this.selectionGeneration++; this.selection = null; this.selected = null; this.editor = null; this.after = undefined; this.snapshot = undefined; this.subscription = null;
     this.graph.setScope(this.project, null);
     this.detail.replaceChildren(); this.editorPanel.replaceChildren(); this.conflictPanel.replaceChildren(); this.historyPanel.replaceChildren(); this.usagePanel.replaceChildren(); this.auditPanel.replaceChildren();
-    this.auditAfter = 0n; this.notice.textContent = ''; this.resetUsage();
+    this.notice.textContent = ''; this.setUsageScope(new api.UsageFilter_ProjectAll());
   }
   private async loadProjects(): Promise<void> {
     const projects: api.Project[] = [];
@@ -281,7 +283,18 @@ class App {
     const key = this.selection === null ? null : `${this.selection.project.value}-${itemName(this.selection)}`;
     for (const [id, row] of this.rows) row.button.setAttribute('aria-current', String(id === key));
   }
-  private usageScope(): string { return this.selection === null ? 'project' : itemName(this.selection); }
+  private usageScope(): string {
+    const scope = this.usageSelection;
+    if (scope instanceof api.UsageFilter_ProjectAll) return 'project';
+    if (scope instanceof api.UsageFilter_TaskOnly) return itemName(scope.item);
+    if (scope instanceof api.UsageFilter_CohortOnly) return `cohort ${scope.execution}`;
+    return `session ${scope.id.value}`;
+  }
+  private setUsageScope(scope: UsageScope): void {
+    this.usageSelection = scope; this.requests.usage++; this.requests.audit++;
+    this.usagePanel.replaceChildren(); this.auditPanel.replaceChildren(); this.auditAfter = 0n; this.resetUsage();
+  }
+  private async selectUsage(scope: UsageScope): Promise<void> { this.setUsageScope(scope); await this.loadUsage(); }
   private resetUsage(): void {
     this.usageMetric.textContent = `Usage · ${this.usageScope()}: not loaded`; this.usageObserved = 'No successful observation'; this.usageFreshness.textContent = this.usageObserved;
   }
@@ -412,7 +425,7 @@ class App {
       this.historyBefore = result.page.entries[result.page.entries.length - 1].item.item.revision; await this.loadHistory();
     })));
   }
-  private usageFilter(): api.UsageFilter { return this.selection === null ? new api.UsageFilter_ProjectAll() : new api.UsageFilter_TaskOnly(this.selection); }
+  private usageFilter(): api.UsageFilter { return this.usageSelection; }
   private async loadUsage(): Promise<void> {
     const filter = this.usageFilter(); this.usageFreshness.textContent = `Loading · ${this.usageObserved}`;
     let result: api.Result | null;
@@ -425,7 +438,12 @@ class App {
     this.usageMetric.textContent += ` · ${totals.reduce((sum, value) => sum + value.unknown, 0n)} unknown measurements · ${totals.reduce((sum, value) => sum + value.estimated, 0n)} estimated measurements`;
     this.usageObserved = `Observed ${new Date().toLocaleTimeString()} · cursor ${result.report.cursor}`;
     this.usageFreshness.textContent = this.usageObserved;
-    this.usagePanel.replaceChildren(element('h3', `Usage · ${this.selection === null ? 'project' : itemName(this.selection)}`));
+    this.usagePanel.replaceChildren(element('h3', `Usage · ${this.usageScope()}`));
+    const scopes = element('div', ''); scopes.className = 'actions';
+    scopes.append(button('Usage for whole project', () => this.action(() => this.selectUsage(new api.UsageFilter_ProjectAll()))));
+    const selected = this.selection;
+    if (selected !== null) scopes.append(button('Selected item usage', () => this.action(() => this.selectUsage(new api.UsageFilter_TaskOnly(selected)))));
+    this.usagePanel.append(scopes);
     for (const [label, totals] of [['Direct', result.report.direct], ['Shared', result.report.shared], ['Unattributed', result.report.unattributed]] as const) {
       this.usagePanel.append(element('p', `${label}: ${totals.total.known} known tokens; ${totals.total.unknown} unknown measurements; ${totals.total.estimated} estimated measurements`));
       if (totals.unknownCosts > 0n) this.usagePanel.append(element('p', `${totals.unknownCosts} unknown costs`));
@@ -435,6 +453,8 @@ class App {
     this.usagePanel.append(element('p', `Shared work is counted once and is not divided among members. Incomplete meters: ${result.report.incompleteMeters}; attempts without measurements: ${result.report.attemptsWithoutMeters}.`),
       element('p', `Attempt coverage: ${result.report.attempts.running} running; ${result.report.attempts.unknown} unknown outcomes; ${result.report.attempts.withGaps} with reported gaps.`),
       button('Refresh usage', () => this.action(() => this.loadUsage())), button('Attempts', () => this.action(() => this.loadAttempts(undefined, undefined))), button('Usage audit', () => this.action(async () => { this.auditAfter = 0n; await this.loadAudit(); })));
+    if (result.report.sharedAssignments.size > 0) this.usagePanel.append(element('p', `Shared assignments: ${[...result.report.sharedAssignments].map(id => id.value).join(', ')}.`));
+    if (result.report.sharedAssignmentsTruncated) this.usagePanel.append(element('p', 'The shared-assignment list is truncated. Browse attempts for further assignments and their frozen membership.'));
   }
   private costRow(cost: api.CostTotal): HTMLElement {
     const group = cost.group;
@@ -458,6 +478,13 @@ class App {
       const row = element('section', ''); const outcome = entry.outcome;
       row.append(element('h4', `${entry.attempt.harness} · ${entry.attempt.role} · ${outcome === undefined ? 'Running' : outcome.value.state}`),
         element('p', `Attempt ${entry.attempt.id.value} · ${entry.assignment.attribution}`));
+      row.append(element('p', `Assignment ${entry.assignment.id.value} · frozen members: ${[...entry.assignment.members].map(itemName).join(', ') || 'none'}`));
+      const scopes = element('div', ''); scopes.className = 'actions';
+      scopes.append(button(`Session usage · ${entry.attempt.session.value}`, () => this.action(() => this.selectUsage(new api.UsageFilter_SessionOnly(entry.attempt.session)))));
+      const cohort = entry.assignment.cohort;
+      if (cohort !== undefined) scopes.append(button(`Cohort usage · ${cohort}`, () => this.action(() => this.selectUsage(new api.UsageFilter_CohortOnly(cohort)))));
+      for (const member of entry.assignment.members) scopes.append(button(`Task usage · ${itemName(member)}`, () => this.action(() => this.selectUsage(new api.UsageFilter_TaskOnly(member)))));
+      row.append(scopes);
       if (outcome !== undefined) for (const gap of outcome.value.gaps) row.append(element('p', gap));
       const details = element('details', ''); details.append(element('summary', 'Attempt details'), element('pre', describe(api.AttemptView_JsonCodec.instance.encode(CONTEXT, entry))));
       row.append(details, button('Outcome history', () => this.action(() => this.loadOutcomes(entry.attempt.id, 0n)))); this.auditPanel.append(row);
