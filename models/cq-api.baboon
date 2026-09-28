@@ -271,8 +271,17 @@ root id CatalogueCursor { value: i64 }
 root data ProjectPage { projects: lst[Project] after: opt[ProjectId] hasMore: bit cursor: CatalogueCursor }
 root data ProjectConfig { project: ProjectId endpoint: str name: str }
 root data SearchInput { project: ProjectId query: str after: opt[ItemId] snapshot: opt[ChangeCursor] limit: i32 }
+enum ItemOrderField { Id Type Title Status Severity }
+enum SortDirection { Ascending Descending }
+root data ItemOrder { field: ItemOrderField direction: SortDirection }
+root data BrowseItem { summary: ItemSummary severity: opt[Severity] }
+root data BrowsePage { items: lst[BrowseItem] cursor: ChangeCursor after: opt[ItemId] hasMore: bit }
+root data LedgerCount { ledger: Ledger count: i64 }
+root data LedgerCounts { entries: lst[LedgerCount] cursor: ChangeCursor }
 root data GraphInput { project: ProjectId roots: set[ItemId] after: opt[ItemId] snapshot: opt[WorksetSnapshot] limit: i32 }
 root adt ReadSelection {
+  data Browse { query: str order: ItemOrder after: opt[ItemId] snapshot: opt[ChangeCursor] limit: i32 }
+  data Counts {}
   data Proposal { id: ArtifactId }
   data Integration { id: IntegrationId }
   data Admission { attempt: AttemptId }
@@ -317,6 +326,8 @@ root adt Command {
   data Usage { input: UsageInput }
 }
 root adt Result {
+  data Browsed { page: BrowsePage }
+  data Counts { report: LedgerCounts }
   data Details { page: ItemViews }
   data Proposal { preview: ProposalPreview }
   data Integration { record: IntegrationRecord }

@@ -1,5 +1,12 @@
 # Requirement coverage
 
+Current R02/R15/R19/R24 UI follow-up: [D29/D30](validation/results-table.md) adds
+whole-query sorting, a semantic results table and independently live project
+counts. Dual repository and full scoped browser checks pass; Astra approves the
+compact projection correction after measuring body-read amplification. Native
+delivery and operator-state update are pending. The [remaining-defect plan](drafts/20260928-remaining-defects.md)
+retains D26/D27 as the two reserved CQ exercises.
+
 Human evaluation follow-up: [D1–D8](validation/human-evaluation.md#unified-live-updates-and-native-candidate) pass the affected source, service/protocol, browser and fresh native checks, with independent Astra approval. Operator installation and actual hostname browser checks pass; D1–D8 are resolved with evidence. The [new UI/CLI batch](design/evaluation-follow-up.md) is filed as D26–D40 and I2; the user regards the UI as a prototype requiring redesign. Earlier technical approvals do not establish usability acceptance. The user authorized the [first UI redesign increment](validation/ui-redesign.md), D28 and D31–D37: verified, Astra-approved and installed, with the running host server awaiting restart. D26/D27 remain Open for CQ testing.
 
 Requirements: [R01–R31](drafts/20260926-0957-cq-requirements-prompt.md). Milestones: [implementation plan](drafts/20260926-1549-cq-implementation-plan.md). Planned ownership is not implementation evidence.

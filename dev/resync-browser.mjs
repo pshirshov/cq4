@@ -25,9 +25,9 @@ export async function resyncChecks(browser, storageState, origin, evidence) {
     const server = route.connectToServer();
     route.onMessage(message => {
       const frame = JSON.parse(String(message));
-      if (frame.Call && frame.Call.command.Search && frame.Call.command.Search.input.project.value === project.value) {
+      if (frame.Call && frame.Call.command.Read && frame.Call.command.Read.input.selection.Browse && frame.Call.command.Read.input.project.value === project.value) {
         exchanges.push({ direction: 'sent', frame });
-        if (held === null && frame.Call.command.Search.input.after !== null) {
+        if (held === null && frame.Call.command.Read.input.selection.Browse.after !== null) {
           held = { message, server, id: frame.Call.id.value }; suppress = true; capture(); return;
         }
       }
@@ -61,10 +61,10 @@ export async function resyncChecks(browser, storageState, origin, evidence) {
     await page.getByText('Data: current', { exact: true }).waitFor(); await settledRequests(page);
     const rejected = exchanges.find(entry => entry.direction === 'received' && entry.frame.Reply.id.value === held.id);
     assert.ok(rejected.frame.Reply.result.Failed.fault.Resync, 'The actual server rejects the stale snapshot');
-    const continuation = JSON.parse(held.message).Call.command.Search.input;
+    const continuation = JSON.parse(held.message).Call.command.Read.input.selection.Browse;
     assert.notEqual(continuation.after, null); assert.notEqual(continuation.snapshot, null);
     const recovery = exchanges.slice(exchanges.indexOf(rejected) + 1).find(entry => entry.direction === 'sent');
-    assert.notEqual(recovery, undefined); assert.equal(recovery.frame.Call.command.Search.input.after, null); assert.equal(recovery.frame.Call.command.Search.input.snapshot, null);
+    assert.notEqual(recovery, undefined); assert.equal(recovery.frame.Call.command.Read.input.selection.Browse.after, null); assert.equal(recovery.frame.Call.command.Read.input.selection.Browse.snapshot, null);
     const count = await page.locator('.item-row').count();
     assert.ok(count === 40 || count === 50, 'Recovery retains a complete first page and may refill at the current scroll position');
     const rows = await page.locator('.item-row').evaluateAll(nodes => nodes.map(node => node.dataset.item));

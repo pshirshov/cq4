@@ -22,6 +22,7 @@ trait LedgerTransaction {
   def allocate(ledger: Ledger): ItemId
   def get(id: ItemId): Option[Item]
   def summary(id: ItemId): Option[ItemSummary]
+  def browseItem(id: ItemId): Option[BrowseItem]
   def put(item: Item): Unit
   def refs(id: ItemId): List[ItemRef]
   def edge(edge: CanonicalEdge, present: Boolean): Boolean
@@ -33,6 +34,8 @@ trait LedgerTransaction {
   def publish(request: RequestId, items: List[ItemRevision]): ChangeCursor
   def changes(after: ChangeCursor, limit: Int): ReadPage[ChangeEvent]
   def scan(query: QueryExpression, after: Option[ItemId], limit: Int): ReadPage[ItemSummary]
+  def browse(query: QueryExpression, order: ItemOrder, after: Option[BrowseItem], limit: Int): ReadPage[BrowseItem]
+  def counts: List[LedgerCount]
   def completeItems(prefix: SearchPrefix, limit: Int): List[ItemSummary]
   def completeLabels(prefix: SearchPrefix, limit: Int): List[String]
   def claim(id: ItemId): Option[Claim]

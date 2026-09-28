@@ -28,7 +28,7 @@ export async function scrollChecks(browser, storageState, origin, evidence) {
     const server = route.connectToServer();
     route.onMessage(message => {
       const frame = JSON.parse(String(message));
-      if (hold && frame.Call?.command.Search?.input.project.value === project.value && frame.Call.command.Search.input.after !== null) {
+      if (hold && frame.Call?.command.Read?.input.project.value === project.value && frame.Call.command.Read.input.selection.Browse && frame.Call.command.Read.input.selection.Browse.after !== null) {
         hold = false; held = { message, server }; return;
       }
       server.send(message);

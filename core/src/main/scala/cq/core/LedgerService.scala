@@ -12,6 +12,8 @@ trait LedgerService[F[_, _]] {
   def get(scope: Scope, id: ItemId): F[Throwable, ItemView]
   def details(scope: Scope, members: List[ItemRevision], bytes: Int): F[Throwable, ItemViews]
   def search(scope: Scope, query: String, after: Option[ItemId], limit: Int): F[Throwable, ItemPage]
+  def browse(scope: Scope, query: String, order: ItemOrder, after: Option[ItemId], snapshot: Option[ChangeCursor], limit: Int): F[Throwable, BrowsePage]
+  def counts(scope: Scope): F[Throwable, LedgerCounts]
   def complete(scope: Scope, query: String, cursor: Int, limit: Int): F[Throwable, QueryAnalysis]
   def termination(scope: Scope, roots: Set[ItemId], intent: TerminationIntent): F[Throwable, TerminationPreview]
   def workset(scope: Scope, roots: Set[ItemId], after: Option[ItemId], snapshot: Option[WorksetSnapshot], limit: Int): F[Throwable, WorksetPage]
@@ -94,6 +96,25 @@ object LedgerService {
         }
       }
     }
+
+    override def browse(scope: Scope, query: String, order: ItemOrder, after: Option[ItemId], snapshot: Option[ChangeCursor], limit: Int): F[Throwable, BrowsePage] = {
+      import izumi.functional.bio.{F, *}
+      F.fromEither(queries.parse(query).left.map(error => DomainFailure(Fault.QuerySyntax(error)))).flatMap { expression =>
+        repository.transact(scope.project) { tx =>
+          page(limit)
+          invalid(after.isEmpty || snapshot.nonEmpty, "Browse continuation requires its snapshot")
+          if (snapshot.exists(_ != tx.cursor)) throw DomainFailure(Fault.Resync("Items changed; restart sorted browse"))
+          val anchor = after.map { id =>
+            inScope(scope, id)
+            tx.browseItem(id).getOrElse(throw DomainFailure(Fault.Missing("Browse continuation item does not exist")))
+          }
+          val found = tx.browse(expression, order, anchor, limit)
+          BrowsePage(found.entries, tx.cursor, found.entries.lastOption.map(_.summary.id), found.hasMore)
+        }
+      }
+    }
+
+    override def counts(scope: Scope): F[Throwable, LedgerCounts] = repository.transact(scope.project)(tx => LedgerCounts(tx.counts, tx.cursor))
 
     override def history(scope: Scope, id: ItemId, before: Revision, limit: Int): F[Throwable, HistoryPage] = repository.transact(scope.project) { tx =>
       page(limit)

@@ -23,9 +23,27 @@ button, input, select, textarea { font: inherit; color: inherit; background: #24
 button { cursor: pointer; }
 button:hover { background: #334b5d; }
 button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid #68c7ec; outline-offset: 2px; }
-.item-row { display: block; width: 100%; text-align: left; margin: 3px 0; overflow-wrap: anywhere; }
-.item-row[aria-current=true] { border-color: #68c7ec; background: #334b5d; }
-.item-status { display: block; margin-top: 2px; font-size: 12px; color: #a4c1d3; }
+nav .navigation-entry { display: flex; align-items: center; gap: 8px; text-align: left; padding: 5px 7px; }
+.navigation-entry svg, .items-table svg { width: 16px; height: 16px; flex: none; }
+.navigation-entry > span:not(.navigation-count) { flex: 1; }
+.navigation-count { margin-left: auto; color: #a4c1d3; font-variant-numeric: tabular-nums; }
+.items-table { table-layout: fixed; }
+.items-table th, .items-table td { padding: 6px 3px; }
+.items-table th { position: sticky; top: -10px; background: #1c2630; z-index: 1; }
+.items-table th:nth-child(1) { width: 12%; }
+.items-table th:nth-child(2) { width: 10%; }
+.items-table th:nth-child(3) { width: 38%; }
+.items-table th:nth-child(4), .items-table th:nth-child(5) { width: 20%; }
+.items-table th button { width: 100%; padding: 0; border: 0; border-radius: 0; text-align: left; font-size: 11px; overflow-wrap: anywhere; }
+.items-table th[aria-sort=ascending] { box-shadow: inset 0 -2px #68c7ec; }
+.items-table th[aria-sort=descending] { box-shadow: inset 0 2px #68c7ec; }
+.items-table th[aria-sort=ascending] button::after { content: ' ↑'; color: #68c7ec; }
+.items-table th[aria-sort=descending] button::after { content: ' ↓'; color: #68c7ec; }
+.item-row.selected { background: #243d4c; }
+.items-table .item-title { border: 0; background: transparent; padding: 0; min-height: 0; text-align: left; overflow-wrap: anywhere; width: 100%; }
+.item-row:hover { background: #253541; }
+.item-id { font-variant-numeric: tabular-nums; color: #a4c1d3; }
+.item-status, .item-severity { color: #a4c1d3; font-size: 11px; }
 .actions { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0; }
 fieldset { border: 1px solid #435364; min-width: 0; margin: 6px 0; padding: 7px; }
 legend { max-width: 100%; overflow-wrap: anywhere; color: #a4c1d3; padding: 0 5px; }

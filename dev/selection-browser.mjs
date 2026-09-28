@@ -102,7 +102,7 @@ export async function selectionChecks(browser, storageState, origin, evidence) {
         assert.deepEqual(errors, []); outcomes.push({ scenario, status: 'passed', exchanges }); continue;
       }
       if (scenario === 'project-list') {
-        predicate = command => command.Search && command.Search.input.project.value === second.project.value;
+        predicate = command => command.Read && command.Read.input.selection.Browse && command.Read.input.project.value === second.project.value;
         await page.getByLabel('Project', { exact: true }).selectOption(second.project.value); await capturedReply();
         assert.equal(await row('T1 · Selection A').count(), 0, 'Old project rows cannot remain actionable while the new project loads');
         held.route.send(held.message); await row('T1 · Selection C').click(); await heading('T1 · Selection C').waitFor();

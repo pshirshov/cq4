@@ -24,6 +24,7 @@ CREATE TABLE cq_items (
   schema_version text NOT NULL,
   archived boolean NOT NULL,
   status text NOT NULL,
+  severity text CHECK (severity IN ('Critical', 'High', 'Medium', 'Low')),
   title text NOT NULL,
   narrative text NOT NULL,
   search_text text NOT NULL,

@@ -28,6 +28,8 @@ final class Application(ledger: LedgerService[IO], repository: LedgerRepository[
         }
       }
       case Command.Read(input) => scoped(authority, input.project) { scope => input.selection match {
+        case ReadSelection.Browse(query, order, after, snapshot, limit) => ledger.browse(scope, query, order, after, snapshot, limit).map(Result.Browsed.apply)
+        case ReadSelection.Counts() => ledger.counts(scope).map(Result.Counts.apply)
         case ReadSelection.Proposal(id) => proposals.preview(scope, id).map(Result.Proposal.apply)
         case ReadSelection.Integration(id) => integrations.get(scope, id).map(Result.Integration.apply)
         case ReadSelection.Admission(attempt) => admissions.get(scope, attempt).map(Result.Admission.apply)

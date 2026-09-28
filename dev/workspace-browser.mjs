@@ -36,7 +36,7 @@ export async function workspaceChecks(browser, storageState, origin, evidence) {
     assert.equal(await secondRow.evaluate(node => node === document.activeElement), true);
     await secondRow.press('Enter'); await page.getByRole('heading', { name: 'T2 · Keyboard B updated', exact: true }).waitFor();
     assert.equal(await secondRow.getAttribute('aria-current'), 'true');
-    assert.equal(await secondRow.locator('.item-status').textContent(), 'Ready');
+    assert.equal(await secondRow.locator('xpath=ancestor::tr').locator('.item-status').textContent(), 'Ready');
     const detail = page.getByRole('article', { name: 'Item workspace', exact: true });
     await secondRow.press('ArrowRight'); assert.equal(await detail.evaluate(node => node === document.activeElement), true);
     await detail.press('Escape'); assert.equal(await secondRow.evaluate(node => node === document.activeElement), true);

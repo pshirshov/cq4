@@ -74,6 +74,7 @@ private final class DummyLedgerTransaction(initial: DummyLedgerState) extends Le
   }
   override def get(id: ItemId): Option[Item] = state.items.get(id)
   override def summary(id: ItemId): Option[ItemSummary] = state.items.get(id).map(LedgerPolicy.summary)
+  override def browseItem(id: ItemId): Option[BrowseItem] = state.items.get(id).map(ItemBrowse.project)
   override def put(item: Item): Unit = { state = state.copy(items = state.items.updated(item.id, item)) }
   override def refs(id: ItemId): List[ItemRef] = state.edges.toList.flatMap { edge =>
     if (edge.source == id) List(ItemRef(edge.relation, edge.target))
@@ -126,6 +127,16 @@ private final class DummyLedgerTransaction(initial: DummyLedgerState) extends Le
       matches(query, item) && after.forall(id => Ordering[(String, Long)].gt(LedgerPolicy.key(item.id), LedgerPolicy.key(id)))
     }.toList.sortBy(i => LedgerPolicy.key(i.id)).iterator.map(LedgerPolicy.summary)
     ReadPage.select(candidates, limit, ItemSummary_JsonCodec)
+  }
+  override def browse(query: QueryExpression, order: ItemOrder, after: Option[BrowseItem], limit: Int): ReadPage[BrowseItem] = {
+    val ordering = ItemBrowse.ordering(order)
+    val candidates = state.items.valuesIterator.filter(matches(query, _)).map(ItemBrowse.project)
+      .filter(item => after.forall(ordering.lt(_, item))).toList.sorted(ordering)
+    ReadPage.select(candidates.iterator, limit, BrowseItem_JsonCodec)
+  }
+  override def counts: List[LedgerCount] = {
+    val counts = state.items.valuesIterator.filterNot(_.draft.archived).toList.groupMapReduce(_.id.ledger)(_ => 1L)(_ + _)
+    Ledger.all.map(ledger => LedgerCount(ledger, counts.getOrElse(ledger, 0L)))
   }
   override def completeItems(prefix: SearchPrefix, limit: Int): List[ItemSummary] = state.items.valuesIterator
     .filter(item => prefix.matches(LedgerPolicy.prefix(item.id.ledger) + item.id.number))

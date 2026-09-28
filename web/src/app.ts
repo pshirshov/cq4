@@ -10,6 +10,7 @@ import { GraphActions } from './graph.js';
 import { itemName } from './items.js';
 import { itemView } from './presentation.js';
 import { Dialog } from './dialog.js';
+import { icon } from './icons.js';
 
 const CONTEXT = BaboonCodecContext.Default;
 const PAGE_SIZE = 40;
@@ -26,7 +27,7 @@ type Panel = 'detail' | 'history' | 'usage' | 'audit';
 type UsageScope = api.UsageFilter_ProjectAll | api.UsageFilter_TaskOnly | api.UsageFilter_CohortOnly | api.UsageFilter_SessionOnly;
 interface UsageLoad { dirty: boolean }
 type AuditView = api.UsageSelection_Costs | api.UsageSelection_Attempts | api.UsageSelection_Outcomes | api.UsageSelection_Audit;
-interface ResultRow { button: HTMLButtonElement; caption: HTMLSpanElement; status: HTMLSpanElement }
+interface ResultRow { element: HTMLTableRowElement; button: HTMLButtonElement; status: HTMLTableCellElement; severity: HTMLTableCellElement }
 
 class App {
   private manager: ConnectionManager | null = null;
@@ -38,11 +39,16 @@ class App {
   }, () => this.action(() => this.search()));
   private readonly query = this.queryEditor.input;
   private activeQuery = '';
-  private readonly items = element('div', '');
+  private readonly items = element('tbody', '');
+  private readonly sortHeaders = new Map<api.ItemOrderField, HTMLTableCellElement>();
+  private order = new api.ItemOrder(api.ItemOrderField.Id, api.SortDirection.Ascending);
+  private readonly navigationCounts = new Map<api.Ledger | 'All', HTMLSpanElement>();
+  private countsLoad: UsageLoad | null = null;
+  private countsSnapshot: bigint | null = null;
   private readonly rows = new Map<string, ResultRow>();
-  private loadedItems: api.ItemSummary[] = [];
+  private loadedItems: api.BrowseItem[] = [];
   private resultsPane: HTMLElement | null = null;
-  private readonly emptyResults = element('p', 'No matching items.');
+  private readonly emptyResults = element('tr', '');
   private readonly resultStatus = element('p', 'No project selected');
   private readonly usageMetric = element('span', 'Usage: not loaded');
   private readonly usageFreshness = element('span', '');
@@ -93,7 +99,7 @@ class App {
   private readonly requests: Record<Panel, number> = { detail: 0, history: 0, usage: 0, audit: 0 };
   private after: api.ItemId | undefined;
   private snapshot: api.ChangeCursor | undefined;
-  private page: api.ItemPage | null = null;
+  private page: api.BrowsePage | null = null;
   private epoch = 0;
   private refreshing = false;
   private dirty = false;
@@ -182,14 +188,34 @@ class App {
     }); });
     this.projectDialog.body.append(newProject); this.historyDialog.body.append(this.historyPanel);
     const shortcuts = element('div', ''); shortcuts.className = 'query-shortcuts';
-    for (const [label, query] of [['All items', ''], ...api.Ledger_values.map(ledger => [ledger, `ledger:${ledger}`])]) {
-      shortcuts.append(button(label, () => this.action(async () => { this.queryEditor.invalidate(); this.query.value = query; await this.search(); })));
+    for (const ledger of ['All' as const, ...api.Ledger_values]) {
+      const label = ledger === 'All' ? 'All items' : ledger;
+      const query = ledger === 'All' ? '' : `ledger:${ledger}`;
+      const entry = button('', () => this.action(async () => { this.queryEditor.invalidate(); this.query.value = query; await this.search(); }));
+      entry.className = 'navigation-entry'; entry.setAttribute('aria-label', label);
+      entry.title = 'Unarchived items in this project, independent of the search query';
+      const glyph = icon(ledger); glyph.classList.add('navigation-icon');
+      const count = element('span', '—'); count.className = 'navigation-count'; count.id = `count-${ledger}`;
+      entry.setAttribute('aria-describedby', count.id); this.navigationCounts.set(ledger, count);
+      entry.append(glyph, element('span', label), count); shortcuts.append(entry);
     }
-    side.append(element('h2', 'Workspace'), button('New item', () => { this.openEditor(null); }),
-      button('Project usage', () => this.action(() => this.selectUsage(new api.UsageFilter_ProjectAll(), true))),
-      element('h3', 'Browse'), shortcuts,
+    const create = button('New item', () => { this.openEditor(null); }); create.className = 'navigation-entry'; create.prepend(icon('New'));
+    const usage = button('Project usage', () => this.action(() => this.selectUsage(new api.UsageFilter_ProjectAll(), true))); usage.className = 'navigation-entry'; usage.prepend(icon('Usage'));
+    side.append(create, usage, element('h3', 'Browse'), shortcuts,
       element('p', 'Ctrl+K: query · F6: next pane · Shift+F6: previous pane. Results: ↑/↓ to move, Enter to select, → for detail, Escape to return.'));
-    this.items.tabIndex = -1; this.items.setAttribute('aria-label', 'Result items'); this.items.setAttribute('role', 'group');
+    const table = element('table', ''); table.className = 'items-table'; table.setAttribute('aria-label', 'Items');
+    const head = element('thead', ''); const headings = element('tr', '');
+    for (const field of api.ItemOrderField_values) {
+      const cell = element('th', ''); cell.scope = 'col'; this.sortHeaders.set(field, cell);
+      const control = button(field === 'Id' ? 'ID' : field, () => this.action(async () => {
+        this.order = new api.ItemOrder(field, this.order.field === field && this.order.direction === 'Ascending' ? api.SortDirection.Descending : api.SortDirection.Ascending);
+        this.updateSort(); await this.search();
+      }));
+      control.setAttribute('aria-label', `Sort by ${field === 'Id' ? 'ID' : field.toLowerCase()}`); cell.append(control); headings.append(cell);
+    }
+    head.append(headings); table.append(head, this.items); this.updateSort();
+    const empty = element('td', 'No matching items.'); empty.colSpan = api.ItemOrderField_values.length; this.emptyResults.append(empty);
+    this.items.tabIndex = -1; this.items.setAttribute('aria-label', 'Result items');
     this.items.addEventListener('keydown', event => {
       const rows = Array.from(this.items.querySelectorAll<HTMLButtonElement>('button')); const index = rows.indexOf(document.activeElement as HTMLButtonElement);
       const target = event.key === 'ArrowDown' ? Math.min(rows.length - 1, index + 1) : event.key === 'ArrowUp' ? Math.max(0, index - 1)
@@ -202,7 +228,7 @@ class App {
     });
     this.root.addEventListener('keydown', event => { if (event.ctrlKey && event.key.toLowerCase() === 'k') { event.preventDefault(); this.query.focus(); } });
     this.resultStatus.setAttribute('role', 'status');
-    list.append(element('h2', 'Items'), this.resultStatus, this.items);
+    list.append(this.resultStatus, table);
     content.append(workspace.toggle, this.notice, this.detail, this.editorPanel, this.conflictPanel, this.graph.element, this.usagePanel, this.auditPanel);
     this.root.replaceChildren(header, workspace.element, this.projectDialog.element, this.createDialog.element, this.historyDialog.element, this.usageDialog.element); workspace.fit();
     this.manager = new ConnectionManager(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`, {
@@ -226,6 +252,7 @@ class App {
           const project = frame.revision.project;
           if (project !== undefined && this.project !== null && project.project.value === this.project.value) {
             if (this.itemCursor === null || project.items.value > this.itemCursor) this.itemCursor = project.items.value;
+            if (this.countsSnapshot === null || this.itemCursor > this.countsSnapshot) this.action(() => this.loadCounts());
             if (!this.queryInvalid && (this.page === null || this.itemCursor > this.page.cursor.value)) {
               this.after = undefined; this.snapshot = undefined; this.action(() => this.refresh());
             }
@@ -253,7 +280,7 @@ class App {
     this.createDialog.close(); this.historyDialog.close(); this.usageDialog.close(); this.closeEditor();
     this.queryEditor.invalidate(); this.queryEditor.showDiagnostic(undefined, this.query.value);
     this.epoch++; this.selectionGeneration++; this.selection = null; this.selected = null; this.editor = null; this.after = undefined; this.snapshot = undefined;
-    this.queryInvalid = false; this.itemCursor = null; this.resetUsageWatch(); this.watch();
+    this.queryInvalid = false; this.itemCursor = null; this.resetCounts(); this.resetUsageWatch(); this.watch();
     this.graph.setScope(this.project, null);
     this.rows.clear(); this.items.replaceChildren(); this.loadedItems = []; this.page = null; this.resultStatus.textContent = 'Loading items…';
     if (this.resultsPane !== null) this.resultsPane.scrollTop = 0;
@@ -265,7 +292,7 @@ class App {
   }
   private resetLiveWatch(): void {
     this.liveGeneration++; this.liveSubscription = null; this.catalogueLoad = null; this.catalogueCursor = null;
-    this.catalogueSnapshot = null; this.itemCursor = null; this.auditLoad = null; this.resetUsageWatch();
+    this.catalogueSnapshot = null; this.itemCursor = null; this.resetCounts(); this.auditLoad = null; this.resetUsageWatch();
   }
   private async loadProjects(): Promise<void> {
     if (this.catalogueLoad !== null) { this.catalogueLoad.dirty = true; return; }
@@ -310,6 +337,7 @@ class App {
   }
   private async refresh(): Promise<void> {
     if (this.project === null) return;
+    this.action(() => this.loadCounts());
     if (this.refreshing) { this.dirty = true; return; }
     this.refreshing = true; this.dirty = false;
     const project = this.project; const epoch = this.epoch;
@@ -321,10 +349,10 @@ class App {
     this.after = undefined; this.snapshot = undefined;
     this.sync.textContent = 'Data: synchronizing'; this.items.setAttribute('aria-busy', 'true');
     try {
-      let page: api.ItemPage;
+      let page: api.BrowsePage;
       do {
-        const input = new api.SearchInput(project, this.activeQuery, after, snapshot, PAGE_SIZE);
-        const response = await this.connection().call(new api.Command_Search(input));
+        const selection = new api.ReadSelection_Browse(this.activeQuery, this.order, after, snapshot, PAGE_SIZE);
+        const response = await this.connection().call(new api.Command_Read(new api.ReadInput(project, selection)));
         if (!current()) return;
         if (response instanceof api.Result_Failed && response.fault instanceof api.Fault_Resync) { this.dirty = true; return; }
         if (response instanceof api.Result_Failed && response.fault instanceof api.Fault_QuerySyntax) {
@@ -333,7 +361,7 @@ class App {
           this.showError(`${error.message} (${error.span.start}–${error.span.end})`); return;
         }
         const result = readResult(response);
-        if (!(result instanceof api.Result_Found)) throw new Error('Unexpected item page');
+        if (!(result instanceof api.Result_Browsed)) throw new Error('Unexpected item page');
         page = result.page; items.push(...page.items); after = page.after; snapshot = page.cursor;
       } while (page.hasMore && items.length < target);
       this.page = page; this.loadedItems = items;
@@ -351,31 +379,79 @@ class App {
       else if (completed && current()) requestAnimationFrame(() => this.loadMore());
     }
   }
-  private renderItems(items: api.ItemSummary[]): void {
+  private updateSort(): void {
+    for (const [field, header] of this.sortHeaders) {
+      const active = field === this.order.field;
+      header.setAttribute('aria-sort', active ? this.order.direction.toLowerCase() : 'none');
+      header.title = `Sort ${active && this.order.direction === api.SortDirection.Ascending ? 'descending' : 'ascending'}`;
+    }
+  }
+  private resetCounts(): void {
+    this.countsLoad = null; this.countsSnapshot = null;
+    for (const count of this.navigationCounts.values()) count.textContent = '—';
+  }
+  private async loadCounts(): Promise<void> {
+    if (this.project === null) return;
+    if (this.countsLoad !== null) { this.countsLoad.dirty = true; return; }
+    const project = this.project; const generation = this.liveGeneration;
+    const load: UsageLoad = { dirty: true }; this.countsLoad = load;
+    const current = () => this.countsLoad === load && this.project === project && this.liveGeneration === generation;
+    try {
+      while (current() && load.dirty) {
+        load.dirty = false;
+        const response = await this.connection().call(new api.Command_Read(new api.ReadInput(project, new api.ReadSelection_Counts())));
+        if (!current()) return;
+        const result = readResult(response);
+        if (!(result instanceof api.Result_Counts)) throw new Error('Unexpected navigation counts');
+        this.countsSnapshot = result.report.cursor.value;
+        let total = 0n;
+        for (const entry of result.report.entries) {
+          const badge = this.navigationCounts.get(entry.ledger);
+          if (badge === undefined) throw new Error('Missing navigation ledger');
+          badge.textContent = entry.count.toLocaleString(); total += entry.count;
+        }
+        const all = this.navigationCounts.get('All');
+        if (all === undefined) throw new Error('Missing all-items navigation');
+        all.textContent = total.toLocaleString();
+        load.dirty = load.dirty || (this.itemCursor !== null && this.itemCursor > this.countsSnapshot);
+      }
+    } catch (error) { if (current()) throw error; }
+    finally { if (current()) this.countsLoad = null; }
+  }
+  private renderItems(items: api.BrowseItem[]): void {
     const focused = this.items.contains(document.activeElement) ? document.activeElement as HTMLElement : null;
-    const retained = new Set<string>();
-    this.emptyResults.remove();
-    for (const [index, item] of items.entries()) {
+    const retained = new Set<string>(); this.emptyResults.remove();
+    for (const [index, entry] of items.entries()) {
+      const item = entry.summary;
       const key = `${item.id.project.value}-${itemName(item.id)}`; retained.add(key);
       let row = this.rows.get(key);
       if (row === undefined) {
-        const node = button('', () => this.action(() => this.select(item.id))); node.className = 'item-row'; node.dataset.item = key;
-        const caption = element('span', ''); const status = element('span', ''); status.className = 'item-status'; status.id = `status-${key}`;
-        node.setAttribute('aria-describedby', status.id); node.append(caption, status); row = { button: node, caption, status }; this.rows.set(key, row);
+        const line = element('tr', ''); line.className = 'item-row'; line.dataset.item = key;
+        const node = button('', () => this.action(() => this.select(item.id))); node.className = 'item-title';
+        const id = element('td', itemName(item.id)); id.className = 'item-id';
+        const type = element('td', ''); type.append(icon(item.id.ledger)); type.setAttribute('aria-label', item.id.ledger); type.title = item.id.ledger;
+        const title = element('td', ''); title.append(node);
+        const status = element('td', ''); status.className = 'item-status'; status.id = `status-${key}`;
+        const severity = element('td', ''); severity.className = 'item-severity';
+        node.setAttribute('aria-describedby', status.id); line.append(id, type, title, status, severity);
+        row = { element: line, button: node, status, severity }; this.rows.set(key, row);
       }
       const caption = `${itemName(item.id)} · ${item.title}${item.archived ? ' · archived' : ''}`;
-      row.caption.textContent = caption; row.status.textContent = item.status; row.button.setAttribute('aria-label', caption);
+      row.button.textContent = item.title + (item.archived ? ' · archived' : ''); row.button.setAttribute('aria-label', caption);
+      row.status.textContent = item.status; row.severity.textContent = entry.severity === undefined ? '—' : entry.severity;
       const before = this.items.children.item(index);
-      if (before !== row.button) this.items.insertBefore(row.button, before);
+      if (before !== row.element) this.items.insertBefore(row.element, before);
     }
-    for (const [key, row] of this.rows) if (!retained.has(key)) { row.button.remove(); this.rows.delete(key); }
+    for (const [key, row] of this.rows) if (!retained.has(key)) { row.element.remove(); this.rows.delete(key); }
     if (items.length === 0) this.items.append(this.emptyResults);
     this.markSelection();
     if (focused !== null && document.activeElement !== focused) (focused.isConnected ? focused : this.items).focus();
   }
   private markSelection(): void {
     const key = this.selection === null ? null : `${this.selection.project.value}-${itemName(this.selection)}`;
-    for (const [id, row] of this.rows) row.button.setAttribute('aria-current', String(id === key));
+    for (const [id, row] of this.rows) {
+      row.button.setAttribute('aria-current', String(id === key)); row.element.classList.toggle('selected', id === key);
+    }
   }
   private usageScope(): string {
     const scope = this.usageSelection;

@@ -5,7 +5,7 @@ import cq.api.*
 import cq.core.*
 import distage.Lifecycle
 import io.circe.parser.parse
-import java.sql.{Connection, PreparedStatement}
+import java.sql.{Connection, PreparedStatement, ResultSet}
 import zio.{IO, Task}
 
 final class PostgresLedgerRepository(database: LedgerDatabase) extends LedgerRepository[IO] {
@@ -87,18 +87,25 @@ private final class PostgresLedgerTransaction(connection: Connection, override v
 
   override def summary(id: ItemId): Option[ItemSummary] = sql.query("SELECT summary::text FROM cq_items WHERE project_id = ? AND ledger = ? AND number = ?")(itemKey(_, id))(r => Wire.decode(ItemSummary_JsonCodec, r.getString(1))).headOption
 
+  private def readBrowseItem(row: ResultSet): BrowseItem = BrowseItem(Wire.decode(ItemSummary_JsonCodec, row.getString(1)), Option(row.getString(2)).map(value =>
+    Severity.parse(value).getOrElse(throw new IllegalStateException(s"Invalid persisted severity $value"))))
+
+  override def browseItem(id: ItemId): Option[BrowseItem] =
+    sql.query("SELECT summary::text, severity FROM cq_items WHERE project_id = ? AND ledger = ? AND number = ?")(itemKey(_, id))(readBrowseItem).headOption
+
   override def put(item: Item): Unit = {
     val previous = sql.query("SELECT summary::text FROM cq_items WHERE project_id = ? AND ledger = ? AND number = ?")(itemKey(_, item.id))
       (r => Wire.decode(ItemSummary_JsonCodec, r.getString(1))).headOption.fold(Set.empty[String])(_.labels)
-    sql.execute("INSERT INTO cq_items(project_id, ledger, number, revision, schema_version, archived, status, title, narrative, body, summary, search_text, display_id) " +
-      "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?::jsonb, ?, ?) ON CONFLICT(project_id, ledger, number) DO UPDATE SET " +
+    sql.execute("INSERT INTO cq_items(project_id, ledger, number, revision, schema_version, archived, status, title, narrative, body, summary, search_text, display_id, severity) " +
+      "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?::jsonb, ?, ?, ?) ON CONFLICT(project_id, ledger, number) DO UPDATE SET " +
       "revision = EXCLUDED.revision, schema_version = EXCLUDED.schema_version, archived = EXCLUDED.archived, " +
-      "status = EXCLUDED.status, title = EXCLUDED.title, narrative = EXCLUDED.narrative, body = EXCLUDED.body, summary = EXCLUDED.summary, search_text = EXCLUDED.search_text") { s =>
+      "status = EXCLUDED.status, title = EXCLUDED.title, narrative = EXCLUDED.narrative, body = EXCLUDED.body, summary = EXCLUDED.summary, search_text = EXCLUDED.search_text, severity = EXCLUDED.severity") { s =>
       itemKey(s, item.id); s.setLong(4, item.revision.value); s.setString(5, item.baboonDomainVersion)
       s.setBoolean(6, item.draft.archived); s.setString(7, LedgerPolicy.status(item.draft.content).toLowerCase(java.util.Locale.ROOT))
       s.setString(8, item.draft.title); s.setString(9, item.draft.body); s.setString(10, Wire.encode(Item_JsonCodec, item)); s.setString(11, Wire.encode(ItemSummary_JsonCodec, LedgerPolicy.summary(item)))
       s.setString(12, SearchText.document(item.draft.title, item.draft.body))
       s.setString(13, LedgerPolicy.prefix(item.id.ledger) + item.id.number)
+      s.setString(14, ItemBrowse.project(item).severity.map(_.toString).orNull)
     }
     def labelKey(label: String)(statement: PreparedStatement): Unit = { projectKey(statement); statement.setString(2, label) }
     (previous -- item.draft.labels).toList.sorted(SearchPrefix.ordering).foreach { label =>
@@ -183,6 +190,50 @@ private final class PostgresLedgerTransaction(connection: Connection, override v
       after.foreach { id => s.setString(index, id.ledger.toString); s.setLong(index + 1, id.number); index += 2 }
       s.setInt(index, limit + 1)
     }
+  }
+
+  override def browse(query: QueryExpression, order: ItemOrder, after: Option[BrowseItem], limit: Int): ReadPage[BrowseItem] = {
+    val compiled = QuerySql.compile(query, project.id)
+    val severity = "i.severity"
+    val missing = if (order.field == ItemOrderField.Severity) s"CASE WHEN $severity IS NULL THEN 1 ELSE 0 END" else "0"
+    val text = order.field match {
+      case ItemOrderField.Id => "regexp_replace(i.display_id, '[0-9]+$', '')"
+      case ItemOrderField.Type => "i.ledger"
+      case ItemOrderField.Title => "i.title"
+      case ItemOrderField.Status => "i.summary ->> 'status'"
+      case ItemOrderField.Severity => "''"
+    }
+    val number = order.field match {
+      case ItemOrderField.Id => "i.number"
+      case ItemOrderField.Severity => s"CASE $severity WHEN 'Critical' THEN 0 WHEN 'High' THEN 1 WHEN 'Medium' THEN 2 WHEN 'Low' THEN 3 ELSE 0 END"
+      case _ => "0"
+    }
+    val ascending = order.direction == SortDirection.Ascending
+    val direction = if (ascending) "ASC" else "DESC"
+    val comparison = if (ascending) ">" else "<"
+    val pagination = after.fold("")(_ => s"WHERE missing > ? OR (missing = ? AND ((sort_text, sort_number) $comparison (? COLLATE \"C\", ?) OR " +
+      "((sort_text, sort_number) = (? COLLATE \"C\", ?) AND (ledger, number) > (?, ?))))")
+    val statement = s"SELECT summary::text, severity FROM (SELECT i.summary, i.ledger, i.number, $severity AS severity, $missing AS missing, " +
+      s"($text) COLLATE \"C\" AS sort_text, $number AS sort_number FROM cq_items i WHERE i.project_id = ? AND (${compiled.predicate})) sorted " +
+      s"$pagination ORDER BY missing ASC, sort_text $direction, sort_number $direction, ledger ASC, number ASC LIMIT ?"
+    sql.pageBy(statement, limit, BrowseItem_JsonCodec) { s =>
+      projectKey(s)
+      var index = compiled.bind(s, 2)
+      after.foreach { item =>
+        val key = ItemBrowse.key(item, order.field)
+        s.setInt(index, key.missing); s.setInt(index + 1, key.missing)
+        s.setString(index + 2, key.text); s.setLong(index + 3, key.number)
+        s.setString(index + 4, key.text); s.setLong(index + 5, key.number)
+        s.setString(index + 6, key.ledger); s.setLong(index + 7, key.id); index += 8
+      }
+      s.setInt(index, limit + 1)
+    }(readBrowseItem)
+  }
+
+  override def counts: List[LedgerCount] = {
+    val counts = sql.query("SELECT ledger, count(*) FROM cq_items WHERE project_id = ? AND NOT archived GROUP BY ledger")(projectKey)
+      (r => ledger(r.getString(1)) -> r.getLong(2)).toMap
+    Ledger.all.map(value => LedgerCount(value, counts.getOrElse(value, 0L)))
   }
 
   private def prefixWhere(column: String, prefix: SearchPrefix): String = s"$column >= ?" + prefix.upper.fold("")(_ => s" AND $column < ?")

@@ -16,6 +16,7 @@ import { usageLiveChecks } from './usage-live-browser.mjs';
 import { densityChecks } from './density-browser.mjs';
 import { scrollChecks } from './scroll-browser.mjs';
 import { catalogueChecks } from './catalogue-browser.mjs';
+import { tableChecks } from './table-browser.mjs';
 import { redesignChecks } from './redesign-browser.mjs';
 import { interactionChecks } from './interaction-browser.mjs';
 
@@ -114,6 +115,7 @@ try {
   await page.getByRole('dialog', { name: 'New item', exact: true }).getByRole('button', { name: 'Close', exact: true }).click();
   assert.deepEqual(errors, []);
   console.log('Chromium: login, project creation, all 14 forms, persisted draft, create/edit/history, usage audit, external live update and offline recovery passed');
+  await tableChecks(browser, await context.storageState(), origin, evidence);
   await redesignChecks(browser, await context.storageState(), origin, evidence);
   await editChecks(browser, await context.storageState(), origin, evidence);
   await scrollChecks(browser, await context.storageState(), origin, evidence);
