@@ -113,7 +113,12 @@
       "applicability": "All 291 current non-documentation inputs match. Query/mutation/closure/integration/usage access budgets pass through 100,000 unrelated items."
     }
   ],
-  "running": [],
+  "running": [
+    {
+      "name": "packaged-live",
+      "directory": "/srv/nvme/tmp/cq4-implementation/20260928T060135-release"
+    }
+  ],
   "pending": [
     "packaged live acceptance and usage report",
     "final independent Astra release review",
@@ -137,9 +142,11 @@
       "cohort-pi",
       "cohort-pi-assess",
       "process-begin",
-      "defect-begin"
+      "defect-begin",
+      "defect-probe",
+      "defect-research"
     ],
-    "runningStage": null,
+    "runningStage": "defect-plan",
     "scope": "Progress snapshot; consult suite.json for current state. Full corpus and human acceptance remain pending.",
     "verifiedRoutes": 9,
     "scopedAccounting": {
@@ -173,7 +180,7 @@
         "error": "Stage process failed"
       }
     ],
-    "correction": "Astra-approved probe instruction clarification and reviewed evaluator amendment admitted; no new model calls; targeted retry pending."
+    "correction": "Astra-approved amendment admitted; unchanged original evidence/accounting verified. Targeted probe retry and research pass; plan in progress. Accepted cohorts reused."
   },
   "evaluatorAmendments": [
     {

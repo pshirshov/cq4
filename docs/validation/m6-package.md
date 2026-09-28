@@ -123,3 +123,7 @@ PATH=/srv/nvme/tmp/cq4-implementation/m6-harness-bin:$PATH \
 ```
 
 Do not resubmit `--amendment` after it has been admitted: its before/after chain is appended once. The source epoch is evaluation provenance; the CQ model remains the single `0.1.0` version. The previously approved native/installed/SQL/UI evidence still applies to unchanged product code. Only the five reviewed evaluator files changed.
+
+Independent Astra also verified the actual amendment admission: unchanged original invocations/proofs/accounting and all 11,775 frozen files. The targeted retry may proceed; no accepted cohort rerun is required.
+
+The targeted retry at `20260928T065309-defect-probe` passes the unchanged strict file-output/recorder/fixture predicate. Its research continuation at `20260928T065443-defect-research` also passes. The suite launches reviewed planning next, retaining all accepted cohorts and the original rejected probe.
