@@ -1,0 +1,145 @@
+{
+  "state": "in-progress",
+  "implementationCommit": "94f4a5288d7282dae09c162a6b42f226a0be4949",
+  "modelVersion": "0.1.0",
+  "platform": "x86_64-linux",
+  "artifact": {
+    "directory": "/srv/nvme/tmp/cq4-implementation/cq-release",
+    "manifestSha256": "d8656dd57434db5fddef0e62b6080692fe4d080ea132d1161ee91f4867f0de71",
+    "executableSha256": "b25dfa22e2aff84282b9dcdf755ba1a2226b75a467dd167413e361428b6761b0",
+    "guardianSha256": "f56efb4626cb8e0fab0cc4b27b1460e75cea275890b5209df0a7f312ddf029bc"
+  },
+  "verifiedGates": [
+    {
+      "name": "contracts",
+      "directory": "/home/pavel/work/safe/cq4/cq4/.work/evidence/20260928T040244-contracts",
+      "status": "passed",
+      "evidenceSha256": {
+        "result.json": "17266eca800ad9eedf4f3c7c372e1bc106e2ee4b4fe44a59cbbfffbcbd1acd6f",
+        "commands.json": "394bf212c05deccfc5444e150c635250d053de814e5d142d13eee3841b063199",
+        "source-sha256.json": "d99ac546df49192f71137c413221725179eec9aad0900cd264ac99a7b2ab2f26"
+      },
+      "applicability": "Retained; all current non-dev inputs match."
+    },
+    {
+      "name": "fast",
+      "directory": "/srv/nvme/tmp/cq4-implementation/20260928T053319-fast",
+      "status": "passed",
+      "evidenceSha256": {
+        "result.json": "edf0606bea225f572f73f7a03d3c52d6dad56957432865a83006260e8ce1863c",
+        "commands.json": "0a99809e009f89828ad05049bc46c05fe642a7a04b25ac11bf76d116c64bbb86",
+        "source-sha256.json": "21b90e713dbb5c133ff082e228eb4ce77756e17ef3bbe30a9a0e1c65cefb12dc"
+      },
+      "applicability": "Retained; all current non-dev inputs match. Later server-process hook and installed signal controller verified by installed gate."
+    },
+    {
+      "name": "ui",
+      "directory": "/home/pavel/work/safe/cq4/cq4/.work/evidence/20260928T035540-ui",
+      "status": "passed",
+      "evidenceSha256": {
+        "result.json": "47c5e664abaf2c9375f927a6933f7934e49dd91aa49dfa99434e9fccd5b8785d",
+        "commands.json": "52ee7d43ba4a50a0668457e9369e5fdb35e232ec905c8a64faef8a06ddeea2a7",
+        "source-sha256.json": "b40088ae4a75c96289cfc6f3319f65fba19877d0ad6db3fefc6ce7c06e019ed8"
+      },
+      "applicability": "Retained; UI inputs unchanged. Compiler flake change separately verified. Current native/installed browser corpus also passes."
+    },
+    {
+      "name": "usage",
+      "directory": "/home/pavel/work/safe/cq4/cq4/.work/evidence/20260928T032953-usage",
+      "status": "passed",
+      "evidenceSha256": {
+        "result.json": "66d9bfd7c8c19d737b5126b3a77fcdd036cd216417f8f1236e6f9d26d7b5d698",
+        "commands.json": "3651e5b84b9555a54a2326fc3294c73268de173483988e3f322fb801a53f5bc1",
+        "source-sha256.json": "83dd18484e4e832eb3ab48ae9f230238ae24c68e220cea1d027e5b69a6c76c85"
+      },
+      "applicability": "Retained usage watch/SQL proof. Later connection UI changes verified by UI and current native/installed browser corpus."
+    },
+    {
+      "name": "process",
+      "directory": "/srv/nvme/tmp/cq4-implementation/20260927T165957-process",
+      "status": "passed",
+      "evidenceSha256": {
+        "result.json": "a34ba5ac3438c891a3c9afee6f357e8b6eeafb70781965b111fd6eb0564e8fb7",
+        "commands.json": "9bfd9aa382d53859ebe794a4f3d98591ffb01f22b14fa44749ef6d39f5d8d479",
+        "source-sha256.json": "7be22f3848b041771e0d024ff68cb58c885ca3222292895573b963b83aff3c2d"
+      },
+      "applicability": "Retained failure-injection evidence for unchanged lifecycle/coordinator/guardian/merge implementations. Changed contracts/support paths covered by current contracts/fast/native/installed gates; scoped Astra applicability approval."
+    },
+    {
+      "name": "native",
+      "directory": "/srv/nvme/tmp/cq4-implementation/20260928T050939-native",
+      "status": "passed",
+      "evidenceSha256": {
+        "result.json": "a3eaaddedac7102e2adbf57a05c28a40a496ba0104cf10b00c2eb3b38f43cf92",
+        "commands.json": "8b2c392395e9a56fd657884cf46a505c89e388551f900cc2a4063a17bcd08559",
+        "source-sha256.json": "3506ecbd6d245ba3bd0965cff6032a8516b41f700d7ad5938a2224e4e7fdebfc"
+      },
+      "applicability": "Complete native tracing/build/runtime/browser gate. Application/build sources match current candidate; later verifier process hook covered by installed gate."
+    },
+    {
+      "name": "installed",
+      "directory": "/srv/nvme/tmp/cq4-implementation/20260928T055336-installed",
+      "status": "package-checked",
+      "evidenceSha256": {
+        "result.json": "dc76a94920ec7cf22fa4ac2479d6299c94b193929fa2b709cbd22e15b79836f7",
+        "commands.json": "d7c066d59f27770fb96765ee7154c6af305d441ec2ec5019525511157781a160",
+        "source-sha256.json": "d5bed71aa0e8ee3828eda693b98321184d4c568300c590bfe704ad8c0d349672"
+      },
+      "applicability": "Complete source-isolated relocated native/guardian corpus and settled backup; all291 verifier sources unchanged; Astra approved."
+    },
+    {
+      "name": "postgres",
+      "directory": "/srv/nvme/tmp/cq4-implementation/20260928T060301-postgres",
+      "status": "passed",
+      "evidenceSha256": {
+        "result.json": "4d49f756343c07fd4ed527a52531811552c7294be73f8ede146c4c43d99b2aeb",
+        "commands.json": "91ed72e4195bc2106ff325ef5c28f29854e6299b17c19e29443d437aa1c27946",
+        "source-sha256.json": "16cb42fdcb8149fee4fa39df9003e1741f4a49bd5073af6f70ee8bb64d6f9737",
+        "source-applicability.json": "b65d0b626f2806574cd01cd5fd4e7c9a6520fe3f1f91e1e75ee0667f6bd03976"
+      },
+      "applicability": "All 291 current non-documentation inputs match. 102 PostgreSQL scenarios plus complete JVM transport/process/restart corpus pass."
+    },
+    {
+      "name": "access",
+      "directory": "/srv/nvme/tmp/cq4-implementation/20260928T061234-access",
+      "status": "passed",
+      "evidenceSha256": {
+        "result.json": "8f4f380ae2e97bb3c149dc283db01f5a6a49dafa856d0633e4e16d72541219d8",
+        "commands.json": "4c1b2bbfebdca57ba1b2be8b2a0702950893f489d25bb93779db6f79e65880bc",
+        "source-sha256.json": "8626fe5cc8e1beed54b7092c1d7a6270cce2290f4ffae8f33ef887413b006a6f",
+        "source-applicability.json": "b65d0b626f2806574cd01cd5fd4e7c9a6520fe3f1f91e1e75ee0667f6bd03976",
+        "access-report.json": "38af35efb517f6809b488c113bb019fba7d90f82bf112aa38797ac562773b6fd"
+      },
+      "applicability": "All 291 current non-documentation inputs match. Query/mutation/closure/integration/usage access budgets pass through 100,000 unrelated items."
+    }
+  ],
+  "running": [
+    {
+      "name": "packaged-live",
+      "directory": "/srv/nvme/tmp/cq4-implementation/20260928T060135-release"
+    }
+  ],
+  "pending": [
+    "packaged live acceptance and usage report",
+    "final independent Astra release review",
+    "designated M2 human acceptance",
+    "designated M6 human acceptance"
+  ],
+  "operations": "docs/design/operations.md",
+  "limits": [
+    "Linux x86-64 native distribution; guardian requires Linux 5.9+.",
+    "Database-only backup is verified for settled state; running host recovery additionally requires retained session and Git state.",
+    "Token/cost observations preserve unavailable fields and do not establish provider billing or matched efficiency savings.",
+    "Managed CQ batch sessions collect governor and child usage. Arbitrary existing interactive sessions do not have universal collection coverage; unsupported paths remain explicit."
+  ],
+  "liveProgress": {
+    "suite": "/srv/nvme/tmp/cq4-implementation/20260928T060135-release",
+    "acceptedStages": [
+      "cohort-claude",
+      "cohort-claude-assess",
+      "cohort-codex"
+    ],
+    "runningStage": "cohort-codex-assess",
+    "scope": "Progress snapshot; consult suite.json for current state. Full corpus and human acceptance remain pending."
+  }
+}
