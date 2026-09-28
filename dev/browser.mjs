@@ -13,6 +13,7 @@ import { graphChecks } from './graph-browser.mjs';
 import { resyncChecks } from './resync-browser.mjs';
 import { usageScopeChecks } from './usage-scope-browser.mjs';
 import { usageLiveChecks } from './usage-live-browser.mjs';
+import { densityChecks } from './density-browser.mjs';
 
 const origin = process.env.CQ_ORIGIN;
 const evidence = process.env.CQ_BROWSER_EVIDENCE;
@@ -41,6 +42,7 @@ try {
   await page.getByLabel('Project', { exact: true }).getByRole('option', { name, exact: true }).waitFor({ state: 'attached' });
   await current();
   const project = await page.getByLabel('Project', { exact: true }).inputValue();
+  await densityChecks(page, evidence);
   await page.getByRole('button', { name: 'New item', exact: true }).click();
   await page.getByLabel('title', { exact: true }).fill('Browser task');
   await page.getByLabel('body', { exact: true }).fill('Unsaved draft survives a page reload.');

@@ -1,6 +1,7 @@
 .direnv/
 .tools/
 .work/
+.local/
 target/
 project/target/
 project/project/
