@@ -2,7 +2,7 @@
 
 Intake: 2026-09-28. Project `cq4`, UUID `20eb436e-1a4d-4bb6-a4b4-d151e5c1dc04`. These are user-reported defects and requirements, not claims of independently reproduced behavior or completed implementation. Creation receipts and individual readback are retained at `/srv/nvme/tmp/cq4-human-evaluation-20260928/redesign-*`.
 
-The user considers the current UI a prototype, not an acceptable release interface. Earlier technical gate results remain evidence of the behaviors those gates checked; they do not establish usability acceptance. M2/M6 human acceptance remains outstanding. Finish delivery of D1–D8 first; the user previously requested a new session using CQ discipline for the next batch, after discussing the launcher design.
+The user considers the current UI a prototype, not an acceptable release interface. Earlier technical gate results remain evidence of the behaviors those gates checked; they do not establish usability acceptance. M2/M6 human acceptance remains outstanding. Finish delivery of D1–D8 first, then discuss the launcher design. The user explicitly confirmed “Queue for the new CQ session”: implement this UI/CLI redesign batch in a new session using CQ discipline.
 
 ## UI acceptance requirements
 
