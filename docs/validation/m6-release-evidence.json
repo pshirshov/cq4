@@ -162,6 +162,13 @@
         "retained-replay.json": "ec8ff77344b0063faa9e8b3fef4de7559defce8a35cb5fa02f1f291de9f3e6d0",
         "after.log": "ed814a77b9b3fd1040c13d0cbf1e21d5c2bee46dfe8e930b66bac650b5e0cea7"
       }
+    },
+    {
+      "file": "/srv/nvme/tmp/cq4-implementation/m6-package/process-guidance-amendment/amendment.json",
+      "admissionProof": "/srv/nvme/tmp/cq4-implementation/m6-package/process-guidance-amendment/admission-proof.json",
+      "admissionProofSha256": "21147874390ed676bf4763431a213586a1fadeb4cb5a78d1cd12606dd8fd98ab",
+      "sourceCommit": "da5470e",
+      "scope": "Only process continuation instructions and reviewed amendment control/tests; prior attempts/proofs/accounting retained"
     }
   ],
   "historicalAccounting": {
@@ -279,13 +286,9 @@
     "scopedReplay": {
       "file": "/srv/nvme/tmp/cq4-implementation/m6-package/corrected-cohort-replay.json",
       "sha256": "08cbc4450233d675d0a293447dbfd49c3930dbc1ac19dee327dc1922517e12dc",
-      "review": "Independent Astra approved; pre-admission evidence"
+      "review": "Independent Astra approved; Go pair now formally adopted"
     },
-    "pendingAdoptions": [
-      "cohort-codex",
-      "cohort-codex-assess",
-      "process-resume (failed; retain accounting)"
-    ],
+    "pendingAdoptions": [],
     "workedProcess": {
       "checkpoint": "20260928T080611-process-begin",
       "answer": "Go",
@@ -294,9 +297,10 @@
       "status": "failed-execution-deadline",
       "instructionCorrection": {
         "commit": "bb1ccc7ede6d9d0f73ef4d88d44bdb02021db2fa",
-        "review": "Independent Astra accepted; isolated source, not yet admitted",
+        "review": "Independent Astra accepted; source epoch admitted and targeted retry running",
         "checks": 12,
-        "pending": "Adopt old-source external evidence after suite lock settles, then admit amendment and retry only process continuation/assessment"
+        "pending": "Targeted continuation and dependent assessment",
+        "admissionCommit": "da5470e"
       },
       "usage": {
         "lineageAttempts": 16,
@@ -306,6 +310,16 @@
         "reason": "Both started attempts terminated before supported authoritative usage events; Claude retains an unverified possible partial source, Codex stream has no counters",
         "completeSpendingOrEfficiencyClaim": false
       }
+    },
+    "defectProcess": {
+      "status": "assess-passed",
+      "assessment": "20260928T084627-defect-assess",
+      "candidate": "f5f1bf23c69e5a71e7c8ed11233287a6c54aab1c",
+      "attempts": 37,
+      "knownTokens": 15614883,
+      "requiredInputOutputComplete": true,
+      "review": "Independent Astra approved full replay and actual preparation prose",
+      "rawRemainingLabels": "Historical stage remaining labels are stale; derived accepted suite proofs establish completed defect track"
     }
   }
 }
