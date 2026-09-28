@@ -93,17 +93,17 @@ class ReleaseRunnerTests(unittest.TestCase):
         self.assertEqual(len(manifests), 1)
         return manifests[0].parent, json.loads(manifests[0].read_text())
 
-    def amendment(self, suite, changes):
+    def amendment(self, suite, stage, changes):
         before = suite["sourceSha256"]
         after = {**before, **changes}
         (self.root / "sources.json").write_text(json.dumps(after))
         review = {"decision": "accepted", "beforeSources": before, "afterSources": after,
-                  "affectedStages": ["defect-probe"], "scope": "Controlled test review; unchanged oracle and runtime."}
+                  "affectedStages": [stage], "scope": "Controlled test review; unchanged oracle and runtime."}
         review_path = self.root / "review.json"
         review_path.write_text(json.dumps(review))
-        failed = next(attempt for attempt in suite["attempts"] if attempt["status"] == "rejected")
+        failed = next(attempt for attempt in suite["attempts"] if attempt["stage"] == stage and attempt["status"] == "rejected")
         value = {"beforeSources": before, "afterSources": after, "affectedStages": review["affectedStages"],
-                 "reason": "Clarify probe output constraint; preserve failed attempt.",
+                 "reason": "Clarify evaluator instructions for " + stage + "; preserve failed attempt.",
                  "failure": {"invocation": failed["id"], "resultSha256": failed["resultSha256"]},
                  "review": {"path": str(review_path), "sha256": hashlib.sha256(review_path.read_bytes()).hexdigest()}}
         path = self.root / "amendment.json"
@@ -115,7 +115,7 @@ class ReleaseRunnerTests(unittest.TestCase):
 
     def test_reviewed_amendment_preserves_accepted_routes_and_failed_attempt(self):
         directory, before = self.rejected_probe()
-        amendment = self.amendment(before, {"dev/defect-eval": "clarified"})
+        amendment = self.amendment(before, "defect-probe", {"dev/defect-eval": "clarified"})
         _, after = self.run_suite(["--resume", str(directory), "--amendment", str(amendment), "--retry", "defect-probe=Clarified output contract"], self.environment, True)
         self.assertEqual(after["sourceSha256"], before["sourceSha256"])
         self.assertEqual(after["attempts"][:9], before["attempts"])
@@ -125,22 +125,35 @@ class ReleaseRunnerTests(unittest.TestCase):
         _, replayed = self.run_suite(["--resume", str(directory), "--report-only"], self.environment, True)
         self.assertEqual(replayed["attempts"], after["attempts"])
 
+    def test_process_instruction_amendment_preserves_cohorts_and_rejected_resume(self):
+        directory, before = self.run_suite(["--answer-file", str(self.answer)],
+            dict(self.environment, FIXTURE_REJECT="process-resume", FIXTURE_STATUS="failed"), True)
+        amendment = self.amendment(before, "process-resume", {"dev/process-eval": "clarified"})
+        _, after = self.run_suite(["--resume", str(directory), "--amendment", str(amendment),
+            "--retry", "process-resume=Clarified context and relationship ordering", "--answer-file", str(self.answer)], self.environment, True)
+        self.assertEqual(after["sourceSha256"], before["sourceSha256"])
+        self.assertEqual(after["attempts"][:len(before["attempts"])], before["attempts"])
+        added = after["attempts"][len(before["attempts"]):]
+        self.assertEqual([attempt["stage"] for attempt in added], ["process-resume", "process-assess"])
+        self.assertTrue(all(attempt["sourceEpoch"] == 1 for attempt in added))
+        self.assertEqual(after["status"], "corpus-passed")
+
     def test_amendment_rejects_unlisted_or_protected_source_changes(self):
         directory, before = self.rejected_probe()
-        amendment = self.amendment(before, {"dev/defect-eval": "clarified"})
+        amendment = self.amendment(before, "defect-probe", {"dev/defect-eval": "clarified"})
         sources = json.loads((self.root / "sources.json").read_text())
         (self.root / "sources.json").write_text(json.dumps({**sources, "unlisted": "changed"}))
         self.run_suite(["--resume", str(directory), "--amendment", str(amendment), "--report-only"], self.environment, False)
         self.assertIn("Amendment source snapshot differs", self.output)
         for protected in ["dev/defect-evidence.py", "app/runtime"]:
             with self.subTest(protected=protected):
-                amendment = self.amendment(before, {protected: "changed"})
+                amendment = self.amendment(before, "defect-probe", {protected: "changed"})
                 self.run_suite(["--resume", str(directory), "--amendment", str(amendment), "--report-only"], self.environment, False)
                 self.assertIn("Protected evaluation inputs changed", self.output)
 
     def test_historical_evidence_and_review_cannot_change_after_amendment(self):
         directory, before = self.rejected_probe()
-        amendment = self.amendment(before, {"dev/defect-eval": "clarified"})
+        amendment = self.amendment(before, "defect-probe", {"dev/defect-eval": "clarified"})
         self.run_suite(["--resume", str(directory), "--amendment", str(amendment), "--report-only"], self.environment, True)
         target = Path(before["attempts"][0]["evidence"]) / "items.json"
         original = target.read_bytes()
@@ -154,7 +167,7 @@ class ReleaseRunnerTests(unittest.TestCase):
 
     def test_new_invocation_cannot_use_historical_sources(self):
         directory, before = self.rejected_probe()
-        amendment = self.amendment(before, {"dev/defect-eval": "clarified"})
+        amendment = self.amendment(before, "defect-probe", {"dev/defect-eval": "clarified"})
         _, after = self.run_suite(["--resume", str(directory), "--amendment", str(amendment), "--retry", "defect-probe=Controlled stale-source rejection"], dict(self.environment, FIXTURE_STALE="yes"), True)
         self.assertEqual(after["attempts"][-1]["status"], "rejected")
         self.assertIn("Stage used different source inputs", after["attempts"][-1]["error"])
@@ -181,7 +194,7 @@ class ReleaseRunnerTests(unittest.TestCase):
         directory, before = self.run_suite(["--answer-file", str(self.answer)],
             dict(self.environment, FIXTURE_REJECT="defect-probe", FIXTURE_STATUS="failed"), True)
         prior = next(a["evidence"] for a in before["attempts"] if a["stage"] == "process-resume")
-        amendment = self.amendment(before, {"dev/defect-eval": "clarified"})
+        amendment = self.amendment(before, "defect-probe", {"dev/defect-eval": "clarified"})
         _, after = self.run_suite(["--resume", str(directory), "--amendment", str(amendment), "--adopt", "process-resume=" + prior], self.environment, True)
         adopted = after["attempts"][-2]
         self.assertEqual(adopted["status"], "accepted")
