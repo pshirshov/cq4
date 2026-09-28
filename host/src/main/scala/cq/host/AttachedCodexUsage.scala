@@ -91,13 +91,17 @@ final class AttachedCodexUsage(directory: Path, run: SupervisorRun, source: Code
         require(native.get[String]("thread_id") == Right(thread.toString), "Native Codex thread metadata disagrees")
         val version = native.get[String]("codex_version").fold(throw _, identity)
         require(Set("0.156.1", "0.157.1")(version), "Unverified native Codex rollout version")
-        val proposed = CodexUsageBinding(thread, version, sessions.toRealPath().toString)
-        require(binding.forall(_ == proposed), "Native Codex thread changed within a CQ host")
-        require(!Files.exists(endFile), "Native Codex usage window is already closed")
-        acquire(proposed)
-        HostFiles.directory(root)
-        HostFiles.immutable(bindingFile, HostFiles.encode(CodexUsageBinding_JsonCodec, proposed), MaxBytes)
-        availability = "Bound to native thread " + thread
+        if (binding.isEmpty && !Files.exists(sessions)) {
+          availability = "Native sessions directory unavailable (including ephemeral sessions); usage unavailable"
+        } else {
+          val proposed = CodexUsageBinding(thread, version, sessions.toRealPath().toString)
+          require(binding.forall(_ == proposed), "Native Codex thread changed within a CQ host")
+          require(!Files.exists(endFile), "Native Codex usage window is already closed")
+          acquire(proposed)
+          HostFiles.directory(root)
+          HostFiles.immutable(bindingFile, HostFiles.encode(CodexUsageBinding_JsonCodec, proposed), MaxBytes)
+          availability = "Bound to native thread " + thread
+        }
     }
   }
   private def deliveries(value: CodexUsageSample, bound: CodexUsageBinding): List[HostDelivery] = {

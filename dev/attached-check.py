@@ -219,6 +219,16 @@ def main():
     assert after == observed_totals
     print(json.dumps({"attachedCodexUsage": "native-metadata-correlated-deduplicated-replayed", "usage": after}))
 
+    with (root / "codex-ephemeral-host.log").open("w") as log:
+        ephemeral = Peer(command + ["host", "codex"], repository, {**env, "CODEX_HOME": str(root / "missing-native-home")}, log)
+        try:
+            response = ephemeral.rpc("tools/call", {"name": "session", "arguments": {"Context": {}}, "_meta": metadata})
+            assert not response["isError"], response
+            assert "directory unavailable" in response["structuredContent"]["Context"]["value"]["usageCoverage"]
+        finally:
+            ephemeral.close()
+    print(json.dumps({"ephemeralCodex": "CQ-available-usage-explicitly-unavailable"}))
+
     with (root / "closing-host.log").open("w") as log:
         closing = Peer(command + ["host", "codex"], repository, env, log)
         try:

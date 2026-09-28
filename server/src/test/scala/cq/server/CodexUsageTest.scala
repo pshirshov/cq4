@@ -79,6 +79,19 @@ final class CodexUsageLocal extends AnyWordSpec {
     }
   }
   "Attached Codex accounting (Behavioral Active Blackbox; dummy Group / filesystem Communication)" should {
+    "keep CQ available when an ephemeral native home has no sessions directory" in fixture { f =>
+      val receiver = new Receiver
+      val missing = f.root.resolve("ephemeral/sessions")
+      Using.resource(new AttachedCodexUsage(f.root.resolve("cq"), f.run, new CodexRollout, f.clock)) { observer =>
+        observer.observe(Some(f.metadata), missing)
+        observer.poll(receiver)
+        assert(receiver.observations.isEmpty && observer.status.contains("directory unavailable"))
+        observer.observe(Some(f.metadata), f.sessions)
+        f.append(f.event(f.sample("available-later", 1)))
+        observer.poll(receiver)
+        assert(receiver.observations.size == 1)
+      }
+    }
     "replay already owned samples after the wall clock moves backwards before shutdown" in fixture { f =>
       val receiver = new Receiver
       val run = f.run

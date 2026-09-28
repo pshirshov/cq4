@@ -43,6 +43,15 @@ Astra approves the source corrections and the ten focused scenarios. The
 current contract round trip passes at `20260928T231707-contracts`. Final
 native/package and operator delivery checks remain pending.
 
+The final boundary check reproduced a missing-directory failure for ephemeral
+Codex homes (`codex-ephemeral-before.log`). An unbound observer now reports
+unavailable usage and permits CQ operations; an existing binding still enforces
+its identity. All eleven local scenarios pass in `codex-ephemeral-corrected.log`,
+and Astra approves this correction. The MCP fixture checks the actual Context
+response for a fresh native home. The preliminary `20260928T231858-native` run
+was deliberately interrupted for this correction; it remains failed with a
+separate interruption record and is excluded from delivery evidence.
+
 ## Accounting boundary
 
 - Native response IDs deduplicate contributions. Thread/turn/model/provider and
