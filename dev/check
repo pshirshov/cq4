@@ -245,6 +245,9 @@ class Checks:
     def ui_checks(self, usage: bool):
         self.generate()
         self.run(["npm", "run", "check"], "typescript-compile", COMMAND_TIMEOUT)
+        self.environment["CQ_BROWSER_EVIDENCE"] = str(self.evidence)
+        self.run(["node", "dev/connection-model.mjs"], "connection-model", COMMAND_TIMEOUT)
+        self.run(["node", "dev/connection-native.mjs"], "connection-native", COMMAND_TIMEOUT)
         command = ["java", "-cp", self.classpath(), "cq.server.Main"]
         with self.database(["shared_preload_libraries = 'pg_stat_statements'"] if usage else []):
             if usage:

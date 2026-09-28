@@ -39,14 +39,14 @@ export async function selectionChecks(browser, storageState, origin, evidence) {
       completeness: 'Complete', gaps: [], evidence: null, supersedes: null }, meter: 'selection', disposition: 'Contribution', detailReason: null } } });
   }
   const outcomes = [];
-  for (const scenario of ['detail', 'history', 'usage', 'project-history', 'project-usage', 'audit', 'same-audit', 'same-detail']) {
+  for (const scenario of ['project-subscribe', 'project-list', 'detail', 'history', 'usage', 'project-history', 'project-usage', 'audit', 'same-audit', 'same-detail']) {
     const context = await browser.newContext({ storageState });
     await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
     await trackProtocol(context);
     const page = await context.newPage();
     const errors = [];
     page.on('pageerror', error => errors.push(String(error)));
-    let predicate = null;
+    let predicate = null; let failSubscribe = false;
     let request = null;
     let held = null;
     let acknowledge;
@@ -56,6 +56,10 @@ export async function selectionChecks(browser, storageState, origin, evidence) {
       const server = route.connectToServer();
       route.onMessage(message => {
         const frame = JSON.parse(String(message));
+        if (failSubscribe && frame.Subscribe && frame.Subscribe.project.value === first.project.value) {
+          failSubscribe = false; request = frame.Subscribe.id.value; frame.Subscribe.after.value = '9223372036854775807';
+          exchanges.push({ request, command: frame }); server.send(JSON.stringify(frame)); return;
+        }
         if (predicate !== null && frame.Call && predicate(frame.Call.command)) {
           assert.equal(request, null); request = frame.Call.id.value; predicate = null;
           exchanges.push({ request, command: frame.Call.command });
@@ -85,6 +89,22 @@ export async function selectionChecks(browser, storageState, origin, evidence) {
       await page.getByLabel('Project', { exact: true }).selectOption(first.project.value);
       await row('T1 · Selection A').waitFor();
       await page.getByText('Data: current', { exact: true }).waitFor();
+      if (scenario === 'project-subscribe') {
+        failSubscribe = true; await row('Search').click(); await capturedReply();
+        assert.ok(exchanges.at(-1).result.Failed, 'Hold an actual server rejection for an invalid replay cursor');
+        await page.getByLabel('Project', { exact: true }).selectOption(second.project.value);
+        held.route.send(held.message); await row('T1 · Selection C').waitFor(); await page.getByText('Data: current', { exact: true }).waitFor();
+        assert.equal(await page.getByRole('alert').count(), 0, 'An obsolete Subscribe failure must not surface in the new project');
+        assert.deepEqual(errors, []); outcomes.push({ scenario, status: 'passed', exchanges }); continue;
+      }
+      if (scenario === 'project-list') {
+        predicate = command => command.Search && command.Search.input.project.value === second.project.value;
+        await page.getByLabel('Project', { exact: true }).selectOption(second.project.value); await capturedReply();
+        assert.equal(await row('T1 · Selection A').count(), 0, 'Old project rows cannot remain actionable while the new project loads');
+        held.route.send(held.message); await row('T1 · Selection C').click(); await heading('T1 · Selection C').waitFor();
+        assert.equal(await page.getByRole('alert').count(), 0); assert.deepEqual(errors, []);
+        outcomes.push({ scenario, status: 'passed', exchanges }); continue;
+      }
       if (scenario.endsWith('detail')) {
         predicate = command => command.Read && command.Read.input.selection.ItemDetail && command.Read.input.selection.ItemDetail.id.number === '1';
       } else if (scenario.endsWith('usage')) {

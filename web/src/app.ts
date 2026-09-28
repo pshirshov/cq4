@@ -1,6 +1,7 @@
 import * as api from '../../generated/typescript/cq/api/index.js';
 import { BaboonCodecContext } from '../../generated/typescript/BaboonSharedRuntime.js';
-import { ConnectionManager, ConnectionStats } from './connection.js';
+import { ConnectionManager } from './connection.js';
+import { ConnectionIndicator } from './connection-indicator.js';
 import { button, edit, element, Editor, Json } from './editor.js';
 import { QueryEditor } from './query.js';
 import { Workspace } from './workspace.js';
@@ -63,9 +64,7 @@ class App {
   private auditCursor: bigint | null = null;
   private readonly notice = element('p', '');
   private readonly sync = element('span', 'No project selected');
-  private readonly health = element('span', 'Connecting');
-  private readonly healthDetails = element('pre', '');
-  private readonly deadline = element('progress', '');
+  private readonly health = new ConnectionIndicator(() => this.connection().retry());
   private project: api.ProjectId | null = null;
   private selected: api.ItemView | null = null;
   private selection: api.ItemId | null = null;
@@ -135,11 +134,8 @@ class App {
   }
   private mount(): void {
     const header = element('header', ''); const identity = element('div', ''); identity.className = 'top-identity';
-    const health = element('details', ''); const summary = element('summary', '');
-    summary.append(this.health, this.deadline); this.deadline.max = 100;
-    health.append(summary, this.healthDetails, button('Retry connection', () => this.connection().retry()));
     const projectLabel = element('label', 'Project'); projectLabel.className = 'project-control'; projectLabel.append(this.projects);
-    identity.append(element('h1', 'CQ'), projectLabel, health, this.sync);
+    identity.append(element('h1', 'CQ'), projectLabel, this.health.element, this.sync);
     const metrics = element('div', ''); metrics.className = 'top-metrics'; metrics.setAttribute('role', 'region'); metrics.setAttribute('aria-label', 'Usage metrics');
     metrics.append(this.usageMetric, this.usageFreshness); header.append(identity, this.queryEditor.element, metrics);
     const workspace = new Workspace(this.root); const side = workspace.navigation; const list = workspace.results; const content = workspace.content;
@@ -183,7 +179,7 @@ class App {
     content.append(this.notice, this.detail, this.editorPanel, this.conflictPanel, this.graph.element, this.historyPanel, this.usagePanel, this.auditPanel);
     this.root.replaceChildren(header, workspace.element); workspace.fit();
     this.manager = new ConnectionManager(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`, {
-      status: stats => this.connectionStatus(stats),
+      status: stats => this.health.update(stats),
       active: () => this.action(async () => {
         this.resetUsageWatch(); this.requests.usage++; this.requests.audit++; this.updateAuditFreshness();
         await this.loadProjects(); this.after = undefined; this.snapshot = undefined; await this.refresh();
@@ -211,13 +207,6 @@ class App {
       },
     });
   }
-  private connectionStatus(stats: ConnectionStats): void {
-    this.health.textContent = `Connection: ${stats.state}`; this.health.dataset.state = stats.state;
-    this.health.setAttribute('aria-label', `Connection ${stats.state}`);
-    this.deadline.value = stats.deadline === null ? 100 : Math.max(0, Math.min(100, (stats.deadline - Date.now()) / 100));
-    this.healthDetails.textContent = `Connections: ${stats.connections}; active: ${stats.active}\nRTT: ${stats.rtt === null ? 'unknown' : stats.rtt + ' ms'}\nRetry: ${stats.attempts}/12\n${stats.reason}\n\n${stats.events.join('\n')}`;
-    document.title = `CQ — ${stats.state}`;
-  }
   private async search(): Promise<void> {
     this.activeQuery = this.query.value; this.epoch++; this.subscription = null; this.after = undefined; this.snapshot = undefined;
     this.notice.textContent = ''; this.queryEditor.showDiagnostic(undefined, this.query.value); await this.refresh();
@@ -227,6 +216,7 @@ class App {
     this.epoch++; this.selectionGeneration++; this.selection = null; this.selected = null; this.editor = null; this.after = undefined; this.snapshot = undefined; this.subscription = null;
     this.resetUsageWatch();
     this.graph.setScope(this.project, null);
+    this.rows.clear(); this.items.replaceChildren(); this.page = null; this.resultStatus.textContent = 'Loading items…';
     this.detail.replaceChildren(); this.editorPanel.replaceChildren(); this.conflictPanel.replaceChildren(); this.historyPanel.replaceChildren(); this.usagePanel.replaceChildren(); this.auditPanel.replaceChildren();
     this.notice.textContent = ''; this.setUsageScope(new api.UsageFilter_ProjectAll());
   }
@@ -251,11 +241,12 @@ class App {
     if (this.refreshing) { this.dirty = true; return; }
     this.refreshing = true; this.dirty = false;
     const project = this.project; const epoch = this.epoch;
+    const current = () => epoch === this.epoch && this.project === project;
     this.sync.textContent = 'Data: synchronizing'; this.items.setAttribute('aria-busy', 'true');
     try {
       const input = new api.SearchInput(project, this.activeQuery, this.after, this.snapshot, PAGE_SIZE);
       const response = await this.connection().call(new api.Command_Search(input));
-      if (epoch !== this.epoch || this.project.value !== project.value) return;
+      if (!current()) return;
       if (response instanceof api.Result_Failed && response.fault instanceof api.Fault_Resync) {
         this.after = undefined; this.snapshot = undefined; this.dirty = true; return;
       }
@@ -270,14 +261,15 @@ class App {
       this.renderItems(result.page.items);
       this.resultStatus.textContent = `${result.page.items.length} items${result.page.hasMore ? ' · more available' : ''}`;
       const subscription = this.connection().subscribe(project, result.page.cursor); this.subscription = subscription.id.value;
-      const replay = readResult(await subscription.result);
-      if (epoch !== this.epoch) return;
+      const acknowledgement = await subscription.result;
+      if (!current()) return;
+      const replay = readResult(acknowledgement);
       if (!(replay instanceof api.Result_Changes)) throw new Error('Unexpected subscription acknowledgement');
       if (replay.page.events.length > 0 || replay.page.hasMore) this.dirty = true;
       else this.sync.textContent = 'Data: current';
       if (this.selection !== null) await this.select(this.selection);
       await this.loadUsage();
-    } catch (error) { this.sync.textContent = 'Data: stale'; throw error; }
+    } catch (error) { if (current()) { this.sync.textContent = 'Data: stale'; throw error; } }
     finally {
       this.refreshing = false; this.items.setAttribute('aria-busy', 'false');
       if (this.dirty) { this.dirty = false; this.action(() => this.refresh()); }
