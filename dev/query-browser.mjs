@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { writeFile } from 'node:fs/promises';
+import { trackProtocol, receivedReply } from './browser-protocol.mjs';
 
 export async function queryChecks(browser, storageState, origin, evidence) {
   const headers = { Authorization: `Bearer ${process.env.CQ_TOKEN}`, 'CQ-Session': randomUUID(),
@@ -18,16 +19,7 @@ export async function queryChecks(browser, storageState, origin, evidence) {
   ] } } } });
   const context = await browser.newContext({ storageState });
   await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
-  await context.addInitScript(() => {
-    window.cqQueryReplies = [];
-    const NativeSocket = window.WebSocket;
-    window.WebSocket = class extends NativeSocket {
-      constructor(...args) {
-        super(...args);
-        this.addEventListener('message', event => { const frame = JSON.parse(event.data); if (frame.Reply) window.cqQueryReplies.push(frame.Reply.id.value); });
-      }
-    };
-  });
+  await trackProtocol(context);
   let delay = null;
   const exchanges = [];
   await context.routeWebSocket(/\/ws$/, route => {
@@ -88,7 +80,7 @@ export async function queryChecks(browser, storageState, origin, evidence) {
       } else if (scenario === 'dismissed') await query.press('Escape');
       else { await page.getByLabel('Project', { exact: true }).selectOption(other.value); await page.getByText('No matching items.', { exact: true }).waitFor(); }
       assert.notEqual(delay.release, null); delay.release();
-      await page.waitForFunction(id => window.cqQueryReplies.includes(id), delay.id);
+      await receivedReply(page, delay.id);
       assert.equal(await page.getByRole('option', { name: 'tasks · Value', exact: true }).count(), 0);
       assert.equal(await query.getAttribute('aria-expanded'), scenario === 'newer-text' ? 'true' : 'false');
       if (scenario === 'newer-text') await page.getByRole('option', { name: 'ready · Value', exact: true }).waitFor();

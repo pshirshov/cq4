@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { writeFile } from 'node:fs/promises';
+import { trackProtocol, receivedReply } from './browser-protocol.mjs';
 
 export async function selectionChecks(browser, storageState, origin, evidence) {
   const id = () => ({ value: randomUUID() });
@@ -41,19 +42,7 @@ export async function selectionChecks(browser, storageState, origin, evidence) {
   for (const scenario of ['detail', 'history', 'usage', 'project-history', 'project-usage', 'audit', 'same-audit', 'same-detail']) {
     const context = await browser.newContext({ storageState });
     await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
-    await context.addInitScript(() => {
-      window.cqReceivedReplies = [];
-      const NativeSocket = window.WebSocket;
-      window.WebSocket = class extends NativeSocket {
-        constructor(...arguments_) {
-          super(...arguments_);
-          this.addEventListener('message', event => {
-            const frame = JSON.parse(event.data);
-            if (frame.Reply) window.cqReceivedReplies.push(frame.Reply.id.value);
-          });
-        }
-      };
-    });
+    await trackProtocol(context);
     const page = await context.newPage();
     const errors = [];
     page.on('pageerror', error => errors.push(String(error)));
@@ -147,7 +136,7 @@ export async function selectionChecks(browser, storageState, origin, evidence) {
       }
       assert.notEqual(held, null);
       held.route.send(held.message);
-      await page.waitForFunction(value => window.cqReceivedReplies.includes(value), request);
+      await receivedReply(page, request);
       assert.equal(await heading(target).count(), 1, 'Late detail must not replace the newer selected item');
       assert.equal(await usage(expectedUsage).count(), 1, 'Late usage must not replace the newer scope');
       if (scenario.endsWith('history')) {

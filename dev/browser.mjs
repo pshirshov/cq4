@@ -8,6 +8,7 @@ import { usageChecks } from './usage-browser.mjs';
 import { selectionChecks } from './selection-browser.mjs';
 import { queryChecks } from './query-browser.mjs';
 import { workspaceChecks } from './workspace-browser.mjs';
+import { editChecks } from './edit-browser.mjs';
 
 const origin = process.env.CQ_ORIGIN;
 const evidence = process.env.CQ_BROWSER_EVIDENCE;
@@ -100,6 +101,7 @@ try {
   }
   assert.deepEqual(errors, []);
   console.log('Chromium: login, project creation, all 14 forms, persisted draft, create/edit/history, usage audit, external live update and offline recovery passed');
+  await editChecks(browser, await context.storageState(), origin, evidence);
   await workspaceChecks(browser, await context.storageState(), origin, evidence);
   await queryChecks(browser, await context.storageState(), origin, evidence);
   await draftChecks(browser, await context.storageState(), origin, evidence);

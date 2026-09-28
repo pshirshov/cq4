@@ -52,6 +52,16 @@ export async function draftChecks(browser, storageState, origin, evidence) {
         assert.equal(actual.Detail.view.item.revision.value, '2', 'Restored draft must retain its original expected revision');
         assert.equal(actual.Detail.view.item.draft.body, 'Concurrent body');
         await page.getByRole('alert').filter({ hasText: 'Conflict' }).waitFor();
+        await page.getByRole('heading', { name: 'Edit conflict · T1', exact: true }).waitFor();
+        await page.getByText('Your draft is based on revision 1; the current revision is 2.', { exact: true }).waitFor();
+        await page.getByRole('button', { name: 'Use current revision as draft base', exact: true }).click();
+        assert.equal(await page.getByLabel('body', { exact: true }).inputValue(), 'My unsaved local note');
+        await page.getByText('Edit T1 from revision 2', { exact: true }).waitFor();
+        await page.getByRole('button', { name: 'Save item', exact: true }).click();
+        await page.getByText('Saved', { exact: true }).waitFor();
+        const rebased = await call({ Read: { input: { project, selection: { ItemDetail: { id: item.id } } } } });
+        assert.equal(rebased.Detail.view.item.revision.value, '3');
+        assert.equal(rebased.Detail.view.item.draft.body, 'My unsaved local note');
       } else {
         let dropNext = true;
         let acknowledgeDrop;

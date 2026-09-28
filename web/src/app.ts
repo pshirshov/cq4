@@ -40,6 +40,7 @@ class App {
   private usageObserved = 'No successful observation';
   private readonly detail = element('section', '');
   private readonly editorPanel = element('section', '');
+  private readonly conflictPanel = element('section', '');
   private readonly historyPanel = element('section', '');
   private readonly usagePanel = element('section', '');
   private readonly auditPanel = element('section', '');
@@ -160,7 +161,7 @@ class App {
       })));
     this.resultStatus.setAttribute('role', 'status');
     list.append(element('h2', 'Items'), this.resultStatus, this.items, pages);
-    content.append(this.notice, this.detail, this.editorPanel, this.historyPanel, this.usagePanel, this.auditPanel);
+    content.append(this.notice, this.detail, this.editorPanel, this.conflictPanel, this.historyPanel, this.usagePanel, this.auditPanel);
     this.root.replaceChildren(header, workspace.element); workspace.fit();
     this.manager = new ConnectionManager(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`, {
       status: stats => this.connectionStatus(stats),
@@ -190,7 +191,7 @@ class App {
   private reset(): void {
     this.queryEditor.invalidate(); this.queryEditor.showDiagnostic(undefined, this.query.value);
     this.epoch++; this.selectionGeneration++; this.selection = null; this.selected = null; this.editor = null; this.after = undefined; this.snapshot = undefined; this.subscription = null;
-    this.detail.replaceChildren(); this.editorPanel.replaceChildren(); this.historyPanel.replaceChildren(); this.usagePanel.replaceChildren(); this.auditPanel.replaceChildren();
+    this.detail.replaceChildren(); this.editorPanel.replaceChildren(); this.conflictPanel.replaceChildren(); this.historyPanel.replaceChildren(); this.usagePanel.replaceChildren(); this.auditPanel.replaceChildren();
     this.auditAfter = 0n; this.notice.textContent = ''; this.resetUsage();
   }
   private async loadProjects(): Promise<void> {
@@ -302,6 +303,7 @@ class App {
     editor.discard.disabled = pending;
   }
   private openEditor(base: api.ItemView | null): void {
+    this.conflictPanel.replaceChildren();
     const project = this.currentProject();
     const key = `cq-draft:${project.value}:${base === null ? 'new' : itemName(base.item.id)}`;
     const initial = base === null ? api.ItemDraft_JsonCodec.instance.decode(CONTEXT, { title: '', body: '', labels: [], archived: false,
@@ -318,7 +320,7 @@ class App {
     const form = edit('ItemDraft', api.ItemDraft_JsonCodec.instance.encode(CONTEXT, record.value) as Json, caption);
     const discard = button('Discard local draft', () => {
       if (this.editor !== editor || editor.record.pending !== undefined) return;
-      localStorage.removeItem(key); this.editor = null; this.editorPanel.replaceChildren();
+      localStorage.removeItem(key); this.editor = null; this.editorPanel.replaceChildren(); this.conflictPanel.replaceChildren();
     });
     const editor = { form, record, key, discard, busy: false };
     this.editor = editor;
@@ -334,6 +336,7 @@ class App {
   }
   private async save(): Promise<void> {
     const editor = this.editor; if (editor === null || editor.busy) return;
+    const navigation = this.selectionGeneration;
     if (editor.record.pending === undefined) {
       const draft = api.ItemDraft_JsonCodec.instance.decode(CONTEXT, editor.form.read());
       const base = editor.record.item;
@@ -351,14 +354,37 @@ class App {
       const result = await this.connection().call(new api.Command_Change(new api.ChangeInput(editor.record.project, pending)));
       if (result instanceof api.Result_Failed) {
         editor.record = new api.BrowserDraft(editor.record.project, editor.record.item, editor.record.value, undefined);
-        this.storeDraft(editor); this.lockDraft(editor); readResult(result);
+        this.storeDraft(editor); this.lockDraft(editor);
+        if (result.fault instanceof api.Fault_Conflict) await this.showConflict(editor);
+        readResult(result);
       }
       if (!(result instanceof api.Result_Changed)) throw new Error('Unexpected change acknowledgement');
       if (localStorage.getItem(editor.key) === submitted) localStorage.removeItem(editor.key);
-      if (this.editor !== editor) return;
-      this.editor = null; this.editorPanel.replaceChildren(); this.notice.textContent = 'Saved';
-      this.after = undefined; this.snapshot = undefined; await this.refresh(); await this.select(result.ack.items[0].id);
+      const ownsEditor = this.editor === editor;
+      if (ownsEditor) { this.editor = null; this.editorPanel.replaceChildren(); this.conflictPanel.replaceChildren(); }
+      const saved = result.ack.items[0];
+      this.notice.setAttribute('role', 'status');
+      this.notice.replaceChildren(element('span', 'Saved'), document.createTextNode(` ${itemName(saved.id)} in project ${editor.record.project.value}.`));
+      if (this.project === null || this.project.value !== editor.record.project.value) return;
+      this.after = undefined; this.snapshot = undefined; await this.refresh();
+      if (ownsEditor && navigation === this.selectionGeneration) await this.select(saved.id);
     } finally { editor.busy = false; }
+  }
+  private async showConflict(editor: NonNullable<App['editor']>): Promise<void> {
+    const base = editor.record.item; if (base === undefined || this.editor !== editor) return;
+    const result = await this.call(new api.Command_Read(new api.ReadInput(editor.record.project, new api.ReadSelection_ItemDetail(base.id))));
+    if (this.editor !== editor || editor.record.pending !== undefined) return;
+    if (!(result instanceof api.Result_Detail)) throw new Error('Unexpected conflict comparison response');
+    const current = result.view;
+    this.conflictPanel.replaceChildren(element('h3', `Edit conflict · ${itemName(base.id)}`),
+      element('p', `Your draft is based on revision ${base.revision.value}; the current revision is ${current.item.revision.value}.`),
+      element('p', 'Inspect the current content below and your draft above. Changing the base keeps your draft; a later save replaces the current content.'),
+      element('pre', describe(api.ItemDraft_JsonCodec.instance.encode(CONTEXT, current.item.draft))),
+      button('Use current revision as draft base', () => {
+        if (this.editor !== editor || editor.record.pending !== undefined) return;
+        editor.record = new api.BrowserDraft(editor.record.project, new api.ItemRevision(base.id, current.item.revision), editor.record.value, undefined);
+        this.storeDraft(editor); this.openEditor(current);
+      }));
   }
   private async loadHistory(): Promise<void> {
     const selected = this.selected; if (selected === null) return;
