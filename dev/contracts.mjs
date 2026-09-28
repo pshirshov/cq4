@@ -22,6 +22,13 @@ const query = contracts.QueryExpression_JsonCodec.instance.decode(context, query
 const encodedQuery = contracts.QueryExpression_JsonCodec.instance.encode(context, query);
 assert.deepEqual(encodedQuery, queryJson);
 await writeFile(`${directory}/typescript-query.json`, JSON.stringify(encodedQuery));
+for (const [name, codec] of [['watch', contracts.ClientFrame_JsonCodec], ['usage-cursor', contracts.ServerFrame_JsonCodec]]) {
+  const original = JSON.parse(await readFile(`${directory}/scala-${name}.json`, 'utf8'));
+  const decoded = codec.instance.decode(context, original);
+  if (name === 'usage-cursor') assert.equal(decoded.cursor, 9007199254740993n);
+  const encoded = codec.instance.encode(context, decoded); assert.deepEqual(encoded, original);
+  await writeFile(`${directory}/typescript-${name}.json`, JSON.stringify(encoded));
+}
 const definitions = JSON.parse(await readFile('generated/resources/cq-schemas.json', 'utf8'));
 const validator = new AjvJsonSchemaValidator();
 assert.equal(validator.getValidator({ ...definitions.cq_api_QueryExpression, $defs: definitions })(encodedQuery).valid, true);

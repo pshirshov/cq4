@@ -6,6 +6,7 @@ import java.time.Clock
 import scala.util.Try
 
 trait UsageService[F[_, _]] {
+  def cursor(scope: Scope): F[Throwable, Long]
   def assign(scope: Scope, value: Assignment): F[Throwable, Assignment]
   def start(scope: Scope, value: Attempt): F[Throwable, Attempt]
   def meter(scope: Scope, value: UsageMeter): F[Throwable, UsageMeter]
@@ -24,6 +25,8 @@ object UsageService {
     private val MaxIdentity = 300
     private val MaxGaps = 32
     private val ReadBatch = 200
+
+    override def cursor(scope: Scope): F[Throwable, Long] = repository.read(scope.project)(_.cursor)
 
     private def host(scope: Scope): Unit =
       if (scope.actor.role != Role.Collector && scope.actor.role != Role.Human) throw DomainFailure(Fault.Denied("Usage ingestion requires a host collector or human credential"))

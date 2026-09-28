@@ -19,6 +19,7 @@ function readResult(result: api.Result): api.Result {
 
 type Panel = 'detail' | 'history' | 'usage' | 'audit';
 type UsageScope = api.UsageFilter_ProjectAll | api.UsageFilter_TaskOnly | api.UsageFilter_CohortOnly | api.UsageFilter_SessionOnly;
+interface UsageLoad { dirty: boolean }
 interface ResultRow { button: HTMLButtonElement; caption: HTMLSpanElement; status: HTMLSpanElement }
 
 class App {
@@ -39,6 +40,11 @@ class App {
   private readonly usageFreshness = element('span', '');
   private usageObserved = 'No successful observation';
   private usageSelection: UsageScope = new api.UsageFilter_ProjectAll();
+  private usageSubscription: string | null = null;
+  private usageCursor: bigint | null = null;
+  private usageSnapshot: bigint | null = null;
+  private usageWatchRejected = false;
+  private usageLoad: UsageLoad | null = null;
   private readonly detail = element('section', '');
   private readonly editorPanel = element('section', '');
   private readonly conflictPanel = element('section', '');
@@ -53,6 +59,8 @@ class App {
   private readonly historyPanel = element('section', '');
   private readonly usagePanel = element('section', '');
   private readonly auditPanel = element('section', '');
+  private readonly auditFreshness = element('p', '');
+  private auditCursor: bigint | null = null;
   private readonly notice = element('p', '');
   private readonly sync = element('span', 'No project selected');
   private readonly health = element('span', 'Connecting');
@@ -84,8 +92,9 @@ class App {
   private async call(command: api.Command): Promise<api.Result> { return readResult(await this.connection().call(command)); }
 
   private async readPanel(panel: Panel, command: api.Command): Promise<api.Result | null> {
-    const request = ++this.requests[panel]; const epoch = this.epoch; const selection = this.selectionGeneration;
-    const current = () => request === this.requests[panel] && epoch === this.epoch && selection === this.selectionGeneration;
+    const request = ++this.requests[panel]; const epoch = this.epoch; const selection = this.selectionGeneration; const project = this.project;
+    const current = () => request === this.requests[panel] && project === this.project && selection === this.selectionGeneration &&
+      (panel === 'usage' || panel === 'audit' || epoch === this.epoch);
     try {
       const result = await this.connection().call(command);
       return current() ? readResult(result) : null;
@@ -175,10 +184,25 @@ class App {
     this.root.replaceChildren(header, workspace.element); workspace.fit();
     this.manager = new ConnectionManager(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`, {
       status: stats => this.connectionStatus(stats),
-      active: () => this.action(async () => { await this.loadProjects(); this.after = undefined; this.snapshot = undefined; await this.refresh(); }),
-      disconnected: () => { this.usageFreshness.textContent = `Stale · ${this.usageObserved}`; this.queryEditor.invalidate(); this.sync.textContent = 'Data: stale'; this.epoch++; this.subscription = null; },
+      active: () => this.action(async () => {
+        this.resetUsageWatch(); this.requests.usage++; this.requests.audit++; this.updateAuditFreshness();
+        await this.loadProjects(); this.after = undefined; this.snapshot = undefined; await this.refresh();
+      }),
+      disconnected: () => {
+        this.resetUsageWatch(); this.requests.usage++; this.requests.audit++;
+        this.usageFreshness.textContent = `Stale · ${this.usageObserved}`; this.updateAuditFreshness();
+        this.queryEditor.invalidate(); this.sync.textContent = 'Data: stale'; this.epoch++; this.subscription = null;
+      },
       event: frame => {
-        if (frame instanceof api.ServerFrame_Changes && frame.subscription.value === this.subscription) {
+        if (frame instanceof api.ServerFrame_UsageCursor && frame.subscription.value === this.usageSubscription && this.project !== null && frame.project.value === this.project.value) {
+          if (this.usageCursor === null || frame.cursor > this.usageCursor) this.usageCursor = frame.cursor;
+          this.updateAuditFreshness();
+          if (this.usageSnapshot === null || this.usageCursor > this.usageSnapshot) this.action(() => this.loadUsage());
+        } else if (frame instanceof api.ServerFrame_Resync && frame.subscription.value === this.usageSubscription) {
+          this.usageSubscription = null; this.usageWatchRejected = true;
+          this.usageFreshness.textContent = `Unavailable · ${this.usageObserved}`;
+          this.showError(describe(api.Fault_JsonCodec.instance.encode(CONTEXT, frame.fault)));
+        } else if (frame instanceof api.ServerFrame_Changes && frame.subscription.value === this.subscription) {
           if (frame.page.events.length > 0) { this.after = undefined; this.snapshot = undefined; this.action(() => this.refresh()); }
           else if (!this.refreshing) this.sync.textContent = 'Data: current';
         } else if (frame instanceof api.ServerFrame_Resync && frame.subscription.value === this.subscription) {
@@ -201,6 +225,7 @@ class App {
   private reset(): void {
     this.queryEditor.invalidate(); this.queryEditor.showDiagnostic(undefined, this.query.value);
     this.epoch++; this.selectionGeneration++; this.selection = null; this.selected = null; this.editor = null; this.after = undefined; this.snapshot = undefined; this.subscription = null;
+    this.resetUsageWatch();
     this.graph.setScope(this.project, null);
     this.detail.replaceChildren(); this.editorPanel.replaceChildren(); this.conflictPanel.replaceChildren(); this.historyPanel.replaceChildren(); this.usagePanel.replaceChildren(); this.auditPanel.replaceChildren();
     this.notice.textContent = ''; this.setUsageScope(new api.UsageFilter_ProjectAll());
@@ -222,6 +247,7 @@ class App {
   }
   private async refresh(): Promise<void> {
     if (this.project === null) return;
+    if (this.usageSubscription === null && !this.usageWatchRejected) this.usageSubscription = this.connection().watchUsage(this.project).value;
     if (this.refreshing) { this.dirty = true; return; }
     this.refreshing = true; this.dirty = false;
     const project = this.project; const epoch = this.epoch;
@@ -292,7 +318,11 @@ class App {
   }
   private setUsageScope(scope: UsageScope): void {
     this.usageSelection = scope; this.requests.usage++; this.requests.audit++;
+    this.usageSnapshot = null; this.auditCursor = null; this.usageLoad = null;
     this.usagePanel.replaceChildren(); this.auditPanel.replaceChildren(); this.auditAfter = 0n; this.resetUsage();
+  }
+  private resetUsageWatch(): void {
+    this.usageSubscription = null; this.usageCursor = null; this.usageSnapshot = null; this.usageWatchRejected = false; this.usageLoad = null;
   }
   private async selectUsage(scope: UsageScope): Promise<void> { this.setUsageScope(scope); await this.loadUsage(); }
   private resetUsage(): void {
@@ -427,16 +457,29 @@ class App {
   }
   private usageFilter(): api.UsageFilter { return this.usageSelection; }
   private async loadUsage(): Promise<void> {
-    const filter = this.usageFilter(); this.usageFreshness.textContent = `Loading · ${this.usageObserved}`;
-    let result: api.Result | null;
-    try { result = await this.readPanel('usage', new api.Command_Usage(new api.UsageInput(this.currentProject(), new api.UsageSelection_Summary(filter)))); }
-    catch (error) { this.usageFreshness.textContent = `Unavailable · ${this.usageObserved}`; throw error; }
-    if (result === null) return;
-    if (!(result instanceof api.Result_UsageSummary)) throw new Error('Unexpected usage response');
-    this.usageMetric.textContent = `Usage · ${this.usageScope()}: ${result.report.direct.total.known} direct · ${result.report.shared.total.known} shared · ${result.report.unattributed.total.known} unattributed known tokens`;
-    const totals = [result.report.direct.total, result.report.shared.total, result.report.unattributed.total];
+    if (this.usageLoad !== null) { this.usageLoad.dirty = true; return; }
+    const load: UsageLoad = { dirty: true }; this.usageLoad = load;
+    try {
+      while (load === this.usageLoad && load.dirty) {
+        load.dirty = false;
+        this.usageFreshness.textContent = `Loading · ${this.usageObserved}`;
+        const result = await this.readPanel('usage', new api.Command_Usage(new api.UsageInput(this.currentProject(), new api.UsageSelection_Summary(this.usageFilter()))));
+        if (load !== this.usageLoad || result === null) continue;
+        if (!(result instanceof api.Result_UsageSummary)) throw new Error('Unexpected usage response');
+        this.usageSnapshot = result.report.cursor;
+        if (this.usageCursor === null || result.report.cursor > this.usageCursor) this.usageCursor = result.report.cursor;
+        this.renderUsage(result.report); this.updateAuditFreshness();
+        load.dirty = load.dirty || this.usageCursor > result.report.cursor;
+      }
+    } catch (error) {
+      if (load === this.usageLoad) { this.usageFreshness.textContent = `Unavailable · ${this.usageObserved}`; throw error; }
+    } finally { if (load === this.usageLoad) this.usageLoad = null; }
+  }
+  private renderUsage(report: api.UsageReport): void {
+    this.usageMetric.textContent = `Usage · ${this.usageScope()}: ${report.direct.total.known} direct · ${report.shared.total.known} shared · ${report.unattributed.total.known} unattributed known tokens`;
+    const totals = [report.direct.total, report.shared.total, report.unattributed.total];
     this.usageMetric.textContent += ` · ${totals.reduce((sum, value) => sum + value.unknown, 0n)} unknown measurements · ${totals.reduce((sum, value) => sum + value.estimated, 0n)} estimated measurements`;
-    this.usageObserved = `Observed ${new Date().toLocaleTimeString()} · cursor ${result.report.cursor}`;
+    this.usageObserved = `Observed ${new Date().toLocaleTimeString()} · cursor ${report.cursor}`;
     this.usageFreshness.textContent = this.usageObserved;
     this.usagePanel.replaceChildren(element('h3', `Usage · ${this.usageScope()}`));
     const scopes = element('div', ''); scopes.className = 'actions';
@@ -444,17 +487,27 @@ class App {
     const selected = this.selection;
     if (selected !== null) scopes.append(button('Selected item usage', () => this.action(() => this.selectUsage(new api.UsageFilter_TaskOnly(selected)))));
     this.usagePanel.append(scopes);
-    for (const [label, totals] of [['Direct', result.report.direct], ['Shared', result.report.shared], ['Unattributed', result.report.unattributed]] as const) {
+    for (const [label, totals] of [['Direct', report.direct], ['Shared', report.shared], ['Unattributed', report.unattributed]] as const) {
       this.usagePanel.append(element('p', `${label}: ${totals.total.known} known tokens; ${totals.total.unknown} unknown measurements; ${totals.total.estimated} estimated measurements`));
       if (totals.unknownCosts > 0n) this.usagePanel.append(element('p', `${totals.unknownCosts} unknown costs`));
     }
-    for (const cost of result.report.costs.entries) this.usagePanel.append(this.costRow(cost));
-    if (result.report.costs.hasMore) this.usagePanel.append(button('More costs', () => this.action(() => this.loadCosts(result.report.costs.after, result.report.cursor))));
-    this.usagePanel.append(element('p', `Shared work is counted once and is not divided among members. Incomplete meters: ${result.report.incompleteMeters}; attempts without measurements: ${result.report.attemptsWithoutMeters}.`),
-      element('p', `Attempt coverage: ${result.report.attempts.running} running; ${result.report.attempts.unknown} unknown outcomes; ${result.report.attempts.withGaps} with reported gaps.`),
+    for (const cost of report.costs.entries) this.usagePanel.append(this.costRow(cost));
+    if (report.costs.hasMore) this.usagePanel.append(button('More costs', () => this.action(() => this.loadCosts(report.costs.after, report.cursor))));
+    this.usagePanel.append(element('p', `Shared work is counted once and is not divided among members. Incomplete meters: ${report.incompleteMeters}; attempts without measurements: ${report.attemptsWithoutMeters}.`),
+      element('p', `Attempt coverage: ${report.attempts.running} running; ${report.attempts.unknown} unknown outcomes; ${report.attempts.withGaps} with reported gaps.`),
       button('Refresh usage', () => this.action(() => this.loadUsage())), button('Attempts', () => this.action(() => this.loadAttempts(undefined, undefined))), button('Usage audit', () => this.action(async () => { this.auditAfter = 0n; await this.loadAudit(); })));
-    if (result.report.sharedAssignments.size > 0) this.usagePanel.append(element('p', `Shared assignments: ${[...result.report.sharedAssignments].map(id => id.value).join(', ')}.`));
-    if (result.report.sharedAssignmentsTruncated) this.usagePanel.append(element('p', 'The shared-assignment list is truncated. Browse attempts for further assignments and their frozen membership.'));
+    if (report.sharedAssignments.size > 0) this.usagePanel.append(element('p', `Shared assignments: ${[...report.sharedAssignments].map(id => id.value).join(', ')}.`));
+    if (report.sharedAssignmentsTruncated) this.usagePanel.append(element('p', 'The shared-assignment list is truncated. Browse attempts for further assignments and their frozen membership.'));
+  }
+  private auditHeader(title: string, cursor: bigint): void {
+    this.auditCursor = cursor;
+    this.auditPanel.replaceChildren(element('h3', title), this.auditFreshness); this.updateAuditFreshness();
+  }
+  private updateAuditFreshness(): void {
+    if (this.auditCursor === null) return;
+    const latest = this.usageCursor;
+    this.auditFreshness.textContent = latest === null ? `Snapshot cursor ${this.auditCursor}; freshness unconfirmed.`
+      : `${latest > this.auditCursor ? 'Stale snapshot' : 'Snapshot'} cursor ${this.auditCursor}; latest observed usage cursor ${latest}.`;
   }
   private costRow(cost: api.CostTotal): HTMLElement {
     const group = cost.group;
@@ -464,7 +517,7 @@ class App {
     const result = await this.readPanel('audit', new api.Command_Usage(new api.UsageInput(this.currentProject(), new api.UsageSelection_Costs(this.usageFilter(), after, snapshot, 20))));
     if (result === null) return;
     if (!(result instanceof api.Result_UsageCosts)) throw new Error('Unexpected cost response');
-    this.auditPanel.replaceChildren(element('h3', 'Cost breakdown'));
+    this.auditHeader('Cost breakdown', result.page.cursor);
     for (const entry of result.page.entries) this.auditPanel.append(this.costRow(entry));
     if (result.page.hasMore) this.auditPanel.append(button('Next cost page', () => this.action(() => this.loadCosts(result.page.after, result.page.cursor))));
   }
@@ -472,7 +525,7 @@ class App {
     const result = await this.readPanel('audit', new api.Command_Usage(new api.UsageInput(this.currentProject(), new api.UsageSelection_Attempts(this.usageFilter(), after, snapshot, 20))));
     if (result === null) return;
     if (!(result instanceof api.Result_UsageAttempts)) throw new Error('Unexpected attempt response');
-    this.auditPanel.replaceChildren(element('h3', 'Attempts'));
+    this.auditHeader('Attempts', result.page.cursor);
     if (result.page.entries.length === 0) this.auditPanel.append(element('p', 'No attempts in this scope.'));
     for (const entry of result.page.entries) {
       const row = element('section', ''); const outcome = entry.outcome;
@@ -495,7 +548,7 @@ class App {
     const result = await this.readPanel('audit', new api.Command_Usage(new api.UsageInput(this.currentProject(), new api.UsageSelection_Outcomes(attempt, after, 20))));
     if (result === null) return;
     if (!(result instanceof api.Result_UsageOutcomes)) throw new Error('Unexpected outcome response');
-    this.auditPanel.replaceChildren(element('h3', 'Outcome history'));
+    this.auditHeader('Outcome history', result.page.cursor);
     if (result.page.entries.length === 0) this.auditPanel.append(element('p', 'No outcome recorded yet.'));
     for (const entry of result.page.entries) {
       const row = element('details', ''); row.append(element('summary', `${entry.sequence} · ${entry.value.state}`),
@@ -508,7 +561,7 @@ class App {
     const result = await this.readPanel('audit', new api.Command_Usage(new api.UsageInput(this.currentProject(), new api.UsageSelection_Audit(this.usageFilter(), this.auditAfter, 20))));
     if (result === null) return;
     if (!(result instanceof api.Result_UsageAudit)) throw new Error('Unexpected audit response');
-    this.auditPanel.replaceChildren(element('h3', 'Usage audit'));
+    this.auditHeader('Usage audit', result.page.cursor);
     if (result.page.entries.length === 0) this.auditPanel.append(element('p', 'No usage observations in this scope.'));
     for (const entry of result.page.entries) {
       const row = element('details', ''); row.append(element('summary', `${entry.sequence} · ${entry.upload.observation.source} · ${entry.upload.observation.completeness}`),

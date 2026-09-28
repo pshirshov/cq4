@@ -38,6 +38,35 @@ abstract class UsageContractTest extends SpecZIO with AssertZIO {
     effect.either.flatMap(result => assertIO(result match { case Left(DomainFailure(fault)) => expected(fault); case _ => false })).unit
 
   "Operational usage audit (Behavioral Active Blackbox; dummy Group / PostgreSQL Good Communication)" should {
+    "advance the usage cursor independently of item history and retain it on replay" in { (usage: UsageService[IO], ledger: LedgerService[IO]) =>
+      val owner = scope()
+      for {
+        _ <- ledger.initialize(owner, "usage cursor")
+        member <- task(ledger, owner, "Stable item")
+        before <- ledger.get(owner, member)
+        empty <- usage.cursor(owner)
+        _ <- assertIO(empty == 0)
+        run <- start(usage, owner, assignment(owner, Set(member), Attribution.Direct, None), CounterScope.Increment, UsageMath.zeroCounts, UsageMath.unknownMoney)
+        started <- usage.cursor(owner)
+        _ <- assertIO(started > empty)
+        sample = upload(run, 1, CounterScope.Increment, counts(10, 1), UsageMath.unknownMoney)
+        receipt <- usage.ingest(collector(owner), sample)
+        observed <- usage.cursor(owner)
+        _ <- assertIO(observed == receipt.sequence && observed > started)
+        _ <- usage.ingest(collector(owner), sample)
+        replayed <- usage.cursor(owner)
+        _ <- assertIO(replayed == observed)
+        outcome = AttemptOutcome(RequestId(UUID.randomUUID()), run.id, AttemptState.Cancelled, 3000, List("Missing final usage"), None)
+        _ <- usage.finish(collector(owner), outcome)
+        finished <- usage.cursor(owner)
+        _ <- usage.finish(collector(owner), outcome.copy(request = RequestId(UUID.randomUUID()), state = AttemptState.Completed, gaps = Nil, supersedes = Some(outcome.request)))
+        corrected <- usage.cursor(owner)
+        after <- ledger.get(owner, member)
+        history <- ledger.history(owner, member, Revision(Long.MaxValue), 20)
+        _ <- assertIO(finished > replayed && corrected > finished && after == before && history.entries.size == 1)
+        _ <- denied(usage.cursor(owner.copy(project = ProjectId(UUID.randomUUID()))))(_.isInstanceOf[Fault.Missing])
+      } yield ()
+    }
     "bound cost-group summaries without discarding distinct pricing evidence" in { (usage: UsageService[IO], ledger: LedgerService[IO]) =>
       val owner = scope()
       for {

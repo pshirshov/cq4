@@ -237,14 +237,24 @@ class Checks:
             self.transport(["java", "-cp", classpath, "cq.server.Main"], "browser", True)
 
     def ui(self):
+        self.ui_checks(False)
+
+    def usage(self):
+        self.ui_checks(True)
+
+    def ui_checks(self, usage: bool):
         self.generate()
         self.run(["npm", "run", "check"], "typescript-compile", COMMAND_TIMEOUT)
         command = ["java", "-cp", self.classpath(), "cq.server.Main"]
-        with self.database([]):
+        with self.database(["shared_preload_libraries = 'pg_stat_statements'"] if usage else []):
+            if usage:
+                self.sbt(["server/testOnly *UsageContractDummy *UsageContractPostgres"], "usage-contract")
             port = free_port()
             self.environment.update(CQ_HOST="127.0.0.1", CQ_PORT=str(port), CQ_ORIGIN=f"http://127.0.0.1:{port}",
                                     CQ_TOKEN=uuid.uuid4().hex, CQ_SESSION=str(uuid.uuid4()), CQ_BROWSER_EVIDENCE=str(self.evidence))
             with self.server(command, "ui"):
+                if usage:
+                    self.run(["node", "dev/usage-watch.mjs"], "usage-watch", STARTUP_TIMEOUT)
                 self.run(["node", "dev/browser.mjs"], "ui-browser", COMMAND_TIMEOUT)
 
     def process(self):
@@ -315,8 +325,8 @@ def generated_hashes():
 
 
 def main():
-    if len(sys.argv) != 2 or sys.argv[1] not in ["contracts", "fast", "postgres", "process", "browser", "ui", "native", "access", "cohort", "growth"]:
-        raise SystemExit("Usage: ./dev/check contracts|fast|postgres|process|browser|ui|native|access|cohort|growth")
+    if len(sys.argv) != 2 or sys.argv[1] not in ["contracts", "fast", "postgres", "process", "browser", "ui", "usage", "native", "access", "cohort", "growth"]:
+        raise SystemExit("Usage: ./dev/check contracts|fast|postgres|process|browser|ui|usage|native|access|cohort|growth")
     if shutil.which("java") is None or shutil.which("sbt") is None:
         os.chdir(ROOT)
         os.execvp("nix", ["nix", "develop", "-c", str(ROOT / "dev/check"), sys.argv[1]])

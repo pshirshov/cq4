@@ -1,6 +1,6 @@
 import { BaboonCodecContext } from '../../generated/typescript/BaboonSharedRuntime.js';
 import {
-  ClientFrame, ClientFrame_Call, ClientFrame_Subscribe, ClientFrame_Ping, ClientFrame_Pong, ClientFrame_JsonCodec,
+  ClientFrame, ClientFrame_Call, ClientFrame_Subscribe, ClientFrame_WatchUsage, ClientFrame_Ping, ClientFrame_Pong, ClientFrame_JsonCodec,
   ServerFrame, ServerFrame_Reply, ServerFrame_Ping, ServerFrame_Pong, ServerFrame_JsonCodec,
   Command, Result, RequestId, ProjectId, ChangeCursor,
 } from '../../generated/typescript/cq/api/index.js';
@@ -216,6 +216,12 @@ export class ConnectionManager {
   subscribe(project: ProjectId, after: ChangeCursor): { id: RequestId; result: Promise<Result> } {
     const id = new RequestId(crypto.randomUUID());
     return { id, result: this.exchange(new ClientFrame_Subscribe(id, project, after)) };
+  }
+  watchUsage(project: ProjectId): RequestId {
+    const connection = this.activeConnection();
+    if (connection === undefined || connection.state !== 'ALIVE') throw new Error('No verified connection');
+    const id = new RequestId(crypto.randomUUID());
+    this.send(connection, new ClientFrame_WatchUsage(id, project)); return id;
   }
   retry(): void {
     if (this.destroyed) return;

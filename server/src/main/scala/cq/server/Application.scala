@@ -64,6 +64,9 @@ final class Application(ledger: LedgerService[IO], repository: LedgerRepository[
   private def scoped[A](authority: Authority, project: ProjectId)(operation: cq.core.Scope => Task[A]): Task[A] =
     ZIO.attempt(authority.scope(project)).flatMap(operation)
 
+  def usageCursor(authority: Authority, project: ProjectId): Task[Long] =
+    ZIO.attempt(authorization.check(authority)) *> scoped(authority, project)(usage.cursor)
+
   def upload(authority: Authority, input: ArtifactUpload): Task[ArtifactMetadata] =
     ZIO.attempt(authorization.check(authority)) *> scoped(authority, input.project)(artifacts.upload(_, input))
 

@@ -25,6 +25,9 @@ export async function usageChecks(page, origin, projectId) {
   await page.getByRole('heading', { name: 'Codex · Worker · Running', exact: true }).waitFor();
   await page.getByRole('button', { name: 'Outcome history', exact: true }).click();
   await page.getByText('No outcome recorded yet.', { exact: true }).waitFor();
+  const query = page.getByLabel('Search query', { exact: true });
+  await query.fill('alpha AND'); await page.getByRole('button', { name: 'Search', exact: true }).click();
+  await page.getByText('Data: invalid query', { exact: true }).waitFor();
   const counter = n => ({ value: String(n), measurement: 'Observed' });
   const counts = n => ({ input: counter(n), output: counter(0), cacheRead: counter(0), cacheWrite: counter(0), reasoning: counter(0) });
   const cost = { amount: null, currency: null, basis: 'Unknown', pricingVersion: null };
@@ -34,12 +37,10 @@ export async function usageChecks(page, origin, projectId) {
     completeness: 'Complete', gaps: [], evidence: null, supersedes: null }, meter: 'fixture', disposition: 'Contribution', detailReason: null } } });
   const outcome = { request: id(), attempt: attempt.id, state: 'Cancelled', finishedAt: '3000', gaps: ['Final request usage unavailable'], supersedes: null };
   await host({ Finish: { value: outcome } });
-  await page.getByRole('button', { name: 'Refresh usage', exact: true }).click();
   await page.getByText('Attempt coverage: 0 running; 0 unknown outcomes; 1 with reported gaps.', { exact: true }).waitFor();
   await page.getByRole('button', { name: 'Attempts', exact: true }).click();
   await page.getByText('Final request usage unavailable', { exact: true }).waitFor();
   await host({ Finish: { value: { ...outcome, request: id(), state: 'Completed', finishedAt: '2500', gaps: [], supersedes: outcome.request } } });
-  await page.getByRole('button', { name: 'Refresh usage', exact: true }).click();
   await page.getByText('Attempt coverage: 0 running; 0 unknown outcomes; 0 with reported gaps.', { exact: true }).waitFor();
   await page.getByRole('button', { name: 'Attempts', exact: true }).click();
   await page.getByRole('heading', { name: 'Codex · Worker · Completed', exact: true }).waitFor();
@@ -52,12 +53,15 @@ export async function usageChecks(page, origin, projectId) {
       cost: { amount: { value: '0.01' }, currency: 'USD', basis: 'ProviderEstimate', pricingVersion: `price-${String(index).padStart(3, '0')}` },
       completeness: 'Complete', gaps: [], evidence: null, supersedes: null }, meter: 'fixture', disposition: 'Contribution', detailReason: null } } });
   }
-  await page.getByRole('button', { name: 'Refresh usage', exact: true }).click();
   await page.getByText('Direct: 301 known tokens; 0 unknown measurements; 0 estimated measurements', { exact: true }).waitFor();
+  await page.getByText(/^Stale snapshot cursor \d+; latest observed usage cursor \d+\.$/).waitFor();
+  assert.equal(await page.getByText('Data: invalid query', { exact: true }).count(), 1, 'Usage refresh is independent of query validity');
   await page.getByRole('button', { name: 'More costs', exact: true }).click();
   await page.getByRole('heading', { name: 'Cost breakdown', exact: true }).waitFor();
   await page.getByText('Direct: 0.01 USD · ProviderEstimate · pricing price-200 · 1 measurements', { exact: true }).waitFor();
   assert.equal(await page.getByRole('button', { name: 'Next cost page', exact: true }).count(), 0);
   assert.deepEqual(await detail(), before, 'Usage lifecycle writes must not revise the item');
-  console.log('Chromium usage: no-meter attempt, complete sample with cancellation gap, explicit correction, retained outcome history, paginated exact costs and unchanged item revision passed');
+  await query.fill(''); await page.getByRole('button', { name: 'Search', exact: true }).click();
+  await page.getByText('Data: current', { exact: true }).waitFor();
+  console.log('Chromium usage: live independent updates through invalid query, corrections, stale audit labels, paginated exact costs and unchanged item revision passed');
 }

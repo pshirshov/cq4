@@ -13,6 +13,7 @@ import java.time.Clock
 import java.util.UUID
 
 private final case class Subscription(id: RequestId, project: ProjectId, after: ChangeCursor)
+private final case class UsageSubscription(id: RequestId, project: ProjectId, cursor: Option[Long])
 private final case class Heartbeat(current: Option[String], previous: Option[String], lastPong: Long, lastPing: Long)
 
 final class LiveSession(application: Application, authorization: Authorization, clock: Clock) {
@@ -25,9 +26,14 @@ final class LiveSession(application: Application, authorization: Authorization, 
   def open(builder: WebSocketBuilder2[Task], authority: Authority): Task[Response[Task]] = for {
     outgoing <- Queue.bounded[WebSocketFrame](QueueCapacity)
     watch <- Ref.Synchronized.make(Option.empty[Subscription])
+    usageWatch <- Ref.Synchronized.make(Option.empty[UsageSubscription])
     heartbeat <- Ref.make(Heartbeat(None, None, clock.millis(), 0L))
     stopped <- Ref.make(false)
     send = (frame: ServerFrame) => outgoing.offer(WebSocketFrame.Text(Wire.encode(ServerFrame_JsonCodec, frame))).unit
+    observeUsage = (subscription: UsageSubscription) => application.usageCursor(authority, subscription.project).flatMap { cursor =>
+      val notify = if (subscription.cursor.contains(cursor)) ZIO.unit else send(ServerFrame.UsageCursor(subscription.id, subscription.project, cursor))
+      notify.as(Option(subscription.copy(cursor = Some(cursor))))
+    }.catchSome { case DomainFailure(fault) => send(ServerFrame.Resync(subscription.id, subscription.project, fault)).as(None) }
     close = (code: Int, reason: String) => stopped.getAndSet(true).flatMap { already =>
       if (already) ZIO.unit else outgoing.offer(WebSocketFrame.Close(code, reason).fold(throw _, identity)).unit
     }
@@ -51,6 +57,10 @@ final class LiveSession(application: Application, authorization: Authorization, 
             case _ => ZIO.dieMessage("Changes command returned an unrelated result")
           }
       }
+      _ <- usageWatch.updateZIO {
+        case None => ZIO.none
+        case Some(subscription) => observeUsage(subscription)
+      }
     } yield ()
     fiber <- (stopped.get.flatMap { done => if (done) ZIO.unit else poll } *> ZIO.sleep(Duration.fromMillis(PollMillis)))
       .forever.catchAll {
@@ -72,6 +82,7 @@ final class LiveSession(application: Application, authorization: Authorization, 
                 case result => send(ServerFrame.Reply(id, result)).as(None)
               }
             }
+            case ClientFrame.WatchUsage(id, project) => usageWatch.updateZIO(_ => observeUsage(UsageSubscription(id, project, None)))
             case _ => close(1007, "Invalid CQ frame")
           })
         case _: WebSocketFrame.Text => close(1009, "Frame exceeds 2 MiB")

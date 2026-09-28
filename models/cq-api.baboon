@@ -365,6 +365,7 @@ root data AccessToken { value: str expiresAt: i64 }
 root adt ClientFrame {
   data Call { id: RequestId command: Command }
   data Subscribe { id: RequestId project: ProjectId after: ChangeCursor }
+  data WatchUsage { id: RequestId project: ProjectId }
   data Ping { nonce: str }
   data Pong { nonce: str }
 }
@@ -372,6 +373,7 @@ root adt ServerFrame {
   data Reply { id: RequestId result: Result }
   data Changes { subscription: RequestId project: ProjectId page: ChangePage }
   data Resync { subscription: RequestId project: ProjectId fault: Fault }
+  data UsageCursor { subscription: RequestId project: ProjectId cursor: i64 }
   data Ping { nonce: str }
   data Pong { nonce: str }
 }

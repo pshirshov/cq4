@@ -16,6 +16,8 @@ object ContractCheck {
     val revision = Revision(9007199254740993L)
     val probe = Probe(ProjectId(UUID.fromString("00000000-0000-0000-0000-000000000001")), revision, "round trip λ")
     val conflict = ApiError.Conflict(revision, Revision(Long.MaxValue))
+    val watch = ClientFrame.WatchUsage(RequestId(probe.project.value), probe.project)
+    val usageCursor = ServerFrame.UsageCursor(watch.id, probe.project, revision.value)
     val query = QueryExpression.And(QueryExpression.Archive(ArchiveFilter.Active), QueryExpression.Or(
       QueryExpression.Not(QueryExpression.Reference(Relation.BlockedBy, QueryItem(Ledger.Tasks, Long.MaxValue))),
       QueryExpression.Text(List("retry", "λ"), true)
@@ -33,6 +35,8 @@ object ContractCheck {
         Files.writeString(directory.resolve("scala-probe.json"), Probe_JsonCodec.encode(context, probe).noSpaces)
         Files.writeString(directory.resolve("scala-error.json"), ApiError_JsonCodec.encode(context, conflict).noSpaces)
         Files.writeString(directory.resolve("scala-query.json"), QueryExpression_JsonCodec.encode(context, query).noSpaces)
+        Files.writeString(directory.resolve("scala-watch.json"), ClientFrame_JsonCodec.encode(context, watch).noSpaces)
+        Files.writeString(directory.resolve("scala-usage-cursor.json"), ServerFrame_JsonCodec.encode(context, usageCursor).noSpaces)
       case "verify" =>
         val returned = parse(Files.readString(directory.resolve("typescript-probe.json"))).flatMap(Probe_JsonCodec.decode(context, _))
         assert(returned == Right(probe))
@@ -40,6 +44,8 @@ object ContractCheck {
         assert(error == Right(conflict))
         val returnedQuery = parse(Files.readString(directory.resolve("typescript-query.json"))).flatMap(QueryExpression_JsonCodec.decode(context, _))
         assert(returnedQuery == Right(query))
+        assert(parse(Files.readString(directory.resolve("typescript-watch.json"))).flatMap(ClientFrame_JsonCodec.decode(context, _)) == Right(watch))
+        assert(parse(Files.readString(directory.resolve("typescript-usage-cursor.json"))).flatMap(ServerFrame_JsonCodec.decode(context, _)) == Right(usageCursor))
       case _ => throw new IllegalArgumentException("Expected export|verify")
     }
     println(s"contracts ${args(0)} passed: JSON, UEBA, 64-bit values, typed error, recursive query")
