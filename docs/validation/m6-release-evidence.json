@@ -137,9 +137,37 @@
     "acceptedStages": [
       "cohort-claude",
       "cohort-claude-assess",
-      "cohort-codex"
+      "cohort-codex",
+      "cohort-codex-assess",
+      "cohort-pi",
+      "cohort-pi-assess",
+      "process-begin"
     ],
-    "runningStage": "cohort-codex-assess",
-    "scope": "Progress snapshot; consult suite.json for current state. Full corpus and human acceptance remain pending."
+    "runningStage": "defect-begin",
+    "scope": "Progress snapshot; consult suite.json for current state. Full corpus and human acceptance remain pending.",
+    "verifiedRoutes": 9,
+    "scopedAccounting": {
+      "attempts": 18,
+      "knownTokens": 4641813,
+      "producerTokens": 3430819,
+      "assessorTokens": 1210994,
+      "governorTokens": 2932369,
+      "childTokens": 1709444,
+      "requiredInputOutputComplete": true,
+      "optionalFieldsLimited": true,
+      "unknownCostContributions": 7,
+      "dispatchCalls": 59,
+      "explicitArtifactDrillDowns": 5
+    },
+    "awaitingInput": {
+      "checkpoint": "/srv/nvme/tmp/cq4-implementation/20260928T060135-release/20260928T062332-process-begin",
+      "question": "Q1@1",
+      "project": "556e23a3-3962-4098-a0dd-0ad51d574181",
+      "choice": [
+        "Python",
+        "Go"
+      ],
+      "state": "Pending clarification about reuse of the earlier Go reply; no answer recorded."
+    }
   }
 }

@@ -68,6 +68,26 @@ Astra also approved the final operations guide after verifying the unchanged exe
 
 Implementation/evaluator/runbook commit: `94f4a52`. `20260928T060135-release` is running via the documented release suite and `/srv/nvme/tmp/cq4-implementation/m6-harness-bin` pins. The first Claude-governed Python cohort has started real Codex Planner and Claude Worker children. All three executable version checks pass. This is launch evidence only; accepted candidates, all nine observed routes, independent assessments and final operational usage reporting remain pending. The process question/resume branch still requires its supplied-answer provenance.
 
+The actual launch command from this checkout is:
+
+```sh
+PATH=/srv/nvme/tmp/cq4-implementation/m6-harness-bin:$PATH \
+CQ_EVIDENCE_ROOT=/srv/nvme/tmp/cq4-implementation \
+./dev/evaluate --suite release --release /srv/nvme/tmp/cq4-implementation/cq-release
+```
+
+After that invocation finishes, resume its retained suite without repeating accepted stages:
+
+```sh
+PATH=/srv/nvme/tmp/cq4-implementation/m6-harness-bin:$PATH \
+./dev/evaluate --suite release \
+  --release /srv/nvme/tmp/cq4-implementation/cq-release \
+  --resume /srv/nvme/tmp/cq4-implementation/20260928T060135-release \
+  --answer-file /absolute/supplied-answer.json
+```
+
+The answer file has exactly four fields: `question` copied verbatim from the new checkpoint's `question-checkpoint.json` (the whole item/revision reference), `answer` equal to `Python` or `Go`, `verbatim` containing the actual supplied reply, and `source` identifying where that reply was received. Do not substitute another checkpoint's question reference or invent a reply. The runner retains the file's bytes and commits its provenance into the consumer candidate. Without this file, independent defect stages can run while the resume/assessment branch remains pending. `--report-only` on a finished suite replays evidence without new model calls. A concurrent invocation fails the suite's exclusive lock.
+
 The first producer and independent cohort assessment are accepted (`20260928T060145-cohort-consumer-claude-python`, `20260928T060702-assess-20260928T060145-cohort-consumer-claude-python`). Producer accounting reconciles four attempts and 1,414,811 known tokens, with zero unknown/estimated input-output contributions; its two observed cost groups coexist with one unknown-cost contribution. The separate assessor has two attempts and retains its own partial cost coverage. `m6-package/first-packaged-metrics.json` retains the successful role/counter reconciliation and native traffic parse. The Codex-governed cohort is running next; this first accepted track is not the full release verdict.
 
 The provisional [release evidence manifest](m6-release-evidence.json) binds implementation commit, package hashes, verified gates, retained-gate applicability and remaining work. Astra approved the manifest and reconciled dispatch/usage/supervisor documentation without a substantive finding. Final PostgreSQL verification at `20260928T060301-postgres` passes 102 scenarios and the full JVM transport/process/restart corpus; all 291 current non-documentation inputs match. Final access verification passes at `20260928T061234-access`, with all 291 inputs matching and access-work budgets satisfied through 100,000 unrelated items.
@@ -75,3 +95,7 @@ The provisional [release evidence manifest](m6-release-evidence.json) binds impl
 The Codex-governed Go producer (`20260928T060837-cohort-consumer-codex-go`) also passes its candidate/cohort proof; its independent assessment is running. These progress snapshots retain the live suite as the current state authority.
 
 Astra approved the final deterministic evidence and provisional manifest: 102 PostgreSQL tests and all 25 recorded commands pass; access measures 126 operations over 100/10,000/100,000 background sizes with all budget checks passing. Current source applicability and every referenced evidence hash were verified. No blocking/major finding remains in this scope; packaged live completion, final release review and designated human acceptance remain open.
+
+All six packaged cohort producer/assessment stages are now accepted. Astra independently replays all nine governor-to-child routes and reconciles 18 distinct attempts to **4,641,813 known tokens**: 3,430,819 producer / 1,210,994 independent-assessor tokens, or 2,932,369 governor / 1,709,444 child tokens. Required input/output coverage is complete and no meter is absent; all 18 retain optional-field limitations. Partial provider estimates coexist with seven unknown-cost contributions and do not establish billing. Native traffic has 59 dispatch calls, five explicit artifact drill-downs, no repeated dispatch IDs and no missing/orphan replies. The Pi producer/assessment contributes 782,403 / 425,233 known tokens. This scoped replay is approved; worked-process and final suite acceptance remain pending.
+
+The packaged question checkpoint passes at `20260928T062332-process-begin`: I1@3 → G1@2 → Q1@1, project `556e23a3-3962-4098-a0dd-0ad51d574181`, asks which implementation language to use, with exact alternatives Python/Go. Archive errors are empty. The existing clarification about carrying forward the earlier Go reply is still unanswered; no new answer record has been fabricated. The suite correctly skips dependent resume/assessment stages and starts `20260928T062725-defect-begin` independently.
