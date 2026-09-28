@@ -607,7 +607,9 @@
       "review": "Independent Astra approved",
       "reviewFile": "/srv/nvme/tmp/cq4-launcher-lock-20260928/astra-review.json",
       "reviewSha256": "befe7242dafb08c3df777356efc06258c608984932ec1bd73f69f81177c08cf9",
-      "operatorRecoveryStatus": "Host-process diagnostic pending; no user process signaled"
+      "operatorRecoveryStatus": "Recovered on host; corrected package running on all interfaces; actual plain-HTTP login and ALIVE connection verified with existing token, no project mutations",
+      "operatorRecoveryEvidence": "/srv/nvme/tmp/cq4-launcher-lock-20260928/host-recovery.json",
+      "operatorRecoverySha256": "e287da49341f907b795acaef368bc60e6b6a64729cbe8551672709dfed0ec70b"
     }
   },
   "activeCorrection": {
