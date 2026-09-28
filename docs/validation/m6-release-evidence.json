@@ -1,5 +1,5 @@
 {
-  "state": "in-progress-post-integration-closeout",
+  "state": "in-progress-final-process-assessment",
   "implementationCommit": "302bf34",
   "modelVersion": "0.1.0",
   "platform": "x86_64-linux",
@@ -131,7 +131,12 @@
       "applicability": "24 commands pass with 292 unchanged source hashes. Source/classpath isolation, imported runtime, all four workflows, browser, restart and settled 24-table backup pass. Delivery/relocated artifact hashes match; independent Astra approved."
     }
   ],
-  "running": [],
+  "running": [
+    {
+      "name": "corrected-packaged-process-assess",
+      "directory": "/srv/nvme/tmp/cq4-implementation/20260928T074651-release/20260928T092821-process-assess"
+    }
+  ],
   "pending": [
     "packaged live acceptance and usage report",
     "final independent Astra release review",
@@ -164,6 +169,13 @@
       "admissionProofSha256": "21147874390ed676bf4763431a213586a1fadeb4cb5a78d1cd12606dd8fd98ab",
       "sourceCommit": "da5470e",
       "scope": "Only process continuation instructions and reviewed amendment control/tests; prior attempts/proofs/accounting retained"
+    },
+    {
+      "file": "/srv/nvme/tmp/cq4-implementation/m6-package/process-closeout/amendment.json",
+      "admissionProof": "/srv/nvme/tmp/cq4-implementation/m6-package/process-closeout/admission-proof.json",
+      "admissionProofSha256": "59bd3e44541191a52b0820d46d4d034f2e395ca64f2d7a700be58466057271f3",
+      "sourceCommit": "02c0846",
+      "scope": "Exact reviewed bounded Handoff closeout and evidence/assessor wiring; original failed producer, integration authority, oracle and quality predicates retained"
     }
   ],
   "historicalAccounting": {
@@ -195,7 +207,7 @@
     "native": "/srv/nvme/tmp/cq4-implementation/20260928T071654-native",
     "installed": "/srv/nvme/tmp/cq4-implementation/20260928T074034-installed",
     "installedStatus": "package-checked",
-    "liveStatus": "incomplete-closeout-pending",
+    "liveStatus": "running-process-assessment",
     "liveSuite": "/srv/nvme/tmp/cq4-implementation/20260928T074651-release"
   },
   "historicalLiveProgress": {
@@ -263,7 +275,7 @@
   },
   "liveProgress": {
     "suite": "/srv/nvme/tmp/cq4-implementation/20260928T074651-release",
-    "status": "incomplete",
+    "status": "running-process-assessment",
     "scope": "Fresh corrected-artifact corpus; old-artifact acceptance and spending remain separate.",
     "independentlyAcceptedCohorts": [
       "claude",
@@ -314,6 +326,24 @@
         "knownTokens": 957199,
         "modelAttempts": 7,
         "attemptsWithoutMeters": 1
+      },
+      "closeout": {
+        "directory": "20260928T092649-process-closeout",
+        "status": "integrated-candidate-passed",
+        "sourceCommit": "02c0846",
+        "candidate": "3100f651eb12ad5170346ccc104d8b6549bffcd7",
+        "elapsedGovernorSeconds": 54.847,
+        "elapsedOuterSeconds": null,
+        "newAttempts": 1,
+        "newKnownTokens": 276774,
+        "lineageAttempts": 13,
+        "lineageKnownTokens": 2447030,
+        "lineageAttemptsWithoutMeters": 1,
+        "review": "Independent Astra approved native scope, frozen archive and accounting replay; adopted into suite"
+      },
+      "assessment": {
+        "directory": "20260928T092821-process-assess",
+        "status": "running"
       }
     },
     "defectProcess": {

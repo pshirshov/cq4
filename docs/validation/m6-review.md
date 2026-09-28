@@ -24,7 +24,7 @@ The same native entrypoint provides the server, CLI and supervisor. The release 
 | Native runtime | 40 commands pass, including actual startup of all four workflows; `20260928T071654-native` |
 | Installed distribution | 24 root commands pass with source/classpath hidden, imported runtime closure, native browser/restart and settled 24-table backup/restore; `20260928T074034-installed` |
 | Native harness routes | Three independently accepted Python/Go cohorts cover all nine governing/child routes; [current candidates and inspection](m2-review.md#current-acceptance-evidence) |
-| Complete processes | Current defect process passes native independent whole-process assessment and Astra replay; Go implementation/review/integration completed before its deadline, with Handoff closeout and independent assessment pending |
+| Complete processes | Current defect process passes native independent whole-process assessment and Astra replay; Go implementation/review/integration and bounded Handoff closeout pass; native independent whole-process assessment is running |
 
 The [release evidence manifest](m6-release-evidence.json) binds exact evidence hashes and explains retained checks' source applicability. Earlier artifact and consumer failures remain historical evidence; their later replacements do not change their original verdicts.
 
