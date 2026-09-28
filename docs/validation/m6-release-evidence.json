@@ -117,6 +117,11 @@
     {
       "name": "packaged-live",
       "directory": "/srv/nvme/tmp/cq4-implementation/20260928T060135-release"
+    },
+    {
+      "name": "packaged-process-resume",
+      "directory": "/srv/nvme/tmp/cq4-implementation/20260928T060135-release/20260928T070043-process-resume",
+      "admission": "Separate concurrent run; suite adoption after completion and validation."
     }
   ],
   "pending": [
@@ -170,7 +175,8 @@
         "Python",
         "Go"
       ],
-      "state": "Pending clarification about reuse of the earlier Go reply; no answer recorded."
+      "state": "Resolved: actual earlier Go reply carried forward with identifiable original source; no fresh reply or M2/M6 human acceptance implied.",
+      "answerFile": "/srv/nvme/tmp/cq4-implementation/20260928T060135-release/supplied-go-answer.json"
     },
     "suiteStatus": "incomplete",
     "rejectedStages": [
