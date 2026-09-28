@@ -661,11 +661,15 @@
     "interruptedCleanupCorrection": {
       "evidence": "/srv/nvme/tmp/cq4-launcher-terminal-20260928/verification.json",
       "sha256": "596fbd5aaf9f713bc9285d3aa0d59a6bf9b7d397885a20284389790a9cb5b0dc",
-      "qualification": "Both focused before/after lifecycle cases pass; independent Astra approves. No application/package change or broader gate rerun. Host recovery pending.",
+      "qualification": "Both focused before/after lifecycle cases pass; independent Astra approves. Host recovery and fresh Chromium login now pass. User-browser sign-in report remains under investigation. No application/package change or broader gate rerun.",
       "review": {
         "file": "/srv/nvme/tmp/cq4-launcher-terminal-20260928/astra-review.json",
         "sha256": "747b536987c0621d22f6d927773e1437210bebb0df7438fbd716b32515cee8d9",
         "verdict": "launcher-cleanup-correction-approved"
+      },
+      "hostRecovery": {
+        "file": "/srv/nvme/tmp/cq4-launcher-terminal-20260928/host-recovery.json",
+        "sha256": "47a3c6d57d53585211990dff4573c6b99c74a730a836313fc758b854ffc1e5a6"
       }
     }
   },
