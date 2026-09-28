@@ -39,14 +39,14 @@ export async function selectionChecks(browser, storageState, origin, evidence) {
       completeness: 'Complete', gaps: [], evidence: null, supersedes: null }, meter: 'selection', disposition: 'Contribution', detailReason: null } } });
   }
   const outcomes = [];
-  for (const scenario of ['project-subscribe', 'project-list', 'detail', 'history', 'usage', 'project-history', 'project-usage', 'audit', 'same-audit', 'same-detail']) {
+  for (const scenario of ['project-watch', 'project-list', 'detail', 'history', 'usage', 'project-history', 'project-usage', 'project-audit', 'audit', 'same-audit', 'same-detail']) {
     const context = await browser.newContext({ storageState });
     await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
     await trackProtocol(context);
     const page = await context.newPage();
     const errors = [];
     page.on('pageerror', error => errors.push(String(error)));
-    let predicate = null; let failSubscribe = false;
+    let predicate = null; let failWatch = false;
     let request = null;
     let held = null;
     let acknowledge;
@@ -56,8 +56,8 @@ export async function selectionChecks(browser, storageState, origin, evidence) {
       const server = route.connectToServer();
       route.onMessage(message => {
         const frame = JSON.parse(String(message));
-        if (failSubscribe && frame.Subscribe && frame.Subscribe.project.value === first.project.value) {
-          failSubscribe = false; request = frame.Subscribe.id.value; frame.Subscribe.after.value = '9223372036854775807';
+        if (failWatch && frame.Watch && frame.Watch.scope.project !== null && frame.Watch.scope.project.value === first.project.value) {
+          failWatch = false; request = frame.Watch.id.value; frame.Watch.scope.project.value = randomUUID();
           exchanges.push({ request, command: frame }); server.send(JSON.stringify(frame)); return;
         }
         if (predicate !== null && frame.Call && predicate(frame.Call.command)) {
@@ -68,7 +68,10 @@ export async function selectionChecks(browser, storageState, origin, evidence) {
       });
       server.onMessage(message => {
         const frame = JSON.parse(String(message));
-        if (frame.Reply && frame.Reply.id.value === request) {
+        if (frame.Resync && frame.Resync.subscription.value === request) {
+          assert.equal(held, null); held = { route, message };
+          exchanges.push({ request, result: { Failed: { fault: frame.Resync.fault } } }); acknowledge();
+        } else if (frame.Reply && frame.Reply.id.value === request) {
           assert.equal(held, null); held = { route, message };
           exchanges.push({ request, result: frame.Reply.result }); acknowledge();
         } else route.send(message);
@@ -89,12 +92,13 @@ export async function selectionChecks(browser, storageState, origin, evidence) {
       await page.getByLabel('Project', { exact: true }).selectOption(first.project.value);
       await row('T1 · Selection A').waitFor();
       await page.getByText('Data: current', { exact: true }).waitFor();
-      if (scenario === 'project-subscribe') {
-        failSubscribe = true; await row('Search').click(); await capturedReply();
-        assert.ok(exchanges.at(-1).result.Failed, 'Hold an actual server rejection for an invalid replay cursor');
+      if (scenario === 'project-watch') {
+        await page.getByLabel('Project', { exact: true }).selectOption(second.project.value); await row('T1 · Selection C').waitFor();
+        failWatch = true; await page.getByLabel('Project', { exact: true }).selectOption(first.project.value); await capturedReply();
+        assert.ok(exchanges.at(-1).result.Failed, 'Hold an actual server rejection for an missing watched project');
         await page.getByLabel('Project', { exact: true }).selectOption(second.project.value);
         held.route.send(held.message); await row('T1 · Selection C').waitFor(); await page.getByText('Data: current', { exact: true }).waitFor();
-        assert.equal(await page.getByRole('alert').count(), 0, 'An obsolete Subscribe failure must not surface in the new project');
+        assert.equal(await page.getByRole('alert').count(), 0, 'An obsolete watch failure must not surface in the new project');
         assert.deepEqual(errors, []); outcomes.push({ scenario, status: 'passed', exchanges }); continue;
       }
       if (scenario === 'project-list') {
@@ -150,7 +154,7 @@ export async function selectionChecks(browser, storageState, origin, evidence) {
         assert.equal(await heading('History · T1').count(), 0, 'Changing selection must clear the previous visible history');
         await row('History').click();
         await heading(historyName).waitFor();
-      } else if (scenario === 'audit') {
+      } else if (scenario.endsWith('audit') && !sameItem) {
         await row('Usage audit').click();
         await heading('Usage audit').waitFor();
       }

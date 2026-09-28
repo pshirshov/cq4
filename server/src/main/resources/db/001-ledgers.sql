@@ -1,3 +1,8 @@
+CREATE TABLE cq_catalogue_clock (
+  singleton boolean PRIMARY KEY CHECK (singleton),
+  cursor bigint NOT NULL CHECK (cursor >= 0)
+);
+INSERT INTO cq_catalogue_clock(singleton, cursor) VALUES (true, 0);
 CREATE TABLE cq_projects (
   project_id uuid PRIMARY KEY,
   body jsonb NOT NULL,

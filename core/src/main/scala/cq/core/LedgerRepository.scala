@@ -9,7 +9,9 @@ final case class StoredRequest(fingerprint: String, acknowledgement: ChangeAck)
 
 trait LedgerRepository[F[_, _]] {
   def initialize(project: Project): F[Throwable, Project]
-  def projects(after: Option[ProjectId], limit: Int): F[Throwable, List[Project]]
+  def projects(after: Option[ProjectId], limit: Int): F[Throwable, ProjectPage]
+  def catalogueCursor: F[Throwable, CatalogueCursor]
+  def itemCursor(project: ProjectId): F[Throwable, ChangeCursor]
   def transact[A](project: ProjectId)(operation: LedgerTransaction => A): F[Throwable, A]
 }
 

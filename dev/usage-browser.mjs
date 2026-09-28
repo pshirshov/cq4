@@ -40,13 +40,15 @@ export async function usageChecks(page, origin, projectId) {
   await page.getByText('Attempt coverage: 0 running; 0 unknown outcomes; 1 with reported gaps.', { exact: true }).waitFor();
   await page.getByRole('button', { name: 'Attempts', exact: true }).click();
   await page.getByText('Final request usage unavailable', { exact: true }).waitFor();
-  await host({ Finish: { value: { ...outcome, request: id(), state: 'Completed', finishedAt: '2500', gaps: [], supersedes: outcome.request } } });
+  const completed = { ...outcome, request: id(), state: 'Completed', finishedAt: '2500', gaps: [], supersedes: outcome.request };
+  await host({ Finish: { value: completed } });
   await page.getByText('Attempt coverage: 0 running; 0 unknown outcomes; 0 with reported gaps.', { exact: true }).waitFor();
-  await page.getByRole('button', { name: 'Attempts', exact: true }).click();
   await page.getByRole('heading', { name: 'Codex · Worker · Completed', exact: true }).waitFor();
   await page.getByRole('button', { name: 'Outcome history', exact: true }).click();
   await page.getByText(/^\d+ · Cancelled$/).waitFor();
   await page.getByText(/^\d+ · Completed$/).waitFor();
+  await host({ Finish: { value: { ...completed, request: id(), finishedAt: '2600', supersedes: completed.request } } });
+  await page.getByText(/^\d+ · Completed$/).nth(1).waitFor();
   for (let index = 0; index < 201; index++) {
     await host({ Ingest: { value: { observation: { id: id(), attempt: attempt.id, source: 'fixture', position: String(index + 2), occurredAt: '4000', receivedAt: '0',
       scope: 'Increment', counters: counts(1), inputIncludesCache: true, outputIncludesReasoning: true,
@@ -54,14 +56,19 @@ export async function usageChecks(page, origin, projectId) {
       completeness: 'Complete', gaps: [], evidence: null, supersedes: null }, meter: 'fixture', disposition: 'Contribution', detailReason: null } } });
   }
   await page.getByText('Direct: 301 known tokens; 0 unknown measurements; 0 estimated measurements', { exact: true }).waitFor();
-  await page.getByText(/^Stale snapshot cursor \d+; latest observed usage cursor \d+\.$/).waitFor();
+  await page.getByText(/^Snapshot cursor (\d+); latest observed usage cursor \1\.$/).waitFor();
   assert.equal(await page.getByText('Data: invalid query', { exact: true }).count(), 1, 'Usage refresh is independent of query validity');
   await page.getByRole('button', { name: 'More costs', exact: true }).click();
   await page.getByRole('heading', { name: 'Cost breakdown', exact: true }).waitFor();
   await page.getByText('Direct: 0.01 USD · ProviderEstimate · pricing price-200 · 1 measurements', { exact: true }).waitFor();
   assert.equal(await page.getByRole('button', { name: 'Next cost page', exact: true }).count(), 0);
+  await host({ Ingest: { value: { observation: { id: id(), attempt: attempt.id, source: 'fixture', position: '203', occurredAt: '5000', receivedAt: '0',
+    scope: 'Increment', counters: counts(1), inputIncludesCache: true, outputIncludesReasoning: true,
+    cost: { amount: { value: '0.02' }, currency: 'USD', basis: 'ProviderEstimate', pricingVersion: 'price-200' },
+    completeness: 'Complete', gaps: [], evidence: null, supersedes: null }, meter: 'fixture', disposition: 'Contribution', detailReason: null } } });
+  await page.getByText('Direct: 0.03 USD · ProviderEstimate · pricing price-200 · 2 measurements', { exact: true }).waitFor();
   assert.deepEqual(await detail(), before, 'Usage lifecycle writes must not revise the item');
   await query.fill(''); await page.getByRole('button', { name: 'Search', exact: true }).click();
   await page.getByText('Data: current', { exact: true }).waitFor();
-  console.log('Chromium usage: live independent updates through invalid query, corrections, stale audit labels, paginated exact costs and unchanged item revision passed');
+  console.log('Chromium usage: live independent updates through invalid query, live attempts/outcomes/cost corrections, current audit labels, paginated exact costs and unchanged item revision passed');
 }

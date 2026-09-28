@@ -1,9 +1,9 @@
 import { uuidV4 } from './uuid.js';
 import { BaboonCodecContext } from '../../generated/typescript/BaboonSharedRuntime.js';
 import {
-  ClientFrame, ClientFrame_Call, ClientFrame_Subscribe, ClientFrame_WatchUsage, ClientFrame_Ping, ClientFrame_Pong, ClientFrame_JsonCodec,
+  ClientFrame, ClientFrame_Call, ClientFrame_Watch, ClientFrame_Ping, ClientFrame_Pong, ClientFrame_JsonCodec,
   ServerFrame, ServerFrame_Reply, ServerFrame_Ping, ServerFrame_Pong, ServerFrame_JsonCodec,
-  Command, Result, RequestId, ProjectId, ChangeCursor,
+  Command, Result, RequestId, LiveScope,
 } from '../../generated/typescript/cq/api/index.js';
 
 type State = 'NEW' | 'ALIVE' | 'STALE' | 'DEAD';
@@ -260,7 +260,7 @@ export class ConnectionManager {
     if (this.nextAttempt !== null && now >= this.nextAttempt) this.connect();
     this.publish();
   }
-  private exchange(frame: ClientFrame_Call | ClientFrame_Subscribe): Promise<Result> {
+  private exchange(frame: ClientFrame_Call): Promise<Result> {
     const connection = this.activeConnection();
     if (connection === undefined || connection.state !== 'ALIVE') return Promise.reject(new Error('No verified connection'));
     return new Promise((resolve, reject) => {
@@ -269,15 +269,11 @@ export class ConnectionManager {
     });
   }
   call(command: Command): Promise<Result> { return this.exchange(new ClientFrame_Call(new RequestId(uuidV4(crypto)), command)); }
-  subscribe(project: ProjectId, after: ChangeCursor): { id: RequestId; result: Promise<Result> } {
-    const id = new RequestId(uuidV4(crypto));
-    return { id, result: this.exchange(new ClientFrame_Subscribe(id, project, after)) };
-  }
-  watchUsage(project: ProjectId): RequestId {
+  watch(scope: LiveScope): RequestId {
     const connection = this.activeConnection();
     if (connection === undefined || connection.state !== 'ALIVE') throw new Error('No verified connection');
     const id = new RequestId(uuidV4(crypto));
-    this.send(connection, new ClientFrame_WatchUsage(id, project)); return id;
+    this.send(connection, new ClientFrame_Watch(id, scope)); return id;
   }
   retry(): void {
     if (this.destroyed) return;

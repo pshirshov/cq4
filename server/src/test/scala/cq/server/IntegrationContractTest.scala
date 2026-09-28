@@ -405,7 +405,9 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
         ZIO.foreachDiscard(List(true, false)) { abort =>
           val failing = new LedgerRepository[IO] {
             override def initialize(value: Project): IO[Throwable, Project] = repository.initialize(value)
-            override def projects(after: Option[ProjectId], limit: Int): IO[Throwable, List[Project]] = repository.projects(after, limit)
+            override def projects(after: Option[ProjectId], limit: Int): IO[Throwable, ProjectPage] = repository.projects(after, limit)
+            override def catalogueCursor: IO[Throwable, CatalogueCursor] = repository.catalogueCursor
+            override def itemCursor(project: ProjectId): IO[Throwable, ChangeCursor] = repository.itemCursor(project)
             override def transact[A](project: ProjectId)(operation: LedgerTransaction => A): IO[Throwable, A] =
               if (abort) repository.transact(project) { tx => operation(tx); throw new IOException("Recording transaction failed after applying changes") }
               else repository.transact(project)(operation).flatMap(_ => ZIO.fail(new IOException("Recording acknowledgement lost after commit")))

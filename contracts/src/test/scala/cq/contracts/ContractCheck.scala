@@ -16,8 +16,8 @@ object ContractCheck {
     val revision = Revision(9007199254740993L)
     val probe = Probe(ProjectId(UUID.fromString("00000000-0000-0000-0000-000000000001")), revision, "round trip λ")
     val conflict = ApiError.Conflict(revision, Revision(Long.MaxValue))
-    val watch = ClientFrame.WatchUsage(RequestId(probe.project.value), probe.project)
-    val usageCursor = ServerFrame.UsageCursor(watch.id, probe.project, revision.value)
+    val watch = ClientFrame.Watch(RequestId(probe.project.value), LiveScope(true, Some(probe.project)))
+    val usageCursor = ServerFrame.Updated(watch.id, LiveRevision(Some(CatalogueCursor(revision.value)), Some(ProjectCursors(probe.project, ChangeCursor(revision.value), revision.value))))
     val query = QueryExpression.And(QueryExpression.Archive(ArchiveFilter.Active), QueryExpression.Or(
       QueryExpression.Not(QueryExpression.Reference(Relation.BlockedBy, QueryItem(Ledger.Tasks, Long.MaxValue))),
       QueryExpression.Text(List("retry", "λ"), true)

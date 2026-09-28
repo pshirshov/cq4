@@ -48,6 +48,32 @@ export async function interactionChecks(browser, storageState, origin, evidence)
       assert.equal(await page.getByLabel('content', { exact: true }).inputValue(), 'Idea');
       assert.equal(await page.getByLabel('title', { exact: true }).inputValue(), 'Persisted Idea');
     });
+    await check('Idea to Defect stores Open instead of the previous Proposed status', async () => {
+      await page.getByLabel('content', { exact: true }).selectOption('Idea');
+      await page.getByLabel('content', { exact: true }).selectOption('Defect');
+      const alerts = await page.getByRole('alert').allTextContents();
+      assert.equal(alerts.some(text => text.includes('Draft storage failed')), false, JSON.stringify(alerts));
+      assert.equal(await page.getByLabel('status', { exact: true }).inputValue(), 'Open');
+      const project = await page.getByLabel('Project', { exact: true }).inputValue();
+      const draft = await page.evaluate(id => JSON.parse(localStorage.getItem(`cq-draft:${id}:new`)), project);
+      assert.equal(draft.value.content.Defect.status, 'Open');
+    });
+    await check('every content-type transition persists the selected branch and status', async () => {
+      const choice = page.getByLabel('content', { exact: true });
+      const kinds = await choice.locator('option').evaluateAll(options => options.map(option => option.value));
+      assert.equal(kinds.length, 14);
+      const project = await page.getByLabel('Project', { exact: true }).inputValue();
+      for (const from of kinds) {
+        for (const to of kinds.filter(kind => kind !== from)) {
+          await choice.selectOption(from); await choice.selectOption(to);
+          const alerts = await page.getByRole('alert').allTextContents();
+          assert.equal(alerts.some(text => text.includes('Draft storage failed')), false, `${from} → ${to}: ${JSON.stringify(alerts)}`);
+          const draft = await page.evaluate(id => JSON.parse(localStorage.getItem(`cq-draft:${id}:new`)), project);
+          assert.deepEqual(Object.keys(draft.value.content), [to], `${from} → ${to}`);
+          assert.equal(draft.value.content[to].status, await page.getByLabel('status', { exact: true }).inputValue());
+        }
+      }
+    });
     await check('partial ledger values show completions before diagnostics', async () => {
       const query = page.getByLabel('Search query');
       await query.fill('ledger:t');
@@ -61,7 +87,7 @@ export async function interactionChecks(browser, storageState, origin, evidence)
       assert.equal(await query.getAttribute('aria-invalid'), 'true');
     });
     assert.deepEqual(errors, []); assert.deepEqual(failures, []);
-    console.log('Browser interactions: hover/focus diagnostics, valid Idea draft and contextual ledger completion passed');
+    console.log('Browser interactions: hover/focus diagnostics, all 182 content-type transitions and contextual ledger completion passed');
   } finally {
     await writeFile(`${evidence}/interaction-results.json`, JSON.stringify({ cases, failures, errors }, null, 2));
     await page.screenshot({ path: `${evidence}/interactions.png`, fullPage: true }); await context.close();

@@ -267,7 +267,8 @@ root data UsageReport {
 }
 root data UsagePage { entries: lst[RecordedUsage] after: i64 hasMore: bit cursor: i64 }
 
-root data ProjectPage { projects: lst[Project] after: opt[ProjectId] hasMore: bit }
+root id CatalogueCursor { value: i64 }
+root data ProjectPage { projects: lst[Project] after: opt[ProjectId] hasMore: bit cursor: CatalogueCursor }
 root data ProjectConfig { project: ProjectId endpoint: str name: str }
 root data SearchInput { project: ProjectId query: str after: opt[ItemId] snapshot: opt[ChangeCursor] limit: i32 }
 root data GraphInput { project: ProjectId roots: set[ItemId] after: opt[ItemId] snapshot: opt[WorksetSnapshot] limit: i32 }
@@ -304,7 +305,7 @@ root adt UsageSelection {
 }
 root data UsageInput { project: ProjectId selection: UsageSelection }
 root adt Command {
-  data Projects { after: opt[ProjectId] limit: i32 }
+  data Projects { after: opt[ProjectId] snapshot: opt[CatalogueCursor] limit: i32 }
   data Initialize { config: ProjectConfig }
   data RenameProject { project: ProjectId expected: Revision name: str }
   data Search { input: SearchInput }
@@ -362,18 +363,19 @@ root adt Credential {
   data Scoped { grant: GrantRequest }
 }
 root data AccessToken { value: str expiresAt: i64 }
+root data LiveScope { catalogue: bit project: opt[ProjectId] }
+root data ProjectCursors { project: ProjectId items: ChangeCursor usage: i64 }
+root data LiveRevision { catalogue: opt[CatalogueCursor] project: opt[ProjectCursors] }
 root adt ClientFrame {
   data Call { id: RequestId command: Command }
-  data Subscribe { id: RequestId project: ProjectId after: ChangeCursor }
-  data WatchUsage { id: RequestId project: ProjectId }
+  data Watch { id: RequestId scope: LiveScope }
   data Ping { nonce: str }
   data Pong { nonce: str }
 }
 root adt ServerFrame {
   data Reply { id: RequestId result: Result }
-  data Changes { subscription: RequestId project: ProjectId page: ChangePage }
-  data Resync { subscription: RequestId project: ProjectId fault: Fault }
-  data UsageCursor { subscription: RequestId project: ProjectId cursor: i64 }
+  data Updated { subscription: RequestId revision: LiveRevision }
+  data Resync { subscription: RequestId fault: Fault }
   data Ping { nonce: str }
   data Pong { nonce: str }
 }

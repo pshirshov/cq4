@@ -5,27 +5,36 @@ import cq.core.*
 import distage.Lifecycle
 import zio.{IO, Ref, Task, ZIO}
 
+private final case class DummyCatalogue(cursor: CatalogueCursor, projects: Map[ProjectId, DummyLedgerState])
+
 final class DummyLedgerResource extends Lifecycle.LiftF[Task, LedgerRepository[IO]](
-  Ref.Synchronized.make(Map.empty[ProjectId, DummyLedgerState]).map { states =>
+  Ref.Synchronized.make(DummyCatalogue(CatalogueCursor(0L), Map.empty)).map { states =>
     new LedgerRepository[IO] {
-      override def projects(after: Option[ProjectId], limit: Int): IO[Throwable, List[Project]] = states.get.map { current =>
-        current.valuesIterator.map(_.project).filter(p => after.forall(a => p.id.value.toString > a.value.toString))
-          .toList.sortBy(_.id.value.toString).take(limit)
+      override def projects(after: Option[ProjectId], limit: Int): IO[Throwable, ProjectPage] = states.get.map { current =>
+        val found = current.projects.valuesIterator.map(_.project).filter(p => after.forall(a => p.id.value.toString > a.value.toString))
+          .toList.sortBy(_.id.value.toString).take(limit + 1)
+        val selected = found.take(limit)
+        ProjectPage(selected, selected.lastOption.map(_.id), found.size > limit, current.cursor)
+      }
+      override def catalogueCursor: IO[Throwable, CatalogueCursor] = states.get.map(_.cursor)
+      override def itemCursor(project: ProjectId): IO[Throwable, ChangeCursor] = states.get.flatMap { current =>
+        ZIO.fromOption(current.projects.get(project)).orElseFail(DomainFailure(Fault.Missing("Project not initialized"))).map(state => ChangeCursor(state.cursor))
       }
       override def initialize(project: Project): IO[Throwable, Project] = states.modify { current =>
-        current.get(project.id) match {
+        current.projects.get(project.id) match {
           case Some(existing) => (existing.project, current)
           case None =>
             val state = DummyLedgerState(project, 0L, 0L, Map.empty, Map.empty, Set.empty, Map.empty, Map.empty, List.empty, Map.empty, Map.empty, Map.empty, Map.empty, Map.empty)
-            (project, current.updated(project.id, state))
+            (project, current.copy(cursor = CatalogueCursor(Math.addExact(current.cursor.value, 1L)), projects = current.projects.updated(project.id, state)))
         }
       }
       override def transact[A](project: ProjectId)(operation: LedgerTransaction => A): IO[Throwable, A] = states.modifyZIO { current =>
         ZIO.attempt {
-          val state = current.getOrElse(project, throw DomainFailure(Fault.Missing("Project not initialized")))
+          val state = current.projects.getOrElse(project, throw DomainFailure(Fault.Missing("Project not initialized")))
           val tx = new DummyLedgerTransaction(state)
           val result = operation(tx)
-          (result, current.updated(project, tx.result))
+          val cursor = if (tx.result.project == state.project) current.cursor else CatalogueCursor(Math.addExact(current.cursor.value, 1L))
+          (result, current.copy(cursor = cursor, projects = current.projects.updated(project, tx.result)))
         }
       }
     }

@@ -25,7 +25,7 @@ await writeFile(`${directory}/typescript-query.json`, JSON.stringify(encodedQuer
 for (const [name, codec] of [['watch', contracts.ClientFrame_JsonCodec], ['usage-cursor', contracts.ServerFrame_JsonCodec]]) {
   const original = JSON.parse(await readFile(`${directory}/scala-${name}.json`, 'utf8'));
   const decoded = codec.instance.decode(context, original);
-  if (name === 'usage-cursor') assert.equal(decoded.cursor, 9007199254740993n);
+  if (name === 'usage-cursor') assert.equal(decoded.revision.project.usage, 9007199254740993n);
   const encoded = codec.instance.encode(context, decoded); assert.deepEqual(encoded, original);
   await writeFile(`${directory}/typescript-${name}.json`, JSON.stringify(encoded));
 }

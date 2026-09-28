@@ -7,13 +7,14 @@ import zio.{IO, Task, ZIO}
 final class Application(ledger: LedgerService[IO], repository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO], authorization: Authorization) {
   def execute(authority: Authority, command: Command): Task[Result] = ZIO.attempt(authorization.check(authority)).flatMap { _ =>
     command match {
-      case Command.Projects(after, limit) =>
+      case Command.Projects(after, snapshot, limit) =>
         ZIO.attempt {
           authority.requireRoot()
           if (limit <= 0 || limit > 200) throw DomainFailure(Fault.Invalid("Page size must be 1–200"))
-        } *> repository.projects(after, limit + 1).map { found =>
-          val selected = found.take(limit)
-          Result.Projects(ProjectPage(selected, selected.lastOption.map(_.id), found.size > limit))
+          if (after.nonEmpty && snapshot.isEmpty) throw DomainFailure(Fault.Invalid("Continuation requires catalogue snapshot cursor"))
+        } *> repository.projects(after, limit).flatMap { page =>
+          if (snapshot.exists(_ != page.cursor)) ZIO.fail(DomainFailure(Fault.Resync("Catalogue changed; restart project list")))
+          else ZIO.succeed(Result.Projects(page))
         }
       case Command.Initialize(config) =>
         ZIO.attempt { authority.requireRoot(); authority.scope(config.project) }.flatMap(ledger.initialize(_, config.name)).map(Result.Initialized.apply)
@@ -64,8 +65,13 @@ final class Application(ledger: LedgerService[IO], repository: LedgerRepository[
   private def scoped[A](authority: Authority, project: ProjectId)(operation: cq.core.Scope => Task[A]): Task[A] =
     ZIO.attempt(authority.scope(project)).flatMap(operation)
 
-  def usageCursor(authority: Authority, project: ProjectId): Task[Long] =
-    ZIO.attempt(authorization.check(authority)) *> scoped(authority, project)(usage.cursor)
+  def liveRevision(authority: Authority, scope: LiveScope): Task[LiveRevision] = for {
+    _ <- ZIO.attempt { authorization.check(authority); if (scope.catalogue) authority.requireRoot() }
+    catalogue <- if (scope.catalogue) repository.catalogueCursor.map(Some(_)) else ZIO.none
+    project <- ZIO.foreach(scope.project) { project => scoped(authority, project) { permitted =>
+      for { items <- repository.itemCursor(project); cursor <- usage.cursor(permitted) } yield ProjectCursors(project, items, cursor)
+    }}
+  } yield LiveRevision(catalogue, project)
 
   def upload(authority: Authority, input: ArtifactUpload): Task[ArtifactMetadata] =
     ZIO.attempt(authorization.check(authority)) *> scoped(authority, input.project)(artifacts.upload(_, input))

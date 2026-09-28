@@ -9,17 +9,31 @@ import java.sql.{Connection, PreparedStatement}
 import zio.{IO, Task}
 
 final class PostgresLedgerRepository(database: LedgerDatabase) extends LedgerRepository[IO] {
-  override def projects(after: Option[ProjectId], limit: Int): IO[Throwable, List[Project]] = database.transaction { connection =>
-    new Jdbc(connection).query("SELECT body::text FROM cq_projects WHERE (?::uuid IS NULL OR project_id > ?::uuid) ORDER BY project_id LIMIT ?") { s =>
-      s.setObject(1, after.map(_.value).orNull); s.setObject(2, after.map(_.value).orNull); s.setInt(3, limit)
+  override def projects(after: Option[ProjectId], limit: Int): IO[Throwable, ProjectPage] = database.transaction { connection =>
+    connection.setTransactionIsolation(Connection.TRANSACTION_REPEATABLE_READ)
+    val sql = new Jdbc(connection)
+    val cursor = readCatalogueCursor(sql)
+    val found = sql.query("SELECT body::text FROM cq_projects WHERE (?::uuid IS NULL OR project_id > ?::uuid) ORDER BY project_id LIMIT ?") { s =>
+      s.setObject(1, after.map(_.value).orNull); s.setObject(2, after.map(_.value).orNull); s.setInt(3, limit + 1)
     }(r => Wire.decode(Project_JsonCodec, r.getString(1)))
+    val selected = found.take(limit)
+    ProjectPage(selected, selected.lastOption.map(_.id), found.size > limit, cursor)
+  }
+
+  private def readCatalogueCursor(sql: Jdbc): CatalogueCursor =
+    CatalogueCursor(sql.query("SELECT cursor FROM cq_catalogue_clock WHERE singleton")(_ => ())(_.getLong(1)).head)
+  override def catalogueCursor: IO[Throwable, CatalogueCursor] = database.transaction(connection => readCatalogueCursor(new Jdbc(connection)))
+  override def itemCursor(project: ProjectId): IO[Throwable, ChangeCursor] = database.transaction { connection =>
+    new Jdbc(connection).query("SELECT change_cursor FROM cq_projects WHERE project_id = ?")(_.setObject(1, project.value))(r => ChangeCursor(r.getLong(1)))
+      .headOption.getOrElse(throw DomainFailure(Fault.Missing("Project not initialized")))
   }
 
   override def initialize(project: Project): IO[Throwable, Project] = database.transaction { connection =>
     val sql = new Jdbc(connection)
-    sql.execute("INSERT INTO cq_projects(project_id, body) VALUES (?, ?::jsonb) ON CONFLICT DO NOTHING") { s =>
+    val inserted = sql.execute("INSERT INTO cq_projects(project_id, body) VALUES (?, ?::jsonb) ON CONFLICT DO NOTHING") { s =>
       s.setObject(1, project.id.value); s.setString(2, Wire.encode(Project_JsonCodec, project))
     }
+    if (inserted > 0) sql.execute("UPDATE cq_catalogue_clock SET cursor = cursor + 1 WHERE singleton")(_ => ())
     sql.query("SELECT body::text FROM cq_projects WHERE project_id = ?")(_.setObject(1, project.id.value))(r => Wire.decode(Project_JsonCodec, r.getString(1))).head
   }
 
@@ -55,6 +69,7 @@ private final class PostgresLedgerTransaction(connection: Connection, override v
     sql.execute("UPDATE cq_projects SET body = ?::jsonb WHERE project_id = ?") { s =>
       s.setString(1, Wire.encode(Project_JsonCodec, value)); s.setObject(2, value.id.value)
     }
+    sql.execute("UPDATE cq_catalogue_clock SET cursor = cursor + 1 WHERE singleton")(_ => ())
     ()
   }
 

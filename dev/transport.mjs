@@ -30,7 +30,7 @@ const initialize = (project, name) => ({ Initialize: { config: { project, endpoi
 const original = await call(initialize(first, 'first'), headers);
 await call(initialize(second, 'second'), headers);
 assert.deepEqual(await call(initialize(first, 'reattached'), headers), original);
-const projects = await call({ Projects: { after: null, limit: 200 } }, headers);
+const projects = await call({ Projects: { after: null, snapshot: null, limit: 200 } }, headers);
 assert.ok(projects.Projects.page.projects.some(p => p.id.value === first.value));
 assert.ok(projects.Projects.page.projects.some(p => p.id.value === second.value));
 const operation = change('HTTP created');
@@ -74,7 +74,7 @@ const browserHeaders = { 'Content-Type': 'application/json', 'CQ-Protocol-Versio
 assert.ok((await call({ Search: { input: search(first) } }, browserHeaders)).Found);
 const noOrigin = { ...browserHeaders };
 delete noOrigin.Origin;
-assert.equal((await post('/api/call', { Projects: { after: null, limit: 10 } }, noOrigin)).status, 401);
+assert.equal((await post('/api/call', { Projects: { after: null, snapshot: null, limit: 10 } }, noOrigin)).status, 401);
 
 const socket = new WebSocket(origin.replace('http:', 'ws:') + '/ws', { headers: browserHeaders });
 const frames = [];
@@ -100,15 +100,17 @@ const request = id();
 const detail = await exchange(request.value, { Call: { id: request, command: { Read: { input: read(first) } } } });
 assert.equal(detail.Detail.view.item.draft.title, 'Changed');
 const subscription = id();
-const replay = await exchange(subscription.value, { Subscribe: { id: subscription, project: first, after: { value: '0' } } });
+socket.send(JSON.stringify({ Watch: { id: subscription, scope: { catalogue: true, project: first } } }));
+const replayId = id();
+const replay = await exchange(replayId.value, { Call: { id: replayId, command: { Read: { input: { project: first, selection: { Changes: { after: { value: '0' }, limit: 100 } } } } } } });
 assert.equal(replay.Changes.page.events.length, 2);
 const changed = await call({ Change: { input: change('Live event') } }, headers);
 const deadline = Date.now() + 5000;
-while (!frames.some(f => f.Changes && f.Changes.page.events.some(e => e.cursor.value === changed.Changed.ack.cursor.value))) {
+while (!frames.some(f => f.Updated && f.Updated.revision.project !== null && f.Updated.revision.project.items.value === changed.Changed.ack.cursor.value)) {
   assert.ok(Date.now() < deadline, 'Committed change must reach subscriber');
   await new Promise(resolve => setTimeout(resolve, 20));
 }
-assert.ok(frames.filter(f => f.Changes).every(f => f.Changes.subscription.value === subscription.value));
+assert.ok(frames.filter(f => f.Updated).every(f => f.Updated.subscription.value === subscription.value));
 const closed = once(socket, 'close');
 socket.send('{malformed');
 assert.equal((await closed)[0], 1007);

@@ -16,7 +16,7 @@ export async function trackProtocol(context) {
       }
       send(message) {
         const frame = JSON.parse(String(message));
-        const request = frame.Call || frame.Subscribe;
+        const request = frame.Call;
         if (request) window.cqBrowserProtocol.pending.push(request.id.value);
         super.send(message);
       }

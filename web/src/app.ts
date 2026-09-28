@@ -23,6 +23,7 @@ function readResult(result: api.Result): api.Result {
 type Panel = 'detail' | 'history' | 'usage' | 'audit';
 type UsageScope = api.UsageFilter_ProjectAll | api.UsageFilter_TaskOnly | api.UsageFilter_CohortOnly | api.UsageFilter_SessionOnly;
 interface UsageLoad { dirty: boolean }
+type AuditView = api.UsageSelection_Costs | api.UsageSelection_Attempts | api.UsageSelection_Outcomes | api.UsageSelection_Audit;
 interface ResultRow { button: HTMLButtonElement; caption: HTMLSpanElement; status: HTMLSpanElement }
 
 class App {
@@ -45,10 +46,16 @@ class App {
   private readonly usageFreshness = element('span', '');
   private usageObserved = 'No successful observation';
   private usageSelection: UsageScope = new api.UsageFilter_ProjectAll();
-  private usageSubscription: string | null = null;
+  private liveSubscription: string | null = null;
+  private liveGeneration = 0;
+  private catalogueLoad: UsageLoad | null = null;
+  private catalogueCursor: bigint | null = null;
+  private catalogueSnapshot: bigint | null = null;
+  private itemCursor: bigint | null = null;
+  private queryInvalid = false;
   private usageCursor: bigint | null = null;
   private usageSnapshot: bigint | null = null;
-  private usageWatchRejected = false;
+  private updatesRejected = false;
   private usageLoad: UsageLoad | null = null;
   private readonly detail = element('section', '');
   private readonly editorPanel = element('section', '');
@@ -77,12 +84,12 @@ class App {
   private after: api.ItemId | undefined;
   private snapshot: api.ChangeCursor | undefined;
   private page: api.ItemPage | null = null;
-  private subscription: string | null = null;
   private epoch = 0;
   private refreshing = false;
   private dirty = false;
   private historyBefore = new api.Revision(9223372036854775807n);
-  private auditAfter = 0n;
+  private auditView: AuditView | null = null;
+  private auditLoad: UsageLoad | null = null;
   private editor: { form: Editor; record: api.BrowserDraft; key: string; discard: HTMLButtonElement; busy: boolean } | null = null;
 
   constructor(private readonly root: HTMLElement) { void this.start(); }
@@ -183,62 +190,97 @@ class App {
     this.manager = new ConnectionManager(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`, {
       status: stats => this.health.update(stats),
       active: () => this.action(async () => {
-        this.resetUsageWatch(); this.requests.usage++; this.requests.audit++; this.updateAuditFreshness();
+        this.resetLiveWatch(); this.watch(); this.requests.usage++; this.requests.audit++; this.updateAuditFreshness();
         await this.loadProjects(); this.after = undefined; this.snapshot = undefined; await this.refresh();
       }),
       disconnected: () => {
-        this.resetUsageWatch(); this.requests.usage++; this.requests.audit++;
+        this.resetLiveWatch(); this.requests.usage++; this.requests.audit++;
         this.usageFreshness.textContent = `Stale · ${this.usageObserved}`; this.updateAuditFreshness();
-        this.queryEditor.invalidate(); this.sync.textContent = 'Data: stale'; this.epoch++; this.subscription = null;
+        this.queryEditor.invalidate(); this.sync.textContent = 'Data: stale'; this.epoch++;
       },
       event: frame => {
-        if (frame instanceof api.ServerFrame_UsageCursor && frame.subscription.value === this.usageSubscription && this.project !== null && frame.project.value === this.project.value) {
-          if (this.usageCursor === null || frame.cursor > this.usageCursor) this.usageCursor = frame.cursor;
-          this.updateAuditFreshness();
-          if (this.usageSnapshot === null || this.usageCursor > this.usageSnapshot) this.action(() => this.loadUsage());
-        } else if (frame instanceof api.ServerFrame_Resync && frame.subscription.value === this.usageSubscription) {
-          this.usageSubscription = null; this.usageWatchRejected = true;
+        if (frame instanceof api.ServerFrame_Updated && frame.subscription.value === this.liveSubscription) {
+          const catalogue = frame.revision.catalogue;
+          if (catalogue !== undefined) {
+            if (this.catalogueCursor === null || catalogue.value > this.catalogueCursor) this.catalogueCursor = catalogue.value;
+            if (this.catalogueSnapshot === null || this.catalogueCursor > this.catalogueSnapshot) this.action(() => this.loadProjects());
+          }
+          const project = frame.revision.project;
+          if (project !== undefined && this.project !== null && project.project.value === this.project.value) {
+            if (this.itemCursor === null || project.items.value > this.itemCursor) this.itemCursor = project.items.value;
+            if (!this.queryInvalid && (this.page === null || this.itemCursor > this.page.cursor.value)) {
+              this.after = undefined; this.snapshot = undefined; this.action(() => this.refresh());
+            }
+            if (this.usageCursor === null || project.usage > this.usageCursor) this.usageCursor = project.usage;
+            this.updateAuditFreshness();
+            if (this.usageSnapshot === null || this.usageCursor > this.usageSnapshot) this.action(() => this.loadUsage());
+            if (this.auditCursor === null || this.usageCursor > this.auditCursor) this.action(() => this.refreshAudit());
+          }
+        } else if (frame instanceof api.ServerFrame_Resync && frame.subscription.value === this.liveSubscription) {
+          this.liveSubscription = null; this.updatesRejected = true;
+          this.sync.textContent = 'Data: updates unavailable';
           this.usageFreshness.textContent = `Unavailable · ${this.usageObserved}`;
           this.showError(describe(api.Fault_JsonCodec.instance.encode(CONTEXT, frame.fault)));
-        } else if (frame instanceof api.ServerFrame_Changes && frame.subscription.value === this.subscription) {
-          if (frame.page.events.length > 0) { this.after = undefined; this.snapshot = undefined; this.action(() => this.refresh()); }
-          else if (!this.refreshing) this.sync.textContent = 'Data: current';
-        } else if (frame instanceof api.ServerFrame_Resync && frame.subscription.value === this.subscription) {
-          this.sync.textContent = 'Data: resynchronizing'; this.after = undefined; this.snapshot = undefined; this.action(() => this.refresh());
         }
       },
     });
   }
   private async search(): Promise<void> {
-    this.activeQuery = this.query.value; this.epoch++; this.subscription = null; this.after = undefined; this.snapshot = undefined;
+    this.activeQuery = this.query.value; this.queryInvalid = false; this.epoch++; this.after = undefined; this.snapshot = undefined;
     this.loadedItems = []; this.page = null;
     if (this.resultsPane !== null) this.resultsPane.scrollTop = 0;
     this.notice.textContent = ''; this.queryEditor.showDiagnostic(undefined, this.query.value); await this.refresh();
   }
   private reset(): void {
     this.queryEditor.invalidate(); this.queryEditor.showDiagnostic(undefined, this.query.value);
-    this.epoch++; this.selectionGeneration++; this.selection = null; this.selected = null; this.editor = null; this.after = undefined; this.snapshot = undefined; this.subscription = null;
-    this.resetUsageWatch();
+    this.epoch++; this.selectionGeneration++; this.selection = null; this.selected = null; this.editor = null; this.after = undefined; this.snapshot = undefined;
+    this.queryInvalid = false; this.itemCursor = null; this.resetUsageWatch(); this.watch();
     this.graph.setScope(this.project, null);
     this.rows.clear(); this.items.replaceChildren(); this.loadedItems = []; this.page = null; this.resultStatus.textContent = 'Loading items…';
     if (this.resultsPane !== null) this.resultsPane.scrollTop = 0;
     this.detail.replaceChildren(); this.editorPanel.replaceChildren(); this.conflictPanel.replaceChildren(); this.historyPanel.replaceChildren(); this.usagePanel.replaceChildren(); this.auditPanel.replaceChildren();
     this.notice.textContent = ''; this.setUsageScope(new api.UsageFilter_ProjectAll());
   }
+  private watch(): void {
+    this.liveSubscription = this.connection().watch(new api.LiveScope(true, this.project === null ? undefined : this.project)).value;
+  }
+  private resetLiveWatch(): void {
+    this.liveGeneration++; this.liveSubscription = null; this.catalogueLoad = null; this.catalogueCursor = null;
+    this.catalogueSnapshot = null; this.itemCursor = null; this.auditLoad = null; this.resetUsageWatch();
+  }
   private async loadProjects(): Promise<void> {
-    const projects: api.Project[] = [];
-    let after: api.ProjectId | undefined;
-    do {
-      const result = await this.call(new api.Command_Projects(after, 200));
-      if (!(result instanceof api.Result_Projects)) throw new Error('Unexpected project response');
-      projects.push(...result.page.projects); after = result.page.hasMore ? result.page.after : undefined;
-    } while (after !== undefined && projects.length < 1000);
-    this.projects.replaceChildren();
-    for (const project of projects) { const option = element('option', project.name); option.value = project.id.value; this.projects.append(option); }
-    if (this.project === null && projects.length > 0) this.project = projects[0].id;
-    if (this.project !== null) this.projects.value = this.project.value;
-    this.graph.setScope(this.project, this.selected);
-    if (after !== undefined) this.showError('Project selector reached 1,000 entries; use CLI for additional projects');
+    if (this.catalogueLoad !== null) { this.catalogueLoad.dirty = true; return; }
+    const load: UsageLoad = { dirty: true }; this.catalogueLoad = load;
+    const generation = this.liveGeneration;
+    const current = () => this.catalogueLoad === load && generation === this.liveGeneration;
+    try {
+      while (current() && load.dirty) {
+        load.dirty = false;
+        const projects: api.Project[] = [];
+        let after: api.ProjectId | undefined; let snapshot: api.CatalogueCursor | undefined;
+        do {
+          const response = await this.connection().call(new api.Command_Projects(after, snapshot, 200));
+          if (!current()) return;
+          if (response instanceof api.Result_Failed && response.fault instanceof api.Fault_Resync) { load.dirty = true; break; }
+          const result = readResult(response);
+          if (!(result instanceof api.Result_Projects)) throw new Error('Unexpected project response');
+          projects.push(...result.page.projects); after = result.page.hasMore ? result.page.after : undefined; snapshot = result.page.cursor;
+        } while (after !== undefined && projects.length < 1000);
+        if (load.dirty) continue;
+        if (snapshot === undefined) throw new Error('Missing catalogue snapshot');
+        this.catalogueSnapshot = snapshot.value;
+        if (this.catalogueCursor === null || snapshot.value > this.catalogueCursor) this.catalogueCursor = snapshot.value;
+        this.projects.replaceChildren();
+        for (const project of projects) { const option = element('option', project.name); option.value = project.id.value; this.projects.append(option); }
+        if (this.project === null && projects.length > 0) {
+          this.project = projects[0].id; this.watch(); this.action(() => this.refresh());
+        }
+        if (this.project !== null) this.projects.value = this.project.value;
+        this.graph.setScope(this.project, this.selected);
+        if (after !== undefined) this.showError('Project selector reached 1,000 entries; use CLI for additional projects');
+        load.dirty = this.catalogueCursor > snapshot.value;
+      }
+    } finally { if (current()) this.catalogueLoad = null; }
   }
   private loadMore(): void {
     const pane = this.resultsPane;
@@ -249,7 +291,6 @@ class App {
   }
   private async refresh(): Promise<void> {
     if (this.project === null) return;
-    if (this.usageSubscription === null && !this.usageWatchRejected) this.usageSubscription = this.connection().watchUsage(this.project).value;
     if (this.refreshing) { this.dirty = true; return; }
     this.refreshing = true; this.dirty = false;
     const project = this.project; const epoch = this.epoch;
@@ -268,7 +309,7 @@ class App {
         if (!current()) return;
         if (response instanceof api.Result_Failed && response.fault instanceof api.Fault_Resync) { this.dirty = true; return; }
         if (response instanceof api.Result_Failed && response.fault instanceof api.Fault_QuerySyntax) {
-          const error = response.fault.diagnostic; this.page = null;
+          const error = response.fault.diagnostic; this.page = null; this.queryInvalid = true;
           this.sync.textContent = 'Data: invalid query'; this.queryEditor.showDiagnostic(error, this.activeQuery);
           this.showError(`${error.message} (${error.span.start}–${error.span.end})`); return;
         }
@@ -279,13 +320,8 @@ class App {
       this.page = page; this.loadedItems = items;
       this.renderItems(items);
       this.resultStatus.textContent = `${items.length} items${page.hasMore ? ' · more available' : ''}`;
-      const subscription = this.connection().subscribe(project, page.cursor); this.subscription = subscription.id.value;
-      const acknowledgement = await subscription.result;
-      if (!current()) return;
-      const replay = readResult(acknowledgement);
-      if (!(replay instanceof api.Result_Changes)) throw new Error('Unexpected subscription acknowledgement');
-      if (replay.page.events.length > 0 || replay.page.hasMore) this.dirty = true;
-      else this.sync.textContent = 'Data: current';
+      this.dirty = this.dirty || (this.itemCursor !== null && this.itemCursor > page.cursor.value);
+      this.sync.textContent = this.updatesRejected ? 'Data: updates unavailable' : 'Data: current';
       if (this.selection !== null) await this.select(this.selection);
       await this.loadUsage();
       completed = true;
@@ -331,11 +367,11 @@ class App {
   }
   private setUsageScope(scope: UsageScope): void {
     this.usageSelection = scope; this.requests.usage++; this.requests.audit++;
-    this.usageSnapshot = null; this.auditCursor = null; this.usageLoad = null;
-    this.usagePanel.replaceChildren(); this.auditPanel.replaceChildren(); this.auditAfter = 0n; this.resetUsage();
+    this.usageSnapshot = null; this.auditCursor = null; this.usageLoad = null; this.auditView = null; this.auditLoad = null;
+    this.usagePanel.replaceChildren(); this.auditPanel.replaceChildren(); this.resetUsage();
   }
   private resetUsageWatch(): void {
-    this.usageSubscription = null; this.usageCursor = null; this.usageSnapshot = null; this.usageWatchRejected = false; this.usageLoad = null;
+    this.usageCursor = null; this.usageSnapshot = null; this.updatesRejected = false; this.usageLoad = null;
   }
   private async selectUsage(scope: UsageScope): Promise<void> { this.setUsageScope(scope); await this.loadUsage(); }
   private resetUsage(): void {
@@ -493,7 +529,7 @@ class App {
     const totals = [report.direct.total, report.shared.total, report.unattributed.total];
     this.usageMetric.textContent += ` · ${totals.reduce((sum, value) => sum + value.unknown, 0n)} unknown measurements · ${totals.reduce((sum, value) => sum + value.estimated, 0n)} estimated measurements`;
     this.usageObserved = `Observed ${new Date().toLocaleTimeString()} · cursor ${report.cursor}`;
-    this.usageFreshness.textContent = this.usageObserved;
+    this.usageFreshness.textContent = this.updatesRejected ? `Updates unavailable · ${this.usageObserved}` : this.usageObserved;
     this.usagePanel.replaceChildren(element('h3', `Usage · ${this.usageScope()}`));
     const scopes = element('div', ''); scopes.className = 'actions';
     scopes.append(button('Usage for whole project', () => this.action(() => this.selectUsage(new api.UsageFilter_ProjectAll()))));
@@ -508,7 +544,7 @@ class App {
     if (report.costs.hasMore) this.usagePanel.append(button('More costs', () => this.action(() => this.loadCosts(report.costs.after, report.cursor))));
     this.usagePanel.append(element('p', `Shared work is counted once and is not divided among members. Incomplete meters: ${report.incompleteMeters}; attempts without measurements: ${report.attemptsWithoutMeters}.`),
       element('p', `Attempt coverage: ${report.attempts.running} running; ${report.attempts.unknown} unknown outcomes; ${report.attempts.withGaps} with reported gaps.`),
-      button('Refresh usage', () => this.action(() => this.loadUsage())), button('Attempts', () => this.action(() => this.loadAttempts(undefined, undefined))), button('Usage audit', () => this.action(async () => { this.auditAfter = 0n; await this.loadAudit(); })));
+      button('Attempts', () => this.action(() => this.loadAttempts(undefined, undefined))), button('Usage audit', () => this.action(() => this.loadAudit(0n))));
     if (report.sharedAssignments.size > 0) this.usagePanel.append(element('p', `Shared assignments: ${[...report.sharedAssignments].map(id => id.value).join(', ')}.`));
     if (report.sharedAssignmentsTruncated) this.usagePanel.append(element('p', 'The shared-assignment list is truncated. Browse attempts for further assignments and their frozen membership.'));
   }
@@ -526,61 +562,110 @@ class App {
     const group = cost.group;
     return element('p', `${group.attribution}: ${cost.amount.value} ${group.currency} · ${group.basis} · pricing ${group.pricingVersion === undefined ? 'unspecified' : group.pricingVersion} · ${cost.measurements} measurements`);
   }
-  private async loadCosts(after: api.CostGroup | undefined, snapshot: bigint | undefined): Promise<void> {
-    const result = await this.readPanel('audit', new api.Command_Usage(new api.UsageInput(this.currentProject(), new api.UsageSelection_Costs(this.usageFilter(), after, snapshot, 20))));
-    if (result === null) return;
-    if (!(result instanceof api.Result_UsageCosts)) throw new Error('Unexpected cost response');
-    this.auditHeader('Cost breakdown', result.page.cursor);
-    for (const entry of result.page.entries) this.auditPanel.append(this.costRow(entry));
-    if (result.page.hasMore) this.auditPanel.append(button('Next cost page', () => this.action(() => this.loadCosts(result.page.after, result.page.cursor))));
+  private loadCosts(after: api.CostGroup | undefined, snapshot: bigint | undefined): Promise<void> {
+    return this.openAudit(new api.UsageSelection_Costs(this.usageFilter(), after, snapshot, 20));
   }
-  private async loadAttempts(after: api.AttemptId | undefined, snapshot: bigint | undefined): Promise<void> {
-    const result = await this.readPanel('audit', new api.Command_Usage(new api.UsageInput(this.currentProject(), new api.UsageSelection_Attempts(this.usageFilter(), after, snapshot, 20))));
-    if (result === null) return;
-    if (!(result instanceof api.Result_UsageAttempts)) throw new Error('Unexpected attempt response');
-    this.auditHeader('Attempts', result.page.cursor);
-    if (result.page.entries.length === 0) this.auditPanel.append(element('p', 'No attempts in this scope.'));
-    for (const entry of result.page.entries) {
-      const row = element('section', ''); const outcome = entry.outcome;
-      row.append(element('h4', `${entry.attempt.harness} · ${entry.attempt.role} · ${outcome === undefined ? 'Running' : outcome.value.state}`),
-        element('p', `Attempt ${entry.attempt.id.value} · ${entry.assignment.attribution}`));
-      row.append(element('p', `Assignment ${entry.assignment.id.value} · frozen members: ${[...entry.assignment.members].map(itemName).join(', ') || 'none'}`));
-      const scopes = element('div', ''); scopes.className = 'actions';
-      scopes.append(button(`Session usage · ${entry.attempt.session.value}`, () => this.action(() => this.selectUsage(new api.UsageFilter_SessionOnly(entry.attempt.session)))));
-      const cohort = entry.assignment.cohort;
-      if (cohort !== undefined) scopes.append(button(`Cohort usage · ${cohort}`, () => this.action(() => this.selectUsage(new api.UsageFilter_CohortOnly(cohort)))));
-      for (const member of entry.assignment.members) scopes.append(button(`Task usage · ${itemName(member)}`, () => this.action(() => this.selectUsage(new api.UsageFilter_TaskOnly(member)))));
-      row.append(scopes);
-      if (outcome !== undefined) for (const gap of outcome.value.gaps) row.append(element('p', gap));
-      const details = element('details', ''); details.append(element('summary', 'Attempt details'), element('pre', describe(api.AttemptView_JsonCodec.instance.encode(CONTEXT, entry))));
-      row.append(details, button('Outcome history', () => this.action(() => this.loadOutcomes(entry.attempt.id, 0n)))); this.auditPanel.append(row);
-    }
-    if (result.page.hasMore) this.auditPanel.append(button('Next attempt page', () => this.action(() => this.loadAttempts(result.page.after, result.page.cursor))));
+  private loadAttempts(after: api.AttemptId | undefined, snapshot: bigint | undefined): Promise<void> {
+    return this.openAudit(new api.UsageSelection_Attempts(this.usageFilter(), after, snapshot, 20));
   }
-  private async loadOutcomes(attempt: api.AttemptId, after: bigint): Promise<void> {
-    const result = await this.readPanel('audit', new api.Command_Usage(new api.UsageInput(this.currentProject(), new api.UsageSelection_Outcomes(attempt, after, 20))));
-    if (result === null) return;
-    if (!(result instanceof api.Result_UsageOutcomes)) throw new Error('Unexpected outcome response');
-    this.auditHeader('Outcome history', result.page.cursor);
-    if (result.page.entries.length === 0) this.auditPanel.append(element('p', 'No outcome recorded yet.'));
-    for (const entry of result.page.entries) {
-      const row = element('details', ''); row.append(element('summary', `${entry.sequence} · ${entry.value.state}`),
-        element('pre', describe(api.RecordedOutcome_JsonCodec.instance.encode(CONTEXT, entry))));
-      this.auditPanel.append(row);
-    }
-    if (result.page.hasMore) this.auditPanel.append(button('Next outcome page', () => this.action(() => this.loadOutcomes(attempt, result.page.after))));
+  private loadOutcomes(attempt: api.AttemptId, after: bigint): Promise<void> {
+    return this.openAudit(new api.UsageSelection_Outcomes(attempt, after, 20));
   }
-  private async loadAudit(): Promise<void> {
-    const result = await this.readPanel('audit', new api.Command_Usage(new api.UsageInput(this.currentProject(), new api.UsageSelection_Audit(this.usageFilter(), this.auditAfter, 20))));
-    if (result === null) return;
-    if (!(result instanceof api.Result_UsageAudit)) throw new Error('Unexpected audit response');
-    this.auditHeader('Usage audit', result.page.cursor);
-    if (result.page.entries.length === 0) this.auditPanel.append(element('p', 'No usage observations in this scope.'));
-    for (const entry of result.page.entries) {
-      const row = element('details', ''); row.append(element('summary', `${entry.sequence} · ${entry.upload.observation.source} · ${entry.upload.observation.completeness}`),
-        element('pre', describe(api.RecordedUsage_JsonCodec.instance.encode(CONTEXT, entry)))); this.auditPanel.append(row);
+  private loadAudit(after: bigint): Promise<void> {
+    return this.openAudit(new api.UsageSelection_Audit(this.usageFilter(), after, 20));
+  }
+  private async openAudit(view: AuditView): Promise<void> {
+    this.auditView = view; this.auditLoad = null; this.auditCursor = null; this.requests.audit++;
+    await this.refreshAudit();
+  }
+  private async refreshAudit(): Promise<void> {
+    const view = this.auditView; const project = this.project;
+    if (view === null || project === null) return;
+    if (this.auditLoad !== null) { this.auditLoad.dirty = true; return; }
+    const load: UsageLoad = { dirty: true }; this.auditLoad = load;
+    const request = ++this.requests.audit; const generation = this.selectionGeneration;
+    const current = () => this.auditLoad === load && this.auditView === view && this.project === project &&
+      this.requests.audit === request && this.selectionGeneration === generation;
+    let snapshot = this.usageCursor === null ? undefined : this.usageCursor;
+    let resnapshot = false;
+    try {
+      while (current() && load.dirty) {
+        load.dirty = false;
+        if (resnapshot && (view instanceof api.UsageSelection_Costs || view instanceof api.UsageSelection_Attempts)) {
+          const first = view instanceof api.UsageSelection_Costs ? new api.UsageSelection_Costs(view.filter, undefined, undefined, 1)
+            : new api.UsageSelection_Attempts(view.filter, undefined, undefined, 1);
+          const result = await this.connection().call(new api.Command_Usage(new api.UsageInput(project, first)));
+          if (!current()) return;
+          readResult(result);
+          if (!(result instanceof api.Result_UsageCosts || result instanceof api.Result_UsageAttempts)) throw new Error('Unexpected usage snapshot response');
+          snapshot = result.page.cursor; resnapshot = false;
+        }
+        const selection = view instanceof api.UsageSelection_Costs ? new api.UsageSelection_Costs(view.filter, view.after, view.after === undefined ? undefined : snapshot, view.limit)
+          : view instanceof api.UsageSelection_Attempts ? new api.UsageSelection_Attempts(view.filter, view.after, view.after === undefined ? undefined : snapshot, view.limit) : view;
+        const response = await this.connection().call(new api.Command_Usage(new api.UsageInput(project, selection)));
+        if (!current()) return;
+        if (response instanceof api.Result_Failed && response.fault instanceof api.Fault_Resync) {
+          resnapshot = true; load.dirty = true; continue;
+        }
+        const result = readResult(response);
+        this.renderAudit(view, result);
+        if (this.auditCursor === null) throw new Error('Audit renderer omitted snapshot cursor');
+        load.dirty = this.usageCursor !== null && this.usageCursor > this.auditCursor;
+      }
+    } catch (error) {
+      if (current()) { this.auditFreshness.textContent = 'Usage view unavailable; waiting for the next update or reconnection.'; throw error; }
+    } finally { if (this.auditLoad === load) this.auditLoad = null; }
+  }
+  private renderAudit(view: AuditView, result: api.Result): void {
+    if (result instanceof api.Result_UsageCosts && view instanceof api.UsageSelection_Costs) {
+      this.auditHeader('Cost breakdown', result.page.cursor);
+      for (const entry of result.page.entries) this.auditPanel.append(this.costRow(entry));
+      if (result.page.hasMore) this.auditPanel.append(button('Next cost page', () => this.action(() => this.loadCosts(result.page.after, result.page.cursor))));
+      return;
     }
-    if (result.page.hasMore) this.auditPanel.append(button('Next audit page', () => this.action(async () => { this.auditAfter = result.page.after; await this.loadAudit(); })));
+    if (result instanceof api.Result_UsageAttempts && view instanceof api.UsageSelection_Attempts) {
+      this.auditHeader('Attempts', result.page.cursor);
+      if (result.page.entries.length === 0) this.auditPanel.append(element('p', 'No attempts in this scope.'));
+      for (const entry of result.page.entries) {
+        const row = element('section', ''); const outcome = entry.outcome;
+        row.append(element('h4', `${entry.attempt.harness} · ${entry.attempt.role} · ${outcome === undefined ? 'Running' : outcome.value.state}`),
+          element('p', `Attempt ${entry.attempt.id.value} · ${entry.assignment.attribution}`));
+        row.append(element('p', `Assignment ${entry.assignment.id.value} · frozen members: ${[...entry.assignment.members].map(itemName).join(', ') || 'none'}`));
+        const scopes = element('div', ''); scopes.className = 'actions';
+        scopes.append(button(`Session usage · ${entry.attempt.session.value}`, () => this.action(() => this.selectUsage(new api.UsageFilter_SessionOnly(entry.attempt.session)))));
+        const cohort = entry.assignment.cohort;
+        if (cohort !== undefined) scopes.append(button(`Cohort usage · ${cohort}`, () => this.action(() => this.selectUsage(new api.UsageFilter_CohortOnly(cohort)))));
+        for (const member of entry.assignment.members) scopes.append(button(`Task usage · ${itemName(member)}`, () => this.action(() => this.selectUsage(new api.UsageFilter_TaskOnly(member)))));
+        row.append(scopes);
+        if (outcome !== undefined) for (const gap of outcome.value.gaps) row.append(element('p', gap));
+        const details = element('details', ''); details.append(element('summary', 'Attempt details'), element('pre', describe(api.AttemptView_JsonCodec.instance.encode(CONTEXT, entry))));
+        row.append(details, button('Outcome history', () => this.action(() => this.loadOutcomes(entry.attempt.id, 0n)))); this.auditPanel.append(row);
+      }
+      if (result.page.hasMore) this.auditPanel.append(button('Next attempt page', () => this.action(() => this.loadAttempts(result.page.after, result.page.cursor))));
+      return;
+    }
+    if (result instanceof api.Result_UsageOutcomes && view instanceof api.UsageSelection_Outcomes) {
+      this.auditHeader('Outcome history', result.page.cursor);
+      if (result.page.entries.length === 0) this.auditPanel.append(element('p', 'No outcome recorded yet.'));
+      for (const entry of result.page.entries) {
+        const row = element('details', ''); row.append(element('summary', `${entry.sequence} · ${entry.value.state}`),
+          element('pre', describe(api.RecordedOutcome_JsonCodec.instance.encode(CONTEXT, entry))));
+        this.auditPanel.append(row);
+      }
+      if (result.page.hasMore) this.auditPanel.append(button('Next outcome page', () => this.action(() => this.loadOutcomes(view.attempt, result.page.after))));
+      return;
+    }
+    if (result instanceof api.Result_UsageAudit && view instanceof api.UsageSelection_Audit) {
+      this.auditHeader('Usage audit', result.page.cursor);
+      if (result.page.entries.length === 0) this.auditPanel.append(element('p', 'No usage observations in this scope.'));
+      for (const entry of result.page.entries) {
+        const row = element('details', ''); row.append(element('summary', `${entry.sequence} · ${entry.upload.observation.source} · ${entry.upload.observation.completeness}`),
+          element('pre', describe(api.RecordedUsage_JsonCodec.instance.encode(CONTEXT, entry)))); this.auditPanel.append(row);
+      }
+      if (result.page.hasMore) this.auditPanel.append(button('Next audit page', () => this.action(() => this.loadAudit(result.page.after))));
+      return;
+    }
+    throw new Error('Unexpected usage view response');
   }
 }
 

@@ -56,6 +56,8 @@ export async function usageLiveChecks(browser, storageState, origin, evidence) {
     const query = page.getByLabel('Search query', { exact: true }); await query.fill('alpha AND'); await click('Search');
     await page.getByText('Data: invalid query', { exact: true }).waitFor(); release();
     await total(10).waitFor(); await settledRequests(page);
+    await page.locator('summary').filter({ hasText: /live-fixture · Complete/ }).first().waitFor({ timeout: 5000 });
+    assert.equal(await page.getByRole('button', { name: 'Refresh usage', exact: true }).count(), 0);
     cases.push('query-only invalidation does not discard the only pending usage observation');
     const before = summaries(); armed = true; await upload(2, 5); await until(() => held !== null);
     const next = await upload(3, 7); const cursor = next.Ingested.value.sequence;
@@ -68,7 +70,7 @@ export async function usageLiveChecks(browser, storageState, origin, evidence) {
     await until(() => connections.length > oldCount && connections[connections.length - 1].received.some(frame => frame.Reply && frame.Reply.result.Failed && frame.Reply.result.Failed.fault.QuerySyntax));
     await upload(4, 3); await total(25).waitFor({ timeout: 5000 });
     const current = connections[connections.length - 1];
-    assert.equal(current.sent.filter(frame => frame.WatchUsage && frame.WatchUsage.project.value === project.value).length, 1);
+    assert.equal(current.sent.filter(frame => frame.Watch && frame.Watch.scope.project.value === project.value).length, 1);
     cases.push('overlapping healthy connection replacement registers the watch and receives further usage-only updates');
     assert.equal(await page.getByText('Data: invalid query', { exact: true }).count(), 1); assert.deepEqual(errors, []);
   } finally {

@@ -35,7 +35,7 @@ export async function resyncChecks(browser, storageState, origin, evidence) {
     });
     server.onMessage(message => {
       const frame = JSON.parse(String(message));
-      if (suppress && frame.Changes && frame.Changes.page.events.length > 0) return;
+      if (suppress && frame.Updated && frame.Updated.revision.project !== null) return;
       if (frame.Reply && exchanges.some(entry => entry.direction === 'sent' && entry.frame.Call.id.value === frame.Reply.id.value)) {
         exchanges.push({ direction: 'received', frame });
         if (held !== null && frame.Reply.id.value === held.id) suppress = false;

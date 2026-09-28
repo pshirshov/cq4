@@ -46,7 +46,7 @@ abstract class ApplicationContractTest extends SpecZIO with AssertZIO {
           _ <- assertIO(denied match { case Result.Failed(_: Fault.Denied) => true; case _ => false })
           cross <- application.execute(worker, Command.Search(SearchInput(second, "archived:all", None, None, 20)))
           _ <- assertIO(cross match { case Result.Failed(_: Fault.Denied) => true; case _ => false })
-          projects <- application.execute(worker, Command.Projects(None, 20))
+          projects <- application.execute(worker, Command.Projects(None, None, 20))
           _ <- assertIO(projects.isInstanceOf[Result.Failed])
           assignment = Assignment(AssignmentId(UUID.randomUUID()), first, Set.empty, Attribution.Unattributed, None, None)
           host <- application.ingest(worker, HostUsageInput(first, HostUsage.Assign(assignment))).either
