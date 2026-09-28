@@ -248,6 +248,8 @@ def main():
         assert integration_traffic and max(len(json.dumps(value["reply"]).encode()) for value in integration_traffic) < 4096
         print(json.dumps({"integration": result, "session": integrated["session"], "maxIntegrationReplyBytes": max(len(json.dumps(value["reply"]).encode()) for value in integration_traffic)}))
         subprocess.run(["git", "-C", str(repository), "update-ref", "refs/heads/integration", original_head, preview["candidate"]["value"]], check=True)
+        subprocess.run(["git", "-C", str(repository), "switch", "integration"], check=True)
+        (repository / "governing.txt").write_text("unstaged over staged governing work\n")
         preload = root / "integration-stall.so"
         subprocess.run(["gcc", "-std=c17", "-shared", "-fPIC", "-Wall", "-Wextra", "-Werror", "-o", str(preload), "dev/shutdown-stall.c", "-ldl"], check=True)
         latch = root / "integration-crash"
@@ -326,7 +328,11 @@ def main():
         assert integration_job.read_bytes() == before_job
         assert sorted(path.name for path in (crash_session / "journal").glob("*.json")) == before_ids
         assert reflog.read_bytes() == before_reflog
-        assert (repository / ".git/index").read_bytes() == original_index
+        assert subprocess.check_output(["git", "-C", str(repository), "symbolic-ref", "HEAD"], text=True).strip() == "refs/heads/integration"
+        assert subprocess.check_output(["git", "-C", str(repository), "show", ":governing.txt"], text=True) == "staged governing work\n"
+        assert (repository / "governing.txt").read_text() == "unstaged over staged governing work\n"
+        assert (repository / "untracked.txt").read_text() == "untracked governing work\n"
+        assert (repository / "consumer.txt").read_text() == "candidate from isolated worker\n"
         print(json.dumps({"crashSession": str(crash_session), "killedAt": "Git incorporated, local observation uncommitted",
                           "resolution": recorded["resolution"], "newGitJobsOnRecovery": 0, "additionalRefUpdates": 0}))
     print("Local dispatch: idempotent start, host candidate/checks, handle-only review, workspace permissions, cancellation, parent/child audit, child delivery replay, reviewed integration, preserved checkout/index and reconcile-only CLI replay and actual SIGKILL incorporation recovery passed")

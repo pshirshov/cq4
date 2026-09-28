@@ -5,7 +5,9 @@ and [actual PostgreSQL/CLI evidence](validation/project-backup.md). Snapshot
 consistency, all 23 project-table fingerprints, active-work/collision refusal,
 corruption and insertion rollback, and lost-commit acknowledgement handling pass.
 Contracts pass and Astra approves the JVM increment. Native/operator delivery,
-D41, D42 and D25 remain open; D26/D27 remain reserved.
+D41 has a [supervised governing-checkout implementation](validation/checked-out-integration.md)
+with passing dual coordinator, preservation, actual interruption and connected
+checks, independently approved by Astra. Native/operator delivery is pending. D42 and D25 remain open; D26/D27 remain reserved.
 
 Current D38/D39/D40 follow-up: [operator CLI](validation/operator-cli.md) provides
 structured help, human output with explicit machine JSON, and quiet startup with

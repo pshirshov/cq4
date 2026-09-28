@@ -1,5 +1,11 @@
 # Git integration — next M3 increment
 
+Current development extension: [D41 governing-checkout integration](../validation/checked-out-integration.md)
+supersedes the initial prohibition on touching the governing index. It preserves
+its staged/unstaged layers through a private prepared index and supervised
+conditional publication. Other-worktree targets remain refused; the documented
+cooperative concurrency precondition and unresolved interruption policy apply.
+
 Status: implementation contract independently approved by Astra; the [server reservation foundation](../validation/m3-integration-reservations.md) is verified and approved at `595acc3`. The [local Git/journal/coordinator foundation](../validation/m3-git-coordinator.md) is verified and independently approved; [governor-facing integration](../validation/m3-connected-integration.md) passes all deterministic gates with independent Astra approval; combined-candidate dispatch remains open. This records the next boundary after [result admission](result-admission.md), committed at `a9403af`. Design approval does not close R27; the real two-session workflow and acknowledgement reconciliation must pass.
 
 ## Required behavior

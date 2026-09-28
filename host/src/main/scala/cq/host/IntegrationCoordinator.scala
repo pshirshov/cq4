@@ -30,7 +30,7 @@ final class IntegrationCoordinator(owner: Scope, journal: IntegrationJournal, gi
     execution <- if (target.incorporated) ZIO.succeed(None) else git.execution(intent)
   } yield {
     if (target.incorporated) Some(IntegrationObservation.Incorporated(target.commit))
-    else if (execution.exists(_.refusedBeforeCommit)) Some(IntegrationObservation.NotApplied("Git refused the conditional update before commit; executor settled"))
+    else if (execution.exists(_.refusedBeforeCommit)) Some(IntegrationObservation.NotApplied(execution.get.refusal.getOrElse("Git refused the conditional update before commit; executor settled")))
     else None
   }
 
@@ -40,7 +40,7 @@ final class IntegrationCoordinator(owner: Scope, journal: IntegrationJournal, gi
       val effect = if (local.attempted) reconcile(local.intent) else {
         git.inspect(local.intent).flatMap { target =>
           if (target.incorporated) ZIO.succeed(Some(IntegrationObservation.Incorporated(target.commit)))
-          else if (target.checkedOut) ZIO.succeed(Some(IntegrationObservation.NotApplied("Configured integration target is checked out; no update launched")))
+          else if (target.checkoutBlocked) ZIO.succeed(Some(IntegrationObservation.NotApplied("Configured integration target is checked out in another or multiple worktrees; no update launched")))
           else if (target.commit != local.intent.expected) ZIO.succeed(Some(IntegrationObservation.NotApplied("Integration target advanced before execution; no update launched")))
           else ZIO.attemptBlocking(entry.write(local.copy(attempted = true))) *> git.execute(local.intent).either.flatMap {
             case Left(_: IntegrationAdmissionClosed) => ZIO.succeed(Some(IntegrationObservation.NotApplied("Owning supervisor closed execution admission before job registration")))

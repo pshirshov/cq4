@@ -26,6 +26,17 @@ int fsync(int fd) {
                 if (access(release, F_OK) != 0) { errno = EIO; return -1; }
             }
             int match = strcmp(mode, "ticket") == 0 && strstr(path, "/children/") != NULL && strstr(path, "/.upload-") != NULL;
+            if (strcmp(mode, "checkout-index") == 0 && strstr(path, "/checkouts/") != NULL &&
+                size >= 15 && strcmp(path + size - 15, "/index-prepared") == 0) {
+                char started[4096];
+                snprintf(started, sizeof(started), "%.*s/started.json", (int)(size - 15), path);
+                match = access(started, F_OK) == 0;
+            }
+            if (strcmp(mode, "checkout-completed") == 0 && strstr(path, "/checkouts/") != NULL && strstr(path, "/.upload-") == NULL) {
+                char completed[8192];
+                snprintf(completed, sizeof(completed), "%s/completed.json", path);
+                match = access(completed, F_OK) == 0;
+            }
             if ((strcmp(mode, "attached-initial") == 0 || strcmp(mode, "attached-selection") == 0) && strstr(path, "/.upload-") != NULL) {
                 int source = open(path, O_RDONLY);
                 ssize_t read_size = source < 0 ? -1 : read(source, content, sizeof(content) - 1);

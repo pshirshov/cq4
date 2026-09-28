@@ -1,5 +1,10 @@
 # Requirement coverage
 
+Current R27/R30 follow-up: [D41 checked-out integration](validation/checked-out-integration.md)
+preserves dirty layers without detaching HEAD. Dual coordinator and real Git
+collision/race regressions, connected workflow and actual interruption checks pass;
+Astra independently approves the source increment. Native/operator delivery remains pending.
+
 Current R20/R31 operator extension I2: [project archives](validation/project-backup.md)
 preserve identity, history, usage and artifacts in a consistent snapshot. Actual
 store/CLI checks and contracts pass with Astra source approval. External Git and

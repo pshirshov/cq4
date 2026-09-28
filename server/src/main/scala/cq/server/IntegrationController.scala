@@ -35,7 +35,7 @@ final class IntegrationController(config: SupervisorConfig, authority: Superviso
   private val coordinator = config.settings.integrationTarget.map { target =>
     new IntegrationCoordinator(config.owner, journal, new SupervisedGitIntegration(config.owner, Path.of(config.run.repository), target,
       new BoundedHostCommand(GitEnvironment.isolated(config.environment), Duration.ofSeconds(10), 65536), execution,
-      config.directory.resolve("payload"), config.environment, config.limits), authority.governor, authority.collector)
+      config.directory.resolve("payload"), config.environment, config.limits, CqEntrypoint.command), authority.governor, authority.collector)
   }
   private var entries = Map.empty[IntegrationId, IntegrationExecutionState]
   private var closing = false

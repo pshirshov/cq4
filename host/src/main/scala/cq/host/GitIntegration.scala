@@ -2,14 +2,14 @@ package cq.host
 
 import cq.api.*
 import cq.core.{DomainFailure, Scope}
-import java.nio.file.Path
+import java.nio.file.{Files, Path}
 import zio.{Task, ZIO}
 
-final case class IntegrationTarget(commit: GitCommit, incorporated: Boolean, checkedOut: Boolean)
-final case class IntegrationExecution(job: JobRecord, stdout: String, stderr: String) {
+final case class IntegrationTarget(commit: GitCommit, incorporated: Boolean, checkoutBlocked: Boolean)
+final case class IntegrationExecution(job: JobRecord, stdout: String, stderr: String, refusal: Option[String]) {
   def refusedBeforeCommit: Boolean = job.phase == JobPhase.Settled && job.exit.exists(value =>
     value.settled && !value.hostFailure && value.reason == StopReason.Exited && value.signal.isEmpty && value.code.exists(_ != 0)) &&
-    stdout == "start: ok\n" && stderr.startsWith("fatal: prepare: ")
+    refusal.nonEmpty
 }
 
 trait GitIntegration {
@@ -34,7 +34,7 @@ final class RetainedIntegrationJobs(journal: JobRepository) extends IntegrationJ
 }
 
 final class SupervisedGitIntegration(owner: Scope, repository: Path, target: String, command: HostCommand, jobs: IntegrationJobs,
-  payloadRoot: Path, environment: Map[String, String], limits: ExecutionLimits) extends GitIntegration {
+  payloadRoot: Path, environment: Map[String, String], limits: ExecutionLimits, entrypoint: List[String]) extends GitIntegration {
   private val MaxProtocolBytes = 65536
   private val GitArguments = List("git", "--no-replace-objects", "--no-pager", "-c", "core.hooksPath=/dev/null", "-c", "submodule.recurse=false")
   private def identity(intent: IntegrationIntent): Unit = {
@@ -60,10 +60,17 @@ final class SupervisedGitIntegration(owner: Scope, repository: Path, target: Str
   }
   private def workspace(intent: IntegrationIntent): WorkspaceSpec =
     WorkspaceSpec(owner.project, owner.actor.session, AttemptId(intent.id.value), intent.repository, intent.candidate)
-  private def launch(intent: IntegrationIntent): JobCommand = JobCommand(GitArguments ++ List("-c", "user.name=CQ host", "-c", "user.email=cq@localhost",
-    "update-ref", "--no-deref", "--stdin", "-m", "CQ integration " + intent.id.value),
-    GitEnvironment.isolated(HostEnvironment.runtime(environment)) ++ Map("LC_ALL" -> "C"),
-    s"start\nupdate ${intent.target} ${intent.candidate.value} ${intent.expected.value}\nprepare\ncommit\n", limits)
+  private def checkoutDirectory(intent: IntegrationIntent): Path = payloadRoot.getParent.resolve("checkouts").resolve(intent.id.value.toString)
+  private def checkoutInput(intent: IntegrationIntent): Path = checkoutDirectory(intent).resolve("intent.json")
+  private def checkedOutPaths: List[Path] = required("worktree", "list", "--porcelain", "-z").split("\u0000\u0000", -1)
+    .map(_.split("\u0000", -1).toList).filter(_.contains("branch " + target)).map { fields =>
+      Path.of(fields.find(_.startsWith("worktree ")).getOrElse(throw new IllegalStateException("Worktree path missing")).stripPrefix("worktree ")).toRealPath()
+    }.toList
+  private def launch(intent: IntegrationIntent): JobCommand = {
+    require(HostFiles.read(checkoutInput(intent), CheckoutPlan_JsonCodec, CheckoutRecords.MaxBytes).intent == intent, "Checkout intent differs from integration")
+    JobCommand(entrypoint ++ List(":checkout", "--", checkoutInput(intent).toString),
+      GitEnvironment.isolated(HostEnvironment.runtime(environment)) ++ Map("LC_ALL" -> "C"), "", limits)
+  }
 
   override def inspect(intent: IntegrationIntent): Task[IntegrationTarget] = ZIO.attemptBlocking {
     identity(intent)
@@ -74,12 +81,32 @@ final class SupervisedGitIntegration(owner: Scope, repository: Path, target: Str
     require(git("symbolic-ref", "--quiet", target).exit == 1, "Integration target must be a direct branch")
     val current = GitCommit(required("show-ref", "--verify", "--hash", target))
     require(current.value.matches("[0-9a-f]{40}|[0-9a-f]{64}"), "Integration target is not a full object ID")
-    val checkedOut = required("worktree", "list", "--porcelain", "-z").split("\u0000", -1).contains("branch " + target)
-    IntegrationTarget(current, current == intent.candidate || ancestor(intent.candidate, current), checkedOut)
+    val paths = checkedOutPaths
+    val incorporated = current == intent.candidate || ancestor(intent.candidate, current)
+    (current, incorporated, paths)
+  }.flatMap { case (current, incorporated, paths) =>
+    val needsProof = Files.exists(checkoutInput(intent)) || paths == List(repository)
+    val complete = if (!incorporated || !needsProof) ZIO.succeed(incorporated) else jobs.status(AttemptId(intent.id.value)).flatMap { record => ZIO.attemptBlocking {
+      require(record.workspace == workspace(intent) && record.fingerprint == launch(intent).fingerprint, "Git job differs from the frozen integration effect")
+      val published = checkoutDirectory(intent).resolve("completed.json")
+      if (!Files.exists(published) || record.phase != JobPhase.Settled || !record.exit.exists(_.settled)) false
+      else {
+        val receipt = HostFiles.read(published, CheckoutReceipt_JsonCodec, CheckoutRecords.MaxBytes)
+        require(receipt.intent == intent && receipt.indexSha256.matches("[0-9a-f]{64}"), "Checkout publication proof differs from integration")
+        val directory = Path.of(receipt.gitDirectory)
+        val targetLock = Path.of(required("rev-parse", "--path-format=absolute", "--git-path", target + ".lock"))
+        !List(directory.resolve("index.lock"), directory.resolve("HEAD.lock"), targetLock).exists(Files.exists(_))
+      }
+    }}.catchSome { case DomainFailure(_: Fault.Missing) => ZIO.succeed(false) }
+    complete.map(value => IntegrationTarget(current, value, paths.nonEmpty && paths != List(repository)))
   }
 
   override def execute(intent: IntegrationIntent): Task[Unit] = for {
-    _ <- ZIO.attemptBlocking(identity(intent))
+    _ <- ZIO.attemptBlocking {
+      identity(intent)
+      HostFiles.directory(checkoutDirectory(intent))
+      HostFiles.immutable(checkoutInput(intent), HostFiles.encode(CheckoutPlan_JsonCodec, CheckoutPlan(intent, checkedOutPaths == List(repository))), CheckoutRecords.MaxBytes)
+    }
     _ <- jobs.execute(workspace(intent), launch(intent))
   } yield ()
 
@@ -93,8 +120,14 @@ final class SupervisedGitIntegration(owner: Scope, repository: Path, target: Str
         require(text.getBytes(java.nio.charset.StandardCharsets.UTF_8).length == bytes, "Git protocol output differs from its settled byte count")
         text
       }
+      val refusalFile = checkoutDirectory(intent).resolve("refused.json")
+      val refusal = if (settled && Files.exists(refusalFile)) {
+        val value = HostFiles.read(refusalFile, CheckoutRefusal_JsonCodec, CheckoutRecords.MaxBytes)
+        require(value.intent == intent && !Files.exists(checkoutDirectory(intent).resolve("started.json")), "Checkout refusal has possible effects")
+        Some(value.reason)
+      } else None
       Some(IntegrationExecution(record, if (settled) output("stdout", record.exit.get.stdoutBytes) else "",
-        if (settled) output("stderr", record.exit.get.stderrBytes) else ""))
+        if (settled) output("stderr", record.exit.get.stderrBytes) else "", refusal))
     }}.catchSome { case DomainFailure(_: Fault.Missing) => ZIO.succeed(None) }
   }
 }

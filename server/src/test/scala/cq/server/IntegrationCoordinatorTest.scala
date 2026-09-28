@@ -73,7 +73,7 @@ final class MemoryIntegrationJournal(owner: Scope) extends IntegrationJournal {
 
 final case class IntegrationFixture(owner: Scope, repository: Path, target: String, base: GitCommit, first: GitCommit, second: GitCommit,
   combined: GitCommit, git: GitIntegration, journal: IntegrationJournal, freshJournal: Task[IntegrationJournal], rewrite: GitCommit => Task[Unit],
-  checkout: Task[Unit], isolation: Task[Unit], closeAdmission: Task[Unit]) {
+  checkout: Task[Unit], checkoutHere: Task[Unit], verifyCheckout: GitCommit => Task[Unit], isolation: Task[Unit], closeAdmission: Task[Unit]) {
   val server = new IntegrationReceiver
   val executions = new AtomicInteger(0)
   val counted: GitIntegration = new GitIntegration {
@@ -106,12 +106,13 @@ final class DummyIntegrationHarness extends IntegrationHarness {
     val target = "refs/heads/integration"
     var current = base
     var checkedOut = false
+    var checkoutHere = false
     var closed = false
     var executions = Map.empty[IntegrationId, IntegrationExecution]
     val lock = new Object
     val git = new GitIntegration {
       override def inspect(intent: IntegrationIntent) = ZIO.attempt(lock.synchronized {
-        IntegrationTarget(current, current == intent.candidate || (current == combined && Set(first, second)(intent.candidate)), checkedOut)
+        IntegrationTarget(current, current == intent.candidate || (current == combined && Set(first, second)(intent.candidate)), checkedOut && !checkoutHere)
       })
       override def execute(intent: IntegrationIntent) = ZIO.attempt(lock.synchronized {
         if (closed) throw new IntegrationAdmissionClosed
@@ -121,13 +122,14 @@ final class DummyIntegrationHarness extends IntegrationHarness {
         val err = if (applied) "" else "fatal: prepare: conditional comparison refused\n"
         val record = JobRecord(WorkspaceSpec(owner.project, owner.actor.session, AttemptId(intent.id.value), repository.toString, intent.candidate),
           "0" * 64, JobTarget.Run, JobPhase.Settled, Some(JobExit(Some(if (applied) 0 else 128), None, StopReason.Exited, out.length, err.length, true, false)), None, 3, 1, 2)
-        executions = executions.updated(intent.id, IntegrationExecution(record, out, err))
+        executions = executions.updated(intent.id, IntegrationExecution(record, out, err, if (applied) None else Some("Conditional comparison refused")))
       })
       override def execution(intent: IntegrationIntent) = ZIO.attempt(lock.synchronized(executions.get(intent.id)))
     }
     operation(IntegrationFixture(owner, repository, target, base, first, second, combined, git, new MemoryIntegrationJournal(owner),
       ZIO.succeed(new MemoryIntegrationJournal(owner)), value => ZIO.succeed(lock.synchronized { current = value }),
-      ZIO.succeed(lock.synchronized { checkedOut = true }), ZIO.unit, ZIO.succeed(lock.synchronized { closed = true })))
+      ZIO.succeed(lock.synchronized { checkedOut = true }), ZIO.succeed(lock.synchronized { checkedOut = true; checkoutHere = true }),
+      value => ZIO.attempt(assert(current == value && checkedOut)), ZIO.unit, ZIO.succeed(lock.synchronized { closed = true })))
   }
 }
 
@@ -165,12 +167,25 @@ final class RealIntegrationHarness(local: LocalWorkspaceFixture, guardian: Guard
       admission <- Semaphore.make(1)
       controlled = new GovernedIntegrationJobs(owner, jobs, admission)
       git = new SupervisedGitIntegration(owner, local.source, target, local.command, controlled, directory.resolve("payload"), guardian.environment,
-        ExecutionLimits(Duration.ofSeconds(3), Duration.ofSeconds(10), Duration.ofSeconds(1), Duration.ofMillis(100), Duration.ofSeconds(2), 65536))
+        ExecutionLimits(Duration.ofSeconds(3), Duration.ofSeconds(10), Duration.ofSeconds(1), Duration.ofMillis(100), Duration.ofSeconds(2), 65536), CqEntrypoint.command)
       result <- operation(IntegrationFixture(owner, local.source, target, local.base, first, second, combined, git,
         new FileIntegrationJournal(directory.resolve("integrations"), owner),
         ZIO.attemptBlocking(new FileIntegrationJournal(Files.createTempDirectory(directory, "missing-journal-"), owner)),
         value => ZIO.attemptBlocking { local.git(local.source, "update-ref", target, value.value); () },
         ZIO.attemptBlocking { local.git(local.source, "worktree", "add", local.directory.resolve("checked-out").toString, "integration"); () },
+        ZIO.attemptBlocking {
+          local.git(local.source, "switch", "integration")
+          Files.writeString(local.source.resolve("tracked.txt"), "governing unstaged over staged\n")
+          ()
+        },
+        value => ZIO.attemptBlocking {
+          assert(local.git(local.source, "symbolic-ref", "HEAD") == target)
+          assert(local.git(local.source, "rev-parse", "HEAD") == value.value)
+          assert(local.git(local.source, "show", ":tracked.txt") == "governing staged")
+          assert(Files.readString(local.source.resolve("tracked.txt")) == "governing unstaged over staged\n")
+          assert(Files.readString(local.source.resolve("untracked.txt")) == "governing untracked\n")
+          assert(Files.readString(local.source.resolve("first.txt")) == "first\n")
+        },
         ZIO.attemptBlocking {
           assert(java.util.Arrays.equals(index, Files.readAllBytes(local.source.resolve(".git/index"))))
           assert(Files.readString(local.source.resolve("tracked.txt")) == "governing staged\n")
@@ -189,6 +204,19 @@ object IntegrationTestPlugin extends PluginDef {
 abstract class IntegrationCoordinatorTest extends SpecZIO with AssertZIO {
   override def config = super.config.copy(pluginConfig = PluginConfig.const(List(IntegrationTestPlugin, WorkspaceTestPlugin, GuardianTestPlugin)))
   "Integration coordinator (Behavioral Active Blackbox; dummy Group / Git, filesystem and process Good Communication)" should {
+    "integrate the governing checked-out branch while preserving staged and unstaged edits and replay without another effect" in { (harness: IntegrationHarness) => harness.use { f =>
+      val intent = f.intent(f.base, f.first)
+      val coordinator = f.coordinator(f.journal)
+      for {
+        _ <- f.checkoutHere
+        _ <- coordinator.prepare(intent)
+        applied <- coordinator.run(intent.id)
+        _ <- assertIO(applied.record.resolution.isInstanceOf[IntegrationResolution.Recorded] && f.executions.get() == 1)
+        _ <- f.verifyCheckout(f.first)
+        replay <- coordinator.recover(intent.id)
+        _ <- assertIO(replay.contains(applied) && f.executions.get() == 1 && f.server.observations.get() == 1)
+      } yield ()
+    } }
     "retain coordinator ownership until an interrupted persistence call has actually returned" in { (harness: IntegrationHarness) => harness.use { f =>
       val intent = f.intent(f.base, f.first)
       val entered = new CountDownLatch(1)

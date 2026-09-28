@@ -27,6 +27,7 @@ Service and automation entrypoints:
   serve             Run the authenticated HTTP/WebSocket server
   run               Run a governed batch harness session (structured output)
   host              Harness-owned MCP stdio process; protocol use only
+  :checkout         Internal supervised Git executor; protocol use only
   job upload        Recover retained delivery batches (operator text output)
 
 Examples:

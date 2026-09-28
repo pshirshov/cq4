@@ -561,6 +561,9 @@ root adt IntegrationResolution {
   data Recorded { acknowledgement: ChangeAck observedTarget: GitCommit }
 }
 root data IntegrationRecord { intent: IntegrationIntent resolution: IntegrationResolution reservedAt: i64 resolvedAt: opt[i64] }
+root data CheckoutPlan { intent: IntegrationIntent attached: bit }
+root data CheckoutReceipt { intent: IntegrationIntent gitDirectory: str indexSha256: str }
+root data CheckoutRefusal { intent: IntegrationIntent reason: str }
 root data IntegrationTicket { id: IntegrationId reviewer: ArtifactId }
 root data IntegrationPreview {
   id: IntegrationId reviewer: ArtifactId target: str expected: GitCommit candidate: GitCommit members: lst[ItemRevision]

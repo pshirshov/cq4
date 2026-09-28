@@ -186,6 +186,8 @@ class Checks:
             self.run(["python3", "dev/cohort-check.py", *command], f"{name}-cohort", DISPATCH_FIXTURE_TIMEOUT * fixture_scale)
             self.environment["CQ_DISPATCH_EVIDENCE"] = str(self.evidence / f"{name}-dispatch")
             self.run(["python3", "dev/dispatch-check.py", *command], f"{name}-dispatch", DISPATCH_FIXTURE_TIMEOUT * fixture_scale)
+            self.environment["CQ_CHECKOUT_EVIDENCE"] = str(self.evidence / f"{name}-checkout")
+            self.run(["python3", "dev/checkout-check.py", *command], f"{name}-checkout", DISPATCH_FIXTURE_TIMEOUT * fixture_scale)
             self.environment["CQ_GROWTH_EVIDENCE"] = str(self.evidence / f"{name}-growth")
             self.run(["python3", "dev/dispatch-growth-check.py", *command], f"{name}-growth", DISPATCH_FIXTURE_TIMEOUT * fixture_scale)
             self.environment["CQ_COMBINATION_EVIDENCE"] = str(self.evidence / f"{name}-combination")

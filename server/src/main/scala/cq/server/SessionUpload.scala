@@ -92,7 +92,7 @@ final class SessionUpload(context: CliContext, clock: Clock) {
         val target = settings.integrationTarget.getOrElse(throw new IllegalArgumentException("Retained integration has no configured target"))
         val git = new SupervisedGitIntegration(owner, Path.of(run.repository), target,
           new BoundedHostCommand(GitEnvironment.isolated(context.environment), Duration.ofSeconds(10), MaxRecordBytes),
-          new RetainedIntegrationJobs(journal), directory.resolve("payload"), context.environment, SupervisorConfig.limits(settings.limits))
+          new RetainedIntegrationJobs(journal), directory.resolve("payload"), context.environment, SupervisorConfig.limits(settings.limits), CqEntrypoint.command)
         new IntegrationCoordinator(owner, new FileIntegrationJournal(directory.resolve("integrations"), owner), git, governor, collector)
       }
       results <- ZIO.foreach(ids) { id => coordinator.recover(id).either.flatMap { result => ZIO.attempt {
