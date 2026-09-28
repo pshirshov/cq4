@@ -1,5 +1,5 @@
 {
-  "state": "in-progress-corrected-live-corpus",
+  "state": "in-progress-post-integration-closeout",
   "implementationCommit": "302bf34",
   "modelVersion": "0.1.0",
   "platform": "x86_64-linux",
@@ -131,12 +131,7 @@
       "applicability": "24 commands pass with 292 unchanged source hashes. Source/classpath isolation, imported runtime, all four workflows, browser, restart and settled 24-table backup pass. Delivery/relocated artifact hashes match; independent Astra approved."
     }
   ],
-  "running": [
-    {
-      "name": "corrected-packaged-release",
-      "directory": "/srv/nvme/tmp/cq4-implementation/20260928T074651-release"
-    }
-  ],
+  "running": [],
   "pending": [
     "packaged live acceptance and usage report",
     "final independent Astra release review",
@@ -200,7 +195,7 @@
     "native": "/srv/nvme/tmp/cq4-implementation/20260928T071654-native",
     "installed": "/srv/nvme/tmp/cq4-implementation/20260928T074034-installed",
     "installedStatus": "package-checked",
-    "liveStatus": "running",
+    "liveStatus": "incomplete-closeout-pending",
     "liveSuite": "/srv/nvme/tmp/cq4-implementation/20260928T074651-release"
   },
   "historicalLiveProgress": {
@@ -268,7 +263,7 @@
   },
   "liveProgress": {
     "suite": "/srv/nvme/tmp/cq4-implementation/20260928T074651-release",
-    "status": "running",
+    "status": "incomplete",
     "scope": "Fresh corrected-artifact corpus; old-artifact acceptance and spending remain separate.",
     "independentlyAcceptedCohorts": [
       "claude",
@@ -299,7 +294,7 @@
         "commit": "bb1ccc7ede6d9d0f73ef4d88d44bdb02021db2fa",
         "review": "Independent Astra accepted; source epoch admitted and targeted retry running",
         "checks": 12,
-        "pending": "Targeted continuation and dependent assessment",
+        "pending": "Retry integrated its candidate then timed out at Handoff closeout; bounded closeout source approved, native continuation pending",
         "admissionCommit": "da5470e"
       },
       "usage": {
@@ -309,6 +304,16 @@
         "instrumentation": "incomplete",
         "reason": "Both started attempts terminated before supported authoritative usage events; Claude retains an unverified possible partial source, Codex stream has no counters",
         "completeSpendingOrEfficiencyClaim": false
+      },
+      "incorporatedRetry": {
+        "directory": "20260928T085152-process-resume",
+        "status": "failed-execution-deadline",
+        "candidate": "3100f651eb12ad5170346ccc104d8b6549bffcd7",
+        "tasks": "T1@5 and T2@4 Done; exact Recorded ACK",
+        "remaining": "Handoff closeout and independent whole-process assessment",
+        "knownTokens": 957199,
+        "modelAttempts": 7,
+        "attemptsWithoutMeters": 1
       }
     },
     "defectProcess": {
@@ -320,6 +325,12 @@
       "requiredInputOutputComplete": true,
       "review": "Independent Astra approved full replay and actual preparation prose",
       "rawRemainingLabels": "Historical stage remaining labels are stale; derived accepted suite proofs establish completed defect track"
+    },
+    "aggregateBeforeCloseout": {
+      "attempts": 86,
+      "knownTokens": 26096325,
+      "attemptsWithoutMeters": 3,
+      "completeSpendingOrEfficiencyClaim": false
     }
   }
 }

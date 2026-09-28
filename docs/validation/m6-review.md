@@ -1,6 +1,6 @@
 # Combined M2 and M6 human review
 
-**Preparation in progress.** The packaged Go process retry, aggregate reporting and final independent release review remain open. This page does not request or record acceptance yet. Per the user's instruction, both human verdicts will be requested together after the technical work is finished.
+**Preparation in progress.** The packaged Go Handoff closeout/assessment, aggregate reporting and final independent release review remain open. This page does not request or record acceptance yet. Per the user's instruction, both human verdicts will be requested together after the technical work is finished.
 
 ## Artifact and scope
 
@@ -24,7 +24,7 @@ The same native entrypoint provides the server, CLI and supervisor. The release 
 | Native runtime | 40 commands pass, including actual startup of all four workflows; `20260928T071654-native` |
 | Installed distribution | 24 root commands pass with source/classpath hidden, imported runtime closure, native browser/restart and settled 24-table backup/restore; `20260928T074034-installed` |
 | Native harness routes | Three independently accepted Python/Go cohorts cover all nine governing/child routes; [current candidates and inspection](m2-review.md#current-acceptance-evidence) |
-| Complete processes | Current defect process passes native independent whole-process assessment and Astra replay; targeted Go continuation remains pending |
+| Complete processes | Current defect process passes native independent whole-process assessment and Astra replay; Go implementation/review/integration completed before its deadline, with Handoff closeout and independent assessment pending |
 
 The [release evidence manifest](m6-release-evidence.json) binds exact evidence hashes and explains retained checks' source applicability. Earlier artifact and consumer failures remain historical evidence; their later replacements do not change their original verdicts.
 
@@ -59,7 +59,7 @@ The replay verifies retained proofs and provenance and regenerates reports. It p
 
 - Linux x86-64 is the verified release platform; the guardian requires Linux 5.9 or newer.
 - The original native artifact is rejected for omitted workflow resources. Use the corrected artifact above.
-- The failed Go continuation has two started attempts without supported authoritative usage events. Known spending remains incomplete; the possible Claude partial source has unverified accounting semantics. [Exact interruption evidence](m6-package.md#reviewed-go-continuation-correction-and-interrupted-usage) remains in the report.
+- The failed Go continuations have three started attempts without supported authoritative usage events. Known spending remains incomplete; the possible Claude partial source has unverified accounting semantics. [Exact interruption evidence](m6-package.md#reviewed-go-continuation-correction-and-interrupted-usage) remains in the report.
 - Provider estimates are not billing. Unknown counters/prices remain unknown. No token-efficiency improvement is claimed.
 - Managed batch sessions collect governing and child usage; universal collection for arbitrary existing interactive sessions is not claimed.
 - A database-only backup covers settled state. Session reconciliation additionally requires the retained journals, artifacts/workspaces and consumer Git repositories. There is no automatic retention/deletion job.

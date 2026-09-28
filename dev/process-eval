@@ -17,11 +17,15 @@ import urllib.parse
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("stage", choices=["begin", "resume"])
+    parser.add_argument("stage", choices=["begin", "resume", "closeout"])
     parser.add_argument("--checkpoint", type=Path)
     parser.add_argument("--answer-file", type=Path)
     parser.add_argument("--release", type=Path)
     arguments = parser.parse_args()
+    if arguments.stage == "closeout":
+        if arguments.checkpoint is None or arguments.answer_file is not None:
+            parser.error("closeout requires --checkpoint and preserves its recorded answer")
+        return runpy.run_path(str(Path(__file__).with_name("process-closeout.py")))["main"](arguments)
     if arguments.stage == "begin" and (arguments.checkpoint is not None or arguments.answer_file is not None):
         parser.error("begin does not accept a checkpoint or answer")
     if arguments.stage == "resume" and (arguments.checkpoint is None or arguments.answer_file is None):

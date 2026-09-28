@@ -267,5 +267,106 @@ class ProcessAssessmentCheck(unittest.TestCase):
                 path.write_text(json.dumps(changed))
 
 
+class ProcessCloseoutCheck(unittest.TestCase):
+    """Behavioral Active Blackbox Atomic: bounded closeout and historical authority."""
+
+    def fixture(self):
+        item = {"project": {"value": "project"}, "ledger": "Handoffs", "number": "1"}
+        task = {**item, "ledger": "Tasks"}
+        old = {"item": {"id": item, "revision": {"value": "2"}, "createdAt": "1", "draft": {"body": "Pending", "archived": False, "labels": []}}, "refs": [{"relation": "DerivedFrom", "target": task}]}
+        other = {"item": {"id": task, "revision": {"value": "5"}}, "refs": []}
+        histories = [{"id": view["item"]["id"], "page": {"hasMore": False, "entries": [{"item": view}]}} for view in [old, other]]
+        before = {"views": [old, other], "histories": histories, "claims": {"claims": [], "integrations": []}, "git": {"value": "candidate"}, "target": {"value": "candidate"}, "clean": True}
+        after = copy.deepcopy(before)
+        changed = after["views"][0]
+        session = {"value": "fresh-session"}
+        request = {"value": "change"}
+        changed["item"].update(revision={"value": "3"}, provenance={"actor": {"session": session, "role": "Governor"}, "request": request})
+        changed["item"]["draft"]["body"] = "Recorded integration; independent assessment remains pending"
+        after["histories"][0]["page"]["entries"] = [{"item": copy.deepcopy(changed)}, *copy.deepcopy(before["histories"][0]["page"]["entries"])]
+        fence = {"claim": {"value": "fresh-claim"}, "generation": "7"}
+        calls = [("mcp__cq__claim", {"action": {"Acquire": {"members": [item]}}}, {"Claimed": {"claim": {"members": [item], "owner": {"session": session}, "fence": fence}}}),
+                 ("mcp__cq__change", {"change": {"request": request, "fences": [fence], "mutations": [{"Replace": {"id": item, "expected": old["item"]["revision"], "draft": changed["item"]["draft"]}}]}}, {"Changed": {"ack": {"request": request, "items": [{"id": item, "revision": {"value": "3"}}]}}}),
+                 ("mcp__cq__claim", {"action": {"Release": {"fence": fence}}}, {"Released": {}})]
+        events = []
+        for index, (name, args, reply) in enumerate(calls):
+            events += [{"message": {"content": [{"type": "tool_use", "id": str(index), "name": name, "input": args}]}},
+                       {"message": {"content": [{"type": "tool_result", "tool_use_id": str(index), "content": json.dumps(reply)}]}}]
+        return {"before": before, "after": after, "run": {"attempt": {"id": {"value": "governor"}, "session": session}},
+                "governing_input": {"attempt": {"value": "governor"}, "body": {"integrationTarget": None}}, "events": events, "children": [], "integrations": []}
+
+    def check(self, fixture):
+        return runpy.run_path(str(Path(__file__).with_name("process-closeout-evidence.py")))["closeout_change"](**fixture)
+
+    def test_closeout_uses_fresh_authority_and_changes_one_handoff(self):
+        self.assertEqual(self.check(self.fixture())["member"]["revision"], {"value": "3"})
+
+    def test_idempotent_native_acknowledgement_replay_is_not_a_second_mutation(self):
+        fixture = self.fixture()
+        fixture["events"] = fixture["events"][:2] * 2 + fixture["events"][2:4] * 2 + fixture["events"][4:]
+        self.check(fixture)
+
+    def test_closeout_rejects_expanded_scope_or_rewritten_history(self):
+        mutations = {
+            "child dispatch": lambda f: f["children"].append("child"),
+            "new integration": lambda f: f["integrations"].append("integration"),
+            "configured integration": lambda f: f["governing_input"]["body"].update(integrationTarget="refs/heads/integration"),
+            "changed Git": lambda f: f["after"].update(git={"value": "another"}),
+            "dirty worktree": lambda f: f["after"].update(clean=False),
+            "unexpired old authority": lambda f: f["before"]["claims"]["claims"].append("old"),
+            "unreleased new authority": lambda f: f["after"]["claims"]["claims"].append("new"),
+            "changed task": lambda f: f["after"]["views"][1]["item"].update(revision={"value": "6"}),
+            "changed relations": lambda f: f["after"]["views"][0]["refs"].clear(),
+            "multiple Handoff revisions": lambda f: f["after"]["views"][0]["item"].update(revision={"value": "4"}),
+            "historical authority": lambda f: f["after"]["views"][0]["item"]["provenance"]["actor"].update(session={"value": "old"}),
+            "rewritten history": lambda f: f["after"]["histories"][0]["page"]["entries"].pop(),
+            "missing fresh claim": lambda f: f.update(events=f["events"][2:]),
+            "missing release": lambda f: f.update(events=f["events"][:-2]),
+            "missing fence": lambda f: f["events"][2]["message"]["content"][0]["input"]["change"].update(fences=[]),
+        }
+        for name, mutate in mutations.items():
+            fixture = self.fixture()
+            mutate(fixture)
+            with self.subTest(name=name), self.assertRaises(AssertionError):
+                self.check(fixture)
+
+    def test_only_settled_incorporated_deadline_archives_are_eligible(self):
+        producer = runpy.run_path(str(Path(__file__).with_name("process-closeout-evidence.py")))["producer"]
+        members = [{"id": {"ledger": "Tasks", "number": str(n)}, "revision": {"value": "3"}} for n in [1, 2]]
+        values = {"result.json": {"status": "failed", "stage": "resume", "archiveErrors": []},
+                  "sessions/producer/run.json": {"attempt": {"id": {"value": "governor"}}},
+                  "sessions/producer/journal/governor.json": {"phase": "Settled", "exit": {"settled": True, "hostFailure": False, "reason": "ExecutionDeadline"}},
+                  "sessions/producer/integrations/one.json": {"intent": {"candidate": {"value": "candidate"}, "members": members}, "attempted": True, "observation": {"Incorporated": {"target": {"value": "candidate"}}}},
+                  "items.json": [{"item": {"id": m["id"], "revision": {"value": "4"}, "draft": {"content": {"Task": {"status": "Done"}}}}} for m in members],
+                  "histories.json": [], "dispatch-statuses.json": [], "candidate-evidence.json": {}, "settings.json": {}}
+        mutations = {
+            "still running": lambda v: v["sessions/producer/journal/governor.json"].update(phase="Running"),
+            "uncertain settlement": lambda v: v["sessions/producer/journal/governor.json"]["exit"].update(settled=False),
+            "host failure": lambda v: v["sessions/producer/journal/governor.json"]["exit"].update(hostFailure=True),
+            "another failure": lambda v: v["sessions/producer/journal/governor.json"]["exit"].update(reason="OutputLimit"),
+            "incomplete archive": lambda v: v["result.json"]["archiveErrors"].append("missing"),
+            "pending integration": lambda v: v["sessions/producer/integrations/one.json"].update(observation=None),
+            "unattempted integration": lambda v: v["sessions/producer/integrations/one.json"].update(attempted=False),
+            "later task edit": lambda v: v["items.json"][0]["item"].update(revision={"value": "5"}),
+            "unfinished task": lambda v: v["items.json"][0]["item"]["draft"]["content"]["Task"].update(status="Ready"),
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            def store(current):
+                for name, value in current.items():
+                    path = directory / name
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text(json.dumps(value))
+            read = lambda path: json.loads(path.read_text())
+            store(values)
+            self.assertEqual(producer(directory, read)["candidate"], {"value": "candidate"})
+            for name, mutate in mutations.items():
+                changed = copy.deepcopy(values)
+                mutate(changed)
+                store(changed)
+                with self.subTest(name=name), self.assertRaises(AssertionError):
+                    producer(directory, read)
+
+
 if __name__ == "__main__":
     unittest.main()

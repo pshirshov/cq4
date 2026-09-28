@@ -151,6 +151,16 @@ class ReleaseRunnerTests(unittest.TestCase):
                 self.run_suite(["--resume", str(directory), "--amendment", str(amendment), "--report-only"], self.environment, False)
                 self.assertIn("Protected evaluation inputs changed", self.output)
 
+    def test_reviewed_closeout_evaluator_can_preserve_the_failed_producer(self):
+        directory, before = self.run_suite(["--answer-file", str(self.answer)],
+            dict(self.environment, FIXTURE_REJECT="process-resume", FIXTURE_STATUS="failed"), True)
+        changes = {name: "reviewed-closeout" for name in ["dev/process-eval", "dev/process-closeout.py", "dev/process-closeout-evidence.py",
+                   "dev/process-assess", "dev/process-assess-evidence.py", "dev/process-assess-check.py"]}
+        amendment = self.amendment(before, "process-resume", changes)
+        _, after = self.run_suite(["--resume", str(directory), "--amendment", str(amendment), "--report-only"], self.environment, True)
+        self.assertEqual(after["attempts"], before["attempts"])
+        self.assertEqual(after["pending"], ["process-resume", "process-assess"])
+
     def test_historical_evidence_and_review_cannot_change_after_amendment(self):
         directory, before = self.rejected_probe()
         amendment = self.amendment(before, "defect-probe", {"dev/defect-eval": "clarified"})

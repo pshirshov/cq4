@@ -279,7 +279,7 @@ def main():
                     "integrations": retained_integrations, "governingReceipt": json.loads((initial_session / "receipt.json").read_text()),
                     "results": {key: {"kind": value["kind"], "sha256": value["sha256"], "attempt": value["attempt"]} for key, value in baseline["artifacts"].items() if value["kind"] in ["Result", "Validation"]},
                     "usage": usage(), "sourceHashes": {"baselineReplay": hashlib.sha256((evidence / "baseline-replay.json").read_bytes()).hexdigest()},
-                    "correction": correction, "reopening": reopened, "priorAssessment": None if prior is None else prior["assessment"],
+                    "correction": correction, "reopening": reopened, "closeout": baseline.get("closeout"), "priorAssessment": None if prior is None else prior["assessment"],
                     "requiredWorkspaceFiles": sorted(candidate_files)}
                 bundle_text = json.dumps(bundle_value, ensure_ascii=False, separators=(",", ":"))
                 assert len(bundle_text.encode()) <= 128 * 1024, "Assessment bundle exceeds host artifact input bound"

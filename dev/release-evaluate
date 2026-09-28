@@ -39,7 +39,8 @@ def evidence_files(directory):
 def source_epochs(report):
     epochs = [report["sourceSha256"]]
     allowed = {"dev/defect-eval", "dev/process-eval", "dev/release-evaluate", "dev/release-evaluate-check.py",
-               "dev/release-report.py", "dev/release-report-check.py"}
+               "dev/release-report.py", "dev/release-report-check.py", "dev/process-closeout.py", "dev/process-closeout-evidence.py",
+               "dev/process-assess", "dev/process-assess-evidence.py", "dev/process-assess-check.py"}
     for amendment in report.get("amendments", []):
         before, after = amendment["beforeSources"], amendment["afterSources"]
         assert before == epochs[-1] and before != after, "Amendment source chain changed"

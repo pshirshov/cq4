@@ -47,6 +47,8 @@ def retained(directory):
         return json.loads(data)
 
     manifest = read(directory / "result.json")
+    if manifest.get("stage") == "closeout":
+        return runpy.run_path(str(Path(__file__).with_name("process-closeout-evidence.py")))["retained"](directory)
     assert manifest["status"] == "integrated-candidate-passed" and not manifest["archiveErrors"] and manifest["accounting"] == "reconciled"
     origin = Path(manifest["baselineEvidence"])
     replay = read(directory / "checkpoint-replay.json")
