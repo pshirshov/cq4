@@ -177,6 +177,8 @@ class Checks:
             self.run(["python3", "dev/cohort-check.py", *command], f"{name}-cohort", DISPATCH_FIXTURE_TIMEOUT)
             self.environment["CQ_DISPATCH_EVIDENCE"] = str(self.evidence / f"{name}-dispatch")
             self.run(["python3", "dev/dispatch-check.py", *command], f"{name}-dispatch", DISPATCH_FIXTURE_TIMEOUT)
+            self.environment["CQ_GROWTH_EVIDENCE"] = str(self.evidence / f"{name}-growth")
+            self.run(["python3", "dev/dispatch-growth-check.py", *command], f"{name}-growth", DISPATCH_FIXTURE_TIMEOUT)
             self.environment["CQ_COMBINATION_EVIDENCE"] = str(self.evidence / f"{name}-combination")
             self.run(["python3", "dev/combination-check.py", *command], f"{name}-combination", COMBINATION_FIXTURE_TIMEOUT)
             self.environment["CQ_ADMISSION_EVIDENCE"] = str(self.evidence / f"{name}-admission")
@@ -209,6 +211,16 @@ class Checks:
             command = ["java", "-cp", classpath, "cq.server.Main"]
             with self.server(command, "cohort"):
                 self.run(["python3", "dev/cohort-check.py", *command], "cohort-check", DISPATCH_FIXTURE_TIMEOUT)
+
+    def growth(self):
+        self.generate()
+        command = ["java", "-cp", self.classpath(), "cq.server.Main"]
+        with self.database([]):
+            port = free_port()
+            self.environment.update(CQ_HOST="127.0.0.1", CQ_PORT=str(port), CQ_ORIGIN=f"http://127.0.0.1:{port}",
+                                    CQ_TOKEN=uuid.uuid4().hex, CQ_SESSION=str(uuid.uuid4()), CQ_GROWTH_EVIDENCE=str(self.evidence / "fixture"))
+            with self.server(command, "growth"):
+                self.run(["python3", "dev/dispatch-growth-check.py", *command], "dispatch-growth", DISPATCH_FIXTURE_TIMEOUT)
 
     def postgres(self):
         self.generate()
@@ -292,8 +304,8 @@ def generated_hashes():
 
 
 def main():
-    if len(sys.argv) != 2 or sys.argv[1] not in ["contracts", "fast", "postgres", "process", "browser", "native", "access", "cohort"]:
-        raise SystemExit("Usage: ./dev/check contracts|fast|postgres|process|browser|native|access|cohort")
+    if len(sys.argv) != 2 or sys.argv[1] not in ["contracts", "fast", "postgres", "process", "browser", "native", "access", "cohort", "growth"]:
+        raise SystemExit("Usage: ./dev/check contracts|fast|postgres|process|browser|native|access|cohort|growth")
     if shutil.which("java") is None or shutil.which("sbt") is None:
         os.chdir(ROOT)
         os.execvp("nix", ["nix", "develop", "-c", str(ROOT / "dev/check"), sys.argv[1]])

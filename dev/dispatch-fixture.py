@@ -86,6 +86,22 @@ def main():
         if assignment["work"] != {"Reviewer": {"mode": "Candidate"}}:
             tool("cq_host", "workspace", {"Check": {"name": "consumer-content", "waitMillis": 0}}, denied=True)
         labels = context["members"][0]["item"]["draft"]["labels"]
+        if labels == ["traffic-growth"]:
+            artifact, = context["artifacts"]
+            scale = len(artifact["body"])
+            assert scale in [32, 60000] and artifact["body"] == "PRIVATE_GROWTH_INPUT:".ljust(scale, "x")
+            narrative = "PRIVATE_GROWTH_RESULT:" + "x" * (1 if scale == 32 else 7000)
+            evidence = {"Evidence": {"members": [{"item": item, "disposition": "Findings", "summary": narrative,
+                "evidence": [{"origin": "ModelDeclared", "description": narrative, "citations": []} for _ in range(4)],
+                "uncertainties": [], "requestedProbes": []} for item in members]}}
+            assert sandbox == "read-only"
+            if role == "Explorer":
+                assert assignment["work"] == {"Explorer": {"mode": "Investigate"}} and context["previous"] is None
+                finish(evidence)
+            else:
+                assert assignment["work"] == {"Reviewer": {"mode": "Audit"}} and context["previous"]["report"] == evidence
+                finish({"Review": {"proposal": None, "members": [{"item": item, "verdict": "Accepted", "findings": []} for item in members]}})
+            return
         assessment_flow = labels and labels[0].startswith("cohort-selected") and (role == "Planner" or assignment["work"] == {"Reviewer": {"mode": "Plan"}})
         if (labels and labels[0].startswith("cohort-assessment")) or assessment_flow:
             assert sandbox == "read-only" and len(members) == 2
@@ -170,6 +186,27 @@ def main():
 
     assert sandbox == "read-only"
     project = data["project"]["project"]
+    if data["request"].startswith("traffic-growth:"):
+        scenario = json.loads(data["request"].split(":", 1)[1])
+        members = scenario["members"]
+        claim = tool("cq", "claim", {"project": project, "action": {"Acquire": {
+            "id": identity(), "members": [member["id"] for member in members], "durationMillis": "180000"}}})["Claimed"]["claim"]
+        rounds = []
+        for handle in scenario["artifacts"]:
+            request = {"request": identity(), "work": {"Explorer": {"mode": "Investigate"}}, "harness": "Codex", "members": members,
+                "guidance": [], "artifacts": [handle], "previous": None, "fence": claim["fence"], "limits": data["limits"]}
+            started = tool("cq_host", "dispatch", {"Start": {"request": request}})["Status"]["value"]
+            explored = poll(started["attempt"])
+            assert explored["phase"] == "Completed" and explored["counts"]["evidence"] == len(members) and explored["usageDelivered"], explored
+            chained = {**request, "request": identity(), "work": {"Reviewer": {"mode": "Audit"}}, "previous": explored["result"]}
+            reviewed = tool("cq_host", "dispatch", {"Start": {"request": chained}})["Status"]["value"]
+            reviewed = poll(reviewed["attempt"])
+            assert reviewed["phase"] == "Completed" and reviewed["counts"]["accepted"] == len(members) and reviewed["usageDelivered"], reviewed
+            rounds.append({"input": handle, "explorer": explored, "reviewer": reviewed})
+        tool("cq", "claim", {"project": project, "action": {"Release": {"fence": claim["fence"]}}})
+        emit({"type": "fixture.growth", "rounds": rounds})
+        finish({"summary": "Same members and roles completed small and large handle-only chains"})
+        return
     if data["request"].startswith("cohort-fairness:"):
         scenario = json.loads(data["request"].split(":", 1)[1])
         selection = {"roots": scenario["roots"], "work": {"Explorer": {"mode": "Investigate"}},
@@ -364,6 +401,8 @@ def main():
              "content": {"Task": {"status": "Ready", "acceptance": ["Exact content verified"], "result": None, "validation": []}}, "citations": []}
     if data["request"] == "proposal-workflow":
         draft["labels"] = ["proposal-fixture"]
+    if data["request"] == "traffic-growth-bootstrap":
+        draft["labels"] = ["traffic-growth"]
     if data["request"].startswith("reviewer-check-failed:"):
         draft["labels"] = ["failed-reviewer-check"]
     cohort = data["request"].startswith("cohort-assessment")
@@ -372,6 +411,10 @@ def main():
     created = tool("cq", "change", {"project": project, "change": {"request": identity(),
         "mutations": [{"Create": {"draft": draft}} for _ in range(2 if cohort else 1)], "fences": [], "reason": "Fixture task"}})
     members = created["Changed"]["ack"]["items"]
+    if data["request"] == "traffic-growth-bootstrap":
+        emit({"type": "fixture.growth-seed", "members": members})
+        finish({"summary": "Registered fixture artifact owner and unchanged task"})
+        return
     claim = tool("cq", "claim", {"project": project, "action": {"Acquire": {"id": identity(), "members": [value["id"] for value in members], "durationMillis": "180000"}}})
     request = {"request": identity(), "work": {"Worker": {"mode": "Implement"}}, "harness": "Codex", "members": members,
                "guidance": [], "artifacts": [], "previous": None, "fence": claim["Claimed"]["claim"]["fence"], "limits": data["limits"]}
