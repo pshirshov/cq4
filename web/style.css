@@ -34,3 +34,14 @@ header details[open] > pre { position: absolute; top: 40px; left: 80px; backgrou
 [hidden] { display: none !important; }
 @media(max-width: 900px) { main { grid-template-columns: 180px 1fr; } article { grid-column: 1 / -1; } header { flex-wrap: wrap; } }
 @media(max-width: 500px) { main { display: block; } }
+
+.query-editor { position: relative; min-width: 0; }
+.query-input { display: flex; gap: 6px; align-items: center; }
+.query-input input { min-width: 0; flex: 1; }
+.query-input button { width: auto; }
+.query-suggestions { position: absolute; z-index: 5; top: 48px; left: 0; width: max(100%, 260px); max-width: calc(100vw - 40px); max-height: 280px; overflow: auto; background: #1c2630; border: 1px solid #61788a; border-radius: 4px; box-shadow: 0 8px 24px #0008; }
+.query-suggestions button { display: block; width: 100%; border: 0; border-radius: 0; text-align: left; margin: 0; overflow-wrap: anywhere; }
+.query-suggestions [aria-selected=true] { background: #334b5d; outline: 2px solid #68c7ec; outline-offset: -2px; }
+.query-diagnostic { color: #ffbd86; }
+.query-diagnostic code { display: block; white-space: pre-wrap; overflow-wrap: anywhere; }
+.query-diagnostic mark { background: #ffbd86; color: #141a20; }

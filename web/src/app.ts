@@ -2,10 +2,12 @@ import * as api from '../../generated/typescript/cq/api/index.js';
 import { BaboonCodecContext } from '../../generated/typescript/BaboonSharedRuntime.js';
 import { ConnectionManager, ConnectionStats } from './connection.js';
 import { button, edit, element, Editor, Json } from './editor.js';
+import { QueryEditor } from './query.js';
 
 const CONTEXT = BaboonCodecContext.Default;
 const PAGE_SIZE = 40;
 const MAX_QUERY_CHARACTERS = 4096;
+const COMPLETION_LIMIT = 30;
 const PREFIX: Record<api.Ledger, string> = { Milestones: 'M', Ideas: 'I', Defects: 'D', Goals: 'G', Tasks: 'T', Researches: 'RS',
   Hypothesis: 'H', Questions: 'Q', Decisions: 'K', Reviews: 'R', Handoffs: 'HO', OperatorActions: 'OA', Memories: 'MEM', Upstream: 'U' };
 function itemName(id: api.ItemId): string { return PREFIX[id.ledger] + id.number; }
@@ -20,7 +22,12 @@ type Panel = 'detail' | 'history' | 'usage' | 'audit';
 class App {
   private manager: ConnectionManager | null = null;
   private readonly projects = element('select', '');
-  private readonly query = element('input', '');
+  private readonly queryEditor = new QueryEditor(async (query, cursor) => {
+    const result = await this.call(new api.Command_Read(new api.ReadInput(this.currentProject(), new api.ReadSelection_QueryComplete(query, cursor, COMPLETION_LIMIT))));
+    if (!(result instanceof api.Result_QueryAnalyzed)) throw new Error('Unexpected query completion response');
+    return result.analysis;
+  }, () => this.action(() => this.search()));
+  private readonly query = this.queryEditor.input;
   private activeQuery = '';
   private readonly items = element('div', '');
   private readonly detail = element('section', '');
@@ -107,13 +114,7 @@ class App {
     const main = element('main', ''); const side = element('nav', ''); const list = element('section', ''); const content = element('article', '');
     this.projects.setAttribute('aria-label', 'Project'); this.query.setAttribute('aria-label', 'Search query');
     this.projects.addEventListener('change', () => this.action(async () => { this.project = new api.ProjectId(this.projects.value); this.reset(); await this.refresh(); }));
-    const search = element('form', ''); const submitQuery = element('button', 'Search'); submitQuery.type = 'submit';
     this.query.placeholder = 'ledger:Tasks status:Ready'; this.query.maxLength = MAX_QUERY_CHARACTERS;
-    search.append(this.query, submitQuery);
-    search.addEventListener('submit', event => { event.preventDefault(); this.action(async () => {
-      this.activeQuery = this.query.value; this.epoch++; this.subscription = null; this.after = undefined; this.snapshot = undefined;
-      this.notice.textContent = ''; this.query.removeAttribute('aria-invalid'); await this.refresh();
-    }); });
     const newProject = element('form', ''); const name = element('input', ''); name.placeholder = 'New project name'; name.setAttribute('aria-label', 'New project name'); name.required = true;
     const add = element('button', 'Create project'); add.type = 'submit'; newProject.append(name, add);
     newProject.addEventListener('submit', event => { event.preventDefault(); this.action(async () => {
@@ -121,7 +122,7 @@ class App {
       await this.call(new api.Command_Initialize(new api.ProjectConfig(project, location.origin, name.value)));
       this.project = project; this.reset(); await this.loadProjects(); await this.refresh(); name.value = '';
     }); });
-    side.append(element('h2', 'Workspace'), this.projects, newProject, search,
+    side.append(element('h2', 'Workspace'), this.projects, newProject, this.queryEditor.element,
       button('New item', () => { this.openEditor(null); }), button('Project usage', () => this.action(async () => { this.choose(null); await this.loadUsage(); })));
     const pages = element('div', ''); pages.className = 'actions';
     pages.append(button('First page', () => this.action(async () => { this.after = undefined; this.snapshot = undefined; await this.refresh(); })),
@@ -134,7 +135,7 @@ class App {
     this.manager = new ConnectionManager(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`, {
       status: stats => this.connectionStatus(stats),
       active: () => this.action(async () => { await this.loadProjects(); this.after = undefined; this.snapshot = undefined; await this.refresh(); }),
-      disconnected: () => { this.sync.textContent = 'Data: stale'; this.epoch++; this.subscription = null; },
+      disconnected: () => { this.queryEditor.invalidate(); this.sync.textContent = 'Data: stale'; this.epoch++; this.subscription = null; },
       event: frame => {
         if (frame instanceof api.ServerFrame_Changes && frame.subscription.value === this.subscription) {
           if (frame.page.events.length > 0) { this.after = undefined; this.snapshot = undefined; this.action(() => this.refresh()); }
@@ -152,7 +153,12 @@ class App {
     this.healthDetails.textContent = `Connections: ${stats.connections}; active: ${stats.active}\nRTT: ${stats.rtt === null ? 'unknown' : stats.rtt + ' ms'}\nRetry: ${stats.attempts}/12\n${stats.reason}\n\n${stats.events.join('\n')}`;
     document.title = `CQ — ${stats.state}`;
   }
+  private async search(): Promise<void> {
+    this.activeQuery = this.query.value; this.epoch++; this.subscription = null; this.after = undefined; this.snapshot = undefined;
+    this.notice.textContent = ''; this.queryEditor.showDiagnostic(undefined, this.query.value); await this.refresh();
+  }
   private reset(): void {
+    this.queryEditor.invalidate(); this.queryEditor.showDiagnostic(undefined, this.query.value);
     this.epoch++; this.selectionGeneration++; this.selection = null; this.selected = null; this.editor = null; this.after = undefined; this.snapshot = undefined; this.subscription = null;
     this.detail.replaceChildren(); this.editorPanel.replaceChildren(); this.historyPanel.replaceChildren(); this.usagePanel.replaceChildren(); this.auditPanel.replaceChildren();
     this.auditAfter = 0n; this.notice.textContent = '';
@@ -186,7 +192,7 @@ class App {
       }
       if (response instanceof api.Result_Failed && response.fault instanceof api.Fault_QuerySyntax) {
         const error = response.fault.diagnostic;
-        this.sync.textContent = 'Data: invalid query'; this.query.setAttribute('aria-invalid', 'true');
+        this.sync.textContent = 'Data: invalid query'; this.queryEditor.showDiagnostic(error, this.activeQuery);
         this.showError(`${error.message} (${error.span.start}–${error.span.end})`); return;
       }
       const result = readResult(response);
