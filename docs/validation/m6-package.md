@@ -99,3 +99,27 @@ Astra approved the final deterministic evidence and provisional manifest: 102 Po
 All six packaged cohort producer/assessment stages are now accepted. Astra independently replays all nine governor-to-child routes and reconciles 18 distinct attempts to **4,641,813 known tokens**: 3,430,819 producer / 1,210,994 independent-assessor tokens, or 2,932,369 governor / 1,709,444 child tokens. Required input/output coverage is complete and no meter is absent; all 18 retain optional-field limitations. Partial provider estimates coexist with seven unknown-cost contributions and do not establish billing. Native traffic has 59 dispatch calls, five explicit artifact drill-downs, no repeated dispatch IDs and no missing/orphan replies. The Pi producer/assessment contributes 782,403 / 425,233 known tokens. This scoped replay is approved; worked-process and final suite acceptance remain pending.
 
 The packaged question checkpoint passes at `20260928T062332-process-begin`: I1@3 → G1@2 → Q1@1, project `556e23a3-3962-4098-a0dd-0ad51d574181`, asks which implementation language to use, with exact alternatives Python/Go. Archive errors are empty. The existing clarification about carrying forward the earlier Go reply is still unanswered; no new answer record has been fabricated. The suite correctly skips dependent resume/assessment stages and starts `20260928T062725-defect-begin` independently.
+
+
+## Retained probe rejection and evaluator amendment
+
+The suite ends `incomplete` after `20260928T062725-defect-begin` passes and `20260928T063520-defect-probe` is rejected. The latter exits zero and reconciles two attempts, but fails the unchanged predicate `Probe left unexpected untracked files`: its workspace contains both the required `cq-probe-observations.json` and an additional `cq-probe-supplement.json`. The exact recorder execution, observations, tracked-file preservation and HEAD checks passed before that predicate. The extra file contains supplemental empirical results. The original prompt did not state that only one output file was permitted; the correction states that restriction explicitly and directs supplemental observations into the Result artifact. The failed evidence and spending remain retained.
+
+`dev/release-evaluate --amendment FILE --resume SUITE` adds a reviewed source snapshot without replacing the original suite source map. The amendment records exact `beforeSources` / `afterSources`, a reason, affected stages, the rejected invocation ID and result hash, and a retained accepted review path/hash. The review must bind the same source maps and stages. Only the five evaluator instruction/scheduling/reporting files and their checks may change through this mechanism; runtime, fixture, recorder, oracle and acceptance predicates stay protected. Each new invocation records its source epoch; previously registered evidence retains its original epoch and complete file hashes. Unknown evidence must match current inputs. Historical proofs are replayed and file snapshots checked before reuse. Reporting exposes both source epochs as a corrected execution series and retains failed spending.
+
+Controlled checks first failed because the amendment CLI was absent, then all eleven scheduling/provenance checks and four accounting/report checks passed. They cover no repeated accepted routes, retained rejection, protected/unlisted source changes, altered historical evidence/review, stale new invocation sources, and explicit adoption of a registered historical epoch. Logs: `/srv/nvme/tmp/cq4-implementation/m6-package/probe-amendment/{before,after}.log`. Astra reproduced a missing freeze for nonzero exits; the fail-first correction freezes failed evidence independently of acceptance and marks incomplete provenance when required files are absent. Astra approved the corrected source with no remaining blocking or major finding. No new paid attempts were launched during this verification.
+
+
+The reviewed amendment was admitted using `--report-only`. All eight accepted proofs replay unchanged, all nine retained invocation records are byte-equivalent as JSON values, and the operational report preserves exactly 33 attempts / 9,089,492 known tokens, including the rejected probe’s two attempts / 405,360 tokens. Full snapshots freeze 11,775 files in nine evidence directories. `m6-package/probe-amendment/admission-proof.json`, `amendment.json`, `astra-review.json` and `admission.log` preserve this check. The original suite and usage report are copied alongside as `before-suite.json` and `before-usage-report.json`.
+
+After amendment admission, retry only the rejected probe and allow its remaining dependent stages to proceed:
+
+```sh
+PATH=/srv/nvme/tmp/cq4-implementation/m6-harness-bin:$PATH \
+./dev/evaluate --suite release \
+  --release /srv/nvme/tmp/cq4-implementation/cq-release \
+  --resume /srv/nvme/tmp/cq4-implementation/20260928T060135-release \
+  --retry 'defect-probe=Clarified output-file restriction; Astra-approved evaluator amendment'
+```
+
+Do not resubmit `--amendment` after it has been admitted: its before/after chain is appended once. The source epoch is evaluation provenance; the CQ model remains the single `0.1.0` version. The previously approved native/installed/SQL/UI evidence still applies to unchanged product code. Only the five reviewed evaluator files changed.

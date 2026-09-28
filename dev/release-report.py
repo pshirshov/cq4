@@ -142,6 +142,11 @@ def report(directory):
     complete = suite["status"] == "corpus-passed" and routes == expected and not gaps
     value = {"status": "release-corpus-observed" if complete else "incomplete", "suiteSha256": digest(directory / "suite.json"),
              "scope": "Packaged observations across different tasks/routes; no matched savings or billing conclusion",
+             "sourceProvenance": {"originalSources": suite["sourceSha256"], "amendments": suite.get("amendments", []),
+                 "scope": "Corrected execution series when amendments are present; not a homogeneous matched experiment",
+                 "invocations": [{"id": attempt["id"], "sourceEpoch": attempt.get("sourceEpoch", 0),
+                                  "evidenceSourceEpoch": attempt.get("evidenceSourceEpoch", attempt.get("sourceEpoch", 0))}
+                                 for attempt in suite["attempts"]]},
              "experiments": experiments, "countersByAttribution": counters,
              "partialCosts": [{"group": json.loads(key), "exactRationalAmount": str(amount)} for key, amount in sorted(costs.items())],
              "unknownCosts": unknown_costs, "incompleteMeters": partial, "attemptsWithoutMeters": absent,

@@ -113,12 +113,7 @@
       "applicability": "All 291 current non-documentation inputs match. Query/mutation/closure/integration/usage access budgets pass through 100,000 unrelated items."
     }
   ],
-  "running": [
-    {
-      "name": "packaged-live",
-      "directory": "/srv/nvme/tmp/cq4-implementation/20260928T060135-release"
-    }
-  ],
+  "running": [],
   "pending": [
     "packaged live acceptance and usage report",
     "final independent Astra release review",
@@ -141,9 +136,10 @@
       "cohort-codex-assess",
       "cohort-pi",
       "cohort-pi-assess",
-      "process-begin"
+      "process-begin",
+      "defect-begin"
     ],
-    "runningStage": "defect-begin",
+    "runningStage": null,
     "scope": "Progress snapshot; consult suite.json for current state. Full corpus and human acceptance remain pending.",
     "verifiedRoutes": 9,
     "scopedAccounting": {
@@ -168,6 +164,29 @@
         "Go"
       ],
       "state": "Pending clarification about reuse of the earlier Go reply; no answer recorded."
+    },
+    "suiteStatus": "incomplete",
+    "rejectedStages": [
+      {
+        "stage": "defect-probe",
+        "directory": "/srv/nvme/tmp/cq4-implementation/20260928T060135-release/20260928T063520-defect-probe",
+        "error": "Stage process failed"
+      }
+    ],
+    "correction": "Astra-approved probe instruction clarification and reviewed evaluator amendment admitted; no new model calls; targeted retry pending."
+  },
+  "evaluatorAmendments": [
+    {
+      "directory": "/srv/nvme/tmp/cq4-implementation/m6-package/probe-amendment",
+      "scope": "Five evaluator-only files; product, fixture, recorder, oracle, acceptance predicates and package unchanged. Retained deterministic gates apply to product baseline.",
+      "review": "Independent Astra approved",
+      "evidenceSha256": {
+        "amendment.json": "8dce4066a67d9034204f4fe5b31518362366e81b86563268afb8cfd1a104a2e5",
+        "astra-review.json": "ec1af7109585cd1d4eeca84d7ca8f85c60ca2a226cc11824d9e9cb079b838c4c",
+        "admission-proof.json": "672370af088fe42809dc5e64b0960a4ad6bf9c3c2001dbbb7500026b9a49f0e2",
+        "retained-replay.json": "ec8ff77344b0063faa9e8b3fef4de7559defce8a35cb5fa02f1f291de9f3e6d0",
+        "after.log": "ed814a77b9b3fd1040c13d0cbf1e21d5c2bee46dfe8e930b66bac650b5e0cea7"
+      }
     }
-  }
+  ]
 }

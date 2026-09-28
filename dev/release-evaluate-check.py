@@ -1,4 +1,5 @@
 """Behavioral Active Effectual / local processes: release scheduling and checkpoint admission."""
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -36,13 +37,16 @@ if __name__ == '__main__':
             'harness':args[0],'language':args[1] if tool=='consumer-eval' else None,'cohortAssessment':{},'checkpoint':{},'archiveErrors':[]}
     rejected=os.environ.get('FIXTURE_REJECT')==stage
     if rejected: result['status']=os.environ['FIXTURE_STATUS']
-    values={'result.json':result,'source-sha256.json':{'fixture':'same'},'items.json':[],'histories.json':[],
+    sources=json.loads((pathlib.Path(__file__).parent.parent/'sources.json').read_text())
+    if os.environ.get('FIXTURE_STALE'): sources['dev/defect-eval']='original'
+    values={'result.json':result,'source-sha256.json':sources,'items.json':[],'histories.json':[],
             'checkpoint-handoff.json':{'Claims':{'preview':{}}},'cohort-seed.json':{},'accepted-cohort-audit.json':{},
             'dispatch-statuses.json':[{'attempt':{'value':'child'}}],'candidate-evidence.json':{},
             'attempts.json':{'UsageAttempts':{'page':{'entries':[]}}},'assessment-before.json':{'Claims':{'preview':{}}},
             'assessment-handoff.json':{'Claims':{'preview':{}}},'sessions/one/run.json':{},'sessions/one/receipt.json':{},
             'sessions/one/children/child/ticket.json':{'attempt':{'id':{'value':'child'}}},'sessions/one/journal/child.json':{}}
     for name,value in values.items():
+        if os.environ.get('FIXTURE_NO_MANIFEST') and rejected and name=='result.json': continue
         path=directory/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text(json.dumps(value))
     print('Evidence:',directory,flush=True)
     sys.exit(int(os.environ.get('FIXTURE_EXIT','0')) if rejected else 0)
@@ -61,12 +65,12 @@ class ReleaseRunnerTests(unittest.TestCase):
             (dev / name).chmod(0o700)
         fixtures = {
             "package": "def load_release(path): return [], path, {'fixture':'native'}\n",
-            "package-check": "def verifier_sources(): return {'fixture':'same'}\n",
+            "package-check": "import json\nfrom pathlib import Path\ndef verifier_sources(): return json.loads((Path(__file__).parent.parent/'sources.json').read_text())\n",
             "consumer-cohort.py": "def retained(path): return {}\ndef audited(*args): return {}\n",
             "process-evidence.py": "def question_checkpoint(*args): return {}\n",
             "process-assess-evidence.py": "def retained(path): return {'proof':{}}\ndef retained_assessment(*args): return {'attemptIds':[]}\n",
             "defect-evidence.py": "def checkpoint(path): return {'manifest':{'proof':{}}}\n",
-            "release-report.py": "import hashlib\ndef lineage_roots(path): return {path:hashlib.sha256((path/'result.json').read_bytes()).hexdigest()}\ndef experimental_usage(*args): return {}\ndef report(path): return {'status':'release-corpus-observed'}\n",
+            "release-report.py": "import hashlib,json\nfrom pathlib import Path\ndef lineage_roots(path):\n result=json.loads((path/'result.json').read_text()); prior=result.get('baselineEvidence')\n return {**(lineage_roots(Path(prior)) if prior else {}),path:hashlib.sha256((path/'result.json').read_bytes()).hexdigest()}\ndef experimental_usage(*args): return {}\ndef report(path): return {'status':'release-corpus-observed'}\n",
         }
         for name, value in fixtures.items():
             (dev / name).write_text(value)
@@ -74,6 +78,7 @@ class ReleaseRunnerTests(unittest.TestCase):
         self.release.mkdir()
         self.answer = self.root / "answer.json"
         self.answer.write_text('{}')
+        (self.root / "sources.json").write_text(json.dumps({"dev/defect-eval": "original", "dev/defect-evidence.py": "predicate", "app/runtime": "native"}))
         self.environment = dict(os.environ, CQ_EVIDENCE_ROOT=str(self.root / "evidence"))
 
     def tearDown(self):
@@ -83,9 +88,107 @@ class ReleaseRunnerTests(unittest.TestCase):
         output = subprocess.run([sys.executable, str(self.root / "dev/release-evaluate"), "--release", str(self.release), *arguments],
                                 env=environment, text=True, capture_output=True, timeout=30)
         self.assertEqual(output.returncode == 0, succeeds, output.stdout + output.stderr)
+        self.output = output.stdout + output.stderr
         manifests = list((self.root / "evidence").glob("*/suite.json"))
         self.assertEqual(len(manifests), 1)
         return manifests[0].parent, json.loads(manifests[0].read_text())
+
+    def amendment(self, suite, changes):
+        before = suite["sourceSha256"]
+        after = {**before, **changes}
+        (self.root / "sources.json").write_text(json.dumps(after))
+        review = {"decision": "accepted", "beforeSources": before, "afterSources": after,
+                  "affectedStages": ["defect-probe"], "scope": "Controlled test review; unchanged oracle and runtime."}
+        review_path = self.root / "review.json"
+        review_path.write_text(json.dumps(review))
+        failed = next(attempt for attempt in suite["attempts"] if attempt["status"] == "rejected")
+        value = {"beforeSources": before, "afterSources": after, "affectedStages": review["affectedStages"],
+                 "reason": "Clarify probe output constraint; preserve failed attempt.",
+                 "failure": {"invocation": failed["id"], "resultSha256": failed["resultSha256"]},
+                 "review": {"path": str(review_path), "sha256": hashlib.sha256(review_path.read_bytes()).hexdigest()}}
+        path = self.root / "amendment.json"
+        path.write_text(json.dumps(value))
+        return path
+
+    def rejected_probe(self):
+        return self.run_suite([], dict(self.environment, FIXTURE_REJECT="defect-probe", FIXTURE_STATUS="failed"), True)
+
+    def test_reviewed_amendment_preserves_accepted_routes_and_failed_attempt(self):
+        directory, before = self.rejected_probe()
+        amendment = self.amendment(before, {"dev/defect-eval": "clarified"})
+        _, after = self.run_suite(["--resume", str(directory), "--amendment", str(amendment), "--retry", "defect-probe=Clarified output contract"], self.environment, True)
+        self.assertEqual(after["sourceSha256"], before["sourceSha256"])
+        self.assertEqual(after["attempts"][:9], before["attempts"])
+        self.assertEqual([a["stage"] for a in after["attempts"][9:]], ["defect-" + s for s in ["probe", "research", "plan", "integrate", "upstream", "assess"]])
+        self.assertTrue(all(a["sourceEpoch"] == 1 for a in after["attempts"][9:]))
+        self.assertEqual(len(after["amendments"]), 1)
+        _, replayed = self.run_suite(["--resume", str(directory), "--report-only"], self.environment, True)
+        self.assertEqual(replayed["attempts"], after["attempts"])
+
+    def test_amendment_rejects_unlisted_or_protected_source_changes(self):
+        directory, before = self.rejected_probe()
+        amendment = self.amendment(before, {"dev/defect-eval": "clarified"})
+        sources = json.loads((self.root / "sources.json").read_text())
+        (self.root / "sources.json").write_text(json.dumps({**sources, "unlisted": "changed"}))
+        self.run_suite(["--resume", str(directory), "--amendment", str(amendment), "--report-only"], self.environment, False)
+        self.assertIn("Amendment source snapshot differs", self.output)
+        for protected in ["dev/defect-evidence.py", "app/runtime"]:
+            with self.subTest(protected=protected):
+                amendment = self.amendment(before, {protected: "changed"})
+                self.run_suite(["--resume", str(directory), "--amendment", str(amendment), "--report-only"], self.environment, False)
+                self.assertIn("Protected evaluation inputs changed", self.output)
+
+    def test_historical_evidence_and_review_cannot_change_after_amendment(self):
+        directory, before = self.rejected_probe()
+        amendment = self.amendment(before, {"dev/defect-eval": "clarified"})
+        self.run_suite(["--resume", str(directory), "--amendment", str(amendment), "--report-only"], self.environment, True)
+        target = Path(before["attempts"][0]["evidence"]) / "items.json"
+        original = target.read_bytes()
+        target.write_text('["altered"]')
+        self.run_suite(["--resume", str(directory), "--report-only"], self.environment, False)
+        self.assertIn("Retained evidence changed", self.output)
+        target.write_bytes(original)
+        (self.root / "review.json").write_text('{}')
+        self.run_suite(["--resume", str(directory), "--report-only"], self.environment, False)
+        self.assertIn("Amendment review changed", self.output)
+
+    def test_new_invocation_cannot_use_historical_sources(self):
+        directory, before = self.rejected_probe()
+        amendment = self.amendment(before, {"dev/defect-eval": "clarified"})
+        _, after = self.run_suite(["--resume", str(directory), "--amendment", str(amendment), "--retry", "defect-probe=Controlled stale-source rejection"], dict(self.environment, FIXTURE_STALE="yes"), True)
+        self.assertEqual(after["attempts"][-1]["status"], "rejected")
+        self.assertIn("Stage used different source inputs", after["attempts"][-1]["error"])
+
+    def test_nonzero_failed_invocations_freeze_evidence_even_without_manifest(self):
+        for missing in [False, True]:
+            with self.subTest(missing_manifest=missing):
+                shutil.rmtree(self.root / "evidence", ignore_errors=True)
+                environment = dict(self.environment, FIXTURE_REJECT="cohort-claude-assess", FIXTURE_STATUS="failed", FIXTURE_EXIT="1")
+                if missing:
+                    environment["FIXTURE_NO_MANIFEST"] = "yes"
+                directory, before = self.run_suite([], environment, True)
+                failed = before["attempts"][1]
+                self.assertEqual(failed["status"], "rejected")
+                target = Path(failed["evidence"]) / "candidate-evidence.json"
+                original = target.read_bytes()
+                target.write_text('{"changed":true}')
+                self.run_suite(["--resume", str(directory), "--report-only"], self.environment, False)
+                self.assertIn("Retained evidence changed", self.output)
+                target.write_bytes(original)
+                self.assertEqual(failed["provenance"], "incomplete" if missing else "verified")
+
+    def test_adoption_preserves_registered_historical_epoch(self):
+        directory, before = self.run_suite(["--answer-file", str(self.answer)],
+            dict(self.environment, FIXTURE_REJECT="defect-probe", FIXTURE_STATUS="failed"), True)
+        prior = next(a["evidence"] for a in before["attempts"] if a["stage"] == "process-resume")
+        amendment = self.amendment(before, {"dev/defect-eval": "clarified"})
+        _, after = self.run_suite(["--resume", str(directory), "--amendment", str(amendment), "--adopt", "process-resume=" + prior], self.environment, True)
+        adopted = after["attempts"][-2]
+        self.assertEqual(adopted["status"], "accepted")
+        self.assertEqual(adopted["sourceEpoch"], 1)
+        self.assertEqual(adopted["evidenceSourceEpoch"], 0)
+        self.assertEqual(after["attempts"][-1]["stage"], "process-assess")
+        self.assertEqual(after["attempts"][-1]["evidenceSourceEpoch"], 1)
 
     def test_resume_preserves_successful_stages_and_waits_for_actual_answer(self):
         directory, before = self.run_suite([], self.environment, True)

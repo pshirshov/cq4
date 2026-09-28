@@ -68,10 +68,14 @@ class ReleaseReportTests(unittest.TestCase):
         payload.mkdir(parents=True)
         (session / "run.json").write_text(json.dumps({"attempt": {"id": {"value": "a"}, "harness": "Claude"}}))
         (payload / "stdout").write_text('{"type":"assistant"')
-        suite = {**self.suite([path]), "selected": {}, "status": "incomplete"}
+        amendment = {"reason": "Retained evaluator correction", "beforeSources": {"instruction": "original"}, "afterSources": {"instruction": "clarified"}}
+        suite = {**self.suite([path]), "selected": {}, "status": "incomplete", "sourceSha256": amendment["beforeSources"], "amendments": [amendment]}
+        suite["attempts"][0]["sourceEpoch"] = 1
         (self.root / "suite.json").write_text(json.dumps(suite))
         report = self.module["report"](self.root)
         self.assertEqual(report["experiments"]["knownTokens"], 100)
+        self.assertEqual(report["sourceProvenance"]["amendments"], [amendment])
+        self.assertEqual(report["sourceProvenance"]["invocations"][0]["sourceEpoch"], 1)
         self.assertEqual(report["sessions"][0]["parentTraffic"]["coverage"], "unavailable")
         self.assertTrue(any("traffic" in gap["reason"] for gap in report["instrumentationGaps"]))
 
