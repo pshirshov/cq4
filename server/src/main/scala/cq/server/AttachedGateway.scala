@@ -3,12 +3,12 @@ package cq.server
 import baboon.runtime.shared.BaboonCodecContext
 import cq.api.*
 import cq.core.{DomainFailure, JsonRoundtrip}
-import cq.host.{AttachedUsage, DispatchProjection, StdioPeer}
+import cq.host.{AttachedCodexUsage, AttachedUsage, DispatchProjection, StdioPeer}
 import io.circe.Json
 import zio.{Task, ZIO}
 
 final class AttachedGateway(config: SupervisorConfig, authority: SupervisorAuthority, schemas: McpSchemas,
-  local: LocalControl, workflow: AttachedWorkflow, accounting: AttachedUsage) {
+  local: LocalControl, workflow: AttachedWorkflow, accounting: AttachedUsage, codex: AttachedCodexUsage) {
   private val Versions = List("2025-03-26", "2025-06-18", "2025-11-25")
   private val CodecContext = BaboonCodecContext.Default
   private val MaxLocalBytes = 65536
@@ -24,6 +24,7 @@ final class AttachedGateway(config: SupervisorConfig, authority: SupervisorAutho
     config.settings.limits, config.settings.integrationTarget, schemas.attachedInstructions(config.run.attempt.harness), workflow.current,
     if (config.run.attempt.harness == Harness.Pi)
       "Interactive Pi finalized assistant usage is collected by the extension; compaction, auxiliary calls and unreported/interrupted responses remain unobserved. Managed child usage is collected independently."
+    else if (config.run.attempt.harness == Harness.Codex) codex.status
     else "Outer interactive model/provider and token usage are unobserved by this host. Managed child usage is collected independently; missing is not zero.")
   private def tool(name: String, arguments: Json): Task[(Json, Boolean)] = name match {
     case "session" =>
@@ -82,6 +83,13 @@ final class AttachedGateway(config: SupervisorConfig, authority: SupervisorAutho
       }
       case "tools/call" =>
         (for {
+          _ <- ZIO.attemptBlocking {
+            if (config.run.attempt.harness == Harness.Codex) {
+              val home = config.environment.get("CODEX_HOME").map(java.nio.file.Path.of(_))
+                .getOrElse(java.nio.file.Path.of(config.environment("HOME"), ".codex"))
+              codex.observe(cursor.downField("params").downField("_meta").focus, home.resolve("sessions"))
+            }
+          }
           name <- ZIO.fromEither(cursor.downField("params").get[String]("name"))
           arguments <- ZIO.fromEither(cursor.downField("params").get[Json]("arguments"))
           value <- tool(name, arguments)

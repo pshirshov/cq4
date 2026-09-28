@@ -1,4 +1,5 @@
 """Behavioral Effectual Good Communication: attached MCP, real server/Git/processes."""
+import datetime
 import json
 import os
 from pathlib import Path
@@ -112,7 +113,7 @@ def main():
             inventory = peer.rpc("tools/list", {})["tools"]
             assert {tool["name"] for tool in inventory} == {"session", "dispatch", "search", "read", "graph", "change", "apply", "claim", "usage"}
             context = peer.tool("session", {"Context": {}})["Context"]["value"]
-            assert context["workflow"] is None and "unobserved" in context["usageCoverage"]
+            assert context["workflow"] is None and "thread metadata" in context["usageCoverage"]
             assert "Canonical argument schemas" in context["instructions"]
             project = context["project"]["project"]
             peer.tool("initialize", {}, denied=True)
@@ -176,6 +177,47 @@ def main():
     assert pi_totals["unattributed"]["total"]["known"] == "15" and pi_totals["incompleteMeters"] == "1", pi_totals
     assert "Acknowledged 0" in cli(["job", "upload", "--session", pi_context["directory"]])
     print(json.dumps({"attachedPiUsage": "deduplicated-partial", "integrationExports": ["claude", "codex", "pi"]}))
+
+    codex_home = root / "codex-home"
+    native_day = codex_home / "sessions/2026/09/28"
+    native_day.mkdir(parents=True)
+    thread = "01a0ea30-6d5b-7581-8c72-83117c61ac2d"
+    turn = "01a0ea30-6ddb-7c62-997e-64936096283b"
+    rollout = native_day / f"rollout-fixture-{thread}.jsonl"
+    def append_native(value):
+        with rollout.open("a") as stream:
+            stream.write(json.dumps(value) + "\n")
+    append_native({"type": "session_meta", "payload": {"id": thread, "cli_version": "0.156.1", "model_provider": "openai"}})
+    append_native({"type": "turn_context", "payload": {"turn_id": turn, "model": "fixture-model"}})
+    metadata = {"threadId": thread, "x-codex-turn-metadata": {"thread_id": thread, "codex_version": "0.156.1"}}
+    with (root / "codex-usage-host.log").open("w") as log:
+        observer = Peer(command + ["host", "codex"], repository, {**env, "CODEX_HOME": str(codex_home)}, log)
+        try:
+            response = observer.rpc("tools/call", {"name": "session", "arguments": {"Context": {}}, "_meta": metadata})
+            assert not response["isError"], response
+            observed = response["structuredContent"]["Context"]["value"]
+            assert thread in observed["usageCoverage"], observed["usageCoverage"]
+            sample = {"type": "token_usage_record", "ordinal": 1, "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                      "payload": {"thread_id": thread, "turn_id": turn, "response_id": "fixture-response", "usage": {
+                          "input_tokens": 100, "cached_input_tokens": 20, "cache_write_input_tokens": 0,
+                          "output_tokens": 30, "reasoning_output_tokens": 8, "total_tokens": 130},
+                          "turn_token_usage": {"input_tokens": 90000}, "thread_token_usage": {"input_tokens": 90000}}}
+            append_native(sample)
+            append_native({**sample, "ordinal": 2})
+        finally:
+            observer.close()
+    observed_directory = Path(observed["directory"])
+    assert len(list((observed_directory / "codex-usage/samples").glob("*/sample.json"))) == 1
+    observed_totals = json.loads(cli(["status", "--session", observed["session"]["value"], "--json"]))["UsageSummary"]["report"]
+    assert observed_totals["unattributed"]["total"]["known"] == "130" and observed_totals["incompleteMeters"] == "1", observed_totals
+    assert observed_totals["attemptsWithoutMeters"] == "0" and observed_totals["attempts"]["unknown"] == "1", observed_totals
+    ack, = (observed_directory / "codex-usage/samples").glob("*/delivery/final/*.ack")
+    ack.unlink()
+    assert "Acknowledged 1" in cli(["job", "upload", "--session", str(observed_directory)])
+    assert "Acknowledged 0" in cli(["job", "upload", "--session", str(observed_directory)])
+    after = json.loads(cli(["status", "--session", observed["session"]["value"], "--json"]))["UsageSummary"]["report"]
+    assert after == observed_totals
+    print(json.dumps({"attachedCodexUsage": "native-metadata-correlated-deduplicated-replayed", "usage": after}))
 
     with (root / "closing-host.log").open("w") as log:
         closing = Peer(command + ["host", "codex"], repository, env, log)

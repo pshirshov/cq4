@@ -1,5 +1,10 @@
 # Implementation status
 
+D42 [native-thread accounting](validation/attached-codex-usage.md) is implemented
+with ten passing focused scenarios and Astra source approval. A real Codex → Pi
+exploratory run reconciles its retained outer usage, with explicit final-tail,
+cost and attribution gaps. Final connected/native/package delivery is pending.
+
 I2 project backup/restore is implemented: [operator instructions](project-backup.md)
 and [actual PostgreSQL/CLI evidence](validation/project-backup.md). Snapshot
 consistency, all 23 project-table fingerprints, active-work/collision refusal,

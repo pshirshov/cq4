@@ -564,6 +564,14 @@ root data IntegrationRecord { intent: IntegrationIntent resolution: IntegrationR
 root data CheckoutPlan { intent: IntegrationIntent attached: bit }
 root data CheckoutReceipt { intent: IntegrationIntent gitDirectory: str indexSha256: str }
 root data CheckoutRefusal { intent: IntegrationIntent reason: str }
+root data CodexUsageBinding { thread: uid version: str sessions: str }
+root data CodexUsageEnd { before: i64 }
+root data CodexUsageFile { path: str fileKey: str }
+root data CodexUsageSample {
+  thread: uid turn: uid response: str position: i64 occurredAt: i64
+  model: opt[str] provider: opt[str] counters: TokenCounts
+}
+root data CodexResponseOwner { attempt: AttemptId sample: CodexUsageSample }
 root data IntegrationTicket { id: IntegrationId reviewer: ArtifactId }
 root data IntegrationPreview {
   id: IntegrationId reviewer: ArtifactId target: str expected: GitCommit candidate: GitCommit members: lst[ItemRevision]

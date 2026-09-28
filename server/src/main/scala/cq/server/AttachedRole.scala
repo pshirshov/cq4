@@ -5,6 +5,7 @@ import cq.host.*
 import izumi.distage.roles.model.{RoleDescriptor, RoleTask}
 import izumi.fundamentals.platform.cli.model.EntrypointArgs
 import izumi.fundamentals.platform.cli.model.schema.{ParserDef, RoleParserSchema}
+import logstage.IzLogger
 import java.io.{InputStream, OutputStream}
 import java.time.{Clock, Duration}
 import zio.{Task, Unsafe, ZIO}
@@ -13,7 +14,8 @@ final case class AttachedChannels(input: InputStream, output: OutputStream, owne
 
 final class AttachedProgram(config: SupervisorConfig, authority: SupervisorAuthority, gateway: AttachedGateway,
   dispatch: DispatchController, integrations: IntegrationController, combinations: CombinationController,
-  watchdog: SupervisorWatchdog, channels: AttachedChannels, clock: Clock, local: LocalControlServer) {
+  watchdog: SupervisorWatchdog, channels: AttachedChannels, clock: Clock, local: LocalControlServer,
+  codex: AttachedCodexUsage, logger: IzLogger) {
   private val MaxRecordBytes = 65536
   private val RequestSeconds = 30L
   private val limits = PeerLimits(Duration.ofSeconds(30), Duration.ofSeconds(10), Duration.ofSeconds(30), Duration.ofSeconds(RequestSeconds), 2 * 1024 * 1024, 32)
@@ -31,16 +33,23 @@ final class AttachedProgram(config: SupervisorConfig, authority: SupervisorAutho
     queue.flush(authority.collector)
   }
   private def shutdown: Task[Unit] = integrations.shutdown.zipPar(combinations.shutdown).zipPar(dispatch.shutdown).unit
+  private def observe(operation: => Unit): Task[Unit] = ZIO.attemptBlocking(operation).catchAll { error => ZIO.attempt {
+    codex.failure(error)
+    val problem = codex.status
+    logger.warn(s"Attached usage observation failed: $problem")
+  }}.uninterruptible
+  private val monitor: Task[Nothing] = (observe(codex.poll(authority.collector)) *> ZIO.sleep(zio.Duration.fromSeconds(5))).forever
   private def finish(peer: StdioPeer): Task[Unit] =
-    ZIO.succeed(peer.close()) *> shutdown *>
+    (ZIO.succeed(peer.close()) *> shutdown *> observe(codex.finish(authority.collector)) *>
       ZIO.attemptBlocking {
         val outcome = AttemptOutcome(RequestId(NativeArtifacts.id(config.run.attempt.id, "outcome").value), config.run.attempt.id,
           AttemptState.Unknown, math.max(config.run.attempt.startedAt, clock.millis()),
           List(peer.reason.getOrElse("Attached session ended"),
-            "Outer interactive model completion is unobserved; Pi finalized assistant samples, when available, cover only observed messages; Claude/Codex outer usage is unavailable; managed child records are independent"), None)
+            "Outer interactive model completion is unobserved; Pi finalized messages and bound Codex response records cover only observed usage; Claude outer usage is unavailable; managed children are independent") ++
+            codex.gaps, None)
         queue.commit(List(HostDelivery.Usage(HostUsageInput(config.project.project, HostUsage.Finish(outcome)))))
         queue.flush(authority.collector)
-      }.unit
+      }.unit).ensuring(ZIO.attemptBlocking(codex.close()).orDie)
   private def loop(peer: StdioPeer): Task[Unit] = ZIO.attemptBlocking(peer.receive()).flatMap {
     case None => ZIO.unit
     case Some(request) => (ZIO.attempt(peer.beginOperation()) *> gateway.handle(peer, request))
@@ -53,7 +62,7 @@ final class AttachedProgram(config: SupervisorConfig, authority: SupervisorAutho
       watchdog.beginShutdown()
       Unsafe.unsafe { implicit unsafe => runtime.unsafe.fork(shutdown.orDie); () }
     })))(
-    peer => finish(peer).orDie)(peer => (initial *> loop(peer)).timeoutFail(new IllegalStateException("Attached session lifetime expired"))(
+    peer => finish(peer).orDie)(peer => (initial *> ZIO.acquireReleaseWith(monitor.interruptible.fork)(_.interrupt)( _ => loop(peer))).timeoutFail(new IllegalStateException("Attached session lifetime expired"))(
       zio.Duration.fromJava(SupervisorConfig.AttachedLifetime))) }
 }
 

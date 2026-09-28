@@ -93,7 +93,7 @@ Return a concise summary with CQ session ID, task ID, child attempt ID, phase an
                 client(setup if native_binary else setup + ["--executable", str(binary)], "configure")
                 executable = next(route["executable"] for route in routes if route["harness"] == PROFILES[args.harness][0])
                 if args.harness == "codex":
-                    command = [executable, "exec", "--json", "--ephemeral", "--model", PROFILES[args.harness][1], "--dangerously-bypass-approvals-and-sandbox",
+                    command = [executable, "exec", "--json", "--model", PROFILES[args.harness][1], "--dangerously-bypass-approvals-and-sandbox",
                                "-c", f'projects.{json.dumps(str(repository))}.trust_level="trusted"', "-"]
                 elif args.harness == "claude":
                     command = [executable, "--print", "--output-format", "stream-json", "--verbose", "--model", PROFILES[args.harness][1],
@@ -165,6 +165,37 @@ Return a concise summary with CQ session ID, task ID, child attempt ID, phase an
                 assert "Acknowledged 0" in (root / "replay.stdout").read_text()
                 if args.harness == "pi":
                     assert len(list((session / "pi-usage").glob("*/sample.json"))) > 0, "Pi native usage hook did not run"
+                if args.harness == "codex":
+                    usage_root = session / "codex-usage"
+                    binding = json.loads((usage_root / "binding.json").read_text())
+                    source = json.loads((usage_root / "source.json").read_text())
+                    samples = [json.loads(path.read_text()) for path in (usage_root / "samples").glob("*/sample.json")]
+                    assert samples, "Bound Codex thread produced no retained native usage"
+                    records = {}
+                    for line in Path(source["path"]).read_text().splitlines():
+                        event = json.loads(line)
+                        if event["type"] == "token_usage_record" and event["payload"]["thread_id"] == binding["thread"]:
+                            records[event["payload"]["response_id"]] = event
+                    assert len({sample["response"] for sample in samples}) == len(samples)
+                    for sample in samples:
+                        native_usage = records[sample["response"]]["payload"]["usage"]
+                        for field, native_field in {"input": "input_tokens", "output": "output_tokens", "cacheRead": "cached_input_tokens",
+                                                    "cacheWrite": "cache_write_input_tokens", "reasoning": "reasoning_output_tokens"}.items():
+                            assert int(sample["counters"][field]["value"]) == native_usage[native_field]
+                    if (usage_root / "end.json").exists():
+                        end = int(json.loads((usage_root / "end.json").read_text())["before"])
+                        def occurred(event):
+                            return int(datetime.datetime.fromisoformat(event["timestamp"].replace("Z", "+00:00")).timestamp() * 1000)
+                        expected = {response for response, event in records.items() if int(run["attempt"]["startedAt"]) <= occurred(event) < end}
+                        assert expected <= {sample["response"] for sample in samples}, "Closed-window response missing"
+                    client(["status", "--session", run["attempt"]["session"]["value"], "--json"], "usage-machine")
+                    totals = json.loads((root / "usage-machine.stdout").read_text())["UsageSummary"]["report"]
+                    retained = sum(int(sample["counters"][field]["value"]) for sample in samples for field in ["input", "output"])
+                    assert int(totals["unattributed"]["total"]["known"]) == retained, totals
+                    assert totals["attemptsWithoutMeters"] == "0" and int(totals["incompleteMeters"]) >= 1, totals
+                    result["codexUsage"] = {"thread": binding["thread"], "retainedResponses": len(samples), "retainedTokens": retained,
+                                            "nativeResponses": len(records), "closedWindow": (usage_root / "end.json").exists(),
+                                            "coverage": "partial", "cost": "unknown", "taskAllocation": "unattributed"}
                 result.update(status="passed", session=run["attempt"]["session"], child=receipt,
                               owner=json.loads((session / "owner.json").read_text()), outerPid=process.pid)
                 (root / "result.json").write_text(json.dumps(result, indent=2) + "\n")

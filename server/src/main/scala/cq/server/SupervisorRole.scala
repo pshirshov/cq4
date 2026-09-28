@@ -275,6 +275,9 @@ object SupervisorPlugin extends PluginDef {
     make[AttachedGateway]
     make[AttachedWorkflow]
     make[AttachedUsage].from { (config: SupervisorConfig, clock: Clock) => new AttachedUsage(config.directory, config.run, clock) }
+    make[AttachedCodexUsage].from { (config: SupervisorConfig, clock: Clock) =>
+      new AttachedCodexUsage(config.directory, config.run, new CodexRollout, clock)
+    }
     make[SupervisorWatchdog].fromResource[SupervisorWatchdog.Resource]
     make[ExecutionDriver].from[SupervisorDriver]
     make[WorkspaceService[IO]].from { (config: SupervisorConfig, clock: Clock) =>

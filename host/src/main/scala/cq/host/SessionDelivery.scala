@@ -81,7 +81,7 @@ final class SessionDelivery(journal: JobRepository, workspaces: WorkspaceService
       val project = publication.assignment.project
       val outcome = AttemptOutcome(RequestId(NativeArtifacts.id(publication.attempt.id, "outcome").value), publication.attempt.id,
         AttemptState.Unknown, math.max(publication.attempt.startedAt, clock.millis()),
-        List("Attached owner observation interrupted; outer model completion and remaining usage are unobserved; retained Pi usage samples are replayed independently; no native Governor process was launched"), None)
+        List("Attached owner observation interrupted; outer model completion and remaining usage are unobserved; retained native usage samples are replayed independently; no native Governor process was launched"), None)
       publication.queue.commit(List(HostDelivery.Usage(HostUsageInput(project, HostUsage.Assign(publication.assignment))),
         HostDelivery.Usage(HostUsageInput(project, HostUsage.Start(publication.attempt))),
         HostDelivery.Usage(HostUsageInput(project, HostUsage.Finish(outcome)))))
@@ -197,6 +197,7 @@ final class SessionDelivery(journal: JobRepository, workspaces: WorkspaceService
       }).either
     }
     attached <- (if (run.ownership == SessionOwnership.Attached) ZIO.attemptBlocking(new AttachedUsage(directory, run, clock).recover(api)) else ZIO.succeed(SessionDeliveryReport(0, Nil))).either
-    recovered <- independent(checked ++ delivered.map(_.map(count => SessionDeliveryReport(count, Nil))) :+ attached)
+    codex <- ZIO.attemptBlocking(Using.resource(new AttachedCodexUsage(directory, run, new CodexRollout, clock))(_.recover(api))).either
+    recovered <- independent(checked ++ delivered.map(_.map(count => SessionDeliveryReport(count, Nil))) ++ List(attached, codex))
   } yield SessionDeliveryReport(recovered.map(_.acknowledged).sum, inventory.incompleteTickets ++ recovered.flatMap(_.incompleteTickets))
 }

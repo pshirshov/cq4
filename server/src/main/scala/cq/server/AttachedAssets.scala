@@ -35,7 +35,7 @@ final class AttachedAssets(schemas: McpSchemas, workflows: WorkflowAssets) {
         List(CommandAsset(Path.of(".mcp.json"), current.mapObject(_.add("mcpServers", servers.mapObject(_.add("cq", value)))).spaces2 + "\n"))
       case Harness.Codex =>
         val file = root.resolve(".codex/config.toml")
-        val forwarded = (Set("CQ_TOKEN", "CQ_TOKEN_FILE", "CQ_SETTINGS") ++ settings.harnesses.flatMap(_.providerEnvironment)).toList.sorted
+        val forwarded = (Set("CQ_TOKEN", "CQ_TOKEN_FILE", "CQ_SETTINGS", "CODEX_HOME") ++ settings.harnesses.flatMap(_.providerEnvironment)).toList.sorted
         val body = CodexHeader + "[mcp_servers.cq]\ncommand = " + quoted(executable.toString) +
           "\nargs = [" + args.map(quoted).mkString(", ") + "]\ncwd = " + quoted(root.toString) +
           "\nenv_vars = [" + forwarded.map(quoted).mkString(", ") + "]\nstartup_timeout_sec = 45\ntool_timeout_sec = 35\n"
