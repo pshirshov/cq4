@@ -262,6 +262,35 @@
   "liveProgress": {
     "suite": "/srv/nvme/tmp/cq4-implementation/20260928T074651-release",
     "status": "running",
-    "scope": "Fresh corrected-artifact corpus; old-artifact acceptance and spending remain separate."
+    "scope": "Fresh corrected-artifact corpus; old-artifact acceptance and spending remain separate.",
+    "independentlyAcceptedCohorts": [
+      "claude",
+      "codex",
+      "pi"
+    ],
+    "verifiedRoutes": 9,
+    "scopedAccounting": {
+      "attempts": 26,
+      "knownTokens": 7479737,
+      "requiredInputOutputComplete": true,
+      "optionalFieldsLimited": true,
+      "includesRejectedGoBranch": true
+    },
+    "scopedReplay": {
+      "file": "/srv/nvme/tmp/cq4-implementation/m6-package/corrected-cohort-replay.json",
+      "sha256": "08cbc4450233d675d0a293447dbfd49c3930dbc1ac19dee327dc1922517e12dc",
+      "review": "Independent Astra approved; pre-admission evidence"
+    },
+    "pendingAdoptions": [
+      "cohort-codex",
+      "cohort-codex-assess"
+    ],
+    "workedProcess": {
+      "checkpoint": "20260928T080611-process-begin",
+      "answer": "Go",
+      "source": "Original actual Go reply plus explicit reuse confirmation call_FTCGWZinwe7DEVI87FxqboBc item0",
+      "resume": "20260928T081149-process-resume",
+      "status": "running"
+    }
   }
 }
