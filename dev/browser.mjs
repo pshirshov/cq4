@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { connectionChecks } from './connection-browser.mjs';
 import { draftChecks } from './draft-browser.mjs';
 import { usageChecks } from './usage-browser.mjs';
+import { selectionChecks } from './selection-browser.mjs';
 
 const origin = process.env.CQ_ORIGIN;
 const evidence = process.env.CQ_BROWSER_EVIDENCE;
@@ -13,6 +14,12 @@ const context = await browser.newContext({ viewport: { width: 1440, height: 1000
 await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
 const page = await context.newPage();
 const errors = [];
+const exchanges = [];
+const failures = [];
+page.on('websocket', socket => {
+  socket.on('framesent', frame => exchanges.push({ direction: 'sent', frame: JSON.parse(String(frame.payload)) }));
+  socket.on('framereceived', frame => exchanges.push({ direction: 'received', frame: JSON.parse(String(frame.payload)) }));
+});
 page.on('pageerror', error => errors.push(String(error)));
 async function current() { await page.getByText('Data: current', { exact: true }).waitFor(); }
 try {
@@ -20,6 +27,7 @@ try {
   await page.getByLabel('Operator token').fill(process.env.CQ_TOKEN);
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
   await page.getByText('Connection: ALIVE', { exact: true }).waitFor();
+  await selectionChecks(browser, await context.storageState(), origin, evidence).catch(error => failures.push(String(error)));
   const name = `Browser ${randomUUID()}`;
   await page.getByLabel('New project name').fill(name);
   await page.getByRole('button', { name: 'Create project', exact: true }).click();
@@ -93,7 +101,10 @@ try {
   await draftChecks(browser, await context.storageState(), origin, evidence);
   await usageChecks(page, origin, project);
   await connectionChecks(browser, await context.storageState(), origin, evidence);
+  assert.deepEqual(failures, []);
 } finally {
+  await writeFile(`${evidence}/browser-exchanges.json`, JSON.stringify(exchanges, null, 2));
+  await writeFile(`${evidence}/browser-fixture-failures.json`, JSON.stringify(failures, null, 2));
   await writeFile(`${evidence}/browser-errors.json`, JSON.stringify(errors, null, 2));
   await context.tracing.stop({ path: `${evidence}/browser-trace.zip` });
   await browser.close();

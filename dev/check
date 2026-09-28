@@ -236,6 +236,17 @@ class Checks:
         with self.database([]):
             self.transport(["java", "-cp", classpath, "cq.server.Main"], "browser", True)
 
+    def ui(self):
+        self.generate()
+        self.run(["npm", "run", "check"], "typescript-compile", COMMAND_TIMEOUT)
+        command = ["java", "-cp", self.classpath(), "cq.server.Main"]
+        with self.database([]):
+            port = free_port()
+            self.environment.update(CQ_HOST="127.0.0.1", CQ_PORT=str(port), CQ_ORIGIN=f"http://127.0.0.1:{port}",
+                                    CQ_TOKEN=uuid.uuid4().hex, CQ_SESSION=str(uuid.uuid4()), CQ_BROWSER_EVIDENCE=str(self.evidence))
+            with self.server(command, "ui"):
+                self.run(["node", "dev/browser.mjs"], "ui-browser", COMMAND_TIMEOUT)
+
     def process(self):
         if sys.platform != "linux":
             raise RuntimeError("UNAVAILABLE: native process guardian currently requires Linux")
@@ -304,8 +315,8 @@ def generated_hashes():
 
 
 def main():
-    if len(sys.argv) != 2 or sys.argv[1] not in ["contracts", "fast", "postgres", "process", "browser", "native", "access", "cohort", "growth"]:
-        raise SystemExit("Usage: ./dev/check contracts|fast|postgres|process|browser|native|access|cohort|growth")
+    if len(sys.argv) != 2 or sys.argv[1] not in ["contracts", "fast", "postgres", "process", "browser", "ui", "native", "access", "cohort", "growth"]:
+        raise SystemExit("Usage: ./dev/check contracts|fast|postgres|process|browser|ui|native|access|cohort|growth")
     if shutil.which("java") is None or shutil.which("sbt") is None:
         os.chdir(ROOT)
         os.execvp("nix", ["nix", "develop", "-c", str(ROOT / "dev/check"), sys.argv[1]])

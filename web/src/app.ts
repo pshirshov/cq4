@@ -15,6 +15,8 @@ function readResult(result: api.Result): api.Result {
   return result;
 }
 
+type Panel = 'detail' | 'history' | 'usage' | 'audit';
+
 class App {
   private manager: ConnectionManager | null = null;
   private readonly projects = element('select', '');
@@ -33,6 +35,9 @@ class App {
   private readonly deadline = element('progress', '');
   private project: api.ProjectId | null = null;
   private selected: api.ItemView | null = null;
+  private selection: api.ItemId | null = null;
+  private selectionGeneration = 0;
+  private readonly requests: Record<Panel, number> = { detail: 0, history: 0, usage: 0, audit: 0 };
   private after: api.ItemId | undefined;
   private snapshot: api.ChangeCursor | undefined;
   private page: api.ItemPage | null = null;
@@ -42,7 +47,6 @@ class App {
   private dirty = false;
   private historyBefore = new api.Revision(9223372036854775807n);
   private auditAfter = 0n;
-  private auditRequest = 0;
   private editor: { form: Editor; record: api.BrowserDraft; key: string; discard: HTMLButtonElement; busy: boolean } | null = null;
 
   constructor(private readonly root: HTMLElement) { void this.start(); }
@@ -53,6 +57,21 @@ class App {
   }
   private currentProject(): api.ProjectId { if (this.project === null) throw new Error('Select a project'); return this.project; }
   private async call(command: api.Command): Promise<api.Result> { return readResult(await this.connection().call(command)); }
+
+  private async readPanel(panel: Panel, command: api.Command): Promise<api.Result | null> {
+    const request = ++this.requests[panel]; const epoch = this.epoch; const selection = this.selectionGeneration;
+    const current = () => request === this.requests[panel] && epoch === this.epoch && selection === this.selectionGeneration;
+    try {
+      const result = await this.connection().call(command);
+      return current() ? readResult(result) : null;
+    } catch (error) { if (current()) throw error; return null; }
+  }
+  private choose(id: api.ItemId | null): void {
+    if (this.selection === null ? id === null : id !== null && this.selection.project.value === id.project.value && itemName(this.selection) === itemName(id)) return;
+    this.selection = id; this.selectionGeneration++; this.selected = null;
+    this.detail.replaceChildren(); this.historyPanel.replaceChildren(); this.usagePanel.replaceChildren(); this.auditPanel.replaceChildren();
+    this.auditAfter = 0n;
+  }
 
   private async start(): Promise<void> {
     try {
@@ -103,7 +122,7 @@ class App {
       this.project = project; this.reset(); await this.loadProjects(); await this.refresh(); name.value = '';
     }); });
     side.append(element('h2', 'Workspace'), this.projects, newProject, search,
-      button('New item', () => { this.openEditor(null); }), button('Project usage', () => this.action(async () => { this.selected = null; this.auditAfter = 0n; await this.loadUsage(); })));
+      button('New item', () => { this.openEditor(null); }), button('Project usage', () => this.action(async () => { this.choose(null); await this.loadUsage(); })));
     const pages = element('div', ''); pages.className = 'actions';
     pages.append(button('First page', () => this.action(async () => { this.after = undefined; this.snapshot = undefined; await this.refresh(); })),
       button('Next page', () => this.action(async () => {
@@ -134,8 +153,8 @@ class App {
     document.title = `CQ — ${stats.state}`;
   }
   private reset(): void {
-    this.epoch++; this.selected = null; this.editor = null; this.after = undefined; this.snapshot = undefined; this.subscription = null;
-    this.detail.replaceChildren(); this.editorPanel.replaceChildren(); this.historyPanel.replaceChildren(); this.auditPanel.replaceChildren();
+    this.epoch++; this.selectionGeneration++; this.selection = null; this.selected = null; this.editor = null; this.after = undefined; this.snapshot = undefined; this.subscription = null;
+    this.detail.replaceChildren(); this.editorPanel.replaceChildren(); this.historyPanel.replaceChildren(); this.usagePanel.replaceChildren(); this.auditPanel.replaceChildren();
     this.auditAfter = 0n; this.notice.textContent = '';
   }
   private async loadProjects(): Promise<void> {
@@ -185,7 +204,7 @@ class App {
       if (!(replay instanceof api.Result_Changes)) throw new Error('Unexpected subscription acknowledgement');
       if (replay.page.events.length > 0 || replay.page.hasMore) this.dirty = true;
       else this.sync.textContent = 'Data: current';
-      if (this.selected !== null) await this.select(this.selected.item.id);
+      if (this.selection !== null) await this.select(this.selection);
       await this.loadUsage();
     } catch (error) { this.sync.textContent = 'Data: stale'; throw error; }
     finally {
@@ -194,9 +213,9 @@ class App {
     }
   }
   private async select(id: api.ItemId): Promise<void> {
-    const epoch = this.epoch;
-    const result = await this.call(new api.Command_Read(new api.ReadInput(this.currentProject(), new api.ReadSelection_ItemDetail(id))));
-    if (epoch !== this.epoch) return;
+    this.choose(id);
+    const result = await this.readPanel('detail', new api.Command_Read(new api.ReadInput(this.currentProject(), new api.ReadSelection_ItemDetail(id))));
+    if (result === null) return;
     if (!(result instanceof api.Result_Detail)) throw new Error('Unexpected item response');
     this.selected = result.view;
     const item = result.view.item;
@@ -210,7 +229,7 @@ class App {
       for (const [key, value] of Object.entries(values)) if (value !== null) fields.append(element('dt', key), element('dd', describe(value)));
     }
     this.detail.append(fields, element('p', result.view.refs.map(ref => `${ref.relation} ${itemName(ref.target)}`).join(' · ')));
-    this.auditAfter = 0n; this.auditPanel.replaceChildren(); await this.loadUsage();
+    await this.loadUsage();
   }
   private storeDraft(editor: NonNullable<App['editor']>): void {
     localStorage.setItem(editor.key, JSON.stringify(api.BrowserDraft_JsonCodec.instance.encode(CONTEXT, editor.record)));
@@ -281,7 +300,8 @@ class App {
   }
   private async loadHistory(): Promise<void> {
     const selected = this.selected; if (selected === null) return;
-    const result = await this.call(new api.Command_Read(new api.ReadInput(this.currentProject(), new api.ReadSelection_History(selected.item.id, this.historyBefore, 10))));
+    const result = await this.readPanel('history', new api.Command_Read(new api.ReadInput(this.currentProject(), new api.ReadSelection_History(selected.item.id, this.historyBefore, 10))));
+    if (result === null) return;
     if (!(result instanceof api.Result_History)) throw new Error('Unexpected history response');
     this.historyPanel.replaceChildren(element('h3', `History · ${itemName(selected.item.id)}`));
     for (const entry of result.page.entries) {
@@ -293,13 +313,13 @@ class App {
       this.historyBefore = result.page.entries[result.page.entries.length - 1].item.item.revision; await this.loadHistory();
     })));
   }
-  private usageFilter(): api.UsageFilter { return this.selected === null ? new api.UsageFilter_ProjectAll() : new api.UsageFilter_TaskOnly(this.selected.item.id); }
+  private usageFilter(): api.UsageFilter { return this.selection === null ? new api.UsageFilter_ProjectAll() : new api.UsageFilter_TaskOnly(this.selection); }
   private async loadUsage(): Promise<void> {
-    const epoch = this.epoch; const filter = this.usageFilter();
-    const result = await this.call(new api.Command_Usage(new api.UsageInput(this.currentProject(), new api.UsageSelection_Summary(filter))));
-    if (epoch !== this.epoch) return;
+    const filter = this.usageFilter();
+    const result = await this.readPanel('usage', new api.Command_Usage(new api.UsageInput(this.currentProject(), new api.UsageSelection_Summary(filter))));
+    if (result === null) return;
     if (!(result instanceof api.Result_UsageSummary)) throw new Error('Unexpected usage response');
-    this.usagePanel.replaceChildren(element('h3', `Usage · ${this.selected === null ? 'project' : itemName(this.selected.item.id)}`));
+    this.usagePanel.replaceChildren(element('h3', `Usage · ${this.selection === null ? 'project' : itemName(this.selection)}`));
     for (const [label, totals] of [['Direct', result.report.direct], ['Shared', result.report.shared], ['Unattributed', result.report.unattributed]] as const) {
       this.usagePanel.append(element('p', `${label}: ${totals.total.known} known tokens; ${totals.total.unknown} unknown measurements; ${totals.total.estimated} estimated measurements`));
       if (totals.unknownCosts > 0n) this.usagePanel.append(element('p', `${totals.unknownCosts} unknown costs`));
@@ -315,18 +335,16 @@ class App {
     return element('p', `${group.attribution}: ${cost.amount.value} ${group.currency} · ${group.basis} · pricing ${group.pricingVersion === undefined ? 'unspecified' : group.pricingVersion} · ${cost.measurements} measurements`);
   }
   private async loadCosts(after: api.CostGroup | undefined, snapshot: bigint | undefined): Promise<void> {
-    const request = ++this.auditRequest; const epoch = this.epoch; const selected = this.selected;
-    const result = await this.call(new api.Command_Usage(new api.UsageInput(this.currentProject(), new api.UsageSelection_Costs(this.usageFilter(), after, snapshot, 20))));
-    if (request !== this.auditRequest || epoch !== this.epoch || selected !== this.selected) return;
+    const result = await this.readPanel('audit', new api.Command_Usage(new api.UsageInput(this.currentProject(), new api.UsageSelection_Costs(this.usageFilter(), after, snapshot, 20))));
+    if (result === null) return;
     if (!(result instanceof api.Result_UsageCosts)) throw new Error('Unexpected cost response');
     this.auditPanel.replaceChildren(element('h3', 'Cost breakdown'));
     for (const entry of result.page.entries) this.auditPanel.append(this.costRow(entry));
     if (result.page.hasMore) this.auditPanel.append(button('Next cost page', () => this.action(() => this.loadCosts(result.page.after, result.page.cursor))));
   }
   private async loadAttempts(after: api.AttemptId | undefined, snapshot: bigint | undefined): Promise<void> {
-    const request = ++this.auditRequest; const epoch = this.epoch; const selected = this.selected;
-    const result = await this.call(new api.Command_Usage(new api.UsageInput(this.currentProject(), new api.UsageSelection_Attempts(this.usageFilter(), after, snapshot, 20))));
-    if (request !== this.auditRequest || epoch !== this.epoch || selected !== this.selected) return;
+    const result = await this.readPanel('audit', new api.Command_Usage(new api.UsageInput(this.currentProject(), new api.UsageSelection_Attempts(this.usageFilter(), after, snapshot, 20))));
+    if (result === null) return;
     if (!(result instanceof api.Result_UsageAttempts)) throw new Error('Unexpected attempt response');
     this.auditPanel.replaceChildren(element('h3', 'Attempts'));
     if (result.page.entries.length === 0) this.auditPanel.append(element('p', 'No attempts in this scope.'));
@@ -341,9 +359,8 @@ class App {
     if (result.page.hasMore) this.auditPanel.append(button('Next attempt page', () => this.action(() => this.loadAttempts(result.page.after, result.page.cursor))));
   }
   private async loadOutcomes(attempt: api.AttemptId, after: bigint): Promise<void> {
-    const request = ++this.auditRequest; const epoch = this.epoch; const selected = this.selected;
-    const result = await this.call(new api.Command_Usage(new api.UsageInput(this.currentProject(), new api.UsageSelection_Outcomes(attempt, after, 20))));
-    if (request !== this.auditRequest || epoch !== this.epoch || selected !== this.selected) return;
+    const result = await this.readPanel('audit', new api.Command_Usage(new api.UsageInput(this.currentProject(), new api.UsageSelection_Outcomes(attempt, after, 20))));
+    if (result === null) return;
     if (!(result instanceof api.Result_UsageOutcomes)) throw new Error('Unexpected outcome response');
     this.auditPanel.replaceChildren(element('h3', 'Outcome history'));
     if (result.page.entries.length === 0) this.auditPanel.append(element('p', 'No outcome recorded yet.'));
@@ -355,9 +372,8 @@ class App {
     if (result.page.hasMore) this.auditPanel.append(button('Next outcome page', () => this.action(() => this.loadOutcomes(attempt, result.page.after))));
   }
   private async loadAudit(): Promise<void> {
-    const request = ++this.auditRequest; const epoch = this.epoch; const selected = this.selected;
-    const result = await this.call(new api.Command_Usage(new api.UsageInput(this.currentProject(), new api.UsageSelection_Audit(this.usageFilter(), this.auditAfter, 20))));
-    if (request !== this.auditRequest || epoch !== this.epoch || selected !== this.selected) return;
+    const result = await this.readPanel('audit', new api.Command_Usage(new api.UsageInput(this.currentProject(), new api.UsageSelection_Audit(this.usageFilter(), this.auditAfter, 20))));
+    if (result === null) return;
     if (!(result instanceof api.Result_UsageAudit)) throw new Error('Unexpected audit response');
     this.auditPanel.replaceChildren(element('h3', 'Usage audit'));
     if (result.page.entries.length === 0) this.auditPanel.append(element('p', 'No usage observations in this scope.'));

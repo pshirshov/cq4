@@ -11,6 +11,7 @@ On Linux amd64 with Nix, Git and network access:
 ./dev/check fast
 ./dev/check postgres
 ./dev/check access
+./dev/check ui
 ./dev/check browser
 ./dev/check native
 ./dev/check process
@@ -31,7 +32,7 @@ CQ_TEST_DATABASE_PASSWORD=local-test-password \
 ./dev/check postgres
 ```
 
-The runner creates and drops a unique schema in that database. The account must have schema creation permission. With no provided URL, PostgreSQL is started as the current non-root user and stopped by the runner. Missing infrastructure fails the check. `access` requires that local cluster and records actual query plans and mutation/completion access budgets as unrelated data grows; [measurement scope and evidence](docs/validation/m3-query-access.md). `browser` runs real Chromium UI and connection checks. `process` builds the Linux guardian and checks process-tree cleanup and the Scala driver; actual supervisor recovery and dispatch are covered by `postgres`; live harness evidence is retained separately. It requires Linux 5.9 or newer.
+The runner creates and drops a unique schema in that database. The account must have schema creation permission. With no provided URL, PostgreSQL is started as the current non-root user and stopped by the runner. Missing infrastructure fails the check. `access` requires that local cluster and records actual query plans and mutation/completion access budgets as unrelated data grows; [measurement scope and evidence](docs/validation/m3-query-access.md). `ui` type-checks the frontend and runs real Chromium UI/connection checks against the server and PostgreSQL, without model consumers or supervisor fixtures. Use it for UI-only increments. `browser` includes the broader transport/supervisor fixtures before those browser checks. `process` builds the Linux guardian and checks process-tree cleanup and the Scala driver; actual supervisor recovery and dispatch are covered by `postgres`; live harness evidence is retained separately. It requires Linux 5.9 or newer.
 
 ## Real consumer evaluations
 
