@@ -26,6 +26,8 @@ Each invocation prints its evidence directory, normally `.work/evidence/<timesta
 
 ## Native distribution
 
+For hands-on evaluation, use the [local launch script and Go project walkthrough](docs/quickstart.md). It starts a private persistent PostgreSQL database and the native server, then walks through intake, reviewed implementation and usage inspection.
+
 The first M6 artifact at `/srv/nvme/tmp/cq4-implementation/cq-release` is retained for historical evidence. Later workflow execution exposed omitted native instructions; it is not the final release candidate. The corrected artifact at `/srv/nvme/tmp/cq4-implementation/cq-release-workflow-resources` passes the full native and installed gates with Astra approval; its fresh live release corpus has all sixteen functional stages accepted, including all nine harness routes and both worked processes. Three interrupted attempts retain missing usage meters, so the instrumentation verdict remains `corpus-usage-incomplete`. Independent Astra approves the technical release candidate; the [combined human verdict](docs/validation/m6-review.md) remains pending. See [package evidence](docs/validation/m6-package.md). The distribution uses one native executable for every role, with `bin/cq-guardian` beside it. Its README documents the exported Nix runtime closure, trusted import on multi-user installations, GC roots, external PostgreSQL/harness dependencies and configuration examples.
 
 From this checkout, assemble and verify a distribution using the evidence directory printed by a passing native gate:

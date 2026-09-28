@@ -2,6 +2,8 @@
 
 These instructions cover the single `0.1.0` Linux x86-64 distribution. See [package evidence](../validation/m6-package.md) for its verification state. PostgreSQL, Git and configured harnesses remain external dependencies. The installed application needs no Java runtime or CQ source checkout.
 
+For a local evaluation with a private database and a small Go project, use the [launch script and walkthrough](../quickstart.md).
+
 ## Start an installed instance
 
 Import `runtime.nar` and retain its paths as described in the distribution's `README.md`. On a multi-user Nix installation the unsigned archive requires a trusted importing user. Keep the distribution directory and its runtime GC roots.

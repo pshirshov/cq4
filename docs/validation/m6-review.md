@@ -32,6 +32,8 @@ The [release evidence manifest](m6-release-evidence.json) binds exact evidence h
 
 ## Run and verify
 
+The [local quickstart](../quickstart.md) supplies a persistent database/server launch script and a small project walkthrough for hands-on evaluation.
+
 Follow the distribution's `README.md` to import and retain the exported Nix runtime closure. The application requires no Java runtime or CQ checkout. PostgreSQL, Git, configured harness credentials and consumer build tools are external dependencies.
 
 The [operations guide](../design/operations.md) gives exact commands for configuring and starting the installed server, signing into the browser, initializing an unrelated consumer, exporting harness commands, running a supervised session, reconciling usage and taking/restoring a settled backup. The [M2 inspection guide](m2-review.md#run-and-inspect) checks an exact accepted consumer in a separate checkout without changing retained evidence.

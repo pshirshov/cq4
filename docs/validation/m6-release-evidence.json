@@ -540,5 +540,19 @@
     "majorFindings": 0,
     "scope": "M0\u2013M6/R01\u2013R31; artifact, retained gate applicability, final corpus and derived documents",
     "qualification": "Minor rubric limitation retained; usage verdict unchanged; human M2/M6 acceptance pending. Runner remaining labels do not ingest this external release-review verdict."
+  },
+  "operatorQuickstart": {
+    "guide": "docs/quickstart.md",
+    "launcher": "docs/examples/launch-local.sh",
+    "launcherSha256": "3a8c5561f7d72a7d049ca9970b1eb619c423ce25b1bbbc18f9646206817b4ecc",
+    "evidenceDirectory": "/srv/nvme/tmp/cq4-launcher-smoke-20260928/verification",
+    "evidenceSha256": {
+      "result.json": "3606bf36e8f5738227a210ccfdcac2fa738103a34b3abc927faaaf699af42656",
+      "shutdown-before.json": "47b44e2068ab0360ff02cfb7d08381f721dd81340d5628aaae6497345b611404",
+      "check.py": "72a801105afacfd51902238de99ee5882f5660654d764fa8636dd60c26c4610d",
+      "setup.sh": "72a2871bb09d9bfb5fe656fafba6376edf1ea2da18b8ed2466bb50879552e538",
+      "astra-review.json": "0e7bcff7f6d325061bbe2de0ea5e5b6e319c1fb65ba8c15ff4cf710955b1adca"
+    },
+    "qualification": "User-requested operator helper added after technical release review; actual native/PostgreSQL lifecycle/setup smoke and independent Astra review pass. Application, package and evaluator inputs unchanged; no new model calls; human acceptance remains pending."
   }
 }

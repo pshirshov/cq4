@@ -24,6 +24,8 @@ The shared operational audit reconciles **91 distinct model attempts / 28,271,43
 
 The native assessor also rejects a stale inherited rubric premise about a ChangesRequested proposal: the inspected current Plan review says Accepted. Later direct governor edits remain disclosed. The original rubric/transcript stay frozen; the [final corpus report](validation/m6-package.md#final-native-process-assessment-and-release-corpus) records the distinction and the consequence for future rubric reuse. Final independent Astra approves the technical release candidate across M0–M6/R01–R31, with no blocking or major findings. Combined human acceptance remains pending; the overall goal is not complete.
 
+The user's subsequent hands-on evaluation request adds a [local server launch script and Go project walkthrough](quickstart.md). [Actual native/PostgreSQL startup, shutdown, persistence and setup checks](validation/local-quickstart.md) pass after reproducing and correcting an unbounded cleanup wait. This operator helper does not change the approved package or repeat paid harness evaluations. Human acceptance remains pending.
+
 ## Historical increment notes
 
 These entries preserve observations and next steps at their original milestone boundaries. Their earlier “pending” statements are historical; the table and current increment above describe the present state.
