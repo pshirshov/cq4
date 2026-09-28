@@ -1,6 +1,6 @@
 # M4 synthetic dependency investigation
 
-This evaluation exercises the defect/research/hypothesis and upstream workflow alongside the [accepted Go worked process](m4-worked-process.md). The component is explicitly synthetic and local; there is no external upstream submission endpoint. Native intake, exact probe execution, research, reviewed adjudication/repair planning and repair integration now pass retained verification. Independent Astra approved the scoped source and evidence through integration. Rejected experiments and corrected checker failures remain explicit. Upstream preparation, reviewed closeout and full process acceptance are pending.
+This evaluation exercises the defect/research/hypothesis and upstream workflow alongside the [accepted Go worked process](m4-worked-process.md). The component is explicitly synthetic and local; there is no external upstream submission endpoint. Native intake, exact probe execution, research, reviewed adjudication/repair planning, repair integration and upstream preparation/local closeout now pass retained verification. Independent Astra approved the source and retained evidence through upstream preparation. Rejected experiments and corrected checker failures remain explicit. Independent whole-process assessment and full process acceptance are pending.
 
 ## Reproduction and stages
 
@@ -137,6 +137,32 @@ Astra reproduced a checker gap: adding a class-level `unittest.skip` decorator l
 
 Independent Astra matched all 255 current sources against the fast/native manifests, replayed the full 26-attempt chain, inspected the actual candidate and meaningful added regressions, and validated the exact Recorded identity, fresh checks and original-test execution. The new regressions exercise `tokens()` and `counts()`; CLI coverage comes from the original CLI test and unchanged external oracle. It approved this scoped commit with no blocking or major finding. This establishes the repair/integration stage; upstream/operator work, reviewed closeout, independent whole-process assessment and M4 acceptance remain open.
 
+## Upstream preparation and local closeout
+
+The new `upstream` continuation checks out the exact incorporated candidate in a fresh clone, verifies its tests and unchanged external oracle, and restores all ledger/history/claim state. The prior session's local integration projection remains archived; the new session begins with no local effect. It uses ordinary `upstream --roots D1 --action prepare`, with Claude governor, Codex Planner and independent Pi Plan Reviewer. Every mutation requires an accepted stored proposal application and matching history acknowledgement.
+
+Astra reviewed the semantic boundary before implementation: G1's original acceptance/scope and M1's objective concern the local repair. D1 may therefore become Resolved, G1 Achieved and M1 Complete based on the exact Recorded candidate and checks. Four preparation records derive from G1 without joining that completed milestone: Upstream Identified with the exact synthetic component/defective fixture, no report URL/outcome; OperatorAction Requested without confirmation/observed evidence; Handoff Open with the absent endpoint/authorization explicit; and Memory Current with concrete applicability and ModelDeclared evidence. Task, Research and Hypothesis records remain unchanged, including transient history. No external publication is authorized or claimed.
+
+Four focused checks reject invented confirmations/reports, changed fixture versions/contracts, wrong evidence provenance, transient false claims and investigation rewrites. They also verify that continuation changes only the checked-out candidate and session-local integration projection. Fast gate `.work/evidence/20260928T002409-fast` passes 189 Scala scenarios and all evaluator checks. Astra approved the source for targeted native execution; native results and final prose/evidence review remain pending.
+
+### Rejected first upstream run
+
+`20260928T002444-defect-upstream` exits normally after 506.424 seconds, but fails the intact guidance predicate. All eight child requests explicitly supply empty guidance; the host retains those requests accurately. The governor initially used all original records as roots, then continued with empty guidance rather than supplying the required current nonmember references. Separate retained graph inspection also rejects a paraphrased Upstream reproduction field. Four proposal applications have accepted reviews and matching acknowledgements; local Git is unchanged and claims are released, but this does not establish an accepted preparation checkpoint.
+
+The full database and audit remain archived, with nine attempts reconciling to 3,813,334 known tokens, nine partial meters and no absent meters. `guidance-failure-analysis.json` preserves the diagnosis and individual subchecks without reclassifying the failed manifest. Astra independently confirmed both failures and approved clarifying the evaluator instructions: four singleton rounds (D1, G1, M1, G1 Produce), all seven other original records as current guidance for each Planner and Reviewer, and literal copying of D1's reproduction field. Children must report missing guidance as a blocker. Predicates remain strict; the retry starts from the passed integration archive rather than reusing the rejected preparation state.
+
+### Passed upstream retry
+
+`20260928T003727-defect-upstream` passes in 445.677 seconds. Final fast gate `.work/evidence/20260928T003648-fast` passes 189 Scala scenarios and four upstream checks, along with the existing evaluator checks. All 258 runtime/build/evaluator sources match; no product contract or process implementation changed for this instruction correction.
+
+- Four exact reviewed applications close D1 at revision 5/cursor 11, G1 at revision 3/cursor 12 and M1 at revision 3/cursor 13, then Produce Upstream/OperatorAction/Handoff/Memory at revision 1 and G1 at revision 4/cursor 14. Every application follows its observed accepted independent review. All eight child requests receive current guidance for the seven nonmember original records. The final snapshot has twelve records and 28 retained revisions; T1, R1 and H1/H2/H3 are unchanged.
+- The Upstream record identifies `synthetic_tokens.py` at defective fixture `e1144c242fd3a25737a843d2fd4004553e3f457f`, copies D1's reproduction exactly and has no report URL or external outcome. OperatorAction remains Requested with null confirmation and empty observed evidence. Handoff explicitly distinguishes the completed local repair from unperformed reporting and the absent endpoint/authorization. Memory limits the tokenization lesson to explicitly ASCII word contracts and acknowledges other legitimate Unicode specifications. The new records derive from G1 without joining the completed local-repair milestone.
+- Git stays clean at incorporated candidate `46694494a847f4d64587ff84c3ef3058d66796de`; no new implementation/integration occurs. Claims are released. The database digest is `b6e067a790df0a8686098556b5e2dad3b5f5aac5723cda7c748d9c20ff7c0198`.
+- Nine new attempts reconcile to 3,779,759 known tokens, nine partial meters and zero absent meters. Full checkpoint replay retains 35 distinct chain attempts and 11,857,443 known tokens. `upstream-experiments.json` includes the rejected first preparation and all previous rejected experiments exactly once: 56 distinct attempts, 19,427,888 known tokens, 56 partial meters and zero absent meters. The retained reporter `/srv/nvme/tmp/cq4-implementation/defect-upstream-analysis/report.py` hashes its source summaries; missing optional counters/prices remain missing. These differing configurations are not matched repetitions.
+- Parent traffic contains thirty dispatch calls, 1,590/1,925-byte compact argument/reply maxima, four Proposal previews and no ArtifactText reads. One overlong claim-duration request is rejected before correction. The rejected first preparation retains its own traffic: 33 dispatch calls with 1,309/3,990-byte maxima. Neither payload measurement establishes token savings.
+
+Independent Astra verified all 258 source hashes, replayed the full 35-attempt chain, inspected the four accepted-review-before-application acknowledgements, preserved investigation history and all seven guidance records for every child, and reviewed the resulting prose. It approved this scoped commit with no blocking or major finding. All 56 experimental attempts remain distinct and accounted. Full native process assessment, matched usage repetitions, M4 review and designated human acceptance remain open.
+
 ## Run
 
 From the repository root:
@@ -148,6 +174,7 @@ From the repository root:
 ./dev/defect-eval research --checkpoint /path/to/passed-defect-probe
 ./dev/defect-eval plan --checkpoint /path/to/passed-defect-research
 ./dev/defect-eval integrate --checkpoint /path/to/verified-defect-plan
+./dev/defect-eval upstream --checkpoint /path/to/passed-defect-integrate
 ```
 
 To verify the retained citation-checker failure without rerunning models:

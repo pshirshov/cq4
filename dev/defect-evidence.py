@@ -14,6 +14,14 @@ def restored(snapshot, archived):
     assert states[0] == states[1], "Restored checkpoint differs from its archive"
 
 
+def continuation(prior):
+    expected = copy.deepcopy(prior["values"]["snapshot"])
+    if prior["manifest"]["stage"] == "integrate":
+        expected["git"] = prior["manifest"]["proof"]["candidate"]
+        expected["localIntegrations"] = []
+    return expected
+
+
 def records(snapshot):
     views, histories = snapshot["views"], snapshot["histories"]
     history = runpy.run_path(str(Path(__file__).with_name("process-history-evidence.py")))
@@ -246,7 +254,7 @@ def retained(directory, depth):
 def checked(directory, depth, manifest):
     assert depth < 8, "Defect checkpoint chain exceeds its bound"
     read = lambda path: json.loads(path.read_text())
-    assert manifest["status"] in ["begin-passed", "probe-passed", "research-passed", "plan-passed", "integrate-passed"] and not manifest["archiveErrors"] and manifest["accounting"] == "reconciled"
+    assert manifest["status"] in ["begin-passed", "probe-passed", "research-passed", "plan-passed", "integrate-passed", "upstream-passed"] and not manifest["archiveErrors"] and manifest["accounting"] == "reconciled"
     support = runpy.run_path(str(Path(__file__).with_name("process-assess-evidence.py")))
     values = support["stage_evidence"](directory)
     prior = retained(Path(manifest["baselineEvidence"]), depth + 1) if manifest["stage"] != "begin" else None
@@ -255,11 +263,13 @@ def checked(directory, depth, manifest):
         assert begin(values, settings) == manifest["proof"]
     else:
         assert manifest["baselineDumpSha256"] == prior["dumpSha256"]
-        restored(read(directory / "before.json"), prior["values"]["snapshot"])
+        restored(read(directory / "before.json"), continuation(prior))
         if manifest["stage"] == "plan":
             assert runpy.run_path(str(Path(__file__).with_name("defect-plan-evidence.py")))["plan"](directory, values, settings, prior) == manifest["proof"]
         elif manifest["stage"] == "integrate":
             assert runpy.run_path(str(Path(__file__).with_name("defect-integrate-evidence.py")))["integrate"](directory, values, settings, prior) == manifest["proof"]
+        elif manifest["stage"] == "upstream":
+            assert runpy.run_path(str(Path(__file__).with_name("defect-upstream-evidence.py")))["upstream"](directory, values, settings, prior) == manifest["proof"]
         else:
             assert empirical(directory, values, settings, prior, manifest["stage"]) == manifest["proof"]
     usage_parts = [] if prior is None else [prior["usage"]]

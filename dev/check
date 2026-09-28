@@ -324,6 +324,7 @@ def main():
             checks.run(["python3", "dev/defect-probe-check.py"], "defect-probe", STARTUP_TIMEOUT)
             checks.run(["python3", "dev/defect-plan-check.py"], "defect-plan", STARTUP_TIMEOUT)
             checks.run(["python3", "dev/defect-integrate-check.py"], "defect-integrate", STARTUP_TIMEOUT)
+            checks.run(["python3", "dev/defect-upstream-check.py"], "defect-upstream", STARTUP_TIMEOUT)
             checks.run(["python3", "dev/evaluate-check.py"], "evaluation-suite", STARTUP_TIMEOUT)
             checks.sbt(["server/testOnly *Dummy *Local"], "dummy-contract")
         else:
