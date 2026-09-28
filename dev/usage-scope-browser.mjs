@@ -59,7 +59,7 @@ export async function usageScopeChecks(browser, storageState, origin, evidence) 
   const click = name => page.getByRole('button', { name, exact: true }).click();
   async function summary(scope, direct, shared, unattributed) {
     await page.getByRole('heading', { name: `Usage · ${scope}`, exact: true }).waitFor(); await settledRequests(page);
-    const metrics = page.getByRole('region', { name: 'Usage metrics', exact: true });
+    const metrics = page.getByRole('region', { name: 'Usage metrics', exact: true, includeHidden: true });
     assert.ok((await metrics.textContent()).includes(`Usage · ${scope}: ${direct} direct · ${shared} shared · ${unattributed} unattributed known tokens`));
     assert.ok((await metrics.textContent()).includes('cursor'));
   }
@@ -72,16 +72,17 @@ export async function usageScopeChecks(browser, storageState, origin, evidence) 
     await click('Attempts'); await click(`Cohort usage · ${cohort}`); await summary(`cohort ${cohort}`, 40, 100, 0);
     await page.getByText(`Shared assignments: ${assignments[0].id.value}.`, { exact: true }).waitFor();
     await click('Attempts'); await click('Task usage · T2'); await summary('T2', 0, 100, 0);
-    assert.equal(await page.getByRole('heading', { name: 'T1 · Scope A', exact: true }).count(), 1, 'Usage scope navigation retains the selected item');
+    assert.equal(await page.getByRole('heading', { name: 'T1 · Scope A', exact: true, includeHidden: true }).count(), 1, 'Usage scope navigation retains the selected item');
     await click('Usage audit'); await page.getByText(/^\d+ · Shared fixture · Complete$/).waitFor();
     assert.equal(await page.getByText(/^\d+ · Direct fixture · Complete$/).count(), 0);
-    await click('Selected item usage'); await summary('T1', 40, 100, 0);
+    await page.getByRole('dialog').getByRole('button', { name: 'Close', exact: true }).click(); await summary('T1', 40, 100, 0);
     cases.push('session/cohort/member navigation, frozen membership and filtered audit preserve direct/shared attribution');
     await click('Project usage'); await summary('project', 40, 100, 7); await click('Attempts');
     holdNext = true; await click(`Session usage · ${attempts[0].session.value}`);
     let timer;
     try { await Promise.race([captured, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Missing held scope summary')), 10000); })]); }
     finally { clearTimeout(timer); }
+    await page.getByRole('dialog').getByRole('button', { name: 'Close', exact: true }).click();
     await click('Project usage'); await page.getByRole('heading', { name: 'Usage · project', exact: true }).waitFor();
     assert.notEqual(held, null); held.route.send(held.message); await receivedReply(page, request); await summary('project', 40, 100, 7);
     assert.equal(await page.getByRole('heading', { name: `Usage · session ${attempts[0].session.value}`, exact: true }).count(), 0);

@@ -40,7 +40,7 @@ export async function usageLiveChecks(browser, storageState, origin, evidence) {
   const page = await context.newPage(); const errors = []; const cases = [];
   page.on('pageerror', error => errors.push(String(error)));
   const click = name => page.getByRole('button', { name, exact: true }).click();
-  const total = amount => page.getByText(`Unattributed: ${amount} known tokens; 0 unknown measurements; 0 estimated measurements`, { exact: true });
+  const total = amount => page.getByRole('table', { name: 'Usage totals' }).getByRole('row').filter({ has: page.getByRole('rowheader', { name: 'Unattributed', exact: true }) }).getByRole('cell', { name: String(amount), exact: true });
   const summaries = () => connections.flatMap(connection => connection.sent).filter(frame => frame.Call && frame.Call.command.Usage && frame.Call.command.Usage.input.selection.Summary).length;
   async function until(predicate) {
     const deadline = Date.now() + 10000;
@@ -49,7 +49,7 @@ export async function usageLiveChecks(browser, storageState, origin, evidence) {
   function release() { assert.notEqual(held, null); held.route.send(held.message); held = null; heldId = null; }
   try {
     await page.goto(origin); await page.getByText('Connection: ALIVE', { exact: true }).waitFor();
-    await page.getByLabel('Project', { exact: true }).selectOption(project.value); await click('Project usage');
+    await page.getByLabel('Project', { exact: true }).selectOption(project.value);
     await page.getByRole('heading', { name: 'Usage · project', exact: true }).waitFor(); await settledRequests(page);
     await click('Usage audit'); await page.getByRole('heading', { name: 'Usage audit', exact: true }).waitFor();
     armed = true; await upload(1, 10); await until(() => held !== null);

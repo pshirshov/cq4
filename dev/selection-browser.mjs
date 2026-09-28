@@ -79,7 +79,7 @@ export async function selectionChecks(browser, storageState, origin, evidence) {
     });
     const row = name => page.getByRole('button', { name, exact: true });
     const heading = name => page.getByRole('heading', { name, exact: true });
-    const usage = amount => page.getByText(`Direct: ${amount} known tokens; 0 unknown measurements; 0 estimated measurements`, { exact: true });
+    const usage = amount => page.getByRole('table', { name: 'Usage totals', includeHidden: true }).getByRole('row', { includeHidden: true }).filter({ has: page.getByRole('rowheader', { name: 'Direct', exact: true, includeHidden: true }) }).getByRole('cell', { name: String(amount), exact: true, includeHidden: true });
     async function capturedReply() {
       let timer;
       try {
@@ -120,6 +120,7 @@ export async function selectionChecks(browser, storageState, origin, evidence) {
         await usage(11).waitFor();
         await row('History').click();
         await heading('History · T1').waitFor();
+        await page.getByRole('dialog').getByRole('button', { name: 'Close', exact: true }).click();
         predicate = command => command.Read && command.Read.input.selection.History;
         await row('History').click();
       } else if (scenario.endsWith('audit')) {
@@ -128,6 +129,7 @@ export async function selectionChecks(browser, storageState, origin, evidence) {
         await row('Usage audit').click();
       }
       await capturedReply();
+      if (scenario.endsWith('history')) await page.getByRole('dialog').getByRole('button', { name: 'Close', exact: true }).click();
       const projectChange = scenario.startsWith('project-');
       const sameItem = scenario.startsWith('same-');
       const target = projectChange ? 'T1 · Selection C' : sameItem ? (scenario === 'same-detail' ? 'T1 · Selection A updated' : 'T1 · Selection A') : 'T2 · Selection B';
@@ -161,11 +163,11 @@ export async function selectionChecks(browser, storageState, origin, evidence) {
       assert.notEqual(held, null);
       held.route.send(held.message);
       await receivedReply(page, request);
-      assert.equal(await heading(target).count(), 1, 'Late detail must not replace the newer selected item');
+      assert.equal(await page.getByRole('heading', { name: target, exact: true, includeHidden: true }).count(), 1, 'Late detail must not replace the newer selected item');
       assert.equal(await usage(expectedUsage).count(), 1, 'Late usage must not replace the newer scope');
       if (scenario.endsWith('history')) {
         assert.equal(await heading(historyName).count(), 1, 'Late history must not replace the newer scope');
-        assert.match(await heading(historyName).locator('..').textContent(), new RegExp(`"title": "Selection ${projectChange ? 'C' : 'B'}"`));
+        await page.getByRole('region', { name: 'Historical revision', exact: true }).getByRole('heading', { name: `${projectChange ? 'T1' : 'T2'} · Selection ${projectChange ? 'C' : 'B'} · revision 1`, exact: true }).waitFor();
       } else if (scenario.endsWith('audit')) {
         await heading('Usage audit').waitFor({ timeout: 5000 });
         const records = await heading('Usage audit').locator('..').locator('pre').allTextContents();

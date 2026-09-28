@@ -16,33 +16,37 @@ export async function graphChecks(browser, storageState, origin, evidence) {
   const change = (project, mutations) => post({ Change: { input: { project, change: {
     request: { value: randomUUID() }, mutations, fences: [], reason: 'Graph fixture' } } } });
   const detail = async id => (await post({ Read: { input: { project: id.project, selection: { ItemDetail: { id } } } } })).Detail.view;
-  for (const scenario of ['relationships-restore', 'uncertain-relationship', 'uncertain-restore', 'obsolete-preview']) {
+  for (const scenario of ['relationships-restore', 'uncertain-relationship', 'uncertain-restore', 'obsolete-preview', 'obsolete-search', 'obsolete-search-disconnect']) {
     const project = { value: randomUUID() }; const item = number => ({ project, ledger: 'Tasks', number: String(number) });
     await post({ Initialize: { config: { project, endpoint: origin, name: `Graph ${scenario} ${project.value}` } } });
     await change(project, ['A', 'B'].map(name => ({ Create: { draft: draft(`Graph ${name}`, `Original ${name}`) } })));
     if (scenario === 'uncertain-restore') await change(project, [{ Replace: { id: item(1), expected: { value: '1' }, draft: draft('Graph A', 'Later A') } }]);
     const context = await browser.newContext({ storageState, viewport: { width: 1440, height: 1000 } });
     await context.tracing.start({ screenshots: true, snapshots: true, sources: true }); await trackProtocol(context);
-    const requests = []; let dropped = false; let dropReply; let held = null;
+    const pendingCalls = new Set(); const requests = []; let dropped = false; let dropReply; let held = null;
     const committed = new Promise(resolve => { dropReply = resolve; });
     if (scenario !== 'relationships-restore') await context.routeWebSocket(/\/ws$/, route => {
       const server = route.connectToServer(); let heldId = null;
       route.onMessage(message => {
         const frame = JSON.parse(String(message));
+        if (frame.Call) pendingCalls.add(frame.Call.id.value);
         if (frame.Call && frame.Call.command.Change) {
           requests.push(frame.Call.command.Change.input);
           if (!dropped) heldId = frame.Call.id.value;
         }
         if (frame.Call && frame.Call.command.Read && frame.Call.command.Read.input.selection.ItemDetail && frame.Call.command.Read.input.selection.ItemDetail.id.number === '999') heldId = frame.Call.id.value;
+        if (scenario.startsWith('obsolete-search') && frame.Call && frame.Call.command.Search && frame.Call.command.Search.input.query === '"Neighbor"') {
+          heldId = frame.Call.id.value; frame.Call.command.Search.input.query = 'alpha AND'; server.send(JSON.stringify(frame)); return;
+        }
         server.send(message);
       });
       server.onMessage(message => {
         const frame = JSON.parse(String(message));
         if (!dropped && frame.Reply && frame.Reply.id.value === heldId) {
-          if (scenario === 'obsolete-preview') { assert.ok(frame.Reply.result.Failed); held = { route, message, id: heldId }; }
+          if (scenario === 'obsolete-preview' || scenario.startsWith('obsolete-search')) { assert.ok(frame.Reply.result.Failed); held = { route, message, id: heldId }; }
           else assert.ok(frame.Reply.result.Changed, 'Suppress an actual committed acknowledgement');
           dropped = true; dropReply();
-        } else route.send(message);
+        } else { if (frame.Reply) pendingCalls.delete(frame.Reply.id.value); route.send(message); }
       });
     });
     const page = await context.newPage(); const errors = []; const cases = [];
@@ -55,12 +59,11 @@ export async function graphChecks(browser, storageState, origin, evidence) {
     }
     async function previewRelation() {
       await page.getByRole('combobox', { name: 'Relationship', exact: true }).selectOption('RelatesTo');
-      await page.getByLabel('Target item ID', { exact: true }).fill('T2'); await click('Preview relationship');
+      await page.getByLabel('Target item', { exact: true }).fill('T2'); await click('Preview relationship');
       await page.getByRole('heading', { name: 'Graph change preview', exact: true }).waitFor();
     }
     async function previewRestore(revision) {
-      await click('History'); const row = page.locator('details').filter({ has: page.getByText(`Revision ${revision} · Graph fixture`, { exact: true }) });
-      await row.locator('summary').click(); await click(`Preview restore revision ${revision}`);
+      await click('History'); await click(`View revision ${revision}`); await click(`Preview restore revision ${revision}`);
       await page.getByRole('heading', { name: 'Graph change preview', exact: true }).waitFor();
     }
     async function confirm() {
@@ -87,8 +90,7 @@ export async function graphChecks(browser, storageState, origin, evidence) {
         await change(project, [{ Replace: { id: item(1), expected: a.item.revision, draft: draft('Graph A', 'Later A') } }]);
         await page.getByText('Later A', { exact: true }).waitFor();
         await click('History');
-        const revision2 = page.locator('details').filter({ has: page.getByText('Revision 2 · Browser relationship', { exact: true }) });
-        await revision2.locator('summary').click(); await click('Preview restore revision 2');
+        await click('View revision 2'); await click('Preview restore revision 2');
         await page.getByText('Neighbors receiving new revisions: T2 @ 3. Their content is preserved.', { exact: true }).waitFor();
         const previewHeading = page.getByRole('heading', { name: 'Graph change preview', exact: true });
         const previewBounds = await previewHeading.boundingBox(); assert.notEqual(previewBounds, null);
@@ -102,8 +104,7 @@ export async function graphChecks(browser, storageState, origin, evidence) {
         assert.equal(b.item.revision.value, '4'); assert.equal(b.item.draft.body, 'Original B'); assert.equal(a.refs.length, 1);
         cases.push('restore content and historical relationship with exact neighbor revision');
         await click('History');
-        const revision3 = page.locator('details').filter({ has: page.getByText('Revision 3 · Browser relationship', { exact: true }) });
-        await revision3.locator('summary').click(); await click('Preview restore revision 3');
+        await click('View revision 3'); await click('Preview restore revision 3');
         await page.getByText('Neighbors receiving new revisions: T2 @ 4. Their content is preserved.', { exact: true }).waitFor();
         await change(project, [{ Replace: { id: item(2), expected: b.item.revision, draft: draft('Graph B', 'Concurrent B') } }]);
         await click('Confirm graph change'); await page.getByRole('alert').filter({ hasText: 'Graph change rejected' }).waitFor();
@@ -112,8 +113,24 @@ export async function graphChecks(browser, storageState, origin, evidence) {
         assert.equal(b.item.revision.value, '5'); assert.equal(b.item.draft.body, 'Concurrent B');
         assert.equal(await page.evaluate(key => localStorage.getItem(key), `cq-graph-change:${project.value}`), null);
         cases.push('stale restore neighbor rejects atomically and preserves concurrent content');
+      } else if (scenario.startsWith('obsolete-search')) {
+        await page.getByLabel('Target item', { exact: true }).fill('Neighbor'); await captured();
+        await click('T2 · Graph B'); await page.getByRole('heading', { name: 'T2 · Graph B', exact: true }).waitFor();
+        if (scenario === 'obsolete-search-disconnect') {
+          await page.getByRole('heading', { name: 'Usage · T2', exact: true }).waitFor();
+          const deadline = Date.now() + 10000;
+          while (pendingCalls.size !== 1 || !pendingCalls.has(held.id)) {
+            assert.ok(Date.now() < deadline, 'Only the withheld target search may remain pending');
+            await new Promise(resolve => setTimeout(resolve, 20));
+          }
+          await held.route.close({ code: 1000, reason: 'Fixture connection replacement' });
+          await page.locator('header summary').hover();
+          await page.waitForFunction(() => document.body.textContent.includes('Closed 1000: Fixture connection replacement'));
+        } else { held.route.send(held.message); await receivedReply(page, held.id); await settledRequests(page); }
+        assert.equal(await page.getByRole('alert').count(), 0, 'An obsolete target search failure must not surface after navigation');
+        cases.push('late failed target search is ignored after navigation');
       } else if (scenario === 'obsolete-preview') {
-        await page.getByLabel('Target item ID', { exact: true }).fill('T999'); await click('Preview relationship'); await captured();
+        await page.getByLabel('Target item', { exact: true }).fill('T999'); await click('Preview relationship'); await captured();
         await click('T2 · Graph B'); await page.getByRole('heading', { name: 'T2 · Graph B', exact: true }).waitFor();
         assert.notEqual(held, null); held.route.send(held.message);
         await receivedReply(page, held.id); await settledRequests(page);
@@ -139,7 +156,7 @@ export async function graphChecks(browser, storageState, origin, evidence) {
       }
       assert.deepEqual(errors, []);
     } finally {
-      await writeFile(`${evidence}/graph-${scenario}-results.json`, JSON.stringify({ cases, errors, requests }, null, 2));
+      await writeFile(`${evidence}/graph-${scenario}-results.json`, JSON.stringify({ cases, errors, requests, heldRequest: held === null ? null : held.id, pendingCalls: [...pendingCalls] }, null, 2));
       await page.screenshot({ path: `${evidence}/graph-${scenario}.png`, fullPage: true });
       await context.tracing.stop({ path: `${evidence}/graph-${scenario}.zip` }); await context.close();
     }

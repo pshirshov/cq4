@@ -20,6 +20,7 @@ try {
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
   await page.getByText('Connection: ALIVE', { exact: true }).waitFor();
   const name = `HTTP project ${Date.now()}`;
+  await page.getByRole('button', { name: 'New project', exact: true }).click();
   await page.getByLabel('New project name').fill(name);
   await page.getByRole('button', { name: 'Create project', exact: true }).click();
   await page.getByLabel('Project', { exact: true }).getByRole('option', { name, exact: true }).waitFor({ state: 'attached' });
@@ -32,7 +33,7 @@ try {
     await page.getByRole('heading', { name: `${title === 'HTTP A' ? 'T1' : 'T2'} · ${title}`, exact: true }).waitFor();
   }
   await page.getByRole('combobox', { name: 'Relationship', exact: true }).selectOption('RelatesTo');
-  await page.getByLabel('Target item ID', { exact: true }).fill('T1');
+  await page.getByLabel('Target item', { exact: true }).fill('T1');
   await page.getByRole('button', { name: 'Preview relationship', exact: true }).click();
   await page.getByRole('button', { name: 'Confirm graph change', exact: true }).click();
   await page.getByRole('status').filter({ hasText: 'Graph change saved' }).waitFor();

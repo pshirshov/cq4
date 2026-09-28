@@ -16,6 +16,7 @@ import { usageLiveChecks } from './usage-live-browser.mjs';
 import { densityChecks } from './density-browser.mjs';
 import { scrollChecks } from './scroll-browser.mjs';
 import { catalogueChecks } from './catalogue-browser.mjs';
+import { redesignChecks } from './redesign-browser.mjs';
 import { interactionChecks } from './interaction-browser.mjs';
 
 const origin = process.env.CQ_ORIGIN;
@@ -40,6 +41,7 @@ try {
   await page.getByText('Connection: ALIVE', { exact: true }).waitFor();
   await selectionChecks(browser, await context.storageState(), origin, evidence).catch(error => failures.push(String(error)));
   const name = `Browser ${randomUUID()}`;
+  await page.getByRole('button', { name: 'New project', exact: true }).click();
   await page.getByLabel('New project name').fill(name);
   await page.getByRole('button', { name: 'Create project', exact: true }).click();
   await page.getByLabel('Project', { exact: true }).getByRole('option', { name, exact: true }).waitFor({ state: 'attached' });
@@ -64,8 +66,9 @@ try {
   await page.getByRole('button', { name: 'Save item', exact: true }).click();
   await page.getByRole('heading', { name: 'T1 · Edited browser task', exact: true }).waitFor();
   await page.getByRole('button', { name: 'History', exact: true }).click();
-  await page.getByText('Revision 2 · Browser edit', { exact: true }).waitFor();
-  await page.getByText('Revision 1 · Browser edit', { exact: true }).waitFor();
+  await page.getByRole('button', { name: 'View revision 2', exact: true }).waitFor();
+  await page.getByRole('button', { name: 'View revision 1', exact: true }).waitFor();
+  await page.getByRole('dialog').getByRole('button', { name: 'Close', exact: true }).click();
   await page.getByRole('button', { name: 'Usage audit', exact: true }).click();
   await page.getByText('No usage observations in this scope.', { exact: true }).waitFor();
 
@@ -108,8 +111,10 @@ try {
     await content.selectOption(branch);
     assert.equal(await content.inputValue(), branch);
   }
+  await page.getByRole('dialog', { name: 'New item', exact: true }).getByRole('button', { name: 'Close', exact: true }).click();
   assert.deepEqual(errors, []);
   console.log('Chromium: login, project creation, all 14 forms, persisted draft, create/edit/history, usage audit, external live update and offline recovery passed');
+  await redesignChecks(browser, await context.storageState(), origin, evidence);
   await editChecks(browser, await context.storageState(), origin, evidence);
   await scrollChecks(browser, await context.storageState(), origin, evidence);
   await catalogueChecks(browser, await context.storageState(), origin, evidence);

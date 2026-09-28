@@ -4,6 +4,8 @@ Intake: 2026-09-28. Project `cq4`, UUID `20eb436e-1a4d-4bb6-a4b4-d151e5c1dc04`. 
 
 The user considers the current UI a prototype, not an acceptable release interface. Earlier technical gate results remain evidence of the behaviors those gates checked; they do not establish usability acceptance. M2/M6 human acceptance remains outstanding. D1–D8 are delivered and resolved. The user has accepted the interactive launcher design below and explicitly confirmed “Queue for the new CQ session”: implement this UI/CLI redesign batch in a new session using CQ discipline.
 
+The later instruction to fix selected defects here supersedes that queueing decision for **D28 and D31–D37**. See the [first redesign increment and evidence](../validation/ui-redesign.md). D26/D27 are deliberately reserved for further CQ tests; other unselected work remains queued.
+
 ## UI acceptance requirements
 
 | Report | CQ item | Required result |

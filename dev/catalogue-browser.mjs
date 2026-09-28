@@ -37,16 +37,16 @@ export async function catalogueChecks(browser, storageState, origin, evidence) {
     await page.goto(origin); await page.getByText('Connection: ALIVE', { exact: true }).waitFor();
     const projects = page.getByLabel('Project', { exact: true }); await projects.selectOption(project.value);
     await page.getByText('Data: current', { exact: true }).waitFor();
-    await page.getByRole('button', { name: 'New item', exact: true }).click();
-    await page.getByLabel('title', { exact: true }).fill('Unsaved across catalogue updates');
     await page.getByLabel('Search query').fill('alpha AND'); await page.getByRole('button', { name: 'Search', exact: true }).click();
     await page.getByText('Data: invalid query', { exact: true }).waitFor();
+    await page.getByRole('button', { name: 'New item', exact: true }).click();
+    await page.getByLabel('title', { exact: true }).fill('Unsaved across catalogue updates');
     const name = `External ${added.value}`;
     await call({ Initialize: { config: { project: added, endpoint: origin, name } } });
-    await projects.getByRole('option', { name, exact: true }).waitFor({ state: 'attached' });
+    await projects.getByRole('option', { name, exact: true, includeHidden: true }).waitFor({ state: 'attached' });
     assert.equal(await projects.inputValue(), project.value);
     await call({ RenameProject: { project, expected: { value: '1' }, name: 'Renamed selected project' } });
-    await projects.getByRole('option', { name: 'Renamed selected project', exact: true }).waitFor({ state: 'attached' });
+    await projects.getByRole('option', { name: 'Renamed selected project', exact: true, includeHidden: true }).waitFor({ state: 'attached' });
     assert.equal(await projects.inputValue(), project.value);
     assert.equal(await page.getByLabel('title', { exact: true }).inputValue(), 'Unsaved across catalogue updates');
     assert.equal(await page.getByText('Data: invalid query', { exact: true }).count(), 1);
@@ -58,14 +58,14 @@ export async function catalogueChecks(browser, storageState, origin, evidence) {
     const now = await call({ Projects: { after: null, snapshot: null, limit: 1 } });
     await until(() => latest >= BigInt(now.Projects.page.cursor.value));
     held.route.send(held.message); held = null; heldId = null;
-    await projects.getByRole('option', { name: 'Latest catalogue revision', exact: true }).waitFor({ state: 'attached' });
+    await projects.getByRole('option', { name: 'Latest catalogue revision', exact: true, includeHidden: true }).waitFor({ state: 'attached' });
     assert.equal(await projects.inputValue(), project.value);
     assert.equal(await page.getByLabel('title', { exact: true }).inputValue(), 'Unsaved across catalogue updates');
     cases.push('a held catalogue response catches up newer notifications without replacing selection or draft');
     await context.setOffline(true); await page.getByText('Data: stale', { exact: true }).waitFor();
     await call({ RenameProject: { project: added, expected: { value: '1' }, name: 'Renamed while disconnected' } });
     await context.setOffline(false);
-    await projects.getByRole('option', { name: 'Renamed while disconnected', exact: true }).waitFor({ state: 'attached' });
+    await projects.getByRole('option', { name: 'Renamed while disconnected', exact: true, includeHidden: true }).waitFor({ state: 'attached' });
     assert.equal(await projects.inputValue(), project.value);
     cases.push('reconnection catches up catalogue changes'); assert.deepEqual(errors, []);
   } finally {

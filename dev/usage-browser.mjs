@@ -25,9 +25,11 @@ export async function usageChecks(page, origin, projectId) {
   await page.getByRole('heading', { name: 'Codex · Worker · Running', exact: true }).waitFor();
   await page.getByRole('button', { name: 'Outcome history', exact: true }).click();
   await page.getByText('No outcome recorded yet.', { exact: true }).waitFor();
+  await page.getByRole('dialog').getByRole('button', { name: 'Close', exact: true }).click();
   const query = page.getByLabel('Search query', { exact: true });
   await query.fill('alpha AND'); await page.getByRole('button', { name: 'Search', exact: true }).click();
   await page.getByText('Data: invalid query', { exact: true }).waitFor();
+  await page.getByRole('button', { name: 'Project usage', exact: true }).click();
   const counter = n => ({ value: String(n), measurement: 'Observed' });
   const counts = n => ({ input: counter(n), output: counter(0), cacheRead: counter(0), cacheWrite: counter(0), reasoning: counter(0) });
   const cost = { amount: null, currency: null, basis: 'Unknown', pricingVersion: null };
@@ -55,19 +57,20 @@ export async function usageChecks(page, origin, projectId) {
       cost: { amount: { value: '0.01' }, currency: 'USD', basis: 'ProviderEstimate', pricingVersion: `price-${String(index).padStart(3, '0')}` },
       completeness: 'Complete', gaps: [], evidence: null, supersedes: null }, meter: 'fixture', disposition: 'Contribution', detailReason: null } } });
   }
-  await page.getByText('Direct: 301 known tokens; 0 unknown measurements; 0 estimated measurements', { exact: true }).waitFor();
+  await page.getByRole('table', { name: 'Usage totals' }).getByRole('row').filter({ has: page.getByRole('rowheader', { name: 'Direct', exact: true }) }).getByRole('cell', { name: '301', exact: true }).waitFor();
   await page.getByText(/^Snapshot cursor (\d+); latest observed usage cursor \1\.$/).waitFor();
   assert.equal(await page.getByText('Data: invalid query', { exact: true }).count(), 1, 'Usage refresh is independent of query validity');
   await page.getByRole('button', { name: 'More costs', exact: true }).click();
   await page.getByRole('heading', { name: 'Cost breakdown', exact: true }).waitFor();
-  await page.getByText('Direct: 0.01 USD · ProviderEstimate · pricing price-200 · 1 measurements', { exact: true }).waitFor();
+  await page.getByRole('table', { name: 'Costs' }).getByRole('row').filter({ has: page.getByRole('cell', { name: 'price-200', exact: true }) }).getByRole('cell', { name: '0.01', exact: true }).waitFor();
   assert.equal(await page.getByRole('button', { name: 'Next cost page', exact: true }).count(), 0);
   await host({ Ingest: { value: { observation: { id: id(), attempt: attempt.id, source: 'fixture', position: '203', occurredAt: '5000', receivedAt: '0',
     scope: 'Increment', counters: counts(1), inputIncludesCache: true, outputIncludesReasoning: true,
     cost: { amount: { value: '0.02' }, currency: 'USD', basis: 'ProviderEstimate', pricingVersion: 'price-200' },
     completeness: 'Complete', gaps: [], evidence: null, supersedes: null }, meter: 'fixture', disposition: 'Contribution', detailReason: null } } });
-  await page.getByText('Direct: 0.03 USD · ProviderEstimate · pricing price-200 · 2 measurements', { exact: true }).waitFor();
+  await page.getByRole('table', { name: 'Costs' }).getByRole('row').filter({ has: page.getByRole('cell', { name: 'price-200', exact: true }) }).getByRole('cell', { name: '0.03', exact: true }).waitFor();
   assert.deepEqual(await detail(), before, 'Usage lifecycle writes must not revise the item');
+  await page.getByRole('dialog').getByRole('button', { name: 'Close', exact: true }).click();
   await query.fill(''); await page.getByRole('button', { name: 'Search', exact: true }).click();
   await page.getByText('Data: current', { exact: true }).waitFor();
   console.log('Chromium usage: live independent updates through invalid query, live attempts/outcomes/cost corrections, current audit labels, paginated exact costs and unchanged item revision passed');

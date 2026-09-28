@@ -13,7 +13,8 @@ export async function interactionChecks(browser, storageState, origin, evidence)
   try {
     await page.goto(origin); await page.getByText('Connection: ALIVE', { exact: true }).waitFor();
     const name = `Interactions ${randomUUID()}`;
-    await page.getByLabel('New project name').fill(name);
+    await page.getByRole('button', { name: 'New project', exact: true }).click();
+  await page.getByLabel('New project name').fill(name);
     await page.getByRole('button', { name: 'Create project', exact: true }).click();
     await page.getByLabel('Project', { exact: true }).getByRole('option', { name, exact: true }).waitFor({ state: 'attached' });
     await page.getByText('Data: current', { exact: true }).waitFor();
@@ -74,6 +75,7 @@ export async function interactionChecks(browser, storageState, origin, evidence)
         }
       }
     });
+    await page.getByRole('dialog', { name: 'New item', exact: true }).getByRole('button', { name: 'Close', exact: true }).click();
     await check('partial ledger values show completions before diagnostics', async () => {
       const query = page.getByLabel('Search query');
       await query.fill('ledger:t');

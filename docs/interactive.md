@@ -22,7 +22,7 @@ This checkout remains on `main`, as requested by the user. The detached-HEAD set
 Launch directly from the normal checkout:
 
 ```sh
-yolo --env CQ_TOKEN_FILE=/srv/nvme/tmp/cq4-playground/token codex
+yolo --profile work --env CQ_TOKEN_FILE=/srv/nvme/tmp/cq4-playground/token codex
 ```
 
 Accept Codex's project-trust prompt. Select the **project** `.agents/skills/cq-begin/SKILL.md` if both personal and project versions are listed. For example:
@@ -36,15 +36,17 @@ To try another harness, configure its integration once:
 
 ```sh
 ./.local/release/bin/cq configure claude --settings "$PWD/.local/interactive/settings.json"
-yolo --env CQ_TOKEN_FILE=/srv/nvme/tmp/cq4-playground/token claude --setting-sources project
+yolo --profile work --env CQ_TOKEN_FILE=/srv/nvme/tmp/cq4-playground/token claude --setting-sources project
 
 ./.local/release/bin/cq configure pi --settings "$PWD/.local/interactive/settings.json"
-yolo --env CQ_TOKEN_FILE=/srv/nvme/tmp/cq4-playground/token pi --approve --no-prompt-templates --prompt-template .pi/prompts
+yolo --profile work --env CQ_TOKEN_FILE=/srv/nvme/tmp/cq4-playground/token pi --approve --no-prompt-templates --prompt-template .pi/prompts
 ```
 
 Claude/Pi workflow commands are `/cq:begin`, `/cq:advance`, `/cq:review`, `/cq:upstream`. The Claude settings selector and Pi prompt selector avoid the older personal CQ commands installed on this machine. Pi `--approve` trusts project files; `--no-approve` disables them, including CQ's extension.
 
 ## Environment and filesystem visibility
+
+On this machine, use `--profile work`: the successful attached-host trial used its authenticated child harnesses; the default profile failed child Claude authentication.
 
 Yolo clears inherited environment variables. An ordinary host-shell `export CQ_TOKEN_FILE=…` is insufficient: use its `--env` option before the harness name.
 

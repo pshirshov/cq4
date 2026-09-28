@@ -3,6 +3,7 @@ import * as api from '../../generated/typescript/cq/api/index.js';
 import { BaboonCodecContext } from '../../generated/typescript/BaboonSharedRuntime.js';
 import { button, element } from './editor.js';
 import { itemName, parseItem } from './items.js';
+import { itemView } from './presentation.js';
 
 const CONTEXT = BaboonCodecContext.Default;
 interface Preview { input: api.ChangeInput; description: HTMLElement[] }
@@ -19,6 +20,8 @@ export class GraphActions {
   private readonly form = element('form', '');
   private readonly relation = element('select', '');
   private readonly target = element('input', '');
+  private readonly matches = element('div', '');
+  private targetGeneration = 0;
   private readonly previewPanel = element('section', '');
   private project: api.ProjectId | null = null;
   private view: api.ItemView | null = null;
@@ -32,12 +35,22 @@ export class GraphActions {
     this.form.className = 'graph-form';
     this.previewPanel.className = 'graph-preview'; this.previewPanel.tabIndex = -1;
     this.previewPanel.setAttribute('aria-label', 'Graph change preview');
-    const relationLabel = element('label', 'Relationship'); relationLabel.append(this.relation);
+    const relationLabel = element('label', 'This item…'); this.relation.setAttribute('aria-label', 'Relationship'); relationLabel.append(this.relation);
     for (const value of api.Relation_values) this.relation.append(element('option', value));
-    const targetLabel = element('label', 'Target item ID'); targetLabel.append(this.target);
-    this.target.required = true; this.target.placeholder = 'T2'; this.target.maxLength = 24;
+    const targetLabel = element('label', 'Related item'); targetLabel.append(this.target);
+    this.target.setAttribute('aria-label', 'Target item'); this.target.setAttribute('role', 'combobox'); this.target.setAttribute('aria-autocomplete', 'list');
+    this.matches.id = `relationship-matches-${uuidV4(crypto)}`; this.matches.setAttribute('role', 'listbox'); this.matches.setAttribute('aria-label', 'Matching items'); this.matches.hidden = true;
+    this.target.setAttribute('aria-controls', this.matches.id); this.target.setAttribute('aria-expanded', 'false');
+    this.target.required = true; this.target.placeholder = 'Search by title or enter T2'; this.target.maxLength = 300;
+    const picker = element('div', ''); picker.className = 'relationship-picker'; picker.append(targetLabel, this.matches);
+    this.target.addEventListener('input', () => { const generation = ++this.targetGeneration; this.action(() => this.searchTargets(this.target.value, generation)); });
+    this.target.addEventListener('keydown', event => {
+      if (event.key === 'ArrowDown' && this.matches.childElementCount > 0) { event.preventDefault(); (this.matches.firstElementChild as HTMLElement).focus(); }
+      if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); this.clearMatches(); }
+    });
+    picker.addEventListener('focusout', event => { if (!(event.relatedTarget instanceof Node) || !picker.contains(event.relatedTarget)) this.clearMatches(); });
     const submit = element('button', 'Preview relationship'); submit.type = 'submit';
-    this.form.append(relationLabel, targetLabel, submit);
+    this.form.append(relationLabel, picker, submit);
     this.form.addEventListener('submit', event => { event.preventDefault(); this.action(async () => {
       const view = this.view; if (view === null) return;
       const relation = api.Relation_values.find(value => value === this.relation.value);
@@ -46,6 +59,33 @@ export class GraphActions {
     }); });
     this.element.append(element('h3', 'Relationships'), this.references, this.form, this.previewPanel);
     this.setScope(null, null);
+  }
+
+  private clearMatches(): void {
+    this.targetGeneration++; this.matches.replaceChildren(); this.matches.hidden = true; this.target.setAttribute('aria-expanded', 'false');
+  }
+  private async searchTargets(text: string, generation: number): Promise<void> {
+    const project = this.project;
+    if (project === null || text.trim() === '') { this.clearMatches(); return; }
+    try {
+      const result = await this.effects.call(new api.Command_Search(new api.SearchInput(project, JSON.stringify(text.trim()), undefined, undefined, 20)));
+      if (generation !== this.targetGeneration || project !== this.project) return;
+      if (result instanceof api.Result_Failed) throw new Error('Relationship search failed; enter an exact item ID or retry.');
+      if (!(result instanceof api.Result_Found)) throw new Error('Unexpected relationship search response');
+      this.matches.replaceChildren();
+      for (const item of result.page.items) {
+        if (this.view !== null && itemName(item.id) === itemName(this.view.item.id)) continue;
+        const option = button(`${itemName(item.id)} · ${item.title}`, () => { this.target.value = itemName(item.id); this.clearMatches(); this.target.focus(); });
+        option.setAttribute('role', 'option'); option.setAttribute('aria-selected', 'false');
+        option.addEventListener('keydown', event => {
+          const next = event.key === 'ArrowDown' ? option.nextElementSibling : event.key === 'ArrowUp' ? option.previousElementSibling : null;
+          if (next instanceof HTMLElement) { event.preventDefault(); next.focus(); }
+          if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); this.clearMatches(); this.target.focus(); }
+        });
+        this.matches.append(option);
+      }
+      this.matches.hidden = this.matches.childElementCount === 0; this.target.setAttribute('aria-expanded', String(!this.matches.hidden));
+    } catch (error) { if (generation === this.targetGeneration && project === this.project) throw error; }
   }
 
   private action(effect: () => Promise<void>): void { void effect().catch(error => this.effects.error(error)); }
@@ -67,7 +107,7 @@ export class GraphActions {
     const changedProject = this.project === null ? project !== null : project === null || this.project.value !== project.value;
     const changedItem = this.view === null ? view !== null : view === null || itemName(this.view.item.id) !== itemName(view.item.id);
     if (changedProject || changedItem) {
-      this.generation++; this.preview = null; this.target.value = '';
+      this.generation++; this.preview = null; this.target.value = ''; this.clearMatches();
     }
     this.project = project; this.view = view;
     if (changedProject) {
@@ -123,8 +163,8 @@ export class GraphActions {
       description: [element('p', `Restore ${itemName(view.item.id)} from historical revision ${historical.item.revision.value}. Expected current revision: ${view.item.revision.value}. This creates a new revision.`),
         ...removed.map(ref => element('p', `Remove ${ref.relation} ${itemName(ref.target)}`)), ...added.map(ref => element('p', `Add ${ref.relation} ${itemName(ref.target)}`)),
         element('p', neighbors.length === 0 ? 'No relationships change.' : `Neighbors receiving new revisions: ${neighbors.map(value => `${itemName(value.id)} @ ${value.revision.value}`).join('; ')}. Their content is preserved.`),
-        element('h4', 'Current content'), element('pre', JSON.stringify(api.ItemDraft_JsonCodec.instance.encode(CONTEXT, view.item.draft), null, 2)),
-        element('h4', 'Content to restore'), element('pre', JSON.stringify(api.ItemDraft_JsonCodec.instance.encode(CONTEXT, historical.item.draft), null, 2))] };
+        element('h4', 'Current content'), itemView(view.item.draft),
+        element('h4', 'Content to restore'), itemView(historical.item.draft)] };
     this.renderPreview(); this.focusPreview();
   }
   private focusPreview(): void { this.previewPanel.focus(); this.previewPanel.scrollIntoView({ block: 'start' }); }
@@ -137,7 +177,7 @@ export class GraphActions {
       const retry = button('Retry exact graph change', () => this.action(() => this.submit(input)));
       retry.disabled = this.busy.has(input.project.value);
       this.previewPanel.append(element('h3', 'Pending graph change'), element('p', `Project ${input.project.value}. Its acknowledgement is unresolved. Retry this exact request before preparing another relationship or restore change.`),
-        element('pre', JSON.stringify(api.ChangeInput_JsonCodec.instance.encode(CONTEXT, input), null, 2)), retry);
+        element('p', `Request ${input.change.request.value}`), retry);
     } else if (this.preview !== null) {
       const preview = this.preview;
       this.previewPanel.append(element('h3', 'Graph change preview'), ...preview.description,

@@ -8,6 +8,8 @@ import { QueryEditor } from './query.js';
 import { Workspace } from './workspace.js';
 import { GraphActions } from './graph.js';
 import { itemName } from './items.js';
+import { itemView } from './presentation.js';
+import { Dialog } from './dialog.js';
 
 const CONTEXT = BaboonCodecContext.Default;
 const PAGE_SIZE = 40;
@@ -69,6 +71,14 @@ class App {
     },
   });
   private readonly historyPanel = element('section', '');
+  private readonly projectDialog = new Dialog(() => {});
+  private readonly createDialog = new Dialog(() => this.closeEditor());
+  private readonly historyDialog = new Dialog(() => { this.requests.history++; });
+  private readonly usageDialog = new Dialog(() => {
+    const pane = document.getElementById('detail-pane');
+    if (pane !== null) pane.append(this.usagePanel, this.auditPanel);
+    this.action(() => this.selectUsage(this.selection === null ? new api.UsageFilter_ProjectAll() : new api.UsageFilter_TaskOnly(this.selection), false));
+  });
   private readonly usagePanel = element('section', '');
   private readonly auditPanel = element('section', '');
   private readonly auditFreshness = element('p', '');
@@ -93,7 +103,11 @@ class App {
   private editor: { form: Editor; record: api.BrowserDraft; key: string; discard: HTMLButtonElement; busy: boolean } | null = null;
 
   constructor(private readonly root: HTMLElement) { void this.start(); }
-  private showError(error: unknown): void { this.notice.textContent = String(error); this.notice.setAttribute('role', 'alert'); }
+  private showError(error: unknown): void {
+    this.notice.textContent = String(error); this.notice.setAttribute('role', 'alert');
+    for (const dialog of [this.projectDialog, this.createDialog, this.historyDialog, this.usageDialog])
+      if (dialog.element.open) { dialog.error.textContent = String(error); dialog.error.hidden = false; }
+  }
   private action(effect: () => Promise<void>): void { void effect().catch(error => this.showError(error)); }
   private connection(): ConnectionManager {
     if (this.manager === null) throw new Error('Connection not initialized'); return this.manager;
@@ -112,6 +126,7 @@ class App {
   }
   private choose(id: api.ItemId | null): void {
     if (this.selection === null ? id === null : id !== null && this.selection.project.value === id.project.value && itemName(this.selection) === itemName(id)) return;
+    this.historyDialog.close(); this.usageDialog.close(); this.closeEditor();
     this.selection = id; this.selectionGeneration++; this.selected = null;
     this.graph.setScope(this.project, null);
     this.detail.replaceChildren(); this.historyPanel.replaceChildren(); this.usagePanel.replaceChildren(); this.auditPanel.replaceChildren();
@@ -145,11 +160,13 @@ class App {
   }
   private mount(): void {
     const header = element('header', ''); const identity = element('div', ''); identity.className = 'top-identity';
-    const projectLabel = element('label', 'Project'); projectLabel.className = 'project-control'; projectLabel.append(this.projects);
-    identity.append(element('h1', 'CQ'), projectLabel, this.health.element);
+    const projectControl = element('div', ''); projectControl.className = 'project-control';
+    const projectLabel = element('label', 'Project'); projectLabel.append(this.projects); projectControl.append(projectLabel);
+    const createProject = button('+', () => { this.projectDialog.open('New project'); }); createProject.setAttribute('aria-label', 'New project'); createProject.title = 'New project';
+    projectControl.append(createProject); identity.append(element('h1', 'CQ'), projectControl, this.health.element);
     const metrics = element('div', ''); metrics.className = 'top-metrics'; metrics.setAttribute('role', 'region'); metrics.setAttribute('aria-label', 'Usage metrics');
     metrics.append(this.sync, this.usageMetric, this.usageFreshness); header.append(identity, this.queryEditor.element, metrics);
-    const workspace = new Workspace(this.root); const side = workspace.navigation; const list = workspace.results; const content = workspace.content;
+    const workspace = new Workspace(this.root, localStorage, error => this.showError(error)); const side = workspace.navigation; const list = workspace.results; const content = workspace.content;
     this.resultsPane = list;
     list.addEventListener('scroll', () => this.loadMore());
     window.addEventListener('resize', () => this.loadMore());
@@ -161,15 +178,16 @@ class App {
     newProject.addEventListener('submit', event => { event.preventDefault(); this.action(async () => {
       const project = new api.ProjectId(uuidV4(crypto));
       await this.call(new api.Command_Initialize(new api.ProjectConfig(project, location.origin, name.value)));
-      this.project = project; this.reset(); await this.loadProjects(); await this.refresh(); name.value = '';
+      this.project = project; this.reset(); await this.loadProjects(); await this.refresh(); name.value = ''; this.projectDialog.close();
     }); });
+    this.projectDialog.body.append(newProject); this.historyDialog.body.append(this.historyPanel);
     const shortcuts = element('div', ''); shortcuts.className = 'query-shortcuts';
     for (const [label, query] of [['All items', ''], ...api.Ledger_values.map(ledger => [ledger, `ledger:${ledger}`])]) {
       shortcuts.append(button(label, () => this.action(async () => { this.queryEditor.invalidate(); this.query.value = query; await this.search(); })));
     }
     side.append(element('h2', 'Workspace'), button('New item', () => { this.openEditor(null); }),
-      button('Project usage', () => this.action(async () => { this.choose(null); await this.selectUsage(new api.UsageFilter_ProjectAll()); })),
-      element('h3', 'Browse'), shortcuts, element('h3', 'Projects'), newProject,
+      button('Project usage', () => this.action(() => this.selectUsage(new api.UsageFilter_ProjectAll(), true))),
+      element('h3', 'Browse'), shortcuts,
       element('p', 'Ctrl+K: query · F6: next pane · Shift+F6: previous pane. Results: ↑/↓ to move, Enter to select, → for detail, Escape to return.'));
     this.items.tabIndex = -1; this.items.setAttribute('aria-label', 'Result items'); this.items.setAttribute('role', 'group');
     this.items.addEventListener('keydown', event => {
@@ -185,8 +203,8 @@ class App {
     this.root.addEventListener('keydown', event => { if (event.ctrlKey && event.key.toLowerCase() === 'k') { event.preventDefault(); this.query.focus(); } });
     this.resultStatus.setAttribute('role', 'status');
     list.append(element('h2', 'Items'), this.resultStatus, this.items);
-    content.append(this.notice, this.detail, this.editorPanel, this.conflictPanel, this.graph.element, this.historyPanel, this.usagePanel, this.auditPanel);
-    this.root.replaceChildren(header, workspace.element); workspace.fit();
+    content.append(workspace.toggle, this.notice, this.detail, this.editorPanel, this.conflictPanel, this.graph.element, this.usagePanel, this.auditPanel);
+    this.root.replaceChildren(header, workspace.element, this.projectDialog.element, this.createDialog.element, this.historyDialog.element, this.usageDialog.element); workspace.fit();
     this.manager = new ConnectionManager(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`, {
       status: stats => this.health.update(stats),
       active: () => this.action(async () => {
@@ -232,6 +250,7 @@ class App {
     this.notice.textContent = ''; this.queryEditor.showDiagnostic(undefined, this.query.value); await this.refresh();
   }
   private reset(): void {
+    this.createDialog.close(); this.historyDialog.close(); this.usageDialog.close(); this.closeEditor();
     this.queryEditor.invalidate(); this.queryEditor.showDiagnostic(undefined, this.query.value);
     this.epoch++; this.selectionGeneration++; this.selection = null; this.selected = null; this.editor = null; this.after = undefined; this.snapshot = undefined;
     this.queryInvalid = false; this.itemCursor = null; this.resetUsageWatch(); this.watch();
@@ -373,7 +392,13 @@ class App {
   private resetUsageWatch(): void {
     this.usageCursor = null; this.usageSnapshot = null; this.updatesRejected = false; this.usageLoad = null;
   }
-  private async selectUsage(scope: UsageScope): Promise<void> { this.setUsageScope(scope); await this.loadUsage(); }
+  private async selectUsage(scope: UsageScope, modal: boolean): Promise<void> {
+    if (modal) {
+      this.usageDialog.body.append(this.usagePanel, this.auditPanel);
+      this.usageDialog.open(scope instanceof api.UsageFilter_ProjectAll ? 'Project usage' : 'Usage details');
+    }
+    this.setUsageScope(scope); await this.loadUsage();
+  }
   private resetUsage(): void {
     this.usageMetric.textContent = `Usage · ${this.usageScope()}: not loaded`; this.usageObserved = 'No successful observation'; this.usageFreshness.textContent = this.usageObserved;
   }
@@ -384,16 +409,14 @@ class App {
     if (!(result instanceof api.Result_Detail)) throw new Error('Unexpected item response');
     this.selected = result.view;
     const item = result.view.item;
-    this.detail.replaceChildren(element('h2', `${itemName(item.id)} · ${item.draft.title}`), element('p', `Revision ${item.revision.value} · ${item.provenance.actor.subject} · ${new Date(Number(item.updatedAt)).toLocaleString()}`),
-      element('pre', item.draft.body), button('Edit current revision', () => this.openEditor(result.view)),
-      button('History', () => this.action(async () => { this.historyBefore = new api.Revision(9223372036854775807n); await this.loadHistory(); })));
-    const fields = element('dl', '');
-    const encoded = api.Content_JsonCodec.instance.encode(CONTEXT, item.draft.content) as Record<string, Record<string, unknown>>;
-    for (const [kind, values] of Object.entries(encoded)) {
-      fields.append(element('dt', 'Ledger'), element('dd', kind));
-      for (const [key, value] of Object.entries(values)) if (value !== null) fields.append(element('dt', key), element('dd', describe(value)));
-    }
-    this.detail.append(fields); this.graph.setScope(this.project, result.view);
+    const title = element('h2', `${itemName(item.id)} · ${item.draft.title}`);
+    const actions = element('div', ''); actions.className = 'actions document-actions';
+    actions.append(button('Edit current revision', () => this.openEditor(result.view)),
+      button('History', () => this.action(async () => { this.historyBefore = new api.Revision(9223372036854775807n); this.historyDialog.open(`History · ${itemName(item.id)}`); await this.loadHistory(); })));
+    const metadata = element('p', `Revision ${item.revision.value} · ${item.provenance.actor.subject} · ${new Date(Number(item.updatedAt)).toLocaleString()}`); metadata.className = 'revision-meta';
+    this.detail.replaceChildren(title, metadata, actions, itemView(item.draft));
+    this.detail.hidden = this.editor !== null && this.editor.record.item !== undefined;
+    this.graph.setScope(this.project, result.view);
     await this.loadUsage();
   }
   private storeDraft(editor: NonNullable<App['editor']>): void {
@@ -403,6 +426,11 @@ class App {
     const pending = editor.record.pending !== undefined;
     for (const input of editor.form.element.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | HTMLButtonElement>('input,select,textarea,button')) input.disabled = pending;
     editor.discard.disabled = pending;
+  }
+  private closeEditor(): void {
+    this.editor = null; this.editorPanel.replaceChildren(); this.conflictPanel.replaceChildren(); this.detail.hidden = false;
+    const pane = document.getElementById('detail-pane');
+    if (pane !== null) this.detail.after(this.editorPanel, this.conflictPanel);
   }
   private openEditor(base: api.ItemView | null): void {
     this.conflictPanel.replaceChildren();
@@ -422,7 +450,7 @@ class App {
     const form = edit('ItemDraft', api.ItemDraft_JsonCodec.instance.encode(CONTEXT, record.value) as Json, caption);
     const discard = button('Discard local draft', () => {
       if (this.editor !== editor || editor.record.pending !== undefined) return;
-      localStorage.removeItem(key); this.editor = null; this.editorPanel.replaceChildren(); this.conflictPanel.replaceChildren();
+      localStorage.removeItem(key); this.closeEditor(); this.createDialog.close();
     });
     const editor = { form, record, key, discard, busy: false };
     this.editor = editor;
@@ -434,7 +462,12 @@ class App {
       } catch (error) { this.showError(`Draft storage failed: ${String(error)}`); }
     });
     this.lockDraft(editor);
-    this.editorPanel.replaceChildren(form.element, button('Save item', () => this.action(() => this.save())), discard);
+    const actions = element('div', ''); actions.className = 'actions editor-actions';
+    actions.append(button('Save item', () => this.action(() => this.save())), button('Cancel edit', () => { this.closeEditor(); this.createDialog.close(); }), discard);
+    this.editorPanel.replaceChildren(form.element, actions);
+    if (base === null) { this.createDialog.body.replaceChildren(this.editorPanel, this.conflictPanel); this.createDialog.open('New item'); }
+    else { this.detail.hidden = true; this.editorPanel.scrollIntoView({ block: 'start' }); }
+
   }
   private async save(): Promise<void> {
     const editor = this.editor; if (editor === null || editor.busy) return;
@@ -463,7 +496,7 @@ class App {
       if (!(result instanceof api.Result_Changed)) throw new Error('Unexpected change acknowledgement');
       if (localStorage.getItem(editor.key) === submitted) localStorage.removeItem(editor.key);
       const ownsEditor = this.editor === editor;
-      if (ownsEditor) { this.editor = null; this.editorPanel.replaceChildren(); this.conflictPanel.replaceChildren(); }
+      if (ownsEditor) { this.closeEditor(); this.createDialog.close(); }
       const saved = result.ack.items[0];
       this.notice.setAttribute('role', 'status');
       this.notice.replaceChildren(element('span', 'Saved'), document.createTextNode(` ${itemName(saved.id)} in project ${editor.record.project.value}.`));
@@ -481,7 +514,7 @@ class App {
     this.conflictPanel.replaceChildren(element('h3', `Edit conflict · ${itemName(base.id)}`),
       element('p', `Your draft is based on revision ${base.revision.value}; the current revision is ${current.item.revision.value}.`),
       element('p', 'Inspect the current content below and your draft above. Changing the base keeps your draft; a later save replaces the current content.'),
-      element('pre', describe(api.ItemDraft_JsonCodec.instance.encode(CONTEXT, current.item.draft))),
+      itemView(current.item.draft),
       button('Use current revision as draft base', () => {
         if (this.editor !== editor || editor.record.pending !== undefined) return;
         editor.record = new api.BrowserDraft(editor.record.project, new api.ItemRevision(base.id, current.item.revision), editor.record.value, undefined);
@@ -493,13 +526,24 @@ class App {
     const result = await this.readPanel('history', new api.Command_Read(new api.ReadInput(this.currentProject(), new api.ReadSelection_History(selected.item.id, this.historyBefore, 10))));
     if (result === null) return;
     if (!(result instanceof api.Result_History)) throw new Error('Unexpected history response');
-    this.historyPanel.replaceChildren(element('h3', `History · ${itemName(selected.item.id)}`));
+    const table = element('table', ''); table.setAttribute('aria-label', 'Revisions');
+    const head = element('thead', ''); const headings = element('tr', '');
+    for (const name of ['Revision', 'Changed', 'By', 'Reason']) headings.append(element('th', name)); head.append(headings); table.append(head);
+    const rows = element('tbody', ''); const viewer = element('section', ''); viewer.setAttribute('aria-label', 'Historical revision');
+    const show = (entry: api.HistoryEntry): void => {
+      const item = entry.item.item;
+      viewer.replaceChildren(element('h3', `${itemName(item.id)} · ${item.draft.title} · revision ${item.revision.value}`), itemView(item.draft),
+        element('h3', 'Relationships'), element('p', entry.item.refs.length === 0 ? 'No relationships.' : entry.item.refs.map(ref => `${ref.relation} ${itemName(ref.target)}`).join(' · ')),
+        button(`Preview restore revision ${item.revision.value}`, () => this.action(async () => { this.historyDialog.close(); await this.graph.restore(entry.item); })));
+      for (const row of rows.querySelectorAll('tr')) row.setAttribute('aria-selected', String(row.dataset.revision === String(item.revision.value)));
+    };
     for (const entry of result.page.entries) {
-      const item = entry.item.item; const row = element('details', '');
-      row.append(element('summary', `Revision ${item.revision.value} · ${entry.reason}`), element('pre', describe(api.ItemView_JsonCodec.instance.encode(CONTEXT, entry.item))));
-      row.append(button(`Preview restore revision ${item.revision.value}`, () => this.action(() => this.graph.restore(entry.item))));
-      this.historyPanel.append(row);
+      const item = entry.item.item; const row = element('tr', ''); row.dataset.revision = String(item.revision.value);
+      const revision = element('td', ''); revision.append(button(`View revision ${item.revision.value}`, () => show(entry)));
+      row.append(revision, element('td', new Date(Number(item.updatedAt)).toLocaleString()), element('td', item.provenance.actor.subject), element('td', entry.reason)); rows.append(row);
     }
+    table.append(rows); this.historyPanel.replaceChildren(table, viewer);
+    if (result.page.entries.length > 0) show(result.page.entries[0]);
     if (result.page.hasMore) this.historyPanel.append(button('Older history', () => this.action(async () => {
       this.historyBefore = result.page.entries[result.page.entries.length - 1].item.item.revision; await this.loadHistory();
     })));
@@ -531,16 +575,16 @@ class App {
     this.usageObserved = `Observed ${new Date().toLocaleTimeString()} · cursor ${report.cursor}`;
     this.usageFreshness.textContent = this.updatesRejected ? `Updates unavailable · ${this.usageObserved}` : this.usageObserved;
     this.usagePanel.replaceChildren(element('h3', `Usage · ${this.usageScope()}`));
-    const scopes = element('div', ''); scopes.className = 'actions';
-    scopes.append(button('Usage for whole project', () => this.action(() => this.selectUsage(new api.UsageFilter_ProjectAll()))));
-    const selected = this.selection;
-    if (selected !== null) scopes.append(button('Selected item usage', () => this.action(() => this.selectUsage(new api.UsageFilter_TaskOnly(selected)))));
-    this.usagePanel.append(scopes);
+    const table = element('table', ''); table.setAttribute('aria-label', 'Usage totals');
+    const head = element('tr', ''); for (const label of ['Attribution', 'Known tokens', 'Unknown measurements', 'Estimated measurements', 'Unknown costs']) head.append(element('th', label));
+    const headings = element('thead', ''); headings.append(head); const body = element('tbody', ''); table.append(headings, body);
     for (const [label, totals] of [['Direct', report.direct], ['Shared', report.shared], ['Unattributed', report.unattributed]] as const) {
-      this.usagePanel.append(element('p', `${label}: ${totals.total.known} known tokens; ${totals.total.unknown} unknown measurements; ${totals.total.estimated} estimated measurements`));
-      if (totals.unknownCosts > 0n) this.usagePanel.append(element('p', `${totals.unknownCosts} unknown costs`));
+      const row = element('tr', ''); row.append(element('th', label));
+      for (const value of [totals.total.known, totals.total.unknown, totals.total.estimated, totals.unknownCosts]) row.append(element('td', String(value)));
+      body.append(row);
     }
-    for (const cost of report.costs.entries) this.usagePanel.append(this.costRow(cost));
+    this.usagePanel.append(table);
+    if (report.costs.entries.length > 0) this.usagePanel.append(this.costTable(report.costs.entries));
     if (report.costs.hasMore) this.usagePanel.append(button('More costs', () => this.action(() => this.loadCosts(report.costs.after, report.cursor))));
     this.usagePanel.append(element('p', `Shared work is counted once and is not divided among members. Incomplete meters: ${report.incompleteMeters}; attempts without measurements: ${report.attemptsWithoutMeters}.`),
       element('p', `Attempt coverage: ${report.attempts.running} running; ${report.attempts.unknown} unknown outcomes; ${report.attempts.withGaps} with reported gaps.`),
@@ -558,9 +602,17 @@ class App {
     this.auditFreshness.textContent = latest === null ? `Snapshot cursor ${this.auditCursor}; freshness unconfirmed.`
       : `${latest > this.auditCursor ? 'Stale snapshot' : 'Snapshot'} cursor ${this.auditCursor}; latest observed usage cursor ${latest}.`;
   }
-  private costRow(cost: api.CostTotal): HTMLElement {
-    const group = cost.group;
-    return element('p', `${group.attribution}: ${cost.amount.value} ${group.currency} · ${group.basis} · pricing ${group.pricingVersion === undefined ? 'unspecified' : group.pricingVersion} · ${cost.measurements} measurements`);
+  private costTable(costs: readonly api.CostTotal[]): HTMLElement {
+    const table = element('table', ''); table.setAttribute('aria-label', 'Costs');
+    const header = element('thead', ''); const headings = element('tr', '');
+    for (const label of ['Attribution', 'Amount', 'Currency', 'Basis', 'Pricing', 'Measurements']) headings.append(element('th', label));
+    header.append(headings); table.append(header); const body = element('tbody', '');
+    for (const cost of costs) {
+      const group = cost.group; const row = element('tr', '');
+      for (const value of [group.attribution, cost.amount.value, group.currency, group.basis, group.pricingVersion === undefined ? 'unspecified' : group.pricingVersion, String(cost.measurements)]) row.append(element('td', value));
+      body.append(row);
+    }
+    table.append(body); return table;
   }
   private loadCosts(after: api.CostGroup | undefined, snapshot: bigint | undefined): Promise<void> {
     return this.openAudit(new api.UsageSelection_Costs(this.usageFilter(), after, snapshot, 20));
@@ -619,7 +671,7 @@ class App {
   private renderAudit(view: AuditView, result: api.Result): void {
     if (result instanceof api.Result_UsageCosts && view instanceof api.UsageSelection_Costs) {
       this.auditHeader('Cost breakdown', result.page.cursor);
-      for (const entry of result.page.entries) this.auditPanel.append(this.costRow(entry));
+      this.auditPanel.append(this.costTable(result.page.entries));
       if (result.page.hasMore) this.auditPanel.append(button('Next cost page', () => this.action(() => this.loadCosts(result.page.after, result.page.cursor))));
       return;
     }
@@ -632,10 +684,10 @@ class App {
           element('p', `Attempt ${entry.attempt.id.value} · ${entry.assignment.attribution}`));
         row.append(element('p', `Assignment ${entry.assignment.id.value} · frozen members: ${[...entry.assignment.members].map(itemName).join(', ') || 'none'}`));
         const scopes = element('div', ''); scopes.className = 'actions';
-        scopes.append(button(`Session usage · ${entry.attempt.session.value}`, () => this.action(() => this.selectUsage(new api.UsageFilter_SessionOnly(entry.attempt.session)))));
+        scopes.append(button(`Session usage · ${entry.attempt.session.value}`, () => this.action(() => this.selectUsage(new api.UsageFilter_SessionOnly(entry.attempt.session), true))));
         const cohort = entry.assignment.cohort;
-        if (cohort !== undefined) scopes.append(button(`Cohort usage · ${cohort}`, () => this.action(() => this.selectUsage(new api.UsageFilter_CohortOnly(cohort)))));
-        for (const member of entry.assignment.members) scopes.append(button(`Task usage · ${itemName(member)}`, () => this.action(() => this.selectUsage(new api.UsageFilter_TaskOnly(member)))));
+        if (cohort !== undefined) scopes.append(button(`Cohort usage · ${cohort}`, () => this.action(() => this.selectUsage(new api.UsageFilter_CohortOnly(cohort), true))));
+        for (const member of entry.assignment.members) scopes.append(button(`Task usage · ${itemName(member)}`, () => this.action(() => this.selectUsage(new api.UsageFilter_TaskOnly(member), true))));
         row.append(scopes);
         if (outcome !== undefined) for (const gap of outcome.value.gaps) row.append(element('p', gap));
         const details = element('details', ''); details.append(element('summary', 'Attempt details'), element('pre', describe(api.AttemptView_JsonCodec.instance.encode(CONTEXT, entry))));
