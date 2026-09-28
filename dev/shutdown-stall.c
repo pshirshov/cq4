@@ -26,6 +26,15 @@ int fsync(int fd) {
                 if (access(release, F_OK) != 0) { errno = EIO; return -1; }
             }
             int match = strcmp(mode, "ticket") == 0 && strstr(path, "/children/") != NULL && strstr(path, "/.upload-") != NULL;
+            if ((strcmp(mode, "attached-initial") == 0 || strcmp(mode, "attached-selection") == 0) && strstr(path, "/.upload-") != NULL) {
+                int source = open(path, O_RDONLY);
+                ssize_t read_size = source < 0 ? -1 : read(source, content, sizeof(content) - 1);
+                if (source >= 0) close(source);
+                if (read_size > 0) {
+                    content[read_size] = 0;
+                    match = strstr(content, strcmp(mode, "attached-initial") == 0 ? "\"ownership\":\"Attached\"" : "\"decision\":") != NULL;
+                }
+            }
             if (strcmp(mode, "input") == 0 && strstr(path, "/payload/") != NULL && size >= 6 && strcmp(path + size - 6, "/input") == 0)
                 match = atomic_fetch_add(&input_count, 1) == 1;
             if (strcmp(mode, "integration-observation") == 0 && strstr(path, "/integrations/.integration-") != NULL) {

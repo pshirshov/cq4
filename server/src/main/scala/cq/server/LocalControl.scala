@@ -33,7 +33,7 @@ final class LocalControl(dispatch: DispatchController, cohorts: CohortController
   private def tool(name: String, input: String, output: String, description: String, readOnly: Boolean): Json = Json.obj(
     "name" -> Json.fromString(name), "description" -> Json.fromString(description), "inputSchema" -> schemas.schema(input), "outputSchema" -> schemas.schema(output),
     "annotations" -> Json.obj("readOnlyHint" -> Json.fromBoolean(readOnly), "openWorldHint" -> Json.False))
-  private def advertised(capability: LocalCapability): Json = if (capability.role == Role.Governor)
+  private[server] def advertised(capability: LocalCapability): Json = if (capability.role == Role.Governor)
     tool("dispatch", "DispatchCommand", "DispatchReply", "Select bounded cohorts, claim one complete choice, then StartChoice by ID, harness and fence. Workflow runs require choices; direct Start supports explicitly assigned non-workflow runs. Poll compact Status or cancel. Prepare/apply reviewed integration; Combine a NotApplied integration and poll CombinationStatus. Forward handles directly; full prompts/results stay outside your context.", false)
   else tool("workspace", "WorkspaceCommand", "WorkspaceReply", "List or read bounded pages in your assigned workspace. A prepared resolver may read MergeReport. A candidate reviewer may request a configured Check by name and poll the same operation; wait for Completed evidence before returning. Relative paths only; Git metadata and symlink traversal are denied.", capability.role != Role.Reviewer)
     .mapObject(_.add("inputSchema", schemas.workspace(capability.role)))
@@ -47,13 +47,13 @@ final class LocalControl(dispatch: DispatchController, cohorts: CohortController
     case _: IllegalArgumentException => Fault.Invalid(DispatchProjection.concise(Option(error.getMessage).getOrElse("Invalid local operation")))
     case _ => Fault.Conflict(DispatchProjection.concise("Local operation failed: " + Option(error.getMessage).getOrElse(error.getClass.getSimpleName)))
   }
-  private def call(capability: LocalCapability, name: String, arguments: Json): Task[(Json, Boolean)] = {
+  private[server] def call(capability: LocalCapability, name: String, arguments: Json): Task[(Json, Boolean)] = {
     if (capability.role == Role.Governor && name == "dispatch") {
       val operation = decode(DispatchCommand_JsonCodec, arguments).tap(command => ZIO.attemptBlocking(workflow.authorize(command))).flatMap {
         case DispatchCommand.Select(request) => cohorts.select(request).map(DispatchReply.Selection.apply)
         case DispatchCommand.StartChoice(choice, harness, fence) => cohorts.start(choice, harness, fence).map(DispatchReply.Status.apply)
         case DispatchCommand.Start(request) => ZIO.attempt {
-          require(config.workflow.isEmpty, "Managed workflow execution requires a retained cohort choice")
+          require(config.run.ownership == SessionOwnership.Managed && config.workflow.isEmpty, "Workflow execution requires a retained cohort choice")
           ChildContracts.request(config.project.project, request)
         } *> dispatch.start(request).map(DispatchReply.Status.apply)
         case DispatchCommand.Status(attempt, wait) => dispatch.status(attempt, wait).map(DispatchReply.Status.apply)

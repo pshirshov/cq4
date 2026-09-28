@@ -4,6 +4,8 @@ Goal: complete the first CQ release under the [implementation plan](drafts/20260
 
 Human evaluation corrections: D1–D8 pass affected browser, CLI, service/protocol and fresh native checks; Astra approves the scoped source and native/package candidate. Installation into the existing operator state and actual hostname browser checks pass; D1–D8 are resolved with retained evidence. The new UI/CLI redesign batch is recorded as D26–D40 and I2; the user considers the current UI a prototype, not an acceptable release interface. [Defect records and evidence](validation/human-evaluation.md); [Scala warning investigation](validation/scala-lazyvals-warning.md). Human release acceptance is still pending.
 
+Interactive launcher follow-up I1/K1 is now in implementation: the stdio role, setup assets, activation fences, owner/deadline shutdown and partial Pi accounting pass focused deterministic checks and scoped Astra lifecycle review. Actual native harness consumers and packaging remain pending. [Evidence and remaining work](validation/attached-host.md). The UI/CLI redesign batch remains queued for its separate session.
+
 | Milestone | State | Evidence |
 | --- | --- | --- |
 | M0 stack and contracts | Complete; Astra approved `1801c2a` | [Four checks and native artifact](validation/m0-stack.md) |

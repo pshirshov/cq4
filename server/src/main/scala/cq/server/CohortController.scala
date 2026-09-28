@@ -11,11 +11,13 @@ final class CohortController(config: SupervisorConfig, authority: SupervisorAuth
   private val progress = new CohortProgress
   private val planner = new CohortPlanner(authority.governor, config.owner, config.run.base, config.settings.checks, progress)
   private var decisions = Map.empty[RequestId, CohortPlan]
+  private var generations = Map.empty[RequestId, Long]
   private var advertised = Set.empty[RequestId]
 
   def select(request: CohortRequest): Task[CohortDecision] = ZIO.attemptBlocking(synchronized {
     val value = decisions.get(request.request) match {
       case Some(existing) =>
+        require(generations(request.request) == workflow.generation, "Cohort selection belongs to a previous workflow activation")
         if (existing.evidence.request != request) throw DomainFailure(Fault.Conflict("Cohort selection identity changed"))
         existing
       case None =>
@@ -32,6 +34,7 @@ final class CohortController(config: SupervisorConfig, authority: SupervisorAuth
         HostFiles.directory(directory)
         HostFiles.immutable(directory.resolve(request.request.value.toString + ".json"), body, ArtifactService.MaxBytes)
         decisions += request.request -> value
+        generations += request.request -> workflow.generation
         value
     }
     if (!advertised(request.request)) {
@@ -48,6 +51,7 @@ final class CohortController(config: SupervisorConfig, authority: SupervisorAuth
     val resolved = ZIO.attemptBlocking(synchronized {
       val (plan, choice) = decisions.values.filter(plan => advertised(plan.evidence.request.request)).toList.flatMap(plan => plan.evidence.decision.choices.map(plan -> _)).find(_._2.id == id)
         .getOrElse(throw DomainFailure(Fault.Missing("Cohort choice is not owned by this governing session")))
+      require(generations(plan.evidence.request.request) == workflow.generation, "Cohort choice belongs to a previous workflow activation")
       val request = DispatchRequest(choice.id, choice.work, harness, choice.members, choice.guidance, choice.artifacts, choice.previous, fence, choice.limits)
       workflow.authorize(DispatchCommand.Start(request))
       val admission = () => {

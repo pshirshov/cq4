@@ -97,25 +97,49 @@ final class McpSchemas {
           s"${endpoint.name}.$name" -> input
         }
       }.filter(_._2.noSpaces.getBytes(UTF_8).length > GuideThresholdBytes)
-      if (inputs.isEmpty) invocation
-      else {
-        val selected = scala.collection.mutable.LinkedHashMap.empty[String, Json]
-        inputs.foreach { case (_, input) => input.hcursor.downField("$defs").focus.get.asObject.get.toList.foreach { case (key, value) =>
-          require(selected.get(key).forall(_ == value), s"Conflicting native tool schema definition $key")
-          selected.update(key, value)
-        }}
-        val aliases = selected.keys.zipWithIndex.map((name, index) => name -> ("d" + Integer.toString(index, Character.MAX_RADIX))).toMap
-        def localNames(value: Json): Json = value.arrayOrObject(value,
-          values => Json.fromValues(values.map(localNames)),
-          fields => Json.fromJsonObject(JsonObject.fromIterable(fields.toList.map { case (key, child) =>
-            key -> (if (key == "$ref") Json.fromString("#/$defs/" + aliases(child.asString.get.stripPrefix("#/$defs/"))) else localNames(child))
-          })))
-        val guide = Json.obj("tools" -> Json.obj(inputs.map { case (name, value) => name -> localNames(value.mapObject(_.remove("$defs"))) }*),
-          "$defs" -> Json.fromJsonObject(JsonObject.fromIterable(selected.map { case (name, value) => aliases(name) -> localNames(value) })))
-        invocation.copy(system = invocation.system + "\nCanonical argument schemas for CQ tools affected by native schema compaction. " +
-          "Use these complete contracts when constructing tool arguments. Each $ref resolves against this document's $defs. " +
-          "They do not grant additional permissions.\n" + guide.noSpaces)
-      }
+      invocation.copy(system = invocation.system + argumentGuide(inputs))
+    }
+  }
+
+  def attachedInstructions(harness: Harness): String = {
+    val instructions = SupervisorProgram.Guidance +
+      " You are the already-running interactive Governor. Call session Context first and session Workflow before dispatch; follow the returned workflow instructions. " +
+      "Do not invoke cq run for this interactive workflow. Report to the user normally; there is no governing JSON completion report. " +
+      "Outer-session usage is explicitly unobserved unless a supported collector supplies it."
+    if (harness != Harness.Codex) instructions
+    else instructions + argumentGuide(tools.map(tool => ("cq." + tool.name, schema(tool.inputType))) ++
+      List("cq.dispatch" -> schema("DispatchCommand"), "cq.session" -> schema("SessionCommand")))
+  }
+
+  def attachedTools: List[Json] = {
+    def local(name: String, input: String, output: String, description: String): Json = Json.obj(
+      "name" -> Json.fromString(name), "description" -> Json.fromString(description),
+      "inputSchema" -> schema(input), "outputSchema" -> schema(output))
+    List(local("session", "SessionCommand", "SessionReply",
+      "First call Context for project, routes, limits, governing instructions and complete argument guide. Then Workflow with a fresh id and typed scope before dispatch. An identical retry returns its original receipt without reactivating a superseded workflow. Context identifies the active workflow."),
+      local("dispatch", "DispatchCommand", "DispatchReply",
+        "Select bounded cohorts, claim one complete choice, then StartChoice by ID, harness and fence. Poll compact Status or Cancel. Direct Start is unavailable. Prepare/apply reviewed integration; Combine a NotApplied integration and poll CombinationStatus. Forward handles; full child prompts/results stay outside your context.")) ++ tools.map(advertised)
+  }
+
+  private def argumentGuide(inputs: List[(String, Json)]): String = {
+    if (inputs.isEmpty) ""
+    else {
+      val selected = scala.collection.mutable.LinkedHashMap.empty[String, Json]
+      inputs.foreach { case (_, input) => input.hcursor.downField("$defs").focus.get.asObject.get.toList.foreach { case (key, value) =>
+        require(selected.get(key).forall(_ == value), s"Conflicting native tool schema definition $key")
+        selected.update(key, value)
+      }}
+      val aliases = selected.keys.zipWithIndex.map((name, index) => name -> ("d" + Integer.toString(index, Character.MAX_RADIX))).toMap
+      def localNames(value: Json): Json = value.arrayOrObject(value,
+        values => Json.fromValues(values.map(localNames)),
+        fields => Json.fromJsonObject(JsonObject.fromIterable(fields.toList.map { case (key, child) =>
+          key -> (if (key == "$ref") Json.fromString("#/$defs/" + aliases(child.asString.get.stripPrefix("#/$defs/"))) else localNames(child))
+        })))
+      val guide = Json.obj("tools" -> Json.obj(inputs.map { case (name, value) => name -> localNames(value.mapObject(_.remove("$defs"))) }*),
+        "$defs" -> Json.fromJsonObject(JsonObject.fromIterable(selected.map { case (name, value) => aliases(name) -> localNames(value) })))
+      "\nCanonical argument schemas for CQ tools affected by native schema compaction. " +
+        "Use these complete contracts when constructing tool arguments. Each $ref resolves against this document's $defs. " +
+        "They do not grant additional permissions.\n" + guide.noSpaces
     }
   }
 

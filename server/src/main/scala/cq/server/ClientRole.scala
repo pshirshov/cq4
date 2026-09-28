@@ -29,6 +29,7 @@ object ClientPlugin extends PluginDef {
     include(new RoleModuleDef { makeRole[ClientRole] })
     include(BundledRolesModule[Task])
     make[Cli]
+    make[AttachedAssets]
     make[cq.host.WorkflowAssets]
     make[SessionUpload]
     make[ProjectLocation]
@@ -42,6 +43,9 @@ final class CqCliParser(roles: CLIParserImpl) extends CLIParser {
     case Some("run") =>
       val raw = args.tail.toVector
       Right(RoleAppArgs(EntrypointArgs.empty, Vector(RoleArgs(SupervisorRole.id, EntrypointArgs(raw, Vector.empty, Vector.empty, raw)))))
+    case Some("host") =>
+      val raw = args.tail.toVector
+      Right(RoleAppArgs(EntrypointArgs.empty, Vector(RoleArgs(AttachedRole.id, EntrypointArgs(raw, Vector.empty, Vector.empty, raw)))))
     case Some(value) if value.startsWith(":") || (value.startsWith("-") && value != "--help") => roles.parse(args)
     case _ =>
       val raw = args.toVector

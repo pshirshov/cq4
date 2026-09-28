@@ -131,6 +131,8 @@ final class DispatchController(config: SupervisorConfig, runner: ChildRunner, jo
   def workspace(attempt: AttemptId, command: WorkspaceCommand): Task[WorkspaceReply] = ZIO.attempt(found(attempt)).flatMap { entry =>
     ZIO.attempt { entry.check(); require(!DispatchController.terminal(entry.status.phase), "Child workspace capability has ended") } *> runner.workspace(entry, command)
   }
+  def quiescent: Boolean = synchronized(entries.values.forall(value => DispatchController.terminal(value.status.phase)))
+
   def shutdown: Task[Unit] = for {
     owned <- ZIO.succeed(synchronized { closing = true; entries.values.toList })
     _ <- ZIO.foreachDiscard(owned)(stop(_, "Governing harness ended; stopping its child hierarchy"))

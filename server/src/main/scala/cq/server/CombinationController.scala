@@ -83,6 +83,9 @@ final class CombinationController(config: SupervisorConfig, authority: Superviso
     _ <- if (waitMillis == 0) ZIO.unit else done.await.timeout(zio.Duration.fromMillis(waitMillis)).unit
   } yield snapshot(entry)
 
+  def quiescent: Boolean = synchronized(entries.values.forall(value =>
+    Set(CombinationPhase.Ready, CombinationPhase.Failed)(value.view.phase)))
+
   def shutdown: Task[Unit] = for {
     pending <- ZIO.succeed(synchronized { closing = true; entries.values.map(_.done).toList })
     _ <- ZIO.foreachDiscard(pending)(_.await)

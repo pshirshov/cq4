@@ -14,7 +14,7 @@ import zio.{Task, ZIO}
 
 final case class CliContext(environment: Map[String, String], directory: Path, output: PrintStream)
 
-final class Cli(context: CliContext, location: ProjectLocation, upload: SessionUpload, workflows: WorkflowAssets) {
+final class Cli(context: CliContext, location: ProjectLocation, upload: SessionUpload, workflows: WorkflowAssets, attached: AttachedAssets) {
   private val environment = context.environment
   private val directory = context.directory
   private val output = context.output
@@ -58,7 +58,7 @@ final class Cli(context: CliContext, location: ProjectLocation, upload: SessionU
     }
   }
   private def request(config: ProjectConfig, sessionId: SessionId, command: Command): Result = {
-    val token = environment.getOrElse("CQ_TOKEN", throw new IllegalArgumentException("CQ_TOKEN is required"))
+    val token = cq.host.HostCredential.read(environment)
     new HttpServerApi(URI.create(validateEndpoint(config.endpoint)), token, sessionId, RequestTimeout).call(command) match {
       case Result.Failed(fault) => throw new IllegalArgumentException(Wire.encode(Fault_JsonCodec, fault))
       case result => result
@@ -78,6 +78,16 @@ final class Cli(context: CliContext, location: ProjectLocation, upload: SessionU
   }
 
   private def runSynchronous(args: List[String]): Unit = args match {
+    case "configure" :: harness :: rest =>
+      val replace = rest.lastOption.contains("--replace")
+      val opts = options(if (replace) rest.dropRight(1) else rest, Set("--settings", "--executable", "--directory"))
+      val settings = opts.get("--settings").orElse(environment.get("CQ_SETTINGS"))
+        .getOrElse(throw new IllegalArgumentException("configure requires --settings FILE or CQ_SETTINGS"))
+      val native = Harness.all.find(_.toString.toLowerCase == harness).getOrElse(throw new IllegalArgumentException("Unknown attached harness"))
+      val executable = opts.get("--executable").getOrElse(ProcessHandle.current().info().command().orElseThrow())
+      require(Path.of(executable).getFileName.toString != "java", "JVM configure requires --executable pointing to an installed CQ binary or exec wrapper")
+      attached.write(native, opts.get("--directory").fold(directory)(value => directory.resolve(value).normalize()),
+        directory.resolve(settings).normalize(), directory.resolve(executable).normalize(), replace).foreach(output.println)
     case "commands" :: "export" :: harness :: rest =>
       val replace = rest.lastOption.contains("--replace")
       val opts = options(if (replace) rest.dropRight(1) else rest, Set("--directory"))
@@ -170,7 +180,7 @@ final class Cli(context: CliContext, location: ProjectLocation, upload: SessionU
       }
       output.println(Wire.encode(Result_JsonCodec, request(config, actorSession, Command.Usage(UsageInput(config.project, selection)))))
     case List("web") => output.println(configuration(configDirectory).endpoint)
-    case Nil | List("--help") => output.println("cq serve | init [--endpoint URL] [--project-id UUID] [--name TEXT] | web | run HARNESS --settings FILE --input FILE [--workflow begin|advance|review|upstream ...] | commands export HARNESS --directory DIR [--replace] | job upload --session DIR | query [--query TEXT] [--complete UTF16_OFFSET] [--roots T1,M1] [--after T1 --snapshot CURSOR] [--limit N] | proposal preview|apply RESULT_UUID | status [audit|costs|attempts|outcomes] [--task T1|--cohort UUID|--session UUID] [--attempt UUID] [--after CURSOR] [--snapshot N] [--limit N]")
+    case Nil | List("--help") => output.println("cq serve | init [--endpoint URL] [--project-id UUID] [--name TEXT] | web | run HARNESS --settings FILE --input FILE [--workflow begin|advance|review|upstream ...] | host HARNESS [--settings FILE] | configure HARNESS --settings FILE [--executable FILE] [--directory DIR] [--replace] | commands export HARNESS --directory DIR [--replace] | job upload --session DIR | query [--query TEXT] [--complete UTF16_OFFSET] [--roots T1,M1] [--after T1 --snapshot CURSOR] [--limit N] | proposal preview|apply RESULT_UUID | status [audit|costs|attempts|outcomes] [--task T1|--cohort UUID|--session UUID] [--attempt UUID] [--after CURSOR] [--snapshot N] [--limit N]")
     case _ => throw new IllegalArgumentException("Unknown command; use cq --help")
   }
 }

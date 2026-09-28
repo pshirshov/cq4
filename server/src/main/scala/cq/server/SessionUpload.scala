@@ -23,7 +23,7 @@ final class SessionUpload(context: CliContext, clock: Clock) {
         run.attempt.session)))(repository => ZIO.attemptBlocking(repository.close()).orDie)
       prepared <- ZIO.attemptBlocking {
         val endpoint = URI.create(run.project.endpoint)
-        val root = new HttpServerApi(endpoint, context.environment.getOrElse("CQ_TOKEN", throw new IllegalArgumentException("CQ_TOKEN is required")),
+        val root = new HttpServerApi(endpoint, HostCredential.read(context.environment),
           run.attempt.session, RequestTimeout)
         val token = root.grant(GrantRequest(run.project.project, Actor("CQ host collector", run.attempt.session, Role.Collector),
           Math.addExact(clock.millis(), CredentialLifetime.toMillis)))
@@ -86,7 +86,7 @@ final class SessionUpload(context: CliContext, clock: Clock) {
         val settings = HostFiles.read(directory.resolve("settings.json"), SupervisorSettings_JsonCodec, MaxRecordBytes)
         val owner = Scope(run.project.project, Actor("CQ governor", run.attempt.session, Role.Governor))
         val endpoint = URI.create(run.project.endpoint)
-        val root = new HttpServerApi(endpoint, context.environment("CQ_TOKEN"), run.attempt.session, RequestTimeout)
+        val root = new HttpServerApi(endpoint, HostCredential.read(context.environment), run.attempt.session, RequestTimeout)
         val token = root.grant(GrantRequest(owner.project, owner.actor, Math.addExact(clock.millis(), CredentialLifetime.toMillis)))
         val governor = new HttpServerApi(endpoint, token.value, owner.actor.session, RequestTimeout)
         val target = settings.integrationTarget.getOrElse(throw new IllegalArgumentException("Retained integration has no configured target"))

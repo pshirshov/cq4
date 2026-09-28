@@ -29,13 +29,13 @@ final class WorkflowAssets {
 
   def commands(harness: Harness): List[CommandAsset] = WorkflowName.values.toList.map { workflow =>
     val command = workflow.toString.toLowerCase
-    val (description, arguments) = workflow match {
-      case WorkflowName.Begin => ("Capture CQ intake or a scope follow-up", "")
-      case WorkflowName.Advance => ("Advance selected CQ work through a specified phase", "--roots ROOTS --through PHASE")
-      case WorkflowName.Review => ("Independently review a stored CQ result", "--result RESULT_UUID --mode MODE")
-      case WorkflowName.Upstream => ("Prepare, report or recheck a CQ upstream defect", "--roots ROOTS --action ACTION")
+    val description = workflow match {
+      case WorkflowName.Begin => "Capture CQ intake or a scope follow-up"
+      case WorkflowName.Advance => "Advance selected CQ work through a specified phase"
+      case WorkflowName.Review => "Independently review a stored CQ result"
+      case WorkflowName.Upstream => "Prepare, report or recheck a CQ upstream defect"
     }
-    val body = resource("entrypoint").replace("{{WORKFLOW}}", command).replace("{{HARNESS}}", harness.toString.toLowerCase).replace("{{OPTIONS}}", arguments)
+    val body = resource("entrypoint").replace("{{WORKFLOW}}", command).replace("{{HARNESS}}", harness.toString.toLowerCase).replace("{{VARIANT}}", workflow.toString)
     harness match {
       case Harness.Codex => CommandAsset(Path.of(s".agents/skills/cq-$command/SKILL.md"),
         s"---\nname: cq-$command\ndescription: $description. Use for the corresponding CQ workflow request.\n---\n\n$body")
@@ -46,7 +46,9 @@ final class WorkflowAssets {
     }
   }
 
-  def writeCommands(harness: Harness, root: Path, replace: Boolean): List[Path] = {
+  def writeCommands(harness: Harness, root: Path, replace: Boolean): List[Path] = writeAssets(commands(harness), root, replace, Set.empty)
+
+  def writeAssets(assets: List[CommandAsset], root: Path, replace: Boolean, merged: Set[Path]): List[Path] = {
     require(root.isAbsolute && root.normalize() == root, "Command export directory must be absolute and normalized")
     def safe(path: Path): Unit = {
       val ancestors = Iterator.iterate(path)(_.getParent).takeWhile(_ != null).toList
@@ -56,20 +58,22 @@ final class WorkflowAssets {
     }
     safe(root)
     require(Files.isDirectory(root, LinkOption.NOFOLLOW_LINKS), "Command export requires an existing project directory")
-    val outputs = commands(harness).map(value => root.resolve(value.path) -> value.body.getBytes(UTF_8))
+    require(assets.forall(value => !value.path.isAbsolute && value.path.normalize() == value.path && !value.path.startsWith("..")), "Asset path must stay inside the project")
+    require(assets.map(_.path).distinct.size == assets.size, "Duplicate asset destination")
+    val outputs = assets.map(value => root.resolve(value.path) -> value.body.getBytes(UTF_8))
     outputs.foreach { case (path, bytes) =>
       safe(path)
       if (Files.exists(path, LinkOption.NOFOLLOW_LINKS)) {
         require(Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS), "Command destination is not a regular file")
         val same = Using.resource(Files.newInputStream(path))(_.readNBytes(bytes.length + 1)).sameElements(bytes)
-        require(same || replace, s"Command destination differs: $path; use --replace for these generated files")
+        require(same || replace || merged(root.relativize(path)), s"Command destination differs: $path; use --replace for these generated files")
       }
     }
     outputs.foreach { case (path, bytes) =>
       safe(path)
       Files.createDirectories(path.getParent)
       if (Files.exists(path, LinkOption.NOFOLLOW_LINKS)) {
-        if (replace) Files.write(path, bytes, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS)
+        if (replace || merged(root.relativize(path))) Files.write(path, bytes, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS)
       } else Files.write(path, bytes, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)
     }
     outputs.map(_._1)

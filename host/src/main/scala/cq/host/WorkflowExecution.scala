@@ -7,6 +7,10 @@ import java.time.Duration
 final class WorkflowExecution(api: ServerApi, project: ProjectId, session: SessionId, workflow: Option[WorkflowRequest]) {
   private val DeadlineNanos = Duration.ofSeconds(20).toNanos
   private val PageSize = 200
+  private var current = workflow
+  private var epoch = 0L
+  def generation: Long = synchronized(epoch)
+  def activate(request: WorkflowRequest): Unit = synchronized { current = Some(request); epoch = Math.addExact(epoch, 1) }
 
   private def permit(condition: Boolean, message: String): Unit =
     if (!condition) throw DomainFailure(Fault.Denied("Workflow execution: " + message))
@@ -62,7 +66,7 @@ final class WorkflowExecution(api: ServerApi, project: ProjectId, session: Sessi
     case _: WorkflowRequest.Begin | _: WorkflowRequest.Upstream => permit(within(phase(work), WorkflowPhase.Plan), "this command permits exploration and planning only")
   }
 
-  def selection(value: CohortRequest): Unit = workflow.foreach { request =>
+  def selection(value: CohortRequest): Unit = synchronized { current.foreach { request =>
     allowed(value.work, request, value.previous)
     val began = System.nanoTime()
     def call(command: Command): Result = {
@@ -77,9 +81,9 @@ final class WorkflowExecution(api: ServerApi, project: ProjectId, session: Sessi
       case WorkflowRequest.Review(result, _) => permit(value.roots == new ArtifactReader(call, project).result(result).value.request.members.map(_.id).toSet,
         "standalone review selection differs from its exact subject")
     }
-  }
+  }}
 
-  def authorize(command: DispatchCommand): Unit = workflow.foreach { request =>
+  def authorize(command: DispatchCommand): Unit = synchronized { current.foreach { request =>
     val began = System.nanoTime()
     def call(value: Command): Result = {
       require(System.nanoTime() - began < DeadlineNanos, "Workflow execution admission deadline exceeded")
@@ -117,5 +121,5 @@ final class WorkflowExecution(api: ServerApi, project: ProjectId, session: Sessi
         }
       case _: DispatchCommand.Status | _: DispatchCommand.Cancel | _: DispatchCommand.IntegrationStatus | _: DispatchCommand.CombinationStatus => ()
     }
-  }
+  }}
 }

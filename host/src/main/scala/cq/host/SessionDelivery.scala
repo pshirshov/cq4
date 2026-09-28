@@ -76,7 +76,17 @@ final class SessionDelivery(journal: JobRepository, workspaces: WorkspaceService
     }
   }
 
-  private def reconcile(directory: Path, publication: Publication): Unit = {
+  private def reconcile(directory: Path, publication: Publication, ownership: SessionOwnership): Unit = {
+    if (ownership == SessionOwnership.Attached && publication.child.isEmpty) {
+      val project = publication.assignment.project
+      val outcome = AttemptOutcome(RequestId(NativeArtifacts.id(publication.attempt.id, "outcome").value), publication.attempt.id,
+        AttemptState.Unknown, math.max(publication.attempt.startedAt, clock.millis()),
+        List("Attached owner observation interrupted; outer model completion and remaining usage are unobserved; retained Pi usage samples are replayed independently; no native Governor process was launched"), None)
+      publication.queue.commit(List(HostDelivery.Usage(HostUsageInput(project, HostUsage.Assign(publication.assignment))),
+        HostDelivery.Usage(HostUsageInput(project, HostUsage.Start(publication.attempt))),
+        HostDelivery.Usage(HostUsageInput(project, HostUsage.Finish(outcome)))))
+      return
+    }
     val attempt = publication.attempt
     val project = publication.assignment.project
     val payload = directory.resolve("payload").resolve(attempt.id.value.toString)
@@ -181,11 +191,12 @@ final class SessionDelivery(journal: JobRepository, workspaces: WorkspaceService
         } yield receipt.acknowledged
         case None => for {
           committed <- ZIO.attemptBlocking(publication.queue.finalized)
-          _ <- if (committed) ZIO.unit else quarantine(owner, publication.attempt.id) *> ZIO.attemptBlocking(reconcile(directory, publication))
+          _ <- if (committed) ZIO.unit else quarantine(owner, publication.attempt.id) *> ZIO.attemptBlocking(reconcile(directory, publication, run.ownership))
           count <- ZIO.attemptBlocking(publication.queue.flush(api))
         } yield count
       }).either
     }
-    recovered <- independent(checked ++ delivered.map(_.map(count => SessionDeliveryReport(count, Nil))))
+    attached <- (if (run.ownership == SessionOwnership.Attached) ZIO.attemptBlocking(new AttachedUsage(directory, run, clock).recover(api)) else ZIO.succeed(0)).either
+    recovered <- independent(checked ++ (delivered :+ attached).map(_.map(count => SessionDeliveryReport(count, Nil))))
   } yield SessionDeliveryReport(recovered.map(_.acknowledged).sum, inventory.incompleteTickets ++ recovered.flatMap(_.incompleteTickets))
 }

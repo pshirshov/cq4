@@ -39,6 +39,56 @@ abstract class SessionDeliveryTest extends SpecZIO with AssertZIO {
   }
 
   "Interrupted publication (Behavioral Active Blackbox; dummy Group / PostgreSQL and Git Good Communication)" should {
+    "replay attached Pi observations without inventing a governing process or counting a response twice" in {
+      (ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO],
+        admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO], fixture: WorkspaceFixture) =>
+      val clock = Clock.systemUTC()
+      def uuid: UUID = UUID.randomUUID()
+      val owner = Scope(ProjectId(uuid), Actor("CQ governor", SessionId(uuid), Role.Governor))
+      val collector = owner.copy(actor = owner.actor.copy(role = Role.Collector))
+      val auth = new Authorization(AccessConfig("attached-usage-recovery-root-token", "http://localhost"), clock)
+      val root = auth.authenticate("attached-usage-recovery-root-token", Some(owner.actor.session.value.toString))
+      val authority = auth.authenticate(auth.grant(root, GrantRequest(owner.project, collector.actor, clock.millis() + 60000)).value, None)
+      val application = new Application(ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, auth)
+      ZIO.scoped { for {
+        runtime <- ZIO.runtime[Any]
+        _ <- ledger.initialize(owner, "Attached accounting")
+        assignment <- usage.assign(collector, Assignment(AssignmentId(uuid), owner.project, Set.empty, Attribution.Unattributed, None, None))
+        attempt <- usage.start(collector, Attempt(AttemptId(uuid), assignment.id, None, owner.actor.session, Role.Governor,
+          Harness.Pi, "unobserved-interactive-provider", "unobserved-interactive-model", "fixture", clock.millis()))
+        run = SupervisorRun(ProjectConfig(owner.project, "http://localhost", "Attached accounting"), assignment, attempt, "0.87.1",
+          fixture.source.toString, fixture.base, SessionOwnership.Attached)
+        directory <- ZIO.attemptBlocking(Files.createTempDirectory("cq-attached-usage-"))
+        journal <- ZIO.acquireRelease(ZIO.attemptBlocking(FileJobRepository.open(directory.resolve("journal"), owner.project, owner.actor.session)))(value => ZIO.attemptBlocking(value.close()).orDie)
+        receiver = new Receiver(application, authority, runtime, AttemptId(uuid))
+        accounting = new AttachedUsage(directory, run, clock)
+        first = AttachedPiEvent(1, "native-session", 1, "provider", "model", 1000, Some("response-1"), "stop",
+          Some(100), Some(30), Some(20), Some(0), None, Some(150), Some(DecimalAmount("0.004")))
+        second = first.copy(sequence = 2, timestamp = 1001, responseId = Some("response-2"), input = Some(2), output = Some(3), cacheRead = Some(0), totalTokens = Some(5))
+        _ <- ZIO.attemptBlocking {
+          accounting.accept(first, receiver)
+          accounting.accept(first, receiver)
+          accounting.accept(second, receiver)
+          accounting.accept(second.copy(sequence = 3), receiver)
+          assert(scala.util.Try(accounting.accept(first.copy(sequence = 4, input = Some(-1)), receiver)).isFailure)
+          assert(!Files.exists(directory.resolve("pi-usage/0004")))
+          assert(scala.util.Try(accounting.accept(first.copy(sequence = 4, session = "foreign"), receiver)).isFailure)
+        }
+        before <- usage.summary(owner, UsageFilter.SessionOnly(owner.actor.session))
+        _ <- assertIO(before.unattributed.total.known == 155 && before.attemptsWithoutMeters == 0 && before.incompleteMeters == 1)
+        _ <- ZIO.attemptBlocking(Files.delete(directory.resolve("pi-usage/0002/delivery/final/000000.ack")))
+        recovered <- new SessionDelivery(journal, fixture.service, clock).flush(directory, run, receiver)
+        after <- usage.summary(owner, UsageFilter.SessionOnly(owner.actor.session))
+        _ <- assertIO(recovered.acknowledged == 2 && after.unattributed.total.known == 155 && after.attempts.unknown == 1 && after.attempts.running == 0)
+        repeated <- new SessionDelivery(journal, fixture.service, clock).flush(directory, run, receiver)
+        _ <- assertIO(repeated.acknowledged == 0)
+        missing <- artifacts.metadata(owner, NativeArtifacts.id(attempt.id, "stdout")).either
+        _ <- assertIO(missing.isLeft && journal.records.isEmpty)
+        metadata <- artifacts.metadata(owner, NativeArtifacts.id(attempt.id, "attached-pi-1"))
+        _ <- assertIO(metadata.kind == ArtifactKind.Transcript)
+      } yield () }
+    }
+
     "recover independent reviewer checks despite a lost upload acknowledgement without launching or completing the review" in {
       (ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO],
         admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO], fixture: WorkspaceFixture) =>
@@ -65,7 +115,7 @@ abstract class SessionDeliveryTest extends SpecZIO with AssertZIO {
         request = DispatchRequest(RequestId(uuid), DispatchWork.Reviewer(ReviewerMode.Candidate), Harness.Codex, created.items, Nil, Nil,
           Some(ArtifactId(uuid)), Fence(ClaimId(uuid), 1), limits)
         ticket = DispatchTicket(request, childAssignment, reviewer, profile, None)
-        run = SupervisorRun(ProjectConfig(owner.project, "http://localhost", "Check recovery"), assignment, governor, profile.version, fixture.source.toString, fixture.base)
+        run = SupervisorRun(ProjectConfig(owner.project, "http://localhost", "Check recovery"), assignment, governor, profile.version, fixture.source.toString, fixture.base, SessionOwnership.Managed)
         declarations = List("a-sealed", "b-interrupted", "c-unstarted").map(name => ValidationCheck(name, List("verify"), 1000, 65536))
         directory <- ZIO.attemptBlocking(Files.createTempDirectory("cq-check-recovery-"))
         journal <- ZIO.acquireRelease(ZIO.attemptBlocking(FileJobRepository.open(directory.resolve("journal"), owner.project, owner.actor.session)))(value => ZIO.attemptBlocking(value.close()).orDie)
@@ -157,7 +207,7 @@ abstract class SessionDeliveryTest extends SpecZIO with AssertZIO {
               assignment <- usage.assign(collector, Assignment(AssignmentId(uuid), owner.project, Set.empty, Attribution.Unattributed, None, None))
               governor <- usage.start(collector, Attempt(AttemptId(uuid), assignment.id, None, owner.actor.session, Role.Governor,
                 Harness.Codex, "fixture", "fixture", "fixture", 1000))
-              run = SupervisorRun(ProjectConfig(owner.project, "http://localhost", "Sealed"), assignment, governor, "0.156.1", fixture.source.toString, fixture.base)
+              run = SupervisorRun(ProjectConfig(owner.project, "http://localhost", "Sealed"), assignment, governor, "0.156.1", fixture.source.toString, fixture.base, SessionOwnership.Managed)
               childAssignment = Assignment(AssignmentId(uuid), owner.project, Set(member.id), Attribution.Direct, None, None)
               attempt = governor.copy(id = AttemptId(uuid), assignment = childAssignment.id, parent = Some(governor.id), role = Role.Worker, startedAt = 1001)
               request = DispatchRequest(RequestId(uuid), DispatchWork.Worker(WorkerMode.Implement), Harness.Codex, List(member), Nil, Nil, None,
@@ -246,7 +296,7 @@ abstract class SessionDeliveryTest extends SpecZIO with AssertZIO {
         val assignment = Assignment(AssignmentId(UUID.randomUUID()), owner.project, Set.empty, Attribution.Unattributed, None, None)
         val governor = Attempt(AttemptId(UUID.randomUUID()), assignment.id, None, owner.actor.session, Role.Governor,
           Harness.Codex, "fixture", "fixture", "fixture", clock.millis())
-        val run = SupervisorRun(ProjectConfig(owner.project, "http://localhost", "Recovery"), assignment, governor, "0.156.1", fixture.source.toString, fixture.base)
+        val run = SupervisorRun(ProjectConfig(owner.project, "http://localhost", "Recovery"), assignment, governor, "0.156.1", fixture.source.toString, fixture.base, SessionOwnership.Managed)
         val limits = HostLimits(3000, 10000, 1000, 300, 2000, 262144)
         val profile = HarnessSetting(Harness.Codex, "/fixture/codex", "fixture", "fixture", "0.156.1", Nil, Set.empty)
         val draft = ItemDraft("Recovery consumer", "Retain interrupted evidence", Set.empty, false,

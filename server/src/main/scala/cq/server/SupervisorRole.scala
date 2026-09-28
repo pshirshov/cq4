@@ -32,6 +32,7 @@ object SupervisorConfig {
   private val MaxConfigBytes = 64 * 1024
   private val MaxInputBytes = 192 * 1024
   private val MaxOutputBytes = 32 * 1024 * 1024
+  val AttachedLifetime = Duration.ofHours(8)
   private val CredentialMargin = Duration.ofMinutes(10)
   private val MaxCredentialLifetime = Duration.ofHours(24)
   def profile(value: HarnessSetting): HarnessProfile = HarnessProfile(value.harness, Path.of(value.executable), value.model, value.provider, value.version,
@@ -55,15 +56,19 @@ object SupervisorConfig {
     lifetime
   }
   def load(arguments: RoleAppArgs, context: CliContext, location: ProjectLocation, clock: Clock): Task[SupervisorConfig] = ZIO.attemptBlocking {
-    val raw = arguments.roles.find(_.role == SupervisorRole.id).getOrElse(throw new IllegalArgumentException("Supervisor role arguments missing")).roleParameters.raw.toList
+    val raw = arguments.roles.find(value => Set(SupervisorRole.id, AttachedRole.id)(value.role)).getOrElse(throw new IllegalArgumentException("Supervisor role arguments missing")).roleParameters.raw.toList
     val args = if (raw.headOption.contains("--")) raw.tail else raw
-    require(args.size >= 5 && args.size % 2 == 1, "cq run HARNESS --settings FILE --input FILE [--workflow NAME ...]")
+    val attached = arguments.roles.exists(_.role == AttachedRole.id)
+    require(args.nonEmpty && args.size % 2 == 1, "cq run HARNESS --settings FILE --input FILE or cq host HARNESS [--settings FILE]")
     val harness = Harness.all.find(_.toString.equalsIgnoreCase(args.head)).getOrElse(throw new IllegalArgumentException("Unknown governing harness"))
     val pairs = args.tail.grouped(2).map(values => values.head -> values(1)).toList
-    val required = Set("--settings", "--input")
+    val required = if (attached) Set.empty[String] else Set("--settings", "--input")
+    val allowed = if (attached) Set("--settings") else required ++ WorkflowArguments.Options
     require(pairs.map(_._1).distinct.size == pairs.size && required.subsetOf(pairs.map(_._1).toSet) &&
-      pairs.forall(pair => (required ++ WorkflowArguments.Options)(pair._1)), "cq run requires unique supported options, --settings FILE and --input FILE")
-    val options = pairs.toMap
+      pairs.forall(pair => allowed(pair._1)), "Unsupported, repeated or missing execution options")
+    val supplied = pairs.toMap
+    val options = if (supplied.contains("--settings")) supplied else supplied.updated("--settings",
+      context.environment.getOrElse("CQ_SETTINGS", throw new IllegalArgumentException("--settings FILE or CQ_SETTINGS is required")))
     val settings = HostFiles.read(context.directory.resolve(options("--settings")).normalize(), SupervisorSettings_JsonCodec, MaxConfigBytes)
     val profiles = settings.harnesses.map(SupervisorConfig.profile)
     require(profiles.nonEmpty && profiles.map(_.harness).distinct.size == profiles.size, "Harness settings must have unique routes")
@@ -107,10 +112,13 @@ object SupervisorConfig {
     val directory = stateRoot.resolve(session.value.toString)
     val assignment = Assignment(AssignmentId(UUID.randomUUID()), project.project, Set.empty, Attribution.Unattributed, None, settings.evaluation)
     val attempt = Attempt(AttemptId(UUID.randomUUID()), assignment.id, None, session, Role.Governor, harness,
-      profile.provider, profile.model, "CQ native collector 0.1.0", clock.millis())
-    val run = SupervisorRun(project, assignment, attempt, profile.version, repository.toString, base)
-    val input = HostFiles.text(context.directory.resolve(options("--input")).normalize(), MaxInputBytes)
-    require(input.trim.nonEmpty, "Governing input cannot be empty")
+      if (attached) "unobserved-interactive-provider" else profile.provider,
+      if (attached) "unobserved-interactive-model" else profile.model,
+      if (attached) "CQ attached session; outer usage unavailable" else "CQ native collector 0.1.0", clock.millis())
+    val run = SupervisorRun(project, assignment, attempt, profile.version, repository.toString, base,
+      if (attached) SessionOwnership.Attached else SessionOwnership.Managed)
+    val input = if (attached) "" else HostFiles.text(context.directory.resolve(options("--input")).normalize(), MaxInputBytes)
+    require(attached || input.trim.nonEmpty, "Governing input cannot be empty")
     val version = new BoundedHostCommand(HarnessEnvironment.isolated(profile, context.environment), Duration.ofSeconds(10), 4096)
       .run(repository, List(profile.executable.toString, "--version"))
     require(version.exit == 0 && version.text.split("[\\s()]+").contains(profile.version), "Installed harness version differs from its configured verified route")
@@ -128,7 +136,7 @@ final class SupervisorJobs(config: SupervisorConfig, workspaces: WorkspaceServic
   )
 
 object SupervisorProgram {
-  val Instructions = "Govern CQ through the exposed tools. Input identifies project, routes, limits, checks and human request. Discover/create work. " +
+  val Guidance = "Govern CQ through the exposed tools. Input identifies project, routes, limits, checks and human request. Discover/create work. " +
     "When workflow is present, follow its host-installed instructions and typed scope. " +
     "Before a child, dispatch Select with explicit roots, desired work, guidance/artifact handles, optional previous and limits. Claim all members of one returned choice, then StartChoice with its ID, configured harness and current fence. Choices fix membership and work; selection itself acquires no claim. Workflow runs require choices. Read excluded/unexamined/ineligible counts. " +
     "An implementation selection may return Planner for compatibility assessment. Forward that result in artifacts to a fresh Worker Implement Select. Unknown/incompatible groups split; acquire each split's exact claim. Pass larger prior results as artifacts when selecting subgroups. Unchanged executed input is deferred; obtain substantive evidence or changed conditions. " +
@@ -137,7 +145,8 @@ object SupervisorProgram {
     "Pass worker candidates to Reviewer Candidate; prefer another configured harness. " +
     "With integrationTarget, PrepareIntegration using a fresh ID and accepted reviewer handle, poll IntegrationStatus, inspect its frozen preview, then Integrate that ID. Only Recorded establishes domain recording; reconcile Pending and inspect NotApplied. Without a target, report the retained reviewed candidate. " +
     "After target advancement causes NotApplied, Combine a fresh ID, that integration ID and current full fence; poll CombinationStatus. Dispatch Worker ResolveConflict with Ready plan in artifacts, its worker as previous and exact preview members/fence. Obtain fresh validation and Reviewer from the new worker handle; omit the plan from reviewer artifacts. Integrate with a fresh ID. For PublicationPending, replay identical Combine or cq job upload. " +
-    "Claim execution only with host evidence. Child completion/review acceptance does not establish final task acceptance. Return exactly {\"summary\":\"observed outcome and remaining work\"}."
+    "Claim execution only with host evidence. Child completion/review acceptance does not establish final task acceptance."
+  val Instructions = Guidance + " Return exactly {\"summary\":\"observed outcome and remaining work\"}."
 }
 
 final class SupervisorProgram(config: SupervisorConfig, registry: HarnessRegistry, jobs: JobSupervisor, authority: SupervisorAuthority,
@@ -239,7 +248,7 @@ object SupervisorRole extends RoleDescriptor {
 
 object SupervisorPlugin extends PluginDef {
   include(new ModuleDef {
-    include(new RoleModuleDef { makeRole[SupervisorRole] })
+    include(new RoleModuleDef { makeRole[SupervisorRole]; makeRole[AttachedRole] })
     make[SupervisorConfig].fromEffect(SupervisorConfig.load _)
     many[HarnessAdapter].add[ClaudeAdapter].add[CodexAdapter].add[PiAdapter]
     make[HarnessRegistry]
@@ -260,6 +269,12 @@ object SupervisorPlugin extends PluginDef {
     make[LocalControl]
     make[LocalControlServer].fromResource[LocalControlServer.Resource]
     make[SupervisorProgram]
+    make[AttachedChannels].fromEffect(ZIO.attempt(AttachedChannels(System.in, System.out,
+      new ProcessOwner(ProcessHandle.current().parent().orElseThrow(() => new IllegalArgumentException("Owning harness process is unavailable"))))))
+    make[AttachedProgram]
+    make[AttachedGateway]
+    make[AttachedWorkflow]
+    make[AttachedUsage].from { (config: SupervisorConfig, clock: Clock) => new AttachedUsage(config.directory, config.run, clock) }
     make[SupervisorWatchdog].fromResource[SupervisorWatchdog.Resource]
     make[ExecutionDriver].from[SupervisorDriver]
     make[WorkspaceService[IO]].from { (config: SupervisorConfig, clock: Clock) =>

@@ -11,9 +11,9 @@ final class SupervisorWatchdog(config: SupervisorConfig) extends AutoCloseable {
   private val HostDrain = Duration.ofSeconds(10)
   private val UnresolvedExit = 75
   private val drain = config.limits.grace.plus(config.limits.kill).plus(HostDrain).toNanos
-  private var deadline = System.nanoTime() + config.limits.startup.plus(config.limits.execution).toNanos + drain
+  private var deadline = System.nanoTime() + (if (config.run.ownership == cq.api.SessionOwnership.Attached) SupervisorConfig.AttachedLifetime else config.limits.startup.plus(config.limits.execution)).toNanos + drain
   private var governor = Option.empty[ManagedExecution]
-  private var draining = false
+  @volatile private var draining = false
   private var closed = false
   private val monitor = Thread.ofPlatform().daemon().name("cq-supervisor-deadline").start(() => {
     var running = true
@@ -41,6 +41,7 @@ final class SupervisorWatchdog(config: SupervisorConfig) extends AutoCloseable {
       draining = true
     }
   }
+  def stopping: Boolean = draining
   override def close(): Unit = {
     synchronized { closed = true }
     monitor.join()
@@ -57,6 +58,7 @@ final class SupervisorDriver(config: SupervisorConfig, watchdog: SupervisorWatch
   private val delegate = new GuardianDriver(Path.of(config.settings.guardian))
   private val governingInput = config.directory.resolve("payload").resolve(config.run.attempt.id.value.toString).resolve("input")
   override def start(spec: ExecutionSpec): ManagedExecution = {
+    require(!watchdog.stopping, "Owning CQ session is stopping; process admission is closed")
     val execution = delegate.start(spec)
     if (spec.input == governingInput) watchdog.observe(execution)
     execution
