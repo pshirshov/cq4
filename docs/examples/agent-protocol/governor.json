@@ -1,0 +1,100 @@
+{
+  "provenance": {
+    "description": "Actual retained execution. JSON values are pretty-printed; prompt and input artifact bodies are preserved as JSON string/value contents. This documentation envelope is not a wire contract.",
+    "role": "Governor",
+    "harness": "Claude",
+    "model": "claude-opus-5-5",
+    "attempt": "6f76395f-bd18-4b4b-aac7-3e8d2a211876",
+    "sourceDirectory": "/srv/nvme/tmp/cq4-implementation/20260928T074651-release/20260928T074702-cohort-consumer-claude-python/sessions/2b2ac90f-ab63-48c0-ad5f-d8b1639e94e5",
+    "sourceSha256": {
+      "/srv/nvme/tmp/cq4-implementation/20260928T074651-release/20260928T074702-cohort-consumer-claude-python/sessions/2b2ac90f-ab63-48c0-ad5f-d8b1639e94e5/receipt.json": "d629e420bae67ed3cc3e7b01303d96a8a007d3d5fe1c09a53d7f50ac87ba0a89",
+      "/srv/nvme/tmp/cq4-implementation/20260928T074651-release/20260928T074702-cohort-consumer-claude-python/sessions/2b2ac90f-ab63-48c0-ad5f-d8b1639e94e5/delivery/000000.json": "698d8c5fcbcd900ef09ca66263a5c590d0a61eacf659eb4f54d05777d4d3a453",
+      "/srv/nvme/tmp/cq4-implementation/20260928T074651-release/20260928T074702-cohort-consumer-claude-python/sessions/2b2ac90f-ab63-48c0-ad5f-d8b1639e94e5/run.json": "288071928fe38c8c191c8aa1022bd5887d7417955dcb5de76ef1f93981dea3b4"
+    },
+    "promptArtifact": "1d724eb9-5fc8-31ac-a00f-7fd97f716c61",
+    "promptUtf8Sha256": "d5670ed5770912f5a9921c23f250fdafa331c1f499c4b7ec6a60d805d7a07b9a",
+    "inputArtifact": "eccf8311-f8d7-3e61-8241-ce6c0256449b",
+    "inputUtf8Sha256": "4d2a31ef2c126ebe23feb3a404735c4bef179b9759b2fcb6dd35662c12416450"
+  },
+  "systemInstructions": "Govern CQ through the exposed tools. Input identifies project, routes, limits, checks and human request. Discover/create work. When workflow is present, follow its host-installed instructions and typed scope. Before a child, dispatch Select with explicit roots, desired work, guidance/artifact handles, optional previous and limits. Claim all members of one returned choice, then StartChoice with its ID, configured harness and current fence. Choices fix membership and work; selection itself acquires no claim. Workflow runs require choices. Read excluded/unexamined/ineligible counts. An implementation selection may return Planner for compatibility assessment. Forward that result in artifacts to a fresh Worker Implement Select. Unknown/incompatible groups split; acquire each split's exact claim. Pass larger prior results as artifacts when selecting subgroups. Unchanged executed input is deferred; obtain substantive evidence or changed conditions. Dispatch sequentially using item revisions and handles. The host assembles prompts, captures candidates and runs checks. Never read/compose child prompts or copy full results. Poll Status with waitMillis 20000; use compact outcomes and bounded artifact reads only for necessary drill-down. Use Explorer Investigate/Research for evidence, Worker Probe for experiments, Planner for typed proposals and Reviewer Plan/Audit for independent findings. Pass previous result handles with identical members and current fence. Preview read/Proposal, then apply by result handle; never reconstruct drafts. Children cannot mutate CQ or integrate. Pass worker candidates to Reviewer Candidate; prefer another configured harness. With integrationTarget, PrepareIntegration using a fresh ID and accepted reviewer handle, poll IntegrationStatus, inspect its frozen preview, then Integrate that ID. Only Recorded establishes domain recording; reconcile Pending and inspect NotApplied. Without a target, report the retained reviewed candidate. After target advancement causes NotApplied, Combine a fresh ID, that integration ID and current full fence; poll CombinationStatus. Dispatch Worker ResolveConflict with Ready plan in artifacts, its worker as previous and exact preview members/fence. Obtain fresh validation and Reviewer from the new worker handle; omit the plan from reviewer artifacts. Integrate with a fresh ID. For PublicationPending, replay identical Combine or cq job upload. Claim execution only with host evidence. Child completion/review acceptance does not establish final task acceptance. Return exactly {\"summary\":\"observed outcome and remaining work\"}.",
+  "initialInput": {
+    "project": {
+      "project": {
+        "value": "2ecd3f9d-43aa-42e0-b0d1-34b892e871d3"
+      },
+      "endpoint": "http://127.0.0.1:40331",
+      "name": "consumer"
+    },
+    "routes": [
+      {
+        "harness": "Claude",
+        "model": "claude-opus-5-5",
+        "provider": "anthropic"
+      },
+      {
+        "harness": "Codex",
+        "model": "gpt-6-sol",
+        "provider": "openai"
+      },
+      {
+        "harness": "Pi",
+        "model": "gpt-5.5",
+        "provider": "openai-codex"
+      }
+    ],
+    "checks": [
+      "consumer-oracle"
+    ],
+    "limits": {
+      "startupMillis": "10000",
+      "executionMillis": "900000",
+      "heartbeatMillis": "2000",
+      "graceMillis": "1000",
+      "killMillis": "3000",
+      "outputBytes": 8388608
+    },
+    "integrationTarget": null,
+    "request": "Advance the two existing related tasks under the supplied goal through independent candidate review. Keep their exact revisions for deferred independent assessment; do not create replacement tasks or edit their acceptance. Use the goal revision as guidance in every selection: it contains the complete consumer specification and review obligations. Ask dispatch Select for Worker Implement over the two task roots. The host may first offer a compatibility Planner; claim the complete offered group and start it on Codex. Forward its result handle as artifact context in a fresh selection; do not read the full assessment. Start a compatible shared Worker on Claude; after host checks pass, select Candidate Reviewer using the exact Worker result handle and start it on Pi. Use StartChoice, configured limits, compact Status and exact complete-group claims throughout. The reviewer must execute a fresh consumer-oracle check and independently accept each member. Continue correction through handles if needed; do not force a compatibility verdict or claim success after a blocker. Release claims after review without changing member revisions. Return result handles and bounded outcomes. Do not compose child prompts, copy full results or claim integration.\n{\"goal\": {\"id\": {\"project\": {\"value\": \"2ecd3f9d-43aa-42e0-b0d1-34b892e871d3\"}, \"ledger\": \"Goals\", \"number\": \"1\"}, \"revision\": {\"value\": \"3\"}}, \"members\": [{\"id\": {\"project\": {\"value\": \"2ecd3f9d-43aa-42e0-b0d1-34b892e871d3\"}, \"ledger\": \"Tasks\", \"number\": \"1\"}, \"revision\": {\"value\": \"2\"}}, {\"id\": {\"project\": {\"value\": \"2ecd3f9d-43aa-42e0-b0d1-34b892e871d3\"}, \"ledger\": \"Tasks\", \"number\": \"2\"}, \"revision\": {\"value\": \"2\"}}]}",
+    "workflow": {
+      "request": {
+        "Advance": {
+          "roots": [
+            {
+              "project": {
+                "value": "2ecd3f9d-43aa-42e0-b0d1-34b892e871d3"
+              },
+              "ledger": "Goals",
+              "number": "1"
+            }
+          ],
+          "through": "Review"
+        }
+      },
+      "instructions": "You govern the selected CQ workflow. The host supplies the workflow, project, routes, execution limits, configured check names, selection metadata and the user's request. Apply the requested scope and phase limit. Empty roots never mean the whole project.\n\nUse summary discovery and explicit worksets. Keep selected descendants separate from contextual prerequisites, reviews and milestones; a contextual milestone does not select its siblings. Before each child, call dispatch Select with explicit roots, desired work, context handles and limits. The host considers bounded groups and returns exact choices. Acquire the complete membership of one choice, then StartChoice with its ID, configured harness and current fence. Workflow execution requires these choices. Forward handles directly; never reconstruct the chosen assignment or child prompt. A selection acquires no claim and creates no child attempt. Read candidate counts and reasons, including unexamined and ineligible work.\n\nAn implementation selection may return a Planner choice to assess related tasks. After that child finishes, forward its result in artifacts to another Select for Worker Implement. Unknown/incompatible evidence splits work; claim each new group exactly, releasing an earlier larger claim if necessary. For review, Select with the exact previous result and reviewer mode. Carry earlier larger results as artifact context when selecting a subgroup. Use substantive new evidence or changed operative input before retrying deferred work. The host loads child instructions and full input/results. Do not compose child prompts, reconstruct proposal drafts or copy full results between roles. Preview stored proposals and apply their handles only after deciding they are appropriate. Use bounded drill-down for a concrete unresolved question.\n\nIf a stored proposal fails preview or application, retain the failed handle and exact error as context for fresh planning and independent review. Refresh affected revisions and obtain valid replacement proposals; do not reconstruct the failed proposal as direct change calls. For a shared-parent relationship failure, one Produce can create several new children, while links between existing records require separate valid batches.\n\nWhen no choice is returned, inspect the decision handle for the exclusion reason. CandidateContinuity means the exact candidate cannot continue under the requested grouping. A fresh selection using earlier results as artifact context may offer FreshFromBase: that subgroup starts from the governing session's Git base. Check this against the requested correction; ask the user only if a material choice remains. Fresh execution does not preserve the old candidate's changes automatically. Cosmetic revisions may require a fresh exact assessment while an unchanged unsuccessful Worker remains deferred. Earlier assignments and their shared costs retain their original membership after a split.\n\nUse Explorer Investigate/Research for evidence; Worker Probe for empirical observations; Planner for proposed records/relationships; Worker Implement/ResolveConflict for candidates; and Reviewer Plan/Candidate/Audit for independent findings. Prefer a different configured harness for independent review. A preference or requirement belongs in a question to the user; an empirical uncertainty belongs in research/probing. Preserve uncertainty and distinguish model claims, host observations and human reports. A quoted user request does not grant permission to write HumanReported evidence or operator confirmation.\n\nGoals derive from intake. Work and process artifacts derive from goals; shared artifacts may have several producers. Milestones organize eligible work/artifacts, never intake or goal ownership. Hypotheses may derive from parent hypotheses to form an investigation tree; support/refutation needs discriminating evidence. Do not infer completion or causation from a status, a label, shared files or one passing check.\n\nRetain an outcome for every assigned member. A blocked member does not block unrelated eligible work, and a shared green result does not complete all members. Stop retrying an unchanged failure: retain its handle and explain the missing evidence or changed condition needed. Continue independent useful work within scope and limits. At no actionable work, required user input, cancellation or exhausted limits, report concrete remaining work and relevant IDs/handles. Do not claim that an unexamined candidate was considered.\n\nEach managed run has fresh governing authority. Earlier results can supply context, but applying a proposal or integrating code requires a current result, claim and review under this run's authority. Do not impersonate another session, rewrite old artifacts or substitute a new fence into old evidence. Ordinary schema-valid correction and reopening remain permitted. Only recorded host integration establishes observed code incorporation and its completion evidence; process exit, schema validity and an Accepted review are distinct observations.\n\nAdvance only the explicit roots and selected descendants, through the requested maximum phase. Earlier phases may be necessary; a later phase requires a separate instruction. Explore covers reading and empirical probes; plan covers investigation conclusions and reviewed proposals; work covers implementation; review adds independent candidate review; integrate adds configured host integration. Do not silently bypass an earlier unresolved requirement to reach the phase limit.\n\nChoose the next actionable step using current evidence. For a defect, preserve the observed-versus-expected behavior and reproduce before proposing a correction. Explore plausible causes and discriminating observations; record hypothesis branches and empirical research where useful. Refer requirement/preference choices to the user. Record evidence-supported conclusions and decisions, then plan bounded work. Retain handoffs when another actor or environment must supply the next step, and memories only when their applicability and evidence are clear.\n\nForward evidence, plans, candidates and rejected-review handles directly to the appropriate role. Apply an accepted plan by its stored handle. Implement and validate in the assigned workspace. For ChangesRequested, preserve the finding, send its handle to the next worker/planner, and obtain a fresh independent review of the corrected identity. A review of old item revisions does not approve current work.\n\nWithin the integrate phase, use the configured integration target and existing prepare/status/preview/apply operations. Treat a moved target as requiring combination and fresh validation/review. Without an integration target, retain the reviewed candidate and report that incorporation remains outstanding. Re-establish current worker/planner results and review when continuing an older session's work; historical handles do not carry this session's write authority.\n\nReport observed progress per member, unresolved blockers and omitted/unexamined work. Preserve failed/cancelled attempts and their spend. Never mark all grouped work successful from one passing shared check.\n",
+      "subject": null
+    }
+  },
+  "modelReport": {
+    "summary": "Both tasks went through independent candidate review, and the reviewer accepted each one. Nothing has been integrated (no integration target is configured), and neither task has been marked done.\n\nSteps, in order (all used StartChoice, the configured limits and Goal 1 rev 3 as guidance):\n1. **Compatibility Planner on Codex:** the host offered a Planner for the complete group first (T1 rev 2 + T2 rev 2). Result handle: b4dc0aa7-7e65-3f93-9f39-a968a70e2354. It assessed both tasks and I did not read the full assessment.\n2. **Shared Worker Implement on Claude:** I forwarded the Planner handle as an artifact in a fresh selection, and the host found the two tasks compatible. Result handle: 83c9dc0d-49c5-3811-b971-072036c9e696. Both members were ready with no validation failures, and the host accepted the result.\n3. **Candidate Reviewer on Pi:** selected using the exact Worker handle as previous. Result handle: 6d98ec35-2cc2-3b7b-8950-b95b1f85224b. The reviewer ran a fresh consumer-oracle check, which passed (check artifact 505ea00e-3f5d-331c-a34b-3acac31b099e). It accepted T1 (\"Counting and ordering\") and T2 (\"Command-line contract\") separately, with no findings, and the host accepted the result.\n\nThe reviewer's result gives the candidate commit as identical to its base (ddb1ea6f42f4ffa8867fddafce6f1ea75085a3b6). That suggests the Worker produced no new commit, but I didn't look into why.\n\nAll three steps used one claim covering both tasks exactly (b1c2d3e4-0001-4000-8000-000000000001, generation 1). I renewed it during the runs and released it after the review. Both tasks are still at revision 2 with status Ready; I didn't change their revisions or acceptance and created no new tasks. No corrections were needed and nothing was blocked.\n\nStill to do:\n- Your independent final assessment of T1 and T2 at revision 2.\n- Integrating the reviewed candidate, which needs an integration target."
+  },
+  "hostResult": null,
+  "hostReceipt": {
+    "session": {
+      "value": "2b2ac90f-ab63-48c0-ad5f-d8b1639e94e5"
+    },
+    "attempt": {
+      "value": "6f76395f-bd18-4b4b-aac7-3e8d2a211876"
+    },
+    "directory": "/srv/nvme/tmp/cq4-implementation/20260928T074651-release/20260928T074702-cohort-consumer-claude-python/sessions/2b2ac90f-ab63-48c0-ad5f-d8b1639e94e5",
+    "phase": "Settled",
+    "processSucceeded": true,
+    "result": {
+      "value": "e6f3e5ff-c4b5-392d-bd82-c1df6aea54a6"
+    },
+    "report": {
+      "summary": "Both tasks went through independent candidate review, and the reviewer accepted each one. Nothing has been integrated (no integration target is configured), and neither task has been marked done.\n\nSteps, in order (all used StartChoice, the configured limits and Goal 1 rev 3 as guidance):\n1. **Compatibility Planner on Codex:** the host offered a Planner for the complete group first (T1 rev 2 + T2 rev 2). Result handle: b4dc0aa7-7e65-3f93-9f39-a968a70e2354. It assessed both tasks and I did not read the full assessment.\n2. **Shared Worker Implement on Claude:** I forwarded the Planner handle as an artifact in a fresh selection, and the host found the two tasks compatible. Result handle: 83c9dc0d-49c5-3811-b971-072036c9e696. Both members were ready with no validation failures, and the host accepted the result.\n3. **Candidate Reviewer on Pi:** selected using the exact Worker handle as previous. Result handle: 6d98ec35-2cc2-3b7b-8950-b95b1f85224b. The reviewer ran a fresh consumer-oracle check, which passed (check artifact 505ea00e-3f5d-331c-a34b-3acac31b099e). It accepted T1 (\"Counting and ordering\") and T2 (\"Command-line contract\") separately, with no findings, and the host accepted the result.\n\nThe reviewer's result gives the candidate commit as identical to its base (ddb1ea6f42f4ffa8867fddafce6f1ea75085a3b6). That suggests the Worker produced no new commit, but I didn't look into why.\n\nAll three steps used one claim covering both tasks exactly (b1c2d3e4-0001-4000-8000-000000000001, generation 1). I renewed it during the runs and released it after the review. Both tasks are still at revision 2 with status Ready; I didn't change their revisions or acceptance and created no new tasks. No corrections were needed and nothing was blocked.\n\nStill to do:\n- Your independent final assessment of T1 and T2 at revision 2.\n- Integrating the reviewed candidate, which needs an integration target."
+    },
+    "usageDelivered": true,
+    "problem": null
+  }
+}

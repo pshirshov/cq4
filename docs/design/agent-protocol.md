@@ -1,0 +1,175 @@
+# Agent roles, real inputs and protocol
+
+Inspected 2026-09-28 against implementation `39f4d29` and retained native consumer executions. This describes the implemented system. The alternative session design at the end is a proposal, not an available mode.
+
+## 1. Inventory
+
+CQ has **four dispatched child roles and one governing model role**. A role is independent of its harness/model: each can use a configured Claude, Codex or Pi route.
+
+| Role | Modes | Job | Final model report |
+| --- | --- | --- | --- |
+| Governor | Optional Begin, Advance, Review or Upstream workflow | Select work, acquire claims, dispatch by handles, apply proposals and request reviewed integration | `GoverningReport`: `{"summary":"…"}` |
+| Explorer | Investigate, Research | Inspect evidence, distinguish explanations, identify uncertainty and useful experiments | `ChildReport.Evidence` |
+| Planner | One mode; planning and cohort compatibility are two uses | Propose ledger changes or assess a complete group's ability to share implementation | `ChildReport.Plan` |
+| Worker | Implement, Probe, ResolveConflict | Execute/edit in an isolated worktree; implement, experiment or resolve a prepared combination | `ChildReport.Work`; Probe returns `Evidence` |
+| Reviewer | Candidate, Plan, Audit | Independently assess an exact candidate, proposal/compatibility assessment, or evidence | `ChildReport.Review` |
+
+`Human` and `Collector` also appear in the authorization enum. They are operator and host identities, not model agents. The supervisor, guardian, cohort selector, input assembler and usage collector are program components. There is no separate researcher, investigator, merger, tester or cohort-manager agent. The release evaluator's independent assessment uses another managed Governor/Reviewer run; “assessor” is usage attribution, not an additional CQ role.
+
+An existing interactive assistant can be an **outer caller**. The exported four workflow commands currently ask it to invoke `cq run`; the managed Governor is another session. Begin/Advance/Review/Upstream are workflows, not four more agents. Development-time Astra reviewers of CQ itself are outside this product inventory.
+
+Sources: [role/mode/report contracts](../../models/cq-api.baboon), [prompt selection](../../host/src/main/scala/cq/host/ChildInstructions.scala), [workflow entrypoints](workflows.md).
+
+## 2. What “the initial prompt” contains
+
+The host supplies both **instructions** and **input data**. A short user request alone is not the full input.
+
+For the Governor, instructions come from `SupervisorProgram.Instructions`. Its stdin is a generated `GoverningInput` with project identity/endpoint, configured routes, named checks, execution limits, optional integration target, the user's request, and optional typed workflow plus its installed instructions. It receives check names; child execution input contains the configured check commands.
+
+For every child, the host loads the role/mode resource and constructs:
+
+```text
+ChildExecutionInput
+  input.project
+  input.request     exact revisions, work/mode, harness, fence, limits, context handles
+  input.members     complete assigned ItemViews, including acceptance and relationships
+  input.guidance    complete contextual ItemViews
+  input.artifacts   resolved metadata and full bodies
+  input.previous    complete previous ChildResult, or null
+  base              exact workspace Git commit
+  checks            configured named command vectors and limits
+```
+
+The Governor passes handles. The host resolves them, reads the child prompt and prior result, and supplies them directly to the child. The child can still receive substantial context; the saving is that full prompts/results do not routinely pass through the Governor's context. No measured net token saving is implied.
+
+Harness-specific delivery:
+
+| Harness | Instructions and final-output mechanism |
+| --- | --- |
+| Claude | `--system-prompt`, JSON stdin; native `--json-schema` structured output; streamed events collected by the host |
+| Codex | `developer_instructions`, JSON stdin via `exec … -`; output schema and final-message file; the host adds canonical argument schemas for affected large MCP tool schemas |
+| Pi | `--system-prompt`, JSON stdin; output schema appended to instructions; bundled extension exposes the MCP tools; the host validates the final JSON |
+
+Only Workers receive native shell/edit tools. Other roles use their CQ tools. The harness adapters disable unrelated native subagents and other capabilities according to the pinned harness's controls. These are the implemented cooperative-agent restrictions; they do not provide hostile-worker isolation.
+
+Sources: [governing assembly](../../server/src/main/scala/cq/server/SupervisorRole.scala), [child assembly](../../server/src/main/scala/cq/server/ChildRunner.scala), [three adapters](../../host/src/main/scala/cq/host/HarnessAdapter.scala), [native schema adaptations](../../server/src/main/scala/cq/server/McpSchemas.scala).
+
+## 3. Complete real examples
+
+The linked JSON files contain **actual saved instructions, complete initial input, final model report, host result and compact receipt**. They are documentation bundles, not a new wire envelope. Each includes original paths, attempt identity, artifact identities and SHA-256 provenance. JSON is formatted for inspection; the original semantic values and instruction text are preserved. No private MCP configuration or credentials are copied. Historical endpoints are evidence, not live addresses to call.
+
+| Example | Actual route and assignment | Observed report / host projection |
+| --- | --- | --- |
+| [Governor](../examples/agent-protocol/governor.json) | Claude / `claude-opus-5-5`; advance the Python word-frequency pair through independent review | Summary plus result handle `e6f3e5ff-c4b5-392d-bd82-c1df6aea54a6`; no integration target |
+| [Explorer](../examples/agent-protocol/explorer.json) | Codex / `gpt-6-sol`; Investigate `D1@1`, an ASCII delimiter defect | One Findings member, citations, explicit uncertainty and requested executable probes; next `Plan` |
+| [Planner](../examples/agent-protocol/planner.json) | Codex / `gpt-6-sol`; assess `T1@2` and `T2@2` together, with `G1@3` guidance | Two Assessed members, Compatible whole-group assessment, acceptance/check mapping, `proposal:null`; next `ConsiderGrouping` |
+| [Worker](../examples/agent-protocol/worker.json) | Claude / `claude-opus-5-5`; Implement the same pair with the Planner artifact resolved into input | Two CandidateReady members; host captures `ddb1ea6f42f4ffa8867fddafce6f1ea75085a3b6`, records checks; next `Review` |
+| [Reviewer](../examples/agent-protocol/reviewer.json) | Pi / `gpt-5.5`; Candidate review with the entire Worker result supplied as `previous` | Two Accepted members, no findings, `proposal:null`; next `ConsiderAcceptance` |
+
+These examples come from the retained native release corpus, not newly simulated runs. Explorer comes from the defect process; the other four come from one cohort execution. Other live corpus modes include Explorer/Research, Worker/Probe and Reviewer/Plan and Audit. This example set does not claim a real-model ResolveConflict execution; that mode's installed instructions and deterministic combination checks are documented separately.
+
+### Governor
+
+The real request begins:
+
+> Advance the two existing related tasks under the supplied goal through independent candidate review. Keep their exact revisions for deferred independent assessment; do not create replacement tasks or edit their acceptance.
+
+The request goes on to require a Codex compatibility Planner, Claude Worker, Pi Reviewer, a fresh configured check, complete-group claims and handle forwarding. The complete request and workflow are in the example's `initialInput`; `systemInstructions` contains the actual higher-priority instructions.
+
+The Governor returns only a bounded `summary` string. Question IDs, choices, blockers and remaining work currently live in that prose; they are **not separate structured fields**. The host adds process success, usage-delivery state and the result handle in `SupervisorReceipt`.
+
+The saved Governor summary contains an incorrect inference: it treats the reviewer's equal base/candidate as suggesting the Worker made no new commit. The Worker host result shows base `b31591b99b83a3caa54d39160e8498463ff2feaa` and candidate `ddb1ea6f42f4ffa8867fddafce6f1ea75085a3b6`. A reviewer starts at the candidate, so its equality is expected. The example preserves the actual statement; model narrative is not authoritative Git evidence.
+
+### Explorer
+
+The installed instruction starts “You are CQ's explorer” and permits scoped CQ/workspace reads only. The example input includes the actual defect, reproduction text and fixture revision. Its final report identifies `re.findall(r"\w+", text)` as the likely cause, cites source files, says it could not execute the test, and requests a Worker probe. It marks authored evidence `ModelDeclared`.
+
+Both modes return one Evidence member per assigned item: `Findings`, `Inconclusive`, `Blocked` or `Failed`, with summary, evidence, uncertainties and requested probes. Investigate emphasizes competing explanations; Research answers an empirical question. They share [installed instructions](../../host/src/main/resources/cq/prompts/explore.md).
+
+### Planner
+
+The real assigned task includes:
+
+> Read UTF-8 stdin, tokenize maximal ASCII [A-Za-z]+ runs, normalize ASCII lowercase, count and sort by descending count then ascending word; empty/no-word input emits nothing.
+
+The complete input also contains the second task's independent criteria and the goal's specification. The Planner reports both members `Assessed`, a shared objective, dependency/interference analysis, and a criterion-by-criterion check/inspection mapping. It does not propose a mutation in this run.
+
+For planning, each member is `Proposed`, `Assessed`, `Blocked` or `Abstained`. A Proposed member requires a typed proposal using `Create`, `Replace`, `Produce` or `Reference`. The Planner supplies no caller authority, request identity, expected revision or claim fence inside the proposal. The Governor previews/applies its stored result handle. Compatibility reports assess entire groups of two to four assigned tasks; labels or a shared passing test are insufficient. [Installed instructions](../../host/src/main/resources/cq/prompts/plan.md).
+
+### Worker
+
+The real Implement input contains both complete tasks, guidance, the resolved Planner report, the workspace base and `consumer-oracle` command configuration. Its final Work report has one `CandidateReady` result per task and describes the source/tests it wrote. The model does not supply its own authoritative candidate commit or validation evidence: the host adds those after capture/checks.
+
+Implement and ResolveConflict return `CandidateReady`, `Blocked` or `Failed` for every member. Probe returns Evidence and publishes no implementation candidate. Workers may edit/run commands, but may not mutate CQ ledgers, dispatch children, commit, move refs or integrate. A resolver with a Combination artifact must read **every page of `workspace.MergeReport`** before deciding how to resolve it. A conflict can exist without unmerged file entries.
+
+Installed instructions: [Implement](../../host/src/main/resources/cq/prompts/implement.md), [Probe](../../host/src/main/resources/cq/prompts/probe.md), [ResolveConflict](../../host/src/main/resources/cq/prompts/resolveconflict.md).
+
+### Reviewer
+
+The real Candidate input embeds the preceding Work report, exact candidate and host validation handles. Its final report is a `Review` with exactly one `Accepted` entry for each assigned task, empty findings, and `proposal:null`. A fresh configured `consumer-oracle` execution is retained by the host.
+
+All review modes require one `Accepted`, `ChangesRequested` or `Blocked` verdict per member. Non-accepted verdicts require findings. Candidate cannot propose ledger changes. Plan/Audit may include an advisory follow-up proposal only when there are ChangesRequested members; its existing mutation endpoints must belong to those members. No Reviewer edits files, mutates ledgers, dispatches children or integrates.
+
+Candidate may request named host checks. Requesting a check is not universally mandatory; the concrete assignment can require it, as this real example does. Once requested, it must reach terminal published evidence before the Reviewer returns. Plan/Audit cannot execute checks. [Candidate instructions](../../host/src/main/resources/cq/prompts/review-candidate.md); [Plan/Audit instructions](../../host/src/main/resources/cq/prompts/review-proposal.md).
+
+## 4. Endpoints and required calls
+
+There are two different MCP servers. Both use `POST /mcp` with scoped bearer credentials:
+
+| Server | Location | Agent-visible tools |
+| --- | --- | --- |
+| `cq` | Durable CQ server, configured project endpoint | Governor: `search`, `read`, `graph`, `change`, `apply`, `claim`, `usage`; children: `search`, `read`, `usage` |
+| `cq_host` | Private loopback port owned by this supervisor process | Governor: `dispatch`; children: `workspace` |
+
+These are tool names within MCP, not paths such as `/dispatch`. The harness/bridge performs MCP initialization and discovery. The model invokes tools through its harness. For example, a workspace read has this transport shape:
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"workspace","arguments":{"Read":{"path":"README.md","offset":0,"limit":8192}}}}
+```
+
+Claude presents names such as `mcp__cq_host__workspace`; Pi registers `cq_host_workspace`; Codex exposes configured MCP tools through its tool host. Exact presentation differs; server/tool identity and generated argument contract do not.
+
+### Required sequence, conditional on the work
+
+| Actor / operation | Protocol obligation |
+| --- | --- |
+| Governor dispatching a workflow child | `cq_host.dispatch.Select` with explicit roots/work/context → `cq.claim` for all members of one choice → `cq_host.dispatch.StartChoice` with choice ID, route and current fence → `Status` until settled. Selection itself acquires no claim. Reuse/renew a valid owned claim; do not acquire overlapping claims blindly. |
+| Governor in a direct non-workflow run | May use exact-assignment `dispatch.Start`; managed workflows reject that bypass. |
+| Governor applying a Planner proposal | Obtain the process-required independent Plan review; inspect `cq.read` selection `Proposal`, then `cq.apply` by result handle under current authority. Do not copy drafts into `change`. |
+| Governor correcting a rejected result | Forward result/review handles to the next Planner/Worker; obtain fresh independent review of the corrected identity. |
+| Governor integrating | `PrepareIntegration` with reviewer handle → poll `IntegrationStatus` → inspect frozen preview → `Integrate`; only `Recorded` establishes domain recording. No configured target means no integration. |
+| Governor handling an advanced target | `Combine` / `CombinationStatus` → Worker/ResolveConflict with prepared plan → fresh Candidate review → fresh integration. |
+| Explorer / Planner / any child | Use `cq.read/search` and workspace `Entries/Read` as evidence requires. There is no mandatory ceremonial read or usage call. Follow pagination when the evidence needed is paginated. |
+| Worker/ResolveConflict with Combination | Read all `workspace.MergeReport` pages. |
+| Reviewer/Candidate requesting a check | `workspace.Check` with a configured name; repeating it polls the same execution. Wait for `Completed`, inspect actual evidence, then return. Only one check may be active. |
+| Every child on completion | Return the correct final JSON branch, covering every assigned member exactly once. **No model-facing “submit result”, “upload usage” or “mark done” endpoint is required.** |
+
+Protocol/process obligations and enforcement differ. For example, instructions require meaningful evidence inspection; a syntactically valid read cannot prove that the model understood it. Claims, role permissions, exact revisions, workflow phase/scope, result shape and host admission are program checks. A passing check or Accepted review is not by itself completion or integration.
+
+`Status` returns at most 12 KiB: identities, phase/process state, outcome counts, next action, a bounded blocker, result handle, `detailsOmitted` and delivery state. It does not normally return successful narrative reports. Full `ChildResult` contains the report, base/candidate and validation; downstream roles receive that full result through host materialization. Explicit bounded `cq.read` artifact access permits necessary drill-down.
+
+The host, not the model, calls `/api/grant`, `/api/artifact`, `/api/usage`, `/api/admission` and `/api/integration` as needed. It registers attempts, assembles/stores inputs, maintains ownership, captures Git candidates, runs configured checks, validates/publishes results and collects usage. `/api/call` is the typed HTTP command interface used by host/CLI clients; it is not an extra completion hook a child must call. [Transport routes](../../server/src/main/scala/cq/server/Transport.scala), [private dispatch/workspace routing](../../server/src/main/scala/cq/server/LocalControl.scala), [compact projection](../../host/src/main/scala/cq/host/DispatchProjection.scala).
+
+## 5. Why `cq run codex …` exists
+
+The current syntax is `cq run codex --settings … --input …`; the same executable has server, client and supervisor roles. The shell script in the quickstart merely starts PostgreSQL and `cq serve`. It is optional convenience and is separate from the managed-session launcher discussed here.
+
+`cq run` establishes a local **execution owner** with the consumer repository, integration target, route configuration, credentials and session directory. It starts the private MCP service, creates isolated worktrees, materializes prompts/results, applies harness restrictions, owns process deadlines/termination, captures candidates/checks, and journals usage/publication for recovery. The durable server alone cannot safely infer that local context or access the consumer's Git repository and harness credentials.
+
+In the current implementation, the supervisor also launches the Governor as a batch child. When that Governor exits, its child hierarchy is terminated and reconciled. The private dispatch endpoint belongs to that managed session; it is not a persistent service that an arbitrary existing interactive session can attach to.
+
+Thus the literal command spelling is not inherently necessary, but the execution-owner responsibilities must live somewhere. Connecting an ordinary unrestricted harness to the durable domain MCP alone does not supply local dispatch, host prompt assembly, isolated execution, review/integration or managed usage accounting.
+
+### Options
+
+| Design | User experience | Status / consequence |
+| --- | --- | --- |
+| Current generated workflow commands | Start the harness normally; use the exported CQ skill/command and supply settings/scope | Implemented. It invokes `cq run` for you and surfaces a bounded receipt. There is still a separate batch Governor and unmetered outer-session overhead. See [exact native invocation paths](workflows.md#entry-points-and-execution). |
+| Local CQ host service, launched on demand by MCP or as a daemon | Start `codex`, `claude` or `pi` normally; the existing interactive session acts as Governor through CQ tools | Proposed. Move session creation and dispatch ownership behind a local service; keep existing child execution, handle passing, validation and integration machinery. This removes the extra batch Governor, not the host. |
+| CQ server owns execution | Browser/CLI submits work; a server-side worker starts harnesses against configured repositories | Proposed and requires changing R21, which says the durable CQ server never starts/holds harness processes. Repository access, credentials and process ownership move to that machine. A separately owned worker could preserve the server boundary. |
+
+For the second option, the concrete missing boundary is **attach/open/close a governing session**: bind a project, repository, routes, limits and permitted scope; issue private per-session authority; expose dispatch to the existing harness; define heartbeat/disconnect/cancellation and retained recovery. A stdio MCP host could live with the harness, avoiding a manually started daemon. Pi would still need its CQ extension/bridge. The existing model-independent services could be reused through another distage role. This preserves [R21's separation](../drafts/20260926-0957-cq-requirements-prompt.md#r21--cross-harness-dispatch-and-bounded-process-ownership) between durable server and local execution ownership.
+
+The tradeoff is that CQ no longer controls the outer harness's startup flags, native tools or all of its usage events. Server permissions and child restrictions remain enforceable, but the interactive Governor could have unrelated shell/tools. Usage must distinguish observable child spending from unavailable outer-session spending, with harness-specific collectors where supported. Session attachment must not silently reuse old claims or result-publication authority.
+
+**My recommendation:** retain the current batch path for automation and add an attachable local host for interactive use if avoiding a second Governor is the desired UX. The current extra governing session is an implementation choice, not a fundamental requirement of handle-based dispatch. This document does not implement or authorize that architectural change.

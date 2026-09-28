@@ -1,0 +1,372 @@
+{
+  "provenance": {
+    "description": "Actual retained execution. JSON values are pretty-printed; prompt and input artifact bodies are preserved as JSON string/value contents. This documentation envelope is not a wire contract.",
+    "role": "Explorer",
+    "harness": "Codex",
+    "model": "gpt-6-sol",
+    "attempt": "2e1c69c4-2c75-4d7f-ad1f-6e6598750b4e",
+    "sourceDirectory": "/srv/nvme/tmp/cq4-implementation/20260928T074651-release/20260928T080934-defect-begin/sessions/31ece6c2-d1c3-434b-94ff-cf7bb89334be/children/2e1c69c4-2c75-4d7f-ad1f-6e6598750b4e",
+    "sourceSha256": {
+      "/srv/nvme/tmp/cq4-implementation/20260928T074651-release/20260928T080934-defect-begin/sessions/31ece6c2-d1c3-434b-94ff-cf7bb89334be/children/2e1c69c4-2c75-4d7f-ad1f-6e6598750b4e/receipt.json": "3c9831bd7e610940e732c474b51022faaf8715343ae64b575e1616cad925ce24",
+      "/srv/nvme/tmp/cq4-implementation/20260928T074651-release/20260928T080934-defect-begin/sessions/31ece6c2-d1c3-434b-94ff-cf7bb89334be/children/2e1c69c4-2c75-4d7f-ad1f-6e6598750b4e/delivery/000001.json": "b711acc5c2cb317e47b7f4d43ed1d057b596ede26c41f9893b00b8d875f518e6",
+      "/srv/nvme/tmp/cq4-implementation/20260928T074651-release/20260928T080934-defect-begin/sessions/31ece6c2-d1c3-434b-94ff-cf7bb89334be/children/2e1c69c4-2c75-4d7f-ad1f-6e6598750b4e/ticket.json": "3f73f4224ac5d29bafffa499d60f20ce4c13e7f0e44abf721ac0b05559927dc6",
+      "/srv/nvme/tmp/cq4-implementation/20260928T074651-release/20260928T080934-defect-begin/sessions/31ece6c2-d1c3-434b-94ff-cf7bb89334be/children/2e1c69c4-2c75-4d7f-ad1f-6e6598750b4e/publication.json": "38d68b02884e0a885cac38d3d891da4c2061186de03afd2c20c615b6fcf0d169"
+    },
+    "promptArtifact": "a5da495f-bb9d-3964-b0ab-2c76aecf1327",
+    "promptUtf8Sha256": "4588a16761f29094bc1140a2eb510a114deb08534b5b901f4913d05a3759c412",
+    "inputArtifact": "d5822904-8443-32f3-95b3-0d665adff89a",
+    "inputUtf8Sha256": "d3f7a9c59d4651fb7fcd3a11cc3acb5559adc05156464963e16e86294cbdaece"
+  },
+  "systemInstructions": "You are CQ's explorer. The host supplies your exact assignment and context. Use only scoped CQ reads and the assigned workspace's bounded list/read tools. You cannot execute commands, edit source, change ledger records, integrate candidates or dispatch children.\n\nInvestigate mode gathers possible explanations for observed behavior and identifies observations that would distinguish them. Research mode gathers evidence addressing the assigned empirical question. Report requirements/preferences as user choices; propose executable probes for empirical uncertainty that cannot be resolved by reading. Do not invent measurements.\n\nReturn the generated Evidence report with exactly one entry per assigned member. Cite concrete source/artifact/URL evidence, mark all child-authored evidence ModelDeclared, and distinguish findings, inconclusive work, blockers and failure. Include bounded uncertainties and requested probes. Existing host evidence can be cited by identity; copying it does not grant you host-observed provenance. Keep item identities separate. The host stores the full report and returns only a compact projection to the governor.\n\nCanonical argument schemas for CQ tools affected by native schema compaction. Use these complete contracts when constructing tool arguments. Each $ref resolves against this document's $defs. They do not grant additional permissions.\n{\"tools\":{\"cq.read\":{\"additionalProperties\":false,\"properties\":{\"project\":{\"$ref\":\"#/$defs/d0\"},\"selection\":{\"$ref\":\"#/$defs/d1\"}},\"required\":[\"project\",\"selection\"],\"type\":\"object\"},\"cq.usage\":{\"additionalProperties\":false,\"properties\":{\"project\":{\"$ref\":\"#/$defs/d0\"},\"selection\":{\"$ref\":\"#/$defs/dn\"}},\"required\":[\"project\",\"selection\"],\"type\":\"object\"}},\"$defs\":{\"d0\":{\"additionalProperties\":false,\"properties\":{\"value\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"value\"],\"type\":\"object\"},\"d1\":{\"oneOf\":[{\"additionalProperties\":false,\"properties\":{\"Proposal\":{\"$ref\":\"#/$defs/d2\"}},\"required\":[\"Proposal\"],\"type\":\"object\"},{\"additionalProperties\":false,\"properties\":{\"Integration\":{\"$ref\":\"#/$defs/d4\"}},\"required\":[\"Integration\"],\"type\":\"object\"},{\"additionalProperties\":false,\"properties\":{\"Admission\":{\"$ref\":\"#/$defs/d6\"}},\"required\":[\"Admission\"],\"type\":\"object\"},{\"additionalProperties\":false,\"properties\":{\"Claims\":{\"$ref\":\"#/$defs/d8\"}},\"required\":[\"Claims\"],\"type\":\"object\"},{\"additionalProperties\":false,\"properties\":{\"Termination\":{\"$ref\":\"#/$defs/db\"}},\"required\":[\"Termination\"],\"type\":\"object\"},{\"additionalProperties\":false,\"properties\":{\"QueryComplete\":{\"$ref\":\"#/$defs/dd\"}},\"required\":[\"QueryComplete\"],\"type\":\"object\"},{\"additionalProperties\":false,\"properties\":{\"ArtifactInfo\":{\"$ref\":\"#/$defs/de\"}},\"required\":[\"ArtifactInfo\"],\"type\":\"object\"},{\"additionalProperties\":false,\"properties\":{\"ArtifactText\":{\"$ref\":\"#/$defs/df\"}},\"required\":[\"ArtifactText\"],\"type\":\"object\"},{\"additionalProperties\":false,\"properties\":{\"ItemDetail\":{\"$ref\":\"#/$defs/dg\"}},\"required\":[\"ItemDetail\"],\"type\":\"object\"},{\"additionalProperties\":false,\"properties\":{\"ItemDetails\":{\"$ref\":\"#/$defs/dh\"}},\"required\":[\"ItemDetails\"],\"type\":\"object\"},{\"additionalProperties\":false,\"properties\":{\"History\":{\"$ref\":\"#/$defs/dk\"}},\"required\":[\"History\"],\"type\":\"object\"},{\"additionalProperties\":false,\"properties\":{\"Changes\":{\"$ref\":\"#/$defs/dl\"}},\"required\":[\"Changes\"],\"type\":\"object\"}],\"type\":\"object\"},\"d2\":{\"additionalProperties\":false,\"properties\":{\"id\":{\"$ref\":\"#/$defs/d3\"}},\"required\":[\"id\"],\"type\":\"object\"},\"d3\":{\"additionalProperties\":false,\"properties\":{\"value\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"value\"],\"type\":\"object\"},\"d4\":{\"additionalProperties\":false,\"properties\":{\"id\":{\"$ref\":\"#/$defs/d5\"}},\"required\":[\"id\"],\"type\":\"object\"},\"d5\":{\"additionalProperties\":false,\"properties\":{\"value\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"value\"],\"type\":\"object\"},\"d6\":{\"additionalProperties\":false,\"properties\":{\"attempt\":{\"$ref\":\"#/$defs/d7\"}},\"required\":[\"attempt\"],\"type\":\"object\"},\"d7\":{\"additionalProperties\":false,\"properties\":{\"value\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"value\"],\"type\":\"object\"},\"d8\":{\"additionalProperties\":false,\"properties\":{\"members\":{\"items\":{\"$ref\":\"#/$defs/d9\"},\"type\":\"array\",\"uniqueItems\":true}},\"required\":[\"members\"],\"type\":\"object\"},\"d9\":{\"additionalProperties\":false,\"properties\":{\"ledger\":{\"$ref\":\"#/$defs/da\"},\"number\":{\"pattern\":\"^-?(0|[1-9][0-9]*)$\",\"type\":\"string\"},\"project\":{\"$ref\":\"#/$defs/d0\"}},\"required\":[\"project\",\"ledger\",\"number\"],\"type\":\"object\"},\"da\":{\"enum\":[\"Milestones\",\"Ideas\",\"Defects\",\"Goals\",\"Tasks\",\"Researches\",\"Hypothesis\",\"Questions\",\"Decisions\",\"Reviews\",\"Handoffs\",\"OperatorActions\",\"Memories\",\"Upstream\"],\"type\":\"string\"},\"db\":{\"additionalProperties\":false,\"properties\":{\"intent\":{\"$ref\":\"#/$defs/dc\"},\"roots\":{\"items\":{\"$ref\":\"#/$defs/d9\"},\"type\":\"array\",\"uniqueItems\":true}},\"required\":[\"roots\",\"intent\"],\"type\":\"object\"},\"dc\":{\"enum\":[\"Cancel\",\"Complete\"],\"type\":\"string\"},\"dd\":{\"additionalProperties\":false,\"properties\":{\"cursor\":{\"maximum\":2147483647,\"minimum\":-2147483648,\"type\":\"integer\"},\"limit\":{\"maximum\":2147483647,\"minimum\":-2147483648,\"type\":\"integer\"},\"query\":{\"type\":\"string\"}},\"required\":[\"query\",\"cursor\",\"limit\"],\"type\":\"object\"},\"de\":{\"additionalProperties\":false,\"properties\":{\"id\":{\"$ref\":\"#/$defs/d3\"}},\"required\":[\"id\"],\"type\":\"object\"},\"df\":{\"additionalProperties\":false,\"properties\":{\"id\":{\"$ref\":\"#/$defs/d3\"},\"limit\":{\"maximum\":2147483647,\"minimum\":-2147483648,\"type\":\"integer\"},\"offset\":{\"maximum\":2147483647,\"minimum\":-2147483648,\"type\":\"integer\"}},\"required\":[\"id\",\"offset\",\"limit\"],\"type\":\"object\"},\"dg\":{\"additionalProperties\":false,\"properties\":{\"id\":{\"$ref\":\"#/$defs/d9\"}},\"required\":[\"id\"],\"type\":\"object\"},\"dh\":{\"additionalProperties\":false,\"properties\":{\"bytes\":{\"maximum\":2147483647,\"minimum\":-2147483648,\"type\":\"integer\"},\"members\":{\"items\":{\"$ref\":\"#/$defs/di\"},\"type\":\"array\"}},\"required\":[\"members\",\"bytes\"],\"type\":\"object\"},\"di\":{\"additionalProperties\":false,\"properties\":{\"id\":{\"$ref\":\"#/$defs/d9\"},\"revision\":{\"$ref\":\"#/$defs/dj\"}},\"required\":[\"id\",\"revision\"],\"type\":\"object\"},\"dj\":{\"additionalProperties\":false,\"properties\":{\"value\":{\"pattern\":\"^-?(0|[1-9][0-9]*)$\",\"type\":\"string\"}},\"required\":[\"value\"],\"type\":\"object\"},\"dk\":{\"additionalProperties\":false,\"properties\":{\"before\":{\"$ref\":\"#/$defs/dj\"},\"id\":{\"$ref\":\"#/$defs/d9\"},\"limit\":{\"maximum\":2147483647,\"minimum\":-2147483648,\"type\":\"integer\"}},\"required\":[\"id\",\"before\",\"limit\"],\"type\":\"object\"},\"dl\":{\"additionalProperties\":false,\"properties\":{\"after\":{\"$ref\":\"#/$defs/dm\"},\"limit\":{\"maximum\":2147483647,\"minimum\":-2147483648,\"type\":\"integer\"}},\"required\":[\"after\",\"limit\"],\"type\":\"object\"},\"dm\":{\"additionalProperties\":false,\"properties\":{\"value\":{\"pattern\":\"^-?(0|[1-9][0-9]*)$\",\"type\":\"string\"}},\"required\":[\"value\"],\"type\":\"object\"},\"dn\":{\"oneOf\":[{\"additionalProperties\":false,\"properties\":{\"Summary\":{\"$ref\":\"#/$defs/do\"}},\"required\":[\"Summary\"],\"type\":\"object\"},{\"additionalProperties\":false,\"properties\":{\"Costs\":{\"$ref\":\"#/$defs/dw\"}},\"required\":[\"Costs\"],\"type\":\"object\"},{\"additionalProperties\":false,\"properties\":{\"Audit\":{\"$ref\":\"#/$defs/d10\"}},\"required\":[\"Audit\"],\"type\":\"object\"},{\"additionalProperties\":false,\"properties\":{\"Attempts\":{\"$ref\":\"#/$defs/d11\"}},\"required\":[\"Attempts\"],\"type\":\"object\"},{\"additionalProperties\":false,\"properties\":{\"Outcomes\":{\"$ref\":\"#/$defs/d12\"}},\"required\":[\"Outcomes\"],\"type\":\"object\"}],\"type\":\"object\"},\"do\":{\"additionalProperties\":false,\"properties\":{\"filter\":{\"$ref\":\"#/$defs/dp\"}},\"required\":[\"filter\"],\"type\":\"object\"},\"dp\":{\"oneOf\":[{\"additionalProperties\":false,\"properties\":{\"ProjectAll\":{\"$ref\":\"#/$defs/dq\"}},\"required\":[\"ProjectAll\"],\"type\":\"object\"},{\"additionalProperties\":false,\"properties\":{\"TaskOnly\":{\"$ref\":\"#/$defs/dr\"}},\"required\":[\"TaskOnly\"],\"type\":\"object\"},{\"additionalProperties\":false,\"properties\":{\"CohortOnly\":{\"$ref\":\"#/$defs/ds\"}},\"required\":[\"CohortOnly\"],\"type\":\"object\"},{\"additionalProperties\":false,\"properties\":{\"SessionOnly\":{\"$ref\":\"#/$defs/dt\"}},\"required\":[\"SessionOnly\"],\"type\":\"object\"},{\"additionalProperties\":false,\"properties\":{\"EvaluationOnly\":{\"$ref\":\"#/$defs/dv\"}},\"required\":[\"EvaluationOnly\"],\"type\":\"object\"}],\"type\":\"object\"},\"dq\":{\"additionalProperties\":false,\"type\":\"object\"},\"dr\":{\"additionalProperties\":false,\"properties\":{\"item\":{\"$ref\":\"#/$defs/d9\"}},\"required\":[\"item\"],\"type\":\"object\"},\"ds\":{\"additionalProperties\":false,\"properties\":{\"execution\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"execution\"],\"type\":\"object\"},\"dt\":{\"additionalProperties\":false,\"properties\":{\"id\":{\"$ref\":\"#/$defs/du\"}},\"required\":[\"id\"],\"type\":\"object\"},\"du\":{\"additionalProperties\":false,\"properties\":{\"value\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"value\"],\"type\":\"object\"},\"dv\":{\"additionalProperties\":false,\"properties\":{\"run\":{\"type\":\"string\"},\"scenario\":{\"oneOf\":[{\"type\":\"string\"},{\"type\":\"null\"}]}},\"required\":[\"run\",\"scenario\"],\"type\":\"object\"},\"dw\":{\"additionalProperties\":false,\"properties\":{\"after\":{\"oneOf\":[{\"$ref\":\"#/$defs/dx\"},{\"type\":\"null\"}]},\"filter\":{\"$ref\":\"#/$defs/dp\"},\"limit\":{\"maximum\":2147483647,\"minimum\":-2147483648,\"type\":\"integer\"},\"snapshot\":{\"oneOf\":[{\"pattern\":\"^-?(0|[1-9][0-9]*)$\",\"type\":\"string\"},{\"type\":\"null\"}]}},\"required\":[\"filter\",\"after\",\"snapshot\",\"limit\"],\"type\":\"object\"},\"dx\":{\"additionalProperties\":false,\"properties\":{\"attribution\":{\"$ref\":\"#/$defs/dy\"},\"basis\":{\"$ref\":\"#/$defs/dz\"},\"currency\":{\"type\":\"string\"},\"pricingVersion\":{\"oneOf\":[{\"type\":\"string\"},{\"type\":\"null\"}]}},\"required\":[\"attribution\",\"currency\",\"basis\",\"pricingVersion\"],\"type\":\"object\"},\"dy\":{\"enum\":[\"Direct\",\"Shared\",\"Unattributed\"],\"type\":\"string\"},\"dz\":{\"enum\":[\"ProviderEstimate\",\"PriceTable\",\"ActualBilling\",\"Unknown\"],\"type\":\"string\"},\"d10\":{\"additionalProperties\":false,\"properties\":{\"after\":{\"pattern\":\"^-?(0|[1-9][0-9]*)$\",\"type\":\"string\"},\"filter\":{\"$ref\":\"#/$defs/dp\"},\"limit\":{\"maximum\":2147483647,\"minimum\":-2147483648,\"type\":\"integer\"}},\"required\":[\"filter\",\"after\",\"limit\"],\"type\":\"object\"},\"d11\":{\"additionalProperties\":false,\"properties\":{\"after\":{\"oneOf\":[{\"$ref\":\"#/$defs/d7\"},{\"type\":\"null\"}]},\"filter\":{\"$ref\":\"#/$defs/dp\"},\"limit\":{\"maximum\":2147483647,\"minimum\":-2147483648,\"type\":\"integer\"},\"snapshot\":{\"oneOf\":[{\"pattern\":\"^-?(0|[1-9][0-9]*)$\",\"type\":\"string\"},{\"type\":\"null\"}]}},\"required\":[\"filter\",\"after\",\"snapshot\",\"limit\"],\"type\":\"object\"},\"d12\":{\"additionalProperties\":false,\"properties\":{\"after\":{\"pattern\":\"^-?(0|[1-9][0-9]*)$\",\"type\":\"string\"},\"attempt\":{\"$ref\":\"#/$defs/d7\"},\"limit\":{\"maximum\":2147483647,\"minimum\":-2147483648,\"type\":\"integer\"}},\"required\":[\"attempt\",\"after\",\"limit\"],\"type\":\"object\"}}}",
+  "initialInput": {
+    "input": {
+      "project": {
+        "value": "98762027-26d5-4f33-83f8-121361300aaa"
+      },
+      "request": {
+        "request": {
+          "value": "c5de497a-54c9-45ce-8ff5-703a85574962"
+        },
+        "work": {
+          "Explorer": {
+            "mode": "Investigate"
+          }
+        },
+        "harness": "Codex",
+        "members": [
+          {
+            "id": {
+              "project": {
+                "value": "98762027-26d5-4f33-83f8-121361300aaa"
+              },
+              "ledger": "Defects",
+              "number": "1"
+            },
+            "revision": {
+              "value": "1"
+            }
+          }
+        ],
+        "guidance": [],
+        "artifacts": [],
+        "previous": null,
+        "fence": {
+          "claim": {
+            "value": "7c000000-0000-4000-8000-0000000000d1"
+          },
+          "generation": "1"
+        },
+        "limits": {
+          "startupMillis": "10000",
+          "executionMillis": "900000",
+          "heartbeatMillis": "2000",
+          "graceMillis": "1000",
+          "killMillis": "3000",
+          "outputBytes": 8388608
+        }
+      },
+      "members": [
+        {
+          "item": {
+            "id": {
+              "project": {
+                "value": "98762027-26d5-4f33-83f8-121361300aaa"
+              },
+              "ledger": "Defects",
+              "number": "1"
+            },
+            "revision": {
+              "value": "1"
+            },
+            "draft": {
+              "title": "count_words: ASCII delimiter test fails — underscores, digits and non-ASCII letters retained in tokens",
+              "body": "Synthetic token-counting consumer (local synthetic dependency `synthetic_tokens.py`; no external upstream or submission endpoint).\n\nSpecification: the command reads UTF-8 stdin and writes lowercase ASCII words and counts as tab-separated lines, sorted by word. A word is a maximal `[A-Za-z]+` match. Digits, underscores and all other characters delimit words. Empty input produces no output and exits successfully. Run `python3 count_words.py`; verify with `python3 -m unittest -v`.\n\nFixture commit: 0e5f7a0842d922209fe88dd0454c65a76fb6172e\n\nObserved via runner-supplied reproduction (reported in the intake request; not independently host-observed by this governor): `python3 -m unittest -v` exits 1; stdout empty; test_ascii_delimiters FAILs, test_cli/test_count_sort_and_case/test_empty pass.\n\nstderr excerpt:\n```\nFAIL: test_ascii_delimiters (test_count_words.CountingTest.test_ascii_delimiters)\n  File \".../consumer/test_count_words.py\", line 15, in test_ascii_delimiters\n    self.assertEqual(counts(\"a_b 12 café\"), [(\"a\", 1), (\"b\", 1), (\"caf\", 1)])\nAssertionError: Lists differ: [('12', 1), ('a_b', 1), ('café', 1)] != [('a', 1), ('b', 1), ('caf', 1)]\nRan 4 tests in 0.023s\nFAILED (failures=1)\n```\n\nCause unknown. Candidate areas (not yet evidenced): token selection (regex/word class in synthetic_tokens.py or consumer), normalization (case/Unicode handling), aggregation (counting/sorting).",
+              "labels": [
+                "synthetic-dependency",
+                "tokenization"
+              ],
+              "archived": false,
+              "content": {
+                "Defect": {
+                  "status": "Open",
+                  "severity": "Medium",
+                  "observed": "counts(\"a_b 12 café\") returns [('12', 1), ('a_b', 1), ('café', 1)]: digits and underscores are kept inside/as tokens and the non-ASCII letter é is retained. `python3 -m unittest -v` exits 1 with test_ascii_delimiters FAIL (3 other tests pass), stdout empty.",
+                  "expected": "Per specification, words are maximal [A-Za-z]+ matches, lowercased; digits, underscores and all other characters delimit words. counts(\"a_b 12 café\") == [('a', 1), ('b', 1), ('caf', 1)] and `python3 -m unittest -v` exits 0.",
+                  "reproduction": "At fixture commit 0e5f7a0842d922209fe88dd0454c65a76fb6172e, in the consumer directory run: `python3 -m unittest -v`. Observed exit 1, empty stdout, stderr reports FAIL test_ascii_delimiters at test_count_words.py line 15: `self.assertEqual(counts(\"a_b 12 café\"), [(\"a\", 1), (\"b\", 1), (\"caf\", 1)])` -> AssertionError: Lists differ: [('12', 1), ('a_b', 1), ('café', 1)] != [('a', 1), ('b', 1), ('caf', 1)]. Ran 4 tests; FAILED (failures=1).",
+                  "cause": null,
+                  "resolution": []
+                }
+              },
+              "citations": [
+                {
+                  "Commit": {
+                    "repository": "consumer",
+                    "hash": "0e5f7a0842d922209fe88dd0454c65a76fb6172e"
+                  }
+                },
+                {
+                  "File": {
+                    "path": "test_count_words.py",
+                    "revision": "0e5f7a0842d922209fe88dd0454c65a76fb6172e"
+                  }
+                },
+                {
+                  "File": {
+                    "path": "count_words.py",
+                    "revision": "0e5f7a0842d922209fe88dd0454c65a76fb6172e"
+                  }
+                },
+                {
+                  "File": {
+                    "path": "synthetic_tokens.py",
+                    "revision": "0e5f7a0842d922209fe88dd0454c65a76fb6172e"
+                  }
+                }
+              ]
+            },
+            "createdAt": "1790583006426",
+            "updatedAt": "1790583006426",
+            "provenance": {
+              "actor": {
+                "subject": "CQ governor",
+                "session": {
+                  "value": "31ece6c2-d1c3-434b-94ff-cf7bb89334be"
+                },
+                "role": "Governor"
+              },
+              "receivedAt": "1790583006426",
+              "request": {
+                "value": "5b0f3c1e-7a2d-4e11-9a0b-1d2c3e4f5a60"
+              }
+            }
+          },
+          "refs": []
+        }
+      ],
+      "guidance": [],
+      "artifacts": [],
+      "previous": null
+    },
+    "base": {
+      "value": "0e5f7a0842d922209fe88dd0454c65a76fb6172e"
+    },
+    "checks": []
+  },
+  "modelReport": {
+    "Evidence": {
+      "members": [
+        {
+          "item": {
+            "project": {
+              "value": "98762027-26d5-4f33-83f8-121361300aaa"
+            },
+            "ledger": "Defects",
+            "number": "1"
+          },
+          "disposition": "Findings",
+          "summary": "Source inspection identifies the `\\w+` expression in the local synthetic dependency as the likely cause of the ASCII delimiter failure.",
+          "evidence": [
+            {
+              "description": "The specification defines words as maximal [A-Za-z]+ matches. The delimiter test expects counts(\"a_b 12 café\") to return [('a', 1), ('b', 1), ('caf', 1)].",
+              "origin": "ModelDeclared",
+              "citations": [
+                {
+                  "File": {
+                    "path": "README.md",
+                    "revision": "0e5f7a0842d922209fe88dd0454c65a76fb6172e"
+                  }
+                },
+                {
+                  "File": {
+                    "path": "test_count_words.py",
+                    "revision": "0e5f7a0842d922209fe88dd0454c65a76fb6172e"
+                  }
+                }
+              ]
+            },
+            {
+              "description": "The tokenization boundary is the likely cause: tokens() uses re.findall(r\"\\w+\", text). Python's Unicode word class includes digits, underscores, and letters such as é, while counts() only lowercases, counts, and sorts the returned tokens. This explains the reported output without requiring an aggregation defect.",
+              "origin": "ModelDeclared",
+              "citations": [
+                {
+                  "File": {
+                    "path": "synthetic_tokens.py",
+                    "revision": "0e5f7a0842d922209fe88dd0454c65a76fb6172e"
+                  }
+                },
+                {
+                  "File": {
+                    "path": "count_words.py",
+                    "revision": "0e5f7a0842d922209fe88dd0454c65a76fb6172e"
+                  }
+                }
+              ]
+            }
+          ],
+          "uncertainties": [
+            "The explorer could not execute commands, so the reported test failure and predicted direct token output were not independently observed.",
+            "The source inspection does not establish whether any additional inputs expose separate defects."
+          ],
+          "requestedProbes": [
+            "At fixture commit 0e5f7a0842d922209fe88dd0454c65a76fb6172e, run `python3 -m unittest -v`; confirm the delimiter assertion fails as reported.",
+            "Run `python3 -c 'from synthetic_tokens import tokens; from count_words import counts; print(tokens(\"a_b 12 café\")); print(counts(\"a_b 12 café\"))'` to distinguish token selection from counting."
+          ]
+        }
+      ]
+    }
+  },
+  "hostResult": {
+    "attempt": {
+      "value": "2e1c69c4-2c75-4d7f-ad1f-6e6598750b4e"
+    },
+    "request": {
+      "request": {
+        "value": "c5de497a-54c9-45ce-8ff5-703a85574962"
+      },
+      "work": {
+        "Explorer": {
+          "mode": "Investigate"
+        }
+      },
+      "harness": "Codex",
+      "members": [
+        {
+          "id": {
+            "project": {
+              "value": "98762027-26d5-4f33-83f8-121361300aaa"
+            },
+            "ledger": "Defects",
+            "number": "1"
+          },
+          "revision": {
+            "value": "1"
+          }
+        }
+      ],
+      "guidance": [],
+      "artifacts": [],
+      "previous": null,
+      "fence": {
+        "claim": {
+          "value": "7c000000-0000-4000-8000-0000000000d1"
+        },
+        "generation": "1"
+      },
+      "limits": {
+        "startupMillis": "10000",
+        "executionMillis": "900000",
+        "heartbeatMillis": "2000",
+        "graceMillis": "1000",
+        "killMillis": "3000",
+        "outputBytes": 8388608
+      }
+    },
+    "base": {
+      "value": "0e5f7a0842d922209fe88dd0454c65a76fb6172e"
+    },
+    "candidate": null,
+    "report": {
+      "Evidence": {
+        "members": [
+          {
+            "item": {
+              "project": {
+                "value": "98762027-26d5-4f33-83f8-121361300aaa"
+              },
+              "ledger": "Defects",
+              "number": "1"
+            },
+            "disposition": "Findings",
+            "summary": "Source inspection identifies the `\\w+` expression in the local synthetic dependency as the likely cause of the ASCII delimiter failure.",
+            "evidence": [
+              {
+                "description": "The specification defines words as maximal [A-Za-z]+ matches. The delimiter test expects counts(\"a_b 12 café\") to return [('a', 1), ('b', 1), ('caf', 1)].",
+                "origin": "ModelDeclared",
+                "citations": [
+                  {
+                    "File": {
+                      "path": "README.md",
+                      "revision": "0e5f7a0842d922209fe88dd0454c65a76fb6172e"
+                    }
+                  },
+                  {
+                    "File": {
+                      "path": "test_count_words.py",
+                      "revision": "0e5f7a0842d922209fe88dd0454c65a76fb6172e"
+                    }
+                  }
+                ]
+              },
+              {
+                "description": "The tokenization boundary is the likely cause: tokens() uses re.findall(r\"\\w+\", text). Python's Unicode word class includes digits, underscores, and letters such as é, while counts() only lowercases, counts, and sorts the returned tokens. This explains the reported output without requiring an aggregation defect.",
+                "origin": "ModelDeclared",
+                "citations": [
+                  {
+                    "File": {
+                      "path": "synthetic_tokens.py",
+                      "revision": "0e5f7a0842d922209fe88dd0454c65a76fb6172e"
+                    }
+                  },
+                  {
+                    "File": {
+                      "path": "count_words.py",
+                      "revision": "0e5f7a0842d922209fe88dd0454c65a76fb6172e"
+                    }
+                  }
+                ]
+              }
+            ],
+            "uncertainties": [
+              "The explorer could not execute commands, so the reported test failure and predicted direct token output were not independently observed.",
+              "The source inspection does not establish whether any additional inputs expose separate defects."
+            ],
+            "requestedProbes": [
+              "At fixture commit 0e5f7a0842d922209fe88dd0454c65a76fb6172e, run `python3 -m unittest -v`; confirm the delimiter assertion fails as reported.",
+              "Run `python3 -c 'from synthetic_tokens import tokens; from count_words import counts; print(tokens(\"a_b 12 café\")); print(counts(\"a_b 12 café\"))'` to distinguish token selection from counting."
+            ]
+          }
+        ]
+      }
+    },
+    "validation": []
+  },
+  "hostReceipt": {
+    "request": {
+      "value": "c5de497a-54c9-45ce-8ff5-703a85574962"
+    },
+    "attempt": {
+      "value": "2e1c69c4-2c75-4d7f-ad1f-6e6598750b4e"
+    },
+    "phase": "Completed",
+    "process": "Settled",
+    "members": [
+      {
+        "project": {
+          "value": "98762027-26d5-4f33-83f8-121361300aaa"
+        },
+        "ledger": "Defects",
+        "number": "1"
+      }
+    ],
+    "counts": {
+      "ready": 0,
+      "accepted": 0,
+      "changesRequested": 0,
+      "blocked": 0,
+      "failed": 0,
+      "validationFailed": 0,
+      "validationUnknown": 0,
+      "proposed": 0,
+      "evidence": 1,
+      "abstained": 0,
+      "assessed": 0
+    },
+    "next": "Plan",
+    "blocker": null,
+    "result": {
+      "value": "749b96ac-950b-3874-a9c1-1e41e5a1c890"
+    },
+    "detailsOmitted": true,
+    "usageDelivered": true
+  }
+}

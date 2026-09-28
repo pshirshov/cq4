@@ -1,0 +1,619 @@
+{
+  "provenance": {
+    "description": "Actual retained execution. JSON values are pretty-printed; prompt and input artifact bodies are preserved as JSON string/value contents. This documentation envelope is not a wire contract.",
+    "role": "Planner",
+    "harness": "Codex",
+    "model": "gpt-6-sol",
+    "attempt": "9ebb4c3d-3d9b-4af9-83cb-0bc339d61c3b",
+    "sourceDirectory": "/srv/nvme/tmp/cq4-implementation/20260928T074651-release/20260928T074702-cohort-consumer-claude-python/sessions/2b2ac90f-ab63-48c0-ad5f-d8b1639e94e5/children/9ebb4c3d-3d9b-4af9-83cb-0bc339d61c3b",
+    "sourceSha256": {
+      "/srv/nvme/tmp/cq4-implementation/20260928T074651-release/20260928T074702-cohort-consumer-claude-python/sessions/2b2ac90f-ab63-48c0-ad5f-d8b1639e94e5/children/9ebb4c3d-3d9b-4af9-83cb-0bc339d61c3b/receipt.json": "9fae2e68b319f781a3f3a0238605bc6cbbb7e62ee9ab4e77a7bf92289d418484",
+      "/srv/nvme/tmp/cq4-implementation/20260928T074651-release/20260928T074702-cohort-consumer-claude-python/sessions/2b2ac90f-ab63-48c0-ad5f-d8b1639e94e5/children/9ebb4c3d-3d9b-4af9-83cb-0bc339d61c3b/delivery/000001.json": "54a8e431cae53a46224d46be64f88f2da390350a6ad417fdb6567d9fcdcc5c84",
+      "/srv/nvme/tmp/cq4-implementation/20260928T074651-release/20260928T074702-cohort-consumer-claude-python/sessions/2b2ac90f-ab63-48c0-ad5f-d8b1639e94e5/children/9ebb4c3d-3d9b-4af9-83cb-0bc339d61c3b/ticket.json": "e414bd3c6921f80ca71cf4e029632bf7db03901cd8831d6b9801560026108548",
+      "/srv/nvme/tmp/cq4-implementation/20260928T074651-release/20260928T074702-cohort-consumer-claude-python/sessions/2b2ac90f-ab63-48c0-ad5f-d8b1639e94e5/children/9ebb4c3d-3d9b-4af9-83cb-0bc339d61c3b/publication.json": "60e179ee18391cea48e5c1bd326845bffa59ea4ea86fe12108b9cb51fc34e611"
+    },
+    "promptArtifact": "80fad1f8-0632-37af-8442-56ed6bc98488",
+    "promptUtf8Sha256": "32d76aaa63789ba3b78431ca5d1cbb7d90363dce809e4e8492ccb89bac759fd9",
+    "inputArtifact": "afb197c9-58fa-36a4-ab46-51e588de35ab",
+    "inputUtf8Sha256": "6aa34869721cc248d974fea8e1c6dffbf72c4f84c3d31661976f9a8ca4305fc6"
+  },
+  "systemInstructions": "You are CQ's planner. The host supplies exact assigned item revisions, context and prior results. Read the material directly. Use scoped CQ reads and bounded workspace reads; do not execute, edit files, mutate ledgers or dispatch children.\n\nPropose the next bounded, useful step. Derive goals from intake; produce tasks/research/questions/decisions and other artifacts from existing assigned producers. Milestones organize process artifacts, not intake or goal ownership. Requirements/preferences need user choices; empirical uncertainty needs research/probing. Preserve each member's identity and acceptance criteria. Readiness informs the process; schema-valid correction and reopening remain permitted.\n\nReturn Plan with exactly one Proposed, Assessed, Blocked or Abstained outcome and concise explanation per member. If any member is Proposed, include the typed proposal. Existing mutation endpoints must be Proposed assigned members; guidance is read-only context. Proposals have no authority, request identity, expected revision or fence fields. Use only generated Create/Replace/Produce/Reference operations. Do not change the same existing item twice in one batch. New IDs are allocated by the server; further relationships can be proposed in another round using those IDs. Do not fabricate host/human evidence or confirmation.\n\nReference changes both endpoints, including the inverse reference: several links sharing a parent would change that parent repeatedly and fail atomically. For several new children, use one Produce(parent, drafts) operation; it allocates all children and changes the parent once. For relationships between existing records, propose separate valid batches and refresh the affected revisions after each acknowledgement. Count Produce's producer and both Reference endpoints when checking overlap with other operations.\n\nFor related assigned tasks, assess whether their implementation can share one candidate. Return assessments for non-overlapping complete groups of two to four exact assigned task revisions. State Compatible, Unknown or Incompatible, one shared change objective, dependency interactions and possible interference. For each member map every acceptance criterion by its zero-based index to configured check names and an explicit inspection method. Only use checks from the supplied execution input. Common labels, files, pairwise overlap or one shared passing check do not prove compatibility of the entire group. Use Unknown when the available evidence is insufficient. An Assessed member must belong to an assessment; compatibility-only reports use proposal null and do not invent ledger mutations. Use assessments [] when no group is assessed.\n\nThe governor previews and chooses whether to apply the immutable result by handle. Full drafts and reasoning remain in this result. A proposed plan is not an accepted review or completed implementation. Return no proposal when blocked or abstaining on every member.\n\nCanonical argument schemas for CQ tools affected by native schema compaction. Use these complete contracts when constructing tool arguments. Each $ref resolves against this document's $defs. They do not grant additional permissions.\n{\"tools\":{\"cq.read\":{\"additionalProperties\":false,\"properties\":{\"project\":{\"$ref\":\"#/$defs/d0\"},\"selection\":{\"$ref\":\"#/$defs/d1\"}},\"required\":[\"project\",\"selection\"],\"type\":\"object\"},\"cq.usage\":{\"additionalProperties\":false,\"properties\":{\"project\":{\"$ref\":\"#/$defs/d0\"},\"selection\":{\"$ref\":\"#/$defs/dn\"}},\"required\":[\"project\",\"selection\"],\"type\":\"object\"}},\"$defs\":{\"d0\":{\"additionalProperties\":false,\"properties\":{\"value\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"value\"],\"type\":\"object\"},\"d1\":{\"oneOf\":[{\"additionalProperties\":false,\"properties\":{\"Proposal\":{\"$ref\":\"#/$defs/d2\"}},\"required\":[\"Proposal\"],\"type\":\"object\"},{\"additionalProperties\":false,\"properties\":{\"Integration\":{\"$ref\":\"#/$defs/d4\"}},\"required\":[\"Integration\"],\"type\":\"object\"},{\"additionalProperties\":false,\"properties\":{\"Admission\":{\"$ref\":\"#/$defs/d6\"}},\"required\":[\"Admission\"],\"type\":\"object\"},{\"additionalProperties\":false,\"properties\":{\"Claims\":{\"$ref\":\"#/$defs/d8\"}},\"required\":[\"Claims\"],\"type\":\"object\"},{\"additionalProperties\":false,\"properties\":{\"Termination\":{\"$ref\":\"#/$defs/db\"}},\"required\":[\"Termination\"],\"type\":\"object\"},{\"additionalProperties\":false,\"properties\":{\"QueryComplete\":{\"$ref\":\"#/$defs/dd\"}},\"required\":[\"QueryComplete\"],\"type\":\"object\"},{\"additionalProperties\":false,\"properties\":{\"ArtifactInfo\":{\"$ref\":\"#/$defs/de\"}},\"required\":[\"ArtifactInfo\"],\"type\":\"object\"},{\"additionalProperties\":false,\"properties\":{\"ArtifactText\":{\"$ref\":\"#/$defs/df\"}},\"required\":[\"ArtifactText\"],\"type\":\"object\"},{\"additionalProperties\":false,\"properties\":{\"ItemDetail\":{\"$ref\":\"#/$defs/dg\"}},\"required\":[\"ItemDetail\"],\"type\":\"object\"},{\"additionalProperties\":false,\"properties\":{\"ItemDetails\":{\"$ref\":\"#/$defs/dh\"}},\"required\":[\"ItemDetails\"],\"type\":\"object\"},{\"additionalProperties\":false,\"properties\":{\"History\":{\"$ref\":\"#/$defs/dk\"}},\"required\":[\"History\"],\"type\":\"object\"},{\"additionalProperties\":false,\"properties\":{\"Changes\":{\"$ref\":\"#/$defs/dl\"}},\"required\":[\"Changes\"],\"type\":\"object\"}],\"type\":\"object\"},\"d2\":{\"additionalProperties\":false,\"properties\":{\"id\":{\"$ref\":\"#/$defs/d3\"}},\"required\":[\"id\"],\"type\":\"object\"},\"d3\":{\"additionalProperties\":false,\"properties\":{\"value\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"value\"],\"type\":\"object\"},\"d4\":{\"additionalProperties\":false,\"properties\":{\"id\":{\"$ref\":\"#/$defs/d5\"}},\"required\":[\"id\"],\"type\":\"object\"},\"d5\":{\"additionalProperties\":false,\"properties\":{\"value\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"value\"],\"type\":\"object\"},\"d6\":{\"additionalProperties\":false,\"properties\":{\"attempt\":{\"$ref\":\"#/$defs/d7\"}},\"required\":[\"attempt\"],\"type\":\"object\"},\"d7\":{\"additionalProperties\":false,\"properties\":{\"value\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"value\"],\"type\":\"object\"},\"d8\":{\"additionalProperties\":false,\"properties\":{\"members\":{\"items\":{\"$ref\":\"#/$defs/d9\"},\"type\":\"array\",\"uniqueItems\":true}},\"required\":[\"members\"],\"type\":\"object\"},\"d9\":{\"additionalProperties\":false,\"properties\":{\"ledger\":{\"$ref\":\"#/$defs/da\"},\"number\":{\"pattern\":\"^-?(0|[1-9][0-9]*)$\",\"type\":\"string\"},\"project\":{\"$ref\":\"#/$defs/d0\"}},\"required\":[\"project\",\"ledger\",\"number\"],\"type\":\"object\"},\"da\":{\"enum\":[\"Milestones\",\"Ideas\",\"Defects\",\"Goals\",\"Tasks\",\"Researches\",\"Hypothesis\",\"Questions\",\"Decisions\",\"Reviews\",\"Handoffs\",\"OperatorActions\",\"Memories\",\"Upstream\"],\"type\":\"string\"},\"db\":{\"additionalProperties\":false,\"properties\":{\"intent\":{\"$ref\":\"#/$defs/dc\"},\"roots\":{\"items\":{\"$ref\":\"#/$defs/d9\"},\"type\":\"array\",\"uniqueItems\":true}},\"required\":[\"roots\",\"intent\"],\"type\":\"object\"},\"dc\":{\"enum\":[\"Cancel\",\"Complete\"],\"type\":\"string\"},\"dd\":{\"additionalProperties\":false,\"properties\":{\"cursor\":{\"maximum\":2147483647,\"minimum\":-2147483648,\"type\":\"integer\"},\"limit\":{\"maximum\":2147483647,\"minimum\":-2147483648,\"type\":\"integer\"},\"query\":{\"type\":\"string\"}},\"required\":[\"query\",\"cursor\",\"limit\"],\"type\":\"object\"},\"de\":{\"additionalProperties\":false,\"properties\":{\"id\":{\"$ref\":\"#/$defs/d3\"}},\"required\":[\"id\"],\"type\":\"object\"},\"df\":{\"additionalProperties\":false,\"properties\":{\"id\":{\"$ref\":\"#/$defs/d3\"},\"limit\":{\"maximum\":2147483647,\"minimum\":-2147483648,\"type\":\"integer\"},\"offset\":{\"maximum\":2147483647,\"minimum\":-2147483648,\"type\":\"integer\"}},\"required\":[\"id\",\"offset\",\"limit\"],\"type\":\"object\"},\"dg\":{\"additionalProperties\":false,\"properties\":{\"id\":{\"$ref\":\"#/$defs/d9\"}},\"required\":[\"id\"],\"type\":\"object\"},\"dh\":{\"additionalProperties\":false,\"properties\":{\"bytes\":{\"maximum\":2147483647,\"minimum\":-2147483648,\"type\":\"integer\"},\"members\":{\"items\":{\"$ref\":\"#/$defs/di\"},\"type\":\"array\"}},\"required\":[\"members\",\"bytes\"],\"type\":\"object\"},\"di\":{\"additionalProperties\":false,\"properties\":{\"id\":{\"$ref\":\"#/$defs/d9\"},\"revision\":{\"$ref\":\"#/$defs/dj\"}},\"required\":[\"id\",\"revision\"],\"type\":\"object\"},\"dj\":{\"additionalProperties\":false,\"properties\":{\"value\":{\"pattern\":\"^-?(0|[1-9][0-9]*)$\",\"type\":\"string\"}},\"required\":[\"value\"],\"type\":\"object\"},\"dk\":{\"additionalProperties\":false,\"properties\":{\"before\":{\"$ref\":\"#/$defs/dj\"},\"id\":{\"$ref\":\"#/$defs/d9\"},\"limit\":{\"maximum\":2147483647,\"minimum\":-2147483648,\"type\":\"integer\"}},\"required\":[\"id\",\"before\",\"limit\"],\"type\":\"object\"},\"dl\":{\"additionalProperties\":false,\"properties\":{\"after\":{\"$ref\":\"#/$defs/dm\"},\"limit\":{\"maximum\":2147483647,\"minimum\":-2147483648,\"type\":\"integer\"}},\"required\":[\"after\",\"limit\"],\"type\":\"object\"},\"dm\":{\"additionalProperties\":false,\"properties\":{\"value\":{\"pattern\":\"^-?(0|[1-9][0-9]*)$\",\"type\":\"string\"}},\"required\":[\"value\"],\"type\":\"object\"},\"dn\":{\"oneOf\":[{\"additionalProperties\":false,\"properties\":{\"Summary\":{\"$ref\":\"#/$defs/do\"}},\"required\":[\"Summary\"],\"type\":\"object\"},{\"additionalProperties\":false,\"properties\":{\"Costs\":{\"$ref\":\"#/$defs/dw\"}},\"required\":[\"Costs\"],\"type\":\"object\"},{\"additionalProperties\":false,\"properties\":{\"Audit\":{\"$ref\":\"#/$defs/d10\"}},\"required\":[\"Audit\"],\"type\":\"object\"},{\"additionalProperties\":false,\"properties\":{\"Attempts\":{\"$ref\":\"#/$defs/d11\"}},\"required\":[\"Attempts\"],\"type\":\"object\"},{\"additionalProperties\":false,\"properties\":{\"Outcomes\":{\"$ref\":\"#/$defs/d12\"}},\"required\":[\"Outcomes\"],\"type\":\"object\"}],\"type\":\"object\"},\"do\":{\"additionalProperties\":false,\"properties\":{\"filter\":{\"$ref\":\"#/$defs/dp\"}},\"required\":[\"filter\"],\"type\":\"object\"},\"dp\":{\"oneOf\":[{\"additionalProperties\":false,\"properties\":{\"ProjectAll\":{\"$ref\":\"#/$defs/dq\"}},\"required\":[\"ProjectAll\"],\"type\":\"object\"},{\"additionalProperties\":false,\"properties\":{\"TaskOnly\":{\"$ref\":\"#/$defs/dr\"}},\"required\":[\"TaskOnly\"],\"type\":\"object\"},{\"additionalProperties\":false,\"properties\":{\"CohortOnly\":{\"$ref\":\"#/$defs/ds\"}},\"required\":[\"CohortOnly\"],\"type\":\"object\"},{\"additionalProperties\":false,\"properties\":{\"SessionOnly\":{\"$ref\":\"#/$defs/dt\"}},\"required\":[\"SessionOnly\"],\"type\":\"object\"},{\"additionalProperties\":false,\"properties\":{\"EvaluationOnly\":{\"$ref\":\"#/$defs/dv\"}},\"required\":[\"EvaluationOnly\"],\"type\":\"object\"}],\"type\":\"object\"},\"dq\":{\"additionalProperties\":false,\"type\":\"object\"},\"dr\":{\"additionalProperties\":false,\"properties\":{\"item\":{\"$ref\":\"#/$defs/d9\"}},\"required\":[\"item\"],\"type\":\"object\"},\"ds\":{\"additionalProperties\":false,\"properties\":{\"execution\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"execution\"],\"type\":\"object\"},\"dt\":{\"additionalProperties\":false,\"properties\":{\"id\":{\"$ref\":\"#/$defs/du\"}},\"required\":[\"id\"],\"type\":\"object\"},\"du\":{\"additionalProperties\":false,\"properties\":{\"value\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"value\"],\"type\":\"object\"},\"dv\":{\"additionalProperties\":false,\"properties\":{\"run\":{\"type\":\"string\"},\"scenario\":{\"oneOf\":[{\"type\":\"string\"},{\"type\":\"null\"}]}},\"required\":[\"run\",\"scenario\"],\"type\":\"object\"},\"dw\":{\"additionalProperties\":false,\"properties\":{\"after\":{\"oneOf\":[{\"$ref\":\"#/$defs/dx\"},{\"type\":\"null\"}]},\"filter\":{\"$ref\":\"#/$defs/dp\"},\"limit\":{\"maximum\":2147483647,\"minimum\":-2147483648,\"type\":\"integer\"},\"snapshot\":{\"oneOf\":[{\"pattern\":\"^-?(0|[1-9][0-9]*)$\",\"type\":\"string\"},{\"type\":\"null\"}]}},\"required\":[\"filter\",\"after\",\"snapshot\",\"limit\"],\"type\":\"object\"},\"dx\":{\"additionalProperties\":false,\"properties\":{\"attribution\":{\"$ref\":\"#/$defs/dy\"},\"basis\":{\"$ref\":\"#/$defs/dz\"},\"currency\":{\"type\":\"string\"},\"pricingVersion\":{\"oneOf\":[{\"type\":\"string\"},{\"type\":\"null\"}]}},\"required\":[\"attribution\",\"currency\",\"basis\",\"pricingVersion\"],\"type\":\"object\"},\"dy\":{\"enum\":[\"Direct\",\"Shared\",\"Unattributed\"],\"type\":\"string\"},\"dz\":{\"enum\":[\"ProviderEstimate\",\"PriceTable\",\"ActualBilling\",\"Unknown\"],\"type\":\"string\"},\"d10\":{\"additionalProperties\":false,\"properties\":{\"after\":{\"pattern\":\"^-?(0|[1-9][0-9]*)$\",\"type\":\"string\"},\"filter\":{\"$ref\":\"#/$defs/dp\"},\"limit\":{\"maximum\":2147483647,\"minimum\":-2147483648,\"type\":\"integer\"}},\"required\":[\"filter\",\"after\",\"limit\"],\"type\":\"object\"},\"d11\":{\"additionalProperties\":false,\"properties\":{\"after\":{\"oneOf\":[{\"$ref\":\"#/$defs/d7\"},{\"type\":\"null\"}]},\"filter\":{\"$ref\":\"#/$defs/dp\"},\"limit\":{\"maximum\":2147483647,\"minimum\":-2147483648,\"type\":\"integer\"},\"snapshot\":{\"oneOf\":[{\"pattern\":\"^-?(0|[1-9][0-9]*)$\",\"type\":\"string\"},{\"type\":\"null\"}]}},\"required\":[\"filter\",\"after\",\"snapshot\",\"limit\"],\"type\":\"object\"},\"d12\":{\"additionalProperties\":false,\"properties\":{\"after\":{\"pattern\":\"^-?(0|[1-9][0-9]*)$\",\"type\":\"string\"},\"attempt\":{\"$ref\":\"#/$defs/d7\"},\"limit\":{\"maximum\":2147483647,\"minimum\":-2147483648,\"type\":\"integer\"}},\"required\":[\"attempt\",\"after\",\"limit\"],\"type\":\"object\"}}}",
+  "initialInput": {
+    "input": {
+      "project": {
+        "value": "2ecd3f9d-43aa-42e0-b0d1-34b892e871d3"
+      },
+      "request": {
+        "request": {
+          "value": "cd4bef4d-0de2-46de-9540-6132c65a8915"
+        },
+        "work": {
+          "Planner": {}
+        },
+        "harness": "Codex",
+        "members": [
+          {
+            "id": {
+              "project": {
+                "value": "2ecd3f9d-43aa-42e0-b0d1-34b892e871d3"
+              },
+              "ledger": "Tasks",
+              "number": "1"
+            },
+            "revision": {
+              "value": "2"
+            }
+          },
+          {
+            "id": {
+              "project": {
+                "value": "2ecd3f9d-43aa-42e0-b0d1-34b892e871d3"
+              },
+              "ledger": "Tasks",
+              "number": "2"
+            },
+            "revision": {
+              "value": "2"
+            }
+          }
+        ],
+        "guidance": [
+          {
+            "id": {
+              "project": {
+                "value": "2ecd3f9d-43aa-42e0-b0d1-34b892e871d3"
+              },
+              "ledger": "Goals",
+              "number": "1"
+            },
+            "revision": {
+              "value": "3"
+            }
+          }
+        ],
+        "artifacts": [],
+        "previous": null,
+        "fence": {
+          "claim": {
+            "value": "b1c2d3e4-0001-4000-8000-000000000001"
+          },
+          "generation": "1"
+        },
+        "limits": {
+          "startupMillis": "10000",
+          "executionMillis": "900000",
+          "heartbeatMillis": "2000",
+          "graceMillis": "1000",
+          "killMillis": "3000",
+          "outputBytes": 8388608
+        }
+      },
+      "members": [
+        {
+          "item": {
+            "id": {
+              "project": {
+                "value": "2ecd3f9d-43aa-42e0-b0d1-34b892e871d3"
+              },
+              "ledger": "Tasks",
+              "number": "1"
+            },
+            "revision": {
+              "value": "2"
+            },
+            "draft": {
+              "title": "Counting and ordering",
+              "body": "Implement this task's separate acceptance criteria against the complete specification in the goal guidance.",
+              "labels": [],
+              "archived": false,
+              "content": {
+                "Task": {
+                  "status": "Ready",
+                  "acceptance": [
+                    "Read UTF-8 stdin, tokenize maximal ASCII [A-Za-z]+ runs, normalize ASCII lowercase, count and sort by descending count then ascending word; empty/no-word input emits nothing.",
+                    "Provide automated tokenization, Unicode-separator, normalization, tie-order and empty-input tests; document these rules in README."
+                  ],
+                  "result": null,
+                  "validation": []
+                }
+              },
+              "citations": []
+            },
+            "createdAt": "1790581625520",
+            "updatedAt": "1790581625541",
+            "provenance": {
+              "actor": {
+                "subject": "operator",
+                "session": {
+                  "value": "20e390e4-f8ee-4198-8dca-bca8b98fff96"
+                },
+                "role": "Human"
+              },
+              "receivedAt": "1790581625541",
+              "request": {
+                "value": "56909de1-a66a-4de9-abb0-3310558a6c9a"
+              }
+            }
+          },
+          "refs": [
+            {
+              "relation": "DerivedFrom",
+              "target": {
+                "project": {
+                  "value": "2ecd3f9d-43aa-42e0-b0d1-34b892e871d3"
+                },
+                "ledger": "Goals",
+                "number": "1"
+              }
+            }
+          ]
+        },
+        {
+          "item": {
+            "id": {
+              "project": {
+                "value": "2ecd3f9d-43aa-42e0-b0d1-34b892e871d3"
+              },
+              "ledger": "Tasks",
+              "number": "2"
+            },
+            "revision": {
+              "value": "2"
+            },
+            "draft": {
+              "title": "Command-line contract",
+              "body": "Implement this task's separate acceptance criteria against the complete specification in the goal guidance.",
+              "labels": [],
+              "archived": false,
+              "content": {
+                "Task": {
+                  "status": "Ready",
+                  "acceptance": [
+                    "Implement --top N for 1..1000, unknown/missing/invalid/out-of-range argument errors with exit 2, nonempty stderr and empty stdout; --help exits 0 with stdout usage and no stderr; normal success exits 0 without stderr.",
+                    "Provide the specified python launch/test commands, automated top-limit/argument/help tests and README usage, including option prefixes and oversized numeric input."
+                  ],
+                  "result": null,
+                  "validation": []
+                }
+              },
+              "citations": []
+            },
+            "createdAt": "1790581625520",
+            "updatedAt": "1790581625556",
+            "provenance": {
+              "actor": {
+                "subject": "operator",
+                "session": {
+                  "value": "20e390e4-f8ee-4198-8dca-bca8b98fff96"
+                },
+                "role": "Human"
+              },
+              "receivedAt": "1790581625556",
+              "request": {
+                "value": "186c256a-755e-4da1-b69c-3a50579395e0"
+              }
+            }
+          },
+          "refs": [
+            {
+              "relation": "DerivedFrom",
+              "target": {
+                "project": {
+                  "value": "2ecd3f9d-43aa-42e0-b0d1-34b892e871d3"
+                },
+                "ledger": "Goals",
+                "number": "1"
+              }
+            }
+          ]
+        }
+      ],
+      "guidance": [
+        {
+          "item": {
+            "id": {
+              "project": {
+                "value": "2ecd3f9d-43aa-42e0-b0d1-34b892e871d3"
+              },
+              "ledger": "Goals",
+              "number": "1"
+            },
+            "revision": {
+              "value": "3"
+            },
+            "draft": {
+              "title": "Word-frequency consumer",
+              "body": "# Word-frequency consumer\n\nImplement a small command-line application using only the standard library. The assigned language and launch command are specified in the evaluation request.\n\n- Read UTF-8 text from standard input. Words are maximal runs matching ASCII `[A-Za-z]+`; every other character is a separator. Normalize words to lowercase ASCII.\n- Count words and print one `word<TAB>count<NEWLINE>` record per word, sorted by descending count and then ascending word. Empty input or input without ASCII words produces empty output.\n- Accept optional `--top N`, where N is an integer from 1 through 1000 inclusive, to emit at most N records. With no option, emit all records.\n- Missing/invalid/out-of-range N, unknown options and positional arguments must exit 2, emit a nonempty diagnostic on stderr and emit no stdout. Argument errors take precedence over `--help`, regardless of argument order: validate the entire argument list before returning help.\n- Standalone `--help` must exit 0, print usage on stdout and emit no stderr. Successful normal processing exits 0 and emits no stderr.\n- Provide automated tests covering tokenization, normalization, sorting, top limits, empty input and argument errors, plus a short README with exact run/test commands.\n\nFor Python, `python -m wordfreq` must work from the repository root, and `python -m unittest discover -v` must discover and pass the consumer's tests. For Go, `go run .` must work from the root, and `go test ./...` must run and pass the consumer's tests. Include a Go module when using Go. The host will separately validate the candidate with configured checks.\n\n\nIndependent candidate review must execute the configured consumer-oracle check freshly and inspect acceptance separately for each assigned task.",
+              "labels": [],
+              "archived": false,
+              "content": {
+                "Goal": {
+                  "status": "Open",
+                  "outcome": "Deliver the specified consumer",
+                  "acceptance": [
+                    "Both task scopes independently reviewed"
+                  ],
+                  "scope": "python"
+                }
+              },
+              "citations": []
+            },
+            "createdAt": "1790581625520",
+            "updatedAt": "1790581625556",
+            "provenance": {
+              "actor": {
+                "subject": "operator",
+                "session": {
+                  "value": "20e390e4-f8ee-4198-8dca-bca8b98fff96"
+                },
+                "role": "Human"
+              },
+              "receivedAt": "1790581625556",
+              "request": {
+                "value": "186c256a-755e-4da1-b69c-3a50579395e0"
+              }
+            }
+          },
+          "refs": [
+            {
+              "relation": "Produces",
+              "target": {
+                "project": {
+                  "value": "2ecd3f9d-43aa-42e0-b0d1-34b892e871d3"
+                },
+                "ledger": "Tasks",
+                "number": "1"
+              }
+            },
+            {
+              "relation": "Produces",
+              "target": {
+                "project": {
+                  "value": "2ecd3f9d-43aa-42e0-b0d1-34b892e871d3"
+                },
+                "ledger": "Tasks",
+                "number": "2"
+              }
+            }
+          ]
+        }
+      ],
+      "artifacts": [],
+      "previous": null
+    },
+    "base": {
+      "value": "b31591b99b83a3caa54d39160e8498463ff2feaa"
+    },
+    "checks": [
+      {
+        "name": "consumer-oracle",
+        "command": [
+          "/nix/store/d64q19q1xjdwfhqx6czvrjgrhq0n3lcc-python3-3.14.7/bin/python3",
+          "/home/pavel/work/safe/cq4/cq4/dev/consumer-oracle.py",
+          "python"
+        ],
+        "executionMillis": "180000",
+        "outputBytes": 262144
+      }
+    ]
+  },
+  "modelReport": {
+    "Plan": {
+      "members": [
+        {
+          "item": {
+            "project": {
+              "value": "2ecd3f9d-43aa-42e0-b0d1-34b892e871d3"
+            },
+            "ledger": "Tasks",
+            "number": "1"
+          },
+          "disposition": "Assessed",
+          "summary": "Compatible with task 2 in one candidate; retain separate inspection of both counting and documentation criteria."
+        },
+        {
+          "item": {
+            "project": {
+              "value": "2ecd3f9d-43aa-42e0-b0d1-34b892e871d3"
+            },
+            "ledger": "Tasks",
+            "number": "2"
+          },
+          "disposition": "Assessed",
+          "summary": "Compatible with task 1 in one candidate; retain separate inspection of CLI, tests, and usage criteria."
+        }
+      ],
+      "proposal": null,
+      "assessments": [
+        {
+          "compatibility": "Compatible",
+          "objective": "Implement and independently review both task scopes in one standard-library Python word-frequency candidate.",
+          "dependencies": "Both tasks target one Python module. Counting and sorting provide the ordered records that --top limits; argument validation must finish before stdin processing, and the CLI must preserve the task 1 output format.",
+          "interference": "A shared entry point, tests, and README require coordination. Apply --top after the specified sort, and ensure argument errors take precedence over --help without producing stdout.",
+          "members": [
+            {
+              "member": {
+                "id": {
+                  "project": {
+                    "value": "2ecd3f9d-43aa-42e0-b0d1-34b892e871d3"
+                  },
+                  "ledger": "Tasks",
+                  "number": "1"
+                },
+                "revision": {
+                  "value": "2"
+                }
+              },
+              "acceptance": [
+                {
+                  "criterion": 0,
+                  "checks": [
+                    "consumer-oracle"
+                  ],
+                  "inspection": "Run the configured consumer-oracle check freshly; inspect its cases for ASCII tokenization, Unicode separators, lowercase normalization, count ordering, ties, and empty output."
+                },
+                {
+                  "criterion": 1,
+                  "checks": [
+                    "consumer-oracle"
+                  ],
+                  "inspection": "Inspect discovered unittest cases and README for the specified rules; run the configured check freshly to verify the consumer behavior."
+                }
+              ]
+            },
+            {
+              "member": {
+                "id": {
+                  "project": {
+                    "value": "2ecd3f9d-43aa-42e0-b0d1-34b892e871d3"
+                  },
+                  "ledger": "Tasks",
+                  "number": "2"
+                },
+                "revision": {
+                  "value": "2"
+                }
+              },
+              "acceptance": [
+                {
+                  "criterion": 0,
+                  "checks": [
+                    "consumer-oracle"
+                  ],
+                  "inspection": "Run the configured consumer-oracle check freshly; inspect cases for --top bounds, malformed and oversized values, unknown and positional arguments, error precedence over --help, exit codes, and stdout/stderr behavior."
+                },
+                {
+                  "criterion": 1,
+                  "checks": [
+                    "consumer-oracle"
+                  ],
+                  "inspection": "Inspect README usage and discovered unittest cases, including option prefixes and oversized numeric input; verify the documented python launch and test commands against the candidate."
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "hostResult": {
+    "attempt": {
+      "value": "9ebb4c3d-3d9b-4af9-83cb-0bc339d61c3b"
+    },
+    "request": {
+      "request": {
+        "value": "cd4bef4d-0de2-46de-9540-6132c65a8915"
+      },
+      "work": {
+        "Planner": {}
+      },
+      "harness": "Codex",
+      "members": [
+        {
+          "id": {
+            "project": {
+              "value": "2ecd3f9d-43aa-42e0-b0d1-34b892e871d3"
+            },
+            "ledger": "Tasks",
+            "number": "1"
+          },
+          "revision": {
+            "value": "2"
+          }
+        },
+        {
+          "id": {
+            "project": {
+              "value": "2ecd3f9d-43aa-42e0-b0d1-34b892e871d3"
+            },
+            "ledger": "Tasks",
+            "number": "2"
+          },
+          "revision": {
+            "value": "2"
+          }
+        }
+      ],
+      "guidance": [
+        {
+          "id": {
+            "project": {
+              "value": "2ecd3f9d-43aa-42e0-b0d1-34b892e871d3"
+            },
+            "ledger": "Goals",
+            "number": "1"
+          },
+          "revision": {
+            "value": "3"
+          }
+        }
+      ],
+      "artifacts": [],
+      "previous": null,
+      "fence": {
+        "claim": {
+          "value": "b1c2d3e4-0001-4000-8000-000000000001"
+        },
+        "generation": "1"
+      },
+      "limits": {
+        "startupMillis": "10000",
+        "executionMillis": "900000",
+        "heartbeatMillis": "2000",
+        "graceMillis": "1000",
+        "killMillis": "3000",
+        "outputBytes": 8388608
+      }
+    },
+    "base": {
+      "value": "b31591b99b83a3caa54d39160e8498463ff2feaa"
+    },
+    "candidate": null,
+    "report": {
+      "Plan": {
+        "members": [
+          {
+            "item": {
+              "project": {
+                "value": "2ecd3f9d-43aa-42e0-b0d1-34b892e871d3"
+              },
+              "ledger": "Tasks",
+              "number": "1"
+            },
+            "disposition": "Assessed",
+            "summary": "Compatible with task 2 in one candidate; retain separate inspection of both counting and documentation criteria."
+          },
+          {
+            "item": {
+              "project": {
+                "value": "2ecd3f9d-43aa-42e0-b0d1-34b892e871d3"
+              },
+              "ledger": "Tasks",
+              "number": "2"
+            },
+            "disposition": "Assessed",
+            "summary": "Compatible with task 1 in one candidate; retain separate inspection of CLI, tests, and usage criteria."
+          }
+        ],
+        "proposal": null,
+        "assessments": [
+          {
+            "compatibility": "Compatible",
+            "objective": "Implement and independently review both task scopes in one standard-library Python word-frequency candidate.",
+            "dependencies": "Both tasks target one Python module. Counting and sorting provide the ordered records that --top limits; argument validation must finish before stdin processing, and the CLI must preserve the task 1 output format.",
+            "interference": "A shared entry point, tests, and README require coordination. Apply --top after the specified sort, and ensure argument errors take precedence over --help without producing stdout.",
+            "members": [
+              {
+                "member": {
+                  "id": {
+                    "project": {
+                      "value": "2ecd3f9d-43aa-42e0-b0d1-34b892e871d3"
+                    },
+                    "ledger": "Tasks",
+                    "number": "1"
+                  },
+                  "revision": {
+                    "value": "2"
+                  }
+                },
+                "acceptance": [
+                  {
+                    "criterion": 0,
+                    "checks": [
+                      "consumer-oracle"
+                    ],
+                    "inspection": "Run the configured consumer-oracle check freshly; inspect its cases for ASCII tokenization, Unicode separators, lowercase normalization, count ordering, ties, and empty output."
+                  },
+                  {
+                    "criterion": 1,
+                    "checks": [
+                      "consumer-oracle"
+                    ],
+                    "inspection": "Inspect discovered unittest cases and README for the specified rules; run the configured check freshly to verify the consumer behavior."
+                  }
+                ]
+              },
+              {
+                "member": {
+                  "id": {
+                    "project": {
+                      "value": "2ecd3f9d-43aa-42e0-b0d1-34b892e871d3"
+                    },
+                    "ledger": "Tasks",
+                    "number": "2"
+                  },
+                  "revision": {
+                    "value": "2"
+                  }
+                },
+                "acceptance": [
+                  {
+                    "criterion": 0,
+                    "checks": [
+                      "consumer-oracle"
+                    ],
+                    "inspection": "Run the configured consumer-oracle check freshly; inspect cases for --top bounds, malformed and oversized values, unknown and positional arguments, error precedence over --help, exit codes, and stdout/stderr behavior."
+                  },
+                  {
+                    "criterion": 1,
+                    "checks": [
+                      "consumer-oracle"
+                    ],
+                    "inspection": "Inspect README usage and discovered unittest cases, including option prefixes and oversized numeric input; verify the documented python launch and test commands against the candidate."
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "validation": []
+  },
+  "hostReceipt": {
+    "request": {
+      "value": "cd4bef4d-0de2-46de-9540-6132c65a8915"
+    },
+    "attempt": {
+      "value": "9ebb4c3d-3d9b-4af9-83cb-0bc339d61c3b"
+    },
+    "phase": "Completed",
+    "process": "Settled",
+    "members": [
+      {
+        "project": {
+          "value": "2ecd3f9d-43aa-42e0-b0d1-34b892e871d3"
+        },
+        "ledger": "Tasks",
+        "number": "1"
+      },
+      {
+        "project": {
+          "value": "2ecd3f9d-43aa-42e0-b0d1-34b892e871d3"
+        },
+        "ledger": "Tasks",
+        "number": "2"
+      }
+    ],
+    "counts": {
+      "ready": 0,
+      "accepted": 0,
+      "changesRequested": 0,
+      "blocked": 0,
+      "failed": 0,
+      "validationFailed": 0,
+      "validationUnknown": 0,
+      "proposed": 0,
+      "evidence": 0,
+      "abstained": 0,
+      "assessed": 2
+    },
+    "next": "ConsiderGrouping",
+    "blocker": null,
+    "result": {
+      "value": "b4dc0aa7-7e65-3f93-9f39-a968a70e2354"
+    },
+    "detailsOmitted": true,
+    "usageDelivered": true
+  }
+}
