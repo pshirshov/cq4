@@ -6,6 +6,7 @@ const COMPLETION_DELAY_MS = 180;
 export class QueryEditor {
   readonly element = element('form', '');
   readonly input = element('input', '');
+  readonly resultCount = element('span', 'No project selected');
   private readonly popup = element('div', '');
   private readonly options = element('div', '');
   private readonly diagnostic = element('div', '');
@@ -29,7 +30,10 @@ export class QueryEditor {
     this.diagnostic.id = 'query-diagnostic'; this.diagnostic.className = 'query-diagnostic'; this.diagnostic.hidden = true;
     this.status.setAttribute('role', 'status'); this.status.hidden = true;
     const search = element('button', 'Search'); search.type = 'submit';
-    const row = element('div', ''); row.className = 'query-input'; row.append(this.input, search);
+    const field = element('div', ''); field.className = 'query-field';
+    this.resultCount.className = 'query-result-count'; this.resultCount.setAttribute('role', 'status');
+    field.append(this.input, this.resultCount);
+    const row = element('div', ''); row.className = 'query-input'; row.append(field, search);
     this.popup.append(this.diagnostic, this.options, this.status); this.element.append(row, this.popup);
     this.element.addEventListener('submit', event => { event.preventDefault(); this.invalidate(); submit(); });
     this.input.addEventListener('input', () => { this.showDiagnostic(undefined, this.input.value); this.schedule(); });
@@ -112,6 +116,8 @@ export class QueryEditor {
         option.addEventListener('pointerdown', event => event.preventDefault()); this.options.append(option);
       }
       this.status.textContent = 'More matches available; refine the query.'; this.status.hidden = !result.hasMore; this.renderPopup();
+      this.active = this.suggestions.length === 0 ? -1 : 0;
+      if (this.active >= 0) this.highlight();
     } catch (error) {
       if (current()) { this.status.textContent = `Query suggestions unavailable: ${String(error)}`; this.status.hidden = false; this.renderPopup(); }
     }

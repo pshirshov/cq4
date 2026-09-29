@@ -3,7 +3,7 @@ import * as api from '../../generated/typescript/cq/api/index.js';
 import { BaboonCodecContext } from '../../generated/typescript/BaboonSharedRuntime.js';
 import { ConnectionManager } from './connection.js';
 import { ConnectionIndicator } from './connection-indicator.js';
-import { button, edit, element, Editor, Json } from './editor.js';
+import { button, editItem, element, ItemEditor, Json } from './editor.js';
 import { QueryEditor } from './query.js';
 import { Workspace } from './workspace.js';
 import { GraphActions } from './graph.js';
@@ -13,6 +13,10 @@ import { Dialog } from './dialog.js';
 import { icon } from './icons.js';
 import { ArchiveDialog } from './archive.js';
 import { attemptsTable, outcomesTable, auditTable } from './usage-view.js';
+import { TableColumns } from './table-columns.js';
+import { Notifications } from './notifications.js';
+import { ReferencePopup } from './references.js';
+import { QuestionBatch } from './questions.js';
 
 const CONTEXT = BaboonCodecContext.Default;
 const PAGE_SIZE = 40;
@@ -32,6 +36,16 @@ type AuditView = api.UsageSelection_Costs | api.UsageSelection_Attempts | api.Us
 interface ResultRow { element: HTMLTableRowElement; button: HTMLButtonElement; status: HTMLTableCellElement; severity: HTMLTableCellElement; modified: HTMLTimeElement }
 
 class App {
+  private readonly notifications = new Notifications();
+  private readonly references = new ReferencePopup(command => this.connection().call(command));
+  private readonly questions = new QuestionBatch({
+    call: command => this.connection().call(command), view: item => this.itemDocument(item),
+    committed: async (project, ack) => {
+      this.notifications.show(`Answer saved: ${ack.items.map(item => itemName(item.id)).join(', ')}.`, 'success');
+      if (this.project !== null && this.project.value === project.value) await this.refresh();
+    },
+  }, localStorage);
+  private mounted = false;
   private manager: ConnectionManager | null = null;
   private readonly projects = element('select', '');
   private readonly queryEditor = new QueryEditor(async (query, cursor) => {
@@ -51,7 +65,7 @@ class App {
   private loadedItems: api.BrowseItem[] = [];
   private resultsPane: HTMLElement | null = null;
   private readonly emptyResults = element('tr', '');
-  private readonly resultStatus = element('p', 'No project selected');
+  private readonly resultStatus = this.queryEditor.resultCount;
   private readonly usageMetric = element('span', 'Usage: not loaded');
   private readonly usageFreshness = element('span', '');
   private usageObserved = 'No successful observation';
@@ -72,9 +86,9 @@ class App {
   private readonly conflictPanel = element('section', '');
   private readonly graph = new GraphActions({
     call: command => this.connection().call(command), select: id => this.select(id), error: error => this.showError(error),
+    view: item => this.itemDocument(item),
     committed: async (project, ack) => {
-      this.notice.setAttribute('role', 'status');
-      this.notice.textContent = `Graph change saved in project ${project.value}: ${ack.items.length === 0 ? 'no revision changes' : ack.items.map(item => `${itemName(item.id)} @ ${item.revision.value}`).join('; ')}.`;
+      this.notifications.show(`Graph change saved in project ${project.value}: ${ack.items.length === 0 ? 'no revision changes' : ack.items.map(item => `${itemName(item.id)} @ ${item.revision.value}`).join('; ')}.`, 'success');
       if (this.project !== null && this.project.value === project.value) { this.after = undefined; this.snapshot = undefined; await this.refresh(); }
     },
   });
@@ -82,13 +96,14 @@ class App {
     call: command => this.connection().call(command),
     committed: async (project, acknowledgement) => {
       if (this.project === null || this.project.value !== project.value) return;
-      this.notice.textContent = `Archived ${acknowledgement.items.length} items.`;
+      this.notifications.show(`Archived ${acknowledgement.items.length} items.`, 'success');
       this.after = undefined; this.snapshot = undefined; await this.refresh();
     },
   }, localStorage);
   private readonly historyPanel = element('section', '');
   private readonly projectDialog = new Dialog(() => {});
   private readonly createDialog = new Dialog(() => this.closeEditor());
+  private readonly conflictDialog = new Dialog(() => {});
   private readonly historyDialog = new Dialog(() => { this.requests.history++; });
   private readonly usageDialog = new Dialog(() => {
     const pane = document.getElementById('detail-pane');
@@ -116,13 +131,14 @@ class App {
   private historyBefore = new api.Revision(9223372036854775807n);
   private auditView: AuditView | null = null;
   private auditLoad: UsageLoad | null = null;
-  private editor: { form: Editor; record: api.BrowserDraft; key: string; discard: HTMLButtonElement; busy: boolean } | null = null;
+  private editor: { form: ItemEditor; record: api.BrowserDraft; key: string; discard: HTMLButtonElement; quick: HTMLButtonElement[]; busy: boolean; next: boolean } | null = null;
 
   constructor(private readonly root: HTMLElement) { void this.start(); }
   private showError(error: unknown): void {
-    this.notice.textContent = String(error); this.notice.setAttribute('role', 'alert');
-    for (const dialog of [this.projectDialog, this.createDialog, this.historyDialog, this.usageDialog])
-      if (dialog.element.open) { dialog.error.textContent = String(error); dialog.error.hidden = false; }
+    const dialog = [this.conflictDialog, this.graph.dialog, this.projectDialog, this.createDialog, this.historyDialog, this.usageDialog].find(dialog => dialog.element.open);
+    if (dialog !== undefined) { dialog.error.textContent = String(error); dialog.error.hidden = false; }
+    else if (this.mounted) this.notifications.show(String(error), 'error');
+    else { this.notice.textContent = String(error); this.notice.setAttribute('role', 'alert'); }
   }
   private action(effect: () => Promise<void>): void { void effect().catch(error => this.showError(error)); }
   private connection(): ConnectionManager {
@@ -175,6 +191,7 @@ class App {
     this.root.replaceChildren(form);
   }
   private mount(): void {
+    this.mounted = true;
     const header = element('header', ''); const identity = element('div', ''); identity.className = 'top-identity';
     const projectControl = element('div', ''); projectControl.className = 'project-control';
     const projectLabel = element('label', 'Project'); projectLabel.append(this.projects); projectControl.append(projectLabel);
@@ -200,6 +217,12 @@ class App {
       this.project = project; this.reset(); await this.loadProjects(); await this.refresh(); name.value = ''; this.projectDialog.close();
     }); });
     this.projectDialog.body.append(newProject); this.historyDialog.body.append(this.historyPanel);
+    this.conflictDialog.body.append(this.conflictPanel);
+    this.createDialog.element.addEventListener('keydown', event => {
+      if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && !event.isComposing) {
+        event.preventDefault(); this.action(() => this.save(true));
+      }
+    });
     const shortcuts = element('div', ''); shortcuts.className = 'query-shortcuts';
     for (const ledger of ['All' as const, ...api.Ledger_values]) {
       const label = ledger === 'All' ? 'All items' : ledger;
@@ -215,7 +238,8 @@ class App {
     const create = button('New item', () => { this.openEditor(null); }); create.className = 'navigation-entry'; create.prepend(icon('New'));
     const usage = button('Project usage', () => this.action(() => this.selectUsage(new api.UsageFilter_ProjectAll(), true))); usage.className = 'navigation-entry'; usage.prepend(icon('Usage'));
     const archive = button('Archive terminal items', () => this.action(async () => this.archive.open(this.currentProject(), this.activeQuery, this.order))); archive.className = 'navigation-entry';
-    side.append(create, usage, archive, element('h3', 'Browse'), shortcuts,
+    const questions = button('Answer open questions', () => this.action(async () => this.questions.open(this.currentProject()))); questions.className = 'navigation-entry'; questions.prepend(icon(api.Ledger.Questions));
+    side.append(create, questions, usage, archive, element('h3', 'Browse'), shortcuts,
       element('p', 'Ctrl+K: query · F6: next pane · Shift+F6: previous pane. Results: ↑/↓ to move, Enter to select, → for detail, Escape to return.'));
     const table = element('table', ''); table.className = 'items-table'; table.setAttribute('aria-label', 'Items');
     const head = element('thead', ''); const headings = element('tr', '');
@@ -229,6 +253,7 @@ class App {
       control.setAttribute('aria-label', `Sort by ${field === 'Id' ? 'ID' : label.toLowerCase()}`); cell.append(control); headings.append(cell);
     }
     head.append(headings); table.append(head, this.items); this.updateSort();
+    new TableColumns(table, [...this.sortHeaders.values()], localStorage, message => this.showError(message));
     const empty = element('td', 'No matching items.'); empty.colSpan = api.ItemOrderField_values.length; this.emptyResults.append(empty);
     this.items.tabIndex = -1; this.items.setAttribute('aria-label', 'Result items');
     this.items.addEventListener('keydown', event => {
@@ -243,9 +268,11 @@ class App {
     });
     this.root.addEventListener('keydown', event => { if (event.ctrlKey && event.key.toLowerCase() === 'k') { event.preventDefault(); this.query.focus(); } });
     this.resultStatus.setAttribute('role', 'status');
-    list.append(this.resultStatus, table);
-    content.append(workspace.toggle, this.notice, this.detail, this.editorPanel, this.conflictPanel, this.graph.element, this.usagePanel, this.auditPanel);
-    this.root.replaceChildren(header, workspace.element, status, this.projectDialog.element, this.createDialog.element, this.historyDialog.element, this.usageDialog.element, this.archive.element); workspace.fit();
+    list.append(table);
+    content.append(workspace.toggle, this.detail, this.editorPanel, this.graph.element, this.usagePanel, this.auditPanel);
+    this.root.replaceChildren(header, workspace.element, status, this.projectDialog.element, this.createDialog.element, this.conflictDialog.element,
+      this.historyDialog.element, this.usageDialog.element, this.archive.element, this.graph.dialog.element, this.references.dialog.element, this.questions.dialog.element, this.notifications.element);
+    this.notifications.reveal(); workspace.fit();
     this.manager = new ConnectionManager(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`, {
       status: stats => this.health.update(stats),
       active: () => this.action(async () => {
@@ -290,9 +317,10 @@ class App {
     this.activeQuery = this.query.value; this.queryInvalid = false; this.epoch++; this.after = undefined; this.snapshot = undefined;
     this.loadedItems = []; this.page = null;
     if (this.resultsPane !== null) this.resultsPane.scrollTop = 0;
-    this.notice.textContent = ''; this.queryEditor.showDiagnostic(undefined, this.query.value); await this.refresh();
+    this.queryEditor.showDiagnostic(undefined, this.query.value); await this.refresh();
   }
   private reset(): void {
+    this.questions.reset(); this.references.reset();
     this.archive.invalidate();
     this.createDialog.close(); this.historyDialog.close(); this.usageDialog.close(); this.closeEditor();
     this.queryEditor.invalidate(); this.queryEditor.showDiagnostic(undefined, this.query.value);
@@ -302,7 +330,7 @@ class App {
     this.rows.clear(); this.items.replaceChildren(); this.loadedItems = []; this.page = null; this.resultStatus.textContent = 'Loading items…';
     if (this.resultsPane !== null) this.resultsPane.scrollTop = 0;
     this.detail.replaceChildren(); this.editorPanel.replaceChildren(); this.conflictPanel.replaceChildren(); this.historyPanel.replaceChildren(); this.usagePanel.replaceChildren(); this.auditPanel.replaceChildren();
-    this.notice.textContent = ''; this.setUsageScope(new api.UsageFilter_ProjectAll());
+    this.notifications.clear(); this.setUsageScope(new api.UsageFilter_ProjectAll());
   }
   private watch(): void {
     this.liveSubscription = this.connection().watch(new api.LiveScope(true, this.project === null ? undefined : this.project)).value;
@@ -503,6 +531,7 @@ class App {
     this.usageMetric.textContent = `Usage · ${this.usageScope()}: not loaded`; this.usageObserved = 'No successful observation'; this.usageFreshness.textContent = this.usageObserved;
     this.usageMetric.title = this.usageMetric.textContent;
   }
+  private itemDocument(item: api.Item): HTMLElement { return itemView(item.draft, text => this.references.render(item.id.project, text)); }
   private async select(id: api.ItemId): Promise<void> {
     this.choose(id);
     const result = await this.readPanel('detail', new api.Command_Read(new api.ReadInput(this.currentProject(), new api.ReadSelection_ItemDetail(id))));
@@ -515,7 +544,7 @@ class App {
     actions.append(button('Edit current revision', () => this.openEditor(result.view)),
       button('History', () => this.action(async () => { this.historyBefore = new api.Revision(9223372036854775807n); this.historyDialog.open(`History · ${itemName(item.id)}`); await this.loadHistory(); })));
     const metadata = element('p', `Revision ${item.revision.value} · ${item.provenance.actor.subject} · ${new Date(Number(item.updatedAt)).toLocaleString()}`); metadata.className = 'revision-meta';
-    this.detail.replaceChildren(title, metadata, actions, itemView(item.draft));
+    this.detail.replaceChildren(title, metadata, actions, this.itemDocument(item));
     this.detail.hidden = this.editor !== null && this.editor.record.item !== undefined;
     this.graph.setScope(this.project, result.view);
     await this.loadUsage();
@@ -527,11 +556,13 @@ class App {
     const pending = editor.record.pending !== undefined;
     for (const input of editor.form.element.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | HTMLButtonElement>('input,select,textarea,button')) input.disabled = pending;
     editor.discard.disabled = pending;
+    for (const control of editor.quick) control.disabled = pending;
   }
   private closeEditor(): void {
+    this.conflictDialog.close();
     this.editor = null; this.editorPanel.replaceChildren(); this.conflictPanel.replaceChildren(); this.detail.hidden = false;
     const pane = document.getElementById('detail-pane');
-    if (pane !== null) this.detail.after(this.editorPanel, this.conflictPanel);
+    if (pane !== null) this.detail.after(this.editorPanel);
   }
   private openEditor(base: api.ItemView | null): void {
     this.conflictPanel.replaceChildren();
@@ -545,35 +576,51 @@ class App {
       record = api.BrowserDraft_JsonCodec.instance.decode(CONTEXT, JSON.parse(saved));
       if (record.project.value !== project.value || (base === null ? record.item !== undefined : record.item === undefined || itemName(record.item.id) !== itemName(base.item.id)))
         throw new Error('Stored draft identity differs from the selected item');
-      this.notice.textContent = record.pending === undefined ? 'Restored your local draft with its original base revision.' : 'A previous save is unresolved. Save item retries that exact request before further editing.';
     }
     const caption = record.item === undefined ? 'New item' : `Edit ${itemName(record.item.id)} from revision ${record.item.revision.value}`;
-    const form = edit('ItemDraft', api.ItemDraft_JsonCodec.instance.encode(CONTEXT, record.value) as Json, caption);
+    const form = editItem(api.ItemDraft_JsonCodec.instance.encode(CONTEXT, record.value) as Json, caption);
     const discard = button('Discard local draft', () => {
       if (this.editor !== editor || editor.record.pending !== undefined) return;
-      localStorage.removeItem(key); this.closeEditor(); this.createDialog.close();
+      localStorage.removeItem(key); localStorage.removeItem(key + ':next'); this.closeEditor(); this.createDialog.close();
     });
-    const editor = { form, record, key, discard, busy: false };
+    const quick = (['Idea', 'Goal', 'Defect'] as const).map(kind => {
+      const control = button(kind, () => { if (editor.record.pending === undefined) form.selectKind(kind); });
+      control.setAttribute('aria-label', `Create ${kind}`); return control;
+    });
+    const editor = { form, record, key, discard, quick, busy: false, next: localStorage.getItem(key + ':next') === 'true' };
     this.editor = editor;
+    const markKind = (): void => { quick.forEach(control => control.setAttribute('aria-pressed', String(control.textContent === form.kind()))); };
+    markKind();
     for (const event of ['input', 'change', 'click']) form.element.addEventListener(event, () => {
       if (editor.record.pending !== undefined) return;
       try {
         editor.record = new api.BrowserDraft(project, editor.record.item, api.ItemDraft_JsonCodec.instance.decode(CONTEXT, form.read()), undefined);
         this.storeDraft(editor);
+        markKind();
       } catch (error) { this.showError(`Draft storage failed: ${String(error)}`); }
     });
     this.lockDraft(editor);
     const actions = element('div', ''); actions.className = 'actions editor-actions';
-    actions.append(button('Save item', () => this.action(() => this.save())), button('Cancel edit', () => { this.closeEditor(); this.createDialog.close(); }), discard);
+    actions.append(button('Save item', () => this.action(() => this.save(false))));
+    if (base === null) {
+      const next = button('Save item and create next', () => this.action(() => this.save(true)));
+      next.title = 'Ctrl+Enter / ⌘+Enter'; next.setAttribute('aria-keyshortcuts', 'Control+Enter Meta+Enter');
+      actions.append(next, element('span', 'Ctrl/⌘+Enter'));
+    }
+    actions.append(button('Cancel edit', () => { this.closeEditor(); this.createDialog.close(); }), discard);
     this.editorPanel.replaceChildren(form.element, actions);
-    if (base === null) { this.createDialog.body.replaceChildren(this.editorPanel, this.conflictPanel); this.createDialog.open('New item'); }
+    if (base === null) { this.createDialog.actions.replaceChildren(...quick); this.createDialog.body.replaceChildren(this.editorPanel); this.createDialog.open('New item'); }
     else { this.detail.hidden = true; this.editorPanel.scrollIntoView({ block: 'start' }); }
+    if (saved !== null) this.notifications.show(record.pending === undefined ? `${caption}: restored your local draft with its original base revision.`
+      : `${caption}: a previous save is unresolved. Save item retries that exact request before further editing.`, 'info');
 
   }
-  private async save(): Promise<void> {
+  private async save(next: boolean): Promise<void> {
     const editor = this.editor; if (editor === null || editor.busy) return;
     const navigation = this.selectionGeneration;
     if (editor.record.pending === undefined) {
+      editor.next = next && editor.record.item === undefined;
+      localStorage.setItem(editor.key + ':next', String(editor.next));
       const draft = api.ItemDraft_JsonCodec.instance.decode(CONTEXT, editor.form.read());
       const base = editor.record.item;
       const mutation = base === undefined ? new api.Mutation_Create(draft) : new api.Mutation_Replace(base.id, base.revision, draft);
@@ -595,15 +642,26 @@ class App {
         readResult(result);
       }
       if (!(result instanceof api.Result_Changed)) throw new Error('Unexpected change acknowledgement');
-      if (localStorage.getItem(editor.key) === submitted) localStorage.removeItem(editor.key);
+      if (localStorage.getItem(editor.key) === submitted) { localStorage.removeItem(editor.key); localStorage.removeItem(editor.key + ':next'); }
       const ownsEditor = this.editor === editor;
       if (ownsEditor) { this.closeEditor(); this.createDialog.close(); }
       const saved = result.ack.items[0];
-      this.notice.setAttribute('role', 'status');
-      this.notice.replaceChildren(element('span', 'Saved'), document.createTextNode(` ${itemName(saved.id)} in project ${editor.record.project.value}.`));
+      this.notifications.show([element('span', 'Saved'), document.createTextNode(` ${itemName(saved.id)} in project ${editor.record.project.value}.`)], 'success');
       if (this.project === null || this.project.value !== editor.record.project.value) return;
       this.after = undefined; this.snapshot = undefined; await this.refresh();
-      if (ownsEditor && navigation === this.selectionGeneration) await this.select(saved.id);
+      if (ownsEditor && navigation === this.selectionGeneration) {
+        const selection = this.select(saved.id); const generation = this.selectionGeneration;
+        await selection;
+        if (editor.next && generation === this.selectionGeneration && this.project.value === editor.record.project.value && this.editor === null && localStorage.getItem(editor.key) === null) {
+          this.openEditor(null);
+          const fresh = this.editor as App['editor'];
+          if (fresh === null) throw new Error('New item editor was not opened');
+          fresh.form.selectKind(editor.form.kind());
+          const title = fresh.form.element.querySelector<HTMLTextAreaElement>('textarea[aria-label=title]');
+          if (title === null) throw new Error('New item editor has no title field');
+          title.focus();
+        }
+      }
     } finally { editor.busy = false; }
   }
   private async showConflict(editor: NonNullable<App['editor']>): Promise<void> {
@@ -612,15 +670,17 @@ class App {
     if (this.editor !== editor || editor.record.pending !== undefined) return;
     if (!(result instanceof api.Result_Detail)) throw new Error('Unexpected conflict comparison response');
     const current = result.view;
-    this.conflictPanel.replaceChildren(element('h3', `Edit conflict · ${itemName(base.id)}`),
+    this.conflictPanel.replaceChildren(
       element('p', `Your draft is based on revision ${base.revision.value}; the current revision is ${current.item.revision.value}.`),
       element('p', 'Inspect the current content below and your draft above. Changing the base keeps your draft; a later save replaces the current content.'),
-      itemView(current.item.draft),
+      this.itemDocument(current.item),
       button('Use current revision as draft base', () => {
         if (this.editor !== editor || editor.record.pending !== undefined) return;
         editor.record = new api.BrowserDraft(editor.record.project, new api.ItemRevision(base.id, current.item.revision), editor.record.value, undefined);
         this.storeDraft(editor); this.openEditor(current);
+        this.conflictDialog.close();
       }));
+    this.conflictDialog.open(`Edit conflict · ${itemName(base.id)}`);
   }
   private async loadHistory(): Promise<void> {
     const selected = this.selected; if (selected === null) return;
@@ -633,7 +693,7 @@ class App {
     const rows = element('tbody', ''); const viewer = element('section', ''); viewer.setAttribute('aria-label', 'Historical revision');
     const show = (entry: api.HistoryEntry): void => {
       const item = entry.item.item;
-      viewer.replaceChildren(element('h3', `${itemName(item.id)} · ${item.draft.title} · revision ${item.revision.value}`), itemView(item.draft),
+      viewer.replaceChildren(element('h3', `${itemName(item.id)} · ${item.draft.title} · revision ${item.revision.value}`), this.itemDocument(item),
         element('h3', 'Relationships'), element('p', entry.item.refs.length === 0 ? 'No relationships.' : entry.item.refs.map(ref => `${ref.relation} ${itemName(ref.target)}`).join(' · ')),
         button(`Preview restore revision ${item.revision.value}`, () => this.action(async () => { this.historyDialog.close(); await this.graph.restore(entry.item); })));
       for (const row of rows.querySelectorAll('tr')) row.setAttribute('aria-selected', String(row.dataset.revision === String(item.revision.value)));

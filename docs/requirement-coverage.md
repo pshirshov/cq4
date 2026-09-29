@@ -1,5 +1,7 @@
 # Requirement coverage
 
+[UI follow-up implementation](validation/ui-followup-implementation.md) is authorized and in progress for D51–D57 and I3/I4. Focused browser and scoped continuation checks pass, including four reproduced response-order/recovery cases. Astra approves the source increment. Fresh native/browser and packaged verification remain pending. D25–D27 remain excluded.
+
 Further [evaluation intake](validation/evaluation-followup.md#further-intake-messages-rapid-entry-and-restored-features) is filed as Open D55–D57 (notification placement, question batch answering and reference popups) and Proposed I3/I4 (quick type selection and save-and-create-next). Current browser observations and the original source audit are retained; implementation remains pending.
 
 The [query/table follow-up](validation/evaluation-followup.md) is filed as Open D51–D54: initial completion selection, column resizing, single-line modified time and fixed headers with the count in search. Verified duplicates D13–D20 are now Resolved at revision 4 with canonical references and exact-package evidence. D25 remains Open; D26/D27 remain reserved. No implementation changes are included in this follow-up.

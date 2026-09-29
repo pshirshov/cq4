@@ -55,7 +55,11 @@ export async function graphChecks(browser, storageState, origin, evidence) {
     async function enter() {
       await page.goto(origin); await page.getByText('Connection: ALIVE', { exact: true }).waitFor();
       await page.getByLabel('Project', { exact: true }).selectOption(project.value);
+      const recovery = page.getByRole('dialog', { name: 'Graph change', exact: true });
+      const pending = await recovery.isVisible();
+      if (pending) await recovery.getByRole('button', { name: 'Close', exact: true }).click();
       await click('T1 · Graph A'); await page.getByRole('heading', { name: 'T1 · Graph A', exact: true }).waitFor();
+      if (pending) await click('Review graph change');
     }
     async function previewRelation() {
       await page.getByRole('combobox', { name: 'Relationship', exact: true }).selectOption('RelatesTo');

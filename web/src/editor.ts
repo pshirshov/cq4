@@ -7,6 +7,7 @@ interface Schema {
   oneOf?: Schema[]; enum?: string[]; items?: Schema; format?: string; pattern?: string;
 }
 export interface Editor { element: HTMLElement; read(): Json }
+export interface ItemEditor extends Editor { kind(): ItemKind; selectKind(kind: ItemKind): void }
 const schemas: Record<string, Schema> = rawSchemas;
 export function element<K extends keyof HTMLElementTagNameMap>(tag: K, text: string): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag); node.textContent = text; return node;
@@ -21,16 +22,19 @@ function required<T>(value: T | undefined, name: string): T {
 function resolve(schema: Schema): Schema {
   return schema.$ref === undefined ? schema : required(schemas[schema.$ref.replace('#/$defs/', '')], schema.$ref);
 }
-export function edit(name: string, value: Json | undefined, caption: string): Editor {
-  if (name !== 'ItemDraft') return field(required(schemas[`cq_api_${name}`], name), value, caption, null);
-  const current = jsonObject(value); const schema = required(schemas.cq_api_ItemDraft, name);
+export function editItem(value: Json | undefined, caption: string): ItemEditor {
+  const current = jsonObject(value); const schema = required(schemas.cq_api_ItemDraft, 'ItemDraft');
   const properties = required(schema.properties, 'item fields');
   const container = element('div', ''); container.className = 'item-document item-form'; container.append(element('h2', caption));
   const body = field(required(properties.body, 'body'), current.body, 'body', null);
   const fields = ['title', 'content', 'labels', 'citations', 'archived'].map(key => ({ key, editor: field(required(properties[key], key), current[key], key, key === 'content' ? body.element : null) }));
   for (const entry of fields) container.append(entry.editor.element);
   fields.push({ key: 'body', editor: body });
-  return { element: container, read: () => Object.fromEntries(fields.map(entry => [entry.key, entry.editor.read()])) };
+  const choice = container.querySelector<HTMLSelectElement>('select[aria-label=content]');
+  if (choice === null) throw new Error('Item editor has no content selector');
+  return { element: container, read: () => Object.fromEntries(fields.map(entry => [entry.key, entry.editor.read()])),
+    kind: () => choice.value as ItemKind,
+    selectKind: kind => { choice.value = kind; choice.dispatchEvent(new Event('change', { bubbles: true })); } };
 }
 function field(unresolved: Schema, value: Json | undefined, label: string, description: HTMLElement | null): Editor {
   const schema = resolve(unresolved);

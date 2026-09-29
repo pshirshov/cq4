@@ -132,7 +132,7 @@ export class ArchiveDialog {
         if (generation === this.generation) this.dialog.body.replaceChildren(element('p', 'Archival rejected. Close this dialog and prepare a fresh preview.'));
         throw new Error(JSON.stringify(api.Fault_JsonCodec.instance.encode(CONTEXT, result.fault)));
       }
-      if (generation === this.generation) this.dialog.body.replaceChildren(element('p', `Archived ${result.ack.items.length} items.`));
+      if (generation === this.generation) this.dialog.close();
       await this.effects.committed(input.project, result.ack);
     } finally {
       this.busy.delete(id);

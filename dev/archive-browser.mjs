@@ -53,11 +53,11 @@ try{
  let timer;try{await Promise.race([captured,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('Missing held archival reply')),6000);})]);}finally{clearTimeout(timer);}
  assert.ok(held.result.Changed);await page.reload();await page.getByText('Connection: ALIVE',{exact:true}).waitFor();await page.getByLabel('Project',{exact:true}).selectOption(other.value);await open();
  assert.equal(await dialog().getByRole('button',{name:'Retry exact archive',exact:true}).count(),0);await dialog().getByRole('button',{name:'Close',exact:true}).click();
- await page.getByLabel('Project',{exact:true}).selectOption(project.value);await open();await dialog().getByRole('button',{name:'Retry exact archive',exact:true}).click();await dialog().getByText('Archived 2 items.',{exact:true}).waitFor();
+ await page.getByLabel('Project',{exact:true}).selectOption(project.value);await open();await dialog().getByRole('button',{name:'Retry exact archive',exact:true}).click();await page.locator('.notification-toast').getByText('Archived 2 items.',{exact:true}).waitFor();
  const after=await Promise.all(ids.map(detail));assert.deepEqual(after.map(i=>i.draft.archived),[true,true,false,false,true]);assert.equal((await history(ids[0])).length,2);assert.equal((await history(ids[1])).length,3);
  assert.equal(await page.evaluate(p=>Object.keys(localStorage).filter(k=>k.startsWith('cq-archive-change:'+p+':')).length,project.value),0);
  cases.push('Reload and project switch retain exact request; replay adds no revision and leaves excluded items untouched');
- await dialog().getByRole('button',{name:'Close',exact:true}).click();
+ assert.equal(await dialog().isVisible(),false);
  const bounded=[];
  for(let offset=0;offset<513;offset+=64){
   const mutations=Array.from({length:Math.min(64,513-offset)},(_,i)=>({Create:{draft:draft('Bounded '+(offset+i),'Done',['bounded'],false)}}));
@@ -68,7 +68,7 @@ try{
  await open();await dialog().getByRole('button',{name:'Confirm archive',exact:true}).waitFor();
  assert.equal(await dialog().getByRole('table',{name:'Archive selection',exact:true}).locator('tbody tr').count(),512);
  await dialog().getByText(/^Limited preview:/).waitFor();
- await dialog().getByRole('button',{name:'Confirm archive',exact:true}).click();await dialog().getByText('Archived 512 items.',{exact:true}).waitFor();
+ await dialog().getByRole('button',{name:'Confirm archive',exact:true}).click();await page.locator('.notification-toast').getByText('Archived 512 items.',{exact:true}).waitFor();
  assert.equal((await detail(bounded[0].id)).draft.archived,true);assert.equal((await detail(bounded[512].id)).draft.archived,false);
  cases.push('513-member request rejected; capped 512-member preview and transport acknowledgement succeed without touching the undisplayed item');
  await page.screenshot({path:evidence+'/archive.png',fullPage:true});

@@ -95,10 +95,10 @@ export async function workspaceChecks(browser, storageState, origin, evidence) {
     for (const viewportWidth of [920, 390, 320]) {
       await page.setViewportSize({ width: viewportWidth, height: 844 });
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), true, `Page overflow at ${viewportWidth}`);
-      assert.equal(await page.getByRole('separator').count(), 0, 'Narrow layout must hide separator focus targets');
+      assert.equal(await page.getByRole('separator', { name: /^Resize (navigation|results)$/ }).count(), 0, 'Narrow layout must hide pane separator focus targets');
       assert.equal(await body.inputValue(), local);
       const bounds = await page.locator('.pane').evaluateAll(nodes => nodes.map(node => ({ id: node.id, width: node.clientWidth, scroll: node.scrollWidth })));
-      assert.ok(bounds.every(value => value.scroll <= value.width + 1), JSON.stringify(bounds));
+      assert.ok(bounds.filter(value => value.id !== 'results-pane').every(value => value.scroll <= value.width + 1), JSON.stringify(bounds));
       if (viewportWidth === 390) await page.screenshot({ path: `${evidence}/workspace-narrow.png`, fullPage: true });
     }
     cases.push('narrow layouts and unbroken draft overflow');

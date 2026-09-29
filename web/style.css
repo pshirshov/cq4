@@ -30,16 +30,15 @@ nav .navigation-entry { display: flex; align-items: center; gap: 8px; text-align
 .navigation-entry svg, .items-table svg { width: 16px; height: 16px; flex: none; }
 .navigation-entry > span:not(.navigation-count) { flex: 1; }
 .navigation-count { margin-left: auto; color: #a4c1d3; font-variant-numeric: tabular-nums; }
-.items-table { table-layout: fixed; }
+#results-pane { padding: 0; }
+.items-table { table-layout: fixed; border-collapse: separate; border-spacing: 0; }
 .items-table th, .items-table td { padding: 6px 3px; }
-.items-table th { position: sticky; top: -10px; background: #1c2630; z-index: 1; }
-.items-table th:nth-child(1) { width: 10%; }
-.items-table th:nth-child(2) { width: 7%; }
-.items-table th:nth-child(3) { width: 33%; }
-.items-table th:nth-child(4), .items-table th:nth-child(5) { width: 15%; }
-.items-table th:nth-child(6) { width: 20%; }
-.item-modified { font-size: 11px; overflow-wrap: anywhere; }
-.item-modified time span { display: block; }
+.items-table th { position: sticky; top: 0; background: #1c2630; z-index: 1; padding-right: 8px; }
+.column-resizer { position: absolute; right: 0; top: 0; bottom: 0; width: 7px; cursor: col-resize; touch-action: none; border-right: 1px solid #435364; }
+.column-resizer:hover, .column-resizer:focus-visible { background: #68c7ec; outline: none; }
+.items-table td { overflow: hidden; }
+.item-modified { font-size: 11px; white-space: nowrap; }
+.item-modified time span + span::before { content: ' '; }
 .items-table th button { width: 100%; padding: 0; border: 0; border-radius: 0; text-align: left; font-size: 11px; overflow-wrap: anywhere; }
 .items-table th[aria-sort=ascending] { box-shadow: inset 0 -2px #68c7ec; }
 .items-table th[aria-sort=descending] { box-shadow: inset 0 2px #68c7ec; }
@@ -95,6 +94,9 @@ progress { width: 50px; height: 6px; margin-left: 12px; }
 
 .query-editor { position: relative; min-width: 0; }
 .query-input { display: flex; gap: 6px; align-items: center; }
+.query-field { display: flex; align-items: center; flex: 1; min-width: 0; border: 1px solid #61788a; background: #24323e; }
+.query-field input { border: 0; background: transparent; width: 0; }
+.query-result-count { flex: none; max-width: 42%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 11px; color: #a4c1d3; padding: 0 7px; }
 .query-input input { min-width: 0; flex: 1; }
 .query-input button { width: auto; }
 .query-popup { position: absolute; z-index: 5; top: calc(100% + 4px); left: 0; width: min(680px, 100%); max-width: calc(100vw - 28px); max-height: 280px; overflow: auto; background: #1c2630; border: 1px solid #61788a; border-radius: 0; box-shadow: 0 8px 24px #0008; }
@@ -114,6 +116,7 @@ progress { width: 50px; height: 6px; margin-left: 12px; }
 .document-field { margin: 20px 0; }
 .document-field h3, .item-form h3 { margin-bottom: 7px; color: #a4c1d3; font-size: 12px; font-weight: 600; }
 .field-value { white-space: pre-wrap; overflow-wrap: anywhere; }
+.item-reference { display: inline; border: 0; border-bottom: 1px dotted #80cef0; color: #80cef0; background: transparent; padding: 0 1px; min-height: 0; font: inherit; }
 .semantic-list { margin: 0; padding-left: 20px; }
 .semantic-list > li { margin: 6px 0; }
 .semantic-list .semantic-list { margin-top: 6px; font-size: 12px; }
@@ -142,6 +145,13 @@ progress { width: 50px; height: 6px; margin-left: 12px; }
 .workspace-dialog::backdrop { background: #050c14aa; }
 .dialog-header { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 18px; background: #1c2630; border-bottom: 1px solid #435364; }
 .dialog-header h2 { margin: 0; }
+.dialog-actions { display: flex; flex-wrap: wrap; gap: 5px; margin-left: auto; }
+.dialog-actions [aria-pressed=true] { background: #245576; border-color: #69a7cb; }
+.answer-alternatives { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0; }
+.answer-alternatives button { max-width: 100%; white-space: pre-wrap; text-align: left; overflow-wrap: anywhere; }
+.notification-toast { position: fixed; inset: auto 16px 42px auto; margin: 0; max-width: min(540px, calc(100vw - 32px)); color: #e1e8ef; background: #24323e; border: 1px solid #61788a; padding: 12px; box-shadow: 0 6px 20px #0009; }
+.notification-toast:popover-open { display: flex; align-items: flex-start; gap: 12px; }
+.notification-toast > div { white-space: pre-wrap; overflow-wrap: anywhere; }
 .dialog-body { padding: 12px 20px 20px; }
 .workspace-dialog > [role=alert]:not(:empty) { padding: 8px 20px; }
 .workspace-dialog form { display: flex; align-items: center; gap: 10px; }

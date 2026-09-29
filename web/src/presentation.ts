@@ -38,28 +38,30 @@ function source(value: Json): HTMLElement {
   } else if ('Artifact' in entry) node.append(document.createTextNode('Artifact '), element('code', String(jsonObject(jsonObject(entry.Artifact).id).value)));
   return node;
 }
-export function renderValue(name: string, value: Json): HTMLElement {
+type TextRenderer = (text: string) => Node;
+export function renderValue(name: string, value: Json, renderText: TextRenderer): HTMLElement {
   const node = element('div', ''); node.className = 'field-value';
   if (Array.isArray(value)) {
     if (value.length === 0) return element('p', 'None recorded.');
     const list = element('ul', ''); list.className = 'semantic-list';
     for (const entry of value) {
       const row = element('li', ''); const data = jsonObject(entry);
-      if (typeof entry === 'string') row.textContent = entry;
+      if (typeof entry === 'string') row.append(renderText(entry));
       else if ('description' in data) {
-        row.className = 'evidence-entry'; row.append(element('p', String(data.description)), element('span', fieldLabel(String(data.origin))));
-        if (Array.isArray(data.citations) && data.citations.length > 0) row.append(renderValue('citations', data.citations));
+        row.className = 'evidence-entry'; const description = element('p', ''); description.append(renderText(String(data.description)));
+        row.append(description, element('span', fieldLabel(String(data.origin))));
+        if (Array.isArray(data.citations) && data.citations.length > 0) row.append(renderValue('citations', data.citations, renderText));
       } else if (name === 'subjects') {
-        const item = api.ItemId_JsonCodec.instance.decode(BaboonCodecContext.Default, data.item); row.textContent = `${itemName(item)} · revision ${jsonObject(data.revision).value}`;
+        const item = api.ItemId_JsonCodec.instance.decode(BaboonCodecContext.Default, data.item); row.append(renderText(`${itemName(item)} · revision ${jsonObject(data.revision).value}`));
       } else row.append(source(entry));
       list.append(row);
     }
     node.append(list);
   } else if (typeof value === 'object' && value !== null) node.append(source(name === 'candidate' ? { Commit: value } : name === 'report' ? { Url: value } : value));
-  else node.textContent = String(value);
+  else node.append(renderText(String(value)));
   return node;
 }
-export function itemView(draft: api.ItemDraft): HTMLElement {
+export function itemView(draft: api.ItemDraft, renderText: TextRenderer): HTMLElement {
   const node = element('div', ''); node.className = 'item-document';
   const encoded = api.Content_JsonCodec.instance.encode(BaboonCodecContext.Default, draft.content) as Json;
   const [kind, content] = Object.entries(jsonObject(encoded))[0]; const values = jsonObject(content);
@@ -71,7 +73,7 @@ export function itemView(draft: api.ItemDraft): HTMLElement {
   node.append(meta);
   const section = (name: string, value: Json): void => {
     if (value === null || value === '' || (Array.isArray(value) && value.length === 0)) return;
-    const block = element('section', ''); block.className = 'document-field'; block.append(element('h3', fieldLabel(name)), renderValue(name, value)); node.append(block);
+    const block = element('section', ''); block.className = 'document-field'; block.append(element('h3', fieldLabel(name)), renderValue(name, value, renderText)); node.append(block);
   };
   section('body', draft.body);
   for (const name of CONTENT_FIELDS[kind as ItemKind]) if (values[name] !== undefined) section(name, values[name]);

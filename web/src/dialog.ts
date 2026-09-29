@@ -4,11 +4,13 @@ export class Dialog {
   readonly element = element('dialog', '');
   readonly body = element('div', '');
   readonly error = element('p', '');
+  readonly actions = element('div', '');
   private readonly heading = element('h2', '');
   private previous: HTMLElement | null = null;
   constructor(private readonly closed: () => void) {
     this.element.className = 'workspace-dialog'; this.body.className = 'dialog-body';
-    const header = element('div', ''); header.className = 'dialog-header'; header.append(this.heading, button('Close', () => this.close()));
+    const header = element('div', ''); header.className = 'dialog-header'; this.actions.className = 'dialog-actions';
+    header.append(this.heading, this.actions, button('Close', () => this.close()));
     this.error.setAttribute('role', 'alert'); this.error.hidden = true; this.element.append(header, this.error, this.body);
     this.element.addEventListener('cancel', event => { event.preventDefault(); this.close(); });
     this.element.addEventListener('click', event => {

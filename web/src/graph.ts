@@ -3,7 +3,7 @@ import * as api from '../../generated/typescript/cq/api/index.js';
 import { BaboonCodecContext } from '../../generated/typescript/BaboonSharedRuntime.js';
 import { button, element } from './editor.js';
 import { itemName, parseItem } from './items.js';
-import { itemView } from './presentation.js';
+import { Dialog } from './dialog.js';
 
 const CONTEXT = BaboonCodecContext.Default;
 interface Preview { input: api.ChangeInput; description: HTMLElement[] }
@@ -12,9 +12,12 @@ interface GraphEffects {
   select(id: api.ItemId): Promise<void>;
   committed(project: api.ProjectId, ack: api.ChangeAck): Promise<void>;
   error(error: unknown): void;
+  view(item: api.Item): HTMLElement;
 }
 
 export class GraphActions {
+  readonly dialog = new Dialog(() => { this.shown = null; });
+  private shown: { project: string; request: string } | null = null;
   readonly element = element('section', '');
   private readonly references = element('div', '');
   private readonly form = element('form', '');
@@ -23,6 +26,7 @@ export class GraphActions {
   private readonly matches = element('div', '');
   private targetGeneration = 0;
   private readonly previewPanel = element('section', '');
+  private readonly review = button('Review graph change', () => this.focusPreview());
   private project: api.ProjectId | null = null;
   private view: api.ItemView | null = null;
   private generation = 0;
@@ -57,7 +61,8 @@ export class GraphActions {
       if (relation === undefined) throw new Error('Select a relationship');
       await this.previewReference(view, relation, parseItem(view.item.id.project, this.target.value), true);
     }); });
-    this.element.append(element('h3', 'Relationships'), this.references, this.form, this.previewPanel);
+    this.dialog.body.append(this.previewPanel);
+    this.element.append(element('h3', 'Relationships'), this.references, this.form, this.review);
     this.setScope(null, null);
   }
 
@@ -107,6 +112,7 @@ export class GraphActions {
     const changedProject = this.project === null ? project !== null : project === null || this.project.value !== project.value;
     const changedItem = this.view === null ? view !== null : view === null || itemName(this.view.item.id) !== itemName(view.item.id);
     if (changedProject || changedItem) {
+      this.dialog.close();
       this.generation++; this.preview = null; this.target.value = ''; this.clearMatches();
     }
     this.project = project; this.view = view;
@@ -134,6 +140,7 @@ export class GraphActions {
     this.form.hidden = view === null;
     this.element.hidden = view === null && this.pending === null;
     this.renderPreview();
+    if (changedProject && this.pending !== null) this.focusPreview();
   }
   private async previewReference(view: api.ItemView, relation: api.Relation, target: api.ItemId, present: boolean): Promise<void> {
     if (this.pending !== null) throw new Error('Resolve the pending graph change before preparing another.');
@@ -163,12 +170,18 @@ export class GraphActions {
       description: [element('p', `Restore ${itemName(view.item.id)} from historical revision ${historical.item.revision.value}. Expected current revision: ${view.item.revision.value}. This creates a new revision.`),
         ...removed.map(ref => element('p', `Remove ${ref.relation} ${itemName(ref.target)}`)), ...added.map(ref => element('p', `Add ${ref.relation} ${itemName(ref.target)}`)),
         element('p', neighbors.length === 0 ? 'No relationships change.' : `Neighbors receiving new revisions: ${neighbors.map(value => `${itemName(value.id)} @ ${value.revision.value}`).join('; ')}. Their content is preserved.`),
-        element('h4', 'Current content'), itemView(view.item.draft),
-        element('h4', 'Content to restore'), itemView(historical.item.draft)] };
+        element('h4', 'Current content'), this.effects.view(view.item),
+        element('h4', 'Content to restore'), this.effects.view(historical.item)] };
     this.renderPreview(); this.focusPreview();
   }
-  private focusPreview(): void { this.previewPanel.focus(); this.previewPanel.scrollIntoView({ block: 'start' }); }
+  private focusPreview(): void {
+    const input = this.pending !== null ? this.pending : this.preview === null ? null : this.preview.input;
+    if (input === null) return;
+    this.shown = { project: input.project.value, request: input.change.request.value };
+    this.dialog.open('Graph change'); this.previewPanel.focus();
+  }
   private renderPreview(): void {
+    this.review.hidden = this.pending === null && this.preview === null;
     for (const control of this.form.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>('input,select,button')) control.disabled = this.pending !== null;
     for (const control of this.references.querySelectorAll<HTMLButtonElement>('button')) if (control.textContent !== null && control.textContent.startsWith('Remove ')) control.disabled = this.pending !== null;
     this.previewPanel.replaceChildren();
@@ -188,7 +201,7 @@ export class GraphActions {
           if (localStorage.getItem(key) !== null) throw new Error('Another graph change is stored for this project; reload to resolve it.');
           localStorage.setItem(key, this.encode(preview.input));
           this.pending = preview.input; this.preview = null; await this.submit(preview.input);
-        })), button('Cancel graph preview', () => { this.generation++; this.preview = null; this.renderPreview(); }));
+        })), button('Cancel graph preview', () => { this.generation++; this.preview = null; this.renderPreview(); this.dialog.close(); }));
     }
   }
   private async submit(input: api.ChangeInput): Promise<void> {
@@ -202,6 +215,7 @@ export class GraphActions {
       if (localStorage.getItem(key) === submitted) localStorage.removeItem(key);
       if (this.pending !== null && this.pending.change.request.value === input.change.request.value) { this.pending = null; this.renderPreview(); }
       if (result instanceof api.Result_Failed) throw new Error(`Graph change rejected. Inspect the current records and prepare a new preview. ${JSON.stringify(api.Fault_JsonCodec.instance.encode(CONTEXT, result.fault))}`);
+      if (this.shown !== null && this.shown.project === project && this.shown.request === input.change.request.value) this.dialog.close();
       await this.effects.committed(input.project, result.ack);
     } finally { this.busy.delete(project); this.renderPreview(); }
   }
