@@ -1,5 +1,7 @@
 # Requirement coverage
 
+The [D43–D49 evaluation polish](validation/evaluation-polish.md) is in progress: table selection/modified time, stable completion, square controls, previewed terminal-only archival and semantic usage tables. Focused domain, browser and contract checks pass; Astra approves the source increment. D13–D20 are revisionally unarchived with content/statuses preserved. Native/package verification and operator delivery remain pending.
+
 The [remaining-defect batch](validation/remaining-defects.md) passes final native,
 source-isolated package, real Codex → Pi and exact updater/backup-restore checks.
 Astra approves technical delivery and the host update script. Operator installation,

@@ -56,7 +56,14 @@ export async function usageScopeChecks(browser, storageState, origin, evidence) 
   });
   const page = await context.newPage(); const errors = []; const cases = [];
   page.on('pageerror', error => errors.push(String(error)));
-  const click = name => page.getByRole('button', { name, exact: true }).click();
+  const click = async name => {
+    const control = page.getByRole('button', { name, exact: true });
+    if (name.includes(' usage · ')) {
+      const row = page.getByRole('table', {name: 'Attempts', exact: true}).locator('tbody > tr').filter({has: page.getByRole('button', {name, exact: true, includeHidden: true})});
+      await row.evaluate(node => { const previous = node.previousElementSibling; if (previous !== null) previous.querySelector('details').open = true; });
+    }
+    await control.click();
+  };
   async function summary(scope, direct, shared, unattributed) {
     await page.getByRole('heading', { name: `Usage · ${scope}`, exact: true }).waitFor(); await settledRequests(page);
     const metrics = page.getByRole('region', { name: 'Usage metrics', exact: true, includeHidden: true });
@@ -67,14 +74,21 @@ export async function usageScopeChecks(browser, storageState, origin, evidence) 
     await page.goto(origin); await page.getByText('Connection: ALIVE', { exact: true }).waitFor();
     await page.getByLabel('Project', { exact: true }).selectOption(project.value);
     await click('T1 · Scope A'); await summary('T1', 40, 100, 0);
-    await click('Attempts'); await page.getByText(`Assignment ${assignments[0].id.value} · frozen members: T1, T2`, { exact: true }).waitFor();
+    await click('Attempts'); await page.getByRole('table', {name: 'Attempts', exact: true}).getByRole('cell', {name: 'Shared · T1, T2', exact: true}).waitFor();
+    assert.deepEqual(await page.getByRole('table', {name: 'Attempts', exact: true}).getByRole('columnheader').allTextContents(), ['Started','Harness / role','Model','State','Attribution / members','Details']);
+    assert.equal(await page.locator('.usage-table pre').count(),0);
+    await page.screenshot({path: `${evidence}/usage-attempts-table.png`,fullPage:true});
     await click(`Session usage · ${attempts[0].session.value}`); await summary(`session ${attempts[0].session.value}`, 0, 100, 0);
     await click('Attempts'); await click(`Cohort usage · ${cohort}`); await summary(`cohort ${cohort}`, 40, 100, 0);
     await page.getByText(`Shared assignments: ${assignments[0].id.value}.`, { exact: true }).waitFor();
     await click('Attempts'); await click('Task usage · T2'); await summary('T2', 0, 100, 0);
     assert.equal(await page.getByRole('heading', { name: 'T1 · Scope A', exact: true, includeHidden: true }).count(), 1, 'Usage scope navigation retains the selected item');
-    await click('Usage audit'); await page.getByText(/^\d+ · Shared fixture · Complete$/).waitFor();
-    assert.equal(await page.getByText(/^\d+ · Direct fixture · Complete$/).count(), 0);
+    await click('Usage audit'); await page.getByRole('table', {name: 'Usage audit', exact: true}).getByRole('cell', {name: 'Shared fixture · Complete', exact: true}).waitFor();
+    assert.equal(await page.getByRole('table', {name: 'Usage audit', exact: true}).getByRole('cell', {name: 'Direct fixture · Complete', exact: true}).count(), 0);
+    assert.deepEqual(await page.getByRole('table', {name: 'Usage audit', exact: true}).getByRole('columnheader').allTextContents(), ['Sequence / time','Source / coverage','Contribution','Input','Output','Cost','Details']);
+    await page.getByRole('table', {name: 'Usage audit', exact: true}).getByRole('cell', {name: 'Unknown · Unknown', exact: true}).waitFor();
+    assert.equal(await page.locator('.usage-table pre').count(),0);
+    await page.screenshot({path: `${evidence}/usage-audit-table.png`,fullPage:true});
     await page.getByRole('dialog').getByRole('button', { name: 'Close', exact: true }).click(); await summary('T1', 40, 100, 0);
     cases.push('session/cohort/member navigation, frozen membership and filtered audit preserve direct/shared attribution');
     await click('Project usage'); await summary('project', 40, 100, 7); await click('Attempts');

@@ -37,7 +37,10 @@ archive conversion or version upgrade mechanism.
 The compressed archive and expanded table payload are each limited to 512 MiB.
 Transfer has a five-minute deadline. The server streams through temporary files;
 validation and insertion run in one transaction, with database constraints and
-project scope enforced. Invalid archives do not partially install a project.
+project scope enforced. Current archived items must be terminal; nonterminal
+archives are rejected. Unarchive those items through CQ before taking a new
+backup. Historical revisions are preserved unchanged. Invalid archives do not
+partially install a project.
 
 A connection failure during commit can leave a successful restore with a lost
 reply. Inspect the target project before retrying. A repeated restore will refuse

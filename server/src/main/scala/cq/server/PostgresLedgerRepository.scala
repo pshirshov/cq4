@@ -202,9 +202,11 @@ private final class PostgresLedgerTransaction(connection: Connection, override v
       case ItemOrderField.Title => "i.title"
       case ItemOrderField.Status => "i.summary ->> 'status'"
       case ItemOrderField.Severity => "''"
+      case ItemOrderField.Modified => "''"
     }
     val number = order.field match {
       case ItemOrderField.Id => "i.number"
+      case ItemOrderField.Modified => "(i.summary ->> 'updatedAt')::bigint"
       case ItemOrderField.Severity => s"CASE $severity WHEN 'Critical' THEN 0 WHEN 'High' THEN 1 WHEN 'Medium' THEN 2 WHEN 'Low' THEN 3 ELSE 0 END"
       case _ => "0"
     }

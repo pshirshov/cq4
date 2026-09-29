@@ -22,7 +22,8 @@ export async function usageChecks(page, origin, projectId) {
   await page.getByRole('button', { name: 'Project usage', exact: true }).click();
   await page.getByText('Attempt coverage: 1 running; 0 unknown outcomes; 0 with reported gaps.', { exact: true }).waitFor();
   await page.getByRole('button', { name: 'Attempts', exact: true }).click();
-  await page.getByRole('heading', { name: 'Codex · Worker · Running', exact: true }).waitFor();
+  await page.getByRole('table', {name: 'Attempts', exact: true}).getByRole('cell', {name: 'Running', exact: true}).waitFor();
+  await page.getByText('Attempt details', {exact: true}).click();
   await page.getByRole('button', { name: 'Outcome history', exact: true }).click();
   await page.getByText('No outcome recorded yet.', { exact: true }).waitFor();
   await page.getByRole('dialog').getByRole('button', { name: 'Close', exact: true }).click();
@@ -41,16 +42,18 @@ export async function usageChecks(page, origin, projectId) {
   await host({ Finish: { value: outcome } });
   await page.getByText('Attempt coverage: 0 running; 0 unknown outcomes; 1 with reported gaps.', { exact: true }).waitFor();
   await page.getByRole('button', { name: 'Attempts', exact: true }).click();
+  await page.getByText('Attempt details', {exact: true}).click();
   await page.getByText('Final request usage unavailable', { exact: true }).waitFor();
   const completed = { ...outcome, request: id(), state: 'Completed', finishedAt: '2500', gaps: [], supersedes: outcome.request };
   await host({ Finish: { value: completed } });
   await page.getByText('Attempt coverage: 0 running; 0 unknown outcomes; 0 with reported gaps.', { exact: true }).waitFor();
-  await page.getByRole('heading', { name: 'Codex · Worker · Completed', exact: true }).waitFor();
+  await page.getByRole('table', {name: 'Attempts', exact: true}).getByRole('cell', {name: 'Completed', exact: true}).waitFor();
+  await page.getByText('Attempt details', {exact: true}).click();
   await page.getByRole('button', { name: 'Outcome history', exact: true }).click();
-  await page.getByText(/^\d+ · Cancelled$/).waitFor();
-  await page.getByText(/^\d+ · Completed$/).waitFor();
+  await page.getByRole('table', {name: 'Outcome history', exact: true}).getByRole('cell', {name: 'Cancelled', exact: true}).waitFor();
+  await page.getByRole('table', {name: 'Outcome history', exact: true}).getByRole('cell', {name: 'Completed', exact: true}).waitFor();
   await host({ Finish: { value: { ...completed, request: id(), finishedAt: '2600', supersedes: completed.request } } });
-  await page.getByText(/^\d+ · Completed$/).nth(1).waitFor();
+  await page.getByRole('table', {name: 'Outcome history', exact: true}).getByRole('cell', {name: 'Completed', exact: true}).nth(1).waitFor();
   for (let index = 0; index < 201; index++) {
     await host({ Ingest: { value: { observation: { id: id(), attempt: attempt.id, source: 'fixture', position: String(index + 2), occurredAt: '4000', receivedAt: '0',
       scope: 'Increment', counters: counts(1), inputIncludesCache: true, outputIncludesReasoning: true,

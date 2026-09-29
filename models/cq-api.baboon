@@ -130,6 +130,7 @@ root data TerminationPlan { roots: lst[ItemId] intent: TerminationIntent entries
 root data TerminationSnapshot { cursor: ChangeCursor digest: str }
 root data TerminationPreview { plan: TerminationPlan snapshot: TerminationSnapshot }
 root adt Mutation {
+  data Archive { members: lst[ItemRevision] }
   data Produce { producer: ItemId expected: Revision drafts: lst[ItemDraft] }
   data Terminate { roots: set[ItemId] intent: TerminationIntent snapshot: TerminationSnapshot }
   data Create { draft: ItemDraft }
@@ -274,7 +275,7 @@ root id CatalogueCursor { value: i64 }
 root data ProjectPage { projects: lst[Project] after: opt[ProjectId] hasMore: bit cursor: CatalogueCursor }
 root data ProjectConfig { project: ProjectId endpoint: str name: str }
 root data SearchInput { project: ProjectId query: str after: opt[ItemId] snapshot: opt[ChangeCursor] limit: i32 }
-enum ItemOrderField { Id Type Title Status Severity }
+enum ItemOrderField { Id Type Title Status Severity Modified }
 enum SortDirection { Ascending Descending }
 root data ItemOrder { field: ItemOrderField direction: SortDirection }
 root data BrowseItem { summary: ItemSummary severity: opt[Severity] }

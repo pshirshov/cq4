@@ -26,10 +26,10 @@ export async function tableChecks(browser, storageState, origin, evidence) {
     await page.goto(origin); await page.getByText('Connection: ALIVE', { exact: true }).waitFor();
     await page.getByLabel('Project', { exact: true }).selectOption(project.value);
     await page.getByRole('button', { name: 'D1 · Visible defect', exact: true }).waitFor();
-    await check('D30 semantic table with five columns', async () => {
+    await check('D30 semantic table with six columns', async () => {
       const table = page.getByRole('table', { name: 'Items', exact: true });
       assert.equal(await table.count(), 1);
-      assert.deepEqual(await table.getByRole('columnheader').allTextContents(), ['ID', 'Type', 'Title', 'Status', 'Severity']);
+      assert.deepEqual(await table.getByRole('columnheader').allTextContents(), ['ID', 'Type', 'Title', 'Status', 'Severity', 'Last modified']);
       assert.equal(await table.getByRole('cell', { name: 'High', exact: true }).count(), 1);
     });
     await check('D29 live navigation counts', async () => {
@@ -73,7 +73,7 @@ export async function tableChecks(browser, storageState, origin, evidence) {
       await page.getByRole('button', { name: 'Search', exact: true }).click();
       await page.getByText('Data: invalid query', { exact: true }).waitFor();
       await call({ Change: { input: { project, change: { request: { value: randomUUID() }, fences: [], reason: 'Count archive fixture', mutations: [
-        { Replace: { id: { project, ledger: 'Defects', number: '1' }, expected: { value: '1' }, draft: { ...draft, archived: true } } }
+        { Replace: { id: { project, ledger: 'Defects', number: '1' }, expected: { value: '1' }, draft: { ...draft, archived: true, content: { Defect: { ...draft.content.Defect, status: 'Resolved' } } } } }
       ] } } } });
       await page.waitForFunction(() => document.querySelector('button[aria-label="Defects"] .navigation-count').textContent === '84');
       assert.equal(await page.getByRole('button', { name: 'All items', exact: true }).locator('.navigation-count').textContent(), '84');

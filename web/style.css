@@ -19,7 +19,7 @@ h3 { margin: 10px 0 6px; font-size: 13px; }
 .pane-separator:hover::after, .pane-separator:focus-visible::after { background: #68c7ec; }
 .pane-separator:focus-visible, .pane:focus-visible { outline: 2px solid #68c7ec; outline-offset: -2px; }
 nav select, nav input, nav button { display: block; width: 100%; margin: 2px 0; }
-button, input, select, textarea { font: inherit; color: inherit; background: #24323e; border: 1px solid #61788a; border-radius: 4px; padding: 3px 8px; min-height: 24px; }
+button, input, select, textarea { font: inherit; color: inherit; background: #24323e; border: 1px solid #61788a; border-radius: 0; padding: 3px 8px; min-height: 24px; }
 button { cursor: pointer; }
 button:hover { background: #334b5d; }
 button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid #68c7ec; outline-offset: 2px; }
@@ -30,10 +30,13 @@ nav .navigation-entry { display: flex; align-items: center; gap: 8px; text-align
 .items-table { table-layout: fixed; }
 .items-table th, .items-table td { padding: 6px 3px; }
 .items-table th { position: sticky; top: -10px; background: #1c2630; z-index: 1; }
-.items-table th:nth-child(1) { width: 12%; }
-.items-table th:nth-child(2) { width: 10%; }
-.items-table th:nth-child(3) { width: 38%; }
-.items-table th:nth-child(4), .items-table th:nth-child(5) { width: 20%; }
+.items-table th:nth-child(1) { width: 10%; }
+.items-table th:nth-child(2) { width: 7%; }
+.items-table th:nth-child(3) { width: 33%; }
+.items-table th:nth-child(4), .items-table th:nth-child(5) { width: 15%; }
+.items-table th:nth-child(6) { width: 20%; }
+.item-modified { font-size: 11px; overflow-wrap: anywhere; }
+.item-modified time span { display: block; }
 .items-table th button { width: 100%; padding: 0; border: 0; border-radius: 0; text-align: left; font-size: 11px; overflow-wrap: anywhere; }
 .items-table th[aria-sort=ascending] { box-shadow: inset 0 -2px #68c7ec; }
 .items-table th[aria-sort=descending] { box-shadow: inset 0 2px #68c7ec; }
@@ -41,6 +44,7 @@ nav .navigation-entry { display: flex; align-items: center; gap: 8px; text-align
 .items-table th[aria-sort=descending] button::after { content: ' ↓'; color: #68c7ec; }
 .item-row.selected { background: #243d4c; }
 .items-table .item-title { border: 0; background: transparent; padding: 0; min-height: 0; text-align: left; overflow-wrap: anywhere; width: 100%; }
+.item-row { cursor: pointer; }
 .item-row:hover { background: #253541; }
 .item-id { font-variant-numeric: tabular-nums; color: #a4c1d3; }
 .item-status, .item-severity { color: #a4c1d3; font-size: 11px; }
@@ -88,17 +92,19 @@ progress { width: 50px; height: 6px; margin-left: 12px; }
 .query-input { display: flex; gap: 6px; align-items: center; }
 .query-input input { min-width: 0; flex: 1; }
 .query-input button { width: auto; }
-.query-suggestions { position: absolute; z-index: 5; top: calc(100% + 4px); left: 0; width: min(680px, 100%); max-width: calc(100vw - 28px); max-height: 280px; overflow: auto; background: #1c2630; border: 1px solid #61788a; border-radius: 4px; box-shadow: 0 8px 24px #0008; }
+.query-popup { position: absolute; z-index: 5; top: calc(100% + 4px); left: 0; width: min(680px, 100%); max-width: calc(100vw - 28px); max-height: 280px; overflow: auto; background: #1c2630; border: 1px solid #61788a; border-radius: 0; box-shadow: 0 8px 24px #0008; }
 .query-suggestions button { display: block; width: 100%; border: 0; border-radius: 0; text-align: left; margin: 0; overflow-wrap: anywhere; }
 .query-suggestions [aria-selected=true] { background: #334b5d; outline: 2px solid #68c7ec; outline-offset: -2px; }
-.query-diagnostic { color: #ffbd86; }
+.query-diagnostic { color: #ffbd86; padding: 4px 8px; }
+.query-popup > p { padding: 4px 8px; margin: 0; }
+.query-input input[aria-invalid=true] { border-color: #ffbd86; }
 .query-diagnostic code { display: block; white-space: pre-wrap; overflow-wrap: anywhere; }
 .query-diagnostic mark { background: #ffbd86; color: #141a20; }
 
 /* Item documents share their field order and visual rhythm with their editors. */
 .item-document { max-width: 940px; margin-inline: auto; line-height: 1.5; }
 .item-metadata, .form-metadata { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 10px 0 18px; }
-.badge, .label-badge { padding: 2px 8px; border-radius: 4px; background: #293f4c; font-size: 12px; }
+.badge, .label-badge { padding: 2px 8px; border-radius: 0; background: #293f4c; font-size: 12px; }
 .label-badge { background: #222e37; color: #a4c1d3; }
 .document-field { margin: 20px 0; }
 .document-field h3, .item-form h3 { margin-bottom: 7px; color: #a4c1d3; font-size: 12px; font-weight: 600; }
@@ -127,7 +133,7 @@ progress { width: 50px; height: 6px; margin-left: 12px; }
 .editor-actions button:first-child { background: #245576; border-color: #69a7cb; }
 .document-actions { margin: 10px 0 16px; }
 .dock-detail { float: right; margin-left: 8px; }
-.workspace-dialog { width: min(900px, calc(100vw - 32px)); max-height: calc(100dvh - 40px); padding: 0; color: #e1e8ef; background: #141a20; border: 1px solid #506779; border-radius: 8px; box-shadow: 0 16px 70px #0009; }
+.workspace-dialog { width: min(900px, calc(100vw - 32px)); max-height: calc(100dvh - 40px); padding: 0; color: #e1e8ef; background: #141a20; border: 1px solid #506779; border-radius: 0; box-shadow: 0 16px 70px #0009; }
 .workspace-dialog::backdrop { background: #050c14aa; }
 .dialog-header { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 18px; background: #1c2630; border-bottom: 1px solid #435364; }
 .dialog-header h2 { margin: 0; }
@@ -161,3 +167,12 @@ tbody tr[aria-selected=true] { background: #243d4c; }
   .form-metadata { gap: 6px; }
   th, td { padding: 5px 4px; }
 }
+
+.usage-table { table-layout: fixed; }
+.usage-table td { vertical-align: top; overflow-wrap: anywhere; }
+.usage-table details { min-width: 0; }
+.usage-fields { display: grid; grid-template-columns: minmax(80px, 1fr) minmax(0, 2fr); gap: 5px 10px; }
+.usage-fields dt { color: #aebdcc; }
+.usage-fields dd { margin: 0; overflow-wrap: anywhere; }
+.usage-scope-actions { display: flex; flex-direction: column; align-items: stretch; gap: 5px; }
+.usage-scope-actions button { overflow-wrap: anywhere; text-align: left; }

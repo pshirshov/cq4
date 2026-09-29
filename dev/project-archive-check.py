@@ -95,6 +95,7 @@ def verify(checks, command, name):
             sql(names[0], f"DELETE FROM cq_integrations WHERE integration_id='{pending_id}'")
             archived = call(checks.environment, {"Read": {"input": {"project": project, "selection": {"ItemDetail": {"id": state["target"]["id"]}}}}})["Detail"]["view"]["item"]
             archived["draft"]["archived"] = True
+            archived["draft"]["content"]["Task"]["status"] = "Done"
             archived["draft"]["labels"] = ["retained label"]
             call(checks.environment, {"Change": {"input": {"project": project, "change": {"request": {"value": str(uuid.uuid4())}, "reason": "Archive coverage",
                 "fences": [], "mutations": [{"Replace": {"id": archived["id"], "expected": archived["revision"], "draft": archived["draft"]}}]}}}})
@@ -134,6 +135,7 @@ def verify(checks, command, name):
                     item = call(checks.environment, {"Read": {"input": {"project": project, "selection": {"ItemDetail": {"id": state["source"]["id"]}}}}})["Detail"]["view"]["item"]
                     item["draft"]["title"] = "Changed during backup"
                     item["draft"]["archived"] = True
+                    item["draft"]["content"]["Task"]["status"] = "Done"
                     call(checks.environment, {"Change": {"input": {"project": project, "change": {"request": {"value": str(uuid.uuid4())}, "reason": "Snapshot isolation",
                         "fences": [], "mutations": [{"Replace": {"id": item["id"], "expected": item["revision"], "draft": item["draft"]}}]}}}})
                     locker.stdin.write("COMMIT;\n\\q\n"); locker.stdin.flush()
@@ -164,6 +166,28 @@ def verify(checks, command, name):
                 result = cli(name, ["restore", str(target)], 1)
                 assert expected in result.stderr, result.stderr
                 assert sql(names[1], "SELECT count(*) FROM cq_projects") == "0", "Failed restore left a project behind"
+
+            def nonterminal_current(m, entries):
+                index = next(i for i, (name, _) in enumerate(entries) if name == "cq_items.copy")
+                data = entries[index][1]; output = bytearray(data[:19]); offset = 19; changed = 0
+                while True:
+                    fields = struct.unpack_from(">h", data, offset)[0]; offset += 2
+                    output.extend(struct.pack(">h", fields))
+                    if fields == -1:
+                        break
+                    for _ in range(fields):
+                        length = struct.unpack_from(">i", data, offset)[0]; offset += 4
+                        value = data[offset:offset + max(length, 0)]; offset += max(length, 0)
+                        if value.startswith(b'\x01{'):
+                            document = json.loads(value[1:])
+                            if "draft" in document and document["draft"]["archived"]:
+                                document["draft"]["content"]["Task"]["status"] = "Ready"
+                                value = b'\x01' + json.dumps(document).encode(); changed += 1; length = len(value)
+                        output.extend(struct.pack(">i", length)); output.extend(value)
+                assert changed == 1 and offset == len(data)
+                entries[index] = (entries[index][0], bytes(output))
+                m["entries"][index - 1].update(bytes=str(len(output)), sha256=hashlib.sha256(output).hexdigest())
+            reject("nonterminal-current", nonterminal_current, "Only terminal items may be archived")
 
             reject("schema-mismatch", lambda m, e: m.update(schemaSha256="0" * 64), "current CQ schema")
             reject("major-mismatch", lambda m, e: m.update(postgresMajor=0), "PostgreSQL major")

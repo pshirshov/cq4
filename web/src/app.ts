@@ -11,6 +11,8 @@ import { itemName } from './items.js';
 import { itemView } from './presentation.js';
 import { Dialog } from './dialog.js';
 import { icon } from './icons.js';
+import { ArchiveDialog } from './archive.js';
+import { attemptsTable, outcomesTable, auditTable } from './usage-view.js';
 
 const CONTEXT = BaboonCodecContext.Default;
 const PAGE_SIZE = 40;
@@ -27,7 +29,7 @@ type Panel = 'detail' | 'history' | 'usage' | 'audit';
 type UsageScope = api.UsageFilter_ProjectAll | api.UsageFilter_TaskOnly | api.UsageFilter_CohortOnly | api.UsageFilter_SessionOnly;
 interface UsageLoad { dirty: boolean }
 type AuditView = api.UsageSelection_Costs | api.UsageSelection_Attempts | api.UsageSelection_Outcomes | api.UsageSelection_Audit;
-interface ResultRow { element: HTMLTableRowElement; button: HTMLButtonElement; status: HTMLTableCellElement; severity: HTMLTableCellElement }
+interface ResultRow { element: HTMLTableRowElement; button: HTMLButtonElement; status: HTMLTableCellElement; severity: HTMLTableCellElement; modified: HTMLTimeElement }
 
 class App {
   private manager: ConnectionManager | null = null;
@@ -76,6 +78,14 @@ class App {
       if (this.project !== null && this.project.value === project.value) { this.after = undefined; this.snapshot = undefined; await this.refresh(); }
     },
   });
+  private readonly archive = new ArchiveDialog({
+    call: command => this.connection().call(command),
+    committed: async (project, acknowledgement) => {
+      if (this.project === null || this.project.value !== project.value) return;
+      this.notice.textContent = `Archived ${acknowledgement.items.length} items.`;
+      this.after = undefined; this.snapshot = undefined; await this.refresh();
+    },
+  }, localStorage);
   private readonly historyPanel = element('section', '');
   private readonly projectDialog = new Dialog(() => {});
   private readonly createDialog = new Dialog(() => this.closeEditor());
@@ -178,6 +188,7 @@ class App {
     window.addEventListener('resize', () => this.loadMore());
     this.projects.setAttribute('aria-label', 'Project'); this.query.setAttribute('aria-label', 'Search query');
     this.projects.addEventListener('change', () => this.action(async () => { this.project = new api.ProjectId(this.projects.value); this.reset(); await this.refresh(); }));
+    this.query.addEventListener('input', () => this.archive.invalidate());
     this.query.placeholder = 'ledger:Tasks status:Ready'; this.query.maxLength = MAX_QUERY_CHARACTERS;
     const newProject = element('form', ''); const name = element('input', ''); name.placeholder = 'New project name'; name.setAttribute('aria-label', 'New project name'); name.required = true;
     const add = element('button', 'Create project'); add.type = 'submit'; newProject.append(name, add);
@@ -201,17 +212,19 @@ class App {
     }
     const create = button('New item', () => { this.openEditor(null); }); create.className = 'navigation-entry'; create.prepend(icon('New'));
     const usage = button('Project usage', () => this.action(() => this.selectUsage(new api.UsageFilter_ProjectAll(), true))); usage.className = 'navigation-entry'; usage.prepend(icon('Usage'));
-    side.append(create, usage, element('h3', 'Browse'), shortcuts,
+    const archive = button('Archive terminal items', () => this.action(async () => this.archive.open(this.currentProject(), this.activeQuery, this.order))); archive.className = 'navigation-entry';
+    side.append(create, usage, archive, element('h3', 'Browse'), shortcuts,
       element('p', 'Ctrl+K: query · F6: next pane · Shift+F6: previous pane. Results: ↑/↓ to move, Enter to select, → for detail, Escape to return.'));
     const table = element('table', ''); table.className = 'items-table'; table.setAttribute('aria-label', 'Items');
     const head = element('thead', ''); const headings = element('tr', '');
     for (const field of api.ItemOrderField_values) {
       const cell = element('th', ''); cell.scope = 'col'; this.sortHeaders.set(field, cell);
-      const control = button(field === 'Id' ? 'ID' : field, () => this.action(async () => {
+      const label = field === 'Id' ? 'ID' : field === 'Modified' ? 'Last modified' : field;
+      const control = button(label, () => this.action(async () => {
         this.order = new api.ItemOrder(field, this.order.field === field && this.order.direction === 'Ascending' ? api.SortDirection.Descending : api.SortDirection.Ascending);
         this.updateSort(); await this.search();
       }));
-      control.setAttribute('aria-label', `Sort by ${field === 'Id' ? 'ID' : field.toLowerCase()}`); cell.append(control); headings.append(cell);
+      control.setAttribute('aria-label', `Sort by ${field === 'Id' ? 'ID' : label.toLowerCase()}`); cell.append(control); headings.append(cell);
     }
     head.append(headings); table.append(head, this.items); this.updateSort();
     const empty = element('td', 'No matching items.'); empty.colSpan = api.ItemOrderField_values.length; this.emptyResults.append(empty);
@@ -230,7 +243,7 @@ class App {
     this.resultStatus.setAttribute('role', 'status');
     list.append(this.resultStatus, table);
     content.append(workspace.toggle, this.notice, this.detail, this.editorPanel, this.conflictPanel, this.graph.element, this.usagePanel, this.auditPanel);
-    this.root.replaceChildren(header, workspace.element, this.projectDialog.element, this.createDialog.element, this.historyDialog.element, this.usageDialog.element); workspace.fit();
+    this.root.replaceChildren(header, workspace.element, this.projectDialog.element, this.createDialog.element, this.historyDialog.element, this.usageDialog.element, this.archive.element); workspace.fit();
     this.manager = new ConnectionManager(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`, {
       status: stats => this.health.update(stats),
       active: () => this.action(async () => {
@@ -271,12 +284,14 @@ class App {
     });
   }
   private async search(): Promise<void> {
+    this.archive.invalidate();
     this.activeQuery = this.query.value; this.queryInvalid = false; this.epoch++; this.after = undefined; this.snapshot = undefined;
     this.loadedItems = []; this.page = null;
     if (this.resultsPane !== null) this.resultsPane.scrollTop = 0;
     this.notice.textContent = ''; this.queryEditor.showDiagnostic(undefined, this.query.value); await this.refresh();
   }
   private reset(): void {
+    this.archive.invalidate();
     this.createDialog.close(); this.historyDialog.close(); this.usageDialog.close(); this.closeEditor();
     this.queryEditor.invalidate(); this.queryEditor.showDiagnostic(undefined, this.query.value);
     this.epoch++; this.selectionGeneration++; this.selection = null; this.selected = null; this.editor = null; this.after = undefined; this.snapshot = undefined;
@@ -428,17 +443,23 @@ class App {
       if (row === undefined) {
         const line = element('tr', ''); line.className = 'item-row'; line.dataset.item = key;
         const node = button('', () => this.action(() => this.select(item.id))); node.className = 'item-title';
+        line.addEventListener('click', event => {
+          if (event.target instanceof Node && !node.contains(event.target)) { node.focus(); this.action(() => this.select(item.id)); }
+        });
         const id = element('td', itemName(item.id)); id.className = 'item-id';
         const type = element('td', ''); type.append(icon(item.id.ledger)); type.setAttribute('aria-label', item.id.ledger); type.title = item.id.ledger;
         const title = element('td', ''); title.append(node);
         const status = element('td', ''); status.className = 'item-status'; status.id = `status-${key}`;
         const severity = element('td', ''); severity.className = 'item-severity';
-        node.setAttribute('aria-describedby', status.id); line.append(id, type, title, status, severity);
-        row = { element: line, button: node, status, severity }; this.rows.set(key, row);
+        const modified = element('time', ''); const timestamp = element('td', ''); timestamp.className = 'item-modified'; timestamp.append(modified);
+        node.setAttribute('aria-describedby', status.id); line.append(id, type, title, status, severity, timestamp);
+        row = { element: line, button: node, status, severity, modified }; this.rows.set(key, row);
       }
       const caption = `${itemName(item.id)} · ${item.title}${item.archived ? ' · archived' : ''}`;
       row.button.textContent = item.title + (item.archived ? ' · archived' : ''); row.button.setAttribute('aria-label', caption);
       row.status.textContent = item.status; row.severity.textContent = entry.severity === undefined ? '—' : entry.severity;
+      const date = new Date(Number(item.updatedAt)); row.modified.dateTime = date.toISOString(); row.modified.title = date.toLocaleString();
+      row.modified.replaceChildren(element('span', date.toLocaleDateString(undefined, { dateStyle: 'short' })), element('span', date.toLocaleTimeString(undefined, { timeStyle: 'short' })));
       const before = this.items.children.item(index);
       if (before !== row.element) this.items.insertBefore(row.element, before);
     }
@@ -451,6 +472,7 @@ class App {
     const key = this.selection === null ? null : `${this.selection.project.value}-${itemName(this.selection)}`;
     for (const [id, row] of this.rows) {
       row.button.setAttribute('aria-current', String(id === key)); row.element.classList.toggle('selected', id === key);
+      row.element.setAttribute('aria-selected', String(id === key));
     }
   }
   private usageScope(): string {
@@ -754,42 +776,24 @@ class App {
     if (result instanceof api.Result_UsageAttempts && view instanceof api.UsageSelection_Attempts) {
       this.auditHeader('Attempts', result.page.cursor);
       if (result.page.entries.length === 0) this.auditPanel.append(element('p', 'No attempts in this scope.'));
-      for (const entry of result.page.entries) {
-        const row = element('section', ''); const outcome = entry.outcome;
-        row.append(element('h4', `${entry.attempt.harness} · ${entry.attempt.role} · ${outcome === undefined ? 'Running' : outcome.value.state}`),
-          element('p', `Attempt ${entry.attempt.id.value} · ${entry.assignment.attribution}`));
-        row.append(element('p', `Assignment ${entry.assignment.id.value} · frozen members: ${[...entry.assignment.members].map(itemName).join(', ') || 'none'}`));
-        const scopes = element('div', ''); scopes.className = 'actions';
-        scopes.append(button(`Session usage · ${entry.attempt.session.value}`, () => this.action(() => this.selectUsage(new api.UsageFilter_SessionOnly(entry.attempt.session), true))));
-        const cohort = entry.assignment.cohort;
-        if (cohort !== undefined) scopes.append(button(`Cohort usage · ${cohort}`, () => this.action(() => this.selectUsage(new api.UsageFilter_CohortOnly(cohort), true))));
-        for (const member of entry.assignment.members) scopes.append(button(`Task usage · ${itemName(member)}`, () => this.action(() => this.selectUsage(new api.UsageFilter_TaskOnly(member), true))));
-        row.append(scopes);
-        if (outcome !== undefined) for (const gap of outcome.value.gaps) row.append(element('p', gap));
-        const details = element('details', ''); details.append(element('summary', 'Attempt details'), element('pre', describe(api.AttemptView_JsonCodec.instance.encode(CONTEXT, entry))));
-        row.append(details, button('Outcome history', () => this.action(() => this.loadOutcomes(entry.attempt.id, 0n)))); this.auditPanel.append(row);
-      }
+      this.auditPanel.append(attemptsTable(result.page.entries, {
+        scope: filter => this.action(() => this.selectUsage(filter, true)),
+        outcomes: attempt => this.action(() => this.loadOutcomes(attempt, 0n)),
+      }));
       if (result.page.hasMore) this.auditPanel.append(button('Next attempt page', () => this.action(() => this.loadAttempts(result.page.after, result.page.cursor))));
       return;
     }
     if (result instanceof api.Result_UsageOutcomes && view instanceof api.UsageSelection_Outcomes) {
       this.auditHeader('Outcome history', result.page.cursor);
       if (result.page.entries.length === 0) this.auditPanel.append(element('p', 'No outcome recorded yet.'));
-      for (const entry of result.page.entries) {
-        const row = element('details', ''); row.append(element('summary', `${entry.sequence} · ${entry.value.state}`),
-          element('pre', describe(api.RecordedOutcome_JsonCodec.instance.encode(CONTEXT, entry))));
-        this.auditPanel.append(row);
-      }
+      this.auditPanel.append(outcomesTable(result.page.entries));
       if (result.page.hasMore) this.auditPanel.append(button('Next outcome page', () => this.action(() => this.loadOutcomes(view.attempt, result.page.after))));
       return;
     }
     if (result instanceof api.Result_UsageAudit && view instanceof api.UsageSelection_Audit) {
       this.auditHeader('Usage audit', result.page.cursor);
       if (result.page.entries.length === 0) this.auditPanel.append(element('p', 'No usage observations in this scope.'));
-      for (const entry of result.page.entries) {
-        const row = element('details', ''); row.append(element('summary', `${entry.sequence} · ${entry.upload.observation.source} · ${entry.upload.observation.completeness}`),
-          element('pre', describe(api.RecordedUsage_JsonCodec.instance.encode(CONTEXT, entry)))); this.auditPanel.append(row);
-      }
+      this.auditPanel.append(auditTable(result.page.entries));
       if (result.page.hasMore) this.auditPanel.append(button('Next audit page', () => this.action(() => this.loadAudit(result.page.after))));
       return;
     }

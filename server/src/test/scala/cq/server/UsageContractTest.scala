@@ -255,7 +255,7 @@ abstract class UsageContractTest extends SpecZIO with AssertZIO {
         _ <- assertIO(records.filter(_.upload.observation.attempt == shared.id).map(_.normalized.input.value) == List(Some(1000L), Some(1100L)))
         _ <- assertIO(records.forall(r => r.upload.observation.receivedAt > 0 && r.actor == host.actor))
         item <- ledger.get(owner, one)
-        _ <- ledger.change(owner, ChangeRequest(RequestId(UUID.randomUUID()), List(Mutation.Replace(one, item.item.revision, item.item.draft.copy(archived = true))), Nil, "Archive retains spend"))
+        _ <- ledger.change(owner, ChangeRequest(RequestId(UUID.randomUUID()), List(Mutation.Replace(one, item.item.revision, item.item.draft.copy(archived = true, content = item.item.draft.content.asInstanceOf[Content.Task].copy(status = TaskStatus.Done)))), Nil, "Archive retains spend"))
         afterArchive <- usage.summary(owner, UsageFilter.TaskOnly(one))
         _ <- assertIO(afterArchive.direct.total.known == 200 && afterArchive.shared.total.known == 1100)
       } yield ()

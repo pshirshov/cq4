@@ -16,7 +16,7 @@ abstract class QueryContractTest extends SpecZIO with AssertZIO {
   )
   private def scope(): Scope = Scope(ProjectId(UUID.randomUUID()), Actor("query", SessionId(UUID.randomUUID()), Role.Governor))
   private def draft(title: String, body: String, labels: Set[String], archived: Boolean): ItemDraft =
-    ItemDraft(title, body, labels, archived, Content.Task(TaskStatus.Ready, List("Searchable"), None, Nil), Nil)
+    ItemDraft(title, body, labels, archived, Content.Task(if (archived) TaskStatus.Done else TaskStatus.Ready, List("Searchable"), None, Nil), Nil)
   private def change(service: LedgerService[IO], owner: Scope, mutations: List[Mutation]): IO[Throwable, ChangeAck] =
     service.change(owner, ChangeRequest(RequestId(UUID.randomUUID()), mutations, Nil, "Query contract scenario"))
   private def create(service: LedgerService[IO], owner: Scope, value: ItemDraft): IO[Throwable, ItemRevision] =
@@ -79,9 +79,9 @@ abstract class QueryContractTest extends SpecZIO with AssertZIO {
         _ <- service.initialize(owner, "reference query")
         _ <- service.initialize(other, "other reference query")
         source <- create(service, owner, draft("Review", "Evidence", Set.empty, false).copy(content = Content.Review(ReviewStatus.Pending, Nil, Some(Citation.Commit("consumer", "abc123")), Nil, None)))
-        target <- create(service, owner, draft("Milestone", "Release", Set.empty, true).copy(content = Content.Milestone(MilestoneStatus.Open, "Release")))
+        target <- create(service, owner, draft("Milestone", "Release", Set.empty, true).copy(content = Content.Milestone(MilestoneStatus.Complete, "Release")))
         otherSource <- create(service, other, draft("Review", "Evidence", Set.empty, false).copy(content = Content.Review(ReviewStatus.Pending, Nil, Some(Citation.Commit("consumer", "abc123")), Nil, None)))
-        otherTarget <- create(service, other, draft("Milestone", "Release", Set.empty, true).copy(content = Content.Milestone(MilestoneStatus.Open, "Release")))
+        otherTarget <- create(service, other, draft("Milestone", "Release", Set.empty, true).copy(content = Content.Milestone(MilestoneStatus.Complete, "Release")))
         _ <- ZIO.foreachDiscard(relations) { relation => for {
           currentOtherSource <- service.get(other, otherSource.id)
           currentOtherTarget <- service.get(other, otherTarget.id)
@@ -111,7 +111,7 @@ abstract class QueryContractTest extends SpecZIO with AssertZIO {
         _ <- service.initialize(owner, "search updates")
         a <- create(service, owner, original)
         b <- create(service, owner, draft("Other", "second phrase", Set.empty, false))
-        updated <- change(service, owner, List(Mutation.Replace(a.id, a.revision, original.copy(title = "After", body = "new phrase", labels = Set("new"), archived = true))))
+        updated <- change(service, owner, List(Mutation.Replace(a.id, a.revision, original.copy(title = "After", body = "new phrase", labels = Set("new"), archived = true, content = Content.Task(TaskStatus.Done, List("Searchable"), None, Nil)))))
         _ <- matches(service, owner, "before OR tag:old archived:all", Nil)
         _ <- matches(service, owner, "after tag:new archived:true", List(a.id))
         _ <- change(service, owner, List(Mutation.Restore(a.id, updated.items.head.revision, a.revision, Nil)))

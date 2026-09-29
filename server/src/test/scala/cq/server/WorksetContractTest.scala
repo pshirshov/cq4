@@ -92,7 +92,7 @@ abstract class WorksetContractTest extends SpecZIO with AssertZIO {
       def ended(status: TaskStatus): ItemDraft = task(status.toString).copy(archived = true, content = Content.Task(status, List("Acceptance"), None, Nil))
       for {
         _ <- service.initialize(owner, "cycles and outcomes")
-        a <- create(service, owner, task("Archived ancestor").copy(archived = true))
+        a <- create(service, owner, ended(TaskStatus.Done).copy(title = "Archived ancestor"))
         b <- create(service, owner, ended(TaskStatus.Done).copy(archived = false))
         c <- create(service, owner, task("Active descendant"))
         cancelled <- create(service, owner, ended(TaskStatus.Cancelled))

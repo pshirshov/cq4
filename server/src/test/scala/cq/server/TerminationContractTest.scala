@@ -66,7 +66,7 @@ abstract class TerminationContractTest extends SpecZIO with AssertZIO {
         "Withdrawn", "Cancelled", "Cancelled", "Cancelled", "Current", "Withdrawn")
       for {
         _ <- service.initialize(owner, "typed outcomes")
-        ids <- ZIO.foreach(contents)(content => create(service, human, task(LedgerPolicy.ledger(content).toString).copy(content = content, archived = true)))
+        ids <- ZIO.foreach(contents)(content => create(service, human, task(LedgerPolicy.ledger(content).toString).copy(content = content, archived = LedgerPolicy.outcome(content).terminal)))
         originals <- ZIO.foreach(ids)(service.get(owner, _))
         completion <- service.termination(owner, ids.toSet, TerminationIntent.Complete)
         _ <- assertIO(!completion.plan.canApply && changed(completion).size == 3 && completion.plan.entries.count(_.effect.isInstanceOf[TerminationEffect.Unsupported]) == 10)
@@ -93,7 +93,7 @@ abstract class TerminationContractTest extends SpecZIO with AssertZIO {
       val owner = scope()
       for {
         _ <- service.initialize(owner, "termination graph")
-        root <- create(service, owner, task("Archived root").copy(archived = true))
+        root <- create(service, owner, task("Archived root").copy(archived = true, content = Content.Task(TaskStatus.Done, List("Acceptance"), None, Nil)))
         work <- create(service, owner, task("Active work"))
         terminal <- create(service, owner, task("Terminal ancestor").copy(content = Content.Task(TaskStatus.Done, List("Done"), Some("Factual result"), Nil)))
         below <- create(service, owner, task("Active below terminal"))
@@ -110,13 +110,13 @@ abstract class TerminationContractTest extends SpecZIO with AssertZIO {
           case (a, relation, b) => link(service, owner, a, relation, b)
         }
         preview <- service.termination(owner, Set(root), TerminationIntent.Cancel)
-        _ <- assertIO(changed(preview) == Set(root, work, below) && effect(preview, terminal) == TerminationEffect.Preserve())
+        _ <- assertIO(changed(preview) == Set(work, below) && effect(preview, terminal) == TerminationEffect.Preserve())
         _ <- assertIO(effect(preview, shared).asInstanceOf[TerminationEffect.Excluded].reasons.contains(TerminationExclusion.Shared(outside)))
         _ <- assertIO(effect(preview, hidden).asInstanceOf[TerminationEffect.Excluded].reasons.contains(TerminationExclusion.Shared(shared)))
         _ <- assertIO(effect(preview, prerequisite).asInstanceOf[TerminationEffect.Excluded].reasons.contains(TerminationExclusion.Prerequisite(work)))
         _ <- assertIO(!preview.plan.entries.exists(_.item.id == sibling))
         explicit <- service.termination(owner, Set(root, shared, prerequisite, milestone), TerminationIntent.Cancel)
-        _ <- assertIO(changed(explicit) == Set(root, work, below, shared, hidden, prerequisite, milestone, sibling))
+        _ <- assertIO(changed(explicit) == Set(work, below, shared, hidden, prerequisite, milestone, sibling))
         ack <- service.change(owner, request(preview))
         kept <- ZIO.foreach(List(shared, hidden, prerequisite, sibling, terminal))(service.get(owner, _))
         _ <- assertIO(ack.items.map(_.id).toSet == changed(preview) && kept.take(4).forall(_.item.draft.content.asInstanceOf[Content.Task].status == TaskStatus.Ready))

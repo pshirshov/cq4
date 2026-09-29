@@ -60,11 +60,11 @@ export async function queryChecks(browser, storageState, origin, evidence) {
     await query.press('ArrowUp'); await query.press('Tab');
     assert.equal(await query.inputValue(), 'ledger:Tasks AND status:Ready');
     await query.focus(); assert.equal(await query.evaluate(input => input.selectionStart), 6); cases.push('middle token and Tab acceptance');
-    await query.fill('alpha AND'); await page.getByRole('button', { name: 'Show query error', exact: true }).waitFor();
+    await query.fill('ledger:unknown'); await page.getByRole('button', { name: 'Show query error', exact: true }).waitFor();
     assert.equal(await query.getAttribute('aria-invalid'), 'true');
-    assert.equal(await page.locator('.query-diagnostic mark').textContent(), '▏');
+    assert.equal(await page.locator('.query-diagnostic mark').textContent(), 'unknown');
     await page.getByRole('button', { name: 'Show query error', exact: true }).click();
-    assert.deepEqual(await query.evaluate(input => [input.selectionStart, input.selectionEnd]), [9, 9]);
+    assert.deepEqual(await query.evaluate(input => [input.selectionStart, input.selectionEnd]), [7, 14]);
     assert.equal(await page.locator('.query-diagnostic').isVisible(), true, 'Locating the error must preserve the diagnostic');
     await page.screenshot({ path: `${evidence}/query-positioned-error.png`, fullPage: true }); cases.push('positioned syntax error');
     for (const scenario of ['newer-text', 'dismissed', 'project-change']) {

@@ -102,6 +102,45 @@ final class QueryParser {
     index
   }
 
+  private def quotedPrefix(literal: String): Option[String] = {
+    val value = new StringBuilder
+    var index = 1
+    def prefix: Option[String] = {
+      val text = value.result()
+      val complete = if (text.nonEmpty && Character.isHighSurrogate(text.last)) text.dropRight(1) else text
+      Option.when(UTF_8.newEncoder().canEncode(complete) && !complete.contains('\u0000'))(complete)
+    }
+    while (index < literal.length) {
+      val character = literal(index)
+      if (character == '"' || character < ' ') return None
+      if (character != '\\') { value.append(character); index += 1 }
+      else {
+        if (index + 1 == literal.length) return prefix
+        literal(index + 1) match {
+          case 'u' =>
+            val digits = literal.slice(index + 2, index + 6)
+            if (!digits.forall(c => "0123456789abcdefABCDEF".contains(c))) return None
+            if (digits.length < 4) return prefix
+            value.append(Integer.parseInt(digits, 16).toChar); index += 6
+          case escaped =>
+            val decoded = escaped match {
+              case '"' => '"'
+              case '\\' => '\\'
+              case '/' => '/'
+              case 'b' => '\b'
+              case 'f' => '\f'
+              case 'n' => '\n'
+              case 'r' => '\r'
+              case 't' => '\t'
+              case _ => return None
+            }
+            value.append(decoded); index += 2
+        }
+      }
+    }
+    prefix
+  }
+
   private def hasArchive(value: QueryExpression): Boolean = value match {
     case _: QueryExpression.Archive => true
     case QueryExpression.And(left, right) => hasArchive(left) || hasArchive(right)
@@ -128,8 +167,8 @@ final class QueryParser {
             val span = QuerySpan(start, index)
             val literal = source.substring(start, index)
             val decoded = io.circe.parser.parse(literal).flatMap(_.as[String])
-            val value = (if (allowOpenQuote && decoded.isLeft) io.circe.parser.parse(literal + "\"").flatMap(_.as[String]) else decoded)
-              .fold(_ => fail(span, if (index == source.length && !literal.endsWith("\"")) "Unterminated quoted value" else "Quoted values use JSON string escaping"), identity)
+            val value = decoded.toOption.orElse(if (allowOpenQuote) quotedPrefix(literal) else None)
+              .getOrElse(fail(span, if (index == source.length && !literal.endsWith("\"")) "Unterminated quoted value" else "Quoted values use JSON string escaping"))
             if (!UTF_8.newEncoder().canEncode(value) || value.contains('\u0000')) fail(span, "Quoted value contains invalid Unicode or NUL")
             Token(Kind.Quoted, value, span)
           case _ =>

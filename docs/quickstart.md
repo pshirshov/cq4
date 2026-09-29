@@ -140,3 +140,23 @@ Shutdown gives CQ ten seconds after SIGTERM, then sends SIGKILL if needed and ob
 To return, repeat step 1. In terminal two enter `nix develop`, source `client.env`, return to the existing `greeting` checkout and export `CQ_SETTINGS` again. Skip project/settings creation and continue from the existing records. Logs are in `logs/cq-server.log`, `logs/postgres.log` and your run-specific files; session directories are under `sessions/`.
 
 `cq init` resolves its endpoint from `--endpoint`, then existing repository configuration, then `CQ_ORIGIN`, then `CQ_ENDPOINT`. After sourcing `client.env`, a new repository only needs `cq init --name "My project"`.
+
+## Browse and archive completed work
+
+Click anywhere on a table row to select it. Use **Last modified** to sort by the
+latest revision timestamp. Query suggestions and diagnostics appear in a popup
+while the filter field has focus.
+
+Apply your filter, then choose **Archive terminal items**. The preview includes
+only unarchived terminal items matching that applied filter, including cancelled
+or rejected outcomes. Confirm the displayed revisions. A batch contains at most
+512 items; limited previews are labelled explicitly. A stale or unavailable item
+rejects the entire batch. If the connection drops during confirmation, reopen
+the action and use **Retry exact archive** to recover the retained request.
+
+Archived items must remain terminal. Unarchive an item before reopening it, or
+change both fields together. Prior revisions remain available in history.
+
+**Project usage → Attempts** and **Usage audit** show tables. Expand a row's
+details for provenance, coverage gaps, individual counters and scope navigation.
+Unknown measurements and costs remain explicit.

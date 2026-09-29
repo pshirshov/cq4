@@ -198,10 +198,14 @@ class Checks:
             self.run(["python3", "dev/dispatch-shutdown-check.py", *command], f"{name}-dispatch-shutdown", DISPATCH_FIXTURE_TIMEOUT * fixture_scale)
             if browser:
                 self.environment["CQ_BROWSER_EVIDENCE"] = str(self.evidence)
-                self.run(["node", "dev/browser.mjs"], f"{name}-browser", COMMAND_TIMEOUT)
+                self.browser_suite(name)
         if browser:
             self.http_browser(command, name)
         runpy.run_path(str(ROOT / "dev/project-archive-check.py"))["verify"](self, command, name)
+
+    def browser_suite(self, name: str):
+        for scenario in ["browser", "polish-browser", "query-prefix-check", "archive-browser"]:
+            self.run(["node", f"dev/{scenario}.mjs"], f"{name}-{scenario}", COMMAND_TIMEOUT)
 
     def http_browser(self, command: list[str], name: str):
         saved = {key: self.environment[key] for key in ["CQ_HOST", "CQ_PORT", "CQ_ORIGIN"]}
@@ -283,7 +287,7 @@ class Checks:
             with self.server(command, "ui"):
                 if usage:
                     self.run(["node", "dev/usage-watch.mjs"], "usage-watch", STARTUP_TIMEOUT)
-                self.run(["node", "dev/browser.mjs"], "ui-browser", COMMAND_TIMEOUT)
+                self.browser_suite("ui")
             self.http_browser(command, "ui")
 
     def process(self):

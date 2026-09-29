@@ -7,6 +7,7 @@ import distage.StandardAxis.Repo
 import izumi.distage.plugins.PluginConfig
 import izumi.distage.testkit.scalatest.{AssertZIO, SpecZIO}
 import java.util.UUID
+import java.time.{Clock, Instant, ZoneOffset}
 import zio.{IO, ZIO}
 
 abstract class BrowseContractTest extends SpecZIO with AssertZIO {
@@ -31,6 +32,7 @@ abstract class BrowseContractTest extends SpecZIO with AssertZIO {
         (ItemOrderField.Type, List(1, 2, 4, 0, 3, 5, 6), List(0, 3, 5, 6, 1, 2, 4)),
         (ItemOrderField.Title, List(2, 3, 1, 4, 0, 6, 5), List(5, 6, 0, 1, 4, 2, 3)),
         (ItemOrderField.Status, List(3, 1, 2, 4, 0, 5, 6), List(0, 5, 6, 1, 2, 4, 3)),
+        (ItemOrderField.Modified, List(1, 2, 4, 0, 3, 5, 6), List(1, 2, 4, 0, 3, 5, 6)),
         (ItemOrderField.Severity, List(2, 4, 1, 0, 3, 5, 6), List(1, 4, 2, 0, 3, 5, 6)),
       )
       def collect(order: ItemOrder, after: Option[ItemId], snapshot: Option[ChangeCursor], limit: Int): IO[Throwable, List[BrowseItem]] =
@@ -53,9 +55,30 @@ abstract class BrowseContractTest extends SpecZIO with AssertZIO {
       } yield ()
     }
 
+    "order modified timestamps numerically and move a later revision across page boundaries" in { (repository: LedgerRepository[IO]) =>
+      val owner = scope()
+      def at(millis: Long) = {
+        val parser = new QueryParser; val traversal = new WorksetTraversal; val termination = new TerminationPlanner(traversal)
+        new LedgerService.Impl[IO](repository, Clock.fixed(Instant.ofEpochMilli(millis), ZoneOffset.UTC), parser,
+          new QueryCompleter(parser), traversal, termination, new ClaimPlanner, new LedgerMutation(termination))
+      }
+      val earlier = at(9); val later = at(100)
+      for {
+        _ <- earlier.initialize(owner, "Modified ordering")
+        created <- change(earlier, owner, List(Mutation.Create(task("First", TaskStatus.Ready)), Mutation.Create(task("Second", TaskStatus.Ready))))
+        _ <- change(later, owner, List(Mutation.Replace(created.items.head.id, Revision(1), task("Changed", TaskStatus.Ready))))
+        asc <- later.browse(owner, "", ItemOrder(ItemOrderField.Modified, SortDirection.Ascending), None, None, 1)
+        desc <- later.browse(owner, "", ItemOrder(ItemOrderField.Modified, SortDirection.Descending), None, None, 1)
+        _ <- assertIO(asc.items.head.summary.id == created.items(1).id && asc.items.head.summary.updatedAt == 9 && asc.hasMore)
+        _ <- assertIO(desc.items.head.summary.id == created.items.head.id && desc.items.head.summary.updatedAt == 100 && desc.hasMore)
+        next <- later.browse(owner, "", ItemOrder(ItemOrderField.Modified, SortDirection.Ascending), asc.after, Some(asc.cursor), 1)
+        _ <- assertIO(next.items == desc.items && !next.hasMore)
+      } yield ()
+    }
+
     "count only unarchived items in the selected project and reject stale or unscoped continuations" in { (service: LedgerService[IO]) =>
       val owner = scope(); val other = scope(); val order = ItemOrder(ItemOrderField.Title, SortDirection.Ascending)
-      val original = task("First", TaskStatus.Ready)
+      val original = task("First", TaskStatus.Done)
       for {
         _ <- service.initialize(owner, "Counts and snapshots")
         _ <- service.initialize(other, "Other project")

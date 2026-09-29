@@ -85,6 +85,14 @@ final class LedgerMutation(terminationPlanner: TerminationPlanner) {
         invalid(!request.mutations.exists(_.isInstanceOf[Mutation.Terminate]) || request.mutations.size == 1,
           "Termination must be the only mutation in its request")
         request.mutations.foreach {
+          case Mutation.Archive(members) =>
+            invalid(members.nonEmpty && members.size <= MaxTouchedItems && members.map(_.id).distinct.size == members.size,
+              s"Archive requires 1–$MaxTouchedItems distinct item revisions")
+            members.foreach { member =>
+              val item = check(member.id, member.revision)
+              invalid(!item.draft.archived, "Archive preview contains an already archived item")
+              revise(item, item.draft.copy(archived = true), None)
+            }
           case Mutation.Terminate(roots, intent, snapshot) =>
             if (tx.cursor != snapshot.cursor) throw DomainFailure(Fault.Conflict("Termination graph changed; review a fresh preview"))
             val preview = terminationPlanner.preview(tx, scope, roots, intent, now)

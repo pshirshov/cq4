@@ -1,7 +1,7 @@
 package cq.server
 
 import cq.api.*
-import cq.core.DomainFailure
+import cq.core.{DomainFailure, LedgerPolicy}
 import java.io.{FilterInputStream, FilterOutputStream}
 import java.nio.charset.StandardCharsets.UTF_8
 import java.nio.file.{Files, Path}
@@ -29,6 +29,7 @@ private[server] object ArchiveLimits {
 
 final class PostgresProjectArchives(database: LedgerDatabase, clock: Clock) extends ProjectArchives {
   import ArchiveLimits.*
+  private val ValidationFetchRows = 32
   private val tables = List(
     BackupTable.Projects -> "cq_projects", BackupTable.Counters -> "cq_counters", BackupTable.Items -> "cq_items",
     BackupTable.Labels -> "cq_labels", BackupTable.Edges -> "cq_edges", BackupTable.History -> "cq_history",
@@ -148,6 +149,18 @@ final class PostgresProjectArchives(database: LedgerDatabase, clock: Clock) exte
       check(zip.getNextEntry == null, "Unexpected extra archive entry")
       check(manifest.entries.head.rows == 1, "Archive requires exactly one project")
       settled(sql, manifest.project, "restore_")
+      Using.resource(connection.prepareStatement("SELECT body, summary, archived FROM restore_cq_items")) { statement =>
+        statement.setFetchSize(ValidationFetchRows)
+        Using.resource(statement.executeQuery()) { rows =>
+          while (rows.next()) {
+            val item = Wire.decode(Item_JsonCodec, rows.getString(1))
+            LedgerPolicy.validate(item.draft)
+            val summary = Wire.decode(ItemSummary_JsonCodec, rows.getString(2))
+            check(rows.getBoolean(3) == item.draft.archived && summary == LedgerPolicy.summary(item),
+              "Archive current item projections disagree with its content")
+          }
+        }
+      }
       tables.foreach { case (_, table) =>
         val fields = columns(sql, table)
         sql.execute(s"INSERT INTO $table ($fields) SELECT $fields FROM restore_$table")(_ => ())

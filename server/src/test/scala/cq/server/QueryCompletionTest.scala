@@ -16,7 +16,7 @@ abstract class QueryCompletionTest extends SpecZIO with AssertZIO {
   )
   private def scope(): Scope = Scope(ProjectId(UUID.randomUUID()), Actor("completion", SessionId(UUID.randomUUID()), Role.Governor))
   private def draft(title: String, labels: Set[String], archived: Boolean): ItemDraft =
-    ItemDraft(title, "Completion evidence", labels, archived, Content.Task(TaskStatus.Ready, List("Completable"), None, Nil), Nil)
+    ItemDraft(title, "Completion evidence", labels, archived, Content.Task(if (archived) TaskStatus.Done else TaskStatus.Ready, List("Completable"), None, Nil), Nil)
   private def change(service: LedgerService[IO], owner: Scope, mutations: List[Mutation]): IO[Throwable, ChangeAck] =
     service.change(owner, ChangeRequest(RequestId(UUID.randomUUID()), mutations, Nil, "Completion scenario"))
   private def create(service: LedgerService[IO], owner: Scope, value: ItemDraft): IO[Throwable, ItemRevision] =

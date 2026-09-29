@@ -162,12 +162,45 @@ abstract class LedgerContractTest extends SpecZIO with AssertZIO {
       } yield ()
     }
 
+    "archive only terminal current revisions atomically and replay the exact acknowledgement" in { (service: LedgerService[IO]) =>
+      val owner = scope()
+      val done = task("Completed").copy(content = Content.Task(TaskStatus.Done, List("Observable result"), Some("Result"), Nil))
+      for {
+        _ <- service.initialize(owner, "Archival invariant")
+        first <- create(service, owner, done)
+        second <- create(service, owner, done.copy(title = "Second"))
+        open <- create(service, owner, task("Open"))
+        _ <- denied(create(service, owner, task("Invalid").copy(archived = true)))(_.isInstanceOf[Fault.Invalid])
+        _ <- denied(service.change(owner, request(List(Mutation.Archive(List(first, open))), Nil)))(_.isInstanceOf[Fault.Invalid])
+        _ <- denied(service.change(owner, request(List(Mutation.Archive(List(first, second.copy(revision = Revision(999))))), Nil)))(_.isInstanceOf[Fault.Conflict])
+        _ <- denied(service.change(owner, request(List(Mutation.Archive(List(first, first))), Nil)))(_.isInstanceOf[Fault.Invalid])
+        _ <- denied(service.change(owner, request(List(Mutation.Archive(Nil)), Nil)))(_.isInstanceOf[Fault.Invalid])
+        foreign = second.copy(id = second.id.copy(project = ProjectId(UUID.randomUUID())))
+        _ <- denied(service.change(owner, request(List(Mutation.Archive(List(first, foreign))), Nil)))(_.isInstanceOf[Fault.Denied])
+        claim <- service.acquire(owner, ClaimId(UUID.randomUUID()), Set(second.id), 300000)
+        _ <- denied(service.change(owner, request(List(Mutation.Archive(List(first, second))), Nil)))(_.isInstanceOf[Fault.StaleFence])
+        unchanged <- service.get(owner, first.id)
+        _ <- assertIO(unchanged.item.revision == first.revision && !unchanged.item.draft.archived)
+        _ <- service.release(owner, claim.fence)
+        command = request(List(Mutation.Archive(List(first, second))), Nil)
+        ack <- service.change(owner, command)
+        replay <- service.change(owner, command)
+        _ <- assertIO(ack == replay && ack.items.size == 2 && ack.items.forall(_.revision == Revision(2)))
+        _ <- denied(service.change(owner, request(List(Mutation.Replace(first.id, Revision(2), task("Reopened").copy(archived = true))), Nil)))(_.isInstanceOf[Fault.Invalid])
+        _ <- denied(service.change(owner, request(List(Mutation.Archive(ack.items)), Nil)))(_.isInstanceOf[Fault.Invalid])
+        restored <- service.change(owner, request(List(Mutation.Restore(first.id, Revision(2), Revision(1), Nil)), Nil))
+        _ <- assertIO(restored.items.head.revision == Revision(3))
+        history <- service.history(owner, first.id, Revision(Long.MaxValue), 200)
+        _ <- assertIO(history.entries.size == 3 && history.entries.exists(_.item.item.draft.archived))
+      } yield ()
+    }
+
     "normalize inverse references once and record both endpoint histories" in { (service: LedgerService[IO]) =>
       val owner = scope()
       for {
         _ <- service.initialize(owner, "references")
         left <- create(service, owner, task("Dependent"))
-        right <- create(service, owner, task("Prerequisite").copy(archived = true))
+        right <- create(service, owner, task("Prerequisite").copy(archived = true, content = Content.Task(TaskStatus.Done, List("Observable result"), None, Nil)))
         added <- service.change(owner, request(List(Mutation.Reference(right.id, Revision(1), Relation.Blocks, left.id, Revision(1), true)), Nil))
         _ <- assertIO(added.items.map(_.revision.value) == List(2L, 2L))
         forward <- service.get(owner, left.id)

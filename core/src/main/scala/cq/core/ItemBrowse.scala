@@ -17,6 +17,7 @@ object ItemBrowse {
       case ItemOrderField.Type => (summary.id.ledger.toString, 0L)
       case ItemOrderField.Title => (summary.title, 0L)
       case ItemOrderField.Status => (summary.status, 0L)
+      case ItemOrderField.Modified => ("", summary.updatedAt)
       case ItemOrderField.Severity => ("", item.severity.fold(0L) {
         case Severity.Critical => 0L
         case Severity.High => 1L

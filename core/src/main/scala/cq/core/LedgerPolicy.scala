@@ -103,6 +103,7 @@ object LedgerPolicy {
   }
 
   def validate(draft: ItemDraft): Unit = {
+    invalid(!draft.archived || outcome(draft.content).terminal, "Only terminal items may be archived; unarchive an item before reopening it")
     invalid(draft.title.trim.nonEmpty && draft.title.length <= MaxTitle, s"Title must contain 1–$MaxTitle characters")
     invalid(draft.body.length <= MaxBody, s"Body exceeds $MaxBody characters")
     invalid(draft.labels.size <= MaxLabels && draft.labels.forall(s => s.trim.nonEmpty && s.length <= MaxLabel), "Invalid labels")
