@@ -1,9 +1,9 @@
 # Item completion selection: D66
 
 User report, 2026-09-29: with an empty focused query, actual item suggestions such
-as D1 appear, but selecting one seems to do nothing. Filed as D66, Open, revision 1.
-No production change has been made; the reported insertion failure is not yet
-reproduced.
+as D1 appear, but selecting one seems to do nothing. Filed as D66, Open. The user subsequently confirmed that insertion works and D1
+was excluded because it is archived. Revision 2 now records a suggestion-context
+and archive-scope defect; no production correction has been made.
 
 ## Inspected behavior
 
@@ -22,8 +22,11 @@ Evidence: `/srv/nvme/tmp/cq4-item-completion-20260929`.
 - `search-observations.json` records `D1` returning no results and
   `D1 archived:all` returning the archived, Resolved D1. The default query excludes
   archives even though completion can suggest archived references.
-- The user has been asked whether query text remains empty or only results remain
-  unchanged. The browser and exact interaction remain unknown.
+- The user confirmed D1 appears in the query and that archived filtering explains
+  the empty result. The user questions the utility of individual item suggestions
+  for an empty query.
 
-These observations do not establish the cause of the user's reported behavior.
-D66 stays Open pending clarification; no speculative completion change is included.
+D66 stays Open for suggestion relevance: syntax suggestions for empty queries,
+reference completion in ID/relationship fields, and archive-aware direct search
+suggestions. Archived targets remain useful in relationship fields. This suggested
+direction is separate from I6, the requested clear-query control.

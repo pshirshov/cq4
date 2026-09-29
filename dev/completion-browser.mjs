@@ -9,9 +9,9 @@ async function call(command){const r=await fetch(origin+'/api/call',{method:'POS
 await call({Initialize:{config:{project,endpoint:origin,name:'Completion fixture'}}});
 await call({Change:{input:{project,change:{request:{value:randomUUID()},fences:[],reason:'Completion fixture',mutations:[{Create:{draft:{title:'Completion target',body:'',labels:['fixture'],archived:false,citations:[],content:{Defect:{status:'Open',severity:'Low',observed:'Actual',expected:'Expected',reproduction:'Steps',cause:null,resolution:[]}}}}}]}}}});
 const browser=await chromium.launch({headless:true});const context=await browser.newContext({viewport:{width:1366,height:768}});
-let held=null;
+let held=null, searches=0;
 await context.routeWebSocket(/\/ws$/,route=>{
- const server=route.connectToServer();route.onMessage(message=>{const f=JSON.parse(String(message));const q=f.Call?.command.Read?.input.selection.QueryComplete;if(held!==null&&held.id===null&&q?.query===held.query)held.id=f.Call.id.value;server.send(message);});
+ const server=route.connectToServer();route.onMessage(message=>{const f=JSON.parse(String(message));const q=f.Call?.command.Read?.input.selection.QueryComplete;if(f.Call?.command.Read?.input.selection.Browse)searches++;if(held!==null&&held.id===null&&q?.query===held.query)held.id=f.Call.id.value;server.send(message);});
  server.onMessage(message=>{const f=JSON.parse(String(message));if(held!==null&&f.Reply?.id.value===held.id){held.release=()=>route.send(message);held.resolve();}else route.send(message);});
 });
 const page=await context.newPage();page.setDefaultTimeout(8000);const cases=[],errors=[];page.on('pageerror',e=>errors.push(String(e)));
@@ -29,6 +29,12 @@ try{
  ready=hold('id:D');await query.fill('id:D');assert.equal(await popup.evaluate(n=>n.hidden),false);assert.ok((await page.locator('#query-suggestions button').evaluateAll(nodes=>nodes.map(n=>n.disabled))).every(Boolean));await captured(ready);
  assert.equal(await query.getAttribute('aria-activedescendant'),null);assert.equal(await popup.evaluate(n=>n.hidden),false);held.release();held=null;await complete();await page.getByRole('option',{name:'D1 · Completion target · Item',exact:true}).waitFor();cases.push('Popup remains open through debounce/held response; obsolete suggestions are disabled');
  ready=hold('ledger:t');await query.fill('ledger:t');await captured(ready);await query.fill('status:r');await page.getByRole('option',{name:'ready · Value',exact:true}).waitFor();held.release();held=null;await complete();assert.equal(await page.getByRole('option',{name:'tasks · Value',exact:true}).count(),0);cases.push('Delayed enum response cannot replace a newer local/backend completion');
+ ready=hold('ledger:t');await query.fill('ledger:t');await captured(ready);const beforeClear=searches;
+ const clear=page.getByRole('button',{name:'Clear query',exact:true});await clear.click();assert.equal(await query.inputValue(),'');assert.equal(await query.evaluate(n=>document.activeElement===n),true);assert.equal(await popup.isVisible(),false);
+ held.release();held=null;await page.waitForTimeout(250);assert.equal(await popup.isVisible(),false);assert.equal(searches,beforeClear);
+ await query.fill('ledger:unknown');await complete();assert.equal(await query.getAttribute('aria-invalid'),'true');await clear.focus();await clear.press('Enter');assert.equal(await query.inputValue(),'');assert.equal(await query.getAttribute('aria-invalid'),null);assert.equal(await popup.isVisible(),false);assert.equal(searches,beforeClear);
+ const clearBounds=await clear.boundingBox(),fieldBounds=await page.locator('.query-field').boundingBox();assert.ok(clearBounds.x>fieldBounds.x&&clearBounds.x+clearBounds.width<=fieldBounds.x+fieldBounds.width);
+ cases.push('In-field clear empties input and diagnostics, keeps focus, rejects old replies and does not submit (pointer or keyboard)');
  await query.fill('ledger:tasks AND status:re');await complete();const end=await popup.boundingBox();await query.press('Home');await complete();const start=await popup.boundingBox();assert.ok(end.x-start.x>100,{end,start});
  await query.evaluate(input=>{input.setSelectionRange(7,7);});await page.waitForTimeout(50);const middle=await popup.boundingBox();assert.ok(middle.x>start.x+20&&middle.x<end.x);cases.push('Popup follows caret navigation and selection changes');
  await query.fill('word '.repeat(250)+'ledger:d');await query.press('End');await page.waitForTimeout(50);const long=await popup.boundingBox();assert.ok(long.x>=8&&long.x+long.width<=1366-7);assert.ok(await query.evaluate(n=>n.scrollLeft>0));

@@ -1,6 +1,8 @@
 # Requirement coverage
 
-[D66 item completion selection](validation/item-completion-selection.md) is Open following user evaluation. A fresh Chromium pointer check inserts D1 successfully; submission is separate, and D1 is archived. The reported interaction needs clarification before a correction can be established. D25–D27 remain excluded.
+[I6 clear-query button](validation/query-clear.md) is implemented in source and passes the scoped frontend/browser check. It clears text and obsolete completion state without submitting; native package and operator delivery remain pending.
+
+[D66 item completion selection](validation/item-completion-selection.md) is Open following user evaluation. The user confirmed insertion succeeds and archived filtering explains the empty results. D66 now records irrelevant item suggestions for an empty query and archive-scope mismatch; that correction remains pending. D25–D27 remain excluded.
 
 [Table/completion/lifecycle follow-up](validation/table-completion-lifecycle.md) implements D58–D65 and I5 at `8a3e7b9`: adaptive table sizing with temporary overrides, Implemented Ideas, document/button spacing and persistent caret-anchored completion with immediate enum hints. Browser checks, 485 local/backend completion comparisons, contracts, 60 affected dummy/PostgreSQL tests, native and relocated-package checks pass. The updater rehearsal passes reconciliation of every Accepted projection and preserved historical data; failed-restoration and abrupt-exit reproductions now pass the launcher recovery guard. Astra approves source, technical delivery, recovery corrections and the pinned host update script. Operator installation, actual-hostname browser/API checks and closeout pass. D58–D65 are Resolved; I1–I5 are Implemented, with I1–I4 retaining archive state and historical evidence. At that closeout, D25–D27 remained unchanged and were the only Open defects. Human release acceptance remains pending.
 

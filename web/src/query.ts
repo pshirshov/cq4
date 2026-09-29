@@ -36,7 +36,12 @@ export class QueryEditor {
     const search = element('button', 'Search'); search.type = 'submit';
     const field = element('div', ''); field.className = 'query-field';
     this.resultCount.className = 'query-result-count'; this.resultCount.setAttribute('role', 'status');
-    field.append(this.input, this.resultCount);
+    const clear = button('×', () => {
+      this.input.value = ''; this.input.focus(); this.invalidate(); this.showDiagnostic(undefined, '');
+    });
+    clear.className = 'query-clear'; clear.setAttribute('aria-label', 'Clear query'); clear.title = 'Clear query';
+    clear.addEventListener('pointerdown', event => event.preventDefault());
+    field.append(this.input, this.resultCount, clear);
     const row = element('div', ''); row.className = 'query-input'; row.append(field, search);
     this.popup.append(this.diagnostic, this.options, this.status); this.element.append(row, this.popup);
     this.element.addEventListener('submit', event => { event.preventDefault(); this.invalidate(); submit(); });

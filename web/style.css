@@ -101,6 +101,7 @@ progress { width: 50px; height: 6px; margin-left: 12px; }
 .query-result-count { flex: none; max-width: 42%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 11px; color: #a4c1d3; padding: 0 7px; }
 .query-input input { min-width: 0; flex: 1; }
 .query-input button { width: auto; }
+.query-input .query-clear { flex: none; align-self: stretch; border: 0; border-left: 1px solid #61788a; padding: 0 7px; }
 .query-popup { position: fixed; z-index: 5; width: min(680px, calc(100vw - 16px)); overflow: auto; background: #1c2630; border: 1px solid #61788a; border-radius: 0; box-shadow: 0 8px 24px #0008; }
 .query-suggestions button { display: block; width: 100%; border: 0; border-radius: 0; text-align: left; margin: 0; overflow-wrap: anywhere; }
 .query-suggestions [aria-selected=true] { background: #334b5d; outline: 2px solid #68c7ec; outline-offset: -2px; }
