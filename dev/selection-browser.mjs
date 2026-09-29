@@ -170,8 +170,9 @@ export async function selectionChecks(browser, storageState, origin, evidence) {
         await page.getByRole('region', { name: 'Historical revision', exact: true }).getByRole('heading', { name: `${projectChange ? 'T1' : 'T2'} · Selection ${projectChange ? 'C' : 'B'} · revision 1`, exact: true }).waitFor();
       } else if (scenario.endsWith('audit')) {
         await heading('Usage audit').waitFor({ timeout: 5000 });
-        const records = await heading('Usage audit').locator('..').locator('pre').allTextContents();
-        assert.deepEqual(records.map(value => JSON.parse(value).upload.observation.counters.input.value), [String(expectedUsage)], 'Late audit must not replace the newer scope');
+        const records = page.getByRole('table', { name: 'Usage audit', exact: true }).locator(':scope > tbody > tr > td:nth-child(4)');
+        await records.first().waitFor();
+        assert.deepEqual(await records.allTextContents(), [`${expectedUsage} · Observed`], 'Late audit must not replace the newer scope');
       }
       assert.deepEqual(errors, []);
       outcomes.push({ scenario, status: 'passed', exchanges });

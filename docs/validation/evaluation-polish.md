@@ -56,3 +56,21 @@ rebuild the embedded assets and run new browser/installed checks.
 Astra independently approves D50's source/layout and the scoped trace-reuse plan.
 On narrow screens the footer follows page content; laptop layouts anchor it at
 the viewport bottom. Rebuilt artifact and installed verification remain pending.
+
+## Native verification continuation
+
+The first native run completed tracing, compilation and runtime checks, then
+failed three delayed-audit selection assertions because the test still searched
+for JSON `<pre>` blocks. `gates/20260929T084029-native/selection-results.json`
+retains the failure. The fixture now checks the semantic Input column with the
+same held replies and expected values (33, 22, 11); all eleven selection cases
+pass in `gates/native-runtime-resumed/selection-results.json`.
+
+The continuation retains the exact executable and earlier passing receipts,
+reruns the browser corpus and finishes HTTP/archive verification. The failed
+original is preserved. Its first preflight also rejected an incorrect assumption
+that the failed browser command was last: successful database cleanup followed
+it. Receipt selection was corrected explicitly. The original executable source
+manifest is separate from the current verifier manifest; supplemental capture
+after launch is disclosed and verifies that all files predate launch, then
+requires unchanged hashes at completion. D50's build waits for that proof.
