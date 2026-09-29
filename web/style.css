@@ -85,6 +85,7 @@ progress { width: 50px; height: 6px; margin-left: 12px; }
 .login label, .login input { display: block; width: 100%; margin: 15px 0; }
 [hidden] { display: none !important; }
 @media(max-width: 920px) {
+  .keyboard-guidance { display: none; }
   .status-metrics { grid-template-columns: auto minmax(0, 1fr); }
   .status-freshness { grid-column: 1 / -1; }
   .workspace { display: block; overflow: auto; }

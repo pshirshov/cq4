@@ -109,6 +109,7 @@ export async function workspaceChecks(browser, storageState, origin, evidence) {
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), true, `Page overflow at ${viewportWidth}`);
       assert.equal(await page.getByRole('separator', { name: /^Resize (navigation|results)$/ }).count(), 0, 'Narrow layout must hide pane separator focus targets');
       await assertStatusVisible();
+      assert.equal(await status.getByRole('group', { name: 'Keyboard shortcuts', exact: true }).isVisible(), false, 'Narrow layout hides keyboard guidance to keep the status bar compact');
       assert.equal(await body.inputValue(), local);
       const bounds = await page.locator('.pane').evaluateAll(nodes => nodes.map(node => ({ id: node.id, width: node.clientWidth, scroll: node.scrollWidth })));
       assert.ok(bounds.filter(value => value.id !== 'results-pane').every(value => value.scroll <= value.width + 1), JSON.stringify(bounds));
