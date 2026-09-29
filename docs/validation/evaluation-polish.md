@@ -1,6 +1,6 @@
 # Evaluation polish: D43–D50
 
-Implementation in progress. Evidence: `/srv/nvme/tmp/cq4-evaluation-polish-20260929`.
+Source, native and relocated package verification pass. Operator delivery remains pending. Evidence: `/srv/nvme/tmp/cq4-evaluation-polish-20260929`.
 
 ## Scope and checks
 
@@ -25,8 +25,8 @@ D25 remains a dependency blocker; D26/D27 remain reserved for CQ trials. The ove
 
 - `current-2/domain.log`: 104 focused dummy/PostgreSQL/parser scenarios pass. Legacy archived fixtures now use terminal status; their original query/traversal assertions are retained.
 - `browser-1`: 309 API and 309 browser prefixes pass; all nine polish checks pass; whole-query table checks pass. Archive checks pass delayed query/project invalidation, all-or-none stale-member refusal, replay after committed-but-unacknowledged response and a capped 512-member batch with the 513th untouched.
-- The broader browser corpus reproduced a new overlay defect: a late submitted-query diagnostic reopened while the input was blurred and intercepted New item. Correction restricts popup display to the focused input; verification is pending.
-- TypeScript type checking passes. Astra source review reports no blocking/major findings; complete source/native delivery approval remains pending.
+- The broader browser corpus reproduced a new overlay defect: a late submitted-query diagnostic reopened while the input was blurred and intercepted New item. Correction restricts popup display to the focused input; the resumed and final native browser corpora pass.
+- TypeScript type checking passes. Astra source review approves the implementation; final package/operator delivery approval remains pending.
 
 `order/browse-contract.log` adds six passing dummy/PostgreSQL ordering scenarios, including unequal timestamps (9 vs 100) and pagination after a later revision. The first contract-generation/browser-3 attempts were invalidated by overlapping generation-dependent jobs: generated files were removed while another compiler was reading them. Their failed logs remain; generation-dependent gates are now sequenced. These are check orchestration failures, not product assertions.
 
@@ -74,3 +74,44 @@ it. Receipt selection was corrected explicitly. The original executable source
 manifest is separate from the current verifier manifest; supplemental capture
 after launch is disclosed and verifies that all files predate launch, then
 requires unchanged hashes at completion. D50's build waits for that proof.
+
+## Final artifact and delivery checks
+
+- Source commits: `51c910e` (D43–D49), `9d542f2` (D50), `b7ea94b`
+  (semantic audit regression selector), `49d0bee` (D50 in the regular polish suite).
+- `gates/native-runtime-resumed/result.json` passes the retained original ELF
+  (`9d06f7fd…`). `source-epochs.json` binds all 169 runtime inputs to `51c910e`;
+  `verification-provenance.json` confirms 346 verifier inputs and the runner
+  remain unchanged through completion. Astra approves the qualified supplemental
+  capture; it does not claim a pre-launch hash capture.
+- `gates/statusbar-native/result.json` passes the final UI rebuild. Its
+  `trace-reuse.json` proves the runtime delta is exactly `web/src/app.ts` and
+  `web/style.css`, retains immutable metadata hashes and identifies inherited
+  tracing. Fresh transport, full browser, 309 API/browser prefixes, exact archive
+  preview/retry, HTTP and status-bar stale/reconnect checks pass. The regular
+  polish suite has ten passing cases. Its D50 fixture wiring was added after
+  build-manifest capture but before invocation; `statusbar-fixture-epoch.json`
+  records this explicitly. No paid harness evaluations were rerun.
+- Candidate: `.local/release-polish`, model version **0.1.0**. Manifest SHA-256:
+  `403f5896da455213f3d2709b27a355b337b307282540f509686ec6bf7153041e`.
+  Executable SHA-256:
+  `f1e58656d85a4805404408d9eef5eebd899064396b6280ed023b5968952eb92a`.
+- `operator-rehearsal/result.json` passes the exact old/new package updater,
+  native persistence and severity checks. All 24 backed-up data tables restore
+  to identical fingerprints. Data, schema and credentials remain unchanged.
+  The updater retains the previous package and refuses an active launcher or
+  database; it does not signal host processes.
+- Source-isolated relocated runtime, browser and restart checks pass at
+  `gates/20260929T092944-installed`. Its final backup fixture then attempted to
+  archive a Ready task and was correctly rejected. The failed result remains.
+  The fixture now marks its seeded Task Done before archiving. The exact same
+  package passes the complete backup fixture at `gates/installed-backup-resumed`,
+  with fresh runtime import and source isolation. All 25 tables, API reads,
+  counters and idempotent acknowledgements survive restoration; verifier inputs
+  remain unchanged. The continuation permits only that fixture source delta and
+  references the earlier passing receipts. The updater rehearsal's 24 data-table
+  count excludes the schema-migration table; the backup fixture includes it.
+- The generated host script is `/tmp/exchange/cq-polish-update.sh`, SHA-256
+  `5548e5541b37177c07f7e2974939005f1a7a4fa1b2ce2bb6edf556c7688e40f6`.
+  Final Astra delivery approval, host update, actual-hostname checks and D43–D50
+  closeout remain pending.

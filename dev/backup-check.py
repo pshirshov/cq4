@@ -80,6 +80,7 @@ def verify(checks, command):
             with urllib.request.urlopen(request, timeout=15) as response:
                 assert response.status == 200
             item = read({"ItemDetail": {"id": state["source"]["id"]}})["Detail"]["view"]["item"]
+            item["draft"]["content"]["Task"]["status"] = "Done"
             item["draft"]["archived"] = True
             call(checks.environment, {"Change": {"input": {"project": project, "change": {"request": {"value": str(uuid.uuid4())},
                 "reason": "Retain archived item across backup", "fences": [], "mutations": [{"Replace": {"id": item["id"], "expected": item["revision"], "draft": item["draft"]}}]}}}})

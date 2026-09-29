@@ -19,6 +19,8 @@ CQ listens on **0.0.0.0:8080**; open **http://vm.home.7mind.io:8080**. Leave the
 cat /srv/nvme/tmp/cq4-playground/token
 ```
 
+Data freshness, usage totals for the selected scope and observation time appear in the bottom status bar. Hover over truncated usage text to read its complete value.
+
 State, credentials, logs and subsequent session journals stay under `/srv/nvme/tmp/cq4-playground`. Reusing the command preserves them. Stop an existing launcher with Ctrl-C before starting this one, then reload the browser to load the current UI. Re-source `client.env` in existing CLI terminals to select the current package.
 
 For another browser URL, set `CQ_ORIGIN` to its exact scheme, hostname and port, without a trailing slash. For example, for a browser on this machine:
