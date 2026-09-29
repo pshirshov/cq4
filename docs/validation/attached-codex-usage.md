@@ -58,7 +58,8 @@ The real Codex → Pi investigation completed; 14 retained outer responses / 544
 tokens reconcile against 15 native responses. Native teardown left no frozen
 window; one pending delivery batch replays, then repeated recovery replays zero.
 The missing final response is an explicit coverage gap. Astra approves technical
-delivery; operator installation is pending. [Aggregate evidence](remaining-defects.md).
+delivery; operator installation and actual-hostname verification pass. D42 is
+Resolved with ModelDeclared evidence; human acceptance remains pending. [Aggregate evidence](remaining-defects.md).
 
 ## Accounting boundary
 

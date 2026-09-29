@@ -2,43 +2,44 @@
 
 The [remaining-defect batch](validation/remaining-defects.md) passes final native,
 source-isolated package, real Codex → Pi and exact updater/backup-restore checks.
-Astra approves technical delivery and the prepared host update script. Operator
-installation and human acceptance remain pending; D25 stays Open and D26/D27
-remain reserved. R09/R31 spending coverage stays explicitly partial.
+Astra approves technical delivery and the host update script. Operator installation,
+actual-hostname browser checks and readable/JSON CLI checks pass. D29/D30 and
+D38–D42 are Resolved; I2 is Accepted. Human acceptance remains pending; D25 stays
+Open and D26/D27 remain reserved. R09/R31 spending coverage stays explicitly partial.
 
 Current R09/R31 follow-up: [D42](validation/attached-codex-usage.md) correlates
 interactive Codex response records through native MCP thread identity and replays
 durable canonical samples. Eleven focused checks, connected MCP/PostgreSQL/shutdown
 checks and current contracts pass with Astra source approval;
-an exploratory real consumer reconciles its observed subset. Outer task/model
+the final packaged real consumer reconciles 14 retained responses / 544,669 tokens. Outer task/model
 grouping, native cost and final-tail coverage remain explicitly incomplete.
-Operator installation is pending. D25's dependency transformation was
+Operator installation is verified. D25's dependency transformation was
 rejected after a reproduced startup hang; [its open blocker](validation/scala-lazyvals-warning.md#rejected-remedy-2026-09-29)
 does not weaken the runtime requirements or represent a completed correction.
 
 Current R27/R30 follow-up: [D41 checked-out integration](validation/checked-out-integration.md)
 preserves dirty layers without detaching HEAD. Dual coordinator and real Git
 collision/race regressions, connected workflow and actual interruption checks pass;
-Astra independently approves the source increment and final native/package evidence. Operator installation remains pending.
+Astra independently approves the source increment and final native/package evidence. Operator installation is verified.
 
 Current R20/R31 operator extension I2: [project archives](validation/project-backup.md)
 preserve identity, history, usage and artifacts in a consistent snapshot. Actual
 store/CLI checks and contracts pass with Astra source approval. External Git and
-harness journals are excluded explicitly; native/operator delivery remains open.
+harness journals are excluded explicitly; native/package checks and operator delivery pass.
 
 Current R29/R31 operator follow-up: [D38/D39/D40](validation/operator-cli.md)
 provides command help, readable scoped usage and explicit JSON output. Actual
 process and PostgreSQL checks pass, including copied page continuations and
-automation callers. Astra approves the source increment; delivery is pending.
+automation callers. Astra approves the source increment; installed operator CLI checks pass.
 
 Current R02/R15/R19/R24 UI follow-up: [D29/D30](validation/results-table.md) adds
 whole-query sorting, a semantic results table and independently live project
 counts. Dual repository and full scoped browser checks pass; Astra approves the
 compact projection correction after measuring body-read amplification. Native
-delivery and operator-state update are pending. The [remaining-defect plan](drafts/20260928-remaining-defects.md)
+delivery and the data-preserving operator update pass. The [remaining-defect plan](drafts/20260928-remaining-defects.md)
 retains D26/D27 as the two reserved CQ exercises.
 
-Human evaluation follow-up: [D1–D8](validation/human-evaluation.md#unified-live-updates-and-native-candidate) pass the affected source, service/protocol, browser and fresh native checks, with independent Astra approval. Operator installation and actual hostname browser checks pass; D1–D8 are resolved with evidence. The [new UI/CLI batch](design/evaluation-follow-up.md) is filed as D26–D40 and I2; the user regards the UI as a prototype requiring redesign. Earlier technical approvals do not establish usability acceptance. The user authorized the [first UI redesign increment](validation/ui-redesign.md), D28 and D31–D37: verified, Astra-approved and installed, with the running host server awaiting restart. D26/D27 remain Open for CQ testing.
+Human evaluation follow-up: [D1–D8](validation/human-evaluation.md#unified-live-updates-and-native-candidate) pass the affected source, service/protocol, browser and fresh native checks, with independent Astra approval. Operator installation and actual hostname browser checks pass; D1–D8 are resolved with evidence. The [new UI/CLI batch](design/evaluation-follow-up.md) is filed as D26–D40 and I2; the user regards the UI as a prototype requiring redesign. Earlier technical approvals do not establish usability acceptance. The user authorized the [first UI redesign increment](validation/ui-redesign.md), D28 and D31–D37: verified, Astra-approved and included in the running package. D26/D27 remain Open for CQ testing.
 
 Requirements: [R01–R31](drafts/20260926-0957-cq-requirements-prompt.md). Milestones: [implementation plan](drafts/20260926-1549-cq-implementation-plan.md). Planned ownership is not implementation evidence.
 

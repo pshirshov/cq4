@@ -15,12 +15,11 @@ cd /home/pavel/work/safe/cq4/cq4
 
 ### Integration into main
 
-This checkout remains on `main`. After installing the
-[remaining-defect package](validation/remaining-defects.md), CQ supports reviewed
+This checkout remains on `main`. The installed
+[remaining-defect package](validation/remaining-defects.md) supports reviewed
 integration into the branch checked out in the governing repository. HEAD stays
 attached; unrelated staged, unstaged, untracked and ignored content is preserved.
-Conflicting local changes cause a refusal. The preceding installed package still
-refuses this operation until it is updated.
+Conflicting local changes cause a refusal.
 
 During the short integration operation, do not edit candidate paths or run
 external Git commands in any of this repository's worktrees. A target checked

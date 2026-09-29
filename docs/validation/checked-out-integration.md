@@ -2,7 +2,8 @@
 
 Source, native and source-isolated package checks pass, including actual executor
 interruption and connected integration recovery. Astra approves technical delivery;
-operator installation and live CQ closure remain pending. Version remains 0.1.0.
+operator installation and live verification pass. D41 is Resolved with
+ModelDeclared evidence; human acceptance remains pending. Version remains 0.1.0.
 [Aggregate evidence](remaining-defects.md).
 
 ## Contract

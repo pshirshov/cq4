@@ -40,7 +40,8 @@ suite:
 
 The fixture is part of both JVM tracing and native transport checks, with separate
 evidence directories for each phase. Native and source-isolated package checks
-now pass; operator installation and verification remain pending. Archive format
+now pass; operator installation and verification also pass. I2 is Accepted with
+implementation evidence; human acceptance remains pending. Archive format
 hashes provide integrity, not source
 authentication; [operator instructions](../project-backup.md) require trusted
 archives and describe external-state exclusions.

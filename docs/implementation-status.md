@@ -6,8 +6,9 @@ for D29/D30 (sortable table and navigation), D38/D39/D40 (operator CLI), D41
 backup/restore). Each increment has scoped passing checks and independent Astra
 source approval. Final native, source-isolated package, real Codex → Pi consumer
 and exact operator-update rehearsal checks pass. Astra approves technical
-delivery and the host update script. The live installation and CQ closeout
-remain pending. [Aggregate delivery evidence](validation/remaining-defects.md).
+delivery and the host update script. The operator update, actual-hostname browser
+and readable/JSON CLI checks now pass. D29/D30 and D38–D42 are Resolved at revision
+2; I2 is Accepted at revision 2. Original table data and credentials are preserved. [Aggregate delivery evidence](validation/remaining-defects.md).
 
 - [Table and navigation evidence](validation/results-table.md)
 - [CLI evidence](validation/operator-cli.md)
@@ -25,9 +26,9 @@ Planning baseline: `7e3076a`. Human release acceptance remains pending.
 
 Human evaluation corrections: D1–D8 pass affected browser, CLI, service/protocol and fresh native checks; Astra approves the scoped source and native/package candidate. Installation into the existing operator state and actual hostname browser checks pass; D1–D8 are resolved with retained evidence. The new UI/CLI redesign batch is recorded as D26–D40 and I2; the user considers the current UI a prototype, not an acceptable release interface. [Defect records and evidence](validation/human-evaluation.md); [Scala warning investigation](validation/scala-lazyvals-warning.md). Human release acceptance is still pending.
 
-Interactive launcher follow-up I1/K1 is implemented and installed: the stdio role, native setup, activation fences, owner/deadline shutdown and partial Pi accounting pass focused checks, fresh native/relocated package gates and three packaged consumer/TUI routes. Project-local integrations and the requested main-branch/scoped-UI policy are prepared. The work-profile host-level trial completed its exploration; D42 records missing outer Codex usage collection. Its receipts are under `/srv/nvme/tmp/cq4-attached-host-20260928/work-profile-human-trial`. [Evidence and remaining work](validation/attached-host.md). The user subsequently authorized D28 and D31–D37 here; [the first redesign increment](validation/ui-redesign.md) records changes and scoped verification. D28 and D31–D37 are now Resolved with full frontend/scoped native/package verification and Astra delivery approval; the package is installed and the running host server awaits normal restart. D26/D27 remain Open for later CQ testing; other redesign work remains queued.
+Interactive launcher follow-up I1/K1 is implemented and installed: the stdio role, native setup, activation fences, owner/deadline shutdown and partial Pi accounting pass focused checks, fresh native/relocated package gates and three packaged consumer/TUI routes. Project-local integrations and the requested main-branch/scoped-UI policy are prepared. The work-profile host-level trial completed its exploration; D42 records missing outer Codex usage collection. Its receipts are under `/srv/nvme/tmp/cq4-attached-host-20260928/work-profile-human-trial`. [Evidence and remaining work](validation/attached-host.md). The user subsequently authorized D28 and D31–D37 here; [the first redesign increment](validation/ui-redesign.md) records changes and scoped verification. D28 and D31–D37 are now Resolved with full frontend/scoped native/package verification and Astra delivery approval; these corrections are included in the running package. D26/D27 remain Open for later CQ testing; the remaining delivered batch is recorded above.
 
-Operator correction: the user rejected detached HEAD. The checkout is restored to `main`, with all implementation commits included. **D41 Open / High** tracks support for reviewed integration into the checked-out target branch; automatic integration there currently remains blocked. The guide and I1/K1 notes are corrected.
+Operator correction: the user rejected detached HEAD. The checkout is restored to `main`, with all implementation commits included. **D41 is now Resolved:** the verified package supports reviewed integration into the governing checked-out branch under the documented Git preconditions. HEAD remains attached. The updated [operator guide](interactive.md) describes integration and interruption recovery.
 
 | Milestone | State | Evidence |
 | --- | --- | --- |

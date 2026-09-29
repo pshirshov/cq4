@@ -29,5 +29,6 @@ prints a complete continuation command retaining the original scope and filters.
 
 Astra independently approves this implementation increment with no remaining
 major findings. Native and source-isolated package checks now pass; Astra approves
-technical delivery. Operator installation and verification remain pending; this
+technical delivery. Installed readable query/status and JSON query checks pass;
+D38/D39/D40 are Resolved with ModelDeclared evidence. This
 is not human acceptance or closure of D25. [Aggregate evidence](remaining-defects.md).

@@ -16,8 +16,29 @@ resizing) remain reserved for later CQ exercises. Human acceptance is pending.
 | D25 | Still Open: no safe dependency remedy established; the candidate transformation hangs CQ startup | [Measured blocker](scala-lazyvals-warning.md#rejected-remedy-2026-09-29) |
 
 Each implementation increment has independent Astra source review and retained
-failing reproductions followed by passing scoped checks. The installed package
-has not yet been replaced; live closeout depends on operator delivery.
+failing reproductions followed by passing scoped checks. The verified package is
+installed and running at `http://vm.home.7mind.io:8080`.
+
+## Operator delivery, 2026-09-29
+
+The user ran the approved host update. `operator-update/receipt.json` records
+successful installation, a full retained backup and unchanged original table
+fingerprints. All installed package files match the approved manifest; the
+regenerated Codex configuration forwards `CODEX_HOME`.
+
+`operator-live.json` and `operator-table.png` record actual-hostname login and
+WebSocket connection, all five table columns, severity sorting, navigation counts
+matching the server (30 unarchived defects), and a 1366-pixel viewport without
+horizontal page overflow. The read-only browser check caused no project changes
+and recorded no page errors. Installed readable query/status and `--json` query
+commands also pass.
+
+`closeout-before.json`, `closeout-request.json`, `closeout-result.json` and
+`closeout-after.json` retain revision-checked atomic CQ closeout and readback:
+D29/D30 and D38–D42 are Resolved at revision 2; I2 is Accepted at revision 2.
+Their evidence is explicitly ModelDeclared and does not assert human acceptance.
+D25 remains Open at revision 2, and D26/D27 remain untouched at revision 1.
+The installed CLI confirms these are the only three open defects.
 
 ## Final verification
 
@@ -54,15 +75,15 @@ backfilled severity projection pass. This does not update the operator database.
 
 Astra independently approves technical delivery of this batch, including
 installed verification, the real consumer's explicit accounting limits, staged
-artifact identity and exact updater rehearsal. Operator installation, live
-verification and human acceptance remain pending.
+artifact identity and exact updater rehearsal. Operator installation and live
+verification now pass as recorded above; human acceptance remains pending.
 
 The expensive nine-route model matrix is not
 repeated: the real consumer check is scoped to the changed Codex observer;
 integration, archive and UI behavior have deterministic runtime checks.
 
-Candidate: `cq-release-remaining-defects` under the evidence root, also staged
-at `.local/release-next-remaining-defects` without replacing the installation.
+Verified artifact: `cq-release-remaining-defects` under the evidence root. The
+staged copy has been installed at `.local/release`.
 
 - Manifest SHA256: `31914b285447019ee59b1314159928a4381cd6674838713671b9391d5c5c8b03`
 - Executable SHA256: `576885b9e32b0a7d6b2f5673fc2bcc6b3c4bea189b59dc519fcb89514cb6b243`
@@ -83,21 +104,20 @@ an exact already-applied schema can be verified on a guarded rerun. There is no
 runtime schema fallback, historical contract version or automatic rollback of
 operator data.
 
-## Install and run on this machine
+## Run on this machine
 
-End other CQ harness sessions, then stop the existing server launcher with
-Ctrl-C and wait for `CQ stopped`. Run in the host terminal:
+The completed one-time host installation used:
 
 ```sh
 bash /tmp/exchange/cq-remaining-update.sh
 ```
 
-The wrapper verifies the prepared updater/configuration/SQL hashes, performs the
-backed-up update, regenerates the Codex MCP integration (including `CODEX_HOME`
-forwarding), and starts the permanent `run-local.sh`. Leave it running after
-`CQ ready`, then reload the browser once. Receipt and full database backup are
-retained under the evidence root's `operator-update` directory; the old package
-becomes `.local/release-before-remaining-defects`.
+The wrapper verified the prepared updater/configuration/SQL hashes, performed the
+backed-up update, regenerated the Codex MCP integration (including `CODEX_HOME`
+forwarding), and started the permanent `run-local.sh`. Reload the browser once
+after this update. Receipt and full database backup are retained under the
+evidence root's `operator-update` directory; the old package is retained at
+`.local/release-before-remaining-defects`.
 
 Subsequent server launches use the permanent script:
 

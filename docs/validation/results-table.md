@@ -63,6 +63,7 @@ runtime compatibility fallback or historical schema is introduced.
 
 Final native and relocated-package checks pass, as does the exact package/updater
 rehearsal with backup restoration and original-data comparisons. Astra approves
-technical delivery. The operator package has not yet been replaced; CQ records
-remain open until delivery evidence is complete. [Aggregate evidence and update
+technical delivery. The package is installed with original data preserved;
+actual-hostname table/count/layout checks pass. D29/D30 are Resolved with
+ModelDeclared evidence; human acceptance remains pending. [Aggregate evidence and update
 instructions](remaining-defects.md).
