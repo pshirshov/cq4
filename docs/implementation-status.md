@@ -1,6 +1,6 @@
 # Implementation status
 
-The [D43–D50 evaluation polish](validation/evaluation-polish.md) is in progress: table selection/modified time, stable completion, square controls, previewed terminal-only archival, semantic usage tables and a bottom data/usage status bar. Focused domain, browser and contract checks pass; Astra approves the source increment. D13–D20 are revisionally unarchived with content/statuses preserved. Native verification, relocated package/runtime/browser/backup checks and exact updater rehearsal pass, with failed legacy fixtures and scoped continuations retained. Final delivery review and operator installation remain pending.
+The [D43–D50 evaluation polish](validation/evaluation-polish.md) is in progress: table selection/modified time, stable completion, square controls, previewed terminal-only archival, semantic usage tables and a bottom data/usage status bar. Focused domain, browser and contract checks pass; Astra approves the source increment. D13–D20 are revisionally unarchived with content/statuses preserved. Native verification, relocated package/runtime/browser/backup checks and exact updater rehearsal pass, with failed legacy fixtures and scoped continuations retained. Astra approves scoped technical delivery and the host update script. Operator installation and actual-hostname verification remain pending.
 
 The [remaining-defect batch](drafts/20260928-remaining-defects.md) is implemented
 for D29/D30 (sortable table and navigation), D38/D39/D40 (operator CLI), D41

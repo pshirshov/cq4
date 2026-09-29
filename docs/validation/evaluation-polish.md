@@ -113,5 +113,25 @@ requires unchanged hashes at completion. D50's build waits for that proof.
   count excludes the schema-migration table; the backup fixture includes it.
 - The generated host script is `/tmp/exchange/cq-polish-update.sh`, SHA-256
   `5548e5541b37177c07f7e2974939005f1a7a4fa1b2ce2bb6edf556c7688e40f6`.
-  Final Astra delivery approval, host update, actual-hostname checks and D43–D50
-  closeout remain pending.
+  Astra approves scoped technical delivery and this wrapper (`final-review.json`).
+  Host update, actual-hostname checks and D43–D50 closeout remain pending.
+
+## Operator update
+
+After ending other CQ harness sessions, stop the existing launcher with Ctrl-C
+and wait for **CQ stopped**. Run this one-time updater in the host terminal:
+
+```sh
+bash /tmp/exchange/cq-polish-update.sh
+```
+
+It shows its contents, prompts before running, verifies exact package hashes,
+backs up the stopped database and starts the permanent `./run-local.sh`. Leave
+that terminal open at **CQ ready**, then reload the browser. Subsequent starts
+continue to use `/home/pavel/work/safe/cq4/cq4/run-local.sh`.
+
+This host-run step is required by the environment skill: the existing launcher
+and PostgreSQL process are outside the agent's PID namespace. The agent will
+read `/tmp/exchange/cq-polish-update.out` and run the read-only actual-hostname
+checks before recording model-declared defect closeout. Human release acceptance
+is separate and remains pending.
