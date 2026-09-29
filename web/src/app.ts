@@ -201,12 +201,13 @@ class App {
     const metrics = element('div', ''); metrics.className = 'status-metrics'; metrics.setAttribute('role', 'region'); metrics.setAttribute('aria-label', 'Usage metrics');
     metrics.append(this.sync, this.usageMetric, this.usageFreshness); header.append(identity, this.queryEditor.element);
     const status = element('footer', ''); status.className = 'status-bar'; status.setAttribute('aria-label', 'Workspace status'); status.append(metrics);
-    const guidance = element('div', ''); guidance.className = 'keyboard-guidance'; guidance.setAttribute('aria-label', 'Keyboard shortcuts');
-    for (const [keys, action] of [['Ctrl+K', 'query'], ['F6', 'next pane'], ['Shift+F6', 'previous pane'],
-      ['↑/↓', 'move in results'], ['↵', 'select'], ['→', 'detail'], ['Esc', 'return']] as const) {
-      const hint = element('span', ''); const key = element('kbd', keys);
-      key.setAttribute('aria-label', keys === '↵' ? 'Enter' : keys === 'Esc' ? 'Escape' : keys === '↑/↓' ? 'Up or Down arrow' : keys === '→' ? 'Right arrow' : keys);
-      hint.append(key, ` ${action}`); guidance.append(hint);
+    const guidance = element('div', ''); guidance.className = 'keyboard-guidance'; guidance.setAttribute('role', 'group'); guidance.setAttribute('aria-label', 'Keyboard shortcuts');
+    for (const [keys, spoken, action] of [['Ctrl+K', 'Ctrl+K', 'query'], ['F6', 'F6', 'next pane'], ['Shift+F6', 'Shift+F6', 'previous pane'],
+      ['↑/↓', 'Up or Down arrow', 'move in results'], ['↵', 'Enter', 'select'], ['→', 'Right arrow', 'detail'], ['Esc', 'Escape', 'return']] as const) {
+      // Generic elements cannot carry an accessible name, so the key name is hidden visually rather than labelled.
+      const hint = element('span', ''); const key = element('kbd', ''); const glyph = element('span', keys);
+      glyph.setAttribute('aria-hidden', 'true'); const name = element('span', spoken); name.className = 'visually-hidden';
+      key.append(glyph, name); hint.append(key, ` ${action}`); guidance.append(hint);
     }
     status.append(guidance);
     this.usageMetric.className = 'status-usage'; this.usageFreshness.className = 'status-freshness';

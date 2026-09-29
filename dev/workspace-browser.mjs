@@ -74,7 +74,8 @@ export async function workspaceChecks(browser, storageState, origin, evidence) {
     assert.equal(await width(results), beforeDrag + 84); cases.push('keyboard/pointer resizing and viewport bounds');
     const status = page.getByLabel('Workspace status', { exact: true });
     assert.equal(await status.locator('kbd').count(), 7);
-    assert.equal(await status.getByLabel('Enter', { exact: true }).textContent(), '↵');
+    assert.equal(await status.locator('kbd [aria-hidden=true]').filter({ hasText: '↵' }).count(), 1);
+    assert.match(await status.getByRole('group', { name: 'Keyboard shortcuts', exact: true }).ariaSnapshot(), /Enter select/);
     assert.equal((await navigation.textContent()).includes('Ctrl+K'), false);
     const assertStatusVisible = async () => {
       const bounds = await status.boundingBox();

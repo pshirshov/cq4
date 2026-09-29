@@ -9,7 +9,7 @@ Keep the server running with `./run-local.sh` in a separate host terminal. After
 The local integration uses `.local/release/bin/cq` and `.local/interactive/settings.json`. The prepared settings enable reviewed integration into `refs/heads/main` and declare `cq-ui`: `nix develop -c ./dev/check ui` (ten-minute deadline). This runs scoped UI/browser verification without the model evaluation matrix. Backend/CLI changes need appropriate additional checks before their implementation; this UI check is not evidence of backend correctness. All three integrations are installed in this checkout. On a fresh checkout, setup installs project-local commands and native configuration:
 
 ```sh
-cd /home/pavel/work/safe/cq4/cq4
+cd /home/pavel/work/safe/flakes/cq4
 ./.local/release/bin/cq configure codex --settings "$PWD/.local/interactive/settings.json"
 ```
 
@@ -76,15 +76,15 @@ For another checkout, initialize and configure it with the installed binary:
 
 ```sh
 CQ_TOKEN_FILE=/srv/nvme/tmp/cq4-playground/token \
-  /home/pavel/work/safe/cq4/cq4/.local/release/bin/cq init --endpoint http://vm.home.7mind.io:8080
-/home/pavel/work/safe/cq4/cq4/.local/release/bin/cq configure codex \
+  /home/pavel/work/safe/flakes/cq4/.local/release/bin/cq init --endpoint http://vm.home.7mind.io:8080
+/home/pavel/work/safe/flakes/cq4/.local/release/bin/cq configure codex \
   --settings /absolute/settings-for-that-project.json
 ```
 
 Choose that project's validation checks and integration branch in its settings. Observe the integration preconditions above. If that package/settings path is outside the checkout and yolo's existing binds, expose it explicitly:
 
 ```sh
-yolo --ro /home/pavel/work/safe/cq4/cq4/.local \
+yolo --ro /home/pavel/work/safe/flakes/cq4/.local \
   --env CQ_TOKEN_FILE=/srv/nvme/tmp/cq4-playground/token codex
 ```
 

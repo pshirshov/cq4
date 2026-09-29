@@ -54,6 +54,15 @@ abstract class QueryCompletionTest extends SpecZIO with AssertZIO {
         _ <- assertIO(replacements(limited) == List("T3") && limited.hasMore)
         suffix <- service.complete(owner, "id:T archived:true", 4, 50)
         _ <- assertIO(replacements(suffix) == List("T1", "T2") && suffix.suggestions.forall(_.span == QuerySpan(3, 4)))
+        _ <- ZIO.foreach(List(
+          ("id: OR", 3, List("T3", "T4")),
+          ("id:T4 AND ", 5, List("T4")),
+          ("archived:all id:T AND", 17, List("T1", "T2", "T3", "T4")),
+          ("archived:true id: archived:", 17, List("T1", "T2")),
+          ("status: id:", 11, List("T3", "T4")),
+        )) { case (text, cursor, expected) =>
+          service.complete(owner, text, cursor, 50).flatMap(result => assertIO(replacements(result) == expected))
+        }
       } yield ()
     }
 

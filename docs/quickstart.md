@@ -7,11 +7,11 @@ This walkthrough starts a persistent local CQ server and drives a small Go proje
 The permanent launcher and native package are in this repository:
 
 ```sh
-cd /home/pavel/work/safe/cq4/cq4
+cd /home/pavel/work/safe/flakes/cq4
 ./run-local.sh
 ```
 
-You can also invoke `/home/pavel/work/safe/cq4/cq4/run-local.sh` from any directory. The [wrapper](../run-local.sh) enters the pinned Nix environment and starts the package at `.local/release` through the [database/server launcher](examples/launch-local.sh). It generates persistent credentials on first use and waits for authenticated server readiness.
+You can also invoke `/home/pavel/work/safe/flakes/cq4/run-local.sh` from any directory. The [wrapper](../run-local.sh) enters the pinned Nix environment and starts the package at `.local/release` through the [database/server launcher](examples/launch-local.sh). It generates persistent credentials on first use and waits for authenticated server readiness.
 
 CQ listens on **0.0.0.0:8080**; open **http://vm.home.7mind.io:8080**. Leave the terminal open. PostgreSQL listens on loopback port 55432 with password authentication. Obtain the browser login token in another terminal:
 
@@ -38,7 +38,7 @@ If startup reports “A launcher already owns”, another process holds the stat
 ## 2. Prepare an unrelated project — terminal two
 
 ```sh
-cd /home/pavel/work/safe/cq4/cq4
+cd /home/pavel/work/safe/flakes/cq4
 nix develop
 source /srv/nvme/tmp/cq4-playground/client.env
 mkdir "$CQ_LOCAL_STATE/greeting"

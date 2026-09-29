@@ -50,8 +50,10 @@ final class QueryCompleter(parser: QueryParser) {
 
   private def archiveScope(source: String, span: QuerySpan): Option[ArchiveFilter] = {
     // A valid placeholder lets the ordinary parser interpret archive scope on both sides of the cursor.
+    // Unfinished text after the value falls back to the prefix alone, then to the language's default active scope.
     val placeholder = "T1"
-    parser.completionExpression(source.take(span.start) + placeholder + source.drop(span.end)).toOption.flatMap { query =>
+    val prefix = source.take(span.start) + placeholder
+    parser.completionExpression(prefix + source.drop(span.end)).orElse(parser.completionExpression(prefix)).fold(_ => Some(ArchiveFilter.Active), query => {
       def possible(value: QueryExpression, archived: Boolean): Set[Boolean] = value match {
         case QueryExpression.All() => Set(true)
         case QueryExpression.Archive(ArchiveFilter.All) => Set(true)
@@ -68,6 +70,6 @@ final class QueryCompleter(parser: QueryParser) {
         case (false, true) => Some(ArchiveFilter.Archived)
         case (false, false) => None
       }
-    }
+    })
   }
 }
