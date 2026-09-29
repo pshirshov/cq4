@@ -180,8 +180,10 @@ class App {
     const projectLabel = element('label', 'Project'); projectLabel.append(this.projects); projectControl.append(projectLabel);
     const createProject = button('+', () => { this.projectDialog.open('New project'); }); createProject.setAttribute('aria-label', 'New project'); createProject.title = 'New project';
     projectControl.append(createProject); identity.append(element('h1', 'CQ'), projectControl, this.health.element);
-    const metrics = element('div', ''); metrics.className = 'top-metrics'; metrics.setAttribute('role', 'region'); metrics.setAttribute('aria-label', 'Usage metrics');
-    metrics.append(this.sync, this.usageMetric, this.usageFreshness); header.append(identity, this.queryEditor.element, metrics);
+    const metrics = element('div', ''); metrics.className = 'status-metrics'; metrics.setAttribute('role', 'region'); metrics.setAttribute('aria-label', 'Usage metrics');
+    metrics.append(this.sync, this.usageMetric, this.usageFreshness); header.append(identity, this.queryEditor.element);
+    const status = element('footer', ''); status.className = 'status-bar'; status.setAttribute('aria-label', 'Workspace status'); status.append(metrics);
+    this.usageMetric.className = 'status-usage'; this.usageFreshness.className = 'status-freshness';
     const workspace = new Workspace(this.root, localStorage, error => this.showError(error)); const side = workspace.navigation; const list = workspace.results; const content = workspace.content;
     this.resultsPane = list;
     list.addEventListener('scroll', () => this.loadMore());
@@ -243,7 +245,7 @@ class App {
     this.resultStatus.setAttribute('role', 'status');
     list.append(this.resultStatus, table);
     content.append(workspace.toggle, this.notice, this.detail, this.editorPanel, this.conflictPanel, this.graph.element, this.usagePanel, this.auditPanel);
-    this.root.replaceChildren(header, workspace.element, this.projectDialog.element, this.createDialog.element, this.historyDialog.element, this.usageDialog.element, this.archive.element); workspace.fit();
+    this.root.replaceChildren(header, workspace.element, status, this.projectDialog.element, this.createDialog.element, this.historyDialog.element, this.usageDialog.element, this.archive.element); workspace.fit();
     this.manager = new ConnectionManager(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`, {
       status: stats => this.health.update(stats),
       active: () => this.action(async () => {
@@ -499,6 +501,7 @@ class App {
   }
   private resetUsage(): void {
     this.usageMetric.textContent = `Usage · ${this.usageScope()}: not loaded`; this.usageObserved = 'No successful observation'; this.usageFreshness.textContent = this.usageObserved;
+    this.usageMetric.title = this.usageMetric.textContent;
   }
   private async select(id: api.ItemId): Promise<void> {
     this.choose(id);
@@ -670,6 +673,7 @@ class App {
     this.usageMetric.textContent = `Usage · ${this.usageScope()}: ${report.direct.total.known} direct · ${report.shared.total.known} shared · ${report.unattributed.total.known} unattributed known tokens`;
     const totals = [report.direct.total, report.shared.total, report.unattributed.total];
     this.usageMetric.textContent += ` · ${totals.reduce((sum, value) => sum + value.unknown, 0n)} unknown measurements · ${totals.reduce((sum, value) => sum + value.estimated, 0n)} estimated measurements`;
+    this.usageMetric.title = this.usageMetric.textContent;
     this.usageObserved = `Observed ${new Date().toLocaleTimeString()} · cursor ${report.cursor}`;
     this.usageFreshness.textContent = this.updatesRejected ? `Updates unavailable · ${this.usageObserved}` : this.usageObserved;
     this.usagePanel.replaceChildren(element('h3', `Usage · ${this.usageScope()}`));

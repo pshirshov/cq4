@@ -1,4 +1,4 @@
-# Evaluation polish: D43–D49
+# Evaluation polish: D43–D50
 
 Implementation in progress. Evidence: `/srv/nvme/tmp/cq4-evaluation-polish-20260929`.
 
@@ -35,3 +35,24 @@ The existing live-usage replacement fixture assumed the new connection always wi
 `contracts-resumed/result.json` passes TypeScript type checking, 504 schema definitions, seven MCP capabilities and Scala/TypeScript round trips. Its generation proof matches every current generated file to the earlier successful identical-generation comparison; it resumes the interrupted gate without regenerating beneath active compilers.
 
 The complete JVM project-archive fixture passes at `live-race-proof-2/archive-project-archives/result.json`, including rejected nonterminal current records, exact snapshot restoration, corruption/scope/collision rejection and uncertain commit acknowledgement. Astra independently approves the source increment with no blocking/major findings. This approval excludes pending native/package/operator delivery and human acceptance.
+
+## D50: data and usage status placement
+
+The follow-up report is recorded as D50. `status-before/placement.json` and
+`status-before.log` reproduce data/usage/freshness inside the search header
+(y=65–79 at 1366×768) and fail the expected footer assertion. The correction
+moves the existing live elements into a compact footer. Usage text can truncate
+with its complete text available on hover; freshness remains distinct. D26's
+keyboard hints and D27 remain reserved.
+
+`status-after-layout.log` passes at 1366×768, 1280×720 and 390×844, including
+stale/reconnect updates. These are read-only checks against the actual hostname
+with the new generated JavaScript/CSS supplied through browser routes; they do
+not claim installation. TypeScript passes. The 1280×720 screenshot was visually
+inspected. The native gate already in progress still builds the preceding UI;
+the final artifact will explicitly reuse its unchanged JVM tracing evidence,
+rebuild the embedded assets and run new browser/installed checks.
+
+Astra independently approves D50's source/layout and the scoped trace-reuse plan.
+On narrow screens the footer follows page content; laptop layouts anchor it at
+the viewport bottom. Rebuilt artifact and installed verification remain pending.
