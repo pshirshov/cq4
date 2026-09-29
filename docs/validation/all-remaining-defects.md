@@ -83,8 +83,22 @@ The final independent delivery review (read-only Claude reviewer, not Astra) app
 - A connection reset during candidate startup polling causes a spurious (safe) rollback.
 - `bin/cq-guardian` embeds a checkout-relative library path, and `examples/supervisor.json` names the pre-rename candidate path. Both are pre-existing packaging properties.
 
-Still pending:
+## Installation and closeout
 
-- Host installation by the operator.
-- Actual-hostname API and browser verification.
-- Revisional resolution of D25/D26/D27/D66.
+The operator ran the pinned wrapper on the host. All four pinned hashes checked, and `operator-update/receipt.json` records `installed`:
+
+- old manifest `27608b97…` → new manifest `33245e5e…`
+- schema checksum `88fefc58…` → `237d7df2…`
+- existing table data unchanged, with the backup and the `release-before-all-defects` rollback package retained
+- recovery marker cleared, and the launcher reported `CQ ready` at `http://vm.home.7mind.io:8080`
+
+Actual-hostname checks:
+
+- `operator-completion-after.json` passes. Empty and bare terms offer no items; `id:`, `(id:` and `((id:` offer only the active D25/D26/D27/D66; `archived:true` and `archived:all` scopes and archived relationship targets behave as specified.
+- The first run (`operator-completion-after-lowercase-not.json`) used lowercase `not`, which the grammar treats as a text term; submitted search agrees. The corrected `NOT` case passes.
+- `operator-live-after.json` passes in the browser: footer keycaps, fixed navigation with results resizing, completion behavior and narrow layouts. Screenshot: `operator-live-after.png`.
+- The pre-install baselines (`operator-completion-before.json`, `operator-live-before.json`) failed on the old package.
+
+`closeout.py` resolved D25 (revision 4), D26 (2), D27 (2) and D66 (3) in one change, with model-declared delivery descriptions and commit/file citations. Before/request/result/after records are retained. D25's resolution states that it is a warning-suppression mitigation and that the deprecated dependency calls remain. After closeout, the live project has no Open defects. Human release acceptance remains pending.
+
+The git-excluded harness configurations still name the old checkout path; regenerate them with `cq configure`.
