@@ -3,7 +3,7 @@
 User evaluation follow-up, 2026-09-29. Filed as D58–D65 and I5. D25–D27 remain
 excluded. Version stays 0.1.0, with no historical model copies or compatibility
 layer. Source is committed at `8a3e7b9`; native/package and update checks pass.
-Final delivery review and operator installation remain pending.
+Astra approves technical delivery and the host script. Operator installation remains pending.
 
 ## Accepted behavior
 
@@ -90,7 +90,7 @@ attempted. Human acceptance remains pending.
 - `gates/native/result.json` and `gates/installed/result.json` pass. Tracing includes
   fresh changed browser/model paths and verified inherited metadata for unchanged
   paths. This does not claim a new paid harness evaluation matrix.
-- `operator-rehearsal-3/result.json` passes the exact package pair and final updater:
+- `operator-rehearsal-4/result.json` passes the exact package pair and final updater:
   all Accepted projections refreshed, known delivered Idea implemented, remaining
   Accepted unarchived, dependent task blocked, historical rows and unrelated current
   data unchanged. Credentials persist, and a separately restored backup matches all
@@ -105,6 +105,12 @@ attempted. Human acceptance remains pending.
   after verified installation or verified rollback. `interlock-after/result.json`
   blocks launch after failed restoration; `interlock-abrupt/result.json` blocks
   launch after abrupt process exit between database shutdown and package rename.
+- A second reproduced failure involved state-directory `fsync` after marker
+  removal. `marker-cleanup-before/result.json` records rollback beginning after
+  verified installation and failing during restoration. Successful installation
+  cleanup now runs outside rollback handling. `marker-cleanup-after/result.json`
+  observes the injected cleanup failure with no rollback attempt and a consistent,
+  runnable new package and database.
 - The launcher amendment is a shell startup guard; packaged application bytes are
   unchanged. The update wrapper pins its checksum alongside the updater, helper,
   configuration and permanent entrypoint. Shell syntax validation passes.
@@ -117,3 +123,18 @@ been written. The normal successful rollback is exercised after real writes.
 `operator-live.mjs` and `closeout.py` are prepared for post-install verification and
 revisioned closeout; neither has been run against the operator installation yet.
 D58–D65 and I5 therefore retain their intake states until delivery is verified.
+
+
+## Operator handoff
+
+Independent Astra review approves the final updater, package evidence, failure
+corrections and checksum-pinned `/tmp/exchange/cq-ui-sizing-update.sh`.
+`final-review.json` records exact hashes. Stop CQ consumer sessions and the existing
+launcher, then run that script on the host. It retains the backup and old package,
+reconciles current Ideas before exposure, and starts `./run-local.sh`.
+
+The environment skill requires this user-run step because the operator processes
+are outside the agent's sandbox PID namespace. The operator endpoint last refused
+connections; no cause is inferred and no host process has been signalled. After
+host confirmation, read the script output and receipt before hostname verification
+and closeout. Human release acceptance remains pending.
