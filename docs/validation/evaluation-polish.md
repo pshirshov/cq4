@@ -1,6 +1,6 @@
 # Evaluation polish: D43–D50
 
-Source, native and relocated package verification pass. Operator delivery remains pending. Evidence: `/srv/nvme/tmp/cq4-evaluation-polish-20260929`.
+Source, native, relocated package and actual-hostname verification pass. The package is installed; D43–D50 are Resolved at revision 2. Evidence: `/srv/nvme/tmp/cq4-evaluation-polish-20260929`.
 
 ## Scope and checks
 
@@ -17,16 +17,16 @@ Source, native and relocated package verification pass. Operator delivery remain
 - `prefix-before/query-prefix-results.json`: 13 of 309 prefixes lose hints while typing quoted JSON escapes or an escaped surrogate pair.
 - `archive-before.log`: a checksummed backup with an archived Ready task is accepted by the old restore path.
 - `usage-before.json`: Attempts contains five raw JSON blocks and no table; Usage audit contains a raw JSON block and no table.
-- `archived-before.json`: D13–D20 are Open and archived. Revisioned repair now passes: `archive-repair-before.json`, `archive-repair-result.json`, `archive-repair-after.json`. Only the archive flags changed; exact retry returns the same acknowledgement. Delivery remains pending.
+- `archived-before.json`: D13–D20 are Open and archived. Revisioned repair now passes: `archive-repair-before.json`, `archive-repair-result.json`, `archive-repair-after.json`. Only the archive flags changed; exact retry returns the same acknowledgement.
 
 D25 remains a dependency blocker; D26/D27 remain reserved for CQ trials. The overall release still awaits designated human acceptance.
 
-## Verification in progress
+## Source verification
 
 - `current-2/domain.log`: 104 focused dummy/PostgreSQL/parser scenarios pass. Legacy archived fixtures now use terminal status; their original query/traversal assertions are retained.
 - `browser-1`: 309 API and 309 browser prefixes pass; all nine polish checks pass; whole-query table checks pass. Archive checks pass delayed query/project invalidation, all-or-none stale-member refusal, replay after committed-but-unacknowledged response and a capped 512-member batch with the 513th untouched.
 - The broader browser corpus reproduced a new overlay defect: a late submitted-query diagnostic reopened while the input was blurred and intercepted New item. Correction restricts popup display to the focused input; the resumed and final native browser corpora pass.
-- TypeScript type checking passes. Astra source review approves the implementation; final package/operator delivery approval remains pending.
+- TypeScript type checking passes. Astra source review approves the implementation; final delivery evidence is below.
 
 `order/browse-contract.log` adds six passing dummy/PostgreSQL ordering scenarios, including unequal timestamps (9 vs 100) and pagination after a later revision. The first contract-generation/browser-3 attempts were invalidated by overlapping generation-dependent jobs: generated files were removed while another compiler was reading them. Their failed logs remain; generation-dependent gates are now sequenced. These are check orchestration failures, not product assertions.
 
@@ -34,7 +34,7 @@ The existing live-usage replacement fixture assumed the new connection always wi
 
 `contracts-resumed/result.json` passes TypeScript type checking, 504 schema definitions, seven MCP capabilities and Scala/TypeScript round trips. Its generation proof matches every current generated file to the earlier successful identical-generation comparison; it resumes the interrupted gate without regenerating beneath active compilers.
 
-The complete JVM project-archive fixture passes at `live-race-proof-2/archive-project-archives/result.json`, including rejected nonterminal current records, exact snapshot restoration, corruption/scope/collision rejection and uncertain commit acknowledgement. Astra independently approves the source increment with no blocking/major findings. This approval excludes pending native/package/operator delivery and human acceptance.
+The complete JVM project-archive fixture passes at `live-race-proof-2/archive-project-archives/result.json`, including rejected nonterminal current records, exact snapshot restoration, corruption/scope/collision rejection and uncertain commit acknowledgement. Astra independently approves the source increment with no blocking/major findings. This source-stage approval covered implementation; final package/operator verification is recorded below. Human acceptance remains separate.
 
 ## D50: data and usage status placement
 
@@ -49,13 +49,13 @@ keyboard hints and D27 remain reserved.
 stale/reconnect updates. These are read-only checks against the actual hostname
 with the new generated JavaScript/CSS supplied through browser routes; they do
 not claim installation. TypeScript passes. The 1280×720 screenshot was visually
-inspected. The native gate already in progress still builds the preceding UI;
-the final artifact will explicitly reuse its unchanged JVM tracing evidence,
-rebuild the embedded assets and run new browser/installed checks.
+inspected. The native gate then in progress built the preceding UI. The final
+artifact below explicitly reuses its unchanged JVM tracing evidence, rebuilds
+the embedded assets and passes new browser/installed checks.
 
 Astra independently approves D50's source/layout and the scoped trace-reuse plan.
 On narrow screens the footer follows page content; laptop layouts anchor it at
-the viewport bottom. Rebuilt artifact and installed verification remain pending.
+the viewport bottom. Rebuilt artifact and installed verification results follow.
 
 ## Native verification continuation
 
@@ -92,7 +92,7 @@ requires unchanged hashes at completion. D50's build waits for that proof.
   polish suite has ten passing cases. Its D50 fixture wiring was added after
   build-manifest capture but before invocation; `statusbar-fixture-epoch.json`
   records this explicitly. No paid harness evaluations were rerun.
-- Candidate: `.local/release-polish`, model version **0.1.0**. Manifest SHA-256:
+- Installed package: `.local/release` (prepared as `.local/release-polish`), model version **0.1.0**. Manifest SHA-256:
   `403f5896da455213f3d2709b27a355b337b307282540f509686ec6bf7153041e`.
   Executable SHA-256:
   `f1e58656d85a4805404408d9eef5eebd899064396b6280ed023b5968952eb92a`.
@@ -114,24 +114,34 @@ requires unchanged hashes at completion. D50's build waits for that proof.
 - The generated host script is `/tmp/exchange/cq-polish-update.sh`, SHA-256
   `5548e5541b37177c07f7e2974939005f1a7a4fa1b2ce2bb6edf556c7688e40f6`.
   Astra approves scoped technical delivery and this wrapper (`final-review.json`).
-  Host update, actual-hostname checks and D43–D50 closeout remain pending.
+  Host update, actual-hostname checks and D43–D50 closeout now pass.
 
-## Operator update
+## Operator update and closeout
 
-After ending other CQ harness sessions, stop the existing launcher with Ctrl-C
-and wait for **CQ stopped**. Run this one-time updater in the host terminal:
+The operator stopped the prior launcher and ran the reviewed one-time
+`/tmp/exchange/cq-polish-update.sh` from the host terminal. Its captured output
+reports **CQ ready** at `http://vm.home.7mind.io:8080`, listening on
+**0.0.0.0:8080**. The environment skill required the host step because the
+existing launcher and PostgreSQL process were outside the agent's PID namespace.
+The exchange output was read before verification.
+
+- `operator-update/receipt.json`: exact reviewed package installed, database
+  schema and all existing data preserved. Installed package files and retained
+  backup match their recorded SHA-256 values.
+- Backup: `/srv/nvme/tmp/cq4-evaluation-polish-20260929/operator-update/before.dump`.
+  Previous package: `.local/release-before-evaluation-polish`.
+- `operator-live.json`: actual-hostname login and WebSocket readiness; six table
+  columns, padding selection, last-modified sorting, stable partial-query hints,
+  square controls, readonly terminal preview excluding Open D17, semantic
+  attempts/audit tables and footer geometry all pass. No browser errors, page
+  overflow or project mutations. Table and attempts screenshots were inspected.
+- `closeout-before.json`, `closeout-request.json`, `closeout-result.json` and
+  `closeout-after.json`: D43–D50 Resolved at revision 2, with model-declared evidence
+  and implementation citations. D25 remains Open at revision 2; D26/D27 remain
+  untouched and Open at revision 1. Human release acceptance remains pending.
+
+Reload the browser once to load the current assets. Future starts use:
 
 ```sh
-bash /tmp/exchange/cq-polish-update.sh
+/home/pavel/work/safe/cq4/cq4/run-local.sh
 ```
-
-It shows its contents, prompts before running, verifies exact package hashes,
-backs up the stopped database and starts the permanent `./run-local.sh`. Leave
-that terminal open at **CQ ready**, then reload the browser. Subsequent starts
-continue to use `/home/pavel/work/safe/cq4/cq4/run-local.sh`.
-
-This host-run step is required by the environment skill: the existing launcher
-and PostgreSQL process are outside the agent's PID namespace. The agent will
-read `/tmp/exchange/cq-polish-update.out` and run the read-only actual-hostname
-checks before recording model-declared defect closeout. Human release acceptance
-is separate and remains pending.
