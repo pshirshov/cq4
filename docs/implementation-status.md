@@ -1,6 +1,6 @@
 # Implementation status
 
-[I6 clear-query button](validation/query-clear.md) is implemented at `df19bdd`. Scoped frontend checks, native and relocated-package checks, and the exact updater/24-table backup-restoration rehearsal pass. Astra approves source, technical delivery and the pinned host wrapper. It clears text and obsolete completion state without submitting; operator installation and closeout remain pending.
+[I6 clear-query button](validation/query-clear.md) is implemented at `df19bdd`. Scoped frontend checks, native and relocated-package checks, and the exact updater/24-table backup-restoration rehearsal pass. Astra approves source, technical delivery and the pinned host wrapper. Operator installation and actual-hostname mouse/keyboard checks pass. The button clears text and obsolete completion state without submitting; I6 is Implemented at revision 2. D25–D27 and D66 are unchanged.
 
 [D66 item completion selection](validation/item-completion-selection.md) is Open following user evaluation. The user confirmed insertion succeeds and archived filtering explains the empty results. D66 now records irrelevant item suggestions for an empty query and archive-scope mismatch; that correction remains pending. D25–D27 remain excluded.
 

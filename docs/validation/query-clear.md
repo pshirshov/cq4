@@ -1,7 +1,7 @@
 # Clear-query button: I6
 
 The user requested a clear button inside the right edge of the search field that
-only empties the query. Filed as I6, Accepted; version remains 0.1.0.
+only empties the query. Filed as I6; now Implemented at revision 2. Version remains 0.1.0.
 
 The implemented × button has the accessible name and tooltip “Clear query”. Pointer
 and keyboard activation clear input and old diagnostic/completion state, return
@@ -22,14 +22,13 @@ cleared diagnostics, rejection of held obsolete replies, focus, in-field positio
 and no submitted browse request. Existing completion interaction cases also pass.
 
 This frontend change does not require backend/domain or paid harness gates. Native
-package/update verification passes and Astra approves delivery. Operator installation
-and closeout remain pending; I6 stays Accepted until that delivery is verified. D66 remains Open for suggestion-context
+package/update verification passes and Astra approves delivery. Operator installation, actual-hostname verification and I6 closeout pass. D66 remains Open for suggestion-context
 behavior; it is independent of this control.
 
 
 ## Native package and handoff
 
-Source commit: `df19bdd`. Candidate: `.local/release-query-clear`.
+Source commit: `df19bdd`. Installed package: `.local/release`.
 
 - Manifest SHA-256: `27608b970b71505d5d50ee5d93def789d6473df79112bb09a8f506f9ad8c8351`.
 - Executable SHA-256: `19883b73147d6f7847ae251acf82a00a74b302858e8334e14f5224aca52765bc`.
@@ -55,3 +54,21 @@ the agent's sandbox PID namespace. After host confirmation, read its captured ou
 and receipt, run `operator-live.mjs` through the actual hostname, then `closeout.py`
 to record I6 as Implemented with evidence. D66 and D25–D27 must remain unchanged.
 Human release acceptance remains pending.
+
+
+## Installed verification
+
+The user completed the host update. `/tmp/exchange/cq-query-clear-update.out`
+reports matching pins and CQ ready at `http://vm.home.7mind.io:8080`, listening on
+`0.0.0.0:8080`. `operator-update/receipt.json` confirms the expected manifest,
+unchanged schema and existing table contents, and retained backup/previous package.
+
+`operator-live.json` passes through the actual hostname with mouse and keyboard:
+the input and diagnostic clear, focus returns, displayed results remain unchanged,
+and zero search requests are issued by clearing. There are no browser errors; the
+verification itself made no CQ mutations.
+
+The subsequent recorded closeout marks I6 Implemented at revision 2 with
+model-declared source/delivery evidence. Before/after checks confirm D25–D27 and
+D66 are unchanged. Human release acceptance remains pending. Reload the browser
+once to load this frontend; subsequent launches still use `./run-local.sh`.
