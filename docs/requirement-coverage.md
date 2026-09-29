@@ -1,19 +1,25 @@
 # Requirement coverage
 
+The [remaining-defect batch](validation/remaining-defects.md) passes final native,
+source-isolated package, real Codex → Pi and exact updater/backup-restore checks.
+Astra approves technical delivery and the prepared host update script. Operator
+installation and human acceptance remain pending; D25 stays Open and D26/D27
+remain reserved. R09/R31 spending coverage stays explicitly partial.
+
 Current R09/R31 follow-up: [D42](validation/attached-codex-usage.md) correlates
 interactive Codex response records through native MCP thread identity and replays
-durable canonical samples. Ten focused checks, connected MCP/PostgreSQL/shutdown
+durable canonical samples. Eleven focused checks, connected MCP/PostgreSQL/shutdown
 checks and current contracts pass with Astra source approval;
 an exploratory real consumer reconciles its observed subset. Outer task/model
 grouping, native cost and final-tail coverage remain explicitly incomplete.
-Final native/operator delivery is pending. D25's dependency transformation was
+Operator installation is pending. D25's dependency transformation was
 rejected after a reproduced startup hang; [its open blocker](validation/scala-lazyvals-warning.md#rejected-remedy-2026-09-29)
 does not weaken the runtime requirements or represent a completed correction.
 
 Current R27/R30 follow-up: [D41 checked-out integration](validation/checked-out-integration.md)
 preserves dirty layers without detaching HEAD. Dual coordinator and real Git
 collision/race regressions, connected workflow and actual interruption checks pass;
-Astra independently approves the source increment. Native/operator delivery remains pending.
+Astra independently approves the source increment and final native/package evidence. Operator installation remains pending.
 
 Current R20/R31 operator extension I2: [project archives](validation/project-backup.md)
 preserve identity, history, usage and artifacts in a consistent snapshot. Actual

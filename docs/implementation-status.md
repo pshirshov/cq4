@@ -1,38 +1,27 @@
 # Implementation status
 
-D42 [native-thread accounting](validation/attached-codex-usage.md) is implemented
-with ten passing focused scenarios, connected MCP/PostgreSQL/shutdown checks,
-contracts and Astra source approval. A real Codex → Pi exploratory run reconciles
-its retained outer usage, with explicit final-tail, cost and attribution gaps.
-Fresh native/package delivery is running for the completed remaining-defect batch.
-D25 remains Open: [the candidate dependency transformation hangs CQ startup](validation/scala-lazyvals-warning.md#rejected-remedy-2026-09-29)
-and was rejected after independent review. D26/D27 remain reserved for CQ exercises.
+The [remaining-defect batch](drafts/20260928-remaining-defects.md) is implemented
+for D29/D30 (sortable table and navigation), D38/D39/D40 (operator CLI), D41
+(checked-out integration), D42 (observable attached Codex usage), and I2 (project
+backup/restore). Each increment has scoped passing checks and independent Astra
+source approval. Final native, source-isolated package, real Codex → Pi consumer
+and exact operator-update rehearsal checks pass. Astra approves technical
+delivery and the host update script. The live installation and CQ closeout
+remain pending. [Aggregate delivery evidence](validation/remaining-defects.md).
 
-I2 project backup/restore is implemented: [operator instructions](project-backup.md)
-and [actual PostgreSQL/CLI evidence](validation/project-backup.md). Snapshot
-consistency, all 23 project-table fingerprints, active-work/collision refusal,
-corruption and insertion rollback, and lost-commit acknowledgement handling pass.
-Contracts pass and Astra approves the JVM increment. Native/operator delivery is pending.
-D41 has a [supervised governing-checkout implementation](validation/checked-out-integration.md)
-with passing dual coordinator, preservation, actual interruption and connected
-checks, independently approved by Astra. Native/operator delivery is pending.
+- [Table and navigation evidence](validation/results-table.md)
+- [CLI evidence](validation/operator-cli.md)
+- [Archive evidence](validation/project-backup.md) and [instructions](project-backup.md)
+- [Integration preservation and interruption evidence](validation/checked-out-integration.md)
+- [Codex accounting evidence and explicit gaps](validation/attached-codex-usage.md):
+  eleven focused scenarios, actual MCP/PostgreSQL/shutdown checks and contracts pass.
+- D25 remains Open: [the candidate dependency transformation hangs CQ startup](validation/scala-lazyvals-warning.md#rejected-remedy-2026-09-29)
+  and was rejected after independent review. No safe dependency remedy is established.
+- D26/D27 remain reserved for CQ exercises. Version remains 0.1.0.
 
-Current D38/D39/D40 follow-up: [operator CLI](validation/operator-cli.md) provides
-structured help, human output with explicit machine JSON, and quiet startup with
-opt-in diagnostics. Actual CLI/PostgreSQL and deterministic dispatch checks pass;
-Astra approves the corrected increment. D25 remains separate. Native delivery
-and the remaining backup/integration/usage work are pending.
-
-Goal: complete the first CQ release under the [implementation plan](drafts/20260926-1549-cq-implementation-plan.md). Planning baseline: `7e3076a`.
-
-Current follow-up: the user authorizes all remaining open defects except D26/D27,
-plus the queued I2 backup/restore request. [Execution plan](drafts/20260928-remaining-defects.md).
-D29/D30 now have a sortable semantic table and live navigation counts; shared
-repository and scoped browser checks pass. Astra's measured body-read concern
-was corrected with a compact severity projection. [Evidence and delivery
-boundary](validation/results-table.md). Native delivery and the offline operator
-projection update remain pending; the remaining CLI, integration, usage and
-dependency work is active.
+Goal: complete the first CQ release under the
+[implementation plan](drafts/20260926-1549-cq-implementation-plan.md).
+Planning baseline: `7e3076a`. Human release acceptance remains pending.
 
 Human evaluation corrections: D1–D8 pass affected browser, CLI, service/protocol and fresh native checks; Astra approves the scoped source and native/package candidate. Installation into the existing operator state and actual hostname browser checks pass; D1–D8 are resolved with retained evidence. The new UI/CLI redesign batch is recorded as D26–D40 and I2; the user considers the current UI a prototype, not an acceptable release interface. [Defect records and evidence](validation/human-evaluation.md); [Scala warning investigation](validation/scala-lazyvals-warning.md). Human release acceptance is still pending.
 

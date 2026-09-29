@@ -39,9 +39,9 @@ Root: `/srv/nvme/tmp/cq4-remaining-defects-20260928`.
   once, then zero, with identical audit summary. Pi accounting, child cancellation
   and blocked-I/O shutdown deadlines also pass.
 
-Astra approves the source corrections and the ten focused scenarios. The
-current contract round trip passes at `20260928T231707-contracts`. Final
-native/package and operator delivery checks remain pending.
+Astra approved the source corrections and the initial ten focused scenarios.
+The contract round trip passes at `20260928T231707-contracts`. Subsequent
+boundary and final package checks are recorded below.
 
 The final boundary check reproduced a missing-directory failure for ephemeral
 Codex homes (`codex-ephemeral-before.log`). An unbound observer now reports
@@ -51,6 +51,14 @@ and Astra approves this correction. The MCP fixture checks the actual Context
 response for a fresh native home. The preliminary `20260928T231858-native` run
 was deliberately interrupted for this correction; it remains failed with a
 separate interruption record and is excluded from delivery evidence.
+
+Final delivery checks now pass: `20260928T235722-native`, the source-isolated
+`20260929T000819-installed`, and `codex-packaged-final` on their exact executable.
+The real Codex → Pi investigation completed; 14 retained outer responses / 544,669
+tokens reconcile against 15 native responses. Native teardown left no frozen
+window; one pending delivery batch replays, then repeated recovery replays zero.
+The missing final response is an explicit coverage gap. Astra approves technical
+delivery; operator installation is pending. [Aggregate evidence](remaining-defects.md).
 
 ## Accounting boundary
 

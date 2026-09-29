@@ -1,7 +1,9 @@
 # D41: integrate into the governing branch
 
-Source checks pass and Astra independently approves this increment. Native/package delivery
-and live CQ closure remain pending. Version remains 0.1.0.
+Source, native and source-isolated package checks pass, including actual executor
+interruption and connected integration recovery. Astra approves technical delivery;
+operator installation and live CQ closure remain pending. Version remains 0.1.0.
+[Aggregate evidence](remaining-defects.md).
 
 ## Contract
 

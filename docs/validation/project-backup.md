@@ -39,8 +39,9 @@ suite:
 - The actual lost-COMMIT-acknowledgement case now reports uncertainty accurately.
 
 The fixture is part of both JVM tracing and native transport checks, with separate
-evidence directories for each phase. Full native/package delivery and operator
-verification remain pending. Archive format hashes provide integrity, not source
+evidence directories for each phase. Native and source-isolated package checks
+now pass; operator installation and verification remain pending. Archive format
+hashes provide integrity, not source
 authentication; [operator instructions](../project-backup.md) require trusted
 archives and describe external-state exclusions.
 
@@ -52,5 +53,6 @@ fixture setup because its monetary amount used a string instead of the generated
 
 The deterministic contracts gate passes at
 `.work/evidence/20260928T220500-contracts`. Astra approves the inspected JVM source
-and corrected archive evidence with no blocking or major findings. Native and
-operator delivery remain pending.
+and corrected archive evidence with no blocking or major findings. Final native,
+relocated-package and exact operator-updater checks also pass with independent
+technical delivery approval. [Aggregate evidence](remaining-defects.md).

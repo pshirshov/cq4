@@ -15,9 +15,20 @@ cd /home/pavel/work/safe/cq4/cq4
 
 ### Integration into main
 
-This checkout remains on `main`, as requested by the user. The detached-HEAD setup previously documented here was rejected and has been withdrawn. All attached-host implementation commits are included in `main`.
+This checkout remains on `main`. After installing the
+[remaining-defect package](validation/remaining-defects.md), CQ supports reviewed
+integration into the branch checked out in the governing repository. HEAD stays
+attached; unrelated staged, unstaged, untracked and ignored content is preserved.
+Conflicting local changes cause a refusal. The preceding installed package still
+refuses this operation until it is updated.
 
-**D41 is open:** CQ currently refuses to update an integration target checked out in any worktree. Settings still select `refs/heads/main` and `cq-ui`, but automatic integration into this checked-out branch will return `NotApplied` until D41 is corrected. Intake, investigation, planning, candidate work and review remain available. Preserve the reviewed candidate and report the integration blocker. Do not detach the operator checkout or remove the Git safety guard to bypass it.
+During the short integration operation, do not edit candidate paths or run
+external Git commands in any of this repository's worktrees. A target checked
+out in another worktree is unsupported, as are sparse/split or unmerged indexes,
+submodules, and assume-unchanged/skip-worktree entries. An interrupted checkout
+can retain locks and an unresolved reservation for inspection; do not delete
+locks or reset the checkout to force success. See the
+[integration and recovery contract](validation/checked-out-integration.md).
 
 Launch directly from the normal checkout:
 
@@ -56,6 +67,7 @@ Yolo clears inherited environment variables. An ordinary host-shell `export CQ_T
 | `CQ_TOKEN` | Optional alternative. Takes precedence if both are present. Do not pass it unless intended. |
 | `CQ_SETTINGS` | Unnecessary after configuration: the generated integration already includes the absolute settings path. |
 | `CQ_ORIGIN` | Unnecessary after `cq init`: the endpoint is stored in project configuration. |
+| `CODEX_HOME` | Forward it when using a custom Codex state directory; bind that directory writable. Updated generated MCP configuration forwards it to the host. |
 | Checkout | Start yolo there; its current directory is bound writable. CQ needs a committed Git base. |
 | Package and settings | Must be readable. They are inside this checkout in the prepared setup. |
 | Session state | Must be writable and outside the source checkout. This setup uses `/srv/nvme/tmp/cq4-interactive-sessions`, already visible to this yolo configuration. |
@@ -70,7 +82,7 @@ CQ_TOKEN_FILE=/srv/nvme/tmp/cq4-playground/token \
   --settings /absolute/settings-for-that-project.json
 ```
 
-Choose that project's validation checks and integration branch in its settings. Account for the current checked-out-target limitation described above. If that package/settings path is outside the checkout and yolo's existing binds, expose it explicitly:
+Choose that project's validation checks and integration branch in its settings. Observe the integration preconditions above. If that package/settings path is outside the checkout and yolo's existing binds, expose it explicitly:
 
 ```sh
 yolo --ro /home/pavel/work/safe/cq4/cq4/.local \
@@ -78,6 +90,13 @@ yolo --ro /home/pavel/work/safe/cq4/cq4/.local \
 ```
 
 For custom locations, add `--ro /absolute/token`, `--ro /absolute/package`, `--ro /absolute/settings.json` and `--rw /absolute/session-root` as needed. All yolo options precede `codex`, `claude` or `pi`. The token and configured native executables must be accessible in the same sandbox.
+
+For a custom Codex home, additionally use
+`--env CODEX_HOME=/absolute/codex-home --rw /absolute/codex-home`. CQ reads the
+bound native rollout and writes response ownership under `CODEX_HOME/cq-usage`.
+Reconfigure Codex with `--replace` after installing this package so the generated
+MCP entry forwards the variable. Ephemeral Codex sessions have no retained
+rollout and therefore report unavailable outer usage; CQ tools still work.
 
 Settings select managed-child executable/model/provider/version, deadlines, validation checks and the integration branch. They do not select the interactive model: use the harness's own model controls. Reconfigure after changing the executable/settings path or CQ tool contracts. Existing user-owned `.codex/config.toml` is refused; export into an empty directory and merge the generated `mcp_servers.cq` table manually. `--replace` only updates CQ-generated files/entries.
 
@@ -94,6 +113,12 @@ CQ_TOKEN_FILE=/srv/nvme/tmp/cq4-playground/token \
 
 Recovery never launches/adopts a process. Repeated completed recovery acknowledges zero batches. An incomplete retained record is reported explicitly after valid records are replayed; it is not silently discarded.
 
-Managed children retain their operational token/cost accounting. Claude/Codex interactive outer usage is unavailable; Pi observes finalized assistant usage, with auxiliary/compaction/interrupted work still marked incomplete. Unknown usage does not mean zero cost.
+Managed children retain their task/cohort token and cost accounting. With the
+updated package, observed Codex 0.156.1/0.157.1 native response records contribute
+to the outer session's unattributed usage, deduplicated across host restarts.
+Outer task/model grouping and cost remain unknown. Claude outer usage remains
+unavailable; Pi observes finalized assistant usage. Auxiliary, compaction,
+unreported and final-tail work remain explicitly incomplete. Unknown usage does
+not mean zero cost. See [the Codex accounting boundary](validation/attached-codex-usage.md).
 
 See [verification evidence and remaining acceptance](validation/attached-host.md).

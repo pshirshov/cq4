@@ -28,5 +28,6 @@ estimated measurements, currency/pricing basis and accounting gaps. Paged output
 prints a complete continuation command retaining the original scope and filters.
 
 Astra independently approves this implementation increment with no remaining
-major findings. Native/package delivery and operator verification are pending;
-this is not human acceptance or closure of D25.
+major findings. Native and source-isolated package checks now pass; Astra approves
+technical delivery. Operator installation and verification remain pending; this
+is not human acceptance or closure of D25. [Aggregate evidence](remaining-defects.md).

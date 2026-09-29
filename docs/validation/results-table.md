@@ -61,7 +61,8 @@ runtime compatibility fallback or historical schema is introduced.
   verification and reads the backfilled severity. Repeating the update is
   rejected. This rehearsal is not an update of the operator's live database.
 
-Final native delivery is pending. The installed package has not yet been replaced;
-CQ records remain open until delivery evidence is complete. CLI, backup/restore,
-integration, Codex usage and dependency-warning work continues under the
-[remaining-defect plan](../drafts/20260928-remaining-defects.md).
+Final native and relocated-package checks pass, as does the exact package/updater
+rehearsal with backup restoration and original-data comparisons. Astra approves
+technical delivery. The operator package has not yet been replaced; CQ records
+remain open until delivery evidence is complete. [Aggregate evidence and update
+instructions](remaining-defects.md).
