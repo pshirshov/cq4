@@ -3,8 +3,9 @@
 The user requested filing four further UI defects and closing already-fixed
 reports. D51–D54 are filed **Open**, with reproductions from the installed browser.
 No implementation change is included. D13–D20 are **Resolved**, with individual
-resolution evidence and references to their canonical reports. Human release
-acceptance remains pending.
+resolution evidence and references to their canonical reports. A subsequent intake
+adds Open D55–D57 and Proposed I3/I4, detailed below. Human release acceptance
+remains pending.
 
 ## New reports
 
@@ -49,7 +50,7 @@ These are model-declared technical checks, not human acceptance.
 
 All twelve mutations were applied in one revision-checked transaction. Direct
 readback verifies the four new reports, eight status changes, unchanged canonical
-D1–D8, and unchanged D25/D26/D27. The complete Open defect set is now **D25, D26,
+D1–D8, and unchanged D25/D26/D27. Immediately after this closeout, the Open defect set was **D25, D26,
 D27, D51, D52, D53, D54**. D25 remains the dependency blocker; D26/D27 remain
 reserved for CQ exercises.
 
@@ -70,3 +71,56 @@ Reused browser/CLI evidence is under
 the backup continuation is `gates/installed-backup-resumed` under the same root.
 No package rebuild, backend gate or paid harness evaluation was needed for filing
 and verified report closeout.
+
+## Further intake: messages, rapid entry and restored features
+
+The user requested filing these reports, not implementing them in this increment.
+All five were created in one transaction and verified by direct item readback.
+
+| Record | State | Requested behavior |
+| --- | --- | --- |
+| D55 | Open | Keep operational messages out of the item pane. Archive success belongs in a toast; route other messages to a suitable status bar, toast or action dialog. |
+| I3 | Proposed | Quick Idea, Goal and Defect selection buttons in the new-item popup header. |
+| I4 | Proposed | A Save item and create next button and discoverable keyboard shortcut, preserving retry and draft safety. |
+| D56 | Open | Restore a dialog for answering multiple Open questions, with context, alternatives, progress and per-question save/advance. |
+| D57 | Open | Highlight inline item references such as D5; activation opens a semantic content popup while preserving the current selection. |
+
+### Notification audit
+
+`web/src/app.ts` mounts its shared notice directly in the item pane. Its writers
+include archive success, item-save success, graph-change success, restored draft
+and unresolved-save notices, and application errors. Errors are additionally copied
+into open dialogs. Pending graph operations and edit conflicts also render inline
+recovery instructions and controls; D55 includes checking their placement while
+preserving actionable recovery.
+
+The live browser reproduced the restored-draft notice in `#detail-pane`: open New
+item, type an unsaved title, cancel, reopen, then close. The notice remains after
+selecting another item. The exact `Archived 37 items.` message is user-reported;
+its routing is source-confirmed, and no archival mutation was repeated.
+
+### Current and original feature observations
+
+The installed new-item header has only Close; its editor has Save item, Cancel edit
+and Discard local draft, with all fourteen types in a combobox. D17's narrative
+contains D5 but no matching interactive element. These observations come from an
+isolated browser context with no ledger mutations or changes to the user's drafts.
+
+The original snapshot's `ledger-web/src/App.tsx` contains `openBatch`, `batchSave`
+and an answer-open-questions modal, including prompt/context, alternatives,
+progress and previous/next navigation. Current code has only the generic Question
+form/view. The live project contains no Questions, so no multi-question runtime
+sequence was exercised. The original application was inspected, not run.
+
+The original `itemReferences.ts`, `ItemReferenceChip.tsx` and `Markdown.tsx` scan
+reference tokens and render interactive chips. Their interaction is hover/focus
+preview plus click navigation; D57 records the user's explicitly requested
+click-to-popup behavior rather than claiming the original code did exactly that.
+Reference snapshots remain unchanged.
+
+Evidence root: `/srv/nvme/tmp/cq4-evaluation-intake-20260929`.
+`inspect-browser.mjs`, `browser-findings.json`, `browser-inspection.log` and two
+screenshots retain current observations; `source-findings.json` records the source
+audit and installed manifest hash. `filing-request.json`, `actor-session.json`,
+`filing-result.json`, `readback.json` and `result.json` retain the exact filing and
+verification. D25/D26/D27 and earlier follow-up reports remain untouched.
