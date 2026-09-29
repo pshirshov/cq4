@@ -138,7 +138,8 @@ private final class DummyLedgerTransaction(initial: DummyLedgerState) extends Le
     val counts = state.items.valuesIterator.filterNot(_.draft.archived).toList.groupMapReduce(_.id.ledger)(_ => 1L)(_ + _)
     Ledger.all.map(ledger => LedgerCount(ledger, counts.getOrElse(ledger, 0L)))
   }
-  override def completeItems(prefix: SearchPrefix, limit: Int): List[ItemSummary] = state.items.valuesIterator
+  override def completeItems(prefix: SearchPrefix, archive: ArchiveFilter, limit: Int): List[ItemSummary] = state.items.valuesIterator
+    .filter(matches(QueryExpression.Archive(archive), _))
     .filter(item => prefix.matches(LedgerPolicy.prefix(item.id.ledger) + item.id.number))
     .toList.sortBy(item => LedgerPolicy.prefix(item.id.ledger) + item.id.number).take(limit).map(LedgerPolicy.summary)
   override def completeLabels(prefix: SearchPrefix, limit: Int): List[String] = state.items.valuesIterator

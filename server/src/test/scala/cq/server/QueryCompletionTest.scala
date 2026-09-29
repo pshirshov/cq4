@@ -24,6 +24,35 @@ abstract class QueryCompletionTest extends SpecZIO with AssertZIO {
   private def replacements(analysis: QueryAnalysis): List[String] = analysis.suggestions.map(_.text)
 
   "Cursor-aware query completion (Behavioral Active Blackbox; dummy Group / PostgreSQL Good Communication)" should {
+    "offer items only in reference fields and respect direct ID archive scope before limiting" in { (service: LedgerService[IO]) =>
+      val owner = scope()
+      val queries = List(
+        "id:" -> List("T3", "T4"),
+        "archived:all id:" -> List("T1", "T2", "T3", "T4"),
+        "archived:true id:" -> List("T1", "T2"),
+        "NOT archived:true id:" -> List("T3", "T4"),
+        "NOT archived:false id:" -> List("T1", "T2"),
+        "(archived:true OR archived:false) id:" -> List("T1", "T2", "T3", "T4"),
+        "archived:true archived:false id:" -> Nil,
+        "NOT status:done id:" -> List("T3", "T4"),
+        "tag:\"archived:true\" id:" -> List("T3", "T4"),
+        "blocked-by:" -> List("T1", "T2", "T3", "T4"),
+      )
+      for {
+        _ <- service.initialize(owner, "contextual item completion")
+        _ <- ZIO.foreach(List(true, true, false, false))(archived => create(service, owner, draft("Target", Set.empty, archived)))
+        terms <- ZIO.foreach(List("", "T", "T1", "ledger:tasks AND "))(text => service.complete(owner, text, text.length, 50))
+        _ <- assertIO(terms.forall(_.suggestions.forall(_.kind != QuerySuggestionKind.Item)))
+        _ <- ZIO.foreach(queries) { case (text, expected) =>
+          service.complete(owner, text, text.length, 50).flatMap(result => assertIO(replacements(result) == expected))
+        }
+        limited <- service.complete(owner, "id:", 3, 1)
+        _ <- assertIO(replacements(limited) == List("T3") && limited.hasMore)
+        suffix <- service.complete(owner, "id:T archived:true", 4, 50)
+        _ <- assertIO(replacements(suffix) == List("T1", "T2") && suffix.suggestions.forall(_.span == QuerySpan(3, 4)))
+      } yield ()
+    }
+
     "complete local grammar context and replace whole tokens without duplicating delimiters" in { (service: LedgerService[IO]) =>
       val owner = scope()
       for {
@@ -110,7 +139,7 @@ abstract class QueryCompletionTest extends SpecZIO with AssertZIO {
           Mutation.Replace(b.id, Revision(999), draft("Invalid revision", Set("orphan"), false)))).either
         _ <- assertIO(rejected.isLeft)
         after <- service.complete(owner, "tag:orphan", 10, 50)
-        ids <- service.complete(owner, "id:T", 4, 1)
+        ids <- service.complete(owner, "archived:all id:T", 16, 1)
         _ <- assertIO(after.suggestions.isEmpty && replacements(ids) == List("T1") && ids.hasMore)
       } yield ()
     }

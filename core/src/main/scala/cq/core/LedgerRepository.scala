@@ -36,7 +36,7 @@ trait LedgerTransaction {
   def scan(query: QueryExpression, after: Option[ItemId], limit: Int): ReadPage[ItemSummary]
   def browse(query: QueryExpression, order: ItemOrder, after: Option[BrowseItem], limit: Int): ReadPage[BrowseItem]
   def counts: List[LedgerCount]
-  def completeItems(prefix: SearchPrefix, limit: Int): List[ItemSummary]
+  def completeItems(prefix: SearchPrefix, archive: ArchiveFilter, limit: Int): List[ItemSummary]
   def completeLabels(prefix: SearchPrefix, limit: Int): List[String]
   def claim(id: ItemId): Option[Claim]
   def claimById(id: ClaimId): Option[Claim]

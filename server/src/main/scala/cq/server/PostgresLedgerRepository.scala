@@ -246,9 +246,15 @@ private final class PostgresLedgerTransaction(connection: Connection, override v
       case None => statement.setInt(3, limit)
     }
   }
-  override def completeItems(prefix: SearchPrefix, limit: Int): List[ItemSummary] =
-    sql.query(s"SELECT summary::text FROM cq_items WHERE project_id = ? AND ${prefixWhere("display_id", prefix)} ORDER BY display_id LIMIT ?")
+  override def completeItems(prefix: SearchPrefix, archive: ArchiveFilter, limit: Int): List[ItemSummary] = {
+    val scope = archive match {
+      case ArchiveFilter.Active => "NOT archived"
+      case ArchiveFilter.Archived => "archived"
+      case ArchiveFilter.All => "TRUE"
+    }
+    sql.query(s"SELECT summary::text FROM cq_items WHERE project_id = ? AND $scope AND ${prefixWhere("display_id", prefix)} ORDER BY display_id LIMIT ?")
       (bindPrefix(prefix, limit))(r => Wire.decode(ItemSummary_JsonCodec, r.getString(1)))
+  }
   override def completeLabels(prefix: SearchPrefix, limit: Int): List[String] =
     sql.query(s"SELECT label FROM cq_labels WHERE project_id = ? AND ${prefixWhere("label", prefix)} ORDER BY label LIMIT ?")
       (bindPrefix(prefix, limit))(_.getString(1))

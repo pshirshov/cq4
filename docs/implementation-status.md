@@ -1,5 +1,7 @@
 # Implementation status
 
+[All remaining defects](validation/all-remaining-defects.md) are now authorized, including previously reserved D25–D27. D26/D27/D66 source corrections pass scoped dummy/PostgreSQL/browser/prefix checks and the actual access gate. Astra's requested access-bound correction was reproduced and now passes with an archive/display index. D25's rejected transformation has a confirmed wrong-field mapping; its safe remediation remains under investigation. None of these four records is closed or delivered yet. Earlier exclusions below are historical.
+
 [I6 clear-query button](validation/query-clear.md) is implemented at `df19bdd`. Scoped frontend checks, native and relocated-package checks, and the exact updater/24-table backup-restoration rehearsal pass. Astra approves source, technical delivery and the pinned host wrapper. Operator installation and actual-hostname mouse/keyboard checks pass. The button clears text and obsolete completion state without submitting; I6 is Implemented at revision 2. D25–D27 and D66 are unchanged.
 
 [D66 item completion selection](validation/item-completion-selection.md) is Open following user evaluation. The user confirmed insertion succeeds and archived filtering explains the empty results. D66 now records irrelevant item suggestions for an empty query and archive-scope mismatch; that correction remains pending. D25–D27 remain excluded.

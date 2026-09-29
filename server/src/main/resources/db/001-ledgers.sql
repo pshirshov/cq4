@@ -35,6 +35,7 @@ CREATE TABLE cq_items (
 );
 CREATE INDEX cq_items_active ON cq_items (project_id, ledger, number) WHERE NOT archived;
 CREATE UNIQUE INDEX cq_items_display ON cq_items (project_id, display_id);
+CREATE INDEX cq_items_archive_display ON cq_items (project_id, archived, display_id);
 CREATE INDEX cq_items_status ON cq_items (project_id, status, ledger, number);
 CREATE INDEX cq_items_search ON cq_items USING gin (search_words);
 CREATE INDEX cq_items_labels ON cq_items USING gin ((summary->'labels'));

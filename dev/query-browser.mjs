@@ -16,6 +16,8 @@ export async function queryChecks(browser, storageState, origin, evidence) {
   await post({ Change: { input: { project, change: { request: { value: randomUUID() }, fences: [], reason: 'Query browser fixture', mutations: [
     { Create: { draft: { title: 'Completion target', body: 'Query popup fixture', labels: [], archived: false, citations: [],
       content: { Task: { status: 'Ready', acceptance: ['Query navigation'], result: null, validation: [] } } } } },
+    { Create: { draft: { title: 'Archived target', body: 'Query archive fixture', labels: [], archived: true, citations: [],
+      content: { Task: { status: 'Done', acceptance: ['Query navigation'], result: null, validation: [] } } } } },
   ] } } } });
   const context = await browser.newContext({ storageState });
   await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
@@ -44,6 +46,18 @@ export async function queryChecks(browser, storageState, origin, evidence) {
     await page.getByLabel('Project', { exact: true }).selectOption(project.value);
     await page.getByRole('button', { name: 'T1 · Completion target', exact: true }).waitFor();
     const query = page.getByRole('combobox', { name: 'Search query', exact: true });
+    const completed = () => page.waitForFunction(() => document.querySelector('.query-popup').getAttribute('aria-busy') === 'false');
+    await query.focus(); await completed();
+    assert.equal(await page.getByRole('option', { name: / · Item$/ }).count(), 0);
+    await query.fill('id:T'); await completed();
+    assert.equal(await page.getByRole('option', { name: /Archived target/ }).count(), 0);
+    await query.fill('archived:all id:T'); await completed();
+    await page.getByRole('option', { name: 'T2 · Archived target · archived · Item', exact: true }).click();
+    assert.equal(await query.inputValue(), 'archived:all id:T2');
+    await query.press('Enter'); await page.getByRole('button', { name: 'T2 · Archived target · archived', exact: true }).waitFor();
+    await query.fill('blocked-by:T'); await completed();
+    await page.getByRole('option', { name: 'T2 · Archived target · archived · Item', exact: true }).waitFor();
+    cases.push('empty query has syntax only; ID archive scope and archived relationship targets');
     for (const [text, option, expected] of [
       ['led', 'ledger · Field', 'ledger:'], ['blocked-b', 'blocked-by · Relation', 'blocked-by:'],
       ['alpha O', 'OR · Operator', 'alpha OR '], ['status:Do', 'done · Value', 'status:done'],

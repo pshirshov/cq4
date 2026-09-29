@@ -201,6 +201,14 @@ class App {
     const metrics = element('div', ''); metrics.className = 'status-metrics'; metrics.setAttribute('role', 'region'); metrics.setAttribute('aria-label', 'Usage metrics');
     metrics.append(this.sync, this.usageMetric, this.usageFreshness); header.append(identity, this.queryEditor.element);
     const status = element('footer', ''); status.className = 'status-bar'; status.setAttribute('aria-label', 'Workspace status'); status.append(metrics);
+    const guidance = element('div', ''); guidance.className = 'keyboard-guidance'; guidance.setAttribute('aria-label', 'Keyboard shortcuts');
+    for (const [keys, action] of [['Ctrl+K', 'query'], ['F6', 'next pane'], ['Shift+F6', 'previous pane'],
+      ['↑/↓', 'move in results'], ['↵', 'select'], ['→', 'detail'], ['Esc', 'return']] as const) {
+      const hint = element('span', ''); const key = element('kbd', keys);
+      key.setAttribute('aria-label', keys === '↵' ? 'Enter' : keys === 'Esc' ? 'Escape' : keys === '↑/↓' ? 'Up or Down arrow' : keys === '→' ? 'Right arrow' : keys);
+      hint.append(key, ` ${action}`); guidance.append(hint);
+    }
+    status.append(guidance);
     this.usageMetric.className = 'status-usage'; this.usageFreshness.className = 'status-freshness';
     const workspace = new Workspace(this.root, localStorage, error => this.showError(error)); const side = workspace.navigation; const list = workspace.results; const content = workspace.content;
     this.resultsPane = list;
@@ -240,8 +248,7 @@ class App {
     const usage = button('Project usage', () => this.action(() => this.selectUsage(new api.UsageFilter_ProjectAll(), true))); usage.className = 'navigation-entry'; usage.prepend(icon('Usage'));
     const archive = button('Archive terminal items', () => this.action(async () => this.archive.open(this.currentProject(), this.activeQuery, this.order))); archive.className = 'navigation-entry';
     const questions = button('Answer open questions', () => this.action(async () => this.questions.open(this.currentProject()))); questions.className = 'navigation-entry'; questions.prepend(icon(api.Ledger.Questions));
-    side.append(create, questions, usage, archive, element('h3', 'Browse'), shortcuts,
-      element('p', 'Ctrl+K: query · F6: next pane · Shift+F6: previous pane. Results: ↑/↓ to move, Enter to select, → for detail, Escape to return.'));
+    side.append(create, questions, usage, archive, element('h3', 'Browse'), shortcuts);
     const table = element('table', ''); table.className = 'items-table'; table.setAttribute('aria-label', 'Items');
     const head = element('thead', ''); const headings = element('tr', '');
     for (const field of api.ItemOrderField_values) {

@@ -177,7 +177,34 @@ SELECT count(*) FROM cq_history WHERE project_id = :'project'::uuid AND ledger =
             extended.measure(size, project)
             previous = size
         self.contention(projects)
+        self.archive_completion()
         print("Actual HTTP mutation/query/closure/integration/usage workloads passed at 100, 10000 and 100000 unrelated rows per project")
+
+    def archive_completion(self):
+        for archived in (False, True):
+            project = {"value": str(uuid.uuid4())}
+            self.call({"Initialize": {"config": {"project": project, "endpoint": self.environment["CQ_ORIGIN"], "name": "Archive completion access"}}})
+            value = draft("Completion target")
+            value["content"]["Task"]["status"] = "Done"
+            value["archived"] = not archived
+            self.call(change(project, [{"Create": {"draft": value}}]))
+            self.sql("""
+WITH template AS (SELECT * FROM cq_items WHERE project_id = :'project'::uuid),
+entries AS (SELECT n, CASE WHEN n > 100000 THEN :archived ELSE NOT :archived END AS archived
+            FROM generate_series(2, 100010) n)
+INSERT INTO cq_items(project_id, ledger, number, display_id, revision, schema_version, archived, status, title, narrative, search_text, body, summary)
+SELECT t.project_id, t.ledger, e.n + 100000, 'T' || (e.n + 100000), t.revision, t.schema_version,
+       e.archived, t.status, t.title, t.narrative, t.search_text,
+       jsonb_set(jsonb_set(t.body, '{id,number}', to_jsonb((e.n + 100000)::text)), '{draft,archived}', to_jsonb(e.archived)),
+       jsonb_set(jsonb_set(t.summary, '{id,number}', to_jsonb((e.n + 100000)::text)), '{archived}', to_jsonb(e.archived))
+FROM template t CROSS JOIN entries e;
+ANALYZE cq_items;
+""", {"project": project["value"], "archived": str(archived).lower()})
+            query = f"archived:{str(archived).lower()} id:T"
+            result = self.measured(f"100000-complete-archive-{archived}", {"Read": {"input": {"project": project,
+                "selection": {"QueryComplete": {"query": query, "cursor": len(query), "limit": 3}}}}})["QueryAnalyzed"]["analysis"]
+            assert [suggestion["text"] for suggestion in result["suggestions"]] == ["T200001", "T200002", "T200003"]
+            assert result["hasMore"]
 
     def contention(self, projects: list[dict]):
         holder = subprocess.Popen(self.psql + ["--set", "project=" + projects[0]["value"]], env=self.database_environment,
