@@ -41,7 +41,7 @@ root data BackupEntry { table: BackupTable rows: i64 bytes: i64 sha256: str }
 root data BackupManifest { project: ProjectId schemaSha256: str postgresMajor: i32 createdAt: i64 entries: lst[BackupEntry] }
 
 enum MilestoneStatus { Open Complete Cancelled }
-enum IdeaStatus { Proposed Accepted Declined Withdrawn }
+enum IdeaStatus { Proposed Accepted Declined Withdrawn Implemented }
 enum DefectStatus { Open Resolved NotReproducible Rejected Withdrawn }
 enum GoalStatus { Open Achieved Abandoned }
 enum TaskStatus { Ready Active Done Cancelled }

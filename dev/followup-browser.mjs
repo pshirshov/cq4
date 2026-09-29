@@ -41,8 +41,10 @@ try {
     await query.press('Escape'); await query.press('Enter'); await page.getByText('Data: invalid query', {exact: true}).waitFor();
     await query.fill('ledger:Defects'); await page.getByRole('button', {name: 'Search', exact: true}).click(); await current();
   });
-  await check('D52 mouse and keyboard resize columns without sorting; widths survive reload', async () => {
-    const handle = table.getByRole('separator', {name: 'Resize Title column', exact: true});
+  await check('D52 mouse and keyboard resize without sorting; D59 temporary overrides reset on reload', async () => {
+    await page.getByRole('button', {name: 'Dock detail below', exact: true}).click();
+    await page.waitForTimeout(60);
+    const handle = table.getByRole('separator', {name: 'Resize Status column', exact: true});
     const before = Number(await handle.getAttribute('aria-valuenow'));
     const bounds = await handle.boundingBox(); assert.ok(bounds);
     await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2); await page.mouse.down();
@@ -52,7 +54,7 @@ try {
     assert.equal(await table.getByRole('columnheader').first().getAttribute('aria-sort'), 'ascending');
     await page.reload(); await page.getByText('Connection: ALIVE', {exact: true}).waitFor();
     await page.getByLabel('Project', {exact: true}).selectOption(project.value); await current();
-    assert.equal(Number(await table.getByRole('separator', {name: 'Resize Title column', exact: true}).getAttribute('aria-valuenow')), before + 61);
+    await page.waitForFunction(width => Number(document.querySelector('[aria-label="Resize Status column"]').getAttribute('aria-valuenow')) === width, before);
   });
   await check('D53 modified date and time occupy one line', async () => {
     const tops = await table.locator('tbody time').first().evaluate(node => [...node.children].map(c => c.getBoundingClientRect().top));

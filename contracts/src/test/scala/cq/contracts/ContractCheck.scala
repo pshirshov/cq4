@@ -18,6 +18,7 @@ object ContractCheck {
     val conflict = ApiError.Conflict(revision, Revision(Long.MaxValue))
     val watch = ClientFrame.Watch(RequestId(probe.project.value), LiveScope(true, Some(probe.project)))
     val usageCursor = ServerFrame.Updated(watch.id, LiveRevision(Some(CatalogueCursor(revision.value)), Some(ProjectCursors(probe.project, ChangeCursor(revision.value), revision.value))))
+    val ideas = IdeaStatus.all.toList.map(status => Content.Idea(status, "Outcome", "Motivation"))
     val query = QueryExpression.And(QueryExpression.Archive(ArchiveFilter.Active), QueryExpression.Or(
       QueryExpression.Not(QueryExpression.Reference(Relation.BlockedBy, QueryItem(Ledger.Tasks, Long.MaxValue))),
       QueryExpression.Text(List("retry", "λ"), true)
@@ -32,12 +33,15 @@ object ContractCheck {
     assert(RevisionCodec.parseRepr(s"Revision:${Revision.baboonDomainVersion}#value:9223372036854775808").isLeft)
     args(0) match {
       case "export" =>
+        Files.writeString(directory.resolve("scala-ideas.json"), io.circe.Json.arr(ideas.map(Content_JsonCodec.encode(context, _))*).noSpaces)
         Files.writeString(directory.resolve("scala-probe.json"), Probe_JsonCodec.encode(context, probe).noSpaces)
         Files.writeString(directory.resolve("scala-error.json"), ApiError_JsonCodec.encode(context, conflict).noSpaces)
         Files.writeString(directory.resolve("scala-query.json"), QueryExpression_JsonCodec.encode(context, query).noSpaces)
         Files.writeString(directory.resolve("scala-watch.json"), ClientFrame_JsonCodec.encode(context, watch).noSpaces)
         Files.writeString(directory.resolve("scala-usage-cursor.json"), ServerFrame_JsonCodec.encode(context, usageCursor).noSpaces)
       case "verify" =>
+        val returnedIdeas = parse(Files.readString(directory.resolve("typescript-ideas.json"))).toOption.get.asArray.get.toList.map(Content_JsonCodec.decode(context, _))
+        assert(returnedIdeas == ideas.map(Right.apply))
         val returned = parse(Files.readString(directory.resolve("typescript-probe.json"))).flatMap(Probe_JsonCodec.decode(context, _))
         assert(returned == Right(probe))
         val error = parse(Files.readString(directory.resolve("typescript-error.json"))).flatMap(ApiError_JsonCodec.decode(context, _))

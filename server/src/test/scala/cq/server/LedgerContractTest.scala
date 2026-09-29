@@ -25,6 +25,31 @@ abstract class LedgerContractTest extends SpecZIO with AssertZIO {
     effect.either.flatMap(result => assertIO(result match { case Left(DomainFailure(fault)) => expected(fault); case _ => false })).unit
 
   "Durable ledger service (Behavioral Active Blackbox; dummy Group / PostgreSQL Good Communication)" should {
+    "keep accepted ideas active until implemented and forbid premature archival" in { (service: LedgerService[IO]) =>
+      val owner = scope()
+      val accepted = task("Accepted idea").copy(content = Content.Idea(IdeaStatus.Accepted, "Deliver outcome", "Motivation"))
+      for {
+        _ <- service.initialize(owner, "idea lifecycle")
+        first <- create(service, owner, accepted)
+        active <- service.search(owner, "ledger:Ideas", None, 200)
+        _ <- assertIO(active.items.head.outcome == ItemOutcome(false, false))
+        _ <- denied(service.change(owner, request(List(Mutation.Archive(List(first))), Nil)))(_.isInstanceOf[Fault.Invalid])
+        _ <- denied(create(service, owner, accepted.copy(archived = true)))(_.isInstanceOf[Fault.Invalid])
+        implemented = IdeaStatus.Implemented
+        completed = accepted.copy(content = Content.Idea(implemented, "Delivered outcome", "Motivation"))
+        changed <- service.change(owner, request(List(Mutation.Replace(first.id, first.revision, completed)), Nil))
+        done <- service.search(owner, "ledger:Ideas status:Implemented", None, 200)
+        _ <- assertIO(done.items.head.outcome == ItemOutcome(true, true))
+        archived <- service.change(owner, request(List(Mutation.Archive(changed.items)), Nil))
+        _ <- denied(service.change(owner, request(List(Mutation.Replace(first.id, archived.items.head.revision, accepted.copy(archived = true))), Nil)))(_.isInstanceOf[Fault.Invalid])
+        _ <- ZIO.foreachDiscard(List(IdeaStatus.Declined, IdeaStatus.Withdrawn)) { status =>
+          create(service, owner, accepted.copy(archived = true, content = Content.Idea(status, "Not pursued", "Motivation")))
+        }
+        terminal <- service.search(owner, "ledger:Ideas archived:true", None, 200)
+        _ <- assertIO(terminal.items.size == 3 && terminal.items.forall(_.outcome.terminal) && terminal.items.count(_.outcome.satisfiesDependency) == 1)
+      } yield ()
+    }
+
     "create all fourteen typed ledgers and preserve project identity through reattachment" in { (service: LedgerService[IO]) =>
       val first = scope()
       val second = scope()

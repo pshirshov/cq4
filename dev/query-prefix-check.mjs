@@ -25,7 +25,8 @@ try {
  await page.getByText('Connection: ALIVE',{exact:true}).waitFor();await page.getByLabel('Project',{exact:true}).selectOption(project.value);
  const input=page.getByRole('combobox',{name:'Search query',exact:true});const height=await page.locator('header').first().evaluate(node=>node.getBoundingClientRect().height);
  for(const prefix of prefixes){
-  await input.fill(prefix);await input.focus();await page.locator('#query-suggestions [role=option]').first().waitFor();
+  await input.fill(prefix);await input.focus();await page.waitForFunction(() => document.querySelector('.query-popup').getAttribute('aria-busy') === 'false');
+  await page.locator('#query-suggestions [role=option]').first().waitFor();
   assert.equal(await page.locator('header').first().evaluate(node=>node.getBoundingClientRect().height),height,prefix);
   assert.notEqual(await input.getAttribute('aria-invalid'),'true',prefix);browserChecked++;
  }

@@ -72,7 +72,7 @@ object LedgerPolicy {
 
   def outcome(value: Content): ItemOutcome = value match {
     case c: Content.Milestone => ItemOutcome(c.status != MilestoneStatus.Open, c.status == MilestoneStatus.Complete)
-    case c: Content.Idea => ItemOutcome(c.status != IdeaStatus.Proposed, c.status == IdeaStatus.Accepted)
+    case c: Content.Idea => ItemOutcome(!Set[IdeaStatus](IdeaStatus.Proposed, IdeaStatus.Accepted).contains(c.status), c.status == IdeaStatus.Implemented)
     case c: Content.Defect => ItemOutcome(c.status != DefectStatus.Open, c.status == DefectStatus.Resolved)
     case c: Content.Goal => ItemOutcome(c.status != GoalStatus.Open, c.status == GoalStatus.Achieved)
     case c: Content.Task => ItemOutcome(Set[TaskStatus](TaskStatus.Done, TaskStatus.Cancelled).contains(c.status), c.status == TaskStatus.Done)

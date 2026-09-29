@@ -1,7 +1,10 @@
 import * as api from '../../generated/typescript/cq/api/index.js';
 import { button, element } from './editor.js';
+import { localSuggestions, suggestionKey } from './query-local.js';
 
 const COMPLETION_DELAY_MS = 180;
+const POPUP_EDGE = 8;
+const POPUP_GAP = 4;
 
 export class QueryEditor {
   readonly element = element('form', '');
@@ -16,6 +19,7 @@ export class QueryEditor {
   private generation = 0;
   private timer: number | null = null;
   private composing = false;
+  private caret = '';
 
   constructor(private readonly complete: (query: string, cursor: number) => Promise<api.QueryAnalysis>, submit: () => void) {
     this.element.className = 'query-editor';
@@ -40,7 +44,7 @@ export class QueryEditor {
     this.input.addEventListener('click', () => this.schedule());
     this.input.addEventListener('focus', () => this.schedule());
     this.input.addEventListener('blur', () => this.invalidate());
-    this.input.addEventListener('compositionstart', () => { this.composing = true; this.invalidate(); });
+    this.input.addEventListener('compositionstart', () => { this.composing = true; this.schedule(); });
     this.input.addEventListener('compositionend', () => { this.composing = false; this.schedule(); });
     this.input.addEventListener('keydown', event => {
       if (event.isComposing || this.composing) return;
@@ -59,11 +63,22 @@ export class QueryEditor {
     this.input.addEventListener('keyup', event => {
       if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) this.schedule();
     });
+    this.input.addEventListener('scroll', () => this.position());
+    this.input.ownerDocument.addEventListener('selectionchange', () => {
+      if (document.activeElement === this.input && this.location() !== this.caret) this.schedule();
+    });
+    window.addEventListener('resize', () => this.position());
+    window.addEventListener('scroll', () => this.position(), true);
+  }
+
+  private cancel(): void {
+    this.generation++;
+    if (this.timer !== null) { window.clearTimeout(this.timer); this.timer = null; }
+    this.caret = this.location();
   }
 
   invalidate(): void {
-    this.generation++;
-    if (this.timer !== null) { window.clearTimeout(this.timer); this.timer = null; }
+    this.cancel();
     this.suggestions = []; this.active = -1; this.options.replaceChildren(); this.popup.hidden = true;
     this.input.setAttribute('aria-expanded', 'false'); this.input.removeAttribute('aria-activedescendant');
     this.status.hidden = true;
@@ -86,14 +101,24 @@ export class QueryEditor {
   }
 
   private renderPopup(): void {
-    this.options.hidden = this.suggestions.length === 0;
+    this.options.hidden = this.options.childElementCount === 0;
     this.popup.hidden = document.activeElement !== this.input || (this.options.hidden && this.diagnostic.hidden && this.status.hidden);
     this.input.setAttribute('aria-expanded', String(!this.popup.hidden && !this.options.hidden));
+    this.position();
   }
 
   private schedule(): void {
-    this.invalidate();
+    this.cancel();
+    this.suggestions = []; this.active = -1; this.input.removeAttribute('aria-activedescendant');
+    for (const option of this.options.querySelectorAll('button')) { option.disabled = true; option.setAttribute('aria-selected', 'false'); }
+    this.popup.setAttribute('aria-busy', 'true');
+    this.status.textContent = this.composing ? 'Composing query…' : 'Loading query suggestions…'; this.status.hidden = false;
+    this.renderPopup();
     if (this.composing) return;
+    const cursor = this.input.selectionStart;
+    if (cursor === null) throw new Error('Query input has no text caret');
+    const local = localSuggestions(this.input.value, cursor);
+    if (local.length > 0) { this.setOptions(local); this.renderPopup(); }
     this.timer = window.setTimeout(() => { this.timer = null; void this.suggest(); }, COMPLETION_DELAY_MS);
   }
 
@@ -109,18 +134,47 @@ export class QueryEditor {
       const completingError = diagnostic !== undefined && result.suggestions.some(suggestion =>
         suggestion.span.start <= diagnostic.span.start && suggestion.span.end >= diagnostic.span.end);
       this.showDiagnostic(completingError ? undefined : diagnostic, source);
-      this.suggestions = result.suggestions;
-      for (const [index, suggestion] of this.suggestions.entries()) {
-        const option = button(`${suggestion.label} · ${suggestion.kind}`, () => this.accept(suggestion));
-        option.id = `query-suggestion-${index}`; option.setAttribute('role', 'option'); option.setAttribute('aria-selected', 'false'); option.tabIndex = -1;
-        option.addEventListener('pointerdown', event => event.preventDefault()); this.options.append(option);
+      const merged = new Map(result.suggestions.map(value => [suggestionKey(value), value]));
+      if (diagnostic === undefined || completingError) for (const value of localSuggestions(source, cursor)) {
+        if (!merged.has(suggestionKey(value))) merged.set(suggestionKey(value), value);
       }
-      this.status.textContent = 'More matches available; refine the query.'; this.status.hidden = !result.hasMore; this.renderPopup();
-      this.active = this.suggestions.length === 0 ? -1 : 0;
-      if (this.active >= 0) this.highlight();
+      this.setOptions([...merged.values()]); this.popup.setAttribute('aria-busy', 'false');
+      this.status.textContent = result.hasMore ? 'More matches available; refine the query.' : 'No query suggestions.';
+      this.status.hidden = !result.hasMore && (this.suggestions.length > 0 || !this.diagnostic.hidden); this.renderPopup();
     } catch (error) {
-      if (current()) { this.status.textContent = `Query suggestions unavailable: ${String(error)}`; this.status.hidden = false; this.renderPopup(); }
+      if (current()) { this.setOptions(localSuggestions(source, cursor)); this.popup.setAttribute('aria-busy', 'false'); this.status.textContent = `Backend query suggestions unavailable: ${String(error)}`; this.status.hidden = false; this.renderPopup(); }
     }
+  }
+
+  private location(): string { return JSON.stringify([this.input.value, this.input.selectionStart, this.input.selectionEnd]); }
+
+  private position(): void {
+    if (this.popup.hidden) return;
+    const input = this.input.getBoundingClientRect(); const style = getComputedStyle(this.input);
+    const cursor = this.input.selectionStart;
+    if (cursor === null) throw new Error('Query input has no text caret');
+    const measure = element('span', this.input.value.slice(0, cursor));
+    Object.assign(measure.style, {position: 'fixed', visibility: 'hidden', whiteSpace: 'pre', font: style.font, letterSpacing: style.letterSpacing});
+    this.element.append(measure);
+    const caret = input.left + parseFloat(style.borderLeftWidth) + parseFloat(style.paddingLeft) + measure.getBoundingClientRect().width - this.input.scrollLeft;
+    measure.remove();
+    const width = this.popup.getBoundingClientRect().width;
+    this.popup.style.left = `${Math.max(POPUP_EDGE, Math.min(Math.max(input.left, Math.min(input.right, caret)), window.innerWidth - width - POPUP_EDGE))}px`;
+    const top = input.bottom + POPUP_GAP;
+    this.popup.style.top = `${top}px`; this.popup.style.maxHeight = `${Math.max(0, window.innerHeight - top - POPUP_EDGE)}px`;
+  }
+
+  private setOptions(values: api.QuerySuggestion[]): void {
+    const selected = this.active < 0 ? null : suggestionKey(this.suggestions[this.active]);
+    this.suggestions = values; this.options.replaceChildren();
+    for (const [index, suggestion] of values.entries()) {
+      const option = button(`${suggestion.label} · ${suggestion.kind}`, () => { if (this.suggestions.includes(suggestion)) this.accept(suggestion); });
+      option.id = `query-suggestion-${index}`; option.setAttribute('role', 'option'); option.tabIndex = -1;
+      option.addEventListener('pointerdown', event => event.preventDefault()); this.options.append(option);
+    }
+    this.active = values.findIndex(value => suggestionKey(value) === selected);
+    if (this.active < 0 && values.length > 0) this.active = 0;
+    if (this.active >= 0) this.highlight(); else this.input.removeAttribute('aria-activedescendant');
   }
 
   private highlight(): void {

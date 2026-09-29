@@ -46,6 +46,7 @@ class App {
     },
   }, localStorage);
   private mounted = false;
+  private tableColumns: TableColumns | null = null;
   private manager: ConnectionManager | null = null;
   private readonly projects = element('select', '');
   private readonly queryEditor = new QueryEditor(async (query, cursor) => {
@@ -253,7 +254,8 @@ class App {
       control.setAttribute('aria-label', `Sort by ${field === 'Id' ? 'ID' : label.toLowerCase()}`); cell.append(control); headings.append(cell);
     }
     head.append(headings); table.append(head, this.items); this.updateSort();
-    new TableColumns(table, [...this.sortHeaders.values()], localStorage, message => this.showError(message));
+    if (this.tableColumns !== null) this.tableColumns.destroy();
+    this.tableColumns = new TableColumns(table, [...this.sortHeaders.values()], workspace.results, this.items);
     const empty = element('td', 'No matching items.'); empty.colSpan = api.ItemOrderField_values.length; this.emptyResults.append(empty);
     this.items.tabIndex = -1; this.items.setAttribute('aria-label', 'Result items');
     this.items.addEventListener('keydown', event => {
@@ -605,7 +607,9 @@ class App {
     if (base === null) {
       const next = button('Save item and create next', () => this.action(() => this.save(true)));
       next.title = 'Ctrl+Enter / ⌘+Enter'; next.setAttribute('aria-keyshortcuts', 'Control+Enter Meta+Enter');
-      actions.append(next, element('span', 'Ctrl/⌘+Enter'));
+      next.setAttribute('aria-label', 'Save item and create next');
+      const shortcut = element('kbd', 'Ctrl/⌘+Enter'); shortcut.className = 'button-shortcut'; shortcut.setAttribute('aria-hidden', 'true');
+      next.append(shortcut); actions.append(next);
     }
     actions.append(button('Cancel edit', () => { this.closeEditor(); this.createDialog.close(); }), discard);
     this.editorPanel.replaceChildren(form.element, actions);
