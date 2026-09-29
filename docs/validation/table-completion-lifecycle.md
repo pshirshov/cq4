@@ -2,7 +2,8 @@
 
 User evaluation follow-up, 2026-09-29. Filed as D58–D65 and I5. D25–D27 remain
 excluded. Version stays 0.1.0, with no historical model copies or compatibility
-layer. Implementation is in scoped verification; operator delivery remains pending.
+layer. Source is committed at `8a3e7b9`; native/package and update checks pass.
+Final delivery review and operator installation remain pending.
 
 ## Accepted behavior
 
@@ -55,25 +56,64 @@ cases agree with backend replacements, and all 309 API/browser prefixes pass.
 `gates/scoped/result.json` passes deterministic generation, Scala/TypeScript
 roundtrips including every Idea status, schemas, and 60 ledger/query/workset/
 termination tests across dummy and PostgreSQL. Native and relocated-package
-checks remain pending. The paid harness matrix is outside
+checks pass, including the complete ten-script native browser suite and focused
+checks with project sources and the JVM dependency cache hidden. The paid harness matrix is outside
 this change's scope; changed model behavior must still pass affected contract/domain
 checks. Astra approves source, subject to the delivery boundary below.
 
-## Required delivery boundary
+## Existing data and delivery boundary
 
 Idea outcomes are stored in `cq_items.summary`; current PostgreSQL search/browse
 and dependency traversal read that projection. Changing the policy alone is
-insufficient for existing Accepted Ideas. The exact updater must reconcile **all**
+insufficient for existing Accepted Ideas. The exact updater reconciles **all**
 current Accepted Ideas revisionally while holding the launcher lock and before
-exposing the new server. Known implemented I1–I4 can move to Implemented, preserving
+exposing the new server. Known implemented I1–I4 move to Implemented, preserving
 archive state and evidence. Other Accepted Ideas retain their status and receive
 fresh current projections; any such archived items must be unarchived. Historical
 records remain unchanged. A partial failure must restore the pre-update backup
 before the old package can be used again.
 
-The rehearsal must seed both archived implemented Ideas and an unarchived Accepted
-Idea with a dependent using the old package, demonstrate the stale outcome under
-the new package, and verify corrected projections/dependency behavior, preserved
-history and backup restoration. Operator catalogue inspection is currently
+The rehearsal seeds archived implemented Ideas, unarchived Accepted Ideas and a
+prematurely archived Accepted Idea using the old package. It reproduces the stale
+outcome and incorrectly ready dependent under the new package, then verifies the
+corrected projections/dependency, preserved history and backup restoration. Operator catalogue inspection is currently
 unavailable (connection refused); no operator restart or data repair has been
 attempted. Human acceptance remains pending.
+
+
+## Native package and update verification
+
+- Candidate: `.local/release-ui-sizing`; native executable SHA-256
+  `80cc1d3fa998dc3cbfee149a6d108f88eb9fe76daaa53cc4679cf5cd84bdc86f`.
+- Manifest SHA-256:
+  `eb8e6ba627d40603840eb3dedacdbb6351634343d8aa02f9d8ba694298bf9d30`.
+- `gates/native/result.json` and `gates/installed/result.json` pass. Tracing includes
+  fresh changed browser/model paths and verified inherited metadata for unchanged
+  paths. This does not claim a new paid harness evaluation matrix.
+- `operator-rehearsal-3/result.json` passes the exact package pair and final updater:
+  all Accepted projections refreshed, known delivered Idea implemented, remaining
+  Accepted unarchived, dependent task blocked, historical rows and unrelated current
+  data unchanged. Credentials persist, and a separately restored backup matches all
+  24 content-table fingerprints and the unchanged schema checksum.
+- The first rehearsal passed its update/rollback stages but its restart fixture
+  expected T10, which the added lifecycle task had consumed. The corrected fixture
+  uses a separate project; both continuations pass. Original failed evidence remains.
+- Astra found a failed-restoration boundary. `interlock-before/result.json` shows
+  the old server could start after real new-format writes and a failed rollback.
+  The updater now durably writes a recovery marker before starting the database;
+  the permanent launcher refuses startup while that marker exists. It clears only
+  after verified installation or verified rollback. `interlock-after/result.json`
+  blocks launch after failed restoration; `interlock-abrupt/result.json` blocks
+  launch after abrupt process exit between database shutdown and package rename.
+- The launcher amendment is a shell startup guard; packaged application bytes are
+  unchanged. The update wrapper pins its checksum alongside the updater, helper,
+  configuration and permanent entrypoint. Shell syntax validation passes.
+
+On unrecovered failure, inspect the marker's receipt and retained backup. Restoration
+must verify the saved table fingerprints and matching old package before clearing
+the marker. Restoring only the old executable is invalid once Implemented data has
+been written. The normal successful rollback is exercised after real writes.
+
+`operator-live.mjs` and `closeout.py` are prepared for post-install verification and
+revisioned closeout; neither has been run against the operator installation yet.
+D58–D65 and I5 therefore retain their intake states until delivery is verified.

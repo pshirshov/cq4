@@ -30,6 +30,11 @@ fi
 chmod 700 "$state"
 exec 9>"$state/launcher.lock"
 flock -n 9 || { echo "A launcher already owns $state" >&2; exit 1; }
+recovery="$state/.cq-update-recovery.json"
+if [[ -e $recovery || -L $recovery ]]; then
+  echo "CQ update requires recovery; startup refused. Inspect $recovery and its receipt before restoring the matching database/package pair. Do not remove this marker until recovery is verified." >&2
+  exit 1
+fi
 mkdir -p "$state/logs" "$state/sessions"
 for secret in token database-password; do
   if [[ ! -f $state/$secret ]]; then
