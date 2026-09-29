@@ -8,7 +8,7 @@ Evidence root: `/srv/nvme/tmp/cq4-all-defects-20260929`.
 
 | Record | Observed failure | Correction and verification |
 | --- | --- | --- |
-| D26 | Keyboard guidance was in navigation; the status bar contained no keycaps. | Guidance now uses outlined, accessible keycaps in the persistent footer. Browser checks cover desktop and 920/390/320-pixel layouts. |
+| D26 | Keyboard guidance was in navigation; the status bar contained no keycaps. | On desktop, guidance uses outlined keycaps with spoken key names in the persistent footer. The narrow layout (≤920px) hides the guidance to keep D50's compact status bar; see the status-bar conflict below. Browser checks cover desktop and 920/390/320-pixel layouts. |
 | D27 | The navigation separator changed width from 200 to 216 pixels. | Navigation has a fixed desktop width; results/detail pointer and keyboard resizing and orientation persistence remain. |
 | D66 | The new service test fails because bare/empty terms suggest actual items. | Items are offered only for `id:` and relationship values. Direct ID suggestions respect archive scope; relationship targets may be archived. Archive filtering precedes the suggestion limit. |
 | D25 | Original dependency initialization emits Unsafe warnings. A repeated-access probe of the previously rejected Sloth transformation succeeds once, then hangs. | Following the user's `.jvmopts` simplification, suppress the warning through the supported JVM option. The dependency still uses deprecated calls; no bytecode transformation or dependency upgrade is adopted. |
@@ -33,8 +33,58 @@ An additional D66 regression was reproduced in `group-before-2`: `id:` offered T
 
 Astra independently approves the D26/D27/D66 source increment after inspecting `scoped-3` and the access report, with no remaining blocking or major findings in that scope. Astra also approves the simplified D25 configuration and D66 unfinished-group correction. `scoped-4` passes the final dummy/PostgreSQL/parser checks, workspace/query/redesign browser checks and 309 character-prefix cases. Native delivery and the guarded operator schema update remain pending.
 
+D25's expected behavior was revisionally updated to record the user's simpler warning-policy requirement (`d25-scope-before/request/result/after.json`, revision 3, still Open). The earlier requirement remains in history.
+
+The combined scoped sbt invocation reported six parser tests and only six shared service tests. Separate forks in `dual-completion-2` explicitly pass all six completion tests once with the dummy repository and once with PostgreSQL; the suite identity and production repository wiring are retained in each log. The first follow-up wrapper expected a nonexistent dummy implementation class name; its six actual tests passed, and the corrected wrapper verifies the named suite and repository distinction.
+
+## Relocation and final review corrections
+
+On 2026-09-29 at 16:15 BST the checkout moved from `/home/pavel/work/safe/cq4/cq4` to `/home/pavel/work/safe/flakes/cq4` while the native gate `20260929T144308-native` was running. That gate failed on the missing directory, and the candidate pipeline stopped with it. Their logs are retained as `native-final-relocation-failed.log` and `candidate-pipeline-relocation-failed.*`. README, quickstart and interactive guidance now use the new path; historical records keep the paths they observed. The git-excluded harness configurations (`.mcp.json`, `.codex/config.toml`, `.pi/extensions/cq-host.json`, `.local/interactive/settings.json`) still name the old path and must be regenerated with `cq configure` after installation.
+
+The relocation exposed a non-hermetic build task. `server/runtimeClasspath` returned a cached `String` of absolute paths. When the inputs matched an earlier build at the old location, sbt's disk cache returned old-path jars, and the JVM server failed with `ClassNotFoundException: cq.server.Main` (`keycaps-before-stale-classpath`). A minimal sbt 2.0.9 build reproduced the same stale-path behavior, and it disappears with `Def.uncached`. sbt's built-in classpath keys relocate correctly, so this is not an upstream defect and nothing was filed. The key is now `Def.uncached`.
+
+Astra was not reachable from this session. Final review instead used a separate read-only Claude reviewer; this is not an Astra approval. Its source/updater review (verdict: approve with minor findings) led to these corrections:
+
+- **D66 regression in the increment.** Archive-scope analysis re-parsed the whole query, so an unfinished part after the cursor (for example editing `T4` in `id:T4 AND `) removed every ID suggestion. The new cursor-positioned test cases failed on both repositories before the correction (`suffix-before`). If the whole query cannot be parsed, the scope now comes from the text up to the value; if that also fails, it uses the language's default active scope. `suffix-after` passes six Dummy and six PostgreSQL tests, and `scoped-5` passes parser, service, browser and 309 prefix checks. Residual: text before the value that cannot be parsed makes archived IDs unavailable until it is corrected, and some tautological expressions (such as `archived:true OR id:`) conservatively return all scopes.
+- **D26 accessibility.** Keycap names were `aria-label`s on generic elements. A standalone Chromium probe of the original markup presents `↵ select Esc return` in the ARIA snapshot (`keycaps-aria-before`). The workspace browser run before the correction (`keycaps-before`) failed on the new structural assertion and never reached the ARIA-snapshot assertion. The glyph is now hidden from assistive technology, the spoken key name is visually hidden text, and the guidance is a named group.
+- **Updater.** Recovery now decides which package renames to undo from the filesystem, not from flags that a signal could interrupt. SIGHUP is handled like SIGINT/SIGTERM. An HTTP error response from the candidate fails immediately instead of being retried as a startup delay. The reviewed pre-correction script is retained as `update-local-reviewed-design.py`.
+
+### Status-bar conflict (D26 against D50) — `7d5a0a9`
+
+The native browser suite exposed a conflict with the delivered D50 check: the status bar must stay at most 48px tall. With D26's guidance in it, the footer measured 41px on desktop, 64px at 390px and 83px at 320px (`footer-before`). Two alternatives did not fit:
+
+- A single scrolling guidance line kept the footer at 45px without a selected project (`footer-after`). With a selected project, however, the data/usage metrics take two rows at 390px, so the check still failed (`scoped-7`).
+- Containing the visually hidden key names also required care: without it, clipped keycaps caused page overflow (`scoped-6`).
+
+The narrow stacked layout (≤920px) therefore hides the keyboard guidance. Desktop keeps D26's full outlined keycaps. `scoped-8` passes the workspace (including an assertion that narrow layouts hide the guidance), query, redesign, prefix and D50 polish suites. This is a scoped product decision, open to the user's override.
+
+### Native, package and updater evidence
+
+- The first native gate at `07acd60` (`gates/20260929T153724-native`) completed fresh tracing and every non-browser native fixture. Its browser launch failed because the gate was started outside the dev shell: `java`/`sbt` were already on PATH, so `dev/check` skipped its `nix develop` re-exec and Playwright lacked `PLAYWRIGHT_BROWSERS_PATH`.
+- The resumed browser suite (`...-native-resumed`) then failed on the D50 check described above.
+- `gates/7d5a0a9-native-web` rebuilt the binary from the base gate's hash-checked trace snapshots. The runtime delta is only `web/style.css`. On the rebuilt binary it passes native transport and artifacts, the complete browser suite, the HTTP browser and project archives.
+- At the user's direction, the installed-package check is scoped (`gates/installed`, `package-check-scoped.py`): the relocated package with hidden sources and classpath, transport, completion, prefix and HTTP browser checks. It passes. The full installed corpus and the paid harness matrix were not rerun.
+- `operator-rehearsal` passes the exact old/candidate updater pair, data and credential preservation, and separate restoration of the backup.
+- The first rollback rehearsal (`operator-rollback-session-mismatch`) did roll back correctly. Its old-package restart verification failed because it used a new CQ session, while idempotency is scoped to the session's actor. The rehearsals now share the seed session. `operator-rollback` passes: an injected failure at the candidate rename restores the database rows, the old schema and index inventory, and a runnable old package.
+- Candidate manifest: `33245e5e4b41c98160448b45d1f4934656b167486568674c43817b7bea3bfd86`. The pinned host wrapper is `/tmp/exchange/cq-all-defects-update.sh`.
+
+Residual hypotheses, disclosed and not corrected:
+
+- A signal that lands between `Popen` returning and its assignment could orphan the candidate smoke-test server. This is a bytecode-sized window.
+- Short landscape phone viewports were not measured.
+- The fingerprint logs contain the same row data as the protected backup in the same 0700 evidence directory.
+
 ## Remaining delivery work
 
-- Build and verify the native/package candidate and scoped runtime coverage; dependency/harness implementations are unchanged.
-- Rehearse the precise operator update, obtain independent delivery review, install through the host boundary and verify the running artifact.
-- Resolve defect records only after verified delivery, retaining citations and history.
+The final independent delivery review (read-only Claude reviewer, not Astra) approves this candidate and wrapper with minor findings. It recomputed every hash in the chain: the wrapper pins, both manifests and their files, the schema checksums at `df19bdd` and `7d5a0a9`, and the binary against native evidence. Its disclosed residuals:
+
+- The rollback rehearsal covers only the failed candidate rename. The both-renamed and signal paths are verified by reading only.
+- An interruption between creating the recovery marker and entering the updater's recovery block leaves a marker that requires manual inspection.
+- A connection reset during candidate startup polling causes a spurious (safe) rollback.
+- `bin/cq-guardian` embeds a checkout-relative library path, and `examples/supervisor.json` names the pre-rename candidate path. Both are pre-existing packaging properties.
+
+Still pending:
+
+- Host installation by the operator.
+- Actual-hostname API and browser verification.
+- Revisional resolution of D25/D26/D27/D66.

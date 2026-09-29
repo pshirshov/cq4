@@ -1,6 +1,6 @@
 # Scala lazy-value startup warning
 
-Human evaluation report: D25 in the `cq4` project's Defects ledger. This investigation does not change the pinned compiler or suppress warnings.
+Human evaluation report: D25 in the `cq4` project's Defects ledger. The original investigation below did not change the compiler or suppress warnings. The later user-directed warning policy is recorded in the final section.
 
 ## Observations (2026-09-28)
 
