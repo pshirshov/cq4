@@ -32,7 +32,9 @@ matrix is planned for this browser-only increment. Human acceptance remains open
 ## Status
 
 Source implementation `dce6b14` and technical package delivery have independent
-Astra approval. CQ records remain Open/Proposed until verified operator installation. TypeScript and the initial focused checks pass in `browser-3`;
+Astra approval. Operator installation and actual-hostname checks now pass.
+D51–D57 are Resolved and I3/I4 are Accepted at revision 2 with model-declared
+delivery evidence. D25–D27 remain unchanged; human acceptance remains pending. TypeScript and the initial focused checks pass in `browser-3`;
 question/reference and uncertain-create checks pass in `browser-5` and `browser-6`.
 
 Astra's first review predicted three response-ownership races. All three failed
@@ -79,7 +81,8 @@ Evidence root: `/srv/nvme/tmp/cq4-ui-followup-implementation-20260929`.
 | Exact updater | Old/new package swap, credentials and table contents preserved, backup restored to separate database with all 24 data-table fingerprints and schema equal; `operator-rehearsal/result.json` |
 | Independent review | Astra approves source, technical delivery and host-run wrapper; `source-review.json` and `final-review.json` |
 
-The packaged candidate is `.local/release-ui-followup`, version **0.1.0**.
+The verified package is installed at `.local/release`, version **0.1.0**.
+Its staging path was `.local/release-ui-followup`.
 
 - Manifest SHA256: `d4b7a8a114e2f5bb0e2b37c43d1af5c768cffa712abf6855008e3cadc1ec3ed9`
 - Native executable SHA256: `7f02262ae9af18fad8fe38c117c13949b68210b469b9720d11d947b319fbeec2`
@@ -91,36 +94,45 @@ hashes and source comparisons. Runtime changes are limited to `web/`; the runner
 only change adds the three browser scripts. No new paid harness matrix or full
 backend gate is claimed for this UI-only increment.
 
-### Install into the operator workspace
+### Operator installation
 
-Actual operator installation is pending. The environment skill requires a host-run
-step because the current launcher/database are outside this sandbox's PID namespace.
+The user executed the reviewed host wrapper. Its captured output at
+`/tmp/exchange/cq-ui-followup-update.out` reports successful package verification,
+installation and **CQ ready** at `http://vm.home.7mind.io:8080`, listening on
+`0.0.0.0:8080`. The environment skill required this host-run step because the
+launcher/database were outside the sandbox's PID namespace.
 
-1. End other CQ harness sessions. Stop the server launcher with **Ctrl-C once** and
-   wait for **CQ stopped**.
-2. In the host terminal, run:
+`operator-update/receipt.json` confirms the exact reviewed manifest, unchanged
+schema and table data, and a retained backup at `operator-update/before.dump`.
+Backup SHA256:
+`5e2aef286fccb48b0d36f83a6196b8539481a54433cfc5c220cb608c11cc529b`.
+The previous package remains at `.local/release-before-ui-followup`.
 
-   ```sh
-   bash /tmp/exchange/cq-ui-followup-update.sh
-   ```
+The read-only actual-hostname check passes in `operator-live.json`: login,
+first-completion Enter behavior, column controls, single-line modified time,
+count placement, quick creation types and question dialog. There are no browser
+errors or page overflow at 1366×768, and the check made no CQ mutations. Isolated
+native fixtures cover saved answers, creation and uncertain-request retries.
 
-3. Leave it running after **CQ ready**, then reload the browser once. Future launches
-   continue to use `./run-local.sh`.
+The revision-checked CQ transaction then resolved D51–D57 and accepted I3/I4, all
+at revision 2. `closeout-{before,request,result,after}.json` retains the exact
+transaction and current records; `closeout-session.json` retains its request
+session. Evidence is **ModelDeclared**, not human acceptance. D25–D27 compare
+unchanged before/after. `scope-after.json` confirms they are the only remaining
+Open defects and no Proposed ideas remain.
 
-The wrapper verifies its updater/configuration hashes. The updater verifies both
-packages, refuses an active launcher/database, creates a restorable backup and
-preserves state and credentials. The preceding package is retained at
-`.local/release-before-ui-followup`; it does not change the application version.
-The live receipt will be `operator-update/receipt.json` in the evidence root.
+Reload the browser once to load the updated assets. Future launches use:
 
-After installation, run the prepared read-only hostname check:
+```sh
+cd /home/pavel/work/safe/cq4/cq4
+./run-local.sh
+```
+
+To repeat the read-only installed UI check:
 
 ```sh
 nix develop --command node /srv/nvme/tmp/cq4-ui-followup-implementation-20260929/operator-live.mjs
 ```
 
-The check exercises the actual login, first-completion Enter behavior, table
-controls, quick creation types and question dialog without saving project changes.
-Native isolated fixtures cover mutations and retries. Revision-checked CQ closeout
-follows verified installation; it preserves D25–D27 and labels evidence as
-model-declared. Human acceptance remains pending.
+The one-time updater has already completed and should not be rerun. Human release
+acceptance remains pending.

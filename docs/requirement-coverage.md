@@ -1,6 +1,6 @@
 # Requirement coverage
 
-[UI follow-up implementation](validation/ui-followup-implementation.md) is implemented for D51–D57 and I3/I4 at `dce6b14`. Focused, complete native/browser, scoped relocated-package and exact updater/backup-restore checks pass. Astra approves the source increment, technical delivery and host-run script. Operator installation, actual-hostname verification and CQ closeout remain pending. D25–D27 remain excluded; human acceptance remains pending.
+[UI follow-up implementation](validation/ui-followup-implementation.md) is implemented for D51–D57 and I3/I4 at `dce6b14`. Focused, complete native/browser, scoped relocated-package and exact updater/backup-restore checks pass. Astra approves the source increment, technical delivery and host-run script. Operator installation and actual-hostname verification pass. D51–D57 are Resolved and I3/I4 are Accepted at revision 2 with model-declared delivery evidence. D25–D27 remain unchanged and are the only Open defects; no Proposed ideas remain. Human acceptance remains pending.
 
 The [evaluation intake](validation/evaluation-followup.md#further-intake-messages-rapid-entry-and-restored-features) recorded D55–D57 (notification placement, question batch answering and reference popups) and I3/I4 (quick type selection and save-and-create-next). Its browser observations and original source audit are retained; implementation and delivery status are recorded above.
 
