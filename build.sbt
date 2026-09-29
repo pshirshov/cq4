@@ -2,6 +2,7 @@ ThisBuild / scalaVersion := "3.9.0"
 ThisBuild / organization := "io.7mind.cq"
 ThisBuild / version := "0.1.0-SNAPSHOT"
 ThisBuild / scalacOptions ++= Seq("-deprecation", "-feature", "-unchecked")
+ThisBuild / javaOptions ++= IO.readLines((ThisBuild / baseDirectory).value / ".jvmopts")
 
 val izumiVersion = "1.2.25"
 val circeVersion = "0.14.16"

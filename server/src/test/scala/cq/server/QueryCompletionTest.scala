@@ -28,6 +28,10 @@ abstract class QueryCompletionTest extends SpecZIO with AssertZIO {
       val owner = scope()
       val queries = List(
         "id:" -> List("T3", "T4"),
+        "(id:" -> List("T3", "T4"),
+        "((id:" -> List("T3", "T4"),
+        "(archived:true id:" -> List("T1", "T2"),
+        "NOT (archived:false OR (id:" -> List("T1", "T2"),
         "archived:all id:" -> List("T1", "T2", "T3", "T4"),
         "archived:true id:" -> List("T1", "T2"),
         "NOT archived:true id:" -> List("T3", "T4"),

@@ -51,7 +51,7 @@ final class QueryCompleter(parser: QueryParser) {
   private def archiveScope(source: String, span: QuerySpan): Option[ArchiveFilter] = {
     // A valid placeholder lets the ordinary parser interpret archive scope on both sides of the cursor.
     val placeholder = "T1"
-    parser.parse(source.take(span.start) + placeholder + source.drop(span.end)).toOption.flatMap { query =>
+    parser.completionExpression(source.take(span.start) + placeholder + source.drop(span.end)).toOption.flatMap { query =>
       def possible(value: QueryExpression, archived: Boolean): Set[Boolean] = value match {
         case QueryExpression.All() => Set(true)
         case QueryExpression.Archive(ArchiveFilter.All) => Set(true)

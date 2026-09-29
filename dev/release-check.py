@@ -47,7 +47,7 @@ class ReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, "must pass"):
             self.package["verified_native"](self.native)
         self.write(self.native / "result.json", {"check": "native", "status": "passed"})
-        for name in ["models/missing.baboon", "project/Build.scala"]:
+        for name in ["models/missing.baboon", "project/Build.scala", ".jvmopts"]:
             with self.subTest(name=name):
                 self.write(self.native / "source-sha256.json", {**self.sources, name: "unobserved"})
                 with self.assertRaisesRegex(AssertionError, "inputs differ"):

@@ -24,9 +24,10 @@ The queued I2 backup/restore request is included. Keep version 0.1.0.
 5. D42: ingest observable interactive Codex usage using native session identity.
    Verify correlation, repeated/cumulative events, termination, concurrent
    sessions, and explicit accounting gaps with recorded and real harness evidence.
-6. D25: verify the dependency bytecode cause and current stable remedies; remove
-   the deprecated Unsafe call without hiding the warning. Verify JVM startup and
-   native packaging with the chosen dependency correction.
+6. D25: following the user's 2026-09-29 `.jvmopts` simplification, suppress the
+   deprecation warning with the supported JVM option and verify ordinary/forked
+   startup. This supersedes removing the call without suppression; retain the
+   dependency limitation and investigation evidence explicitly.
 7. Independent Astra review and correction loops; scoped deterministic and real
    harness checks for affected behavior; build/install a verified package and
    document restart/run instructions. Update CQ records and coverage/status only

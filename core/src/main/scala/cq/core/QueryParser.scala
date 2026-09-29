@@ -40,9 +40,13 @@ final class QueryParser {
   private final case class Invalid(diagnostic: QueryDiagnostic) extends RuntimeException(diagnostic.message)
   private def fail(span: QuerySpan, message: String): Nothing = throw Invalid(QueryDiagnostic(span, message))
 
-  def parse(source: String): Either[QueryDiagnostic, QueryExpression] = try {
+  def parse(source: String): Either[QueryDiagnostic, QueryExpression] = parseExpression(source, false)
+
+  def completionExpression(source: String): Either[QueryDiagnostic, QueryExpression] = parseExpression(source, true)
+
+  private def parseExpression(source: String, allowOpenGroups: Boolean): Either[QueryDiagnostic, QueryExpression] = try {
     validateSource(source)
-    val expression = new Parser(tokens(source, false)).parse()
+    val expression = new Parser(tokens(source, false), allowOpenGroups).parse()
     Right(if (hasArchive(expression)) expression else QueryExpression.And(QueryExpression.Archive(ArchiveFilter.Active), expression))
   } catch { case Invalid(diagnostic) => Left(diagnostic) }
 
@@ -186,7 +190,7 @@ final class QueryParser {
     output.result()
   }
 
-  private final class Parser(input: Vector[Token]) {
+  private final class Parser(input: Vector[Token], allowOpenGroups: Boolean) {
     private var offset = 0
     private var nodes = 0
     private def current: Token = input(offset)
@@ -224,8 +228,8 @@ final class QueryParser {
       } else if (current.kind == Kind.Left) {
         take()
         val value = disjunction(depth + 1)
-        if (current.kind != Kind.Right) fail(current.span, "Expected closing parenthesis")
-        take()
+        if (current.kind == Kind.Right) take()
+        else if (!allowOpenGroups || current.kind != Kind.End) fail(current.span, "Expected closing parenthesis")
         value
       } else {
         if (!Set(Kind.Word, Kind.Quoted).contains(current.kind) || keyword("AND") || keyword("OR")) fail(current.span, "Expected query term")

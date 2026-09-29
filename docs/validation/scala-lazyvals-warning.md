@@ -51,3 +51,9 @@ remedy while retaining D25. A future correction needs a safe rebuilt dependency
 set or a demonstrated transformer correction, followed by JVM and native checks.
 The existing compiler issue does not establish that this separate transformation
 failure belongs in scalac; no duplicate or speculative upstream report was sent.
+
+## User-directed simplification, 2026-09-29
+
+The subsequent transformer investigation found further defects and passed targeted corrections, but introduced disproportionate build complexity. The user proposed `.jvmopts`. CQ now sets `--sun-misc-unsafe-memory-access=allow` there and forwards the option to forked sbt JVMs. Raw Java launch instructions include the flag explicitly; native packages require no JVM flag. Original dependencies and versions are retained.
+
+The same original CQ classpath emits the warning by default and runs quietly with the option. `sbt run` and `runMain` also pass without it. This addresses startup noise and supersedes the earlier no-suppression approach; it does **not** remove deprecated Unsafe calls or establish compatibility with a future JDK that removes them. [Current verification and delivery status](all-remaining-defects.md#d25-investigation).
