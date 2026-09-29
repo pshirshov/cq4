@@ -3,7 +3,8 @@
 User evaluation follow-up, 2026-09-29. Filed as D58–D65 and I5. D25–D27 remain
 excluded. Version stays 0.1.0, with no historical model copies or compatibility
 layer. Source is committed at `8a3e7b9`; native/package and update checks pass.
-Astra approves technical delivery and the host script. Operator installation remains pending.
+Astra approves technical delivery and the host script. Operator installation and
+actual-hostname verification pass; D58–D65 and I5 have verified closeout.
 
 ## Accepted behavior
 
@@ -76,9 +77,8 @@ before the old package can be used again.
 The rehearsal seeds archived implemented Ideas, unarchived Accepted Ideas and a
 prematurely archived Accepted Idea using the old package. It reproduces the stale
 outcome and incorrectly ready dependent under the new package, then verifies the
-corrected projections/dependency, preserved history and backup restoration. Operator catalogue inspection is currently
-unavailable (connection refused); no operator restart or data repair has been
-attempted. Human acceptance remains pending.
+corrected projections/dependency, preserved history and backup restoration. Before handoff the operator endpoint refused connections; its cause was not
+established. The subsequent host-run update and hostname verification pass. Human acceptance remains pending.
 
 
 ## Native package and update verification
@@ -120,9 +120,9 @@ must verify the saved table fingerprints and matching old package before clearin
 the marker. Restoring only the old executable is invalid once Implemented data has
 been written. The normal successful rollback is exercised after real writes.
 
-`operator-live.mjs` and `closeout.py` are prepared for post-install verification and
-revisioned closeout; neither has been run against the operator installation yet.
-D58–D65 and I5 therefore retain their intake states until delivery is verified.
+`operator-live.mjs` passes against the installed operator service. `closeout.py`
+then records the verified delivery revisionally; readbacks confirm the expected
+statuses and unchanged D25–D27.
 
 
 ## Operator handoff
@@ -138,3 +138,30 @@ are outside the agent's sandbox PID namespace. The operator endpoint last refuse
 connections; no cause is inferred and no host process has been signalled. After
 host confirmation, read the script output and receipt before hostname verification
 and closeout. Human release acceptance remains pending.
+
+
+## Installed verification and closeout
+
+The user completed the host update. The captured output reports all pinned hashes
+matching and `CQ ready` at `http://vm.home.7mind.io:8080`, listening on `0.0.0.0:8080`.
+`operator-update/receipt.json` records installed package identity, unchanged schema,
+preserved historical/unrelated current data and a retained backup. Five Accepted
+Ideas were reconciled: I1–I4 became Implemented with archival and content preserved;
+I5 retained Accepted with a fresh nonterminal projection before closeout.
+
+`operator-live.json` passes through the actual hostname: immediate enum hints,
+Enter acceptance, full-width adaptive table, temporary column controls, document
+width, caret-following completion, Implemented selection and the in-button shortcut.
+Browser errors are empty. This check made no CQ mutations. It also read back all
+reconciled Ideas and their current persisted outcomes.
+
+`closeout-request.json`, result and before/after records retain the exact batch.
+D58 is Resolved at revision 3; D59–D65 are Resolved at revision 2. I5 is Implemented
+at revision 3. Resolution evidence is ModelDeclared and cites the source commit and
+this document; it does not assert human acceptance. `delivery-state.json` confirms
+all five Ideas are Implemented, no update recovery marker remains, and D25–D27 are
+the only Open defects. Those three records are unchanged by closeout.
+
+Reload the browser once to load the installed frontend. Subsequent launches continue
+to use `./run-local.sh`; do not rerun the one-time update script. Human release
+acceptance remains pending.
