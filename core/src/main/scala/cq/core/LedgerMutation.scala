@@ -21,7 +21,8 @@ final class LedgerMutation(terminationPlanner: TerminationPlanner) {
   private def execute(tx: LedgerTransaction, scope: Scope, request: ChangeRequest, now: Long, reservation: Option[IntegrationRecord]): ChangeAck = {
     write(scope)
     invalid(request.mutations.nonEmpty && request.mutations.size <= MaxBatch, s"Mutation batch must contain 1–$MaxBatch operations")
-    invalid(request.reason.trim.nonEmpty && request.reason.length <= MaxTitle, "Mutation reason required")
+    invalid(request.reason.trim.nonEmpty, "Mutation reason required")
+    invalid(request.reason.length <= MaxTitle, s"Mutation reason must be at most $MaxTitle characters; received ${request.reason.length}")
     val wire = ChangeRequest_JsonCodec.encode(BaboonCodecContext.Default, request).noSpaces
     val fingerprint = MessageDigest.getInstance("SHA-256").digest(wire.getBytes(StandardCharsets.UTF_8)).map(b => f"${b & 0xff}%02x").mkString
     tx.request(scope.actor, request.request) match {
