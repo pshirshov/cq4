@@ -26,7 +26,7 @@ Native structured-output schemas select the assigned Work or Review branch from 
 
 The host-owned `ChildResult` envelope binds the report to the attempt, dispatch request, base, optional exact candidate commit and validation evidence handles. A candidate-ready worker or any candidate review requires a candidate. The envelope and report are bounded to 128 KiB. The [local runner](local-dispatch.md) now checks candidate object existence, workspace ownership, host validation and final claim/revision admission; a syntactically valid commit ID or report alone is not that evidence.
 
-The previous-result handle must reference a JSON result artifact. The envelope must name the artifact's attempt and exactly the new request's member revisions. Candidate review requires a worker result containing a candidate. Host code loads and validates the full prior result directly into the next child input. The parent can forward its handle without reading the body. Results remain immutable and repeatably readable.
+The previous-result handle must reference a JSON result artifact. The envelope must name the artifact's attempt and the new request's members; a member may be at a later revision only while its draft is unchanged since the recorded one ([cohorts](cohorts.md)). Candidate review requires a worker result containing a candidate. Host code loads and validates the full prior result directly into the next child input. The parent can forward its handle without reading the body. Results remain immutable and repeatably readable.
 
 ## Verification boundary
 

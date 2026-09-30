@@ -1,7 +1,7 @@
 package cq.server
 
 import cq.api.*
-import cq.core.DomainFailure
+import cq.core.{DomainFailure, LedgerPolicy}
 import cq.host.*
 import distage.Lifecycle
 import java.nio.file.Path
@@ -61,8 +61,7 @@ final class DispatchController(config: SupervisorConfig, runner: ChildRunner, jo
         require(!closing && !disabled.get(), "Dispatch admission is closed")
         ChildContracts.request(config.project.project, request)
         require(entries.size < MaxChildren, "Governing session reached its child-attempt bound")
-        if (entries.values.exists(entry => !DispatchController.terminal(entry.status.phase)))
-          throw DomainFailure(Fault.Conflict("This slice permits one active child at a time; poll its status before starting another"))
+        DispatchController.admissible(entries.values.filter(entry => !DispatchController.terminal(entry.status.phase)).map(_.ticket.request).toList, request)
         SupervisorConfig.within(request.limits, config.settings.limits)
         val profile = config.settings.harnesses.find(_.harness == request.harness).getOrElse(throw new IllegalArgumentException("Requested harness route is not configured"))
         val id = AttemptId(UUID.randomUUID())
@@ -141,8 +140,18 @@ final class DispatchController(config: SupervisorConfig, runner: ChildRunner, jo
 }
 
 object DispatchController {
+  val MaxActiveChildren = 4
   def terminal(phase: DispatchPhase): Boolean = Set(DispatchPhase.Completed, DispatchPhase.Failed, DispatchPhase.Cancelled,
     DispatchPhase.Unknown, DispatchPhase.PublicationPending)(phase)
+  // Active children hold disjoint claims: a member belongs to at most one running child (D83).
+  def admissible(active: List[DispatchRequest], request: DispatchRequest): Unit = {
+    val members = request.members.map(_.id).toSet
+    val overlapping = active.flatMap(_.members.map(_.id)).filter(members).distinct.sortBy(LedgerPolicy.key)
+    if (overlapping.nonEmpty)
+      throw DomainFailure(Fault.Conflict(s"An active child already covers ${overlapping.map(id => LedgerPolicy.prefix(id.ledger) + id.number).mkString(", ")}; poll its status before starting another child on the same members"))
+    if (active.size >= MaxActiveChildren)
+      throw DomainFailure(Fault.Conflict(s"This session permits at most $MaxActiveChildren active children; poll or cancel one before starting another"))
+  }
   final class Resource(config: SupervisorConfig, runner: ChildRunner, jobs: JobSupervisor, clock: Clock, watchdog: SupervisorWatchdog) extends Lifecycle.Of[Task, DispatchController](
     Lifecycle.make(ZIO.succeed(new DispatchController(config, runner, jobs, clock)))(value => ZIO.succeed(watchdog.beginShutdown()) *> value.shutdown)
   )

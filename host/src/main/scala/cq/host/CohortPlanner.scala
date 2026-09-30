@@ -184,11 +184,15 @@ final class CohortPlanner(api: ServerApi, owner: Scope, bases: ExecutionBase, ch
     validate(request)
     val ctx = if (partition) context(call, request, base) else originalContext
     val exact = originalContext.previous.map(_.request.members)
-    exact.foreach(members => require(members.forall(ref => byId.get(ref.id).exists(_.item.revision == ref.revision) && supports(request.work, ref.id)),
+    // A member revised only by reference or provenance changes since the previous result continues at its current revision (D80).
+    val drafts = new HistoricalDrafts(call, owner.project)
+    exact.foreach(members => require(members.forall(ref => byId.get(ref.id).exists(entry =>
+      drafts.unchanged(ref, ItemRevision(ref.id, entry.item.revision)) && supports(request.work, ref.id))),
       "Exact previous cohort is outside the selection, stale or incompatible with the operation"))
     val eligible = order.filter(id => ready(request.work, byId(id)) && supports(request.work, id) && exact.forall(_.exists(_.id == id)))
     val automatic = exact.isEmpty || partition
-    val candidates = if (automatic) progress.pool(eligible, CohortBounds.Candidates).map(id => ItemRevision(id, byId(id).item.revision)) else exact.get
+    val candidates = if (automatic) progress.pool(eligible, CohortBounds.Candidates).map(id => ItemRevision(id, byId(id).item.revision))
+      else exact.get.map(ref => ItemRevision(ref.id, byId(ref.id).item.revision))
     val loaded = details(call, candidates)
     val views = loaded.items.map(value => value.item.id -> value).toMap
     val claim = if (loaded.items.isEmpty) None else Some(call(Command.Read(ReadInput(owner.project, ReadSelection.Claims(views.keySet)))) match {

@@ -14,6 +14,7 @@ final case class ExecutedResult(result: AdmittedResult, input: ChildExecutionInp
 final class ArtifactReader(call: Command => Result, project: ProjectId) {
   private val PageCodePoints = 8192
   private val MaxArtifactBytes = 128 * 1024
+  private val drafts = new HistoricalDrafts(call, project)
   def read(id: ArtifactId): ResolvedArtifact = readBounded(id, MaxArtifactBytes)
 
   private def readBounded(id: ArtifactId, maximum: Int): ResolvedArtifact = {
@@ -84,7 +85,7 @@ final class ArtifactReader(call: Command => Result, project: ProjectId) {
     val input = execution(admitted)
     require(admitted.value.request.work == DispatchWork.Reviewer(ReviewerMode.Candidate) &&
       input.input.previous.exists(value => value.candidate == admitted.value.candidate && value.candidate.contains(input.base) &&
-        value.request.members.toSet == admitted.value.request.members.toSet), "Review input differs from its candidate subject")
+        drafts.unchanged(value.request.members, admitted.value.request.members)), "Review input differs from its candidate subject")
     ExecutedResult(admitted, input)
   }
 

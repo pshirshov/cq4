@@ -126,7 +126,7 @@ time.sleep(30)
       access = new LocalAccess(authority, clock)
       _ <- ZIO.succeed(access.bind(URI.create("http://127.0.0.1:1")))
       runner = new ChildRunner(config, authority, new HarnessRegistry(Set(new ClaudeAdapter, new CodexAdapter, new PiAdapter)), jobs, workspaces,
-        new McpSchemas, new HarnessOutput, new ChildInstructions, new CandidateWorkspace(config), new WorkspaceReader, access, clock)
+        new McpSchemas, new HarnessOutput, new ChildInstructions, new CandidateWorkspace(config), new WorkspaceReader, access, new OperatorRequirements(""), clock)
       _ <- test(Fixture(owner, config, runner, jobs, created.items, claim.fence, governor, profile, clock))
     } yield ()
   }

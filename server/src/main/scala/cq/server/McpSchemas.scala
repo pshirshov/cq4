@@ -29,7 +29,7 @@ final class McpSchemas {
       decoder(ChangeInput_JsonCodec)(Command.Change.apply)),
     McpTool("apply", "Apply the typed proposal in an admitted result by handle after inspecting read/Proposal. Only the original governor can apply it. Current exact assignment revisions/claim are required; an exact committed retry returns its original acknowledgement. Drafts and authority are resolved by the server.", "ProposalApplyInput", Set("Changed"), true,
       decoder(ProposalApplyInput_JsonCodec)(Command.ApplyProposal.apply)),
-    McpTool("claim", s"Acquire, renew or release an explicit item-set claim. Duration is 1–${cq.core.LedgerPolicy.MaxClaimMillis} ms; renew before expiry during longer work. Governor authority required. Takeover requires Human authority and a freshly reviewed read/Claims snapshot; replaced claims lose their entire membership.", "ClaimInput", Set("Claimed"), true,
+    McpTool("claim", s"Acquire, renew or release an explicit item-set claim. Duration is 1–${cq.core.LedgerPolicy.MaxClaimMillis} ms (at most ${cq.core.LedgerPolicy.MaxClaimMillis / 60000} minutes); the host renews the claim covering a running child, integration or combination on its own, so renew only claims you hold outside running work before they expire. Governor authority required. Takeover requires Human authority and a freshly reviewed read/Claims snapshot; replaced claims lose their entire membership.", "ClaimInput", Set("Claimed"), true,
       decoder(ClaimInput_JsonCodec)(Command.ClaimWork.apply)),
     McpTool("usage", "Read task, cohort, session, evaluation or project usage totals and bounded cost, observation, attempt and outcome audit pages. Shared totals are not per-member allocations.", "UsageInput", Set("UsageSummary", "UsageCosts", "UsageAudit", "UsageAttempts", "UsageOutcomes"), false,
       decoder(UsageInput_JsonCodec)(Command.Usage.apply)),
@@ -123,7 +123,7 @@ final class McpSchemas {
     List(local("session", "SessionCommand", "SessionReply",
       "First call Context for project, routes, limits, governing instructions and complete argument guide. Then Workflow with a fresh id and typed scope before dispatch. An identical retry returns its original receipt without reactivating a superseded workflow. Context identifies the active workflow."),
       local("dispatch", "DispatchCommand", "DispatchReply",
-        "Select bounded cohorts, claim one complete choice, then StartChoice by ID, harness and fence. Poll compact Status or Cancel. Direct Start is unavailable. Prepare/apply reviewed integration; Combine a NotApplied integration and poll CombinationStatus. Forward handles; full child prompts/results stay outside your context.")) ++ tools.map(advertised)
+        s"Select bounded cohorts, claim one complete choice, then StartChoice by ID, harness and fence. Up to ${DispatchController.MaxActiveChildren} children with disjoint members may run at once. Poll compact Status or Cancel. Direct Start is unavailable. Prepare/apply reviewed integration; Combine a NotApplied integration and poll CombinationStatus. Forward handles; full child prompts/results stay outside your context.")) ++ tools.map(advertised)
   }
 
   private def argumentGuide(inputs: List[(String, Json)]): String = {

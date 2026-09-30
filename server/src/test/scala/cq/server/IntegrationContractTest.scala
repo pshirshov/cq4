@@ -11,14 +11,44 @@ import java.io.IOException
 import java.nio.file.Files
 import java.time.{Clock, Instant, ZoneOffset}
 import java.util.UUID
-import zio.{IO, Task, Unsafe, ZIO}
+import zio.{IO, Runtime, Task, Unsafe, ZIO}
 
 abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
   override def config = super.config.copy(pluginConfig = PluginConfig.const(List(CqPlugin)),
     memoizationRoots = Set(DIKey[LedgerService[IO]], DIKey[UsageService[IO]], DIKey[ArtifactService[IO]], DIKey[IntegrationService[IO]]))
   private def uuid: UUID = UUID.randomUUID()
+  private val recordedResult = "Worker evidence: failing reproduction, then passing checks"
   private def task: ItemDraft = ItemDraft("Integration task", "Preserved narrative", Set("consumer"), false,
-    Content.Task(TaskStatus.Ready, List("Exact reviewed behavior"), None, Nil), Nil)
+    Content.Task(TaskStatus.Ready, List("Exact reviewed behavior"), Some(recordedResult), Nil), Nil)
+  private def integrated(intent: IntegrationIntent): String = s"Integrated ${intent.candidate.value} into ${intent.target}"
+  /** An integration target that never advanced: every candidate is expected at its worker's recorded base. */
+  private val recordedBases: ExecutionBase = new ExecutionBase {
+    override def fresh(): GitCommit = throw new IllegalStateException("Fresh work is not started by these cases")
+    override def expected(base: GitCommit, candidate: GitCommit): GitCommit = base
+  }
+  private final class ServiceApi(scope: Scope, ledger: LedgerService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], runtime: Runtime[Any]) extends ServerApi {
+    override def call(command: Command): Result = {
+      val effect: IO[Throwable, Result] = command match {
+        case Command.Read(ReadInput(_, ReadSelection.ItemDetail(id))) => ledger.get(scope, id).map(Result.Detail.apply)
+        case Command.Read(ReadInput(_, ReadSelection.History(id, before, limit))) => ledger.history(scope, id, before, limit).map(Result.History.apply)
+        case Command.Read(ReadInput(_, ReadSelection.ArtifactInfo(id))) => artifacts.metadata(scope, id).map(Result.ArtifactInfo.apply)
+        case Command.Read(ReadInput(_, ReadSelection.ArtifactText(id, offset, limit))) => artifacts.page(scope, id, offset, limit).map(Result.ArtifactText.apply)
+        case Command.Read(ReadInput(_, ReadSelection.Admission(attempt))) => admissions.get(scope, attempt).map(Result.Admission.apply)
+        case Command.ClaimWork(ClaimInput(_, ClaimAction.Renew(fence, millis))) => ledger.renew(scope, fence, millis).map(Result.Claimed.apply)
+        case _ => ZIO.fail(new IllegalStateException("Unexpected integration preparation command"))
+      }
+      Unsafe.unsafe { implicit unsafe => runtime.unsafe.run(effect.either).getOrThrowFiberFailure() } match {
+        case Right(value) => value
+        case Left(DomainFailure(fault)) => Result.Failed(fault)
+        case Left(error) => throw error
+      }
+    }
+    override def usage(value: HostUsageInput): HostUsageResult = throw new IllegalStateException("Preparation cannot publish usage")
+    override def artifact(value: ArtifactUpload): ArtifactMetadata = throw new IllegalStateException("Preparation cannot publish artifacts")
+    override def grant(value: GrantRequest): AccessToken = throw new IllegalStateException("Preparation cannot grant authority")
+    override def admit(value: HostAdmissionInput): ResultAdmission = throw new IllegalStateException("Preparation cannot admit a result")
+    override def integrate(value: HostIntegrationInput): IntegrationRecord = throw new IllegalStateException("Preparation cannot integrate")
+  }
   private final case class Fixture(owner: Scope, collector: Scope, governor: AttemptId, claim: Claim, items: List[Item], worker: ChildResult,
     reviewer: ChildResult, intent: IntegrationIntent) {
     def fresh: IntegrationIntent = {
@@ -115,7 +145,60 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
           validation.citations.collect { case Citation.Artifact(id) => id }.toSet == (List(f.intent.worker, f.intent.reviewer) ++
             IntegrationValidation.citations(f.worker, f.reviewer)).toSet
         })
+        // D80: integration appends its record to the worker's recorded result instead of replacing it.
+        _ <- assertIO(completed.forall(item => item.draft.content.asInstanceOf[Content.Task].result.contains(recordedResult + "\n\n" + integrated(f.intent))))
       } yield ()
+    }
+
+    "D80: integrate a candidate reviewed after a derived record revised a member without changing its content" in {
+      (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO],
+        integrations: IntegrationService[IO]) => {
+        val research = ItemDraft("Reproduction evidence", "Observed the failure, then the pass", Set.empty, false,
+          Content.Research(ResearchStatus.Open, "Does the candidate hold?", Nil, None, None), Nil)
+        def reviewCurrent(f: Fixture): IO[Throwable, (Fixture, List[Item])] = for {
+          current <- ZIO.foreach(f.items)(item => ledger.get(f.owner, item.id).map(_.item))
+          members = current.map(item => ItemRevision(item.id, item.revision))
+          assignment <- usage.assign(f.collector, Assignment(AssignmentId(uuid), f.owner.project, f.claim.members, Attribution.Shared, Some(uuid), None))
+          attempt <- usage.start(f.collector, Attempt(AttemptId(uuid), assignment.id, Some(f.governor), f.owner.actor.session, Role.Reviewer,
+            Harness.Codex, "fixture", "fixture", "fixture", 1000))
+          review = f.reviewer.copy(attempt = attempt.id, request = f.reviewer.request.copy(request = RequestId(uuid), members = members))
+          handle <- publish(f.collector, review, artifacts, admissions)
+          id = IntegrationId(uuid)
+          change = IntegrationPolicy.completion(id, f.intent.repository, f.intent.target, f.intent.candidate, f.intent.worker, handle,
+            IntegrationValidation.citations(f.worker, review), f.claim.fence, current)
+        } yield (f.copy(reviewer = review, intent = f.intent.copy(id = id, reviewer = handle, members = members, change = change)), current)
+        for {
+          runtime <- ZIO.runtime[Any]
+          original <- begin(ledger, usage, artifacts, admissions)
+          producer = original.items.head
+          _ <- ledger.change(original.owner, ChangeRequest(RequestId(uuid), List(Mutation.Produce(producer.id, producer.revision, List(research))),
+            List(original.claim.fence), "Record evidence under the task"))
+          reviewed <- reviewCurrent(original)
+          (f, current) = reviewed
+          _ <- assertIO(f.intent.members != original.intent.members && current.map(_.draft) == original.items.map(_.draft))
+          prepared <- ZIO.attemptBlocking(new IntegrationPreparation(new ServiceApi(f.owner, ledger, artifacts, admissions, runtime), f.owner,
+            f.intent.repository, f.intent.target, f.intent.checks, Clock.systemUTC(), recordedBases).prepare(IntegrationTicket(f.intent.id, f.intent.reviewer)))
+          _ <- assertIO(prepared == f.intent)
+          reserved <- integrations.reserve(f.collector, f.intent)
+          _ <- assertIO(reserved.resolution == IntegrationResolution.Pending())
+          recorded <- integrations.observe(f.collector, f.intent.id, IntegrationObservation.Incorporated(f.intent.candidate))
+          _ <- assertIO(recorded.resolution.isInstanceOf[IntegrationResolution.Recorded])
+          completed <- ZIO.foreach(f.items)(item => ledger.get(f.owner, item.id))
+          _ <- assertIO(completed.forall(view => view.item.draft.content match {
+            case value: Content.Task => value.status == TaskStatus.Done && value.result.contains(recordedResult + "\n\n" + integrated(f.intent))
+            case _ => false
+          }) && completed.head.refs.exists(_.relation == Relation.Produces))
+          changed <- begin(ledger, usage, artifacts, admissions)
+          edited = changed.items.head
+          _ <- ledger.change(changed.owner, ChangeRequest(RequestId(uuid), List(Mutation.Replace(edited.id, edited.revision,
+            edited.draft.copy(body = "Changed requirements"))), List(changed.claim.fence), "Change the task content"))
+          stale <- reviewCurrent(changed)
+          _ <- reject(integrations.reserve(stale._1.collector, stale._1.intent), _.isInstanceOf[Fault.Invalid])
+          refused <- ZIO.attemptBlocking(new IntegrationPreparation(new ServiceApi(stale._1.owner, ledger, artifacts, admissions, runtime), stale._1.owner,
+            stale._1.intent.repository, stale._1.intent.target, stale._1.intent.checks, Clock.systemUTC(), recordedBases).prepare(IntegrationTicket(stale._1.intent.id, stale._1.intent.reviewer))).either
+          _ <- assertIO(refused.isLeft)
+        } yield ()
+      }
     }
 
     "reject reviewer checks with foreign authors, changed candidates or declarations, incomplete inventory and unsuccessful jobs" in {

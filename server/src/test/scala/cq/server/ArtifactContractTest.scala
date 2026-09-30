@@ -92,6 +92,13 @@ abstract class ArtifactContractTest extends SpecZIO with AssertZIO {
           _ <- ZIO.foreachDiscard(List((-1, 1), (0, 0), (0, 8193), (3, 1), (Int.MaxValue, 1))) { case (offset, limit) =>
             denied(artifacts.page(scope, upload.id, offset, limit))(_.isInstanceOf[Fault.Invalid])
           }
+          // D83: a refused page read states the maximum and the requested bounds.
+          oversized <- artifacts.page(scope, upload.id, 0, ArtifactService.MaxPageCodePoints + 1).either
+          _ <- assertIO(oversized match {
+            case Left(DomainFailure(Fault.Invalid(message))) =>
+              message.contains(ArtifactService.MaxPageCodePoints.toString) && message.contains((ArtifactService.MaxPageCodePoints + 1).toString)
+            case _ => false
+          })
           emoji <- artifacts.page(scope, upload.id, 0, 1)
           lambda <- artifacts.page(scope, upload.id, emoji.next, 1)
           _ <- assertIO(emoji.text == "😀" && emoji.next == 1 && emoji.hasMore && lambda.text == "λ" && !lambda.hasMore)
