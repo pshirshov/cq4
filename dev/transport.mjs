@@ -74,6 +74,7 @@ assert.ok(cookie.includes(`Max-Age=${400 * 24 * 60 * 60}`), cookie);
 const renewal = await fetch(origin + '/api/hello', { headers: { Cookie: cookie.split(';')[0] } });
 assert.equal(renewal.status, 200);
 assert.ok(renewal.headers.get('set-cookie').includes(`Max-Age=${400 * 24 * 60 * 60}`), 'Browser session is renewed on app load');
+assert.equal((await fetch(origin + '/api/hello', { headers })).headers.get('set-cookie'), null, 'Bearer requests never receive a browser session');
 const browserHeaders = { 'Content-Type': 'application/json', 'CQ-Protocol-Version': '0.1.0', Cookie: cookie.split(';')[0], Origin: origin };
 assert.ok((await call({ Search: { input: search(first) } }, browserHeaders)).Found);
 const noOrigin = { ...browserHeaders };
