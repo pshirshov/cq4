@@ -19,13 +19,14 @@ export class Workspace {
   readonly content = element('article', '');
   readonly toggle = button('▭', () => { this.orientation = this.orientation === 'right' ? 'bottom' : 'right'; this.fit(); this.publish(); this.persist(); });
   private orientation: Orientation = 'right';
+  private detailOpen = true;
   private resultsHeight = 320;
   private resultsWidth = 340;
   private readonly separator: HTMLDivElement;
 
   constructor(root: HTMLElement, private readonly storage: Storage, private readonly warning: (message: string) => void) {
     this.restore();
-    this.element.className = 'workspace';
+    this.element.className = 'workspace'; this.element.dataset.detail = 'open';
     for (const [pane, id, label] of [[this.navigation, 'navigation-pane', 'Navigation'], [this.results, 'results-pane', 'Results'],
       [this.content, 'detail-pane', 'Item workspace']] as const) {
       pane.id = id; pane.className = 'pane'; pane.setAttribute('aria-label', label); pane.tabIndex = -1;
@@ -39,11 +40,18 @@ export class Workspace {
     root.addEventListener('keydown', event => {
       if (event.key !== 'F6') return;
       event.preventDefault();
-      const panes = [this.navigation, this.results, this.content];
+      const panes = [this.navigation, this.results, this.content].filter(pane => pane !== this.content || this.detailOpen);
       const index = panes.findIndex(pane => pane.contains(document.activeElement));
       const next = index < 0 ? (event.shiftKey ? panes.length - 1 : 0) : (index + (event.shiftKey ? -1 : 1) + panes.length) % panes.length;
       panes[next].focus();
     });
+  }
+
+  get detailVisible(): boolean { return this.detailOpen; }
+  setDetailOpen(open: boolean): void {
+    if (this.detailOpen === open) return;
+    this.detailOpen = open; this.content.hidden = !open; this.separator.hidden = !open;
+    this.element.dataset.detail = open ? 'open' : 'closed'; this.fit();
   }
 
   fit(): void {
@@ -52,6 +60,7 @@ export class Workspace {
   }
 
   private maximum(): number {
+    if (!this.detailOpen) return this.orientation === 'bottom' ? Math.max(RESULTS_MIN_HEIGHT, this.element.clientHeight) : Math.max(RESULTS_MIN_WIDTH, this.element.clientWidth - NAVIGATION_WIDTH);
     return this.orientation === 'bottom'
       ? Math.max(RESULTS_MIN_HEIGHT, this.element.clientHeight - DETAIL_MIN_HEIGHT - SEPARATOR_WIDTH)
       : Math.max(RESULTS_MIN_WIDTH, this.element.clientWidth - NAVIGATION_WIDTH - DETAIL_MIN_WIDTH - SEPARATOR_WIDTH);

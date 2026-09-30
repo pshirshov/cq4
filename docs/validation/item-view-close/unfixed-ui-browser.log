@@ -1,0 +1,28 @@
+Skipping host requirements validation logic because `PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS` env variable is set.
+Chromium selection: delayed detail/history/usage replies preserve newer item and project ownership
+Laptop density: all navigation buttons fit at 1366×768 and 1280×720 without horizontal page overflow
+Chromium: login, project creation, all 14 forms, persisted draft, create/edit/history, usage audit, external live update and offline recovery passed
+Chromium edit completion: held committed replies preserve item/project navigation and report the saved scope
+Scrolling: automatic bounded batches, live range/focus preservation, stale query ownership and top-right connection indicator passed
+Browser interactions: hover/focus diagnostics, all 182 content-type transitions and contextual ledger completion passed
+Chromium graph actions: relationship navigation/mutation, content/edge restore, stale neighbor rejection and durable exact retries
+Chromium search resync: actual stale continuation rejection and fresh first-page recovery
+Chromium usage scopes: project/session/cohort/task links, frozen membership, shared accounting and obsolete summary ownership
+Chromium usage watch: query independence, coalesced catch-up and overlapping connection replacement
+node:internal/modules/run_main:107
+    triggerUncaughtException(
+    ^
+
+locator.click: Timeout 30000ms exceeded.
+Call log:
+[2m  - waiting for getByRole('button', { name: 'Close item view', exact: true })[22m
+
+    at workspaceChecks (<workspace>/dev/workspace-browser.mjs:51:78)
+    at async file://<workspace>/dev/browser.mjs:128:3 {
+  log: [
+    "  - waiting for getByRole('button', { name: 'Close item view', exact: true })"
+  ],
+  name: 'TimeoutError'
+}
+
+Node.js v24.20.0

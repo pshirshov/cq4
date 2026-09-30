@@ -65,6 +65,7 @@ class App {
   private readonly rows = new Map<string, ResultRow>();
   private loadedItems: api.BrowseItem[] = [];
   private resultsPane: HTMLElement | null = null;
+  private workspace: Workspace | null = null;
   private readonly emptyResults = element('tr', '');
   private readonly resultStatus = this.queryEditor.resultCount;
   private readonly usageMetric = element('span', 'Usage: not loaded');
@@ -203,7 +204,7 @@ class App {
     const status = element('footer', ''); status.className = 'status-bar'; status.setAttribute('aria-label', 'Workspace status'); status.append(metrics);
     const guidance = element('div', ''); guidance.className = 'keyboard-guidance'; guidance.setAttribute('role', 'group'); guidance.setAttribute('aria-label', 'Keyboard shortcuts');
     for (const [keys, spoken, action] of [['Ctrl+K', 'Ctrl+K', 'query'], ['F6', 'F6', 'next pane'], ['Shift+F6', 'Shift+F6', 'previous pane'],
-      ['↑/↓', 'Up or Down arrow', 'move in results'], ['↵', 'Enter', 'select'], ['→', 'Right arrow', 'detail'], ['Esc', 'Escape', 'return']] as const) {
+      ['↑/↓', 'Up or Down arrow', 'move in results'], ['↵', 'Enter', 'select'], ['→', 'Right arrow', 'detail'], ['Esc', 'Escape', 'return; again closes item']] as const) {
       // Generic elements cannot carry an accessible name, so the key name is hidden visually rather than labelled.
       const hint = element('span', ''); const key = element('kbd', ''); const glyph = element('span', keys);
       glyph.setAttribute('aria-hidden', 'true'); const name = element('span', spoken); name.className = 'visually-hidden';
@@ -212,7 +213,7 @@ class App {
     status.append(guidance);
     this.usageMetric.className = 'status-usage'; this.usageFreshness.className = 'status-freshness';
     const workspace = new Workspace(this.root, localStorage, error => this.showError(error)); const side = workspace.navigation; const list = workspace.results; const content = workspace.content;
-    this.resultsPane = list;
+    this.resultsPane = list; this.workspace = workspace;
     list.addEventListener('scroll', () => this.loadMore());
     window.addEventListener('resize', () => this.loadMore());
     this.projects.setAttribute('aria-label', 'Project'); this.query.setAttribute('aria-label', 'Search query');
@@ -273,7 +274,8 @@ class App {
       const target = event.key === 'ArrowDown' ? Math.min(rows.length - 1, index + 1) : event.key === 'ArrowUp' ? Math.max(0, index - 1)
         : event.key === 'Home' ? 0 : event.key === 'End' ? rows.length - 1 : null;
       if (target !== null && rows.length > 0) { event.preventDefault(); rows[target].focus(); }
-      else if (event.key === 'ArrowRight') { event.preventDefault(); content.focus(); }
+      else if (event.key === 'ArrowRight' && workspace.detailVisible) { event.preventDefault(); content.focus(); }
+      else if (event.key === 'Escape' && this.selection !== null && workspace.detailVisible) { event.preventDefault(); this.closeItem(); }
     });
     content.addEventListener('keydown', event => {
       if (event.key === 'Escape') { event.preventDefault(); const row = this.items.querySelector<HTMLButtonElement>('[aria-current=true]'); (row === null ? this.items : row).focus(); }
@@ -543,8 +545,13 @@ class App {
     this.usageMetric.title = this.usageMetric.textContent;
   }
   private itemDocument(item: api.Item): HTMLElement { return itemView(item.draft, text => this.references.render(item.id.project, text)); }
+  private closeItem(): void {
+    const row = this.items.querySelector<HTMLButtonElement>('[aria-current=true]');
+    this.choose(null); if (this.workspace !== null) this.workspace.setDetailOpen(false);
+    (row !== null && row.isConnected ? row : this.items).focus();
+  }
   private async select(id: api.ItemId): Promise<void> {
-    this.choose(id);
+    this.choose(id); if (this.workspace !== null) this.workspace.setDetailOpen(true);
     const result = await this.readPanel('detail', new api.Command_Read(new api.ReadInput(this.currentProject(), new api.ReadSelection_ItemDetail(id))));
     if (result === null) return;
     if (!(result instanceof api.Result_Detail)) throw new Error('Unexpected item response');
@@ -552,8 +559,11 @@ class App {
     const item = result.view.item;
     const title = element('h2', `${itemName(item.id)} · ${item.draft.title}`);
     const actions = element('div', ''); actions.className = 'actions document-actions';
-    actions.append(button('Edit current revision', () => this.openEditor(result.view)),
-      button('History', () => this.action(async () => { this.historyBefore = new api.Revision(9223372036854775807n); this.historyDialog.open(`History · ${itemName(item.id)}`); await this.loadHistory(); })));
+    const close = button('Close', () => this.closeItem()); close.setAttribute('aria-label', 'Close item view'); close.title = 'Close item view (Esc from results)';
+    actions.append(close, button('Edit current revision', () => this.openEditor(result.view)),
+      button('History', () => this.action(async () => { this.historyBefore = new api.Revision(9223372036854775807n);
+        // Drop the previous item's or visit's revisions so stale rows cannot be activated while the fresh page loads.
+        this.historyPanel.replaceChildren(element('p', 'Loading history…')); this.historyDialog.open(`History · ${itemName(item.id)}`); await this.loadHistory(); })));
     const metadata = element('p', `Revision ${item.revision.value} · ${item.provenance.actor.subject} · ${new Date(Number(item.updatedAt)).toLocaleString()}`); metadata.className = 'revision-meta';
     this.detail.replaceChildren(title, metadata, actions, this.itemDocument(item));
     this.detail.hidden = this.editor !== null && this.editor.record.item !== undefined;
