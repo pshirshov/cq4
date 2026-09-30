@@ -35,6 +35,16 @@ final class DummyWorkspaceResource extends Lifecycle.LiftF[Task, WorkspaceFixtur
         val next = records(attempt).copy(admission = WorkspaceAdmission.Quarantined, quarantineReason = Some(reason))
         (next, records.updated(attempt, next))
       }
+      override def remove(attempt: AttemptId): IO[Throwable, WorkspaceRecord] = state.modifyZIO { records => ZIO.attempt {
+        val current = records.getOrElse(attempt, throw DomainFailure(Fault.Missing("Workspace not registered")))
+        val next = current.admission match {
+          case WorkspaceAdmission.Open => current.copy(admission = WorkspaceAdmission.Removed)
+          case WorkspaceAdmission.Removed => current
+          case WorkspaceAdmission.Quarantined => throw DomainFailure(Fault.Conflict("Quarantined workspace is retained for inspection"))
+        }
+        (next, records.updated(attempt, next))
+      } }
+      override def prune(repository: String): IO[Throwable, Int] = ZIO.succeed(0)
     }
     WorkspaceFixture(Path.of("/dummy/source"), GitCommit("a" * 40), repository)
   }
@@ -107,6 +117,18 @@ abstract class WorkspaceContractTest extends SpecZIO with AssertZIO {
         _ <- denied(service.prepare(owner, spec))
         stored <- service.get(owner, spec.attempt)
         _ <- assertIO(stored == quarantined)
+        _ <- denied(service.remove(owner, spec.attempt))
+        _ <- denied(service.remove(worker, second.spec.attempt))
+        removed <- service.remove(owner, second.spec.attempt)
+        _ <- assertIO(removed.admission == WorkspaceAdmission.Removed && removed.observed == second.observed && removed.spec == second.spec)
+        again <- service.remove(owner, second.spec.attempt)
+        _ <- assertIO(again == removed)
+        _ <- denied(service.prepare(owner, second.spec))
+        retained <- service.get(owner, spec.attempt)
+        _ <- assertIO(retained == quarantined)
+        _ <- denied(service.prune(worker, fixture.source.toString))
+        pruned <- service.prune(owner, fixture.source.toString)
+        _ <- assertIO(pruned == 0)
       } yield ()
     }
   }
@@ -203,6 +225,53 @@ final class WorkspaceContractLocal extends WorkspaceContractTest {
         _ <- ZIO.attemptBlocking(assert(Files.readString(Path.of(record.directory).resolve("tracked.txt")) == "committed\n"))
         retry <- new WorkspaceService.Impl[IO](local.repository).prepare(owner, spec).either
         _ <- assertIO(retry.isLeft)
+      } yield ()
+    }
+
+    "remove a worktree through the source repository, refuse one whose Git identity differs from its record, and prune only CQ-locked entries whose directory is gone" in { (local: LocalWorkspaceFixture) =>
+      val owner = Scope(ProjectId(UUID.randomUUID()), Actor("governor", SessionId(UUID.randomUUID()), Role.Governor))
+      val fixture = local.fixture
+      val service = fixture.service
+      def listed: List[String] = local.git(local.source, "worktree", "list", "--porcelain").linesIterator.filter(_.startsWith("worktree ")).map(_.stripPrefix("worktree ")).toList
+      def deleteTree(directory: Path): Unit = {
+        val entries = Files.walk(directory)
+        try entries.iterator().asScala.toList.reverse.foreach(Files.delete) finally entries.close()
+      }
+      for {
+        dirty <- service.prepare(owner, fixture.spec(owner))
+        relocated <- service.prepare(owner, fixture.spec(owner))
+        deleted <- service.prepare(owner, fixture.spec(owner))
+        _ <- ZIO.attemptBlocking {
+          Files.writeString(Path.of(dirty.directory).resolve("tracked.txt"), "uncommitted edit\n")
+          Files.writeString(Path.of(dirty.directory).resolve("untracked.txt"), "scratch\n")
+          local.git(local.source, "worktree", "add", "--detach", "--lock", "--reason", "operator lock", local.directory.resolve("manual").toString, fixture.base.value)
+          assert(listed.toSet == Set(local.source, Path.of(dirty.directory), Path.of(relocated.directory), Path.of(deleted.directory), local.directory.resolve("manual")).map(_.toRealPath().toString))
+        }
+        removed <- service.remove(owner, dirty.spec.attempt)
+        _ <- ZIO.attemptBlocking {
+          assert(removed.admission == WorkspaceAdmission.Removed && !Files.exists(Path.of(dirty.directory)) && !listed.contains(Path.of(dirty.directory).toRealPath().toString))
+          assert(Files.readString(local.source.resolve("tracked.txt")) == "committed\n")
+          // A stale gitdir pointer, as left behind by relocating the state root, must be reported rather than deleted.
+          Files.writeString(Path.of(relocated.directory).resolve(".git"), "gitdir: /nonexistent/previous/state/worktrees/tree\n")
+        }
+        refused <- service.remove(owner, relocated.spec.attempt)
+        _ <- ZIO.attemptBlocking {
+          assert(refused.admission == WorkspaceAdmission.Quarantined && refused.quarantineReason.exists(_.startsWith("Removal refused")) && refused.observed == relocated.observed)
+          assert(Files.exists(Path.of(relocated.directory).resolve("tracked.txt")) && listed.contains(Path.of(relocated.directory).toRealPath().toString))
+          deleteTree(Path.of(deleted.directory))
+          deleteTree(local.directory.resolve("manual"))
+          assert(listed.contains(Path.of(deleted.directory).toString) && listed.contains(local.directory.resolve("manual").toString))
+        }
+        unverifiable <- service.remove(owner, deleted.spec.attempt)
+        pruned <- service.prune(owner, local.source.toString)
+        repeated <- service.prune(owner, local.source.toString)
+        stillRefused <- service.get(owner, relocated.spec.attempt)
+        _ <- ZIO.attemptBlocking {
+          assert(unverifiable.admission == WorkspaceAdmission.Quarantined && unverifiable.quarantineReason.exists(_.startsWith("Removal refused")))
+          assert(pruned == 1 && repeated == 0, s"pruned $pruned then $repeated")
+          assert(!listed.contains(Path.of(deleted.directory).toString) && listed.contains(local.directory.resolve("manual").toString))
+          assert(listed.contains(Path.of(relocated.directory).toRealPath().toString) && stillRefused == refused)
+        }
       } yield ()
     }
 

@@ -87,6 +87,11 @@ final class JobSupervisor private (owner: Scope, repository: JobRepository, work
     read(attempt)
   }
 
+  def records(scope: Scope): IO[Throwable, List[JobRecord]] = ZIO.attempt {
+    authorized(scope)
+    observations.get().values.toList.sortBy(_.workspace.attempt.value.toString)
+  }
+
   def start(scope: Scope, workspace: WorkspaceSpec, command: JobCommand): IO[Throwable, JobRecord] = ZIO.attempt {
     authorized(scope)
     if (workspace.project != owner.project || workspace.owner != owner.actor.session)

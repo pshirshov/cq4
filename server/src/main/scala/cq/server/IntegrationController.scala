@@ -130,8 +130,11 @@ final class IntegrationController(config: SupervisorConfig, authority: Superviso
     _ <- if (waitMillis == 0) ZIO.unit else done.await.timeout(zio.Duration.fromMillis(waitMillis)).unit
   } yield snapshot(entry)
 
-  def quiescent: Boolean = synchronized(entries.values.forall(value =>
-    Set(IntegrationPhase.Recorded, IntegrationPhase.NotApplied, IntegrationPhase.Failed)(value.view.phase)))
+  def quiescent: Boolean = synchronized(entries.values.forall(value => IntegrationController.terminal(value.view.phase)))
+
+  /** Git jobs of integrations that are prepared, running or awaiting server acknowledgement; their workspaces must be retained. */
+  def pendingJobs: Set[AttemptId] = synchronized(entries.values.filterNot(value => IntegrationController.terminal(value.view.phase))
+    .map(value => AttemptId(value.ticket.id.value)).toSet)
 
   def shutdown: Task[Unit] = for {
     pending <- ZIO.succeed(synchronized { closing = true; entries.values.map(_.done).toList })
@@ -142,6 +145,7 @@ final class IntegrationController(config: SupervisorConfig, authority: Superviso
 }
 
 object IntegrationController {
+  def terminal(phase: IntegrationPhase): Boolean = Set(IntegrationPhase.Recorded, IntegrationPhase.NotApplied, IntegrationPhase.Failed)(phase)
   final class Resource(config: SupervisorConfig, authority: SupervisorAuthority, jobs: JobSupervisor, clock: Clock, watchdog: SupervisorWatchdog)
     extends Lifecycle.Of[Task, IntegrationController](Lifecycle.make(
       Semaphore.make(1).map(new IntegrationController(config, authority, jobs, clock, _)))(

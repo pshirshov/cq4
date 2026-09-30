@@ -12,6 +12,7 @@ import zio.{IO, ZIO}
 
 final class GitWorkspaceRepository(configuredRoot: Path, command: HostCommand, clock: Clock) extends WorkspaceRepository[IO] {
   private val MaxRecordBytes = 64 * 1024
+  private val MaxReasonCharacters = 300
   require(configuredRoot.isAbsolute && configuredRoot.normalize() == configuredRoot, "Workspace root must be absolute and normalized")
   private def canonical(path: Path): Path =
     if (Files.exists(path)) path.toRealPath() else canonical(path.getParent).resolve(path.getFileName)
@@ -116,5 +117,52 @@ final class GitWorkspaceRepository(configuredRoot: Path, command: HostCommand, c
       write(next)
       next
     }
+  }
+
+  override def remove(attempt: AttemptId): IO[Throwable, WorkspaceRecord] = ZIO.attemptBlocking {
+    locked(attempt) {
+      val current = read(attempt).getOrElse(throw DomainFailure(Fault.Missing("Workspace not registered")))
+      current.admission match {
+        case WorkspaceAdmission.Removed => current
+        case WorkspaceAdmission.Quarantined => conflict("Quarantined workspace is retained for inspection")
+        case WorkspaceAdmission.Open =>
+          val observed = current.observed.getOrElse(conflict("Unconfirmed workspace preparation cannot be removed automatically"))
+          val directory = Path.of(current.directory)
+          val source = Path.of(current.spec.repository).toRealPath()
+          val verification = scala.util.Try {
+            val top = Path.of(git(directory, "rev-parse", "--show-toplevel")).toRealPath()
+            val common = Path.of(git(directory, "rev-parse", "--path-format=absolute", "--git-common-dir")).toRealPath()
+            val gitDirectory = Path.of(git(directory, "rev-parse", "--absolute-git-dir")).toRealPath()
+            val sourceCommon = Path.of(git(source, "rev-parse", "--path-format=absolute", "--git-common-dir")).toRealPath()
+            require(top == directory && common.toString == observed.gitCommon && gitDirectory.toString == observed.gitDirectory && sourceCommon == common,
+              "Workspace directory no longer belongs to its recorded Git worktree")
+          }
+          val next = verification.failed.toOption match {
+            case Some(failure) =>
+              current.copy(admission = WorkspaceAdmission.Quarantined,
+                quarantineReason = Some(("Removal refused: " + Option(failure.getMessage).getOrElse(failure.getClass.getSimpleName)).take(MaxReasonCharacters)))
+            case None =>
+              // The worktree was registered with --lock; Git requires the second --force to remove a locked worktree.
+              git(source, "worktree", "remove", "--force", "--force", directory.toString)
+              git(source, "worktree", "prune")
+              require(!Files.exists(directory), "Git reported worktree removal but the workspace directory remains")
+              current.copy(admission = WorkspaceAdmission.Removed)
+          }
+          write(next)
+          next
+      }
+    }
+  }
+
+  override def prune(repository: String): IO[Throwable, Int] = ZIO.attemptBlocking {
+    val source = Path.of(repository).toRealPath()
+    // Locked registrations are never pruned by Git, so CQ's own locks are released first when their directory is gone.
+    val entries = git(source, "worktree", "list", "--porcelain").split("\n\n", -1).toList.map(_.linesIterator.toList).filter(_.nonEmpty)
+    entries.foreach { fields =>
+      val path = fields.find(_.startsWith("worktree ")).map(_.stripPrefix("worktree ")).getOrElse(throw new IllegalStateException("Worktree listing entry has no path"))
+      val ownLock = fields.exists(_.startsWith("locked CQ attempt "))
+      if (ownLock && !Files.exists(Path.of(path))) git(source, "worktree", "unlock", path)
+    }
+    git(source, "worktree", "prune", "--verbose").linesIterator.count(_.startsWith("Removing "))
   }
 }

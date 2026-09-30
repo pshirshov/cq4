@@ -401,7 +401,7 @@ root adt ServerFrame {
 
 root id GitCommit { value: str }
 root data WorkspaceSpec { project: ProjectId owner: SessionId attempt: AttemptId repository: str base: GitCommit }
-enum WorkspaceAdmission { Open Quarantined }
+enum WorkspaceAdmission { Open Quarantined Removed }
 root data WorkspaceObservation { head: GitCommit gitCommon: str gitDirectory: str verifiedAt: i64 }
 root data WorkspaceRecord { spec: WorkspaceSpec directory: str admission: WorkspaceAdmission observed: opt[WorkspaceObservation] quarantineReason: opt[str] }
 

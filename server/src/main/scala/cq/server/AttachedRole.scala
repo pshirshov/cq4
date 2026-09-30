@@ -15,7 +15,7 @@ final case class AttachedChannels(input: InputStream, output: OutputStream, owne
 final class AttachedProgram(config: SupervisorConfig, authority: SupervisorAuthority, gateway: AttachedGateway,
   dispatch: DispatchController, integrations: IntegrationController, combinations: CombinationController,
   watchdog: SupervisorWatchdog, channels: AttachedChannels, clock: Clock, local: LocalControlServer,
-  codex: AttachedCodexUsage, logger: IzLogger) {
+  codex: AttachedCodexUsage, cleanup: WorkspaceCleanup, logger: IzLogger) {
   private val MaxRecordBytes = 65536
   private val RequestSeconds = 30L
   private val limits = PeerLimits(Duration.ofSeconds(30), Duration.ofSeconds(10), Duration.ofSeconds(30), Duration.ofSeconds(RequestSeconds), 2 * 1024 * 1024, 32)
@@ -31,7 +31,7 @@ final class AttachedProgram(config: SupervisorConfig, authority: SupervisorAutho
       HostDelivery.Usage(HostUsageInput(config.project.project, HostUsage.Assign(config.run.assignment))),
       HostDelivery.Usage(HostUsageInput(config.project.project, HostUsage.Start(config.run.attempt))))))
     queue.flush(authority.collector)
-  }
+  } *> cleanup.prune
   private def shutdown: Task[Unit] = integrations.shutdown.zipPar(combinations.shutdown).zipPar(dispatch.shutdown).unit
   private def observe(operation: => Unit): Task[Unit] = ZIO.attemptBlocking(operation).catchAll { error => ZIO.attempt {
     codex.failure(error)
@@ -40,7 +40,7 @@ final class AttachedProgram(config: SupervisorConfig, authority: SupervisorAutho
   }}.uninterruptible
   private val monitor: Task[Nothing] = (observe(codex.poll(authority.collector)) *> ZIO.sleep(zio.Duration.fromSeconds(5))).forever
   private def finish(peer: StdioPeer): Task[Unit] =
-    (ZIO.succeed(peer.close()) *> shutdown *> observe(codex.finish(authority.collector)) *>
+    (ZIO.succeed(peer.close()) *> shutdown *> cleanup.run *> observe(codex.finish(authority.collector)) *>
       ZIO.attemptBlocking {
         val outcome = AttemptOutcome(RequestId(NativeArtifacts.id(config.run.attempt.id, "outcome").value), config.run.attempt.id,
           AttemptState.Unknown, math.max(config.run.attempt.startedAt, clock.millis()),
