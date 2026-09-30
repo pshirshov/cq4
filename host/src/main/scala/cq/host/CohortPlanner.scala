@@ -262,7 +262,8 @@ final class CohortPlanner(api: ServerApi, owner: Scope, base: GitCommit, checks:
         val next = group :+ candidate
         val shared = common.intersect(producers(candidate))
         if (group.size < CohortBounds.Members && fits(request, request.work, next, ctx)) {
-          if (!organised && shared.nonEmpty && independent(next)) {
+          // Decision 10: Blocks/BlockedBy constrain execution, not planning, so Planner groups skip the independence check.
+          if (!organised && shared.nonEmpty && (planner || independent(next))) {
             group = next
             common = shared
           } else if (planner && next.forall(organisable)) {

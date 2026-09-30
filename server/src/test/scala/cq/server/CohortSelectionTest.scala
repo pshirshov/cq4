@@ -496,6 +496,35 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
       } yield ()
     }
 
+    "D74: group dependent Planner Tasks sharing a producer outside the roots" in { (ledger: LedgerService[IO]) =>
+      val scope = owner
+      for {
+        runtime <- ZIO.runtime[Any]
+        _ <- ledger.initialize(scope, "D74 unrooted producer")
+        created <- ledger.change(scope, ChangeRequest(RequestId(uuid), List(Mutation.Create(goal), Mutation.Create(task), Mutation.Create(task)),
+          Nil, "Goal outside the roots"))
+        ids = created.items.map(_.id)
+        _ <- link(ledger, scope, ids.head, Relation.Produces, ids(1))
+        _ <- link(ledger, scope, ids.head, Relation.Produces, ids(2))
+        _ <- link(ledger, scope, ids(2), Relation.BlockedBy, ids(1))
+        planner = new CohortPlanner(api(ledger, scope, runtime), scope, GitCommit("a" * 40), Nil, new CohortProgress)
+        input = request(ids.tail.toSet, DispatchWork.Planner())
+        selected <- ZIO.attemptBlocking(planner.plan(input, ArtifactId(uuid)))
+        _ <- ZIO.succeed(println("D74 unrooted producer planner groups=" + selected.evidence.decision.choices.map(choice =>
+          (choice.members.map(_.id.number), choice.reason, choice.witness.map(_.number)))))
+        choice = selected.evidence.decision.choices.find(_.members.size > 1)
+        _ <- assertIO(choice.exists(value => value.members.map(_.id).toSet == Set(ids(1), ids(2)) &&
+          value.reason == CohortReason.CommonProducer && value.witness.contains(ids.head)))
+        _ <- ZIO.attemptBlocking(planner.verify(input, choice.get, selected.fingerprints(choice.get.id)))
+        claim <- ledger.acquire(scope, ClaimId(uuid), choice.get.members.map(_.id).toSet, 300000)
+        _ <- ledger.release(scope, claim.fence)
+        explorer <- ZIO.attemptBlocking(planner.plan(input.copy(work = DispatchWork.Explorer(ExplorerMode.Investigate)), ArtifactId(uuid)))
+        worker <- ZIO.attemptBlocking(planner.plan(input.copy(work = DispatchWork.Worker(WorkerMode.Implement)), ArtifactId(uuid)))
+        _ <- assertIO((explorer.evidence.decision.choices ++ worker.evidence.decision.choices).forall(_.members.size == 1) &&
+          !(explorer.evidence.decision.choices ++ worker.evidence.decision.choices).exists(_.members.exists(_.id == ids(2))))
+      } yield ()
+    }
+
     "D74: apply a reviewed Plan linking an organised Planner choice to its rooted milestone and blocker" in {
       (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], proposals: ProposalService[IO]) => for {
         runtime <- ZIO.runtime[Any]
@@ -567,7 +596,8 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
         choices = selected.evidence.decision.choices
         _ <- assertIO(!choices.exists(_.members.exists(_.id == f.milestone)))
         choice = choices.find(_.members.exists(_.id == f.tasks.head)).get
-        _ <- assertIO(choice.members.map(_.id).toSet == f.tasks.toSet && choice.reason == CohortReason.PlannerOrganisation)
+        // Dependent Tasks sharing the rooted Goal group by their common producer; the Planner skips the independence check.
+        _ <- assertIO(choice.members.map(_.id).toSet == f.tasks.toSet && choice.reason == CohortReason.CommonProducer && choice.witness.contains(f.goal))
         report = ChildReport.Plan(choice.members.map(ref => PlanMember(ref.id, PlanDisposition.Proposed, "Organise")),
           Some(LedgerProposal(List(ProposedMutation.Reference(f.tasks.head, Relation.PartOf, f.milestone, true)), "Link to an unrooted milestone")), Nil)
         refused <- ZIO.attempt(ProposalPolicy.prepare(choice.work, choice.members, report)).either
