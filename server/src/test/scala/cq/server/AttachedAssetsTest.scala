@@ -54,6 +54,11 @@ final class AttachedAssetsLocal extends AnyWordSpec {
       assets.write(Harness.Claude, root, settings, binary, false)
       assert(approved.hcursor.get[List[String]]("enabledMcpjsonServers") == Right(List("other", "cq")))
       assert(approved.hcursor.downField("permissions").get[List[String]]("allow") == Right(List("Bash(ls)")))
+      // Claude Code records a declined server in disabledMcpjsonServers, which overrides the approval.
+      Files.writeString(local, "{\"enabledMcpjsonServers\":[\"cq\"],\"disabledMcpjsonServers\":[\"other\",\"cq\"]}")
+      assets.write(Harness.Claude, root, settings, binary, false)
+      assert(approved.hcursor.get[List[String]]("enabledMcpjsonServers") == Right(List("cq")))
+      assert(approved.hcursor.get[List[String]]("disabledMcpjsonServers") == Right(List("other")))
       List("[\"cq\"]", "{\"enabledMcpjsonServers\":\"cq\"}").foreach { invalid =>
         Files.writeString(local, invalid)
         intercept[IllegalArgumentException](assets.write(Harness.Claude, root, settings, binary, true))

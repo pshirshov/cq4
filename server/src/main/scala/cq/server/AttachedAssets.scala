@@ -39,8 +39,12 @@ final class AttachedAssets(schemas: McpSchemas, workflows: WorkflowAssets) {
         require(enabled.isArray, "Claude enabledMcpjsonServers in .claude/settings.local.json must be an array")
         val cq = Json.fromString("cq")
         val approved = if (enabled.asArray.exists(_.contains(cq))) enabled else enabled.mapArray(_ :+ cq)
+        // Claude records a declined server in disabledMcpjsonServers, which overrides the approval; remove only the cq entry.
+        val disabled = local.hcursor.downField("disabledMcpjsonServers").focus
+        require(disabled.forall(_.isArray), "Claude disabledMcpjsonServers in .claude/settings.local.json must be an array")
+        val settingsLocal = disabled.fold(local)(value => local.mapObject(_.add("disabledMcpjsonServers", value.mapArray(_.filterNot(_ == cq)))))
         List(CommandAsset(Path.of(".mcp.json"), current.mapObject(_.add("mcpServers", servers.mapObject(_.add("cq", value)))).spaces2 + "\n"),
-          CommandAsset(Path.of(".claude/settings.local.json"), local.mapObject(_.add("enabledMcpjsonServers", approved)).spaces2 + "\n"))
+          CommandAsset(Path.of(".claude/settings.local.json"), settingsLocal.mapObject(_.add("enabledMcpjsonServers", approved)).spaces2 + "\n"))
       case Harness.Codex =>
         val file = root.resolve(".codex/config.toml")
         val forwarded = (Set("CQ_TOKEN", "CQ_TOKEN_FILE", "CQ_SETTINGS", "CODEX_HOME") ++ settings.harnesses.flatMap(_.providerEnvironment)).toList.sorted

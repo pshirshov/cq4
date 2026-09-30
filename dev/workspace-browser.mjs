@@ -94,6 +94,19 @@ export async function workspaceChecks(browser, storageState, origin, evidence) {
     assert.equal(await heading.count(), 0); assert.equal(await currentRows.count(), 0);
     await secondRow.click(); await heading.waitFor(); await detail.waitFor(); assert.equal(await secondRow.getAttribute('aria-current'), 'true');
     cases.push('filter switch omitting the selection clears it and hides the item view; selecting reopens it');
+    // A live change that moves the selected item out of the results must not close an open editor.
+    await query.fill('ledger:Defects status:Open'); await page.getByRole('button', { name: 'Search', exact: true }).click();
+    await page.getByText('1 items', { exact: true }).waitFor(); await defectRow.click();
+    await page.getByRole('heading', { name: 'D1 · Stale selection defect', exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Edit current revision', exact: true }).click();
+    const cancelEdit = page.getByRole('button', { name: 'Cancel edit', exact: true }); await cancelEdit.waitFor();
+    const defect = (await post({ Read: { input: { project, selection: { ItemDetail: { id: { project, ledger: 'Defects', number: '1' } } } } } })).Detail.view.item;
+    await change([{ Replace: { id: defect.id, expected: defect.revision, draft: { ...defect.draft,
+      content: { Defect: { ...defect.draft.content.Defect, status: 'NotReproducible' } } } } }]);
+    await defectRow.waitFor({ state: 'detached' }); await page.getByText('Data: current', { exact: true }).waitFor();
+    assert.equal(await cancelEdit.isVisible(), true, 'a live change removing the edited item from the results closed its editor');
+    await cancelEdit.click(); await page.getByRole('button', { name: 'All items', exact: true }).click(); await secondRow.waitFor();
+    await secondRow.click(); await heading.waitFor(); cases.push('live removal of the selected item from the results keeps an open editor');
     const navigation = page.getByRole('navigation', { name: 'Navigation', exact: true });
     const results = page.getByRole('region', { name: 'Results', exact: true });
     assert.equal(await page.getByRole('separator', { name: 'Resize navigation', exact: true }).count(), 0);

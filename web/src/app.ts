@@ -432,7 +432,9 @@ class App {
         // D72/Decision 8: a fully loaded result without the selected item closes the item view; a later page may still hold it.
         const selected = this.selection;
         const listed = items.some(({ summary }) => summary.id.project.value === selected.project.value && itemName(summary.id) === itemName(selected));
-        if (listed || page.hasMore) await this.select(selected); else this.hideItem();
+        // An open editor or item dialog keeps its item: a live change must not discard what the operator is working on.
+        const engaged = this.editor !== null || this.historyDialog.element.open || this.usageDialog.element.open;
+        if (listed || page.hasMore || engaged) await this.select(selected); else this.hideItem();
       }
       await this.loadUsage();
       completed = true;
