@@ -46,6 +46,25 @@ final class DispatchLocal extends AnyWordSpec {
       intercept[IllegalArgumentException](reader(root, WorkspaceCommand.Read("binary", -1, 10)))
     }
   }
+  "Concurrent child admission (Behavioral Active Blackbox Atomic)" should {
+    "D83: admit up to four active children with disjoint members and refuse overlapping or excess starts" in {
+      val project = ProjectId(UUID.randomUUID())
+      def request(numbers: Long*): DispatchRequest = DispatchRequest(RequestId(UUID.randomUUID()), DispatchWork.Worker(WorkerMode.Probe), Harness.Codex,
+        numbers.toList.map(number => ItemRevision(ItemId(project, Ledger.Tasks, number), Revision(1))), Nil, Nil, None,
+        Fence(ClaimId(UUID.randomUUID()), 1), HostLimits(3000, 10000, 1000, 300, 2000, 262144))
+      def conflict(active: List[DispatchRequest], next: DispatchRequest): String =
+        intercept[cq.core.DomainFailure](DispatchController.admissible(active, next)).fault match {
+          case Fault.Conflict(message) => message
+          case other => fail(s"Expected a conflict, observed $other")
+        }
+      val active = List(request(1), request(2, 3), request(4))
+      DispatchController.admissible(Nil, request(1))
+      DispatchController.admissible(active, request(5))
+      assert(conflict(active, request(3, 6)).contains("T3"))
+      assert(conflict(active :+ request(5), request(6)).contains(DispatchController.MaxActiveChildren.toString))
+      assert(DispatchController.MaxActiveChildren == 4)
+    }
+  }
   "Compact dispatch projection (Behavioral Active Blackbox Atomic)" should {
     "bound large cohort narratives and preserve validation and member outcomes" in {
       val project = ProjectId(UUID.randomUUID())

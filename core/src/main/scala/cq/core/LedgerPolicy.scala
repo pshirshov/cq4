@@ -10,7 +10,7 @@ object LedgerPolicy {
   val MaxLabels = 32
   val MaxLabel = 80
   val MaxRefs = 200
-  val MaxClaimMillis = 300000L
+  val MaxClaimMillis = 1800000L
   val MaxNestedEntries = 64
   val MaxLocation = 2048
   val MaxDraftBytes = 262144

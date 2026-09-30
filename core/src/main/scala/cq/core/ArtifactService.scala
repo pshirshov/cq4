@@ -64,7 +64,8 @@ object ArtifactService {
     override def metadata(scope: Scope, id: ArtifactId): F[Throwable, ArtifactMetadata] = found(scope, id).map(_.metadata)
 
     override def page(scope: Scope, id: ArtifactId, offset: Int, limit: Int): F[Throwable, ArtifactPage] = for {
-      _ <- F.fromEither(Try(LedgerPolicy.invalid(offset >= 0 && limit > 0 && limit <= MaxPageCodePoints, "Invalid artifact page bounds")).toEither)
+      _ <- F.fromEither(Try(LedgerPolicy.invalid(offset >= 0 && limit > 0 && limit <= MaxPageCodePoints,
+        s"Invalid artifact page bounds: offset must be at least 0 and limit 1–$MaxPageCodePoints code points; requested offset $offset and limit $limit")).toEither)
       stored <- found(scope, id)
       page <- F.fromEither(Try {
         LedgerPolicy.invalid(offset <= stored.metadata.codePoints, "Artifact offset exceeds content")

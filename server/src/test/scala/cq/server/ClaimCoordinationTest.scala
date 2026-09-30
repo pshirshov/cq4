@@ -52,6 +52,23 @@ abstract class ClaimCoordinationTest extends SpecZIO with AssertZIO {
       } yield ()
     }
 
+    "D83: hold a lease for up to thirty minutes and reject longer durations" in { (service: LedgerService[IO]) =>
+      val owner = scope()
+      val thirtyMinutes = 30L * 60 * 1000
+      for {
+        _ <- service.initialize(owner, "lease duration")
+        item <- create(service, owner, "Long-running child")
+        other <- create(service, owner, "Unrelated work")
+        before <- ZIO.clockWith(_.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS))
+        claim <- service.acquire(owner, ClaimId(UUID.randomUUID()), Set(item.id), thirtyMinutes)
+        _ <- assertIO(claim.expiresAt >= before + thirtyMinutes && claim.origin == ClaimOrigin.Acquire(thirtyMinutes))
+        renewed <- service.renew(owner, claim.fence, thirtyMinutes)
+        _ <- assertIO(renewed.expiresAt >= claim.expiresAt)
+        _ <- reject(service.acquire(owner, ClaimId(UUID.randomUUID()), Set(other.id), thirtyMinutes + 1), _.isInstanceOf[Fault.Invalid])
+        _ <- reject(service.renew(owner, claim.fence, thirtyMinutes + 1), _.isInstanceOf[Fault.Invalid])
+      } yield ()
+    }
+
     "produce descendants under the producer fence with one atomic history event and frozen claim membership" in { (service: LedgerService[IO]) =>
       val owner = scope()
       val other = owner.copy(actor = owner.actor.copy(session = SessionId(UUID.randomUUID())))
