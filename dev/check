@@ -27,6 +27,8 @@ SHUTDOWN_TIMEOUT = 20
 DISPATCH_FIXTURE_TIMEOUT = 180
 COMBINATION_FIXTURE_TIMEOUT = 240
 TRACE_FIXTURE_SCALE = 3
+# JVM CLI invocations start slowly; the CLI fixture alone takes about 66 s on an idle machine.
+JVM_FIXTURE_SCALE = 3
 
 
 class Checks:
@@ -256,14 +258,14 @@ class Checks:
         classpath = self.classpath()
         with self.database([]):
             self.sbt(["server/testOnly *Postgres"], "postgres-contract")
-            self.transport(["java", "-cp", classpath, "cq.server.Main"], "jvm", False, 1)
+            self.transport(["java", "-cp", classpath, "cq.server.Main"], "jvm", False, JVM_FIXTURE_SCALE)
             self.restart(["java", "-cp", classpath, "cq.server.Main"])
 
     def browser(self):
         self.generate()
         classpath = self.classpath()
         with self.database([]):
-            self.transport(["java", "-cp", classpath, "cq.server.Main"], "browser", True, 1)
+            self.transport(["java", "-cp", classpath, "cq.server.Main"], "browser", True, JVM_FIXTURE_SCALE)
 
     def ui(self):
         self.ui_checks(False)
