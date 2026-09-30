@@ -5,13 +5,27 @@ import cq.host.*
 import java.nio.file.{Files, LinkOption, Path}
 import java.time.Duration
 
-final class CandidateWorkspace(config: SupervisorConfig) {
+final class CandidateWorkspace(config: SupervisorConfig) extends ExecutionBase {
   private val MaxOutputBytes = 1024 * 1024
   private val command = new BoundedHostCommand(GitEnvironment.isolated(HostEnvironment.runtime(config.environment)), Duration.ofSeconds(10), MaxOutputBytes)
+  private val GitArguments = List("git", "--no-replace-objects", "--no-pager", "-c", "core.hooksPath=/dev/null", "-c", "submodule.recurse=false")
   private def git(directory: Path, arguments: String*): String = {
-    val result = command.run(directory, List("git", "--no-replace-objects", "--no-pager", "-c", "core.hooksPath=/dev/null", "-c", "submodule.recurse=false") ++ arguments)
+    val result = command.run(directory, GitArguments ++ arguments)
     require(result.exit == 0, s"Candidate Git operation failed: ${result.text.take(300)}")
     result.text.trim
+  }
+  private def ancestor(earlier: GitCommit, later: GitCommit): Boolean =
+    command.run(Path.of(config.run.repository), GitArguments ++ List("merge-base", "--is-ancestor", earlier.value, later.value)).exit match {
+      case 0 => true
+      case 1 => false
+      case _ => throw new IllegalStateException("Candidate ancestry inspection failed")
+    }
+  private def targetHead: Option[GitCommit] =
+    config.settings.integrationTarget.map(target => GitCommit(git(Path.of(config.run.repository), "show-ref", "--verify", "--hash", target)))
+  override def fresh(): GitCommit = targetHead.getOrElse(config.run.base)
+  override def expected(base: GitCommit, candidate: GitCommit): GitCommit = targetHead match {
+    case Some(head) if head != candidate && ancestor(head, candidate) => head
+    case _ => base
   }
   def verifyBase(base: GitCommit): Unit = {
     val repository = Path.of(config.run.repository)
@@ -43,7 +57,7 @@ final class CandidateWorkspace(config: SupervisorConfig) {
     MergeInputs(config.directory.toRealPath().resolve("workspaces").resolve(attempt.value.toString).resolve("tree"), common,
       plan.observedTarget, plan.candidate)
   }
-  def capture(workspace: WorkspaceRecord, combination: Option[CombinationPlan]): GitCommit = {
+  def capture(workspace: WorkspaceRecord, combination: Option[CombinationPlan], message: String): GitCommit = {
     require(workspace.admission == WorkspaceAdmission.Open && workspace.observed.nonEmpty, "Candidate workspace is quarantined or unconfirmed")
     val tree = Path.of(workspace.directory)
     val top = Path.of(git(tree, "rev-parse", "--show-toplevel")).toRealPath()
@@ -70,7 +84,7 @@ final class CandidateWorkspace(config: SupervisorConfig) {
     require(!staged.linesIterator.exists(_.startsWith("160000 ")), "Candidate submodules are not supported")
     val objectId = git(tree, "write-tree")
     val commit = GitCommit(git(tree, (List("-c", "user.name=CQ host", "-c", "user.email=cq@localhost", "commit-tree", objectId) ++
-      parents.flatMap(parent => List("-p", parent.value)) ++ List("-m", "CQ candidate " + workspace.spec.attempt.value))*))
+      parents.flatMap(parent => List("-p", parent.value)) ++ List("-m", message))*))
     git(tree, "update-ref", "refs/cq/candidates/" + workspace.spec.attempt.value, commit.value, "0" * commit.value.length)
     commit
   }

@@ -65,7 +65,7 @@ final class IntegrationServiceImpl[F[+_, +_]: Error2](ledger: LedgerRepository[F
         work.request.work.isInstanceOf[DispatchWork.Worker] && work.request.work != DispatchWork.Worker(WorkerMode.Probe) &&
         review.request.work == DispatchWork.Reviewer(ReviewerMode.Candidate) && review.request.previous.contains(intent.worker) &&
         work.request.members == intent.members && review.request.members == intent.members &&
-        work.request.fence == intent.fence && review.request.fence == intent.fence && work.base == intent.expected &&
+        work.request.fence == intent.fence && review.request.fence == intent.fence &&
         work.candidate.contains(intent.candidate) && review.candidate == work.candidate && review.base == intent.candidate,
         "Integration requires an independently reviewed exact worker candidate and assignment")
       invalid(work.report match { case ChildReport.Work(members) => members.forall(_.disposition == WorkDisposition.CandidateReady); case _ => false }, "Every integration member must be candidate-ready")

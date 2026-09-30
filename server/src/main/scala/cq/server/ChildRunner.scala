@@ -103,7 +103,7 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
             val target = config.settings.integrationTarget.getOrElse(throw new IllegalArgumentException("No integration target configured"))
             new CombinationPreparation(authority.governor, config.owner, config.run.attempt.id, config.run.repository, target, clock).consume(input)
           } else None
-          val base = combination.map(_.observedTarget).orElse(input.previous.flatMap(_.candidate)).getOrElse(config.run.base)
+          val base = combination.map(_.observedTarget).orElse(input.previous.flatMap(_.candidate)).getOrElse(candidates.fresh())
           if (combination.isEmpty) candidates.verifyBase(base)
           val prompt = instructions(ticket.request.work)
           val body = HostFiles.encode(ChildExecutionInput_JsonCodec, ChildExecutionInput(input, base, config.settings.checks))
@@ -166,7 +166,7 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
               combination.foreach { _ =>
                 require(Set("0\n", "1\n")(HostFiles.text(entry.directory.resolve("assets/merge-ready"), 2)), "Merge preparation was not confirmed")
               }
-              val commit = candidates.capture(workspace, combination)
+              val commit = candidates.capture(workspace, combination, CandidateMessage(entry.ticket.attempt.id, input.members, input.guidance, combination))
               HostFiles.immutable(entry.directory.resolve("candidate.json"), HostFiles.encode(GitCommit_JsonCodec, commit), 1024)
               Some(commit)
             }}

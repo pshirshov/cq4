@@ -53,7 +53,7 @@ final class CombinationPreparation(api: ServerApi, owner: Scope, governor: Attem
       "Combination source belongs to another owner, repository or target")
     val work = new ArtifactReader(call, owner.project).result(intent.worker)
     require(work.admission.owner == owner.actor && work.metadata.actor.session == owner.actor.session && work.metadata.actor.role == Role.Collector &&
-      work.value.candidate.contains(intent.candidate) && work.value.base == intent.expected && work.value.request.members == intent.members &&
+      work.value.candidate.contains(intent.candidate) && work.value.request.members == intent.members &&
       work.value.request.fence == intent.fence && work.value.request.work.isInstanceOf[DispatchWork.Worker] &&
       work.value.request.work != DispatchWork.Worker(WorkerMode.Probe), "Combination source has no matching admitted original worker")
     intent
