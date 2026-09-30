@@ -12,7 +12,7 @@ import zio.{IO, Ref, Task, ZIO}
 
 final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority, registry: HarnessRegistry, jobs: JobSupervisor,
   workspaces: WorkspaceService[IO], schemas: McpSchemas, output: HarnessOutput, instructions: ChildInstructions,
-  candidates: CandidateWorkspace, reader: WorkspaceReader, access: LocalAccess, clock: Clock) {
+  candidates: CandidateWorkspace, reader: WorkspaceReader, access: LocalAccess, requirements: OperatorRequirements, clock: Clock) {
   private val MaxOutputBytes = 32 * 1024 * 1024
   private val MaxGaps = 32
   private val ClaimMillis = Duration.ofMinutes(3).toMillis
@@ -90,7 +90,7 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
           queue.flush(authority.collector)
           entry.check()
         }
-        input <- ZIO.attemptBlocking(new InputAssembler(authority.governor, config.owner, clock).assemble(entry.ticket.request))
+        input <- ZIO.attemptBlocking(new InputAssembler(authority.governor, config.owner, clock, requirements.current).assemble(entry.ticket.request))
         _ <- maintain(entry).forkScoped
         prepared <- ZIO.attemptBlocking {
           entry.check()

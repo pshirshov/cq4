@@ -5,7 +5,7 @@ import cq.core.{DomainFailure, Scope}
 import java.nio.charset.StandardCharsets.UTF_8
 import java.time.{Clock, Duration}
 
-final class InputAssembler(api: ServerApi, owner: Scope, clock: Clock) {
+final class InputAssembler(api: ServerApi, owner: Scope, clock: Clock, operatorRequirements: String) {
   private val ClaimMillis = Duration.ofMinutes(3).toMillis
   private val AssemblyNanos = Duration.ofSeconds(60).toNanos
   require(owner.actor.role == Role.Governor, "Input assembly requires governing authority")
@@ -47,7 +47,7 @@ final class InputAssembler(api: ServerApi, owner: Scope, clock: Clock) {
           "Plan review requires a result containing a typed proposal or cohort assessment")
       value
     }
-    val input = ChildInput(owner.project, request, members, guidance, artifacts, previous)
+    val input = ChildInput(owner.project, request, members, guidance, artifacts, previous, OperatorRequirements.delivered(request.work, operatorRequirements))
     require(HostFiles.encode(ChildInput_JsonCodec, input).getBytes(UTF_8).length <= ChildContracts.MaxInputBytes, "Assembled input exceeds its byte bound")
     claim()
     input

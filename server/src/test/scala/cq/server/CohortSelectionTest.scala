@@ -81,7 +81,7 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
       dispatch = DispatchRequest(RequestId(uuid), DispatchWork.Planner(), Harness.Codex, created.items, Nil, Nil, None, claim.fence,
         HostLimits(3000, 10000, 1000, 300, 2000, 262144))
       views <- ZIO.foreach(created.items)(ref => ledger.get(scope, ref.id))
-      input = ChildExecutionInput(ChildInput(scope.project, dispatch, views, Nil, Nil, None), base, checks)
+      input = ChildExecutionInput(ChildInput(scope.project, dispatch, views, Nil, Nil, None, None), base, checks)
       _ <- artifacts.upload(collector, ArtifactUpload(scope.project, NativeArtifacts.id(attempt.id, "input"), attempt.id, ArtifactKind.Input,
         "application/json", Wire.encode(ChildExecutionInput_JsonCodec, input)))
       groups = created.items.grouped(2).map(members => CohortAssessment(compatibility, "Share implementation", "No dependency conflict", "Separate acceptance",
@@ -120,7 +120,7 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
       HostLimits(3000, 10000, 1000, 300, 2000, 262144))
     base = previous.flatMap(_.result.candidate).getOrElse(f.base)
     views <- ZIO.foreach(f.members)(ref => ledger.get(f.scope, ref.id))
-    input = ChildExecutionInput(ChildInput(f.scope.project, dispatch, views, Nil, Nil, previous.map(_.result)), base, f.checks)
+    input = ChildExecutionInput(ChildInput(f.scope.project, dispatch, views, Nil, Nil, previous.map(_.result), None), base, f.checks)
     _ <- artifacts.upload(f.collector, ArtifactUpload(f.scope.project, NativeArtifacts.id(attempt.id, "input"), attempt.id, ArtifactKind.Input,
       "application/json", Wire.encode(ChildExecutionInput_JsonCodec, input)))
     result = ChildResult(attempt.id, dispatch, base, if (work == DispatchWork.Planner()) None else Some(GitCommit("b" * 40)), report, validation)

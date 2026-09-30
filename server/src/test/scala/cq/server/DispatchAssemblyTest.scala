@@ -41,6 +41,7 @@ abstract class DispatchAssemblyTest extends SpecZIO with AssertZIO {
         val application = new Application(ledger, repository, usage, artifacts, admissions, integrations, proposals, authorization)
         val narrative = "Consumer specification λ😀" * 1000
         val largeBody = "evidence λ😀\n" * 5000
+        val requirements = "Fail-first reproduction evidence is required; the cq-ui check is not backend evidence λ😀"
         for {
           runtime <- ZIO.runtime[Any]
           _ <- ledger.initialize(scope, "Assembly consumer")
@@ -64,14 +65,14 @@ abstract class DispatchAssemblyTest extends SpecZIO with AssertZIO {
             "application/json", Wire.encode(ChildResult_JsonCodec, stored)))
           _ <- ZIO.attemptBlocking {
             val unadmitted = request.copy(work = DispatchWork.Reviewer(ReviewerMode.Candidate), artifacts = Nil, previous = Some(previous.id))
-            intercept[DomainFailure](new InputAssembler(new ApplicationApi(application, authority, runtime), scope, clock).assemble(unadmitted))
+            intercept[DomainFailure](new InputAssembler(new ApplicationApi(application, authority, runtime), scope, clock, requirements).assemble(unadmitted))
           }
           _ <- admissions.admit(collector, HostAdmissionInput(scope.project, previous.id, scope.actor))
           unbound <- artifacts.upload(collector, ArtifactUpload(scope.project, ArtifactId(UUID.randomUUID()), attempt.id, ArtifactKind.Result,
             "application/json", Wire.encode(ChildResult_JsonCodec, stored.copy(candidate = Some(GitCommit("c" * 40))))))
           _ <- ZIO.attemptBlocking {
             val api = new ApplicationApi(application, authority, runtime)
-            val assembler = new InputAssembler(api, scope, clock)
+            val assembler = new InputAssembler(api, scope, clock, requirements)
             val workflows = new WorkflowAssembly(api, scope.project, new WorkflowAssets)
             val subject = workflows.assemble(WorkflowRequest.Review(previous.id, ReviewerMode.Candidate))
             assert(subject.subject.contains(WorkflowSubject(previous.id, request.work, List(member), stored.candidate)))
@@ -115,6 +116,14 @@ abstract class DispatchAssemblyTest extends SpecZIO with AssertZIO {
             assert(assembler.assemble(largeRequest) == two)
             assert(Wire.encode(DispatchRequest_JsonCodec, request).getBytes(UTF_8).length == Wire.encode(DispatchRequest_JsonCodec, largeRequest).getBytes(UTF_8).length)
             assert(Wire.encode(ChildInput_JsonCodec, two).getBytes(UTF_8).length > Wire.encode(ChildInput_JsonCodec, one).getBytes(UTF_8).length + 50000)
+            // Planner and Worker children receive the operator's governing request as their own bounded section; explorers do not.
+            assert(one.operatorRequirements.contains(requirements))
+            assert(assembler.assemble(request.copy(work = DispatchWork.Planner())).operatorRequirements.contains(requirements))
+            assert(assembler.assemble(request.copy(work = DispatchWork.Explorer(ExplorerMode.Investigate))).operatorRequirements.isEmpty)
+            val oversized = "требование 😀\n" * 4096
+            val section = new InputAssembler(api, scope, clock, oversized).assemble(request.copy(work = DispatchWork.Planner())).operatorRequirements.get
+            assert(section.codePointCount(0, section.length) < oversized.codePointCount(0, oversized.length) && section.startsWith(oversized.take(1000)) &&
+              section.endsWith(s"of ${oversized.codePointCount(0, oversized.length)} code points delivered]"))
             val review = request.copy(work = DispatchWork.Reviewer(ReviewerMode.Candidate), harness = Harness.Pi, artifacts = Nil, previous = Some(previous.id))
             val resolved = assembler.assemble(review)
             assert(resolved.previous.contains(stored) && resolved.previous.get.candidate == stored.candidate)
@@ -123,7 +132,7 @@ abstract class DispatchAssemblyTest extends SpecZIO with AssertZIO {
             intercept[IllegalArgumentException](assembler.assemble(request.copy(members = List(member, guidance), guidance = Nil)))
             intercept[IllegalArgumentException](assembler.assemble(request.copy(guidance = List(guidance.copy(id = guidance.id.copy(project = ProjectId(UUID.randomUUID())))))))
             intercept[IllegalArgumentException](assembler.assemble(review.copy(previous = Some(small.id))))
-            intercept[IllegalArgumentException](new InputAssembler(api, scope.copy(actor = scope.actor.copy(subject = "different governor")), clock).assemble(request))
+            intercept[IllegalArgumentException](new InputAssembler(api, scope.copy(actor = scope.actor.copy(subject = "different governor")), clock, requirements).assemble(request))
           }
           _ <- ledger.release(scope, claim.fence)
           late <- usage.start(collector, attempt.copy(id = AttemptId(UUID.randomUUID())))
@@ -134,10 +143,10 @@ abstract class DispatchAssemblyTest extends SpecZIO with AssertZIO {
           replacement <- ledger.acquire(scope, ClaimId(UUID.randomUUID()), Set(member.id), 60000)
           _ <- ZIO.attemptBlocking {
             val review = request.copy(work = DispatchWork.Reviewer(ReviewerMode.Candidate), artifacts = Nil, previous = Some(rejected.id), fence = replacement.fence)
-            intercept[IllegalArgumentException](new InputAssembler(new ApplicationApi(application, authority, runtime), scope, clock).assemble(review))
+            intercept[IllegalArgumentException](new InputAssembler(new ApplicationApi(application, authority, runtime), scope, clock, requirements).assemble(review))
           }
           _ <- ZIO.attemptBlocking {
-            intercept[DomainFailure](new InputAssembler(new ApplicationApi(application, authority, runtime), scope, clock).assemble(request))
+            intercept[DomainFailure](new InputAssembler(new ApplicationApi(application, authority, runtime), scope, clock, requirements).assemble(request))
           }
           _ <- ledger.change(scope, ChangeRequest(requestId, List(Mutation.Replace(member.id, member.revision, draft("Changed acceptance context"))),
             List(replacement.fence), "Current task correction"))
