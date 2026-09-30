@@ -63,19 +63,19 @@ abstract class TerminationContractTest extends SpecZIO with AssertZIO {
         Content.Upstream(UpstreamStatus.Reported, "Library", "1", "Reproduction", Some(Citation.Url("https://example.org/issue")), None),
       )
       val expected = List("Cancelled", "Withdrawn", "Withdrawn", "Abandoned", "Cancelled", "Cancelled", "Withdrawn", "Withdrawn",
-        "Withdrawn", "Cancelled", "Cancelled", "Cancelled", "Current", "Withdrawn")
+        "Withdrawn", "Cancelled", "Cancelled", "Cancelled", "Retracted", "Withdrawn")
       for {
         _ <- service.initialize(owner, "typed outcomes")
         ids <- ZIO.foreach(contents)(content => create(service, human, task(LedgerPolicy.ledger(content).toString).copy(content = content, archived = LedgerPolicy.outcome(content).terminal)))
         originals <- ZIO.foreach(ids)(service.get(owner, _))
         completion <- service.termination(owner, ids.toSet, TerminationIntent.Complete)
-        _ <- assertIO(!completion.plan.canApply && changed(completion).size == 3 && completion.plan.entries.count(_.effect.isInstanceOf[TerminationEffect.Unsupported]) == 10)
+        _ <- assertIO(!completion.plan.canApply && changed(completion).size == 3 && completion.plan.entries.count(_.effect.isInstanceOf[TerminationEffect.Unsupported]) == 11)
         _ <- reject(service.change(owner, request(completion)), _.isInstanceOf[Fault.Conflict])
         cancelled <- service.termination(owner, ids.toSet, TerminationIntent.Cancel)
-        _ <- assertIO(cancelled.plan.canApply && changed(cancelled).size == 13)
+        _ <- assertIO(cancelled.plan.canApply && changed(cancelled).size == 14)
         ack <- service.change(owner, request(cancelled))
         after <- ZIO.foreach(ids)(service.get(owner, _))
-        _ <- assertIO(after.map(v => LedgerPolicy.status(v.item.draft.content)) == expected && ack.items.size == 13)
+        _ <- assertIO(after.map(v => LedgerPolicy.status(v.item.draft.content)) == expected && ack.items.size == 14)
         _ <- ZIO.foreachDiscard(originals.zip(after)) { case (before, current) =>
           val oldContent = Wire.encode(Content_JsonCodec, before.item.draft.content)
           val newContent = Wire.encode(Content_JsonCodec, current.item.draft.content)

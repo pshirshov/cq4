@@ -90,7 +90,7 @@ final class TerminationPlanner(worksets: WorksetTraversal) {
         case Ledger.Reviews => change(TerminalStatus.Review(ReviewStatus.Cancelled))
         case Ledger.Handoffs => change(TerminalStatus.Handoff(HandoffStatus.Cancelled))
         case Ledger.OperatorActions => change(TerminalStatus.OperatorAction(OperatorActionStatus.Cancelled))
-        case Ledger.Memories => throw new IllegalStateException("A memory must already be terminal")
+        case Ledger.Memories => change(TerminalStatus.Memory(MemoryStatus.Retracted))
         case Ledger.Upstream => change(TerminalStatus.Upstream(UpstreamStatus.Withdrawn))
       }
     }

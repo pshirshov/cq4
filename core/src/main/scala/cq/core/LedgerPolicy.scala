@@ -79,11 +79,11 @@ object LedgerPolicy {
     case c: Content.Research => ItemOutcome(Set[ResearchStatus](ResearchStatus.Concluded, ResearchStatus.Inconclusive, ResearchStatus.Cancelled).contains(c.status), c.status == ResearchStatus.Concluded)
     case c: Content.Hypothesis => ItemOutcome(!Set[HypothesisStatus](HypothesisStatus.Proposed, HypothesisStatus.Investigating).contains(c.status), Set[HypothesisStatus](HypothesisStatus.Supported, HypothesisStatus.Refuted).contains(c.status))
     case c: Content.Question => ItemOutcome(c.status != QuestionStatus.Open, c.status == QuestionStatus.Answered)
-    case c: Content.Decision => ItemOutcome(c.status != DecisionStatus.Proposed, c.status == DecisionStatus.Adopted)
+    case c: Content.Decision => ItemOutcome(Set[DecisionStatus](DecisionStatus.Superseded, DecisionStatus.Withdrawn).contains(c.status), c.status == DecisionStatus.Adopted)
     case c: Content.Review => ItemOutcome(!Set[ReviewStatus](ReviewStatus.Pending, ReviewStatus.Active).contains(c.status), c.status == ReviewStatus.Approved)
     case c: Content.Handoff => ItemOutcome(c.status != HandoffStatus.Open, c.status == HandoffStatus.Accepted)
     case c: Content.OperatorAction => ItemOutcome(!Set[OperatorActionStatus](OperatorActionStatus.Requested, OperatorActionStatus.Confirmed).contains(c.status), c.status == OperatorActionStatus.Observed)
-    case c: Content.Memory => ItemOutcome(true, c.status == MemoryStatus.Current)
+    case c: Content.Memory => ItemOutcome(Set[MemoryStatus](MemoryStatus.Superseded, MemoryStatus.Retracted).contains(c.status), c.status == MemoryStatus.Current)
     case c: Content.Upstream => ItemOutcome(!Set[UpstreamStatus](UpstreamStatus.Identified, UpstreamStatus.Reported).contains(c.status), c.status == UpstreamStatus.Resolved)
   }
 
