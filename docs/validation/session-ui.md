@@ -52,3 +52,14 @@ Accepted trade-offs, disclosed rather than corrected:
 - A same-site page can trigger a renewal through a GET without an Origin header. This can only extend a session's lifetime.
 - The ID cell names its ledger only through its tooltip, although the ID prefix already conveys the type.
 - Sorting by type is no longer offered in the table.
+
+## D25 native correction in this candidate
+
+The pending candidate (manifest `e1d0581a…`) was superseded before installation, and its wrapper withdrawn, when the native executable was found to still print the Unsafe warning. `ead2dc6` passes the `.jvmopts` memory-access setting to the native builder and adds a quiet-startup gate; evidence in `superseded-d25/` and `/srv/nvme/tmp/cq4-d25-native`.
+
+The rebuilt candidate, manifest `1944260beeb2ee3e3e658908df0d50c5f74cbeae0bd43fddced2b92304b6a90a`:
+
+- prints no warning, including in every server log of the native, installed and rehearsal gates
+- passes the scoped installed check and both rehearsals, with only `NEW_MANIFEST` changed in the reviewed updater
+
+An independent review approves with minor findings. The README claim is corrected, and the native builder now receives only the memory-access setting from `.jvmopts`.

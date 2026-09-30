@@ -54,6 +54,20 @@ failure belongs in scalac; no duplicate or speculative upstream report was sent.
 
 ## User-directed simplification, 2026-09-29
 
-The subsequent transformer investigation found further defects and passed targeted corrections, but introduced disproportionate build complexity. The user proposed `.jvmopts`. CQ now sets `--sun-misc-unsafe-memory-access=allow` there and forwards the option to forked sbt JVMs. Raw Java launch instructions include the flag explicitly; native packages require no JVM flag. Original dependencies and versions are retained.
+The subsequent transformer investigation found further defects and passed targeted corrections, but introduced disproportionate build complexity. The user proposed `.jvmopts`. CQ now sets `--sun-misc-unsafe-memory-access=allow` there and forwards the option to forked sbt JVMs. Raw Java launch instructions include the flag explicitly. The claim that native packages need no flag was wrong: see the native correction below. Original dependencies and versions are retained.
 
 The same original CQ classpath emits the warning by default and runs quietly with the option. `sbt run` and `runMain` also pass without it. This addresses startup noise and supersedes the earlier no-suppression approach; it does **not** remove deprecated Unsafe calls or establish compatibility with a future JDK that removes them. [Current verification and delivery status](all-remaining-defects.md#d25-investigation).
+
+## Native correction, 2026-09-30
+
+D25 was closed on 2026-09-29 with the untested claim that native packages need no option. The installed native `cq` still printed the four-line warning on every invocation, including server startup, so D25 was reopened.
+
+A minimal probe (`/srv/nvme/tmp/cq4-d25-native`) separates the cases:
+
+- A statically known field offset is folded during image building and never warns.
+- A field offset resolved at run time warns, as Scala's `LazyVals$` does, and a runtime `-Dsun.misc.unsafe.memory.access=allow` does not help.
+- Building with `-J--sun-misc-unsafe-memory-access=allow` (or the equivalent `-D` system property) silences it.
+
+The mode is therefore fixed when the image is built; this is inferred from probe behaviour, since the GraalVM source was not inspected. The native gate now passes the `.jvmopts` memory-access setting to `native-image`, and fails if the built executable's `:help` prints the warning.
+
+The rebuilt candidate is quiet for `:help`, the CLI help paths, and every server run in the native, installed and rehearsal gates. The deprecated dependency calls remain; nothing is promised for a JDK that removes them.

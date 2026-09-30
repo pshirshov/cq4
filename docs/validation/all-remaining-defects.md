@@ -102,3 +102,7 @@ Actual-hostname checks:
 `closeout.py` resolved D25 (revision 4), D26 (2), D27 (2) and D66 (3) in one change, with model-declared delivery descriptions and commit/file citations. Before/request/result/after records are retained. D25's resolution states that it is a warning-suppression mitigation and that the deprecated dependency calls remain. After closeout, the live project has no Open defects. Human release acceptance remains pending.
 
 The git-excluded harness configurations still name the old checkout path; regenerate them with `cq configure`.
+
+## D25 reopened, 2026-09-30
+
+The D25 closeout above claimed that native packages need no JVM option; that was never tested and was wrong. The installed native executable still printed the warning, so D25 was reopened at revision 7. The correction and its evidence are recorded in [the lazy-values investigation](scala-lazyvals-warning.md#native-correction-2026-09-30) and [the session/UI delivery](session-ui.md).

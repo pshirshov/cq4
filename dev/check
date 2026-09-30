@@ -401,8 +401,9 @@ def verify_test_report(output: str):
 
 
 def native_jvm_options():
-    # The image fixes its sun.misc.Unsafe memory-access mode at build time, so the builder JVM receives .jvmopts.
-    return ["-J" + line.strip() for line in (ROOT / ".jvmopts").read_text().splitlines() if line.strip()]
+    # The image fixes its sun.misc.Unsafe memory-access mode at build time, so the builder JVM receives that .jvmopts setting.
+    return ["-J" + line.strip() for line in (ROOT / ".jvmopts").read_text().splitlines()
+            if line.strip().startswith("--sun-misc-unsafe-memory-access=")]
 
 
 def free_port():

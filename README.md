@@ -131,7 +131,7 @@ npm run build
 nix develop -c sbt --server --batch --no-colors ';server/compile;show server/runtimeClasspath;exit'
 ```
 
-Use the emitted classpath with `java --sun-misc-unsafe-memory-access=allow -cp <classpath> cq.server.Main` from the consumer directory (inside `nix develop` or with Java 25 available). The option suppresses warnings from older dependencies' lazy values; it does not replace their deprecated calls. sbt and its forked applications receive this setting from `.jvmopts`. Native packages need no JVM option. Set `CQ_TOKEN` to the operator or scoped credential. Supported commands:
+Use the emitted classpath with `java --sun-misc-unsafe-memory-access=allow -cp <classpath> cq.server.Main` from the consumer directory (inside `nix develop` or with Java 25 available). The option suppresses warnings from older dependencies' lazy values; it does not replace their deprecated calls. sbt and its forked applications receive this setting from `.jvmopts`. Native packages fix this mode when the image is built: the native gate passes the `.jvmopts` setting to `native-image` and fails if startup prints the warning; runtime options cannot change it. Set `CQ_TOKEN` to the operator or scoped credential. Supported commands:
 
 ```text
 cq init --endpoint http://127.0.0.1:8765
