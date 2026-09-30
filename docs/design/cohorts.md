@@ -9,7 +9,7 @@ Before a managed workflow starts a child, the host considers a bounded pool of s
 Selection must establish these properties:
 
 - Only selected descendants are candidates. Contextual milestones never introduce sibling work.
-- The entire group shares a compatible operation and a common context witness; a chain of pairwise overlap is insufficient.
+- The entire group shares a compatible operation and a common context witness; a chain of pairwise overlap is insufficient. The only exception is a Planner organisation group (`CohortReason.PlannerOrganisation`, rule 1 below), which carries no witness and instead requires every member to be organisable within the same workflow roots.
 - Every member remains separately identified and receives its own outcome.
 - A recommendation is neither a claim nor an execution. The ordinary atomic claim still decides concurrent ownership.
 - Membership is immutable once execution starts. A new round may produce different groups without changing earlier assignments or spend.

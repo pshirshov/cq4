@@ -30,6 +30,7 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
         case Command.Graph(input) => ledger.workset(scope, input.roots, input.after, input.snapshot, input.limit).map(Result.Workset.apply)
         case Command.Read(ReadInput(_, ReadSelection.ItemDetails(members, bytes))) => ledger.details(scope, members, bytes).map(Result.Details.apply)
         case Command.Read(ReadInput(_, ReadSelection.Claims(members))) => ledger.claimPreview(scope, members).map(Result.Claims.apply)
+        case Command.Read(ReadInput(_, ReadSelection.ItemDetail(id))) => ledger.get(scope, id).map(Result.Detail.apply)
         case _ => ZIO.fail(new IllegalStateException("Unexpected selection read"))
       }
       Unsafe.unsafe { implicit unsafe => runtime.unsafe.run(effect.either).getOrThrowFiberFailure() } match {
@@ -524,6 +525,28 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
           Wire.encode(ChildResult_JsonCodec, result)))
         admitted <- admissions.admit(collector, HostAdmissionInput(f.scope.project, stored.id, f.scope.actor))
         _ <- assertIO(admitted.decision == AdmissionDecision.Accepted())
+        // Plan review: a Reviewer(Plan) child reviews the admitted Planner result before the governor applies its proposal.
+        reads = new EvidenceApi(api(ledger, f.scope, runtime), artifacts, admissions, f.scope, runtime)
+        reviewWork = DispatchWork.Reviewer(ReviewerMode.Plan)
+        reviewDispatch = DispatchRequest(RequestId(uuid), reviewWork, Harness.Codex, choice.members, Nil, Nil, Some(stored.id), claim.fence, choice.limits)
+        _ <- assertIO(CohortAssessmentPolicy.reviewable(dispatch.work, dispatch.members, report))
+        subject <- ZIO.attemptBlocking(new WorkflowAssembly(reads, f.scope.project, new WorkflowAssets).assemble(WorkflowRequest.Review(stored.id, ReviewerMode.Plan)))
+        _ <- assertIO(subject.subject.contains(WorkflowSubject(stored.id, DispatchWork.Planner(), choice.members, None)))
+        _ <- ZIO.attemptBlocking(new WorkflowExecution(reads, f.scope.project, f.scope.actor.session, Some(WorkflowRequest.Review(stored.id, ReviewerMode.Plan)))
+          .authorize(DispatchCommand.Start(reviewDispatch)))
+        reviewAssignment <- usage.assign(collector, Assignment(AssignmentId(uuid), f.scope.project, claim.members, Attribution.Shared, Some(uuid), None))
+        reviewAttempt <- usage.start(collector, Attempt(AttemptId(uuid), reviewAssignment.id, Some(parent.id), f.scope.actor.session, Role.Reviewer, Harness.Codex, "fixture", "fixture", "fixture", 1002))
+        review = ChildResult(reviewAttempt.id, reviewDispatch, GitCommit("a" * 40), None,
+          ChildReport.Review(choice.members.map(ref => ReviewMember(ref.id, ReviewVerdict.Accepted, Nil)), None), Nil)
+        reviewed <- artifacts.upload(collector, ArtifactUpload(f.scope.project, ArtifactId(uuid), reviewAttempt.id, ArtifactKind.Result, "application/json",
+          Wire.encode(ChildResult_JsonCodec, review)))
+        reviewAdmitted <- admissions.admit(collector, HostAdmissionInput(f.scope.project, reviewed.id, f.scope.actor))
+        _ <- assertIO(reviewAdmitted.decision == AdmissionDecision.Accepted())
+        verdicts <- ZIO.attemptBlocking(new ArtifactReader(reads.call, f.scope.project).result(reviewed.id).value)
+        _ <- assertIO(verdicts.request.previous.contains(stored.id) && (verdicts.report match {
+          case ChildReport.Review(members, None) => members.map(_.item).toSet == claim.members && members.forall(_.verdict == ReviewVerdict.Accepted)
+          case _ => false
+        }))
         preview <- proposals.preview(f.scope, stored.id)
         _ <- assertIO(preview.role == Role.Planner && preview.operations.size == 2)
         _ <- proposals(f.scope, stored.id)
