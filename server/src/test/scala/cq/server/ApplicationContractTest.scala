@@ -57,6 +57,14 @@ abstract class ApplicationContractTest extends SpecZIO with AssertZIO {
           _ <- assertIO(scala.util.Try(authorization(Now + 10000).authenticate(token.value, None)).isFailure)
           _ <- assertIO(scala.util.Try(auth.authenticate(token.value + "x", None)).isFailure)
           _ <- assertIO(scala.util.Try(auth.authenticate(Token, None)).isFailure)
+          browser = auth.login(Token, UUID.randomUUID().toString)
+          _ <- assertIO(scala.util.Try(authorization(Now + 30L * 24 * 60 * 60 * 1000).authenticate(browser.value, None)).isSuccess)
+          day = 24L * 60 * 60 * 1000
+          _ <- assertIO(scala.util.Try(authorization(Now + 401 * day).authenticate(browser.value, None)).isFailure)
+          later = authorization(Now + 399 * day)
+          renewed = later.renew(later.authenticate(browser.value, None))
+          _ <- assertIO(authorization(Now + 700 * day).authenticate(renewed.value, None).scope(first) == later.authenticate(browser.value, None).scope(first))
+          _ <- assertIO(scala.util.Try(auth.renew(worker)).isFailure)
         } yield ()
     }
 

@@ -27,7 +27,9 @@ final class Authority private[server] (val credential: Credential) {
 }
 
 final class Authorization(access: AccessConfig, clock: Clock) {
-  private val SessionMillis = 12L * 60 * 60 * 1000
+  // Browsers cap cookie lifetime at 400 days; each app load renews the session, and replacing the operator token revokes it.
+  val SessionSeconds: Long = 400L * 24 * 60 * 60
+  private val SessionMillis = SessionSeconds * 1000
   private val MaxGrantMillis = 24L * 60 * 60 * 1000
   private val MaxTokenLength = 8192
   private val encoder = Base64.getUrlEncoder.withoutPadding()
@@ -47,6 +49,10 @@ final class Authorization(access: AccessConfig, clock: Clock) {
     if (!equal(bearer, access.token)) throw DomainFailure(Fault.Denied("Invalid operator credential"))
     val session = Try(UUID.fromString(sessionId)).getOrElse(throw DomainFailure(Fault.Invalid("Login requires CQ-Session UUID")))
     sign(Credential.RootSession(SessionId(session), Math.addExact(clock.millis(), SessionMillis)))
+  }
+  def renew(authority: Authority): AccessToken = authority.credential match {
+    case Credential.RootSession(session, _) => sign(Credential.RootSession(session, Math.addExact(clock.millis(), SessionMillis)))
+    case _: Credential.Scoped => throw DomainFailure(Fault.Denied("Only operator browser sessions can be renewed"))
   }
   def grant(authority: Authority, request: GrantRequest): AccessToken = {
     authority.requireRoot()

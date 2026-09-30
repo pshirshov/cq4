@@ -62,14 +62,19 @@ final class Transport(application: Application, authorization: Authorization, ac
     case GET -> Root / "style.css" => assets.stylesheet
     case request @ POST -> Root / "api" / "login" => guarded {
       ZIO.attempt(authorization.login(bearer(request).getOrElse(""), header(request, "CQ-Session").getOrElse(""))).flatMap { token =>
-        encoded(Status.Ok, AccessToken_JsonCodec, token).map(_.putHeaders(cookie(token.value, 12L * 60 * 60)))
+        encoded(Status.Ok, AccessToken_JsonCodec, token).map(_.putHeaders(cookie(token.value, authorization.SessionSeconds)))
       }
     }
     case request @ POST -> Root / "api" / "logout" => guarded {
       authenticate(request).as(Response[Task](Status.NoContent).putHeaders(cookie("", 0L)))
     }
     case request @ GET -> Root / "api" / "hello" => guarded {
-      authenticate(request) *> encoded(Status.Ok, ProtocolHello_JsonCodec, ProtocolHello(apiVersion, List(apiVersion)))
+      authenticate(request).flatMap { authority =>
+        encoded(Status.Ok, ProtocolHello_JsonCodec, ProtocolHello(apiVersion, List(apiVersion))).map { response =>
+          if (bearer(request).isEmpty && authority.root) response.putHeaders(cookie(authorization.renew(authority).value, authorization.SessionSeconds))
+          else response
+        }
+      }
     }
     case request @ POST -> Root / "api" / "grant" => guarded {
       for {
