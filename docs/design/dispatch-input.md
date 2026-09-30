@@ -12,6 +12,8 @@ The contract admits 1–16 members, up to 16 guidance references and 8 artifact 
 
 `InputAssembler` depends on `ServerApi`, the authenticated governing scope and a clock. It renews the supplied claim and requires the exact owner actor, fence and member set. It fetches each requested item and requires its exact revision. Guidance is input data and does not expand the work assignment.
 
+Planner and Worker inputs additionally carry `operatorRequirements`: the operator's governing request text (the `cq run` input file, or the text supplied at attached workflow activation), bounded to 16,384 code points with an explicit truncation marker beyond that. It is delivered by the host, not copied by the governor, so a stated check or evidence rule reaches the child that proposes or implements a Task. Explorer and Reviewer inputs omit it.
+
 Each input artifact is bounded to 128 KiB and fetched by Unicode code-point pages. Every page must preserve metadata, offsets, progress and the final-page flag. The assembled bytes must match the immutable artifact's byte count and SHA-256. Invalid Unicode, mismatched metadata, oversized inputs and stale references fail explicitly. The combined `ChildInput` is bounded to 192 KiB, including all materialized data and the previous result. It is for the host/child path, not the parent response.
 
 Assembly checks a 60-second budget before each server call. An in-flight call retains the HTTP adapter's own deadline; this is not a hard 60-second cancellation timer. A final renewal rechecks the claim before returning. These renewals do not replace claim maintenance during execution or revision/fence checks at final admission. Reads establish the requested individual revisions; they do not claim an atomic multi-item snapshot.

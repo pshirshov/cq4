@@ -401,7 +401,7 @@ root adt ServerFrame {
 
 root id GitCommit { value: str }
 root data WorkspaceSpec { project: ProjectId owner: SessionId attempt: AttemptId repository: str base: GitCommit }
-enum WorkspaceAdmission { Open Quarantined }
+enum WorkspaceAdmission { Open Quarantined Removed }
 root data WorkspaceObservation { head: GitCommit gitCommon: str gitDirectory: str verifiedAt: i64 }
 root data WorkspaceRecord { spec: WorkspaceSpec directory: str admission: WorkspaceAdmission observed: opt[WorkspaceObservation] quarantineReason: opt[str] }
 
@@ -445,7 +445,7 @@ root data AttachedPiEvent {
   input: opt[i64] output: opt[i64] cacheRead: opt[i64] cacheWrite: opt[i64] reasoning: opt[i64] totalTokens: opt[i64] costUSD: opt[DecimalAmount]
 }
 root data AttachedPiSample { event: AttachedPiEvent receivedAt: i64 }
-root data WorkflowActivation { id: RequestId context: WorkflowContext }
+root data WorkflowActivation { id: RequestId context: WorkflowContext operatorRequirements: str }
 root data AttachedContext {
   session: SessionId attempt: AttemptId directory: str project: ProjectConfig
   routes: lst[HarnessRoute] checks: lst[str] limits: HostLimits integrationTarget: opt[str]
@@ -453,7 +453,7 @@ root data AttachedContext {
 }
 root adt SessionCommand {
   data Context {}
-  data Workflow { id: RequestId request: WorkflowRequest }
+  data Workflow { id: RequestId request: WorkflowRequest operatorRequirements: str }
 }
 root adt SessionReply {
   data Context { value: AttachedContext }
@@ -608,7 +608,7 @@ root data HostIntegrationInput { project: ProjectId operation: HostIntegration }
 root data ResolvedArtifact { metadata: ArtifactMetadata body: str }
 root data ChildInput {
   project: ProjectId request: DispatchRequest members: lst[ItemView] guidance: lst[ItemView]
-  artifacts: lst[ResolvedArtifact] previous: opt[ChildResult]
+  artifacts: lst[ResolvedArtifact] previous: opt[ChildResult] operatorRequirements: opt[str]
 }
 root data ChildExecutionInput { input: ChildInput base: GitCommit checks: lst[ValidationCheck] }
 enum ValidationState { Passed Failed Unknown }

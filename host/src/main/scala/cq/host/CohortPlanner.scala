@@ -161,7 +161,7 @@ final class CohortPlanner(api: ServerApi, owner: Scope, bases: ExecutionBase, ch
     val refs = members.map(value => ItemRevision(value.item.id, value.item.revision))
     val dispatch = DispatchRequest(request.request, work, Harness.Claude, refs, request.guidance, request.artifacts, request.previous,
       Fence(ClaimId(request.request.value), Long.MaxValue), request.limits)
-    val input = ChildInput(owner.project, dispatch, members, context.guidance, context.artifacts, context.previous)
+    val input = ChildInput(owner.project, dispatch, members, context.guidance, context.artifacts, context.previous, None)
     refs.map(_.id).toSet.intersect(request.guidance.map(_.id).toSet).isEmpty &&
       HostFiles.encode(ChildInput_JsonCodec, input).getBytes(UTF_8).length <= ChildContracts.MaxInputBytes
   }

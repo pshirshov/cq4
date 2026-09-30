@@ -63,7 +63,7 @@ final class SessionDelivery(journal: JobRepository, workspaces: WorkspaceService
 
   private def quarantine(owner: Scope, attempt: AttemptId): Task[Unit] =
     workspaces.get(owner, attempt).flatMap { value =>
-      if (value.admission == WorkspaceAdmission.Quarantined) ZIO.unit
+      if (value.admission != WorkspaceAdmission.Open) ZIO.unit
       else workspaces.quarantine(owner, attempt, Interrupted).unit
     }.catchSome { case DomainFailure(_: Fault.Missing) => ZIO.unit }
 

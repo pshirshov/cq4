@@ -278,7 +278,7 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
           intercept[IllegalArgumentException](reopened.retain(ticket.copy(source = IntegrationId(uuid))))
           val request = f.worker.request.copy(request = RequestId(uuid), work = DispatchWork.Worker(WorkerMode.ResolveConflict),
             previous = Some(f.intent.worker), artifacts = List(CombinationPlans.artifact(plan)))
-          val assembler = new InputAssembler(governor, f.owner, clock)
+          val assembler = new InputAssembler(governor, f.owner, clock, "")
           val input = assembler.assemble(request)
           assert(prepare.consume(input).contains(plan))
           List(DispatchWork.Worker(WorkerMode.Implement), DispatchWork.Worker(WorkerMode.Probe), DispatchWork.Reviewer(ReviewerMode.Candidate)).foreach { work =>

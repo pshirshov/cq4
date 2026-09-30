@@ -370,6 +370,8 @@ final class JobSupervisorProcess extends SpecZIO with AssertZIO {
             release.await.timeoutFail(new IllegalStateException("Preparation fixture was not released"))(zio.Duration.fromSeconds(5)) *> local.fixture.service.prepare(scope, spec)
           override def get(scope: Scope, attempt: AttemptId) = local.fixture.service.get(scope, attempt)
           override def quarantine(scope: Scope, attempt: AttemptId, reason: String) = local.fixture.service.quarantine(scope, attempt, reason)
+          override def remove(scope: Scope, attempt: AttemptId) = local.fixture.service.remove(scope, attempt)
+          override def prune(scope: Scope, repository: String) = local.fixture.service.prune(scope, repository)
         }
         _ <- ZIO.scoped {
           for {

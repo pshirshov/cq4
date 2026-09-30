@@ -35,7 +35,7 @@ final class AttachedGateway(config: SupervisorConfig, authority: SupervisorAutho
         command
       }.flatMap {
         case _: SessionCommand.Context => ZIO.succeed(SessionReply.Context(context))
-        case SessionCommand.Workflow(id, request) => workflow.activate(id, request).map(SessionReply.Workflow.apply)
+        case SessionCommand.Workflow(id, request, operatorRequirements) => workflow.activate(id, request, operatorRequirements).map(SessionReply.Workflow.apply)
       }.map(value => SessionReply_JsonCodec.encode(CodecContext, value) -> false)
     case "dispatch" =>
       ZIO.attempt {

@@ -151,7 +151,7 @@ object SupervisorProgram {
 
 final class SupervisorProgram(config: SupervisorConfig, registry: HarnessRegistry, jobs: JobSupervisor, authority: SupervisorAuthority,
   local: LocalControlServer, access: LocalAccess, dispatch: DispatchController, integrations: IntegrationController, combinations: CombinationController,
-  schemas: McpSchemas, output: HarnessOutput, workflows: WorkflowAssets, clock: Clock, context: CliContext) {
+  schemas: McpSchemas, output: HarnessOutput, workflows: WorkflowAssets, cleanup: WorkspaceCleanup, clock: Clock, context: CliContext) {
   private val MaxInputBytes = 192 * 1024
   private val MaxOutputBytes = 32 * 1024 * 1024
   private val MaxRecordBytes = 64 * 1024
@@ -195,6 +195,7 @@ final class SupervisorProgram(config: SupervisorConfig, registry: HarnessRegistr
       _ <- jobs.start(config.owner, WorkspaceSpec(project, attempt.session, attempt.id, config.run.repository, config.run.base), command)
       record <- jobs.await(config.owner, attempt.id)
       _ <- integrations.shutdown.zipPar(combinations.shutdown).zipPar(dispatch.shutdown)
+      _ <- cleanup.run
       receipt <- ZIO.attemptBlocking {
         val stdout = if (Files.exists(payload.resolve("stdout"))) HostFiles.bytes(payload.resolve("stdout"), MaxOutputBytes) else Array.emptyByteArray
         val stderr = if (Files.exists(payload.resolve("stderr"))) HostFiles.bytes(payload.resolve("stderr"), MaxOutputBytes) else Array.emptyByteArray
@@ -261,12 +262,14 @@ object SupervisorPlugin extends PluginDef {
       new WorkflowExecution(authority.governor, config.project.project, config.owner.actor.session, config.workflow)
     }
     make[LocalAccess]
+    make[OperatorRequirements].from((config: SupervisorConfig) => new OperatorRequirements(config.input))
     make[ChildRunner]
     make[DispatchController].fromResource[DispatchController.Resource]
     make[CohortController]
     make[IntegrationController].fromResource[IntegrationController.Resource]
     make[CombinationController].fromResource[CombinationController.Resource]
     make[LocalControl]
+    make[WorkspaceCleanup]
     make[LocalControlServer].fromResource[LocalControlServer.Resource]
     make[SupervisorProgram]
     make[AttachedChannels].fromEffect(ZIO.attempt(AttachedChannels(System.in, System.out,

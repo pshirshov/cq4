@@ -8,12 +8,18 @@ trait WorkspaceRepository[F[_, _]] {
   def prepare(spec: WorkspaceSpec): F[Throwable, WorkspaceRecord]
   def get(attempt: AttemptId): F[Throwable, Option[WorkspaceRecord]]
   def quarantine(attempt: AttemptId, reason: String): F[Throwable, WorkspaceRecord]
+  /** Removes an open workspace whose Git identity still matches its record; a mismatch quarantines the record instead. */
+  def remove(attempt: AttemptId): F[Throwable, WorkspaceRecord]
+  /** Drops the source repository's worktree registrations whose directories no longer exist; returns how many. */
+  def prune(repository: String): F[Throwable, Int]
 }
 
 trait WorkspaceService[F[_, _]] {
   def prepare(scope: Scope, spec: WorkspaceSpec): F[Throwable, WorkspaceRecord]
   def get(scope: Scope, attempt: AttemptId): F[Throwable, WorkspaceRecord]
   def quarantine(scope: Scope, attempt: AttemptId, reason: String): F[Throwable, WorkspaceRecord]
+  def remove(scope: Scope, attempt: AttemptId): F[Throwable, WorkspaceRecord]
+  def prune(scope: Scope, repository: String): F[Throwable, Int]
 }
 
 object WorkspaceService {
@@ -46,5 +52,18 @@ object WorkspaceService {
       _ <- F.fromEither(Try(LedgerPolicy.invalid(reason.trim.nonEmpty && reason.length <= LedgerPolicy.MaxTitle, "Quarantine reason required")).toEither)
       record <- repository.quarantine(attempt, reason)
     } yield record
+
+    override def remove(scope: Scope, attempt: AttemptId): F[Throwable, WorkspaceRecord] = for {
+      _ <- get(scope, attempt)
+      record <- repository.remove(attempt)
+    } yield record
+
+    override def prune(scope: Scope, repository: String): F[Throwable, Int] = for {
+      _ <- F.fromEither(Try {
+        if (!Set(Role.Governor, Role.Human).contains(scope.actor.role)) throw DomainFailure(Fault.Denied("Worktree pruning requires a governing role"))
+        LedgerPolicy.invalid(java.nio.file.Path.of(repository).isAbsolute, "Workspace repository must be absolute")
+      }.toEither)
+      count <- this.repository.prune(repository)
+    } yield count
   }
 }

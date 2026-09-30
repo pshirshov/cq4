@@ -10,7 +10,17 @@ Preparation resolves the committed base, persists ownership, creates a detached 
 
 Admission (`Open` or `Quarantined`) is separate from the observed creation record. The latter contains verified base, Git common directory and observation time. It is evidence of preparation, not a live observation of the workspace after agents run. Quarantine retains that observation and the filesystem. A failed or uncertain creation records quarantine and leaves any directory/registration available for inspection. A pending ownership record is never silently treated as a completed creation. Missing/inconsistent ownership records fail explicitly. Repeated preparation returns the same verified record only for identical ownership/base, open admission and reverified Git top-level/common-directory identity. Replacement or missing worktree identity quarantines the record without discarding its previous observation.
 
-Records use generated codecs, bounded reads, fsync and atomic rename. Restart can read completed or quarantined records; it does not adopt harness processes. Cleanup/deletion, candidate integration, process ownership and proof of termination are M2/M3 work. This foundation deliberately has no destructive workspace removal operation.
+Records use generated codecs, bounded reads, fsync and atomic rename. Restart can read completed or quarantined records; it does not adopt harness processes. Candidate integration, process ownership and proof of termination are M2/M3 work.
+
+## Lifecycle and removal
+
+Admission is `Open`, `Quarantined` or `Removed`. A workspace exists for every job the session launches: the managed governor itself, each child, each host validation check, each reviewer-declared check and each integration's Git job. Candidates are captured as commits under `refs/cq/candidates/<attempt>` in the shared object store, so a worktree is not needed once its result has been collected.
+
+At governing-session shutdown (`cq run` after the governor exits, `cq host` when the attached peer closes), after the dispatch, integration and combination controllers have settled their work, the host sweeps the session's job journal. It removes the workspace of every job that is `Settled` and whose record is `Open` with a confirmed observation, except jobs referenced by an integration that is still prepared, running or awaiting server acknowledgement. Quarantined workspaces are retained for inspection; the runner quarantines the workspace of a child that failed, was cancelled or lost admission, so those remain until an operator inspects them. Unsettled or uncertain jobs are retained. The sweep logs the removed count and each retained workspace with its reason; it never fails the session.
+
+Removal reverifies the worktree from inside (`--show-toplevel`, `--git-common-dir`, `--absolute-git-dir`) against the recorded observation and the source repository's common directory, then runs `git worktree remove --force --force` (the second `--force` releases CQ's own lock) and `git worktree prune` from the source repository, and records `Removed`. A workspace whose recorded Git directory no longer matches, including one whose `.git` file still points at a relocated state root, is never deleted: its record is quarantined with a `Removal refused` reason and the directory and registration stay for the operator. `Removed` records keep their observation and cannot be prepared again.
+
+`cq host` startup prunes the source repository's registrations whose directories no longer exist and logs how many. Git never prunes a locked registration, so entries locked with CQ's own `CQ attempt` reason are unlocked first; other locks are left alone.
 
 ## Bounded Git commands
 
