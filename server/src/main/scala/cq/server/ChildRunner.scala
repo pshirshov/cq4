@@ -185,7 +185,7 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
         stored <- ZIO.attemptBlocking {
           entry.check()
           claim(entry, true)
-          val value = ChildResult(entry.ticket.attempt.id, entry.ticket.request, base, candidate, report, validation)
+          val value = ChildResult(entry.ticket.attempt.id, entry.ticket.request, base, candidate, report, validation, RetainedEvidence(Nil, Nil))
           ChildContracts.result(config.project.project, value)
           value
         }

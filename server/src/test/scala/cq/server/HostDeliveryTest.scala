@@ -112,8 +112,8 @@ final class HostDeliveryLocal extends AnyWordSpec {
         Fence(ClaimId(UUID.randomUUID()), 1), HostLimits(3000, 10000, 1000, 300, 2000, 262144))
       val ticket = DispatchTicket(request, assignment, record, HarnessSetting(Harness.Codex, "/fixture", "fixture", "fixture", "0.156.1", Nil, Set.empty), None)
       val ready = ChildResult(a, request, GitCommit("a" * 40), Some(GitCommit("b" * 40)),
-        ChildReport.Work(List(WorkMember(item.id, WorkDisposition.CandidateReady, "Ready"))), Nil)
-      val blocked = ready.copy(report = ChildReport.Work(List(WorkMember(item.id, WorkDisposition.Blocked, "Blocked"))))
+        ChildReport.Work(List(WorkMember(item.id, WorkDisposition.CandidateReady, "Ready", Nil))), Nil, RetainedEvidence(Nil, Nil))
+      val blocked = ready.copy(report = ChildReport.Work(List(WorkMember(item.id, WorkDisposition.Blocked, "Blocked", Nil))))
       val intent = ChildPublication(p, owner, Some(ready), DispatchProjection.pending(ticket),
         AttemptOutcome(RequestId(NativeArtifacts.id(a, "outcome").value), a, AttemptState.Completed, 2000, Nil, None))
       val upload = ArtifactUpload(p, NativeArtifacts.id(a, "result"), a, ArtifactKind.Result, "application/json", HostFiles.encode(ChildResult_JsonCodec, blocked))

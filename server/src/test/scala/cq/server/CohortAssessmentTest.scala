@@ -90,10 +90,10 @@ final class CohortAssessmentLocal extends AnyWordSpec {
       val request = DispatchRequest(RequestId(UUID.randomUUID()), DispatchWork.Planner(), Harness.Codex, members, Nil, Nil, None,
         Fence(ClaimId(UUID.randomUUID()), 1), HostLimits(3000, 10000, 1000, 300, 2000, 262144))
       val initial = DispatchStatus(request.request, attempt, DispatchPhase.Running, None, members.map(_.id), DispatchProjection.EmptyCounts,
-        ChildNext.Wait, None, None, false, true)
+        ChildNext.Wait, None, None, None, false, true)
       val handle = ArtifactId(UUID.randomUUID())
       def project(value: CohortAssessment): DispatchStatus = DispatchProjection.completed(initial,
-        ChildResult(attempt, request, GitCommit("a" * 40), None, report.copy(assessments = List(value)), Nil), handle)
+        ChildResult(attempt, request, GitCommit("a" * 40), None, report.copy(assessments = List(value)), Nil, RetainedEvidence(Nil, Nil)), handle)
       val small = project(assessment)
       val large = project(assessment.copy(objective = "PRIVATE_ASSESSMENT " * 400))
       assert(small == large && small.counts.assessed == 3 && small.counts.proposed == 0 && small.next == ChildNext.ConsiderGrouping)

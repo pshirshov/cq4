@@ -118,7 +118,7 @@ final class CohortProgressLocal extends AnyWordSpec {
         1, 1, actor.copy(role = Role.Collector), 1)
       val value = ChildResult(attempt, request, GitCommit("a" * 40), Some(GitCommit("b" * 40)),
         ChildReport.Review(List(ReviewMember(id(1), ReviewVerdict.Accepted, Nil)), None),
-        List(ValidationEvidence("test", ValidationState.Failed, ArtifactId(UUID.randomUUID()))))
+        List(ValidationEvidence("test", ValidationState.Failed, ArtifactId(UUID.randomUUID()))), RetainedEvidence(Nil, Nil))
       def source(result: ChildResult): CohortResultFingerprint = CohortResultFingerprint(result, Nil)
       def hash(result: ChildResult, artifacts: List[ResolvedArtifact]): String = CohortFingerprint(work, List(item(1)), Nil,
         artifacts.map(operative), List(source(result)), GitCommit("a" * 40), checks)
@@ -145,10 +145,10 @@ final class CohortProgressLocal extends AnyWordSpec {
       assert(hash(context, Nil) != noEvidence)
       assert(hash(context.copy(report = ChildReport.Evidence(List(EvidenceMember(id(2), EvidenceDisposition.Findings, "Changed research", Nil, Nil, Nil)))), Nil) != hash(context, Nil))
       val otherWorker = context.copy(request = context.request.copy(work = work),
-        report = ChildReport.Work(List(WorkMember(id(2), WorkDisposition.Blocked, "Observed another task's constraint"))))
+        report = ChildReport.Work(List(WorkMember(id(2), WorkDisposition.Blocked, "Observed another task's constraint", Nil))))
       assert(hash(otherWorker, Nil) != noEvidence)
       val ownWorker = otherWorker.copy(request = otherWorker.request.copy(members = List(member)),
-        report = ChildReport.Work(List(WorkMember(id(1), WorkDisposition.Blocked, "Unchanged own failure"))))
+        report = ChildReport.Work(List(WorkMember(id(1), WorkDisposition.Blocked, "Unchanged own failure", Nil))))
       assert(hash(ownWorker, Nil) == noEvidence)
     }
 

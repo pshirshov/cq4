@@ -9,7 +9,7 @@ object DispatchProjection {
   private val MaxBlockerCodePoints = 300
   def concise(value: String): String = value.substring(0, value.offsetByCodePoints(0, value.codePointCount(0, value.length).min(MaxBlockerCodePoints)))
   def pending(ticket: DispatchTicket): DispatchStatus = DispatchStatus(ticket.request.request, ticket.attempt.id,
-    DispatchPhase.Preparing, None, ticket.request.members.map(_.id), EmptyCounts, ChildNext.Wait, None, None, false, false)
+    DispatchPhase.Preparing, None, ticket.request.members.map(_.id), EmptyCounts, ChildNext.Wait, None, None, None, false, false)
   def completed(previous: DispatchStatus, result: ChildResult, handle: ArtifactId): DispatchStatus = {
     val failures = result.validation.count(_.state == ValidationState.Failed)
     val unknown = result.validation.count(_.state == ValidationState.Unknown)

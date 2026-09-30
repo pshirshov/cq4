@@ -220,7 +220,7 @@ abstract class SessionDeliveryTest extends SpecZIO with AssertZIO {
                 claim.fence, HostLimits(3000, 10000, 1000, 300, 2000, 262144))
               ticket = DispatchTicket(request, childAssignment, attempt, HarnessSetting(Harness.Codex, "/fixture", "fixture", "fixture", "0.156.1", Nil, Set.empty), None)
               result = ChildResult(attempt.id, request, fixture.base, Some(fixture.base),
-                ChildReport.Work(List(WorkMember(member.id, WorkDisposition.CandidateReady, "Candidate"))), Nil)
+                ChildReport.Work(List(WorkMember(member.id, WorkDisposition.CandidateReady, "Candidate", Nil))), Nil, RetainedEvidence(Nil, Nil))
               directory <- ZIO.attemptBlocking(Files.createTempDirectory("cq-sealed-recovery-"))
               journal <- ZIO.acquireRelease(ZIO.attemptBlocking(FileJobRepository.open(directory.resolve("journal"), owner.project, owner.actor.session)))(v => ZIO.attemptBlocking(v.close()).orDie)
               child = directory.resolve("children").resolve(attempt.id.value.toString)

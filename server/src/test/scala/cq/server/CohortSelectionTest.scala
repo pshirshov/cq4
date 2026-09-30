@@ -87,7 +87,7 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
       groups = created.items.grouped(2).map(members => CohortAssessment(compatibility, "Share implementation", "No dependency conflict", "Separate acceptance",
         members.map(member => CohortMemberAssessment(member, List(CohortCriterion(0, Set("acceptance"), "Inspect this task")))))).toList
       report = ChildReport.Plan(created.items.map(ref => PlanMember(ref.id, PlanDisposition.Assessed, "Assessed")), None, groups)
-      result = ChildResult(attempt.id, dispatch, base, None, report, Nil)
+      result = ChildResult(attempt.id, dispatch, base, None, report, Nil, RetainedEvidence(Nil, Nil))
       stored <- artifacts.upload(collector, ArtifactUpload(scope.project, ArtifactId(uuid), attempt.id, ArtifactKind.Result, "application/json", Wire.encode(ChildResult_JsonCodec, result)))
       admitted <- admissions.admit(collector, HostAdmissionInput(scope.project, stored.id, scope.actor))
       _ <- assertIO(admitted.decision == AdmissionDecision.Accepted())
@@ -123,7 +123,7 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
     input = ChildExecutionInput(ChildInput(f.scope.project, dispatch, views, Nil, Nil, previous.map(_.result)), base, f.checks)
     _ <- artifacts.upload(f.collector, ArtifactUpload(f.scope.project, NativeArtifacts.id(attempt.id, "input"), attempt.id, ArtifactKind.Input,
       "application/json", Wire.encode(ChildExecutionInput_JsonCodec, input)))
-    result = ChildResult(attempt.id, dispatch, base, if (work == DispatchWork.Planner()) None else Some(GitCommit("b" * 40)), report, validation)
+    result = ChildResult(attempt.id, dispatch, base, if (work == DispatchWork.Planner()) None else Some(GitCommit("b" * 40)), report, validation, RetainedEvidence(Nil, Nil))
     stored <- artifacts.upload(f.collector, ArtifactUpload(f.scope.project, ArtifactId(uuid), attempt.id, ArtifactKind.Result, "application/json", Wire.encode(ChildResult_JsonCodec, result)))
     admitted <- admissions.admit(f.collector, HostAdmissionInput(f.scope.project, stored.id, f.scope.actor))
     _ <- assertIO(admitted.decision == AdmissionDecision.Accepted())
@@ -183,7 +183,7 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
         initial <- ZIO.attemptBlocking(planner.plan(input.copy(artifacts = List(fixture.artifact)), ArtifactId(uuid)))
         _ <- assertIO(initial.evidence.decision.choices.size == 1 && initial.evidence.decision.choices.head.members.size == 2)
         _ <- ZIO.attempt(progress.started(initial.fingerprints(initial.evidence.decision.choices.head.id)))
-        worker <- publish(fixture, input.work, ChildReport.Work(fixture.members.map(ref => WorkMember(ref.id, WorkDisposition.Failed, "Observed failure"))),
+        worker <- publish(fixture, input.work, ChildReport.Work(fixture.members.map(ref => WorkMember(ref.id, WorkDisposition.Failed, "Observed failure", Nil))),
           None, Nil, ledger, usage, artifacts, admissions)
         old <- ZIO.attemptBlocking(new ArtifactReader(reads.call, fixture.scope.project).result(fixture.artifact).value.report.asInstanceOf[ChildReport.Plan])
         views <- ZIO.foreach(fixture.members)(ref => ledger.get(fixture.scope, ref.id))
@@ -220,7 +220,7 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
         runtime <- ZIO.runtime[Any]
         fixture <- assessed(ledger, usage, artifacts, admissions, 6, CohortCompatibility.Compatible)
         worker <- publish(fixture, DispatchWork.Worker(WorkerMode.Implement), ChildReport.Work(fixture.members.map(ref =>
-          WorkMember(ref.id, WorkDisposition.Failed, "Observed failure"))), None, Nil, ledger, usage, artifacts, admissions)
+          WorkMember(ref.id, WorkDisposition.Failed, "Observed failure", Nil))), None, Nil, ledger, usage, artifacts, admissions)
         observed <- ZIO.foreach(List(("original", "same failure"), ("replay", "same failure"), ("changed", "new failure"))) { (name, body) =>
           val bytes = body.getBytes(java.nio.charset.StandardCharsets.UTF_8)
           val (out, uploads) = NativeArtifacts.binary(fixture.scope.project, worker.result.attempt, name, "text/plain", bytes)
@@ -278,7 +278,7 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
         prepared <- assessed(ledger, usage, artifacts, admissions, 6, CohortCompatibility.Compatible)
         fixture = prepared.copy(checks = Nil)
         worker <- publish(fixture, DispatchWork.Worker(WorkerMode.Implement), ChildReport.Work(fixture.members.map(ref =>
-          WorkMember(ref.id, WorkDisposition.CandidateReady, "Candidate"))), None, Nil, ledger, usage, artifacts, admissions)
+          WorkMember(ref.id, WorkDisposition.CandidateReady, "Candidate", Nil))), None, Nil, ledger, usage, artifacts, admissions)
         reviewer <- publish(fixture, DispatchWork.Reviewer(ReviewerMode.Candidate), ChildReport.Review(fixture.members.zipWithIndex.map { (ref, index) =>
           if (index == 0) ReviewMember(ref.id, ReviewVerdict.ChangesRequested, List("Fix this task"))
           else ReviewMember(ref.id, ReviewVerdict.Accepted, Nil)
@@ -549,7 +549,7 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
           Some(LedgerProposal(mutations, "Link tasks to the milestone and order them")), Nil)
         prepared <- ZIO.attempt(ProposalPolicy.prepare(dispatch.work, dispatch.members, report))
         _ <- assertIO(prepared.exists(_.mutations.size == 2))
-        result = ChildResult(attempt.id, dispatch, GitCommit("a" * 40), None, report, Nil)
+        result = ChildResult(attempt.id, dispatch, GitCommit("a" * 40), None, report, Nil, RetainedEvidence(Nil, Nil))
         stored <- artifacts.upload(collector, ArtifactUpload(f.scope.project, ArtifactId(uuid), attempt.id, ArtifactKind.Result, "application/json",
           Wire.encode(ChildResult_JsonCodec, result)))
         admitted <- admissions.admit(collector, HostAdmissionInput(f.scope.project, stored.id, f.scope.actor))
@@ -566,7 +566,7 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
         reviewAssignment <- usage.assign(collector, Assignment(AssignmentId(uuid), f.scope.project, claim.members, Attribution.Shared, Some(uuid), None))
         reviewAttempt <- usage.start(collector, Attempt(AttemptId(uuid), reviewAssignment.id, Some(parent.id), f.scope.actor.session, Role.Reviewer, Harness.Codex, "fixture", "fixture", "fixture", 1002))
         review = ChildResult(reviewAttempt.id, reviewDispatch, GitCommit("a" * 40), None,
-          ChildReport.Review(choice.members.map(ref => ReviewMember(ref.id, ReviewVerdict.Accepted, Nil)), None), Nil)
+          ChildReport.Review(choice.members.map(ref => ReviewMember(ref.id, ReviewVerdict.Accepted, Nil)), None), Nil, RetainedEvidence(Nil, Nil))
         reviewed <- artifacts.upload(collector, ArtifactUpload(f.scope.project, ArtifactId(uuid), reviewAttempt.id, ArtifactKind.Result, "application/json",
           Wire.encode(ChildResult_JsonCodec, review)))
         reviewAdmitted <- admissions.admit(collector, HostAdmissionInput(f.scope.project, reviewed.id, f.scope.actor))
