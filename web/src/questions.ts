@@ -3,6 +3,7 @@ import { BaboonCodecContext } from '../../generated/typescript/BaboonSharedRunti
 import { Dialog } from './dialog.js';
 import { button, element } from './editor.js';
 import { itemName } from './items.js';
+import { faultMessage } from './faults.js';
 import { uuidV4 } from './uuid.js';
 
 const CONTEXT = BaboonCodecContext.Default;
@@ -70,7 +71,7 @@ export class QuestionBatch {
   private error(error: unknown): void { this.dialog.error.textContent = String(error); this.dialog.error.hidden = false; }
   private async call(command: api.Command): Promise<api.Result> {
     const result = await this.effects.call(command);
-    if (result instanceof api.Result_Failed) throw new Error(JSON.stringify(api.Fault_JsonCodec.instance.encode(CONTEXT, result.fault)));
+    if (result instanceof api.Result_Failed) throw new Error(faultMessage(result.fault));
     return result;
   }
   open(project: api.ProjectId): void {
@@ -182,7 +183,7 @@ export class QuestionBatch {
       if (!(result instanceof api.Result_Changed || result instanceof api.Result_Failed)) throw new Error('Unexpected answer acknowledgement');
       if (result instanceof api.Result_Failed) {
         if (this.storage.getItem(key) === submitted) this.store(record.with({pending: undefined}));
-        failure = JSON.stringify(api.Fault_JsonCodec.instance.encode(CONTEXT, result.fault));
+        failure = faultMessage(result.fault);
         return;
       }
       if (this.storage.getItem(key) === submitted) this.storage.removeItem(key);

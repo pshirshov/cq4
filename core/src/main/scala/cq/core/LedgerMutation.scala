@@ -92,6 +92,8 @@ final class LedgerMutation(terminationPlanner: TerminationPlanner) {
             members.foreach { member =>
               val item = check(member.id, member.revision)
               invalid(!item.draft.archived, "Archive preview contains an already archived item")
+              val open = LedgerPolicy.openRelated(tx, member.id)
+              invalid(open.isEmpty, s"Archive excludes ${LedgerPolicy.prefix(member.id.ledger)}${member.id.number}: related open items ${open.map(o => LedgerPolicy.prefix(o.ledger) + o.number).mkString(", ")}")
               revise(item, item.draft.copy(archived = true), None)
             }
           case Mutation.Terminate(roots, intent, snapshot) =>

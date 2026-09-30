@@ -16,6 +16,7 @@ trait LedgerService[F[_, _]] {
   def counts(scope: Scope): F[Throwable, LedgerCounts]
   def complete(scope: Scope, query: String, cursor: Int, limit: Int): F[Throwable, QueryAnalysis]
   def termination(scope: Scope, roots: Set[ItemId], intent: TerminationIntent): F[Throwable, TerminationPreview]
+  def archivePreview(scope: Scope, query: String, limit: Int): F[Throwable, ArchivePlan]
   def workset(scope: Scope, roots: Set[ItemId], after: Option[ItemId], snapshot: Option[WorksetSnapshot], limit: Int): F[Throwable, WorksetPage]
   def history(scope: Scope, id: ItemId, before: Revision, limit: Int): F[Throwable, HistoryPage]
   def changes(scope: Scope, after: ChangeCursor, limit: Int): F[Throwable, ChangePage]
@@ -74,6 +75,7 @@ object LedgerService {
       ItemViews(items.result(), omitted.result())
     }
 
+    private val ArchiveScanLimit = 5000
     private def page(limit: Int): Unit = invalid(limit > 0 && limit <= MaxPage, s"Page size must be 1–$MaxPage")
 
     override def complete(scope: Scope, query: String, cursor: Int, limit: Int): F[Throwable, QueryAnalysis] =
@@ -81,6 +83,40 @@ object LedgerService {
 
     override def termination(scope: Scope, roots: Set[ItemId], intent: TerminationIntent): F[Throwable, TerminationPreview] =
       repository.transact(scope.project)(tx => terminationPlanner.preview(tx, scope, roots, intent, clock.millis()))
+
+    // Scans the query in ID order and partitions unarchived terminal matches into archivable members and retained ones.
+    override def archivePreview(scope: Scope, query: String, limit: Int): F[Throwable, ArchivePlan] = {
+      import izumi.functional.bio.{F, *}
+      F.fromEither(queries.parse(query).left.map(error => DomainFailure(Fault.QuerySyntax(error)))).flatMap { expression =>
+        repository.transact(scope.project) { tx =>
+          invalid(limit > 0 && limit <= LedgerPolicy.MaxTouchedItems, s"Archive preview size must be 1–${LedgerPolicy.MaxTouchedItems}")
+          val members = List.newBuilder[ItemSummary]
+          val retained = List.newBuilder[ArchiveRetention]
+          var selected = 0
+          var scanned = 0
+          var after: Option[ItemId] = None
+          var more = true
+          var truncated = false
+          while (more && !truncated && scanned < ArchiveScanLimit) {
+            val page = tx.scan(expression, after, MaxPage)
+            page.entries.foreach { item =>
+              scanned += 1
+              if (!item.archived && item.outcome.terminal) {
+                if (selected >= limit) truncated = true
+                else {
+                  val open = LedgerPolicy.openRelated(tx, item.id)
+                  if (open.isEmpty) members += item else retained += ArchiveRetention(item, open)
+                  selected += 1
+                }
+              }
+            }
+            after = page.entries.lastOption.map(_.id)
+            more = page.hasMore && page.entries.nonEmpty
+          }
+          ArchivePlan(members.result(), retained.result(), scanned, truncated || more, tx.cursor)
+        }
+      }
+    }
 
     override def workset(scope: Scope, roots: Set[ItemId], after: Option[ItemId], snapshot: Option[WorksetSnapshot], limit: Int): F[Throwable, WorksetPage] =
       repository.transact(scope.project)(tx => worksets.page(tx, roots, after, snapshot, limit))

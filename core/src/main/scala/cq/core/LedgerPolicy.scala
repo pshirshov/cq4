@@ -108,6 +108,8 @@ object LedgerPolicy {
     invalid(draft.body.length <= MaxBody, s"Body exceeds $MaxBody characters")
     invalid(draft.labels.size <= MaxLabels && draft.labels.forall(s => s.trim.nonEmpty && s.length <= MaxLabel), "Invalid labels")
     def text(value: String, field: String): Unit = invalid(value.trim.nonEmpty && value.length <= MaxBody, s"Invalid $field")
+    // Operator intake (ideas, defects, goals) may leave narrative fields empty; planning fills them in later.
+    def bounded(value: String, field: String): Unit = invalid(value.length <= MaxBody, s"Invalid $field")
     def texts(values: List[String], field: String): Unit = {
       invalid(values.size <= MaxNestedEntries, s"Invalid $field")
       values.foreach(text(_, field))
@@ -123,9 +125,9 @@ object LedgerPolicy {
     observations.foreach { value => text(value.description, "evidence description"); citations(value.citations) }
     draft.content match {
       case c: Content.Milestone => text(c.objective, "objective")
-      case c: Content.Idea => text(c.outcome, "outcome"); text(c.motivation, "motivation")
-      case c: Content.Defect => text(c.observed, "observed"); text(c.expected, "expected"); text(c.reproduction, "reproduction"); optional(c.cause, "cause")
-      case c: Content.Goal => text(c.outcome, "outcome"); invalid(c.acceptance.nonEmpty, "Acceptance is required"); texts(c.acceptance, "acceptance"); text(c.scope, "scope")
+      case c: Content.Idea => bounded(c.outcome, "outcome"); bounded(c.motivation, "motivation")
+      case c: Content.Defect => bounded(c.observed, "observed"); bounded(c.expected, "expected"); bounded(c.reproduction, "reproduction"); optional(c.cause, "cause")
+      case c: Content.Goal => bounded(c.outcome, "outcome"); texts(c.acceptance, "acceptance"); bounded(c.scope, "scope")
       case c: Content.Task => invalid(c.acceptance.nonEmpty, "Acceptance is required"); texts(c.acceptance, "acceptance"); optional(c.result, "result")
       case c: Content.Research => text(c.question, "research question"); optional(c.conclusion, "conclusion"); optional(c.recommendation, "recommendation")
       case c: Content.Hypothesis => text(c.claim, "claim"); text(c.rationale, "rationale"); optional(c.adjudication, "adjudication")
@@ -204,6 +206,9 @@ object LedgerPolicy {
   }
 
   def key(id: ItemId): (String, Long) = (id.ledger.toString, id.number)
+  // A terminal item stays out of archival while any related item (either direction) is still open: unarchived and not terminal.
+  def openRelated(tx: LedgerTransaction, id: ItemId): List[ItemId] =
+    tx.refs(id).map(_.target).distinct.filter(target => tx.summary(target).exists(related => !related.archived && !related.outcome.terminal)).sortBy(key)
 
   def canonical(source: ItemId, relation: Relation, target: ItemId): CanonicalEdge = {
     invalid(source != target, "Self references are not allowed")

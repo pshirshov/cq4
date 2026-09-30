@@ -4,6 +4,7 @@ import { Dialog } from './dialog.js';
 import { button, element } from './editor.js';
 import { icon } from './icons.js';
 import { itemName, parseItem } from './items.js';
+import { faultMessage } from './faults.js';
 import { itemView } from './presentation.js';
 
 export class ReferencePopup {
@@ -49,7 +50,7 @@ export class ReferencePopup {
     try {
       const result = await this.call(new api.Command_Read(new api.ReadInput(id.project, new api.ReadSelection_ItemDetail(id))));
       if (generation !== this.generation) return;
-      if (result instanceof api.Result_Failed) throw new Error(JSON.stringify(api.Fault_JsonCodec.instance.encode(BaboonCodecContext.Default, result.fault)));
+      if (result instanceof api.Result_Failed) throw new Error(faultMessage(result.fault));
       if (!(result instanceof api.Result_Detail)) throw new Error('Unexpected reference response');
       const item = result.view.item;
       this.dialog.body.replaceChildren(element('h3', `${itemName(item.id)} · ${item.draft.title}`),

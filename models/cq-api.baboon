@@ -129,6 +129,8 @@ root data TerminationClaim { fence: Fence owner: Actor members: lst[ItemId] affe
 root data TerminationPlan { roots: lst[ItemId] intent: TerminationIntent entries: lst[TerminationEntry] claims: lst[TerminationClaim] integrations: lst[IntegrationHold] canApply: bit }
 root data TerminationSnapshot { cursor: ChangeCursor digest: str }
 root data TerminationPreview { plan: TerminationPlan snapshot: TerminationSnapshot }
+root data ArchiveRetention { item: ItemSummary open: lst[ItemId] }
+root data ArchivePlan { members: lst[ItemSummary] retained: lst[ArchiveRetention] scanned: i32 limited: bit cursor: ChangeCursor }
 root adt Mutation {
   data Archive { members: lst[ItemRevision] }
   data Produce { producer: ItemId expected: Revision drafts: lst[ItemDraft] }
@@ -291,6 +293,7 @@ root adt ReadSelection {
   data Admission { attempt: AttemptId }
   data Claims { members: set[ItemId] }
   data Termination { roots: set[ItemId] intent: TerminationIntent }
+  data ArchivePreview { query: str limit: i32 }
   data QueryComplete { query: str cursor: i32 limit: i32 }
   data ArtifactInfo { id: ArtifactId }
   data ArtifactText { id: ArtifactId offset: i32 limit: i32 }
@@ -338,6 +341,7 @@ root adt Result {
   data Admission { record: ResultAdmission }
   data Claims { preview: ClaimPreview }
   data Termination { preview: TerminationPreview }
+  data ArchivePreview { plan: ArchivePlan }
   data Workset { page: WorksetPage }
   data QueryAnalyzed { analysis: QueryAnalysis }
   data ArtifactInfo { metadata: ArtifactMetadata }

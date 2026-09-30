@@ -12,6 +12,7 @@ import { itemView } from './presentation.js';
 import { Dialog } from './dialog.js';
 import { icon } from './icons.js';
 import { ArchiveDialog } from './archive.js';
+import { faultMessage } from './faults.js';
 import { attemptsTable, outcomesTable, auditTable } from './usage-view.js';
 import { TableColumns } from './table-columns.js';
 import { Notifications } from './notifications.js';
@@ -23,9 +24,8 @@ const PAGE_SIZE = 40;
 const LOAD_MORE_DISTANCE = 120;
 const MAX_QUERY_CHARACTERS = 4096;
 const COMPLETION_LIMIT = 30;
-function describe(value: unknown): string { return typeof value === 'string' ? value : JSON.stringify(value, null, 2); }
 function readResult(result: api.Result): api.Result {
-  if (result instanceof api.Result_Failed) throw new Error(describe(api.Fault_JsonCodec.instance.encode(CONTEXT, result.fault)));
+  if (result instanceof api.Result_Failed) throw new Error(faultMessage(result.fault));
   return result;
 }
 
@@ -321,7 +321,7 @@ class App {
           this.liveSubscription = null; this.updatesRejected = true;
           this.sync.textContent = 'Data: updates unavailable';
           this.usageFreshness.textContent = `Unavailable · ${this.usageObserved}`;
-          this.showError(describe(api.Fault_JsonCodec.instance.encode(CONTEXT, frame.fault)));
+          this.showError(faultMessage(frame.fault));
         }
       },
     });
@@ -433,7 +433,7 @@ class App {
         const selected = this.selection;
         const listed = items.some(({ summary }) => summary.id.project.value === selected.project.value && itemName(summary.id) === itemName(selected));
         // An open editor or item dialog keeps its item: a live change must not discard what the operator is working on.
-        const engaged = this.editor !== null || this.historyDialog.element.open || this.usageDialog.element.open;
+        const engaged = this.editor !== null || this.historyDialog.element.open || this.usageDialog.element.open || this.graph.dialog.element.open;
         if (listed || page.hasMore || engaged) await this.select(selected); else this.hideItem();
       }
       await this.loadUsage();
@@ -558,7 +558,11 @@ class App {
     (row !== null && row.isConnected ? row : this.items).focus();
   }
   // D71 close path without moving focus, shared with refreshes that drop the selection (D72).
-  private hideItem(): void { this.choose(null); if (this.workspace !== null) this.workspace.setDetailOpen(false); }
+  private hideItem(): void {
+    const inside = this.workspace !== null && this.workspace.content.contains(document.activeElement);
+    this.choose(null); if (this.workspace !== null) this.workspace.setDetailOpen(false);
+    if (inside) this.items.focus();
+  }
   private async select(id: api.ItemId): Promise<void> {
     this.choose(id); if (this.workspace !== null) this.workspace.setDetailOpen(true);
     const result = await this.readPanel('detail', new api.Command_Read(new api.ReadInput(this.currentProject(), new api.ReadSelection_ItemDetail(id))));

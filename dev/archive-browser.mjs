@@ -14,6 +14,11 @@ const selected=draft('Selected completed','Done',['batch'],false),cancelled=draf
 const change=mutations=>call({Change:{input:{project,change:{request:{value:randomUUID()},mutations,fences:[],reason:'Archive fixture'}}}});
 const created=await change([selected,cancelled,draft('Active','Ready',['batch'],false),draft('Outside filter','Done',[],false),draft('Already archived','Done',['batch'],true)].map(draft=>({Create:{draft}})));
 assert.ok(created.Changed);const ids=created.Changed.ack.items.map(i=>i.id);
+// D68: a terminal item related to an open item is kept out of the archive selection and listed with its open relation.
+const goal={title:'Open goal',body:'Still open',labels:[],archived:false,citations:[],content:{Goal:{status:'Open',outcome:'',acceptance:[],scope:''}}};
+const retainedCreate=await change([{Create:{draft:goal}},{Create:{draft:draft('Retained by goal','Done',['batch'],false)}}]);assert.ok(retainedCreate.Changed);
+const [goalRev,retainedRev]=retainedCreate.Changed.ack.items;
+assert.ok((await change([{Reference:{source:retainedRev.id,expectedSource:retainedRev.revision,relation:'DerivedFrom',target:goalRev.id,expectedTarget:goalRev.revision,present:true}}])).Changed);
 const detail=async id=>(await call({Read:{input:{project,selection:{ItemDetail:{id}}}}})).Detail.view.item;
 const history=async id=>(await call({Read:{input:{project,selection:{History:{id,before:{value:'9223372036854775807'},limit:200}}}}})).History.page.entries;
 const browser=await chromium.launch({headless:true});const context=await browser.newContext({viewport:{width:1366,height:768}});
@@ -23,7 +28,7 @@ let hold=false,held=null,resolveHeld;let pendingId=null;
 const captured=new Promise(resolve=>{resolveHeld=resolve;});
 await context.routeWebSocket(/\/ws$/,route=>{
  const server=route.connectToServer();
- route.onMessage(message=>{const frame=JSON.parse(String(message));if(previewHold!==null&&previewHold.id===null&&frame.Call?.command.Read?.input.selection.Browse)previewHold.id=frame.Call.id.value;if(hold&&frame.Call?.command.Change?.input.change.mutations.some(m=>m.Archive)){hold=false;pendingId=frame.Call.id.value;}server.send(message);});
+ route.onMessage(message=>{const frame=JSON.parse(String(message));if(previewHold!==null&&previewHold.id===null&&frame.Call?.command.Read?.input.selection.ArchivePreview)previewHold.id=frame.Call.id.value;if(hold&&frame.Call?.command.Change?.input.change.mutations.some(m=>m.Archive)){hold=false;pendingId=frame.Call.id.value;}server.send(message);});
  server.onMessage(message=>{const frame=JSON.parse(String(message));if(previewHold!==null&&frame.Reply?.id.value===previewHold.id){previewHold.release=()=>route.send(message);previewHold.resolve();}else if(frame.Reply?.id.value===pendingId){held=frame.Reply;pendingId=null;resolveHeld();}else route.send(message);});
 });
 const page=await context.newPage();page.setDefaultTimeout(6000);const cases=[];
@@ -45,6 +50,9 @@ try{
  cases.push('Delayed preview cannot reopen after query or project invalidation');
  await open();const selection=dialog().getByRole('table',{name:'Archive selection',exact:true});await selection.getByRole('cell',{name:'Selected cancelled',exact:true}).waitFor();
  assert.equal(await selection.locator('tbody tr').count(),2);assert.equal((await detail(ids[0])).draft.archived,false);cases.push('Preview selects only unarchived terminal filter matches and changes nothing');
+ const kept=dialog().getByRole('list',{name:'Retained items',exact:true});assert.equal(await kept.locator('li').count(),1);assert.match(await kept.textContent(),/T6 · Retained by goal · open: G1/);
+ const direct=await change([{Archive:{members:[{id:retainedRev.id,revision:(await detail(retainedRev.id)).revision}]}}]);assert.match(direct.Failed?.fault.Invalid?.message??'',/Archive excludes T6: related open items G1/);
+ cases.push('D68 terminal item with an open related item is kept out of the selection and refused by the server');
  await change([{Replace:{id:ids[1],expected:{value:'1'},draft:{...cancelled,title:'Edited after preview'}}}]);
  await dialog().getByRole('button',{name:'Confirm archive',exact:true}).click();await dialog().getByText('Archival rejected. Close this dialog and prepare a fresh preview.',{exact:true}).waitFor();
  assert.equal((await detail(ids[0])).draft.archived,false);assert.equal((await detail(ids[1])).draft.archived,false);cases.push('Stale member rejects whole preview');

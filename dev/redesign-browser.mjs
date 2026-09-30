@@ -65,6 +65,23 @@ export async function redesignChecks(browser, storageState, origin, evidence) {
       await dialog.getByRole('button', { name: 'Discard local draft', exact: true }).click();
     });
     if (await page.getByRole('button', { name: 'Discard local draft', exact: true }).isVisible()) await page.getByRole('button', { name: 'Discard local draft', exact: true }).click();
+    await check('D85/D86 title-only idea is accepted and faults are shown as text', async () => {
+      await page.getByRole('button', { name: 'New item', exact: true }).click();
+      const dialog = page.getByRole('dialog', { name: 'New item', exact: true });
+      await dialog.getByRole('button', { name: 'Create Idea', exact: true }).click();
+      await dialog.getByLabel('title', { exact: true }).fill('x'.repeat(301));
+      await dialog.getByRole('button', { name: 'Save item', exact: true }).click();
+      await dialog.getByRole('alert').filter({ hasText: 'Title must contain 1–300 characters' }).waitFor();
+      assert.equal((await dialog.getByRole('alert').textContent()).includes('{'), false, 'fault rendered as JSON');
+      await dialog.getByLabel('title', { exact: true }).fill('Only a title');
+      await dialog.getByRole('button', { name: 'Save item', exact: true }).click();
+      await page.getByText(/Saved I\d+ in project/).first().waitFor();
+      await page.locator('#detail-pane').getByRole('heading', { name: /^I\d+ · Only a title$/ }).waitFor();
+      const ideas = await call({ Search: { input: { project, query: 'ledger:Ideas', after: null, snapshot: null, limit: 20 } } });
+      assert.equal(ideas.Found.page.items.length, 1);
+      await page.getByRole('button', { name: 'D1 · Explain the integration guard', exact: true }).click();
+      await page.locator('#detail-pane').getByRole('heading', { name: 'D1 · Explain the integration guard', exact: true }).waitFor();
+    });
     await check('D34 history is a table and semantic revision viewer', async () => {
       await page.getByRole('button', { name: 'History', exact: true }).click();
       const dialog = page.getByRole('dialog', { name: 'History · D1', exact: true }); assert.equal(await dialog.count(), 1);

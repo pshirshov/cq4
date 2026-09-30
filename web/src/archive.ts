@@ -3,18 +3,16 @@ import { BaboonCodecContext } from '../../generated/typescript/BaboonSharedRunti
 import { button, element } from './editor.js';
 import { Dialog } from './dialog.js';
 import { itemName } from './items.js';
+import { faultMessage } from './faults.js';
 import { uuidV4 } from './uuid.js';
 
 const CONTEXT = BaboonCodecContext.Default;
-const PAGE_SIZE = 200;
 const MAX_MEMBERS = 512;
 const MAX_SCANNED = 5000;
-const SNAPSHOT_ATTEMPTS = 3;
 interface ArchiveEffects {
   call(command: api.Command): Promise<api.Result>;
   committed(project: api.ProjectId, acknowledgement: api.ChangeAck): Promise<void>;
 }
-interface Preview { items: api.ItemSummary[]; scanned: number; limited: boolean }
 
 export class ArchiveDialog {
   private generation = 0;
@@ -55,50 +53,39 @@ export class ArchiveDialog {
     const pending = this.pending(project);
     if (pending.length > 0) { this.renderPending(project, pending, generation); return; }
     this.dialog.body.replaceChildren(element('p', 'Preparing a snapshot of the current filter…'));
-    for (let attempt = 0; attempt < SNAPSHOT_ATTEMPTS; attempt++) {
-      const preview = await this.collect(project, query, order, current);
-      if (!current()) return;
-      if (preview === null) { this.dialog.body.replaceChildren(element('p', 'Items changed while preparing the preview; restarting it…')); continue; }
-      this.render(project, query, preview, generation); return;
-    }
-    throw new Error('Items kept changing during preview. Open a fresh archive preview when changes settle.');
+    const preview = await this.collect(project, query, current);
+    if (preview === null || !current()) return;
+    this.render(project, query, preview, generation);
   }
-  private async collect(project: api.ProjectId, query: string, order: api.ItemOrder, current: () => boolean): Promise<Preview | null> {
-    const items: api.ItemSummary[] = []; let scanned = 0;
-    let after: api.ItemId | undefined; let snapshot: api.ChangeCursor | undefined;
-    while (current()) {
-      const result = await this.effects.call(new api.Command_Read(new api.ReadInput(project,
-        new api.ReadSelection_Browse(query, order, after, snapshot, PAGE_SIZE))));
-      if (!current()) return null;
-      if (result instanceof api.Result_Failed && result.fault instanceof api.Fault_Resync) return null;
-      if (result instanceof api.Result_Failed) throw new Error(JSON.stringify(api.Fault_JsonCodec.instance.encode(CONTEXT, result.fault)));
-      if (!(result instanceof api.Result_Browsed)) throw new Error('Unexpected archive preview response');
-      const page = result.page; snapshot = page.cursor; scanned += page.items.length;
-      const eligible = page.items.map(entry => entry.summary).filter(item => !item.archived && item.outcome.terminal);
-      items.push(...eligible);
-      if (items.length >= MAX_MEMBERS || scanned >= MAX_SCANNED || !page.hasMore)
-        return { items: items.slice(0, MAX_MEMBERS), scanned, limited: items.length > MAX_MEMBERS || page.hasMore };
-      if (page.after === undefined) throw new Error('Archive preview continuation is missing');
-      after = page.after;
-    }
-    return null;
+  private async collect(project: api.ProjectId, query: string, current: () => boolean): Promise<api.ArchivePlan | null> {
+    const result = await this.effects.call(new api.Command_Read(new api.ReadInput(project, new api.ReadSelection_ArchivePreview(query, MAX_MEMBERS))));
+    if (!current()) return null;
+    if (result instanceof api.Result_Failed) throw new Error(faultMessage(result.fault));
+    if (!(result instanceof api.Result_ArchivePreview)) throw new Error('Unexpected archive preview response');
+    return result.plan;
   }
-  private render(project: api.ProjectId, query: string, preview: Preview, generation: number): void {
+  private render(project: api.ProjectId, query: string, preview: api.ArchivePlan, generation: number): void {
     const panel = this.dialog.body;
     panel.replaceChildren(element('p', `Filter: ${query || 'All items'}. ${preview.scanned} matching items examined.`),
-      element('p', `${preview.items.length} unarchived terminal items selected. Their status, content and history are preserved.`));
+      element('p', `${preview.members.length} unarchived terminal items selected. Their status, content and history are preserved.`));
+    if (preview.retained.length > 0) {
+      panel.append(element('p', `${preview.retained.length} terminal items are kept because related items are still open:`));
+      const kept = element('ul', ''); kept.setAttribute('aria-label', 'Retained items');
+      for (const retention of preview.retained) kept.append(element('li', `${itemName(retention.item.id)} · ${retention.item.title} · open: ${retention.open.map(itemName).join(', ')}`));
+      panel.append(kept);
+    }
     if (preview.limited) panel.append(element('p', `Limited preview: at most ${MAX_MEMBERS} terminal items and ${MAX_SCANNED} examined matches per operation. Only the items below will be archived. Refine the filter or repeat after this batch.`));
-    if (preview.items.length === 0) { panel.append(element('p', 'No terminal items selected.')); return; }
+    if (preview.members.length === 0) { panel.append(element('p', 'No terminal items selected.')); return; }
     const table = element('table', ''); table.setAttribute('aria-label', 'Archive selection');
     const head = element('thead', ''); const headings = element('tr', '');
     for (const label of ['ID', 'Title', 'Status']) headings.append(element('th', label));
     head.append(headings); table.append(head); const body = element('tbody', '');
-    for (const item of preview.items) {
+    for (const item of preview.members) {
       const row = element('tr', ''); for (const value of [itemName(item.id), item.title, item.status]) row.append(element('td', value)); body.append(row);
     }
     table.append(body); panel.append(table);
     const input = new api.ChangeInput(project, new api.ChangeRequest(new api.RequestId(uuidV4(crypto)),
-      [new api.Mutation_Archive(preview.items.map(item => new api.ItemRevision(item.id, item.revision)))], [], 'Browser archive of previewed terminal items'));
+      [new api.Mutation_Archive(preview.members.map(item => new api.ItemRevision(item.id, item.revision)))], [], 'Browser archive of previewed terminal items'));
     panel.append(element('p', 'Confirmation uses these exact revisions. If any selected item changed or cannot be archived, the entire operation is rejected.'),
       button('Confirm archive', () => this.action(generation, async () => {
         if (generation !== this.generation) return;
@@ -130,7 +117,7 @@ export class ArchiveDialog {
       if (this.storage.getItem(key) === encoded) this.storage.removeItem(key);
       if (result instanceof api.Result_Failed) {
         if (generation === this.generation) this.dialog.body.replaceChildren(element('p', 'Archival rejected. Close this dialog and prepare a fresh preview.'));
-        throw new Error(JSON.stringify(api.Fault_JsonCodec.instance.encode(CONTEXT, result.fault)));
+        throw new Error(faultMessage(result.fault));
       }
       if (generation === this.generation) this.dialog.close();
       await this.effects.committed(input.project, result.ack);

@@ -203,6 +203,45 @@ abstract class LedgerContractTest extends SpecZIO with AssertZIO {
       } yield ()
     }
 
+    "accept operator-created ideas, defects and goals with empty narrative fields" in { (service: LedgerService[IO]) =>
+      val owner = scope()
+      def draft(content: Content): ItemDraft = ItemDraft("Only a title", "", Set.empty, false, content, Nil)
+      for {
+        _ <- service.initialize(owner, "Relaxed intake")
+        _ <- create(service, owner, draft(Content.Idea(IdeaStatus.Proposed, "", "")))
+        _ <- create(service, owner, draft(Content.Defect(DefectStatus.Open, Severity.Low, "", "", "", None, Nil)))
+        _ <- create(service, owner, draft(Content.Goal(GoalStatus.Open, "", Nil, "")))
+        _ <- denied(create(service, owner, draft(Content.Idea(IdeaStatus.Proposed, "x" * 100001, ""))))(_.isInstanceOf[Fault.Invalid])
+        _ <- denied(create(service, owner, ItemDraft(" ", "", Set.empty, false, Content.Idea(IdeaStatus.Proposed, "", ""), Nil)))(_.isInstanceOf[Fault.Invalid])
+      } yield ()
+    }
+
+    "retain terminal items while related items are still open" in { (service: LedgerService[IO]) =>
+      val owner = scope()
+      val done = task("Done").copy(content = Content.Task(TaskStatus.Done, List("Observable result"), Some("Result"), Nil))
+      val goal = ItemDraft("Goal", "body", Set.empty, false, Content.Goal(GoalStatus.Open, "Outcome", List("Acceptance"), "Scope"), Nil)
+      def link(source: ItemRevision, target: ItemRevision): Mutation =
+        Mutation.Reference(source.id, source.revision, Relation.DerivedFrom, target.id, target.revision, true)
+      for {
+        _ <- service.initialize(owner, "Archive retention")
+        g <- create(service, owner, goal)
+        t <- create(service, owner, done)
+        free <- create(service, owner, done.copy(title = "Unrelated"))
+        linked <- service.change(owner, request(List(link(t, g)), Nil))
+        task2 = linked.items.find(_.id == t.id).get
+        _ <- denied(service.change(owner, request(List(Mutation.Archive(List(task2, free))), Nil)))(_.isInstanceOf[Fault.Invalid])
+        unchanged <- service.get(owner, free.id)
+        _ <- assertIO(!unchanged.item.draft.archived)
+        preview <- service.archivePreview(owner, "ledger:Tasks", 50)
+        _ <- assertIO(preview.members.map(_.id) == List(free.id) && preview.retained.map(r => (r.item.id, r.open)) == List((t.id, List(g.id))) && !preview.limited)
+        achieved <- service.change(owner, request(List(Mutation.Replace(g.id, linked.items.find(_.id == g.id).get.revision,
+          goal.copy(content = Content.Goal(GoalStatus.Achieved, "Outcome", List("Acceptance"), "Scope")))), Nil))
+        after <- service.archivePreview(owner, "ledger:Tasks", 50)
+        _ <- assertIO(after.members.map(_.id).toSet == Set(t.id, free.id) && after.retained.isEmpty)
+        _ <- service.change(owner, request(List(Mutation.Archive(after.members.map(m => ItemRevision(m.id, m.revision)))), Nil))
+      } yield ()
+    }
+
     "archive only terminal current revisions atomically and replay the exact acknowledgement" in { (service: LedgerService[IO]) =>
       val owner = scope()
       val done = task("Completed").copy(content = Content.Task(TaskStatus.Done, List("Observable result"), Some("Result"), Nil))

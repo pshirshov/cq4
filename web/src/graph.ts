@@ -4,6 +4,7 @@ import { BaboonCodecContext } from '../../generated/typescript/BaboonSharedRunti
 import { button, element } from './editor.js';
 import { itemName, parseItem } from './items.js';
 import { Dialog } from './dialog.js';
+import { faultMessage } from './faults.js';
 
 const CONTEXT = BaboonCodecContext.Default;
 interface Preview { input: api.ChangeInput; description: HTMLElement[] }
@@ -103,7 +104,7 @@ export class GraphActions {
     try {
       const result = await this.effects.call(new api.Command_Read(new api.ReadInput(id.project, new api.ReadSelection_ItemDetail(id))));
       if (generation !== this.generation) return null;
-      if (result instanceof api.Result_Failed) throw new Error(JSON.stringify(api.Fault_JsonCodec.instance.encode(CONTEXT, result.fault)));
+      if (result instanceof api.Result_Failed) throw new Error(faultMessage(result.fault));
       if (!(result instanceof api.Result_Detail)) throw new Error('Unexpected relationship detail response');
       return result.view;
     } catch (error) { if (generation === this.generation) throw error; return null; }
@@ -214,7 +215,7 @@ export class GraphActions {
       if (!(result instanceof api.Result_Changed) && !(result instanceof api.Result_Failed)) throw new Error('Unexpected graph change acknowledgement');
       if (localStorage.getItem(key) === submitted) localStorage.removeItem(key);
       if (this.pending !== null && this.pending.change.request.value === input.change.request.value) { this.pending = null; this.renderPreview(); }
-      if (result instanceof api.Result_Failed) throw new Error(`Graph change rejected. Inspect the current records and prepare a new preview. ${JSON.stringify(api.Fault_JsonCodec.instance.encode(CONTEXT, result.fault))}`);
+      if (result instanceof api.Result_Failed) throw new Error(`Graph change rejected. Inspect the current records and prepare a new preview. ${faultMessage(result.fault)}`);
       if (this.shown !== null && this.shown.project === project && this.shown.request === input.change.request.value) this.dialog.close();
       await this.effects.committed(input.project, result.ack);
     } finally { this.busy.delete(project); this.renderPreview(); }

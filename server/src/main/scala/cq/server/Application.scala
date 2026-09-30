@@ -35,6 +35,7 @@ final class Application(ledger: LedgerService[IO], repository: LedgerRepository[
         case ReadSelection.Admission(attempt) => admissions.get(scope, attempt).map(Result.Admission.apply)
         case ReadSelection.Claims(members) => ledger.claimPreview(scope, members).map(Result.Claims.apply)
         case ReadSelection.Termination(roots, intent) => ledger.termination(scope, roots, intent).map(Result.Termination.apply)
+        case ReadSelection.ArchivePreview(query, limit) => ledger.archivePreview(scope, query, limit).map(Result.ArchivePreview.apply)
         case ReadSelection.QueryComplete(query, cursor, limit) => ledger.complete(scope, query, cursor, limit).map(Result.QueryAnalyzed.apply)
         case ReadSelection.ArtifactInfo(id) => artifacts.metadata(scope, id).map(Result.ArtifactInfo.apply)
         case ReadSelection.ArtifactText(id, offset, limit) => artifacts.page(scope, id, offset, limit).map(Result.ArtifactText.apply)
