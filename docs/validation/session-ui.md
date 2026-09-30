@@ -63,3 +63,14 @@ The rebuilt candidate, manifest `1944260beeb2ee3e3e658908df0d50c5f74cbeae0bd43fd
 - passes the scoped installed check and both rehearsals, with only `NEW_MANIFEST` changed in the reviewed updater
 
 An independent review approves with minor findings. The README claim is corrected, and the native builder now receives only the memory-access setting from `.jvmopts`.
+
+## Installation and closeout
+
+The operator ran the pinned wrapper. `operator-update/receipt.json` records `installed`: `33245e5e…` → `1944260b…`, table data unchanged, recovery marker cleared.
+
+Verification on the actual hostname:
+
+- `operator-live-after.json` passes: a persistent HttpOnly session with no token re-entry in a new browser context, the merged ID column with icons, the "Answer questions" label and icons on item links. The pre-install baseline failed all four checks.
+- The installed executable prints no Unsafe warning (`operator-d25-after.txt`), and the server log's last warnings belong to the previous package's startup.
+
+`closeout.py` recorded I7 and I8 as Implemented and D25 as Resolved again (revision 8), stating that the fix only suppresses the warning. D67 remains the only Open defect. Human release acceptance remains pending.
