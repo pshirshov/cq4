@@ -25,7 +25,7 @@ export class QuestionBatch {
   private readonly previous = button('Previous question', () => this.move(-1));
   private readonly next = button('Skip / next question', () => this.move(1));
   private readonly busy = new Set<string>();
-  private readonly choices = element('div', '');
+  private choices: HTMLButtonElement[] = [];
   private more = false;
 
   constructor(private readonly effects: QuestionEffects, private readonly storage: Storage) {
@@ -126,16 +126,22 @@ export class QuestionBatch {
     this.answer.disabled = pending || unavailable; this.save.disabled = this.busy.has(this.key(item.id)) || (!pending && (stale || unavailable));
     this.save.textContent = pending ? 'Retry exact answer' : 'Save answer and next';
     this.previous.disabled = this.nextIndex(-1) === null; this.next.disabled = this.nextIndex(1) === null;
-    this.choices.replaceChildren(); this.choices.className = 'answer-alternatives';
-    for (const alternative of record.value.content.alternatives) {
-      const choice = button(alternative, () => { this.answer.value = alternative; this.answer.dispatchEvent(new Event('input')); this.answer.focus(); });
-      choice.disabled = pending || unavailable; this.choices.append(choice);
-    }
+    // Pick controls are placed before each rendered alternative so every alternative appears once (D69).
+    const view = this.effects.view(item);
+    const rows = view.querySelectorAll<HTMLLIElement>('section[data-field="alternatives"] > .field-value > ul > li');
+    const alternatives = item.draft.content.alternatives;
+    if (rows.length !== alternatives.length) throw new Error('Question alternatives were not rendered as a list');
+    this.choices = alternatives.map((alternative, index) => {
+      const choice = button('Pick', () => { this.answer.value = alternative; this.answer.dispatchEvent(new Event('input')); this.answer.focus(); });
+      choice.className = 'pick-alternative'; choice.setAttribute('aria-label', `Pick alternative: ${alternative}`);
+      choice.disabled = pending || unavailable; rows[index].classList.add('answer-alternative'); rows[index].prepend(choice);
+      return choice;
+    });
     const actions = element('div', ''); actions.className = 'actions'; actions.append(this.previous, this.next, this.save);
     const label = element('label', 'Your answer'); label.append(this.answer);
     this.dialog.body.replaceChildren(element('h3', `${itemName(item.id)} · ${item.draft.title}`),
       element('p', `Question ${this.index + 1} of ${this.queue.length} · ${this.completed.size} answered in this batch`),
-      this.effects.view(item), this.choices, label, actions);
+      view, label, actions);
     if (this.more) this.dialog.body.append(element('p', `This batch includes the first ${BATCH_LIMIT} open questions and retained pending answers. More questions remain; reopen the dialog for the next batch.`));
     if (pending) this.dialog.body.prepend(element('p', 'The previous answer has an unresolved acknowledgement. Retry the exact retained request before changing it.'));
     else if (unavailable) this.dialog.body.prepend(element('p', 'This question is no longer open. Your draft is retained; skip to another question.'));
@@ -170,7 +176,7 @@ export class QuestionBatch {
     const submitted = this.encode(record);
     let failure: unknown = null;
     this.busy.add(key); this.answer.disabled = true; this.save.disabled = true;
-    for (const choice of this.choices.querySelectorAll('button')) choice.disabled = true;
+    for (const choice of this.choices) choice.disabled = true;
     try {
       const result = await this.effects.call(new api.Command_Change(new api.ChangeInput(record.project, pending)));
       if (!(result instanceof api.Result_Changed || result instanceof api.Result_Failed)) throw new Error('Unexpected answer acknowledgement');

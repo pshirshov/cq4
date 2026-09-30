@@ -73,7 +73,7 @@ export function itemView(draft: api.ItemDraft, renderText: TextRenderer): HTMLEl
   node.append(meta);
   const section = (name: string, value: Json): void => {
     if (value === null || value === '' || (Array.isArray(value) && value.length === 0)) return;
-    const block = element('section', ''); block.className = 'document-field'; block.append(element('h3', fieldLabel(name)), renderValue(name, value, renderText)); node.append(block);
+    const block = element('section', ''); block.className = 'document-field'; block.dataset.field = name; block.append(element('h3', fieldLabel(name)), renderValue(name, value, renderText)); node.append(block);
   };
   section('body', draft.body);
   for (const name of CONTENT_FIELDS[kind as ItemKind]) if (values[name] !== undefined) section(name, values[name]);
