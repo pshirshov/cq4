@@ -232,7 +232,7 @@ abstract class UsageContractTest extends SpecZIO with AssertZIO {
         _ <- assertIO(project.direct.total.known == 500 && project.shared.total.known == 1000 && project.unattributed.total.known == 0)
         _ <- assertIO(project.direct.unknownCosts == 2 && project.shared.unknownCosts == 1 && project.costs.entries.isEmpty)
         views <- ZIO.foreach(List(one, two))(id => usage.summary(owner, UsageFilter.TaskOnly(id)))
-        _ <- assertIO(views.map(_.direct.total.known) == List(200L, 300L) && views.forall(_.sharedAssignments == Set(sharedAssignment.id)))
+        _ <- assertIO(views.map(_.direct.total.known) == List(200L, 300L) && views.forall(_.sharedAssignments == List(sharedAssignment)))
         correction = sharedUpload.copy(observation = sharedUpload.observation.copy(id = ObservationId(UUID.randomUUID()), counters = counts(1100, 0), supersedes = Some(sharedUpload.observation.id)))
         corrections <- ZIO.foreachPar((1 to 8).toList)(_ => usage.ingest(host, correction))
         _ <- assertIO(corrections.distinct.size == 1)

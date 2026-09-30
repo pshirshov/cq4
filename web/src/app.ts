@@ -13,7 +13,7 @@ import { Dialog } from './dialog.js';
 import { icon } from './icons.js';
 import { ArchiveDialog } from './archive.js';
 import { faultMessage } from './faults.js';
-import { attemptsTable, outcomesTable, auditTable } from './usage-view.js';
+import { attemptsTable, outcomesTable, auditTable, sharedAssignmentsList } from './usage-view.js';
 import { formatAmount, MoneyDigits } from './money.js';
 import { TableColumns } from './table-columns.js';
 import { Notifications } from './notifications.js';
@@ -773,6 +773,8 @@ class App {
     this.usageMetric.title = this.usageMetric.textContent;
     this.usageObserved = `Observed ${new Date().toLocaleTimeString()} · cursor ${report.cursor}`;
     this.usageFreshness.textContent = this.updatesRejected ? `Updates unavailable · ${this.usageObserved}` : this.usageObserved;
+    const previousShared = this.usagePanel.querySelector<HTMLDetailsElement>('details.usage-shared');
+    const sharedOpen = previousShared !== null && previousShared.open;
     this.usagePanel.replaceChildren(element('h3', `Usage · ${this.usageScope()}`));
     const table = element('table', ''); table.setAttribute('aria-label', 'Usage totals');
     const head = element('tr', ''); for (const label of ['Attribution', 'Known tokens', 'Unknown measurements', 'Estimated measurements', 'Unknown costs']) head.append(element('th', label));
@@ -788,7 +790,7 @@ class App {
     this.usagePanel.append(element('p', `Shared work is counted once and is not divided among members. Incomplete meters: ${report.incompleteMeters}; attempts without measurements: ${report.attemptsWithoutMeters}.`),
       element('p', `Attempt coverage: ${report.attempts.running} running; ${report.attempts.unknown} unknown outcomes; ${report.attempts.withGaps} with reported gaps.`),
       button('Attempts', () => this.action(() => this.loadAttempts(undefined, undefined))), button('Usage audit', () => this.action(() => this.loadAudit(0n))));
-    if (report.sharedAssignments.size > 0) this.usagePanel.append(element('p', `Shared assignments: ${[...report.sharedAssignments].map(id => id.value).join(', ')}.`));
+    if (report.sharedAssignments.length > 0) this.usagePanel.append(sharedAssignmentsList(report.sharedAssignments, sharedOpen));
     if (report.sharedAssignmentsTruncated) this.usagePanel.append(element('p', 'The shared-assignment list is truncated. Browse attempts for further assignments and their frozen membership.'));
   }
   private auditHeader(title: string, cursor: bigint): void {

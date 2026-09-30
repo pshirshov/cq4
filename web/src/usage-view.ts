@@ -68,6 +68,19 @@ export function attemptsTable(entries: api.AttemptView[], actions: AttemptAction
       details('Attempt details', metadata, scopes, button('Outcome history', () => actions.outcomes(attempt.id)))];
   }));
 }
+export function sharedAssignmentsList(assignments: readonly api.Assignment[], open: boolean): HTMLDetailsElement {
+  const list = element('ul', ''); list.setAttribute('aria-label', 'Shared assignments');
+  for (const assignment of assignments) {
+    const scope = [[...assignment.members].map(itemName).join(', ') || 'No assigned items'];
+    if (assignment.cohort !== undefined) scope.push(`cohort ${assignment.cohort}`);
+    const evaluation = assignment.evaluation;
+    if (evaluation !== undefined) scope.push(`evaluation ${evaluation.run} · ${evaluation.scenario} · ${evaluation.assessor ? 'Assessor' : 'Consumer'}`);
+    const entry = element('li', scope.join(' · ')); entry.title = `Assignment ${assignment.id.value}`; list.append(entry);
+  }
+  const count = assignments.length;
+  const result = details(`${count} shared ${count === 1 ? 'assignment' : 'assignments'}`, list);
+  result.className = 'usage-shared'; result.open = open; return result;
+}
 export function outcomesTable(entries: api.RecordedOutcome[]): HTMLTableElement {
   return table('Outcome history', ['Sequence', 'State', 'Finished', 'Gaps', 'Provenance'], entries.map(entry => [
     entry.sequence.toString(), entry.value.state, time(entry.value.finishedAt), entry.value.gaps.join('; ') || 'None recorded',

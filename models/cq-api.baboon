@@ -263,7 +263,7 @@ root data UsageReport {
   direct: UsageTotals
   shared: UsageTotals
   unattributed: UsageTotals
-  sharedAssignments: set[AssignmentId]
+  sharedAssignments: lst[Assignment]
   sharedAssignmentsTruncated: bit
   cursor: i64
   incompleteMeters: i64

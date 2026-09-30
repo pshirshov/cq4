@@ -181,7 +181,7 @@ object UsageService {
       var direct = UsageMath.zeroTotals
       var shared = UsageMath.zeroTotals
       var unattributed = UsageMath.zeroTotals
-      var sharedAssignments = Set.empty[AssignmentId]
+      var sharedAssignments = Map.empty[AssignmentId, Assignment]
       var sharedAssignmentsTruncated = false
       var incomplete = 0L
       var after = Option.empty[MeterKey]
@@ -193,7 +193,7 @@ object UsageService {
             case Attribution.Direct => direct = UsageMath.combine(direct, entry.projection.totals, 1)
             case Attribution.Shared =>
               shared = UsageMath.combine(shared, entry.projection.totals, 1)
-              if (sharedAssignments.size < ReadBatch) sharedAssignments += entry.assignment.id
+              if (sharedAssignments.size < ReadBatch) sharedAssignments += entry.assignment.id -> entry.assignment
               else if (!sharedAssignments.contains(entry.assignment.id)) sharedAssignmentsTruncated = true
             case Attribution.Unattributed => unattributed = UsageMath.combine(unattributed, entry.projection.totals, 1)
           }
@@ -202,7 +202,7 @@ object UsageService {
         after = page.lastOption.map(p => MeterKey(p.attempt.id, p.meter.key))
         more = page.size == ReadBatch
       }
-      UsageReport(direct, shared, unattributed, sharedAssignments, sharedAssignmentsTruncated, reader.cursor, incomplete, reader.attemptsWithoutMeters(value), reader.coverage(value), costPage(reader, value, None, ReadBatch))
+      UsageReport(direct, shared, unattributed, sharedAssignments.values.toList.sortBy(_.id.value.toString), sharedAssignmentsTruncated, reader.cursor, incomplete, reader.attemptsWithoutMeters(value), reader.coverage(value), costPage(reader, value, None, ReadBatch))
     }
 
     private def costPage(reader: UsageReader, filter: UsageFilter, after: Option[CostGroup], limit: Int): CostPage = {
