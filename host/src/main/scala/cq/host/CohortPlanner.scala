@@ -8,12 +8,12 @@ import java.util.UUID
 
 final case class CohortPlan(evidence: CohortEvidence, fingerprints: Map[RequestId, CohortExecutionFingerprint])
 
-final class CohortPlanner(api: ServerApi, owner: Scope, base: GitCommit, checks: List[ValidationCheck], progress: CohortProgress) {
+final class CohortPlanner(api: ServerApi, owner: Scope, bases: ExecutionBase, checks: List[ValidationCheck], progress: CohortProgress) {
   private val DeadlineNanos = Duration.ofSeconds(60).toNanos
   private val PageSize = 200
   private val RequestBytes = 16 * 1024
   private final case class Context(guidance: List[ItemView], artifacts: List[ResolvedArtifact], operative: List[CohortArtifactFingerprint], results: List[AdmittedResult],
-    operativeResults: List[CohortResultFingerprint], assessments: List[ExecutedResult], reviews: List[ExecutedResult], previous: Option[ChildResult]) {
+    operativeResults: List[CohortResultFingerprint], assessments: List[ExecutedResult], reviews: List[ExecutedResult], previous: Option[ChildResult], base: GitCommit) {
     def executionBase: GitCommit = previous.flatMap(_.candidate).getOrElse(base)
   }
 
@@ -70,7 +70,8 @@ final class CohortPlanner(api: ServerApi, owner: Scope, base: GitCommit, checks:
     }
   }
 
-  private def context(call: Command => Result, request: CohortRequest): Context = {
+  // The fresh base is resolved once per selection or verification so every choice of one decision shares the same observed target head.
+  private def context(call: Command => Result, request: CohortRequest, base: GitCommit): Context = {
     val reader = new ArtifactReader(call, owner.project)
     val guidance = details(call, request.guidance)
     require(guidance.omitted.isEmpty, "Cohort guidance exceeds its content budget")
@@ -87,7 +88,7 @@ final class CohortPlanner(api: ServerApi, owner: Scope, base: GitCommit, checks:
     def read(id: ArtifactId): ResolvedArtifact = cache.getOrElseUpdate(id, reader.read(id))
     val operative = artifacts.map(value => CohortArtifacts(value, read))
     val operativeResults = sources.map(value => CohortArtifacts.result(value, read))
-    Context(guidance.items, artifacts, operative, results, operativeResults, assessments, reviews, previous.map(_.value))
+    Context(guidance.items, artifacts, operative, results, operativeResults, assessments, reviews, previous.map(_.value), base)
   }
 
   private def producers(value: ItemView): Set[ItemId] = value.refs.collect { case ItemRef(Relation.DerivedFrom, id) => id }.toSet
@@ -176,11 +177,12 @@ final class CohortPlanner(api: ServerApi, owner: Scope, base: GitCommit, checks:
       (value.item.id.ledger == Ledger.Milestones && byId.get(value.item.id).exists(_.root)) || producers(value).exists(byId.contains)
     val planner = original.work == DispatchWork.Planner()
     val order = progress.order(selected.map(_.item.id))
-    val originalContext = context(call, original)
+    val base = bases.fresh()
+    val originalContext = context(call, original, base)
     val partition = original.work == DispatchWork.Worker(WorkerMode.Implement) && originalContext.previous.exists(_.report.isInstanceOf[ChildReport.Plan])
     val request = if (partition) original.copy(artifacts = (original.artifacts ++ original.previous).distinct, previous = None) else original
     validate(request)
-    val ctx = if (partition) context(call, request) else originalContext
+    val ctx = if (partition) context(call, request, base) else originalContext
     val exact = originalContext.previous.map(_.request.members)
     exact.foreach(members => require(members.forall(ref => byId.get(ref.id).exists(_.item.revision == ref.revision) && supports(request.work, ref.id)),
       "Exact previous cohort is outside the selection, stale or incompatible with the operation"))
@@ -243,7 +245,7 @@ final class CohortPlanner(api: ServerApi, owner: Scope, base: GitCommit, checks:
         case Some(value) =>
           val split = request.copy(artifacts = (request.artifacts ++ request.previous).distinct, previous = None)
           validate(split)
-          val splitContext = context(call, split)
+          val splitContext = context(call, split, base)
           val reason = if (value == CohortCompatibility.Unknown) CohortReason.UnknownAssessment else CohortReason.IncompatibleAssessment
           pending.foreach(member => offer(List(member), request.work, reason, None, split, splitContext))
       } else offer(pending, request.work, CohortReason.ExactPrevious, None, request, ctx)
@@ -310,7 +312,7 @@ final class CohortPlanner(api: ServerApi, owner: Scope, base: GitCommit, checks:
     val loaded = details(call, choice.members)
     require(loaded.omitted.isEmpty, "Selected cohort no longer fits its content budget")
     val inputs = request.copy(work = choice.work, guidance = choice.guidance, artifacts = choice.artifacts, previous = choice.previous)
-    val ctx = context(call, inputs)
+    val ctx = context(call, inputs, bases.fresh())
     require(fits(inputs, choice.work, loaded.items, ctx) && executionFingerprint(choice.work, loaded.items, ctx, choice.reason) == expected,
       "Cohort operative input changed; select again")
     call(Command.Graph(GraphInput(owner.project, request.roots, None, Some(snapshot), 1)))

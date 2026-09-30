@@ -42,7 +42,7 @@ final class CandidateWorkspaceLocal extends SpecZIO with AssertZIO {
           val tree = Path.of(workspace.directory)
           Files.writeString(tree.resolve("candidate.txt"), "candidate\n")
           Files.writeString(tree.resolve(".git"), "gitdir: " + local.source.resolve(".git") + "\n")
-          val result = Try(candidates.capture(workspace, None))
+          val result = Try(candidates.capture(workspace, None, "Candidate\n"))
           val unchanged = Files.readAllBytes(local.source.resolve(".git/index")).toList == before
           println(s"Redirected Git directory: captureRejected=${result.isFailure}, governingIndexUnchanged=$unchanged")
           assert(result.isFailure && unchanged)
@@ -54,6 +54,51 @@ final class CandidateWorkspaceLocal extends SpecZIO with AssertZIO {
       } yield ()
     }
 
+    "start fresh work at the current target head, expect that head only while the candidate descends from it, and record the message" in { (local: LocalWorkspaceFixture) =>
+      val settings = configuration(local)
+      val candidates = new CandidateWorkspace(settings)
+      val fixture = local.fixture
+      val attempt = AttemptId(uuid)
+      def makeCandidate(name: String, base: GitCommit, message: String) = for {
+        workspace <- fixture.service.prepare(settings.owner, fixture.spec(settings.owner).copy(base = base))
+        commit <- ZIO.attemptBlocking {
+          Files.writeString(Path.of(workspace.directory).resolve(name), name + "\n")
+          candidates.capture(workspace, None, message)
+        }
+      } yield commit
+      val message = s"T1 Fix the base\n\nAssignment:\n- T1 Fix the base (derived from D77)\n\n${CandidateMessage.AttemptTrailer}: ${attempt.value}\n"
+      for {
+        _ <- ZIO.attemptBlocking { local.git(local.source, "branch", "integration", local.base.value); () }
+        _ <- assertIO(candidates.fresh() == local.base)
+        first <- makeCandidate("first.txt", local.base, message)
+        second <- makeCandidate("second.txt", first, "Continuation\n")
+        other <- makeCandidate("other.txt", local.base, "Competing\n")
+        _ <- ZIO.attemptBlocking {
+          assert(local.git(local.source, "log", "-1", "--format=%B", first.value) == message.trim)
+          assert(local.git(local.source, "log", "-1", s"--format=%(trailers:key=${CandidateMessage.AttemptTrailer},valueonly)", first.value) == attempt.value.toString)
+          assert(local.git(local.source, "log", "-1", "--format=%an <%ae>", first.value) == "CQ host <cq@localhost>")
+          // A continuation candidate whose ancestry still reaches the unmoved target head integrates against that head, not its worker base.
+          val expectations = List(
+            (first, second, local.base), (local.base, first, local.base))
+          println(s"Target at base: expected=${expectations.map((base, candidate, _) => candidates.expected(base, candidate).value.take(7))} " +
+            s"wanted=${expectations.map(_._3.value.take(7))}")
+          expectations.foreach((base, candidate, wanted) => assert(candidates.expected(base, candidate) == wanted))
+          local.git(local.source, "update-ref", "refs/heads/integration", first.value)
+          println(s"Target at first: fresh=${candidates.fresh().value.take(7)} first=${first.value.take(7)}")
+          assert(candidates.fresh() == first)
+          assert(candidates.expected(first, second) == first)
+          // An incorporated candidate keeps its worker base so inspection reports Incorporated instead of a same-commit update.
+          assert(candidates.expected(local.base, first) == local.base)
+          local.git(local.source, "update-ref", "refs/heads/integration", other.value)
+          assert(candidates.fresh() == other)
+          // The target advanced past the candidate's base: the worker base stays expected so the update is NotApplied and combinable.
+          assert(candidates.expected(local.base, first) == local.base && candidates.expected(first, second) == first)
+          val unconfigured = new CandidateWorkspace(settings.copy(settings = settings.settings.copy(integrationTarget = None)))
+          assert(unconfigured.fresh() == local.base && unconfigured.expected(first, second) == first)
+        }
+      } yield ()
+    }
+
     "capture both ordered immutable parents and reject changed HEAD or merge inputs" in { (local: LocalWorkspaceFixture) =>
       val settings = configuration(local)
       val candidates = new CandidateWorkspace(settings)
@@ -62,7 +107,7 @@ final class CandidateWorkspaceLocal extends SpecZIO with AssertZIO {
         workspace <- fixture.service.prepare(settings.owner, fixture.spec(settings.owner))
         commit <- ZIO.attemptBlocking {
           Files.writeString(Path.of(workspace.directory).resolve(name), name + "\n")
-          candidates.capture(workspace, None)
+          candidates.capture(workspace, None, name + "\n")
         }
       } yield commit
       for {
@@ -92,10 +137,10 @@ final class CandidateWorkspaceLocal extends SpecZIO with AssertZIO {
               case "valid" => ()
             }
             if (mode == "valid") {
-              val commit = candidates.capture(workspace, Some(plan))
+              val commit = candidates.capture(workspace, Some(plan), "Combined\n")
               assert(local.git(tree, "rev-list", "--parents", "-n", "1", commit.value).split(" ").toList == List(commit.value, target.value, original.value))
               List("left.txt", "right.txt").foreach(name => assert(local.git(tree, "show", commit.value + ":" + name) == name))
-            } else intercept[IllegalArgumentException](candidates.capture(workspace, Some(plan)))
+            } else intercept[IllegalArgumentException](candidates.capture(workspace, Some(plan), "Combined\n"))
             assert(Files.readAllBytes(local.source.resolve(".git/index")).toList == before)
           }
         } yield () }

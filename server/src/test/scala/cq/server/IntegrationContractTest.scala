@@ -148,6 +148,64 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
       } yield ()
     }
 
+    "reserve an intent whose expected target is the observed head rather than the worker's base" in {
+      (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO],
+        integrations: IntegrationService[IO]) => for {
+        f <- begin(ledger, usage, artifacts, admissions)
+        head = GitCommit("c" * 40)
+        intent = f.fresh.copy(expected = head)
+        _ <- assertIO(f.worker.base != head)
+        reserved <- integrations.reserve(f.collector, intent)
+        _ <- assertIO(reserved.resolution == IntegrationResolution.Pending() && reserved.intent.expected == head)
+      } yield ()
+    }
+
+    "prepare a continuation candidate against the observed current head instead of its worker base" in {
+      (ledger: LedgerService[IO], repository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO],
+        admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) => for {
+        f <- begin(ledger, usage, artifacts, admissions)
+        runtime <- ZIO.runtime[Any]
+        continuation = GitCommit("d" * 40)
+        assignment <- usage.assign(f.collector, Assignment(AssignmentId(uuid), f.owner.project, f.claim.members, Attribution.Shared, Some(uuid), None))
+        workerAttempt <- usage.start(f.collector, Attempt(AttemptId(uuid), assignment.id, Some(f.governor), f.owner.actor.session, Role.Worker,
+          Harness.Codex, "fixture", "fixture", "fixture", 1000))
+        worker = f.worker.copy(attempt = workerAttempt.id, base = f.intent.candidate, candidate = Some(continuation), validation = Nil,
+          request = f.worker.request.copy(request = RequestId(uuid), previous = Some(f.intent.reviewer)))
+        workerArtifact <- publish(f.collector, worker, artifacts, admissions)
+        reviewAttempt <- usage.start(f.collector, Attempt(AttemptId(uuid), assignment.id, Some(f.governor), f.owner.actor.session, Role.Reviewer,
+          Harness.Codex, "fixture", "fixture", "fixture", 1001))
+        reviewer = f.reviewer.copy(attempt = reviewAttempt.id, base = continuation, candidate = Some(continuation), validation = Nil,
+          request = f.reviewer.request.copy(request = RequestId(uuid), previous = Some(workerArtifact)))
+        reviewArtifact <- publish(f.collector, reviewer, artifacts, admissions)
+        _ <- ZIO.attemptBlocking {
+          val clock = Clock.systemUTC()
+          val auth = new Authorization(AccessConfig("preparation-contract-root-token", "http://localhost"), clock)
+          val root = auth.authenticate("preparation-contract-root-token", Some(f.owner.actor.session.value.toString))
+          val application = new Application(ledger, repository, usage, artifacts, admissions, integrations, proposals, auth)
+          val authority = auth.authenticate(auth.grant(root, GrantRequest(f.owner.project, f.owner.actor, clock.millis() + 300000)).value, None)
+          val governor = new ServerApi {
+            override def call(value: Command): Result = Unsafe.unsafe { implicit unsafe => runtime.unsafe.run(application.execute(authority, value)).getOrThrowFiberFailure() }
+            override def artifact(value: ArtifactUpload): ArtifactMetadata = throw new IllegalStateException("Preparation cannot publish artifacts")
+            override def usage(value: HostUsageInput): HostUsageResult = throw new IllegalStateException("Preparation cannot publish usage")
+            override def grant(value: GrantRequest): AccessToken = throw new IllegalStateException("Preparation cannot grant authority")
+            override def admit(value: HostAdmissionInput): ResultAdmission = throw new IllegalStateException("Preparation cannot admit a result")
+            override def integrate(value: HostIntegrationInput): IntegrationRecord = throw new IllegalStateException("Preparation cannot integrate")
+          }
+          val head = f.intent.expected
+          var observed = List.empty[(GitCommit, GitCommit)]
+          val bases = new ExecutionBase {
+            override def fresh(): GitCommit = head
+            override def expected(base: GitCommit, candidate: GitCommit): GitCommit = { observed :+= (base, candidate); head }
+          }
+          val preparation = new IntegrationPreparation(governor, f.owner, f.intent.repository, f.intent.target, Nil, clock, bases)
+          val intent = preparation.prepare(IntegrationTicket(IntegrationId(uuid), reviewArtifact))
+          println(s"Continuation preparation: worker base=${worker.base.value.take(7)} head=${head.value.take(7)} expected=${intent.expected.value.take(7)} observed=$observed")
+          assert(observed == List((worker.base, continuation)))
+          assert(intent.expected == head && intent.candidate == continuation && intent.worker == workerArtifact && intent.reviewer == reviewArtifact)
+        }
+      } yield ()
+    }
+
     "prevent create-only proposal application while any assigned member has a pending integration" in {
       (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO],
         integrations: IntegrationService[IO], proposals: ProposalService[IO]) => for {

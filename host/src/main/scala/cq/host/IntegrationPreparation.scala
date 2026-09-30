@@ -5,7 +5,7 @@ import cq.core.{DomainFailure, IntegrationPolicy, Scope}
 import java.time.{Clock, Duration}
 
 final class IntegrationPreparation(api: ServerApi, owner: Scope, repository: String, target: String,
-  checks: List[ValidationCheck], clock: Clock) {
+  checks: List[ValidationCheck], clock: Clock, bases: ExecutionBase) {
   private val PreparationNanos = Duration.ofSeconds(60).toNanos
   private val ClaimMillis = Duration.ofMinutes(3).toMillis
 
@@ -59,7 +59,7 @@ final class IntegrationPreparation(api: ServerApi, owner: Scope, repository: Str
     val change = IntegrationPolicy.completion(ticket.id, repository, target, worker.candidate.get, workerId, ticket.reviewer,
       IntegrationValidation.citations(worker, reviewer), worker.request.fence, items)
     renew()
-    IntegrationIntent(ticket.id, owner.project, owner.actor, repository, target, worker.base, worker.candidate.get,
+    IntegrationIntent(ticket.id, owner.project, owner.actor, repository, target, bases.expected(worker.base, worker.candidate.get), worker.candidate.get,
       workerId, ticket.reviewer, checks, worker.request.fence, worker.request.members, change)
   }
 }

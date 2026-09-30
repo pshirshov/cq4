@@ -27,7 +27,8 @@ private[server] final class GovernedIntegrationJobs(owner: Scope, jobs: JobSuper
   } yield ()
 }
 
-final class IntegrationController(config: SupervisorConfig, authority: SupervisorAuthority, jobs: JobSupervisor, clock: Clock, admission: Semaphore) {
+final class IntegrationController(config: SupervisorConfig, authority: SupervisorAuthority, jobs: JobSupervisor, candidates: CandidateWorkspace, clock: Clock,
+  admission: Semaphore) {
   private val MaxWaitMillis = 20000
   private val AcknowledgementMillis = 1000L
   private val journal = new FileIntegrationJournal(config.directory.resolve("integrations"), config.owner)
@@ -95,7 +96,7 @@ final class IntegrationController(config: SupervisorConfig, authority: Superviso
       }
       _ <- ready.succeed(())
       intent <- ZIO.attemptBlocking(new IntegrationPreparation(authority.governor, config.owner, config.run.repository,
-        config.settings.integrationTarget.get, config.settings.checks, clock).prepare(ticket))
+        config.settings.integrationTarget.get, config.settings.checks, clock, candidates).prepare(ticket))
       _ <- available.prepare(intent)
     } yield IntegrationStatus(ticket.id, IntegrationPhase.Ready, Some(preview(intent)), IntegrationNext.Confirm, None))
     _ <- restore(entry.ready.await).timeoutFail(new IllegalStateException("Integration ticket acknowledgement deadline exceeded; admission disabled"))(
@@ -142,8 +143,9 @@ final class IntegrationController(config: SupervisorConfig, authority: Superviso
 }
 
 object IntegrationController {
-  final class Resource(config: SupervisorConfig, authority: SupervisorAuthority, jobs: JobSupervisor, clock: Clock, watchdog: SupervisorWatchdog)
+  final class Resource(config: SupervisorConfig, authority: SupervisorAuthority, jobs: JobSupervisor, candidates: CandidateWorkspace, clock: Clock,
+    watchdog: SupervisorWatchdog)
     extends Lifecycle.Of[Task, IntegrationController](Lifecycle.make(
-      Semaphore.make(1).map(new IntegrationController(config, authority, jobs, clock, _)))(
+      Semaphore.make(1).map(new IntegrationController(config, authority, jobs, candidates, clock, _)))(
       value => ZIO.succeed(watchdog.beginShutdown()) *> value.shutdown))
 }
