@@ -76,7 +76,7 @@ final class CandidateWorkspaceLocal extends SpecZIO with AssertZIO {
         first <- makeCandidate("first.txt", local.base, message)
         second <- makeCandidate("second.txt", first, "Continuation\n")
         other <- makeCandidate("other.txt", local.base, "Competing\n")
-        _ <- ZIO.attemptBlocking {
+        orphan <- ZIO.attemptBlocking {
           assert(local.git(local.source, "log", "-1", "--format=%B", first.value) == message.trim)
           assert(local.git(local.source, "log", "-1", s"--format=%(trailers:key=${CandidateMessage.AttemptTrailer},valueonly)", first.value) == attempt.value.toString)
           assert(local.git(local.source, "log", "-1", "--format=%an <%ae>", first.value) == "CQ host <cq@localhost>")
@@ -106,8 +106,18 @@ final class CandidateWorkspaceLocal extends SpecZIO with AssertZIO {
           local.git(local.source, "update-ref", "refs/heads/integration", orphan.value)
           assert(candidates.fresh() == orphan)
           candidates.verifyBase(orphan)
+          orphan
+        }
+        onOrphan <- makeCandidate("orphan.txt", orphan, "On the orphan head\n")
+        _ <- ZIO.attemptBlocking {
+          // A host-captured candidate is a valid base for review and continuation even though it does not descend from the session base.
+          candidates.verifyBase(onOrphan)
           local.git(local.source, "update-ref", "refs/heads/integration", other.value)
-          assert(scala.util.Try(candidates.verifyBase(orphan)).isFailure)
+          candidates.verifyBase(onOrphan)
+          // An uncaptured commit outside the target and the session base is refused.
+          val foreign = GitCommit(local.git(local.source, "-c", "user.name=CQ test", "-c", "user.email=test@localhost", "commit-tree",
+            local.git(local.source, "rev-parse", local.base.value + "^{tree}"), "-m", "Foreign commit"))
+          assert(scala.util.Try(candidates.verifyBase(foreign)).isFailure)
         }
       } yield ()
     }

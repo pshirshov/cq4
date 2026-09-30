@@ -30,8 +30,10 @@ final class CandidateWorkspace(config: SupervisorConfig) extends ExecutionBase {
   def verifyBase(base: GitCommit): Unit = {
     val repository = Path.of(config.run.repository)
     require(git(repository, "rev-parse", "--verify", "--end-of-options", base.value + "^{commit}") == base.value, "Candidate object is unavailable")
-    // The current target head is a valid fresh base even when the operator's checkout diverged from the target (D77); any other base must descend from the session base.
-    if (!targetHead.contains(base)) require(ancestor(config.run.base, base), "Candidate base does not descend from the session base")
+    // Fresh work starts at the target head; reviews, continuations and combinations start at host-captured candidates. Neither needs to descend
+    // from the session base, which may have diverged from the target (D77). Any other commit is refused.
+    val captured = git(repository, "for-each-ref", "--format=%(refname)", "--points-at=" + base.value, "refs/cq/candidates/").nonEmpty
+    require(targetHead.contains(base) || base == config.run.base || captured, "Candidate base is neither the target head, the session base nor a captured candidate")
   }
   def observeTarget(candidate: GitCommit): GitCommit = {
     val target = config.settings.integrationTarget.getOrElse(throw new IllegalArgumentException("No integration target configured"))
