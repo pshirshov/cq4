@@ -234,7 +234,8 @@ object LedgerService {
       duration(durationMillis)
       val c = owned(tx, scope, fence)
       if (c.released) throw DomainFailure(Fault.StaleFence("Claim released"))
-      val next = c.copy(expiresAt = Math.addExact(clock.millis(), durationMillis))
+      // A renewal never shortens the lease: the host renews running work for minutes while a governor may hold a longer claim.
+      val next = c.copy(expiresAt = Math.max(c.expiresAt, Math.addExact(clock.millis(), durationMillis)))
       tx.updateClaim(next)
       next
     }

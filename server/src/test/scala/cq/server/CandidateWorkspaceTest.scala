@@ -63,6 +63,9 @@ final class CandidateWorkspaceLocal extends SpecZIO with AssertZIO {
         workspace <- fixture.service.prepare(settings.owner, fixture.spec(settings.owner).copy(base = base))
         commit <- ZIO.attemptBlocking {
           Files.writeString(Path.of(workspace.directory).resolve(name), name + "\n")
+          val evidence = Path.of(workspace.directory).resolve(".work/evidence")
+          Files.createDirectories(evidence)
+          Files.writeString(evidence.resolve("run.log"), "worker log\n")
           candidates.capture(workspace, None, message)
         }
       } yield commit
@@ -95,6 +98,16 @@ final class CandidateWorkspaceLocal extends SpecZIO with AssertZIO {
           assert(candidates.expected(local.base, first) == local.base && candidates.expected(first, second) == first)
           val unconfigured = new CandidateWorkspace(settings.copy(settings = settings.settings.copy(integrationTarget = None)))
           assert(unconfigured.fresh() == local.base && unconfigured.expected(first, second) == first)
+          // The worker's .work/ directory never enters the candidate, whatever the project's ignore rules say.
+          assert(!local.git(local.source, "ls-tree", "-r", "--name-only", first.value).linesIterator.exists(_.startsWith(".work/")))
+          // A target head that does not descend from the session base is still a valid fresh base; foreign commits still are not.
+          val orphan = GitCommit(local.git(local.source, "-c", "user.name=CQ test", "-c", "user.email=test@localhost", "commit-tree",
+            local.git(local.source, "rev-parse", local.base.value + "^{tree}"), "-m", "Orphan target"))
+          local.git(local.source, "update-ref", "refs/heads/integration", orphan.value)
+          assert(candidates.fresh() == orphan)
+          candidates.verifyBase(orphan)
+          local.git(local.source, "update-ref", "refs/heads/integration", other.value)
+          assert(scala.util.Try(candidates.verifyBase(orphan)).isFailure)
         }
       } yield ()
     }

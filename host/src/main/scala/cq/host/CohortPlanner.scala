@@ -8,7 +8,8 @@ import java.util.UUID
 
 final case class CohortPlan(evidence: CohortEvidence, fingerprints: Map[RequestId, CohortExecutionFingerprint])
 
-final class CohortPlanner(api: ServerApi, owner: Scope, bases: ExecutionBase, checks: List[ValidationCheck], progress: CohortProgress) {
+final class CohortPlanner(api: ServerApi, owner: Scope, bases: ExecutionBase, checks: List[ValidationCheck], progress: CohortProgress,
+  requirements: OperatorRequirements) {
   private val DeadlineNanos = Duration.ofSeconds(60).toNanos
   private val PageSize = 200
   private val RequestBytes = 16 * 1024
@@ -161,7 +162,9 @@ final class CohortPlanner(api: ServerApi, owner: Scope, bases: ExecutionBase, ch
     val refs = members.map(value => ItemRevision(value.item.id, value.item.revision))
     val dispatch = DispatchRequest(request.request, work, Harness.Claude, refs, request.guidance, request.artifacts, request.previous,
       Fence(ClaimId(request.request.value), Long.MaxValue), request.limits)
-    val input = ChildInput(owner.project, dispatch, members, context.guidance, context.artifacts, context.previous, None)
+    // The budget check carries the operator requirements assembly will deliver, so an offered cohort cannot fail at assembly.
+    val input = ChildInput(owner.project, dispatch, members, context.guidance, context.artifacts, context.previous,
+      OperatorRequirements.delivered(work, requirements.current))
     refs.map(_.id).toSet.intersect(request.guidance.map(_.id).toSet).isEmpty &&
       HostFiles.encode(ChildInput_JsonCodec, input).getBytes(UTF_8).length <= ChildContracts.MaxInputBytes
   }

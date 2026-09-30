@@ -10,7 +10,7 @@ object RevisionEquivalence {
 
   def unchanged(recorded: List[ItemRevision], current: List[ItemRevision], draft: ItemRevision => ItemDraft): Boolean = {
     val currentById = current.map(ref => ref.id -> ref).toMap
-    recorded.size == current.size && currentById.size == current.size &&
+    recorded.size == current.size && recorded.map(_.id).distinct.size == recorded.size && currentById.size == current.size &&
       recorded.forall(ref => currentById.get(ref.id).exists(unchanged(ref, _, draft)))
   }
 }

@@ -285,7 +285,8 @@ object SupervisorPlugin extends PluginDef {
     make[ExecutionDriver].from[SupervisorDriver]
     make[WorkspaceService[IO]].from { (config: SupervisorConfig, clock: Clock) =>
       new WorkspaceService.Impl[IO](new GitWorkspaceRepository(config.directory.resolve("workspaces"),
-        new BoundedHostCommand(GitEnvironment.isolated(config.environment), Duration.ofSeconds(10), 65536), clock))
+        // Worktree creation and removal move whole checkouts; the ten-second bound of the other Git probes is too short for them.
+        new BoundedHostCommand(GitEnvironment.isolated(config.environment), Duration.ofMinutes(5), 65536), clock))
     }
     make[JobSupervisor].fromResource[SupervisorJobs]
   })

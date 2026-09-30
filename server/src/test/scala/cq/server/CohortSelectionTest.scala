@@ -149,7 +149,7 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
         descendant = created.items.last.id
         _ <- link(ledger, scope, root, Relation.Produces, descendant)
         _ <- link(ledger, scope, root, Relation.BlockedBy, descendant)
-        planner = new CohortPlanner(api(ledger, scope, runtime), scope, fixed(GitCommit("a" * 40)), Nil, new CohortProgress)
+        planner = new CohortPlanner(api(ledger, scope, runtime), scope, fixed(GitCommit("a" * 40)), Nil, new CohortProgress, new OperatorRequirements(""))
         input = request(Set(root), DispatchWork.Planner())
         selected <- ZIO.attemptBlocking(planner.plan(input, ArtifactId(uuid)))
         _ <- assertIO(selected.evidence.decision.choices.flatMap(_.members.map(_.id)) == List(root))
@@ -186,7 +186,7 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
         fixture <- assessed(ledger, usage, artifacts, admissions, 2, CohortCompatibility.Compatible)
         reads = new EvidenceApi(api(ledger, fixture.scope, runtime), artifacts, admissions, fixture.scope, runtime)
         progress = new CohortProgress
-        planner = new CohortPlanner(reads, fixture.scope, fixed(fixture.base), fixture.checks, progress)
+        planner = new CohortPlanner(reads, fixture.scope, fixed(fixture.base), fixture.checks, progress, new OperatorRequirements(""))
         input = request(fixture.members.map(_.id).toSet, DispatchWork.Worker(WorkerMode.Implement))
         initial <- ZIO.attemptBlocking(planner.plan(input.copy(artifacts = List(fixture.artifact)), ArtifactId(uuid)))
         _ <- assertIO(initial.evidence.decision.choices.size == 1 && initial.evidence.decision.choices.head.members.size == 2)
@@ -242,7 +242,7 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
         }
         reads = new EvidenceApi(api(ledger, fixture.scope, runtime), artifacts, admissions, fixture.scope, runtime)
         progress = new CohortProgress
-        planner = new CohortPlanner(reads, fixture.scope, fixed(fixture.base), fixture.checks, progress)
+        planner = new CohortPlanner(reads, fixture.scope, fixed(fixture.base), fixture.checks, progress, new OperatorRequirements(""))
         input = request(Set(fixture.members.head.id), DispatchWork.Explorer(ExplorerMode.Investigate))
         first <- ZIO.attemptBlocking(planner.plan(input.copy(artifacts = List(observed.head)), ArtifactId(uuid)))
         _ <- ZIO.attempt(progress.started(first.fingerprints(first.evidence.decision.choices.head.id)))
@@ -253,7 +253,7 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
           ChildReport.Review(fixture.members.map(ref => ReviewMember(ref.id, ReviewVerdict.ChangesRequested, List("Correct the failure"))), None),
           Some(worker), List(ValidationEvidence(fixture.checks.head.name, ValidationState.Failed, id)), ledger, usage, artifacts, admissions))
         nestedProgress = new CohortProgress
-        nested = new CohortPlanner(reads, fixture.scope, fixed(fixture.base), fixture.checks, nestedProgress)
+        nested = new CohortPlanner(reads, fixture.scope, fixed(fixture.base), fixture.checks, nestedProgress, new OperatorRequirements(""))
         initial <- ZIO.attemptBlocking(nested.plan(input.copy(artifacts = List(reviews.head.id)), ArtifactId(uuid)))
         _ <- ZIO.attempt(nestedProgress.started(initial.fingerprints(initial.evidence.decision.choices.head.id)))
         repeated <- ZIO.attemptBlocking(nested.plan(input.copy(request = RequestId(uuid), artifacts = List(reviews(1).id)), ArtifactId(uuid)))
@@ -269,7 +269,7 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
         fixture <- assessed(ledger, usage, artifacts, admissions, 16, CohortCompatibility.Unknown)
         reads = new EvidenceApi(api(ledger, fixture.scope, runtime), artifacts, admissions, fixture.scope, runtime)
         progress = new CohortProgress
-        planner = new CohortPlanner(reads, fixture.scope, fixed(fixture.base), fixture.checks, progress)
+        planner = new CohortPlanner(reads, fixture.scope, fixed(fixture.base), fixture.checks, progress, new OperatorRequirements(""))
         input = request(fixture.members.map(_.id).toSet, DispatchWork.Worker(WorkerMode.Implement)).copy(previous = Some(fixture.artifact))
         rounds <- ZIO.foreach(1 to 2) { _ => ZIO.attemptBlocking {
           val choices = planner.plan(input.copy(request = RequestId(uuid)), ArtifactId(uuid)).evidence.decision.choices
@@ -292,14 +292,14 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
           else ReviewMember(ref.id, ReviewVerdict.Accepted, Nil)
         }, None), Some(worker), Nil, ledger, usage, artifacts, admissions)
         reads = new EvidenceApi(api(ledger, fixture.scope, runtime), artifacts, admissions, fixture.scope, runtime)
-        planner = new CohortPlanner(reads, fixture.scope, fixed(fixture.base), fixture.checks, new CohortProgress)
+        planner = new CohortPlanner(reads, fixture.scope, fixed(fixture.base), fixture.checks, new CohortProgress, new OperatorRequirements(""))
         input = request(fixture.members.map(_.id).toSet, DispatchWork.Worker(WorkerMode.Implement))
         fresh <- ZIO.attemptBlocking(planner.plan(input.copy(artifacts = List(reviewer.id)), ArtifactId(uuid)))
         exact <- ZIO.attemptBlocking(planner.plan(input.copy(previous = Some(reviewer.id)), ArtifactId(uuid)))
         _ <- assertIO(exact.evidence.decision.choices.isEmpty && exact.evidence.decision.counts.excluded == fixture.members.size)
         _ <- assertIO(fresh.evidence.decision.choices.flatMap(_.members.map(_.id)) == List(fixture.members.head.id) &&
           fresh.evidence.decision.choices.head.reason == CohortReason.FreshFromBase)
-        changed <- ZIO.attemptBlocking(new CohortPlanner(reads, fixture.scope, fixed(fixture.base), prepared.checks, new CohortProgress)
+        changed <- ZIO.attemptBlocking(new CohortPlanner(reads, fixture.scope, fixed(fixture.base), prepared.checks, new CohortProgress, new OperatorRequirements(""))
           .plan(input.copy(artifacts = List(reviewer.id)), ArtifactId(uuid)))
         _ <- assertIO(changed.evidence.decision.choices.flatMap(_.members.map(_.id)).toSet == fixture.members.map(_.id).toSet)
       } yield ()
@@ -312,7 +312,7 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
         reads = new EvidenceApi(api(ledger, fixture.scope, runtime), artifacts, admissions, fixture.scope, runtime)
         progress = new CohortProgress
         target = new MutableBase(fixture.base)
-        planner = new CohortPlanner(reads, fixture.scope, target, fixture.checks, progress)
+        planner = new CohortPlanner(reads, fixture.scope, target, fixture.checks, progress, new OperatorRequirements(""))
         input = request(Set(fixture.members.head.id), DispatchWork.Worker(WorkerMode.Implement))
         initial <- ZIO.attemptBlocking(planner.plan(input, ArtifactId(uuid)))
         _ <- assertIO(initial.evidence.decision.choices.size == 1)
@@ -345,7 +345,7 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
         worker <- publish(fixture, DispatchWork.Worker(WorkerMode.Implement), ChildReport.Work(fixture.members.map(ref =>
           WorkMember(ref.id, WorkDisposition.CandidateReady, "Candidate", Nil))), None, Nil, ledger, usage, artifacts, admissions)
         reads = new EvidenceApi(api(ledger, fixture.scope, runtime), artifacts, admissions, fixture.scope, runtime)
-        planner = new CohortPlanner(reads, fixture.scope, fixed(fixture.base), fixture.checks, new CohortProgress)
+        planner = new CohortPlanner(reads, fixture.scope, fixed(fixture.base), fixture.checks, new CohortProgress, new OperatorRequirements(""))
         continuation = request(fixture.members.map(_.id).toSet, DispatchWork.Worker(WorkerMode.Implement)).copy(previous = Some(worker.id))
         review = continuation.copy(request = RequestId(uuid), work = DispatchWork.Reviewer(ReviewerMode.Candidate))
         original <- ledger.get(fixture.scope, producer.id)
@@ -390,7 +390,7 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
       reads = new EvidenceApi(api(ledger, fixture.scope, runtime), artifacts, admissions, fixture.scope, runtime)
       input = request(fixture.members.map(_.id).toSet, DispatchWork.Worker(WorkerMode.Implement)).copy(artifacts = List(fixture.artifact))
       choices <- ZIO.attemptBlocking {
-        def select(base: GitCommit, checks: List[ValidationCheck]) = new CohortPlanner(reads, fixture.scope, fixed(base), checks, new CohortProgress)
+        def select(base: GitCommit, checks: List[ValidationCheck]) = new CohortPlanner(reads, fixture.scope, fixed(base), checks, new CohortProgress, new OperatorRequirements(""))
           .plan(input, ArtifactId(uuid)).evidence.decision.choices
         val compatible = select(fixture.base, fixture.checks)
         val changedBase = select(GitCommit("b" * 40), fixture.checks)
@@ -408,7 +408,7 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
         runtime <- ZIO.runtime[Any]
         fixture <- assessed(ledger, usage, artifacts, admissions, 6, CohortCompatibility.Compatible)
         reads = new EvidenceApi(api(ledger, fixture.scope, runtime), artifacts, admissions, fixture.scope, runtime)
-        planner = new CohortPlanner(reads, fixture.scope, fixed(fixture.base), fixture.checks, new CohortProgress)
+        planner = new CohortPlanner(reads, fixture.scope, fixed(fixture.base), fixture.checks, new CohortProgress, new OperatorRequirements(""))
         input = request(fixture.members.map(_.id).toSet, DispatchWork.Worker(WorkerMode.Implement)).copy(previous = Some(fixture.artifact))
         result <- ZIO.attemptBlocking(planner.plan(input, ArtifactId(uuid)))
         choices = result.evidence.decision.choices
@@ -428,7 +428,7 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
         _ <- ZIO.foreachDiscard(List((4, 0), (4, 1), (5, 1), (5, 2), (5, 3))) { (a, b) => link(ledger, scope, ids(a), Relation.Produces, ids(b)) }
         _ <- link(ledger, scope, ids(6), Relation.Contains, ids(0))
         _ <- link(ledger, scope, ids(6), Relation.Contains, ids(3))
-        planner = new CohortPlanner(api(ledger, scope, runtime), scope, fixed(GitCommit("a" * 40)), Nil, new CohortProgress)
+        planner = new CohortPlanner(api(ledger, scope, runtime), scope, fixed(GitCommit("a" * 40)), Nil, new CohortProgress, new OperatorRequirements(""))
         result <- ZIO.attemptBlocking(planner.plan(request(ids.take(3).toSet, DispatchWork.Explorer(ExplorerMode.Investigate)), ArtifactId(uuid)))
         choices = result.evidence.decision.choices
         _ <- assertIO(choices.map(_.members.map(_.id).toSet) == List(ids.take(2).toSet, Set(ids(2))) &&
@@ -444,7 +444,7 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
         created <- ledger.change(scope, ChangeRequest(RequestId(uuid), List.fill(3)(Mutation.Create(task)), Nil, "Candidates"))
         ids = created.items.map(_.id)
         _ <- ZIO.foreachDiscard(ids.tail)(id => link(ledger, scope, ids.head, Relation.Produces, id))
-        planner = new CohortPlanner(api(ledger, scope, runtime), scope, fixed(GitCommit("a" * 40)), Nil, new CohortProgress)
+        planner = new CohortPlanner(api(ledger, scope, runtime), scope, fixed(GitCommit("a" * 40)), Nil, new CohortProgress, new OperatorRequirements(""))
         result <- ZIO.attemptBlocking(planner.plan(request(ids.tail.toSet, DispatchWork.Reviewer(ReviewerMode.Audit)), ArtifactId(uuid)))
         _ <- assertIO(result.evidence.decision.choices.size == 2 && result.evidence.decision.choices.forall(_.members.size == 1))
       } yield ()
@@ -459,7 +459,7 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
         ids = created.items.map(_.id)
         _ <- ZIO.foreachDiscard(ids.tail)(id => link(ledger, scope, ids.head, Relation.Produces, id))
         progress = new CohortProgress
-        planner = new CohortPlanner(api(ledger, scope, runtime), scope, fixed(GitCommit("a" * 40)), Nil, progress)
+        planner = new CohortPlanner(api(ledger, scope, runtime), scope, fixed(GitCommit("a" * 40)), Nil, progress, new OperatorRequirements(""))
         initial <- ZIO.attemptBlocking(planner.plan(request(ids.slice(1, 3).toSet, DispatchWork.Explorer(ExplorerMode.Investigate)), ArtifactId(uuid)))
         choice = initial.evidence.decision.choices.head
         _ <- ZIO.attempt(progress.started(initial.fingerprints(choice.id)))
@@ -480,7 +480,7 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
         member = created.items.head.id
         dependency = created.items.last.id
         _ <- link(ledger, scope, member, Relation.BlockedBy, dependency)
-        planner = new CohortPlanner(api(ledger, scope, runtime), scope, fixed(GitCommit("a" * 40)), Nil, new CohortProgress)
+        planner = new CohortPlanner(api(ledger, scope, runtime), scope, fixed(GitCommit("a" * 40)), Nil, new CohortProgress, new OperatorRequirements(""))
         input = request(Set(member), DispatchWork.Explorer(ExplorerMode.Investigate))
         selected <- ZIO.attemptBlocking(planner.plan(input, ArtifactId(uuid)))
         choice = selected.evidence.decision.choices.head
@@ -501,7 +501,7 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
         _ <- ledger.initialize(scope, "fairness")
         created <- ledger.change(scope, ChangeRequest(RequestId(uuid), List.fill(32)(Mutation.Create(task)), Nil, "Candidates"))
         progress = new CohortProgress
-        planner = new CohortPlanner(api(ledger, scope, runtime), scope, fixed(GitCommit("a" * 40)), Nil, progress)
+        planner = new CohortPlanner(api(ledger, scope, runtime), scope, fixed(GitCommit("a" * 40)), Nil, progress, new OperatorRequirements(""))
         first <- ZIO.attemptBlocking(planner.plan(request(created.items.map(_.id).toSet, DispatchWork.Explorer(ExplorerMode.Investigate)), ArtifactId(uuid)))
         _ <- ZIO.attempt(progress.offered(first.evidence.decision.choices.flatMap(_.members.map(_.id))))
         extra <- ledger.change(scope, ChangeRequest(RequestId(uuid), List(Mutation.Create(task)), Nil, "Later arrival"))
@@ -526,7 +526,7 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
         foreign = scope.copy(actor = scope.actor.copy(session = SessionId(uuid)))
         _ <- ledger.acquire(foreign, ClaimId(uuid), created.items.take(32).map(_.id).toSet, 300000)
         progress = new CohortProgress
-        planner = new CohortPlanner(api(ledger, scope, runtime), scope, fixed(GitCommit("a" * 40)), Nil, progress)
+        planner = new CohortPlanner(api(ledger, scope, runtime), scope, fixed(GitCommit("a" * 40)), Nil, progress, new OperatorRequirements(""))
         decisions <- ZIO.foreach(1 to 2) { _ => ZIO.attemptBlocking(planner.plan(
           request(created.items.map(_.id).toSet, DispatchWork.Explorer(ExplorerMode.Investigate)), ArtifactId(uuid))) }
         offered = decisions.flatMap(_.evidence.decision.choices.flatMap(_.members.map(_.id)))
@@ -538,7 +538,7 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
       for {
         runtime <- ZIO.runtime[Any]
         f <- organised(ledger, chained = true)
-        planner = new CohortPlanner(api(ledger, f.scope, runtime), f.scope, fixed(GitCommit("a" * 40)), Nil, new CohortProgress)
+        planner = new CohortPlanner(api(ledger, f.scope, runtime), f.scope, fixed(GitCommit("a" * 40)), Nil, new CohortProgress, new OperatorRequirements(""))
         input = request(Set(f.goal, f.milestone), DispatchWork.Planner())
         selected <- ZIO.attemptBlocking(planner.plan(input, ArtifactId(uuid)))
         groups = selected.evidence.decision.choices.map(_.members.map(_.id).toSet)
@@ -568,7 +568,7 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
         ids = created.items.map(_.id)
         _ <- link(ledger, scope, ids.head, Relation.Produces, ids(2))
         _ <- link(ledger, scope, ids(1), Relation.Produces, ids(3))
-        planner = new CohortPlanner(api(ledger, scope, runtime), scope, fixed(GitCommit("a" * 40)), Nil, new CohortProgress)
+        planner = new CohortPlanner(api(ledger, scope, runtime), scope, fixed(GitCommit("a" * 40)), Nil, new CohortProgress, new OperatorRequirements(""))
         input = request(ids.take(2).toSet, DispatchWork.Planner())
         selected <- ZIO.attemptBlocking(planner.plan(input, ArtifactId(uuid)))
         _ <- ZIO.succeed(println("D74 cross planner groups=" + selected.evidence.decision.choices.map(choice =>
@@ -593,7 +593,7 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
         _ <- link(ledger, scope, ids.head, Relation.Produces, ids(1))
         _ <- link(ledger, scope, ids.head, Relation.Produces, ids(2))
         _ <- link(ledger, scope, ids(2), Relation.BlockedBy, ids(1))
-        planner = new CohortPlanner(api(ledger, scope, runtime), scope, fixed(GitCommit("a" * 40)), Nil, new CohortProgress)
+        planner = new CohortPlanner(api(ledger, scope, runtime), scope, fixed(GitCommit("a" * 40)), Nil, new CohortProgress, new OperatorRequirements(""))
         input = request(ids.tail.toSet, DispatchWork.Planner())
         selected <- ZIO.attemptBlocking(planner.plan(input, ArtifactId(uuid)))
         _ <- ZIO.succeed(println("D74 unrooted producer planner groups=" + selected.evidence.decision.choices.map(choice =>
@@ -615,7 +615,7 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
       (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], proposals: ProposalService[IO]) => for {
         runtime <- ZIO.runtime[Any]
         f <- organised(ledger, chained = false)
-        planner = new CohortPlanner(api(ledger, f.scope, runtime), f.scope, fixed(GitCommit("a" * 40)), Nil, new CohortProgress)
+        planner = new CohortPlanner(api(ledger, f.scope, runtime), f.scope, fixed(GitCommit("a" * 40)), Nil, new CohortProgress, new OperatorRequirements(""))
         input = request(Set(f.goal, f.milestone), DispatchWork.Planner())
         selected <- ZIO.attemptBlocking(planner.plan(input, ArtifactId(uuid)))
         choice = selected.evidence.decision.choices.find(_.members.exists(_.id == f.milestone)).get
@@ -677,7 +677,7 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
       for {
         runtime <- ZIO.runtime[Any]
         f <- organised(ledger, chained = true)
-        planner = new CohortPlanner(api(ledger, f.scope, runtime), f.scope, fixed(GitCommit("a" * 40)), Nil, new CohortProgress)
+        planner = new CohortPlanner(api(ledger, f.scope, runtime), f.scope, fixed(GitCommit("a" * 40)), Nil, new CohortProgress, new OperatorRequirements(""))
         selected <- ZIO.attemptBlocking(planner.plan(request(Set(f.goal), DispatchWork.Planner()), ArtifactId(uuid)))
         choices = selected.evidence.decision.choices
         _ <- assertIO(!choices.exists(_.members.exists(_.id == f.milestone)))

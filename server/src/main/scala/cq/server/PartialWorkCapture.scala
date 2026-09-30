@@ -41,7 +41,7 @@ final class PartialWorkCapture(config: SupervisorConfig) {
     val evidence = new WorkspaceEvidence(project, attempt, "partial-evidence").collect(tree, untracked)
     val out = upload("partial-stdout", tail(stdout))
     val err = upload("partial-stderr", tail(stderr))
-    val manifest = PartialWork(attempt, state, out.id, err.id, status.map(_.id), diff.map(_._1.id), diff.forall(_._2), evidence.retained)
+    val manifest = PartialWork(attempt, state, out.id, err.id, status.map(_.id), diff.map(_._1.id), diff.exists(_._2), evidence.retained)
     val record = ArtifactUpload(project, NativeArtifacts.id(attempt, "partial"), attempt, ArtifactKind.Evidence, "application/json",
       HostFiles.encode(PartialWork_JsonCodec, manifest))
     (record.id, out :: err :: status.toList ++ diff.map(_._1).toList ++ evidence.uploads :+ record)

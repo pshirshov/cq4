@@ -7,9 +7,9 @@ import java.time.Clock
 import zio.{Task, ZIO}
 
 final class CohortController(config: SupervisorConfig, authority: SupervisorAuthority, workflow: WorkflowExecution,
-  dispatch: DispatchController, candidates: CandidateWorkspace, clock: Clock) {
+  dispatch: DispatchController, candidates: CandidateWorkspace, requirements: OperatorRequirements, clock: Clock) {
   private val progress = new CohortProgress
-  private val planner = new CohortPlanner(authority.governor, config.owner, candidates, config.settings.checks, progress)
+  private val planner = new CohortPlanner(authority.governor, config.owner, candidates, config.settings.checks, progress, requirements)
   private var decisions = Map.empty[RequestId, CohortPlan]
   private var generations = Map.empty[RequestId, Long]
   private var advertised = Set.empty[RequestId]

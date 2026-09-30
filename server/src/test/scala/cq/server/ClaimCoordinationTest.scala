@@ -64,6 +64,9 @@ abstract class ClaimCoordinationTest extends SpecZIO with AssertZIO {
         _ <- assertIO(claim.expiresAt >= before + thirtyMinutes && claim.origin == ClaimOrigin.Acquire(thirtyMinutes))
         renewed <- service.renew(owner, claim.fence, thirtyMinutes)
         _ <- assertIO(renewed.expiresAt >= claim.expiresAt)
+        // A shorter renewal (the host renews running work for three minutes) never shortens the lease the governor holds.
+        shortened <- service.renew(owner, claim.fence, 3L * 60 * 1000)
+        _ <- assertIO(shortened.expiresAt >= renewed.expiresAt && shortened.origin == claim.origin)
         _ <- reject(service.acquire(owner, ClaimId(UUID.randomUUID()), Set(other.id), thirtyMinutes + 1), _.isInstanceOf[Fault.Invalid])
         _ <- reject(service.renew(owner, claim.fence, thirtyMinutes + 1), _.isInstanceOf[Fault.Invalid])
       } yield ()

@@ -22,7 +22,6 @@ final class CandidateMessageLocal extends AnyWordSpec {
         view(id(Ledger.Tasks, 12), "Start  workers\nfrom the target", task, List(ItemRef(Relation.DerivedFrom, producer.item.id), ItemRef(Relation.DerivedFrom, id(Ledger.Goals, 3)))),
         view(id(Ledger.Tasks, 13), "Describe integrated commits", task, List(ItemRef(Relation.BlockedBy, id(Ledger.Tasks, 12)))))
       val message = CandidateMessage(attempt, members, List(producer), None)
-      println(message)
       assert(message ==
         s"""T12 Start workers from the target; T13 Describe integrated commits
            |

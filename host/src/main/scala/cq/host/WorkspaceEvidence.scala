@@ -63,8 +63,9 @@ final class WorkspaceEvidence(project: ProjectId, attempt: AttemptId, prefix: St
     def add(value: String): Unit = resolve(value) match {
       case Left(rejected) => omit(rejected)
       case Right(resolved) =>
-        val candidates = if (Files.isDirectory(resolved, LinkOption.NOFOLLOW_LINKS)) walk(resolved) else List(resolved)
-        candidates.foreach(retain)
+        // A named path the host cannot walk or read is omitted like an invalid one; it never fails the worker's result.
+        val candidates = Try(if (Files.isDirectory(resolved, LinkOption.NOFOLLOW_LINKS)) walk(resolved) else List(resolved))
+        candidates.fold(_ => omit(relative(resolved)), _.foreach(file => Try(retain(file)).failed.foreach(_ => omit(relative(file)))))
     }
     private def retain(file: Path): Unit = {
       val path = relative(file)

@@ -30,7 +30,8 @@ final class CandidateWorkspace(config: SupervisorConfig) extends ExecutionBase {
   def verifyBase(base: GitCommit): Unit = {
     val repository = Path.of(config.run.repository)
     require(git(repository, "rev-parse", "--verify", "--end-of-options", base.value + "^{commit}") == base.value, "Candidate object is unavailable")
-    git(repository, "merge-base", "--is-ancestor", config.run.base.value, base.value)
+    // The current target head is a valid fresh base even when the operator's checkout diverged from the target (D77); any other base must descend from the session base.
+    if (!targetHead.contains(base)) require(ancestor(config.run.base, base), "Candidate base does not descend from the session base")
   }
   def observeTarget(candidate: GitCommit): GitCommit = {
     val target = config.settings.integrationTarget.getOrElse(throw new IllegalArgumentException("No integration target configured"))
@@ -79,7 +80,8 @@ final class CandidateWorkspace(config: SupervisorConfig) extends ExecutionBase {
         else git(tree, "merge-base", "--is-ancestor", plan.candidate.value, plan.observedTarget.value)
         List(plan.observedTarget, plan.candidate)
     }
-    git(tree, "add", "--all", "--", ".")
+    // The worker's .work/ directory (evidence, logs) never enters the candidate, whatever the project's ignore rules say.
+    git(tree, "add", "--all", "--", ".", ":(exclude).work")
     val staged = git(tree, "ls-files", "--stage")
     require(!staged.linesIterator.exists(_.startsWith("160000 ")), "Candidate submodules are not supported")
     val objectId = git(tree, "write-tree")
