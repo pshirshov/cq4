@@ -54,6 +54,32 @@ final class CandidateWorkspaceLocal extends SpecZIO with AssertZIO {
       } yield ()
     }
 
+    "capture a candidate whose project ignore rules already list the worker's .work/ directory" in { (local: LocalWorkspaceFixture) =>
+      val settings = configuration(local)
+      val candidates = new CandidateWorkspace(settings)
+      val fixture = local.fixture
+      for {
+        ignoring <- ZIO.attemptBlocking {
+          Files.writeString(local.source.resolve(".gitignore"), ".work/\n")
+          local.git(local.source, "add", ".gitignore")
+          local.git(local.source, "-c", "user.name=CQ test", "-c", "user.email=test@localhost", "commit", "-q", "-m", "Ignore .work")
+          GitCommit(local.git(local.source, "rev-parse", "HEAD"))
+        }
+        workspace <- fixture.service.prepare(settings.owner, fixture.spec(settings.owner).copy(base = ignoring))
+        commit <- ZIO.attemptBlocking {
+          Files.writeString(Path.of(workspace.directory).resolve("change.txt"), "change\n")
+          val evidence = Path.of(workspace.directory).resolve(".work/evidence")
+          Files.createDirectories(evidence)
+          Files.writeString(evidence.resolve("run.log"), "worker log\n")
+          candidates.capture(workspace, None, "Candidate\n")
+        }
+        _ <- ZIO.attemptBlocking {
+          val files = local.git(local.source, "ls-tree", "-r", "--name-only", commit.value).linesIterator.toList
+          assert(files.contains("change.txt") && !files.exists(_.startsWith(".work/")), files)
+        }
+      } yield ()
+    }
+
     "start fresh work at the current target head, expect that head only while the candidate descends from it, and record the message" in { (local: LocalWorkspaceFixture) =>
       val settings = configuration(local)
       val candidates = new CandidateWorkspace(settings)

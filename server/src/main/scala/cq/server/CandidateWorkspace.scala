@@ -83,7 +83,9 @@ final class CandidateWorkspace(config: SupervisorConfig) extends ExecutionBase {
         List(plan.observedTarget, plan.candidate)
     }
     // The worker's .work/ directory (evidence, logs) never enters the candidate, whatever the project's ignore rules say.
-    git(tree, "add", "--all", "--", ".", ":(exclude).work")
+    // An exclude pathspec is not used: Git rejects it when the project already ignores .work/.
+    git(tree, "add", "--all", "--", ".")
+    git(tree, "rm", "-r", "--cached", "--quiet", "--ignore-unmatch", "--", ".work")
     val staged = git(tree, "ls-files", "--stage")
     require(!staged.linesIterator.exists(_.startsWith("160000 ")), "Candidate submodules are not supported")
     val objectId = git(tree, "write-tree")
