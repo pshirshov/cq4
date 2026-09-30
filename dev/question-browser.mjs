@@ -56,14 +56,15 @@ async function enter() {
   await page.getByText('Connection: ALIVE', {exact: true}).waitFor();
   await page.getByLabel('Project', {exact: true}).selectOption(project.value); await page.getByText('Data: current', {exact: true}).waitFor();
 }
-const batch = () => page.getByRole('dialog', {name: 'Answer open questions', exact: true});
-const open = () => page.getByRole('button', {name: 'Answer open questions', exact: true}).click();
+const batch = () => page.getByRole('dialog', {name: 'Answer questions', exact: true});
+const open = () => page.getByRole('button', {name: 'Answer questions', exact: true}).click();
 try {
   await enter();
   await page.getByRole('button', {name: 'D1 · References', exact: true}).click();
   await page.locator('#detail-pane').getByRole('heading', {name: 'D1 · References', exact: true}).waitFor();
   const document = page.locator('#detail-pane .item-document');
   assert.deepEqual(await document.getByRole('button').allTextContents(), ['Q1', 'Q2', 'Q999']);
+  assert.equal(await document.locator('.item-reference svg').count(), 3);
   await document.getByRole('button', {name: 'View Q1', exact: true}).click();
   let reference = page.getByRole('dialog', {name: 'Item reference · Q1', exact: true});
   await reference.getByRole('heading', {name: 'Q1 · Question 1', exact: true}).waitFor();
@@ -82,6 +83,11 @@ try {
   cases.push('D57 token boundaries, nested popup/back, keyboard, missing target and preserved selection');
 
   await open(); await batch().getByRole('heading', {name: 'Q1 · Question 1', exact: true}).waitFor();
+  await batch().getByRole('button', {name: 'View Q2', exact: true}).click();
+  reference = page.getByRole('dialog', {name: 'Item reference · Q2', exact: true});
+  await reference.getByRole('heading', {name: 'Q2 · Question 2', exact: true}).waitFor();
+  await reference.getByRole('button', {name: 'Close', exact: true}).click();
+  cases.push('Item references inside the question batch open the reference popup');
   await batch().getByLabel('Answer', {exact: true}).fill('Retained answer one');
   await batch().getByRole('button', {name: 'Skip / next question', exact: true}).click();
   await batch().getByRole('heading', {name: 'Q2 · Question 2', exact: true}).waitFor();

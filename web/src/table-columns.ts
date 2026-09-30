@@ -1,7 +1,7 @@
 import { element } from './editor.js';
 
-const TITLE = 2;
-const TITLE_NEIGHBOR = 3;
+const TITLE = 1;
+const TITLE_NEIGHBOR = 2;
 const MIN_TITLE = 80;
 const MAX_WIDTH = 1200;
 const STEP = 16;

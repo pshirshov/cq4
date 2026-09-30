@@ -26,10 +26,12 @@ export async function tableChecks(browser, storageState, origin, evidence) {
     await page.goto(origin); await page.getByText('Connection: ALIVE', { exact: true }).waitFor();
     await page.getByLabel('Project', { exact: true }).selectOption(project.value);
     await page.getByRole('button', { name: 'D1 · Visible defect', exact: true }).waitFor();
-    await check('D30 semantic table with six columns', async () => {
+    await check('D30 semantic table with merged ID/type column', async () => {
       const table = page.getByRole('table', { name: 'Items', exact: true });
       assert.equal(await table.count(), 1);
-      assert.deepEqual(await table.getByRole('columnheader').allTextContents(), ['ID', 'Type', 'Title', 'Status', 'Severity', 'Last modified']);
+      assert.deepEqual(await table.getByRole('columnheader').allTextContents(), ['ID', 'Title', 'Status', 'Severity', 'Last modified']);
+      const id = table.locator('tbody .item-id').first();
+      assert.equal(await id.locator('svg').count(), 1); assert.equal(await id.getAttribute('title'), 'Defects');
       assert.equal(await table.getByRole('cell', { name: 'High', exact: true }).count(), 1);
     });
     await check('D29 live navigation counts', async () => {
@@ -58,7 +60,8 @@ export async function tableChecks(browser, storageState, origin, evidence) {
       assert.equal(await table.getByRole('button', { name: 'D85 · Item 001', exact: true }).count(), 0);
       await sort('title', 'D85'); await sort('title', 'D1');
       await sort('severity', 'D5'); await sort('severity', 'D2');
-      await sort('type', 'D1'); await sort('status', 'D1');
+      await sort('status', 'D1');
+      assert.equal(await table.getByRole('button', { name: 'Sort by type', exact: true }).count(), 0);
       await sort('ID', 'D1'); await sort('ID', 'D85');
       assert.equal(await table.getByRole('columnheader').first().getAttribute('aria-sort'), 'descending');
       const pane = page.getByRole('region', { name: 'Results', exact: true });

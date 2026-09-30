@@ -46,10 +46,10 @@ try {
       };
     }
     const page = await context.newPage(); page.setDefaultTimeout(6000);
-    const batch = () => page.getByRole('dialog', {name: 'Answer open questions', exact: true});
+    const batch = () => page.getByRole('dialog', {name: 'Answer questions', exact: true});
     const graph = () => page.getByRole('dialog', {name: 'Graph change', exact: true});
     const choose = project => page.getByLabel('Project', {exact: true}).selectOption(project.value);
-    const open = () => page.getByRole('button', {name: 'Answer open questions', exact: true}).click();
+    const open = () => page.getByRole('button', {name: 'Answer questions', exact: true}).click();
     async function preview() {
       await page.getByRole('button', {name: 'T1 · Task 1', exact: true}).click();
       await page.getByRole('heading', {name: 'T1 · Task 1', exact: true}).waitFor();

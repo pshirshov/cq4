@@ -2,6 +2,7 @@ import * as api from '../../generated/typescript/cq/api/index.js';
 import { BaboonCodecContext } from '../../generated/typescript/BaboonSharedRuntime.js';
 import { Dialog } from './dialog.js';
 import { button, element } from './editor.js';
+import { icon } from './icons.js';
 import { itemName, parseItem } from './items.js';
 import { itemView } from './presentation.js';
 
@@ -27,7 +28,7 @@ export class ReferencePopup {
       let id: api.ItemId;
       try { id = parseItem(project, match[0]); } catch { continue; }
       fragment.append(document.createTextNode(text.slice(end, start)));
-      const link = button(match[0], () => { void this.open(id, false); }); link.className = 'item-reference';
+      const link = button(match[0], () => { void this.open(id, false); }); link.className = 'item-reference'; link.prepend(icon(id.ledger));
       link.setAttribute('aria-label', `View ${match[0]}`); link.setAttribute('aria-haspopup', 'dialog');
       fragment.append(link); end = after;
     }

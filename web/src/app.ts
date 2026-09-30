@@ -248,11 +248,13 @@ class App {
     const create = button('New item', () => { this.openEditor(null); }); create.className = 'navigation-entry'; create.prepend(icon('New'));
     const usage = button('Project usage', () => this.action(() => this.selectUsage(new api.UsageFilter_ProjectAll(), true))); usage.className = 'navigation-entry'; usage.prepend(icon('Usage'));
     const archive = button('Archive terminal items', () => this.action(async () => this.archive.open(this.currentProject(), this.activeQuery, this.order))); archive.className = 'navigation-entry';
-    const questions = button('Answer open questions', () => this.action(async () => this.questions.open(this.currentProject()))); questions.className = 'navigation-entry'; questions.prepend(icon(api.Ledger.Questions));
+    const questions = button('Answer questions', () => this.action(async () => this.questions.open(this.currentProject()))); questions.className = 'navigation-entry'; questions.prepend(icon(api.Ledger.Questions));
     side.append(create, questions, usage, archive, element('h3', 'Browse'), shortcuts);
     const table = element('table', ''); table.className = 'items-table'; table.setAttribute('aria-label', 'Items');
     const head = element('thead', ''); const headings = element('tr', '');
-    for (const field of api.ItemOrderField_values) {
+    // The ID column carries the item type icon, so the separate Type column is not shown.
+    const columns = api.ItemOrderField_values.filter(field => field !== api.ItemOrderField.Type);
+    for (const field of columns) {
       const cell = element('th', ''); cell.scope = 'col'; this.sortHeaders.set(field, cell);
       const label = field === 'Id' ? 'ID' : field === 'Modified' ? 'Last modified' : field;
       const control = button(label, () => this.action(async () => {
@@ -264,7 +266,7 @@ class App {
     head.append(headings); table.append(head, this.items); this.updateSort();
     if (this.tableColumns !== null) this.tableColumns.destroy();
     this.tableColumns = new TableColumns(table, [...this.sortHeaders.values()], workspace.results, this.items);
-    const empty = element('td', 'No matching items.'); empty.colSpan = api.ItemOrderField_values.length; this.emptyResults.append(empty);
+    const empty = element('td', 'No matching items.'); empty.colSpan = columns.length; this.emptyResults.append(empty);
     this.items.tabIndex = -1; this.items.setAttribute('aria-label', 'Result items');
     this.items.addEventListener('keydown', event => {
       const rows = Array.from(this.items.querySelectorAll<HTMLButtonElement>('button')); const index = rows.indexOf(document.activeElement as HTMLButtonElement);
@@ -486,13 +488,12 @@ class App {
         line.addEventListener('click', event => {
           if (event.target instanceof Node && !node.contains(event.target)) { node.focus(); this.action(() => this.select(item.id)); }
         });
-        const id = element('td', itemName(item.id)); id.className = 'item-id';
-        const type = element('td', ''); type.append(icon(item.id.ledger)); type.setAttribute('aria-label', item.id.ledger); type.title = item.id.ledger;
+        const id = element('td', ''); id.className = 'item-id'; id.title = item.id.ledger; id.append(icon(item.id.ledger), itemName(item.id));
         const title = element('td', ''); title.append(node);
         const status = element('td', ''); status.className = 'item-status'; status.id = `status-${key}`;
         const severity = element('td', ''); severity.className = 'item-severity';
         const modified = element('time', ''); const timestamp = element('td', ''); timestamp.className = 'item-modified'; timestamp.append(modified);
-        node.setAttribute('aria-describedby', status.id); line.append(id, type, title, status, severity, timestamp);
+        node.setAttribute('aria-describedby', status.id); line.append(id, title, status, severity, timestamp);
         row = { element: line, button: node, status, severity, modified }; this.rows.set(key, row);
       }
       const caption = `${itemName(item.id)} · ${item.title}${item.archived ? ' · archived' : ''}`;

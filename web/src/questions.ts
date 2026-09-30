@@ -74,7 +74,7 @@ export class QuestionBatch {
     return result;
   }
   open(project: api.ProjectId): void {
-    this.reset(); this.dialog.open('Answer open questions'); this.dialog.body.replaceChildren(element('p', 'Loading open questions…'));
+    this.reset(); this.dialog.open('Answer questions'); this.dialog.body.replaceChildren(element('p', 'Loading open questions…'));
     const generation = this.generation;
     this.action(async () => {
       const result = await this.call(new api.Command_Search(new api.SearchInput(project, 'ledger:Questions status:Open', undefined, undefined, BATCH_LIMIT)));
