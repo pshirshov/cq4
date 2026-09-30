@@ -561,7 +561,9 @@ class App {
     const actions = element('div', ''); actions.className = 'actions document-actions';
     const close = button('Close', () => this.closeItem()); close.setAttribute('aria-label', 'Close item view'); close.title = 'Close item view (Esc from results)';
     actions.append(close, button('Edit current revision', () => this.openEditor(result.view)),
-      button('History', () => this.action(async () => { this.historyBefore = new api.Revision(9223372036854775807n); this.historyDialog.open(`History · ${itemName(item.id)}`); await this.loadHistory(); })));
+      button('History', () => this.action(async () => { this.historyBefore = new api.Revision(9223372036854775807n);
+        // Drop the previous item's or visit's revisions so stale rows cannot be activated while the fresh page loads.
+        this.historyPanel.replaceChildren(element('p', 'Loading history…')); this.historyDialog.open(`History · ${itemName(item.id)}`); await this.loadHistory(); })));
     const metadata = element('p', `Revision ${item.revision.value} · ${item.provenance.actor.subject} · ${new Date(Number(item.updatedAt)).toLocaleString()}`); metadata.className = 'revision-meta';
     this.detail.replaceChildren(title, metadata, actions, this.itemDocument(item));
     this.detail.hidden = this.editor !== null && this.editor.record.item !== undefined;
