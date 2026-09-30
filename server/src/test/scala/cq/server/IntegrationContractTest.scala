@@ -55,12 +55,12 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
       request = DispatchRequest(RequestId(uuid), DispatchWork.Worker(WorkerMode.Implement), Harness.Codex, created.items, Nil, Nil, None,
         claim.fence, HostLimits(3000, 10000, 1000, 300, 2000, 262144))
       worker = ChildResult(workerAttempt.id, request, GitCommit("a" * 40), Some(candidate),
-        ChildReport.Work(created.items.map(ref => WorkMember(ref.id, WorkDisposition.CandidateReady, "Ready"))), List(ValidationEvidence(check.name, ValidationState.Passed, validation.id)))
+        ChildReport.Work(created.items.map(ref => WorkMember(ref.id, WorkDisposition.CandidateReady, "Ready", Nil))), List(ValidationEvidence(check.name, ValidationState.Passed, validation.id)), RetainedEvidence(Nil, Nil))
       workerArtifact <- publish(collector, worker, artifacts, admissions)
       reviewAssignment <- usage.assign(collector, workerAssignment.copy(id = AssignmentId(uuid), cohort = Some(uuid)))
       reviewAttempt <- usage.start(collector, workerAttempt.copy(id = AttemptId(uuid), assignment = reviewAssignment.id, role = Role.Reviewer))
       reviewer = ChildResult(reviewAttempt.id, request.copy(request = RequestId(uuid), work = DispatchWork.Reviewer(ReviewerMode.Candidate), previous = Some(workerArtifact)),
-        candidate, Some(candidate), ChildReport.Review(created.items.map(ref => ReviewMember(ref.id, ReviewVerdict.Accepted, Nil)), None), worker.validation)
+        candidate, Some(candidate), ChildReport.Review(created.items.map(ref => ReviewMember(ref.id, ReviewVerdict.Accepted, Nil)), None), worker.validation, RetainedEvidence(Nil, Nil))
       reviewArtifact <- publish(collector, reviewer, artifacts, admissions)
       id = IntegrationId(uuid)
       change = IntegrationPolicy.completion(id, "/consumer", "refs/heads/integration", candidate, workerArtifact, reviewArtifact, List(validation.id), claim.fence, items)

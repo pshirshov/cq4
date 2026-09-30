@@ -43,7 +43,7 @@ abstract class ProposalContractTest extends SpecZIO with AssertZIO {
       Harness.Codex, "fixture", "fixture", "fixture", 1001))
     request = DispatchRequest(RequestId(uuid), work, Harness.Codex, f.members, Nil, Nil, None, f.claim.fence,
       HostLimits(3000, 10000, 1000, 300, 2000, 262144))
-    result = ChildResult(attempt.id, request, GitCommit("a" * 40), None, report, Nil)
+    result = ChildResult(attempt.id, request, GitCommit("a" * 40), None, report, Nil, RetainedEvidence(Nil, Nil))
     artifact <- artifacts.upload(f.collector, ArtifactUpload(f.owner.project, ArtifactId(uuid), attempt.id, ArtifactKind.Result,
       "application/json", Wire.encode(ChildResult_JsonCodec, result)))
   } yield Published(result, artifact)

@@ -84,7 +84,11 @@ object ChildContracts {
         CohortAssessmentPolicy.shape(members, plan)
         plan.members.map(_.item)
       case (assigned: DispatchWork.Worker, ChildReport.Work(entries)) if assigned.mode != WorkerMode.Probe =>
-        entries.foreach(entry => narrative(entry.summary))
+        entries.foreach { entry =>
+          narrative(entry.summary)
+          require(entry.evidence.size <= WorkspaceEvidence.MaxFiles &&
+            entry.evidence.forall(path => path.nonEmpty && path.length <= WorkspaceEvidence.MaxPathCharacters), "Invalid named evidence bounds")
+        }
         entries.map(_.item)
       case (_: DispatchWork.Reviewer, ChildReport.Review(entries, _)) =>
         entries.foreach { entry =>
@@ -114,6 +118,12 @@ object ChildContracts {
       (value.candidate.isEmpty && value.validation.isEmpty), "Non-candidate results cannot inherit candidate validation")
     require(value.validation.size <= 8 && value.validation.map(_.check).distinct.size == value.validation.size &&
       value.validation.forall(_.check.matches("[a-z][a-z0-9-]{0,49}")), "Invalid host validation inventory")
+    val evidence = value.evidence
+    require(value.request.work.isInstanceOf[DispatchWork.Worker] || (evidence.files.isEmpty && evidence.omitted.isEmpty), "Only worker results retain workspace evidence")
+    require(evidence.files.size <= WorkspaceEvidence.MaxFiles && evidence.files.map(_.path).distinct.size == evidence.files.size &&
+      evidence.files.forall(file => file.path.nonEmpty && file.path.length <= WorkspaceEvidence.MaxPathCharacters && file.bytes >= 0) &&
+      evidence.omitted.size <= WorkspaceEvidence.MaxOmitted + 1 && evidence.omitted.forall(_.length <= WorkspaceEvidence.MaxPathCharacters),
+      "Invalid retained evidence inventory")
     require(HostFiles.encode(ChildResult_JsonCodec, value).getBytes(UTF_8).length <= MaxResultBytes, "Stored child result exceeds its byte bound")
   }
 }

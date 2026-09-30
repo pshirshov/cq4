@@ -35,7 +35,7 @@ abstract class ResultAdmissionTest extends SpecZIO with AssertZIO {
       request = DispatchRequest(RequestId(UUID.randomUUID()), DispatchWork.Worker(WorkerMode.Implement), Harness.Codex,
         created.items, Nil, Nil, None, claim.fence, HostLimits(3000, 10000, 1000, 300, 2000, 262144))
       result = ChildResult(child.id, request, GitCommit("a" * 40), Some(GitCommit("b" * 40)),
-        ChildReport.Work(created.items.map(item => WorkMember(item.id, WorkDisposition.CandidateReady, "Candidate"))), Nil)
+        ChildReport.Work(created.items.map(item => WorkMember(item.id, WorkDisposition.CandidateReady, "Candidate", Nil))), Nil, RetainedEvidence(Nil, Nil))
       metadata <- artifacts.upload(collector, ArtifactUpload(owner.project, ArtifactId(UUID.randomUUID()), child.id,
         ArtifactKind.Result, "application/json", Wire.encode(ChildResult_JsonCodec, result)))
     } yield Fixture(owner, collector, claim, result, metadata)
@@ -100,7 +100,7 @@ abstract class ResultAdmissionTest extends SpecZIO with AssertZIO {
           ArtifactKind.Result, "application/json", "{}"))
         _ <- rejected(admission.admit(f.collector, f.input.copy(artifact = malformed.id)), _.isInstanceOf[Fault.Invalid])
         reduced = f.result.copy(request = f.result.request.copy(members = f.result.request.members.take(1)),
-          report = ChildReport.Work(List(WorkMember(f.result.request.members.head.id, WorkDisposition.CandidateReady, "Partial assignment"))))
+          report = ChildReport.Work(List(WorkMember(f.result.request.members.head.id, WorkDisposition.CandidateReady, "Partial assignment", Nil))))
         mismatched <- artifacts.upload(f.collector, ArtifactUpload(f.owner.project, ArtifactId(UUID.randomUUID()), f.result.attempt,
           ArtifactKind.Result, "application/json", Wire.encode(ChildResult_JsonCodec, reduced)))
         _ <- rejected(admission.admit(f.collector, f.input.copy(artifact = mismatched.id)), _.isInstanceOf[Fault.Invalid])

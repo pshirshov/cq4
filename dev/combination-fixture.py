@@ -82,7 +82,7 @@ def main():
                 Path(actor + ".txt").write_text(actor + "\n")
                 if scenario == "conflict":
                     Path("shared.txt").write_text(actor + "\n")
-            finish({"Work": {"members": [{"item": member, "disposition": "CandidateReady", "summary": "CHILD_ONLY_NARRATIVE " + "details " * 500}]}})
+            finish({"Work": {"members": [{"item": member, "disposition": "CandidateReady", "summary": "CHILD_ONLY_NARRATIVE " + "details " * 500, "evidence": []}]}})
         else:
             assert sandbox == "read-only" and not context["artifacts"]
             previous = context["previous"]

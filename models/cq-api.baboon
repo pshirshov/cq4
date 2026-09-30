@@ -405,7 +405,7 @@ enum WorkspaceAdmission { Open Quarantined }
 root data WorkspaceObservation { head: GitCommit gitCommon: str gitDirectory: str verifiedAt: i64 }
 root data WorkspaceRecord { spec: WorkspaceSpec directory: str admission: WorkspaceAdmission observed: opt[WorkspaceObservation] quarantineReason: opt[str] }
 
-enum ArtifactKind { Prompt Input Result Transcript Validation Combination Selection }
+enum ArtifactKind { Prompt Input Result Transcript Validation Combination Selection Evidence }
 root data ArtifactUpload { project: ProjectId id: ArtifactId attempt: AttemptId kind: ArtifactKind mediaType: str body: str }
 root data ArtifactMetadata { project: ProjectId id: ArtifactId attempt: AttemptId kind: ArtifactKind mediaType: str sha256: str bytes: i32 codePoints: i32 actor: Actor receivedAt: i64 }
 root data ArtifactPage { metadata: ArtifactMetadata offset: i32 next: i32 hasMore: bit text: str }
@@ -499,7 +499,7 @@ root data CohortAssessment {
   compatibility: CohortCompatibility objective: str dependencies: str interference: str members: lst[CohortMemberAssessment]
 }
 enum EvidenceDisposition { Findings Inconclusive Blocked Failed }
-root data WorkMember { item: ItemId disposition: WorkDisposition summary: str }
+root data WorkMember { item: ItemId disposition: WorkDisposition summary: str evidence: lst[str] }
 root data ReviewMember { item: ItemId verdict: ReviewVerdict findings: lst[str] }
 root data PlanMember { item: ItemId disposition: PlanDisposition summary: str }
 root data EvidenceMember {
@@ -533,8 +533,15 @@ root adt ChildReport {
   data Work { members: lst[WorkMember] }
   data Review { members: lst[ReviewMember] proposal: opt[LedgerProposal] }
 }
+root data EvidenceFile { path: str artifact: ArtifactId bytes: i64 truncated: bit }
+root data RetainedEvidence { files: lst[EvidenceFile] omitted: lst[str] }
 root data ChildResult {
   attempt: AttemptId request: DispatchRequest base: GitCommit candidate: opt[GitCommit] report: ChildReport validation: lst[ValidationEvidence]
+  evidence: RetainedEvidence
+}
+root data PartialWork {
+  attempt: AttemptId state: AttemptState stdout: ArtifactId stderr: ArtifactId status: opt[ArtifactId] diff: opt[ArtifactId] diffTruncated: bit
+  evidence: RetainedEvidence
 }
 root data ChildPublication {
   project: ProjectId owner: Actor result: opt[ChildResult] status: DispatchStatus outcome: AttemptOutcome
@@ -618,7 +625,7 @@ root data ChildCounts {
 }
 root data DispatchStatus {
   request: RequestId attempt: AttemptId phase: DispatchPhase process: opt[JobPhase] members: lst[ItemId]
-  counts: ChildCounts next: ChildNext blocker: opt[str] result: opt[ArtifactId] detailsOmitted: bit usageDelivered: bit
+  counts: ChildCounts next: ChildNext blocker: opt[str] result: opt[ArtifactId] partial: opt[ArtifactId] detailsOmitted: bit usageDelivered: bit
 }
 root data DispatchTicket { request: DispatchRequest assignment: Assignment attempt: Attempt profile: HarnessSetting selection: opt[ArtifactId] }
 root data CohortRequest {

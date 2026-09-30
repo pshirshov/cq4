@@ -105,9 +105,10 @@ class ExtendedAccess:
             return metadata["id"]
 
         worker_handle = publish({"attempt": worker["id"], "request": request, "base": base, "candidate": candidate,
-            "report": {"Work": {"members": [{"item": member, "disposition": "CandidateReady", "summary": "Access fixture"} for member in members]}}, "validation": []})
+            "report": {"Work": {"members": [{"item": member, "disposition": "CandidateReady", "summary": "Access fixture", "evidence": []} for member in members]}}, "validation": [],
+            "evidence": {"files": [], "omitted": []}})
         reviewer_handle = publish({"attempt": reviewer["id"], "request": {**request, "request": identity(), "work": {"Reviewer": {"mode": "Candidate"}}, "previous": worker_handle},
-            "base": candidate, "candidate": candidate, "report": {"Review": {"proposal": None, "members": [{"item": member, "verdict": "Accepted", "findings": []} for member in members]}}, "validation": []})
+            "base": candidate, "candidate": candidate, "report": {"Review": {"proposal": None, "members": [{"item": member, "verdict": "Accepted", "findings": []} for member in members]}}, "validation": [], "evidence": {"files": [], "omitted": []}})
         operation = identity()
         repository, target = "/access-fixture", "refs/heads/integration"
         mutations = []

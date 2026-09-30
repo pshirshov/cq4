@@ -152,7 +152,7 @@ def main():
             if assignment["work"]["Worker"]["mode"] == "Probe":
                 signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
             disposition = "Failed" if labels and labels[0].startswith("cohort-selected-refresh") else "CandidateReady"
-            finish({"Work": {"members": [{"item": item, "disposition": disposition, "summary": "CHILD_ONLY_NARRATIVE " + "detail " * 1000} for item in members]}})
+            finish({"Work": {"members": [{"item": item, "disposition": disposition, "summary": "CHILD_ONLY_NARRATIVE " + "detail " * 1000, "evidence": []} for item in members]}})
             if assignment["work"]["Worker"]["mode"] == "Probe":
                 time.sleep(60)
             else:

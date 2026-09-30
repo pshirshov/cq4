@@ -53,11 +53,11 @@ object IntegrationApiCheck {
       metadata.id
     }
     val workerResult = ChildResult(worker.id, request, base, Some(candidate),
-      ChildReport.Work(members.map(ref => WorkMember(ref.id, WorkDisposition.CandidateReady, "Ready"))), Nil)
+      ChildReport.Work(members.map(ref => WorkMember(ref.id, WorkDisposition.CandidateReady, "Ready", Nil))), Nil, RetainedEvidence(Nil, Nil))
     val workerHandle = publish(workerResult)
     val reviewerHandle = publish(ChildResult(reviewer.id,
       request.copy(request = RequestId(uuid), work = DispatchWork.Reviewer(ReviewerMode.Candidate), previous = Some(workerHandle)), candidate, Some(candidate),
-      ChildReport.Review(members.map(ref => ReviewMember(ref.id, ReviewVerdict.Accepted, Nil)), None), Nil))
+      ChildReport.Review(members.map(ref => ReviewMember(ref.id, ReviewVerdict.Accepted, Nil)), None), Nil, RetainedEvidence(Nil, Nil)))
     val id = IntegrationId(uuid)
     val repository = "/http-fixture"
     val target = "refs/heads/integration"

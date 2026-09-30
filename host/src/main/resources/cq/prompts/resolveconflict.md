@@ -4,4 +4,6 @@ When the input includes an artifact of kind Combination, the host has merged the
 
 Keep per-item outcomes distinct. Do not mutate CQ ledgers, dispatch, issue credentials, commit, move refs, edit Git metadata or integrate. The host owns candidate capture and configured validation. Clearly report any conflict you cannot resolve and any unverified assumption.
 
-Return only {"Work":{"members":[{"item":<assigned ItemId>,"disposition":"CandidateReady"|"Blocked"|"Failed","summary":"correction and remaining blocker"}]}} with exactly one entry for every assigned item. CandidateReady requests host capture; it does not establish validation success or acceptance.
+Write run logs under .work/evidence/ or name evidence files in the report's evidence list; the host retains them as result artifacts for reviewers (32 files, 256 KiB each, 2 MiB in total). Do not commit logs into the candidate.
+
+Return only {"Work":{"members":[{"item":<assigned ItemId>,"disposition":"CandidateReady"|"Blocked"|"Failed","summary":"correction and remaining blocker","evidence":["workspace-relative evidence file or directory", ...]}]}} with exactly one entry for every assigned item. CandidateReady requests host capture; it does not establish validation success or acceptance.
