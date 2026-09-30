@@ -17,6 +17,7 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
   private val MaxGaps = 32
   private val ClaimMillis = Duration.ofMinutes(3).toMillis
   private val RenewalSeconds = 20L
+  private val partials = new PartialWorkCapture(config)
   private final case class Trace(native: Option[JobRecord], extra: List[ArtifactUpload], uncertain: Boolean)
   private def directory(attempt: AttemptId): Path = config.directory.resolve("payload").resolve(attempt.value.toString)
   private def bytes(attempt: AttemptId, name: String): Array[Byte] = {
@@ -159,6 +160,12 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
           }
           report
         }
+        evidence <- if (entry.ticket.attempt.role != Role.Worker) ZIO.succeed(CollectedEvidence(RetainedEvidence(Nil, Nil), Nil))
+          else workspaces.get(config.owner, entry.ticket.attempt.id).flatMap { workspace => ZIO.attemptBlocking {
+            val named = report match { case ChildReport.Work(members) => members.flatMap(_.evidence); case _ => Nil }
+            new WorkspaceEvidence(config.project.project, entry.ticket.attempt.id, "evidence").collect(Path.of(workspace.directory), named)
+          }}
+        _ <- trace.update(value => value.copy(extra = value.extra ++ evidence.uploads))
         candidate <- report match {
           case ChildReport.Work(members) if members.exists(_.disposition == WorkDisposition.CandidateReady) =>
             workspaces.get(config.owner, entry.ticket.attempt.id).flatMap { workspace => ZIO.attemptBlocking {
@@ -185,7 +192,7 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
         stored <- ZIO.attemptBlocking {
           entry.check()
           claim(entry, true)
-          val value = ChildResult(entry.ticket.attempt.id, entry.ticket.request, base, candidate, report, validation, RetainedEvidence(Nil, Nil))
+          val value = ChildResult(entry.ticket.attempt.id, entry.ticket.request, base, candidate, report, validation, evidence.retained)
           ChildContracts.result(config.project.project, value)
           value
         }
@@ -234,6 +241,7 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
         case Some(value) => ZIO.succeed(Some(value))
         case None => jobs.await(config.owner, attempt.id).map(Some(_)).catchSome { case DomainFailure(_: Fault.Missing) => ZIO.succeed(None) }
       }
+      workspace <- workspaces.get(config.owner, attempt.id).map(Some(_)).catchSome { case DomainFailure(_: Fault.Missing) => ZIO.succeed(None) }
       _ <- ZIO.attemptBlocking {
         val cancelled = entry.freeze()
         val project = config.project.project
@@ -250,13 +258,18 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
         val state = if (trace.uncertain || observed.exists(_.state == AttemptState.Unknown)) AttemptState.Unknown
           else if (cancelled.nonEmpty) AttemptState.Cancelled
           else observed.map(_.withResult(valid.nonEmpty)).getOrElse(AttemptState.Failed)
-        val allArtifacts = outParts ++ errParts ++ trace.extra
+        // A worker that failed or was cancelled leaves no result; its workspace state is retained so a following attempt can continue from it.
+        val partial = workspace.filter(_ => attempt.role == Role.Worker && Set(AttemptState.Failed, AttemptState.Cancelled)(state))
+          .map(record => Try(partials.capture(attempt.id, state, Path.of(record.directory), stdout, stderr)).toEither)
+        val partialGap = partial.flatMap(_.left.toOption).map(error => "Partial work collection failed: " + Option(error.getMessage).getOrElse(error.getClass.getSimpleName))
+        val allArtifacts = outParts ++ errParts ++ trace.extra ++ partial.flatMap(_.toOption).toList.flatMap(_._2)
         val observations = usage.meters.flatMap(batch => HostDelivery.Usage(HostUsageInput(project, HostUsage.Meter(batch.meter))) ::
           batch.observations.map(value => HostDelivery.Usage(HostUsageInput(project, HostUsage.Ingest(value)))))
         val outcome = AttemptOutcome(RequestId(NativeArtifacts.id(attempt.id, "outcome").value), attempt.id, state, collectedAt,
-          (problem.toList ++ observed.toList.flatMap(_.problem).map(DispatchProjection.concise) ++ usage.gaps).take(MaxGaps), None)
+          (problem.toList ++ observed.toList.flatMap(_.problem).map(DispatchProjection.concise) ++ partialGap.map(DispatchProjection.concise) ++ usage.gaps).take(MaxGaps), None)
         val entries = allArtifacts.map(HostDelivery.Artifact.apply) ++ observations
-        val base = entry.status.copy(process = job.map(_.phase), blocker = problem, usageDelivered = false, detailsOmitted = true)
+        val base = entry.status.copy(process = job.map(_.phase), blocker = problem, partial = partial.flatMap(_.toOption).map(_._1),
+          usageDelivered = false, detailsOmitted = true)
         val publication = new ChildPublicationDelivery(entry.directory, entry.ticket)
         publication.seal(ChildPublication(project, config.owner.actor, valid, base, outcome), entries)
         val retained = Try(publication.finish(authority.collector)).toOption.map(_.status).getOrElse(base.copy(
