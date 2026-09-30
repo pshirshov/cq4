@@ -1,0 +1,23 @@
+Evidence: <workspace>/.work/evidence/20260930T153836-ui
+Running generate
+Running npm-ci
+Running browser-build
+Running typescript-compile
+Running connection-model
+Running connection-native
+Running server-classpath
+Running database-init
+Running database-start
+Running ui-browser
+Running ui-polish-browser
+Running ui-query-prefix-check
+Running ui-archive-browser
+Running ui-followup-browser
+Running ui-question-browser
+Running ui-dialog-races-browser
+Running ui-sizing-browser
+Running ui-completion-browser
+Running ui-query-local-check
+Running ui-http-browser
+Running database-stop
+PASS: ui; evidence <workspace>/.work/evidence/20260930T153836-ui

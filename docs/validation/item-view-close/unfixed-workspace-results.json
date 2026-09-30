@@ -1,0 +1,7 @@
+{
+  "cases": [
+    "focus during live update",
+    "keyboard selection, detail return and pane/query focus"
+  ],
+  "errors": []
+}

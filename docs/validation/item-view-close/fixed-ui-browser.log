@@ -1,0 +1,18 @@
+Skipping host requirements validation logic because `PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS` env variable is set.
+Chromium selection: delayed detail/history/usage replies preserve newer item and project ownership
+Laptop density: all navigation buttons fit at 1366×768 and 1280×720 without horizontal page overflow
+Chromium: login, project creation, all 14 forms, persisted draft, create/edit/history, usage audit, external live update and offline recovery passed
+Chromium edit completion: held committed replies preserve item/project navigation and report the saved scope
+Scrolling: automatic bounded batches, live range/focus preservation, stale query ownership and top-right connection indicator passed
+Browser interactions: hover/focus diagnostics, all 182 content-type transitions and contextual ledger completion passed
+Chromium graph actions: relationship navigation/mutation, content/edge restore, stale neighbor rejection and durable exact retries
+Chromium search resync: actual stale continuation rejection and fresh first-page recovery
+Chromium usage scopes: project/session/cohort/task links, frozen membership, shared accounting and obsolete summary ownership
+Chromium usage watch: query independence, coalesced catch-up and overlapping connection replacement
+Chromium workspace: live focus, keyboard navigation, query shortcuts, resizing, independent scrolling, narrow overflow, draft preservation and metric freshness passed
+Chromium query: five suggestion kinds, middle-token replacement, keyboard acceptance/dismissal, positioned errors and stale text/project replies passed
+Chromium draft recovery passed: stale-base
+Chromium draft recovery passed: uncertain-create
+Chromium draft recovery passed: uncertain-login
+Chromium usage: live independent updates through invalid query, live attempts/outcomes/cost corrections, current audit labels, paginated exact costs and unchanged item revision passed
+Browser connection: actual heartbeat loss/recovery, phase budget, pool/RTT diagnostics, stable keyboard focus, permanent close/manual retry, pagehide/pageshow, hidden retry, freeze/resume and narrow layout passed
