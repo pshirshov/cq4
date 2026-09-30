@@ -51,7 +51,7 @@ Integration preparation and combination admission verify members against the cur
 
 Capture an idea or defect directly from the user's intent without requiring a milestone or lifecycle metadata. Preserve the user's text in the host input artifact; actor provenance and evidence origin remain honest. A model quoting input cannot manufacture HumanReported evidence or operator confirmation.
 
-For existing roots, inspect current work and record the requested scope change or follow-up without cancelling unrelated work. Claim the producer and use Planner to propose goals. Review and apply a proposal by handle. Derive tasks, researches, questions, decisions and handoffs from goals in further bounded rounds. After server allocation, organize eligible work/artifacts with PartOf relations to an explicitly selected or newly proposed milestone; never invent IDs to refer to proposed records inside a mutation.
+For existing roots, inspect current work and record the requested scope change or follow-up without cancelling unrelated work. Claim the producer and use Planner to propose goals. Review and apply a proposal by handle. Derive tasks, researches, questions, decisions and handoffs from goals in further bounded rounds. After server allocation, organize eligible work/artifacts with PartOf relations to a milestone through a Planner organisation choice (see cohorts.md). An existing milestone must be a workflow root before it can be linked; a milestone outside the roots is never an assignable endpoint. A new milestone is produced first and linked in a later round once it is a root. Never invent IDs to refer to proposed records inside a mutation.
 
 ### Advance
 
