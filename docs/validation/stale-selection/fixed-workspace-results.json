@@ -1,0 +1,18 @@
+{
+  "cases": [
+    "focus during live update",
+    "keyboard selection, detail return and pane/query focus",
+    "item view close button and Escape close clear selection, hide the pane, F6 skips it and selection reopens it",
+    "navigation writes visible query",
+    "filter switch still listing the selection keeps the item view",
+    "filter switch omitting the selection clears it and hides the item view; selecting reopens it",
+    "keyboard/pointer resizing and viewport bounds",
+    "fixed navigation and persistent outlined keyboard guidance",
+    "independent result scrolling",
+    "live edits preserve draft and text focus",
+    "narrow layouts and unbroken draft overflow",
+    "draft survives reload and project switching",
+    "usage observation and stale labels"
+  ],
+  "errors": []
+}

@@ -428,7 +428,12 @@ class App {
       this.resultStatus.textContent = `${items.length} items${page.hasMore ? ' · more available' : ''}`;
       this.dirty = this.dirty || (this.itemCursor !== null && this.itemCursor > page.cursor.value);
       this.sync.textContent = this.updatesRejected ? 'Data: updates unavailable' : 'Data: current';
-      if (this.selection !== null) await this.select(this.selection);
+      if (this.selection !== null) {
+        // D72/Decision 8: a fully loaded result without the selected item closes the item view; a later page may still hold it.
+        const selected = this.selection;
+        const listed = items.some(({ summary }) => summary.id.project.value === selected.project.value && itemName(summary.id) === itemName(selected));
+        if (listed || page.hasMore) await this.select(selected); else this.hideItem();
+      }
       await this.loadUsage();
       completed = true;
     } catch (error) { if (current()) { this.sync.textContent = 'Data: stale'; throw error; } }
@@ -547,9 +552,11 @@ class App {
   private itemDocument(item: api.Item): HTMLElement { return itemView(item.draft, text => this.references.render(item.id.project, text)); }
   private closeItem(): void {
     const row = this.items.querySelector<HTMLButtonElement>('[aria-current=true]');
-    this.choose(null); if (this.workspace !== null) this.workspace.setDetailOpen(false);
+    this.hideItem();
     (row !== null && row.isConnected ? row : this.items).focus();
   }
+  // D71 close path without moving focus, shared with refreshes that drop the selection (D72).
+  private hideItem(): void { this.choose(null); if (this.workspace !== null) this.workspace.setDetailOpen(false); }
   private async select(id: api.ItemId): Promise<void> {
     this.choose(id); if (this.workspace !== null) this.workspace.setDetailOpen(true);
     const result = await this.readPanel('detail', new api.Command_Read(new api.ReadInput(this.currentProject(), new api.ReadSelection_ItemDetail(id))));
