@@ -34,6 +34,32 @@ final class AttachedAssetsLocal extends AnyWordSpec {
       val pi = parser.parse(Files.readString(root.resolve(".pi/extensions/cq-host.json"))).fold(throw _, identity)
       assert(pi.hcursor.get[List[io.circe.Json]]("tools").toOption.get.size == 9)
     }
+    "approve the cq project server in Claude local settings while preserving existing local settings" in {
+      val root = Files.createTempDirectory("cq-attached-approval-").toAbsolutePath
+      val binary = root.resolve("cq")
+      Files.writeString(binary, "#!/bin/sh\nexit 0\n")
+      assert(binary.toFile.setExecutable(true))
+      val settings = root.resolve("settings.json")
+      val profiles = Harness.all.toList.map(harness => HarnessSetting(harness, binary.toString, "model", "provider", "version", Nil, Set.empty))
+      Files.writeString(settings, HostFiles.encode(SupervisorSettings_JsonCodec, SupervisorSettings(root.resolve("state").toString,
+        binary.toString, profiles, HostLimits(1000, 10000, 500, 100, 1000, 65536), Nil, None, None)))
+      val assets = new AttachedAssets(new McpSchemas, new WorkflowAssets)
+      val local = root.resolve(".claude/settings.local.json")
+      def approved: io.circe.Json = parser.parse(Files.readString(local)).fold(throw _, identity)
+      val paths = assets.write(Harness.Claude, root, settings, binary, false)
+      assert(paths.contains(local))
+      assert(approved == io.circe.Json.obj("enabledMcpjsonServers" -> io.circe.Json.arr(io.circe.Json.fromString("cq"))))
+      Files.writeString(local, "{\"enabledMcpjsonServers\":[\"other\"],\"permissions\":{\"allow\":[\"Bash(ls)\"]}}")
+      assets.write(Harness.Claude, root, settings, binary, false)
+      assets.write(Harness.Claude, root, settings, binary, false)
+      assert(approved.hcursor.get[List[String]]("enabledMcpjsonServers") == Right(List("other", "cq")))
+      assert(approved.hcursor.downField("permissions").get[List[String]]("allow") == Right(List("Bash(ls)")))
+      List("[\"cq\"]", "{\"enabledMcpjsonServers\":\"cq\"}").foreach { invalid =>
+        Files.writeString(local, invalid)
+        intercept[IllegalArgumentException](assets.write(Harness.Claude, root, settings, binary, true))
+        assert(Files.readString(local) == invalid)
+      }
+    }
     "preflight command conflicts and refuse user-owned TOML even with replacement requested" in {
       val root = Files.createTempDirectory("cq-attached-conflict-").toAbsolutePath
       val binary = root.resolve("cq")
@@ -52,7 +78,7 @@ final class AttachedAssetsLocal extends AnyWordSpec {
       Files.createDirectories(command.getParent)
       Files.writeString(command, "keep")
       intercept[IllegalArgumentException](assets.write(Harness.Claude, root, settings, binary, false))
-      assert(!Files.exists(root.resolve(".mcp.json")))
+      assert(!Files.exists(root.resolve(".mcp.json")) && !Files.exists(root.resolve(".claude/settings.local.json")))
     }
   }
 }

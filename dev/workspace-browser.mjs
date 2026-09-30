@@ -47,11 +47,53 @@ export async function workspaceChecks(browser, storageState, origin, evidence) {
     assert.equal(await query.evaluate(node => node === document.activeElement && node.closest('header') !== null), true);
     assert.equal(await page.getByLabel('Project', { exact: true }).evaluate(node => node.closest('header') !== null), true);
     cases.push('keyboard selection, detail return and pane/query focus');
+    const heading = page.getByRole('heading', { name: 'T2 · Keyboard B updated', exact: true });
+    await page.getByRole('button', { name: 'Close item view', exact: true }).click();
+    await detail.waitFor({ state: 'hidden' }); await heading.waitFor({ state: 'detached' });
+    assert.equal(await secondRow.getAttribute('aria-current'), 'false');
+    assert.equal(await secondRow.evaluate(node => node === document.activeElement), true, 'Closing returns focus to the results');
+    await secondRow.press('Enter'); await heading.waitFor(); await detail.waitFor();
+    await secondRow.press('ArrowRight'); await detail.press('Escape'); await secondRow.press('Escape');
+    await detail.waitFor({ state: 'hidden' }); assert.equal(await secondRow.getAttribute('aria-current'), 'false');
+    assert.equal(await secondRow.evaluate(node => node === document.activeElement), true, 'Escape close keeps focus in the results');
+    await secondRow.press('F6');
+    assert.equal(await page.locator('#navigation-pane').evaluate(node => node === document.activeElement), true, 'F6 skips the hidden item pane');
+    await page.keyboard.press('Shift+F6');
+    assert.equal(await page.getByRole('region', { name: 'Results', exact: true }).evaluate(node => node === document.activeElement), true);
+    await secondRow.focus(); await secondRow.press('Enter'); await heading.waitFor(); await detail.waitFor();
+    assert.equal(await secondRow.getAttribute('aria-current'), 'true');
+    cases.push('item view close button and Escape close clear selection, hide the pane, F6 skips it and selection reopens it');
     await page.getByRole('button', { name: 'Tasks', exact: true }).click();
     assert.equal(await query.inputValue(), 'ledger:Tasks');
     await page.getByText('Data: current', { exact: true }).waitFor();
     await page.getByRole('button', { name: 'All items', exact: true }).click(); assert.equal(await query.inputValue(), '');
+    await page.getByText('Data: current', { exact: true }).waitFor();
     cases.push('navigation writes visible query');
+    // D72 / Decision 8: a navigation filter whose fully loaded results omit the selection closes the item view.
+    await change([{ Create: { draft: { title: 'Stale selection defect', body: 'Workspace interaction fixture', labels: [], archived: false, citations: [],
+      content: { Defect: { status: 'Open', severity: 'Medium', observed: 'Stale detail', expected: 'Hidden detail', reproduction: 'Switch filters', cause: null, resolution: [] } } } } }]);
+    const defectRow = page.getByRole('button', { name: 'D1 · Stale selection defect', exact: true }); await defectRow.waitFor();
+    const currentRows = page.locator('#results-pane [aria-current=true]');
+    await page.getByRole('button', { name: 'Tasks', exact: true }).click(); await defectRow.waitFor({ state: 'detached' });
+    await page.getByText('Data: current', { exact: true }).waitFor();
+    await heading.waitFor(); assert.equal(await detail.isVisible(), true, 'A filter that still lists the selection keeps the item view');
+    assert.equal(await secondRow.getAttribute('aria-current'), 'true');
+    cases.push('filter switch still listing the selection keeps the item view');
+    const stale = { taskRowPresent: null, detailVisible: null, headingCount: null, selectedRows: null };
+    try {
+      await page.getByRole('button', { name: 'Defects', exact: true }).click(); assert.equal(await query.inputValue(), 'ledger:Defects');
+      await defectRow.waitFor(); await secondRow.waitFor({ state: 'detached' }); await page.getByText('Data: current', { exact: true }).waitFor();
+      await page.waitForFunction(() => document.getElementById('detail-pane').hidden, null, { timeout: 5000 }).catch(() => {});
+      Object.assign(stale, { taskRowPresent: await secondRow.count(), detailVisible: await detail.isVisible(), headingCount: await heading.count(), selectedRows: await currentRows.count() });
+      assert.equal(stale.detailVisible, false, 'stale task detail remains visible after switching to Defects');
+      assert.equal(stale.headingCount, 0, 'stale task heading remains after switching to Defects'); assert.equal(stale.selectedRows, 0);
+    } finally { await writeFile(`${evidence}/workspace-stale-selection.json`, JSON.stringify(stale, null, 2)); }
+    await page.getByRole('button', { name: 'All items', exact: true }).click(); await secondRow.waitFor();
+    await page.getByText('Data: current', { exact: true }).waitFor();
+    assert.equal(await detail.isVisible(), false, 'Returning to a listing filter does not restore the cleared selection');
+    assert.equal(await heading.count(), 0); assert.equal(await currentRows.count(), 0);
+    await secondRow.click(); await heading.waitFor(); await detail.waitFor(); assert.equal(await secondRow.getAttribute('aria-current'), 'true');
+    cases.push('filter switch omitting the selection clears it and hides the item view; selecting reopens it');
     const navigation = page.getByRole('navigation', { name: 'Navigation', exact: true });
     const results = page.getByRole('region', { name: 'Results', exact: true });
     assert.equal(await page.getByRole('separator', { name: 'Resize navigation', exact: true }).count(), 0);

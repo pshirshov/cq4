@@ -32,7 +32,15 @@ final class AttachedAssets(schemas: McpSchemas, workflows: WorkflowAssets) {
         require(servers.isObject, "Claude mcpServers must be an object")
         val value = command.deepMerge(Json.obj("type" -> Json.fromString("stdio")))
         require(servers.hcursor.downField("cq").focus.forall(_ == value) || replace, "Claude cq entry differs; use --replace to replace that entry")
-        List(CommandAsset(Path.of(".mcp.json"), current.mapObject(_.add("mcpServers", servers.mapObject(_.add("cq", value)))).spaces2 + "\n"))
+        val localFile = root.resolve(".claude/settings.local.json")
+        val local = if (Files.exists(localFile)) parser.parse(HostFiles.text(localFile, MaxConfigBytes)).fold(throw _, identity) else Json.obj()
+        require(local.isObject, "Claude .claude/settings.local.json must be an object")
+        val enabled = local.hcursor.downField("enabledMcpjsonServers").focus.getOrElse(Json.arr())
+        require(enabled.isArray, "Claude enabledMcpjsonServers in .claude/settings.local.json must be an array")
+        val cq = Json.fromString("cq")
+        val approved = if (enabled.asArray.exists(_.contains(cq))) enabled else enabled.mapArray(_ :+ cq)
+        List(CommandAsset(Path.of(".mcp.json"), current.mapObject(_.add("mcpServers", servers.mapObject(_.add("cq", value)))).spaces2 + "\n"),
+          CommandAsset(Path.of(".claude/settings.local.json"), local.mapObject(_.add("enabledMcpjsonServers", approved)).spaces2 + "\n"))
       case Harness.Codex =>
         val file = root.resolve(".codex/config.toml")
         val forwarded = (Set("CQ_TOKEN", "CQ_TOKEN_FILE", "CQ_SETTINGS", "CODEX_HOME") ++ settings.harnesses.flatMap(_.providerEnvironment)).toList.sorted

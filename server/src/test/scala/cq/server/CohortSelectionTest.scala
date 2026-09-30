@@ -30,6 +30,7 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
         case Command.Graph(input) => ledger.workset(scope, input.roots, input.after, input.snapshot, input.limit).map(Result.Workset.apply)
         case Command.Read(ReadInput(_, ReadSelection.ItemDetails(members, bytes))) => ledger.details(scope, members, bytes).map(Result.Details.apply)
         case Command.Read(ReadInput(_, ReadSelection.Claims(members))) => ledger.claimPreview(scope, members).map(Result.Claims.apply)
+        case Command.Read(ReadInput(_, ReadSelection.ItemDetail(id))) => ledger.get(scope, id).map(Result.Detail.apply)
         case _ => ZIO.fail(new IllegalStateException("Unexpected selection read"))
       }
       Unsafe.unsafe { implicit unsafe => runtime.unsafe.run(effect.either).getOrThrowFiberFailure() } match {
@@ -94,6 +95,23 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
   }
 
   private final case class Published(result: ChildResult, id: ArtifactId)
+  private def goal: ItemDraft = task.copy(title = "Goal", content = Content.Goal(GoalStatus.Open, "Outcome", List("Goal acceptance"), "Scope"))
+  private def milestone: ItemDraft = task.copy(title = "Milestone", content = Content.Milestone(MilestoneStatus.Open, "Release"))
+  private final case class Organised(scope: Scope, goal: ItemId, milestone: ItemId, tasks: List[ItemId])
+  // D74 fixture: Goal G Produces T4, T5, T6; T5 BlockedBy T4 and, when chained, T6 BlockedBy T5; Milestone M is separate.
+  private def organised(ledger: LedgerService[IO], chained: Boolean): IO[Throwable, Organised] = {
+    val scope = owner
+    for {
+      _ <- ledger.initialize(scope, "D74 organisation")
+      created <- ledger.change(scope, ChangeRequest(RequestId(uuid), List(Mutation.Create(goal), Mutation.Create(milestone)) ++
+        List.fill(3)(Mutation.Create(task)), Nil, "Goal, milestone and tasks"))
+      ids = created.items.map(_.id)
+      tasks = ids.drop(2)
+      _ <- ZIO.foreachDiscard(tasks)(id => link(ledger, scope, ids.head, Relation.Produces, id))
+      _ <- link(ledger, scope, tasks(1), Relation.BlockedBy, tasks.head)
+      _ <- ZIO.when(chained)(link(ledger, scope, tasks(2), Relation.BlockedBy, tasks(1)))
+    } yield Organised(scope, ids.head, ids(1), tasks)
+  }
   private def publish(f: Assessed, work: DispatchWork, report: ChildReport, previous: Option[Published], validation: List[ValidationEvidence], ledger: LedgerService[IO], usage: UsageService[IO],
     artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO]): IO[Throwable, Published] = for {
     assignment <- usage.assign(f.collector, Assignment(AssignmentId(uuid), f.scope.project, f.members.map(_.id).toSet, Attribution.Shared, Some(uuid), None))
@@ -427,6 +445,166 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
           request(created.items.map(_.id).toSet, DispatchWork.Explorer(ExplorerMode.Investigate)), ArtifactId(uuid))) }
         offered = decisions.flatMap(_.evidence.decision.choices.flatMap(_.members.map(_.id)))
         _ <- assertIO(offered.contains(created.items.last.id))
+      } yield ()
+    }
+
+    "D74: offer a rooted milestone with its Tasks and blocked Tasks to a Planner only" in { (ledger: LedgerService[IO]) =>
+      for {
+        runtime <- ZIO.runtime[Any]
+        f <- organised(ledger, chained = true)
+        planner = new CohortPlanner(api(ledger, f.scope, runtime), f.scope, GitCommit("a" * 40), Nil, new CohortProgress)
+        input = request(Set(f.goal, f.milestone), DispatchWork.Planner())
+        selected <- ZIO.attemptBlocking(planner.plan(input, ArtifactId(uuid)))
+        groups = selected.evidence.decision.choices.map(_.members.map(_.id).toSet)
+        _ <- ZIO.succeed(println("D74 milestone planner groups=" + selected.evidence.decision.choices.map(choice =>
+          (choice.members.map(_.id.number), choice.reason))))
+        choice = selected.evidence.decision.choices.find(_.members.exists(_.id == f.milestone)).get
+        _ <- assertIO(groups.contains((f.milestone :: f.tasks).toSet) && choice.reason == CohortReason.PlannerOrganisation &&
+          choice.witness.isEmpty && choice.cohort.nonEmpty && groups.contains(Set(f.goal)))
+        _ <- ZIO.attemptBlocking(planner.verify(input, choice, selected.fingerprints(choice.id)))
+        claim <- ledger.acquire(f.scope, ClaimId(uuid), choice.members.map(_.id).toSet, 300000)
+        _ <- ledger.release(f.scope, claim.fence)
+        explorer <- ZIO.attemptBlocking(planner.plan(input.copy(work = DispatchWork.Explorer(ExplorerMode.Investigate)), ArtifactId(uuid)))
+        explored = explorer.evidence.decision.choices.flatMap(_.members.map(_.id))
+        _ <- assertIO(!explored.contains(f.tasks(1)) && !explored.contains(f.tasks(2)) &&
+          explorer.evidence.decision.choices.forall(value => value.members.size == 1 || !value.members.exists(_.id == f.milestone)) &&
+          explorer.evidence.decision.choices.forall(_.reason != CohortReason.PlannerOrganisation))
+      } yield ()
+    }
+
+    "D74: group Planner Tasks derived from different Goals within the roots" in { (ledger: LedgerService[IO]) =>
+      val scope = owner
+      for {
+        runtime <- ZIO.runtime[Any]
+        _ <- ledger.initialize(scope, "D74 cross goal")
+        created <- ledger.change(scope, ChangeRequest(RequestId(uuid), List(Mutation.Create(goal), Mutation.Create(goal), Mutation.Create(task),
+          Mutation.Create(task)), Nil, "Two goals"))
+        ids = created.items.map(_.id)
+        _ <- link(ledger, scope, ids.head, Relation.Produces, ids(2))
+        _ <- link(ledger, scope, ids(1), Relation.Produces, ids(3))
+        planner = new CohortPlanner(api(ledger, scope, runtime), scope, GitCommit("a" * 40), Nil, new CohortProgress)
+        input = request(ids.take(2).toSet, DispatchWork.Planner())
+        selected <- ZIO.attemptBlocking(planner.plan(input, ArtifactId(uuid)))
+        _ <- ZIO.succeed(println("D74 cross planner groups=" + selected.evidence.decision.choices.map(choice =>
+          (choice.members.map(_.id.number), choice.reason))))
+        choice = selected.evidence.decision.choices.find(_.members.size > 1).get
+        _ <- assertIO(choice.members.map(_.id).toSet == Set(ids(2), ids(3)) && choice.reason == CohortReason.PlannerOrganisation)
+        _ <- ZIO.attemptBlocking(planner.verify(input, choice, selected.fingerprints(choice.id)))
+        explorer <- ZIO.attemptBlocking(planner.plan(input.copy(work = DispatchWork.Explorer(ExplorerMode.Investigate)), ArtifactId(uuid)))
+        worker <- ZIO.attemptBlocking(planner.plan(input.copy(work = DispatchWork.Worker(WorkerMode.Implement)), ArtifactId(uuid)))
+        _ <- assertIO((explorer.evidence.decision.choices ++ worker.evidence.decision.choices).forall(_.members.size == 1))
+      } yield ()
+    }
+
+    "D74: group dependent Planner Tasks sharing a producer outside the roots" in { (ledger: LedgerService[IO]) =>
+      val scope = owner
+      for {
+        runtime <- ZIO.runtime[Any]
+        _ <- ledger.initialize(scope, "D74 unrooted producer")
+        created <- ledger.change(scope, ChangeRequest(RequestId(uuid), List(Mutation.Create(goal), Mutation.Create(task), Mutation.Create(task)),
+          Nil, "Goal outside the roots"))
+        ids = created.items.map(_.id)
+        _ <- link(ledger, scope, ids.head, Relation.Produces, ids(1))
+        _ <- link(ledger, scope, ids.head, Relation.Produces, ids(2))
+        _ <- link(ledger, scope, ids(2), Relation.BlockedBy, ids(1))
+        planner = new CohortPlanner(api(ledger, scope, runtime), scope, GitCommit("a" * 40), Nil, new CohortProgress)
+        input = request(ids.tail.toSet, DispatchWork.Planner())
+        selected <- ZIO.attemptBlocking(planner.plan(input, ArtifactId(uuid)))
+        _ <- ZIO.succeed(println("D74 unrooted producer planner groups=" + selected.evidence.decision.choices.map(choice =>
+          (choice.members.map(_.id.number), choice.reason, choice.witness.map(_.number)))))
+        choice = selected.evidence.decision.choices.find(_.members.size > 1)
+        _ <- assertIO(choice.exists(value => value.members.map(_.id).toSet == Set(ids(1), ids(2)) &&
+          value.reason == CohortReason.CommonProducer && value.witness.contains(ids.head)))
+        _ <- ZIO.attemptBlocking(planner.verify(input, choice.get, selected.fingerprints(choice.get.id)))
+        claim <- ledger.acquire(scope, ClaimId(uuid), choice.get.members.map(_.id).toSet, 300000)
+        _ <- ledger.release(scope, claim.fence)
+        explorer <- ZIO.attemptBlocking(planner.plan(input.copy(work = DispatchWork.Explorer(ExplorerMode.Investigate)), ArtifactId(uuid)))
+        worker <- ZIO.attemptBlocking(planner.plan(input.copy(work = DispatchWork.Worker(WorkerMode.Implement)), ArtifactId(uuid)))
+        _ <- assertIO((explorer.evidence.decision.choices ++ worker.evidence.decision.choices).forall(_.members.size == 1) &&
+          !(explorer.evidence.decision.choices ++ worker.evidence.decision.choices).exists(_.members.exists(_.id == ids(2))))
+      } yield ()
+    }
+
+    "D74: apply a reviewed Plan linking an organised Planner choice to its rooted milestone and blocker" in {
+      (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], proposals: ProposalService[IO]) => for {
+        runtime <- ZIO.runtime[Any]
+        f <- organised(ledger, chained = false)
+        planner = new CohortPlanner(api(ledger, f.scope, runtime), f.scope, GitCommit("a" * 40), Nil, new CohortProgress)
+        input = request(Set(f.goal, f.milestone), DispatchWork.Planner())
+        selected <- ZIO.attemptBlocking(planner.plan(input, ArtifactId(uuid)))
+        choice = selected.evidence.decision.choices.find(_.members.exists(_.id == f.milestone)).get
+        _ <- assertIO(choice.members.map(_.id).toSet == (f.milestone :: f.tasks).toSet && choice.reason == CohortReason.PlannerOrganisation)
+        _ <- ZIO.attemptBlocking(planner.verify(input, choice, selected.fingerprints(choice.id)))
+        collector = f.scope.copy(actor = f.scope.actor.copy(subject = "host", role = Role.Collector))
+        claim <- ledger.acquire(f.scope, ClaimId(uuid), choice.members.map(_.id).toSet, 300000)
+        governing <- usage.assign(collector, Assignment(AssignmentId(uuid), f.scope.project, Set.empty, Attribution.Unattributed, None, None))
+        parent <- usage.start(collector, Attempt(AttemptId(uuid), governing.id, None, f.scope.actor.session, Role.Governor, Harness.Codex, "fixture", "fixture", "fixture", 1000))
+        assignment <- usage.assign(collector, Assignment(AssignmentId(uuid), f.scope.project, claim.members, Attribution.Shared, Some(uuid), None))
+        attempt <- usage.start(collector, Attempt(AttemptId(uuid), assignment.id, Some(parent.id), f.scope.actor.session, Role.Planner, Harness.Codex, "fixture", "fixture", "fixture", 1001))
+        dispatch = DispatchRequest(choice.id, choice.work, Harness.Codex, choice.members, Nil, Nil, None, claim.fence, choice.limits)
+        // The ledger changes each item at most once per batch, so one proposal links one Task to the milestone.
+        mutations = List(ProposedMutation.Reference(f.tasks.head, Relation.PartOf, f.milestone, true),
+          ProposedMutation.Reference(f.tasks(2), Relation.BlockedBy, f.tasks(1), true))
+        report = ChildReport.Plan(choice.members.map(ref => PlanMember(ref.id, PlanDisposition.Proposed, "Organise under the milestone")),
+          Some(LedgerProposal(mutations, "Link tasks to the milestone and order them")), Nil)
+        prepared <- ZIO.attempt(ProposalPolicy.prepare(dispatch.work, dispatch.members, report))
+        _ <- assertIO(prepared.exists(_.mutations.size == 2))
+        result = ChildResult(attempt.id, dispatch, GitCommit("a" * 40), None, report, Nil)
+        stored <- artifacts.upload(collector, ArtifactUpload(f.scope.project, ArtifactId(uuid), attempt.id, ArtifactKind.Result, "application/json",
+          Wire.encode(ChildResult_JsonCodec, result)))
+        admitted <- admissions.admit(collector, HostAdmissionInput(f.scope.project, stored.id, f.scope.actor))
+        _ <- assertIO(admitted.decision == AdmissionDecision.Accepted())
+        // Plan review: a Reviewer(Plan) child reviews the admitted Planner result before the governor applies its proposal.
+        reads = new EvidenceApi(api(ledger, f.scope, runtime), artifacts, admissions, f.scope, runtime)
+        reviewWork = DispatchWork.Reviewer(ReviewerMode.Plan)
+        reviewDispatch = DispatchRequest(RequestId(uuid), reviewWork, Harness.Codex, choice.members, Nil, Nil, Some(stored.id), claim.fence, choice.limits)
+        _ <- assertIO(CohortAssessmentPolicy.reviewable(dispatch.work, dispatch.members, report))
+        subject <- ZIO.attemptBlocking(new WorkflowAssembly(reads, f.scope.project, new WorkflowAssets).assemble(WorkflowRequest.Review(stored.id, ReviewerMode.Plan)))
+        _ <- assertIO(subject.subject.contains(WorkflowSubject(stored.id, DispatchWork.Planner(), choice.members, None)))
+        _ <- ZIO.attemptBlocking(new WorkflowExecution(reads, f.scope.project, f.scope.actor.session, Some(WorkflowRequest.Review(stored.id, ReviewerMode.Plan)))
+          .authorize(DispatchCommand.Start(reviewDispatch)))
+        reviewAssignment <- usage.assign(collector, Assignment(AssignmentId(uuid), f.scope.project, claim.members, Attribution.Shared, Some(uuid), None))
+        reviewAttempt <- usage.start(collector, Attempt(AttemptId(uuid), reviewAssignment.id, Some(parent.id), f.scope.actor.session, Role.Reviewer, Harness.Codex, "fixture", "fixture", "fixture", 1002))
+        review = ChildResult(reviewAttempt.id, reviewDispatch, GitCommit("a" * 40), None,
+          ChildReport.Review(choice.members.map(ref => ReviewMember(ref.id, ReviewVerdict.Accepted, Nil)), None), Nil)
+        reviewed <- artifacts.upload(collector, ArtifactUpload(f.scope.project, ArtifactId(uuid), reviewAttempt.id, ArtifactKind.Result, "application/json",
+          Wire.encode(ChildResult_JsonCodec, review)))
+        reviewAdmitted <- admissions.admit(collector, HostAdmissionInput(f.scope.project, reviewed.id, f.scope.actor))
+        _ <- assertIO(reviewAdmitted.decision == AdmissionDecision.Accepted())
+        verdicts <- ZIO.attemptBlocking(new ArtifactReader(reads.call, f.scope.project).result(reviewed.id).value)
+        _ <- assertIO(verdicts.request.previous.contains(stored.id) && (verdicts.report match {
+          case ChildReport.Review(members, None) => members.map(_.item).toSet == claim.members && members.forall(_.verdict == ReviewVerdict.Accepted)
+          case _ => false
+        }))
+        preview <- proposals.preview(f.scope, stored.id)
+        _ <- assertIO(preview.role == Role.Planner && preview.operations.size == 2)
+        _ <- proposals(f.scope, stored.id)
+        linked <- ledger.get(f.scope, f.milestone)
+        last <- ledger.get(f.scope, f.tasks(2))
+        first <- ledger.get(f.scope, f.tasks.head)
+        _ <- assertIO(linked.refs.contains(ItemRef(Relation.Contains, f.tasks.head)) && first.refs.contains(ItemRef(Relation.PartOf, f.milestone)) &&
+          last.refs.contains(ItemRef(Relation.BlockedBy, f.tasks(1))))
+      } yield ()
+    }
+
+    "D74: keep refusing a proposed link to a milestone outside the workflow roots" in { (ledger: LedgerService[IO]) =>
+      for {
+        runtime <- ZIO.runtime[Any]
+        f <- organised(ledger, chained = true)
+        planner = new CohortPlanner(api(ledger, f.scope, runtime), f.scope, GitCommit("a" * 40), Nil, new CohortProgress)
+        selected <- ZIO.attemptBlocking(planner.plan(request(Set(f.goal), DispatchWork.Planner()), ArtifactId(uuid)))
+        choices = selected.evidence.decision.choices
+        _ <- assertIO(!choices.exists(_.members.exists(_.id == f.milestone)))
+        choice = choices.find(_.members.exists(_.id == f.tasks.head)).get
+        // Dependent Tasks sharing the rooted Goal group by their common producer; the Planner skips the independence check.
+        _ <- assertIO(choice.members.map(_.id).toSet == f.tasks.toSet && choice.reason == CohortReason.CommonProducer && choice.witness.contains(f.goal))
+        report = ChildReport.Plan(choice.members.map(ref => PlanMember(ref.id, PlanDisposition.Proposed, "Organise")),
+          Some(LedgerProposal(List(ProposedMutation.Reference(f.tasks.head, Relation.PartOf, f.milestone, true)), "Link to an unrooted milestone")), Nil)
+        refused <- ZIO.attempt(ProposalPolicy.prepare(choice.work, choice.members, report)).either
+        _ <- assertIO(refused.left.exists {
+          case DomainFailure(Fault.Invalid(message)) => message == "Proposal endpoint is outside its eligible assignment"
+          case _ => false
+        })
       } yield ()
     }
   }

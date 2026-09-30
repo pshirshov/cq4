@@ -13,7 +13,7 @@ async function call(command) {
 const project = {value: randomUUID()};
 await call({Initialize: {config: {project, endpoint: origin, name: 'Question and reference checks'}}});
 const question = number => ({title: `Question ${number}`, body: 'See Q2 for context.', labels: [], archived: false, citations: [], content: {
-  Question: {status: 'Open', prompt: `Choose ${number}`, context: 'A human answer is required.', alternatives: ['Go', 'Python'], answer: null},
+  Question: {status: 'Open', prompt: `Choose ${number}`, context: 'A human answer is required.', alternatives: ['Go', 'Python', 'Same as Q3'], answer: null},
 }});
 const source = {title: 'References', body: 'See Q1 and Q2. Missing Q999. Plain XQ1 Q01 path/Q1.txt `Q1` https://example.org/Q1?a=Q2.', labels: [], archived: false, citations: [],
   content: {Defect: {status: 'Open', severity: 'Medium', observed: 'References', expected: 'Popups', reproduction: 'Activate', cause: null, resolution: []}}};
@@ -91,7 +91,25 @@ try {
   await batch().getByLabel('Answer', {exact: true}).fill('Retained answer one');
   await batch().getByRole('button', {name: 'Skip / next question', exact: true}).click();
   await batch().getByRole('heading', {name: 'Q2 · Question 2', exact: true}).waitFor();
-  await batch().getByRole('button', {name: 'Go', exact: true}).click();
+  // D69: each alternative is listed once, in the document, with one Pick control placed before it.
+  assert.equal((await batch().innerText()).split('Python').length - 1, 1, 'alternative Python is rendered exactly once');
+  assert.equal(await batch().locator('.answer-alternatives').count(), 0);
+  for (const name of ['Go', 'Python', 'Same as Q3']) assert.equal(await batch().getByRole('button', {name, exact: true}).count(), 0);
+  const alternatives = batch().locator('section[data-field="alternatives"] li');
+  assert.deepEqual(await alternatives.allTextContents(), ['PickGo', 'PickPython', 'PickSame as Q3']);
+  assert.equal(await batch().getByRole('button', {name: /^Pick alternative: /}).count(), 3);
+  await alternatives.nth(2).getByRole('button', {name: 'View Q3', exact: true}).click();
+  reference = page.getByRole('dialog', {name: 'Item reference · Q3', exact: true});
+  await reference.getByRole('heading', {name: 'Q3 · Question 3', exact: true}).waitFor();
+  await reference.getByRole('button', {name: 'Close', exact: true}).click();
+  assert.equal(await batch().getByLabel('Answer', {exact: true}).inputValue(), '');
+  await alternatives.nth(1).getByRole('button', {name: 'Pick alternative: Python', exact: true}).click();
+  assert.equal(await batch().getByLabel('Answer', {exact: true}).inputValue(), 'Python');
+  await alternatives.first().getByRole('button', {name: 'Pick alternative: Go', exact: true}).click();
+  assert.equal(await batch().getByLabel('Answer', {exact: true}).inputValue(), 'Go');
+  await batch().screenshot({path: evidence + '/question-alternatives.png'});
+  assert.equal((await detail(ids[1])).draft.content.Question.status, 'Open', 'picking does not save');
+  assert.equal((await detail(ids[1])).revision.value, '1');
   await batch().getByRole('button', {name: 'Save answer and next', exact: true}).click();
   await batch().getByRole('heading', {name: 'Q3 · Question 3', exact: true}).waitFor();
   assert.equal((await detail(ids[1])).draft.content.Question.answer, 'Go');
@@ -109,13 +127,16 @@ try {
   await batch().getByRole('heading', {name: 'Q3 · Question 3', exact: true}).waitFor();
   assert.equal((await detail(ids[0])).draft.body, 'Concurrent clarification');
   assert.equal((await detail(ids[0])).draft.content.Question.status, 'Answered');
-  cases.push('D56 alternatives, free text, skips, navigation, persisted answers and explicit conflict rebase');
+  cases.push('D56/D69 alternatives listed once with pick controls and working links, pick fills without saving, free text, skips, navigation, persisted answers and explicit conflict rebase');
 
   await batch().getByRole('button', {name: 'Save answer and next', exact: true}).click();
   await batch().getByRole('alert').filter({hasText: 'Enter an answer'}).waitFor();
   await batch().getByLabel('Answer', {exact: true}).fill('Third answer');
   const captured = hold('Browser answer to human question');
   await batch().getByRole('button', {name: 'Save answer and next', exact: true}).click(); await captured();
+  const picks = batch().getByRole('button', {name: /^Pick alternative: /});
+  assert.equal(await picks.count(), 3);
+  for (const pick of await picks.all()) assert.equal(await pick.isDisabled(), true, 'pick controls are disabled during submit');
   held = null; await enter(); await open();
   await batch().getByRole('button', {name: 'Retry exact answer', exact: true}).click();
   await batch().getByText('All questions in this batch are answered.', {exact: true}).waitFor();

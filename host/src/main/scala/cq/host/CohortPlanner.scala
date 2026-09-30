@@ -97,9 +97,13 @@ final class CohortPlanner(api: ServerApi, owner: Scope, base: GitCommit, checks:
   }
   private def supports(work: DispatchWork, id: ItemId): Boolean =
     work != DispatchWork.Worker(WorkerMode.Implement) || id.ledger == Ledger.Tasks
+  private def blocked(entry: WorksetEntry): Boolean = entry.reasons.exists(_.isInstanceOf[WorksetReason.Blocked])
+  // Blocking constrains execution, not planning: a Planner may organise an open Selected entry whose only non-readiness is
+  // an unsatisfied BlockedBy (Decision 10). An explicit terminal root stays plannable for its reopening only while unblocked.
   private def ready(work: DispatchWork, entry: WorksetEntry): Boolean =
-    entry.ready || (work == DispatchWork.Planner() && entry.role == WorksetRole.Selected && entry.root &&
-      entry.item.outcome.terminal && !entry.item.archived && !entry.reasons.exists(_.isInstanceOf[WorksetReason.Blocked]))
+    entry.ready || (work == DispatchWork.Planner() && entry.role == WorksetRole.Selected && !entry.item.archived && (
+      (entry.root && entry.item.outcome.terminal && !blocked(entry)) ||
+      (!entry.item.outcome.terminal && blocked(entry))))
   private def fingerprint(work: DispatchWork, members: List[ItemView], context: Context): String =
     CohortFingerprint(work, members, context.guidance, context.operative, context.operativeResults, context.executionBase, checks)
   private def executionFingerprint(work: DispatchWork, members: List[ItemView], context: Context, reason: CohortReason): CohortExecutionFingerprint = {
@@ -167,6 +171,10 @@ final class CohortPlanner(api: ServerApi, owner: Scope, base: GitCommit, checks:
     val (entries, snapshot) = graph(call, original)
     val selected = entries.filter(_.role == WorksetRole.Selected)
     val byId = selected.map(entry => entry.item.id -> entry).toMap
+    // Planner organisation: an explicitly rooted Milestone, or an entry derived from a producer inside the Selected scope.
+    def organisable(value: ItemView): Boolean =
+      (value.item.id.ledger == Ledger.Milestones && byId.get(value.item.id).exists(_.root)) || producers(value).exists(byId.contains)
+    val planner = original.work == DispatchWork.Planner()
     val order = progress.order(selected.map(_.item.id))
     val originalContext = context(call, original)
     val partition = original.work == DispatchWork.Worker(WorkerMode.Implement) && originalContext.previous.exists(_.report.isInstanceOf[ChildReport.Plan])
@@ -249,16 +257,24 @@ final class CohortPlanner(api: ServerApi, owner: Scope, base: GitCommit, checks:
         case _: DispatchWork.Explorer | _: DispatchWork.Planner | DispatchWork.Worker(WorkerMode.Probe) | DispatchWork.Worker(WorkerMode.Implement) => true
         case _ => false
       }
+      var organised = false
       pending.tail.filter(_ => mayGroup && assessed.isEmpty).foreach { candidate =>
         val next = group :+ candidate
         val shared = common.intersect(producers(candidate))
-        if (group.size < CohortBounds.Members && shared.nonEmpty && independent(next) && fits(request, request.work, next, ctx)) {
-          group = next
-          common = shared
+        if (group.size < CohortBounds.Members && fits(request, request.work, next, ctx)) {
+          // Decision 10: Blocks/BlockedBy constrain execution, not planning, so Planner groups skip the independence check.
+          if (!organised && shared.nonEmpty && (planner || independent(next))) {
+            group = next
+            common = shared
+          } else if (planner && next.forall(organisable)) {
+            group = next
+            organised = true
+          }
         }
       }
       var work = request.work
-      var reason = if (group.size > 1) CohortReason.CommonProducer else CohortReason.NoCommonProducer
+      var reason = if (group.size > 1 && organised) CohortReason.PlannerOrganisation
+        else if (group.size > 1) CohortReason.CommonProducer else CohortReason.NoCommonProducer
       if (request.work == DispatchWork.Worker(WorkerMode.Implement) && group.size > 1) {
         compatibility(group, ctx) match {
           case Some(CohortCompatibility.Compatible) => reason = CohortReason.CompatibleAssessment
@@ -268,7 +284,7 @@ final class CohortPlanner(api: ServerApi, owner: Scope, base: GitCommit, checks:
           case None => work = DispatchWork.Planner(); reason = CohortReason.AssessmentRequired
         }
       }
-      offer(group, work, reason, if (group.size > 1 && assessed.isEmpty) common.toList.sortBy(LedgerPolicy.key).headOption else None, request, ctx)
+      offer(group, work, reason, if (group.size > 1 && assessed.isEmpty && !organised) common.toList.sortBy(LedgerPolicy.key).headOption else None, request, ctx)
       val ids = group.map(_.item.id).toSet
       pending = pending.filterNot(value => ids(value.item.id))
     }

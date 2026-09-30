@@ -1,0 +1,61 @@
+warning: Git tree '/srv/nvme/tmp/cq4-interactive-sessions/43d26cac-14a3-4744-a9de-07e734f20ab9/workspaces/f93f4ef1-6e07-4b7f-bacd-51afb343f1c4/tree' is dirty
+Evidence: <workspace>/.work/evidence/20260930T153622-ui
+Running generate
+Running npm-ci
+Running browser-build
+Running typescript-compile
+Running connection-model
+Running connection-native
+Running server-classpath
+Running database-init
+Running database-start
+Running ui-browser
+Skipping host requirements validation logic because `PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS` env variable is set.
+Chromium selection: delayed detail/history/usage replies preserve newer item and project ownership
+Laptop density: all navigation buttons fit at 1366×768 and 1280×720 without horizontal page overflow
+Chromium: login, project creation, all 14 forms, persisted draft, create/edit/history, usage audit, external live update and offline recovery passed
+Chromium edit completion: held committed replies preserve item/project navigation and report the saved scope
+Scrolling: automatic bounded batches, live range/focus preservation, stale query ownership and top-right connection indicator passed
+Browser interactions: hover/focus diagnostics, all 182 content-type transitions and contextual ledger completion passed
+Chromium graph actions: relationship navigation/mutation, content/edge restore, stale neighbor rejection and durable exact retries
+Chromium search resync: actual stale continuation rejection and fresh first-page recovery
+Chromium usage scopes: project/session/cohort/task links, frozen membership, shared accounting and obsolete summary ownership
+Chromium usage watch: query independence, coalesced catch-up and overlapping connection replacement
+node:internal/modules/run_main:107
+    triggerUncaughtException(
+    ^
+
+locator.click: Timeout 30000ms exceeded.
+Call log:
+[2m  - waiting for getByRole('button', { name: 'Close item view', exact: true })[22m
+
+    at workspaceChecks (<workspace>/dev/workspace-browser.mjs:51:78)
+    at async file://<workspace>/dev/browser.mjs:128:3 {
+  log: [
+    "  - waiting for getByRole('button', { name: 'Close item view', exact: true })"
+  ],
+  name: 'TimeoutError'
+}
+
+Node.js v24.20.0
+
+Running database-stop
+Traceback (most recent call last):
+  File "<workspace>/dev/check", line 474, in <module>
+    main()
+    ~~~~^^
+  File "<workspace>/dev/check", line 463, in main
+    getattr(checks, command)()
+    ~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "<workspace>/dev/check", line 269, in ui
+    self.ui_checks(False)
+    ~~~~~~~~~~~~~~^^^^^^^
+  File "<workspace>/dev/check", line 290, in ui_checks
+    self.browser_suite("ui")
+    ~~~~~~~~~~~~~~~~~~^^^^^^
+  File "<workspace>/dev/check", line 208, in browser_suite
+    self.run(["node", f"dev/{scenario}.mjs"], f"{name}-{scenario}", COMMAND_TIMEOUT)
+    ~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<workspace>/dev/check", line 48, in run
+    raise RuntimeError(f"{name} failed with exit {result.returncode}; see {path}")
+RuntimeError: ui-browser failed with exit 1; see <workspace>/.work/evidence/20260930T153622-ui/ui-browser.log

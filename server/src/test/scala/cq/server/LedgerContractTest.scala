@@ -102,6 +102,22 @@ abstract class LedgerContractTest extends SpecZIO with AssertZIO {
       } yield ()
     }
 
+    "distinguish a missing change reason from an over-long one" in { (service: LedgerService[IO]) =>
+      val owner = scope()
+      def withReason(reason: String): ChangeRequest = request(List(Mutation.Create(task("Reason bounds"))), Nil).copy(reason = reason)
+      for {
+        _ <- service.initialize(owner, "reason bounds")
+        _ <- denied(service.change(owner, withReason("")))(_ == Fault.Invalid("Mutation reason required"))
+        _ <- denied(service.change(owner, withReason("   \t ")))(_ == Fault.Invalid("Mutation reason required"))
+        _ <- denied(service.change(owner, withReason("r" * 301))) {
+          case Fault.Invalid(message) => message == "Mutation reason must be at most 300 characters; received 301" && !message.contains("required")
+          case _ => false
+        }
+        accepted <- service.change(owner, withReason("r" * 300))
+        _ <- assertIO(accepted.items.size == 1)
+      } yield ()
+    }
+
     "reject reordered mutations on immutable request replay without repeating side effects" in { (service: LedgerService[IO]) =>
       val owner = scope()
       val ordered = request(List(Mutation.Create(task("First")), Mutation.Create(task("Second"))), Nil)
