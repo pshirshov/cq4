@@ -333,10 +333,11 @@ class Checks:
             self.transport(["java", f"-agentlib:native-image-agent=config-output-dir={traces}/{{pid}}-{{datetime}},config-write-period-secs=1",
                             "-cp", classpath, "cq.server.Main"], "native-agent", False, TRACE_FIXTURE_SCALE)
             config = self.native_config(traces)
-            self.run(["native-image", "--no-fallback", "-march=compatibility", "-O1", "-J-Xmx8g",
+            self.run(["native-image", "--no-fallback", "-march=compatibility", "-O1", "-J-Xmx8g", *native_jvm_options(),
                       f"-H:ConfigurationFileDirectories={config}", "-cp", classpath,
                       "cq.server.Main", str(binary)], "native-image", COMMAND_TIMEOUT)
             built = hashlib.sha256(binary.read_bytes()).hexdigest()
+            self.quiet_startup(binary, "native")
             self.transport([str(binary)], "native", True, 1)
             if hashlib.sha256(binary.read_bytes()).hexdigest() != built:
                 raise RuntimeError("Native executable changed during verification")
@@ -344,6 +345,11 @@ class Checks:
                 "path": str(binary), "sha256": built, "bytes": binary.stat().st_size,
                 "sourceManifest": "source-sha256.json", "metadataInventory": "native-trace-inventory.json",
             }, indent=2) + "\n")
+
+    def quiet_startup(self, binary: Path, name: str):
+        output = self.run([str(binary), ":help"], f"{name}-startup", STARTUP_TIMEOUT)
+        if "sun.misc.Unsafe" in output:
+            raise RuntimeError(f"{name} executable prints the sun.misc.Unsafe warning; see {name}-startup.log")
 
     def native_config(self, traces: Path):
         inputs = sorted(path for path in traces.iterdir() if path.is_dir())
@@ -392,6 +398,11 @@ def verify_test_report(output: str):
         raise RuntimeError("Required test report is absent, failed or incomplete, regardless of sbt exit status")
     if "*** FAILED ***" in output or "*** ABORTED ***" in output:
         raise RuntimeError("Required test report contains failure/abort despite sbt exit status")
+
+
+def native_jvm_options():
+    # The image fixes its sun.misc.Unsafe memory-access mode at build time, so the builder JVM receives .jvmopts.
+    return ["-J" + line.strip() for line in (ROOT / ".jvmopts").read_text().splitlines() if line.strip()]
 
 
 def free_port():
