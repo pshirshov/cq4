@@ -120,17 +120,17 @@ def main():
             peer.tool("workspace", {"Read": {"path": ".", "offset": 0, "limit": 20}}, denied=True)
             selection = {"request": identity(), "roots": [], "work": {"Explorer": {"mode": "Investigate"}}, "guidance": [], "artifacts": [], "previous": None, "limits": limits}
             peer.tool("dispatch", {"Select": {"request": selection}}, denied=True)
-            first = {"Workflow": {"id": identity(), "request": {"Begin": {"roots": []}}}}
+            first = {"Workflow": {"id": identity(), "request": {"Begin": {"roots": []}}, "operatorRequirements": "Attached fixture: operator requirements text"}}
             activated = peer.tool("session", first)
             assert peer.tool("session", first) == activated
-            peer.tool("session", {"Workflow": {"id": first["Workflow"]["id"], "request": {"Advance": {"roots": [], "through": "Explore"}}}}, denied=True)
+            peer.tool("session", {"Workflow": {"id": first["Workflow"]["id"], "request": {"Advance": {"roots": [], "through": "Explore"}}, "operatorRequirements": "Attached fixture: operator requirements text"}}, denied=True)
             draft = {"title": "Attached investigation", "body": "Investigate the fixture", "labels": ["proposal-fixture"], "archived": False,
                      "content": {"Task": {"status": "Ready", "acceptance": ["Report findings"], "result": None, "validation": []}}, "citations": []}
             created = peer.tool("change", {"project": project, "change": {"request": identity(), "mutations": [{"Create": {"draft": draft}}], "fences": [], "reason": "Attached fixture"}})["Changed"]["ack"]["items"][0]
             selection["roots"] = [created["id"]]
             choice, = peer.tool("dispatch", {"Select": {"request": selection}})["Selection"]["value"]["choices"]
             claim = peer.tool("claim", {"project": project, "action": {"Acquire": {"id": identity(), "members": [created["id"]], "durationMillis": "180000"}}})["Claimed"]["claim"]
-            next_scope = {"Workflow": {"id": identity(), "request": {"Advance": {"roots": [created["id"]], "through": "Explore"}}}}
+            next_scope = {"Workflow": {"id": identity(), "request": {"Advance": {"roots": [created["id"]], "through": "Explore"}}, "operatorRequirements": "Attached fixture: operator requirements text"}}
             peer.tool("session", next_scope)
             peer.tool("dispatch", {"Select": {"request": selection}}, denied=True)
             peer.tool("dispatch", {"StartChoice": {"choice": choice["id"], "harness": "Codex", "fence": claim["fence"]}}, denied=True)
@@ -141,7 +141,7 @@ def main():
             started = peer.tool("dispatch", {"StartChoice": {"choice": choice["id"], "harness": "Codex", "fence": claim["fence"]}})["Status"]["value"]
             # The asynchronous child must finish before a different workflow is admitted.
             if started["phase"] in ["Preparing", "Running"]:
-                peer.tool("session", {"Workflow": {"id": identity(), "request": {"Begin": {"roots": []}}}}, denied=True)
+                peer.tool("session", {"Workflow": {"id": identity(), "request": {"Begin": {"roots": []}}, "operatorRequirements": "Attached fixture: operator requirements text"}}, denied=True)
             for _ in range(6):
                 status = peer.tool("dispatch", {"Status": {"attempt": started["attempt"], "waitMillis": 20000}})["Status"]["value"]
                 if status["phase"] not in ["Preparing", "Running", "Stopping", "Validating", "Publishing"]:
@@ -233,7 +233,7 @@ def main():
         closing = Peer(command + ["host", "codex"], repository, env, log)
         try:
             closing_context = closing.tool("session", {"Context": {}})["Context"]["value"]
-            closing.tool("session", {"Workflow": {"id": identity(), "request": {"Begin": {"roots": []}}}})
+            closing.tool("session", {"Workflow": {"id": identity(), "request": {"Begin": {"roots": []}}, "operatorRequirements": "Attached fixture: operator requirements text"}})
             created = closing.tool("change", {"project": project, "change": {"request": identity(), "mutations": [{"Create": {"draft": {**draft, "labels": []}}}], "fences": [], "reason": "Owned child shutdown"}})["Changed"]["ack"]["items"][0]
             selected, = closing.tool("dispatch", {"Select": {"request": {**selection, "request": identity(), "roots": [created["id"]], "work": {"Worker": {"mode": "Probe"}}}}})["Selection"]["value"]["choices"]
             owned = closing.tool("claim", {"project": project, "action": {"Acquire": {"id": identity(), "members": [created["id"]], "durationMillis": "180000"}}})["Claimed"]["claim"]
