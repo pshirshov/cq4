@@ -113,7 +113,7 @@ class Checks:
                 with (data / "postgresql.conf").open("a") as configuration:
                     configuration.write("\n" + "\n".join(settings) + "\n")
                 self.run(["pg_ctl", "-D", str(data), "-l", str(self.evidence / "postgres.log"),
-                          "-o", f"-h 127.0.0.1 -p {port} -k {temporary}", "-w", "start"], "database-start", STARTUP_TIMEOUT)
+                          "-o", f"-h 127.0.0.1 -p {port} -c unix_socket_directories=''", "-w", "start"], "database-start", STARTUP_TIMEOUT)
                 self.environment.update(CQ_DATABASE_URL=f"jdbc:postgresql://127.0.0.1:{port}/postgres",
                                         CQ_DATABASE_USER=getpass.getuser(), CQ_DATABASE_PASSWORD="")
                 try:
