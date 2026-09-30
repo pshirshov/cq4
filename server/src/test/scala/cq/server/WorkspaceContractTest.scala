@@ -249,7 +249,7 @@ final class WorkspaceContractLocal extends WorkspaceContractTest {
         }
         removed <- service.remove(owner, dirty.spec.attempt)
         _ <- ZIO.attemptBlocking {
-          assert(removed.admission == WorkspaceAdmission.Removed && !Files.exists(Path.of(dirty.directory)) && !listed.contains(Path.of(dirty.directory).toRealPath().toString))
+          assert(removed.admission == WorkspaceAdmission.Removed && !Files.exists(Path.of(dirty.directory)) && !listed.contains(dirty.directory))
           assert(Files.readString(local.source.resolve("tracked.txt")) == "committed\n")
           // A stale gitdir pointer, as left behind by relocating the state root, must be reported rather than deleted.
           Files.writeString(Path.of(relocated.directory).resolve(".git"), "gitdir: /nonexistent/previous/state/worktrees/tree\n")

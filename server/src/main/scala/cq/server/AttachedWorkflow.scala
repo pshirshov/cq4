@@ -8,7 +8,8 @@ import zio.{Task, ZIO}
 final class AttachedWorkflow(config: SupervisorConfig, authority: SupervisorAuthority, assets: WorkflowAssets, execution: WorkflowExecution,
   requirements: OperatorRequirements, dispatch: DispatchController, integrations: IntegrationController, combinations: CombinationController) {
   private val MaxActivations = 64
-  private val MaxActivationBytes = 65536
+  // Instructions plus a session request of up to 64 KiB (the gateway bound) no longer fit the former 64 KiB record.
+  private val MaxActivationBytes = 131072
   private var activations = Map.empty[RequestId, WorkflowActivation]
   private var active = Option.empty[WorkflowActivation]
   private var integrationsByEpoch = Map.empty[IntegrationId, Long]
