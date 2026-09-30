@@ -19,6 +19,7 @@ final class IntegrationPreparation(api: ServerApi, owner: Scope, repository: Str
       }
     }
     val reader = new ArtifactReader(call, owner.project)
+    val drafts = new HistoricalDrafts(call, owner.project)
     val review = reader.result(ticket.reviewer)
     require(review.value.request.work == DispatchWork.Reviewer(ReviewerMode.Candidate), "Integration requires a reviewer result handle")
     val workerId = review.value.request.previous.getOrElse(throw new IllegalArgumentException("Review has no worker handle"))
@@ -30,7 +31,7 @@ final class IntegrationPreparation(api: ServerApi, owner: Scope, repository: Str
         value.metadata.actor.role == Role.Collector, "Integration evidence belongs to another governing session")
     }
     require(worker.request.work.isInstanceOf[DispatchWork.Worker] && worker.request.work != DispatchWork.Worker(WorkerMode.Probe) &&
-      reviewer.attempt != worker.attempt && reviewer.request.members == worker.request.members && reviewer.request.fence == worker.request.fence &&
+      reviewer.attempt != worker.attempt && drafts.unchanged(worker.request.members, reviewer.request.members) && reviewer.request.fence == worker.request.fence &&
       worker.candidate.nonEmpty && reviewer.candidate == worker.candidate && reviewer.base == worker.candidate.get,
       "Integration requires independently reviewed exact worker output")
     require(worker.report match { case ChildReport.Work(members) => members.forall(_.disposition == WorkDisposition.CandidateReady); case _ => false },
@@ -51,7 +52,7 @@ final class IntegrationPreparation(api: ServerApi, owner: Scope, repository: Str
     val items = worker.request.members.map { reference =>
       call(Command.Read(ReadInput(owner.project, ReadSelection.ItemDetail(reference.id)))) match {
         case Result.Detail(value) =>
-          require(value.item.id == reference.id && value.item.revision == reference.revision, "Integration member revision changed")
+          require(value.item.id == reference.id && drafts.unchanged(reference, ItemRevision(value.item.id, value.item.revision)), "Integration member content changed")
           value.item
         case _ => throw new IllegalStateException("Integration member read returned an unexpected result")
       }
@@ -60,6 +61,6 @@ final class IntegrationPreparation(api: ServerApi, owner: Scope, repository: Str
       IntegrationValidation.citations(worker, reviewer), worker.request.fence, items)
     renew()
     IntegrationIntent(ticket.id, owner.project, owner.actor, repository, target, worker.base, worker.candidate.get,
-      workerId, ticket.reviewer, checks, worker.request.fence, worker.request.members, change)
+      workerId, ticket.reviewer, checks, worker.request.fence, items.map(item => ItemRevision(item.id, item.revision)), change)
   }
 }

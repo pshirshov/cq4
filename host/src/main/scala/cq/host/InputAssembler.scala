@@ -33,13 +33,14 @@ final class InputAssembler(api: ServerApi, owner: Scope, clock: Clock) {
       case _ => throw new IllegalStateException("Item read returned an unexpected result")
     }
     val reader = new ArtifactReader(call, owner.project)
+    val drafts = new HistoricalDrafts(call, owner.project)
     claim()
     val members = request.members.map(item)
     val guidance = request.guidance.map(item)
     val artifacts = request.artifacts.map(reader.read)
     val previous = request.previous.map { id =>
       val value = reader.result(id).value
-      require(value.request.members.toSet == request.members.toSet, "Prior result belongs to another assignment revision")
+      require(drafts.unchanged(value.request.members, request.members), "Prior result belongs to another assignment revision")
       if (request.work == DispatchWork.Reviewer(ReviewerMode.Candidate))
         require(value.report.isInstanceOf[ChildReport.Work] && value.candidate.nonEmpty, "Candidate review requires a worker result with a candidate")
       if (request.work == DispatchWork.Reviewer(ReviewerMode.Plan))

@@ -64,7 +64,7 @@ final class IntegrationServiceImpl[F[+_, +_]: Error2](ledger: LedgerRepository[F
       invalid(work.attempt == worker._1.attempt && review.attempt == reviewer._1.attempt && work.attempt != review.attempt &&
         work.request.work.isInstanceOf[DispatchWork.Worker] && work.request.work != DispatchWork.Worker(WorkerMode.Probe) &&
         review.request.work == DispatchWork.Reviewer(ReviewerMode.Candidate) && review.request.previous.contains(intent.worker) &&
-        work.request.members == intent.members && review.request.members == intent.members &&
+        work.request.members.map(_.id).toSet == intent.members.map(_.id).toSet && review.request.members.map(_.id).toSet == intent.members.map(_.id).toSet &&
         work.request.fence == intent.fence && review.request.fence == intent.fence && work.base == intent.expected &&
         work.candidate.contains(intent.candidate) && review.candidate == work.candidate && review.base == intent.candidate,
         "Integration requires an independently reviewed exact worker candidate and assignment")
@@ -86,8 +86,13 @@ final class IntegrationServiceImpl[F[+_, +_]: Error2](ledger: LedgerRepository[F
           val now = clock.millis()
           List(worker, reviewer).foreach { case (metadata, body) =>
             invalid(tx.admission(body.attempt).exists(value => value.artifact == metadata && value.owner == intent.owner && value.fence == intent.fence &&
-              value.members == intent.members && value.decision == AdmissionDecision.Accepted()), "Integration evidence has no matching accepted admission")
+              value.members == body.request.members && value.decision == AdmissionDecision.Accepted()), "Integration evidence has no matching accepted admission")
           }
+          // Members may have been revised by reference or provenance changes since the worker and reviewer ran (D80); their drafts must be unchanged.
+          def draft(ref: ItemRevision): ItemDraft = tx.historical(ref.id, ref.revision).map(_.item.item.draft)
+            .getOrElse(throw DomainFailure(Fault.Invalid("Integration member revision has no history")))
+          invalid(RevisionEquivalence.unchanged(worker._2.request.members, intent.members, draft) && RevisionEquivalence.unchanged(reviewer._2.request.members, intent.members, draft),
+            "Integration requires the reviewed members' content to be unchanged since the worker and reviewer ran")
           val owned = tx.claimById(intent.fence.claim).exists(claim => claim.owner == intent.owner && claim.fence == intent.fence &&
             claim.members == intent.members.map(_.id).toSet && ClaimPolicy.active(tx, claim, now))
           if (!owned) throw DomainFailure(Fault.StaleFence("Integration reservation requires the current full claim"))

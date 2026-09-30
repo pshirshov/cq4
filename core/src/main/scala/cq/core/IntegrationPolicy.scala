@@ -29,8 +29,11 @@ object IntegrationPolicy {
         case _ => throw DomainFailure(Fault.Invalid("Integration completes only explicitly reviewed task members"))
       }
       LedgerPolicy.invalid(!Set[TaskStatus](TaskStatus.Done, TaskStatus.Cancelled)(task.status), "Integration member is already terminal")
-      val draft = item.draft.copy(content = task.copy(status = TaskStatus.Done,
-        result = Some(s"Integrated ${candidate.value} into $target"), validation = task.validation :+ evidence))
+      val summary = s"Integrated ${candidate.value} into $target"
+      // The worker's recorded result is retained and the integration appended (D80); a recorded result too long to extend
+      // stays as recorded, since the appended validation evidence cites the same commit.
+      val result = task.result.fold(summary)(recorded => if (recorded.length + summary.length + 2 <= LedgerPolicy.MaxBody) recorded + "\n\n" + summary else recorded)
+      val draft = item.draft.copy(content = task.copy(status = TaskStatus.Done, result = Some(result), validation = task.validation :+ evidence))
       LedgerPolicy.validate(draft)
       Mutation.Replace(item.id, item.revision, draft)
     }

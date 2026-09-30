@@ -98,7 +98,8 @@ final class WorkflowExecution(api: ServerApi, project: ProjectId, session: Sessi
       case WorkflowRequest.Advance(roots, _) => selected(call, roots, values.map(_.id).toSet)
       case WorkflowRequest.Upstream(roots, _) => selected(call, roots, values.map(_.id).toSet)
       case WorkflowRequest.Review(result, _) =>
-        permit(values == new ArtifactReader(call, project).result(result).value.request.members, "standalone review members differ from its exact subject")
+        permit(new HistoricalDrafts(call, project).unchanged(new ArtifactReader(call, project).result(result).value.request.members, values),
+          "standalone review members differ from its exact subject")
     }
     def integration(): Unit = permit(request match {
       case WorkflowRequest.Advance(_, WorkflowPhase.Integrate) => true

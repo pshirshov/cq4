@@ -33,9 +33,10 @@ final class WorkflowAssembly(api: ServerApi, project: ProjectId, assets: Workflo
             "Plan review requires a stored proposal or cohort assessment")
           case ReviewerMode.Audit => ()
         }
+        val drafts = new HistoricalDrafts(call, project)
         value.request.members.foreach { member =>
           call(Command.Read(ReadInput(project, ReadSelection.ItemDetail(member.id)))) match {
-            case Result.Detail(view) => require(view.item.id == member.id && view.item.revision == member.revision,
+            case Result.Detail(view) => require(view.item.id == member.id && drafts.unchanged(member, ItemRevision(view.item.id, view.item.revision)),
               "Review subject is stale; inspect the retained result and select current work before requesting approval")
             case _ => throw new IllegalStateException("Workflow member read returned an unexpected result")
           }
