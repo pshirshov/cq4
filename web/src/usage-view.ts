@@ -1,6 +1,7 @@
 import * as api from '../../generated/typescript/cq/api/index.js';
 import { button, element } from './editor.js';
 import { itemName } from './items.js';
+import { formatAmount, MoneyDigits } from './money.js';
 
 type Cell = string | HTMLElement;
 function table(label: string, headings: string[], rows: Cell[][]): HTMLTableElement {
@@ -33,8 +34,11 @@ function details(label: string, ...content: HTMLElement[]): HTMLDetailsElement {
 }
 function time(value: bigint): string { return new Date(Number(value)).toLocaleString(); }
 function counter(value: api.Counter): string { return `${value.value === undefined ? 'Unknown' : value.value.toLocaleString()} · ${value.measurement}`; }
-function money(value: api.Money): string {
-  return `${value.amount === undefined ? 'Unknown' : value.amount.value} ${value.currency === undefined ? '' : value.currency} · ${value.basis}`.trim();
+function money(value: api.Money): HTMLElement {
+  const amount = value.amount === undefined ? 'Unknown' : formatAmount(value.amount.value, MoneyDigits);
+  const result = element('span', `${amount} ${value.currency === undefined ? '' : value.currency} · ${value.basis}`.trim());
+  if (value.amount !== undefined) result.title = value.amount.value;
+  return result;
 }
 function tokens(label: string, counts: api.TokenCounts): HTMLTableElement {
   return table(label, ['Counter', 'Value / measurement'], [['Input', counter(counts.input)], ['Output', counter(counts.output)],

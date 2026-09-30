@@ -14,6 +14,7 @@ import { icon } from './icons.js';
 import { ArchiveDialog } from './archive.js';
 import { faultMessage } from './faults.js';
 import { attemptsTable, outcomesTable, auditTable } from './usage-view.js';
+import { formatAmount, MoneyDigits } from './money.js';
 import { TableColumns } from './table-columns.js';
 import { Notifications } from './notifications.js';
 import { ReferencePopup } from './references.js';
@@ -807,7 +808,9 @@ class App {
     header.append(headings); table.append(header); const body = element('tbody', '');
     for (const cost of costs) {
       const group = cost.group; const row = element('tr', '');
-      for (const value of [group.attribution, cost.amount.value, group.currency, group.basis, group.pricingVersion === undefined ? 'unspecified' : group.pricingVersion, String(cost.measurements)]) row.append(element('td', value));
+      const amount = element('td', formatAmount(cost.amount.value, MoneyDigits)); amount.title = cost.amount.value;
+      row.append(element('td', group.attribution), amount);
+      for (const value of [group.currency, group.basis, group.pricingVersion === undefined ? 'unspecified' : group.pricingVersion, String(cost.measurements)]) row.append(element('td', value));
       body.append(row);
     }
     table.append(body); return table;
