@@ -6,8 +6,9 @@ import java.nio.file.Path
 
 /**
  * What `cq configure` installs for the hook-driven harnesses (Claude Code and Codex): the drive and park command or skill files, and the
- * CQ entries it merges into harness-owned hook configuration. A CQ entry is recognised by its command, `<cq> hook <harness> <event>`;
- * every other entry is user-owned and is kept as it is.
+ * CQ entries it merges into harness-owned hook configuration. A CQ entry is recognised by its whole command: one executable followed by
+ * `hook <harness> <event>`, as [[hookCommand]] writes it. Every other entry is user-owned and is kept as it is, including a command that
+ * wraps the CQ hook or merely ends like one.
  */
 object DriverAssets {
   val Hooks: List[DriverOrigin] = List(DriverOrigin.UserPromptSubmit, DriverOrigin.Stop)
@@ -54,9 +55,11 @@ object DriverAssets {
 
   def hookCommand(executable: Path, harness: Harness, origin: DriverOrigin): String = s"${quoted(executable.toString)} hook ${harness.toString.toLowerCase} $origin"
 
-  private def owned(handler: Json): Boolean = handler.hcursor.get[String]("command").exists { command =>
-    Harness.all.exists(harness => DriverOrigin.all.exists(origin => command.endsWith(s" hook ${harness.toString.toLowerCase} $origin")))
-  }
+  // One shell word as `quoted` writes an executable path.
+  private val Executable = """(?:[-A-Za-z0-9_./]+|'(?:[^']|'"'"')*')"""
+  private val Generated = (Executable + " hook (?:" + Harness.all.map(_.toString.toLowerCase).mkString("|") + ") (?:" + DriverOrigin.all.mkString("|") + ")").r
+
+  private def owned(handler: Json): Boolean = handler.hcursor.get[String]("command").exists(command => Generated.matches(command.trim.split("\\s+").mkString(" ")))
 
   private def handler(executable: Path, harness: Harness, origin: DriverOrigin): Json =
     Json.obj("type" -> Json.fromString("command"), "command" -> Json.fromString(hookCommand(executable, harness, origin)))

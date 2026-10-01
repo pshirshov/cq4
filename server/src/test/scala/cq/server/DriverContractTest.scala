@@ -1282,6 +1282,52 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
       } yield ()
     }
 
+    "record a write in its cycle only once the write is committed" in { (service: LedgerService[IO], repository: LedgerRepository[IO], mutations: LedgerMutation) =>
+      val w = world
+      val key = claude("uncommitted")
+      for {
+        _ <- service.initialize(w.operator, "uncommitted")
+        root <- create(service, w.operator, goal("Goal"))
+        one <- driven(service, w, key, workset(root))
+        claim <- service.acquire(w.governor, ClaimId(uuid), Set(root), 600000L)
+        current <- service.get(w.governor, root)
+        change = request(List(Mutation.Produce(root, current.item.revision, List(task("Never committed")), None)), List(claim.fence))
+        // The boundary admits the write and the transaction then fails, as a failed commit does.
+        failed <- repository.transact(w.project) { tx => mutations(tx, w.governor, change, Clock.systemUTC().millis()); throw new java.sql.SQLException("Commit failed") }.either
+        after <- status(service, w, key)
+        absent <- service.get(w.operator, root.copy(ledger = Ledger.Tasks, number = 1)).either
+        _ <- assertIO(failed.left.exists(_.isInstanceOf[java.sql.SQLException]) && missing(absent))
+        _ <- assertIO(after.exists(value => value.state == DriverState.On && value.cycle.exists(cycle => cycle.created.isEmpty &&
+          cycle.lineage.map(_.member) == List(LineageMember.Run(one.run), LineageMember.Claim(claim.fence.claim)))))
+        committed <- service.change(w.governor, change)
+        recorded <- status(service, w, key)
+        _ <- assertIO(recorded.exists(_.cycle.exists(cycle => cycle.created == committed.items.map(_.id).filter(_ != root) &&
+          cycle.lineage.map(_.member).contains(LineageMember.Change(change.request)))))
+      } yield ()
+    }
+
+    "answer a status read while a ledger write of the project is in progress" in { (service: LedgerService[IO], repository: LedgerRepository[IO]) =>
+      val w = world
+      val key = claude("status-read")
+      val (entered, release) = (new java.util.concurrent.CountDownLatch(1), new java.util.concurrent.CountDownLatch(1))
+      for {
+        _ <- service.initialize(w.operator, "status-read")
+        root <- create(service, w.operator, goal("Goal"))
+        _ <- on(service, w, key, workset(root))
+        writer <- repository.transact(w.project) { _ => entered.countDown(); release.await() }.fork
+        _ <- ZIO.attemptBlocking(entered.await())
+        line <- status(service, w, key).timeout(zio.Duration.fromSeconds(5)).ensuring(ZIO.succeed(release.countDown()))
+        own <- act(service, w.governor, DriverSession.Status())
+        _ <- writer.join
+        _ <- assertIO(line.flatten.exists(_.line == "CQ driver on: G1 through work; 0 active children") &&
+          (own match { case DriverReply.Status(Some(value)) => value.key == key; case _ => false }))
+        refused <- ZIO.foreach(List(service.drive(w.governor, DriverRequest.Control(key, DriverOrigin.StatusLine, DriverControl.Status())),
+          control(service, w, claude("two words"), DriverOrigin.StatusLine, DriverControl.Status()),
+          control(service, w, DriverKey(Harness.Pi, "pi-status"), DriverOrigin.StatusLine, DriverControl.Status())))(_.either)
+        _ <- assertIO(denied(refused.head) && refused.tail.forall(invalid))
+      } yield ()
+    }
+
     "register work dispatched from a driven run under its cycle and settle it when the host reports it done" in {
       (ledger: LedgerService[IO], repository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO],
         integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>

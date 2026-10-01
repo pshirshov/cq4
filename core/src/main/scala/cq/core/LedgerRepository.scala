@@ -17,6 +17,8 @@ trait LedgerRepository[F[_, _]] {
 
 trait LedgerTransaction {
   def project: Project
+  // Runs `effect` once this transaction has committed, and never when it fails or is rolled back. For state held outside the repository.
+  def afterCommit(effect: () => Unit): Unit
   def renameProject(project: Project): Unit
   def cursor: ChangeCursor
   def allocate(ledger: Ledger): ItemId

@@ -248,6 +248,36 @@ abstract class DriverHookTest extends SpecZIO with AssertZIO {
       assert(large.contains("Advanceable (26):") && large.count(_.startsWith("- T")) == 25 && large.contains("- … 1 more") && large.mkString("\n").length < 10000)
     }
 
+    "say that the driver may have changed when a drive or park reply is lost, and that nothing changed when the host rejects" in scenarios { world =>
+      import world.*
+      val root = goal("Goal")
+      // The server commits the request and the reply is lost in transit, as a client deadline does.
+      val lossy = new ServerApi {
+        override def call(command: Command): Result = { server.call(command); throw new IllegalStateException("HTTP response deadline exceeded") }
+        override def usage(value: HostUsageInput): HostUsageResult = server.usage(value)
+        override def artifact(value: ArtifactUpload): ArtifactMetadata = server.artifact(value)
+        override def admit(value: HostAdmissionInput): ResultAdmission = server.admit(value)
+        override def integrate(value: HostIntegrationInput): IntegrationRecord = server.integrate(value)
+        override def grant(value: GrantRequest): AccessToken = server.grant(value)
+      }
+      val unanswered = new DriverHook(() => new DriverEntry(lossy, project))
+      def prompt(hook: DriverHook, text: String): String = {
+        val reply = parse(hook.run(harness.toString.toLowerCase, "UserPromptSubmit", payload("UserPromptSubmit", "lost-reply", "prompt" -> Json.fromString(text)).noSpaces.getBytes(UTF_8))).fold(throw _, identity)
+        reply.hcursor.downField("hookSpecificOutput").get[String]("additionalContext").fold(throw _, identity)
+      }
+      val lost = prompt(unanswered, s"${words.drive} G1 through=work")
+      assert(status("lost-reply").exists(_.state == DriverState.Binding), "the server did start the driver")
+      assert(lost == s"CQ driver drive-start rejected: HTTP response deadline exceeded\nThe CQ server's reply was not received, so this session's driver may have changed and a bind token may have been issued. " +
+        s"Read the driver status with the CQ session tool ({\"Driver\":{}}) or run ${words.park} before driving again.")
+      val parked = prompt(unanswered, words.park)
+      assert(status("lost-reply").exists(_.stopped.exists(_.reason == DriverStop.Parked)) && parked.startsWith("CQ driver park rejected: HTTP response deadline exceeded\nThe CQ server's reply was not received"))
+      // A rejection is the host's answer: nothing changed.
+      val rejected = prompt(hook, s"${words.drive} through=work")
+      assert(rejected.startsWith("CQ driver drive-start rejected: Drive targets are empty") &&
+        rejected.endsWith("\nNothing changed for this session's driver and no bind token was issued."))
+      assert(root.number == 1)
+    }
+
     "keep two concurrent sessions isolated by their own session_id and show the trusted-key limitation" in scenarios { world =>
       import world.*
       val first = goal("Goal of A")

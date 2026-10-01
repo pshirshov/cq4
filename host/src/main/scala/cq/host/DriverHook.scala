@@ -51,7 +51,9 @@ final class DriverHook(entry: () => DriverEntry) {
     // The result is context for this session's turn and a transcript message; a failure is reported the same way so the command body can show it.
     def reported(label: String)(operation: => (String, List[String])): String = {
       val (message, context) = try operation catch {
-        case NonFatal(error) => (s"$label rejected: ${describe(error)}", List("Nothing changed for this session's driver and no bind token was issued."))
+        // A fault is the host's answer. Any other failure, such as a reply lost after the server committed, leaves the outcome unknown.
+        case error @ DomainFailure(_) => (s"$label rejected: ${describe(error)}", List(Unchanged))
+        case NonFatal(error) => (s"$label rejected: ${describe(error)}", List(unknown(dialect)))
       }
       render(JsonObject("hookSpecificOutput" -> Json.obj("hookEventName" -> Json.fromString(call.event),
         "additionalContext" -> Json.fromString((message :: context).mkString("\n"))), "systemMessage" -> Json.fromString(message)))
@@ -90,6 +92,9 @@ object DriverHook {
   val DriveLabel = "CQ driver drive-start"
   val ParkLabel = "CQ driver park"
   val NoDriver = "CQ driver off"
+  private val Unchanged = "Nothing changed for this session's driver and no bind token was issued."
+  private def unknown(dialect: HookDialect): String = "The CQ server's reply was not received, so this session's driver may have changed and a bind token may have been issued. " +
+    s"""Read the driver status with the CQ session tool ({"Driver":{}}) or run ${dialect.park} before driving again."""
   // Keeps the context block below the 10,000 characters Claude Code passes to the model from one hook.
   private val MaxListed = 25
   private val MaxTitle = 80

@@ -106,18 +106,24 @@ final class DriverBoundary(registry: DriverRegistry, planner: WorksetPlanner) {
       if (unselected.nonEmpty)
         registry.fail(record, s"non-selected creation: ${references(unselected)} is not a selected descendant of ${references(record.targets)}", now)
     }
-    stamp(record, cycle.copy(created = cycle.created ++ created.map(_.id)), attribution.parent, stamps, now)
+    stamp(tx, record, cycle, created.map(_.id), attribution.parent, stamps, now)
   }
 
-  def claimed(project: ProjectId, session: SessionId, claim: ClaimId, now: Long): Unit =
-    registry.bound(project, session).foreach { record =>
-      record.cycle.filter(_.active).foreach(cycle => stamp(record, cycle, LineageMember.Run(cycle.run.get), List(LineageMember.Claim(claim)), now))
+  def claimed(tx: LedgerTransaction, session: SessionId, claim: ClaimId, now: Long): Unit =
+    registry.bound(tx.project.id, session).foreach { record =>
+      record.cycle.filter(_.active).foreach(cycle => stamp(tx, record, cycle, Nil, LineageMember.Run(cycle.run.get), List(LineageMember.Claim(claim)), now))
     }
 
-  private def stamp(record: DriverRecord, cycle: CycleRecord, parent: LineageMember, stamps: List[LineageMember], now: Long): Unit = {
+  // The cycle records a write only once the write is committed: a transaction that fails leaves no created item or lineage member behind.
+  private def stamp(tx: LedgerTransaction, record: DriverRecord, cycle: CycleRecord, created: List[ItemId], parent: LineageMember, stamps: List[LineageMember], now: Long): Unit = {
     val added = stamps.filterNot(member => cycle.lineage.exists(_.member == member)).map(LineageEntry(_, Some(parent), true))
     if (cycle.lineage.size + added.size > DriverPolicy.MaxLineage)
       registry.fail(record, s"cycle ${cycle.number} exceeds ${DriverPolicy.MaxLineage} lineage members", now)
-    registry.put(record.copy(cycle = Some(cycle.copy(lineage = cycle.lineage ++ added)), touchedAt = now))
+    tx.afterCommit(() => registry.update(record.project, record.key) { current =>
+      current.cycle.filter(_.id == cycle.id).fold(current) { live =>
+        val entries = added.filterNot(entry => live.lineage.exists(_.member == entry.member))
+        current.copy(cycle = Some(live.copy(created = live.created ++ created, lineage = live.lineage ++ entries)), touchedAt = now)
+      }
+    })
   }
 }

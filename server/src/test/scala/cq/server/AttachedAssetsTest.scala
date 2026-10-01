@@ -6,6 +6,7 @@ import io.circe.{Json, parser}
 import java.nio.file.Files
 import org.scalatest.wordspec.AnyWordSpec
 import scala.jdk.CollectionConverters.*
+import scala.util.Using
 
 final class AttachedAssetsLocal extends AnyWordSpec {
   private def project(prefix: String): (java.nio.file.Path, java.nio.file.Path, java.nio.file.Path) = {
@@ -155,6 +156,38 @@ final class AttachedAssetsLocal extends AnyWordSpec {
         Files.writeString(local, invalid)
         intercept[IllegalArgumentException](assets.write(Harness.Claude, root, settings, binary, true, true))
         assert(Files.readString(local) == invalid)
+      }
+    }
+    "own only the hook command CQ generates, replace a merged file by renaming and refuse the status-line flag where none is installed" in {
+      val (root, binary, settings) = project("cq-attached-ownership-")
+      val assets = new AttachedAssets(new McpSchemas, new WorkflowAssets)
+      val local = root.resolve(".claude/settings.local.json")
+      def installed: Json = parser.parse(Files.readString(local)).fold(throw _, identity)
+      def handler(command: String): Json = Json.obj("type" -> Json.fromString("command"), "command" -> Json.fromString(command))
+      def group(handlers: Json*): Json = Json.obj("hooks" -> Json.arr(handlers*))
+      def cq(event: String): Json = handler(s"$binary hook claude $event")
+      // A user command that merely ends like a CQ hook, and a wrapped copy of the CQ hook, are the user's.
+      val users = List("/usr/local/bin/log --tag hook claude Stop", s"timeout 5 $binary hook claude Stop", s"sh -c '$binary hook claude Stop'")
+      Files.createDirectories(local.getParent)
+      Files.writeString(local, Json.obj("hooks" -> Json.obj("Stop" -> Json.arr(group(users.map(handler)*), group(handler(s"  /old/place/cq   hook  claude\tStop "))))).spaces2)
+      Files.setPosixFilePermissions(local, java.nio.file.attribute.PosixFilePermissions.fromString("rw-r-----"))
+      val inode = Files.getAttribute(local, "unix:ino")
+      assets.write(Harness.Claude, root, settings, binary, false, false)
+      assert(installed.hcursor.downField("hooks").downField("Stop").focus.contains(Json.arr(group(users.map(handler)*), group(cq("Stop")))))
+      // The merged file is replaced as a whole: a reader sees the old content or the new one, never a truncated file.
+      assert(Files.getAttribute(local, "unix:ino") != inode && Files.getPosixFilePermissions(local) == java.nio.file.attribute.PosixFilePermissions.fromString("rw-r-----"))
+      assert(Using.resource(Files.list(local.getParent))(_.iterator().asScala.map(_.getFileName.toString).toSet) == Set("settings.local.json", "commands"))
+      // A statusLine that wraps the CQ command is the user's as well.
+      val wrapped = installed.mapObject(_.add("statusLine", handler(s"timeout 2 $binary hook claude StatusLine")))
+      Files.writeString(local, wrapped.spaces2)
+      val refused = intercept[IllegalArgumentException](assets.write(Harness.Claude, root, settings, binary, false, false))
+      assert(refused.getMessage.contains("use --replace-statusline") && installed == wrapped)
+      // Codex and Pi have no CQ status line: the flag is refused by name and nothing is written.
+      List(Harness.Codex, Harness.Pi).foreach { harness =>
+        val (other, executable, file) = project(s"cq-attached-flag-${harness.toString.toLowerCase}-")
+        val flag = intercept[IllegalArgumentException](assets.write(harness, other, file, executable, false, true))
+        assert(flag.getMessage == s"requirement failed: --replace-statusline applies only to claude: cq configure installs no status line for ${harness.toString.toLowerCase}")
+        assert(!Files.exists(other.resolve(".codex")) && !Files.exists(other.resolve(".pi")) && !Files.exists(other.resolve(".agents")))
       }
     }
     "install the Codex drive and park skills and CQ hooks in .codex/hooks.json and keep user-owned entries" in {

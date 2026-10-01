@@ -122,6 +122,6 @@ object Main extends RoleAppMain.LauncherBIO[IO] {
       make[RouterFactory].from[DiagnosticRouter]
     }
   override protected def earlyFailureHandler(argv: RoleAppMain.ArgV): AppFailureHandler =
-    if (argv.args.headOption.contains(AttachedRole.id)) new AttachedStartup.Handler(System.in, System.out, System.err, super.earlyFailureHandler(argv))
+    if (argv.args.headOption.contains(AttachedRole.id)) new AttachedStartup.Handler(System.in, System.out, System.err, super.earlyFailureHandler(argv), System.exit)
     else super.earlyFailureHandler(argv)
 }

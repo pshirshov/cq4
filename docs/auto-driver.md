@@ -32,7 +32,7 @@ cq configure codex  --settings /absolute/settings.json --replace
 cq configure pi     --settings /absolute/settings.json --replace
 ```
 
-`--replace` and `--replace-statusline` go after the other options. `--replace` overwrites CQ-generated files that differ from the current package (command files, skills, the Pi extension, the Codex `config.toml` with the CQ header, the `cq` entry of `.mcp.json`). It never replaces a file or entry CQ does not own.
+`--replace` and `--replace-statusline` go after the other options. `--replace-statusline` applies to `claude` only; `cq configure codex` and `cq configure pi` reject it with `--replace-statusline applies only to claude: cq configure installs no status line for codex`. `--replace` overwrites CQ-generated files that differ from the current package (command files, skills, the Pi extension, the Codex `config.toml` with the CQ header, the `cq` entry of `.mcp.json`). It never replaces a file or entry CQ does not own.
 
 | Harness | What is written for the driver | Extra steps |
 | --- | --- | --- |
@@ -40,7 +40,7 @@ cq configure pi     --settings /absolute/settings.json --replace
 | Codex | The skills `.agents/skills/cq-drive` and `cq-park`; the two hook groups in `.codex/hooks.json`. | Codex runs project hooks only in a trusted project after a review. In the Hooks dialog (`/hooks`) Codex 0.159.2 showed `2 hooks need review before they can run`; `t` trusts all, Enter reviews one. It ran the hooks after that. |
 | Pi | Nothing beyond the generated extension `.pi/extensions/cq-host.js`, which contains the commands, the toggle key and the footer. | None. `pi --approve` loads the extension. |
 
-In both hook files an entry is CQ's when its command ends in `hook <harness> <event>`. Such entries are replaced; every other hook group, handler and event is kept.
+In both hook files an entry is CQ's when its whole command is the one CQ generates: a single executable followed by `hook <harness> <event>` (extra whitespace is ignored). Such entries are replaced, including one left by a CQ installed elsewhere; every other hook group, handler and event is kept. A command that wraps the CQ hook, for example `timeout 5 /path/cq hook claude Stop`, is yours: CQ keeps it and adds its own group, so the hook then runs twice. Remove or edit wrapped copies yourself. Existing files are replaced by a rename, so a running harness never reads a half-written file.
 
 The hook commands run `cq hook <harness> <event>` as processes of the harness. They read the project endpoint saved by `cq init` and need the operator credential, so the harness environment must carry `CQ_TOKEN_FILE` (or `CQ_TOKEN`) exactly as the attached host needs it. Without it a drive or park command is rejected with `… rejected: CQ_TOKEN or CQ_TOKEN_FILE is required`, the `Stop` hook and the status line report `CQ … hook error: CQ_TOKEN or CQ_TOKEN_FILE is required`, and the session continues undriven.
 
@@ -90,7 +90,7 @@ call '{"Workset":{"input":{"project":{"value":"'$project'"},"action":{"Preview":
 
 IDs are separated by spaces or commas. Inline targets need exactly one `through=<phase>`, in lower case. `workset=<UUID>` stands alone. In Claude Code and Codex the command must be the first word of the prompt; any other prompt passes through untouched.
 
-The targets and the phase are frozen for the drive. A second drive command while the driver is binding or on is rejected with `conflict: This session's CQ driver is already on; park it before driving other targets or another phase`. A rejected drive (`CQ driver drive-start rejected: …` in Claude Code and Codex, `CQ driver not started: …` in Pi) changes nothing.
+The targets and the phase are frozen for the drive. A second drive command while the driver is binding or on is rejected with `conflict: This session's CQ driver is already on; park it before driving other targets or another phase`. A rejected drive (`CQ driver drive-start rejected: …` in Claude Code and Codex, `CQ driver not started: …` in Pi) changes nothing. The exception is a reply that never arrived: in Claude Code and Codex the hook then reports `The CQ server's reply was not received, so this session's driver may have changed …`. The server may have started or parked the driver, so read the driver status or park before driving again.
 
 ### Claude Code and Codex: the bind step
 
@@ -153,7 +153,7 @@ CQ driver off: G1 through work; stopped (quiescent): No item of the advanceable 
 | --- | --- | --- |
 | Claude Code | The CQ `statusLine` (`cq hook claude StatusLine`) prints the line. In the recorded run each call of the JVM build took 2–3 seconds and Claude Code cancelled refreshes that a newer one superseded. | `UserPromptSubmit says: …`, `Stop says: …`, `Stop hook error: …` for a blocked stop. |
 | Codex | None. Codex shows no custom status-line text, so the transcript messages are the only indicator. | `↳ Hook · …`, `Blocked by hook`. |
-| Pi | The footer status `cq-driver` shows the line; it is refreshed at every turn end while the driver is on. | Notices. |
+| Pi | The footer status `cq-driver` shows the line; it is refreshed at every turn end while the driver is on. If that refresh fails or is not answered within five seconds, the footer reads `CQ driver status unavailable: …` and the drive continues. | Notices. |
 
 A CQ error in a hook never blocks the harness: the hook exits 0, the prompt or the stop proceeds, and the error is shown as `CQ <event> hook error: …` (in the status line for `StatusLine`).
 

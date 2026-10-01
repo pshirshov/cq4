@@ -6,12 +6,15 @@ const MAX_CONFIG_BYTES = 2097152;
 const MAX_FRAME_BYTES = 2097152;
 const MAX_PENDING = 32;
 const REQUEST_MILLIS = 35000;
+// A status refresh only repaints the footer: it is given up early and alone, without closing the connection.
+const STATUS_MILLIS = 5000;
 const PROTOCOL = "2025-03-26";
 const DRIVER_FOOTER = "cq-driver";
 const DRIVER_TOGGLE = "ctrl+alt+a";
 const DRIVER_OFF = "CQ driver off";
 const DRIVE_USAGE = "/cq:drive <target IDs> through=<phase> or /cq:drive workset=<id>";
 const PREVIEW_LINES = 12;
+const TITLE_CODE_POINTS = 80;
 const LEDGER_PREFIX = { Milestones: "M", Ideas: "I", Defects: "D", Goals: "G", Tasks: "T", Researches: "RS", Hypothesis: "H", Questions: "Q",
   Decisions: "K", Reviews: "R", Handoffs: "HO", OperatorActions: "OA", Memories: "MEM", Upstream: "U" };
 const FAILURE_STOPS = new Set(["Failure", "NotBound"]);
@@ -35,12 +38,17 @@ function reason(value) {
     default: return name.toLowerCase();
   }
 }
+// An item title is user text: it is shown on one line, without control characters and bounded in length.
+function shown(title) {
+  const points = Array.from(title.replace(/\p{Cc}/gu, " "));
+  return points.length <= TITLE_CODE_POINTS ? points.join("") : points.slice(0, TITLE_CODE_POINTS - 1).join("") + "…";
+}
 // The host preview as three separate groups: what the driver may advance, what it only shows, and why each item is or is not ready.
 function previewText(preview) {
   const reasons = values => values.length === 0 ? "" : " — " + values.map(reason).join(", ");
   const group = (title, lines) => [`${title} (${lines.length}):`, ...lines.slice(0, PREVIEW_LINES).map(line => "  " + line),
     ...(lines.length > PREVIEW_LINES ? [`  … ${lines.length - PREVIEW_LINES} more`] : [])];
-  const summary = item => `${item.status}: ${item.title}`;
+  const summary = item => `${item.status}: ${shown(item.title)}`;
   return [
     ...group("Advanceable", preview.advanceable.map(member => `${reference(member.item.id)}${member.root ? " (target)" : ""} ${summary(member.item)}`)),
     ...group("Context only, never advanced", preview.context.map(entry => `${reference(entry.item.id)} ${summary(entry.item)}${reasons(entry.reasons)}`)),
@@ -52,6 +60,7 @@ class Connection {
   constructor(configuration) {
     this.sequence = 0;
     this.pending = new Map();
+    this.abandoned = new Set();
     this.failed = undefined;
     this.buffer = Buffer.alloc(0);
     this.process = spawn(configuration.command, configuration.args, {
@@ -94,6 +103,7 @@ class Connection {
       this.send({ jsonrpc: "2.0", id: value.id, result: {} });
       return;
     }
+    if (this.abandoned.delete(value.id)) return;
     const request = this.pending.get(value.id);
     if (request === undefined) throw new Error("Uncorrelated CQ response");
     this.pending.delete(value.id);
@@ -102,7 +112,7 @@ class Connection {
     else request.resolve(value.result);
   }
   async rpc(method, params, signal) {
-    if (this.pending.size >= MAX_PENDING) throw new Error("CQ request queue is full");
+    if (this.pending.size + this.abandoned.size >= MAX_PENDING) throw new Error("CQ request queue is full");
     const id = ++this.sequence;
     let timer;
     const abort = () => { this.fail(new Error("CQ operation interrupted; session closed to bound pending effects")); this.process.stdin.destroy(); };
@@ -119,6 +129,24 @@ class Connection {
     } finally {
       clearTimeout(timer);
       if (signal !== undefined) signal.removeEventListener("abort", abort);
+      this.pending.delete(id);
+    }
+  }
+  // A request without effects that is given up after `millis`: its late reply is dropped and the connection stays open.
+  // An unanswered request still counts against the pending bound, so a host that stops answering fills it and fails the connection there.
+  async poll(method, params, millis) {
+    if (this.failed !== undefined) throw this.failed;
+    if (this.pending.size + this.abandoned.size >= MAX_PENDING) throw new Error("CQ request queue is full");
+    const id = ++this.sequence;
+    let timer;
+    try {
+      return await new Promise((resolve, reject) => {
+        this.pending.set(id, { resolve, reject });
+        timer = setTimeout(() => { this.abandoned.add(id); reject(new Error("CQ request timed out")); }, millis);
+        this.send({ jsonrpc: "2.0", id, method, params });
+      });
+    } finally {
+      clearTimeout(timer);
       this.pending.delete(id);
     }
   }
@@ -153,7 +181,8 @@ export default async function (pi) {
   // The session key is Pi's own session identifier; the attached host adds its attached session.
   async function driver(context, action, fields) {
     if (connection === undefined) throw new Error("CQ attached host is unavailable; restart the session");
-    const reply = await connection.rpc("cq/driver", { [action]: { session: context.sessionManager.getSessionId(), ...fields } }, undefined);
+    const request = { [action]: { session: context.sessionManager.getSessionId(), ...fields } };
+    const reply = await (action === "Status" ? connection.poll("cq/driver", request, STATUS_MILLIS) : connection.rpc("cq/driver", request, undefined));
     const [name, body] = variant(reply);
     if (name !== "Failed") return reply;
     const [fault, detail] = variant(body.fault);
@@ -249,7 +278,10 @@ export default async function (pi) {
   pi.on("turn_start", () => { turn += 1; });
   pi.on("turn_end", async (event, context) => {
     outcome = event.outcome;
-    if (driving) show(context, expect(await driver(context, "Status", {}), "Status").value);
+    if (!driving) return;
+    // The footer is an indicator only: a refresh that fails is shown there and neither ends the turn's handling nor the drive.
+    try { show(context, expect(await driver(context, "Status", {}), "Status").value); }
+    catch (error) { context.ui.setStatus(DRIVER_FOOTER, "CQ driver status unavailable: " + error.message); }
   });
   pi.on("agent_settled", async (_event, context) => {
     if (!driving) return;

@@ -34,9 +34,9 @@ final class DummyLedgerResource extends Lifecycle.LiftF[Task, LedgerRepository[I
           val tx = new DummyLedgerTransaction(state)
           val result = operation(tx)
           val cursor = if (tx.result.project == state.project) current.cursor else CatalogueCursor(Math.addExact(current.cursor.value, 1L))
-          (result, current.copy(cursor = cursor, projects = current.projects.updated(project, tx.result)))
+          ((result, tx.committed), current.copy(cursor = cursor, projects = current.projects.updated(project, tx.result)))
         }
-      }
+      }.map { (result, committed) => committed.foreach(_()); result }
     }
   }
 )
@@ -61,7 +61,10 @@ private final case class DummyLedgerState(
 
 private final class DummyLedgerTransaction(initial: DummyLedgerState) extends LedgerTransaction {
   private var state = initial
+  private var effects = List.empty[() => Unit]
   def result: DummyLedgerState = state
+  def committed: List[() => Unit] = effects.reverse
+  override def afterCommit(effect: () => Unit): Unit = effects = effect :: effects
   override def project: Project = state.project
   override def renameProject(project: Project): Unit = {
     require(project.id == state.project.id, "Project identity cannot change")

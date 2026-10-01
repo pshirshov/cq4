@@ -11,12 +11,24 @@ final class DriverService(registry: DriverRegistry, planner: WorksetPlanner) {
   private def denied(message: String): Nothing = throw DomainFailure(Fault.Denied(message))
   private def token(): DriverToken = DriverToken(UUID.randomUUID())
 
-  // State-changing entry points: only the CQ hook commands and the Pi extension hold the operator credential they require.
-  def control(tx: LedgerTransaction, scope: Scope, key: DriverKey, source: DriverOrigin, action: DriverControl, now: Long): DriverReply = {
+  private def authorized(scope: Scope, key: DriverKey, source: DriverOrigin, action: DriverControl): Unit = {
     if (scope.actor.role != Role.Human)
       denied("Driver control requires the operator credential of a CQ hook command or the Pi extension; attached sessions only bind and read status")
     DriverPolicy.key(key)
     origin(key, source, action)
+  }
+
+  // The status reads use the registry alone, outside any project transaction.
+  def read(scope: Scope, key: DriverKey, source: DriverOrigin): DriverReply = {
+    authorized(scope, key, source, DriverControl.Status())
+    DriverReply.Status(registry.get(scope.project, key).map(status))
+  }
+  def own(scope: Scope): DriverReply = DriverReply.Status(registry.all(scope.project).filter(_.attached.contains(scope.actor.session))
+    .sortBy(record => (record.on, record.touchedAt)).lastOption.map(status))
+
+  // State-changing entry points: only the CQ hook commands and the Pi extension hold the operator credential they require.
+  def control(tx: LedgerTransaction, scope: Scope, key: DriverKey, source: DriverOrigin, action: DriverControl, now: Long): DriverReply = {
+    authorized(scope, key, source, action)
     val project = scope.project
     action match {
       case DriverControl.Start(target, attached) =>
@@ -45,7 +57,7 @@ final class DriverService(registry: DriverRegistry, planner: WorksetPlanner) {
           DriverReply.Parked(Some(status(parked)), s"CQ driver parked: ${describe(parked)}")
         case other => DriverReply.Parked(other.map(status), "CQ driver is already off")
       }
-      case _: DriverControl.Status => DriverReply.Status(registry.get(project, key).map(status))
+      case _: DriverControl.Status => read(scope, key, source)
       case _: DriverControl.Continue => registry.get(project, key) match {
         case None => DriverReply.Stop(DriverStopped(DriverStop.Off, "No CQ driver is on for this session"), None, Nil)
         case Some(record) => record.state match {
@@ -130,8 +142,7 @@ final class DriverService(registry: DriverRegistry, planner: WorksetPlanner) {
     val project = scope.project
     val caller = scope.actor.session
     action match {
-      case _: DriverSession.Status =>
-        DriverReply.Status(registry.all(project).filter(_.attached.contains(caller)).sortBy(record => (record.on, record.touchedAt)).lastOption.map(status))
+      case _: DriverSession.Status => own(scope)
       case DriverSession.Bind(value) =>
         governor(scope)
         val record = registry.all(project).find(record => record.state == DriverState.Binding && record.bind.exists(_.token == value))

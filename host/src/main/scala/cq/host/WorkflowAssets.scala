@@ -2,7 +2,7 @@ package cq.host
 
 import cq.api.*
 import java.nio.charset.StandardCharsets.UTF_8
-import java.nio.file.{Files, LinkOption, Path, StandardOpenOption}
+import java.nio.file.{Files, LinkOption, Path, StandardCopyOption, StandardOpenOption}
 import scala.util.Using
 
 final case class CommandAsset(path: Path, body: String)
@@ -33,6 +33,16 @@ final class WorkflowAssets {
 
   def writeCommands(harness: Harness, root: Path, replace: Boolean): List[Path] = writeAssets(commands(harness), root, replace, Set.empty)
 
+  // Replaces a file as a whole: a concurrent reader, such as a running harness, sees the old content or the new one and never a truncated file.
+  private def replaced(path: Path, bytes: Array[Byte]): Unit = {
+    val temporary = Files.createTempFile(path.getParent, ".cq-", ".pending")
+    try {
+      Files.write(temporary, bytes)
+      Files.setPosixFilePermissions(temporary, Files.getPosixFilePermissions(path, LinkOption.NOFOLLOW_LINKS))
+      Files.move(temporary, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+    } finally Files.deleteIfExists(temporary)
+  }
+
   def writeAssets(assets: List[CommandAsset], root: Path, replace: Boolean, merged: Set[Path]): List[Path] = {
     require(root.isAbsolute && root.normalize() == root, "Command export directory must be absolute and normalized")
     def safe(path: Path): Unit = {
@@ -58,7 +68,7 @@ final class WorkflowAssets {
       safe(path)
       Files.createDirectories(path.getParent)
       if (Files.exists(path, LinkOption.NOFOLLOW_LINKS)) {
-        if (replace || merged(root.relativize(path))) Files.write(path, bytes, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS)
+        if (replace || merged(root.relativize(path))) replaced(path, bytes)
       } else Files.write(path, bytes, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)
     }
     outputs.map(_._1)

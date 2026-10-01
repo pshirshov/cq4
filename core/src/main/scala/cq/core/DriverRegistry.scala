@@ -38,6 +38,7 @@ final class DriverRegistry {
   def get(project: ProjectId, key: DriverKey): Option[DriverRecord] = synchronized(drivers.get((project, key)))
   def all(project: ProjectId): List[DriverRecord] = synchronized(drivers.valuesIterator.filter(_.project == project).toList)
   def put(record: DriverRecord): Unit = synchronized { drivers = drivers.updated((record.project, record.key), record) }
+  def update(project: ProjectId, key: DriverKey)(change: DriverRecord => DriverRecord): Unit = synchronized { drivers.get((project, key)).foreach(record => drivers = drivers.updated((project, key), change(record))) }
   def remove(record: DriverRecord): Unit = synchronized { drivers = drivers - ((record.project, record.key)) }
 
   def bound(project: ProjectId, session: SessionId): Option[DriverRecord] = all(project).find(record => record.on && record.attached.contains(session))
