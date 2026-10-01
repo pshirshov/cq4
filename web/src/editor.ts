@@ -12,7 +12,7 @@ const schemas: Record<string, Schema> = rawSchemas;
 export function element<K extends keyof HTMLElementTagNameMap>(tag: K, text: string): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag); node.textContent = text; return node;
 }
-export function button(text: string, action: () => void): HTMLButtonElement {
+export function button(text: string, action: (event: MouseEvent) => void): HTMLButtonElement {
   const node = element('button', text); node.type = 'button'; node.addEventListener('click', action); return node;
 }
 function required<T>(value: T | undefined, name: string): T {
