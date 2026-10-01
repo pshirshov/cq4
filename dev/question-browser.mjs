@@ -164,6 +164,41 @@ try {
   await batch().getByRole('button', {name: 'Close', exact: true}).click();
   cases.push('D56 empty-answer validation and retry after committed-but-lost acknowledgement without extra revision');
 
+  // I14: the recommendation names its alternative by index, so the editor keeps the index on that alternative or clears it visibly.
+  const editable = question(4); editable.content.Question.alternatives = ['Go', 'Python', 'Rust']; editable.content.Question.recommendation = recommendation;
+  const fourth = (await change([{Create: {draft: editable}}])).Changed.ack.items[0].id;
+  const committed = async revision => {
+    for (let attempt = 0; attempt < 60; attempt++) {
+      const item = await detail(fourth); if (item.revision.value === revision) return item.draft.content.Question;
+      await page.waitForTimeout(100);
+    }
+    throw new Error(`Q4 did not reach revision ${revision}`);
+  };
+  const form = page.locator('#detail-pane .item-form, .item-form').first();
+  const removeFirstAlternative = async () => {
+    await page.getByRole('button', {name: 'Q4 · Question 4', exact: true}).click();
+    await page.getByRole('button', {name: 'Edit current revision', exact: true}).click();
+    await form.locator('[data-field=alternatives] .array-row').first().getByRole('button', {name: 'Remove', exact: true}).click();
+  };
+  await removeFirstAlternative();
+  assert.equal(await form.getByLabel('alternative', {exact: true}).inputValue(), '0', 'the index follows the recommended alternative');
+  assert.equal(await form.locator('[data-field=recommendation] [role=status]').isVisible(), false);
+  await page.getByRole('button', {name: 'Save item', exact: true}).click();
+  let stored = await committed('2');
+  assert.deepEqual([stored.alternatives, stored.recommendation], [['Python', 'Rust'], {alternative: 0, reason: recommendation.reason}]);
+  await page.waitForFunction(count => document.querySelectorAll('#detail-pane section[data-field="alternatives"] li').length === count, 2);
+  assert.equal(await page.locator('#detail-pane .recommended-alternative').textContent(), 'PythonRecommended' + recommendation.reason);
+  await removeFirstAlternative();
+  assert.equal(await form.getByLabel('Add recommendation', {exact: true}).isChecked(), false, 'a recommendation whose alternative was removed is cleared');
+  assert.equal(await form.locator('[data-field=recommendation] [role=status]').textContent(),
+    'Recommendation cleared: its alternative “Python” is no longer in the list. Tick “Add recommendation” to state it again.');
+  await page.getByRole('button', {name: 'Save item', exact: true}).click();
+  stored = await committed('3');
+  assert.deepEqual([stored.alternatives, stored.recommendation], [['Rust'], null]);
+  await page.waitForFunction(count => document.querySelectorAll('#detail-pane section[data-field="alternatives"] li').length === count, 1);
+  assert.equal(await page.locator('#detail-pane .recommended-alternative').count(), 0);
+  cases.push('I14 the item editor keeps the recommendation on its alternative when the list changes and clears it visibly when that alternative is removed');
+
   await page.getByRole('button', {name: 'New item', exact: true}).click();
   const create = page.getByRole('dialog', {name: 'New item', exact: true});
   await create.getByLabel('content', {exact: true}).selectOption('Question');

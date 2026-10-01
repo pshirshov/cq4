@@ -51,6 +51,8 @@ Browser checks press these controls through `dev/hold.mjs`; `dev/hold-browser.mj
 
 A Question's item view marks the recommended alternative inside its alternatives list with a "Recommended" badge and the reason; a Question without a recommendation shows no badge. The question batch dialog labels that row's Pick control `Pick recommended alternative: <text>`. Every alternative remains pickable and the free-text answer is unchanged.
 
+The recommendation names its alternative by zero-based index, so the item editor keeps the two aligned (`followRecommendation` in `web/src/editor.ts`). After any edit of the alternatives list in which the recommended alternative's text is no longer at its index, the editor moves the index to the row that now holds that text; when no row holds it (the alternative was removed or reworded), the editor unticks "Add recommendation" and shows "Recommendation cleared: its alternative “<text>” is no longer in the list. Tick “Add recommendation” to state it again." next to the field. The index and reason stay in the unticked fields, and editing the recommendation itself rebinds it to the alternative at the entered index.
+
 ## Usage and synchronization
 
 Usage has its own project cursor. Item change events cannot establish that usage is current, and usage updates must not create item events. Use bounded cursor invalidation for the subscribed project and fetch only the currently displayed usage scope. Reconnect refreshes both snapshots. Guard all usage responses against project/scope/request changes; an obsolete reply cannot change a caption or cursor.
