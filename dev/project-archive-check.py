@@ -189,7 +189,7 @@ def verify(checks, command, name):
                 assert changed == 1 and offset == len(data)
                 entries[index] = (entries[index][0], bytes(output))
                 m["entries"][index - 1].update(bytes=str(len(output)), sha256=hashlib.sha256(output).hexdigest())
-            reject("nonterminal-current", nonterminal_current, "Only terminal items may be archived")
+            reject("nonterminal-current", nonterminal_current, "Only terminal or settled items may be archived")
 
             reject("schema-mismatch", lambda m, e: m.update(schemaSha256="0" * 64), "current CQ schema")
             reject("major-mismatch", lambda m, e: m.update(postgresMajor=0), "PostgreSQL major")

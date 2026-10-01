@@ -263,10 +263,36 @@ abstract class LedgerContractTest extends SpecZIO with AssertZIO {
         _ <- assertIO(active.items.map(_.id).toSet == Set(adopted.id, current.id) && active.items.forall(_.outcome == ItemOutcome(false, true)))
         _ <- denied(service.change(owner, request(List(Mutation.Archive(List(adopted))), Nil)))(_.isInstanceOf[Fault.Invalid])
         _ <- denied(service.change(owner, request(List(Mutation.Archive(List(current))), Nil)))(_.isInstanceOf[Fault.Invalid])
-        _ <- denied(create(service, owner, decision(DecisionStatus.Adopted).copy(archived = true)))(_.isInstanceOf[Fault.Invalid])
-        _ <- denied(create(service, owner, memory(MemoryStatus.Current).copy(archived = true)))(_.isInstanceOf[Fault.Invalid])
+        explicit <- ZIO.foreach(List(decision(DecisionStatus.Adopted), memory(MemoryStatus.Current)))(draft => create(service, owner, draft.copy(archived = true)))
+        _ <- assertIO(explicit.map(_.id.ledger) == List(Ledger.Decisions, Ledger.Memories))
         archived <- service.change(owner, request(List(Mutation.Archive(List(supersededDecision, supersededMemory))), Nil))
         _ <- assertIO(archived.items.size == 2)
+      } yield ()
+    }
+
+    "accept explicitly archived settled records while bulk archival keeps refusing them" in { (service: LedgerService[IO]) =>
+      val owner = scope()
+      val adopted = task("Adopted decision").copy(content = Content.Decision(DecisionStatus.Adopted, "Choice", "Rationale", Nil))
+      val current = task("Current memory").copy(content = Content.Memory(MemoryStatus.Current, "Knowledge", "Applies here", Nil))
+      val refused = "Only terminal items may be archived; unarchive an item before reopening it"
+      for {
+        _ <- service.initialize(owner, "Explicit settled archival")
+        decision <- create(service, owner, adopted)
+        memory <- create(service, owner, current)
+        other <- create(service, owner, adopted.copy(title = "Still active decision"))
+        archived <- service.change(owner, request(List(Mutation.Replace(decision.id, decision.revision, adopted.copy(archived = true))), Nil))
+        kept <- service.change(owner, request(List(Mutation.Replace(decision.id, archived.items.head.revision, adopted.copy(archived = true, title = "Retitled"))), Nil))
+        stored <- service.get(owner, decision.id)
+        _ <- assertIO(kept.items.head.revision == Revision(3) && stored.item.draft.archived && stored.item.draft.title == "Retitled")
+        _ <- service.change(owner, request(List(Mutation.Replace(memory.id, memory.revision, current.copy(archived = true))), Nil))
+        _ <- create(service, owner, current.copy(title = "Created archived", archived = true))
+        preview <- service.archivePreview(owner, "archived:all", 50)
+        _ <- assertIO(preview.members.isEmpty && preview.retained.isEmpty)
+        _ <- denied(service.change(owner, request(List(Mutation.Archive(List(other))), Nil)))(_ == Fault.Invalid(refused))
+        active <- service.get(owner, other.id)
+        _ <- assertIO(!active.item.draft.archived && active.item.revision == other.revision)
+        proposed = adopted.copy(archived = true, content = Content.Decision(DecisionStatus.Proposed, "Choice", "Rationale", Nil))
+        _ <- denied(service.change(owner, request(List(Mutation.Replace(other.id, other.revision, proposed)), Nil)))(_ == Fault.Invalid("Only terminal or settled items may be archived; unarchive an item before reopening it"))
       } yield ()
     }
 
