@@ -16,6 +16,7 @@ import { faultMessage } from './faults.js';
 import { attemptsTable, outcomesTable, auditTable, sharedAssignmentsList } from './usage-view.js';
 import { formatAmount, MoneyDigits } from './money.js';
 import { TableColumns } from './table-columns.js';
+import { ItemsView } from './items-view.js';
 import { Notifications } from './notifications.js';
 import { ReferencePopup } from './references.js';
 import { QuestionBatch } from './questions.js';
@@ -59,7 +60,8 @@ class App {
   private activeQuery = '';
   private readonly items = element('tbody', '');
   private readonly sortHeaders = new Map<api.ItemOrderField, HTMLTableCellElement>();
-  private order = new api.ItemOrder(api.ItemOrderField.Id, api.SortDirection.Ascending, false);
+  private readonly itemsView = new ItemsView(localStorage, message => this.showError(message));
+  private order = this.itemsView.load();
   private readonly navigationCounts = new Map<api.Ledger | 'All', HTMLSpanElement>();
   private countsLoad: UsageLoad | null = null;
   private countsSnapshot: bigint | null = null;
@@ -260,8 +262,8 @@ class App {
       const cell = element('th', ''); cell.scope = 'col'; this.sortHeaders.set(field, cell);
       const label = field === 'Id' ? 'ID' : field === 'Modified' ? 'Last modified' : field;
       const control = button(label, () => this.action(async () => {
-        this.order = new api.ItemOrder(field, this.order.field === field && this.order.direction === 'Ascending' ? api.SortDirection.Descending : api.SortDirection.Ascending, false);
-        this.updateSort(); await this.search();
+        this.order = new api.ItemOrder(field, this.order.field === field && this.order.direction === 'Ascending' ? api.SortDirection.Descending : api.SortDirection.Ascending, this.order.grouped);
+        this.itemsView.store(this.order); this.updateSort(); await this.search();
       }));
       control.setAttribute('aria-label', `Sort by ${field === 'Id' ? 'ID' : label.toLowerCase()}`); cell.append(control); headings.append(cell);
     }

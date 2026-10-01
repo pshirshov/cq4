@@ -29,6 +29,8 @@ The query editor calls `QueryComplete` with the current text and caret position.
 
 Navigation shortcuts write a complete, visible query and use the same submission path. Result rows expose selection and status. Keyboard navigation stays within the visible page, with an explicit path into detail and back. Splitters support pointer and keyboard resizing with minimum widths. At narrow widths, stack or switch pane presentation while preserving selected item, query and draft; do not keep invisible focusable controls. Long IDs, queries, code and structured values wrap or scroll within their pane.
 
+The results table keeps its view state per browser: the sort field, direction and grouping mode are stored in local storage under `cq-items-view` as the `ItemOrder` JSON and applied to the first browse request after a reload. An unreadable or outdated value yields ID ascending without a notification and is replaced by the next change; a failed write is reported like a failed pane-layout write.
+
 Top-bar metrics identify their scope and last successful observation. Loading and stale values are labeled; missing counters are not rendered as zero. Forms expose labels, validation errors and pending-save state. Draft notices identify the project/item they belong to.
 
 ## Usage and synchronization

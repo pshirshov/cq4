@@ -20,6 +20,15 @@ export async function tableChecks(browser, storageState, origin, evidence) {
   const context = await browser.newContext({ storageState, viewport: { width: 1366, height: 768 } });
   await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
   const page = await context.newPage(); page.setDefaultTimeout(5000);
+  const browses = []; const errors = []; page.on('pageerror', error => errors.push(String(error)));
+  page.on('websocket', socket => socket.on('framesent', frame => {
+    const browse = JSON.parse(String(frame.payload)).Call?.command.Read?.input.selection.Browse; if (browse) browses.push(browse);
+  }));
+  const reopen = async () => {
+    browses.length = 0; await page.reload(); await page.getByText('Connection: ALIVE', { exact: true }).waitFor();
+    await page.getByLabel('Project', { exact: true }).selectOption(project.value); await page.getByText('Data: current', { exact: true }).waitFor();
+  };
+  const savedView = () => page.evaluate(() => JSON.parse(localStorage.getItem('cq-items-view')));
   const cases = []; const failures = [];
   const check = async (name, body) => { try { await body(); cases.push(name); } catch (error) { failures.push(`${name}: ${String(error)}`); } };
   try {
@@ -83,6 +92,35 @@ export async function tableChecks(browser, storageState, origin, evidence) {
       await page.getByRole('button', { name: 'All items', exact: true }).click();
       await page.getByText('Data: current', { exact: true }).waitFor();
       assert.equal(await page.getByRole('button', { name: 'D1 · Visible defect', exact: true }).count(), 0);
+    });
+    const table = page.getByRole('table', { name: 'Items', exact: true });
+    const sorted = (index, direction) => page.waitForFunction(([column, value]) =>
+      document.querySelectorAll('.items-table th')[column].getAttribute('aria-sort') === value, [index, direction]);
+    await check('I15 sort field and direction survive a reload', async () => {
+      const title = table.getByRole('button', { name: 'Sort by title', exact: true });
+      await title.click(); await sorted(1, 'ascending'); await title.click(); await sorted(1, 'descending');
+      assert.deepEqual(await savedView(), { field: 'Title', direction: 'Descending', grouped: false });
+      await reopen();
+      assert.equal(await table.getByRole('columnheader').nth(1).getAttribute('aria-sort'), 'descending');
+      assert.deepEqual(browses[0].order, { field: 'Title', direction: 'Descending', grouped: false });
+    });
+    await check('I15 malformed or outdated view state falls back to ID ascending and is overwritten', async () => {
+      for (const saved of ['{"field":"Title"', 'null', '{"field":"Title","direction":"Descending"}', '{"field":"Rank","direction":"Descending","grouped":false}']) {
+        await page.evaluate(value => localStorage.setItem('cq-items-view', value), saved);
+        await reopen();
+        assert.equal(await table.getByRole('columnheader').first().getAttribute('aria-sort'), 'ascending');
+        assert.deepEqual(browses[0].order, { field: 'Id', direction: 'Ascending', grouped: false });
+        assert.equal(await page.getByRole('alert').count(), 0); assert.deepEqual(errors, []);
+      }
+      await table.getByRole('button', { name: 'Sort by status', exact: true }).click(); await sorted(2, 'ascending');
+      assert.deepEqual(await savedView(), { field: 'Status', direction: 'Ascending', grouped: false });
+    });
+    await check('I15 a failed view-state write warns and keeps the chosen order', async () => {
+      await page.evaluate(() => { Storage.prototype.setItem = () => { throw new DOMException('Quota exceeded', 'QuotaExceededError'); }; });
+      await table.getByRole('button', { name: 'Sort by severity', exact: true }).click(); await sorted(3, 'ascending');
+      await page.getByRole('alert').getByText('Items view could not be saved in this browser.').waitFor();
+      await reopen();
+      assert.equal(await table.getByRole('columnheader').nth(2).getAttribute('aria-sort'), 'ascending');
     });
     await page.screenshot({ path: `${evidence}/table.png`, fullPage: true });
     assert.deepEqual(failures, []);
