@@ -33,9 +33,9 @@ final class WorkspaceCleanupLocal extends SpecZIO with AssertZIO {
       for {
         _ <- ZIO.foreachDiscard(List(settled, quarantined, running, pending))(spec => service.prepare(owner, spec))
         _ <- service.quarantine(owner, quarantined.attempt, "Termination unconfirmed")
-        expired <- WorkspaceCleanup.sweep(owner, records, Set(pending.attempt), service, clock, clock.millis())
-        report <- WorkspaceCleanup.sweep(owner, records, Set(pending.attempt), service, clock, deadline)
-        again <- WorkspaceCleanup.sweep(owner, records, Set(pending.attempt), service, clock, deadline)
+        expired <- WorkspaceCleanup.sweep(owner, records, Set(pending.attempt), service, clock, clock.millis(), () => ())
+        report <- WorkspaceCleanup.sweep(owner, records, Set(pending.attempt), service, clock, deadline, () => ())
+        again <- WorkspaceCleanup.sweep(owner, records, Set(pending.attempt), service, clock, deadline, () => ())
         states <- ZIO.foreach(List(settled, quarantined, running, pending))(spec => service.get(owner, spec.attempt))
         _ <- ZIO.attemptBlocking {
           assert(expired.deadlineExceeded && expired.removed.isEmpty && expired.quarantined.isEmpty &&

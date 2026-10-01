@@ -11,13 +11,14 @@ import zio.{IO, Task, ZIO}
 final case class WorkspaceCleanupReport(removed: List[AttemptId], quarantined: List[RetainedWorkspace], retained: List[RetainedWorkspace], deadlineExceeded: Boolean)
 
 object WorkspaceCleanup {
-  /** Upper bound of one session's shutdown sweep; the supervisor watchdog extends its halt deadline by this much. */
+  /** Upper bound of one session's shutdown sweep; the supervisor watchdog extends its halt deadline by at most this much, one drain window per completed Git operation. */
   val Budget: Duration = Duration.ofMinutes(5)
   val DeadlineExceeded = "Cleanup deadline exceeded"
   private val MaxReceiptBytes = 65536
 
-  /** Removes the workspace of every settled job whose record is open and which no pending integration references, until `deadline` (epoch millis); everything else is retained with its reason. */
-  def sweep(owner: Scope, records: List[JobRecord], pending: Set[AttemptId], workspaces: WorkspaceService[IO], clock: Clock, deadline: Long): Task[WorkspaceCleanupReport] =
+  /** Removes the workspace of every settled job whose record is open and which no pending integration references, until `deadline` (epoch millis), reporting each completed Git operation to `progress`; everything else is retained with its reason. */
+  def sweep(owner: Scope, records: List[JobRecord], pending: Set[AttemptId], workspaces: WorkspaceService[IO], clock: Clock, deadline: Long,
+    progress: () => Unit): Task[WorkspaceCleanupReport] =
     ZIO.foldLeft(records.sortBy(_.workspace.attempt.value.toString))(WorkspaceCleanupReport(Nil, Nil, Nil, false)) { (report, record) =>
       val attempt = record.workspace.attempt
       def retain(reason: String): WorkspaceCleanupReport = report.copy(retained = report.retained :+ RetainedWorkspace(attempt, reason))
@@ -35,20 +36,20 @@ object WorkspaceCleanup {
             case Right(removed) if removed.admission == WorkspaceAdmission.Removed => report.copy(removed = report.removed :+ attempt)
             case Right(refused) => quarantined(refused.quarantineReason.getOrElse("Removal refused"))
             case Left(error) => retain("Removal failed: " + Option(error.getMessage).getOrElse(error.getClass.getSimpleName))
-          }
+          }.tap(_ => ZIO.succeed(progress()))
         }
       }
     }
 }
 
 final class WorkspaceCleanup(config: SupervisorConfig, jobs: JobSupervisor, workspaces: WorkspaceService[IO],
-  integrations: IntegrationController, clock: Clock, logger: IzLogger) {
+  integrations: IntegrationController, watchdog: SupervisorWatchdog, clock: Clock, logger: IzLogger) {
   import WorkspaceCleanup.*
   /** Governing-session shutdown housekeeping: runs after every controller has settled its work, records `workspaces/cleanup.json` and never fails the session. */
   def run: Task[Unit] = (for {
     startedAt <- ZIO.succeed(clock.millis())
     records <- jobs.records(config.owner)
-    report <- sweep(config.owner, records, integrations.pendingJobs, workspaces, clock, startedAt + Budget.toMillis)
+    report <- sweep(config.owner, records, integrations.pendingJobs, workspaces, clock, startedAt + Budget.toMillis, () => watchdog.progress())
     _ <- ZIO.attemptBlocking {
       val receipt = WorkspaceCleanupReceipt(config.owner.actor.session, startedAt, clock.millis(), report.deadlineExceeded,
         report.removed, report.quarantined, report.retained)
