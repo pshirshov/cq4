@@ -1,5 +1,7 @@
 package cq.server
 
+import cq.host.WorkflowCatalog
+
 object CliHelp {
   def requested(args: List[String]): Boolean = args.isEmpty || args.headOption.contains("help") ||
     (args.lastOption.contains("--help") && args.dropRight(1).forall(!_.startsWith("--")))
@@ -153,9 +155,9 @@ HARNESS is claude, codex or pi. Then launch that harness directly.
 Example: cq configure codex --settings .local/interactive/settings.json
 Credentials are read by the attached host; forward CQ_TOKEN_FILE into the sandbox.
 """
-      case Some("commands") => """Usage: cq commands export HARNESS --directory DIR [--replace] [--json]
+      case Some("commands") => s"""Usage: cq commands export HARNESS --directory DIR [--replace] [--json]
 
-Export the four CQ workflows (begin, advance, review, upstream) as native harness
+Export the four CQ workflows (${WorkflowCatalog.commands.map(_.command).mkString(", ")}) as native harness
 commands or skills. HARNESS is claude, codex or pi; DIR must already exist.
   --replace   Replace existing CQ command assets
   --json      Emit the list of written paths
@@ -175,18 +177,13 @@ Run the durable HTTP/WebSocket server. Required environment:
 For the local package/database launcher, use ./run-local.sh.
 Use 'cq --diagnostics serve' for debug logs on stderr.
 """
-      case Some("run") => """Usage: cq run HARNESS --settings FILE --input FILE [WORKFLOW OPTIONS]
+      case Some("run") => s"""Usage: cq run HARNESS --settings FILE --input FILE [WORKFLOW OPTIONS]
 
 Govern a batch claude, codex or pi session. Structured output is intended for
 automation; this is separate from directly launching an interactive harness.
   --settings FILE   Required supervisor settings file
   --input FILE      Governing session input
-  --workflow NAME   begin, advance, review or upstream
-  --roots IDS       Comma-separated roots (optional for begin; required for advance/upstream)
-  --through PHASE   advance: explore, plan, work, review or integrate
-  --result UUID     review: stored result artifact
-  --mode MODE       review: candidate, plan or audit
-  --action ACTION   upstream: prepare, report or recheck
+${WorkflowCatalog.optionHelp}
 
 Example: cq run codex --settings ./cq-settings.json --input ./request.txt
 """
