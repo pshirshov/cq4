@@ -1,6 +1,7 @@
 package cq.host
 
-import cq.api.DispatchWork
+import cq.api.{CycleToken, DispatchWork, Fault}
+import cq.core.DomainFailure
 
 /** The operator's governing request text for the current session: the batch input file, or the text supplied at attached workflow activation. */
 final class OperatorRequirements(initial: String) {
@@ -17,6 +18,19 @@ object OperatorRequirements {
     if (count <= MaxCodePoints) text
     else text.substring(0, text.offsetByCodePoints(0, MaxCodePoints)) +
       s"\n[operator requirements truncated by the host: $MaxCodePoints of $count code points delivered]"
+  }
+
+  val TokenLeak = "operatorRequirements carries this activation's CQ driver token; pass the token only in Workflow.token and leave the driver flags out of operatorRequirements"
+
+  // A driver token authorizes one activation and travels only in `Workflow.token`. The requirements text is delivered to children, so a
+  // text that carries the activation's token is refused before the token is presented to the server; the session can activate again without it.
+  def admitted(text: String, token: Option[CycleToken]): String = {
+    val value = token.map {
+      case CycleToken.Start(value) => value
+      case CycleToken.Resume(value) => value
+    }
+    if (value.exists(found => text.toLowerCase(java.util.Locale.ROOT).contains(found.value.toString))) throw DomainFailure(Fault.Invalid(TokenLeak))
+    text
   }
 
   def delivered(work: DispatchWork, text: String): Option[String] = work match {

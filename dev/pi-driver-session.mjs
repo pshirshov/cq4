@@ -93,7 +93,7 @@ function activation(text) {
   assert(match !== null, text);
   const roots = match[1].split(",").map(value => [target, outsider, other].find(item => reference(item.id) === value).id);
   const through = match[2][0].toUpperCase() + match[2].slice(1);
-  return { Workflow: { id: identity(), request: { Advance: { roots, through } }, operatorRequirements: text,
+  return { Workflow: { id: identity(), request: { Advance: { roots, through } }, operatorRequirements: `/cq:advance --roots ${match[1]} --through ${match[2]}`,
     token: { [match[3] === "start" ? "Start" : "Resume"]: { token: { value: match[4] } } } } };
 }
 async function activate(pi) {

@@ -200,7 +200,10 @@ def main():
             words = issued["text"].split(" ")
             assert words[:6] == ["$cq-advance", "--roots", reference, "--through", "explore", "--start-token"] and len(words) == 7, issued
             advance = {"Advance": {"roots": [target["id"]], "through": "Explore"}}
-            directed = {"Workflow": {"id": identity(), "request": advance, "operatorRequirements": issued["text"], "token": {"Start": {"token": {"value": words[6]}}}}}
+            # The token travels only in Workflow.token: requirements text that carries it is refused before the token is presented, so a clean retry activates.
+            leaking = {"Workflow": {"id": identity(), "request": advance, "operatorRequirements": issued["text"], "token": {"Start": {"token": {"value": words[6]}}}}}
+            assert "pass the token only in Workflow.token" in json.dumps(driven.tool("session", leaking, denied=True))
+            directed = {"Workflow": {"id": identity(), "request": advance, "operatorRequirements": f"Driven fixture: advance {reference} through explore", "token": {"Start": {"token": {"value": words[6]}}}}}
             run = driven.tool("session", directed)["Workflow"]["value"]
             assert run["cycle"] == issued["cycle"] and driven.tool("session", directed)["Workflow"]["value"] == run, run
             assert driven.tool("session", {"Context": {}})["Context"]["value"]["workflow"]["cycle"] == issued["cycle"]
@@ -233,6 +236,35 @@ def main():
             driven.refused("cq/driver", {"Status": {"session": "attached-fixture-session"}})
             assert control("Stop", {"Continue": {}})["Stop"]["stopped"]["reason"] == "Off"
             change([{"Replace": {"id": outsider["id"], "expected": outsider["revision"], "draft": {**draft, "title": "Driver off: written as before"}}}], [])
+            # The hook entry points as Codex runs them: the commands `cq configure` generated, the hook payload on stdin, the hook output on stdout.
+            generated = json.loads((repository / ".codex/hooks.json").read_text())["hooks"]
+            def hook(event, session, **fields):
+                installed, = [handler["command"] for group in generated[event] for handler in group["hooks"]]
+                assert shlex.split(installed) == [str(wrapper), "hook", "codex", event], installed
+                payload = {"turn_id": str(uuid.uuid4()), "cwd": str(repository), "hook_event_name": event, "model": "fixture-model", "permission_mode": "default", **fields}
+                if session is not None:
+                    payload["session_id"] = session
+                result = subprocess.run(shlex.split(installed), cwd=repository, env=env, input=json.dumps(payload), capture_output=True, text=True, timeout=60)
+                assert result.returncode == 0, result
+                return json.loads(result.stdout) if result.stdout else None
+            hooked = "attached-fixture-hook-session"
+            assert hook("UserPromptSubmit", hooked, prompt="Reply with exactly: HELLO") is None
+            assert hook("Stop", hooked, stop_hook_active=False, last_assistant_message="HELLO") is None
+            assert "rejected: Drive targets are empty" in hook("UserPromptSubmit", hooked, prompt="$cq-drive through=explore")["systemMessage"]
+            driving = hook("UserPromptSubmit", hooked, prompt=f"$cq-drive {reference} through=explore")
+            offered = driving["hookSpecificOutput"]["additionalContext"]
+            assert driving["hookSpecificOutput"]["hookEventName"] == "UserPromptSubmit" and offered.startswith(f"CQ driver drive-start: CQ driver binding: {reference} through explore"), driving
+            printed, = [line for line in offered.splitlines() if '{"Bind":' in line]
+            hook_bound = driven.tool("session", json.loads(printed[printed.index('{"Bind":'):]))["Driver"]["reply"]["Bound"]["status"]
+            assert hook_bound["state"] == "On" and hook_bound["key"] == {"harness": "Codex", "session": hooked} and hook_bound["attached"] == driven_session, hook_bound
+            blocked = hook("Stop", hooked, stop_hook_active=False, last_assistant_message="Bound.")
+            assert blocked["decision"] == "block" and blocked["reason"].splitlines()[-1].startswith(f"$cq-advance --roots {reference} --through explore --start-token "), blocked
+            assert hook("UserPromptSubmit", hooked, prompt="$cq-park")["systemMessage"] == f"CQ driver park: CQ driver parked: {reference} through explore"
+            assert hook("Stop", hooked, stop_hook_active=True, last_assistant_message="Parked.") is None
+            assert hook("Stop", None, stop_hook_active=False) == {"systemMessage": "CQ Stop hook error: Driver session key is missing; no default session is used"}
+            status_line = json.loads((repository / ".claude/settings.local.json").read_text())["statusLine"]["command"]
+            shown = subprocess.run(shlex.split(status_line), cwd=repository, env=env, input=json.dumps({"session_id": "attached-fixture-status"}), capture_output=True, text=True, timeout=60)
+            assert shlex.split(status_line) == [str(wrapper), "hook", "claude", "StatusLine"] and shown.returncode == 0 and shown.stdout == "CQ driver off\n", shown
         finally:
             driven.close()
     print(json.dumps({"drivenSession": driven_session, "cycle": issued["cycle"], "lineage": members(settled), "stop": stop["stopped"]}))
