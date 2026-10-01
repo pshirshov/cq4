@@ -106,6 +106,7 @@ object LedgerPolicy {
     case _ => false
   }
   def settled(item: ItemSummary): Boolean = settled(item.id.ledger, item.status)
+  def settled(content: Content): Boolean = settled(ledger(content), status(content))
 
   // Open work: neither terminal nor settled; an open item is also unarchived.
   def open(ledger: Ledger, status: String): Boolean = !outcome(ledger, status).terminal && !settled(ledger, status)
@@ -144,7 +145,7 @@ object LedgerPolicy {
   }
 
   def validate(draft: ItemDraft): Unit = {
-    invalid(!draft.archived || outcome(draft.content).terminal, "Only terminal items may be archived; unarchive an item before reopening it")
+    invalid(!draft.archived || outcome(draft.content).terminal || settled(draft.content), "Only terminal or settled items may be archived; unarchive an item before reopening it")
     invalid(draft.title.trim.nonEmpty && draft.title.length <= MaxTitle, s"Title must contain 1–$MaxTitle characters")
     invalid(draft.body.length <= MaxBody, s"Body exceeds $MaxBody characters")
     invalid(draft.labels.size <= MaxLabels && draft.labels.forall(s => s.trim.nonEmpty && s.length <= MaxLabel), "Invalid labels")
