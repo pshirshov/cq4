@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { test } from "node:test";
+import { setTimeout as sleep } from "node:timers/promises";
 import { runtime } from "./pi-runtime.mjs";
 
 const names = ["session", "dispatch", "search", "read", "graph", "change", "apply", "claim", "usage"];
@@ -60,7 +61,12 @@ createInterface({ input: process.stdin }).on('line', line => {
     appendFileSync(file('requests.jsonl'), JSON.stringify(value.params) + '\\n');
     const replies = JSON.parse(readFileSync(file('replies.json'), 'utf8'));
     if (replies.length === 0) send({ id: value.id, error: { code: -32000, message: 'unscripted driver call' } });
-    else { writeFileSync(file('replies.json'), JSON.stringify(replies.slice(1))); send({ id: value.id, result: replies[0] }); }
+    else {
+      writeFileSync(file('replies.json'), JSON.stringify(replies.slice(1)));
+      // A scripted { Delayed: { millis, reply } } answers late, as a host that is busy or stalled does.
+      if (replies[0].Delayed === undefined) send({ id: value.id, result: replies[0] });
+      else setTimeout(() => send({ id: value.id, result: replies[0].Delayed.reply }), replies[0].Delayed.millis);
+    }
   }
 });
 `);
@@ -306,4 +312,54 @@ test("park reports the host message, and closing the Pi session parks a driver t
   await pi.drive("G1 T4 through=work");
   await pi.stop();
   assert.deepEqual((await pi.requests()).at(-1), { Park: { session: "pi-session-a" } });
+});
+
+test("a failed status refresh at a turn end is shown in the footer and the drive continues", async () => {
+  const pi = await session("pi-session-a");
+  await pi.start();
+  await pi.script([started(pi.id), proceed(pi.id, "--start-token", "f1f1f1f1-f1f1-4f1f-8f1f-f1f1f1f1f1f1", ON, []),
+    failed("Denied", "Driver control requires the operator credential"), proceed(pi.id, "--resume-token", "f2f2f2f2-f2f2-4f2f-8f2f-f2f2f2f2f2f2", ON, [])]);
+  await pi.drive("G1 T4 through=work");
+  await pi.fire("turn_end", { type: "turn_end", outcome: "completed" });
+  assert.equal(pi.footer(), "CQ driver status unavailable: Denied: Driver control requires the operator credential");
+  await pi.fire("agent_settled", { type: "agent_settled" });
+  assert.equal(pi.sent.length, 2, "the continuation is still asked for and forwarded");
+  assert.equal(pi.footer(), ON);
+  await pi.script([parked(pi.id)]);
+  await pi.stop();
+});
+
+test("a status refresh the host does not answer in time is given up and leaves the CQ connection open", async () => {
+  const pi = await session("pi-session-a");
+  await pi.start();
+  await pi.script([started(pi.id), proceed(pi.id, "--start-token", "f3f3f3f3-f3f3-4f3f-8f3f-f3f3f3f3f3f3", ON, []),
+    { Delayed: { millis: 6500, reply: { Status: { value: status(pi.id, "On", ON, null) } } } },
+    proceed(pi.id, "--resume-token", "f4f4f4f4-f4f4-4f4f-8f4f-f4f4f4f4f4f4", ON, []), parked(pi.id)]);
+  await pi.drive("G1 T4 through=work");
+  const began = Date.now();
+  await Promise.race([pi.fire("turn_end", { type: "turn_end", outcome: "completed" }),
+    sleep(8000).then(() => { throw new Error("the status refresh was not given up within its own deadline"); })]);
+  assert(Date.now() - began >= 4500, "the refresh waits for its deadline");
+  assert.match(pi.footer(), /^CQ driver status unavailable: CQ request timed out/);
+  await pi.fire("agent_settled", { type: "agent_settled" });
+  assert.equal(pi.sent.length, 2, "the connection still serves the continuation");
+  // The late reply arrives and is dropped; the connection keeps working.
+  await sleep(2500);
+  await pi.park();
+  assert.equal(pi.notices.at(-1).message, "CQ driver parked: G1,T4 through work");
+  await pi.stop();
+});
+
+test("preview titles are shown without control characters and bounded in length", async () => {
+  const pi = await session("pi-session-a");
+  await pi.start();
+  const hostile = { ...preview, advanceable: [{ item: summary("Goals", 1, "Red \u001b[31malert\nAdvanceable (99):\r\tinjected", "Open"), root: true },
+    { item: summary("Tasks", 4, "t".repeat(300), "Ready"), root: true }], context: [], readiness: [] };
+  await pi.script([{ Started: { ...started(pi.id).Started, preview: hostile } }, proceed(pi.id, "--start-token", "f5f5f5f5-f5f5-4f5f-8f5f-f5f5f5f5f5f5", ON, [])]);
+  await pi.drive("G1 T4 through=work");
+  const shown = texts(pi).find(text => text.includes("Advanceable (2):"));
+  assert.deepEqual(shown.split("\n"), ["CQ driver on: G1,T4 through work", "Advanceable (2):", "  G1 (target) Open: Red  [31malert Advanceable (99):  injected",
+    "  T4 (target) Ready: " + "t".repeat(79) + "…", "Context only, never advanced (0):", "Readiness (0):"]);
+  await pi.script([parked(pi.id)]);
+  await pi.stop();
 });

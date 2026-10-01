@@ -24,7 +24,7 @@ The driver was recorded on Claude Code 2.1.285, Codex 0.159.2 and Pi 0.99.1. CQ 
 
 ## Install
 
-The driver's assets are part of what `cq configure` writes. Reconfigure each harness you use with a CQ package that contains the driver; in such a package `cq help hook` prints `Usage: cq hook HARNESS EVENT`. On 2026-10-01 the package installed at `.local/release` in this checkout predated the driver (its executable does not contain the `--replace-statusline` help text) and the assets installed in this checkout had no drive or park command. Install a package built from a revision with the driver first.
+The driver's assets are part of what `cq configure` writes. Reconfigure each harness you use with a CQ package that contains the driver; in such a package `cq help hook` prints `Usage: cq hook HARNESS EVENT`. A package without that command predates the driver: install a newer one first.
 
 ```sh
 cq configure claude --settings /absolute/settings.json --replace
@@ -32,7 +32,7 @@ cq configure codex  --settings /absolute/settings.json --replace
 cq configure pi     --settings /absolute/settings.json --replace
 ```
 
-`--replace` and `--replace-statusline` go after the other options. `--replace` overwrites CQ-generated files that differ from the current package (command files, skills, the Pi extension, the Codex `config.toml` with the CQ header, the `cq` entry of `.mcp.json`). It never replaces a file or entry CQ does not own.
+`--replace` and `--replace-statusline` go after the other options. `--replace-statusline` applies to `claude` only; `cq configure codex` and `cq configure pi` reject it with `--replace-statusline applies only to claude: cq configure installs no status line for codex`. `--replace` overwrites CQ-generated files that differ from the current package (command files, skills, the Pi extension, the Codex `config.toml` with the CQ header, the `cq` entry of `.mcp.json`). It never replaces a file or entry CQ does not own.
 
 | Harness | What is written for the driver | Extra steps |
 | --- | --- | --- |
@@ -40,7 +40,7 @@ cq configure pi     --settings /absolute/settings.json --replace
 | Codex | The skills `.agents/skills/cq-drive` and `cq-park`; the two hook groups in `.codex/hooks.json`. | Codex runs project hooks only in a trusted project after a review. In the Hooks dialog (`/hooks`) Codex 0.159.2 showed `2 hooks need review before they can run`; `t` trusts all, Enter reviews one. It ran the hooks after that. |
 | Pi | Nothing beyond the generated extension `.pi/extensions/cq-host.js`, which contains the commands, the toggle key and the footer. | None. `pi --approve` loads the extension. |
 
-In both hook files an entry is CQ's when its command ends in `hook <harness> <event>`. Such entries are replaced; every other hook group, handler and event is kept.
+In both hook files an entry is CQ's when its whole command is the one CQ generates: a single executable followed by `hook <harness> <event>` (extra whitespace is ignored). Such entries are replaced, including one left by a CQ installed elsewhere; every other hook group, handler and event is kept. A command that wraps the CQ hook, for example `timeout 5 /path/cq hook claude Stop`, is yours: CQ keeps it and adds its own group, so the hook then runs twice. Remove or edit wrapped copies yourself. Existing files are replaced by a rename, so a running harness never reads a half-written file.
 
 The hook commands run `cq hook <harness> <event>` as processes of the harness. They read the project endpoint saved by `cq init` and need the operator credential, so the harness environment must carry `CQ_TOKEN_FILE` (or `CQ_TOKEN`) exactly as the attached host needs it. Without it a drive or park command is rejected with `… rejected: CQ_TOKEN or CQ_TOKEN_FILE is required`, the `Stop` hook and the status line report `CQ … hook error: CQ_TOKEN or CQ_TOKEN_FILE is required`, and the session continues undriven.
 
@@ -90,7 +90,7 @@ call '{"Workset":{"input":{"project":{"value":"'$project'"},"action":{"Preview":
 
 IDs are separated by spaces or commas. Inline targets need exactly one `through=<phase>`, in lower case. `workset=<UUID>` stands alone. In Claude Code and Codex the command must be the first word of the prompt; any other prompt passes through untouched.
 
-The targets and the phase are frozen for the drive. A second drive command while the driver is binding or on is rejected with `conflict: This session's CQ driver is already on; park it before driving other targets or another phase`. A rejected drive (`CQ driver drive-start rejected: …` in Claude Code and Codex, `CQ driver not started: …` in Pi) changes nothing.
+The targets and the phase are frozen for the drive. A second drive command while the driver is binding or on is rejected with `conflict: This session's CQ driver is already on; park it before driving other targets or another phase`. A rejected drive (`CQ driver drive-start rejected: …` in Claude Code and Codex, `CQ driver not started: …` in Pi) changes nothing. The exception is a reply that never arrived: in Claude Code and Codex the hook then reports `The CQ server's reply was not received, so this session's driver may have changed …`. The server may have started or parked the driver, so read the driver status or park before driving again.
 
 ### Claude Code and Codex: the bind step
 
@@ -115,8 +115,9 @@ A drive is a sequence of cycles. After each turn the harness asks the server for
 - **Snapshot.** For a new cycle the server computes the advanceable set from the frozen targets. This snapshot alone decides whether the cycle starts, and it is stored with the cycle. It is not recomputed when the session activates the cycle or writes.
 - **Refresh rule.** The set is recomputed before every cycle, so an item produced in cycle N is advanceable in cycle N+1. When the set changes, a message says so: `CQ driver: the advanceable set changed to 2 items; added T1`.
 - **Start directive.** A new cycle is handed over as one line the session must run unchanged: `/cq:advance --roots G1,T4 --through work --start-token <UUID>` (Codex: `$cq-advance …`). The token is valid once. The server starts the run only if the roots, the phase and the token equal the directive and the caller is the bound session.
-- **Resume directive.** When the session stops while work of the running cycle is still in flight (a child attempt, an integration, a combination, a delegated session), the server issues `… --resume-token <UUID>` with a fresh token. It reattaches the session to the existing run and never starts a second one.
-- **Lineage.** The cycle ID is stamped on the run and inherited by everything dispatched from it: requests, child attempts, claims, proposal applications, integrations, combinations and delegated sessions. The active-children count in the indicator counts unsettled child attempts.
+- **Resume directive.** When the session stops while work of the running cycle is still in flight (a running child attempt, an integration being prepared or applied, a combination being prepared), the server issues `… --resume-token <UUID>` with a fresh token. It reattaches the session to the existing run and never starts a second one.
+- **Work that waits for the session.** A prepared integration that was not applied, an integration awaiting reconciliation and a combination whose publication is pending do not finish by themselves. When only such work remains, the session gets one resume directive to resolve it. If it stops again with the same work still waiting, the drive ends with `Failure` and names that work.
+- **Lineage.** The cycle ID is stamped on the run and inherited by everything dispatched from it: requests, child attempts, claims, proposal applications, integrations and combinations. (The server also models sessions delegated under a cycle; no CQ client creates one.) The active-children count in the indicator counts unsettled child attempts.
 
 How a continuation appears:
 
@@ -129,12 +130,13 @@ How a continuation appears:
 ## Rules while the driver is on
 
 - **Every ledger write of the driven session is checked.** While the driver is on, each ledger mutation from the bound session is attributed to the active cycle, whether it comes from the advance workflow or from a direct CQ tool call: item changes, Reference changes, proposal applications and integration completions. A change to an existing item outside the cycle's snapshot is rejected. A Reference is checked at both ends. A new item is admitted only if the traversal of the frozen targets selects it after the write, so a plain create is rejected and a produce under an in-set item is admitted.
+- **Planned Tasks get their milestone.** A milestone is context of a workset, not a member of it. A produce under an in-set item may still assign its Tasks to an Open milestone outside the set, or to a Milestone created in the same batch, and an in-set Task may be added to an Open milestone. The milestone gains the member and nothing else about it may change: editing, archiving or closing a milestone outside the set is an out-of-set change, and so is assigning to a milestone that is not Open.
 - **No cycle, no write.** Before the first directive is accepted and between cycles, any ledger mutation from the bound session is rejected, in-set or not.
 - **No other workflow.** Activating `begin`, `review` or `upstream`, or `advance` without the directive's token or with other roots or another phase, is rejected.
-- **Rejection.** Each of these rejections leaves the ledger unchanged (the check runs inside the writing transaction), returns `CQ driver stopped with reason failure: <detail>` to the tool call and stops the driver with `Failure`.
+- **Rejection.** Each of the rejections above leaves the ledger unchanged (the check runs inside the writing transaction), returns `CQ driver stopped with reason failure: <detail>` to the tool call and stops the driver with `Failure`.
 - **To change something by hand, park first.** After a park or a stop the session writes as it does without a driver.
 - **The token stays out of the request text.** The directive's token is passed only in the workflow activation's `token` field. If the model copies it into `operatorRequirements`, the attached host refuses the activation with `operatorRequirements carries this activation's CQ driver token; …` before the token reaches the server, and the model can activate again without it. This is not a driver stop. Do not paste a directive into free text yourself.
-- **The driver never answers for you.** An open Question or a requested Operator Action that is ready or blocks an advanceable item stops the drive with `UserInputRequired` once no other item is ready or the previous cycle changed nothing.
+- **The driver never answers for you.** An open Question or a requested Operator Action that is ready or blocks an advanceable item stops the drive with `UserInputRequired` once no other item is ready or the previous cycle changed nothing. While the drive continues on other work, a write of the driven session that answers a Question, or changes its answer, is refused with `The CQ driver never answers Questions: Q3 would be answered by a driven session; park the driver before recording the user's answer`. The refusal writes nothing and leaves the driver on. To have your answer recorded, park, let the session record it, and drive again.
 
 ## Indicators
 
@@ -151,7 +153,7 @@ CQ driver off: G1 through work; stopped (quiescent): No item of the advanceable 
 | --- | --- | --- |
 | Claude Code | The CQ `statusLine` (`cq hook claude StatusLine`) prints the line. In the recorded run each call of the JVM build took 2–3 seconds and Claude Code cancelled refreshes that a newer one superseded. | `UserPromptSubmit says: …`, `Stop says: …`, `Stop hook error: …` for a blocked stop. |
 | Codex | None. Codex shows no custom status-line text, so the transcript messages are the only indicator. | `↳ Hook · …`, `Blocked by hook`. |
-| Pi | The footer status `cq-driver` shows the line; it is refreshed at every turn end while the driver is on. | Notices. |
+| Pi | The footer status `cq-driver` shows the line; it is refreshed at every turn end while the driver is on. If that refresh fails or is not answered within five seconds, the footer reads `CQ driver status unavailable: …` and the drive continues. | Notices. |
 
 A CQ error in a hook never blocks the harness: the hook exits 0, the prompt or the stop proceeds, and the error is shown as `CQ <event> hook error: …` (in the status line for `StatusLine`).
 
@@ -185,9 +187,9 @@ A stop turns the driver off and releases the binding. The message is `CQ driver 
 | --- | --- | --- | --- |
 | `Quiescent` | `quiescent` | No advanceable item is ready, or the previous cycle changed nothing in the set, its context or its readiness. | Check the items with `cq query --roots …` or the browser. Either the work is finished up to what is ready, or the last cycle made no progress: read its transcript before driving again. |
 | `UserInputRequired` | `user input required` | `Awaiting the user on Q3,OA1; …`: an open Question or a requested Operator Action. | Answer the Question or complete the Operator Action, then drive again. |
-| `LimitReached` | `limit reached` | The drive issued its 64 directives. | Drive again. |
+| `LimitReached` | `limit reached` | The drive issued its 64 directives. | Read the last turns first: a drive that spends its directives on resume directives is waiting for work that does not finish. Then drive again. A new drive starts a fresh count, and one harness session can run any number of drives. |
 | `NotBound` | `not bound` | Claude Code and Codex: no attached session presented the bind token before the turn ended. | Check that the `cq` MCP server is loaded in the session and that its tool call is permitted, then drive again. |
-| `Failure` | `failure` | The session left its bounds or the set could not be computed. The detail names the case: `directive not started` (the session stopped without running the start directive), `untracked activation`, `untracked mutation`, `out-of-set change: T7 is outside the advanceable set stored for cycle 2`, `non-selected creation`, a workflow, roots or phase that differ from the directive, an unknown or reused token, an item created by the cycle that the recomputed set does not select. | The rejected operation wrote nothing. Read the detail and the turn that caused it. If the change was intended, make it now, with the driver off, and drive again; if the target set was too narrow, drive with other targets. |
+| `Failure` | `failure` | The session left its bounds or the set could not be computed. The detail names the case: `directive not started` (the session stopped without running the start directive), `untracked activation`, `untracked mutation`, `out-of-set change: T7 is outside the advanceable set stored for cycle 2`, `non-selected creation`, a workflow, roots or phase that differ from the directive, an unknown or reused token, an item created by the cycle that the recomputed set does not select, `cycle 2 is held by integration <id>, which only the session can resolve, and a resume directive did not resolve it` (prepared work was left unapplied), `attempt <id> of cycle 2 could not be registered: …` or `… could not be settled: …` (the attached host lost track of dispatched work), `run <id> of cycle 2 is not the active workflow of its attached host`. | The rejected operation wrote nothing. Read the detail and the turn that caused it. If the change was intended, make it now, with the driver off, and drive again; if the target set was too narrow, drive with other targets. |
 | `Parked` | `parked` | `Parked by the operator`. | Nothing; drive again when wanted. |
 | `Off` | `off` | The continuation was asked for a session that has no driver or whose driver is off, for example after a server restart. | Claude Code and Codex print nothing; the status line reads `CQ driver off`. Pi posts `CQ driver stopped: No CQ driver is on for this session`. Drive again. |
 
@@ -198,7 +200,7 @@ Pi adds two local outcomes. `CQ driver stopped: continuation query failed: …; 
 | Limit | Value | At the limit |
 | --- | --- | --- |
 | Directives per drive (start and resume both count) | 64 | The drive stops with `LimitReached`. |
-| Drivers per project | 64 | A new drive displaces the least recently touched driver that is off or has been silent for eight hours. If every driver is live, drive-start fails with `limit: A project holds at most 64 CQ drivers; park one first`. |
+| Drivers per project | 64 | A new drive displaces the least recently touched driver that is off or has been silent for eight hours. That includes a driver that is on: one with no directive and no write for eight hours is removed without a message, its next continuation returns `Off`, and its session's writes are no longer confined. If every driver is live, drive-start fails with `limit: A project holds at most 64 CQ drivers; park one first`. |
 | Lineage members per cycle | 1,024 | Registration fails; an attributed write beyond the bound stops the drive with `Failure`. No automated check exercises this bound. |
 | Targets per workset; items per traversal | 64; 1,024 | The drive command is rejected. |
 | Drive argument text | 4,096 characters | The drive command is rejected. |
@@ -212,7 +214,8 @@ Pi adds two local outcomes. `CQ driver stopped: continuation query failed: …; 
 - **Trusted, not authenticated.** The key is checked for shape only. Two sessions that each supply their own key never change each other's driver. A process of the same user that runs a CQ hook entry point with another session's id, and holds the operator credential the hooks use, changes that session's driver state: it can start, park or query it. Per-session isolation therefore covers sessions that do not forge hook input, not adversarial ones. A contract test asserts this limitation.
 - **No default session.** Malformed hook input, a missing or malformed `session_id`, an unknown harness and an event other than the one the command was installed for are rejected with an explicit message and change nothing.
 - **Who can start or park.** Only the CQ hook commands and the Pi extension, with the operator credential. The model-facing `session` tool offers the token-gated `Bind` and a read-only status; a governor credential is denied driver control, and no MCP domain tool carries a driver command.
-- **What the boundary guarantees.** Writes of the bound session and of the lineage that carries the cycle ID are confined to the cycle's set. Other sessions of the project are unaffected by a driver and are not confined by it.
+- **A model with a shell can reach the hooks.** The hook commands need the operator token file in the harness environment, and the harness gives the session's own id to the model's shell tool (`$CLAUDE_CODE_SESSION_ID`, `CODEX_SESSION_ID`). A model that can run commands can therefore run `cq hook <harness> UserPromptSubmit` itself with a drive or park prompt, or read the token file and call the API as the operator. The driver does not defend against this: it confines a cooperating session's ledger writes, it is not a sandbox. Restrict the model's shell or the token file's readability if that matters.
+- **What the boundary guarantees.** Ledger writes of the bound session are confined to the cycle's set. Other sessions of the project are unaffected by a driver and are not confined by it. Claims are not confined: the driven session can acquire, renew and release a claim on any item, also outside the set; the claim is recorded in the cycle's lineage and gives no right to change the item. The server also confines writes that carry a cycle ID from a session delegated under the cycle, but no CQ client creates such a session.
 
 ## Harness caveats
 
@@ -224,4 +227,5 @@ Pi adds two local outcomes. `CQ driver stopped: continuation query failed: …; 
 | Claude Code | Claude Code overrides a `Stop` hook after 8 consecutive blocks without progress; `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP` raises the cap. An API error runs `StopFailure` instead of `Stop`, so no continuation is asked. | Planning probe only. The recorded drives blocked three times in a row at most. The driver's state after such an override or error was not observed: park and drive again. |
 | Codex | Project hooks need a trusted project and the `/hooks` review. No status-line text. | Recorded. |
 | Pi | The recorded sessions were launched with `pi --approve`. | Recorded. |
+| Claude Code, Codex | If the harness issues a new `session_id` while the `cq` MCP server keeps running, drive again under the new id: binding moves the attached session to the new driver and parks the old id's driver (`Its attached session was bound to the CQ driver of session <new id>`). | Contract test; not observed in a real harness. |
 | All | A driver whose harness session ended without parking stays in the server until it is displaced at capacity or the server restarts. Pi parks on quit; Claude Code and Codex have no session-end hook installed. | Code. |

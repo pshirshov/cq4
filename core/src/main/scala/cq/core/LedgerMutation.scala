@@ -37,9 +37,9 @@ final class LedgerMutation(terminationPlanner: TerminationPlanner, boundary: Dri
     else boundary.admit(scope.project, scope.actor.session, cycle, now) match {
       case None => execute(tx, scope, request, now, reservation)
       case Some(attribution) =>
-        boundary.check(scope.project, attribution, request, now)
+        boundary.check(tx, attribution, request, now)
         val acknowledgement = execute(tx, scope, request, now, reservation)
-        boundary.verify(tx, attribution, acknowledgement, LineageMember.Change(request.request) :: stamps, now)
+        boundary.verify(tx, attribution, request, acknowledgement, LineageMember.Change(request.request) :: stamps, now)
         acknowledgement
     }
   }

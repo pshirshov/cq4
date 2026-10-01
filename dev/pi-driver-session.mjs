@@ -81,7 +81,8 @@ const draft = { title: "Driven task", body: "Advance the fixture", labels: [], a
   content: { Task: { status: "Ready", acceptance: ["Report findings"], result: null, validation: [] } }, citations: [] };
 const change = (pi, mutations, fences) => pi.tool("change", { project, change: { request: identity(), mutations, fences, reason: "Pi driver fixture" } });
 const detail = async id => (await first.tool("read", { project, selection: { ItemDetail: { id } } })).Detail.view.item;
-const [target, outsider, other] = (await change(first, [{ Create: { draft } }, { Create: { draft } }, { Create: { draft } }], [])).Changed.ack.items;
+const [target, outsider, other, milestone] = (await change(first, [{ Create: { draft } }, { Create: { draft } }, { Create: { draft } },
+  { Create: { draft: { ...draft, title: "Fixture milestone", content: { Milestone: { status: "Open", objective: "Deliver the planned task" } } } } }], [])).Changed.ack.items;
 const status = async pi => (await operator({ Driver: { input: { project, request: { Control: { key: { harness: "Pi", session: pi.id }, origin: "Extension", action: { Status: {} } } } } } })).Driver.reply.Status.value;
 const driveInput = `${reference(target.id)} through=explore`;
 const line = `CQ driver on: ${reference(target.id)} through explore`;
@@ -146,8 +147,12 @@ assert.deepEqual(resumed.cycle.run, run, "a resume reattaches to the cycle's run
 assert.equal(resumed.cycle.lineage.filter(entry => entry.member.Run !== undefined).length, 1, "no duplicate run");
 assert.deepEqual((await first.tool("session", { Context: {} })).Context.value.workflow.id, run);
 const current = await detail(target.id);
-const produced = (await change(first, [{ Produce: { producer: target.id, expected: current.revision, drafts: [{ ...draft, title: "Descendant of cycle 1" }], milestone: null } }], [claim.fence])).Changed.ack.items
-  .find(item => item.id.number !== target.id.number);
+// Planning inside the drive: the produced Task is assigned to an Open milestone that the workset does not select.
+const planned = (await change(first, [{ Produce: { producer: target.id, expected: current.revision, drafts: [{ ...draft, title: "Descendant of cycle 1" }],
+  milestone: { Existing: { id: milestone.id } } } }], [claim.fence])).Changed.ack.items;
+assert.deepEqual(new Set(planned.map(item => item.id.ledger + item.id.number)), new Set(["Tasks" + target.id.number, "Tasks4", "Milestones" + milestone.id.number]));
+const produced = planned.find(item => item.id.ledger === "Tasks" && item.id.number !== target.id.number);
+assert.equal((await status(first)).state, "On", "assigning a produced Task to an out-of-set Open milestone keeps the driver on");
 await first.tool("dispatch", { Cancel: { attempt: child.attempt } });
 const deadline = Date.now() + 60000;
 while ((await first.driver()).activeChildren !== 0) { assert(Date.now() < deadline, "The cancelled child did not settle"); await sleep(200); }

@@ -11,21 +11,30 @@ final class DriverService(registry: DriverRegistry, planner: WorksetPlanner) {
   private def denied(message: String): Nothing = throw DomainFailure(Fault.Denied(message))
   private def token(): DriverToken = DriverToken(UUID.randomUUID())
 
-  // State-changing entry points: only the CQ hook commands and the Pi extension hold the operator credential they require.
-  def control(tx: LedgerTransaction, scope: Scope, key: DriverKey, source: DriverOrigin, action: DriverControl, now: Long): DriverReply = {
+  private def authorized(scope: Scope, key: DriverKey, source: DriverOrigin, action: DriverControl): Unit = {
     if (scope.actor.role != Role.Human)
       denied("Driver control requires the operator credential of a CQ hook command or the Pi extension; attached sessions only bind and read status")
     DriverPolicy.key(key)
     origin(key, source, action)
+  }
+
+  // The status reads use the registry alone, outside any project transaction.
+  def read(scope: Scope, key: DriverKey, source: DriverOrigin): DriverReply = {
+    authorized(scope, key, source, DriverControl.Status())
+    DriverReply.Status(registry.get(scope.project, key).map(status))
+  }
+  def own(scope: Scope): DriverReply = DriverReply.Status(registry.all(scope.project).filter(_.attached.contains(scope.actor.session))
+    .sortBy(record => (record.on, record.touchedAt)).lastOption.map(status))
+
+  // State-changing entry points: only the CQ hook commands and the Pi extension hold the operator credential they require.
+  def control(tx: LedgerTransaction, scope: Scope, key: DriverKey, source: DriverOrigin, action: DriverControl, now: Long): DriverReply = {
+    authorized(scope, key, source, action)
     val project = scope.project
     action match {
       case DriverControl.Start(target, attached) =>
         if (registry.get(project, key).exists(_.state != DriverState.Off))
           throw DomainFailure(Fault.Conflict("This session's CQ driver is already on; park it before driving other targets or another phase"))
         val preview = planner.resolve(tx, target)
-        attached.foreach { session =>
-          if (registry.bound(project, session).nonEmpty) throw DomainFailure(Fault.Conflict("The attached session is already bound to another CQ driver"))
-        }
         val others = registry.all(project).filter(_.key != key)
         // At capacity an off driver, or one whose session went silent, makes room; a live driver is never displaced.
         if (others.size >= MaxDrivers)
@@ -36,6 +45,7 @@ final class DriverService(registry: DriverRegistry, planner: WorksetPlanner) {
         val offer = if (attached.isEmpty) Some(BindOffer(token(), Math.addExact(now, BindMillis))) else None
         val record = DriverRecord(project, key, if (attached.isEmpty) DriverState.Binding else DriverState.On, attached, preview.workset,
           preview.targets, preview.through, offer, None, 0, None, true, now)
+        attached.foreach(supersede(project, _, key, now))
         registry.put(record)
         DriverReply.Started(status(record), preview, offer.map(_.token),
           if (attached.isEmpty) s"CQ driver binding: ${describe(record)}; it turns on when this session presents the bind token"
@@ -47,7 +57,7 @@ final class DriverService(registry: DriverRegistry, planner: WorksetPlanner) {
           DriverReply.Parked(Some(status(parked)), s"CQ driver parked: ${describe(parked)}")
         case other => DriverReply.Parked(other.map(status), "CQ driver is already off")
       }
-      case _: DriverControl.Status => DriverReply.Status(registry.get(project, key).map(status))
+      case _: DriverControl.Status => read(scope, key, source)
       case _: DriverControl.Continue => registry.get(project, key) match {
         case None => DriverReply.Stop(DriverStopped(DriverStop.Off, "No CQ driver is on for this session"), None, Nil)
         case Some(record) => record.state match {
@@ -63,6 +73,12 @@ final class DriverService(registry: DriverRegistry, planner: WorksetPlanner) {
     }
   }
 
+  // A harness may issue a new session key while its attached host lives on: the attached session's binding follows the key that drives now.
+  private def supersede(project: ProjectId, attached: SessionId, key: DriverKey, now: Long): Unit =
+    registry.bound(project, attached).foreach { previous =>
+      registry.put(stopped(previous, DriverStopped(DriverStop.Parked, s"Its attached session was bound to the CQ driver of session ${key.session}"), false, now))
+    }
+
   private def stop(record: DriverRecord, value: DriverStopped, messages: List[String], now: Long): DriverReply = {
     val next = stopped(record, value, true, now)
     registry.put(next)
@@ -75,17 +91,24 @@ final class DriverService(registry: DriverRegistry, planner: WorksetPlanner) {
     DriverReply.Continue(directive(record.key.harness, cycle, value), status(next), messages)
   }
 
+  private def resume(record: DriverRecord, cycle: CycleRecord, now: Long): DriverReply =
+    if (record.directives >= MaxDirectives) stop(record, limit, Nil, now)
+    else {
+      val resume = token()
+      directed(record, cycle.copy(resumeToken = Some(resume)), CycleToken.Resume(resume), Nil, now)
+    }
+
   private def limit: DriverStopped = DriverStopped(DriverStop.LimitReached, s"This drive issued its $MaxDirectives directives; drive again to continue")
 
   private def continuation(tx: LedgerTransaction, record: DriverRecord, now: Long): DriverReply = record.cycle match {
     case Some(cycle) if cycle.state == CycleState.Pending =>
       stop(record, DriverStopped(DriverStop.Failure, s"directive not started: the start directive of cycle ${cycle.number} was not submitted"), Nil, now)
-    case Some(cycle) if cycle.active && cycle.inFlight.nonEmpty =>
-      if (record.directives >= MaxDirectives) stop(record, limit, Nil, now)
-      else {
-        val resume = token()
-        directed(record, cycle.copy(resumeToken = Some(resume)), CycleToken.Resume(resume), Nil, now)
-      }
+    case Some(cycle) if cycle.active && cycle.inFlight.nonEmpty => resume(record, cycle, now)
+    // Work that waits for the session gets one resume directive; a second stop on the same work ends the drive instead of resuming forever.
+    case Some(cycle) if cycle.active && cycle.held.nonEmpty =>
+      if (cycle.held != cycle.prompted) resume(record, cycle.copy(prompted = cycle.held), now)
+      else stop(record, DriverStopped(DriverStop.Failure, s"cycle ${cycle.number} is held by ${cycle.held.toList.map(member).sorted.mkString(", ")}, " +
+        "which only the session can resolve, and a resume directive did not resolve it"), Nil, now)
     case previous =>
       val finished = previous.map(ended)
       val settled = record.copy(cycle = finished)
@@ -97,7 +120,9 @@ final class DriverService(registry: DriverRegistry, planner: WorksetPlanner) {
         case Success(snapshot) =>
           val messages = finished.flatMap(changed(_, snapshot)).toList
           val selected = snapshot.advanceable.map(_.item.id).toSet
-          val unselected = finished.toList.flatMap(_.created).filterNot(selected)
+          // A Milestone the cycle created for its Tasks stays context: it is accounted for while a selected item still belongs to it.
+          val milestones = snapshot.context.map(_.item.id).filter(_.ledger == Ledger.Milestones).toSet
+          val unselected = finished.toList.flatMap(_.created).filterNot(id => selected(id) || milestones(id))
           if (unselected.nonEmpty) stop(settled, DriverStopped(DriverStop.Failure,
             s"${references(unselected)} created by cycle ${finished.get.number} is not in the recomputed advanceable set"), messages, now)
           else decide(snapshot, finished) match {
@@ -106,7 +131,7 @@ final class DriverService(registry: DriverRegistry, planner: WorksetPlanner) {
             case DriverDecision.Continue =>
               val start = token()
               val cycle = CycleRecord(CycleId(UUID.randomUUID()), finished.fold(1)(_.number + 1), record.targets, record.through, snapshot,
-                CycleState.Pending, start, None, Map.empty, None, Nil, Nil)
+                CycleState.Pending, start, None, Map.empty, None, Nil, Nil, Set.empty, Set.empty)
               directed(record, cycle, CycleToken.Start(start), messages, now)
           }
       }
@@ -117,14 +142,13 @@ final class DriverService(registry: DriverRegistry, planner: WorksetPlanner) {
     val project = scope.project
     val caller = scope.actor.session
     action match {
-      case _: DriverSession.Status =>
-        DriverReply.Status(registry.all(project).filter(_.attached.contains(caller)).sortBy(_.touchedAt).lastOption.map(status))
+      case _: DriverSession.Status => own(scope)
       case DriverSession.Bind(value) =>
         governor(scope)
         val record = registry.all(project).find(record => record.state == DriverState.Binding && record.bind.exists(_.token == value))
           .getOrElse(denied("Unknown or already used CQ driver bind token; run the drive command again"))
         if (record.bind.get.expiresAt <= now) denied("The CQ driver bind token expired; park and run the drive command again")
-        if (registry.bound(project, caller).nonEmpty) throw DomainFailure(Fault.Conflict("This attached session is already bound to another CQ driver"))
+        supersede(project, caller, record.key, now)
         val bound = record.copy(state = DriverState.On, attached = Some(caller), bind = None, touchedAt = now)
         registry.put(bound)
         DriverReply.Bound(status(bound), s"CQ driver on: ${describe(bound)}")
@@ -137,6 +161,8 @@ final class DriverService(registry: DriverRegistry, planner: WorksetPlanner) {
         cycle.lineage.find(_.member == member) match {
           case Some(entry) =>
             if (!entry.parent.contains(parent)) throw DomainFailure(Fault.Conflict("Lineage member is already registered under another parent"))
+            // A member the session resumed is in flight again.
+            if (cycle.resting(member)) registry.put(record.copy(cycle = Some(cycle.copy(resting = cycle.resting - member, prompted = cycle.prompted - member)), touchedAt = now))
             DriverReply.Lineage(id, entry)
           case None =>
             LedgerPolicy.invalid(cycle.lineage.exists(_.member == parent), "Lineage parent is not a member of this cycle")
@@ -146,15 +172,33 @@ final class DriverService(registry: DriverRegistry, planner: WorksetPlanner) {
             DriverReply.Lineage(id, entry)
         }
       case DriverSession.Settle(id, member) =>
-        LedgerAccess.write(scope)
-        val record = registry.all(project).find(_.cycle.exists(_.id == id)).getOrElse(throw DomainFailure(Fault.Missing("Unknown CQ driver cycle")))
-        val cycle = record.cycle.get
-        if (!record.attached.contains(caller) && !cycle.delegated(caller)) denied("Only a session in the cycle's lineage settles its members")
-        val entry = cycle.lineage.find(_.member == member).getOrElse(throw DomainFailure(Fault.Missing("Unknown lineage member"))).copy(settled = true)
-        registry.put(record.copy(cycle = Some(cycle.copy(lineage = cycle.lineage.map(value => if (value.member == member) entry else value))), touchedAt = now))
+        val (record, cycle, entry) = registered(scope, id, member)
+        val settled = entry.copy(settled = true)
+        registry.put(record.copy(cycle = Some(cycle.copy(lineage = cycle.lineage.map(value => if (value.member == member) settled else value))), touchedAt = now))
+        DriverReply.Lineage(id, settled)
+      case DriverSession.Rest(id, member) =>
+        val (record, cycle, entry) = registered(scope, id, member)
+        registry.put(record.copy(cycle = Some(cycle.copy(resting = cycle.resting + member)), touchedAt = now))
         DriverReply.Lineage(id, entry)
+      // The attached host can no longer account for the member, so the drive ends instead of continuing on lineage the host does not hold.
+      case DriverSession.Fail(id, member, detail) =>
+        LedgerAccess.write(scope)
+        LedgerPolicy.invalid(detail.trim.nonEmpty && detail.length <= MaxDetail, s"A lineage failure requires a detail of 1–$MaxDetail characters")
+        val (record, cycle) = registry.lineage(project, id, caller, now)
+        val value = DriverStopped(DriverStop.Failure, s"${DriverPolicy.member(member)} of cycle ${cycle.number} $detail")
+        val next = stopped(record, value, false, now)
+        registry.put(next)
+        DriverReply.Stop(value, Some(status(next)), Nil)
       case _: DriverSession.Change => throw new IllegalStateException("A cycle-attributed change is a ledger mutation")
     }
+  }
+
+  private def registered(scope: Scope, id: CycleId, member: LineageMember): (DriverRecord, CycleRecord, LineageEntry) = {
+    LedgerAccess.write(scope)
+    val record = registry.all(scope.project).find(_.cycle.exists(_.id == id)).getOrElse(throw DomainFailure(Fault.Missing("Unknown CQ driver cycle")))
+    val cycle = record.cycle.get
+    if (!record.attached.contains(scope.actor.session) && !cycle.delegated(scope.actor.session)) denied("Only a session in the cycle's lineage settles its members")
+    (record, cycle, cycle.lineage.find(_.member == member).getOrElse(throw DomainFailure(Fault.Missing("Unknown lineage member"))))
   }
 
   private def governor(scope: Scope): Unit =

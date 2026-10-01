@@ -8,13 +8,15 @@ final case class BindOffer(token: DriverToken, expiresAt: Long)
 final case class CycleRecord(
   id: CycleId, number: Int, roots: Set[ItemId], through: WorkflowPhase, snapshot: WorksetPreview, state: CycleState,
   startToken: DriverToken, resumeToken: Option[DriverToken], resumed: Map[DriverToken, RequestId], run: Option[RequestId],
-  created: List[ItemId], lineage: List[LineageEntry],
+  created: List[ItemId], lineage: List[LineageEntry], resting: Set[LineageMember], prompted: Set[LineageMember],
 ) {
   val advanceable: Set[ItemId] = snapshot.advanceable.map(_.item.id).toSet
   def boundary: Set[ItemId] = advanceable ++ created
   def active: Boolean = state == CycleState.Active
   // Work dispatched from the run that has not settled; while any remains, the run is still active.
-  def inFlight: List[LineageEntry] = lineage.filter(entry => !entry.settled && !entry.member.isInstanceOf[LineageMember.Run])
+  def inFlight: List[LineageEntry] = lineage.filter(entry => !entry.settled && !entry.member.isInstanceOf[LineageMember.Run] && !resting(entry.member))
+  // Unsettled work that waits for the session, such as a prepared integration that was not applied. `prompted` is the work the last resume directive was issued for.
+  def held: Set[LineageMember] = lineage.filter(entry => !entry.settled && resting(entry.member)).map(_.member).toSet
   def activeChildren: Int = inFlight.count(_.member.isInstanceOf[LineageMember.Attempt])
   def delegated(session: SessionId): Boolean = lineage.exists(entry => !entry.settled && entry.member == LineageMember.Session(session))
   def tokens: Set[DriverToken] = resumed.keySet ++ resumeToken + startToken
@@ -36,6 +38,7 @@ final class DriverRegistry {
   def get(project: ProjectId, key: DriverKey): Option[DriverRecord] = synchronized(drivers.get((project, key)))
   def all(project: ProjectId): List[DriverRecord] = synchronized(drivers.valuesIterator.filter(_.project == project).toList)
   def put(record: DriverRecord): Unit = synchronized { drivers = drivers.updated((record.project, record.key), record) }
+  def update(project: ProjectId, key: DriverKey)(change: DriverRecord => DriverRecord): Unit = synchronized { drivers.get((project, key)).foreach(record => drivers = drivers.updated((project, key), change(record))) }
   def remove(record: DriverRecord): Unit = synchronized { drivers = drivers - ((record.project, record.key)) }
 
   def bound(project: ProjectId, session: SessionId): Option[DriverRecord] = all(project).find(record => record.on && record.attached.contains(session))

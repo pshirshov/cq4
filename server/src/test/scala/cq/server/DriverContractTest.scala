@@ -19,6 +19,7 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
     memoizationRoots = Set(DIKey[LedgerRepository[IO]], DIKey[LedgerService[IO]], DIKey[UsageService[IO]], DIKey[ArtifactService[IO]], DIKey[ProposalService[IO]]),
   )
   private def uuid: UUID = UUID.randomUUID()
+  private val Pause = zio.Duration.fromMillis(5)
   private final case class World(operator: Scope, governor: Scope) {
     val project: ProjectId = operator.project
     def other(role: Role): Scope = Scope(project, Actor("another session", SessionId(UUID.randomUUID()), role))
@@ -47,6 +48,15 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
     change = request(List(Mutation.Produce(producer, current.item.revision, List(task(title)), None)), List(claim.fence))
     ack <- service.change(scope, change).ensuring(service.release(scope, claim.fence).ignore)
   } yield (change, ack)
+  private def milestone(title: String, status: MilestoneStatus): ItemDraft = task(title).copy(content = Content.Milestone(status, "Deliver the planned tasks"))
+  // A change made under a producer claim that is held only for the write.
+  private def producing(service: LedgerService[IO], scope: Scope, producer: ItemId)(mutations: Revision => List[Mutation]): IO[Throwable, ChangeAck] = for {
+    claim <- service.acquire(scope, ClaimId(uuid), Set(producer), 600000L)
+    current <- service.get(scope, producer)
+    ack <- service.change(scope, request(mutations(current.item.revision), List(claim.fence))).ensuring(service.release(scope, claim.fence).ignore)
+  } yield ack
+  private def assigning(producer: ItemId, title: String, target: MilestoneRef)(revision: Revision): List[Mutation] =
+    List(Mutation.Produce(producer, revision, List(task(title)), Some(target)))
   private def cursor(service: LedgerService[IO], w: World): IO[Throwable, ChangeCursor] = service.counts(w.operator).map(_.cursor)
 
   private def control(service: LedgerService[IO], w: World, key: DriverKey, origin: DriverOrigin, action: DriverControl): IO[Throwable, DriverReply] =
@@ -116,6 +126,60 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
     _ <- assertIO(denied(result) && before == after)
     _ <- failed(service, w, key, detail)
   } yield ()
+
+  // An admitted Planner result whose proposal the world's governor may apply; the driver's target is the first dispatch member.
+  private def proposed(service: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO],
+    name: String, drafts: List[ItemDraft], begun: Boolean)(mutations: List[ItemRevision] => List[ProposedMutation]): IO[Throwable, (World, DriverKey, Option[Driven], ArtifactId, List[ItemRevision])] = {
+    val w = world
+    val key = claude(name)
+    val collector = w.governor.copy(actor = w.governor.actor.copy(subject = "host", role = Role.Collector))
+    for {
+      _ <- service.initialize(w.operator, name)
+      created <- service.change(w.governor, request(drafts.map(Mutation.Create.apply), Nil))
+      members = created.items
+      claim <- service.acquire(w.governor, ClaimId(uuid), members.map(_.id).toSet, 300000)
+      governing <- usage.assign(collector, Assignment(AssignmentId(uuid), w.project, Set.empty, Attribution.Unattributed, None, None))
+      parent <- usage.start(collector, Attempt(AttemptId(uuid), governing.id, None, w.governor.actor.session, Role.Governor, Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Govern))
+      assignment <- usage.assign(collector, Assignment(AssignmentId(uuid), w.project, claim.members, Attribution.Shared, Some(uuid), None))
+      attempt <- usage.start(collector, Attempt(AttemptId(uuid), assignment.id, Some(parent.id), w.governor.actor.session, Role.Planner, Harness.Codex, "fixture", "fixture", "fixture", 1001, UsagePhase.Plan))
+      dispatch = DispatchRequest(RequestId(uuid), DispatchWork.Planner(), Harness.Codex, members, Nil, Nil, None, claim.fence, HostLimits(3000, 1000, 300, 2000, 262144))
+      report = ChildReport.Plan(members.map(ref => PlanMember(ref.id, PlanDisposition.Proposed, "Proposed next step")),
+        Some(LedgerProposal(mutations(members), "Apply the proposed next step")), Nil)
+      result = ChildResult(attempt.id, dispatch, GitCommit("a" * 40), None, report, Nil, RetainedEvidence(Nil, Nil))
+      artifact <- artifacts.upload(collector, ArtifactUpload(w.project, ArtifactId(uuid), attempt.id, ArtifactKind.Result, "application/json", Wire.encode(ChildResult_JsonCodec, result)))
+      admission <- admissions.admit(collector, HostAdmissionInput(w.project, artifact.id, w.governor.actor))
+      _ <- assertIO(admission.decision == AdmissionDecision.Accepted())
+      cycle <- if (begun) driven(service, w, key, workset(members.head.id)).map(Some(_)) else on(service, w, key, workset(members.head.id)).as(None)
+    } yield (w, key, cycle, artifact.id, members)
+  }
+  // Runs independent scenarios to their end and reports every one that failed.
+  private def each(scenarios: (String, IO[Throwable, Any])*): IO[Throwable, Unit] =
+    ZIO.foreach(scenarios.toList) { case (label, scenario) => scenario.either.map(_.left.toOption.map(error => s"$label: $error")) }.flatMap { outcomes =>
+      ZIO.when(outcomes.flatten.nonEmpty)(ZIO.fail(new AssertionError(outcomes.flatten.mkString("\n")))).unit
+    }
+
+  // The driver operations of one session as its attached host calls them; `dropped` requests fail in transit before they reach the server.
+  private final class SessionApi(service: LedgerService[IO], scope: Scope, runtime: Runtime[Any], dropped: DriverSession => Boolean) extends ServerApi {
+    override def call(command: Command): Result = command match {
+      case Command.Driver(DriverInput(_, DriverRequest.Session(action))) if dropped(action) => throw new java.io.IOException("Connection reset")
+      case Command.Driver(DriverInput(_, request)) => Unsafe.unsafe { implicit unsafe =>
+        runtime.unsafe.run(service.drive(scope, request).map(Result.Driver.apply).catchSome { case DomainFailure(fault) => ZIO.succeed(Result.Failed(fault)) }).getOrThrowFiberFailure()
+      }
+      case other => throw new IllegalStateException("Unexpected command " + other)
+    }
+    override def usage(value: HostUsageInput): HostUsageResult = throw new IllegalStateException("The driver publishes no usage")
+    override def artifact(value: ArtifactUpload): ArtifactMetadata = throw new IllegalStateException("The driver publishes no artifacts")
+    override def admit(value: HostAdmissionInput): ResultAdmission = throw new IllegalStateException("The driver admits no results")
+    override def integrate(value: HostIntegrationInput): IntegrationRecord = throw new IllegalStateException("The driver integrates no candidates")
+    override def grant(value: GrantRequest): AccessToken = throw new IllegalStateException("The driver issues no credentials")
+  }
+  private def host(service: LedgerService[IO], w: World, runtime: Runtime[Any], quiescent: () => Boolean): WorkflowActivations =
+    new WorkflowActivations(new DriverSessionClient(new SessionApi(service, w.governor, runtime, _ => false), w.project), quiescent,
+      (id, request, requirements, cycle) => WorkflowActivation(id, WorkflowContext(request, "Fixture instructions", None), requirements, cycle))
+  private def activation(text: String, project: ProjectId): (RequestId, WorkflowRequest, Option[CycleToken]) = {
+    val (workflow, token) = submitted(project, text, "/cq:advance")
+    (RequestId(uuid), workflow, Some(token))
+  }
 
   private final class ApplicationApi(application: Application, authority: Authority, runtime: Runtime[Any]) extends ServerApi {
     override def call(command: Command): Result = Unsafe.unsafe { implicit unsafe => runtime.unsafe.run(application.execute(authority, command)).getOrThrowFiberFailure() }
@@ -214,8 +278,6 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
           reused <- act(service, second, DriverSession.Bind(started.bind.get)).either
           _ <- assertIO(denied(reused))
           other <- start(service, w, claude("binding-other"), workset(root))
-          twice <- act(service, w.governor, DriverSession.Bind(other.bind.get)).either
-          _ <- assertIO(conflict(twice))
           _ <- act(service, second, DriverSession.Bind(other.bind.get))
           expiring = claude("binding-expired")
           offer <- start(service, w, expiring, workset(root))
@@ -242,8 +304,6 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
             case DriverReply.Started(value, _, None, "CQ driver on: G1 through work") => value.state == DriverState.On && value.attached.contains(attached.actor.session)
             case _ => false
           })
-          taken <- control(service, w, DriverKey(Harness.Pi, "pi-other"), DriverOrigin.Extension, DriverControl.Start(workset(root), Some(attached.actor.session))).either
-          _ <- assertIO(conflict(taken))
           wrong <- ZIO.foreach(List(
             control(service, w, DriverKey(Harness.Pi, "pi-hook"), DriverOrigin.UserPromptSubmit, DriverControl.Start(workset(root), None)),
             control(service, w, DriverKey(Harness.Pi, "pi-unattached"), DriverOrigin.Extension, DriverControl.Start(workset(root), None)),
@@ -682,29 +742,8 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
 
     "check a proposal application from the bound session against the active cycle" in {
       (service: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], proposals: ProposalService[IO]) =>
-        def proposal(name: String, member: Int, begun: Boolean): IO[Throwable, (World, DriverKey, Option[Driven], ArtifactId, List[ItemRevision])] = {
-          val w = world
-          val key = claude(name)
-          val collector = w.governor.copy(actor = w.governor.actor.copy(subject = "host", role = Role.Collector))
-          for {
-            _ <- service.initialize(w.operator, name)
-            created <- service.change(w.governor, request(List.fill(2)(Mutation.Create(task("Proposal member"))), Nil))
-            members = created.items
-            claim <- service.acquire(w.governor, ClaimId(uuid), members.map(_.id).toSet, 300000)
-            governing <- usage.assign(collector, Assignment(AssignmentId(uuid), w.project, Set.empty, Attribution.Unattributed, None, None))
-            parent <- usage.start(collector, Attempt(AttemptId(uuid), governing.id, None, w.governor.actor.session, Role.Governor, Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Govern))
-            assignment <- usage.assign(collector, Assignment(AssignmentId(uuid), w.project, claim.members, Attribution.Shared, Some(uuid), None))
-            attempt <- usage.start(collector, Attempt(AttemptId(uuid), assignment.id, Some(parent.id), w.governor.actor.session, Role.Planner, Harness.Codex, "fixture", "fixture", "fixture", 1001, UsagePhase.Plan))
-            dispatch = DispatchRequest(RequestId(uuid), DispatchWork.Planner(), Harness.Codex, members, Nil, Nil, None, claim.fence, HostLimits(3000, 1000, 300, 2000, 262144))
-            report = ChildReport.Plan(members.map(ref => PlanMember(ref.id, PlanDisposition.Proposed, "Proposed next step")),
-              Some(LedgerProposal(List(ProposedMutation.Replace(members(member).id, task("Proposed title"))), "Apply the proposed next step")), Nil)
-            result = ChildResult(attempt.id, dispatch, GitCommit("a" * 40), None, report, Nil, RetainedEvidence(Nil, Nil))
-            artifact <- artifacts.upload(collector, ArtifactUpload(w.project, ArtifactId(uuid), attempt.id, ArtifactKind.Result, "application/json", Wire.encode(ChildResult_JsonCodec, result)))
-            admission <- admissions.admit(collector, HostAdmissionInput(w.project, artifact.id, w.governor.actor))
-            _ <- assertIO(admission.decision == AdmissionDecision.Accepted())
-            cycle <- if (begun) driven(service, w, key, workset(members.head.id)).map(Some(_)) else on(service, w, key, workset(members.head.id)).as(None)
-          } yield (w, key, cycle, artifact.id, members)
-        }
+        def proposal(name: String, member: Int, begun: Boolean) = proposed(service, usage, artifacts, admissions, name, List.fill(2)(task("Proposal member")), begun)(
+          members => List(ProposedMutation.Replace(members(member).id, task("Proposed title"))))
         for {
           (inside, insideKey, begun, applicable, members) <- proposal("proposal-in-set", 0, true)
           cycle = begun.get
@@ -718,6 +757,173 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
           (between, betweenKey, _, early, _) <- proposal("proposal-between-cycles", 1, false)
           _ <- rejects(service, between, betweenKey, "untracked mutation")(proposals(between.governor, early))
         } yield ()
+    }
+
+    "let a drive plan Tasks under an Open milestone outside its set, changing nothing else about that milestone" in {
+      (service: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], proposals: ProposalService[IO]) =>
+        val w = world
+        val key = claude("milestone-existing")
+        val direct = for {
+          _ <- service.initialize(w.operator, "milestone-existing")
+          root <- create(service, w.operator, goal("Goal"))
+          open <- create(service, w.operator, milestone("Open milestone", MilestoneStatus.Open))
+          before <- service.get(w.operator, open)
+          _ <- driven(service, w, key, workset(root))
+          ack <- producing(service, w.governor, root)(assigning(root, "Planned task", MilestoneRef.Existing(open)))
+          planned = ack.items.map(_.id).find(_.ledger == Ledger.Tasks).get
+          after <- service.get(w.operator, open)
+          running <- status(service, w, key)
+          _ <- assertIO(ack.items.map(_.id).toSet == Set(root, open, planned) && after.item.draft == before.item.draft && after.item.revision == Revision(2) &&
+            after.refs == List(ItemRef(Relation.Contains, planned)) && running.exists(value => value.state == DriverState.On && value.cycle.exists(_.created == List(planned))))
+          next <- directive(service, w, key)
+          _ <- assertIO(next.messages == List("CQ driver: the advanceable set changed to 2 items; added T1") && !next.status.cycle.get.advanceable.exists(_.id == open))
+          _ <- submit(service, w, w.governor, next.directive.text)
+          change <- replace(service, w.governor, open, "The milestone's draft changed by the drive")
+          _ <- rejects(service, w, key, "out-of-set change: M1 is outside the advanceable set stored for cycle 2")(service.change(w.governor, change))
+        } yield ()
+        val applied = for {
+          (planning, planningKey, cycle, artifact, members) <- proposed(service, usage, artifacts, admissions, "milestone-existing-proposal",
+            List(task("Producer"), milestone("Open milestone", MilestoneStatus.Open)), true)(members =>
+            List(ProposedMutation.Produce(members.head.id, List(task("Planned task")), Some(MilestoneRef.Existing(members(1).id)))))
+          ack <- proposals(planning.governor, artifact)
+          stamped <- status(service, planning, planningKey)
+          _ <- assertIO(ack.items.map(_.id).toSet == members.map(_.id).toSet + members.head.id.copy(number = 2) && stamped.exists(_.state == DriverState.On) &&
+            lineage(stamped).contains(LineageEntry(LineageMember.Proposal(artifact), Some(LineageMember.Run(cycle.get.run)), true)))
+        } yield ()
+        // Both in one batch: the assignment does not admit another change of the same milestone.
+        val edited = for {
+          session <- ZIO.succeed(world)
+          _ <- service.initialize(session.operator, "milestone-edited")
+          root <- create(service, session.operator, goal("Goal"))
+          open <- create(service, session.operator, milestone("Open milestone", MilestoneStatus.Open))
+          current <- service.get(session.operator, open)
+          _ <- driven(service, session, claude("milestone-edited"), workset(root))
+          _ <- rejects(service, session, claude("milestone-edited"), "out-of-set change: M1 is outside the advanceable set stored for cycle 1")(
+            producing(service, session.governor, root)(revision => Mutation.Replace(open, current.item.revision, current.item.draft.copy(title = "Edited")) ::
+              assigning(root, "Planned task", MilestoneRef.Existing(open))(revision)))
+        } yield ()
+        val closed = for {
+          session <- ZIO.succeed(world)
+          _ <- service.initialize(session.operator, "milestone-closed")
+          root <- create(service, session.operator, goal("Goal"))
+          complete <- create(service, session.operator, milestone("Complete milestone", MilestoneStatus.Complete))
+          _ <- driven(service, session, claude("milestone-closed"), workset(root))
+          _ <- rejects(service, session, claude("milestone-closed"), "out-of-set change: M1 is outside the advanceable set stored for cycle 1")(
+            producing(service, session.governor, root)(assigning(root, "Planned task", MilestoneRef.Existing(complete))))
+        } yield ()
+        each("direct Produce" -> direct, "applied proposal" -> applied, "milestone edited in the same batch" -> edited, "closed milestone" -> closed)
+    }
+
+    "admit the Milestone a batch creates for its in-set Produce and keep it in the cycle that created it" in {
+      (service: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], proposals: ProposalService[IO]) =>
+        val w = world
+        val key = claude("milestone-created")
+        def planning(root: ItemId)(revision: Revision): List[Mutation] =
+          Mutation.Create(milestone("Planned milestone", MilestoneStatus.Open)) :: assigning(root, "Planned task", MilestoneRef.Created(0))(revision)
+        val direct = for {
+          _ <- service.initialize(w.operator, "milestone-created")
+          root <- create(service, w.operator, goal("Goal"))
+          _ <- driven(service, w, key, workset(root))
+          ack <- producing(service, w.governor, root)(planning(root))
+          made = ack.items.map(_.id).find(_.ledger == Ledger.Milestones).get
+          planned = ack.items.map(_.id).find(_.ledger == Ledger.Tasks).get
+          running <- status(service, w, key)
+          _ <- assertIO(ack.items.map(_.id).toSet == Set(root, made, planned) && running.exists(value => value.state == DriverState.On && value.cycle.exists(_.created == List(made, planned))))
+          own <- replace(service, w.governor, made, "The cycle may change the milestone it created").flatMap(service.change(w.governor, _))
+          _ <- assertIO(own.items.map(_.id) == List(made))
+          next <- directive(service, w, key)
+          _ <- assertIO(next.messages == List("CQ driver: the advanceable set changed to 2 items; added T1") && !next.status.cycle.get.advanceable.exists(_.id == made))
+          _ <- submit(service, w, w.governor, next.directive.text)
+          later <- replace(service, w.governor, made, "A later cycle does not own the milestone")
+          _ <- rejects(service, w, key, "out-of-set change: M1 is outside the advanceable set stored for cycle 2")(service.change(w.governor, later))
+        } yield ()
+        val applied = for {
+          (session, sessionKey, cycle, artifact, members) <- proposed(service, usage, artifacts, admissions, "milestone-created-proposal", List(task("Producer"), task("Bystander")), true)(members =>
+            List(ProposedMutation.Create(milestone("Planned milestone", MilestoneStatus.Open)),
+              ProposedMutation.Produce(members.head.id, List(task("Planned task")), Some(MilestoneRef.Created(0)))))
+          ack <- proposals(session.governor, artifact)
+          stamped <- status(service, session, sessionKey)
+          _ <- assertIO(ack.items.map(_.id).map(_.ledger).sortBy(_.toString) == List(Ledger.Milestones, Ledger.Tasks, Ledger.Tasks) &&
+            stamped.exists(value => value.state == DriverState.On && value.cycle.exists(_.created.size == 2)) &&
+            lineage(stamped).contains(LineageEntry(LineageMember.Proposal(artifact), Some(LineageMember.Run(cycle.get.run)), true)))
+        } yield ()
+        def refused(name: String, detail: String)(mutations: ItemId => Revision => List[Mutation]): IO[Throwable, Unit] = {
+          val session = world
+          for {
+            _ <- service.initialize(session.operator, name)
+            root <- create(service, session.operator, goal("Goal"))
+            _ <- driven(service, session, claude(name), workset(root))
+            _ <- rejects(service, session, claude(name), detail)(producing(service, session.governor, root)(mutations(root)))
+          } yield ()
+        }
+        // A Created index that names a Task is an invalid request, not a boundary violation: nothing is written and the driver stays on.
+        val misnamed = for {
+          session <- ZIO.succeed(world)
+          _ <- service.initialize(session.operator, "milestone-misnamed")
+          root <- create(service, session.operator, goal("Goal"))
+          _ <- driven(service, session, claude("milestone-misnamed"), workset(root))
+          before <- cursor(service, session)
+          result <- producing(service, session.governor, root)(revision => Mutation.Create(task("Not a milestone")) :: assigning(root, "Planned task", MilestoneRef.Created(0))(revision)).either
+          after <- cursor(service, session)
+          kept <- status(service, session, claude("milestone-misnamed"))
+          _ <- assertIO(fault(result).contains(Fault.Invalid("Produce milestone must reference an earlier Create of a Milestone in this batch")) && before == after && kept.exists(_.state == DriverState.On))
+        } yield ()
+        each("direct Create and Produce" -> direct, "applied proposal" -> applied, "Created index naming a Task" -> misnamed,
+          "milestone no Produce names" -> refused("milestone-unnamed", "non-selected creation: M1 is not a selected descendant of G1")(root => revision =>
+            List(Mutation.Create(milestone("Unassigned milestone", MilestoneStatus.Open)), Mutation.Produce(root, revision, List(task("Planned task")), None))),
+          "milestone created alone" -> refused("milestone-alone", "non-selected creation: M1 is not a selected descendant of G1")(_ => _ =>
+            List(Mutation.Create(milestone("Unattached milestone", MilestoneStatus.Open)))))
+    }
+
+    "let an in-set Task join an Open milestone outside the set and reject every other reference to that milestone" in {
+      (service: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], proposals: ProposalService[IO]) =>
+        val w = world
+        def begun(name: String, target: ItemId): IO[Throwable, (World, DriverKey)] = {
+          val bound = w.copy(governor = w.other(Role.Governor))
+          driven(service, bound, claude(name), workset(target)).as((bound, claude(name)))
+        }
+        val direct = for {
+          _ <- service.initialize(w.operator, "milestone-joined")
+          root <- create(service, w.operator, goal("Goal"))
+          (_, first) <- produce(service, w.operator, root, "Task without a milestone")
+          (_, second) <- produce(service, w.operator, root, "Another Task without a milestone")
+          joining = first.items.find(_.id != root).get.id
+          loose = second.items.find(_.id != root).get.id
+          open <- create(service, w.operator, milestone("Open milestone", MilestoneStatus.Open))
+          complete <- create(service, w.operator, milestone("Complete milestone", MilestoneStatus.Complete))
+          before <- service.get(w.operator, open)
+          (joined, joinedKey) <- begun("joined", root)
+          ack <- reference(service, joined.governor, joining, Relation.PartOf, open, true).flatMap(service.change(joined.governor, _))
+          after <- service.get(w.operator, open)
+          running <- status(service, joined, joinedKey)
+          _ <- assertIO(ack.items.map(_.id).toSet == Set(joining, open) && after.item.draft == before.item.draft && after.refs == List(ItemRef(Relation.Contains, joining)) &&
+            running.exists(value => value.state == DriverState.On && value.cycle.exists(_.created.isEmpty)))
+          inverse <- reference(service, joined.governor, open, Relation.Contains, loose, true).flatMap(service.change(joined.governor, _))
+          _ <- assertIO(inverse.items.map(_.id).toSet == Set(loose, open))
+          _ <- reference(service, w.operator, loose, Relation.PartOf, open, false).flatMap(service.change(w.operator, _))
+          refusals = List[(String, String, Scope => IO[Throwable, ChangeRequest])](
+            ("joined-closed", "out-of-set change: M2 is outside", reference(service, _, loose, Relation.PartOf, complete, true)),
+            ("joined-related", "out-of-set change: M1 is outside", reference(service, _, loose, Relation.RelatesTo, open, true)),
+            ("joined-removed", "out-of-set change: M1 is outside", reference(service, _, joining, Relation.PartOf, open, false)),
+            ("joined-blocked", "out-of-set change: M1 is outside", reference(service, _, loose, Relation.BlockedBy, open, true)))
+          _ <- ZIO.foreachDiscard(refusals) { case (name, detail, change) =>
+            begun(name, root).flatMap { case (session, key) => change(session.governor).flatMap(value => rejects(service, session, key, detail)(service.change(session.governor, value))) }
+          }
+        } yield ()
+        def proposal(name: String, status: MilestoneStatus) = proposed(service, usage, artifacts, admissions, name,
+          List(task("Member"), milestone(s"$status milestone", status)), true)(members => List(ProposedMutation.Reference(members.head.id, Relation.PartOf, members(1).id, true)))
+        val applied = for {
+          (session, sessionKey, cycle, artifact, members) <- proposal("milestone-joined-proposal", MilestoneStatus.Open)
+          ack <- proposals(session.governor, artifact)
+          stamped <- status(service, session, sessionKey)
+          _ <- assertIO(ack.items.map(_.id).toSet == members.map(_.id).toSet && stamped.exists(_.state == DriverState.On) &&
+            lineage(stamped).contains(LineageEntry(LineageMember.Proposal(artifact), Some(LineageMember.Run(cycle.get.run)), true)))
+        } yield ()
+        val closed = for {
+          (session, sessionKey, _, artifact, _) <- proposal("milestone-closed-proposal", MilestoneStatus.Complete)
+          _ <- rejects(service, session, sessionKey, "out-of-set change: M1 is outside the advanceable set stored for cycle 1")(proposals(session.governor, artifact))
+        } yield ()
+        each("direct Reference" -> direct, "applied proposal" -> applied, "applied proposal to a closed milestone" -> closed)
     }
 
     "carry the cycle ID through nested delegation and reject a delegated child's out-of-set writes" in { (service: LedgerService[IO]) =>
@@ -828,6 +1034,24 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
         _ <- assertIO(direct match { case DriverReply.Stop(DriverStopped(_, detail), _, _) => detail == "Awaiting the user on Q1; the driver never answers questions or infers approval"; case _ => false })
         open <- service.get(w.operator, asked)
         _ <- assertIO(open.item.revision == Revision(2) && LedgerPolicy.status(open.item.draft.content) == QuestionStatus.Open.toString)
+        // The write itself is refused while the cycle continues on other ready work: a new answer, a changed one and an answered creation.
+        answering = w.copy(governor = w.other(Role.Governor))
+        _ <- driven(service, answering, claude("answering"), workset(ready, asked))
+        answered = (text: String) => open.item.draft.copy(content = Content.Question(QuestionStatus.Answered, "Prompt", "Context", Nil, None, Some(text)))
+        before <- cursor(service, w)
+        attempts <- ZIO.foreach(List(
+          request(List(Mutation.Replace(asked, open.item.revision, answered("The driver's own answer"))), Nil),
+          request(List(Mutation.Replace(asked, open.item.revision, open.item.draft.copy(content = Content.Question(QuestionStatus.Open, "Prompt", "Context", Nil, None, Some("Drafted answer"))))), Nil),
+        ))(service.change(answering.governor, _).either)
+        after <- cursor(service, w)
+        kept <- status(service, answering, claude("answering"))
+        _ <- assertIO(attempts.forall(result => fault(result).contains(Fault.Denied(
+          "The CQ driver never answers Questions: Q1 would be answered by a driven session; park the driver before recording the user's answer"))) &&
+          before == after && kept.exists(_.state == DriverState.On))
+        retitled <- service.change(answering.governor, request(List(Mutation.Replace(asked, open.item.revision, open.item.draft.copy(title = "Reworded question"))), Nil))
+        _ <- park(service, answering, claude("answering"))
+        byHand <- service.get(w.operator, asked).flatMap(view => service.change(answering.governor, request(List(Mutation.Replace(asked, view.item.revision, answered("The user's answer"))), Nil)))
+        _ <- assertIO(retitled.items.map(_.id) == List(asked) && byHand.items.map(_.id) == List(asked))
         // Limit: every start and resume directive counts.
         limited = w.copy(governor = w.other(Role.Governor))
         one <- driven(service, limited, claude("limit"), workset(ready))
@@ -846,6 +1070,261 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
           (parked match { case DriverReply.Parked(Some(value), "CQ driver parked: T3 through work") => stopped(Some(value), DriverStop.Parked); case _ => false }) &&
           unknown == DriverReply.Stop(DriverStopped(DriverStop.Off, "No CQ driver is on for this session"), None, Nil) && none.isEmpty)
         _ <- assertIO(DriverStop.all.map(DriverPolicy.reason) == List("quiescent", "user input required", "limit reached", "not bound", "failure", "parked", "off"))
+      } yield ()
+    }
+
+    "move an attached session's binding to the driver of a new session key and park the old key's driver" in { (service: LedgerService[IO]) =>
+      val w = world
+      val (old, renewed) = (claude("key-before"), claude("key-after"))
+      val attached = w.other(Role.Governor)
+      val (piOld, piNew) = (DriverKey(Harness.Pi, "pi-before"), DriverKey(Harness.Pi, "pi-after"))
+      def extension(key: DriverKey, root: ItemId): IO[Throwable, DriverReply] =
+        control(service, w, key, DriverOrigin.Extension, DriverControl.Start(workset(root), Some(attached.actor.session)))
+      for {
+        _ <- service.initialize(w.operator, "rebinding")
+        root <- create(service, w.operator, goal("Goal"))
+        one <- driven(service, w, old, workset(root))
+        // The harness issued a new session_id while the attached host lives on: the drive command arrives under the new key.
+        started <- start(service, w, renewed, workset(root))
+        bound <- act(service, w.governor, DriverSession.Bind(started.bind.get))
+        before <- status(service, w, old)
+        own <- act(service, w.governor, DriverSession.Status())
+        _ <- assertIO((bound match { case DriverReply.Bound(value, _) => value.key == renewed && value.state == DriverState.On && value.attached.contains(w.governor.actor.session); case _ => false }) &&
+          stopped(before, DriverStop.Parked) && before.get.stopped.get.detail == "Its attached session was bound to the CQ driver of session key-after" &&
+          before.get.cycle.exists(_.state == CycleState.Ended) && (own match { case DriverReply.Status(Some(value)) => value.key == renewed; case _ => false }))
+        stale <- activate(service, w.governor, RequestId(uuid), one.workflow, Some(one.token)).either
+        _ <- assertIO(denied(stale))
+        again <- start(service, w, renewed, workset(root)).flatMap(value => act(service, w.governor, DriverSession.Bind(value.bind.get)))
+        parked <- park(service, w, renewed)
+        _ <- assertIO(again.isInstanceOf[DriverReply.Bound] && (parked match { case DriverReply.Parked(Some(value), _) => stopped(Some(value), DriverStop.Parked) && value.key == renewed; case _ => false }))
+        free <- replace(service, w.governor, root, "Parked under the new key: the session writes as before").flatMap(service.change(w.governor, _))
+        _ <- assertIO(free.items.map(_.id) == List(root))
+        _ <- extension(piOld, root)
+        moved <- extension(piNew, root)
+        displaced <- control(service, w, piOld, DriverOrigin.Extension, DriverControl.Status()).map { case DriverReply.Status(value) => value; case other => throw new IllegalStateException(other.toString) }
+        _ <- assertIO((moved match { case DriverReply.Started(value, _, None, _) => value.key == piNew && value.state == DriverState.On && value.attached.contains(attached.actor.session); case _ => false }) &&
+          stopped(displaced, DriverStop.Parked) && displaced.get.stopped.get.detail == "Its attached session was bound to the CQ driver of session pi-after")
+      } yield ()
+    }
+
+    "check an activation's host preconditions before presenting its token and not cap the activations of one attached host" in { (service: LedgerService[IO]) =>
+      val w = world
+      val key = claude("host-order")
+      for {
+        runtime <- ZIO.runtime[Any]
+        _ <- service.initialize(w.operator, "host-order")
+        root <- create(service, w.operator, goal("Goal"))
+        quiet = new java.util.concurrent.atomic.AtomicBoolean(true)
+        attachedHost = host(service, w, runtime, () => quiet.get)
+        // A long attached session: more activations than one drive issues directives, before and between drives.
+        undriven <- ZIO.foreach((1 to 2 * DriverPolicy.MaxDirectives).toList)(_ =>
+          ZIO.attemptBlocking(attachedHost.activate(RequestId(uuid), WorkflowRequest.Begin(Set.empty), "Undriven", None)).either)
+        _ <- assertIO(undriven.forall(_.exists(_.cycle.isEmpty)))
+        _ <- on(service, w, key, workset(root))
+        issued <- directive(service, w, key)
+        (id, workflow, token) = activation(issued.directive.text, w.project)
+        _ <- ZIO.succeed(quiet.set(false))
+        busy <- ZIO.attemptBlocking(attachedHost.activate(id, workflow, "Driven", token)).either
+        unused <- status(service, w, key)
+        _ <- assertIO(busy.left.exists(_.getMessage.contains("Settle active child/check/integration/combination work before changing workflow")) &&
+          unused.exists(value => value.state == DriverState.On && value.cycle.exists(cycle => cycle.state == CycleState.Pending && cycle.run.isEmpty)))
+        _ <- ZIO.succeed(quiet.set(true))
+        accepted <- ZIO.attemptBlocking(attachedHost.activate(id, workflow, "Driven", token))
+        replayed <- ZIO.attemptBlocking(attachedHost.activate(id, workflow, "Driven", token))
+        running <- status(service, w, key)
+        _ <- assertIO(accepted.cycle.contains(issued.directive.cycle) && replayed == accepted && attachedHost.current.contains(accepted) &&
+          running.exists(_.cycle.exists(cycle => cycle.state == CycleState.Active && cycle.run.contains(id))))
+      } yield ()
+    }
+
+    "stop the driver when a resume token names a run that is not its attached host's active workflow" in { (service: LedgerService[IO]) =>
+      val w = world
+      val key = claude("host-resume")
+      for {
+        runtime <- ZIO.runtime[Any]
+        _ <- service.initialize(w.operator, "host-resume")
+        root <- create(service, w.operator, goal("Goal"))
+        _ <- on(service, w, key, workset(root))
+        issued <- directive(service, w, key)
+        (id, workflow, token) = activation(issued.directive.text, w.project)
+        owner = host(service, w, runtime, () => true)
+        run <- ZIO.attemptBlocking(owner.activate(id, workflow, "Driven", token))
+        _ <- act(service, w.governor, DriverSession.Inherit(run.cycle.get, LineageMember.Run(id), LineageMember.Attempt(AttemptId(uuid))))
+        first <- directive(service, w, key)
+        (again, _, resume) = activation(first.directive.text, w.project)
+        reattached <- ZIO.attemptBlocking(owner.activate(again, workflow, "Driven", resume))
+        _ <- assertIO(reattached == run)
+        // A host that holds no record of the cycle's run, as after a failed activation record.
+        second <- directive(service, w, key)
+        (lost, _, other) = activation(second.directive.text, w.project)
+        refused <- ZIO.attemptBlocking(host(service, w, runtime, () => true).activate(lost, workflow, "Driven", other)).either
+        _ <- assertIO(denied(refused) && fault(refused).exists(_.toString.contains("CQ driver stopped with reason failure")))
+        _ <- failed(service, w, key, s"run ${id.value} of cycle 1 is not the active workflow of its attached host")
+      } yield ()
+    }
+
+    "retry lineage registration and settlement in transit and stop the driver naming a member the host cannot register or settle" in { (service: LedgerService[IO]) =>
+      val w = world
+      def scenario(name: String, observed: zio.Task[Option[LineageOutcome]], dropped: (DriverSession, Int) => Boolean)(verify: (World, DriverKey, LineageMember.Attempt) => IO[Throwable, Unit]): IO[Throwable, Unit] = {
+        val session = w.copy(governor = w.other(Role.Governor))
+        val key = claude(name)
+        val attempt = LineageMember.Attempt(AttemptId(uuid))
+        val calls = new java.util.concurrent.atomic.AtomicInteger(0)
+        for {
+          runtime <- ZIO.runtime[Any]
+          root <- create(service, w.operator, goal(name))
+          one <- driven(service, session, key, workset(root))
+          reports <- zio.Ref.make(List.empty[String])
+          tracker = new LineageTracker(new DriverSessionClient(new SessionApi(service, session.governor, runtime, action => dropped(action, calls.incrementAndGet())), w.project),
+            message => Unsafe.unsafe { implicit unsafe => runtime.unsafe.run(reports.update(message :: _)).getOrThrowFiberFailure() }, Pause, Pause)
+          _ <- tracker.track(one.cycle, LineageMember.Run(one.run), attempt, observed)
+          _ <- verify(session, key, attempt)
+        } yield ()
+      }
+      def eventually(service: LedgerService[IO], session: World, key: DriverKey)(holds: Option[DriverStatus] => Boolean): IO[Throwable, Unit] =
+        (ZIO.sleep(zio.Duration.fromMillis(50)) *> status(service, session, key)).repeatUntil(holds)
+          .timeoutFail(new IllegalStateException("The lineage did not reach the expected state"))(zio.Duration.fromSeconds(30)).unit
+      for {
+        _ <- service.initialize(w.operator, "tracker-retry")
+        settled = ZIO.some(LineageOutcome.Settled)
+        _ <- scenario("tracker-transient", settled, (action, call) => (action.isInstanceOf[DriverSession.Inherit] || action.isInstanceOf[DriverSession.Settle]) && call % 3 != 0) { (session, key, attempt) =>
+          eventually(service, session, key)(value => value.exists(_.state == DriverState.On) && lineage(value).contains(LineageEntry(attempt, lineage(value).headOption.map(_.member), true)))
+        }
+        _ <- scenario("tracker-unregistered", settled, (action, _) => action.isInstanceOf[DriverSession.Inherit]) { (session, key, attempt) =>
+          failed(service, session, key, s"attempt ${attempt.id.value} of cycle 1 could not be registered: Connection reset")
+        }
+        _ <- scenario("tracker-unsettled", settled, (action, _) => action.isInstanceOf[DriverSession.Settle]) { (session, key, attempt) =>
+          eventually(service, session, key)(value => stopped(value, DriverStop.Failure) &&
+            value.get.stopped.get.detail == s"attempt ${attempt.id.value} of cycle 1 could not be settled: Connection reset")
+        }
+        _ <- scenario("tracker-unreadable", ZIO.fail(DomainFailure(Fault.Missing("Attempt is not owned by this governing session"))), (_, _) => false) { (session, key, attempt) =>
+          eventually(service, session, key)(value => stopped(value, DriverStop.Failure) && value.get.stopped.get.detail.startsWith(s"attempt ${attempt.id.value} of cycle 1 could not be settled: "))
+        }
+        // A member that comes to rest is reported as resting, and as in flight again once the host works on it.
+        phases <- zio.Ref.make[Option[LineageOutcome]](Some(LineageOutcome.Resting))
+        _ <- scenario("tracker-resting", phases.get, (_, _) => false) { (session, key, attempt) =>
+          for {
+            held <- query(service, session, key).repeatUntil(_.isInstanceOf[DriverReply.Stop])
+            _ <- assertIO(held match { case DriverReply.Stop(DriverStopped(DriverStop.Failure, detail), _, _) => detail.startsWith(s"cycle 1 is held by attempt ${attempt.id.value}"); case _ => false })
+          } yield ()
+        }
+        _ <- phases.set(Some(LineageOutcome.Resting))
+        _ <- scenario("tracker-resumed", phases.get, (_, _) => false) { (session, key, attempt) =>
+          for {
+            _ <- query(service, session, key)
+            _ <- phases.set(None)
+            _ <- ZIO.sleep(Pause.multipliedBy(20))
+            resumed <- ZIO.foreach(List.fill(3)(()))(_ => query(service, session, key))
+            _ <- assertIO(resumed.forall(_.isInstanceOf[DriverReply.Continue]))
+            _ <- phases.set(Some(LineageOutcome.Settled))
+            _ <- eventually(service, session, key)(value => lineage(value).contains(LineageEntry(attempt, lineage(value).headOption.map(_.member), true)))
+          } yield ()
+        }
+        _ <- assertIO(IntegrationPhase.all.map(AttachedDriver.integration) == List(None, Some(LineageOutcome.Resting), None, Some(LineageOutcome.Resting),
+          Some(LineageOutcome.Settled), Some(LineageOutcome.Settled), Some(LineageOutcome.Settled)) &&
+          CombinationPhase.all.map(AttachedDriver.combination) == List(None, Some(LineageOutcome.Settled), Some(LineageOutcome.Resting), Some(LineageOutcome.Settled)))
+      } yield ()
+    }
+
+    "give work that rests on the session one resume directive and then stop naming it" in { (service: LedgerService[IO]) =>
+      val w = world
+      val key = claude("resting")
+      val integration = LineageMember.Integration(IntegrationId(uuid))
+      for {
+        _ <- service.initialize(w.operator, "resting")
+        root <- create(service, w.operator, goal("Goal"))
+        one <- driven(service, w, key, workset(root))
+        run = LineageMember.Run(one.run)
+        _ <- act(service, w.governor, DriverSession.Inherit(one.cycle, run, integration))
+        rested <- act(service, w.governor, DriverSession.Rest(one.cycle, integration))
+        waiting <- status(service, w, key)
+        _ <- assertIO(rested == DriverReply.Lineage(one.cycle, LineageEntry(integration, Some(run), false)) && waiting.exists(_.activeChildren == 0))
+        prompted <- query(service, w, key)
+        _ <- assertIO(prompted match { case DriverReply.Continue(value, _, _) => value.cycle == one.cycle && value.token.isInstanceOf[CycleToken.Resume]; case _ => false })
+        // The session resumes the member, which then comes to rest again: that is new work to resolve and earns its own resume directive.
+        _ <- act(service, w.governor, DriverSession.Inherit(one.cycle, run, integration))
+        running <- ZIO.foreach(List.fill(2)(()))(_ => query(service, w, key))
+        _ <- act(service, w.governor, DriverSession.Rest(one.cycle, integration))
+        again <- query(service, w, key)
+        _ <- assertIO((running :+ again).forall(_.isInstanceOf[DriverReply.Continue]))
+        held <- query(service, w, key)
+        _ <- assertIO(held match {
+          case DriverReply.Stop(DriverStopped(DriverStop.Failure, detail), Some(value), _) =>
+            detail == s"cycle 1 is held by integration ${integration.id.value}, which only the session can resolve, and a resume directive did not resolve it" &&
+              stopped(Some(value), DriverStop.Failure) && value.directives == 5
+          case _ => false
+        })
+        // Resolved after its resume directive, the member no longer holds the cycle and the next decision is an ordinary one.
+        resolving = w.copy(governor = w.other(Role.Governor))
+        two <- driven(service, resolving, claude("rest-resolved"), workset(root))
+        _ <- act(service, resolving.governor, DriverSession.Inherit(two.cycle, LineageMember.Run(two.run), integration))
+        _ <- act(service, resolving.governor, DriverSession.Rest(two.cycle, integration))
+        _ <- directive(service, resolving, claude("rest-resolved"))
+        _ <- act(service, resolving.governor, DriverSession.Settle(two.cycle, integration))
+        done <- query(service, resolving, claude("rest-resolved"))
+        _ <- assertIO(done match { case DriverReply.Stop(DriverStopped(DriverStop.Quiescent, _), _, _) => true; case _ => false })
+        // The host reports a member it cannot account for: the drive stops with the member named.
+        failing = w.copy(governor = w.other(Role.Governor))
+        three <- driven(service, failing, claude("rest-failed"), workset(root))
+        outsider <- act(service, w.other(Role.Governor), DriverSession.Rest(three.cycle, LineageMember.Run(three.run))).either
+        vague <- act(service, failing.governor, DriverSession.Fail(three.cycle, LineageMember.Run(three.run), " ")).either
+        still <- status(service, failing, claude("rest-failed"))
+        _ <- assertIO(denied(outsider) && invalid(vague) && still.exists(_.state == DriverState.On))
+        reported <- act(service, failing.governor, DriverSession.Fail(three.cycle, integration, "could not be registered: Connection reset"))
+        _ <- assertIO(reported match {
+          case DriverReply.Stop(DriverStopped(DriverStop.Failure, detail), Some(value), Nil) =>
+            detail == s"integration ${integration.id.value} of cycle 1 could not be registered: Connection reset" && stopped(Some(value), DriverStop.Failure)
+          case _ => false
+        })
+        announced <- query(service, failing, claude("rest-failed"))
+        late <- act(service, failing.governor, DriverSession.Fail(three.cycle, integration, "could not be settled")).either
+        _ <- assertIO((announced match { case DriverReply.Stop(DriverStopped(DriverStop.Failure, _), _, List(_)) => true; case _ => false }) && denied(late))
+      } yield ()
+    }
+
+    "record a write in its cycle only once the write is committed" in { (service: LedgerService[IO], repository: LedgerRepository[IO], mutations: LedgerMutation) =>
+      val w = world
+      val key = claude("uncommitted")
+      for {
+        _ <- service.initialize(w.operator, "uncommitted")
+        root <- create(service, w.operator, goal("Goal"))
+        one <- driven(service, w, key, workset(root))
+        claim <- service.acquire(w.governor, ClaimId(uuid), Set(root), 600000L)
+        current <- service.get(w.governor, root)
+        change = request(List(Mutation.Produce(root, current.item.revision, List(task("Never committed")), None)), List(claim.fence))
+        // The boundary admits the write and the transaction then fails, as a failed commit does.
+        failed <- repository.transact(w.project) { tx => mutations(tx, w.governor, change, Clock.systemUTC().millis()); throw new java.sql.SQLException("Commit failed") }.either
+        after <- status(service, w, key)
+        absent <- service.get(w.operator, root.copy(ledger = Ledger.Tasks, number = 1)).either
+        _ <- assertIO(failed.left.exists(_.isInstanceOf[java.sql.SQLException]) && missing(absent))
+        _ <- assertIO(after.exists(value => value.state == DriverState.On && value.cycle.exists(cycle => cycle.created.isEmpty &&
+          cycle.lineage.map(_.member) == List(LineageMember.Run(one.run), LineageMember.Claim(claim.fence.claim)))))
+        committed <- service.change(w.governor, change)
+        recorded <- status(service, w, key)
+        _ <- assertIO(recorded.exists(_.cycle.exists(cycle => cycle.created == committed.items.map(_.id).filter(_ != root) &&
+          cycle.lineage.map(_.member).contains(LineageMember.Change(change.request)))))
+      } yield ()
+    }
+
+    "answer a status read while a ledger write of the project is in progress" in { (service: LedgerService[IO], repository: LedgerRepository[IO]) =>
+      val w = world
+      val key = claude("status-read")
+      val (entered, release) = (new java.util.concurrent.CountDownLatch(1), new java.util.concurrent.CountDownLatch(1))
+      for {
+        _ <- service.initialize(w.operator, "status-read")
+        root <- create(service, w.operator, goal("Goal"))
+        _ <- on(service, w, key, workset(root))
+        writer <- repository.transact(w.project) { _ => entered.countDown(); release.await() }.fork
+        _ <- ZIO.attemptBlocking(entered.await())
+        line <- status(service, w, key).timeout(zio.Duration.fromSeconds(5)).ensuring(ZIO.succeed(release.countDown()))
+        own <- act(service, w.governor, DriverSession.Status())
+        _ <- writer.join
+        _ <- assertIO(line.flatten.exists(_.line == "CQ driver on: G1 through work; 0 active children") &&
+          (own match { case DriverReply.Status(Some(value)) => value.key == key; case _ => false }))
+        refused <- ZIO.foreach(List(service.drive(w.governor, DriverRequest.Control(key, DriverOrigin.StatusLine, DriverControl.Status())),
+          control(service, w, claude("two words"), DriverOrigin.StatusLine, DriverControl.Status()),
+          control(service, w, DriverKey(Harness.Pi, "pi-status"), DriverOrigin.StatusLine, DriverControl.Status())))(_.either)
+        _ <- assertIO(denied(refused.head) && refused.tail.forall(invalid))
       } yield ()
     }
 
@@ -870,12 +1349,12 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
           one <- driven(ledger, session, key, workset(target))
           reports <- zio.Ref.make(List.empty[String])
           tracker = new LineageTracker(new DriverSessionClient(new ApplicationApi(application, authority, runtime), w.project),
-            message => Unsafe.unsafe { implicit unsafe => runtime.unsafe.run(reports.update(message :: _)).getOrThrowFiberFailure() })
+            message => Unsafe.unsafe { implicit unsafe => runtime.unsafe.run(reports.update(message :: _)).getOrThrowFiberFailure() }, Pause, Pause)
           finished <- Promise.make[Nothing, Unit]
           run = LineageMember.Run(one.run)
           _ <- tracker.record(one.cycle, run, dispatch)
-          _ <- tracker.track(one.cycle, dispatch, attempt, finished.await)
-          _ <- tracker.track(one.cycle, dispatch, attempt, ZIO.unit)
+          _ <- tracker.track(one.cycle, dispatch, attempt, finished.await.as(Some(LineageOutcome.Settled)))
+          _ <- tracker.track(one.cycle, dispatch, attempt, ZIO.some(LineageOutcome.Settled))
           running <- status(ledger, session, key)
           _ <- assertIO(lineage(running).contains(LineageEntry(attempt, Some(dispatch), false)) && running.exists(_.activeChildren == 1))
           resumed <- query(ledger, session, key)
@@ -883,9 +1362,9 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
           _ <- finished.succeed(())
           settled <- (ZIO.sleep(zio.Duration.fromMillis(50)) *> status(ledger, session, key)).repeatUntil(value => lineage(value).filter(_.member != run).forall(_.settled)).timeoutFail(new IllegalStateException("Lineage was not settled"))(zio.Duration.fromSeconds(20))
           _ <- assertIO(settled.exists(_.activeChildren == 0) && lineage(settled).map(_.member).toSet == Set(run, dispatch, attempt))
-          _ <- tracker.track(CycleId(uuid), run, LineageMember.Attempt(AttemptId(uuid)), ZIO.unit)
+          _ <- tracker.track(CycleId(uuid), run, LineageMember.Attempt(AttemptId(uuid)), ZIO.some(LineageOutcome.Settled))
           problems <- reports.get
-          _ <- assertIO(problems.size == 1 && problems.head.startsWith("Driver lineage registration failed"))
+          _ <- assertIO(problems.size == 1 && problems.head.startsWith("Driver lineage registration failed for attempt ") && problems.head.contains("the driver was not stopped"))
         } yield ()
     }
   }

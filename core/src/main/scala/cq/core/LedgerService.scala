@@ -227,17 +227,25 @@ object LedgerService {
           }
           val claim = Claim(Fence(id, tx.nextFence()), scope.actor, members, Math.addExact(now, durationMillis), false, ClaimOrigin.Acquire(durationMillis))
           tx.insertClaim(claim)
-          boundary.claimed(scope.project, scope.actor.session, id, now)
+          boundary.claimed(tx, scope.actor.session, id, now)
           claim
       }
     }
 
-    override def drive(scope: Scope, request: DriverRequest): F[Throwable, DriverReply] = repository.transact(scope.project) { tx =>
-      val now = clock.millis()
+    override def drive(scope: Scope, request: DriverRequest): F[Throwable, DriverReply] = {
+      import izumi.functional.bio.{F, *}
       request match {
-        case DriverRequest.Control(key, origin, action) => drivers.control(tx, scope, key, origin, action, now)
-        case DriverRequest.Session(DriverSession.Change(cycle, change)) => DriverReply.Changed(cycle, mutations.attributed(tx, scope, change, now, cycle))
-        case DriverRequest.Session(action) => drivers.session(scope, action, now)
+        // A status read touches no ledger state: it takes no project transaction, so status-line polling never waits for a ledger write.
+        case DriverRequest.Control(key, origin, _: DriverControl.Status) => F.fromEither(scala.util.Try(drivers.read(scope, key, origin)).toEither)
+        case DriverRequest.Session(_: DriverSession.Status) => F.fromEither(scala.util.Try(drivers.own(scope)).toEither)
+        case _ => repository.transact(scope.project) { tx =>
+          val now = clock.millis()
+          request match {
+            case DriverRequest.Control(key, origin, action) => drivers.control(tx, scope, key, origin, action, now)
+            case DriverRequest.Session(DriverSession.Change(cycle, change)) => DriverReply.Changed(cycle, mutations.attributed(tx, scope, change, now, cycle))
+            case DriverRequest.Session(action) => drivers.session(scope, action, now)
+          }
+        }
       }
     }
 

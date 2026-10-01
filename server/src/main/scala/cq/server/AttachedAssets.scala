@@ -23,6 +23,8 @@ final class AttachedAssets(schemas: McpSchemas, workflows: WorkflowAssets) {
     require(executable.isAbsolute && Files.isExecutable(executable) && Files.isRegularFile(executable), "CQ executable must be an absolute executable file")
     val settings = HostFiles.read(settingsPath, SupervisorSettings_JsonCodec, MaxConfigBytes)
     require(settings.harnesses.exists(_.harness == harness), "Settings do not include this harness route")
+    require(harness == Harness.Claude || !replaceStatusLine,
+      s"${DriverAssets.StatusLineFlag} applies only to claude: cq configure installs no status line for ${harness.toString.toLowerCase}")
     val args = List("host", harness.toString.toLowerCase, "--settings", settingsPath.toString)
     val command = Json.obj("command" -> Json.fromString(executable.toString), "args" -> Json.arr(args.map(Json.fromString)*))
     val integration = harness match {

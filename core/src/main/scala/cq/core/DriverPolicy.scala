@@ -14,6 +14,7 @@ object DriverPolicy {
   // Start and resume directives issued by one drive; each is one harness continuation.
   val MaxDirectives = 64
   val MaxLineage = 1024
+  val MaxDetail = 512
   val BindMillis = 600000L
   // A driver untouched for this long belongs to a harness session that ended without parking.
   val IdleMillis = 8L * 60 * 60 * 1000
@@ -49,6 +50,19 @@ object DriverPolicy {
   def reference(id: ItemId): String = LedgerPolicy.prefix(id.ledger) + id.number
   def references(ids: Iterable[ItemId]): String = ids.toList.sortBy(LedgerPolicy.key).map(reference).mkString(",")
   def phase(value: WorkflowPhase): String = value.toString.toLowerCase
+  def member(value: LineageMember): String = value match {
+    case LineageMember.Run(id) => s"run ${id.value}"
+    case LineageMember.Session(id) => s"session ${id.value}"
+    case LineageMember.Request(id) => s"request ${id.value}"
+    case LineageMember.Attempt(id) => s"attempt ${id.value}"
+    case LineageMember.Claim(id) => s"claim ${id.value}"
+    case LineageMember.Proposal(id) => s"proposal ${id.value}"
+    case LineageMember.Change(id) => s"change ${id.value}"
+    case LineageMember.Integration(id) => s"integration ${id.value}"
+    case LineageMember.Combination(id) => s"combination ${id.value}"
+  }
+  def answerRefused(questions: Iterable[ItemId]): String =
+    s"The CQ driver never answers Questions: ${references(questions)} would be answered by a driven session; park the driver before recording the user's answer"
 
   def invocation(harness: Harness): String = harness match {
     case Harness.Claude | Harness.Pi => "/cq:advance"

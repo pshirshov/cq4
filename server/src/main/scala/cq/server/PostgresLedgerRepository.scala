@@ -41,8 +41,9 @@ final class PostgresLedgerRepository(database: LedgerDatabase) extends LedgerRep
     val sql = new Jdbc(connection)
     val found = sql.query("SELECT body::text FROM cq_projects WHERE project_id = ? FOR UPDATE")(_.setObject(1, project.value))(r => Wire.decode(Project_JsonCodec, r.getString(1)))
     val metadata = found.headOption.getOrElse(throw DomainFailure(Fault.Missing("Project not initialized")))
-    operation(new PostgresLedgerTransaction(connection, metadata))
-  }
+    val tx = new PostgresLedgerTransaction(connection, metadata)
+    (operation(tx), tx.committed)
+  }.map { (result, committed) => committed.foreach(_()); result }
 }
 
 final class PostgresLedgerResource(repository: PostgresLedgerRepository, database: LedgerDatabase)
@@ -68,6 +69,9 @@ private object PersistedItems {
 
 private final class PostgresLedgerTransaction(connection: Connection, override val project: Project) extends LedgerTransaction {
   private val sql = new Jdbc(connection)
+  private var effects = List.empty[() => Unit]
+  def committed: List[() => Unit] = effects.reverse
+  override def afterCommit(effect: () => Unit): Unit = effects = effect :: effects
   private def projectKey(s: PreparedStatement): Unit = s.setObject(1, project.id.value)
   private def itemKey(s: PreparedStatement, id: ItemId): Unit = {
     require(id.project == project.id, "Transaction project invariant violated")
