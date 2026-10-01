@@ -749,7 +749,7 @@ enum ValidationState { Passed Failed Unknown }
 root data ValidationEvidence { check: str state: ValidationState artifact: ArtifactId failures: lst[ArtifactId] }
 root data ValidationObservation { check: ValidationCheck candidate: GitCommit job: JobRecord stdout: ArtifactId stderr: ArtifactId }
 enum DeclaredCheckPhase { Starting Running Publishing Completed Failed Unknown }
-root data DeclaredCheckTicket { parent: AttemptId check: ValidationCheck workspace: WorkspaceSpec fingerprint: str }
+root data DeclaredCheckTicket { parent: AttemptId check: ValidationCheck workspace: WorkspaceSpec fingerprint: str failures: lst[ArtifactId] }
 root data DeclaredCheckStatus { name: str job: AttemptId phase: DeclaredCheckPhase evidence: opt[ValidationEvidence] blocker: opt[str] }
 enum DispatchPhase { Preparing Running Stopping Validating Publishing Completed Failed Cancelled Unknown PublicationPending }
 enum ChildNext { Wait Plan Review Revise ResolveBlocker Retry ConsiderAcceptance ConsiderProposal ConsiderGrouping InspectEvidence RetryDelivery }

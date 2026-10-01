@@ -46,7 +46,7 @@ final class HostDeliveryLocal extends AnyWordSpec {
     "replay sealed reviewer check evidence after a lost acknowledgement without rereading payload" in {
       val root = Files.createTempDirectory("cq-review-check-replay-")
       val spec = WorkspaceSpec(project, SessionId(UUID.randomUUID()), attempt, "/consumer", GitCommit("a" * 40))
-      val ticket = DeclaredCheckTicket(attempt, ValidationCheck("verify", List("verify"), 1000, 65536, 1), spec, "a" * 64)
+      val ticket = DeclaredCheckTicket(attempt, ValidationCheck("verify", List("verify"), 1000, 65536, 1), spec, "a" * 64, Nil)
       val record = JobRecord(spec, ticket.fingerprint, JobTarget.Run, JobPhase.Settled,
         Some(JobExit(Some(0), None, StopReason.Exited, 4, 0, true, false)), None, 1, 1, 2)
       val payload = root.resolve("payload").resolve(spec.attempt.value.toString)
@@ -70,10 +70,34 @@ final class HostDeliveryLocal extends AnyWordSpec {
       intercept[IllegalArgumentException](reopened.reconcile(Some(record.copy(workspace = spec.copy(base = GitCommit("b" * 40))))))
     }
 
+    "I19: seal a rerun under its own artifact names with the earlier failed runs recorded in its evidence" in {
+      val root = Files.createTempDirectory("cq-review-check-rerun-")
+      val parent = AttemptId(UUID.randomUUID())
+      val first = NativeArtifacts.id(parent, "review-check-verify")
+      val spec = WorkspaceSpec(project, SessionId(UUID.randomUUID()), AttemptId(UUID.randomUUID()), "/consumer", GitCommit("a" * 40))
+      val ticket = DeclaredCheckTicket(parent, ValidationCheck("verify", List("verify"), 1000, 65536, 2), spec, "a" * 64, List(first))
+      val record = JobRecord(spec, ticket.fingerprint, JobTarget.Run, JobPhase.Settled,
+        Some(JobExit(Some(0), None, StopReason.Exited, 4, 0, true, false)), None, 1, 1, 2)
+      val payload = root.resolve("payload").resolve(spec.attempt.value.toString)
+      HostFiles.directory(payload)
+      Files.writeString(payload.resolve("stdout"), "pass")
+      val directory = root.resolve("check")
+      HostFiles.directory(directory)
+      val publication = new DeclaredCheckPublication(directory, ticket, root.resolve("payload"))
+      publication.seal(Some(record), None)
+      val receiver = new Receiver
+      receiver.loseAcknowledgement = false
+      val receipt = publication.finish(receiver)
+      val observation = NativeArtifacts.id(parent, "recheck-2-verify")
+      assert(receipt.status.phase == DeclaredCheckPhase.Completed &&
+        receipt.status.evidence.contains(ValidationEvidence("verify", ValidationState.Passed, observation, List(first))), receipt.status.toString)
+      assert(receiver.values.contains(observation) && receiver.values.contains(NativeArtifacts.id(parent, "recheck-2-verify-stdout")) && !receiver.values.contains(first))
+    }
+
     "preserve unknown reviewer checks without inventing observations when no job was committed" in {
       val root = Files.createTempDirectory("cq-review-check-missing-")
       val spec = WorkspaceSpec(project, SessionId(UUID.randomUUID()), attempt, "/consumer", GitCommit("a" * 40))
-      val ticket = DeclaredCheckTicket(attempt, ValidationCheck("verify", List("verify"), 1000, 65536, 1), spec, "a" * 64)
+      val ticket = DeclaredCheckTicket(attempt, ValidationCheck("verify", List("verify"), 1000, 65536, 1), spec, "a" * 64, Nil)
       val publication = new DeclaredCheckPublication(root, ticket, root.resolve("payload"))
       publication.reconcile(None)
       val receiver = new Receiver
@@ -87,7 +111,7 @@ final class HostDeliveryLocal extends AnyWordSpec {
     "mark truncated check output unknown and never rebuild a sealed queue after an interrupted status write" in {
       val root = Files.createTempDirectory("cq-review-check-partial-")
       val spec = WorkspaceSpec(project, SessionId(UUID.randomUUID()), attempt, "/consumer", GitCommit("a" * 40))
-      val ticket = DeclaredCheckTicket(attempt, ValidationCheck("verify", List("verify"), 1000, 65536, 1), spec, "a" * 64)
+      val ticket = DeclaredCheckTicket(attempt, ValidationCheck("verify", List("verify"), 1000, 65536, 1), spec, "a" * 64, Nil)
       val record = JobRecord(spec, ticket.fingerprint, JobTarget.Run, JobPhase.Settled,
         Some(JobExit(Some(0), None, StopReason.Exited, 10, 0, true, false)), None, 1, 1, 2)
       val publication = new DeclaredCheckPublication(root, ticket, root.resolve("payload"))

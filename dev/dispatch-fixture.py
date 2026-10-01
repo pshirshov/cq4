@@ -168,12 +168,14 @@ def main():
             tool("cq_host", "workspace", {"Check": {"name": "undeclared", "waitMillis": 0}}, denied=True)
             tool("cq_host", "workspace", {"Check": {"name": "consumer-content", "waitMillis": 20001}}, denied=True)
             check = tool("cq_host", "workspace", {"Check": {"name": "consumer-content", "waitMillis": 0}})["Check"]["value"]
-            job = check["job"]
+            jobs = {check["job"]["value"]}
             deadline = time.monotonic() + 20
             while check["phase"] != "Completed":
                 assert time.monotonic() < deadline and check["phase"] not in ["Failed", "Unknown"], check
                 check = tool("cq_host", "workspace", {"Check": {"name": "consumer-content", "waitMillis": 1000}})["Check"]["value"]
-                assert check["job"] == job
+                jobs.add(check["job"]["value"])
+            # The job changes only when the host reruns a failed run (I19); one request never starts a second check by itself.
+            assert len(jobs) <= 1 + len(check["evidence"]["failures"]) and (len(jobs) == 1) == (check["evidence"]["failures"] == []), check
             expected = "Failed" if "failed-reviewer-check" in context["members"][0]["item"]["draft"]["labels"] else "Passed"
             assert check["evidence"]["state"] == expected and check["evidence"] != context["previous"]["validation"][0]
             assert not Path("check-private").exists()
@@ -548,8 +550,10 @@ def main():
         return
     reviewed = poll(review["attempt"])
     assert reviewed["phase"] == "Completed" and reviewed["counts"]["accepted"] == 1, reviewed
-    if data["request"] == "intermittent-check":
+    if data["request"] in ["intermittent-check", "intermittent-reviewer-check"]:
         assert reviewed["counts"]["validationFailed"] == 0 and reviewed["next"] == "ConsiderAcceptance", reviewed
+        # The reviewer's own observation replaces the inherited one, so only a rerun of the reviewer's check counts here.
+        assert reviewed["counts"]["validationIntermittent"] == (1 if data["request"] == "intermittent-reviewer-check" else 0), reviewed
         finish({"summary": "A check that failed once passed on its rerun; the candidate was reviewed without a worker pass"})
         return
     if data["request"] == "integrate-reviewed-candidate":

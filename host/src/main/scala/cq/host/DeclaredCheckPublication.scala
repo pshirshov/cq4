@@ -5,8 +5,10 @@ import java.nio.file.{Files, Path}
 
 final case class DeclaredCheckReceipt(status: DeclaredCheckStatus, acknowledged: Int)
 
+/** One run of a declared check; the ticket's `failures` are the observations of the failed runs before it. */
 final class DeclaredCheckPublication(directory: Path, ticket: DeclaredCheckTicket, payload: Path) {
   private val MaxStatusBytes = 4096
+  private val prefix = DeclaredCheckPublication.label(ticket.check.name, ticket.failures.size + 1)
   private val statusFile = directory.resolve("result.json")
   private val queue = new DeliveryQueue(directory.resolve("delivery"))
   private def output(name: String): Path = payload.resolve(ticket.workspace.attempt.value.toString).resolve(name)
@@ -19,7 +21,6 @@ final class DeclaredCheckPublication(directory: Path, ticket: DeclaredCheckTicke
     record.foreach { value => require(value.workspace == ticket.workspace && value.fingerprint == ticket.fingerprint,
       "Declared check job differs from its immutable execution ticket") }
     val project = ticket.workspace.project
-    val prefix = "review-check-" + ticket.check.name
     val stdout = bytes("stdout")
     val stderr = bytes("stderr")
     val (out, outParts) = NativeArtifacts.binary(project, ticket.parent, prefix + "-stdout", "application/octet-stream", stdout)
@@ -31,7 +32,7 @@ final class DeclaredCheckPublication(directory: Path, ticket: DeclaredCheckTicke
     val artifact = record.map { value => ArtifactUpload(project, NativeArtifacts.id(ticket.parent, prefix), ticket.parent,
       ArtifactKind.Validation, "application/json", HostFiles.encode(ValidationObservation_JsonCodec,
         ValidationObservation(ticket.check, ticket.workspace.base, value, out, err))) }
-    val evidence = artifact.map(value => ValidationEvidence(ticket.check.name, state, value.id, Nil))
+    val evidence = artifact.map(value => ValidationEvidence(ticket.check.name, state, value.id, ticket.failures))
     val blocker = problem.orElse(if (!settled || !complete) Some("Declared check settlement or retained output is incomplete") else observed.flatMap(_.problem))
       .map(DispatchProjection.concise)
     val status = DeclaredCheckStatus(ticket.check.name, ticket.workspace.attempt,
@@ -56,9 +57,20 @@ final class DeclaredCheckPublication(directory: Path, ticket: DeclaredCheckTicke
     val status = HostFiles.read(statusFile, DeclaredCheckStatus_JsonCodec, MaxStatusBytes)
     require(status.name == ticket.check.name && status.job == ticket.workspace.attempt &&
       Set(DeclaredCheckPhase.Completed, DeclaredCheckPhase.Unknown)(status.phase) &&
-      status.evidence.forall(value => value.check == ticket.check.name && value.artifact == NativeArtifacts.id(ticket.parent, "review-check-" + ticket.check.name)),
+      status.evidence.forall(value => value.check == ticket.check.name && value.artifact == NativeArtifacts.id(ticket.parent, prefix) &&
+        value.failures == ticket.failures),
       "Declared check publication differs from its ticket")
     require(queue.finalized, "Declared check evidence was not sealed")
     DeclaredCheckReceipt(status, queue.flush(api))
   }
+}
+
+object DeclaredCheckPublication {
+  /** The first run keeps the names a single run has; a rerun's names begin differently, so no check name can collide with them. */
+  def label(name: String, run: Int): String = if (run == 1) "review-check-" + name else s"recheck-$run-$name"
+  def job(parent: AttemptId, name: String, run: Int): AttemptId =
+    AttemptId(NativeArtifacts.id(parent, "declared-check-job-" + name + (if (run == 1) "" else s":$run")).value)
+  def directory(check: Path, run: Int): Path = if (run == 1) check else check.resolve(s"rerun-$run")
+  /** The observations of the runs before `run`: what its ticket must record as failures. */
+  def earlier(parent: AttemptId, name: String, run: Int): List[ArtifactId] = (1 until run).map(number => NativeArtifacts.id(parent, label(name, number))).toList
 }

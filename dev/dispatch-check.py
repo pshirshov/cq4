@@ -257,6 +257,27 @@ def main():
         # Two worker runs (failed, then passed) and the reviewer's own run.
         assert counter.read_text() == "3", counter.read_text()
         print(json.dumps({"intermittentCheck": evidence, "session": intermittent["session"], "executions": 3}))
+
+        # I19: a check the reviewer requests fails once and passes on its rerun, under a job and ticket of its own.
+        counter = root / "intermittent-reviewer-check-count"
+        script = counting(counter, 0).replace("n <= 0", "n == 2")
+        configured["checks"][0].update(command=[sys.executable, "-c", script], attempts=2)
+        settings.write_text(json.dumps(configured))
+        source.write_text("intermittent-reviewer-check")
+        rechecked = json.loads(run(["run", "codex", "--settings", str(settings), "--input", str(source)]))
+        review_directory = child(Path(rechecked["directory"]), "Reviewer")
+        runs = [review_directory / "checks/consumer-content", review_directory / "checks/consumer-content/rerun-2"]
+        tickets = [json.loads((path / "ticket.json").read_text()) for path in runs]
+        states = [json.loads((path / "result.json").read_text()) for path in runs]
+        assert [value["evidence"]["state"] for value in states] == ["Failed", "Passed"], states
+        assert tickets[0]["failures"] == [] and tickets[1]["failures"] == [states[0]["evidence"]["artifact"]] == states[1]["evidence"]["failures"], tickets
+        assert tickets[0]["workspace"]["attempt"] != tickets[1]["workspace"]["attempt"] and states[1]["job"] == tickets[1]["workspace"]["attempt"]
+        reviewed = json.loads((review_directory / "receipt.json").read_text())
+        assert reviewed["phase"] == "Completed" and reviewed["counts"]["accepted"] == 1 and reviewed["counts"]["validationFailed"] == 0, reviewed
+        assert reviewed["counts"]["validationIntermittent"] == 1 and reviewed["next"] == "ConsiderAcceptance", reviewed
+        # The worker's run and the reviewer's failed and passing runs.
+        assert counter.read_text() == "3", counter.read_text()
+        print(json.dumps({"intermittentReviewerCheck": states[1]["evidence"], "session": rechecked["session"], "executions": 3}))
         settings.write_text(ordinary_settings)
         subprocess.run(["git", "-C", str(repository), "branch", "integration"], check=True)
         (repository / "governing.txt").write_text("staged governing work\n")
