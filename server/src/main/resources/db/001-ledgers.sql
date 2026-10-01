@@ -243,3 +243,9 @@ CREATE TABLE cq_integration_members (
   FOREIGN KEY (project_id, ledger, item_number) REFERENCES cq_items
 );
 CREATE INDEX cq_integration_members_owner ON cq_integration_members(project_id, integration_id);
+CREATE TABLE cq_worksets (
+  project_id uuid NOT NULL REFERENCES cq_projects,
+  workset_id uuid NOT NULL,
+  body jsonb NOT NULL,
+  PRIMARY KEY (project_id, workset_id)
+);

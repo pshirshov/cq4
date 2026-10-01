@@ -308,6 +308,32 @@ private final class PostgresLedgerTransaction(connection: Connection, override v
     ()
   }
 
+  override def workset(id: WorksetId): Option[StoredWorkset] =
+    sql.query("SELECT body::text FROM cq_worksets WHERE project_id = ? AND workset_id = ?") { s =>
+      projectKey(s); s.setObject(2, id.value)
+    }(r => Wire.decode(StoredWorkset_JsonCodec, r.getString(1))).headOption
+
+  override def insertWorkset(value: StoredWorkset): Unit = {
+    sql.execute("INSERT INTO cq_worksets(project_id, workset_id, body) VALUES (?, ?, ?::jsonb)") { s =>
+      projectKey(s); s.setObject(2, value.id.value); s.setString(3, Wire.encode(StoredWorkset_JsonCodec, value))
+    }
+    ()
+  }
+
+  override def candidateRoots(after: Option[ItemId], limit: Int): ReadPage[ItemSummary] = {
+    val open = "NOT %1$s.archived AND NOT (%1$s.summary->'outcome'->>'terminal')::boolean"
+    val pagination = after.fold("")(_ => " AND (i.ledger, i.number) > (?, ?)")
+    sql.page(s"SELECT i.summary::text FROM cq_items i WHERE i.project_id = ? AND ${open.format("i")}$pagination AND NOT EXISTS (" +
+      "SELECT 1 FROM cq_edges e JOIN cq_items p ON p.project_id = e.project_id AND p.ledger = e.target_ledger AND p.number = e.target_number " +
+      s"WHERE e.project_id = i.project_id AND e.source_ledger = i.ledger AND e.source_number = i.number AND e.relation IN ('DerivedFrom', 'PartOf') AND ${open.format("p")}) " +
+      "ORDER BY i.ledger, i.number LIMIT ?", limit, ItemSummary_JsonCodec) { s =>
+      projectKey(s)
+      var index = 2
+      after.foreach { id => s.setString(index, id.ledger.toString); s.setLong(index + 1, id.number); index += 2 }
+      s.setInt(index, limit + 1)
+    }
+  }
+
   override def nextFence(): Long = sql.query("UPDATE cq_projects SET fence_counter = fence_counter + 1 WHERE project_id = ? RETURNING fence_counter")(projectKey)(_.getLong(1)).head
 
   override def integration(id: IntegrationId): Option[IntegrationRecord] =
