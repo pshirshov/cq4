@@ -43,7 +43,7 @@ final class StaleSummaryPostgres extends SpecZIO with AssertZIO {
         _ <- assertIO(preview.members.map(_.id) == List(finished.id) && preview.retained.isEmpty)
         found <- service.search(owner, "ledger:Decisions", None, 200)
         _ <- assertIO(found.items.map(_.outcome) == List(ItemOutcome(false, true)))
-        browsed <- service.browse(owner, "ledger:Decisions", ItemOrder(ItemOrderField.Id, SortDirection.Ascending), None, None, 200)
+        browsed <- service.browse(owner, "ledger:Decisions", ItemOrder(ItemOrderField.Id, SortDirection.Ascending, false), None, None, 200)
         _ <- assertIO(browsed.items.map(_.summary.outcome) == List(ItemOutcome(false, true)))
         workset <- service.workset(owner, Set(decision.id), None, None, 200)
         _ <- assertIO(workset.entries.find(_.item.id == decision.id).map(_.reasons).contains(List(WorksetReason.Settled())) && workset.readyCount == 1)

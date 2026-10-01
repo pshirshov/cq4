@@ -99,11 +99,18 @@ private final class PostgresLedgerTransaction(connection: Connection, override v
 
   override def summary(id: ItemId): Option[ItemSummary] = sql.query("SELECT summary::text FROM cq_items WHERE project_id = ? AND ledger = ? AND number = ?")(itemKey(_, id))(r => PersistedItems.summary(r.getString(1))).headOption
 
-  private def readBrowseItem(row: ResultSet): BrowseItem = BrowseItem(PersistedItems.summary(row.getString(1)), Option(row.getString(2)).map(value =>
-    Severity.parse(value).getOrElse(throw new IllegalStateException(s"Invalid persisted severity $value"))))
+  // LedgerPolicy.endpoints admits only milestones as PartOf targets and LedgerMutation at most one per item; a second edge fails the scalar subquery.
+  private val milestoneNumber = "(SELECT e.target_number FROM cq_edges e WHERE e.project_id = i.project_id AND e.source_ledger = i.ledger " +
+    "AND e.source_number = i.number AND e.relation = 'PartOf')"
+  private def readBrowseItem(row: ResultSet): BrowseItem = {
+    val number = row.getLong(3)
+    val milestone = if (row.wasNull()) None else Some(ItemId(project.id, Ledger.Milestones, number))
+    BrowseItem(PersistedItems.summary(row.getString(1)), Option(row.getString(2)).map(value =>
+      Severity.parse(value).getOrElse(throw new IllegalStateException(s"Invalid persisted severity $value"))), milestone)
+  }
 
   override def browseItem(id: ItemId): Option[BrowseItem] =
-    sql.query("SELECT summary::text, severity FROM cq_items WHERE project_id = ? AND ledger = ? AND number = ?")(itemKey(_, id))(readBrowseItem).headOption
+    sql.query(s"SELECT i.summary::text, i.severity, $milestoneNumber FROM cq_items i WHERE i.project_id = ? AND i.ledger = ? AND i.number = ?")(itemKey(_, id))(readBrowseItem).headOption
 
   override def put(item: Item): Unit = {
     val previous = sql.query("SELECT summary::text FROM cq_items WHERE project_id = ? AND ledger = ? AND number = ?")(itemKey(_, item.id))
@@ -117,7 +124,7 @@ private final class PostgresLedgerTransaction(connection: Connection, override v
       s.setString(8, item.draft.title); s.setString(9, item.draft.body); s.setString(10, Wire.encode(Item_JsonCodec, item)); s.setString(11, Wire.encode(ItemSummary_JsonCodec, LedgerPolicy.summary(item)))
       s.setString(12, SearchText.document(item.draft.title, item.draft.body))
       s.setString(13, LedgerPolicy.prefix(item.id.ledger) + item.id.number)
-      s.setString(14, ItemBrowse.project(item).severity.map(_.toString).orNull)
+      s.setString(14, ItemBrowse.severity(item).map(_.toString).orNull)
     }
     def labelKey(label: String)(statement: PreparedStatement): Unit = { projectKey(statement); statement.setString(2, label) }
     (previous -- item.draft.labels).toList.sorted(SearchPrefix.ordering).foreach { label =>
@@ -225,16 +232,22 @@ private final class PostgresLedgerTransaction(connection: Connection, override v
     val ascending = order.direction == SortDirection.Ascending
     val direction = if (ascending) "ASC" else "DESC"
     val comparison = if (ascending) ">" else "<"
-    val pagination = after.fold("")(_ => s"WHERE missing > ? OR (missing = ? AND ((sort_text, sort_number) $comparison (? COLLATE \"C\", ?) OR " +
-      "((sort_text, sort_number) = (? COLLATE \"C\", ?) AND (ledger, number) > (?, ?))))")
-    val statement = s"SELECT summary::text, severity FROM (SELECT i.summary, i.ledger, i.number, $severity AS severity, $missing AS missing, " +
-      s"($text) COLLATE \"C\" AS sort_text, $number AS sort_number FROM cq_items i WHERE i.project_id = ? AND (${compiled.predicate})) sorted " +
-      s"$pagination ORDER BY missing ASC, sort_text $direction, sort_number $direction, ledger ASC, number ASC LIMIT ?"
+    val group = "(milestone IS NULL, COALESCE(milestone, 0))"
+    val later = s"missing > ? OR (missing = ? AND ((sort_text, sort_number) $comparison (? COLLATE \"C\", ?) OR " +
+      "((sort_text, sort_number) = (? COLLATE \"C\", ?) AND (ledger, number) > (?, ?))))"
+    val pagination = after.fold("")(_ => if (order.grouped) s"WHERE $group > (?, ?) OR ($group = (?, ?) AND ($later))" else s"WHERE $later")
+    val grouping = if (order.grouped) "milestone ASC NULLS LAST, " else ""
+    val statement = s"SELECT summary::text, severity, milestone FROM (SELECT i.summary, i.ledger, i.number, $severity AS severity, $milestoneNumber AS milestone, " +
+      s"$missing AS missing, ($text) COLLATE \"C\" AS sort_text, $number AS sort_number FROM cq_items i WHERE i.project_id = ? AND (${compiled.predicate})) sorted " +
+      s"$pagination ORDER BY ${grouping}missing ASC, sort_text $direction, sort_number $direction, ledger ASC, number ASC LIMIT ?"
     sql.pageBy(statement, limit, BrowseItem_JsonCodec) { s =>
       projectKey(s)
       var index = compiled.bind(s, 2)
       after.foreach { item =>
-        val key = ItemBrowse.key(item, order.field)
+        val key = ItemBrowse.key(item, order)
+        if (order.grouped) {
+          s.setBoolean(index, key.ungrouped); s.setLong(index + 1, key.group); s.setBoolean(index + 2, key.ungrouped); s.setLong(index + 3, key.group); index += 4
+        }
         s.setInt(index, key.missing); s.setInt(index + 1, key.missing)
         s.setString(index + 2, key.text); s.setLong(index + 3, key.number)
         s.setString(index + 4, key.text); s.setLong(index + 5, key.number)

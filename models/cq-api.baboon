@@ -280,8 +280,8 @@ root data ProjectConfig { project: ProjectId endpoint: str name: str }
 root data SearchInput { project: ProjectId query: str after: opt[ItemId] snapshot: opt[ChangeCursor] limit: i32 }
 enum ItemOrderField { Id Type Title Status Severity Modified }
 enum SortDirection { Ascending Descending }
-root data ItemOrder { field: ItemOrderField direction: SortDirection }
-root data BrowseItem { summary: ItemSummary severity: opt[Severity] }
+root data ItemOrder { field: ItemOrderField direction: SortDirection grouped: bit }
+root data BrowseItem { summary: ItemSummary severity: opt[Severity] milestone: opt[ItemId] }
 root data BrowsePage { items: lst[BrowseItem] cursor: ChangeCursor after: opt[ItemId] hasMore: bit }
 root data LedgerCount { ledger: Ledger count: i64 }
 root data LedgerCounts { entries: lst[LedgerCount] cursor: ChangeCursor }

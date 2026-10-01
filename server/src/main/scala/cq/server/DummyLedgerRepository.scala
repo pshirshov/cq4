@@ -75,7 +75,9 @@ private final class DummyLedgerTransaction(initial: DummyLedgerState) extends Le
   }
   override def get(id: ItemId): Option[Item] = state.items.get(id)
   override def summary(id: ItemId): Option[ItemSummary] = state.items.get(id).map(LedgerPolicy.summary)
-  override def browseItem(id: ItemId): Option[BrowseItem] = state.items.get(id).map(ItemBrowse.project)
+  private def browseRow(item: Item): BrowseItem =
+    ItemBrowse.project(item, state.edges.collectFirst { case edge if edge.source == item.id && edge.relation == Relation.PartOf => edge.target })
+  override def browseItem(id: ItemId): Option[BrowseItem] = state.items.get(id).map(browseRow)
   override def put(item: Item): Unit = { state = state.copy(items = state.items.updated(item.id, item)) }
   override def refs(id: ItemId): List[ItemRef] = state.edges.toList.flatMap { edge =>
     if (edge.source == id) List(ItemRef(edge.relation, edge.target))
@@ -131,7 +133,7 @@ private final class DummyLedgerTransaction(initial: DummyLedgerState) extends Le
   }
   override def browse(query: QueryExpression, order: ItemOrder, after: Option[BrowseItem], limit: Int): ReadPage[BrowseItem] = {
     val ordering = ItemBrowse.ordering(order)
-    val candidates = state.items.valuesIterator.filter(matches(query, _)).map(ItemBrowse.project)
+    val candidates = state.items.valuesIterator.filter(matches(query, _)).map(browseRow)
       .filter(item => after.forall(ordering.lt(_, item))).toList.sorted(ordering)
     ReadPage.select(candidates.iterator, limit, BrowseItem_JsonCodec)
   }

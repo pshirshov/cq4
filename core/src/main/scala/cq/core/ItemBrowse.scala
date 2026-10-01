@@ -3,15 +3,17 @@ package cq.core
 import cq.api.*
 
 object ItemBrowse {
-  final case class Key(missing: Int, text: String, number: Long, ledger: String, id: Long)
+  final case class Key(ungrouped: Boolean, group: Long, missing: Int, text: String, number: Long, ledger: String, id: Long)
 
-  def project(item: Item): BrowseItem = BrowseItem(LedgerPolicy.summary(item), item.draft.content match {
+  def severity(item: Item): Option[Severity] = item.draft.content match {
     case defect: Content.Defect => Some(defect.severity)
     case _ => None
-  })
+  }
 
-  def key(item: BrowseItem, field: ItemOrderField): Key = {
-    val summary = item.summary
+  def project(item: Item, milestone: Option[ItemId]): BrowseItem = BrowseItem(LedgerPolicy.summary(item), severity(item), milestone)
+
+  def key(item: BrowseItem, order: ItemOrder): Key = {
+    val summary = item.summary; val field = order.field
     val (text, number) = field match {
       case ItemOrderField.Id => (LedgerPolicy.prefix(summary.id.ledger), summary.id.number)
       case ItemOrderField.Type => (summary.id.ledger.toString, 0L)
@@ -25,15 +27,19 @@ object ItemBrowse {
         case Severity.Low => 3L
       })
     }
-    Key(if (field == ItemOrderField.Severity && item.severity.isEmpty) 1 else 0, text, number, summary.id.ledger.toString, summary.id.number)
+    val milestone = if (order.grouped) item.milestone else None
+    Key(order.grouped && milestone.isEmpty, milestone.fold(0L)(_.number),
+      if (field == ItemOrderField.Severity && item.severity.isEmpty) 1 else 0, text, number, summary.id.ledger.toString, summary.id.number)
   }
 
   def ordering(order: ItemOrder): Ordering[BrowseItem] = (left, right) => {
-    val a = key(left, order.field); val b = key(right, order.field)
+    val a = key(left, order); val b = key(right, order)
+    val group = Ordering[(Boolean, Long)].compare((a.ungrouped, a.group), (b.ungrouped, b.group))
     val missing = Integer.compare(a.missing, b.missing)
     val text = SearchPrefix.ordering.compare(a.text, b.text)
     val primary = if (text != 0) text else java.lang.Long.compare(a.number, b.number)
-    if (missing != 0) missing
+    if (group != 0) group
+    else if (missing != 0) missing
     else if (primary != 0) { if (order.direction == SortDirection.Ascending) primary else -primary }
     else Ordering[(String, Long)].compare((a.ledger, a.id), (b.ledger, b.id))
   }
