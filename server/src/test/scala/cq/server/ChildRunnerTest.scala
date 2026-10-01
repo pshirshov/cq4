@@ -49,6 +49,11 @@ target.write_text(json.dumps({"Work": {"members": [{"item": item, "disposition":
     "evidence": ["notes/extra.log", "../outside.log", "missing.log"]} for item in members]}}))
 emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_tokens": 0, "cache_write_input_tokens": 0, "output_tokens": 5, "reasoning_output_tokens": 0}})
 """
+  private val Recording = Header + """Path(".work/evidence").mkdir(parents=True)
+Path(".work/evidence/argv.json").write_text(json.dumps(sys.argv))
+target.write_text(json.dumps({"Work": {"members": [{"item": item, "disposition": "Blocked", "summary": "Recorded the launch", "evidence": []} for item in members]}}))
+emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_tokens": 0, "cache_write_input_tokens": 0, "output_tokens": 5, "reasoning_output_tokens": 0}})
+"""
   private val Stalling = Header + """Path("tracked.txt").write_text("partial change\n")
 Path("new.txt").write_text("untracked partial file\n")
 Path(".work/evidence").mkdir(parents=True)
@@ -68,7 +73,7 @@ time.sleep(30)
     override def grant(value: GrantRequest): AccessToken = auth.grant(root, value)
   }
 
-  private final case class Fixture(owner: Scope, config: SupervisorConfig, runner: ChildRunner, jobs: JobSupervisor, members: List[ItemRevision], fence: Fence,
+  private final case class Fixture(owner: Scope, config: SupervisorConfig, runner: ChildRunner, agents: AgentCatalog, jobs: JobSupervisor, members: List[ItemRevision], fence: Fence,
     governor: Attempt, profile: HarnessSetting, clock: Clock) {
     def install(script: String): Unit = {
       val executable = Path.of(profile.executable)
@@ -130,9 +135,10 @@ time.sleep(30)
         workspaces, new GuardianDriver(guardian.binary), directory.resolve("payload"), clock)
       access = new LocalAccess(authority, clock)
       _ <- ZIO.succeed(access.bind(URI.create("http://127.0.0.1:1")))
+      agents = new AgentCatalog(new McpSchemas, new ChildInstructions)
       runner = new ChildRunner(config, authority, new HarnessRegistry(Set(new ClaudeAdapter, new CodexAdapter, new PiAdapter)), jobs, workspaces,
-        new McpSchemas, new HarnessOutput, new ChildInstructions, new CandidateWorkspace(config), new WorkspaceReader, access, new OperatorRequirements(""), clock)
-      _ <- test(Fixture(owner, config, runner, jobs, created.items, claim.fence, governor, profile, clock))
+        agents, new HarnessOutput, new CandidateWorkspace(config), new WorkspaceReader, access, new OperatorRequirements(""), clock)
+      _ <- test(Fixture(owner, config, runner, agents, jobs, created.items, claim.fence, governor, profile, clock))
     } yield ()
   }
 
@@ -169,6 +175,44 @@ time.sleep(30)
           assert(large.kind == ArtifactKind.Evidence && large.mediaType == "text/plain" && large.attempt == entry.ticket.attempt.id)
           assert(result.evidence.omitted.toSet == Set(".work/evidence/binary.bin", "../outside.log", "missing.log"), result.evidence.omitted.toString)
           assert(!retained.contains("unnamed.log") && !retained.contains("tracked.txt"))
+        }
+      } yield () }
+    }
+
+    "launch the child with the agent catalog's effective prompt, output schema and tool configuration" in {
+      (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None) { f => for {
+        entry <- f.dispatch(Recording, HostLimits(3000, 30000, 900, 100, 1000, 262144))
+        _ <- f.runner.run(entry).timeoutFail(new IllegalStateException("Worker did not finish"))(zio.Duration.fromSeconds(60))
+        status = entry.status
+        _ <- ZIO.attempt(assert(status.phase == DispatchPhase.Completed && status.result.nonEmpty, status.toString))
+        result <- text(artifacts, f.owner, status.result.get).map(Wire.decode(ChildResult_JsonCodec, _))
+        recorded <- text(artifacts, f.owner, result.evidence.files.find(_.path == ".work/evidence/argv.json").get.artifact)
+        prompt <- text(artifacts, f.owner, NativeArtifacts.id(entry.ticket.attempt.id, "prompt"))
+        delivered <- text(artifacts, f.owner, NativeArtifacts.id(entry.ticket.attempt.id, "input"))
+        _ <- ZIO.attemptBlocking {
+          val agent = f.agents.entry(entry.ticket.request.work)
+          val view = agent.on(entry.ticket.attempt.harness)
+          val arguments = io.circe.parser.parse(recorded).flatMap(_.as[List[String]]).fold(throw _, identity)
+          val settings = arguments.sliding(2).collect { case List("-c", value) => value }.toList.map { value =>
+            val (key, json) = value.splitAt(value.indexOf('='))
+            key -> io.circe.parser.parse(json.drop(1)).fold(throw _, identity)
+          }.toMap
+          assert(agent.work == DispatchWork.Worker(WorkerMode.Implement) && view.harness == Harness.Codex)
+          assert(settings("developer_instructions").asString.contains(view.prompt) && prompt == view.prompt)
+          val schema = Path.of(arguments(arguments.indexOf("--output-schema") + 1))
+          assert(schema == entry.directory.resolve("assets/result-schema.json"))
+          assert(io.circe.parser.parse(Files.readString(schema)) == Right(view.outputSchema))
+          McpTarget.values.foreach { target =>
+            assert(settings(s"mcp_servers.${target.server}.enabled_tools").as[List[String]] == Right(view.tools.enabledMcp(target)))
+          }
+          view.tools.builtin.foreach { tool =>
+            assert(settings(tool.name) == (if (tool.name == "web_search") io.circe.Json.fromString(if (tool.enabled) "live" else "disabled")
+              else io.circe.Json.fromBoolean(tool.enabled)), tool.name)
+          }
+          assert(io.circe.parser.parse(delivered).fold(throw _, identity).hcursor.downField("input").downField("request").get[io.circe.Json]("work")
+            == Right(DispatchWork_JsonCodec.encode(baboon.runtime.shared.BaboonCodecContext.Default, agent.work)))
         }
       } yield () }
     }

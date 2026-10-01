@@ -2,7 +2,7 @@ package cq.server
 
 import baboon.runtime.shared.{BaboonCodecContext, BaboonJsonCodec}
 import cq.api.*
-import cq.host.{ChildContracts, HarnessInvocation, HarnessTools, McpTarget}
+import cq.host.{ChildContracts, HarnessInvocation, HarnessSchema, HarnessTools, McpTarget}
 import io.circe.{Json, JsonObject, parser}
 import java.nio.charset.StandardCharsets.UTF_8
 
@@ -80,31 +80,36 @@ final class McpSchemas {
     }))
   }
 
-  def nativeInvocation(harness: Harness, invocation: HarnessInvocation): HarnessInvocation = {
-    if (harness == Harness.Pi) invocation.copy(system = invocation.system +
+  /** The system instructions `harness` receives for `role`: the canonical ones plus what the harness cannot carry natively. Pure. */
+  def nativeSystem(harness: Harness, role: Role, system: String, resultSchema: Json, targets: List[McpTarget]): String = {
+    if (harness == Harness.Pi) system +
       "\nReturn one JSON value matching this complete output schema, without Markdown. " +
       "Preserve object wrappers and identifier fields exactly. Every declared property is required; use null only where permitted. " +
-      "Each $ref resolves against this schema's $defs. CQ validates the complete result before admission.\n" + invocation.resultSchema.noSpaces)
-    else if (harness != Harness.Codex) invocation
+      "Each $ref resolves against this schema's $defs. CQ validates the complete result before admission.\n" +
+      HarnessSchema.result(harness, resultSchema).noSpaces
+    else if (harness != Harness.Codex) system
     else {
       // Codex 0.156.1 drops definitions above 5,000 normalized bytes; reserve room for its normalization.
       val GuideThresholdBytes = 4000
-      val inputs = invocation.endpoints.flatMap { endpoint =>
-        invocation.tools(endpoint.target).map { name =>
-          val input = endpoint.target match {
+      val inputs = targets.flatMap { target =>
+        HarnessTools.mcp(role, target).map { name =>
+          val input = target match {
             case McpTarget.Domain => advertised(tools.find(_.name == name).get).hcursor.downField("inputSchema").focus.get
             case McpTarget.Local => name match {
               case "dispatch" => schema("DispatchCommand")
-              case "workspace" => workspace(invocation.role)
+              case "workspace" => workspace(role)
               case _ => throw new IllegalArgumentException("Unknown local tool schema")
             }
           }
-          s"${endpoint.name}.$name" -> input
+          s"${target.server}.$name" -> input
         }
       }.filter(_._2.noSpaces.getBytes(UTF_8).length > GuideThresholdBytes)
-      invocation.copy(system = invocation.system + argumentGuide(inputs))
+      system + argumentGuide(inputs)
     }
   }
+
+  def nativeInvocation(harness: Harness, invocation: HarnessInvocation): HarnessInvocation = invocation.copy(
+    system = nativeSystem(harness, invocation.role, invocation.system, invocation.resultSchema, invocation.endpoints.map(_.target)))
 
   def attachedInstructions(harness: Harness): String = {
     val instructions = SupervisorProgram.Guidance +

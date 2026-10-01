@@ -20,12 +20,16 @@ final case class HarnessProfile(harness: Harness, executable: Path, model: Strin
     !Set("CLAUDECODE", "CLAUDE_CODE_SIMPLE", "CLAUDE_CODE_SAFE_MODE")(name)), "Provider environment cannot carry CQ or harness-control authority")
 }
 
-enum McpTarget { case Domain, Local }
+enum McpTarget {
+  case Domain, Local
+  /** MCP server name a harness reaches this endpoint under. */
+  def server: String = this match { case McpTarget.Domain => "cq"; case McpTarget.Local => "cq_host" }
+}
 final case class HarnessMcp(target: McpTarget, endpoint: URI, token: AccessToken) {
   require(Set("http", "https")(endpoint.getScheme) && endpoint.getHost != null && endpoint.getUserInfo == null &&
     endpoint.getRawQuery == null && endpoint.getRawFragment == null, "MCP endpoint must be an HTTP(S) URL without credentials/query/fragment")
   require(token.value.nonEmpty && token.value.length <= 8192, "Scoped MCP credential required")
-  def name: String = target match { case McpTarget.Domain => "cq"; case McpTarget.Local => "cq_host" }
+  def name: String = target.server
   def environmentKey: String = "CQ_MCP_" + name.toUpperCase + "_TOKEN"
 }
 
@@ -101,7 +105,7 @@ final class ClaudeAdapter extends HarnessAdapter {
       "--disable-slash-commands", "--strict-mcp-config", "--mcp-config", invocation.assets.resolve("claude-mcp.json").toString,
       "--tools", builtin.mkString(","), "--allowedTools", (builtin ++ mcp).mkString(","),
       "--disallowedTools", policy.deniedBuiltin.mkString(","), "--system-prompt", invocation.system,
-      "--json-schema", invocation.resultSchema.noSpaces)
+      "--json-schema", HarnessSchema.result(harness, invocation.resultSchema).noSpaces)
     HarnessLaunch(arguments, HarnessEnvironment.isolated(profile, environment), List(HarnessAsset("claude-mcp.json", Json.obj("mcpServers" -> servers).noSpaces)))
   }
 }
@@ -135,7 +139,7 @@ final class CodexAdapter extends HarnessAdapter {
       "--output-last-message", invocation.assets.resolve("last-message.json").toString) ++ restrictions ++ mcp ++ List("-")
     val scoped = invocation.endpoints.map(endpoint => endpoint.environmentKey -> endpoint.token.value).toMap
     HarnessLaunch(arguments, HarnessEnvironment.isolated(profile, environment) ++ scoped,
-      List(HarnessAsset("result-schema.json", CodexSchema.result(invocation.resultSchema).noSpaces),
+      List(HarnessAsset("result-schema.json", HarnessSchema.result(harness, invocation.resultSchema).noSpaces),
         HarnessAsset("canonical-result-schema.json", invocation.resultSchema.noSpaces)))
   }
 }

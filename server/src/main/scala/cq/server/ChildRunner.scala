@@ -11,7 +11,7 @@ import scala.util.Try
 import zio.{IO, Ref, Task, ZIO}
 
 final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority, registry: HarnessRegistry, jobs: JobSupervisor,
-  workspaces: WorkspaceService[IO], schemas: McpSchemas, output: HarnessOutput, instructions: ChildInstructions,
+  workspaces: WorkspaceService[IO], agents: AgentCatalog, output: HarnessOutput,
   candidates: CandidateWorkspace, reader: WorkspaceReader, access: LocalAccess, requirements: OperatorRequirements, clock: Clock) {
   private val MaxOutputBytes = 32 * 1024 * 1024
   private val MaxGaps = 32
@@ -106,15 +106,15 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
           } else None
           val base = combination.map(_.observedTarget).orElse(input.previous.flatMap(_.candidate)).getOrElse(candidates.fresh())
           if (combination.isEmpty) candidates.verifyBase(base)
-          val prompt = instructions(ticket.request.work)
           val body = HostFiles.encode(ChildExecutionInput_JsonCodec, ChildExecutionInput(input, base, config.settings.checks))
           val domain = authority.root.grant(GrantRequest(config.project.project,
             Actor("CQ child " + ticket.attempt.id.value, ticket.attempt.session, ticket.attempt.role), authority.expiresAt))
           val local = access.issue(ticket.attempt.id, ticket.attempt.role)
           val assets = entry.directory.resolve("assets")
-          val invocation = schemas.nativeInvocation(profile.harness,
-            HarnessInvocation(ticket.attempt.role, ticket.attempt.id, prompt, schemas.childReport(ticket.request.work),
-              List(HarnessMcp(McpTarget.Domain, config.endpoint.resolve("/mcp"), domain), HarnessMcp(McpTarget.Local, access.endpoint, local)), assets))
+          val invocation = agents.invocation(ticket.request.work, profile.harness, ticket.attempt.id, {
+            case McpTarget.Domain => HarnessMcp(McpTarget.Domain, config.endpoint.resolve("/mcp"), domain)
+            case McpTarget.Local => HarnessMcp(McpTarget.Local, access.endpoint, local)
+          }, assets)
           val native = registry(profile.harness).launch(profile, invocation, config.environment)
           val launched = combination match {
             case None => native

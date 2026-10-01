@@ -1,6 +1,15 @@
 package cq.host
 
+import cq.api.Harness
 import io.circe.Json
+
+/** The output schema a harness is given for a canonical result schema. Pure. */
+object HarnessSchema {
+  def result(harness: Harness, canonical: Json): Json = harness match {
+    case Harness.Claude | Harness.Pi => canonical
+    case Harness.Codex => CodexSchema.result(canonical)
+  }
+}
 
 object CodexSchema {
   val UniqueItemsRule = "Items must be unique. CQ rejects duplicate set members."

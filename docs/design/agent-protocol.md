@@ -20,6 +20,8 @@ An existing interactive assistant is the **Governor** when configured with `cq c
 
 Sources: [role/mode/report contracts](../../models/cq-api.baboon), [prompt selection](../../host/src/main/scala/cq/host/ChildInstructions.scala), [workflow entrypoints](workflows.md).
 
+The dispatched role modes are indexed by the [agent catalog](../../server/src/main/scala/cq/server/AgentCatalog.scala): one flat entry per `DispatchWork` mode with its canonical prompt and input/output schemas, each harness's effective prompt, output schema and enabled/disabled MCP and built-in tools, and an authored typed [input and output example](../../server/src/main/scala/cq/server/AgentExamples.scala). The catalog owns none of these facts. It reads the prompt resources, the generated schemas and the tool-permission functions, and child launch builds its harness invocation from the same entry. Update the examples whenever the model changes; `AgentCatalogLocal` validates them against the generated schemas.
+
 ## 2. What “the initial prompt” contains
 
 The host supplies both **instructions** and **input data**. A short user request alone is not the full input.

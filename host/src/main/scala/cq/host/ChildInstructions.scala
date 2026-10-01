@@ -6,7 +6,8 @@ import scala.util.Using
 
 final class ChildInstructions {
   private val MaxBytes = 16384
-  def apply(work: DispatchWork): String = {
+  /** Classpath path of the prompt resource a dispatched child of this mode is instructed with. */
+  def resource(work: DispatchWork): String = {
     val name = work match {
       case _: DispatchWork.Explorer => "explore"
       case _: DispatchWork.Planner => "plan"
@@ -14,7 +15,11 @@ final class ChildInstructions {
       case DispatchWork.Reviewer(ReviewerMode.Candidate) => "review-candidate"
       case _: DispatchWork.Reviewer => "review-proposal"
     }
-    Using.resource(Option(getClass.getResourceAsStream(s"/cq/prompts/$name.md"))
+    s"cq/prompts/$name.md"
+  }
+
+  def apply(work: DispatchWork): String = {
+    Using.resource(Option(getClass.getResourceAsStream("/" + resource(work)))
       .getOrElse(throw new IllegalStateException("Installed child prompt is missing"))) { stream =>
       val bytes = stream.readNBytes(MaxBytes + 1)
       require(bytes.length <= MaxBytes, "Installed child prompt exceeds its byte bound")

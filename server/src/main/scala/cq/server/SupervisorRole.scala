@@ -263,6 +263,7 @@ object SupervisorPlugin extends PluginDef {
     make[HarnessRegistry]
     make[HarnessOutput]
     make[ChildInstructions]
+    make[AgentCatalog]
     make[WorkspaceReader]
     make[CandidateWorkspace]
     make[SupervisorAuthority].fromEffect(SupervisorAuthority.acquire _)

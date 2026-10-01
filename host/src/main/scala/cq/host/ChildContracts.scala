@@ -19,6 +19,10 @@ object ChildContracts {
   private val MaxFindings = 32
   private val MaxOutputBytes = 32 * 1024 * 1024
 
+  /** Every dispatchable role and mode, in model order. */
+  val Works: List[DispatchWork] = ExplorerMode.all.map(DispatchWork.Explorer.apply) ++ List(DispatchWork.Planner()) ++
+    WorkerMode.all.map(DispatchWork.Worker.apply) ++ ReviewerMode.all.map(DispatchWork.Reviewer.apply)
+
   def role(work: DispatchWork): Role = work match {
     case _: DispatchWork.Explorer => Role.Explorer
     case _: DispatchWork.Planner => Role.Planner
