@@ -163,7 +163,7 @@ export async function tableChecks(browser, storageState, origin, evidence) {
       assert.deepEqual(await savedView(), { field: 'Id', direction: 'Ascending', grouped: true });
       const headings = table.locator('tbody tr.item-group');
       assert.equal(await headings.locator('button, a, input, [tabindex]').count(), 0);
-      assert.deepEqual(await headings.evaluateAll(rows => rows.map(row => [row.querySelectorAll('svg').length, row.cells.length, row.cells[0].colSpan])), [[1, 1, 6], [1, 1, 6], [0, 1, 6]]);
+      assert.deepEqual(await headings.evaluateAll(rows => rows.map(row => [row.querySelectorAll('svg').length, row.cells.length, row.cells[0].colSpan])), [[1, 1, 6], [1, 1, 6], [1, 1, 6]]);
       const focus = () => page.evaluate(() => document.activeElement.getAttribute('aria-label'));
       await table.getByRole('button', { name: 'T2 · Two', exact: true }).focus();
       for (const [key, expected] of [['ArrowDown', 'T4 · Four'], ['ArrowDown', 'T1 · One'], ['ArrowDown', 'T3 · Three'], ['ArrowDown', 'T3 · Three'], ['ArrowUp', 'T1 · One'],

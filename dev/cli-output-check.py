@@ -31,7 +31,7 @@ def main():
 
         overview = run("help", ["--help"], 0, False).stdout
         assert "Usage:" in overview and "Operator commands" in overview and "automation entrypoints" in overview and "--json" in overview
-        for topic in ["init", "query", "status", "proposal", "web", "configure", "commands", "serve", "run", "host", "job"]:
+        for topic in ["init", "query", "status", "proposal", "web", "configure", "commands", "serve", "run", "host", "hook", "job"]:
             result = run("help-" + topic, [topic, "--help"], 0, False)
             assert result.stdout.startswith("Usage: cq " + topic), result.stdout
         assert not list(root.iterdir()), "Help must not create project or session state"

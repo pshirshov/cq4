@@ -33,7 +33,7 @@ object ClientPlugin extends PluginDef {
     make[cq.host.WorkflowAssets]
     make[SessionUpload]
     make[ProjectLocation]
-    make[CliContext].fromEffect(ZIO.attempt(CliContext(sys.env, Path.of("").toAbsolutePath.normalize(), System.out)))
+    make[CliContext].fromEffect(ZIO.attempt(CliContext(sys.env, Path.of("").toAbsolutePath.normalize(), System.out, System.in)))
   })
 }
 

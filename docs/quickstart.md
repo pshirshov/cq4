@@ -79,7 +79,7 @@ export CQ_SETTINGS="$CQ_LOCAL_STATE/supervisor.json"
 cq commands export codex --directory "$PWD"
 ```
 
-The settings contain only the Codex route; it can fill each of the four CQ roles. Codex must already be authenticated. Exported skills are optional for the direct CLI walkthrough below. If using an interactive Codex session instead, select the project-local `.agents/skills/cq-begin/SKILL.md` explicitly to avoid older personal skills with the same name; provide `CQ_SETTINGS` and the intended scope.
+The settings contain only the Codex route; it can fill each of the four CQ roles. Codex must already be authenticated. Exported skills are optional for the direct CLI walkthrough below. If using an interactive Codex session instead, select the project-local `.agents/skills/cq-begin/SKILL.md` explicitly to avoid older personal skills with the same name; provide `CQ_SETTINGS` and the intended scope. Such a session, once set up as in [Run CQ inside your normal harness](interactive.md), can also advance a chosen workset unattended: see [Drive CQ work automatically](auto-driver.md).
 
 ## 3. Capture the request, then advance it
 

@@ -29,6 +29,7 @@ Service and automation entrypoints:
   serve             Run the authenticated HTTP/WebSocket server
   run               Run a governed batch harness session (structured output)
   host              Harness-owned MCP stdio process; protocol use only
+  hook              Harness hook entry point of the CQ auto-driver; protocol use only
   :checkout         Internal supervised Git executor; protocol use only
   job upload        Recover retained delivery batches (operator text output)
 
@@ -148,10 +149,14 @@ Print the saved project's browser URL. With --json, emit {"endpoint":"…"}.
 
 Install project-local integration so the harness starts its own CQ host.
 HARNESS is claude, codex or pi. Then launch that harness directly.
+Claude and Codex also get the drive and park commands and the CQ driver hooks
+(Claude: .claude/settings.local.json with a statusLine; Codex: .codex/hooks.json).
+User-owned hook entries are kept. Both --replace flags go after the options.
   --settings FILE     Supervisor settings; defaults to CQ_SETTINGS
   --executable FILE   Installed CQ executable; defaults to the current executable
   --directory DIR     Project directory; defaults to the current directory
   --replace           Replace existing CQ integration assets
+  --replace-statusline  Claude: replace an existing statusLine that is not CQ's
   --json              Emit the list of written paths
 
 Example: cq configure codex --settings .local/interactive/settings.json
@@ -195,6 +200,17 @@ MCP stdio protocol entrypoint for claude, codex or pi. The native harness owns
 this process and its descendant hierarchy. Usually installed by 'cq configure';
 do not invoke interactively or redirect protocol stdout into a human terminal.
 Settings default to CQ_SETTINGS. Diagnostics are exclusively on stderr.
+"""
+      case Some("hook") => """Usage: cq hook HARNESS EVENT
+
+Hook entrypoint of the CQ auto-driver for claude or codex; EVENT is
+UserPromptSubmit, Stop or StatusLine. The harness runs it with the hook input
+on stdin; 'cq configure' installs it. UserPromptSubmit starts or parks this
+session's driver for a typed drive or park command and passes every other
+prompt through. Stop blocks with the host's advance directive while work
+remains and otherwise allows the stop. StatusLine prints the driver status.
+It needs the operator credential, trusts the session_id on stdin, and exits 0
+even on a CQ error, which it reports in its output without blocking the harness.
 """
       case Some("job") => """Usage: cq job upload --session DIR
 

@@ -114,7 +114,7 @@ object ShutdownFixture extends RoleAppMain.LauncherBIO[IO] {
         SupervisorAuthority(new Receiver, new Receiver, new Receiver, AccessToken("governor", expires))
       }
       make[SessionCollectors].fromValue(new SessionCollectors { override def collector(run: SupervisorRun): ServerApi = new Receiver })
-      make[CliContext].from((config: SupervisorConfig) => CliContext(sys.env, config.directory, System.out))
+      make[CliContext].from((config: SupervisorConfig) => CliContext(sys.env, config.directory, System.out, System.in))
       make[McpSchemas]
       make[WorkflowAssets]
     }))
