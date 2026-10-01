@@ -104,11 +104,11 @@ class App {
     },
   }, localStorage);
   private readonly historyPanel = element('section', '');
-  private readonly projectDialog = new Dialog(() => {});
-  private readonly createDialog = new Dialog(() => this.closeEditor());
-  private readonly conflictDialog = new Dialog(() => {});
-  private readonly historyDialog = new Dialog(() => { this.requests.history++; });
-  private readonly usageDialog = new Dialog(() => {
+  private readonly projectDialog = new Dialog('standard', () => {});
+  private readonly createDialog = new Dialog('large', () => this.closeEditor());
+  private readonly conflictDialog = new Dialog('standard', () => {});
+  private readonly historyDialog = new Dialog('standard', () => { this.requests.history++; });
+  private readonly usageDialog = new Dialog('large', () => {
     const pane = document.getElementById('detail-pane');
     if (pane !== null) pane.append(this.usagePanel, this.auditPanel);
     this.action(() => this.selectUsage(this.selection === null ? new api.UsageFilter_ProjectAll() : new api.UsageFilter_TaskOnly(this.selection), false));

@@ -168,6 +168,12 @@ progress { width: 50px; height: 6px; margin-left: 12px; }
 .workspace-dialog > [role=alert]:not(:empty) { padding: 8px 20px; }
 .workspace-dialog form { display: flex; align-items: center; gap: 10px; }
 .workspace-dialog form input { min-width: 0; flex: 1; }
+/* Large variant (DialogSize 'large' in web/src/dialog.ts): fixed 90% × 90% of the viewport at every width, header in place,
+   only the body scrolls. Required for the question batch, usage and New item dialogs, the Help dialog (I10) and any Workset dialog.
+   Applied only while open so the closed <dialog> stays hidden; the selectors outrank the narrow-viewport .workspace-dialog rule. */
+.workspace-dialog.large[open] { display: flex; flex-direction: column; width: 90vw; height: 90dvh; max-width: none; max-height: none; overflow: hidden; }
+.workspace-dialog.large > .dialog-header, .workspace-dialog.large > [role=alert] { flex: none; }
+.workspace-dialog.large > .dialog-body { flex: 1 1 auto; min-height: 0; overflow: auto; }
 table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: 12px; }
 th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid #2b3c49; vertical-align: top; overflow-wrap: anywhere; }
 th { color: #a4c1d3; font-weight: 500; }

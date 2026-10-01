@@ -17,7 +17,7 @@ interface GraphEffects {
 }
 
 export class GraphActions {
-  readonly dialog = new Dialog(() => { this.shown = null; });
+  readonly dialog = new Dialog('standard', () => { this.shown = null; });
   private shown: { project: string; request: string } | null = null;
   readonly element = element('section', '');
   private readonly references = element('div', '');

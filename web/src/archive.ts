@@ -17,7 +17,7 @@ interface ArchiveEffects {
 export class ArchiveDialog {
   private generation = 0;
   private readonly busy = new Set<string>();
-  private readonly dialog = new Dialog(() => { this.generation++; });
+  private readonly dialog = new Dialog('standard', () => { this.generation++; });
   readonly element = this.dialog.element;
   constructor(private readonly effects: ArchiveEffects, private readonly storage: Storage) {}
 

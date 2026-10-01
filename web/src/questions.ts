@@ -15,7 +15,7 @@ interface QuestionEffects {
 }
 
 export class QuestionBatch {
-  readonly dialog = new Dialog(() => { this.generation++; this.record = null; });
+  readonly dialog = new Dialog('large', () => { this.generation++; this.record = null; });
   private generation = 0;
   private queue: api.ItemId[] = [];
   private index = 0;

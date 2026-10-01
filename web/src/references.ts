@@ -8,7 +8,7 @@ import { faultMessage } from './faults.js';
 import { itemView } from './presentation.js';
 
 export class ReferencePopup {
-  readonly dialog = new Dialog(() => { this.generation++; });
+  readonly dialog = new Dialog('standard', () => { this.generation++; });
   private generation = 0;
   private trail: api.ItemId[] = [];
 
