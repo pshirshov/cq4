@@ -167,7 +167,7 @@ final class RealIntegrationHarness(local: LocalWorkspaceFixture, guardian: Guard
       admission <- Semaphore.make(1)
       controlled = new GovernedIntegrationJobs(owner, jobs, admission)
       git = new SupervisedGitIntegration(owner, local.source, target, local.command, controlled, directory.resolve("payload"), guardian.environment,
-        ExecutionLimits(Duration.ofSeconds(3), Duration.ofSeconds(10), Duration.ofSeconds(1), Duration.ofMillis(100), Duration.ofSeconds(2), 65536), CqEntrypoint.command)
+        ExecutionLimits(Duration.ofSeconds(3), None, Duration.ofSeconds(1), Duration.ofMillis(100), Duration.ofSeconds(2), 65536), CqEntrypoint.command)
       result <- operation(IntegrationFixture(owner, local.source, target, local.base, first, second, combined, git,
         new FileIntegrationJournal(directory.resolve("integrations"), owner),
         ZIO.attemptBlocking(new FileIntegrationJournal(Files.createTempDirectory(directory, "missing-journal-"), owner)),

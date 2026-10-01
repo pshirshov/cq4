@@ -25,7 +25,6 @@ Initialize the consumer with the existing `cq init --endpoint URL`. It must be a
   }],
   "limits": {
     "startupMillis": "10000",
-    "executionMillis": "600000",
     "heartbeatMillis": "2000",
     "graceMillis": "1000",
     "killMillis": "3000",
@@ -51,7 +50,7 @@ Use the JVM launcher described in the [README](../../README.md#current-cli) from
 cq run codex --settings /absolute/settings.json --input /absolute/request.txt
 ```
 
-The input is a nonempty UTF-8 file of at most 192 KiB. Settings/project records are bounded to 64 KiB. `limits.retainedOutputBytes` bounds the published transcript of each native stream, up to 32 MiB each; it does not stop a process (see [process guardian](process-guardian.md#output-retention-bound-and-disk-safety-ceiling)). The combined startup, execution and cleanup limits plus a ten-minute delivery margin must fit the server's 24-hour scoped-credential lifetime. Installed harness versions are checked before launch; missing or unverified routes fail explicitly. `CQ_TOKEN` must authorize host credential grants. It remains in the host and is excluded from the harness environment.
+The input is a nonempty UTF-8 file of at most 192 KiB. Settings/project records are bounded to 64 KiB. `limits.retainedOutputBytes` bounds the published transcript of each native stream, up to 32 MiB each; it does not stop a process (see [process guardian](process-guardian.md#output-retention-bound-and-disk-safety-ceiling)). A governing harness and its children have no execution deadline (see [process guardian](process-guardian.md#deadlines-that-stay-and-deadlines-that-went)); the host renews its own scoped credentials for as long as the session runs. Installed harness versions are checked before launch; missing or unverified routes fail explicitly. `CQ_TOKEN` must authorize host credential grants. It remains in the host and is excluded from the harness environment.
 
 Set `integrationTarget` to an explicit existing full branch reference such as `refs/heads/integration` to enable reviewed-candidate integration. The branch must not be checked out when applying the update. Use `null` for candidate-only sessions.
 
@@ -77,7 +76,7 @@ This holds the session journal's exclusive owner lock throughout credential acqu
 
 ## Runtime scope and remaining release work
 
-The durable job service quarantines unfinished records on recovery and owns process-tree shutdown. The role connects child dispatch, claims and reference-based prompt/result chaining. All three governing routes have independent consumer assessments, qualified by the [current clarified-oracle evidence](../validation/m4-usage-repetitions.md). Reviewed integration and combination/reconciliation are implemented. Interactive outer-session telemetry retains its declared coverage limits; the native distribution and installed deterministic corpus pass, while packaged live verification and human acceptance remain pending. No automatic retention/deletion is implemented. Forced shutdown exits 75 and requires reconciliation; see the [shutdown boundary](local-dispatch.md#delivery-and-shutdown).
+The durable job service quarantines unfinished records on recovery and owns process-tree shutdown. The role connects child dispatch, claims and reference-based prompt/result chaining. All three governing routes have independent consumer assessments, qualified by the [current clarified-oracle evidence](../validation/m4-usage-repetitions.md). Reviewed integration and combination/reconciliation are implemented. Interactive outer-session telemetry retains its declared coverage limits; the native distribution and installed deterministic corpus pass, while packaged live verification and human acceptance remain pending. No automatic retention/deletion is implemented. A session has no deadline of its own; a shutdown that does not drain within grace + kill + ten seconds exits 75 and requires reconciliation; see the [shutdown boundary](local-dispatch.md#delivery-and-shutdown).
 
 See [verification evidence](../validation/m2-supervisor-role.md).
 

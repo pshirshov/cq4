@@ -31,7 +31,7 @@ def main():
         "evaluation": {"run": "deterministic-growth", "scenario": "fixed-member-pair", "assessor": False},
         "harnesses": [{"harness": "Codex", "executable": str(executable), "model": "fixture-model", "provider": "fixture-provider",
             "version": "0.156.1", "providerExtensions": [], "providerEnvironment": []}],
-        "limits": {"startupMillis": "5000", "executionMillis": "90000", "heartbeatMillis": "1000", "graceMillis": "300", "killMillis": "2000", "retainedOutputBytes": 262144}, "checks": []}))
+        "limits": {"startupMillis": "5000", "heartbeatMillis": "1000", "graceMillis": "300", "killMillis": "2000", "retainedOutputBytes": 262144}, "checks": []}))
 
     def run(arguments, name):
         result = subprocess.run(command + arguments, cwd=repository, env=environment, capture_output=True, text=True, timeout=110)

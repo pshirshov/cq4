@@ -12,7 +12,7 @@ import scala.util.Using
 import zio.ZIO
 
 final case class GuardianFixture(binary: Path, root: Path, environment: Map[String, String]) {
-  def spec(command: List[String], execution: Duration): ExecutionSpec = {
+  def spec(command: List[String], execution: Option[Duration]): ExecutionSpec = {
     val directory = Files.createDirectory(root.resolve(UUID.randomUUID().toString))
     val input = directory.resolve("input")
     Files.writeString(input, "host input λ\n")
@@ -20,7 +20,7 @@ final case class GuardianFixture(binary: Path, root: Path, environment: Map[Stri
       ExecutionLimits(Duration.ofSeconds(2), execution, Duration.ofMillis(900), Duration.ofMillis(100), Duration.ofSeconds(1), 262144))
   }
   def artificial(script: String): (Path, ExecutionSpec) = {
-    val execution = spec(List("true"), Duration.ofSeconds(30))
+    val execution = spec(List("true"), Some(Duration.ofSeconds(30)))
     val helper = execution.directory.resolve("artificial-guardian")
     Files.writeString(helper, "#!/bin/sh\n" + script + "\n")
     require(helper.toFile.setExecutable(true))
@@ -42,7 +42,7 @@ final class GuardianDriverProcess extends SpecZIO with AssertZIO {
 
   "Guardian driver (Behavioral Active Blackbox; local Process Communication)" should {
     "report observed execution and retain separate output without blocking the start call" in { (fixture: GuardianFixture) => ZIO.attemptBlocking {
-      val spec = fixture.spec(List("python3", "-c", "import sys,time; print(sys.stdin.read(),end=''); sys.stderr.write('diagnostic'); time.sleep(0.2)"), Duration.ofSeconds(3))
+      val spec = fixture.spec(List("python3", "-c", "import sys,time; print(sys.stdin.read(),end=''); sys.stderr.write('diagnostic'); time.sleep(0.2)"), Some(Duration.ofSeconds(3)))
       val before = System.nanoTime()
       Using.resource(new GuardianDriver(fixture.binary).start(spec)) { running =>
         assert(Duration.ofNanos(System.nanoTime() - before).toMillis < 200)
@@ -55,7 +55,7 @@ final class GuardianDriverProcess extends SpecZIO with AssertZIO {
     }}
 
     "D95: let a command exceed its retained output bound and exit normally with the whole stream on disk" in { (fixture: GuardianFixture) => ZIO.attemptBlocking {
-      val spec = fixture.spec(List("python3", "-c", "import os\nfor _ in range(128): os.write(1, b'o' * 8192)"), Duration.ofSeconds(10))
+      val spec = fixture.spec(List("python3", "-c", "import os\nfor _ in range(128): os.write(1, b'o' * 8192)"), Some(Duration.ofSeconds(10)))
       Using.resource(new GuardianDriver(fixture.binary).start(spec)) { running =>
         val observed = running.await(Duration.ofSeconds(15))
         assert(observed.phase == ProcessPhase.Settled && observed.result.exists(r => r.code.contains(0) && r.reason == StopReason.Exited && r.stdoutBytes == 1048576),
@@ -65,7 +65,7 @@ final class GuardianDriverProcess extends SpecZIO with AssertZIO {
     }}
 
     "cancel promptly and settle the actual root before declaring cleanup complete" in { (fixture: GuardianFixture) => ZIO.attemptBlocking {
-      val spec = fixture.spec(List("sleep", "30"), Duration.ofSeconds(40))
+      val spec = fixture.spec(List("sleep", "30"), Some(Duration.ofSeconds(40)))
       Using.resource(new GuardianDriver(fixture.binary).start(spec)) { running =>
         val before = System.nanoTime()
         assert(running.cancel().cancellationRequested)
@@ -76,15 +76,23 @@ final class GuardianDriverProcess extends SpecZIO with AssertZIO {
     }}
 
     "distinguish a command deadline from unknown cleanup after abrupt guardian death" in { (fixture: GuardianFixture) => ZIO.attemptBlocking {
-      val deadline = fixture.spec(List("sleep", "30"), Duration.ofMillis(150))
+      val deadline = fixture.spec(List("sleep", "30"), Some(Duration.ofMillis(150)))
       Using.resource(new GuardianDriver(fixture.binary).start(deadline)) { running =>
         val observed = running.await(Duration.ofSeconds(5))
         assert(observed.phase == ProcessPhase.Settled && observed.result.exists(_.reason == StopReason.ExecutionDeadline))
       }
-      val killed = fixture.spec(List("python3", "-c", "import os,signal; os.kill(os.getppid(),signal.SIGKILL)"), Duration.ofSeconds(3))
+      val killed = fixture.spec(List("python3", "-c", "import os,signal; os.kill(os.getppid(),signal.SIGKILL)"), Some(Duration.ofSeconds(3)))
       Using.resource(new GuardianDriver(fixture.binary).start(killed)) { running =>
         val observed = running.await(Duration.ofSeconds(5))
         assert(observed.phase == ProcessPhase.Uncertain && observed.problem.nonEmpty)
+      }
+    }}
+
+    "I21: run a command without an execution limit past every other wall-clock bound of its job and settle its own exit" in { (fixture: GuardianFixture) => ZIO.attemptBlocking {
+      val spec = fixture.spec(List("sleep", "6"), None)
+      Using.resource(new GuardianDriver(fixture.binary).start(spec)) { running =>
+        val observed = running.await(Duration.ofSeconds(12))
+        assert(observed.phase == ProcessPhase.Settled && observed.result.exists(r => r.code.contains(0) && r.reason == StopReason.Exited), observed.toString)
       }
     }}
 

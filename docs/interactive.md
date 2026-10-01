@@ -111,7 +111,7 @@ Troubleshooting: when a startup precondition fails (missing token, missing or in
 
 ## Shutdown and accounting
 
-Ending the harness ends its CQ host and managed hierarchy. Freezing the native owner is detected through the heartbeat deadline; reconnecting creates a fresh session and does not adopt uncertain children. A session has an eight-hour absolute lifetime.
+Ending the harness ends its CQ host and managed hierarchy. Freezing the native owner is detected through the heartbeat deadline; reconnecting creates a fresh session and does not adopt uncertain children. A session has no absolute lifetime: it runs for as long as its harness does, and the host renews its own server credentials meanwhile.
 
 Some native clients terminate their MCP host before it finishes its final audit publication. Preserve the session directory, which `session Context` returns. After the owner has stopped, recover pending records with:
 

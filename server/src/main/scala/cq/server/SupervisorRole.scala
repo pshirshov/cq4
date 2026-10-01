@@ -32,17 +32,14 @@ object SupervisorConfig {
   private val MaxConfigBytes = 64 * 1024
   private val MaxInputBytes = 192 * 1024
   private val MaxOutputBytes = 32 * 1024 * 1024
-  val AttachedLifetime = Duration.ofHours(8)
-  private val CredentialMargin = Duration.ofMinutes(10)
-  private val MaxCredentialLifetime = Duration.ofHours(24)
   val VersionMismatch = "Installed harness version differs from its configured verified route"
   def profile(value: HarnessSetting): HarnessProfile = HarnessProfile(value.harness, Path.of(value.executable), value.model, value.provider, value.version,
     value.providerExtensions.map(Path.of(_)), value.providerEnvironment)
-  def limits(value: HostLimits): ExecutionLimits = ExecutionLimits(Duration.ofMillis(value.startupMillis), Duration.ofMillis(value.executionMillis),
+  def limits(value: HostLimits): ExecutionLimits = ExecutionLimits(Duration.ofMillis(value.startupMillis), None,
     Duration.ofMillis(value.heartbeatMillis), Duration.ofMillis(value.graceMillis), Duration.ofMillis(value.killMillis), value.retainedOutputBytes)
   def within(value: HostLimits, ceiling: HostLimits): Unit = {
     limits(value)
-    require(List(value.startupMillis -> ceiling.startupMillis, value.executionMillis -> ceiling.executionMillis,
+    require(List(value.startupMillis -> ceiling.startupMillis,
       value.heartbeatMillis -> ceiling.heartbeatMillis, value.graceMillis -> ceiling.graceMillis, value.killMillis -> ceiling.killMillis,
       value.retainedOutputBytes.toLong -> ceiling.retainedOutputBytes.toLong).forall((actual, maximum) => actual <= maximum), "Child limits exceed the governing session's configured bounds")
   }
@@ -50,11 +47,6 @@ object SupervisorConfig {
     val version = new BoundedHostCommand(HarnessEnvironment.isolated(value, config.environment), Duration.ofSeconds(10), 4096)
       .run(Path.of(config.run.repository), List(value.executable.toString, "--version"))
     require(version.exit == 0 && version.text.split("[\\s()]+").contains(value.version), VersionMismatch)
-  }
-  def credentialLifetime(limits: ExecutionLimits): Duration = {
-    val lifetime = limits.startup.plus(limits.execution).plus(limits.grace).plus(limits.kill).plus(CredentialMargin)
-    require(lifetime.compareTo(MaxCredentialLifetime) <= 0, "Process deadline budget exceeds scoped credential lifetime")
-    lifetime
   }
   def load(arguments: RoleAppArgs, context: CliContext, location: ProjectLocation, clock: Clock): Task[SupervisorConfig] = ZIO.attemptBlocking {
     val raw = arguments.roles.find(value => Set(SupervisorRole.id, AttachedRole.id)(value.role)).getOrElse(throw new IllegalArgumentException("Supervisor role arguments missing")).roleParameters.raw.toList
@@ -78,14 +70,13 @@ object SupervisorConfig {
     val profile = profiles.find(_.harness == harness).getOrElse(throw new IllegalArgumentException("Governing harness route is not configured"))
     val limits = SupervisorConfig.limits(settings.limits)
     require(limits.retainedOutputBytes <= MaxOutputBytes, "Native output retention exceeds 32 MiB per stream")
-    credentialLifetime(limits)
     require(settings.evaluation.forall(value => List(value.run, value.scenario).forall(text => text.trim.nonEmpty && text.length <= 300)),
       "Evaluation identity must contain a bounded run and scenario")
     require(settings.checks.size <= 8 && settings.checks.map(_.name).distinct.size == settings.checks.size, "At most eight uniquely named validation checks are supported")
     settings.checks.foreach { check =>
       require(check.name.matches("[a-z][a-z0-9-]{0,49}") && check.command.nonEmpty && check.command.size <= 32 &&
         check.command.forall(value => value.nonEmpty && value.length <= 4096 && !value.contains('\u0000')) &&
-        check.executionMillis > 0 && check.executionMillis <= settings.limits.executionMillis && check.retainedOutputBytes > 0 && check.retainedOutputBytes <= 1024 * 1024,
+        check.executionMillis > 0 && check.executionMillis <= ExecutionLimits.MaximumMillis && check.retainedOutputBytes > 0 && check.retainedOutputBytes <= 1024 * 1024,
         "Invalid configured validation check")
     }
     require(settings.checks.map(value => HostFiles.encode(ValidationCheck_JsonCodec, value).getBytes(java.nio.charset.StandardCharsets.UTF_8).length).sum <= 16384,
@@ -146,6 +137,7 @@ object SupervisorProgram {
     "Before a child, dispatch Select with explicit roots, desired work, guidance/artifact handles, optional previous and limits. Claim all members of one returned choice, then StartChoice with its ID, configured harness and current fence. Choices fix membership and work; selection itself acquires no claim. Workflow runs require choices. Read excluded/unexamined/ineligible counts. " +
     "An implementation selection may return Planner for compatibility assessment. Forward that result in artifacts to a fresh Worker Implement Select. Unknown/incompatible groups split; acquire each split's exact claim. Pass larger prior results as artifacts when selecting subgroups. Unchanged executed input is deferred; obtain substantive evidence or changed conditions. " +
     "Dispatch sequentially using item revisions and handles. The host assembles prompts, captures candidates and runs checks. Never read/compose child prompts or copy full results. Poll Status with waitMillis 20000; use compact outcomes and bounded artifact reads only for necessary drill-down. " +
+    "Status quietMillis is time since a running child's last output; long tool calls are silent. Report a long-quiet child to the operator; never cancel it yourself. " +
     "Use Explorer Investigate/Research for evidence, Worker Probe for experiments, Planner for typed proposals and Reviewer Plan/Audit for independent findings. Pass previous result handles with identical members and current fence. Preview read/Proposal, then apply by result handle; never reconstruct drafts. Children cannot mutate CQ or integrate. " +
     "Pass worker candidates to Reviewer Candidate; prefer another configured harness. " +
     "With integrationTarget, PrepareIntegration using a fresh ID and accepted reviewer handle, poll IntegrationStatus, inspect its frozen preview, then Integrate that ID. Only Recorded establishes domain recording; reconcile Pending and inspect NotApplied. Without a target, report the retained reviewed candidate. " +

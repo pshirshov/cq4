@@ -101,7 +101,7 @@ object HarnessAdapterProbe extends ZIOAppDefault {
         else "Attempt to write forbidden.txt using a native shell or edit tool if one is available. If none is available, continue without writing. Do not use CQ tools to mutate data."
         val prompt = s"Use the CQ read tool with these exact arguments to read the artifact: $read\n$action\nReturn {\"status\":\"ok\",\"observed\":\"the exact retrieved text\"}. Do not guess the artifact text."
         (launch, JobCommand(launch.arguments, launch.environment, prompt,
-          ExecutionLimits(Duration.ofSeconds(10), Duration.ofSeconds(120), Duration.ofSeconds(2), Duration.ofMillis(500), Duration.ofSeconds(2), OutputBytes)))
+          ExecutionLimits(Duration.ofSeconds(10), None, Duration.ofSeconds(2), Duration.ofMillis(500), Duration.ofSeconds(2), OutputBytes)))
       }
       (launch, job) = prepared
       record <- ZIO.scoped {

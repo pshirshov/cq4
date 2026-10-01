@@ -28,7 +28,7 @@ object ShutdownFixture extends RoleAppMain.LauncherBIO[IO] {
   val StateProperty = "cq.fixture.state"
   /** When `true`, the attached fixture leaves its settled children's workspaces in place, as a host killed before releasing them does. */
   val RetainProperty = "cq.fixture.retain"
-  val Limits = HostLimits(3000, 30000, 900, 100, 1000, 262144)
+  val Limits = HostLimits(3000, 900, 100, 1000, 262144)
   /** The batch governor: a harness stand-in that marks its workspace and then runs until stopped. */
   val GovernorScript = "#!/usr/bin/env python3\nimport time\nfrom pathlib import Path\nPath('running').write_text('governor')\ntime.sleep(60)\n"
 
@@ -111,7 +111,7 @@ object ShutdownFixture extends RoleAppMain.LauncherBIO[IO] {
       }
       make[SupervisorAuthority].from { (clock: Clock) =>
         val expires = clock.millis() + Duration.ofHours(1).toMillis
-        SupervisorAuthority(new Receiver, new Receiver, new Receiver, AccessToken("governor", expires), expires)
+        SupervisorAuthority(new Receiver, new Receiver, new Receiver, AccessToken("governor", expires))
       }
       make[SessionCollectors].fromValue(new SessionCollectors { override def collector(run: SupervisorRun): ServerApi = new Receiver })
       make[CliContext].from((config: SupervisorConfig) => CliContext(sys.env, config.directory, System.out, System.in))

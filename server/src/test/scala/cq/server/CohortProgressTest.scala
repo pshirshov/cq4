@@ -112,7 +112,7 @@ final class CohortProgressLocal extends AnyWordSpec {
       val member = ItemRevision(id(1), Revision(1))
       val request = DispatchRequest(RequestId(UUID.randomUUID()), DispatchWork.Reviewer(ReviewerMode.Candidate), Harness.Codex,
         List(member), Nil, Nil, Some(ArtifactId(UUID.randomUUID())), Fence(ClaimId(UUID.randomUUID()), 1),
-        HostLimits(3000, 10000, 1000, 300, 2000, 262144))
+        HostLimits(3000, 1000, 300, 2000, 262144))
       val attempt = AttemptId(UUID.randomUUID())
       val metadata = ArtifactMetadata(project, ArtifactId(UUID.randomUUID()), attempt, ArtifactKind.Result, "application/json", "a" * 64,
         1, 1, actor.copy(role = Role.Collector), 1)

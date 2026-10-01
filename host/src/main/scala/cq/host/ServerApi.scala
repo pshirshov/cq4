@@ -7,7 +7,7 @@ import io.circe.parser.parse
 import java.net.URI
 import java.net.http.{HttpClient, HttpRequest, HttpResponse, HttpTimeoutException}
 import java.nio.charset.StandardCharsets.UTF_8
-import java.time.Duration
+import java.time.{Clock, Duration}
 import java.util.concurrent.{ExecutionException, TimeUnit, TimeoutException}
 
 trait ServerApi {
@@ -64,4 +64,25 @@ final class HttpServerApi(endpoint: URI, token: String, session: SessionId, time
   override def grant(input: GrantRequest): AccessToken = post("/api/grant", GrantRequest_JsonCodec, input, AccessToken_JsonCodec)
   override def admit(input: HostAdmissionInput): ResultAdmission = post("/api/admission", HostAdmissionInput_JsonCodec, input, ResultAdmission_JsonCodec)
   override def integrate(input: HostIntegrationInput): IntegrationRecord = post("/api/integration", HostIntegrationInput_JsonCodec, input, IntegrationRecord_JsonCodec)
+}
+
+/** The server bounds a scoped credential's lifetime; a host that outlives one is granted the next from its root credential once less than `margin` remains. */
+final class RenewingServerApi(root: ServerApi, project: ProjectId, actor: Actor, connect: AccessToken => ServerApi, clock: Clock,
+  lifetime: Duration, margin: Duration) extends ServerApi {
+  require(!margin.isNegative && margin.compareTo(lifetime) < 0, "Renewal margin must be shorter than the credential lifetime")
+  private var current = Option.empty[(AccessToken, ServerApi)]
+  private def api: ServerApi = synchronized {
+    val now = clock.millis()
+    if (current.forall { case (token, _) => token.expiresAt - now < margin.toMillis }) {
+      val token = root.grant(GrantRequest(project, actor, Math.addExact(now, lifetime.toMillis)))
+      current = Some(token -> connect(token))
+    }
+    current.get._2
+  }
+  override def call(command: Command): Result = api.call(command)
+  override def usage(input: HostUsageInput): HostUsageResult = api.usage(input)
+  override def artifact(input: ArtifactUpload): ArtifactMetadata = api.artifact(input)
+  override def grant(input: GrantRequest): AccessToken = api.grant(input)
+  override def admit(input: HostAdmissionInput): ResultAdmission = api.admit(input)
+  override def integrate(input: HostIntegrationInput): IntegrationRecord = api.integrate(input)
 }

@@ -18,7 +18,7 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
   private def task: ItemDraft = ItemDraft("Work", "Required behavior", Set("shared-label"), false,
     Content.Task(TaskStatus.Ready, List("Independent acceptance"), None, Nil), Nil)
   private def request(roots: Set[ItemId], work: DispatchWork): CohortRequest = CohortRequest(RequestId(uuid), roots, work, Nil, Nil, None,
-    HostLimits(3000, 10000, 1000, 300, 2000, 262144))
+    HostLimits(3000, 1000, 300, 2000, 262144))
   private final class MutableBase(var head: GitCommit) extends ExecutionBase {
     override def fresh(): GitCommit = head
     override def expected(base: GitCommit, candidate: GitCommit): GitCommit = base
@@ -86,7 +86,7 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
       assignment <- usage.assign(collector, Assignment(AssignmentId(uuid), scope.project, claim.members, Attribution.Shared, Some(uuid), None))
       attempt <- usage.start(collector, Attempt(AttemptId(uuid), assignment.id, Some(parent.id), scope.actor.session, Role.Planner, Harness.Codex, "fixture", "fixture", "fixture", 1001, UsagePhase.Plan))
       dispatch = DispatchRequest(RequestId(uuid), DispatchWork.Planner(), Harness.Codex, members, Nil, Nil, None, claim.fence,
-        HostLimits(3000, 10000, 1000, 300, 2000, 262144))
+        HostLimits(3000, 1000, 300, 2000, 262144))
       views <- ZIO.foreach(members)(ref => ledger.get(scope, ref.id))
       input = ChildExecutionInput(ChildInput(scope.project, dispatch, views, Nil, Nil, None, None), base, checks)
       _ <- artifacts.upload(collector, ArtifactUpload(scope.project, NativeArtifacts.id(attempt.id, "input"), attempt.id, ArtifactKind.Input,
@@ -125,7 +125,7 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
       if (f.members.size == 1) Attribution.Direct else Attribution.Shared, if (f.members.size == 1) None else Some(uuid), None))
     attempt <- usage.start(f.collector, Attempt(AttemptId(uuid), assignment.id, Some(f.parent), f.scope.actor.session, ChildContracts.role(work), Harness.Codex, "fixture", "fixture", "fixture", 1002, ChildContracts.phase(work)))
     dispatch = DispatchRequest(RequestId(uuid), work, Harness.Codex, f.members, Nil, Nil, previous.map(_.id), f.fence,
-      HostLimits(3000, 10000, 1000, 300, 2000, 262144))
+      HostLimits(3000, 1000, 300, 2000, 262144))
     base = previous.flatMap(_.result.candidate).getOrElse(f.base)
     views <- ZIO.foreach(f.members)(ref => ledger.get(f.scope, ref.id))
     input = ChildExecutionInput(ChildInput(f.scope.project, dispatch, views, Nil, Nil, previous.map(_.result), None), base, f.checks)

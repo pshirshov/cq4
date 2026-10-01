@@ -109,7 +109,7 @@ def main():
             answer_citation = {"File": {"path": ".cq-evaluation/answer.json", "revision": answer_commit}}
             checks.run(["git", "-C", str(consumer), "branch", "integration"], "integration-branch", 10)
         settings = {"integrationTarget": None, "stateRoot": str(evidence / "sessions"), "guardian": str(guardian), "harnesses": routes,
-                    "limits": {"startupMillis": "10000", "executionMillis": str(evaluation["EXECUTION_MILLIS"]), "heartbeatMillis": "2000",
+                    "limits": {"startupMillis": "10000", "heartbeatMillis": "2000",
                                "graceMillis": "1000", "killMillis": "3000", "retainedOutputBytes": 8388608}, "checks": [],
                     "evaluation": {"run": identifier, "scenario": "worked-wordfreq", "assessor": False}}
         if original is not None:

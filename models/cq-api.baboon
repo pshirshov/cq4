@@ -549,7 +549,7 @@ root data HarnessSetting {
   harness: Harness executable: str model: str provider: str version: str
   providerExtensions: lst[str] providerEnvironment: set[str]
 }
-root data HostLimits { startupMillis: i64 executionMillis: i64 heartbeatMillis: i64 graceMillis: i64 killMillis: i64 retainedOutputBytes: i32 }
+root data HostLimits { startupMillis: i64 heartbeatMillis: i64 graceMillis: i64 killMillis: i64 retainedOutputBytes: i32 }
 root data ValidationCheck { name: str command: lst[str] executionMillis: i64 retainedOutputBytes: i32 }
 root data SupervisorSettings { stateRoot: str guardian: str harnesses: lst[HarnessSetting] limits: HostLimits checks: lst[ValidationCheck] evaluation: opt[EvaluationScope] integrationTarget: opt[str] }
 root data GoverningReport { summary: str }
@@ -766,7 +766,7 @@ root data WorkspaceState { admission: WorkspaceAdmission directory: opt[str] }
 root data DispatchStatus {
   request: RequestId attempt: AttemptId phase: DispatchPhase process: opt[JobPhase] members: lst[ItemId]
   counts: ChildCounts next: ChildNext blocker: opt[str] result: opt[ArtifactId] partial: opt[ArtifactId] detailsOmitted: bit usageDelivered: bit
-  workspace: opt[WorkspaceState]
+  workspace: opt[WorkspaceState] quietMillis: opt[i64]
 }
 root data DispatchTicket { request: DispatchRequest assignment: Assignment attempt: Attempt profile: HarnessSetting selection: opt[ArtifactId] }
 root data CohortRequest {

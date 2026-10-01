@@ -66,7 +66,7 @@ object ChildContracts {
       "Candidate or plan review requires its previous result handle")
     require(HostFiles.encode(DispatchRequest_JsonCodec, value).getBytes(UTF_8).length <= MaxRequestBytes, "Dispatch request exceeds its byte bound")
     val limits = value.limits
-    ExecutionLimits(Duration.ofMillis(limits.startupMillis), Duration.ofMillis(limits.executionMillis), Duration.ofMillis(limits.heartbeatMillis),
+    ExecutionLimits(Duration.ofMillis(limits.startupMillis), None, Duration.ofMillis(limits.heartbeatMillis),
       Duration.ofMillis(limits.graceMillis), Duration.ofMillis(limits.killMillis), limits.retainedOutputBytes)
     require(limits.retainedOutputBytes <= MaxOutputBytes, "Dispatch output exceeds its retained byte bound")
   }

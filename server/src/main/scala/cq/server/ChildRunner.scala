@@ -107,8 +107,8 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
           val base = combination.map(_.observedTarget).orElse(input.previous.flatMap(_.candidate)).getOrElse(candidates.fresh())
           if (combination.isEmpty) candidates.verifyBase(base)
           val body = HostFiles.encode(ChildExecutionInput_JsonCodec, ChildExecutionInput(input, base, config.settings.checks))
-          val domain = authority.root.grant(GrantRequest(config.project.project,
-            Actor("CQ child " + ticket.attempt.id.value, ticket.attempt.session, ticket.attempt.role), authority.expiresAt))
+          val domain = SupervisorAuthority.harnessGrant(authority.root, config.project.project,
+            Actor("CQ child " + ticket.attempt.id.value, ticket.attempt.session, ticket.attempt.role), clock)
           val local = access.issue(ticket.attempt.id, ticket.attempt.role)
           val assets = entry.directory.resolve("assets")
           val invocation = agents.invocation(ticket.request.work, profile.harness, ticket.attempt.id, {

@@ -16,7 +16,7 @@ final class AttachedAssetsLocal extends AnyWordSpec {
     val settings = root.resolve("settings.json")
     val profiles = Harness.all.toList.map(harness => HarnessSetting(harness, binary.toString, "model", "provider", "version", Nil, Set.empty))
     Files.writeString(settings, HostFiles.encode(SupervisorSettings_JsonCodec, SupervisorSettings(root.resolve("state").toString,
-      binary.toString, profiles, HostLimits(1000, 10000, 500, 100, 1000, 65536), Nil, None, None)))
+      binary.toString, profiles, HostLimits(1000, 500, 100, 1000, 65536), Nil, None, None)))
     (root, binary, settings)
   }
 
@@ -28,7 +28,7 @@ final class AttachedAssetsLocal extends AnyWordSpec {
       assert(binary.toFile.setExecutable(true))
       val profiles = Harness.all.toList.map(harness => HarnessSetting(harness, binary.toString, "model", "provider", "version", Nil, Set("PROVIDER_API_KEY")))
       val settings = root.resolve("settings.json")
-      val value = SupervisorSettings(root.resolve("state").toString, binary.toString, profiles, HostLimits(1000, 10000, 500, 100, 1000, 65536), Nil, None, None)
+      val value = SupervisorSettings(root.resolve("state").toString, binary.toString, profiles, HostLimits(1000, 500, 100, 1000, 65536), Nil, None, None)
       Files.writeString(settings, HostFiles.encode(SupervisorSettings_JsonCodec, value))
       val assets = new AttachedAssets(new McpSchemas, new WorkflowAssets)
       Files.writeString(root.resolve(".mcp.json"), "{\"mcpServers\":{\"unrelated\":{\"command\":\"keep\"}},\"other\":true}")
@@ -63,7 +63,7 @@ final class AttachedAssetsLocal extends AnyWordSpec {
       val settings = root.resolve("settings.json")
       val profiles = Harness.all.toList.map(harness => HarnessSetting(harness, binary.toString, "model", "provider", "version", Nil, Set.empty))
       Files.writeString(settings, HostFiles.encode(SupervisorSettings_JsonCodec, SupervisorSettings(root.resolve("state").toString,
-        binary.toString, profiles, HostLimits(1000, 10000, 500, 100, 1000, 65536), Nil, None, None)))
+        binary.toString, profiles, HostLimits(1000, 500, 100, 1000, 65536), Nil, None, None)))
       val assets = new AttachedAssets(new McpSchemas, new WorkflowAssets)
       val local = root.resolve(".claude/settings.local.json")
       def approved: io.circe.Json = parser.parse(Files.readString(local)).fold(throw _, identity)
@@ -94,7 +94,7 @@ final class AttachedAssetsLocal extends AnyWordSpec {
       val settings = root.resolve("settings.json")
       val profiles = Harness.all.toList.map(harness => HarnessSetting(harness, binary.toString, "model", "provider", "version", Nil, Set.empty))
       Files.writeString(settings, HostFiles.encode(SupervisorSettings_JsonCodec, SupervisorSettings(root.resolve("state").toString,
-        binary.toString, profiles, HostLimits(1000, 10000, 500, 100, 1000, 65536), Nil, None, None)))
+        binary.toString, profiles, HostLimits(1000, 500, 100, 1000, 65536), Nil, None, None)))
       val assets = new AttachedAssets(new McpSchemas, new WorkflowAssets)
       Files.createDirectories(root.resolve(".codex"))
       Files.writeString(root.resolve(".codex/config.toml"), "model = 'keep'\n")

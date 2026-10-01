@@ -76,7 +76,7 @@ final class IntegrationRebaseProcess extends SpecZIO with AssertZIO {
     val root = auth.authenticate(token, Some(owner.actor.session.value.toString))
     val expires = clock.millis() + 60L * 60 * 1000
     val application = new Application(ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, auth)
-    val limits = HostLimits(5000, 30000, 900, 100, 1000, 262144)
+    val limits = HostLimits(5000, 900, 100, 1000, 262144)
     val renewals = new AtomicInteger(0)
     def publish(value: ChildResult): Task[ArtifactId] = for {
       artifact <- artifacts.upload(collector, ArtifactUpload(owner.project, ArtifactId(uuid), value.attempt, ArtifactKind.Result,
@@ -102,7 +102,7 @@ final class IntegrationRebaseProcess extends SpecZIO with AssertZIO {
       governorAuthority = auth.authenticate(auth.grant(root, GrantRequest(owner.project, owner.actor, expires)).value, None)
       authority = SupervisorAuthority(new Receiver(application, auth, root, root, runtime, new AtomicInteger(0)),
         new Receiver(application, auth, root, collectorAuthority, runtime, new AtomicInteger(0)),
-        new Receiver(application, auth, root, governorAuthority, runtime, renewals), AccessToken("governor", expires), expires)
+        new Receiver(application, auth, root, governorAuthority, runtime, renewals), AccessToken("governor", expires))
       jobs <- JobSupervisor.acquire(config.owner, ZIO.attemptBlocking(FileJobRepository.open(directory.resolve("journal"), project.project, owner.actor.session)),
         local.fixture.service, new GuardianDriver(guardian.binary), directory.resolve("payload"), clock)
       admission <- Semaphore.make(1)
