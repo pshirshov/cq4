@@ -121,7 +121,7 @@ class ExtendedAccess:
             mutations.append({"Replace": {"id": item["id"], "expected": item["revision"], "draft": changed}})
         change = {"request": operation, "mutations": mutations, "fences": [fence], "reason": "Integrate reviewed candidate " + operation["value"]}
         return {"id": operation, "project": project, "owner": self.scopes[project["value"]]["owner"], "repository": repository, "target": target,
-            "expected": base, "candidate": candidate, "worker": worker_handle, "reviewer": reviewer_handle, "checks": [], "fence": fence, "members": refs, "change": change}
+            "expected": base, "candidate": candidate, "worker": worker_handle, "reviewer": reviewer_handle, "checks": [], "fence": fence, "members": refs, "change": change, "rebase": None}
 
     def upload(self, attempt, position, value, supersedes):
         return {"meter": "native", "disposition": "Contribution", "detailReason": None, "observation": {"id": identity(), "attempt": attempt,

@@ -26,6 +26,7 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
     override def fresh(): GitCommit = throw new IllegalStateException("Fresh work is not started by these cases")
     override def expected(base: GitCommit, candidate: GitCommit): GitCommit = base
   }
+  private def prepare(preparation: IntegrationPreparation, ticket: IntegrationTicket): IntegrationIntent = preparation.freeze(preparation.review(ticket), None)
   private final class ServiceApi(scope: Scope, ledger: LedgerService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], runtime: Runtime[Any]) extends ServerApi {
     override def call(command: Command): Result = {
       val effect: IO[Throwable, Result] = command match {
@@ -54,7 +55,7 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
     def fresh: IntegrationIntent = {
       val id = IntegrationId(uuid)
       intent.copy(id = id, change = IntegrationPolicy.completion(id, intent.repository, intent.target, intent.candidate,
-        intent.worker, intent.reviewer, IntegrationValidation.citations(worker, reviewer), intent.fence, items))
+        intent.rebase, intent.worker, intent.reviewer, IntegrationValidation.citations(worker, reviewer), intent.fence, items))
     }
   }
   private def publish(scope: Scope, value: ChildResult, artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO]): IO[Throwable, ArtifactId] = for {
@@ -93,9 +94,9 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
         candidate, Some(candidate), ChildReport.Review(created.items.map(ref => ReviewMember(ref.id, ReviewVerdict.Accepted, Nil)), None), worker.validation, RetainedEvidence(Nil, Nil))
       reviewArtifact <- publish(collector, reviewer, artifacts, admissions)
       id = IntegrationId(uuid)
-      change = IntegrationPolicy.completion(id, "/consumer", "refs/heads/integration", candidate, workerArtifact, reviewArtifact, List(validation.id), claim.fence, items)
+      change = IntegrationPolicy.completion(id, "/consumer", "refs/heads/integration", candidate, None, workerArtifact, reviewArtifact, List(validation.id), claim.fence, items)
       intent = IntegrationIntent(id, owner.project, owner.actor, "/consumer", "refs/heads/integration", worker.base, candidate,
-        workerArtifact, reviewArtifact, List(check), claim.fence, created.items, change)
+        workerArtifact, reviewArtifact, List(check), claim.fence, created.items, change, None)
     } yield Fixture(owner, collector, parent.id, claim, items, worker, reviewer, intent)
   }
   private def reject[A](operation: IO[Throwable, A], accepts: Fault => Boolean): IO[Throwable, Unit] = operation.either.flatMap { value =>
@@ -118,9 +119,27 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
       request = f.reviewer.request.copy(request = RequestId(uuid), harness = Harness.Pi))
     handle <- publish(f.collector, review, artifacts, admissions)
     id = IntegrationId(uuid)
-    change = IntegrationPolicy.completion(id, f.intent.repository, f.intent.target, f.intent.candidate, f.intent.worker, handle,
+    change = IntegrationPolicy.completion(id, f.intent.repository, f.intent.target, f.intent.candidate, None, f.intent.worker, handle,
       IntegrationValidation.citations(f.worker, review), f.intent.fence, f.items)
   } yield f.copy(reviewer = review, intent = f.intent.copy(id = id, reviewer = handle, change = change))
+  private val rebasedRule = Fault.Invalid("Rebased integration requires passing host checks on the exact rebased commit")
+  private val advancedHead = GitCommit("c" * 40)
+  private val rebasedCommit = GitCommit("e" * 40)
+  /** A host rebase of the reviewed candidate onto an advanced head, checked on the rebased commit under the governor attempt. */
+  private def rebased(f: Fixture, artifacts: ArtifactService[IO], alter: ReviewValidation => ReviewValidation): Task[Fixture] = {
+    val artifact = ArtifactId(uuid)
+    val job = JobRecord(WorkspaceSpec(f.owner.project, f.owner.actor.session, AttemptId(uuid), f.intent.repository, rebasedCommit),
+      "host-rebase-check", JobTarget.Run, JobPhase.Settled, Some(JobExit(Some(0), None, StopReason.Exited, 0, 0, true, false)), None, 1, 1000, 1001)
+    val value = alter(ReviewValidation(f.governor, ValidationObservation(f.intent.checks.head, rebasedCommit, job, ArtifactId(uuid), ArtifactId(uuid)),
+      List(ValidationEvidence(f.intent.checks.head.name, ValidationState.Passed, artifact))))
+    val id = IntegrationId(uuid)
+    val rebase = IntegrationRebase(f.intent.candidate, value.author, value.evidence)
+    val change = IntegrationPolicy.completion(id, f.intent.repository, f.intent.target, rebasedCommit, Some(rebase), f.intent.worker, f.intent.reviewer,
+      IntegrationValidation.citations(f.worker, f.reviewer), f.intent.fence, f.items)
+    artifacts.upload(f.collector, ArtifactUpload(f.owner.project, artifact, f.governor, ArtifactKind.Validation, "application/json",
+      Wire.encode(ValidationObservation_JsonCodec, value.observation)))
+      .as(f.copy(intent = f.intent.copy(id = id, expected = advancedHead, candidate = rebasedCommit, change = change, rebase = Some(rebase))))
+  }
   private def pending(id: IntegrationId)(fault: Fault): Boolean = fault == Fault.IntegrationPending(id)
   private def fixed(repository: LedgerRepository[IO], millis: Long): LedgerService[IO] = FixedLedger.at(repository, millis)
 
@@ -158,7 +177,7 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
           review = f.reviewer.copy(attempt = attempt.id, request = f.reviewer.request.copy(request = RequestId(uuid), members = members))
           handle <- publish(f.collector, review, artifacts, admissions)
           id = IntegrationId(uuid)
-          change = IntegrationPolicy.completion(id, f.intent.repository, f.intent.target, f.intent.candidate, f.intent.worker, handle,
+          change = IntegrationPolicy.completion(id, f.intent.repository, f.intent.target, f.intent.candidate, None, f.intent.worker, handle,
             IntegrationValidation.citations(f.worker, review), f.claim.fence, current)
         } yield (f.copy(reviewer = review, intent = f.intent.copy(id = id, reviewer = handle, members = members, change = change)), current)
         for {
@@ -170,8 +189,8 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
           reviewed <- reviewCurrent(original)
           (f, current) = reviewed
           _ <- assertIO(f.intent.members != original.intent.members && current.map(_.draft) == original.items.map(_.draft))
-          prepared <- ZIO.attemptBlocking(new IntegrationPreparation(new ServiceApi(f.owner, ledger, artifacts, admissions, runtime), f.owner,
-            f.intent.repository, f.intent.target, f.intent.checks, Clock.systemUTC(), recordedBases).prepare(IntegrationTicket(f.intent.id, f.intent.reviewer)))
+          prepared <- ZIO.attemptBlocking(prepare(new IntegrationPreparation(new ServiceApi(f.owner, ledger, artifacts, admissions, runtime), f.owner,
+            f.intent.repository, f.intent.target, f.intent.checks, Clock.systemUTC(), recordedBases), IntegrationTicket(f.intent.id, f.intent.reviewer)))
           _ <- assertIO(prepared == f.intent)
           reserved <- integrations.reserve(f.collector, f.intent)
           _ <- assertIO(reserved.resolution == IntegrationResolution.Pending())
@@ -188,8 +207,8 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
             edited.draft.copy(body = "Changed requirements"))), List(changed.claim.fence), "Change the task content"))
           stale <- reviewCurrent(changed)
           _ <- reject(integrations.reserve(stale._1.collector, stale._1.intent), _.isInstanceOf[Fault.Invalid])
-          refused <- ZIO.attemptBlocking(new IntegrationPreparation(new ServiceApi(stale._1.owner, ledger, artifacts, admissions, runtime), stale._1.owner,
-            stale._1.intent.repository, stale._1.intent.target, stale._1.intent.checks, Clock.systemUTC(), recordedBases).prepare(IntegrationTicket(stale._1.intent.id, stale._1.intent.reviewer))).either
+          refused <- ZIO.attemptBlocking(prepare(new IntegrationPreparation(new ServiceApi(stale._1.owner, ledger, artifacts, admissions, runtime), stale._1.owner,
+            stale._1.intent.repository, stale._1.intent.target, stale._1.intent.checks, Clock.systemUTC(), recordedBases), IntegrationTicket(stale._1.intent.id, stale._1.intent.reviewer))).either
           _ <- assertIO(refused.isLeft)
         } yield ()
       }
@@ -222,6 +241,81 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
         unchanged <- ledger.claimPreview(original.owner, original.claim.members)
         _ <- assertIO(unchanged.integrations.isEmpty)
         _ <- integrations.reserve(original.collector, original.intent)
+      } yield ()
+    }
+
+    "I18: reserve a host-rebased intent on the reviewed candidate and cite the landed commit, the reviewed commit and the host's checks" in {
+      (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO],
+        integrations: IntegrationService[IO]) => for {
+        original <- begin(ledger, usage, artifacts, admissions)
+        f <- rebased(original, artifacts, identity)
+        rebase = f.intent.rebase.get
+        _ <- reject(integrations.reserve(f.collector, f.intent.copy(rebase = Some(rebase.copy(reviewed = GitCommit("d" * 40))))), _.isInstanceOf[Fault.Invalid])
+        _ <- reject(integrations.reserve(f.collector, f.intent.copy(rebase = Some(rebase.copy(reviewed = rebasedCommit)))), _.isInstanceOf[Fault.Invalid])
+        _ <- reject(integrations.reserve(f.collector, f.intent.copy(change = original.fresh.change.copy(request = f.intent.change.request))), _.isInstanceOf[Fault.Invalid])
+        reserved <- integrations.reserve(f.collector, f.intent)
+        stored <- integrations.get(f.owner, f.intent.id)
+        _ <- ZIO.attempt(assert(reserved.resolution == IntegrationResolution.Pending() && stored == reserved && stored.intent == f.intent))
+        recorded <- integrations.observe(f.collector, f.intent.id, IntegrationObservation.Incorporated(rebasedCommit))
+        _ <- assertIO(recorded.resolution.isInstanceOf[IntegrationResolution.Recorded])
+        completed <- ZIO.foreach(f.items)(item => ledger.get(f.owner, item.id).map(_.item.draft.content.asInstanceOf[Content.Task]))
+        _ <- ZIO.attempt(completed.foreach { task =>
+          println(s"Rebased completion: result=${task.result.map(_.linesIterator.toList.last)} citations=${task.validation.last.citations}")
+          assert(task.status == TaskStatus.Done && task.validation.last.citations == List(
+            Citation.Commit(f.intent.repository, rebasedCommit.value), Citation.Commit(f.intent.repository, original.intent.candidate.value),
+            Citation.Artifact(f.intent.worker), Citation.Artifact(f.intent.reviewer)) ++
+            (IntegrationValidation.citations(f.worker, f.reviewer) ++ rebase.validation.map(_.artifact)).map(Citation.Artifact.apply))
+          assert(task.result.contains(recordedResult + "\n\n" + integrated(f.intent) + s" (host rebase of reviewed candidate ${original.intent.candidate.value})"))
+        })
+      } yield ()
+    }
+
+    "I18: reject a host-rebased intent whose host checks have a foreign author, another commit, failed, missing or mismatched evidence, or no checks" in {
+      (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO],
+        integrations: IntegrationService[IO]) => for {
+        original <- begin(ledger, usage, artifacts, admissions)
+        reviewed = original.intent.candidate
+        changes = List[(String, ReviewValidation => ReviewValidation)](
+          "foreign author" -> (value => value.copy(author = original.worker.attempt)),
+          "observation of the reviewed commit" -> (value => value.copy(observation = value.observation.copy(candidate = reviewed))),
+          "job based on the reviewed commit" -> (value => value.copy(observation = value.observation.copy(job = value.observation.job.copy(
+            workspace = value.observation.job.workspace.copy(base = reviewed))))),
+          "unsuccessful job" -> (value => value.copy(observation = value.observation.copy(job = value.observation.job.copy(
+            exit = value.observation.job.exit.map(_.copy(code = Some(1))))))),
+          "failed evidence" -> (value => value.copy(evidence = value.evidence.map(_.copy(state = ValidationState.Failed)))),
+          "missing evidence" -> (value => value.copy(evidence = Nil)),
+          "evidence of another check" -> (value => value.copy(evidence = value.evidence.map(_.copy(check = "another-check")))))
+        _ <- ZIO.foreachDiscard(changes) { case (name, alter) => for {
+          f <- rebased(original, artifacts, alter)
+          result <- integrations.reserve(f.collector, f.intent).either
+          _ <- ZIO.attempt(assert(result == Left(DomainFailure(rebasedRule)), s"$name: $result"))
+          _ <- reject(integrations.get(f.owner, f.intent.id), _.isInstanceOf[Fault.Missing])
+        } yield () }
+        // Without configured checks nothing verifies the rebased commit: the reviewed candidate integrates, a host rebase of it does not.
+        assignment <- usage.assign(original.collector, Assignment(AssignmentId(uuid), original.owner.project, original.claim.members, Attribution.Shared, Some(uuid), None))
+        workerAttempt <- usage.start(original.collector, Attempt(AttemptId(uuid), assignment.id, Some(original.governor), original.owner.actor.session, Role.Worker,
+          Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Work))
+        worker = original.worker.copy(attempt = workerAttempt.id, validation = Nil, request = original.worker.request.copy(request = RequestId(uuid)))
+        workerArtifact <- publish(original.collector, worker, artifacts, admissions)
+        reviewAttempt <- usage.start(original.collector, Attempt(AttemptId(uuid), assignment.id, Some(original.governor), original.owner.actor.session, Role.Reviewer,
+          Harness.Codex, "fixture", "fixture", "fixture", 1001, UsagePhase.Review))
+        reviewer = original.reviewer.copy(attempt = reviewAttempt.id, validation = Nil,
+          request = original.reviewer.request.copy(request = RequestId(uuid), previous = Some(workerArtifact)))
+        reviewArtifact <- publish(original.collector, reviewer, artifacts, admissions)
+        plain = IntegrationId(uuid)
+        unchecked = original.intent.copy(id = plain, worker = workerArtifact, reviewer = reviewArtifact, checks = Nil,
+          change = IntegrationPolicy.completion(plain, original.intent.repository, original.intent.target, reviewed, None, workerArtifact, reviewArtifact,
+            Nil, original.intent.fence, original.items))
+        id = IntegrationId(uuid)
+        rebase = IntegrationRebase(reviewed, original.governor, Nil)
+        result <- integrations.reserve(original.collector, unchecked.copy(id = id, expected = advancedHead, candidate = rebasedCommit, rebase = Some(rebase),
+          change = IntegrationPolicy.completion(id, original.intent.repository, original.intent.target, rebasedCommit, Some(rebase), workerArtifact, reviewArtifact,
+            Nil, original.intent.fence, original.items))).either
+        _ <- ZIO.attempt(assert(result == Left(DomainFailure(rebasedRule)), s"no configured checks: $result"))
+        preview <- ledger.claimPreview(original.owner, original.claim.members)
+        _ <- assertIO(preview.integrations.isEmpty)
+        reserved <- integrations.reserve(original.collector, unchecked)
+        _ <- assertIO(reserved.resolution == IntegrationResolution.Pending())
       } yield ()
     }
 
@@ -275,7 +369,7 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
             override def expected(base: GitCommit, candidate: GitCommit): GitCommit = { observed :+= (base, candidate); head }
           }
           val preparation = new IntegrationPreparation(governor, f.owner, f.intent.repository, f.intent.target, Nil, clock, bases)
-          val intent = preparation.prepare(IntegrationTicket(IntegrationId(uuid), reviewArtifact))
+          val intent = prepare(preparation, IntegrationTicket(IntegrationId(uuid), reviewArtifact))
           println(s"Continuation preparation: worker base=${worker.base.value.take(7)} head=${head.value.take(7)} expected=${intent.expected.value.take(7)} observed=$observed")
           assert(observed == List((worker.base, continuation)))
           assert(intent.expected == head && intent.candidate == continuation && intent.worker == workerArtifact && intent.reviewer == reviewArtifact)

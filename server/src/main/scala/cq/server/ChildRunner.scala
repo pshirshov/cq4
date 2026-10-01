@@ -5,7 +5,6 @@ import cq.core.{DomainFailure, WorkspaceService}
 import cq.host.*
 import java.nio.file.{Files, Path}
 import java.time.{Clock, Duration}
-import java.util.UUID
 import scala.util.{Try, Using}
 import zio.{IO, Ref, Task, ZIO}
 
@@ -16,6 +15,7 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
   private val ClaimMillis = Duration.ofMinutes(3).toMillis
   private val RenewalSeconds = 20L
   private val partials = new PartialWorkCapture(config)
+  private val validation = new HostValidation(config)
   private final case class Trace(native: Option[JobRecord], extra: List[ArtifactUpload], uncertain: Boolean)
   private def directory(attempt: AttemptId): Path = config.directory.resolve("payload").resolve(attempt.value.toString)
   private def transcript(attempt: AttemptId, name: String, bound: Int): Array[Byte] = NativeTranscript.retained(directory(attempt).resolve(name), bound)
@@ -211,24 +211,9 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
   } yield closed
 
   private def validate(entry: DispatchExecution, candidate: GitCommit, check: ValidationCheck, index: Int, trace: Ref[Trace]): Task[ValidationEvidence] = for {
-    id <- ZIO.succeed(AttemptId(UUID.randomUUID()))
-    source = config.limits
-    limits = ExecutionLimits(source.startup, Duration.ofMillis(check.executionMillis), source.heartbeat, source.grace, source.kill, check.retainedOutputBytes)
-    record <- launch(entry, id, candidate, JobCommand(check.command, HostEnvironment.runtime(config.environment), "", limits))
-    captured <- ZIO.attemptBlocking {
-      val parent = entry.ticket.attempt.id
-      val project = config.project.project
-      val (stdout, outParts) = NativeArtifacts.binary(project, parent, s"check-$index-stdout", "application/octet-stream", transcript(id, "stdout", check.retainedOutputBytes))
-      val (stderr, errParts) = NativeArtifacts.binary(project, parent, s"check-$index-stderr", "application/octet-stream", transcript(id, "stderr", check.retainedOutputBytes))
-      val observation = ValidationObservation(check, candidate, record, stdout, stderr)
-      val artifact = ArtifactUpload(project, NativeArtifacts.id(parent, s"check-$index"), parent, ArtifactKind.Validation,
-        "application/json", HostFiles.encode(ValidationObservation_JsonCodec, observation))
-      val outcome = JobOutcome.observed(record)
-      val state = if (outcome.succeeded) ValidationState.Passed else if (outcome.state == AttemptState.Unknown) ValidationState.Unknown else ValidationState.Failed
-      (ValidationEvidence(check.name, state, artifact.id), outParts ++ errParts :+ artifact)
-    }.ensuring(release(id).ignore)
-    (evidence, artifacts) = captured
-    _ <- trace.update(value => value.copy(extra = value.extra ++ artifacts, uncertain = value.uncertain || evidence.state == ValidationState.Unknown))
+    validated <- validation(entry.ticket.attempt.id, s"check-$index", candidate, check, (id, base, command) => launch(entry, id, base, command).ensuring(release(id).ignore))
+    evidence = validated.evidence
+    _ <- trace.update(value => value.copy(extra = value.extra ++ validated.artifacts, uncertain = value.uncertain || evidence.state == ValidationState.Unknown))
     _ <- ZIO.attempt(require(evidence.state != ValidationState.Unknown, "Host validation cleanup is unconfirmed"))
   } yield evidence
 

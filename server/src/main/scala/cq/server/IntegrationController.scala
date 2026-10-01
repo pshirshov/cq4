@@ -32,6 +32,7 @@ final class IntegrationController(config: SupervisorConfig, authority: Superviso
   admission: Semaphore) {
   private val MaxWaitMillis = 20000
   private val AcknowledgementMillis = 1000L
+  private val RenewalSeconds = 20L
   private val journal = new FileIntegrationJournal(config.directory.resolve("integrations"), config.owner)
   private val execution = new GovernedIntegrationJobs(config.owner, jobs, admission)
   private val coordinator = config.settings.integrationTarget.map { target =>
@@ -39,6 +40,7 @@ final class IntegrationController(config: SupervisorConfig, authority: Superviso
       new BoundedHostCommand(GitEnvironment.isolated(config.environment), Duration.ofSeconds(10), 65536), execution,
       config.directory.resolve("payload"), config.environment, config.limits, CqEntrypoint.command), authority.governor, authority.collector)
   }
+  private val rebase = new RebasePreparation(config, authority, candidates)
   private var entries = Map.empty[IntegrationId, IntegrationExecutionState]
   private var closing = false
   private var disabled = false
@@ -53,16 +55,19 @@ final class IntegrationController(config: SupervisorConfig, authority: Superviso
   }
   private def snapshot(entry: IntegrationExecutionState): IntegrationStatus = synchronized(entry.view)
   private def update(entry: IntegrationExecutionState, value: IntegrationStatus): Unit = synchronized { entry.view = value }
-  private def preview(intent: IntegrationIntent): IntegrationPreview =
-    IntegrationPreview(intent.id, intent.reviewer, intent.target, intent.expected, intent.candidate, intent.members)
-  private def projected(value: IntegrationRun): IntegrationStatus = {
+  private def preview(intent: IntegrationIntent, rebase: RebaseOutcome): IntegrationPreview =
+    IntegrationPreview(intent.id, intent.reviewer, intent.target, intent.expected, intent.candidate, intent.members, rebase)
+  private def projected(entry: IntegrationExecutionState, value: IntegrationRun): IntegrationStatus = {
     val (phase, next, blocker) = value.record.resolution match {
       case IntegrationResolution.Recorded(_, _) => (IntegrationPhase.Recorded, IntegrationNext.Complete, None)
       case IntegrationResolution.NotApplied(reason) => (IntegrationPhase.NotApplied, IntegrationNext.InspectEvidence, Some(reason))
       case IntegrationResolution.Pending() => (IntegrationPhase.Pending, IntegrationNext.Reconcile, value.blocker)
     }
-    IntegrationStatus(value.record.intent.id, phase, Some(preview(value.record.intent)), next, blocker.map(DispatchProjection.concise))
+    IntegrationStatus(value.record.intent.id, phase, snapshot(entry).preview, next, blocker.map(DispatchProjection.concise))
   }
+  private def check(id: AttemptId, base: GitCommit, command: JobCommand): Task[JobRecord] =
+    execution.execute(WorkspaceSpec(config.owner.project, config.owner.actor.session, id, config.run.repository, base), command)
+      .onInterrupt(jobs.cancel(config.owner, id).ignore) *> execution.status(id)
   private def background(entry: IntegrationExecutionState, done: Promise[Nothing, Unit], operation: Task[IntegrationStatus]): Task[Unit] =
     operation.flatMap(value => ZIO.succeed(update(entry, value))).catchAll { error =>
       ZIO.succeed {
@@ -96,10 +101,19 @@ final class IntegrationController(config: SupervisorConfig, authority: Superviso
         HostFiles.immutable(directory.resolve(ticket.id.value.toString + ".json"), HostFiles.encode(IntegrationTicket_JsonCodec, ticket), 1024)
       }
       _ <- ready.succeed(())
-      intent <- ZIO.attemptBlocking(new IntegrationPreparation(authority.governor, config.owner, config.run.repository,
-        config.settings.integrationTarget.get, config.settings.checks, clock, candidates).prepare(ticket))
+      preparation = new IntegrationPreparation(authority.governor, config.owner, config.run.repository,
+        config.settings.integrationTarget.get, config.settings.checks, clock, candidates)
+      reviewed <- ZIO.attemptBlocking(preparation.review(ticket))
+      // The claim is renewed while host checks of a rebased commit run; a failed renewal stops them.
+      renewal = (ZIO.sleep(zio.Duration.fromSeconds(RenewalSeconds)) *> ZIO.attemptBlocking(preparation.renew(reviewed))).forever
+      rebased <- ZIO.interruptible(rebase(ticket.id, config.settings.integrationTarget.get, reviewed.candidate, check).raceFirst(renewal))
+      // Shutdown cancels a running check, which then reads as failed; that outcome is discarded rather than reported.
+      _ <- ZIO.attempt(synchronized(require(!closing || !rebased.outcome.isInstanceOf[RebaseOutcome.ChecksFailed],
+        "Integration admission closed while host checks ran")))
+      intent <- ZIO.attemptBlocking(preparation.freeze(reviewed, rebased.applied))
       _ <- available.prepare(intent)
-    } yield IntegrationStatus(ticket.id, IntegrationPhase.Ready, Some(preview(intent)), IntegrationNext.Confirm, None))
+    } yield IntegrationStatus(ticket.id, IntegrationPhase.Ready, Some(preview(intent, rebased.outcome)), IntegrationNext.Confirm,
+      RebasePreparation.blocker(rebased.outcome)))
     _ <- restore(entry.ready.await).timeoutFail(new IllegalStateException("Integration ticket acknowledgement deadline exceeded; admission disabled"))(
       zio.Duration.fromMillis(AcknowledgementMillis)).tapError(_ => ZIO.succeed(synchronized { disabled = true }))
   } yield snapshot(entry) }
@@ -119,7 +133,7 @@ final class IntegrationController(config: SupervisorConfig, authority: Superviso
       }
     })
     (entry, fresh) = registered
-    _ <- if (!fresh) ZIO.unit else background(entry, done, available.run(id).map(projected))
+    _ <- if (!fresh) ZIO.unit else background(entry, done, available.run(id).map(projected(entry, _)))
   } yield snapshot(entry) }
 
   def status(id: IntegrationId, waitMillis: Int): Task[IntegrationStatus] = for {

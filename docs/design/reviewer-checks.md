@@ -26,6 +26,8 @@ A candidate reviewer inherits the exact worker validation inventory. A newly req
 
 Host preparation and server reservation use one shared validation rule. Integration continues to require the exact independent reviewer, full member coverage and all configured worker checks passing. Reviewer validation names must match that frozen inventory and every reviewer observation must also pass. Each entry is either the exact inherited worker evidence or a validated observation authored by this reviewer for this exact candidate and declaration. Metadata attempt, command/declaration, project, session, workspace base and actual successful settled job are checked. Integration completion cites distinct worker and reviewer observations, with the existing atomic reservation/request journal and Git reconciliation unchanged.
 
+A [host rebase](git-integration.md#host-rebase-onto-an-advanced-target) adds a third author of validation evidence. Worker and reviewer observations establish the reviewed commit; they say nothing about the merged commit that lands. The governing attempt therefore runs every configured check on exactly that commit, and both host and server require each of those observations to pass for that commit and author. The reviewer's verdict is not extended to the merged commit: no model wrote it, and the rerun checks are its only coverage beyond the reviewed difference.
+
 A reviewer is not required to repeat every already observed check by a new execution. The operation supplies independent execution when needed; it cannot waive worker checks or hide a requested failure. Plan/Audit reviewers inspect evidence by handle and use Candidate mode when fresh executable verification of a code candidate is required.
 
 ## Verification

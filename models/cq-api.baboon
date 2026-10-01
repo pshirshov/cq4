@@ -680,9 +680,11 @@ root data ResultAdmission {
   artifact: ArtifactMetadata owner: Actor fence: Fence members: lst[ItemRevision] decision: AdmissionDecision decidedAt: i64
 }
 root id IntegrationId { value: uid }
+root data IntegrationRebase { reviewed: GitCommit author: AttemptId validation: lst[ValidationEvidence] }
 root data IntegrationIntent {
   id: IntegrationId project: ProjectId owner: Actor repository: str target: str expected: GitCommit candidate: GitCommit
   worker: ArtifactId reviewer: ArtifactId checks: lst[ValidationCheck] fence: Fence members: lst[ItemRevision] change: ChangeRequest
+  rebase: opt[IntegrationRebase]
 }
 root data IntegrationHold {
   id: IntegrationId owner: Actor target: str expected: GitCommit candidate: GitCommit members: lst[ItemRevision]
@@ -709,8 +711,16 @@ root data CodexUsageSample {
 }
 root data CodexResponseOwner { attempt: AttemptId sample: CodexUsageSample }
 root data IntegrationTicket { id: IntegrationId reviewer: ArtifactId }
+root adt RebaseOutcome {
+  data Unneeded {}
+  data Applied { reviewed: GitCommit }
+  data Conflicted { target: GitCommit }
+  data ChecksFailed { target: GitCommit validation: lst[ValidationEvidence] }
+  data Refused { target: GitCommit reason: str }
+}
 root data IntegrationPreview {
   id: IntegrationId reviewer: ArtifactId target: str expected: GitCommit candidate: GitCommit members: lst[ItemRevision]
+  rebase: RebaseOutcome
 }
 enum IntegrationPhase { Preparing Ready Running Pending Recorded NotApplied Failed }
 enum IntegrationNext { Wait Confirm Reconcile InspectEvidence Complete }

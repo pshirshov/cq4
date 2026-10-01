@@ -18,10 +18,13 @@ object IntegrationPolicy {
   def unreserved(tx: LedgerTransaction, members: Set[ItemId]): Unit =
     pending(tx, members).headOption.foreach(value => throw DomainFailure(Fault.IntegrationPending(value.id)))
 
-  def completion(id: IntegrationId, repository: String, target: String, candidate: GitCommit, worker: ArtifactId,
+  /** `candidate` is the commit that lands; with a host rebase it is the rebased commit, and the reviewed commit and the host's checks
+    * of the rebased commit are cited beside the worker, the reviewer and their validation. */
+  def completion(id: IntegrationId, repository: String, target: String, candidate: GitCommit, rebase: Option[IntegrationRebase], worker: ArtifactId,
     reviewer: ArtifactId, validation: List[ArtifactId], fence: Fence, items: List[Item]): ChangeRequest = {
-    val citations = List(Citation.Commit(repository, candidate.value), Citation.Artifact(worker), Citation.Artifact(reviewer)) ++
-      validation.map(Citation.Artifact.apply)
+    val citations = List(Citation.Commit(repository, candidate.value)) ++ rebase.map(value => Citation.Commit(repository, value.reviewed.value)) ++
+      List(Citation.Artifact(worker), Citation.Artifact(reviewer)) ++
+      (validation ++ rebase.toList.flatMap(_.validation.map(_.artifact))).map(Citation.Artifact.apply)
     val evidence = Evidence(s"Host recorded integration ${id.value} into $target", EvidenceOrigin.HostObserved, citations)
     val mutations = items.map { item =>
       val task = item.draft.content match {
@@ -29,7 +32,8 @@ object IntegrationPolicy {
         case _ => throw DomainFailure(Fault.Invalid("Integration completes only explicitly reviewed task members"))
       }
       LedgerPolicy.invalid(!Set[TaskStatus](TaskStatus.Done, TaskStatus.Cancelled)(task.status), "Integration member is already terminal")
-      val summary = s"Integrated ${candidate.value} into $target"
+      val summary = s"Integrated ${candidate.value} into $target" +
+        rebase.fold("")(value => s" (host rebase of reviewed candidate ${value.reviewed.value})")
       // The worker's recorded result is retained and the integration appended (D80); a recorded result too long to extend
       // stays as recorded, since the appended validation evidence cites the same commit.
       val result = task.result.fold(summary)(recorded => if (recorded.length + summary.length + 2 <= LedgerPolicy.MaxBody) recorded + "\n\n" + summary else recorded)

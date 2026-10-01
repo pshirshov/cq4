@@ -18,6 +18,13 @@ object CandidateMessage {
   private def named(value: ItemId, known: Map[ItemId, ItemView]): String =
     known.get(value).fold(id(value))(view => id(value) + " " + title(view.item.draft.title))
 
+  /** Commit message of a host rebase: the host, not a model, merged the reviewed candidate onto the advanced target.
+    * `subject` is the reviewed candidate's own subject, so the target's first-parent history still names the work. */
+  def rebased(id: IntegrationId, target: String, head: GitCommit, reviewed: GitCommit, subject: String): String =
+    List(subject, "",
+      s"Host rebase of reviewed candidate ${reviewed.value} onto integration target $target at ${head.value}.", "",
+      s"$IntegrationTrailer: ${id.value}").mkString("\n") + "\n"
+
   def apply(attempt: AttemptId, members: List[ItemView], context: List[ItemView], combination: Option[CombinationPlan]): String = {
     require(members.nonEmpty, "Candidate message requires assigned members")
     val known = (members ++ context).map(view => view.item.id -> view).toMap

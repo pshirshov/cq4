@@ -87,7 +87,7 @@ final case class IntegrationFixture(owner: Scope, repository: Path, target: Stri
     val member = ItemRevision(ItemId(owner.project, Ledger.Tasks, 1), Revision(1))
     val fence = Fence(ClaimId(UUID.randomUUID()), 1)
     IntegrationIntent(id, owner.project, owner.actor, repository.toString, target, expected, candidate, ArtifactId(UUID.randomUUID()),
-      ArtifactId(UUID.randomUUID()), Nil, fence, List(member), ChangeRequest(RequestId(id.value), Nil, List(fence), "Fixture completion"))
+      ArtifactId(UUID.randomUUID()), Nil, fence, List(member), ChangeRequest(RequestId(id.value), Nil, List(fence), "Fixture completion"), None)
   }
 }
 

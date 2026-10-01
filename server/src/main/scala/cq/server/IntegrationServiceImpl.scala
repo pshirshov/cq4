@@ -47,12 +47,14 @@ final class IntegrationServiceImpl[F[+_, +_]: Error2](ledger: LedgerRepository[F
       invalid(intent.target.length <= LedgerPolicy.MaxLocation && intent.target.startsWith("refs/heads/") &&
         intent.target.matches("[A-Za-z0-9][A-Za-z0-9._/-]*") && !intent.target.contains("..") &&
         intent.target.split("/", -1).forall(part => part.nonEmpty && !part.startsWith(".") && !part.endsWith(".") && !part.endsWith(".lock")), "Invalid integration branch")
-      objectId(intent.expected); objectId(intent.candidate)
+      objectId(intent.expected); objectId(intent.candidate); intent.rebase.foreach(value => objectId(value.reviewed))
       invalid(intent.candidate != intent.expected, "Integration candidate must advance its target")
       invalid(intent.checks.size <= IntegrationPolicy.MaxChecks && intent.checks.map(_.name).distinct.size == intent.checks.size, "Invalid integration check set")
       if (IntegrationIntent_JsonCodec.encode(BaboonCodecContext.Default, intent).noSpaces.getBytes(UTF_8).length > IntegrationPolicy.MaxIntentBytes)
         throw DomainFailure(Fault.Limit("Integration intent exceeds 512 KiB"))
     }.toEither)
+    // Worker and reviewer cover the reviewed commit; a host rebase lands another commit that only the host's own checks cover.
+    reviewed = intent.rebase.fold(intent.candidate)(_.reviewed)
     worker <- artifact(scope, intent.worker, ArtifactKind.Result, ChildResult_JsonCodec)
     reviewer <- artifact(scope, intent.reviewer, ArtifactKind.Result, ChildResult_JsonCodec)
     _ <- F.fromEither(Try {
@@ -66,7 +68,8 @@ final class IntegrationServiceImpl[F[+_, +_]: Error2](ledger: LedgerRepository[F
         review.request.work == DispatchWork.Reviewer(ReviewerMode.Candidate) && review.request.previous.contains(intent.worker) &&
         work.request.members.map(_.id).toSet == intent.members.map(_.id).toSet && review.request.members.map(_.id).toSet == intent.members.map(_.id).toSet &&
         work.request.fence == intent.fence && review.request.fence == intent.fence &&
-        work.candidate.contains(intent.candidate) && review.candidate == work.candidate && review.base == intent.candidate,
+        reviewed != intent.expected && (intent.rebase.isEmpty || reviewed != intent.candidate) &&
+        work.candidate.contains(reviewed) && review.candidate == work.candidate && review.base == reviewed,
         "Integration requires an independently reviewed exact worker candidate and assignment")
       invalid(work.report match { case ChildReport.Work(members) => members.forall(_.disposition == WorkDisposition.CandidateReady); case _ => false }, "Every integration member must be candidate-ready")
       invalid(review.report match { case ChildReport.Review(members, _) => members.forall(_.verdict == ReviewVerdict.Accepted); case _ => false }, "Every integration member must be independently accepted")
@@ -74,7 +77,13 @@ final class IntegrationServiceImpl[F[+_, +_]: Error2](ledger: LedgerRepository[F
     applicable <- F.fromEither(Try(IntegrationValidation.applicable(worker._2, reviewer._2, intent.checks)).toEither)
     _ <- F.traverse_(applicable) { expected =>
       artifact(scope, expected.evidence.artifact, ArtifactKind.Validation, ValidationObservation_JsonCodec).flatMap { case (metadata, observed) => F.fromEither(Try {
-        IntegrationValidation.verify(scope.project, scope.actor.session, intent.candidate, expected, metadata, observed)
+        IntegrationValidation.verify(scope.project, scope.actor.session, reviewed, expected, metadata, observed)
+      }.toEither) }
+    }
+    rebased <- F.fromEither(Try(intent.rebase.toList.flatMap(IntegrationValidation.rebased(_, intent.checks))).toEither)
+    _ <- F.traverse_(rebased) { expected =>
+      artifact(scope, expected.evidence.artifact, ArtifactKind.Validation, ValidationObservation_JsonCodec).flatMap { case (metadata, observed) => F.fromEither(Try {
+        IntegrationValidation.verifyRebased(scope.project, scope.actor.session, intent.candidate, expected, metadata, observed)
       }.toEither) }
     }
     result <- ledger.transact(scope.project) { tx =>
@@ -102,7 +111,7 @@ final class IntegrationServiceImpl[F[+_, +_]: Error2](ledger: LedgerRepository[F
             LedgerAccess.expected(item, ref.revision)
             item
           }
-          val change = IntegrationPolicy.completion(intent.id, intent.repository, intent.target, intent.candidate, intent.worker, intent.reviewer,
+          val change = IntegrationPolicy.completion(intent.id, intent.repository, intent.target, intent.candidate, intent.rebase, intent.worker, intent.reviewer,
             IntegrationValidation.citations(worker._2, reviewer._2), intent.fence, items)
           invalid(intent.change == change, "Integration may only apply the exact narrative-preserving task completion request")
           if (tx.request(intent.owner, change.request).nonEmpty) throw DomainFailure(Fault.Conflict("Integration domain request was already used"))

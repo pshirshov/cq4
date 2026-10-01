@@ -67,7 +67,7 @@ def main():
                       "repository": str(repo), "target": "refs/heads/main", "expected": {"value": base}, "candidate": {"value": candidate},
                       "worker": {"value": str(uuid.uuid4())}, "reviewer": {"value": str(uuid.uuid4())}, "checks": [],
                       "fence": {"claim": {"value": str(uuid.uuid4())}, "generation": "1"}, "members": [],
-                      "change": {"request": identity, "mutations": [], "fences": [], "reason": "Fixture"}}
+                      "change": {"request": identity, "mutations": [], "fences": [], "reason": "Fixture"}, "rebase": None}
             source = directory / "intent.json"
             source.write_text(json.dumps({"intent": intent, "attached": True}))
             injected = environment if mode == "success" else {**environment, "LD_PRELOAD": str(preload),
