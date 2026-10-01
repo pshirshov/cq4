@@ -116,8 +116,10 @@ final class CodexAdapter extends HarnessAdapter {
   override def launch(profile: HarnessProfile, invocation: HarnessInvocation, environment: Map[String, String]): HarnessLaunch = {
     require(profile.harness == harness)
     val policy = HarnessTools.policy(invocation.role, harness)
-    val restrictions = config("approval_policy", Json.fromString("never")) ++
-      config("model_provider", Json.fromString(profile.provider)) ++ policy.builtin.flatMap(setting) ++
+    // Approval and provider settings stay between agents.enabled and web_search, where the launch has always placed them.
+    val (leading, trailing) = policy.builtin.span(_.name != "web_search")
+    val restrictions = leading.flatMap(setting) ++ config("approval_policy", Json.fromString("never")) ++
+      config("model_provider", Json.fromString(profile.provider)) ++ trailing.flatMap(setting) ++
       config("developer_instructions", Json.fromString(invocation.system))
     val mcp = invocation.endpoints.flatMap { endpoint =>
       val prefix = "mcp_servers." + endpoint.name + "."
