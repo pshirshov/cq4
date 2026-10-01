@@ -60,8 +60,19 @@ final class HarnessAdapterLocal extends AnyWordSpec {
         system = SupervisorProgram.Instructions, resultSchema = schemas.schema("GoverningReport"))
       adapters.foreach { adapter =>
         val prepared = schemas.nativeInvocation(adapter.harness, governor)
-        assert(prepared.system.startsWith(governor.system) && adapter.launch(profile(adapter.harness), prepared, environment).arguments.nonEmpty)
+        val launch = adapter.launch(profile(adapter.harness), prepared, environment)
+        assert(prepared.system.startsWith(governor.system) && launch.arguments.nonEmpty)
+        launch.arguments.foreach(argument => assert(argument.getBytes(java.nio.charset.StandardCharsets.UTF_8).length <= HarnessLaunch.MaxArgumentBytes, adapter.harness))
       }
+    }
+
+    "refuse a launch whose encoded argument exceeds the operating system's per-argument limit" in {
+      // Codex receives the instructions JSON-encoded in one argument: a control character occupies six bytes there.
+      val controls = invocation(Role.Governor, Path.of("/test/assets")).copy(system = "\u0001" * (HarnessInvocation.MaxSystemBytes / 2))
+      val refused = intercept[IllegalArgumentException](new CodexAdapter().launch(profile(Harness.Codex), controls, environment))
+      assert(refused.getMessage.contains("Harness launch argument exceeds the operating system's per-argument limit"))
+      val quoted = invocation(Role.Governor, Path.of("/test/assets")).copy(system = "\"" * HarnessInvocation.MaxSystemBytes)
+      adapters.foreach(adapter => assert(adapter.launch(profile(adapter.harness), quoted, environment).arguments.nonEmpty))
     }
 
     "translate nested report unions for the Codex structured-output dialect" in {
