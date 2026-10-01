@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { writeFile } from 'node:fs/promises';
 import { trackProtocol, receivedReply, settledRequests } from './browser-protocol.mjs';
+import { hold, HOLD_SETTLE_MS } from './hold.mjs';
 
 export async function graphChecks(browser, storageState, origin, evidence) {
   const headers = { Authorization: `Bearer ${process.env.CQ_TOKEN}`, 'CQ-Session': randomUUID(),
@@ -70,9 +71,16 @@ export async function graphChecks(browser, storageState, origin, evidence) {
       await click('History'); await click(`View revision ${revision}`); await click(`Preview restore revision ${revision}`);
       await page.getByRole('heading', { name: 'Graph change preview', exact: true }).waitFor();
     }
-    async function confirm() {
-      await click('Confirm graph change'); await page.getByRole('status').filter({ hasText: 'Graph change saved' }).waitFor();
+    const confirmation = page.getByRole('button', { name: 'Confirm graph change', exact: true });
+    async function confirm(destructive) {
+      if (destructive) await hold(page, confirmation); else await confirmation.click();
+      await page.getByRole('status').filter({ hasText: 'Graph change saved' }).waitFor();
       await settledRequests(page);
+    }
+    async function clickKeeps(id, revision) {
+      await confirmation.click(); await page.waitForTimeout(HOLD_SETTLE_MS);
+      assert.equal((await detail(id)).item.revision.value, revision, 'A plain click must not confirm a destructive graph change');
+      assert.equal(await confirmation.getAttribute('data-hold'), 'idle');
     }
     async function captured() {
       let timeout;
@@ -82,12 +90,17 @@ export async function graphChecks(browser, storageState, origin, evidence) {
     try {
       await enter();
       if (scenario === 'relationships-restore') {
-        await previewRelation(); await confirm();
+        await previewRelation(); assert.equal(await confirmation.getAttribute('data-hold'), null, 'Adding a relationship stays a plain click'); await confirm(false);
         let a = await detail(item(1)); let b = await detail(item(2));
         assert.equal(a.item.revision.value, '2'); assert.equal(b.item.revision.value, '2');
         assert.deepEqual(a.refs, [{ relation: 'RelatesTo', target: item(2) }]);
         await click('Open T2'); await page.getByRole('heading', { name: 'T2 · Graph B', exact: true }).waitFor();
-        await click('Open T1'); await click('Remove RelatesTo T2'); await confirm();
+        await click('Open T1'); await click('Remove RelatesTo T2'); await clickKeeps(item(1), '2');
+        const rendered = await confirmation.elementHandle();
+        await change(project, [{ Create: { draft: draft('Graph C', 'Unrelated live change') } }]);
+        await page.getByText('Graph C', { exact: true }).waitFor(); await settledRequests(page);
+        assert.equal(await rendered.evaluate(node => node.isConnected), true, 'A live refresh must not replace the confirmation of an unchanged preview, which would cancel a hold');
+        await confirm(true);
         a = await detail(item(1)); b = await detail(item(2));
         assert.equal(a.item.revision.value, '3'); assert.equal(b.item.revision.value, '3'); assert.deepEqual(a.refs, []);
         cases.push('add, navigate inverse reference and remove both endpoints');
@@ -102,7 +115,7 @@ export async function graphChecks(browser, storageState, origin, evidence) {
         assert.ok(previewBounds.y >= headerBounds.y + headerBounds.height && previewBounds.y + previewBounds.height <= page.viewportSize().height,
           `Requested preview must be visible in the detail viewport: ${JSON.stringify(previewBounds)}`);
         assert.equal(await previewHeading.evaluate(node => node.parentElement === document.activeElement), true, 'Requested preview receives keyboard focus');
-        await page.screenshot({ path: `${evidence}/graph-restore-preview.png`, fullPage: true }); await confirm();
+        await page.screenshot({ path: `${evidence}/graph-restore-preview.png`, fullPage: true }); await clickKeeps(item(1), '4'); await confirm(true);
         a = await detail(item(1)); b = await detail(item(2));
         assert.equal(a.item.revision.value, '5'); assert.equal(a.item.draft.body, 'Original A');
         assert.equal(b.item.revision.value, '4'); assert.equal(b.item.draft.body, 'Original B'); assert.equal(a.refs.length, 1);
@@ -111,7 +124,7 @@ export async function graphChecks(browser, storageState, origin, evidence) {
         await click('View revision 3'); await click('Preview restore revision 3');
         await page.getByText('Neighbors receiving new revisions: T2 @ 4. Their content is preserved.', { exact: true }).waitFor();
         await change(project, [{ Replace: { id: item(2), expected: b.item.revision, draft: draft('Graph B', 'Concurrent B') } }]);
-        await click('Confirm graph change'); await page.getByRole('alert').filter({ hasText: 'Graph change rejected' }).waitFor();
+        await hold(page, confirmation); await page.getByRole('alert').filter({ hasText: 'Graph change rejected' }).waitFor();
         a = await detail(item(1)); b = await detail(item(2));
         assert.equal(a.item.revision.value, '5'); assert.equal(a.refs.length, 1);
         assert.equal(b.item.revision.value, '5'); assert.equal(b.item.draft.body, 'Concurrent B');
@@ -141,8 +154,8 @@ export async function graphChecks(browser, storageState, origin, evidence) {
         assert.equal(await page.getByRole('alert').count(), 0, 'An obsolete preview lookup must not report an error after navigation');
         cases.push('delayed failed preview lookup is ignored after navigation');
       } else {
-        if (scenario === 'uncertain-relationship') await previewRelation(); else await previewRestore(1);
-        await click('Confirm graph change');
+        if (scenario === 'uncertain-relationship') { await previewRelation(); await confirmation.click(); }
+        else { await previewRestore(1); await hold(page, confirmation); }
         await captured();
         const stored = await page.evaluate(key => JSON.parse(localStorage.getItem(key)), `cq-graph-change:${project.value}`);
         assert.deepEqual(stored, requests[0]);

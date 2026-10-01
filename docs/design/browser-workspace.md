@@ -35,6 +35,20 @@ The results table keeps its view state per browser: the sort field, direction an
 
 Top-bar metrics identify their scope and last successful observation. Loading and stale values are labeled; missing counters are not rendered as zero. Forms expose labels, validation errors and pending-save state. Draft notices identify the project/item they belong to.
 
+## Destructive actions
+
+Controls whose effect removes operator-visible state require a deliberate press-and-hold (I22), following the previous CQ version's hold button. The guarded controls are:
+
+- **Confirm archive** in the Archive terminal items dialog.
+- **Discard local draft** in the item editor and the New item dialog.
+- **Confirm graph change** when the preview removes a relationship or restores a historical revision. Confirming an added relationship stays an ordinary click.
+
+Controls that only open a preview, retry an already confirmed exact request, cancel, or edit unsaved form or query text are not guarded: `Remove <relation>`, the retry-exact buttons, form-row Remove, clear query, the cancel buttons and "use … as base".
+
+A guarded control is an ordinary button containing a progress indicator labelled "Hold to confirm" (`web/src/hold-button.ts`). Holding the primary pointer button, Space or Enter for `HOLD_MS` (1000 ms) runs the action exactly once; key auto-repeat does not restart or repeat it. The indicator fills over the hold and `data-hold` reports `idle`, `holding` or `done`. Releasing, moving the pointer off the control, losing focus or pressing Escape before completion cancels and resets the indicator; Escape then cancels only the hold and leaves the surrounding dialog open. A plain click does nothing. A click that no pointer produced, as assistive technology issues, starts the same timed countdown, cancellable by Escape or by moving focus away. A disabled control never starts, and a control disabled or removed during a hold does not act. A live refresh therefore leaves an unchanged graph preview and its confirmation control in place rather than rebuilding them.
+
+Browser checks press these controls through `dev/hold.mjs`; `dev/hold-browser.mjs` verifies the interaction itself.
+
 ## Usage and synchronization
 
 Usage has its own project cursor. Item change events cannot establish that usage is current, and usage updates must not create item events. Use bounded cursor invalidation for the subscribed project and fetch only the currently displayed usage scope. Reconnect refreshes both snapshots. Guard all usage responses against project/scope/request changes; an obsolete reply cannot change a caption or cursor.
