@@ -10,7 +10,7 @@ The server holds one record per project, harness and session key: the state (`Bi
 
 The records live in the server process, not in PostgreSQL. A status read (`Status` from a control origin or from an attached session) reads them directly and takes no project transaction, so status-line polling never waits for a ledger write; every other driver operation runs inside one project transaction. They persist across the turns of a harness session, but a server restart turns every driver off: the next continuation query then returns stop with reason `Off` and the session's writes behave as they do without a driver. No ledger schema change accompanies the driver.
 
-A project holds at most 64 records. At capacity, drive-start displaces the least recently touched record that is off or has been silent for eight hours; if every record is live, drive-start fails with `Limit`.
+A project holds at most 64 records. At capacity, drive-start displaces the least recently touched record that is off or has been silent for eight hours; if every record is live, drive-start fails with `Limit`. Silence is measured from the record's last driver operation or attributed write, so a driver that is on but idle for eight hours (a session left open overnight, a child that runs longer) is displaced like an abandoned one. Its record is removed without a stop reason: the session's next continuation query returns `Off`, and from the moment of displacement its writes are no longer confined. Displacement happens only at capacity.
 
 ## Session trust
 
@@ -18,10 +18,12 @@ State-changing entry points are keyed by the session key the harness supplies: t
 
 Two sessions that each supply their own key never change each other's record. A same-user process that supplies another session's key does change that session's record. This is the documented limit of the isolation guarantee and a contract test asserts it.
 
+The same limit applies to the driven model itself. The hook commands run in the harness environment, which carries the operator token file, and the harness exposes the session's own key to the model's shell tool. A model with shell access can therefore run `cq hook <harness> UserPromptSubmit` with a drive or park prompt on stdin, or use the token file directly, and start, park or re-scope its own driver. The control surface is separated from the model-facing tools, not from a model that can execute commands as the operator.
+
 Authority separates the two surfaces:
 
 - **Control** (`DriverRequest.Control`: `Start`, `Park`, `Continue`, `Status`) requires the operator credential, which only the CQ hook commands and the Pi extension's attached host hold. A governor credential is `Denied`. The declared origin is checked: Pi drives from `Extension`, the other harnesses from hooks; `Start` and `Park` belong to `UserPromptSubmit`, `Continue` to `Stop`, and `Status` to any origin including `StatusLine`.
-- **Session** (`DriverRequest.Session`) runs under an attached session's own governor credential. The model-facing `session` tool exposes only `Bind` (gated by the hook-minted token) and `Driver` (read-only status). Neither starts nor parks a driver. Activation, lineage registration and cycle-attributed changes are called by the attached host and by delegated sessions, not offered as tools.
+- **Session** (`DriverRequest.Session`) runs under an attached session's own governor credential. The model-facing `session` tool exposes only `Bind` (gated by the hook-minted token) and `Driver` (read-only status). Neither starts nor parks a driver. Activation and lineage registration are called by the attached host, not offered as tools. Cycle-attributed changes (`DriverSession.Change`) are a server operation that no CQ client calls yet (see [Cycle lineage](#cycle-lineage)).
 
 No MCP domain tool carries a driver command.
 
@@ -56,7 +58,7 @@ The query takes the key and returns either a directive (`Continue`) or `Stop`.
 | On, cycle started, nothing in flight, work resting on the session | `Continue` with one resume directive for that work, then `Stop` with `Failure` |
 | On, no cycle, or the cycle's run is over | a new cycle decision, below |
 
-A cycle's run is still active while a lineage member registered under it is **in flight**: work the attached host is carrying out, which finishes without the session. That is a child attempt that has not reached a terminal phase, an integration that is `Preparing` or `Running`, a combination that is `Preparing`, or a delegated session. Each stop of the session then yields a resume directive.
+A cycle's run is still active while a lineage member registered under it is **in flight**: work the attached host is carrying out, which finishes without the session. That is a child attempt that has not reached a terminal phase, an integration that is `Preparing` or `Running`, or a combination that is `Preparing`. Each stop of the session then yields a resume directive.
 
 A member **rests** when it is unsettled but only the session can move it: an integration that is `Ready` (prepared, not applied) or `Pending` (awaiting reconciliation), and a combination whose publication is pending. Resting work does not hold a cycle open indefinitely. When nothing is in flight and some member rests, the query issues one resume directive, so the session can resolve that work inside the cycle that owns it. If the next query finds the same members still resting, the driver stops with `Failure` and the detail `cycle N is held by integration <id>, which only the session can resolve, and a resume directive did not resolve it`. A member the session resumed (it is in flight again) and that comes to rest again earns a new resume directive. A member that reaches a terminal phase is settled and holds nothing.
 
@@ -124,9 +126,13 @@ The accepted cycle ID is stamped on the advance run: the server records the run 
 
 - the server adds the Change request, Claim, Proposal and Integration of every attributed write and of every claim the bound session acquires during the cycle;
 - the attached host registers each dispatch Request and child Attempt, each prepared Integration and each Combination when the dispatch tool returns. It then follows the member: it reports it as resting (`DriverSession.Rest`) when it comes to rest, registers it again when the host works on it again, and settles it when it reaches a terminal phase;
-- a session delegated under the cycle is registered as a `Session` member and may register further members, including further sessions, beneath itself.
+A cycle holds at most 1,024 lineage members.
 
-A session other than the bound one is attributed only when its write carries the cycle ID (`DriverSession.Change`) and the session is an unsettled member of that cycle. A write that names an unknown cycle, an ended cycle or a cycle the caller is not part of is rejected; when the cycle's driver is on it stops with reason `Failure`. A cycle holds at most 1,024 lineage members.
+**Implemented and reserved.** The three kinds of entry above are what a real drive produces. Only the bound attached session writes under a cycle: children report results and do not change the ledger themselves, and the attached host makes no ledger write of its own under a cycle ID.
+
+The server core also implements delegation, which nothing in the attached host, the hook commands, the Pi extension or the MCP tools uses: a `LineageMember.Session` entry for a session delegated under the cycle, which may register members beneath itself and holds the run open while unsettled, and `DriverSession.Change`, a write by such a session that carries the cycle ID and meets the same boundary. A write that names an unknown cycle, an ended cycle or a cycle the caller is not part of is rejected; when the cycle's driver is on it stops with reason `Failure`. `DriverContractTest` exercises these paths; no production code constructs a `Session` member or a `DriverSession.Change`, so they are reserved for a future delegating client and carry no guarantee about one.
+
+**Claims are stamped, not confined.** A claim the bound session acquires during an active cycle is added to the lineage, and that is all the boundary does with claims. Acquiring, renewing and releasing a claim are not ledger mutations: the bound session may claim an item outside the cycle's set, and may claim while no cycle is active, without a rejection or a stop. The claim confers no write: a mutation of that item still meets the boundary.
 
 The host's lineage calls are made reliable rather than best-effort. A call lost in transit is repeated up to six times with a doubling pause (250 ms at first); a fault the server returns is its answer and is not repeated. If a member cannot be registered, its state on the host cannot be read, or it cannot be settled, the host reports it with `DriverSession.Fail` and the driver stops with `Failure` and a detail naming the member: `attempt <id> of cycle N could not be registered: <cause>` or `… could not be settled: <cause>`. If that report cannot be delivered either, the host logs it; the drive is then bounded only by its directive limit.
 

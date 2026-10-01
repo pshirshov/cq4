@@ -24,7 +24,7 @@ The driver was recorded on Claude Code 2.1.285, Codex 0.159.2 and Pi 0.99.1. CQ 
 
 ## Install
 
-The driver's assets are part of what `cq configure` writes. Reconfigure each harness you use with a CQ package that contains the driver; in such a package `cq help hook` prints `Usage: cq hook HARNESS EVENT`. On 2026-10-01 the package installed at `.local/release` in this checkout predated the driver (its executable does not contain the `--replace-statusline` help text) and the assets installed in this checkout had no drive or park command. Install a package built from a revision with the driver first.
+The driver's assets are part of what `cq configure` writes. Reconfigure each harness you use with a CQ package that contains the driver; in such a package `cq help hook` prints `Usage: cq hook HARNESS EVENT`. A package without that command predates the driver: install a newer one first.
 
 ```sh
 cq configure claude --settings /absolute/settings.json --replace
@@ -117,7 +117,7 @@ A drive is a sequence of cycles. After each turn the harness asks the server for
 - **Start directive.** A new cycle is handed over as one line the session must run unchanged: `/cq:advance --roots G1,T4 --through work --start-token <UUID>` (Codex: `$cq-advance …`). The token is valid once. The server starts the run only if the roots, the phase and the token equal the directive and the caller is the bound session.
 - **Resume directive.** When the session stops while work of the running cycle is still in flight (a running child attempt, an integration being prepared or applied, a combination being prepared), the server issues `… --resume-token <UUID>` with a fresh token. It reattaches the session to the existing run and never starts a second one.
 - **Work that waits for the session.** A prepared integration that was not applied, an integration awaiting reconciliation and a combination whose publication is pending do not finish by themselves. When only such work remains, the session gets one resume directive to resolve it. If it stops again with the same work still waiting, the drive ends with `Failure` and names that work.
-- **Lineage.** The cycle ID is stamped on the run and inherited by everything dispatched from it: requests, child attempts, claims, proposal applications, integrations, combinations and delegated sessions. The active-children count in the indicator counts unsettled child attempts.
+- **Lineage.** The cycle ID is stamped on the run and inherited by everything dispatched from it: requests, child attempts, claims, proposal applications, integrations and combinations. (The server also models sessions delegated under a cycle; no CQ client creates one.) The active-children count in the indicator counts unsettled child attempts.
 
 How a continuation appears:
 
@@ -200,7 +200,7 @@ Pi adds two local outcomes. `CQ driver stopped: continuation query failed: …; 
 | Limit | Value | At the limit |
 | --- | --- | --- |
 | Directives per drive (start and resume both count) | 64 | The drive stops with `LimitReached`. |
-| Drivers per project | 64 | A new drive displaces the least recently touched driver that is off or has been silent for eight hours. If every driver is live, drive-start fails with `limit: A project holds at most 64 CQ drivers; park one first`. |
+| Drivers per project | 64 | A new drive displaces the least recently touched driver that is off or has been silent for eight hours. That includes a driver that is on: one with no directive and no write for eight hours is removed without a message, its next continuation returns `Off`, and its session's writes are no longer confined. If every driver is live, drive-start fails with `limit: A project holds at most 64 CQ drivers; park one first`. |
 | Lineage members per cycle | 1,024 | Registration fails; an attributed write beyond the bound stops the drive with `Failure`. No automated check exercises this bound. |
 | Targets per workset; items per traversal | 64; 1,024 | The drive command is rejected. |
 | Drive argument text | 4,096 characters | The drive command is rejected. |
@@ -214,7 +214,8 @@ Pi adds two local outcomes. `CQ driver stopped: continuation query failed: …; 
 - **Trusted, not authenticated.** The key is checked for shape only. Two sessions that each supply their own key never change each other's driver. A process of the same user that runs a CQ hook entry point with another session's id, and holds the operator credential the hooks use, changes that session's driver state: it can start, park or query it. Per-session isolation therefore covers sessions that do not forge hook input, not adversarial ones. A contract test asserts this limitation.
 - **No default session.** Malformed hook input, a missing or malformed `session_id`, an unknown harness and an event other than the one the command was installed for are rejected with an explicit message and change nothing.
 - **Who can start or park.** Only the CQ hook commands and the Pi extension, with the operator credential. The model-facing `session` tool offers the token-gated `Bind` and a read-only status; a governor credential is denied driver control, and no MCP domain tool carries a driver command.
-- **What the boundary guarantees.** Writes of the bound session and of the lineage that carries the cycle ID are confined to the cycle's set. Other sessions of the project are unaffected by a driver and are not confined by it.
+- **A model with a shell can reach the hooks.** The hook commands need the operator token file in the harness environment, and the harness gives the session's own id to the model's shell tool (`$CLAUDE_CODE_SESSION_ID`, `CODEX_SESSION_ID`). A model that can run commands can therefore run `cq hook <harness> UserPromptSubmit` itself with a drive or park prompt, or read the token file and call the API as the operator. The driver does not defend against this: it confines a cooperating session's ledger writes, it is not a sandbox. Restrict the model's shell or the token file's readability if that matters.
+- **What the boundary guarantees.** Ledger writes of the bound session are confined to the cycle's set. Other sessions of the project are unaffected by a driver and are not confined by it. Claims are not confined: the driven session can acquire, renew and release a claim on any item, also outside the set; the claim is recorded in the cycle's lineage and gives no right to change the item. The server also confines writes that carry a cycle ID from a session delegated under the cycle, but no CQ client creates such a session.
 
 ## Harness caveats
 
