@@ -35,11 +35,7 @@ final case class HarnessInvocation(role: Role, attempt: AttemptId, system: Strin
   require(UTF_8.newEncoder().canEncode(system) && system.getBytes(UTF_8).length <= 32768, "Harness system instructions exceed bounds")
   require(resultSchema.isObject && resultSchema.noSpaces.getBytes(UTF_8).length <= 32768, "Harness result schema exceeds bounds")
   require(endpoints.map(_.target).distinct.size == endpoints.size, "Duplicate MCP target")
-  def edits: Boolean = role == Role.Worker
-  def tools(target: McpTarget): List[String] = target match {
-    case McpTarget.Domain => if (role == Role.Governor) List("search", "read", "graph", "change", "apply", "claim", "usage") else List("search", "read", "usage")
-    case McpTarget.Local => if (role == Role.Governor) List("dispatch") else List("workspace")
-  }
+  def tools(target: McpTarget): List[String] = HarnessTools.mcp(role, target)
 }
 
 final case class HarnessAsset(name: String, body: String) {
@@ -93,8 +89,9 @@ final class ClaudeAdapter extends HarnessAdapter {
   override def launch(profile: HarnessProfile, invocation: HarnessInvocation, environment: Map[String, String]): HarnessLaunch = {
     require(profile.harness == harness)
     require(profile.provider == "anthropic", "Claude adapter supports only the verified Anthropic provider route")
-    val builtin = if (invocation.edits) List("Read", "Glob", "Grep", "Edit", "Write", "Bash") else Nil
-    val mcp = invocation.endpoints.flatMap(endpoint => invocation.tools(endpoint.target).map(tool => s"mcp__${endpoint.name}__$tool"))
+    val policy = HarnessTools.policy(invocation.role, harness)
+    val builtin = policy.enabledBuiltin
+    val mcp = invocation.endpoints.flatMap(endpoint => policy.enabledMcp(endpoint.target).map(tool => s"mcp__${endpoint.name}__$tool"))
     val servers = Json.obj(invocation.endpoints.map { endpoint => endpoint.name -> Json.obj(
       "type" -> Json.fromString("http"), "url" -> Json.fromString(endpoint.endpoint.toString),
       "headers" -> Json.obj("Authorization" -> Json.fromString("Bearer " + endpoint.token.value)),
@@ -103,7 +100,7 @@ final class ClaudeAdapter extends HarnessAdapter {
       "--no-session-persistence", "--session-id", invocation.attempt.value.toString, "--model", profile.model,
       "--disable-slash-commands", "--strict-mcp-config", "--mcp-config", invocation.assets.resolve("claude-mcp.json").toString,
       "--tools", builtin.mkString(","), "--allowedTools", (builtin ++ mcp).mkString(","),
-      "--disallowedTools", "Agent,Task,TaskOutput,TaskStop", "--system-prompt", invocation.system,
+      "--disallowedTools", policy.deniedBuiltin.mkString(","), "--system-prompt", invocation.system,
       "--json-schema", invocation.resultSchema.noSpaces)
     HarnessLaunch(arguments, HarnessEnvironment.isolated(profile, environment), List(HarnessAsset("claude-mcp.json", Json.obj("mcpServers" -> servers).noSpaces)))
   }
@@ -112,27 +109,28 @@ final class ClaudeAdapter extends HarnessAdapter {
 final class CodexAdapter extends HarnessAdapter {
   override val harness: Harness = Harness.Codex
   private def config(key: String, value: Json): List[String] = List("-c", s"$key=${value.noSpaces}")
+  private def setting(tool: HarnessTool): List[String] = tool.name match {
+    case "web_search" => config(tool.name, Json.fromString(if (tool.enabled) "live" else "disabled"))
+    case name => config(name, Json.fromBoolean(tool.enabled))
+  }
   override def launch(profile: HarnessProfile, invocation: HarnessInvocation, environment: Map[String, String]): HarnessLaunch = {
     require(profile.harness == harness)
-    val disabled = List("multi_agent", "multi_agent_v2", "plugins", "plugin_hooks", "apps", "enable_mcp_apps", "memories",
-      "skill_search", "skill_mcp_dependency_install")
-    val restrictions = disabled.flatMap(name => config("features." + name, Json.False)) ++
-      config("features.code_mode_host", Json.True) ++
-      List("shell_tool", "unified_exec", "apply_patch_freeform").flatMap(name => config("features." + name, Json.fromBoolean(invocation.edits))) ++
-      config("agents.enabled", Json.False) ++ config("approval_policy", Json.fromString("never")) ++
-      config("model_provider", Json.fromString(profile.provider)) ++
-      config("web_search", Json.fromString("disabled")) ++ config("tools.update_plan.enabled", Json.False) ++
+    val policy = HarnessTools.policy(invocation.role, harness)
+    // Approval and provider settings stay between agents.enabled and web_search, where the launch has always placed them.
+    val (leading, trailing) = policy.builtin.span(_.name != "web_search")
+    val restrictions = leading.flatMap(setting) ++ config("approval_policy", Json.fromString("never")) ++
+      config("model_provider", Json.fromString(profile.provider)) ++ trailing.flatMap(setting) ++
       config("developer_instructions", Json.fromString(invocation.system))
     val mcp = invocation.endpoints.flatMap { endpoint =>
       val prefix = "mcp_servers." + endpoint.name + "."
       config(prefix + "url", Json.fromString(endpoint.endpoint.toString)) ++
         config(prefix + "bearer_token_env_var", Json.fromString(endpoint.environmentKey)) ++
-        config(prefix + "enabled_tools", Json.arr(invocation.tools(endpoint.target).map(Json.fromString)*)) ++
+        config(prefix + "enabled_tools", Json.arr(policy.enabledMcp(endpoint.target).map(Json.fromString)*)) ++
         config(prefix + "required", Json.True) ++ config(prefix + "startup_timeout_sec", Json.fromInt(10)) ++
         config(prefix + "tool_timeout_sec", Json.fromInt(30)) ++ config(prefix + "default_tools_approval_mode", Json.fromString("approve"))
     }
     val arguments = List(profile.executable.toString, "exec", "--json", "--ephemeral", "--ignore-user-config", "--ignore-rules", "--strict-config",
-      "--model", profile.model, "--sandbox", if (invocation.edits) "workspace-write" else "read-only",
+      "--model", profile.model, "--sandbox", if (policy.edits) "workspace-write" else "read-only",
       "--output-schema", invocation.assets.resolve("result-schema.json").toString,
       "--output-last-message", invocation.assets.resolve("last-message.json").toString) ++ restrictions ++ mcp ++ List("-")
     val scoped = invocation.endpoints.map(endpoint => endpoint.environmentKey -> endpoint.token.value).toMap
@@ -146,11 +144,12 @@ final class PiAdapter extends HarnessAdapter {
   override val harness: Harness = Harness.Pi
   override def launch(profile: HarnessProfile, invocation: HarnessInvocation, environment: Map[String, String]): HarnessLaunch = {
     require(profile.harness == harness)
-    val builtin = if (invocation.edits) List("read", "write", "edit", "bash") else Nil
-    val mcp = invocation.endpoints.flatMap(endpoint => invocation.tools(endpoint.target).map(tool => s"${endpoint.name}_$tool"))
+    val policy = HarnessTools.policy(invocation.role, harness)
+    val builtin = policy.enabledBuiltin
+    val mcp = invocation.endpoints.flatMap(endpoint => policy.enabledMcp(endpoint.target).map(tool => s"${endpoint.name}_$tool"))
     val configuration = Json.obj("endpoints" -> Json.arr(invocation.endpoints.map { endpoint => Json.obj(
       "name" -> Json.fromString(endpoint.name), "url" -> Json.fromString(endpoint.endpoint.toString),
-      "token" -> Json.fromString(endpoint.token.value), "tools" -> Json.arr(invocation.tools(endpoint.target).map(Json.fromString)*),
+      "token" -> Json.fromString(endpoint.token.value), "tools" -> Json.arr(policy.enabledMcp(endpoint.target).map(Json.fromString)*),
     ) }*))
     val extension = Using.resource(getClass.getResourceAsStream("/cq/pi-bridge.mjs")) { stream =>
       require(stream != null, "CQ Pi bridge resource is missing")
