@@ -7,6 +7,7 @@ import distage.{Lifecycle, ModuleDef}
 import izumi.distage.plugins.PluginDef
 import izumi.distage.roles.model.{RoleDescriptor, RoleTask}
 import izumi.distage.roles.model.definition.RoleModuleDef
+import izumi.functional.bio.UnsafeRun2.FailureHandler
 import izumi.fundamentals.platform.cli.model.{EntrypointArgs, RoleAppArgs}
 import izumi.fundamentals.platform.cli.model.schema.{ParserDef, RoleParserSchema}
 import java.io.ByteArrayInputStream
@@ -35,6 +36,7 @@ object SupervisorConfig {
   val AttachedLifetime = Duration.ofHours(8)
   private val CredentialMargin = Duration.ofMinutes(10)
   private val MaxCredentialLifetime = Duration.ofHours(24)
+  val VersionMismatch = "Installed harness version differs from its configured verified route"
   def profile(value: HarnessSetting): HarnessProfile = HarnessProfile(value.harness, Path.of(value.executable), value.model, value.provider, value.version,
     value.providerExtensions.map(Path.of(_)), value.providerEnvironment)
   def limits(value: HostLimits): ExecutionLimits = ExecutionLimits(Duration.ofMillis(value.startupMillis), Duration.ofMillis(value.executionMillis),
@@ -48,7 +50,7 @@ object SupervisorConfig {
   def verifyProfile(config: SupervisorConfig, value: HarnessProfile): Unit = {
     val version = new BoundedHostCommand(HarnessEnvironment.isolated(value, config.environment), Duration.ofSeconds(10), 4096)
       .run(Path.of(config.run.repository), List(value.executable.toString, "--version"))
-    require(version.exit == 0 && version.text.split("[\\s()]+").contains(value.version), "Installed harness version differs from its configured verified route")
+    require(version.exit == 0 && version.text.split("[\\s()]+").contains(value.version), VersionMismatch)
   }
   def credentialLifetime(limits: ExecutionLimits): Duration = {
     val lifetime = limits.startup.plus(limits.execution).plus(limits.grace).plus(limits.kill).plus(CredentialMargin)
@@ -69,7 +71,9 @@ object SupervisorConfig {
     val supplied = pairs.toMap
     val options = if (supplied.contains("--settings")) supplied else supplied.updated("--settings",
       context.environment.getOrElse("CQ_SETTINGS", throw new IllegalArgumentException("--settings FILE or CQ_SETTINGS is required")))
-    val settings = HostFiles.read(context.directory.resolve(options("--settings")).normalize(), SupervisorSettings_JsonCodec, MaxConfigBytes)
+    val settingsFile = context.directory.resolve(options("--settings")).normalize()
+    require(Files.isRegularFile(settingsFile), s"Settings file $settingsFile is missing")
+    val settings = HostFiles.read(settingsFile, SupervisorSettings_JsonCodec, MaxConfigBytes)
     val profiles = settings.harnesses.map(SupervisorConfig.profile)
     require(profiles.nonEmpty && profiles.map(_.harness).distinct.size == profiles.size, "Harness settings must have unique routes")
     val profile = profiles.find(_.harness == harness).getOrElse(throw new IllegalArgumentException("Governing harness route is not configured"))
@@ -89,7 +93,9 @@ object SupervisorConfig {
       "Configured validation arguments exceed 16 KiB")
     val guardian = Path.of(settings.guardian)
     require(guardian.isAbsolute && guardian.normalize() == guardian && Files.isExecutable(guardian), "Explicit executable guardian required")
-    val project = HostFiles.read(location.directory.resolve("project.json"), ProjectConfig_JsonCodec, MaxConfigBytes)
+    val projectFile = location.directory.resolve("project.json")
+    require(Files.isRegularFile(projectFile), s"Project configuration $projectFile is missing")
+    val project = HostFiles.read(projectFile, ProjectConfig_JsonCodec, MaxConfigBytes)
     val workflow = WorkflowArguments.parse(project.project, options.filter((key, _) => WorkflowArguments.Options(key)))
     val git = new BoundedHostCommand(GitEnvironment.isolated(context.environment), Duration.ofSeconds(10), MaxConfigBytes)
     def command(arguments: String*): String = {
@@ -121,7 +127,7 @@ object SupervisorConfig {
     require(attached || input.trim.nonEmpty, "Governing input cannot be empty")
     val version = new BoundedHostCommand(HarnessEnvironment.isolated(profile, context.environment), Duration.ofSeconds(10), 4096)
       .run(repository, List(profile.executable.toString, "--version"))
-    require(version.exit == 0 && version.text.split("[\\s()]+").contains(profile.version), "Installed harness version differs from its configured verified route")
+    require(version.exit == 0 && version.text.split("[\\s()]+").contains(profile.version), VersionMismatch)
     SupervisorConfig(settings, project, profile, limits, run, directory, input, workflow, context.environment)
   }
 }
@@ -267,6 +273,7 @@ object SupervisorPlugin extends PluginDef {
     make[WorkspaceReader]
     make[CandidateWorkspace]
     make[SupervisorAuthority].fromEffect(SupervisorAuthority.acquire _)
+    modify[FailureHandler].by(_.flatAp((arguments: RoleAppArgs) => AttachedStartup.reporting(arguments)))
     make[WorkflowExecution].from { (config: SupervisorConfig, authority: SupervisorAuthority) =>
       new WorkflowExecution(authority.governor, config.project.project, config.owner.actor.session, config.workflow)
     }
