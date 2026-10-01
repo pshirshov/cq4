@@ -13,7 +13,7 @@ atom        := item-id | word | quoted-string | attribute ':' value
 value       := word | quoted-string
 ```
 
-`NOT`/`-` bind before conjunction, and conjunction binds before `OR`. Boolean keywords are uppercase; lowercase words are full-text terms. Adjacent terms imply `AND`. Double-quoted values use JSON string escaping; unquoted backslash escapes are rejected. Quotes distinguish a literal phrase such as `"T42"` from an exact item ID. Parentheses, colon, quote, whitespace and a leading minus delimit tokens; quote literal values containing these delimiters.
+`NOT`/`-` bind before conjunction, and conjunction binds before `OR`. Boolean keywords are matched without regard to case (`not`, `Not` and `NOT` are the same operator); to search for the words themselves, quote them (`"not"`). Adjacent terms imply `AND`. Double-quoted values use JSON string escaping; unquoted backslash escapes are rejected. Quotes distinguish a literal phrase such as `"T42"` from an exact item ID. Parentheses, colon, quote, whitespace and a leading minus delimit tokens; quote literal values containing these delimiters.
 
 | Attribute | Meaning |
 | --- | --- |

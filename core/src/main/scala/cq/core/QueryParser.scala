@@ -85,7 +85,7 @@ final class QueryParser {
           if (next < source.length && source(next) == ':') Some(QuerySite.Field(span, prefix))
           else {
             val afterExpression = previous.lastOption.exists(token => token.kind == Kind.Right || token.kind == Kind.Quoted ||
-              (token.kind == Kind.Word && !Set("AND", "OR", "NOT").contains(token.value)))
+              (token.kind == Kind.Word && !Set("AND", "OR", "NOT").contains(token.value.toUpperCase(java.util.Locale.ROOT))))
             val depth = previous.count(_.kind == Kind.Left) - previous.count(_.kind == Kind.Right)
             Some(QuerySite.Term(span, prefix, afterExpression, depth > 0))
           }
@@ -195,7 +195,7 @@ final class QueryParser {
     private var nodes = 0
     private def current: Token = input(offset)
     private def take(): Token = { val result = current; offset += 1; result }
-    private def keyword(value: String): Boolean = current.kind == Kind.Word && current.value == value
+    private def keyword(value: String): Boolean = current.kind == Kind.Word && current.value.equalsIgnoreCase(value)
     private def node(value: QueryExpression, span: QuerySpan): QueryExpression = {
       nodes += 1
       if (nodes > MaxNodes) fail(span, s"Query exceeds $MaxNodes expression nodes")

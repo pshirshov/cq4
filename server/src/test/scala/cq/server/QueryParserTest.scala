@@ -15,7 +15,10 @@ final class QueryParserLocal extends AnyWordSpec {
       assert(parsed("alpha OR beta AND NOT gamma") == active(QueryExpression.Or(text("alpha"), QueryExpression.And(text("beta"), QueryExpression.Not(text("gamma"))))))
       assert(parsed("(alpha OR beta) -gamma") == active(QueryExpression.And(QueryExpression.Or(text("alpha"), text("beta")), QueryExpression.Not(text("gamma")))))
       assert(parsed("alpha beta") == parsed("alpha AND beta"))
-      assert(parsed("and or not") == active(QueryExpression.And(QueryExpression.And(text("and"), text("or")), text("not"))))
+      assert(parsed("alpha or beta and not gamma") == parsed("alpha OR beta AND NOT gamma"))
+      assert(parsed("ledger:Tasks and (Not status:done)") == parsed("ledger:Tasks AND (NOT status:done)"))
+      assert(parsed("\"and\" \"or\" \"not\"") == active(QueryExpression.And(QueryExpression.And(QueryExpression.Text(List("and"), true), QueryExpression.Text(List("or"), true)), QueryExpression.Text(List("not"), true))))
+      assert(parser.parse("and or not").isLeft)
       assert(parsed("   ") == active(QueryExpression.All()))
     }
 

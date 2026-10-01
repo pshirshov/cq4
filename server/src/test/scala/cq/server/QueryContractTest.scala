@@ -38,6 +38,7 @@ abstract class QueryContractTest extends SpecZIO with AssertZIO {
         _ <- create(service, other, draft("Alpha retry", "deadline café", Set(quotedTag), false))
         _ <- matches(service, owner, "", List(a.id, b.id))
         _ <- matches(service, owner, "alpha OR beta AND NOT status:Done", List(a.id))
+        _ <- matches(service, owner, "alpha or beta and not status:Done", List(a.id))
         _ <- matches(service, owner, "(alpha OR beta) status:done", List(b.id))
         _ <- matches(service, owner, "ledger:Tasks status:Ready \"retry deadline\"", List(a.id))
         _ <- matches(service, owner, "tag:" + io.circe.Json.fromString(quotedTag).noSpaces, List(a.id))
