@@ -4,11 +4,16 @@ import baboon.runtime.shared.{BaboonCodecContext, BaboonJsonCodec}
 import cq.api.*
 import cq.core.DomainFailure
 import io.circe.parser.parse
+import java.io.IOException
 import java.net.URI
 import java.net.http.{HttpClient, HttpRequest, HttpResponse, HttpTimeoutException}
 import java.nio.charset.StandardCharsets.UTF_8
 import java.time.{Clock, Duration}
 import java.util.concurrent.{ExecutionException, TimeUnit, TimeoutException}
+
+/** The server gave no answer to act on: it could not be reached, did not respond in time or failed internally. Nothing is known
+  * about whether it performed the request. */
+final class ServerUnavailable(message: String, cause: Throwable) extends IllegalStateException(message, cause)
 
 trait ServerApi {
   def call(command: Command): Result
@@ -38,14 +43,18 @@ final class HttpServerApi(endpoint: URI, token: String, session: SessionId, time
       val response = try pending.get(timeout.toMillis, TimeUnit.MILLISECONDS) catch {
         case failure: TimeoutException =>
           pending.cancel(true)
-          throw new IllegalStateException("HTTP response deadline exceeded", failure)
+          throw new ServerUnavailable("HTTP response deadline exceeded", failure)
         case failure: InterruptedException =>
           pending.cancel(true)
           Thread.currentThread().interrupt()
           throw failure
         case failure: ExecutionException if failure.getCause.isInstanceOf[HttpTimeoutException] =>
-          throw new IllegalStateException("HTTP response deadline exceeded", failure)
+          throw new ServerUnavailable("HTTP response deadline exceeded", failure)
+        case failure: ExecutionException if failure.getCause.isInstanceOf[IOException] =>
+          throw new ServerUnavailable("HTTP request failed: " + Option(failure.getCause.getMessage).getOrElse(failure.getCause.getClass.getSimpleName), failure)
       }
+      // A server error says nothing about the request's domain outcome, whatever its body.
+      if (response.statusCode() >= 500) throw new ServerUnavailable(s"HTTP ${response.statusCode()}: server error", null)
       val text = new String(response.body(), UTF_8)
       val json = parse(text).fold(throw _, identity)
       if (response.statusCode() != 200) {

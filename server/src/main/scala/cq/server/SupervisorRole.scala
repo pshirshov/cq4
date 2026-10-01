@@ -279,6 +279,8 @@ object SupervisorPlugin extends PluginDef {
     }
     make[LocalAccess]
     make[OperatorRequirements].from((config: SupervisorConfig) => new OperatorRequirements(config.input))
+    make[ClaimRenewal.Policy].fromValue(ClaimRenewal.Default)
+    make[ClaimRenewal]
     make[ChildRunner]
     make[DispatchController].fromResource[DispatchController.Resource]
     make[CohortController]

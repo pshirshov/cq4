@@ -106,8 +106,11 @@ sys.stderr.flush()
     override def grant(value: GrantRequest): AccessToken = auth.grant(root, value)
   }
 
+  private val renewal = new ClaimRenewal(ClaimRenewal.Default, logstage.IzLogger.NullLogger)
+  /** `renewing` builds another runner of the same session with its own server authority and claim renewal policy. */
   private final case class Fixture(owner: Scope, collector: Scope, config: SupervisorConfig, authority: SupervisorAuthority, runner: ChildRunner, agents: AgentCatalog,
-    jobs: JobSupervisor, members: List[ItemRevision], fence: Fence, governor: Attempt, profile: HarnessSetting, clock: Clock) {
+    jobs: JobSupervisor, members: List[ItemRevision], fence: Fence, governor: Attempt, profile: HarnessSetting, clock: Clock,
+    renewing: (SupervisorAuthority, ClaimRenewal.Policy) => ChildRunner) {
     val limits: HostLimits = HostLimits(3000, 900, 100, 1000, 262144)
     /** Runs one child of `controller` to its terminal status. */
     def child(controller: DispatchController, script: String, request: DispatchRequest): Task[DispatchStatus] = for {
@@ -119,7 +122,7 @@ sys.stderr.flush()
     def revalidations(controller: DispatchController): ZIO[zio.Scope, Throwable, RevalidationController] = for {
       requests <- Semaphore.make(1)
       admission <- Semaphore.make(1)
-      value <- ZIO.acquireRelease(ZIO.succeed(new RevalidationController(config, authority, jobs, controller, clock, requests, admission)))(_.shutdown.orDie)
+      value <- ZIO.acquireRelease(ZIO.succeed(new RevalidationController(config, authority, jobs, controller, renewal, clock, requests, admission)))(_.shutdown.orDie)
     } yield value
     def install(script: String): Unit = {
       val executable = Path.of(profile.executable)
@@ -182,9 +185,10 @@ sys.stderr.flush()
       access = new LocalAccess
       _ <- ZIO.succeed(access.bind(URI.create("http://127.0.0.1:1")))
       agents = new AgentCatalog(new McpSchemas, new ChildInstructions)
-      runner = new ChildRunner(config, authority, new HarnessRegistry(Set(new ClaudeAdapter, new CodexAdapter, new PiAdapter)), jobs, workspaces,
-        agents, new HarnessOutput, new CandidateWorkspace(config), new WorkspaceReader, access, new OperatorRequirements(""), clock)
-      _ <- test(Fixture(owner, collector, config, authority, runner, agents, jobs, members, claim.fence, governor, profile, clock))
+      renewing = (authority: SupervisorAuthority, policy: ClaimRenewal.Policy) => new ChildRunner(config, authority,
+        new HarnessRegistry(Set(new ClaudeAdapter, new CodexAdapter, new PiAdapter)), jobs, workspaces, agents, new HarnessOutput, new CandidateWorkspace(config),
+        new WorkspaceReader, access, new OperatorRequirements(""), new ClaimRenewal(policy, logstage.IzLogger.NullLogger), clock)
+      _ <- test(Fixture(owner, collector, config, authority, renewing(authority, ClaimRenewal.Default), agents, jobs, members, claim.fence, governor, profile, clock, renewing))
     } yield ()
   }
 
@@ -315,6 +319,57 @@ sys.stderr.flush()
         _ <- ZIO.attempt(assert(entry.status.phase == DispatchPhase.Completed && entry.status.result.nonEmpty &&
           job.exit.exists(exit => exit.reason == StopReason.Exited && exit.code.contains(0)), s"${entry.status} $job"))
       } yield () }
+    }
+
+    "keep a child running while the server leaves claim renewals unanswered, and stop it at once when the server refuses one" in {
+      (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None, Nil) { f =>
+        val renewals = new java.util.concurrent.atomic.AtomicInteger(0)
+        // Once the child runs, the server leaves three renewals unanswered and then recovers.
+        val unanswered = new java.util.concurrent.atomic.AtomicInteger(0)
+        val interrupted = new ServerApi {
+          private val server = f.authority.governor
+          override def call(command: Command): Result = command match {
+            case Command.ClaimWork(ClaimInput(_, _: ClaimAction.Renew)) if { renewals.incrementAndGet(); unanswered.getAndUpdate(left => math.max(0, left - 1)) > 0 } =>
+              throw new ServerUnavailable("HTTP response deadline exceeded", new java.util.concurrent.TimeoutException)
+            case _ => server.call(command)
+          }
+          override def artifact(value: ArtifactUpload): ArtifactMetadata = server.artifact(value)
+          override def usage(value: HostUsageInput): HostUsageResult = server.usage(value)
+          override def admit(value: HostAdmissionInput): ResultAdmission = server.admit(value)
+          override def integrate(value: HostIntegrationInput): IntegrationRecord = server.integrate(value)
+          override def grant(value: GrantRequest): AccessToken = server.grant(value)
+        }
+        val runner = f.renewing(f.authority.copy(governor = interrupted), ClaimRenewal.Policy(Duration.ofSeconds(30), Duration.ofSeconds(1), Duration.ofSeconds(5)))
+        val waiting = Slow.replace("time.sleep(3)", "time.sleep(6)")
+        for {
+          entry <- f.dispatch(waiting, f.limits)
+          completing <- runner.run(entry).fork
+          _ <- ZIO.sleep(zio.Duration.fromMillis(100)).repeatUntil(_ => entry.status.phase == DispatchPhase.Running)
+            .timeoutFail(new IllegalStateException("Worker did not start"))(zio.Duration.fromSeconds(30))
+          before <- ZIO.succeed { unanswered.set(3); renewals.get() }
+          _ <- completing.join.timeoutFail(new IllegalStateException("Worker did not finish"))(zio.Duration.fromSeconds(60))
+          _ <- ZIO.attempt {
+            println(s"Unanswered renewals: ${entry.status.phase} ${entry.status.blocker} renewals=$before→${renewals.get()} left=${unanswered.get()}")
+            assert(entry.status.phase == DispatchPhase.Completed && entry.status.result.nonEmpty && unanswered.get() == 0 && renewals.get() >= before + 4,
+              s"${entry.status} after ${renewals.get()} renewals")
+          }
+          refused <- f.dispatch(waiting, f.limits)
+          running <- runner.run(refused).fork
+          _ <- ZIO.sleep(zio.Duration.fromMillis(200)).repeatUntil(_ => refused.status.phase == DispatchPhase.Running)
+            .timeoutFail(new IllegalStateException("Worker did not start"))(zio.Duration.fromSeconds(30))
+          released <- ZIO.succeed(System.nanoTime())
+          _ <- ledger.release(f.owner, f.fence)
+          _ <- running.join.timeoutFail(new IllegalStateException("Worker was not stopped"))(zio.Duration.fromSeconds(30))
+          _ <- ZIO.attempt {
+            val elapsed = Duration.ofNanos(System.nanoTime() - released)
+            println(s"Refused renewal: ${refused.status.phase} ${refused.status.blocker} after $elapsed")
+            assert(refused.status.phase == DispatchPhase.Cancelled && refused.status.blocker.contains("Work claim refresh failed: " + Fault.StaleFence("Claim released")) &&
+              elapsed.compareTo(Duration.ofSeconds(5)) < 0, s"${refused.status} after $elapsed")
+          }
+        } yield ()
+      }
     }
 
     "I21: grant a child its domain credential at its own start for the server's grant lifetime" in {

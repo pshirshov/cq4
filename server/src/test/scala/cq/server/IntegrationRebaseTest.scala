@@ -108,7 +108,8 @@ final class IntegrationRebaseProcess extends SpecZIO with AssertZIO {
       jobs <- JobSupervisor.acquire(config.owner, ZIO.attemptBlocking(FileJobRepository.open(directory.resolve("journal"), project.project, owner.actor.session)),
         local.fixture.service, new GuardianDriver(guardian.binary), directory.resolve("payload"), clock)
       admission <- Semaphore.make(1)
-      controller <- ZIO.acquireRelease(ZIO.succeed(new IntegrationController(config, authority, jobs, new CandidateWorkspace(config), clock, admission)))(_.shutdown.orDie)
+      controller <- ZIO.acquireRelease(ZIO.succeed(new IntegrationController(config, authority, jobs, new CandidateWorkspace(config),
+        new ClaimRenewal(ClaimRenewal.Default, logstage.IzLogger.NullLogger), clock, admission)))(_.shutdown.orDie)
       empty = Fixture(local, owner, config, controller, jobs, governor.id, ArtifactId(uuid), local.base, local.base, created.items, claim.fence, renewals, AssignmentId(uuid))
       commits <- ZIO.attemptBlocking {
         local.git(local.source, "branch", "integration", local.base.value)

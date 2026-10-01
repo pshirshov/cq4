@@ -41,6 +41,52 @@ final class HostDeliveryLocal extends AnyWordSpec {
   }
 
   "Host delivery (Behavioral Active Blackbox; Group / filesystem Communication)" should {
+    "tell an unanswered request (refused connection, timeout, server error) from a fault the server returned" in {
+      val server = com.sun.net.httpserver.HttpServer.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0)
+      def respond(path: String, status: Int, body: String, delayMillis: Long): Unit = server.createContext(path, exchange => {
+        Thread.sleep(delayMillis)
+        val bytes = body.getBytes(UTF_8)
+        exchange.sendResponseHeaders(status, bytes.length.toLong)
+        exchange.getResponseBody.write(bytes)
+        exchange.close()
+      })
+      val fault = Fault.StaleFence("Claim released")
+      val refusal = HostFiles.encode(Fault_JsonCodec, fault)
+      respond("/refused/api/grant", 400, refusal, 0)
+      respond("/failing/api/grant", 503, refusal, 0)
+      respond("/broken/api/grant", 500, "<html>proxy error</html>", 0)
+      respond("/slow/api/grant", 200, "{}", 2000)
+      server.setExecutor(java.util.concurrent.Executors.newCachedThreadPool())
+      server.start()
+      val origin = "http://127.0.0.1:" + server.getAddress.getPort
+      val request = GrantRequest(project, Actor("fixture", SessionId(UUID.randomUUID()), Role.Collector), 1)
+      // HttpServerApi takes an origin; a prefix-routing proxy stands in for the four server behaviours.
+      def outcome(prefix: String): Throwable = {
+        val proxy = com.sun.net.httpserver.HttpServer.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0)
+        proxy.createContext("/", exchange => {
+          val upstream = java.net.http.HttpClient.newHttpClient().send(java.net.http.HttpRequest.newBuilder(java.net.URI.create(origin + prefix + exchange.getRequestURI.getPath))
+            .POST(java.net.http.HttpRequest.BodyPublishers.ofByteArray(exchange.getRequestBody.readAllBytes())).build(), java.net.http.HttpResponse.BodyHandlers.ofByteArray())
+          exchange.sendResponseHeaders(upstream.statusCode(), upstream.body().length.toLong)
+          exchange.getResponseBody.write(upstream.body())
+          exchange.close()
+        })
+        proxy.setExecutor(java.util.concurrent.Executors.newCachedThreadPool())
+        proxy.start()
+        try intercept[Throwable](new HttpServerApi(java.net.URI.create("http://127.0.0.1:" + proxy.getAddress.getPort), "token", SessionId(UUID.randomUUID()),
+          Duration.ofMillis(500)).grant(request))
+        finally proxy.stop(0)
+      }
+      try {
+        val closed = new java.net.ServerSocket(0, 1, java.net.InetAddress.getByName("127.0.0.1"))
+        val unreachable = java.net.URI.create("http://127.0.0.1:" + closed.getLocalPort)
+        closed.close()
+        val refusedConnection = intercept[Throwable](new HttpServerApi(unreachable, "token", SessionId(UUID.randomUUID()), Duration.ofMillis(500)).grant(request))
+        val outcomes = List("/refused", "/failing", "/broken", "/slow").map(outcome)
+        println(s"HTTP failures: connection=$refusedConnection ${outcomes.map(value => value.getClass.getSimpleName + ": " + value.getMessage)}")
+        assert(refusedConnection.isInstanceOf[ServerUnavailable], refusedConnection.toString)
+        assert(outcomes.head == cq.core.DomainFailure(fault) && outcomes.tail.forall(_.isInstanceOf[ServerUnavailable]), outcomes.toString)
+      } finally server.stop(0)
+    }
     "reject fresh reviewer checks that would disappear from the inherited inventory" in {
       val inherited = List(ValidationEvidence("original", ValidationState.Passed, ArtifactId(UUID.randomUUID()), Nil))
       val extra = ValidationEvidence("newly-configured", ValidationState.Failed, ArtifactId(UUID.randomUUID()), Nil)

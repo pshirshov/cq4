@@ -33,11 +33,10 @@ private[server] final class GovernedIntegrationJobs(owner: Scope, jobs: JobSuper
   } yield ()
 }
 
-final class IntegrationController(config: SupervisorConfig, authority: SupervisorAuthority, jobs: JobSupervisor, candidates: CandidateWorkspace, clock: Clock,
-  admission: Semaphore) {
+final class IntegrationController(config: SupervisorConfig, authority: SupervisorAuthority, jobs: JobSupervisor, candidates: CandidateWorkspace,
+  renewal: ClaimRenewal, clock: Clock, admission: Semaphore) {
   private val MaxWaitMillis = 20000
   private val AcknowledgementMillis = 1000L
-  private val RenewalSeconds = 20L
   private val journal = new FileIntegrationJournal(config.directory.resolve("integrations"), config.owner)
   private val execution = new GovernedIntegrationJobs(config.owner, jobs, admission)
   private val coordinator = config.settings.integrationTarget.map { target =>
@@ -119,12 +118,14 @@ final class IntegrationController(config: SupervisorConfig, authority: Superviso
       _ <- ready.succeed(())
       preparation = new IntegrationPreparation(authority.governor, config.owner, config.run.repository,
         config.settings.integrationTarget.get, config.settings.checks, clock, candidates)
+      // The review renews the claim; the renewals that follow count their lease from before it.
+      began <- ZIO.succeed(System.nanoTime())
       reviewed <- ZIO.attemptBlocking(preparation.review(ticket))
       assignment <- ZIO.attemptBlocking(PhaseSpans.producer(config.directory, reviewed.workerId))
       _ <- ZIO.succeed(synchronized { entry.assignment = Some(assignment) })
-      // The claim is renewed while host checks of a rebased commit run; a failed renewal stops them.
-      renewal = (ZIO.sleep(zio.Duration.fromSeconds(RenewalSeconds)) *> ZIO.attemptBlocking(preparation.renew(reviewed))).forever
-      rebased <- ZIO.interruptible(rebase(ticket.id, config.settings.integrationTarget.get, reviewed.candidate, spans.check(jobs, execution, assignment)).raceFirst(renewal))
+      // The claim is renewed while host checks of a rebased commit run; a renewal that fails for good stops them.
+      renewed = renewal.maintain(began, ZIO.attemptBlocking(preparation.renew(reviewed)))
+      rebased <- ZIO.interruptible(rebase(ticket.id, config.settings.integrationTarget.get, reviewed.candidate, spans.check(jobs, execution, assignment)).raceFirst(renewed))
       // Shutdown cancels a running check, which then reads as failed; that outcome is discarded rather than reported.
       _ <- ZIO.attempt(synchronized(require(!closing || !rebased.outcome.isInstanceOf[RebaseOutcome.ChecksFailed],
         "Integration admission closed while host checks ran")))
@@ -180,9 +181,9 @@ final class IntegrationController(config: SupervisorConfig, authority: Superviso
 
 object IntegrationController {
   def terminal(phase: IntegrationPhase): Boolean = Set(IntegrationPhase.Recorded, IntegrationPhase.NotApplied, IntegrationPhase.Failed)(phase)
-  final class Resource(config: SupervisorConfig, authority: SupervisorAuthority, jobs: JobSupervisor, candidates: CandidateWorkspace, clock: Clock,
-    watchdog: SupervisorWatchdog)
+  final class Resource(config: SupervisorConfig, authority: SupervisorAuthority, jobs: JobSupervisor, candidates: CandidateWorkspace,
+    renewal: ClaimRenewal, clock: Clock, watchdog: SupervisorWatchdog)
     extends Lifecycle.Of[Task, IntegrationController](Lifecycle.make(
-      Semaphore.make(1).map(new IntegrationController(config, authority, jobs, candidates, clock, _)))(
+      Semaphore.make(1).map(new IntegrationController(config, authority, jobs, candidates, renewal, clock, _)))(
       value => ZIO.succeed(watchdog.beginShutdown()) *> value.shutdown))
 }

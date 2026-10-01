@@ -10,10 +10,9 @@ import zio.{IO, Ref, Task, ZIO}
 
 final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority, registry: HarnessRegistry, jobs: JobSupervisor,
   workspaces: WorkspaceService[IO], agents: AgentCatalog, output: HarnessOutput,
-  candidates: CandidateWorkspace, reader: WorkspaceReader, access: LocalAccess, requirements: OperatorRequirements, clock: Clock) {
+  candidates: CandidateWorkspace, reader: WorkspaceReader, access: LocalAccess, requirements: OperatorRequirements, renewal: ClaimRenewal, clock: Clock) {
   private val MaxGaps = 32
   private val ClaimMillis = Duration.ofMinutes(3).toMillis
-  private val RenewalSeconds = 20L
   private val partials = new PartialWorkCapture(config)
   private val validation = new HostValidation(config)
   private final case class Trace(native: Option[JobRecord], extra: List[ArtifactUpload], spans: List[PhaseSpan], uncertain: Boolean)
@@ -40,12 +39,10 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
       }
     }
   }
-  private def maintain(entry: DispatchExecution): Task[Unit] = {
-    val refresh = ZIO.attemptBlocking(claim(entry, false)).catchAll { failure =>
-      ZIO.succeed(entry.requestStop("Work claim refresh failed: " + Option(failure.getMessage).getOrElse(failure.getClass.getSimpleName))) *>
-        ZIO.foreachDiscard(entry.ownedJobs)(id => jobs.cancel(config.owner, id).unit.catchSome { case DomainFailure(_: Fault.Missing) => ZIO.unit })
-    }
-    (ZIO.sleep(zio.Duration.fromSeconds(RenewalSeconds)) *> refresh).forever
+  /** `obtained` is when the claim was last renewed for this child (`System.nanoTime`). */
+  private def maintain(entry: DispatchExecution, obtained: Long): Task[Unit] = renewal.maintain(obtained, ZIO.attemptBlocking(claim(entry, false))).catchAll { failure =>
+    ZIO.succeed(entry.requestStop("Work claim refresh failed: " + Option(failure.getMessage).getOrElse(failure.getClass.getSimpleName))) *>
+      ZIO.foreachDiscard(entry.ownedJobs)(id => jobs.cancel(config.owner, id).unit.catchSome { case DomainFailure(_: Fault.Missing) => ZIO.unit })
   }
   private def launch(entry: DispatchExecution, id: AttemptId, base: GitCommit, command: JobCommand): Task[JobRecord] = for {
     _ <- ZIO.attempt { entry.check(); entry.active(id) }
@@ -91,8 +88,10 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
           queue.flush(authority.collector)
           entry.check()
         }
+        // Input assembly renews the claim; the renewals that follow count their lease from before it.
+        began <- ZIO.succeed(System.nanoTime())
         input <- ZIO.attemptBlocking(new InputAssembler(authority.governor, config.owner, clock, requirements.current).assemble(entry.ticket.request))
-        _ <- maintain(entry).forkScoped
+        _ <- maintain(entry, began).forkScoped
         prepared <- ZIO.attemptBlocking {
           entry.check()
           val ticket = entry.ticket

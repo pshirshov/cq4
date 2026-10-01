@@ -11,11 +11,10 @@ private[server] final class RevalidationExecution(val result: ArtifactId, val fe
 
 /** Reruns the failed configured checks of an admitted worker result on its exact candidate and publishes the round as a
   * `ValidationAmendment` under the governing attempt. The admitted result is never changed. */
-final class RevalidationController(config: SupervisorConfig, authority: SupervisorAuthority, jobs: JobSupervisor, dispatch: DispatchController, clock: Clock,
-  requests: Semaphore, admission: Semaphore) {
+final class RevalidationController(config: SupervisorConfig, authority: SupervisorAuthority, jobs: JobSupervisor, dispatch: DispatchController,
+  renewal: ClaimRenewal, clock: Clock, requests: Semaphore, admission: Semaphore) {
   private val WaitMillis = 20000L
   private val MaxOperations = 32
-  private val RenewalSeconds = 20L
   private val ClaimMillis = Duration.ofMinutes(3).toMillis
   private val AdmissionNanos = Duration.ofSeconds(60).toNanos
   private val validation = new HostValidation(config)
@@ -23,7 +22,8 @@ final class RevalidationController(config: SupervisorConfig, authority: Supervis
   private val spans = new SessionSpans(config, authority)
   private var entries = Map.empty[RequestId, RevalidationExecution]
   private var closing = false
-  private final case class Round(result: ChildResult, number: Int, failing: List[EffectiveCheck], effective: EffectiveValidation)
+  /** `obtained` is when admission renewed the claim (`System.nanoTime`). */
+  private final case class Round(result: ChildResult, number: Int, failing: List[EffectiveCheck], effective: EffectiveValidation, obtained: Long)
 
   private def bounded[A](operation: (Command => Result) => A): A = {
     val began = System.nanoTime()
@@ -51,10 +51,11 @@ final class RevalidationController(config: SupervisorConfig, authority: Supervis
     require(value.request.work.isInstanceOf[DispatchWork.Worker] && value.request.work != DispatchWork.Worker(WorkerMode.Probe) && value.candidate.nonEmpty,
       "Revalidation requires an admitted worker result with a candidate")
     if (fence != value.request.fence) throw DomainFailure(Fault.StaleFence("Revalidation requires the claim fence its result was admitted under"))
+    val obtained = System.nanoTime()
     renew(call, value.request)
     dispatch.revalidatable(value)
     val effective = IntegrationValidation.effective(config.owner.project, config.owner.actor.session, result, value, config.settings.checks, reader.amendments(result))
-    Round(value, effective.amendments.size + 1, IntegrationValidation.revalidated(effective), effective)
+    Round(value, effective.amendments.size + 1, IntegrationValidation.revalidated(effective), effective, obtained)
   }
 
   private def register(id: RequestId, result: ArtifactId, fence: Fence, done: Promise[Nothing, Unit]): (RevalidationExecution, Option[Round]) =
@@ -80,13 +81,13 @@ final class RevalidationController(config: SupervisorConfig, authority: Supervis
     val author = config.run.attempt.id
     val candidate = round.result.candidate.get
     val label = "reval-" + id.value.toString.replace("-", "")
-    // The claim is renewed while the checks run; a failed renewal stops them and no round is recorded.
-    val renewal = (ZIO.sleep(zio.Duration.fromSeconds(RenewalSeconds)) *> ZIO.attemptBlocking(bounded(renew(_, round.result.request)))).forever
+    // The claim is renewed while the checks run; a renewal that fails for good stops them and no round is recorded.
+    val renewed = renewal.maintain(round.obtained, ZIO.attemptBlocking(bounded(renew(_, round.result.request))))
     for {
       assignment <- ZIO.attemptBlocking(PhaseSpans.producer(config.directory, result))
       results <- ZIO.interruptible(ZIO.foreach(round.failing.zipWithIndex) { case (failing, index) =>
         validation(author, s"$label-$index", candidate, failing.original.declaration, spans.check(jobs, execution, assignment))
-      }.raceFirst(renewal))
+      }.raceFirst(renewed))
       evidence = results.map(_.evidence)
       // Shutdown cancels a running check, which then reads as failed; that outcome is discarded rather than recorded as a round.
       _ <- ZIO.attempt(synchronized(require(!closing || evidence.forall(_.state == ValidationState.Passed), "Revalidation admission closed while checks ran")))
@@ -122,8 +123,8 @@ final class RevalidationController(config: SupervisorConfig, authority: Supervis
 }
 
 object RevalidationController {
-  final class Resource(config: SupervisorConfig, authority: SupervisorAuthority, jobs: JobSupervisor, dispatch: DispatchController, clock: Clock,
-    watchdog: SupervisorWatchdog) extends Lifecycle.Of[Task, RevalidationController](Lifecycle.make(
-      Semaphore.make(1).zip(Semaphore.make(1)).map((requests, admission) => new RevalidationController(config, authority, jobs, dispatch, clock, requests, admission)))(
+  final class Resource(config: SupervisorConfig, authority: SupervisorAuthority, jobs: JobSupervisor, dispatch: DispatchController,
+    renewal: ClaimRenewal, clock: Clock, watchdog: SupervisorWatchdog) extends Lifecycle.Of[Task, RevalidationController](Lifecycle.make(
+      Semaphore.make(1).zip(Semaphore.make(1)).map((requests, admission) => new RevalidationController(config, authority, jobs, dispatch, renewal, clock, requests, admission)))(
       value => ZIO.succeed(watchdog.beginShutdown()) *> value.shutdown))
 }
