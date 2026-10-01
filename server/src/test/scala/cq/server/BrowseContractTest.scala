@@ -7,7 +7,6 @@ import distage.StandardAxis.Repo
 import izumi.distage.plugins.PluginConfig
 import izumi.distage.testkit.scalatest.{AssertZIO, SpecZIO}
 import java.util.UUID
-import java.time.{Clock, Instant, ZoneOffset}
 import zio.{IO, ZIO}
 
 abstract class BrowseContractTest extends SpecZIO with AssertZIO {
@@ -95,11 +94,7 @@ abstract class BrowseContractTest extends SpecZIO with AssertZIO {
 
     "order modified timestamps numerically and move a later revision across page boundaries" in { (repository: LedgerRepository[IO]) =>
       val owner = scope()
-      def at(millis: Long) = {
-        val parser = new QueryParser; val traversal = new WorksetTraversal; val termination = new TerminationPlanner(traversal)
-        new LedgerService.Impl[IO](repository, Clock.fixed(Instant.ofEpochMilli(millis), ZoneOffset.UTC), parser,
-          new QueryCompleter(parser), traversal, termination, new ClaimPlanner, new LedgerMutation(termination))
-      }
+      def at(millis: Long) = FixedLedger.at(repository, millis)
       val earlier = at(9); val later = at(100)
       for {
         _ <- earlier.initialize(owner, "Modified ordering")

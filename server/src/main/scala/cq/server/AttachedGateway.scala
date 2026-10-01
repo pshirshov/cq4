@@ -8,7 +8,7 @@ import io.circe.Json
 import zio.{Task, ZIO}
 
 final class AttachedGateway(config: SupervisorConfig, authority: SupervisorAuthority, schemas: McpSchemas,
-  local: LocalControl, workflow: AttachedWorkflow, accounting: AttachedUsage, codex: AttachedCodexUsage) {
+  local: LocalControl, workflow: AttachedWorkflow, accounting: AttachedUsage, codex: AttachedCodexUsage, driver: AttachedDriver) {
   private val Versions = List("2025-03-26", "2025-06-18", "2025-11-25")
   private val CodecContext = BaboonCodecContext.Default
   private val MaxLocalBytes = 65536
@@ -35,7 +35,10 @@ final class AttachedGateway(config: SupervisorConfig, authority: SupervisorAutho
         command
       }.flatMap {
         case _: SessionCommand.Context => ZIO.succeed(SessionReply.Context(context))
-        case SessionCommand.Workflow(id, request, operatorRequirements) => workflow.activate(id, request, operatorRequirements).map(SessionReply.Workflow.apply)
+        case SessionCommand.Workflow(id, request, operatorRequirements, token) => workflow.activate(id, request, operatorRequirements, token).map(SessionReply.Workflow.apply)
+        // The model-facing driver surface: a bind gated by the hook-minted token and a read-only status. Neither starts nor parks a driver.
+        case SessionCommand.Bind(token) => ZIO.attemptBlocking(SessionReply.Driver(driver.session.bind(token)))
+        case _: SessionCommand.Driver => ZIO.attemptBlocking(SessionReply.Driver(driver.session.status))
       }.map(value => SessionReply_JsonCodec.encode(CodecContext, value) -> false)
     case "dispatch" =>
       ZIO.attempt {
@@ -43,7 +46,10 @@ final class AttachedGateway(config: SupervisorConfig, authority: SupervisorAutho
         val command = DispatchCommand_JsonCodec.decode(CodecContext, arguments).fold(throw _, identity)
         require(JsonRoundtrip.lossless(arguments, DispatchCommand_JsonCodec.encode(CodecContext, command)), "Noncanonical dispatch request")
         workflow.authorize(command)
-      } *> local.call(capability, name, arguments)
+        command
+      }.flatMap { command => local.call(capability, name, arguments).tap { case (body, _) =>
+        ZIO.fromEither(DispatchReply_JsonCodec.decode(CodecContext, body)).flatMap(driver.observe(workflow.current, command, _))
+      }}
     case _ => ZIO.attemptBlocking {
       val definition = schemas.tools.find(_.name == name).getOrElse(throw DomainFailure(Fault.Denied("Unavailable attached tool")))
       val command = definition.decode(arguments).fold(throw _, identity)
@@ -80,6 +86,19 @@ final class AttachedGateway(config: SupervisorConfig, authority: SupervisorAutho
         require(JsonRoundtrip.lossless(body, AttachedPiEvent_JsonCodec.encode(CodecContext, event)), "Noncanonical native Pi usage")
         accounting.accept(event, authority.collector)
         Some(success(id, Json.obj()))
+      }
+      case "cq/driver" if config.run.attempt.harness == Harness.Pi => ZIO.attemptBlocking {
+        val body = cursor.downField("params").focus.getOrElse(throw new IllegalArgumentException("Missing driver request"))
+        require(body.noSpaces.getBytes(java.nio.charset.StandardCharsets.UTF_8).length <= MaxLocalBytes, "Driver request exceeds its bound")
+        val command = ExtensionDriver_JsonCodec.decode(CodecContext, body).fold(throw _, identity)
+        require(JsonRoundtrip.lossless(body, ExtensionDriver_JsonCodec.encode(CodecContext, command)), "Noncanonical driver request")
+        Some(success(id, DriverReply_JsonCodec.encode(CodecContext, driver.extension(command))))
+      }.catchAll { error =>
+        val fault = error match {
+          case DomainFailure(value) => value
+          case _ => Fault.Invalid(DispatchProjection.concise(Option(error.getMessage).getOrElse(error.getClass.getSimpleName)))
+        }
+        ZIO.some(success(id, Json.obj("Failed" -> Json.obj("fault" -> Fault_JsonCodec.encode(CodecContext, fault)))))
       }
       case "tools/call" =>
         (for {

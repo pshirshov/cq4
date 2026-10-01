@@ -122,13 +122,7 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
       IntegrationValidation.citations(f.worker, review), f.intent.fence, f.items)
   } yield f.copy(reviewer = review, intent = f.intent.copy(id = id, reviewer = handle, change = change))
   private def pending(id: IntegrationId)(fault: Fault): Boolean = fault == Fault.IntegrationPending(id)
-  private def fixed(repository: LedgerRepository[IO], millis: Long): LedgerService[IO] = {
-    val parser = new QueryParser
-    val worksets = new WorksetTraversal
-    val termination = new TerminationPlanner(worksets)
-    new LedgerService.Impl[IO](repository, Clock.fixed(Instant.ofEpochMilli(millis), ZoneOffset.UTC), parser,
-      new QueryCompleter(parser), worksets, termination, new ClaimPlanner, new LedgerMutation(termination))
-  }
+  private def fixed(repository: LedgerRepository[IO], millis: Long): LedgerService[IO] = FixedLedger.at(repository, millis)
 
   "Integration reservations (Behavioral Active Blackbox; dummy Group / PostgreSQL Good Communication)" should {
     "retain distinct worker and independently executed reviewer checks in exact completion" in {

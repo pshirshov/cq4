@@ -4,7 +4,7 @@ M4 implementation contract. The [role/proposal](proposals.md), [reviewer-check](
 
 ## Entry points and execution
 
-The four agent commands are begin, advance, review and upstream. After `cq configure HARNESS --settings FILE`, interactive command assets use `session Context` and `session Workflow` on the harness-owned host. The existing interactive assistant governs; the host loads workflow instructions and assembles child prompts/results. No batch Governor is started. The same distage executable retains `cq run` for batch execution. See [attached-host verification](../validation/attached-host.md).
+The four agent commands are begin, advance, review and upstream. After `cq configure HARNESS --settings FILE`, interactive command assets use `session Context` and `session Workflow` on the harness-owned host. The existing interactive assistant governs; the host loads workflow instructions and assembles child prompts/results. No batch Governor is started. `session Workflow` takes an optional driver token: while a session's [driver](driver.md) is on, only the start or resume token of a host-issued advance directive activates a workflow there, and every other activation is rejected. The same distage executable retains `cq run` for batch execution. See [attached-host verification](../validation/attached-host.md).
 
 Keep the existing `cq run HARNESS --settings FILE --input FILE` for direct governing requests and evaluations. Add explicit workflow selection with `--workflow NAME` and command-specific arguments:
 

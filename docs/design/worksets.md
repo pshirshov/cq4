@@ -42,7 +42,7 @@ The generated `Command.Workset` operation lets an operator choose driver targets
 
 Empty targets are rejected with `Invalid` and never mean the whole project. Unknown item IDs and unknown stored worksets return `Missing`, and cross-project targets return `Denied`. An unknown phase does not decode, so HTTP returns 400 `Invalid`. More than 64 targets, a traversal beyond 1,024 items, or a preview larger than 512 KiB fail explicitly. The through phase does not change selection; it is recorded for the driver and for the advance workflow's phase limit.
 
-`WorksetPlanner.evaluate` is the one function behind the preview, the driver's per-cycle advanceable set and write-time admission checks. It reads a ledger transaction, so a caller can evaluate the state as it will be after a write by calling it inside the writing transaction. `LedgerService.previewWorksetAfter` shows this: it applies a change request, evaluates the workset, and always rolls the transaction back.
+`WorksetPlanner.evaluate` is the one function behind the preview, the driver's per-cycle advanceable set and write-time admission checks. It reads a ledger transaction, so a caller can evaluate the state as it will be after a write by calling it inside the writing transaction. `LedgerService.previewWorksetAfter` shows this: it applies a change request, evaluates the workset, and always rolls the transaction back. The [driver core](driver.md) stores one evaluation per cycle as its issue-time snapshot and runs another inside each attributed write.
 
 ## Interfaces
 
@@ -55,4 +55,4 @@ cq query --roots T1,M1 --limit 50
 cq query --roots ''
 ```
 
-Continue with the same roots, `--after <ID>` and `--snapshot '<returned snapshot JSON>'`. Roots cannot be combined with `--query` or `--complete`. The later M5 workset UI will consume this same operation. Stored worksets, discovery and preview are exposed only as HTTP/WebSocket `Command.Workset` actions; they have no MCP tool or CLI command.
+Continue with the same roots, `--after <ID>` and `--snapshot '<returned snapshot JSON>'`. Roots cannot be combined with `--query` or `--complete`. The later M5 workset UI will consume this same operation. Stored worksets, discovery and preview are exposed only as HTTP/WebSocket `Command.Workset` actions; they have no MCP tool or CLI command. Drive-start takes the same `WorksetTarget` and returns the same preview.

@@ -293,6 +293,7 @@ object SupervisorPlugin extends PluginDef {
     make[AttachedProgram]
     make[AttachedGateway]
     make[AttachedWorkflow]
+    make[AttachedDriver]
     make[AttachedUsage].from { (config: SupervisorConfig, clock: Clock) => new AttachedUsage(config.directory, config.run, clock) }
     make[AttachedCodexUsage].from { (config: SupervisorConfig, clock: Clock) =>
       new AttachedCodexUsage(config.directory, config.run, new CodexRollout, clock)

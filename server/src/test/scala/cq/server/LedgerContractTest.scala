@@ -6,7 +6,6 @@ import distage.{Activation, DIKey}
 import distage.StandardAxis.Repo
 import izumi.distage.plugins.PluginConfig
 import izumi.distage.testkit.scalatest.{AssertZIO, SpecZIO}
-import java.time.{Clock, Instant, ZoneOffset}
 import java.util.UUID
 import zio.{IO, ZIO}
 
@@ -443,8 +442,8 @@ abstract class LedgerContractTest extends SpecZIO with AssertZIO {
       val owner = scope()
       val other = owner.copy(actor = owner.actor.copy(session = SessionId(UUID.randomUUID())))
       val start = 1000000L
-      val service = new LedgerService.Impl[IO](repository, Clock.fixed(Instant.ofEpochMilli(start), ZoneOffset.UTC), new QueryParser, new QueryCompleter(new QueryParser), new WorksetTraversal, new TerminationPlanner(new WorksetTraversal), new ClaimPlanner, new LedgerMutation(new TerminationPlanner(new WorksetTraversal)))
-      val later = new LedgerService.Impl[IO](repository, Clock.fixed(Instant.ofEpochMilli(start + 2000), ZoneOffset.UTC), new QueryParser, new QueryCompleter(new QueryParser), new WorksetTraversal, new TerminationPlanner(new WorksetTraversal), new ClaimPlanner, new LedgerMutation(new TerminationPlanner(new WorksetTraversal)))
+      val service = FixedLedger.at(repository, start)
+      val later = FixedLedger.at(repository, start + 2000)
       for {
         _ <- service.initialize(owner, "claims")
         left <- create(service, owner, task("One"))

@@ -125,7 +125,7 @@ Managed batch Governors and children use two MCP servers. Both use `POST /mcp` w
 | `cq` | Durable CQ server, configured project endpoint | Governor: `search`, `read`, `graph`, `change`, `apply`, `claim`, `usage`; children: `search`, `read`, `usage` |
 | `cq_host` | Private loopback port owned by this supervisor process | Governor: `dispatch`; children: `workspace` |
 
-An attached interactive Governor uses one harness-owned **stdio** MCP connection named `cq`, exposing the seven Governor domain tools plus `session` and `dispatch`. Its dispatch calls use `cq.dispatch` in place of `cq_host.dispatch` in the table below. Pi presents these as `cq_session`, `cq_dispatch`, etc. Children still use the two scoped HTTP servers above. The Pi extension's private `cq/piUsage` RPC carries native usage metadata; it is not a model tool or a required agent call.
+An attached interactive Governor uses one harness-owned **stdio** MCP connection named `cq`, exposing the seven Governor domain tools plus `session` and `dispatch`. Its dispatch calls use `cq.dispatch` in place of `cq_host.dispatch` in the table below. Pi presents these as `cq_session`, `cq_dispatch`, etc. Children still use the two scoped HTTP servers above. The Pi extension's private `cq/piUsage` RPC carries native usage metadata; it is not a model tool or a required agent call. `session` also carries the [driver](driver.md) operations an attached session may perform itself: `Bind` with a hook-minted token and the read-only `Driver` status. Starting and parking a driver are not model tools; the Pi extension's private `cq/driver` RPC and the CQ hook commands are the only callers.
 
 These are tool names within MCP, not paths such as `/dispatch`. The harness/bridge performs MCP initialization and discovery. The model invokes tools through its harness. For example, a workspace read has this transport shape:
 
@@ -139,7 +139,7 @@ Claude presents names such as `mcp__cq_host__workspace`; Pi registers `cq_host_w
 
 | Actor / operation | Protocol obligation |
 | --- | --- |
-| Attached Governor starting work | `cq.session.Context` → consume instructions and project identity → `cq.session.Workflow` with a fresh activation UUID and explicit typed scope. Retain the ID/request for identical retries. |
+| Attached Governor starting work | `cq.session.Context` → consume instructions and project identity → `cq.session.Workflow` with a fresh activation UUID and explicit typed scope; `token` is `null` unless the invocation is a driver directive carrying `--start-token` or `--resume-token`. Retain the ID/request for identical retries. |
 | Governor dispatching a workflow child | `cq_host.dispatch.Select` with explicit roots/work/context → `cq.claim` for all members of one choice → `cq_host.dispatch.StartChoice` with choice ID, route and current fence → `Status` until settled. Selection itself acquires no claim. Reuse/renew a valid owned claim; do not acquire overlapping claims blindly. |
 | Batch Governor in a direct non-workflow run | May use exact-assignment `dispatch.Start`; managed workflows reject that bypass. |
 | Governor applying a Planner proposal | Obtain the process-required independent Plan review; inspect `cq.read` selection `Proposal`, then `cq.apply` by result handle under current authority. Do not copy drafts into `change`. |

@@ -31,12 +31,14 @@ trait LedgerService[F[_, _]] {
   def acquire(scope: Scope, id: ClaimId, members: Set[ItemId], durationMillis: Long): F[Throwable, Claim]
   def renew(scope: Scope, fence: Fence, durationMillis: Long): F[Throwable, Claim]
   def release(scope: Scope, fence: Fence): F[Throwable, Claim]
+  // Driver control (the CQ hook commands and the Pi extension) and the driver operations of attached sessions.
+  def drive(scope: Scope, request: DriverRequest): F[Throwable, DriverReply]
 }
 
 object LedgerService {
   private final case class Hypothetical(preview: WorksetPreview) extends RuntimeException("Hypothetical workset evaluation", null, false, false)
 
-  final class Impl[F[+_, +_]: Error2](repository: LedgerRepository[F], clock: Clock, queries: QueryParser, completions: QueryCompleter, worksets: WorksetTraversal, terminationPlanner: TerminationPlanner, claimPlanner: ClaimPlanner, mutations: LedgerMutation) extends LedgerService[F] {
+  final class Impl[F[+_, +_]: Error2](repository: LedgerRepository[F], clock: Clock, queries: QueryParser, completions: QueryCompleter, worksets: WorksetTraversal, terminationPlanner: TerminationPlanner, claimPlanner: ClaimPlanner, mutations: LedgerMutation, drivers: DriverService, boundary: DriverBoundary) extends LedgerService[F] {
     import LedgerPolicy.*
     import LedgerAccess.*
 
@@ -153,7 +155,7 @@ object LedgerService {
     override def previewWorksetAfter(scope: Scope, target: WorksetTarget, change: ChangeRequest): F[Throwable, WorksetPreview] = {
       import izumi.functional.bio.{F, *}
       repository.transact(scope.project) { tx =>
-        mutations(tx, scope, change, clock.millis())
+        mutations.hypothetical(tx, scope, change, clock.millis())
         throw Hypothetical(planner.resolve(tx, target))
       }.catchSome { case Hypothetical(preview) => F.pure(preview) }
     }
@@ -225,7 +227,17 @@ object LedgerService {
           }
           val claim = Claim(Fence(id, tx.nextFence()), scope.actor, members, Math.addExact(now, durationMillis), false, ClaimOrigin.Acquire(durationMillis))
           tx.insertClaim(claim)
+          boundary.claimed(scope.project, scope.actor.session, id, now)
           claim
+      }
+    }
+
+    override def drive(scope: Scope, request: DriverRequest): F[Throwable, DriverReply] = repository.transact(scope.project) { tx =>
+      val now = clock.millis()
+      request match {
+        case DriverRequest.Control(key, origin, action) => drivers.control(tx, scope, key, origin, action, now)
+        case DriverRequest.Session(DriverSession.Change(cycle, change)) => DriverReply.Changed(cycle, mutations.attributed(tx, scope, change, now, cycle))
+        case DriverRequest.Session(action) => drivers.session(scope, action, now)
       }
     }
 
