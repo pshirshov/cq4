@@ -11,3 +11,16 @@ export function formatAmount(value: string, digits: number): string {
   const text = rounded.toString().padStart(digits + 1, '0');
   return digits === 0 ? text : `${text.slice(0, -digits)}.${text.slice(-digits)}`;
 }
+
+// Adds nonnegative decimal strings exactly; the result has no trailing fractional zeros, like the amounts the service reports.
+export function sumAmounts(values: readonly string[]): string {
+  const parts = values.map(value => {
+    const match = /^([0-9]+)(?:\.([0-9]+))?$/.exec(value);
+    if (match === null) throw new Error(`Invalid decimal amount: ${value}`);
+    return { whole: match[1] as string, fraction: match[2] === undefined ? '' : match[2] };
+  });
+  const scale = parts.reduce((most, part) => Math.max(most, part.fraction.length), 0);
+  const total = parts.reduce((sum, part) => sum + BigInt(part.whole + part.fraction.padEnd(scale, '0')), 0n).toString().padStart(scale + 1, '0');
+  const whole = total.slice(0, total.length - scale); const fraction = total.slice(total.length - scale).replace(/0+$/, '');
+  return fraction === '' ? whole : `${whole}.${fraction}`;
+}

@@ -14,7 +14,7 @@ import { holdButton } from './hold-button.js';
 import { icon } from './icons.js';
 import { ArchiveDialog } from './archive.js';
 import { faultMessage } from './faults.js';
-import { attemptsTable, outcomesTable, auditTable, sharedAssignmentsList } from './usage-view.js';
+import { attemptsTable, outcomesTable, auditTable, phasesTable, sharedAssignmentsList } from './usage-view.js';
 import { formatAmount, MoneyDigits } from './money.js';
 import { TableColumn, TableColumns } from './table-columns.js';
 import { ItemsView } from './items-view.js';
@@ -797,16 +797,20 @@ class App {
         const result = await this.readPanel('usage', new api.Command_Usage(new api.UsageInput(this.currentProject(), new api.UsageSelection_Summary(this.usageFilter()))));
         if (load !== this.usageLoad || result === null) continue;
         if (!(result instanceof api.Result_UsageSummary)) throw new Error('Unexpected usage response');
+        const phases = await this.readPanel('usage', new api.Command_Usage(new api.UsageInput(this.currentProject(), new api.UsageSelection_Phases(this.usageFilter()))));
+        if (load !== this.usageLoad || phases === null) continue;
+        if (!(phases instanceof api.Result_UsagePhases)) throw new Error('Unexpected usage phases response');
         this.usageSnapshot = result.report.cursor;
-        if (this.usageCursor === null || result.report.cursor > this.usageCursor) this.usageCursor = result.report.cursor;
-        this.renderUsage(result.report); this.updateAuditFreshness();
+        // The phase report is read after the summary; a later cursor leaves the load dirty, so both are read again.
+        if (this.usageCursor === null || phases.report.cursor > this.usageCursor) this.usageCursor = phases.report.cursor;
+        this.renderUsage(result.report, phases.report); this.updateAuditFreshness();
         load.dirty = load.dirty || this.usageCursor > result.report.cursor;
       }
     } catch (error) {
       if (load === this.usageLoad) { this.usageFreshness.textContent = `Unavailable · ${this.usageObserved}`; throw error; }
     } finally { if (load === this.usageLoad) this.usageLoad = null; }
   }
-  private renderUsage(report: api.UsageReport): void {
+  private renderUsage(report: api.UsageReport, phases: api.PhaseReport): void {
     this.usageMetric.textContent = `Usage · ${this.usageScope()}: ${report.direct.total.known} direct · ${report.shared.total.known} shared · ${report.unattributed.total.known} unattributed known tokens`;
     const totals = [report.direct.total, report.shared.total, report.unattributed.total];
     this.usageMetric.textContent += ` · ${totals.reduce((sum, value) => sum + value.unknown, 0n)} unknown measurements · ${totals.reduce((sum, value) => sum + value.estimated, 0n)} estimated measurements`;
@@ -827,6 +831,8 @@ class App {
     this.usagePanel.append(table);
     if (report.costs.entries.length > 0) this.usagePanel.append(this.costTable(report.costs.entries));
     if (report.costs.hasMore) this.usagePanel.append(button('More costs', () => this.action(() => this.loadCosts(report.costs.after, report.cursor))));
+    if (phases.phases.length > 0) this.usagePanel.append(phasesTable(phases.phases));
+    if (phases.costsTruncated) this.usagePanel.append(element('p', 'Per-phase costs are truncated; the amounts shown are lower bounds. The cost breakdown lists every cost group.'));
     this.usagePanel.append(element('p', `Shared work is counted once and is not divided among members. Incomplete meters: ${report.incompleteMeters}; attempts without measurements: ${report.attemptsWithoutMeters}.`),
       element('p', `Attempt coverage: ${report.attempts.running} running; ${report.attempts.unknown} unknown outcomes; ${report.attempts.withGaps} with reported gaps.`),
       button('Attempts', () => this.action(() => this.loadAttempts(undefined, undefined))), button('Usage audit', () => this.action(() => this.loadAudit(0n))));
