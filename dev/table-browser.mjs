@@ -158,7 +158,7 @@ export async function tableChecks(browser, storageState, origin, evidence) {
     });
     await check('I15 grouping reissues the browse and inserts one unfocusable header per group', async () => {
       assert.equal(await grouping.isChecked(), false); browses.length = 0;
-      await grouping.check(); await shows(['#M1', 'T2', 'T4', '#M2', 'T1', '#No milestone', 'T3']);
+      await grouping.check(); await shows(['#M1', 'T2', 'T4', '#M2', 'T1', '#—', 'T3']);
       assert.deepEqual(browses[0].order, { field: 'Id', direction: 'Ascending', grouped: true });
       assert.deepEqual(await savedView(), { field: 'Id', direction: 'Ascending', grouped: true });
       const headings = table.locator('tbody tr.item-group');
@@ -169,24 +169,24 @@ export async function tableChecks(browser, storageState, origin, evidence) {
       for (const [key, expected] of [['ArrowDown', 'T4 · Four'], ['ArrowDown', 'T1 · One'], ['ArrowDown', 'T3 · Three'], ['ArrowDown', 'T3 · Three'], ['ArrowUp', 'T1 · One'],
         ['ArrowUp', 'T4 · Four'], ['Home', 'T2 · Two'], ['End', 'T3 · Three']]) { await page.keyboard.press(key); assert.equal(await focus(), expected); }
       await page.screenshot({ path: `${evidence}/table-grouped.png`, fullPage: true });
-      await table.getByRole('button', { name: 'Sort by title', exact: true }).click(); await shows(['#M1', 'T4', 'T2', '#M2', 'T1', '#No milestone', 'T3']);
-      await table.getByRole('button', { name: 'Sort by ID', exact: true }).click(); await shows(['#M1', 'T2', 'T4', '#M2', 'T1', '#No milestone', 'T3']);
+      await table.getByRole('button', { name: 'Sort by title', exact: true }).click(); await shows(['#M1', 'T4', 'T2', '#M2', 'T1', '#—', 'T3']);
+      await table.getByRole('button', { name: 'Sort by ID', exact: true }).click(); await shows(['#M1', 'T2', 'T4', '#M2', 'T1', '#—', 'T3']);
     });
     await check('I15 live updates move rows between groups without duplicating headers', async () => {
       await change([membership(3, 1, 2, 2, true)]); await shows(['#M1', 'T2', 'T4', '#M2', 'T1', 'T3']);
       await change([membership(3, 2, 2, 3, false), { Create: { draft: { ...draft, title: 'Five', content: { Task: { status: 'Ready', acceptance: ['Listed'], result: null, validation: [] } } } } }]);
-      await shows(['#M1', 'T2', 'T4', '#M2', 'T1', '#No milestone', 'T3', 'T5']);
+      await shows(['#M1', 'T2', 'T4', '#M2', 'T1', '#—', 'T3', 'T5']);
       assert.deepEqual(await table.locator('tbody td.item-milestone').allTextContents(), ['M1', 'M1', 'M2', '', '']);
     });
-    await check('I15 milestones themselves are listed under No milestone; an empty result has no group header', async () => {
-      await search('ledger:Milestones'); await shows(['#No milestone', 'M1', 'M2']);
+    await check('I15 milestones themselves are listed under the unassigned group; an empty result has no group header', async () => {
+      await search('ledger:Milestones'); await shows(['#—', 'M1', 'M2']);
       await search('ledger:Tasks Absent'); await shows(['#No matching items.']);
       assert.equal(await table.locator('tbody td').getAttribute('colspan'), String(await table.getByRole('columnheader').count()));
     });
     await check('I15 grouping survives a reload and can be switched off', async () => {
       await reopen();
       assert.equal(await grouping.isChecked(), true); assert.equal(browses[0].order.grouped, true);
-      await search('ledger:Tasks'); await shows(['#M1', 'T2', 'T4', '#M2', 'T1', '#No milestone', 'T3', 'T5']);
+      await search('ledger:Tasks'); await shows(['#M1', 'T2', 'T4', '#M2', 'T1', '#—', 'T3', 'T5']);
       browses.length = 0; await grouping.uncheck(); await shows(['T1', 'T2', 'T3', 'T4', 'T5']);
       assert.equal(browses[0].order.grouped, false); assert.equal((await savedView()).grouped, false);
       assert.deepEqual(errors, []);

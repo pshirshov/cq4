@@ -275,7 +275,7 @@ class App {
         const milestone = element('th', ''); milestone.scope = 'col'; milestone.className = 'milestone-heading';
         const flag = icon(api.Ledger.Milestones); flag.removeAttribute('aria-hidden'); flag.setAttribute('role', 'img'); flag.setAttribute('aria-label', 'Milestone');
         const grouping = element('input', ''); grouping.type = 'checkbox'; grouping.checked = this.order.grouped;
-        grouping.setAttribute('aria-label', 'Group by milestone'); grouping.title = 'Group by milestone';
+        grouping.setAttribute('aria-label', 'Group by milestone'); grouping.title = 'Group rows by this column';
         grouping.addEventListener('change', () => this.action(async () => {
           this.order = new api.ItemOrder(this.order.field, this.order.direction, grouping.checked);
           this.itemsView.store(this.order); await this.search();
@@ -508,7 +508,7 @@ class App {
     if (row === undefined) {
       row = element('tr', ''); row.className = 'item-group';
       const cell = element('td', ''); cell.colSpan = ITEM_COLUMNS;
-      if (milestone === undefined) cell.append('No milestone'); else cell.append(icon(api.Ledger.Milestones), key);
+      if (milestone === undefined) { cell.append(icon(api.Ledger.Milestones), '—'); cell.setAttribute('aria-label', 'No milestone'); } else cell.append(icon(api.Ledger.Milestones), key);
       row.append(cell); this.groupRows.set(key, row);
     }
     return row;
