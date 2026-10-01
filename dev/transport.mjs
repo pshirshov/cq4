@@ -30,9 +30,16 @@ const initialize = (project, name) => ({ Initialize: { config: { project, endpoi
 const original = await call(initialize(first, 'first'), headers);
 await call(initialize(second, 'second'), headers);
 assert.deepEqual(await call(initialize(first, 'reattached'), headers), original);
-const projects = await call({ Projects: { after: null, snapshot: null, limit: 200 } }, headers);
-assert.ok(projects.Projects.page.projects.some(p => p.id.value === first.value));
-assert.ok(projects.Projects.page.projects.some(p => p.id.value === second.value));
+// The database may already hold more projects than one page; follow the listing to its end.
+const listed = [];
+for (let after = null, snapshot = null; ;) {
+  const page = (await call({ Projects: { after, snapshot, limit: 200 } }, headers)).Projects.page;
+  listed.push(...page.projects.map(p => p.id.value));
+  if (!page.hasMore) break;
+  after = page.after; snapshot = page.cursor;
+}
+assert.ok(listed.includes(first.value));
+assert.ok(listed.includes(second.value));
 const operation = change('HTTP created');
 const created = await call({ Change: { input: operation } }, headers);
 const item = created.Changed.ack.items[0];
