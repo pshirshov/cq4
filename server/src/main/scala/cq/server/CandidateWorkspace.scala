@@ -5,9 +5,8 @@ import cq.host.*
 import java.nio.file.{Files, LinkOption, Path}
 import java.time.Duration
 
-final class CandidateWorkspace(config: SupervisorConfig) extends ExecutionBase {
-  private val MaxOutputBytes = 1024 * 1024
-  private val command = new BoundedHostCommand(GitEnvironment.isolated(HostEnvironment.runtime(config.environment)), Duration.ofSeconds(10), MaxOutputBytes)
+final class CandidateWorkspace(config: SupervisorConfig, command: HostCommand) extends ExecutionBase {
+  def this(config: SupervisorConfig) = this(config, CandidateWorkspace.command(config.environment))
   private val GitArguments = List("git", "--no-replace-objects", "--no-pager", "-c", "core.hooksPath=/dev/null", "-c", "submodule.recurse=false")
   private def git(directory: Path, arguments: String*): String = {
     val result = command.run(directory, GitArguments ++ arguments)
@@ -67,14 +66,20 @@ final class CandidateWorkspace(config: SupervisorConfig) extends ExecutionBase {
   def rebase(head: GitCommit, candidate: GitCommit, id: IntegrationId, message: String): HostRebase = {
     verifyPair(head, candidate)
     val repository = Path.of(config.run.repository)
-    val drivers = command.run(repository, GitArguments ++ List("config", "--get-regexp", "^merge\\..*\\.driver$"))
-    require(drivers.exit == 0 || drivers.exit == 1 && drivers.text.isEmpty, "Candidate merge driver inspection failed")
-    if (drivers.exit == 0) HostRebase.Refused("Host rebase refuses repository-defined merge drivers")
+    // Repository settings that select another merge behaviour are honoured by a merge in a workspace, not by the host: it refuses them.
+    val custom = command.run(repository, GitArguments ++ List("config", "--name-only", "--get-regexp", "^(merge\\..*\\.driver|merge\\.default|core\\.attributesfile)$"))
+    require(custom.exit == 0 || custom.exit == 1 && custom.text.isEmpty, "Candidate merge configuration inspection failed")
+    val names = custom.text.linesIterator.toList.distinct
+    val attributes = Path.of(git(repository, "rev-parse", "--path-format=absolute", "--git-path", "info/attributes"))
+    if (names.exists(_.endsWith(".driver"))) HostRebase.Refused("Host rebase refuses repository-defined merge drivers")
+    else if (names.nonEmpty) HostRebase.Refused("Host rebase refuses repository-defined merge behaviour: " + names.mkString(", "))
+    else if (Files.exists(attributes) && Files.size(attributes) > 0) HostRebase.Refused("Host rebase refuses a repository with info/attributes")
     else {
-      // The merge reads attributes from the target head's tree rather than the governing checkout's files, and repository configuration
-      // can neither move files into a renamed directory nor run content filters.
-      val merged = command.run(repository, GitArguments ++ List("--attr-source=" + head.value, "-c", "merge.directoryRenames=conflict",
-        "-c", "merge.renormalize=false", "merge-tree", "--write-tree", "--no-messages", head.value, candidate.value))
+      // The merge reads attributes from the target head's tree only: not from the governing checkout's files, the user's attributes
+      // file or the system one (GIT_ATTR_NOSYSTEM in the isolated environment). Repository configuration can neither move files into
+      // a renamed directory nor run content filters.
+      val merged = command.run(repository, GitArguments ++ List("--attr-source=" + head.value, "-c", "core.attributesFile=/dev/null",
+        "-c", "merge.directoryRenames=conflict", "-c", "merge.renormalize=false", "merge-tree", "--write-tree", "--no-messages", head.value, candidate.value))
       val objectId = merged.text.linesIterator.nextOption().getOrElse("")
       require(Set(0, 1)(merged.exit) && objectId.matches("[0-9a-f]{40}|[0-9a-f]{64}"), s"Candidate Git operation failed: ${merged.text.take(300)}")
       if (merged.exit == 1) HostRebase.Conflicted
@@ -120,4 +125,10 @@ final class CandidateWorkspace(config: SupervisorConfig) extends ExecutionBase {
     git(tree, "update-ref", "refs/cq/candidates/" + workspace.spec.attempt.value, commit.value, "0" * commit.value.length)
     commit
   }
+}
+
+object CandidateWorkspace {
+  private val MaxOutputBytes = 1024 * 1024
+  def command(environment: Map[String, String]): HostCommand =
+    new BoundedHostCommand(GitEnvironment.isolated(HostEnvironment.runtime(environment)), Duration.ofSeconds(10), MaxOutputBytes)
 }

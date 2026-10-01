@@ -531,10 +531,15 @@ root data SessionCleanup {
   session: SessionId removed: lst[AttemptId] quarantined: lst[RetainedWorkspace] retained: lst[RetainedWorkspace]
   acknowledged: i32 problem: opt[str]
 }
+root data CleanupTotals {
+  examined: i32 live: i32 recovered: i32 abandoned: i32 removed: i32 quarantined: i32 retained: i32 acknowledged: i32 problems: i32 unexamined: i32
+}
 root data WorkspaceCleanupReceipt {
   owner: SessionId startedAt: i64 finishedAt: i64 deadlineExceeded: bit
-  live: lst[SessionId] sessions: lst[SessionCleanup]
+  live: lst[SessionId] sessions: lst[SessionCleanup] totals: CleanupTotals
 }
+enum RecoveryOutcome { Recovered Abandoned }
+root data SessionRecovery { outcome: RecoveryOutcome reason: str recordedAt: i64 host: str }
 
 enum ArtifactKind { Prompt Input Result Transcript Validation Combination Selection Evidence Amendment }
 root data ArtifactUpload { project: ProjectId id: ArtifactId attempt: AttemptId kind: ArtifactKind mediaType: str body: str }
@@ -690,7 +695,8 @@ root data ResultAdmission {
   artifact: ArtifactMetadata owner: Actor fence: Fence members: lst[ItemRevision] decision: AdmissionDecision decidedAt: i64
 }
 root id IntegrationId { value: uid }
-root data IntegrationRebase { reviewed: GitCommit author: AttemptId validation: lst[ValidationEvidence] }
+root data RebaseAttempt { commit: GitCommit validation: lst[ValidationEvidence] }
+root data IntegrationRebase { reviewed: GitCommit author: AttemptId validation: lst[ValidationEvidence] failed: lst[RebaseAttempt] }
 root data IntegrationIntent {
   id: IntegrationId project: ProjectId owner: Actor repository: str target: str expected: GitCommit candidate: GitCommit
   worker: ArtifactId reviewer: ArtifactId checks: lst[ValidationCheck] fence: Fence members: lst[ItemRevision] change: ChangeRequest

@@ -154,7 +154,8 @@ object SupervisorProgram {
 
 final class SupervisorProgram(config: SupervisorConfig, registry: HarnessRegistry, jobs: JobSupervisor, authority: SupervisorAuthority,
   local: LocalControlServer, access: LocalAccess, dispatch: DispatchController, integrations: IntegrationController, combinations: CombinationController,
-  schemas: McpSchemas, output: HarnessOutput, workflows: WorkflowAssets, cleanup: WorkspaceCleanup, watchdog: SupervisorWatchdog, clock: Clock, context: CliContext) {
+  revalidations: RevalidationController, schemas: McpSchemas, output: HarnessOutput, workflows: WorkflowAssets, cleanup: WorkspaceCleanup, release: SessionRelease, watchdog: SupervisorWatchdog,
+  clock: Clock, context: CliContext) {
   private val MaxInputBytes = 192 * 1024
   private val MaxRecordBytes = 64 * 1024
   private val MaxSummaryCharacters = 8192
@@ -205,9 +206,7 @@ final class SupervisorProgram(config: SupervisorConfig, registry: HarnessRegistr
       _ <- cleanup.recover.forkDaemon
       _ <- jobs.start(config.owner, WorkspaceSpec(project, attempt.session, attempt.id, config.run.repository, config.run.base), command)
       record <- jobs.await(config.owner, attempt.id)
-      // The governor's result is read from its retained output and assets; a failed removal is retried by the next host startup.
-      _ <- jobs.release(config.owner, attempt.id).ignore
-      _ <- integrations.shutdown.zipPar(combinations.shutdown).zipPar(dispatch.shutdown)
+      _ <- integrations.shutdown.zipPar(combinations.shutdown).zipPar(revalidations.shutdown).zipPar(dispatch.shutdown)
       receipt <- ZIO.attemptBlocking {
         val stdout = NativeTranscript.retained(payload.resolve("stdout"), config.limits.retainedOutputBytes)
         val stderr = NativeTranscript.retained(payload.resolve("stderr"), config.limits.retainedOutputBytes)
@@ -245,6 +244,9 @@ final class SupervisorProgram(config: SupervisorConfig, registry: HarnessRegistr
         context.output.println(HostFiles.encode(SupervisorReceipt_JsonCodec, receipt))
         receipt
       }
+      // The governor's result was read from its retained output and assets. Its workspace and those postponed while the session
+      // stopped are removed only now; what is not removed in time is removed by the next host startup.
+      _ <- jobs.release(config.owner, attempt.id).ignore *> release.finish
       _ <- ZIO.attempt(require(receipt.problem.isEmpty, receipt.problem.getOrElse("Governing run failed")))
     } yield ()).ensuring(ZIO.succeed(guard.release()))
   }
@@ -269,7 +271,7 @@ object SupervisorPlugin extends PluginDef {
     make[ChildInstructions]
     make[AgentCatalog]
     make[WorkspaceReader]
-    make[CandidateWorkspace]
+    make[CandidateWorkspace].from((config: SupervisorConfig) => new CandidateWorkspace(config))
     make[SupervisorAuthority].fromEffect(SupervisorAuthority.acquire _)
     modify[FailureHandler].by(_.flatAp((arguments: RoleAppArgs) => AttachedStartup.reporting(arguments)))
     make[WorkflowExecution].from { (config: SupervisorConfig, authority: SupervisorAuthority) =>
@@ -277,6 +279,8 @@ object SupervisorPlugin extends PluginDef {
     }
     make[LocalAccess]
     make[OperatorRequirements].from((config: SupervisorConfig) => new OperatorRequirements(config.input))
+    make[ClaimRenewal.Policy].fromValue(ClaimRenewal.Default)
+    make[ClaimRenewal]
     make[ChildRunner]
     make[DispatchController].fromResource[DispatchController.Resource]
     make[CohortController]
@@ -284,6 +288,7 @@ object SupervisorPlugin extends PluginDef {
     make[CombinationController].fromResource[CombinationController.Resource]
     make[RevalidationController].fromResource[RevalidationController.Resource]
     make[LocalControl]
+    make[WorkspaceCleanup.Bounds].fromValue(WorkspaceCleanup.Default)
     make[WorkspaceCleanup]
     make[LocalControlServer].fromResource[LocalControlServer.Resource]
     make[SupervisorProgram]
@@ -301,7 +306,9 @@ object SupervisorPlugin extends PluginDef {
     make[ExecutionDriver].from[SupervisorDriver]
     make[SessionWorkspaces]
     make[SessionCollectors].from[HttpSessionCollectors]
-    make[WorkspaceService[IO]].from((config: SupervisorConfig, sessions: SessionWorkspaces) => sessions.at(config.directory))
+    make[SessionRelease].from((config: SupervisorConfig, sessions: SessionWorkspaces, watchdog: SupervisorWatchdog) =>
+      new SessionRelease(sessions.at(config.directory), watchdog))
+    make[WorkspaceService[IO]].using[SessionRelease]
     make[JobSupervisor].fromResource[SupervisorJobs]
   })
 }

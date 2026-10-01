@@ -108,6 +108,8 @@ final class IntegrationServiceImpl[F[+_, +_]: Error2](ledger: LedgerRepository[F
       }.toEither) }
     }
     _ <- failures(scope, intent.candidate, rebased.flatMap(IntegrationValidation.failures))
+    earlier <- F.fromEither(Try(intent.rebase.toList.flatMap(IntegrationValidation.attempts(_, intent.candidate, intent.checks))).toEither)
+    _ <- F.traverse_(earlier)((commit, run) => failures(scope, commit, List(run)))
     result <- ledger.transact(scope.project) { tx =>
       tx.integration(intent.id) match {
         case Some(previous) =>
@@ -135,7 +137,7 @@ final class IntegrationServiceImpl[F[+_, +_]: Error2](ledger: LedgerRepository[F
           }
           val cited = evidence.citations
           val change = IntegrationPolicy.completion(intent.id, intent.repository, intent.target, intent.candidate, intent.rebase, intent.worker, intent.reviewer,
-            cited.established, cited.superseded, intent.fence, items)
+            cited.established, cited.failed, cited.rounds, intent.fence, items)
           invalid(intent.change == change, "Integration may only apply the exact narrative-preserving task completion request")
           if (tx.request(intent.owner, change.request).nonEmpty) throw DomainFailure(Fault.Conflict("Integration domain request was already used"))
           val value = IntegrationRecord(intent, IntegrationResolution.Pending(), now, None)

@@ -5,7 +5,9 @@ import cq.api.*
 import cq.core.*
 import io.circe.parser.parse
 import java.nio.channels.{FileChannel, OverlappingFileLockException}
-import java.nio.file.{Files, Path, StandardCopyOption, StandardOpenOption}
+import java.io.IOException
+import java.nio.file.attribute.BasicFileAttributes
+import java.nio.file.{FileVisitResult, Files, LinkOption, Path, SimpleFileVisitor, StandardCopyOption, StandardOpenOption}
 import java.time.Clock
 import scala.util.Using
 import zio.{IO, ZIO}
@@ -52,6 +54,15 @@ final class GitWorkspaceRepository(configuredRoot: Path, command: HostCommand, c
       Using.resource(FileChannel.open(file.getParent, StandardOpenOption.READ))(_.force(true))
     } finally Files.deleteIfExists(temporary)
   }
+  /** Deletes what is left of a tree without following symbolic links. */
+  private def delete(directory: Path): Unit = if (Files.exists(directory, LinkOption.NOFOLLOW_LINKS)) Files.walkFileTree(directory, new SimpleFileVisitor[Path] {
+    override def visitFile(file: Path, attributes: BasicFileAttributes): FileVisitResult = { Files.delete(file); FileVisitResult.CONTINUE }
+    override def postVisitDirectory(visited: Path, failure: IOException): FileVisitResult = {
+      if (failure != null) throw failure
+      Files.delete(visited)
+      FileVisitResult.CONTINUE
+    }
+  })
   private def git(directory: Path, arguments: String*): String = {
     val result = command.run(directory, List("git", "--no-pager", "-c", "core.hooksPath=/dev/null", "-c", "submodule.recurse=false") ++ arguments)
     if (result.exit != 0) throw new IllegalStateException(s"Git exited ${result.exit}: ${result.text.take(500)}")
@@ -129,21 +140,30 @@ final class GitWorkspaceRepository(configuredRoot: Path, command: HostCommand, c
           val observed = current.observed.getOrElse(conflict("Unconfirmed workspace preparation cannot be removed automatically"))
           val directory = Path.of(current.directory)
           val source = Path.of(current.spec.repository).toRealPath()
+          // A removal cut by the end of its host leaves a tree without its `.git` entry, or none; Git refuses to remove the former.
+          val cut = !Files.exists(directory.resolve(".git"), LinkOption.NOFOLLOW_LINKS)
+          val registration = Path.of(observed.gitDirectory)
           val verification = scala.util.Try {
-            val top = Path.of(git(directory, "rev-parse", "--show-toplevel")).toRealPath()
-            val common = Path.of(git(directory, "rev-parse", "--path-format=absolute", "--git-common-dir")).toRealPath()
-            val gitDirectory = Path.of(git(directory, "rev-parse", "--absolute-git-dir")).toRealPath()
             val sourceCommon = Path.of(git(source, "rev-parse", "--path-format=absolute", "--git-common-dir")).toRealPath()
-            require(top == directory && common.toString == observed.gitCommon && gitDirectory.toString == observed.gitDirectory && sourceCommon == common,
-              "Workspace directory no longer belongs to its recorded Git worktree")
+            if (cut) require(sourceCommon.toString == observed.gitCommon && registration.getParent == sourceCommon.resolve("worktrees") &&
+              (!Files.exists(registration) || HostFiles.text(registration.resolve("gitdir"), MaxRecordBytes).trim == directory.resolve(".git").toString),
+              "Workspace registration no longer names its recorded directory")
+            else {
+              val top = Path.of(git(directory, "rev-parse", "--show-toplevel")).toRealPath()
+              val common = Path.of(git(directory, "rev-parse", "--path-format=absolute", "--git-common-dir")).toRealPath()
+              val gitDirectory = Path.of(git(directory, "rev-parse", "--absolute-git-dir")).toRealPath()
+              require(top == directory && common.toString == observed.gitCommon && gitDirectory.toString == observed.gitDirectory && sourceCommon == common,
+                "Workspace directory no longer belongs to its recorded Git worktree")
+            }
           }
           val next = verification.failed.toOption match {
             case Some(failure) =>
               current.copy(admission = WorkspaceAdmission.Quarantined,
                 quarantineReason = Some(("Removal refused: " + Option(failure.getMessage).getOrElse(failure.getClass.getSimpleName)).take(MaxReasonCharacters)))
             case None =>
+              if (cut) delete(directory)
               // The worktree was registered with --lock; Git requires the second --force to remove a locked worktree.
-              git(source, "worktree", "remove", "--force", "--force", directory.toString)
+              if (Files.exists(registration)) git(source, "worktree", "remove", "--force", "--force", directory.toString)
               git(source, "worktree", "prune")
               require(!Files.exists(directory), "Git reported worktree removal but the workspace directory remains")
               current.copy(admission = WorkspaceAdmission.Removed)

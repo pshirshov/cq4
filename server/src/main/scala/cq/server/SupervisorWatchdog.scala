@@ -43,6 +43,8 @@ final class SupervisorWatchdog(config: SupervisorConfig, nanoTime: () => Long, h
     }
   }
   def stopping: Boolean = draining
+  /** What is left of the drain once shutdown has begun, and the whole drain before. */
+  def remaining: Duration = synchronized(Duration.ofNanos(deadline.fold(drain)(value => math.max(0L, value - nanoTime()))))
   override def close(): Unit = {
     synchronized { closed = true }
     monitor.join()
