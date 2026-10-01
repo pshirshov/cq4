@@ -13,7 +13,7 @@ atom        := item-id | word | quoted-string | attribute ':' value
 value       := word | quoted-string
 ```
 
-`NOT`/`-` bind before conjunction, and conjunction binds before `OR`. Boolean keywords are matched without regard to case (`not`, `Not` and `NOT` are the same operator); to search for the words themselves, quote them (`"not"`). Adjacent terms imply `AND`. Double-quoted values use JSON string escaping; unquoted backslash escapes are rejected. Quotes distinguish a literal phrase such as `"T42"` from an exact item ID. Parentheses, colon, quote, whitespace and a leading minus delimit tokens; quote literal values containing these delimiters.
+`NOT`/`-` bind before conjunction, and conjunction binds before `OR`. Boolean keywords are matched without regard to case (`not`, `Not` and `NOT` are the same operator); to search for the words themselves, quote them (`"not"`). So `do not merge` means `do AND NOT merge` and selects items that contain "do" and lack "merge"; `do "not" merge` searches for the three words. A keyword that leaves a term missing (a bare `not`, `alpha and`, `alpha AND or beta`) returns "Expected query term: not is a Boolean operator; quote it to search for the word ("not")". Adjacent terms imply `AND`. Double-quoted values use JSON string escaping; unquoted backslash escapes are rejected. Quotes distinguish a literal phrase such as `"T42"` from an exact item ID. Parentheses, colon, quote, whitespace and a leading minus delimit tokens; quote literal values containing these delimiters.
 
 | Attribute | Meaning |
 | --- | --- |

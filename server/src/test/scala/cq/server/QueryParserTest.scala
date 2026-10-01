@@ -22,6 +22,23 @@ final class QueryParserLocal extends AnyWordSpec {
       assert(parsed("   ") == active(QueryExpression.All()))
     }
 
+    "say that a Boolean keyword where a term is expected must be quoted to search for the word" in {
+      def diagnostic(source: String): QueryDiagnostic = parser.parse(source).swap.toOption.get
+      def hint(word: String): String = s"""Expected query term: $word is a Boolean operator; quote it to search for the word ("$word")"""
+      assert(diagnostic("and") == QueryDiagnostic(QuerySpan(0, 3), hint("and")))
+      assert(diagnostic("alpha AND Or beta") == QueryDiagnostic(QuerySpan(10, 12), hint("Or")))
+      assert(diagnostic("not") == QueryDiagnostic(QuerySpan(3, 3), hint("not")))
+      assert(diagnostic("do NOT") == QueryDiagnostic(QuerySpan(6, 6), hint("NOT")))
+      assert(diagnostic("alpha and") == QueryDiagnostic(QuerySpan(9, 9), hint("and")))
+      assert(diagnostic("(alpha or) beta") == QueryDiagnostic(QuerySpan(9, 10), hint("or")))
+      // Without a keyword the diagnostic stays plain: a minus, an empty group, and an attribute value that only spells a keyword.
+      List("-" -> QuerySpan(1, 1), "()" -> QuerySpan(1, 2), "tag:and :" -> QuerySpan(8, 9)).foreach { case (source, span) =>
+        assert(diagnostic(source) == QueryDiagnostic(span, "Expected query term"), source)
+      }
+      assert(parsed("do not merge") == active(QueryExpression.And(text("do"), QueryExpression.Not(text("merge")))))
+      assert(parsed("do \"not\" merge") == active(QueryExpression.And(QueryExpression.And(text("do"), QueryExpression.Text(List("not"), true)), text("merge"))))
+    }
+
     "parse every supported ledger and relation with canonical IDs and preserve exact tags" in {
       QueryCatalog.ledgers.foreach { case (name, ledger) => assert(parsed("ledger:" + name) == active(QueryExpression.LedgerIs(ledger))) }
       QueryCatalog.relations.foreach { case (name, relation) => assert(parsed(name + ":T42") == active(QueryExpression.Reference(relation, QueryItem(Ledger.Tasks, 42)))) }
