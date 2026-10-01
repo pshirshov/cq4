@@ -16,7 +16,7 @@ trait HostCommand {
 object GitEnvironment {
   def isolated(environment: Map[String, String]): Map[String, String] =
     environment.filterNot(_._1.startsWith("GIT_")) ++ Map(
-      "GIT_CONFIG_NOSYSTEM" -> "1", "GIT_CONFIG_GLOBAL" -> "/dev/null", "GIT_TERMINAL_PROMPT" -> "0",
+      "GIT_CONFIG_NOSYSTEM" -> "1", "GIT_CONFIG_GLOBAL" -> "/dev/null", "GIT_ATTR_NOSYSTEM" -> "1", "GIT_TERMINAL_PROMPT" -> "0",
     )
 }
 

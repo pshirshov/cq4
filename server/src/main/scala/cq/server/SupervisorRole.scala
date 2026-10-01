@@ -269,7 +269,7 @@ object SupervisorPlugin extends PluginDef {
     make[ChildInstructions]
     make[AgentCatalog]
     make[WorkspaceReader]
-    make[CandidateWorkspace]
+    make[CandidateWorkspace].from((config: SupervisorConfig) => new CandidateWorkspace(config))
     make[SupervisorAuthority].fromEffect(SupervisorAuthority.acquire _)
     modify[FailureHandler].by(_.flatAp((arguments: RoleAppArgs) => AttachedStartup.reporting(arguments)))
     make[WorkflowExecution].from { (config: SupervisorConfig, authority: SupervisorAuthority) =>

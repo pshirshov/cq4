@@ -240,6 +240,78 @@ final class CandidateWorkspaceLocal extends SpecZIO with AssertZIO {
       } yield ()
     }
 
+    "report a textual conflict, or refuse, whichever attribute or configuration source outside the target's tree selects the union driver" in { (local: LocalWorkspaceFixture) =>
+      val settings = configuration(local)
+      val fixture = local.fixture
+      val Union = "tracked.txt merge=union\n"
+      def makeCandidate(text: String) = for {
+        workspace <- fixture.service.prepare(settings.owner, fixture.spec(settings.owner))
+        commit <- ZIO.attemptBlocking {
+          Files.writeString(Path.of(workspace.directory).resolve("tracked.txt"), text)
+          new CandidateWorkspace(settings).capture(workspace, None, "Candidate\n")
+        }
+      } yield commit
+      def rebase(environment: Map[String, String], head: GitCommit, candidate: GitCommit): HostRebase =
+        new CandidateWorkspace(settings.copy(environment = environment)).rebase(head, candidate, IntegrationId(uuid), "Rebase\n")
+      for {
+        head <- makeCandidate("target line\n")
+        candidate <- makeCandidate("candidate line\n")
+        _ <- ZIO.attemptBlocking {
+          local.git(local.source, "branch", "integration", local.base.value)
+          val captured = local.git(local.source, "for-each-ref", "--format=%(refname)", "refs/cq/candidates/")
+          var wrong = List.empty[String]
+          def outcome(source: String, environment: Map[String, String], expected: HostRebase): Unit = {
+            val result = rebase(environment, head, candidate)
+            println(s"Host rebase with merge=union from $source: $result")
+            if (result != expected) wrong = wrong :+ s"$source gave $result"
+          }
+          // The operator's own attributes file must not decide the other cases.
+          val clean = sys.env.updated("HOME", Files.createDirectory(local.directory.resolve("empty-home")).toString)
+          assert(rebase(clean, head, candidate) == HostRebase.Conflicted)
+
+          val attributes = Path.of(local.git(local.source, "rev-parse", "--path-format=absolute", "--git-path", "info/attributes"))
+          Files.createDirectories(attributes.getParent)
+          Files.writeString(attributes, Union)
+          outcome("$GIT_DIR/info/attributes", clean, HostRebase.Refused("Host rebase refuses a repository with info/attributes"))
+          Files.delete(attributes)
+
+          val home = Files.createDirectories(local.directory.resolve("home/.config/git")).getParent.getParent
+          Files.writeString(home.resolve(".config/git/attributes"), Union)
+          outcome("$HOME/.config/git/attributes", clean.updated("HOME", home.toString), HostRebase.Conflicted)
+
+          val custom = Files.writeString(local.directory.resolve("custom-attributes"), Union)
+          local.git(local.source, "config", "core.attributesFile", custom.toString)
+          outcome("repository core.attributesFile", clean, HostRebase.Refused("Host rebase refuses repository-defined merge behaviour: core.attributesfile"))
+          local.git(local.source, "config", "--unset", "core.attributesFile")
+
+          local.git(local.source, "config", "merge.default", "union")
+          outcome("repository merge.default", clean, HostRebase.Refused("Host rebase refuses repository-defined merge behaviour: merge.default"))
+          local.git(local.source, "config", "--unset", "merge.default")
+
+          // The system attributes file has a fixed path outside the fixture. Where bubblewrap exists Git runs in a mount namespace
+          // that provides it; elsewhere only the variable that makes Git 2.55 skip that file is asserted.
+          val system = Path.of(new BoundedHostCommand(sys.env.filterNot(_._1.startsWith("GIT_")), java.time.Duration.ofSeconds(10), 4096)
+            .run(local.source, List("git", "var", "GIT_ATTR_SYSTEM")).text.trim)
+          val path = sys.env("PATH").split(":").toList.map(Path.of(_))
+          val real = path.map(_.resolve("git")).find(Files.isExecutable(_)).get.toRealPath()
+          val contents = Files.writeString(local.directory.resolve("system-attributes"), Union)
+          val native = CandidateWorkspace.command(clean)
+          path.map(_.resolve("bwrap")).find(Files.isExecutable(_)) match {
+            case Some(sandbox) =>
+              val namespaced: HostCommand = (directory, arguments) => native.run(directory, List(sandbox.toString, "--dev-bind", "/", "/",
+                "--tmpfs", system.getParent.toString, "--ro-bind", contents.toString, system.toString, real.toString) ++ arguments.tail)
+              val result = new CandidateWorkspace(settings, namespaced).rebase(head, candidate, IntegrationId(uuid), "Rebase\n")
+              println(s"Host rebase with merge=union from the system file $system: $result")
+              if (result != HostRebase.Conflicted) wrong = wrong :+ s"the system file $system gave $result"
+            case None =>
+              println(s"Host rebase with merge=union from the system file $system: NOT EXERCISED, bubblewrap is unavailable")
+              if (!GitEnvironment.isolated(clean).get("GIT_ATTR_NOSYSTEM").contains("1")) wrong = wrong :+ "the merge environment reads the system attributes file"
+          }
+          assert(wrong.isEmpty && local.git(local.source, "for-each-ref", "--format=%(refname)", "refs/cq/candidates/") == captured, wrong.mkString("; "))
+        }
+      } yield ()
+    }
+
     "capture both ordered immutable parents and reject changed HEAD or merge inputs" in { (local: LocalWorkspaceFixture) =>
       val settings = configuration(local)
       val candidates = new CandidateWorkspace(settings)
