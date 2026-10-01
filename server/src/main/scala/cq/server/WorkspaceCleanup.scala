@@ -113,9 +113,20 @@ object WorkspaceCleanup {
     }
   }
 
-  /** The governing final publication or a child's publication has not been acknowledged by the server. A child whose owner died
-    * before sealing its publication never gets a receipt: it is delivered once its reconciled outcome is acknowledged. */
-  def undelivered(session: Path): Boolean = !acknowledged(session.resolve("delivery")) || childDirectories(session).exists { child =>
+  /** A span of host work the session retained and the server has not acknowledged. */
+  private def retainedSpan(session: Path): Boolean = {
+    val root = session.resolve("spans")
+    Files.isDirectory(root, LinkOption.NOFOLLOW_LINKS) && Using.resource(Files.list(root))(_.iterator().asScala.exists { span =>
+      Files.isDirectory(span, LinkOption.NOFOLLOW_LINKS) && Using.resource(Files.list(span)) { entries =>
+        val names = entries.iterator().asScala.map(_.getFileName.toString).toSet
+        names.exists(name => name.endsWith(".json") && !names(name.stripSuffix(".json") + ".ack"))
+      }
+    })
+  }
+
+  /** The governing final publication, a child's publication or a retained span has not been acknowledged by the server. A child whose
+    * owner died before sealing its publication never gets a receipt: it is delivered once its reconciled outcome is acknowledged. */
+  def undelivered(session: Path): Boolean = !acknowledged(session.resolve("delivery")) || retainedSpan(session) || childDirectories(session).exists { child =>
     !Files.exists(child.resolve("receipt.json"), LinkOption.NOFOLLOW_LINKS) &&
       (Files.exists(child.resolve("publication.json"), LinkOption.NOFOLLOW_LINKS) || !acknowledged(child.resolve("delivery")))
   }

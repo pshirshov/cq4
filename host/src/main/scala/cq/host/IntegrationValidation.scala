@@ -11,8 +11,9 @@ import java.util.UUID
 final case class ApplicableValidation(evidence: ValidationEvidence, declaration: ValidationCheck, author: AttemptId)
 /** A run of a check that failed before the observation the integration relies on, cited in the Task evidence. */
 final case class FailedRun(artifact: ArtifactId, declaration: ValidationCheck, author: AttemptId)
-/** What the Task evidence cites: the observations that establish each check, and the failed runs and revalidation rounds they superseded. */
-final case class ValidationCitations(established: List[ArtifactId], superseded: List[ArtifactId])
+/** What the Task evidence cites, each under its own label: the observations that establish each check, the runs that failed before
+  * them, and the revalidation rounds (whatever their outcome). */
+final case class ValidationCitations(established: List[ArtifactId], failed: List[ArtifactId], rounds: List[ArtifactId])
 /** A revalidation round of an admitted result as the server stores it. */
 final case class PublishedAmendment(stored: ResolvedArtifact, value: ValidationAmendment)
 /** One configured check of an admitted result: its evidence at admission and each revalidation round that reran it. */
@@ -25,7 +26,7 @@ final case class EffectiveValidation(result: ChildResult, checks: List[Effective
 }
 /** The evidence one integration relies on (`passing`) and additionally cites (`failed`, `amendments`). */
 final case class IntegrationEvidence(passing: List[ApplicableValidation], failed: List[FailedRun], amendments: List[ArtifactId]) {
-  def citations: ValidationCitations = ValidationCitations(passing.map(_.evidence.artifact).distinct, (amendments ++ failed.map(_.artifact)).distinct)
+  def citations: ValidationCitations = ValidationCitations(passing.map(_.evidence.artifact).distinct, failed.map(_.artifact).distinct, amendments.distinct)
 }
 
 object IntegrationValidation {

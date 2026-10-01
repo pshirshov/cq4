@@ -363,14 +363,15 @@ def main():
         # The admitted result is unchanged on the server as well.
         assert json.loads(artifact_text(completed["result"])["text"])["validation"] == [admitted]
         integration = next(value for value in events if value.get("type") == "fixture.integration")
-        established, superseded = integration["item"]["draft"]["content"]["Task"]["validation"][-2:]
+        established, failed, rounds = integration["item"]["draft"]["content"]["Task"]["validation"][-3:]
         assert {"Artifact": {"id": rerun["artifact"]}} in established["citations"] and {"Artifact": {"id": admitted["artifact"]}} not in established["citations"]
-        assert superseded["citations"] == [{"Artifact": {"id": completed["amendment"]}}, {"Artifact": {"id": admitted["artifact"]}}], superseded
+        assert failed["description"].startswith("Host check runs that failed") and failed["citations"] == [{"Artifact": {"id": admitted["artifact"]}}], failed
+        assert rounds["description"].startswith("Revalidation rounds") and rounds["citations"] == [{"Artifact": {"id": completed["amendment"]}}], rounds
         landed = integration["recorded"]["preview"]["candidate"]["value"]
         assert subprocess.check_output(["git", "-C", str(repository), "rev-parse", "refs/heads/integration"], text=True).strip() == landed
         # Admission (failed), the revalidation round (passed) and the reviewer's own run.
         assert counter.read_text() == "3", counter.read_text()
-        print(json.dumps({"revalidatedIntegration": {"round": completed, "citations": superseded["citations"]}, "session": revalidated["session"], "executions": 3}))
+        print(json.dumps({"revalidatedIntegration": {"round": completed, "citations": failed["citations"] + rounds["citations"]}, "session": revalidated["session"], "executions": 3}))
         subprocess.run(["git", "-C", str(repository), "update-ref", "refs/heads/integration", original_head, landed], check=True)
 
         # I19: the bound. A check that keeps failing uses its one allowed round; the next request is refused and runs nothing.

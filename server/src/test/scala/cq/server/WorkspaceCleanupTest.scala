@@ -231,6 +231,25 @@ final class WorkspaceCleanupLocal extends SpecZIO with AssertZIO {
       }
     }
 
+    "deliver a span an ended session retained after its final publication" in { (local: LocalWorkspaceFixture) =>
+      val state = new State(local)
+      for {
+        ended <- state.session(0)
+        span <- ZIO.attemptBlocking {
+          ended.finish()
+          val span = PhaseSpan(RequestId(uuid), ended.run.assignment.id, ended.run.attempt.session, UsagePhase.Check, 1000, 2000, AttemptState.Cancelled)
+          new SpanDelivery(ended.directory.resolve("spans"), ended.run.project.project).retain(span)
+          ended.directory.resolve("spans").resolve(span.id.value.toString)
+        }
+        receipt <- state.recover(WorkspaceCleanup.Default)
+        _ <- ZIO.attemptBlocking {
+          println(s"Retained span: $receipt marker=${ended.recovery}")
+          assert(Files.exists(span.resolve("000000.ack")) && state.grants.get() == 1 && receipt.sessions.map(_.acknowledged) == List(1), receipt.toString)
+          assert(ended.recovery.exists(_.outcome == RecoveryOutcome.Recovered))
+        }
+      } yield ()
+    }
+
     "abandon a session whose run record cannot be decoded once, and leave one whose owner still runs" in { (local: LocalWorkspaceFixture) =>
       val state = new State(local)
       def undecodable(): Path = {

@@ -66,12 +66,14 @@ final class SessionLifetimeLocal extends AnyWordSpec {
       assert(api.call(command) == Reached && grants.get() == 3, "A credential with under an hour left was kept")
     }
 
-    "I21: keep a local capability valid for as long as its attempt runs and deny it once revoked" in {
-      val clock = new ManualClock(1_000_000_000_000L)
+    "I21: issue a local capability that carries no expiry and deny it once its attempt is revoked" in {
       val access = new LocalAccess
       val attempt = AttemptId(uuid)
+      val other = AttemptId(uuid)
       val token = access.issue(attempt, Role.Worker)
-      clock.advance(Duration.ofHours(25))
+      // LocalAccess reads no clock: the only bound on a capability is its revocation.
+      assert(token.expiresAt == Long.MaxValue && access.issue(attempt, Role.Worker) == token)
+      access.revoke(other)
       assert(access.authenticate(token.value) == LocalCapability(attempt, Role.Worker))
       access.revoke(attempt)
       assert(scala.util.Try(access.authenticate(token.value)).failed.toOption.exists { case DomainFailure(_: Fault.Denied) => true; case _ => false })

@@ -89,7 +89,7 @@ final class IntegrationPreparation(api: ServerApi, owner: Scope, repository: Str
     }
     val candidate = rebase.fold(reviewed.candidate)(_.commit)
     val change = IntegrationPolicy.completion(ticket.id, repository, target, candidate, rebase.map(_.evidence), reviewed.workerId, ticket.reviewer,
-      reviewed.validation.established, reviewed.validation.superseded, worker.request.fence, items)
+      reviewed.validation.established, reviewed.validation.failed, reviewed.validation.rounds, worker.request.fence, items)
     renew(call, worker)
     IntegrationIntent(ticket.id, owner.project, owner.actor, repository, target,
       rebase.fold(bases.expected(worker.base, reviewed.candidate))(_.head), candidate,

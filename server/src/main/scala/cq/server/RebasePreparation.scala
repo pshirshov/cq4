@@ -35,7 +35,7 @@ final class RebasePreparation(config: SupervisorConfig, authority: SupervisorAut
                 results <- ZIO.foreach(config.settings.checks.zipWithIndex) { case (check, index) => validation(author, s"$label-$index", commit, check, launch) }
                 _ <- ZIO.attemptBlocking(results.flatMap(_.artifacts).foreach(authority.collector.artifact))
                 evidence = results.map(_.evidence)
-                _ <- ZIO.attempt(require(!evidence.exists(_.state == ValidationState.Unknown), "Host validation cleanup is unconfirmed"))
+                _ <- ZIO.attempt(require(!evidence.exists(_.state == ValidationState.Unknown), results.flatMap(_.unrun).headOption.getOrElse("Host validation cleanup is unconfirmed")))
                 passed = evidence.forall(_.state == ValidationState.Passed)
                 _ <- ZIO.succeed(synchronized { if (!passed) failed = failed.updated((reviewed, head), earlier :+ (id, RebaseAttempt(commit, evidence))) })
               } yield

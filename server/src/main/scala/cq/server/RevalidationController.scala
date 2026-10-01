@@ -89,6 +89,8 @@ final class RevalidationController(config: SupervisorConfig, authority: Supervis
         validation(author, s"$label-$index", candidate, failing.original.declaration, spans.check(jobs, execution, assignment))
       }.raceFirst(renewed))
       evidence = results.map(_.evidence)
+      // A check the session could not start ran nothing: no round is recorded for it.
+      _ <- ZIO.attempt(results.flatMap(_.unrun).headOption.foreach(reason => throw new IllegalStateException(reason)))
       // Shutdown cancels a running check, which then reads as failed; that outcome is discarded rather than recorded as a round.
       _ <- ZIO.attempt(synchronized(require(!closing || evidence.forall(_.state == ValidationState.Passed), "Revalidation admission closed while checks ran")))
       amendment = ArtifactUpload(config.owner.project, IntegrationValidation.amendmentId(result, round.number), author, ArtifactKind.Amendment,

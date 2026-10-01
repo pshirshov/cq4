@@ -154,7 +154,7 @@ object SupervisorProgram {
 
 final class SupervisorProgram(config: SupervisorConfig, registry: HarnessRegistry, jobs: JobSupervisor, authority: SupervisorAuthority,
   local: LocalControlServer, access: LocalAccess, dispatch: DispatchController, integrations: IntegrationController, combinations: CombinationController,
-  schemas: McpSchemas, output: HarnessOutput, workflows: WorkflowAssets, cleanup: WorkspaceCleanup, release: SessionRelease, watchdog: SupervisorWatchdog,
+  revalidations: RevalidationController, schemas: McpSchemas, output: HarnessOutput, workflows: WorkflowAssets, cleanup: WorkspaceCleanup, release: SessionRelease, watchdog: SupervisorWatchdog,
   clock: Clock, context: CliContext) {
   private val MaxInputBytes = 192 * 1024
   private val MaxRecordBytes = 64 * 1024
@@ -206,7 +206,7 @@ final class SupervisorProgram(config: SupervisorConfig, registry: HarnessRegistr
       _ <- cleanup.recover.forkDaemon
       _ <- jobs.start(config.owner, WorkspaceSpec(project, attempt.session, attempt.id, config.run.repository, config.run.base), command)
       record <- jobs.await(config.owner, attempt.id)
-      _ <- integrations.shutdown.zipPar(combinations.shutdown).zipPar(dispatch.shutdown)
+      _ <- integrations.shutdown.zipPar(combinations.shutdown).zipPar(revalidations.shutdown).zipPar(dispatch.shutdown)
       receipt <- ZIO.attemptBlocking {
         val stdout = NativeTranscript.retained(payload.resolve("stdout"), config.limits.retainedOutputBytes)
         val stderr = NativeTranscript.retained(payload.resolve("stderr"), config.limits.retainedOutputBytes)

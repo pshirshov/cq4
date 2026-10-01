@@ -2,7 +2,7 @@ package cq.host
 
 import baboon.runtime.shared.BaboonCodecContext
 import cq.api.*
-import cq.core.DomainFailure
+import cq.core.{DomainFailure, IntegrationPolicy}
 import io.circe.parser.parse
 import java.nio.channels.{FileChannel, FileLock, OverlappingFileLockException}
 import java.nio.file.{Files, Path, StandardCopyOption, StandardOpenOption}
@@ -17,7 +17,13 @@ trait JobRepository extends AutoCloseable {
 }
 
 object JobRecords {
-  val MaxJobs = 256
+  /** A session starts at most this many children, as many integrations and as many revalidation rounds (`DispatchController`,
+    * `IntegrationEntries`, `RevalidationController`). */
+  private val MaxOwners = IntegrationEntries.MaxOperations
+  private val MaxCheckRuns = IntegrationPolicy.MaxChecks * IntegrationValidation.MaxAttempts
+  /** Every job those bounds allow: the governing harness; each child's and each integration's own job with every run of every check;
+    * and those check runs for each revalidation round. The journal bound is therefore reached only after one of them. */
+  val MaxJobs: Int = 1 + 2 * MaxOwners * (1 + MaxCheckRuns) + MaxOwners * MaxCheckRuns
   val MaxRecordBytes = 64 * 1024
   def conflict(message: String): Nothing = throw DomainFailure(Fault.Conflict(message))
   def terminal(phase: JobPhase): Boolean = phase == JobPhase.Settled || phase == JobPhase.Uncertain

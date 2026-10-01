@@ -33,7 +33,7 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
     IntegrationValidation.effective(owner.project, owner.actor.session, id, worker, checks, amendments), reviewer).citations
   private def completion(id: IntegrationId, repository: String, target: String, candidate: GitCommit, rebase: Option[IntegrationRebase], worker: ArtifactId,
     reviewer: ArtifactId, cited: ValidationCitations, fence: Fence, items: List[Item]): ChangeRequest =
-    IntegrationPolicy.completion(id, repository, target, candidate, rebase, worker, reviewer, cited.established, cited.superseded, fence, items)
+    IntegrationPolicy.completion(id, repository, target, candidate, rebase, worker, reviewer, cited.established, cited.failed, cited.rounds, fence, items)
   private final class ServiceApi(scope: Scope, ledger: LedgerService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], runtime: Runtime[Any]) extends ServerApi {
     override def call(command: Command): Result = {
       val effect: IO[Throwable, Result] = command match {
@@ -138,7 +138,7 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
     id = IntegrationId(uuid)
     // An altered review the validation rule refuses has no citations to compute; its reservation is refused before the change request is compared.
     change = completion(id, f.intent.repository, f.intent.target, f.intent.candidate, None, f.intent.worker, handle,
-      scala.util.Try(cited(f.owner, f.intent.worker, f.worker, review, f.intent.checks, Nil)).getOrElse(ValidationCitations(Nil, Nil)), f.intent.fence, f.items)
+      scala.util.Try(cited(f.owner, f.intent.worker, f.worker, review, f.intent.checks, Nil)).getOrElse(ValidationCitations(Nil, Nil, Nil)), f.intent.fence, f.items)
   } yield f.copy(reviewer = review, intent = f.intent.copy(id = id, reviewer = handle, change = change))
   private val rebasedRule = Fault.Invalid("Rebased integration requires passing host checks on the exact rebased commit")
   private val advancedHead = GitCommit("c" * 40)
@@ -203,7 +203,7 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
       reviewArtifact <- publish(original.collector, reviewer, artifacts, admissions)
       id = IntegrationId(uuid)
       // A fixture the rule refuses has no citations to compute; the reservation is refused before its change request is compared.
-      citations = scala.util.Try(cited(original.owner, workerArtifact, worker, reviewer, List(check), published)).getOrElse(ValidationCitations(Nil, Nil))
+      citations = scala.util.Try(cited(original.owner, workerArtifact, worker, reviewer, List(check), published)).getOrElse(ValidationCitations(Nil, Nil, Nil))
       change = completion(id, original.intent.repository, original.intent.target, candidate, None, workerArtifact, reviewArtifact, citations, original.intent.fence, original.items)
     } yield Revalidated(original.copy(worker = worker, reviewer = reviewer, intent = original.intent.copy(id = id, worker = workerArtifact, reviewer = reviewArtifact,
       checks = List(check), change = change)), failed, published)
@@ -291,12 +291,16 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
         _ <- integrations.observe(f.collector, f.intent.id, IntegrationObservation.Incorporated(f.intent.candidate))
         completed <- ZIO.foreach(f.items)(item => ledger.get(f.owner, item.id).map(_.item.draft.content.asInstanceOf[Content.Task]))
         _ <- ZIO.attempt(completed.foreach { task =>
-          val recorded = task.validation.takeRight(2)
+          val recorded = task.validation.takeRight(3)
           val passing = amended.amendments.last.value.validation.head.artifact
           println(s"Revalidated completion: ${recorded.map(value => value.description -> value.citations)}")
           assert(task.status == TaskStatus.Done && recorded.head.citations == List(Citation.Commit(f.intent.repository, f.intent.candidate.value),
             Citation.Artifact(f.intent.worker), Citation.Artifact(f.intent.reviewer), Citation.Artifact(passing)), recorded.head.toString)
-          assert(recorded.last.citations == (amended.amendments.map(_.stored.metadata.id) :+ amended.failed).map(Citation.Artifact.apply), recorded.last.toString)
+          // The failed admission run and the rounds, one of which passed, are cited under labels that say what they are.
+          assert(recorded(1) == Evidence(s"Host check runs that failed before the passing runs cited for integration ${f.intent.id.value}", EvidenceOrigin.HostObserved,
+            List(Citation.Artifact(amended.failed))), recorded(1).toString)
+          assert(recorded(2) == Evidence(s"Revalidation rounds of the checks cited for integration ${f.intent.id.value}", EvidenceOrigin.HostObserved,
+            amended.amendments.map(value => Citation.Artifact(value.stored.metadata.id))), recorded(2).toString)
         })
       } yield ()
     }
@@ -477,12 +481,12 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
         plain = IntegrationId(uuid)
         unchecked = original.intent.copy(id = plain, worker = workerArtifact, reviewer = reviewArtifact, checks = Nil,
           change = completion(plain, original.intent.repository, original.intent.target, reviewed, None, workerArtifact, reviewArtifact,
-            ValidationCitations(Nil, Nil), original.intent.fence, original.items))
+            ValidationCitations(Nil, Nil, Nil), original.intent.fence, original.items))
         id = IntegrationId(uuid)
         rebase = IntegrationRebase(reviewed, original.governor, Nil, Nil)
         result <- integrations.reserve(original.collector, unchecked.copy(id = id, expected = advancedHead, candidate = rebasedCommit, rebase = Some(rebase),
           change = completion(id, original.intent.repository, original.intent.target, rebasedCommit, Some(rebase), workerArtifact, reviewArtifact,
-            ValidationCitations(Nil, Nil), original.intent.fence, original.items))).either
+            ValidationCitations(Nil, Nil, Nil), original.intent.fence, original.items))).either
         _ <- ZIO.attempt(assert(result == Left(DomainFailure(rebasedRule)), s"no configured checks: $result"))
         preview <- ledger.claimPreview(original.owner, original.claim.members)
         _ <- assertIO(preview.integrations.isEmpty)

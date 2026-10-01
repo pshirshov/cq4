@@ -15,7 +15,8 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
   private val ClaimMillis = Duration.ofMinutes(3).toMillis
   private val partials = new PartialWorkCapture(config)
   private val validation = new HostValidation(config)
-  private final case class Trace(native: Option[JobRecord], extra: List[ArtifactUpload], spans: List[PhaseSpan], uncertain: Boolean)
+  /** `unrun` names the checks the host could not start; the result is published with them Unknown. */
+  private final case class Trace(native: Option[JobRecord], extra: List[ArtifactUpload], spans: List[PhaseSpan], uncertain: Boolean, unrun: List[String])
   private def directory(attempt: AttemptId): Path = config.directory.resolve("payload").resolve(attempt.value.toString)
   private def transcript(attempt: AttemptId, name: String, bound: Int): Array[Byte] = NativeTranscript.retained(directory(attempt).resolve(name), bound)
   private def collect(attempt: Attempt, version: String, collectedAt: Long): CollectedUsage =
@@ -76,8 +77,8 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
     } yield result
   }
 
-  def run(entry: DispatchExecution): Task[Unit] = for {
-    trace <- Ref.make(Trace(None, Nil, Nil, false))
+  def run(entry: DispatchExecution): Task[Unit] = (for {
+    trace <- Ref.make(Trace(None, Nil, Nil, false, Nil))
     queue <- ZIO.attemptBlocking(new DeliveryQueue(entry.directory.resolve("delivery")))
     result <- ZIO.scoped {
       for {
@@ -210,8 +211,8 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
         .catchSome { case DomainFailure(_: Fault.Missing) => ZIO.unit }
     } else ZIO.unit
     observed <- trace.get
-    _ <- publish(entry, result, observed).ensuring(ZIO.succeed(access.revoke(entry.ticket.attempt.id)))
-  } yield ()
+    _ <- publish(entry, result, observed)
+  } yield ()).ensuring(ZIO.succeed(access.revoke(entry.ticket.attempt.id)))
 
   private def closeChecks(entry: DispatchExecution, trace: Ref[Trace]): Task[ClosedReviewerChecks] = for {
     closed <- entry.reviewerChecks.fold(ZIO.succeed(ClosedReviewerChecks(Nil, false, false)))(_.close)
@@ -222,8 +223,10 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
     validated <- validation(entry.ticket.attempt.id, s"check-$index", candidate, check, (id, base, command) => launch(entry, id, base, command).ensuring(release(id).ignore)
       .tap(record => trace.update(value => value.copy(spans = value.spans :+ PhaseSpans.check(record, entry.ticket.assignment.id)))))
     evidence = validated.evidence
-    _ <- trace.update(value => value.copy(extra = value.extra ++ validated.artifacts, uncertain = value.uncertain || evidence.state == ValidationState.Unknown))
-    _ <- ZIO.attempt(require(evidence.state != ValidationState.Unknown, "Host validation cleanup is unconfirmed"))
+    // A check that could not be started ran nothing: its cleanup is not in doubt and the worker's result stands.
+    uncertain = evidence.state == ValidationState.Unknown && validated.unrun.isEmpty
+    _ <- trace.update(value => value.copy(extra = value.extra ++ validated.artifacts, uncertain = value.uncertain || uncertain, unrun = value.unrun ++ validated.unrun))
+    _ <- ZIO.attempt(require(!uncertain, "Host validation cleanup is unconfirmed"))
   } yield evidence
 
   private def publish(entry: DispatchExecution, result: Either[Throwable, ChildResult], trace: Trace): Task[Unit] = {
@@ -243,7 +246,8 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
         val (_, errParts) = NativeArtifacts.binary(project, attempt.id, "stderr", "application/octet-stream", stderr)
         val collectedAt = math.max(attempt.startedAt, clock.millis())
         val usage = collect(attempt, entry.ticket.profile.version, collectedAt)
-        val problem = cancelled.orElse(result.left.toOption.map(error => Option(error.getMessage).getOrElse(error.getClass.getSimpleName))).map(DispatchProjection.concise)
+        val problem = cancelled.orElse(result.left.toOption.map(error => Option(error.getMessage).getOrElse(error.getClass.getSimpleName)))
+          .orElse(trace.unrun.headOption).map(DispatchProjection.concise)
         val valid = if (cancelled.nonEmpty) None else result.toOption
         val observed = job.map(JobOutcome.observed)
         val state = if (trace.uncertain || observed.exists(_.state == AttemptState.Unknown)) AttemptState.Unknown

@@ -110,7 +110,8 @@ sys.stderr.flush()
   /** `renewing` builds another runner of the same session with its own server authority and claim renewal policy. */
   private final case class Fixture(owner: Scope, collector: Scope, config: SupervisorConfig, authority: SupervisorAuthority, runner: ChildRunner, agents: AgentCatalog,
     jobs: JobSupervisor, members: List[ItemRevision], fence: Fence, governor: Attempt, profile: HarnessSetting, clock: Clock,
-    renewing: (SupervisorAuthority, ClaimRenewal.Policy) => ChildRunner) {
+    renewing: (SupervisorAuthority, ClaimRenewal.Policy) => ChildRunner, access: LocalAccess, jobLimit: java.util.concurrent.atomic.AtomicInteger,
+    failingQuarantine: ChildRunner) {
     val limits: HostLimits = HostLimits(3000, 900, 100, 1000, 262144)
     /** Runs one child of `controller` to its terminal status. */
     def child(controller: DispatchController, script: String, request: DispatchRequest): Task[DispatchStatus] = for {
@@ -180,15 +181,35 @@ sys.stderr.flush()
       authority = SupervisorAuthority(new Receiver(application, auth, root, root, runtime), new Receiver(application, auth, root, collectorAuthority, runtime),
         new Receiver(application, auth, root, governorAuthority, runtime), AccessToken("governor", expires))
       workspaces = local.fixture.service
-      jobs <- JobSupervisor.acquire(config.owner, ZIO.attemptBlocking(FileJobRepository.open(directory.resolve("journal"), project.project, owner.actor.session)),
-        workspaces, new GuardianDriver(guardian.binary), directory.resolve("payload"), clock)
+      // The journal refuses a reservation once `jobLimit` further ones have been made, as it does at its session bound.
+      jobLimit = new java.util.concurrent.atomic.AtomicInteger(Int.MaxValue)
+      jobs <- JobSupervisor.acquire(config.owner, ZIO.attemptBlocking {
+        val journal = FileJobRepository.open(directory.resolve("journal"), project.project, owner.actor.session)
+        new JobRepository {
+          override def records: List[JobRecord] = journal.records
+          override def reserve(workspace: WorkspaceSpec, fingerprint: String, now: Long): (JobRecord, Boolean) = {
+            if (jobLimit.getAndDecrement() <= 0) throw DomainFailure(Fault.Limit("Session job limit reached; start a new governing session"))
+            journal.reserve(workspace, fingerprint, now)
+          }
+          override def replace(expected: JobRecord, next: JobRecord): Unit = journal.replace(expected, next)
+          override def close(): Unit = journal.close()
+        }
+      }, workspaces, new GuardianDriver(guardian.binary), directory.resolve("payload"), clock)
       access = new LocalAccess
       _ <- ZIO.succeed(access.bind(URI.create("http://127.0.0.1:1")))
       agents = new AgentCatalog(new McpSchemas, new ChildInstructions)
-      renewing = (authority: SupervisorAuthority, policy: ClaimRenewal.Policy) => new ChildRunner(config, authority,
+      runner = (authority: SupervisorAuthority, policy: ClaimRenewal.Policy, workspaces: WorkspaceService[IO]) => new ChildRunner(config, authority,
         new HarnessRegistry(Set(new ClaudeAdapter, new CodexAdapter, new PiAdapter)), jobs, workspaces, agents, new HarnessOutput, new CandidateWorkspace(config),
         new WorkspaceReader, access, new OperatorRequirements(""), new ClaimRenewal(policy, logstage.IzLogger.NullLogger), clock)
-      _ <- test(Fixture(owner, collector, config, authority, renewing(authority, ClaimRenewal.Default), agents, jobs, members, claim.fence, governor, profile, clock, renewing))
+      unquarantinable = new WorkspaceService[IO] {
+        override def prepare(scope: Scope, spec: WorkspaceSpec): IO[Throwable, WorkspaceRecord] = workspaces.prepare(scope, spec)
+        override def get(scope: Scope, attempt: AttemptId): IO[Throwable, WorkspaceRecord] = workspaces.get(scope, attempt)
+        override def quarantine(scope: Scope, attempt: AttemptId, reason: String): IO[Throwable, WorkspaceRecord] = ZIO.fail(new java.io.IOException("Injected quarantine failure"))
+        override def remove(scope: Scope, attempt: AttemptId): IO[Throwable, WorkspaceRecord] = workspaces.remove(scope, attempt)
+        override def prune(scope: Scope, repository: String): IO[Throwable, Int] = workspaces.prune(scope, repository)
+      }
+      _ <- test(Fixture(owner, collector, config, authority, runner(authority, ClaimRenewal.Default, workspaces), agents, jobs, members, claim.fence, governor, profile, clock,
+        runner(_, _, workspaces), access, jobLimit, runner(authority, ClaimRenewal.Default, unquarantinable)))
     } yield ()
   }
 
@@ -370,6 +391,45 @@ sys.stderr.flush()
           }
         } yield ()
       }
+    }
+
+    "revoke a child's local capability when the run fails after the child has ended" in {
+      (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None, Nil) { f => for {
+        entry <- f.dispatch(Failing, f.limits)
+        // The runner is issued the capability this call creates.
+        token <- ZIO.succeed(f.access.issue(entry.ticket.attempt.id, Role.Worker))
+        outcome <- f.failingQuarantine.run(entry).either
+        _ <- ZIO.attempt {
+          val retained = scala.util.Try(f.access.authenticate(token.value))
+          println(s"Capability after a failed run: run=${outcome.left.map(_.getMessage)} capability=$retained")
+          assert(outcome.left.exists(_.getMessage == "Injected quarantine failure"), outcome.toString)
+          assert(retained.failed.toOption.exists { case DomainFailure(_: Fault.Denied) => true; case _ => false }, s"The capability outlived its attempt: $retained")
+        }
+      } yield () }
+    }
+
+    "publish a worker's result with the check Unknown and a named blocker when the session cannot start another job" in {
+      (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
+      val check = ValidationCheck("unit", List("true"), 10000, 65536, 1, 0)
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None, List(check)) { f => for {
+        entry <- f.dispatch(Completing, f.limits)
+        // The child's own job is the last the journal admits.
+        _ <- ZIO.succeed(f.jobLimit.set(1))
+        _ <- f.runner.run(entry).timeoutFail(new IllegalStateException("Worker did not finish"))(zio.Duration.fromSeconds(60))
+        status = entry.status
+        _ <- ZIO.attempt(assert(status.phase == DispatchPhase.Completed && status.result.nonEmpty, status.toString))
+        result <- text(artifacts, f.owner, status.result.get).map(Wire.decode(ChildResult_JsonCodec, _))
+        reason <- text(artifacts, f.owner, result.validation.head.artifact)
+        _ <- ZIO.attempt {
+          val blocker = "Host check unit was not run: Session job limit reached; start a new governing session"
+          println(s"Unreserved check: ${status.phase} next=${status.next} blocker=${status.blocker} validation=${result.validation} artifact=$reason")
+          assert(result.candidate.nonEmpty && result.validation.map(value => (value.check, value.state, value.failures)) == List(("unit", ValidationState.Unknown, Nil)))
+          assert(status.blocker.contains(blocker) && status.next == ChildNext.InspectEvidence && status.counts.validationUnknown == 1 && reason == blocker, status.toString)
+        }
+      } yield () }
     }
 
     "I21: grant a child its domain credential at its own start for the server's grant lifetime" in {

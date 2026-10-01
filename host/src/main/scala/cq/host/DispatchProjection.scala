@@ -49,7 +49,8 @@ object DispatchProjection {
     }
     bounded(previous.copy(phase = DispatchPhase.Completed, counts = counts,
       next = if (unknown > 0) ChildNext.InspectEvidence else if (failures > 0) ChildNext.Revise else next,
-      blocker = result.validation.find(_.state != ValidationState.Passed).map(value => s"Host check ${value.check}: ${value.state}").orElse(blocker).map(concise),
+      // A blocker sealed with the publication says why a check has no outcome; it is more specific than the check's state.
+      blocker = previous.blocker.orElse(result.validation.find(_.state != ValidationState.Passed).map(value => s"Host check ${value.check}: ${value.state}")).orElse(blocker).map(concise),
       result = Some(handle), detailsOmitted = true))
   }
   def workspace(record: WorkspaceRecord): WorkspaceState =

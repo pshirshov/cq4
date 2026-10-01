@@ -62,7 +62,7 @@ object IntegrationApiCheck {
     val id = IntegrationId(uuid)
     val repository = "/http-fixture"
     val target = "refs/heads/integration"
-    val change = IntegrationPolicy.completion(id, repository, target, candidate, None, workerHandle, reviewerHandle, Nil, Nil, claim.fence, List(item))
+    val change = IntegrationPolicy.completion(id, repository, target, candidate, None, workerHandle, reviewerHandle, Nil, Nil, Nil, claim.fence, List(item))
     val intent = IntegrationIntent(id, project, owner, repository, target, base, candidate, workerHandle, reviewerHandle, Nil, claim.fence, members, change, None)
     val input = HostIntegrationInput(project, HostIntegration.Reserve(intent))
     def denied(operation: => Any): Unit = require(try { operation; false } catch { case DomainFailure(_: Fault.Denied) => true })

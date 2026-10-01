@@ -272,12 +272,14 @@ final class IntegrationRebaseProcess extends SpecZIO with AssertZIO {
         worker <- text(artifacts, f.owner, record.intent.worker).map(Wire.decode(ChildResult_JsonCodec, _))
         task <- ledger.get(f.owner, f.members.head.id).map(_.item.draft.content.asInstanceOf[Content.Task])
         _ <- ZIO.attempt {
-          val cited = task.validation.takeRight(2)
-          println(s"Rebase of a revalidated candidate: ${recorded.phase} worker=${worker.validation} citations=${cited.map(_.citations)}")
+          val cited = task.validation.takeRight(3)
+          println(s"Rebase of a revalidated candidate: ${recorded.phase} worker=${worker.validation} citations=${cited.map(value => (value.description, value.citations))}")
           assert(recorded.phase == IntegrationPhase.Recorded && f.target == ready.preview.get.candidate, recorded.toString)
-          // The admitted worker result still records the failure; the amendment and that failure are cited beside the passing observations.
+          // The admitted worker result still records the failure; that failure and the round are cited beside the passing observations, each under its own label.
           assert(worker.validation.map(_.state) == List(ValidationState.Failed))
-          assert(cited.last.citations == List(Citation.Artifact(IntegrationValidation.amendmentId(record.intent.worker, 1)), Citation.Artifact(worker.validation.head.artifact)))
+          assert(cited(1).description.startsWith("Host check runs that failed") && cited(1).citations == List(Citation.Artifact(worker.validation.head.artifact)), cited(1).toString)
+          assert(cited(2).description.startsWith("Revalidation rounds") &&
+            cited(2).citations == List(Citation.Artifact(IntegrationValidation.amendmentId(record.intent.worker, 1))), cited(2).toString)
           assert(cited.head.citations.contains(Citation.Artifact(record.intent.rebase.get.validation.head.artifact)) &&
             !cited.head.citations.contains(Citation.Artifact(worker.validation.head.artifact)))
         }
@@ -534,9 +536,12 @@ final class IntegrationRebaseProcess extends SpecZIO with AssertZIO {
           status <- f.settled(id)
           record <- f.jobs.await(f.config.owner, running.head.workspace.attempt)
             .timeoutFail(new IllegalStateException("Check was not stopped"))(zio.Duration.fromSeconds(20))
+          workspace <- local.fixture.service.get(f.config.owner, running.head.workspace.attempt)
           _ <- ZIO.attempt {
-            println(s"Claim lost during a check: status=$status job=${record.phase} ${record.exit}")
+            println(s"Claim lost during a check: status=$status job=${record.phase} ${record.exit} workspace=${workspace.admission}")
             assert(status.phase == IntegrationPhase.Failed && record.phase == JobPhase.Settled && record.exit.exists(_.reason == StopReason.Cancelled), status.toString)
+            // The stopped check's workspace is released like that of a check that ran to its end.
+            assert(workspace.admission == WorkspaceAdmission.Removed, workspace.toString)
           }
           // I20: the stopped run is a Cancelled Check span and the failed preparation a Failed Integrate span.
           recorded <- spans.read(f.owner.project)(reader => List(PhaseSpans.check(record, f.worker).id,
