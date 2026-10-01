@@ -22,6 +22,7 @@ final class AttachedWorkflow(config: SupervisorConfig, authority: SupervisorAuth
   // A start token creates the cycle's one run; a resume token returns that run and never creates another.
   def activate(id: RequestId, request: WorkflowRequest, operatorRequirements: String, token: Option[CycleToken]): Task[WorkflowActivation] = ZIO.attemptBlocking(synchronized {
     require(config.run.ownership == SessionOwnership.Attached, "Interactive activation requires an attached session")
+    OperatorRequirements.admitted(operatorRequirements, token)
     activations.get(id).map { value =>
       require(value.context.request == request && value.operatorRequirements == operatorRequirements && tokens(id) == token, "Workflow activation identity changed")
       value

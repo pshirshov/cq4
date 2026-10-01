@@ -35,6 +35,29 @@ final class WorkflowLocal extends AnyWordSpec {
     }
   }
 
+  "Driver token handling at activation (Behavioral Active Blackbox Atomic)" should {
+    "keep the driver token out of the operator requirements delivered to children" in {
+      val start = DriverToken(UUID.randomUUID())
+      val directive = s"/cq:advance --roots G1 --through work --start-token ${start.value}"
+      // A driven activation whose requirements text carries its own token is refused by name before any run starts.
+      List[CycleToken](CycleToken.Start(start), CycleToken.Resume(start)).foreach { token =>
+        List(directive, directive.toUpperCase, s"Advance G1.\nToken ${start.value}.").foreach { text =>
+          val refused = intercept[cq.core.DomainFailure](cq.host.OperatorRequirements.admitted(text, Some(token)))
+          assert(refused.fault == Fault.Invalid(cq.host.OperatorRequirements.TokenLeak))
+        }
+        assert(cq.host.OperatorRequirements.admitted("/cq:advance --roots G1 --through work", Some(token)) == "/cq:advance --roots G1 --through work")
+      }
+      assert(cq.host.OperatorRequirements.TokenLeak.contains("Workflow.token") && cq.host.OperatorRequirements.TokenLeak.contains("operatorRequirements"))
+      assert(cq.host.OperatorRequirements.admitted(directive, None) == directive)
+      assert(cq.host.OperatorRequirements.admitted(directive, Some(CycleToken.Start(DriverToken(UUID.randomUUID())))) == directive)
+      // The generated advance command tells the model the same rule.
+      Harness.all.foreach { harness =>
+        val advance = new WorkflowAssets().commands(harness).find(_.path.toString.contains("advance")).get.body
+        assert(advance.contains("Pass the token only in `token`") && advance.contains("leave the `--start-token` or `--resume-token` flag and its UUID out of `operatorRequirements`"))
+      }
+    }
+  }
+
   "Command export (Behavioral Active Effectual filesystem Good Communication)" should {
     "export all four commands idempotently, preserve unrelated files and preflight every conflict" in {
       val assets = new WorkflowAssets

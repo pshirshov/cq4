@@ -1,7 +1,7 @@
 package cq.host
 
 import cq.api.*
-import cq.core.{CohortBounds, DomainFailure, LedgerPolicy, Scope, WorksetTraversal}
+import cq.core.{CohortBounds, DomainFailure, LedgerPolicy, MilestonePolicy, Scope, WorksetTraversal}
 import java.nio.charset.StandardCharsets.UTF_8
 import java.time.Duration
 import java.util.UUID
@@ -207,7 +207,9 @@ final class CohortPlanner(api: ServerApi, owner: Scope, bases: ExecutionBase, ch
     val held = claim.toList.flatMap(_.claims.filter(_.owner != owner.actor).flatMap(_.members)).toSet ++
       claim.toList.flatMap(_.integrations.flatMap(_.members.map(_.id))).toSet
     val excludedMembers = loaded.items.flatMap(value => {
-      val reason = if (held(value.item.id)) Some(CohortReason.Claimed) else reviewDisposition(value, request.work, ctx)
+      val reason = if (held(value.item.id)) Some(CohortReason.Claimed)
+        else if (MilestonePolicy.missing(request.work, value)) Some(CohortReason.NoMilestone)
+        else reviewDisposition(value, request.work, ctx)
       reason.map(value.item.id -> _)
     }).toMap
     var pending = candidates.flatMap(ref => views.get(ref.id)).filterNot(value => excludedMembers.contains(value.item.id))
@@ -302,7 +304,7 @@ final class CohortPlanner(api: ServerApi, owner: Scope, bases: ExecutionBase, ch
     call(Command.Graph(GraphInput(owner.project, request.roots, None, Some(snapshot), 1)))
     val chosen = choices.result()
     val excluded = considered.filter(value => Set(CohortReason.Claimed, CohortReason.Deferred, CohortReason.InputBound,
-      CohortReason.ReviewAccepted, CohortReason.ReviewBlocked, CohortReason.CandidateContinuity)(value.reason)).map(_.members.size).sum
+      CohortReason.ReviewAccepted, CohortReason.ReviewBlocked, CohortReason.CandidateContinuity, CohortReason.NoMilestone)(value.reason)).map(_.members.size).sum
     val counts = CohortCounts(entries.size, selected.size, loaded.items.size, excluded,
       eligible.size - loaded.items.count(value => eligible.contains(value.item.id)), selected.count(entry => !ready(request.work, entry)),
       selected.count(entry => ready(request.work, entry) && !supports(request.work, entry.item.id)), selected.size - chosen.map(_.members.size).sum)
@@ -320,6 +322,7 @@ final class CohortPlanner(api: ServerApi, owner: Scope, bases: ExecutionBase, ch
       (choice.previous.nonEmpty || ready(choice.work, entry)))), "Selected cohort is no longer selected, ready or current")
     val loaded = details(call, choice.members)
     require(loaded.omitted.isEmpty, "Selected cohort no longer fits its content budget")
+    MilestonePolicy.admit(choice.work, loaded.items)
     val inputs = request.copy(work = choice.work, guidance = choice.guidance, artifacts = choice.artifacts, previous = choice.previous)
     val ctx = context(call, inputs, bases.fresh())
     require(fits(inputs, choice.work, loaded.items, ctx) && executionFingerprint(choice.work, loaded.items, ctx, choice.reason) == expected,

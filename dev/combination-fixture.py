@@ -123,8 +123,15 @@ def main():
 
     draft = {"title": actor + " combination fixture", "body": json.dumps(task), "labels": [], "archived": False,
         "content": {"Task": {"status": "Ready", "acceptance": ["Both independent changes survive"], "result": None, "validation": []}}, "citations": []}
-    members = tool("cq", "change", {"project": project, "change": {"request": identity(), "mutations": [{"Create": {"draft": draft}}],
+    # Implementation and conflict resolution are admitted only for Tasks under a milestone.
+    member, milestone = tool("cq", "change", {"project": project, "change": {"request": identity(), "mutations": [{"Create": {"draft": draft}}, {"Create": {"draft": {
+        "title": actor + " combination milestone", "body": "", "labels": [], "archived": False, "citations": [],
+        "content": {"Milestone": {"status": "Open", "objective": "Deliver the combination fixture"}}}}}],
         "fences": [], "reason": "Combination fixture"}})["Changed"]["ack"]["items"]
+    members = [value for value in tool("cq", "change", {"project": project, "change": {"request": identity(), "mutations": [{"Reference": {
+        "source": member["id"], "expectedSource": member["revision"], "relation": "PartOf", "target": milestone["id"],
+        "expectedTarget": milestone["revision"], "present": True}}], "fences": [], "reason": "Combination fixture milestone"}})["Changed"]["ack"]["items"]
+        if value["id"] == member["id"]]
     claim = tool("cq", "claim", {"project": project, "action": {"Acquire": {"id": identity(),
         "members": [member["id"] for member in members], "durationMillis": "180000"}}})["Claimed"]["claim"]
     base_request = {"harness": "Codex", "members": members, "guidance": [], "artifacts": [], "previous": None,

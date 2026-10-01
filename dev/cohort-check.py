@@ -163,10 +163,16 @@ def main():
                 goal, *members = change([{"Create": {"draft": {**draft, "labels": [], "content": {"Goal": {
                     "status": "Open", "outcome": "Shared parser", "acceptance": ["Independent task acceptance"], "scope": "Consumer"}}}}},
                     *[{"Create": {"draft": draft}} for _ in range(2)]])
+                milestone, = change([{"Create": {"draft": {**draft, "title": "Cohort milestone", "labels": [], "content": {"Milestone": {
+                    "status": "Open", "objective": "Deliver the shared parser"}}}}}])
                 for member in members:
                     linked = change([{"Reference": {"source": goal["id"], "expectedSource": goal["revision"], "relation": "Produces",
                         "target": member["id"], "expectedTarget": member["revision"], "present": True}}])
                     goal = next(value for value in linked if value["id"] == goal["id"])
+                    member = next(value for value in linked if value["id"] == member["id"])
+                    # Implementation is admitted only for Tasks under a milestone.
+                    milestone = next(value for value in change([{"Reference": {"source": member["id"], "expectedSource": member["revision"], "relation": "PartOf",
+                        "target": milestone["id"], "expectedTarget": milestone["revision"], "present": True}}]) if value["id"] == milestone["id"])
                 source.write_text("cohort-flow:" + json.dumps({"roots": [goal["id"]], "unknown": unknown, "refresh": refresh, "mixed": priced}))
                 result = subprocess.run(command + ["run", "codex", "--settings", str(settings), "--input", str(source),
                     "--workflow", "advance", "--roots", "G" + goal["id"]["number"], "--through", "review"],

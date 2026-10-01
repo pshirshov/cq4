@@ -83,26 +83,26 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
     val base = GitCommit("a" * 40)
     for {
       _ <- ledger.initialize(scope, "Assessment selection")
-      created <- ledger.change(scope, ChangeRequest(RequestId(uuid), List.fill(count)(Mutation.Create(task)), Nil, "Candidates"))
-      claim <- ledger.acquire(scope, ClaimId(uuid), created.items.map(_.id).toSet, 300000)
+      members <- MilestoneFixture.assigned(ledger, scope, List.fill(count)(task))
+      claim <- ledger.acquire(scope, ClaimId(uuid), members.map(_.id).toSet, 300000)
       governing <- usage.assign(collector, Assignment(AssignmentId(uuid), scope.project, Set.empty, Attribution.Unattributed, None, None))
       parent <- usage.start(collector, Attempt(AttemptId(uuid), governing.id, None, scope.actor.session, Role.Governor, Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Govern))
       assignment <- usage.assign(collector, Assignment(AssignmentId(uuid), scope.project, claim.members, Attribution.Shared, Some(uuid), None))
       attempt <- usage.start(collector, Attempt(AttemptId(uuid), assignment.id, Some(parent.id), scope.actor.session, Role.Planner, Harness.Codex, "fixture", "fixture", "fixture", 1001, UsagePhase.Plan))
-      dispatch = DispatchRequest(RequestId(uuid), DispatchWork.Planner(), Harness.Codex, created.items, Nil, Nil, None, claim.fence,
+      dispatch = DispatchRequest(RequestId(uuid), DispatchWork.Planner(), Harness.Codex, members, Nil, Nil, None, claim.fence,
         HostLimits(3000, 10000, 1000, 300, 2000, 262144))
-      views <- ZIO.foreach(created.items)(ref => ledger.get(scope, ref.id))
+      views <- ZIO.foreach(members)(ref => ledger.get(scope, ref.id))
       input = ChildExecutionInput(ChildInput(scope.project, dispatch, views, Nil, Nil, None, None), base, checks)
       _ <- artifacts.upload(collector, ArtifactUpload(scope.project, NativeArtifacts.id(attempt.id, "input"), attempt.id, ArtifactKind.Input,
         "application/json", Wire.encode(ChildExecutionInput_JsonCodec, input)))
-      groups = created.items.grouped(2).map(members => CohortAssessment(compatibility, "Share implementation", "No dependency conflict", "Separate acceptance",
+      groups = members.grouped(2).map(members => CohortAssessment(compatibility, "Share implementation", "No dependency conflict", "Separate acceptance",
         members.map(member => CohortMemberAssessment(member, List(CohortCriterion(0, Set("acceptance"), "Inspect this task")))))).toList
-      report = ChildReport.Plan(created.items.map(ref => PlanMember(ref.id, PlanDisposition.Assessed, "Assessed")), None, groups)
+      report = ChildReport.Plan(members.map(ref => PlanMember(ref.id, PlanDisposition.Assessed, "Assessed")), None, groups)
       result = ChildResult(attempt.id, dispatch, base, None, report, Nil, RetainedEvidence(Nil, Nil))
       stored <- artifacts.upload(collector, ArtifactUpload(scope.project, ArtifactId(uuid), attempt.id, ArtifactKind.Result, "application/json", Wire.encode(ChildResult_JsonCodec, result)))
       admitted <- admissions.admit(collector, HostAdmissionInput(scope.project, stored.id, scope.actor))
       _ <- assertIO(admitted.decision == AdmissionDecision.Accepted())
-    } yield Assessed(scope, created.items, stored.id, checks, base, collector, parent.id, claim.fence)
+    } yield Assessed(scope, members, stored.id, checks, base, collector, parent.id, claim.fence)
   }
 
   private final case class Published(result: ChildResult, id: ArtifactId)
@@ -379,12 +379,12 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
         scope = owner
         collector = scope.copy(actor = scope.actor.copy(subject = "host", role = Role.Collector))
         _ <- ledger.initialize(scope, "D80 continuation")
-        created <- ledger.change(scope, ChangeRequest(RequestId(uuid), List(Mutation.Create(task)), Nil, "Single task candidate"))
-        producer = created.items.head
+        members <- MilestoneFixture.assigned(ledger, scope, List(task))
+        producer = members.head
         claim <- ledger.acquire(scope, ClaimId(uuid), Set(producer.id), 300000)
         governing <- usage.assign(collector, Assignment(AssignmentId(uuid), scope.project, Set.empty, Attribution.Unattributed, None, None))
         parent <- usage.start(collector, Attempt(AttemptId(uuid), governing.id, None, scope.actor.session, Role.Governor, Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Govern))
-        fixture = Assessed(scope, created.items, ArtifactId(uuid), Nil, GitCommit("a" * 40), collector, parent.id, claim.fence)
+        fixture = Assessed(scope, members, ArtifactId(uuid), Nil, GitCommit("a" * 40), collector, parent.id, claim.fence)
         worker <- publish(fixture, DispatchWork.Worker(WorkerMode.Implement), ChildReport.Work(fixture.members.map(ref =>
           WorkMember(ref.id, WorkDisposition.CandidateReady, "Candidate", Nil))), None, Nil, ledger, usage, artifacts, admissions)
         reads = new EvidenceApi(api(ledger, fixture.scope, runtime), artifacts, admissions, fixture.scope, runtime)
@@ -394,7 +394,7 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
         original <- ledger.get(fixture.scope, producer.id)
         research = ItemDraft("Reproduction evidence", "Observed the failure, then the pass", Set.empty, false,
           Content.Research(ResearchStatus.Open, "Does the candidate hold?", Nil, None, None), Nil)
-        _ <- ledger.change(fixture.scope, ChangeRequest(RequestId(uuid), List(Mutation.Produce(producer.id, producer.revision, List(research))),
+        _ <- ledger.change(fixture.scope, ChangeRequest(RequestId(uuid), List(Mutation.Produce(producer.id, producer.revision, List(research), None)),
           List(fixture.fence), "Record evidence under the task"))
         revised <- ledger.get(fixture.scope, producer.id)
         _ <- assertIO(revised.item.revision == Revision(producer.revision.value + 1) && revised.item.draft == original.item.draft &&
@@ -457,6 +457,31 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
         choices = result.evidence.decision.choices
         _ <- assertIO(choices.map(_.members.toSet).toSet == fixture.members.grouped(2).map(_.toSet).toSet &&
           choices.forall(choice => choice.work == input.work && choice.previous.isEmpty && choice.artifacts == List(fixture.artifact)))
+      } yield ()
+    }
+
+    "exclude a task without a milestone from implementation and offer it once assigned" in { (ledger: LedgerService[IO]) =>
+      val scope = owner
+      def offered(plan: CohortPlan): Set[ItemId] = plan.evidence.decision.choices.flatMap(_.members.map(_.id)).toSet
+      for {
+        runtime <- ZIO.runtime[Any]
+        _ <- ledger.initialize(scope, "Milestone admission")
+        created <- ledger.change(scope, ChangeRequest(RequestId(uuid), List(Mutation.Create(milestone), Mutation.Create(task), Mutation.Create(task)), Nil, "Milestone and tasks"))
+        target = created.items.head.id
+        assigned = created.items(1).id
+        unassigned = created.items(2).id
+        _ <- link(ledger, scope, assigned, Relation.PartOf, target)
+        planner = new CohortPlanner(api(ledger, scope, runtime), scope, fixed(GitCommit("a" * 40)), Nil, new CohortProgress, new OperatorRequirements(""))
+        input = request(Set(assigned, unassigned), DispatchWork.Worker(WorkerMode.Implement))
+        selected <- ZIO.attemptBlocking(planner.plan(input, ArtifactId(uuid)))
+        _ <- assertIO(offered(selected) == Set(assigned) && selected.evidence.decision.counts.excluded == 1 &&
+          selected.evidence.considered.filter(_.reason == CohortReason.NoMilestone).map(_.members.map(_.id)) == List(List(unassigned)))
+        others <- ZIO.foreach(List[DispatchWork](DispatchWork.Explorer(ExplorerMode.Investigate), DispatchWork.Planner(), DispatchWork.Worker(WorkerMode.Probe)))(work =>
+          ZIO.attemptBlocking(planner.plan(input.copy(request = RequestId(uuid), work = work), ArtifactId(uuid))))
+        _ <- assertIO(others.forall(plan => offered(plan) == Set(assigned, unassigned) && plan.evidence.decision.counts.excluded == 0))
+        _ <- link(ledger, scope, unassigned, Relation.PartOf, target)
+        organised <- ZIO.attemptBlocking(planner.plan(input.copy(request = RequestId(uuid)), ArtifactId(uuid)))
+        _ <- assertIO(offered(organised) == Set(assigned, unassigned) && !organised.evidence.considered.exists(_.reason == CohortReason.NoMilestone))
       } yield ()
     }
 
@@ -628,10 +653,11 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
         runtime <- ZIO.runtime[Any]
         _ <- ledger.initialize(scope, "D74 cross goal")
         created <- ledger.change(scope, ChangeRequest(RequestId(uuid), List(Mutation.Create(goal), Mutation.Create(goal), Mutation.Create(task),
-          Mutation.Create(task)), Nil, "Two goals"))
+          Mutation.Create(task), Mutation.Create(milestone)), Nil, "Two goals"))
         ids = created.items.map(_.id)
         _ <- link(ledger, scope, ids.head, Relation.Produces, ids(2))
         _ <- link(ledger, scope, ids(1), Relation.Produces, ids(3))
+        _ <- ZIO.foreachDiscard(List(ids(2), ids(3)))(id => link(ledger, scope, id, Relation.PartOf, ids(4)))
         planner = new CohortPlanner(api(ledger, scope, runtime), scope, fixed(GitCommit("a" * 40)), Nil, new CohortProgress, new OperatorRequirements(""))
         input = request(ids.take(2).toSet, DispatchWork.Planner())
         selected <- ZIO.attemptBlocking(planner.plan(input, ArtifactId(uuid)))
@@ -656,6 +682,8 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
         ids = created.items.map(_.id)
         _ <- link(ledger, scope, ids.head, Relation.Produces, ids(1))
         _ <- link(ledger, scope, ids.head, Relation.Produces, ids(2))
+        organising <- ledger.change(scope, ChangeRequest(RequestId(uuid), List(Mutation.Create(milestone)), Nil, "Milestone outside the roots"))
+        _ <- ZIO.foreachDiscard(ids.tail)(id => link(ledger, scope, id, Relation.PartOf, organising.items.head.id))
         _ <- link(ledger, scope, ids(2), Relation.BlockedBy, ids(1))
         planner = new CohortPlanner(api(ledger, scope, runtime), scope, fixed(GitCommit("a" * 40)), Nil, new CohortProgress, new OperatorRequirements(""))
         input = request(ids.tail.toSet, DispatchWork.Planner())

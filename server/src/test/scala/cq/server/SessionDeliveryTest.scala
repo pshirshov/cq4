@@ -221,9 +221,9 @@ abstract class SessionDeliveryTest extends SpecZIO with AssertZIO {
             for {
               runtime <- ZIO.runtime[Any]
               _ <- ledger.initialize(owner, "Sealed recovery")
-              ack <- ledger.change(owner, ChangeRequest(RequestId(uuid), List(Mutation.Create(ItemDraft("Task", "Body", Set.empty, false,
-                Content.Task(TaskStatus.Ready, List("Outcome"), None, Nil), Nil))), Nil, "Fixture"))
-              member = ack.items.head
+              members <- MilestoneFixture.assigned(ledger, owner, List(ItemDraft("Task", "Body", Set.empty, false,
+                Content.Task(TaskStatus.Ready, List("Outcome"), None, Nil), Nil)))
+              member = members.head
               claim <- ledger.acquire(owner, ClaimId(uuid), Set(member.id), 300000)
               assignment <- usage.assign(collector, Assignment(AssignmentId(uuid), owner.project, Set.empty, Attribution.Unattributed, None, None))
               governor <- usage.start(collector, Attempt(AttemptId(uuid), assignment.id, None, owner.actor.session, Role.Governor,
@@ -330,8 +330,8 @@ abstract class SessionDeliveryTest extends SpecZIO with AssertZIO {
           for {
             runtime <- ZIO.runtime[Any]
             _ <- ledger.initialize(owner, "Recovery consumer")
-            ack <- ledger.change(owner, ChangeRequest(RequestId(uuid), List(Mutation.Create(draft)), Nil, "Fixture"))
-            member = ack.items.head
+            members <- MilestoneFixture.assigned(ledger, owner, List(draft))
+            member = members.head
             fence <- ledger.acquire(owner, ClaimId(uuid), Set(member.id), 60000)
             directory <- ZIO.attemptBlocking(Files.createTempDirectory("cq-session-recovery-"))
             journal <- ZIO.acquireRelease(ZIO.attemptBlocking(FileJobRepository.open(directory.resolve("journal"), owner.project, owner.actor.session)))(v => ZIO.attemptBlocking(v.close()).orDie)

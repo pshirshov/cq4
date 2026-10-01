@@ -2,8 +2,8 @@ package cq.server
 
 import cq.api.*
 import cq.core.LedgerPolicy
-import cq.host.{HttpServerApi, WorkflowAssets}
-import java.io.PrintStream
+import cq.host.{DriverAssets, DriverEntry, DriverHook, HttpServerApi, WorkflowAssets}
+import java.io.{InputStream, PrintStream}
 import java.net.URI
 import java.nio.channels.FileChannel
 import java.nio.file.{Files, Path, StandardCopyOption, StandardOpenOption}
@@ -12,7 +12,7 @@ import java.util.UUID
 import scala.util.Using
 import zio.{Task, ZIO}
 
-final case class CliContext(environment: Map[String, String], directory: Path, output: PrintStream)
+final case class CliContext(environment: Map[String, String], directory: Path, output: PrintStream, input: InputStream)
 
 final class Cli(context: CliContext, location: ProjectLocation, upload: SessionUpload, workflows: WorkflowAssets, attached: AttachedAssets) {
   private val environment = context.environment
@@ -97,15 +97,26 @@ final class Cli(context: CliContext, location: ProjectLocation, upload: SessionU
       val path = directory.resolve(file).normalize()
       renderer.archive(client.restore(path), "Restored", path)
     case "configure" :: harness :: rest =>
-      val replace = rest.lastOption.contains("--replace")
-      val opts = options(if (replace) rest.dropRight(1) else rest, Set("--settings", "--executable", "--directory"))
+      val flags = rest.reverse.takeWhile(Set("--replace", DriverAssets.StatusLineFlag))
+      require(flags.distinct.size == flags.size, "Repeated option")
+      val replace = flags.contains("--replace")
+      val opts = options(rest.dropRight(flags.size), Set("--settings", "--executable", "--directory"))
       val settings = opts.get("--settings").orElse(environment.get("CQ_SETTINGS"))
         .getOrElse(throw new IllegalArgumentException("configure requires --settings FILE or CQ_SETTINGS"))
       val native = Harness.all.find(_.toString.toLowerCase == harness).getOrElse(throw new IllegalArgumentException("Unknown attached harness"))
       val executable = opts.get("--executable").getOrElse(ProcessHandle.current().info().command().orElseThrow())
       require(Path.of(executable).getFileName.toString != "java", "JVM configure requires --executable pointing to an installed CQ binary or exec wrapper")
       renderer.paths(attached.write(native, opts.get("--directory").fold(directory)(value => directory.resolve(value).normalize()),
-        directory.resolve(settings).normalize(), directory.resolve(executable).normalize(), replace))
+        directory.resolve(settings).normalize(), directory.resolve(executable).normalize(), replace, flags.contains(DriverAssets.StatusLineFlag)))
+    // The CQ hook entry point of Claude Code and Codex. It always exits 0 so that a CQ error never blocks the harness; the error is in the output.
+    case List("hook", harness, event) =>
+      val hook = new DriverHook(() => {
+        val location = configDirectory
+        val (config, actorSession) = locked(location)((configuration(location), session(location)))
+        new DriverEntry(new HttpServerApi(URI.create(validateEndpoint(config.endpoint)), cq.host.HostCredential.read(environment), actorSession, RequestTimeout), config.project)
+      })
+      output.print(hook.run(harness, event, context.input.readNBytes(DriverHook.MaxInputBytes + 1)))
+      output.flush()
     case "commands" :: "export" :: harness :: rest =>
       val replace = rest.lastOption.contains("--replace")
       val opts = options(if (replace) rest.dropRight(1) else rest, Set("--directory"))

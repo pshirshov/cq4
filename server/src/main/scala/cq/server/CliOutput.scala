@@ -18,7 +18,7 @@ object CliArguments {
       case "--json" :: tail =>
         require(format != CliFormat.Json, "Repeated --json option")
         format = CliFormat.Json; remaining = tail
-      case option :: value :: tail if option.startsWith("--") && option != "--replace" =>
+      case option :: value :: tail if option.startsWith("--") && option != "--replace" && option != cq.host.DriverAssets.StatusLineFlag =>
         values += option; values += value; remaining = tail
       case head :: tail => values += head; remaining = tail
       case Nil => ()
@@ -176,7 +176,12 @@ final class CliOutput(output: PrintStream, format: CliFormat, invocation: List[S
         val changed = List("body" -> fields.body, "labels" -> fields.labels, "content" -> fields.content, "citations" -> fields.citations,
           "evidence" -> fields.evidence, "provenance" -> fields.provenance, "operator confirmation" -> fields.operatorConfirmation).collect { case (name, true) => name }
         line("  Changed: " + changed.mkString(", "))
-      case ProposalOperationSummary.Produce(producer, drafts) => drafts.foreach(value => line(s"Produce from ${id(producer)}: ${draft(value)}"))
+      case ProposalOperationSummary.Produce(producer, drafts, milestone) =>
+        val assigned = milestone.fold("") {
+          case MilestoneRef.Existing(value) => s" · milestone ${id(value)}"
+          case MilestoneRef.Created(mutation) => s" · milestone created by operation $mutation"
+        }
+        drafts.foreach(value => line(s"Produce from ${id(producer)}: ${draft(value)}" + (if (value.ledger == Ledger.Tasks) assigned else "")))
       case ProposalOperationSummary.Reference(source, relation, target, present) => line(s"${if (present) "Add" else "Remove"} ${id(source)} $relation ${id(target)}")
     }
     if (value.detailsOmitted) line("This preview summarizes changed fields; inspect the stored result for complete content.")

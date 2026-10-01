@@ -50,7 +50,17 @@ final class HarnessAdapterLocal extends AnyWordSpec {
         assert(system.startsWith(original.system + "\n"))
         assert(io.circe.parser.parse(system.linesIterator.toList.last) == Right(original.resultSchema))
         assert(prepared.copy(system = original.system) == original)
-        assert(system.getBytes(java.nio.charset.StandardCharsets.UTF_8).length <= 32768)
+        assert(system.getBytes(java.nio.charset.StandardCharsets.UTF_8).length <= HarnessInvocation.MaxSystemBytes)
+      }
+    }
+
+    "keep the Governor's complete native instructions within the launch bound on every harness" in {
+      val schemas = new McpSchemas()
+      val governor = invocation(Role.Governor, Path.of("/test/assets")).copy(
+        system = SupervisorProgram.Instructions, resultSchema = schemas.schema("GoverningReport"))
+      adapters.foreach { adapter =>
+        val prepared = schemas.nativeInvocation(adapter.harness, governor)
+        assert(prepared.system.startsWith(governor.system) && adapter.launch(profile(adapter.harness), prepared, environment).arguments.nonEmpty)
       }
     }
 

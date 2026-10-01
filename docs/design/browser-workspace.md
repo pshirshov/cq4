@@ -49,6 +49,8 @@ A guarded control is an ordinary button containing a progress indicator labelled
 
 Browser checks press these controls through `dev/hold.mjs`; `dev/hold-browser.mjs` verifies the interaction itself.
 
+A Question's item view marks the recommended alternative inside its alternatives list with a "Recommended" badge and the reason; a Question without a recommendation shows no badge. The question batch dialog labels that row's Pick control `Pick recommended alternative: <text>`. Every alternative remains pickable and the free-text answer is unchanged.
+
 ## Usage and synchronization
 
 Usage has its own project cursor. Item change events cannot establish that usage is current, and usage updates must not create item events. Use bounded cursor invalidation for the subscribed project and fetch only the currently displayed usage scope. Reconnect refreshes both snapshots. Guard all usage responses against project/scope/request changes; an obsolete reply cannot change a caption or cursor.
@@ -56,6 +58,8 @@ Usage has its own project cursor. Item change events cannot establish that usage
 Extend the generated WebSocket protocol with a project usage watch and a notification containing its subscription identity, project and usage cursor. Keep this watch independent of query validity and item pagination. Each connection owns at most one usage watch, replacing it on project change; teardown releases it. The existing server poll loop reads the indexed project usage clock through an authorized application/service boundary, sends an initial cursor and then only changed cursors. It does not compute summaries or scan observations on each tick. Scope/credential failures stop the watch with an explicit typed error. The browser coalesces notifications while one scoped summary request is in flight, compares the returned cursor with the latest notification and fetches again if needed. Display the last successful observation time and stale/loading state. Verify the generated frames, authorization, bounded read, reconnect and upload/outcome-correction behavior; no role MCP operation or harness dispatch contract needs to change.
 
 Keep the accounting interpretation from [usage-audit.md](usage-audit.md): direct, shared and unattributed totals are distinct; shared runs are counted once; missing counters, estimates and actual billing remain distinct. Drill-down identifies frozen execution membership, attempt outcomes, correction history and optional raw evidence. Discover session/cohort links from recorded attempts rather than requiring users to invent identifiers.
+
+The usage view also shows a per-phase table for the displayed scope. Each summary refresh reads the `Phases` selection with the same filter after the summary; a phase cursor later than the summary cursor triggers another read of both. The table has one row per phase present in the report: attempts, running attempts, busy wall time, known tokens, unknown and estimated measurements, unknown costs and cost. Busy wall time is truncated to whole seconds (`45 s`, `3 min 20 s`) and to whole minutes from one hour on (`1 h 02 min`); the title holds the exact milliseconds. Cost amounts are added exactly per currency and basis, across attribution and pricing version, and shown with four fractional digits and the exact sum as title. When the report's cost groups are truncated, a note states that the amounts are lower bounds. An empty report shows no table.
 
 ## Connection behavior
 

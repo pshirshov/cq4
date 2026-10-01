@@ -15,7 +15,8 @@ class ProcessEvidenceCheck(unittest.TestCase):
         items = [{"id": {"project": {"value": "project"}, "ledger": ledger, "number": "1"}, "revision": {"value": "1"},
                   "draft": {"content": {kind: content}}} for ledger, kind, content in [
                     ("Ideas", "Idea", {}), ("Goals", "Goal", {}),
-                    ("Questions", "Question", {"status": "Open", "answer": None, "alternatives": ["Python", "Go"], "prompt": "Which language?"})]]
+                    ("Questions", "Question", {"status": "Open", "answer": None, "alternatives": ["Python", "Go"], "prompt": "Which language?",
+                                                 "recommendation": {"alternative": 0, "reason": "The specification's examples are in Python"}})]]
         views = [{"item": item, "refs": [] if index == 0 else [{"relation": "DerivedFrom", "target": items[index - 1]["id"]}]} for index, item in enumerate(items)]
         return copy.deepcopy({"views": views, "histories": [{"id": view["item"]["id"], "page": {"hasMore": False, "entries": [{"item": copy.deepcopy(view)}]}} for view in views],
                 "tickets": [], "receipt": {"processSucceeded": True, "usageDelivered": True, "report": {"summary": "Q1: Python or Go?"}},
@@ -212,6 +213,8 @@ class ProcessEvidenceCheck(unittest.TestCase):
             "missing derivation": lambda f: f["views"][1].update(refs=[]),
             "milestone ownership": lambda f: f["views"][0]["refs"].append({"relation": "PartOf", "target": {"ledger": "Milestones"}}),
             "invented answer": lambda f: f["views"][2]["item"]["draft"]["content"]["Question"].update(answer="Python"),
+            "no recommendation": lambda f: [view["item"]["draft"]["content"]["Question"].update(recommendation=None)
+                                            for view in [f["views"][2], f["histories"][2]["page"]["entries"][0]["item"]]],
             "hidden choice": lambda f: f["receipt"]["report"].update(summary="Waiting"),
             "early implementation": lambda f: f["tickets"].append({"request": {"work": {"Worker": {"mode": "Implement"}}}}),
             "lost history": lambda f: f["histories"][0]["page"].update(entries=[]),

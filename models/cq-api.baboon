@@ -64,6 +64,7 @@ root adt Citation {
 }
 root data Evidence { description: str origin: EvidenceOrigin citations: lst[Citation] }
 root data ReviewedItem { item: ItemId revision: Revision }
+root data QuestionRecommendation { alternative: i32 reason: str }
 root adt Content {
   data Milestone { status: MilestoneStatus objective: str }
   data Idea { status: IdeaStatus outcome: str motivation: str }
@@ -72,7 +73,7 @@ root adt Content {
   data Task { status: TaskStatus acceptance: lst[str] result: opt[str] validation: lst[Evidence] }
   data Research { status: ResearchStatus question: str findings: lst[Evidence] conclusion: opt[str] recommendation: opt[str] }
   data Hypothesis { status: HypothesisStatus claim: str rationale: str evidence: lst[Evidence] adjudication: opt[str] }
-  data Question { status: QuestionStatus prompt: str context: str alternatives: lst[str] answer: opt[str] }
+  data Question { status: QuestionStatus prompt: str context: str alternatives: lst[str] recommendation: opt[QuestionRecommendation] answer: opt[str] }
   data Decision { status: DecisionStatus choice: str rationale: str alternatives: lst[str] }
   data Review { status: ReviewStatus subjects: lst[ReviewedItem] candidate: opt[Citation.Commit] findings: lst[Evidence] summary: opt[str] }
   data Handoff { status: HandoffStatus outcome: str remaining: lst[str] blockers: lst[str] }
@@ -131,9 +132,13 @@ root data TerminationSnapshot { cursor: ChangeCursor digest: str }
 root data TerminationPreview { plan: TerminationPlan snapshot: TerminationSnapshot }
 root data ArchiveRetention { item: ItemSummary open: lst[ItemId] }
 root data ArchivePlan { members: lst[ItemSummary] retained: lst[ArchiveRetention] scanned: i32 limited: bit cursor: ChangeCursor }
+root adt MilestoneRef {
+  data Existing { id: ItemId }
+  data Created { mutation: i32 }
+}
 root adt Mutation {
   data Archive { members: lst[ItemRevision] }
-  data Produce { producer: ItemId expected: Revision drafts: lst[ItemDraft] }
+  data Produce { producer: ItemId expected: Revision drafts: lst[ItemDraft] milestone: opt[MilestoneRef] }
   data Terminate { roots: set[ItemId] intent: TerminationIntent snapshot: TerminationSnapshot }
   data Create { draft: ItemDraft }
   data Replace { id: ItemId expected: Revision draft: ItemDraft }
@@ -633,7 +638,7 @@ root data EvidenceMember {
 root adt ProposedMutation {
   data Create { draft: ItemDraft }
   data Replace { id: ItemId draft: ItemDraft }
-  data Produce { producer: ItemId drafts: lst[ItemDraft] }
+  data Produce { producer: ItemId drafts: lst[ItemDraft] milestone: opt[MilestoneRef] }
   data Reference { source: ItemId relation: Relation target: ItemId present: bit }
 }
 root data LedgerProposal { mutations: lst[ProposedMutation] reason: str }
@@ -644,7 +649,7 @@ root data ProposalFieldChanges {
 root adt ProposalOperationSummary {
   data Create { draft: ProposalDraftSummary }
   data Replace { id: ItemId before: ProposalDraftSummary after: ProposalDraftSummary fields: ProposalFieldChanges }
-  data Produce { producer: ItemId drafts: lst[ProposalDraftSummary] }
+  data Produce { producer: ItemId drafts: lst[ProposalDraftSummary] milestone: opt[MilestoneRef] }
   data Reference { source: ItemId relation: Relation target: ItemId present: bit }
 }
 root data ProposalPreview {
@@ -776,7 +781,7 @@ root data CohortRequest {
 enum CohortReason {
   CommonProducer CompatibleAssessment AssessmentRequired UnknownAssessment IncompatibleAssessment
   NoCommonProducer ExactPrevious Single InputBound Claimed Deferred NotReady ReviewAccepted ReviewBlocked FreshFromBase CandidateContinuity
-  PlannerOrganisation
+  PlannerOrganisation NoMilestone
 }
 root data CohortChoice {
   id: RequestId work: DispatchWork members: lst[ItemRevision] guidance: lst[ItemRevision] artifacts: lst[ArtifactId]
