@@ -228,7 +228,7 @@ final class WorkspaceContractLocal extends WorkspaceContractTest {
       } yield ()
     }
 
-    "remove a worktree through the source repository, refuse one whose Git identity differs from its record, and prune only CQ-locked entries whose directory is gone" in { (local: LocalWorkspaceFixture) =>
+    "remove a worktree through the source repository, finish a removal that was cut, refuse one whose Git identity differs from its record, and prune only CQ-locked entries whose directory is gone" in { (local: LocalWorkspaceFixture) =>
       val owner = Scope(ProjectId(UUID.randomUUID()), Actor("governor", SessionId(UUID.randomUUID()), Role.Governor))
       val fixture = local.fixture
       val service = fixture.service
@@ -241,11 +241,17 @@ final class WorkspaceContractLocal extends WorkspaceContractTest {
         dirty <- service.prepare(owner, fixture.spec(owner))
         relocated <- service.prepare(owner, fixture.spec(owner))
         deleted <- service.prepare(owner, fixture.spec(owner))
+        partial <- service.prepare(owner, fixture.spec(owner))
+        unrecorded <- service.prepare(owner, fixture.spec(owner))
+        renamed <- service.prepare(owner, fixture.spec(owner))
+        stale <- service.prepare(owner, fixture.spec(owner))
+        cut = List(deleted, partial, unrecorded, renamed, stale)
         _ <- ZIO.attemptBlocking {
           Files.writeString(Path.of(dirty.directory).resolve("tracked.txt"), "uncommitted edit\n")
           Files.writeString(Path.of(dirty.directory).resolve("untracked.txt"), "scratch\n")
           local.git(local.source, "worktree", "add", "--detach", "--lock", "--reason", "operator lock", local.directory.resolve("manual").toString, fixture.base.value)
-          assert(listed.toSet == Set(local.source, Path.of(dirty.directory), Path.of(relocated.directory), Path.of(deleted.directory), local.directory.resolve("manual")).map(_.toRealPath().toString))
+          assert(listed.toSet == (List(local.source, Path.of(dirty.directory), Path.of(relocated.directory), local.directory.resolve("manual")) ++
+            cut.map(value => Path.of(value.directory))).map(_.toRealPath().toString).toSet)
         }
         removed <- service.remove(owner, dirty.spec.attempt)
         _ <- ZIO.attemptBlocking {
@@ -258,18 +264,34 @@ final class WorkspaceContractLocal extends WorkspaceContractTest {
         _ <- ZIO.attemptBlocking {
           assert(refused.admission == WorkspaceAdmission.Quarantined && refused.quarantineReason.exists(_.startsWith("Removal refused")) && refused.observed == relocated.observed)
           assert(Files.exists(Path.of(relocated.directory).resolve("tracked.txt")) && listed.contains(Path.of(relocated.directory).toRealPath().toString))
+          // A removal cut by the end of its host leaves no tree, a tree without its .git entry, or neither tree nor registration.
           deleteTree(Path.of(deleted.directory))
+          Files.delete(Path.of(partial.directory).resolve(".git"))
+          Files.delete(Path.of(partial.directory).resolve("tracked.txt"))
+          Files.writeString(Path.of(partial.directory).resolve("left-over.txt"), "left over\n")
+          local.git(local.source, "worktree", "remove", "--force", "--force", unrecorded.directory)
+          // A tree without its .git entry whose registration names another directory is not this record's worktree.
+          Files.delete(Path.of(renamed.directory).resolve(".git"))
+          Files.writeString(Path.of(renamed.observed.get.gitDirectory).resolve("gitdir"), local.directory.resolve("elsewhere/.git").toString + "\n")
+          deleteTree(Path.of(stale.directory))
           deleteTree(local.directory.resolve("manual"))
           assert(listed.contains(Path.of(deleted.directory).toString) && listed.contains(local.directory.resolve("manual").toString))
         }
-        unverifiable <- service.remove(owner, deleted.spec.attempt)
+        finished <- ZIO.foreach(List(deleted, partial, unrecorded))(value => service.remove(owner, value.spec.attempt))
+        foreign <- service.remove(owner, renamed.spec.attempt)
         pruned <- service.prune(owner, local.source.toString)
         repeated <- service.prune(owner, local.source.toString)
         stillRefused <- service.get(owner, relocated.spec.attempt)
         _ <- ZIO.attemptBlocking {
-          assert(unverifiable.admission == WorkspaceAdmission.Quarantined && unverifiable.quarantineReason.exists(_.startsWith("Removal refused")))
-          assert(pruned == 1 && repeated == 0, s"pruned $pruned then $repeated")
-          assert(!listed.contains(Path.of(deleted.directory).toString) && listed.contains(local.directory.resolve("manual").toString))
+          println(s"Cut removals: ${finished.map(value => (value.admission, value.quarantineReason))} foreign=${foreign.admission} ${foreign.quarantineReason}")
+          assert(finished.map(_.admission) == List.fill(3)(WorkspaceAdmission.Removed), finished.toString)
+          assert(List(deleted, partial, unrecorded).forall(value => !Files.exists(Path.of(value.directory)) && !listed.contains(value.directory) &&
+            !Files.exists(Path.of(value.observed.get.gitDirectory))))
+          assert(foreign.admission == WorkspaceAdmission.Quarantined && foreign.quarantineReason.exists(_.startsWith("Removal refused")) &&
+            Files.exists(Path.of(renamed.directory).resolve("tracked.txt")), foreign.toString)
+          // The stale registration and the one that now names a directory that does not exist are pruned; the operator's lock is not.
+          assert(pruned == 2 && repeated == 0, s"pruned $pruned then $repeated")
+          assert(!listed.contains(Path.of(stale.directory).toString) && listed.contains(local.directory.resolve("manual").toString))
           assert(listed.contains(Path.of(relocated.directory).toRealPath().toString) && stillRefused == refused)
         }
       } yield ()

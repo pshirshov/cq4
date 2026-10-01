@@ -15,7 +15,7 @@ final case class AttachedChannels(input: InputStream, output: OutputStream, owne
 final class AttachedProgram(config: SupervisorConfig, authority: SupervisorAuthority, gateway: AttachedGateway,
   dispatch: DispatchController, integrations: IntegrationController, combinations: CombinationController,
   watchdog: SupervisorWatchdog, channels: AttachedChannels, clock: Clock, local: LocalControlServer,
-  codex: AttachedCodexUsage, cleanup: WorkspaceCleanup, logger: IzLogger) {
+  codex: AttachedCodexUsage, cleanup: WorkspaceCleanup, release: SessionRelease, logger: IzLogger) {
   private val MaxRecordBytes = 65536
   private val RequestSeconds = 30L
   private val limits = PeerLimits(Duration.ofSeconds(30), Duration.ofSeconds(10), Duration.ofSeconds(30), Duration.ofSeconds(RequestSeconds), 2 * 1024 * 1024, 32)
@@ -50,7 +50,7 @@ final class AttachedProgram(config: SupervisorConfig, authority: SupervisorAutho
         queue.commit(List(HostDelivery.Usage(HostUsageInput(config.project.project, HostUsage.Finish(outcome)))))
         queue.flush(authority.collector)
         new SessionSpans(config, authority).flush()
-      }.unit).ensuring(ZIO.attemptBlocking(codex.close()).orDie)
+      }.unit *> release.finish).ensuring(ZIO.attemptBlocking(codex.close()).orDie)
   private def loop(peer: StdioPeer): Task[Unit] = ZIO.attemptBlocking(peer.receive()).flatMap {
     case None => ZIO.unit
     case Some(request) => (ZIO.attempt(peer.beginOperation()) *> gateway.handle(peer, request))

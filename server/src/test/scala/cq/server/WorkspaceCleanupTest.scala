@@ -53,7 +53,7 @@ final class WorkspaceCleanupLocal extends SpecZIO with AssertZIO {
         "unobserved-interactive-provider", "unobserved-interactive-model", "fixture", 1000, UsagePhase.Govern)
       SupervisorRun(owner, assignment, attempt, profile.version, repository, local.base, SessionOwnership.Attached)
     }
-    private def settings(run: SupervisorRun): SupervisorConfig = SupervisorConfig(
+    def settings(run: SupervisorRun): SupervisorConfig = SupervisorConfig(
       SupervisorSettings(root.toString, "/unused/guardian", List(profile), limits, Nil, None, None), run.project, SupervisorConfig.profile(profile),
       SupervisorConfig.limits(limits), run, root.resolve(run.attempt.session.value.toString), "", None, sys.env)
     /** The startup recovery of a new session of this project; its receipt is read back from that session's directory. */
@@ -204,6 +204,31 @@ final class WorkspaceCleanupLocal extends SpecZIO with AssertZIO {
           assert(marked.exists(_.outcome == RecoveryOutcome.Recovered) && second.live.isEmpty && second.sessions.isEmpty && state.grants.get() == 0, s"$marked $second")
         }
       } yield ()
+    }
+
+    "remove a running session's workspace at once, also inside a finalizer, and postpone removals to the end of the finish sequence once the session stops" in { (local: LocalWorkspaceFixture) =>
+      val state = new State(local)
+      val run = state.run(state.project, local.source.toString)
+      val owner = Scope(run.project.project, Actor("CQ governor", run.attempt.session, Role.Governor))
+      val specs = List.fill(3)(WorkspaceSpec(run.project.project, run.attempt.session, AttemptId(uuid), run.repository, local.base))
+      val halted = new AtomicInteger(0)
+      ZIO.acquireReleaseWith(ZIO.succeed(new SupervisorWatchdog(state.settings(run), () => System.nanoTime(), _ => { halted.incrementAndGet(); () })))(
+        watchdog => ZIO.succeed(watchdog.close())) { watchdog =>
+        val release = new SessionRelease(local.fixture.service, watchdog)
+        for {
+          _ <- ZIO.foreachDiscard(specs)(release.prepare(owner, _))
+          direct <- release.remove(owner, specs(0).attempt).timeoutFail(new IllegalStateException("Removal did not return"))(zio.Duration.fromSeconds(30))
+          // Owners release a check's workspace from a finalizer, where nothing can be interrupted.
+          finalized <- ZIO.unit.ensuring(release.remove(owner, specs(1).attempt).orDie).disconnect
+            .timeoutFail(new IllegalStateException("Removal inside a finalizer did not return"))(zio.Duration.fromSeconds(30)) *> release.get(owner, specs(1).attempt)
+          _ <- ZIO.succeed(watchdog.beginShutdown())
+          postponed <- release.remove(owner, specs(2).attempt)
+          _ <- release.finish.uninterruptible
+          finished <- release.get(owner, specs(2).attempt)
+          _ <- ZIO.attempt(assert(List(direct, finalized, postponed, finished).map(_.admission) ==
+            List(WorkspaceAdmission.Removed, WorkspaceAdmission.Removed, WorkspaceAdmission.Open, WorkspaceAdmission.Removed) && halted.get() == 0))
+        } yield ()
+      }
     }
 
     "abandon a session whose run record cannot be decoded once, and leave one whose owner still runs" in { (local: LocalWorkspaceFixture) =>

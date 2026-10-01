@@ -8,7 +8,7 @@ trait WorkspaceRepository[F[_, _]] {
   def prepare(spec: WorkspaceSpec): F[Throwable, WorkspaceRecord]
   def get(attempt: AttemptId): F[Throwable, Option[WorkspaceRecord]]
   def quarantine(attempt: AttemptId, reason: String): F[Throwable, WorkspaceRecord]
-  /** Removes an open workspace whose Git identity still matches its record; a mismatch quarantines the record instead. */
+  /** Removes an open workspace whose Git identity still matches its record, finishing a removal that was cut; a mismatch quarantines the record instead. */
   def remove(attempt: AttemptId): F[Throwable, WorkspaceRecord]
   /** Drops the source repository's worktree registrations whose directories no longer exist; returns how many. */
   def prune(repository: String): F[Throwable, Int]

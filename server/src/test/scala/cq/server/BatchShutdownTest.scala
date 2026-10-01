@@ -61,5 +61,62 @@ final class BatchShutdownProcess extends SpecZIO with AssertZIO {
         }
       } yield ()
     }
+
+    "write the receipt and deliver the Finish usage before a workspace removal that outlasts the drain, and leave that removal to the next startup" in { (local: LocalWorkspaceFixture, guardian: GuardianFixture) =>
+      val project = ProjectId(UUID.randomUUID())
+      def scope: Scope = Scope(project, Actor("CQ governor", SessionId(UUID.randomUUID()), Role.Governor))
+      val (first, next) = (scope, scope)
+      def prepare(owner: Scope): Path = {
+        val at = Files.createTempDirectory(local.directory, "batch-")
+        Files.writeString(at.resolve("workspace.json"), WorkspaceSpec_JsonCodec.encode(BaboonCodecContext.Default, local.fixture.spec(owner)).noSpaces)
+        at
+      }
+      def started(session: Path): Boolean = Files.isDirectory(session.resolve("workspaces")) && Files.exists(session.resolve("workspaces").resolve("cleanup.json")) &&
+        Using.resource(Files.list(session.resolve("workspaces")))(_.iterator().asScala.exists(entry => Files.exists(entry.resolve("tree").resolve("running"))))
+      for {
+        prepared <- ZIO.attemptBlocking {
+          val state = Files.createTempDirectory(local.directory, "state-")
+          // Removing a worktree takes longer than the fixture's drain (grace 100 ms + kill 1 s + 10 s) and then fails.
+          val shims = Files.createDirectory(local.directory.resolve("slow-git"))
+          val real = sys.env("PATH").split(":").toList.map(Path.of(_).resolve("git")).find(Files.isExecutable(_)).get
+          val shim = Files.writeString(shims.resolve("git"), s"#!/bin/sh\ncase \" $$* \" in *' worktree remove '*) sleep 30; exit 1;; esac\nexec '$real' \"$$@\"\n")
+          assert(shim.toFile.setExecutable(true))
+          (state, shims)
+        }
+        (state, shims) = prepared
+        session = state.resolve(first.actor.session.value.toString)
+        governor <- ZIO.attemptBlocking {
+          val at = prepare(first)
+          val process = ShutdownFixture.launch(at, ShutdownFixture.BatchFixtureRole, guardian.binary, Map("PATH" -> s"$shims:${sys.env("PATH")}"),
+            Map(ShutdownFixture.StateProperty -> state.toString))
+          try {
+            ShutdownFixture.awaitUntil(process, at, Duration.ofSeconds(60))(started(session))
+            assert(new ProcessBuilder("kill", "-INT", process.pid().toString).inheritIO().start().waitFor() == 0)
+            assert(process.waitFor(60, TimeUnit.SECONDS), "Batch supervisor did not exit after SIGINT")
+            val log = Files.readString(at.resolve("owner.log"))
+            println(s"Slow removal: exit=${process.exitValue()} receipt=${Files.exists(session.resolve("receipt.json"))}")
+            assert(Files.exists(session.resolve("receipt.json")), s"exit ${process.exitValue()} without a receipt\n$log")
+            val receipt = HostFiles.read(session.resolve("receipt.json"), SupervisorReceipt_JsonCodec, 65536)
+            assert(receipt.phase == JobPhase.Settled && receipt.usageDelivered && process.exitValue() == SigintExit, s"exit ${process.exitValue()} $receipt\n$log")
+            AttemptId(UUID.fromString(Files.readString(at.resolve("governor-attempt")).trim))
+          } finally if (process.isAlive) process.destroyForcibly()
+        }
+        service = new WorkspaceService.Impl[IO](new GitWorkspaceRepository(session.resolve("workspaces"), local.command, Clock.systemUTC()))
+        left <- service.get(first, governor)
+        _ <- ZIO.attempt(assert(left.admission == WorkspaceAdmission.Open && !Files.exists(session.resolve("recovery.json")), left.toString))
+        _ <- ZIO.attemptBlocking {
+          val at = prepare(next)
+          val following = state.resolve(next.actor.session.value.toString)
+          val process = ShutdownFixture.launch(at, ShutdownFixture.BatchFixtureRole, guardian.binary, Map.empty, Map(ShutdownFixture.StateProperty -> state.toString))
+          try ShutdownFixture.awaitUntil(process, at, Duration.ofSeconds(60))(started(following))
+          finally { process.destroyForcibly(); process.waitFor(10, TimeUnit.SECONDS) }
+          val cleanup = HostFiles.read(following.resolve("workspaces").resolve("cleanup.json"), WorkspaceCleanupReceipt_JsonCodec, 65536)
+          assert(cleanup.sessions == List(SessionCleanup(first.actor.session, List(governor), Nil, Nil, 0, None)) && cleanup.totals.recovered == 1, cleanup.toString)
+          assert(HostFiles.read(session.resolve("recovery.json"), SessionRecovery_JsonCodec, 65536).outcome == RecoveryOutcome.Recovered)
+        }
+        removed <- service.get(first, governor)
+        _ <- ZIO.attempt(assert(removed.admission == WorkspaceAdmission.Removed && !Files.exists(Path.of(removed.directory)), removed.toString))
+      } yield ()
+    }
   }
 }

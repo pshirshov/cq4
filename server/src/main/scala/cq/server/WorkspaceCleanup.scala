@@ -22,6 +22,33 @@ final class SessionWorkspaces(config: SupervisorConfig, clock: Clock) {
     new BoundedHostCommand(GitEnvironment.isolated(config.environment), Duration.ofMinutes(5), 65536), clock))
 }
 
+/**
+ * The running session's workspaces. Removing a worktree can take longer than the watchdog's drain, so nothing on the finish path waits
+ * for one: once the session is stopping a removal is postponed until the receipt and the final delivery are done (`finish`), and one
+ * already running is no longer awaited. What `finish` does not complete stays `Open` and is removed by the next host startup.
+ */
+final class SessionRelease(delegate: WorkspaceService[IO], watchdog: SupervisorWatchdog) extends WorkspaceService[IO] {
+  private val PollMillis = 20L
+  /** Left of the drain for the receipt to reach its reader and the host to exit in order. */
+  private val ExitMargin = Duration.ofSeconds(2)
+  private var postponed = List.empty[(Scope, AttemptId)]
+  override def prepare(scope: Scope, spec: WorkspaceSpec): IO[Throwable, WorkspaceRecord] = delegate.prepare(scope, spec)
+  override def get(scope: Scope, attempt: AttemptId): IO[Throwable, WorkspaceRecord] = delegate.get(scope, attempt)
+  override def quarantine(scope: Scope, attempt: AttemptId, reason: String): IO[Throwable, WorkspaceRecord] = delegate.quarantine(scope, attempt, reason)
+  override def prune(scope: Scope, repository: String): IO[Throwable, Int] = delegate.prune(scope, repository)
+  /** Owners release from finalizers, where nothing can be interrupted: a removal runs on its own fiber and is observed, not raced. */
+  private def observed[A](removal: IO[Throwable, A], abandon: () => Boolean): IO[Throwable, Option[A]] = removal.forkDaemon.flatMap { fiber =>
+    (fiber.poll <* ZIO.sleep(zio.Duration.fromMillis(PollMillis))).repeatUntil(exit => exit.nonEmpty || abandon()).flatMap(ZIO.foreach(_)(ZIO.done(_)))
+  }
+  override def remove(scope: Scope, attempt: AttemptId): IO[Throwable, WorkspaceRecord] = ZIO.suspendSucceed {
+    if (watchdog.stopping) ZIO.succeed(synchronized { postponed = postponed :+ (scope, attempt) }) *> delegate.get(scope, attempt)
+    else observed(delegate.remove(scope, attempt), () => watchdog.stopping).flatMap(ZIO.fromOption(_).orElse(delegate.get(scope, attempt)))
+  }
+  /** Run by the finish sequence after the receipt and the final delivery, within what is left of the drain. */
+  def finish: UIO[Unit] = observed(ZIO.foreachDiscard(synchronized(postponed))((scope, attempt) => delegate.remove(scope, attempt).ignore),
+    () => watchdog.remaining.compareTo(ExitMargin) <= 0).ignore
+}
+
 /** Collector authority for another session of this host's project, obtained as `cq job upload` obtains it. */
 trait SessionCollectors {
   def collector(run: SupervisorRun): ServerApi
