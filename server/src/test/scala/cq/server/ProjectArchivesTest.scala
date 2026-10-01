@@ -17,7 +17,7 @@ import zio.{IO, ZIO}
 final class ProjectArchivesPostgres extends SpecZIO with AssertZIO {
   override def config = super.config.copy(
     pluginConfig = PluginConfig.const(List(CqPlugin)),
-    memoizationRoots = Set(DIKey[LedgerRepository[IO]], DIKey[LedgerService[IO]]),
+    memoizationRoots = Set(DIKey[LedgerRepository[IO]], DIKey[LedgerService[IO]], DIKey[UsageService[IO]]),
     activation = Activation(Repo -> Repo.Prod),
   )
   private def request(mutations: List[Mutation]): ChangeRequest = ChangeRequest(RequestId(UUID.randomUUID()), mutations, Nil, "Archive scenario")
@@ -55,6 +55,39 @@ final class ProjectArchivesPostgres extends SpecZIO with AssertZIO {
         _ <- assertIO(restored.map(_.project) == Right(owner.project))
         item <- new PostgresLedgerRepository(target).transact(owner.project)(tx => tx.get(decision.id))
         _ <- assertIO(item.exists(value => value.draft.archived && value.draft.content == adopted.content))
+      } yield ()
+    }
+
+    "round-trip host spans with the assignment they belong to" in {
+      (service: LedgerService[IO], usage: UsageService[IO], config: DatabaseConfig, archives: ProjectArchives) =>
+      val owner = Scope(ProjectId(UUID.randomUUID()), Actor("operator", SessionId(UUID.randomUUID()), Role.Governor))
+      val host = owner.copy(actor = owner.actor.copy(role = Role.Collector))
+      val task = ItemDraft("Checked task", "", Set.empty, false, Content.Task(TaskStatus.Ready, List("Observable result"), None, Nil), Nil)
+      val schema = "cq_restore_" + UUID.randomUUID().toString.replace("-", "")
+      val separator = if (config.url.contains("?")) "&" else "?"
+      val target = new LedgerDatabase(config.copy(url = config.url + separator + "currentSchema=" + schema))
+      val filter = UsageFilter.ProjectAll()
+      for {
+        _ <- service.initialize(owner, "archived spans")
+        created <- service.change(owner, request(List(Mutation.Create(task))))
+        assignment = Assignment(AssignmentId(UUID.randomUUID()), owner.project, Set(created.items.head.id), Attribution.Direct, None, None)
+        _ <- usage.assign(host, assignment)
+        span = PhaseSpan(RequestId(UUID.randomUUID()), assignment.id, owner.actor.session, UsagePhase.Check, 1000, 1700, AttemptState.Failed)
+        _ <- usage.span(host, span)
+        before <- usage.phases(owner, filter)
+        _ <- assertIO(before.phases.map(value => (value.phase, value.spans, value.wallMillis)) == List((UsagePhase.Check, 1L, 700L)))
+        file <- ZIO.attempt(Files.createTempFile("cq-archive-", ".zip"))
+        manifest <- archives.backup(owner.project, file)
+        _ <- assertIO(manifest.entries.exists(entry => entry.table == BackupTable.UsageSpans && entry.rows == 1))
+        _ <- ZIO.attemptBlocking(Using.resource(DriverManager.getConnection(config.url, config.user, config.password)) { connection =>
+          Using.resource(connection.createStatement())(_.execute(s"CREATE SCHEMA $schema")); ()
+        })
+        _ <- target.initialize
+        restored <- new PostgresProjectArchives(target, Clock.systemUTC()).restore(file).either
+        _ <- ZIO.attempt(Files.deleteIfExists(file))
+        _ <- assertIO(restored.map(_.entries) == Right(manifest.entries))
+        copy <- new PostgresUsageRepository(target).read(owner.project)(reader => (reader.span(span.id), reader.spans(filter), reader.cursor))
+        _ <- assertIO(copy == (Some(span), List(SpanTally(UsagePhase.Check, 1, 700)), before.cursor))
       } yield ()
     }
   }

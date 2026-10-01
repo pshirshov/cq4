@@ -208,6 +208,22 @@ CREATE TABLE cq_usage_outcomes (
 );
 CREATE UNIQUE INDEX cq_usage_outcome_sequence ON cq_usage_outcomes (project_id, sequence);
 CREATE INDEX cq_usage_attempt_outcomes ON cq_usage_outcomes (project_id, attempt_id, sequence);
+CREATE TABLE cq_usage_spans (
+  project_id uuid NOT NULL,
+  span_id uuid NOT NULL,
+  assignment_id uuid NOT NULL,
+  session_id uuid NOT NULL,
+  phase text NOT NULL,
+  started_at bigint NOT NULL,
+  finished_at bigint NOT NULL CHECK (finished_at >= started_at),
+  actor jsonb NOT NULL,
+  received_at bigint NOT NULL,
+  body jsonb NOT NULL,
+  PRIMARY KEY (project_id, span_id),
+  FOREIGN KEY (project_id, assignment_id) REFERENCES cq_usage_assignments
+);
+CREATE INDEX cq_usage_assignment_spans ON cq_usage_spans (project_id, assignment_id);
+CREATE INDEX cq_usage_session_spans ON cq_usage_spans (project_id, session_id);
 CREATE TABLE cq_artifacts (
   project_id uuid NOT NULL,
   artifact_id uuid NOT NULL,

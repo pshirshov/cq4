@@ -166,6 +166,22 @@ private final class PostgresUsageTransaction(connection: Connection, project: Pr
     require(changed == 1, "Attempt disappeared during outcome admission")
   }
 
+  override def span(id: RequestId): Option[PhaseSpan] = sql.query("SELECT body::text FROM cq_usage_spans WHERE project_id = ? AND span_id = ?")(identity(_, id.value))(r => Wire.decode(PhaseSpan_JsonCodec, r.getString(1))).headOption
+
+  override def putSpan(value: PhaseSpan, actor: Actor, receivedAt: Long): Unit = {
+    sql.execute("INSERT INTO cq_usage_spans(project_id, span_id, assignment_id, session_id, phase, started_at, finished_at, actor, received_at, body) VALUES (?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?::jsonb)") { s =>
+      identity(s, value.id.value); s.setObject(3, value.assignment.value); s.setObject(4, value.session.value); s.setString(5, value.phase.toString)
+      s.setLong(6, value.startedAt); s.setLong(7, value.finishedAt); s.setString(8, Wire.encode(Actor_JsonCodec, actor)); s.setLong(9, receivedAt)
+      s.setString(10, Wire.encode(PhaseSpan_JsonCodec, value))
+    }
+    tick()
+    ()
+  }
+
+  override def spans(filter: UsageFilter): List[SpanTally] =
+    sql.query("SELECT t.phase, count(*), sum(t.finished_at - t.started_at) FROM cq_usage_spans t JOIN cq_usage_assignments a USING(project_id, assignment_id) WHERE t.project_id = ?" +
+      filterSql(filter) + " GROUP BY t.phase")(s => { bindFilter(s, filter); () })(r => SpanTally(UsagePhase.parse(r.getString(1)).get, r.getLong(2), r.getBigDecimal(3).longValueExact()))
+
   override def latestOutcome(attempt: AttemptId): Option[RecordedOutcome] =
     sql.query("SELECT effective_outcome::text FROM cq_usage_attempts WHERE project_id = ? AND attempt_id = ?")(identity(_, attempt.value))
       (r => Option(r.getString(1)).map(Wire.decode(RecordedOutcome_JsonCodec, _))).headOption.flatten

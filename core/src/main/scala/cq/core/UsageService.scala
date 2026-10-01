@@ -12,6 +12,7 @@ trait UsageService[F[_, _]] {
   def meter(scope: Scope, value: UsageMeter): F[Throwable, UsageMeter]
   def ingest(scope: Scope, value: UsageUpload): F[Throwable, UsageReceipt]
   def finish(scope: Scope, value: AttemptOutcome): F[Throwable, AttemptOutcome]
+  def span(scope: Scope, value: PhaseSpan): F[Throwable, PhaseSpan]
   def costs(scope: Scope, filter: UsageFilter, after: Option[CostGroup], snapshot: Option[Long], limit: Int): F[Throwable, CostPage]
   def summary(scope: Scope, filter: UsageFilter): F[Throwable, UsageReport]
   def phases(scope: Scope, filter: UsageFilter): F[Throwable, PhaseReport]
@@ -26,6 +27,7 @@ object UsageService {
     private val MaxIdentity = 300
     private val MaxGaps = 32
     private val ReadBatch = 200
+    private val HostPhases = Set[UsagePhase](UsagePhase.Check, UsagePhase.Combine, UsagePhase.Integrate)
 
     override def cursor(scope: Scope): F[Throwable, Long] = repository.read(scope.project)(_.cursor)
 
@@ -171,6 +173,15 @@ object UsageService {
       value
     }
 
+    override def span(scope: Scope, value: PhaseSpan): F[Throwable, PhaseSpan] = repository.transact(scope.project) { tx =>
+      host(scope)
+      found(tx.assignment(value.assignment), "Assignment not registered")
+      invalid(HostPhases(value.phase), "A host span is a check, a combination or an integration")
+      invalid(value.state != AttemptState.Running && value.startedAt >= 0 && value.finishedAt >= value.startedAt, "Invalid span outcome or times")
+      if (!same(tx.span(value.id), value)) tx.putSpan(value, scope.actor, clock.millis())
+      value
+    }
+
     private def filter(scope: Scope, value: UsageFilter): Unit = value match {
       case UsageFilter.TaskOnly(item) => if (item.project != scope.project) throw DomainFailure(Fault.Denied("Usage filter belongs to another project"))
       case UsageFilter.EvaluationOnly(run, scenario) => text(run, "evaluation run"); scenario.foreach(text(_, "evaluation scenario"))
@@ -238,10 +249,11 @@ object UsageService {
         more = page.hasMore
       }
       val costs = reader.phaseCosts(value, ReadBatch + 1)
-      // Host spans are not recorded yet, so every phase reports none.
-      PhaseReport(UsagePhase.all.filter(tallies.contains).map { phase =>
-        val tally = tallies(phase)
-        PhaseUsage(phase, tally.attempts, 0, tally.running, tally.wallMillis, totals.getOrElse(phase, UsageMath.zeroTotals),
+      val spans = reader.spans(value).map(tally => tally.phase -> tally).toMap
+      PhaseReport(UsagePhase.all.filter(phase => tallies.contains(phase) || spans.contains(phase)).map { phase =>
+        val tally = tallies.getOrElse(phase, PhaseTally(0, 0, 0))
+        val span = spans.getOrElse(phase, SpanTally(phase, 0, 0))
+        PhaseUsage(phase, tally.attempts, span.spans, tally.running, Math.addExact(tally.wallMillis, span.wallMillis), totals.getOrElse(phase, UsageMath.zeroTotals),
           costs.take(ReadBatch).filter(_.phase == phase).map(_.total))
       }, costs.size > ReadBatch, reader.cursor)
     }
