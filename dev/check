@@ -305,6 +305,10 @@ class Checks:
         self.run(["gcc", "-shared", "-fPIC", "-Wall", "-Wextra", "-Werror", "-o", str(faults),
                   "dev/merge-fault.c", "-ldl"], "merge-fault-build", COMMAND_TIMEOUT)
         self.environment["CQ_MERGE_FAULT_LIBRARY"] = str(faults)
+        stall = self.evidence / "shutdown-stall.so"
+        self.run(["gcc", "-std=c17", "-shared", "-fPIC", "-Wall", "-Wextra", "-Werror", "-o", str(stall),
+                  "dev/shutdown-stall.c", "-ldl"], "shutdown-stall-build", COMMAND_TIMEOUT)
+        self.environment["CQ_SHUTDOWN_STALL_LIBRARY"] = str(stall)
         self.generate()
         self.sbt(["server/testOnly *Process"], "guardian-driver")
 

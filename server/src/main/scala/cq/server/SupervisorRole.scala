@@ -1,7 +1,7 @@
 package cq.server
 
 import cq.api.*
-import cq.core.{Scope, WorkspaceService}
+import cq.core.{DomainFailure, Scope, WorkspaceService}
 import cq.host.*
 import distage.{Lifecycle, ModuleDef}
 import izumi.distage.plugins.PluginDef
@@ -15,7 +15,7 @@ import java.nio.file.{Files, Path}
 import java.time.{Clock, Duration}
 import java.util.UUID
 import scala.util.Try
-import zio.{IO, Task, ZEnvironment, ZIO}
+import zio.{IO, Task, Unsafe, ZEnvironment, ZIO}
 
 final class HarnessRegistry(adapters: Set[HarnessAdapter]) {
   require(adapters.map(_.harness) == Harness.all.toSet && adapters.size == Harness.all.size, "Exactly one adapter per supported harness required")
@@ -151,7 +151,7 @@ object SupervisorProgram {
 
 final class SupervisorProgram(config: SupervisorConfig, registry: HarnessRegistry, jobs: JobSupervisor, authority: SupervisorAuthority,
   local: LocalControlServer, access: LocalAccess, dispatch: DispatchController, integrations: IntegrationController, combinations: CombinationController,
-  schemas: McpSchemas, output: HarnessOutput, workflows: WorkflowAssets, cleanup: WorkspaceCleanup, clock: Clock, context: CliContext) {
+  schemas: McpSchemas, output: HarnessOutput, workflows: WorkflowAssets, cleanup: WorkspaceCleanup, watchdog: SupervisorWatchdog, clock: Clock, context: CliContext) {
   private val MaxInputBytes = 192 * 1024
   private val MaxOutputBytes = 32 * 1024 * 1024
   private val MaxRecordBytes = 64 * 1024
@@ -159,12 +159,20 @@ final class SupervisorProgram(config: SupervisorConfig, registry: HarnessRegistr
   private val MaxGaps = 32
   private val MaxGapCharacters = 300
 
-  def run: Task[Unit] = {
+  def run: Task[Unit] = ZIO.runtime[Any].flatMap { runtime =>
     val attempt = config.run.attempt
     val project = config.project.project
     val assets = config.directory.resolve("assets").resolve(attempt.id.value.toString)
     val payload = config.directory.resolve("payload").resolve(attempt.id.value.toString)
-    for {
+    // Interruption closes process admission, stops the governor and lets the usual settlement (sweep, receipt, Finish usage) run before the exit.
+    val guard = new TerminationGuard("cq-supervisor-termination", () => {
+      watchdog.beginShutdown()
+      Unsafe.unsafe { implicit unsafe =>
+        runtime.unsafe.fork(jobs.cancel(config.owner, attempt.id).unit.catchSome { case DomainFailure(_: Fault.Missing) => ZIO.unit }.orDie); ()
+      }
+    })
+    (for {
+      _ <- ZIO.attempt(guard.install())
       prepared <- ZIO.attemptBlocking {
         HostFiles.directory(config.directory)
         HostFiles.immutable(config.directory.resolve("run.json"), HostFiles.encode(SupervisorRun_JsonCodec, config.run), MaxRecordBytes)
@@ -234,7 +242,7 @@ final class SupervisorProgram(config: SupervisorConfig, registry: HarnessRegistr
         receipt
       }
       _ <- ZIO.attempt(require(receipt.problem.isEmpty, receipt.problem.getOrElse("Governing run failed")))
-    } yield ()
+    } yield ()).ensuring(ZIO.succeed(guard.release()))
   }
 }
 
