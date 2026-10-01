@@ -18,16 +18,21 @@ object IntegrationPolicy {
   def unreserved(tx: LedgerTransaction, members: Set[ItemId]): Unit =
     pending(tx, members).headOption.foreach(value => throw DomainFailure(Fault.IntegrationPending(value.id)))
 
+  /** The failed runs one check's evidence records: the runs before its last and, when the last failed too, that one. */
+  def failedRuns(evidence: ValidationEvidence): List[ArtifactId] =
+    if (evidence.state == ValidationState.Failed) evidence.failures :+ evidence.artifact else evidence.failures
+
   /** `candidate` is the commit that lands; with a host rebase it is the rebased commit, and the reviewed commit and the host's checks
     * of the rebased commit are cited beside the worker, the reviewer and their validation. `superseded` are the failed runs that a
-    * passing rerun of the same check on the same commit replaced; they and the rebase's own are cited in a second evidence entry. */
+    * passing rerun of the same check on the same commit replaced; they, the rebase's own and the failed runs on its earlier merge
+    * commits are cited in a second evidence entry. */
   def completion(id: IntegrationId, repository: String, target: String, candidate: GitCommit, rebase: Option[IntegrationRebase], worker: ArtifactId,
     reviewer: ArtifactId, validation: List[ArtifactId], superseded: List[ArtifactId], fence: Fence, items: List[Item]): ChangeRequest = {
     val citations = List(Citation.Commit(repository, candidate.value)) ++ rebase.map(value => Citation.Commit(repository, value.reviewed.value)) ++
       List(Citation.Artifact(worker), Citation.Artifact(reviewer)) ++
       (validation ++ rebase.toList.flatMap(_.validation.map(_.artifact))).map(Citation.Artifact.apply)
     val evidence = Evidence(s"Host recorded integration ${id.value} into $target", EvidenceOrigin.HostObserved, citations)
-    val failed = superseded ++ rebase.toList.flatMap(_.validation.flatMap(_.failures))
+    val failed = superseded ++ rebase.toList.flatMap(value => value.failed.flatMap(_.validation.flatMap(failedRuns)) ++ value.validation.flatMap(_.failures))
     val reruns = if (failed.isEmpty) Nil else List(Evidence(s"Host check runs that failed before the passing runs cited for integration ${id.value}",
       EvidenceOrigin.HostObserved, failed.map(Citation.Artifact.apply)))
     val mutations = items.map { item =>

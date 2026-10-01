@@ -108,6 +108,8 @@ final class IntegrationServiceImpl[F[+_, +_]: Error2](ledger: LedgerRepository[F
       }.toEither) }
     }
     _ <- failures(scope, intent.candidate, rebased.flatMap(IntegrationValidation.failures))
+    earlier <- F.fromEither(Try(intent.rebase.toList.flatMap(IntegrationValidation.attempts(_, intent.candidate, intent.checks))).toEither)
+    _ <- F.traverse_(earlier)((commit, run) => failures(scope, commit, List(run)))
     result <- ledger.transact(scope.project) { tx =>
       tx.integration(intent.id) match {
         case Some(previous) =>

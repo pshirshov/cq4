@@ -73,14 +73,14 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
   } yield artifact.id
 
   private def begin(ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO]): IO[Throwable, Fixture] =
-    begin(ledger, usage, artifacts, admissions, None)
+    begin(ledger, usage, artifacts, admissions, None, 0)
   /** With `failed`, the worker's check passed on a rerun: the first run, altered given the governing attempt, is published and recorded as the evidence's failure. */
   private def begin(ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO],
-    failed: Option[AttemptId => ReviewValidation => ReviewValidation]): IO[Throwable, Fixture] = {
+    failed: Option[AttemptId => ReviewValidation => ReviewValidation], revalidations: Int): IO[Throwable, Fixture] = {
     val owner = Scope(ProjectId(uuid), Actor("integration governor", SessionId(uuid), Role.Governor))
     val collector = owner.copy(actor = owner.actor.copy(subject = "host collector", role = Role.Collector))
     val candidate = GitCommit("b" * 40)
-    val check = ValidationCheck("consumer", List("consumer-check"), 1000, 65536, 1, 0)
+    val check = ValidationCheck("consumer", List("consumer-check"), 1000, 65536, 1, revalidations)
     for {
       _ <- ledger.initialize(owner, "Integration")
       members <- MilestoneFixture.assigned(ledger, owner, List.fill(2)(task))
@@ -151,7 +151,7 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
     val value = alter(ReviewValidation(f.governor, ValidationObservation(f.intent.checks.head, rebasedCommit, job, ArtifactId(uuid), ArtifactId(uuid)),
       List(ValidationEvidence(f.intent.checks.head.name, ValidationState.Passed, artifact, Nil))))
     val id = IntegrationId(uuid)
-    val rebase = IntegrationRebase(f.intent.candidate, value.author, value.evidence)
+    val rebase = IntegrationRebase(f.intent.candidate, value.author, value.evidence, Nil)
     val change = completion(id, f.intent.repository, f.intent.target, rebasedCommit, Some(rebase), f.intent.worker, f.intent.reviewer,
       cited(f.owner, f.intent.worker, f.worker, f.reviewer, f.intent.checks, Nil), f.intent.fence, f.items)
     artifacts.upload(f.collector, ArtifactUpload(f.owner.project, artifact, f.governor, ArtifactKind.Validation, "application/json",
@@ -235,7 +235,7 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
       (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO],
         integrations: IntegrationService[IO]) => for {
         runtime <- ZIO.runtime[Any]
-        f <- begin(ledger, usage, artifacts, admissions, Some(_ => identity))
+        f <- begin(ledger, usage, artifacts, admissions, Some(_ => identity), 0)
         evidence = f.worker.validation.head
         _ <- assertIO(evidence.state == ValidationState.Passed && evidence.failures.size == 1 && f.reviewer.validation == f.worker.validation)
         prepared <- ZIO.attemptBlocking(prepare(new IntegrationPreparation(new ServiceApi(f.owner, ledger, artifacts, admissions, runtime), f.owner,
@@ -258,7 +258,7 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
           "another check" -> (_ => value => value.copy(observation = value.observation.copy(check = value.observation.check.copy(name = "other")))),
           "another author" -> (governor => value => value.copy(author = governor)))
         _ <- ZIO.foreachDiscard(foreign) { case (name, alter) => for {
-          altered <- begin(ledger, usage, artifacts, admissions, Some(alter))
+          altered <- begin(ledger, usage, artifacts, admissions, Some(alter), 0)
           result <- integrations.reserve(altered.collector, altered.intent).either
           _ <- ZIO.attempt(assert(result == Left(DomainFailure(Fault.Invalid("Validation failure does not record this author's failed run of the check on this candidate"))), s"$name: $result"))
           host <- ZIO.attemptBlocking(prepare(new IntegrationPreparation(new ServiceApi(altered.owner, ledger, artifacts, admissions, runtime), altered.owner,
@@ -479,7 +479,7 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
           change = completion(plain, original.intent.repository, original.intent.target, reviewed, None, workerArtifact, reviewArtifact,
             ValidationCitations(Nil, Nil), original.intent.fence, original.items))
         id = IntegrationId(uuid)
-        rebase = IntegrationRebase(reviewed, original.governor, Nil)
+        rebase = IntegrationRebase(reviewed, original.governor, Nil, Nil)
         result <- integrations.reserve(original.collector, unchecked.copy(id = id, expected = advancedHead, candidate = rebasedCommit, rebase = Some(rebase),
           change = completion(id, original.intent.repository, original.intent.target, rebasedCommit, Some(rebase), workerArtifact, reviewArtifact,
             ValidationCitations(Nil, Nil), original.intent.fence, original.items))).either
@@ -488,6 +488,53 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
         _ <- assertIO(preview.integrations.isEmpty)
         reserved <- integrations.reserve(original.collector, unchecked)
         _ <- assertIO(reserved.resolution == IntegrationResolution.Pending())
+      } yield ()
+    }
+
+    "cite the failed runs on earlier rebases of a host-rebased intent and refuse attempts that are not bounded failed runs on other commits" in {
+      (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO],
+        integrations: IntegrationService[IO]) =>
+      val attemptRule = Fault.Invalid("Rebased integration cites earlier rebase attempts that are not bounded failed runs of the configured checks on other commits")
+      val failureRule = Fault.Invalid("Validation failure does not record this author's failed run of the check on this candidate")
+      val earlier = GitCommit("f" * 40)
+      for {
+        original <- begin(ledger, usage, artifacts, admissions, None, 1)
+        f <- rebased(original, artifacts, identity)
+        check = f.intent.checks.head
+        observe = (commit: GitCommit, code: Int, author: AttemptId) => artifacts.upload(f.collector, ArtifactUpload(f.owner.project, ArtifactId(uuid), author,
+          ArtifactKind.Validation, "application/json", Wire.encode(ValidationObservation_JsonCodec, ValidationObservation(check, commit,
+            JobRecord(WorkspaceSpec(f.owner.project, f.owner.actor.session, AttemptId(uuid), f.intent.repository, commit), "host-rebase-check", JobTarget.Run,
+              JobPhase.Settled, Some(JobExit(Some(code), None, StopReason.Exited, 0, 0, true, false)), None, 1, 1000, 1001), ArtifactId(uuid), ArtifactId(uuid))))).map(_.id)
+        failed <- observe(earlier, 1, f.governor)
+        passed <- observe(earlier, 0, f.governor)
+        foreign <- observe(earlier, 1, f.worker.attempt)
+        again <- observe(GitCommit("9" * 40), 1, f.governor)
+        attempt = (commit: GitCommit, state: ValidationState, artifact: ArtifactId) => RebaseAttempt(commit, List(ValidationEvidence(check.name, state, artifact, Nil)))
+        citing = (attempts: List[RebaseAttempt]) => {
+          val id = IntegrationId(uuid)
+          val rebase = f.intent.rebase.get.copy(failed = attempts)
+          f.intent.copy(id = id, rebase = Some(rebase), change = completion(id, f.intent.repository, f.intent.target, rebasedCommit, Some(rebase), f.intent.worker,
+            f.intent.reviewer, cited(f.owner, f.intent.worker, f.worker, f.reviewer, f.intent.checks, Nil), f.intent.fence, f.items))
+        }
+        _ <- ZIO.foreachDiscard(List(
+          "a run that passed" -> (List(attempt(earlier, ValidationState.Failed, passed)), failureRule),
+          "a foreign author" -> (List(attempt(earlier, ValidationState.Failed, foreign)), failureRule),
+          "another commit than the run's" -> (List(attempt(GitCommit("8" * 40), ValidationState.Failed, failed)), failureRule),
+          "the landed commit" -> (List(attempt(rebasedCommit, ValidationState.Failed, failed)), attemptRule),
+          "no failed check" -> (List(attempt(earlier, ValidationState.Passed, passed)), attemptRule),
+          "another check inventory" -> (List(RebaseAttempt(earlier, Nil)), attemptRule),
+          "more rounds than the check's revalidations" -> (List(attempt(earlier, ValidationState.Failed, failed), attempt(GitCommit("9" * 40), ValidationState.Failed, again)), attemptRule),
+        )) { case (name, (attempts, rule)) =>
+          integrations.reserve(f.collector, citing(attempts)).either.flatMap(result => ZIO.attempt(assert(result == Left(DomainFailure(rule)), s"$name: $result")))
+        }
+        intent = citing(List(attempt(earlier, ValidationState.Failed, failed)))
+        _ <- integrations.reserve(f.collector, intent)
+        _ <- integrations.observe(f.collector, intent.id, IntegrationObservation.Incorporated(rebasedCommit))
+        completed <- ZIO.foreach(f.items)(item => ledger.get(f.owner, item.id).map(_.item.draft.content.asInstanceOf[Content.Task]))
+        _ <- ZIO.attempt(completed.foreach { task =>
+          println(s"Rebased completion after a failed attempt: ${task.validation.takeRight(2).map(value => (value.description, value.citations))}")
+          assert(task.validation.last.citations == List(Citation.Artifact(failed)) && !task.validation.init.last.citations.contains(Citation.Artifact(failed)))
+        })
       } yield ()
     }
 

@@ -32,6 +32,7 @@ object IntegrationValidation {
   private val RebasedRule = "Rebased integration requires passing host checks on the exact rebased commit"
   private val FailureRule = "Validation failure does not record this author's failed run of the check on this candidate"
   private val InventoryRule = "Worker and reviewer validation must cover the configured check inventory"
+  private val AttemptRule = "Rebased integration cites earlier rebase attempts that are not bounded failed runs of the configured checks on other commits"
   private val AmendmentRule = "Validation amendment does not record a bounded revalidation of this result's failed checks on its candidate"
   /** Runs of one check on one commit: the first and its automatic reruns. */
   val MaxAttempts = 3
@@ -106,6 +107,28 @@ object IntegrationValidation {
     invalid(declarations.nonEmpty && rebase.validation.map(_.check) == declarations.map(_.name) &&
       rebase.validation.forall(_.state == ValidationState.Passed), RebasedRule)
     rebase.validation.zip(declarations).map { case (evidence, declaration) => ApplicableValidation(evidence, declaration, rebase.author) }
+  }
+
+  /** The check that forbids another rebase of one reviewed candidate onto one target head after the `failed` ones: as with a
+    * governor-requested revalidation, a check may be rerun `revalidations` times after its first failure. */
+  def exhausted(failed: List[RebaseAttempt], declarations: List[ValidationCheck]): Option[ValidationCheck] = {
+    def failing(attempt: RebaseAttempt, check: ValidationCheck): Boolean =
+      attempt.validation.exists(evidence => evidence.check == check.name && evidence.state == ValidationState.Failed)
+    failed.lastOption.flatMap(last => declarations.find(check => failing(last, check) && failed.dropWhile(!failing(_, check)).size > check.revalidations))
+  }
+
+  /** The failed runs on the earlier merge commits of a rebase, each with the commit it ran on. Every earlier attempt ran the
+    * configured checks on a commit of its own, at least one failed, and none was beyond its check's bound. */
+  def attempts(rebase: IntegrationRebase, candidate: GitCommit, declarations: List[ValidationCheck]): List[(GitCommit, FailedRun)] = {
+    val commits = rebase.failed.map(_.commit)
+    invalid((candidate :: commits).distinct.size == commits.size + 1 && rebase.failed.forall(attempt =>
+      attempt.commit.value.matches("[0-9a-f]{40}|[0-9a-f]{64}") && attempt.validation.map(_.check) == declarations.map(_.name) &&
+        attempt.validation.forall(evidence => evidence.state != ValidationState.Unknown && runs(evidence)) &&
+        attempt.validation.exists(_.state == ValidationState.Failed)) &&
+      (1 to rebase.failed.size).forall(count => exhausted(rebase.failed.take(count), declarations).isEmpty), AttemptRule)
+    rebase.failed.flatMap(attempt => attempt.validation.zip(declarations).flatMap { case (evidence, declaration) =>
+      IntegrationPolicy.failedRuns(evidence).map(artifact => (attempt.commit, FailedRun(artifact, declaration, rebase.author)))
+    })
   }
 
   def failures(expected: ApplicableValidation): List[FailedRun] = expected.evidence.failures.map(FailedRun(_, expected.declaration, expected.author))
