@@ -12,7 +12,7 @@ final case class HarnessProfile(harness: Harness, executable: Path, model: Strin
   providerExtensions: List[Path], providerEnvironment: Set[String]) {
   require(executable.isAbsolute && executable.normalize() == executable, "Harness executable must be absolute and normalized")
   require(List(model, provider).forall(s => s.nonEmpty && s.length <= 100 && !s.exists(_.isControl)), "Explicit harness model/provider required")
-  require(version == HarnessUsage.version(harness), "Unverified harness version")
+  require(HarnessUsage.verified(harness, version), "Unverified harness version")
   require(providerExtensions.forall(p => p.isAbsolute && p.normalize() == p), "Provider extension paths must be absolute and normalized")
   require(providerExtensions.isEmpty || harness == Harness.Pi, "Only Pi accepts explicit provider extensions")
   require(providerExtensions.distinct == providerExtensions && providerExtensions.size <= 8, "Invalid provider extension inventory")

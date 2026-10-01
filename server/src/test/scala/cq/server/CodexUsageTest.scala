@@ -79,6 +79,26 @@ final class CodexUsageLocal extends AnyWordSpec {
     }
   }
   "Attached Codex accounting (Behavioral Active Blackbox; dummy Group / filesystem Communication)" should {
+    "accept the installed Codex rollout version and read its retained response record" in fixture { f =>
+      val thread = UUID.fromString("01a0f65e-bf52-7a81-8845-354564acfdbe")
+      val day = Files.createDirectories(f.sessions.resolve("2026/10/01"))
+      val native = Using.resource(getClass.getResourceAsStream("/harness-usage/codex-rollout-0.159.2.jsonl"))(_.readAllBytes())
+      Files.write(day.resolve(s"rollout-fixture-$thread.jsonl"), native)
+      val page = new CodexRollout().poll(CodexUsageBinding(thread, "0.159.2", f.sessions.toRealPath().toString))
+      assert(page.caughtUp && page.samples.size == 1)
+      val sample = page.samples.head
+      assert(sample.response == "resp_03e13fa99410cfc8016abe0bfda2bc87d28a5443f9f72b8ca0" && sample.model.contains("gpt-6-sol") && sample.provider.contains("openai"))
+      assert(sample.counters.input.value.contains(14342) && sample.counters.output.value.contains(15) && sample.counters.reasoning.value.contains(0))
+      val metadata = Json.obj("threadId" -> Json.fromString(thread.toString), "x-codex-turn-metadata" ->
+        Json.obj("thread_id" -> Json.fromString(thread.toString), "codex_version" -> Json.fromString("0.159.2")))
+      val receiver = new Receiver
+      Using.resource(new AttachedCodexUsage(f.root.resolve("cq"), f.run, new CodexRollout, f.clock)) { observer =>
+        observer.observe(Some(metadata), f.sessions)
+        observer.poll(receiver)
+        assert(receiver.observations.size == 1)
+        assert(receiver.observations.values.head.observation.source == "Codex/0.159.2/rollout/openai/gpt-6-sol")
+      }
+    }
     "keep CQ available when an ephemeral native home has no sessions directory" in fixture { f =>
       val receiver = new Receiver
       val missing = f.root.resolve("ephemeral/sessions")

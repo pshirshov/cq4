@@ -4,6 +4,7 @@ import cq.api.*
 import cq.core.{DomainFailure, UsageMath}
 import io.circe.{Json, JsonObject}
 import java.io.{ByteArrayOutputStream, InputStream}
+import java.math.RoundingMode
 import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets.UTF_8
 import java.security.MessageDigest
@@ -26,7 +27,7 @@ final class HarnessUsage {
 
   def collect(input: InputStream, request: UsageCollectionRequest): CollectedUsage = {
     require(request.collectedAt >= 0, "Invalid collection timestamp")
-    require(request.version == version(request.harness), "Unverified harness usage format version")
+    require(verified(request.harness, request.version), "Unverified harness usage format version")
     request.origin match {
       case UsageOrigin.Resumed(baselines) =>
         require(baselines.map(_.key).distinct.size == baselines.size, "Duplicate usage baseline")
@@ -92,12 +93,16 @@ object HarnessUsage {
   private val ReadBytes = 8192
   private val MaxGaps = 32
   private val MaxLabel = 100
+  private val DoubleSignificantDigits = 17
   private final case class Malformed(message: String) extends RuntimeException(message)
-  def version(harness: Harness): String = harness match {
-    case Harness.Claude => "2.1.280"
-    case Harness.Codex => "0.156.1"
-    case Harness.Pi => "0.87.1"
+  /** Native output formats verified against retained fixtures, oldest first; the last entry is the installed version live probes target. */
+  def versions(harness: Harness): List[String] = harness match {
+    case Harness.Claude => List("2.1.280", "2.1.285")
+    case Harness.Codex => List("0.156.1", "0.159.2")
+    case Harness.Pi => List("0.87.1", "0.99.1")
   }
+  def version(harness: Harness): String = versions(harness).last
+  def verified(harness: Harness, version: String): Boolean = versions(harness).contains(version)
   private def hash(value: String): String = java.util.HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value.getBytes(UTF_8)))
   private def obj(json: Json, field: String): JsonObject = json.hcursor.downField(field).focus.flatMap(_.asObject)
     .getOrElse(throw Malformed(s"Missing or invalid native $field object"))
@@ -122,14 +127,17 @@ object HarnessUsage {
     case Some(value) =>
       val amount = value.asNumber.flatMap(_.toBigDecimal).getOrElse(throw Malformed("Invalid native estimated cost"))
       if (amount < 0) throw Malformed("Negative native estimated cost")
-      if (amount == 0 && zeroIsUnknown) UsageMath.unknownMoney
+      val reported = amount.bigDecimal.stripTrailingZeros()
+      if (reported.scale() > UsageMath.MaxAmountScale + DoubleSignificantDigits) throw Malformed("Native estimated cost exceeds decimal bounds")
+      // Native amounts are IEEE doubles; decimal places beyond the audit scale are binary noise, not price precision.
+      val decimal = if (reported.scale() > UsageMath.MaxAmountScale)
+        reported.setScale(UsageMath.MaxAmountScale, RoundingMode.HALF_EVEN).stripTrailingZeros() else reported
+      if (decimal.signum() == 0 && zeroIsUnknown) UsageMath.unknownMoney
       else {
-        val decimal = amount.bigDecimal.stripTrailingZeros()
         val scale = decimal.scale().toLong
         val precision = decimal.precision().toLong
         val length = if (scale <= 0) precision - scale else if (scale >= precision) scale + 2 else precision + 1
-        if (scale > UsageMath.MaxAmountScale || length > UsageMath.MaxAmountLength)
-          throw Malformed("Native estimated cost exceeds decimal bounds")
+        if (length > UsageMath.MaxAmountLength) throw Malformed("Native estimated cost exceeds decimal bounds")
         val money = Money(Some(DecimalAmount(decimal.toPlainString)), Some("USD"), CostBasis.ProviderEstimate, None)
         try UsageMath.validate(money) catch { case _: DomainFailure => throw Malformed("Native estimated cost exceeds decimal bounds") }
         money
