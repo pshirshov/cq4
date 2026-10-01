@@ -18,7 +18,7 @@ object CliArguments {
       case "--json" :: tail =>
         require(format != CliFormat.Json, "Repeated --json option")
         format = CliFormat.Json; remaining = tail
-      case option :: value :: tail if option.startsWith("--") && option != "--replace" =>
+      case option :: value :: tail if option.startsWith("--") && option != "--replace" && option != cq.host.DriverAssets.StatusLineFlag =>
         values += option; values += value; remaining = tail
       case head :: tail => values += head; remaining = tail
       case Nil => ()

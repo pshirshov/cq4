@@ -1,0 +1,32 @@
+# Claude Code and Codex hook driver
+
+Recorded 2026-10-01 for T9 on Claude Code 2.1.285 and Codex 0.159.2 (`codex-cli 0.159.2`, model `gpt-6.1-sol`; Claude model `claude-opus-5-5`). Evidence root: `/srv/nvme/tmp/cq4-cross-cut/t9-probe`.
+
+## Interactive probe with a stub backend
+
+For each harness, two interactive sessions ran concurrently in a private tmux server in one scratch project. `cq configure claude` and `cq configure codex` generated the project's assets with the JVM build of this branch as the executable. The hook entries, the status line and the command and skill files were used exactly as generated. Only the `cq` MCP server entry (`.mcp.json`, `.codex/config.toml`) was pointed at `mcp-stub.py`, and the saved project endpoint at `stub.py`: a scripted stand-in for the server's driver control and for the attached host's `session` tool. **No CQ server, ledger or attached host took part**, so server-side token acceptance, the write boundary and "ledger unchanged" are not part of this record; `DriverHookTest`, `DriverContractTest` and `dev/attached-check.py` cover them. The executable wrapper `bin/cq` recorded the stdin, stdout and exit code of every hook invocation under `calls/`.
+
+| Evidence | Observed result |
+| --- | --- |
+| `claude-run1/calls`, `codex-run1/calls` | Each harness ran the generated commands. Claude Code sent, among other fields, `session_id`, `transcript_path`, `cwd`, `prompt_id`, `permission_mode`, `hook_event_name` and `prompt` (UserPromptSubmit) or `stop_hook_active`, `last_assistant_message` (Stop); Codex sent `session_id`, `turn_id`, `transcript_path`, `cwd`, `hook_event_name`, `model`, `permission_mode` and the same event fields. The Claude statusLine input carries `session_id` and no `hook_event_name`. The hook processes inherited `CQ_TOKEN_FILE` from the harness environment in both harnesses. |
+| `*/analysis.json` | In each run every hook call of one session carried one `session_id` and the two concurrent sessions carried different ones (Claude: 19 and 16 UserPromptSubmit and Stop calls; Codex: 12 and 12). Every completed hook process exited 0. Claude Code cancelled 49 of its 155 status-line refreshes when a newer one superseded them; the JVM wrapper needs 2–3 seconds for each call. |
+| `claude-run1/claude-a-screen.txt` | With the driver off, a prompt and its stop pass with no hook output and the status line reads `CQ driver off`. `/cq:drive through=work` shows the host rejection (`UserPromptSubmit says: …`) and the model reports it without binding. |
+| `claude-run1/claude-*-screen.txt`, `codex-run1/codex-*-screen.txt` | `/cq:drive G1 through=work` and `$cq-drive T2 through=plan`: the hook message is shown, the model shows the preview and calls `session` `Bind` with the token from the hook context, and the next stop is blocked (Claude Code: `Stop hook error: …`, Codex: `Blocked by hook`). The model then runs the directive: `Skill(/cq:advance)` in Claude Code, the `cq-advance` skill in Codex. Both sessions of each harness ran start, resume and a second start, then the quiescent stop was allowed and shown (`Stop says: …`, `↳ Hook · …`). The Claude status line followed: on with the roots and phase, then off with the stop reason. |
+| `*/analysis.json`, `directives.jsonl`, `activations.jsonl` | Claude Code: 16 directives, Codex: 10. Each was activated exactly once, by its own session, with the roots, phase and token of the directive. |
+| `claude-run0-notbound`, `codex-run0-notbound` | A session whose bind did not reach the host (a probe misconfiguration of the stub MCP server in Claude Code, a refused MCP approval in Codex) was stopped at its next stop with `CQ driver stopped (not bound): …`. |
+| `claude-run1/claude-a-screen-3-park.txt` | Claude Code: after an interrupt, `/cq:park` parks session A (`CQ driver parked: G1 through work`, status line `stopped (parked)`) while session B continues its drive to the quiescent stop. |
+| `claude-run1/claude-b-screen-2.txt` | Claude Code: `/cq:park` typed during a driven turn is queued and reaches the hook only after the drive ends. |
+| `codex-run1/codex-a-screen-3-queued-park.txt` | Codex: `$cq-park` typed during a driven turn reaches the hook at once; the driver is parked and the turn's stop is allowed. |
+| `codex-run0-notbound/codex-hooks-review-screen.txt` | Codex reports "2 hooks need review" for the generated `.codex/hooks.json` and runs them after `t` (trust all). |
+| `*/session.jsonl` | In all 26 activations the model copied the whole directive, token included, into `operatorRequirements`. The entry point text now forbids it and the attached host refuses it. The probe predates that change. |
+
+`analyze.py` derives `analysis.json` from `calls/` and the stub logs. `drive.sh`, `launch-claude.sh` and `launch-codex.sh` are the session scripts; the `.cast` files are the asciinema recordings.
+
+## Process fixture on a real host
+
+`dev/attached-check.py`, run against a private PostgreSQL-backed server (`/srv/nvme/tmp/cq4-cross-cut/t9-fx`), runs the generated `cq hook codex …` commands and the generated Claude status-line command as processes: an ordinary prompt and stop with the driver off, a rejected drive, a drive whose printed `Bind` request the real attached session presents, the blocked stop with the start directive, park, the allowed stop and the missing-`session_id` error. The same run refuses a driven activation whose `operatorRequirements` carries its token and accepts the retry without it.
+
+## Not covered
+
+- No recorded run of a real harness against a real CQ server and ledger: the "ledger unchanged" failure stops (skipped directive, untracked advance, direct out-of-set write) are shown only by `DriverHookTest` with a simulated model, not by a recorded harness session.
+- The supervisor settings pins were not changed. `HarnessUsage` already lists Claude Code 2.1.285 and Codex 0.159.2 as supported versions.
