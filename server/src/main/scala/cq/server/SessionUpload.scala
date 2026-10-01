@@ -29,7 +29,7 @@ final class SessionUpload(context: CliContext, clock: Clock) {
           Math.addExact(clock.millis(), CredentialLifetime.toMillis)))
         val collector = new HttpServerApi(endpoint, token.value, run.attempt.session, RequestTimeout)
         val workspaces = new WorkspaceService.Impl[IO](new GitWorkspaceRepository(directory.resolve("workspaces"),
-          new BoundedHostCommand(GitEnvironment.isolated(context.environment), Duration.ofSeconds(10), MaxRecordBytes), clock))
+          new BoundedHostCommand(GitEnvironment.isolated(context.environment), Duration.ofMinutes(5), MaxRecordBytes), clock))
         (collector, new SessionDelivery(journal, workspaces, clock))
       }
       (collector, delivery) = prepared

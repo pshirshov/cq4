@@ -52,6 +52,8 @@ The mutating Git executor needs the same supervisor-owned process-lifetime disci
 
 For target advancement, a host-generated `CombinationPlan` handle binds repository/target, observed target commit and original worker result. Only `Worker(ResolveConflict)` may consume it. Host preparation uses that frozen target as the isolated workspace base, applies/merges the original candidate, and supplies conflict state by handle. Capture a new candidate descending from the frozen target, rerun configured checks, and obtain a fresh independent reviewer result. `ChildRunner` base selection is: the frozen combination target, else the previous candidate, else the current integration target head (the session base without a configured target). A further target advance requires a new operation and combination/review round.
 
+`refs/cq/candidates/*` is the trust boundary for child bases. `CandidateWorkspace.verifyBase` accepts a base only when it is the current target head, the session base or a commit that a host-captured candidate ref points at; any other commit, including one made by hand in the operator's checkout, is refused.
+
 The initial target is an explicitly configured branch not checked out in any worktree. Reject checked-out targets before attempting an update. This requires cooperating Git writers: a preflight worktree check does not fence an arbitrary external checkout performed concurrently. CQ never updates shared checkout files or indexes.
 
 ### Governor operations and recovery ownership

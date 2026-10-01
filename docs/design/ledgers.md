@@ -13,7 +13,7 @@ The schema lists exact required, optional and collection fields. Every content b
 | Ledger/prefix | Domain fields beyond status | Terminal statuses | Dependency-satisfying status |
 | --- | --- | --- | --- |
 | milestones/M | objective | Complete, Cancelled | Complete |
-| ideas/I | outcome, motivation | Accepted, Declined, Withdrawn | Accepted |
+| ideas/I | outcome, motivation | Declined, Withdrawn, Implemented | Implemented |
 | defects/D | severity, observed, expected, reproduction, optional cause, resolution evidence | Resolved, NotReproducible, Rejected, Withdrawn | Resolved |
 | goals/G | outcome, acceptance, scope | Achieved, Abandoned | Achieved |
 | tasks/T | acceptance, optional result, validation evidence | Done, Cancelled | Done |
