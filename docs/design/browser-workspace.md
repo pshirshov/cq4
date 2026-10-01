@@ -49,6 +49,8 @@ A guarded control is an ordinary button containing a progress indicator labelled
 
 Browser checks press these controls through `dev/hold.mjs`; `dev/hold-browser.mjs` verifies the interaction itself.
 
+A Question's item view marks the recommended alternative inside its alternatives list with a "Recommended" badge and the reason; a Question without a recommendation shows no badge. The question batch dialog labels that row's Pick control `Pick recommended alternative: <text>`. Every alternative remains pickable and the free-text answer is unchanged.
+
 ## Usage and synchronization
 
 Usage has its own project cursor. Item change events cannot establish that usage is current, and usage updates must not create item events. Use bounded cursor invalidation for the subscribed project and fetch only the currently displayed usage scope. Reconnect refreshes both snapshots. Guard all usage responses against project/scope/request changes; an obsolete reply cannot change a caption or cursor.

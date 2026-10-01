@@ -131,10 +131,12 @@ export class QuestionBatch {
     const view = this.effects.view(item);
     const rows = view.querySelectorAll<HTMLLIElement>('section[data-field="alternatives"] > .field-value > ul > li');
     const alternatives = item.draft.content.alternatives;
+    const recommendation = item.draft.content.recommendation;
+    const recommended = recommendation === undefined ? null : recommendation.alternative;
     if (rows.length !== alternatives.length) throw new Error('Question alternatives were not rendered as a list');
     this.choices = alternatives.map((alternative, index) => {
       const choice = button('Pick', () => { this.answer.value = alternative; this.answer.dispatchEvent(new Event('input')); this.answer.focus(); });
-      choice.className = 'pick-alternative'; choice.setAttribute('aria-label', `Pick alternative: ${alternative}`);
+      choice.className = 'pick-alternative'; choice.setAttribute('aria-label', `Pick ${index === recommended ? 'recommended alternative' : 'alternative'}: ${alternative}`);
       choice.disabled = pending || unavailable; rows[index].classList.add('answer-alternative'); rows[index].prepend(choice);
       return choice;
     });

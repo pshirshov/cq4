@@ -135,7 +135,10 @@ def main():
                     "uncertainties": ["Probe observations require interpretation"], "requestedProbes": []} for item in members]}})
             else:
                 draft = {**context["members"][0]["item"]["draft"], "title": "Proposed follow-up", "body": narrative}
-                proposal = {"mutations": [{"Produce": {"producer": members[0], "drafts": [draft]}}], "reason": "Create follow-up"}
+                milestone = {"title": "Proposed milestone", "body": "", "labels": [], "archived": False, "citations": [],
+                             "content": {"Milestone": {"status": "Open", "objective": "Deliver the proposed follow-up"}}}
+                proposal = {"mutations": [{"Create": {"draft": milestone}},
+                                          {"Produce": {"producer": members[0], "drafts": [draft], "milestone": {"Created": {"mutation": 0}}}}], "reason": "Create follow-up"}
                 if role == "Planner":
                     assert "Evidence" in context["previous"]["report"]
                     finish({"Plan": {"members": [{"item": item, "disposition": "Proposed", "summary": narrative} for item in members], "proposal": proposal, "assessments": []}})
@@ -444,6 +447,16 @@ def main():
         emit({"type": "fixture.growth-seed", "members": members})
         finish({"summary": "Registered fixture artifact owner and unchanged task"})
         return
+    # Implementation is admitted only for Tasks under a milestone.
+    milestone = tool("cq", "change", {"project": project, "change": {"request": identity(), "mutations": [{"Create": {"draft": {
+        "title": "Fixture milestone", "body": "", "labels": [], "archived": False, "citations": [],
+        "content": {"Milestone": {"status": "Open", "objective": "Deliver the fixture tasks"}}}}}], "fences": [], "reason": "Fixture milestone"}})["Changed"]["ack"]["items"][0]
+    for index, member in enumerate(members):
+        linked = tool("cq", "change", {"project": project, "change": {"request": identity(), "mutations": [{"Reference": {
+            "source": member["id"], "expectedSource": member["revision"], "relation": "PartOf", "target": milestone["id"],
+            "expectedTarget": milestone["revision"], "present": True}}], "fences": [], "reason": "Fixture milestone"}})["Changed"]["ack"]["items"]
+        milestone = next(value for value in linked if value["id"] == milestone["id"])
+        members[index] = next(value for value in linked if value["id"] == member["id"])
     claim = tool("cq", "claim", {"project": project, "action": {"Acquire": {"id": identity(), "members": [value["id"] for value in members], "durationMillis": "180000"}}})
     request = {"request": identity(), "work": {"Worker": {"mode": "Implement"}}, "harness": "Codex", "members": members,
                "guidance": [], "artifacts": [], "previous": None, "fence": claim["Claimed"]["claim"]["fence"], "limits": data["limits"]}
@@ -492,7 +505,8 @@ def main():
         # Both proposals share the frozen producer; applying one makes the other stale.
         handle = results[3]["result"]
         preview = tool("cq", "read", {"project": project, "selection": {"Proposal": {"id": handle}}})["Proposal"]["preview"]
-        assert preview["members"] == members and preview["detailsOmitted"] and len(preview["operations"]) == 1
+        assert preview["members"] == members and preview["detailsOmitted"] and len(preview["operations"]) == 2
+        assert preview["operations"][1]["Produce"]["milestone"] == {"Created": {"mutation": 0}}
         apply_input = {"project": project, "result": handle}
         ack = tool("cq", "apply", apply_input)["Changed"]["ack"]
         assert tool("cq", "apply", apply_input)["Changed"]["ack"] == ack

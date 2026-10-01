@@ -32,7 +32,7 @@ final class DriverBoundary(registry: DriverRegistry, planner: WorksetPlanner) {
 
   private def existing(mutation: Mutation): List[ItemId] = mutation match {
     case Mutation.Archive(members) => members.map(_.id)
-    case Mutation.Produce(producer, _, _) => List(producer)
+    case Mutation.Produce(producer, _, _, milestone) => producer :: milestone.collect { case MilestoneRef.Existing(id) => id }.toList
     case Mutation.Terminate(roots, _, _) => roots.toList
     case _: Mutation.Create => Nil
     case Mutation.Replace(id, _, _) => List(id)

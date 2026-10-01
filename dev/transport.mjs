@@ -193,7 +193,7 @@ const producer = (await call({ Change: { input: change('Claimed producer') } }, 
 const producerClaim = (await client.callTool({ name: 'claim', arguments: { project: first,
   action: { Acquire: { id: id(), members: [producer.id], durationMillis: '300000' } } } })).structuredContent.Claimed.claim;
 const production = { project: first, change: { request: id(), reason: 'Atomic client production', fences: [producerClaim.fence],
-  mutations: [{ Produce: { producer: producer.id, expected: producer.revision, drafts: [draft('Produced one'), draft('Produced two')] } }] } };
+  mutations: [{ Produce: { producer: producer.id, expected: producer.revision, drafts: [draft('Produced one'), draft('Produced two')], milestone: null } }] } };
 const produced = (await client.callTool({ name: 'change', arguments: production })).structuredContent;
 assert.equal(produced.Changed.ack.items.length, 3);
 assert.deepEqual(await call({ Change: { input: production } }, headers), produced);

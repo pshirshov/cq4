@@ -173,7 +173,12 @@ object LedgerPolicy {
       case c: Content.Task => invalid(c.acceptance.nonEmpty, "Acceptance is required"); texts(c.acceptance, "acceptance"); optional(c.result, "result")
       case c: Content.Research => text(c.question, "research question"); optional(c.conclusion, "conclusion"); optional(c.recommendation, "recommendation")
       case c: Content.Hypothesis => text(c.claim, "claim"); text(c.rationale, "rationale"); optional(c.adjudication, "adjudication")
-      case c: Content.Question => text(c.prompt, "question"); text(c.context, "context"); texts(c.alternatives, "alternatives"); optional(c.answer, "answer")
+      case c: Content.Question =>
+        text(c.prompt, "question"); text(c.context, "context"); texts(c.alternatives, "alternatives"); optional(c.answer, "answer")
+        c.recommendation.foreach { value =>
+          invalid(c.alternatives.indices.contains(value.alternative), "Recommended alternative must index the alternatives list")
+          text(value.reason, "recommendation reason")
+        }
       case c: Content.Decision => text(c.choice, "choice"); text(c.rationale, "rationale"); texts(c.alternatives, "alternatives")
       case c: Content.Review =>
         invalid(c.subjects.nonEmpty || c.candidate.nonEmpty, "Review requires an item revision or candidate commit")
@@ -225,6 +230,16 @@ object LedgerPolicy {
       case _ => ()
     }
   }
+
+  def recommended(draft: ItemDraft): Unit = draft.content match {
+    case c: Content.Question => invalid(c.status != QuestionStatus.Open || c.alternatives.isEmpty || c.recommendation.nonEmpty,
+      "An agent-created Question with alternatives must state its recommended alternative and reason")
+    case _ => ()
+  }
+
+  // An agent that revises an item without changing its recorded content (a reference, a title) has not written the Question.
+  def recommendation(role: Role, draft: ItemDraft, recorded: List[ItemDraft]): Unit =
+    if (role != Role.Human && !recorded.exists(_.content == draft.content)) recommended(draft)
 
   def summary(item: Item): ItemSummary = ItemSummary(item.id, item.revision, item.draft.title,
     status(item.draft.content), item.draft.archived, item.draft.labels, item.updatedAt, outcome(item.draft.content))

@@ -20,6 +20,8 @@ abstract class ProposalContractTest extends SpecZIO with AssertZIO {
   private def uuid: UUID = UUID.randomUUID()
   private def task: ItemDraft = ItemDraft("Proposal task", "PRIVATE_DRAFT " + "x" * 4096, Set.empty, false,
     Content.Task(TaskStatus.Ready, List("Preserve assignment and atomicity"), None, Nil), Nil)
+  private def research: ItemDraft = task.copy(title = "Proposal research", content = Content.Research(ResearchStatus.Open, "What remains unknown?", Nil, None, None))
+  private def milestone(status: MilestoneStatus): ItemDraft = task.copy(title = s"$status milestone", content = Content.Milestone(status, "Deliver the proposed tasks"))
 
   private def begin(ledger: LedgerService[IO], usage: UsageService[IO]): IO[Throwable, Fixture] = {
     val owner = Scope(ProjectId(uuid), Actor("proposal governor", SessionId(uuid), Role.Governor))
@@ -82,8 +84,8 @@ abstract class ProposalContractTest extends SpecZIO with AssertZIO {
         f <- begin(ledger, usage)
         completed = task.copy(archived = true, content = Content.Task(TaskStatus.Done, List("Preserve assignment and atomicity"), Some("Declared complete"),
           List(Evidence("Model evidence", EvidenceOrigin.ModelDeclared, Nil))))
-        report = plan(f, List(ProposedMutation.Create(task.copy(title = "New task")), ProposedMutation.Replace(f.members.head.id, completed),
-          ProposedMutation.Produce(f.members(1).id, List(task.copy(title = "Derived task")))))
+        report = plan(f, List(ProposedMutation.Create(milestone(MilestoneStatus.Open)), ProposedMutation.Replace(f.members.head.id, completed),
+          ProposedMutation.Produce(f.members(1).id, List(task.copy(title = "Derived task")), Some(MilestoneRef.Created(0)))))
           .copy(members = f.members.zipWithIndex.map { case (ref, index) => PlanMember(ref.id,
             if (index == 2) PlanDisposition.Blocked else PlanDisposition.Proposed, "Per-member disposition") })
         value <- publish(f, DispatchWork.Planner(), report, usage, artifacts)
@@ -100,9 +102,9 @@ abstract class ProposalContractTest extends SpecZIO with AssertZIO {
         changes <- ledger.changes(f.owner, ChangeCursor(0), 20)
         history <- ledger.history(f.owner, f.members.head.id, Revision(Long.MaxValue), 20)
         blocked <- ledger.get(f.owner, f.members.last.id)
-        child <- ledger.get(f.owner, ItemId(f.owner.project, Ledger.Tasks, 5))
+        child <- ledger.get(f.owner, ItemId(f.owner.project, Ledger.Tasks, 4))
         _ <- assertIO(changes.events.size == 2 && history.entries.size == 2 && blocked.item.revision == Revision(1) &&
-          child.refs.contains(ItemRef(Relation.DerivedFrom, f.members(1).id)))
+          child.refs.toSet == Set(ItemRef(Relation.DerivedFrom, f.members(1).id), ItemRef(Relation.PartOf, ItemId(f.owner.project, Ledger.Milestones, 1))))
         _ <- ledger.release(f.owner, f.claim.fence)
         changed = ack.items.find(_.id == f.members.head.id).get
         _ <- ledger.change(f.owner, ChangeRequest(RequestId(uuid), List(Mutation.Replace(changed.id, changed.revision, task.copy(title = "Later correction"))), Nil, "Later"))
@@ -116,35 +118,35 @@ abstract class ProposalContractTest extends SpecZIO with AssertZIO {
     "recover a lost application acknowledgement without repeating the committed effects" in {
       (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], proposals: ProposalService[IO]) => for {
         f <- begin(ledger, usage)
-        value <- publish(f, DispatchWork.Planner(), plan(f, List(ProposedMutation.Create(task))), usage, artifacts)
+        value <- publish(f, DispatchWork.Planner(), plan(f, List(ProposedMutation.Create(research))), usage, artifacts)
         _ <- admit(f, value, admissions)
         lost <- proposals(f.owner, value.artifact.id).flatMap(_ => ZIO.fail(new java.io.IOException("Lost after commit"))).either
         _ <- assertIO(lost.left.exists(_.getMessage == "Lost after commit"))
         before <- ledger.changes(f.owner, ChangeCursor(0), 20)
         retry <- proposals(f.owner, value.artifact.id)
         after <- ledger.changes(f.owner, ChangeCursor(0), 20)
-        _ <- assertIO(before == after && after.events.size == 2 && retry.items.map(_.id.number) == List(4))
+        _ <- assertIO(before == after && after.events.size == 2 && retry.items.map(_.id) == List(ItemId(f.owner.project, Ledger.Researches, 1)))
       } yield ()
     }
 
     "reject stale unmodified members, released or replaced claims, and unadmitted or rejected results" in {
       (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], proposals: ProposalService[IO]) => for {
         f <- begin(ledger, usage)
-        value <- publish(f, DispatchWork.Planner(), plan(f, List(ProposedMutation.Create(task))), usage, artifacts)
+        value <- publish(f, DispatchWork.Planner(), plan(f, List(ProposedMutation.Create(research))), usage, artifacts)
         _ <- rejected(proposals(f.owner, value.artifact.id), _.isInstanceOf[Fault.Conflict])
         _ <- admit(f, value, admissions)
         untouched = f.members.last
         _ <- ledger.change(f.owner, ChangeRequest(RequestId(uuid), List(Mutation.Replace(untouched.id, untouched.revision, task.copy(title = "Changed context"))), List(f.claim.fence), "Change"))
         _ <- rejected(proposals(f.owner, value.artifact.id), _.isInstanceOf[Fault.Conflict])
         released <- begin(ledger, usage)
-        late <- publish(released, DispatchWork.Planner(), plan(released, List(ProposedMutation.Create(task))), usage, artifacts)
+        late <- publish(released, DispatchWork.Planner(), plan(released, List(ProposedMutation.Create(research))), usage, artifacts)
         _ <- admit(released, late, admissions)
         _ <- ledger.release(released.owner, released.claim.fence)
         _ <- rejected(proposals(released.owner, late.artifact.id), _.isInstanceOf[Fault.StaleFence])
         _ <- ledger.acquire(released.owner, ClaimId(uuid), released.claim.members, 300000)
         _ <- rejected(proposals(released.owner, late.artifact.id), _.isInstanceOf[Fault.StaleFence])
         rejectedFixture <- begin(ledger, usage)
-        rejectedResult <- publish(rejectedFixture, DispatchWork.Planner(), plan(rejectedFixture, List(ProposedMutation.Create(task))), usage, artifacts)
+        rejectedResult <- publish(rejectedFixture, DispatchWork.Planner(), plan(rejectedFixture, List(ProposedMutation.Create(research))), usage, artifacts)
         _ <- ledger.release(rejectedFixture.owner, rejectedFixture.claim.fence)
         decision <- admissions.admit(rejectedFixture.collector, HostAdmissionInput(rejectedFixture.owner.project, rejectedResult.artifact.id, rejectedFixture.owner.actor))
         _ <- assertIO(decision.decision == AdmissionDecision.Rejected(AdmissionRejection.ClaimLost))
@@ -156,14 +158,14 @@ abstract class ProposalContractTest extends SpecZIO with AssertZIO {
       (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], proposals: ProposalService[IO]) => for {
         f <- begin(ledger, usage)
         invalidLedger = task.copy(content = Content.Idea(IdeaStatus.Proposed, "Outcome", "Motivation"))
-        value <- publish(f, DispatchWork.Planner(), plan(f, List(ProposedMutation.Create(task), ProposedMutation.Replace(f.members.head.id, invalidLedger))), usage, artifacts)
+        value <- publish(f, DispatchWork.Planner(), plan(f, List(ProposedMutation.Create(research), ProposedMutation.Replace(f.members.head.id, invalidLedger))), usage, artifacts)
         _ <- admit(f, value, admissions)
         _ <- rejected(proposals(f.owner, value.artifact.id), _.isInstanceOf[Fault.Invalid])
         changes <- ledger.changes(f.owner, ChangeCursor(0), 20)
         current <- ledger.get(f.owner, f.members.head.id)
-        created <- ledger.change(f.owner, ChangeRequest(RequestId(uuid), List(Mutation.Create(task)), Nil, "After rollback"))
-        _ <- assertIO(changes.events.size == 1 && current.item.revision == Revision(1) && created.items.head.id.number == 4)
-        fabricated = task.copy(content = Content.Task(TaskStatus.Done, List("Acceptance"), Some("Declared"), List(Evidence("Invented check", EvidenceOrigin.HostObserved, Nil))))
+        created <- ledger.change(f.owner, ChangeRequest(RequestId(uuid), List(Mutation.Create(research)), Nil, "After rollback"))
+        _ <- assertIO(changes.events.size == 1 && current.item.revision == Revision(1) && created.items.head.id == ItemId(f.owner.project, Ledger.Researches, 1))
+        fabricated = task.copy(content = Content.Research(ResearchStatus.Concluded, "What was checked?", List(Evidence("Invented check", EvidenceOrigin.HostObserved, Nil)), Some("Declared"), None))
         confirmation = task.copy(content = Content.OperatorAction(OperatorActionStatus.Confirmed, "External action", "Actual evidence", Some("User said yes"), Nil))
         _ <- ZIO.foreachDiscard(List(fabricated, confirmation)) { draft => for {
           proposal <- publish(f, DispatchWork.Planner(), plan(f, List(ProposedMutation.Create(draft))), usage, artifacts)
@@ -176,7 +178,7 @@ abstract class ProposalContractTest extends SpecZIO with AssertZIO {
     "deny foreign authority and namespace collisions and reject malformed immutable result aliases" in {
       (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], proposals: ProposalService[IO]) => for {
         f <- begin(ledger, usage)
-        value <- publish(f, DispatchWork.Planner(), plan(f, List(ProposedMutation.Create(task))), usage, artifacts)
+        value <- publish(f, DispatchWork.Planner(), plan(f, List(ProposedMutation.Create(research))), usage, artifacts)
         _ <- admit(f, value, admissions)
         _ <- ZIO.foreachDiscard(List(Role.Human, Role.Explorer, Role.Planner, Role.Worker, Role.Reviewer, Role.Collector)) { role =>
           rejected(proposals(f.owner.copy(actor = f.owner.actor.copy(role = role)), value.artifact.id), _.isInstanceOf[Fault.Denied])
@@ -198,7 +200,7 @@ abstract class ProposalContractTest extends SpecZIO with AssertZIO {
     "require eligible member outcomes even for create-only proposals and reject writes to blocked or guidance items" in {
       (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO]) => for {
         f <- begin(ledger, usage)
-        proposed = plan(f, List(ProposedMutation.Create(task)))
+        proposed = plan(f, List(ProposedMutation.Create(research)))
         invalidPlans = List(
           proposed.copy(members = proposed.members.map(_.copy(disposition = PlanDisposition.Blocked))),
           proposed.copy(members = proposed.members.map(_.copy(disposition = PlanDisposition.Abstained))),
@@ -218,8 +220,8 @@ abstract class ProposalContractTest extends SpecZIO with AssertZIO {
     "apply a reviewer follow-up as a proposal without treating its findings as acceptance" in {
       (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], proposals: ProposalService[IO]) => for {
         f <- begin(ledger, usage)
-        report = ChildReport.Review(f.members.map(ref => ReviewMember(ref.id, ReviewVerdict.ChangesRequested, List("Retain a follow-up task"))),
-          Some(LedgerProposal(List(ProposedMutation.Create(task)), "Review follow-up")))
+        report = ChildReport.Review(f.members.map(ref => ReviewMember(ref.id, ReviewVerdict.ChangesRequested, List("Retain a follow-up research"))),
+          Some(LedgerProposal(List(ProposedMutation.Create(research)), "Review follow-up")))
         value <- publish(f, DispatchWork.Reviewer(ReviewerMode.Audit), report, usage, artifacts)
         _ <- admit(f, value, admissions)
         preview <- proposals.preview(f.owner, value.artifact.id)
@@ -233,13 +235,113 @@ abstract class ProposalContractTest extends SpecZIO with AssertZIO {
     "reject an oversized semantic preview and its application without partial creation" in {
       (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], proposals: ProposalService[IO]) => for {
         f <- begin(ledger, usage)
-        large = task.copy(title = "é" * 300, body = "")
+        large = research.copy(title = "é" * 300, body = "")
         value <- publish(f, DispatchWork.Planner(), plan(f, List.fill(64)(ProposedMutation.Create(large))), usage, artifacts)
         _ <- admit(f, value, admissions)
         _ <- rejected(proposals.preview(f.owner, value.artifact.id), _.isInstanceOf[Fault.Limit])
         _ <- rejected(proposals(f.owner, value.artifact.id), _.isInstanceOf[Fault.Limit])
         changes <- ledger.changes(f.owner, ChangeCursor(0), 20)
         _ <- assertIO(changes.events.size == 1)
+      } yield ()
+    }
+
+    "reject a proposed question whose alternatives carry no recommendation" in {
+      (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], proposals: ProposalService[IO]) =>
+      def question(recommendation: Option[QuestionRecommendation]): ItemDraft = task.copy(title = "Which store?",
+        content = Content.Question(QuestionStatus.Open, "Which store?", "Both satisfy the goal", List("PostgreSQL", "SQLite"), recommendation, None))
+      val required = Fault.Invalid("An agent-created Question with alternatives must state its recommended alternative and reason")
+      for {
+        f <- begin(ledger, usage)
+        _ <- ZIO.foreachDiscard(List(ProposedMutation.Create(question(None)), ProposedMutation.Produce(f.members.head.id, List(question(None)), None),
+          ProposedMutation.Replace(f.members.head.id, question(None)))) { mutation => for {
+          value <- publish(f, DispatchWork.Planner(), plan(f, List(mutation)), usage, artifacts)
+          _ <- rejected(admissions.admit(f.collector, HostAdmissionInput(f.owner.project, value.artifact.id, f.owner.actor)), _ == required)
+        } yield () }
+        recommended = question(Some(QuestionRecommendation(0, "The server already runs PostgreSQL")))
+        value <- publish(f, DispatchWork.Planner(), plan(f, List(ProposedMutation.Create(recommended))), usage, artifacts)
+        _ <- admit(f, value, admissions)
+        ack <- proposals(f.owner, value.artifact.id)
+        created <- ledger.get(f.owner, ack.items.head.id)
+        _ <- assertIO(created.item.draft.content == recommended.content)
+      } yield ()
+    }
+
+    "reject task production without a milestone and preview the assignment" in {
+      (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], proposals: ProposalService[IO]) =>
+      val unassigned = Fault.Invalid("Produce creates Tasks without a milestone: assign an existing Open milestone or a Milestone created earlier in this proposal")
+      val created = Fault.Invalid("Proposed Tasks must be produced from an assigned producer and assigned to a milestone")
+      val index = Fault.Invalid("Produce milestone must reference an earlier Create of a Milestone in this batch")
+      for {
+        f <- begin(ledger, usage)
+        existing <- ledger.change(f.owner, ChangeRequest(RequestId(uuid), List(Mutation.Create(milestone(MilestoneStatus.Open)),
+          Mutation.Create(milestone(MilestoneStatus.Complete))), Nil, "Milestones outside the assignment"))
+        open = existing.items.head.id
+        closed = existing.items.last.id
+        first = f.members.head.id
+        second = f.members(1).id
+        _ <- ZIO.foreachDiscard(List[(List[ProposedMutation], Fault)](
+          List(ProposedMutation.Produce(first, List(research, task), None)) -> unassigned,
+          List(ProposedMutation.Create(task)) -> created,
+          List(ProposedMutation.Produce(first, List(task), Some(MilestoneRef.Created(0)))) -> index,
+          List(ProposedMutation.Create(research), ProposedMutation.Produce(first, List(task), Some(MilestoneRef.Created(0)))) -> index,
+          List(ProposedMutation.Produce(first, List(task), Some(MilestoneRef.Created(1))), ProposedMutation.Create(milestone(MilestoneStatus.Open))) -> index,
+          List(ProposedMutation.Produce(first, List(research), Some(MilestoneRef.Existing(open)))) -> Fault.Invalid("A Produce milestone requires a Task draft"),
+          List(ProposedMutation.Produce(first, List(task), Some(MilestoneRef.Existing(first)))) -> Fault.Invalid("PartOf target must be a milestone"),
+        )) { case (mutations, fault) => for {
+          value <- publish(f, DispatchWork.Planner(), plan(f, mutations), usage, artifacts)
+          _ <- rejected(admissions.admit(f.collector, HostAdmissionInput(f.owner.project, value.artifact.id, f.owner.actor)), _ == fault)
+        } yield () }
+        refused <- publish(f, DispatchWork.Planner(), plan(f, List(ProposedMutation.Create(research),
+          ProposedMutation.Produce(first, List(task), Some(MilestoneRef.Existing(closed))))), usage, artifacts)
+        _ <- admit(f, refused, admissions)
+        before <- ledger.changes(f.owner, ChangeCursor(0), 20)
+        _ <- rejected(proposals(f.owner, refused.artifact.id), _ == Fault.Invalid(s"Tasks can be assigned only to an Open milestone; M${closed.number} is Complete"))
+        unchanged <- ledger.changes(f.owner, ChangeCursor(0), 20)
+        _ <- assertIO(before == unchanged)
+        value <- publish(f, DispatchWork.Planner(), plan(f, List(ProposedMutation.Create(milestone(MilestoneStatus.Open)),
+          ProposedMutation.Produce(first, List(task.copy(title = "Under the proposed milestone"), research), Some(MilestoneRef.Created(0))),
+          ProposedMutation.Produce(second, List(task.copy(title = "Under the existing milestone")), Some(MilestoneRef.Existing(open))),
+          ProposedMutation.Produce(f.members.last.id, List(research), None))), usage, artifacts)
+        _ <- admit(f, value, admissions)
+        preview <- proposals.preview(f.owner, value.artifact.id)
+        _ <- assertIO(preview.operations.collect { case produce: ProposalOperationSummary.Produce => (produce.producer, produce.milestone) } ==
+          List((first, Some(MilestoneRef.Created(0))), (second, Some(MilestoneRef.Existing(open))), (f.members.last.id, None)))
+        ack <- proposals(f.owner, value.artifact.id)
+        proposed = ack.items.map(_.id).filter(id => id.ledger == Ledger.Milestones && id != open).head
+        tasks <- ZIO.foreach(ack.items.map(_.id).filter(id => id.ledger == Ledger.Tasks && !f.members.exists(_.id == id)))(ledger.get(f.owner, _))
+        researches <- ZIO.foreach(ack.items.map(_.id).filter(_.ledger == Ledger.Researches))(ledger.get(f.owner, _))
+        target <- ledger.get(f.owner, open)
+        _ <- assertIO(tasks.map(view => view.item.draft.title -> view.refs.toSet).toMap == Map(
+          "Under the proposed milestone" -> Set(ItemRef(Relation.DerivedFrom, first), ItemRef(Relation.PartOf, proposed)),
+          "Under the existing milestone" -> Set(ItemRef(Relation.DerivedFrom, second), ItemRef(Relation.PartOf, open))))
+        _ <- assertIO(researches.size == 2 && researches.forall(_.refs.forall(_.relation == Relation.DerivedFrom)))
+        _ <- assertIO(target.item.revision == Revision(2) && ack.items.count(_.id == open) == 1)
+      } yield ()
+    }
+
+    "apply an evidenced memory production and reject an unevidenced one" in {
+      (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], proposals: ProposalService[IO]) =>
+      val cited = Evidence("The build file pins the compiler", EvidenceOrigin.ModelDeclared, List(Citation.File("build.sbt", None)))
+      def memory(status: MemoryStatus, evidence: List[Evidence]): ItemDraft = task.copy(title = "Compiler pin",
+        content = Content.Memory(status, "The build pins Scala 3", "Any build change", evidence))
+      val refused = Fault.Invalid("Proposed Memory requires Current status and cited evidence")
+      for {
+        f <- begin(ledger, usage)
+        producer = f.members.head.id
+        _ <- ZIO.foreachDiscard(List(memory(MemoryStatus.Current, Nil), memory(MemoryStatus.Current, List(cited, cited.copy(citations = Nil))),
+          memory(MemoryStatus.Superseded, List(cited)), memory(MemoryStatus.Retracted, List(cited)))) { draft =>
+          ZIO.foreachDiscard(List(ProposedMutation.Produce(producer, List(draft), None), ProposedMutation.Create(draft))) { mutation => for {
+            value <- publish(f, DispatchWork.Planner(), plan(f, List(mutation)), usage, artifacts)
+            _ <- rejected(admissions.admit(f.collector, HostAdmissionInput(f.owner.project, value.artifact.id, f.owner.actor)), _ == refused)
+          } yield () }
+        }
+        value <- publish(f, DispatchWork.Planner(), plan(f, List(ProposedMutation.Produce(producer, List(memory(MemoryStatus.Current, List(cited))), None))), usage, artifacts)
+        _ <- admit(f, value, admissions)
+        ack <- proposals(f.owner, value.artifact.id)
+        applied <- ledger.get(f.owner, ack.items.find(_.id.ledger == Ledger.Memories).get.id)
+        _ <- assertIO(applied.refs == List(ItemRef(Relation.DerivedFrom, producer)) &&
+          applied.item.draft.content == Content.Memory(MemoryStatus.Current, "The build pins Scala 3", "Any build change", List(cited)) &&
+          LedgerPolicy.evidence(applied.item.draft.content).map(_.origin) == List(EvidenceOrigin.ModelDeclared))
       } yield ()
     }
   }
