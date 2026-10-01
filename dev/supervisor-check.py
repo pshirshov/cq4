@@ -37,8 +37,6 @@ prompt = governing["request"]
 if prompt == "workflow input":
     assert governing["workflow"]["request"] == {"Begin": {"roots": []}}
     assert governing["workflow"]["subject"] is None and len(governing["workflow"]["instructions"]) > 100
-if prompt == "deadline input":
-    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
 target = pathlib.Path(sys.argv[sys.argv.index("--output-last-message") + 1])
 target.write_text(json.dumps({"summary": "Fixture governing result"} if prompt != "invalid result" else {"unexpected": True}))
 for event in [
@@ -48,8 +46,8 @@ for event in [
         "cache_write_input_tokens": 0, "output_tokens": 31, "reasoning_output_tokens": 3}}
 ]:
     print(json.dumps(event), flush=True)
-if prompt == "deadline input":
-    time.sleep(30)
+if prompt == "long input":
+    time.sleep(3)
 if prompt == "uncertain input":
     os.kill(os.getppid(), signal.SIGKILL)
     time.sleep(30)
@@ -63,7 +61,7 @@ if prompt == "recovery input":
             "integrationTarget": None, "stateRoot": str(root / "sessions"), "guardian": str(guardian), "checks": [], "evaluation": None,
             "harnesses": [{"harness": "Codex", "executable": str(executable), "model": "fixture-model", "provider": "fixture-provider",
                            "version": "0.156.1", "providerExtensions": [], "providerEnvironment": []}],
-            "limits": {"startupMillis": "3000", "executionMillis": "15000", "heartbeatMillis": "1000",
+            "limits": {"startupMillis": "3000", "heartbeatMillis": "1000",
                        "graceMillis": "300", "killMillis": "2000", "retainedOutputBytes": 262144},
         }))
         input_file = root / "input.txt"
@@ -155,13 +153,14 @@ if prompt == "recovery input":
         invalid = run([":supervisor", "--", "codex", "--settings", str(settings), "--input", str(input_file)], 1)
         rejected = json.loads(invalid.stdout)
         assert rejected["processSucceeded"] and rejected["result"] is None and rejected["usageDelivered"] and rejected["problem"]
-        stopped_settings = json.loads(settings.read_text())
-        stopped_settings["limits"]["executionMillis"] = "1500"
-        settings.write_text(json.dumps(stopped_settings))
+        # A governing harness has no execution deadline: a settings file that still carries the removed limit neither stops it nor is refused.
+        stale_settings = json.loads(settings.read_text())
+        stale_settings["limits"]["executionMillis"] = "1500"
+        settings.write_text(json.dumps(stale_settings))
         failures = []
-        for prompt, phase, unknown, reason in [
-            ("deadline input", "Settled", "0", "ExecutionDeadline"),
-            ("uncertain input", "Uncertain", "1", "Uncertain"),
+        for prompt, exit_code, phase, succeeded, unknown, reason in [
+            ("long input", 0, "Settled", True, "0", None),
+            ("uncertain input", 1, "Uncertain", False, "1", "Uncertain"),
         ]:
             input_file.write_text(prompt)
             stopped = subprocess.run(launcher + ["run", "codex", "--settings", str(settings), "--input", str(input_file)],
@@ -171,17 +170,18 @@ if prompt == "recovery input":
             stop_usage = api({"Usage": {"input": {"project": stop_manifest["project"]["project"], "selection": {
                 "Summary": {"filter": {"SessionOnly": {"id": stop_receipt["session"]}}}}}}})["UsageSummary"]["report"]
             print(json.dumps({"case": prompt, "exit": stopped.returncode, "receipt": stop_receipt, "usage": stop_usage}), flush=True)
-            if not (stopped.returncode == 1 and stop_receipt["phase"] == phase and not stop_receipt["processSucceeded"]
-                    and stop_receipt["result"] is None and stop_receipt["usageDelivered"]
-                    and reason in (stop_receipt["problem"] or "") and stop_usage["attempts"]["unknown"] == unknown):
+            if not (stopped.returncode == exit_code and stop_receipt["phase"] == phase and stop_receipt["processSucceeded"] == succeeded
+                    and (stop_receipt["result"] is not None) == succeeded and stop_receipt["usageDelivered"]
+                    and (stop_receipt["problem"] is None if reason is None else reason in (stop_receipt["problem"] or ""))
+                    and stop_usage["attempts"]["unknown"] == unknown):
                 failures.append(prompt)
         assert not failures, f"Incorrect native stop classification: {failures}"
         excessive = json.loads(settings.read_text())
-        excessive["limits"]["startupMillis"] = "86400000"
+        excessive["limits"]["startupMillis"] = "86400001"
         settings.write_text(json.dumps(excessive))
         input_file.write_text("valid input")
         denied = run(["run", "codex", "--settings", str(settings), "--input", str(input_file)], 1)
-        assert "credential lifetime" in denied.stderr, denied.stderr
+        assert "Invalid process deadline" in denied.stderr, denied.stderr
     print("Supervisor role: shorthand/native launch, database graph isolation, scoped environment, native result validation, artifact publication and idempotent audit delivery pass with a deterministic harness fixture")
 
 

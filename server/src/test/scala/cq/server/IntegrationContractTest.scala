@@ -101,7 +101,7 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
           Wire.encode(ValidationObservation_JsonCodec, first.observation))).map(_.id)
       }
       request = DispatchRequest(RequestId(uuid), DispatchWork.Worker(WorkerMode.Implement), Harness.Codex, members, Nil, Nil, None,
-        claim.fence, HostLimits(3000, 10000, 1000, 300, 2000, 262144))
+        claim.fence, HostLimits(3000, 1000, 300, 2000, 262144))
       worker = ChildResult(workerAttempt.id, request, GitCommit("a" * 40), Some(candidate),
         ChildReport.Work(members.map(ref => WorkMember(ref.id, WorkDisposition.CandidateReady, "Ready", Nil))), List(ValidationEvidence(check.name, ValidationState.Passed, validation.id, failures)), RetainedEvidence(Nil, Nil))
       workerArtifact <- publish(collector, worker, artifacts, admissions)

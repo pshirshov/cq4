@@ -203,7 +203,9 @@ int main(int argc, char **argv) {
         return 2;
     }
     const int64_t max_duration = 24LL * 60 * 60 * 1000;
-    int64_t startup = number(argv[1], max_duration), duration = number(argv[2], max_duration);
+    /* run-ms 0: the command has no execution deadline. */
+    bool unbounded = strcmp(argv[2], "0") == 0;
+    int64_t startup = number(argv[1], max_duration), duration = unbounded ? 0 : number(argv[2], max_duration);
     int64_t heartbeat = number(argv[3], max_duration), grace = number(argv[4], max_duration), force = number(argv[5], max_duration);
     /* Disk-safety ceiling per stream: everything below it is written to the output file, and only exceeding it stops the job. */
     int64_t maximum = number(argv[6], INT64_MAX);
@@ -272,7 +274,7 @@ int main(int argc, char **argv) {
         }
         if (failed) stop(&job, "HostFailure", now);
         if (!acknowledged && now - began >= startup) stop(&job, "StartupDeadline", now);
-        if (job.started && now - launched >= duration) stop(&job, "ExecutionDeadline", now);
+        if (!unbounded && job.started && now - launched >= duration) stop(&job, "ExecutionDeadline", now);
         if (now - beat >= heartbeat) stop(&job, "HeartbeatLost", now);
         if (job.stopping && now - job.stop_at >= grace && !kill_children()) failed = true;
         all_gone = reap(&job, now, &failed);

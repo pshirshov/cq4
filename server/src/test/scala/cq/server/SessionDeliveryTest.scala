@@ -116,7 +116,7 @@ abstract class SessionDeliveryTest extends SpecZIO with AssertZIO {
           Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Govern))
         childAssignment <- usage.assign(collector, Assignment(AssignmentId(uuid), owner.project, created.items.map(_.id).toSet, Attribution.Direct, None, None))
         reviewer <- usage.start(collector, governor.copy(id = AttemptId(uuid), assignment = childAssignment.id, parent = Some(governor.id), role = Role.Reviewer))
-        limits = HostLimits(3000, 10000, 1000, 300, 2000, 65536)
+        limits = HostLimits(3000, 1000, 300, 2000, 65536)
         profile = HarnessSetting(Harness.Codex, "/fixture", "fixture", "fixture", "0.156.1", Nil, Set.empty)
         request = DispatchRequest(RequestId(uuid), DispatchWork.Reviewer(ReviewerMode.Candidate), Harness.Codex, created.items, Nil, Nil,
           Some(ArtifactId(uuid)), Fence(ClaimId(uuid), 1), limits)
@@ -232,7 +232,7 @@ abstract class SessionDeliveryTest extends SpecZIO with AssertZIO {
               childAssignment = Assignment(AssignmentId(uuid), owner.project, Set(member.id), Attribution.Direct, None, None)
               attempt = governor.copy(id = AttemptId(uuid), assignment = childAssignment.id, parent = Some(governor.id), role = Role.Worker, startedAt = 1001)
               request = DispatchRequest(RequestId(uuid), DispatchWork.Worker(WorkerMode.Implement), Harness.Codex, List(member), Nil, Nil, None,
-                claim.fence, HostLimits(3000, 10000, 1000, 300, 2000, 262144))
+                claim.fence, HostLimits(3000, 1000, 300, 2000, 262144))
               ticket = DispatchTicket(request, childAssignment, attempt, HarnessSetting(Harness.Codex, "/fixture", "fixture", "fixture", "0.156.1", Nil, Set.empty), None)
               result = ChildResult(attempt.id, request, fixture.base, Some(fixture.base),
                 ChildReport.Work(List(WorkMember(member.id, WorkDisposition.CandidateReady, "Candidate", Nil))), Nil, RetainedEvidence(Nil, Nil))
@@ -318,7 +318,7 @@ abstract class SessionDeliveryTest extends SpecZIO with AssertZIO {
         val governor = Attempt(AttemptId(UUID.randomUUID()), assignment.id, None, owner.actor.session, Role.Governor,
           Harness.Codex, "fixture", "fixture", "fixture", clock.millis(), UsagePhase.Govern)
         val run = SupervisorRun(ProjectConfig(owner.project, "http://localhost", "Recovery"), assignment, governor, "0.156.1", fixture.source.toString, fixture.base, SessionOwnership.Managed)
-        val limits = HostLimits(3000, 10000, 1000, 300, 2000, 262144)
+        val limits = HostLimits(3000, 1000, 300, 2000, 262144)
         val profile = HarnessSetting(Harness.Codex, "/fixture/codex", "fixture", "fixture", "0.156.1", Nil, Set.empty)
         val draft = ItemDraft("Recovery consumer", "Retain interrupted evidence", Set.empty, false,
           Content.Task(TaskStatus.Ready, List("Account once"), None, Nil), Nil)

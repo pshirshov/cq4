@@ -20,7 +20,7 @@ final class JobSupervisorProcess extends SpecZIO with AssertZIO {
   override def config = super.config.copy(pluginConfig = PluginConfig.const(List(GuardianTestPlugin, WorkspaceTestPlugin)), activation = Activation(Repo -> Repo.Prod))
   private def owner: Scope = Scope(ProjectId(UUID.randomUUID()), Actor("job owner", SessionId(UUID.randomUUID()), Role.Governor))
   private def command(fixture: GuardianFixture, script: String): JobCommand =
-    JobCommand(List("python3", "-c", script), fixture.environment, "input λ", ExecutionLimits(Duration.ofSeconds(2), Duration.ofSeconds(30),
+    JobCommand(List("python3", "-c", script), fixture.environment, "input λ", ExecutionLimits(Duration.ofSeconds(2), None,
       Duration.ofMillis(900), Duration.ofMillis(100), Duration.ofSeconds(1), 262144))
   private def root(local: LocalWorkspaceFixture): IO[Throwable, Path] = ZIO.attemptBlocking(Files.createTempDirectory(local.directory, "supervisor-"))
   private def acquire(at: Path, scope: Scope, service: WorkspaceService[IO], driver: ExecutionDriver) =
@@ -28,6 +28,14 @@ final class JobSupervisorProcess extends SpecZIO with AssertZIO {
       service, driver, at.resolve("payload"), Clock.systemUTC())
 
   "Durable supervisor (Behavioral Active Blackbox; Git/filesystem/process Communication)" should {
+    "I21: keep the journalled fingerprint of a deadline-bound command and give a command without an execution limit its own" in { (_: GuardianFixture) => ZIO.attempt {
+      def limits(execution: Option[Duration]) = ExecutionLimits(Duration.ofSeconds(2), execution, Duration.ofMillis(900), Duration.ofMillis(100), Duration.ofSeconds(1), 262144)
+      def fingerprint(execution: Option[Duration]) = JobCommand(List("check"), Map("K" -> "V"), "input", limits(execution)).fingerprint
+      // SHA-256 of the launch encoding as journalled before harness jobs lost their execution deadline.
+      assert(fingerprint(Some(Duration.ofSeconds(30))) == "54d0141e3fd4bc7b55495bb3ba8a43aa7d088c4e9779a406a6676c7e42f6a3d6")
+      assert(fingerprint(None) == "350fa8a8dd0cb33471d68517cc092cc52a1bd17f93d1fa128505f09bd1dbf012")
+    }}
+
     "suppress launch when cancellation races a stalled Starting record" in { (local: LocalWorkspaceFixture, guardian: GuardianFixture) =>
       val scope = owner
       val workspace = local.fixture.spec(scope)

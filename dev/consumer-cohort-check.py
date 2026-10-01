@@ -47,7 +47,7 @@ class ConsumerCohortCheck(unittest.TestCase):
             name = value["attempt"]["value"]
             request = value["request"]
             request.update(work={role: {} if role == "Planner" else {"mode": "Implement" if role == "Worker" else "Candidate"}},
-                artifacts=[{"value": "plan-result"}] if role == "Worker" else [], guidance=[], limits={"executionMillis": "1000"},
+                artifacts=[{"value": "plan-result"}] if role == "Worker" else [], guidance=[], limits={"startupMillis": "1000"},
                 previous={"value": "worker-result"} if role == "Reviewer" else None)
             attempt = {"id": value["attempt"], "session": governor["session"], "parent": governor["id"], "role": role, "harness": routes[role]}
             assignment = {"members": [member["id"] for member in members], "attribution": "Shared", "cohort": name + "-cohort"}

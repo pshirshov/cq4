@@ -32,7 +32,7 @@ def main():
             "integrationTarget": None, "stateRoot": str(root / "sessions"), "guardian": str(guardian), "evaluation": None,
             "harnesses": [{"harness": "Codex", "executable": str(executable), "model": "fixture-model", "provider": "fixture-provider",
                            "version": "0.156.1", "providerExtensions": [], "providerEnvironment": []}],
-            "limits": {"startupMillis": "5000", "executionMillis": "60000", "heartbeatMillis": "1000",
+            "limits": {"startupMillis": "5000", "heartbeatMillis": "1000",
                        "graceMillis": "100", "killMillis": "1000", "retainedOutputBytes": 262144}, "checks": [],
         }))
         source = root / "request.txt"

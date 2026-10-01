@@ -95,7 +95,7 @@ final class MergePreparationProcess extends SpecZIO with AssertZIO {
     val input = prepared.root.resolve("input")
     Files.writeString(input, "native input λ\n")
     ExecutionSpec(prepared.tree, launch.arguments, launch.environment, input, prepared.root.resolve("stdout"), prepared.root.resolve("stderr"),
-      ExecutionLimits(Duration.ofSeconds(2), Duration.ofSeconds(10), Duration.ofMillis(900), Duration.ofMillis(100), Duration.ofSeconds(1), 262144))
+      ExecutionLimits(Duration.ofSeconds(2), Some(Duration.ofSeconds(10)), Duration.ofMillis(900), Duration.ofMillis(100), Duration.ofSeconds(1), 262144))
   }
   private def run(fixture: GuardianFixture, execution: ExecutionSpec): ProcessObservation =
     Using.resource(new GuardianDriver(fixture.binary).start(execution))(_.await(Duration.ofSeconds(15)))

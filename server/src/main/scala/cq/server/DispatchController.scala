@@ -4,7 +4,7 @@ import cq.api.*
 import cq.core.{DomainFailure, LedgerPolicy}
 import cq.host.*
 import distage.Lifecycle
-import java.nio.file.Path
+import java.nio.file.{Files, Path}
 import java.time.Clock
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
@@ -101,9 +101,19 @@ final class DispatchController(config: SupervisorConfig, runner: ChildRunner, jo
       .tapError(error => ZIO.succeed { disabled.set(true); entry.requestStop(error.getMessage) })
     result <- snapshot(entry)
   } yield result
+  /**
+   * Time since a running job last wrote to stdout or stderr, read from the modification times of its output files when a status is asked for.
+   * A harness is also silent throughout a long tool call, so the host reports this and never acts on it.
+   */
+  private def quiet(id: AttemptId, record: JobRecord): Option[Long] = Option.when(record.phase == JobPhase.Running) {
+    val payload = config.directory.resolve("payload").resolve(id.value.toString)
+    val written = List("stdout", "stderr").map(name => Files.getLastModifiedTime(payload.resolve(name)).toMillis).max
+    math.max(0L, clock.millis() - written)
+  }
   private def snapshot(entry: DispatchExecution): Task[DispatchStatus] = entry.activeJob match {
     case None => ZIO.succeed(entry.status)
-    case Some(id) => jobs.status(config.owner, id).map(record => DispatchProjection.bounded(entry.status.copy(process = Some(record.phase)))).catchSome {
+    case Some(id) => jobs.status(config.owner, id).flatMap(record => ZIO.attemptBlocking(
+      DispatchProjection.bounded(entry.status.copy(process = Some(record.phase), quietMillis = quiet(id, record))))).catchSome {
       case DomainFailure(_: Fault.Missing) => ZIO.succeed(entry.status)
     }
   }

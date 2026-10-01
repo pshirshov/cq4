@@ -31,7 +31,7 @@ const python = execFileSync("python3", ["-c", "import sys; print(sys.executable)
 const native = join(root, "fixture-harness");
 writeFileSync(native, `#!${python}\n` + readFileSync("dev/dispatch-fixture.py", "utf8").replace('print("codex-cli 0.156.1")', 'print("fixture 0.156.1 2.1.280 0.99.1")'));
 chmodSync(native, 0o700);
-const limits = { startupMillis: "5000", executionMillis: "60000", heartbeatMillis: "1000", graceMillis: "300", killMillis: "2000", retainedOutputBytes: 262144 };
+const limits = { startupMillis: "5000", heartbeatMillis: "1000", graceMillis: "300", killMillis: "2000", retainedOutputBytes: 262144 };
 const settings = join(root, "settings.json");
 writeFileSync(settings, JSON.stringify({ integrationTarget: null, stateRoot: join(root, "sessions"), guardian, checks: [], evaluation: null, limits,
   harnesses: [["Codex", "fixture-provider", "0.156.1"], ["Claude", "anthropic", "2.1.280"], ["Pi", "fixture-provider", "0.99.1"]].map(([harness, provider, version]) =>
@@ -146,7 +146,7 @@ assert.deepEqual(resumed.cycle.run, run, "a resume reattaches to the cycle's run
 assert.equal(resumed.cycle.lineage.filter(entry => entry.member.Run !== undefined).length, 1, "no duplicate run");
 assert.deepEqual((await first.tool("session", { Context: {} })).Context.value.workflow.id, run);
 const current = await detail(target.id);
-const produced = (await change(first, [{ Produce: { producer: target.id, expected: current.revision, drafts: [{ ...draft, title: "Descendant of cycle 1" }] } }], [claim.fence])).Changed.ack.items
+const produced = (await change(first, [{ Produce: { producer: target.id, expected: current.revision, drafts: [{ ...draft, title: "Descendant of cycle 1" }], milestone: null } }], [claim.fence])).Changed.ack.items
   .find(item => item.id.number !== target.id.number);
 await first.tool("dispatch", { Cancel: { attempt: child.attempt } });
 const deadline = Date.now() + 60000;

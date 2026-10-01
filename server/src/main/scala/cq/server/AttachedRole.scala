@@ -67,8 +67,7 @@ final class AttachedProgram(config: SupervisorConfig, authority: SupervisorAutho
       guard.install()
       (peer, guard)
     })({ (peer, guard) => finish(peer).orDie.ensuring(ZIO.succeed(guard.release())) })({ (peer, _) =>
-      (initial *> ZIO.acquireReleaseWith(monitor.interruptible.fork)(_.interrupt)( _ => loop(peer))).timeoutFail(new IllegalStateException("Attached session lifetime expired"))(
-        zio.Duration.fromJava(SupervisorConfig.AttachedLifetime)) }) }
+      initial *> ZIO.acquireReleaseWith(monitor.interruptible.fork)(_.interrupt)( _ => loop(peer)) }) }
 }
 
 final class AttachedRole(program: AttachedProgram) extends RoleTask[Task] {

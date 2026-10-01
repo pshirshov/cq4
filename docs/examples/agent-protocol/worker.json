@@ -87,11 +87,10 @@
         },
         "limits": {
           "startupMillis": "10000",
-          "executionMillis": "900000",
           "heartbeatMillis": "2000",
           "graceMillis": "1000",
           "killMillis": "3000",
-          "outputBytes": 8388608
+          "retainedOutputBytes": 8388608
         }
       },
       "members": [
@@ -310,7 +309,7 @@
             },
             "receivedAt": "1790581672247"
           },
-          "body": "{\"attempt\":{\"value\":\"9ebb4c3d-3d9b-4af9-83cb-0bc339d61c3b\"},\"request\":{\"request\":{\"value\":\"cd4bef4d-0de2-46de-9540-6132c65a8915\"},\"work\":{\"Planner\":{}},\"harness\":\"Codex\",\"members\":[{\"id\":{\"project\":{\"value\":\"2ecd3f9d-43aa-42e0-b0d1-34b892e871d3\"},\"ledger\":\"Tasks\",\"number\":\"1\"},\"revision\":{\"value\":\"2\"}},{\"id\":{\"project\":{\"value\":\"2ecd3f9d-43aa-42e0-b0d1-34b892e871d3\"},\"ledger\":\"Tasks\",\"number\":\"2\"},\"revision\":{\"value\":\"2\"}}],\"guidance\":[{\"id\":{\"project\":{\"value\":\"2ecd3f9d-43aa-42e0-b0d1-34b892e871d3\"},\"ledger\":\"Goals\",\"number\":\"1\"},\"revision\":{\"value\":\"3\"}}],\"artifacts\":[],\"previous\":null,\"fence\":{\"claim\":{\"value\":\"b1c2d3e4-0001-4000-8000-000000000001\"},\"generation\":\"1\"},\"limits\":{\"startupMillis\":\"10000\",\"executionMillis\":\"900000\",\"heartbeatMillis\":\"2000\",\"graceMillis\":\"1000\",\"killMillis\":\"3000\",\"outputBytes\":8388608}},\"base\":{\"value\":\"b31591b99b83a3caa54d39160e8498463ff2feaa\"},\"candidate\":null,\"report\":{\"Plan\":{\"members\":[{\"item\":{\"project\":{\"value\":\"2ecd3f9d-43aa-42e0-b0d1-34b892e871d3\"},\"ledger\":\"Tasks\",\"number\":\"1\"},\"disposition\":\"Assessed\",\"summary\":\"Compatible with task 2 in one candidate; retain separate inspection of both counting and documentation criteria.\"},{\"item\":{\"project\":{\"value\":\"2ecd3f9d-43aa-42e0-b0d1-34b892e871d3\"},\"ledger\":\"Tasks\",\"number\":\"2\"},\"disposition\":\"Assessed\",\"summary\":\"Compatible with task 1 in one candidate; retain separate inspection of CLI, tests, and usage criteria.\"}],\"proposal\":null,\"assessments\":[{\"compatibility\":\"Compatible\",\"objective\":\"Implement and independently review both task scopes in one standard-library Python word-frequency candidate.\",\"dependencies\":\"Both tasks target one Python module. Counting and sorting provide the ordered records that --top limits; argument validation must finish before stdin processing, and the CLI must preserve the task 1 output format.\",\"interference\":\"A shared entry point, tests, and README require coordination. Apply --top after the specified sort, and ensure argument errors take precedence over --help without producing stdout.\",\"members\":[{\"member\":{\"id\":{\"project\":{\"value\":\"2ecd3f9d-43aa-42e0-b0d1-34b892e871d3\"},\"ledger\":\"Tasks\",\"number\":\"1\"},\"revision\":{\"value\":\"2\"}},\"acceptance\":[{\"criterion\":0,\"checks\":[\"consumer-oracle\"],\"inspection\":\"Run the configured consumer-oracle check freshly; inspect its cases for ASCII tokenization, Unicode separators, lowercase normalization, count ordering, ties, and empty output.\"},{\"criterion\":1,\"checks\":[\"consumer-oracle\"],\"inspection\":\"Inspect discovered unittest cases and README for the specified rules; run the configured check freshly to verify the consumer behavior.\"}]},{\"member\":{\"id\":{\"project\":{\"value\":\"2ecd3f9d-43aa-42e0-b0d1-34b892e871d3\"},\"ledger\":\"Tasks\",\"number\":\"2\"},\"revision\":{\"value\":\"2\"}},\"acceptance\":[{\"criterion\":0,\"checks\":[\"consumer-oracle\"],\"inspection\":\"Run the configured consumer-oracle check freshly; inspect cases for --top bounds, malformed and oversized values, unknown and positional arguments, error precedence over --help, exit codes, and stdout/stderr behavior.\"},{\"criterion\":1,\"checks\":[\"consumer-oracle\"],\"inspection\":\"Inspect README usage and discovered unittest cases, including option prefixes and oversized numeric input; verify the documented python launch and test commands against the candidate.\"}]}]}]}},\"validation\":[]}"
+          "body": "{\"attempt\":{\"value\":\"9ebb4c3d-3d9b-4af9-83cb-0bc339d61c3b\"},\"request\":{\"request\":{\"value\":\"cd4bef4d-0de2-46de-9540-6132c65a8915\"},\"work\":{\"Planner\":{}},\"harness\":\"Codex\",\"members\":[{\"id\":{\"project\":{\"value\":\"2ecd3f9d-43aa-42e0-b0d1-34b892e871d3\"},\"ledger\":\"Tasks\",\"number\":\"1\"},\"revision\":{\"value\":\"2\"}},{\"id\":{\"project\":{\"value\":\"2ecd3f9d-43aa-42e0-b0d1-34b892e871d3\"},\"ledger\":\"Tasks\",\"number\":\"2\"},\"revision\":{\"value\":\"2\"}}],\"guidance\":[{\"id\":{\"project\":{\"value\":\"2ecd3f9d-43aa-42e0-b0d1-34b892e871d3\"},\"ledger\":\"Goals\",\"number\":\"1\"},\"revision\":{\"value\":\"3\"}}],\"artifacts\":[],\"previous\":null,\"fence\":{\"claim\":{\"value\":\"b1c2d3e4-0001-4000-8000-000000000001\"},\"generation\":\"1\"},\"limits\":{\"startupMillis\":\"10000\",\"heartbeatMillis\":\"2000\",\"graceMillis\":\"1000\",\"killMillis\":\"3000\",\"retainedOutputBytes\":8388608}},\"base\":{\"value\":\"b31591b99b83a3caa54d39160e8498463ff2feaa\"},\"candidate\":null,\"report\":{\"Plan\":{\"members\":[{\"item\":{\"project\":{\"value\":\"2ecd3f9d-43aa-42e0-b0d1-34b892e871d3\"},\"ledger\":\"Tasks\",\"number\":\"1\"},\"disposition\":\"Assessed\",\"summary\":\"Compatible with task 2 in one candidate; retain separate inspection of both counting and documentation criteria.\"},{\"item\":{\"project\":{\"value\":\"2ecd3f9d-43aa-42e0-b0d1-34b892e871d3\"},\"ledger\":\"Tasks\",\"number\":\"2\"},\"disposition\":\"Assessed\",\"summary\":\"Compatible with task 1 in one candidate; retain separate inspection of CLI, tests, and usage criteria.\"}],\"proposal\":null,\"assessments\":[{\"compatibility\":\"Compatible\",\"objective\":\"Implement and independently review both task scopes in one standard-library Python word-frequency candidate.\",\"dependencies\":\"Both tasks target one Python module. Counting and sorting provide the ordered records that --top limits; argument validation must finish before stdin processing, and the CLI must preserve the task 1 output format.\",\"interference\":\"A shared entry point, tests, and README require coordination. Apply --top after the specified sort, and ensure argument errors take precedence over --help without producing stdout.\",\"members\":[{\"member\":{\"id\":{\"project\":{\"value\":\"2ecd3f9d-43aa-42e0-b0d1-34b892e871d3\"},\"ledger\":\"Tasks\",\"number\":\"1\"},\"revision\":{\"value\":\"2\"}},\"acceptance\":[{\"criterion\":0,\"checks\":[\"consumer-oracle\"],\"inspection\":\"Run the configured consumer-oracle check freshly; inspect its cases for ASCII tokenization, Unicode separators, lowercase normalization, count ordering, ties, and empty output.\"},{\"criterion\":1,\"checks\":[\"consumer-oracle\"],\"inspection\":\"Inspect discovered unittest cases and README for the specified rules; run the configured check freshly to verify the consumer behavior.\"}]},{\"member\":{\"id\":{\"project\":{\"value\":\"2ecd3f9d-43aa-42e0-b0d1-34b892e871d3\"},\"ledger\":\"Tasks\",\"number\":\"2\"},\"revision\":{\"value\":\"2\"}},\"acceptance\":[{\"criterion\":0,\"checks\":[\"consumer-oracle\"],\"inspection\":\"Run the configured consumer-oracle check freshly; inspect cases for --top bounds, malformed and oversized values, unknown and positional arguments, error precedence over --help, exit codes, and stdout/stderr behavior.\"},{\"criterion\":1,\"checks\":[\"consumer-oracle\"],\"inspection\":\"Inspect README usage and discovered unittest cases, including option prefixes and oversized numeric input; verify the documented python launch and test commands against the candidate.\"}]}]}]}},\"validation\":[]}"
         }
       ],
       "previous": null
@@ -327,7 +326,7 @@
           "python"
         ],
         "executionMillis": "180000",
-        "outputBytes": 262144,
+        "retainedOutputBytes": 262144,
         "attempts": 1,
         "revalidations": 0
       }
@@ -429,11 +428,10 @@
       },
       "limits": {
         "startupMillis": "10000",
-        "executionMillis": "900000",
         "heartbeatMillis": "2000",
         "graceMillis": "1000",
         "killMillis": "3000",
-        "outputBytes": 8388608
+        "retainedOutputBytes": 8388608
       }
     },
     "base": {

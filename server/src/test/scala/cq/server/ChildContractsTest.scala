@@ -33,7 +33,7 @@ final class ChildContractsLocal extends AnyWordSpec {
         DispatchWork.Reviewer(ReviewerMode.Plan) -> review, DispatchWork.Reviewer(ReviewerMode.Audit) -> review)
       cases.foreach { case (work, report) =>
         val request = DispatchRequest(RequestId(UUID.randomUUID()), work, Harness.Codex, List(member), Nil, Nil,
-          Some(ArtifactId(UUID.randomUUID())), Fence(ClaimId(UUID.randomUUID()), 1), HostLimits(3000, 10000, 1000, 300, 2000, 262144))
+          Some(ArtifactId(UUID.randomUUID())), Fence(ClaimId(UUID.randomUUID()), 1), HostLimits(3000, 1000, 300, 2000, 262144))
         val result = ChildResult(AttemptId(UUID.randomUUID()), request, GitCommit("a" * 40), None, report, Nil, RetainedEvidence(Nil, Nil))
         ChildContracts.result(project, result)
         intercept[IllegalArgumentException](ChildContracts.result(project, result.copy(candidate = Some(GitCommit("b" * 40)))))
@@ -73,9 +73,9 @@ final class ChildContractsLocal extends AnyWordSpec {
       val handle = ArtifactId(UUID.randomUUID())
       val attempt = AttemptId(UUID.randomUUID())
       val request = DispatchRequest(RequestId(UUID.randomUUID()), DispatchWork.Planner(), Harness.Codex, members, Nil, Nil, None,
-        Fence(ClaimId(UUID.randomUUID()), 1), HostLimits(3000, 10000, 1000, 300, 2000, 262144))
+        Fence(ClaimId(UUID.randomUUID()), 1), HostLimits(3000, 1000, 300, 2000, 262144))
       val initial = DispatchStatus(request.request, attempt, DispatchPhase.Running, Some(JobPhase.Settled), members.map(_.id),
-        DispatchProjection.EmptyCounts, ChildNext.Wait, None, None, None, false, true, None)
+        DispatchProjection.EmptyCounts, ChildNext.Wait, None, None, None, false, true, None, None)
       val reports = List(
         ChildReport.Evidence(members.map(ref => EvidenceMember(ref.id, EvidenceDisposition.Inconclusive, "🙂" * 3000, Nil, Nil, Nil))),
         ChildReport.Plan(members.map(ref => PlanMember(ref.id, PlanDisposition.Abstained, "🙂" * 3000)), None, Nil),
@@ -107,7 +107,7 @@ final class ChildContractsLocal extends AnyWordSpec {
       val flagged = ChildReport.Review(List(ReviewMember(member.id, ReviewVerdict.Accepted, List("Memory candidate: the build pins its compiler"))), None)
       assert(ChildContracts.report(DispatchWork.Reviewer(ReviewerMode.Candidate), List(member), encoded(flagged)) == flagged)
       val request = DispatchRequest(RequestId(UUID.randomUUID()), work, Harness.Codex, List(member), Nil, Nil, None,
-        Fence(ClaimId(UUID.randomUUID()), 1), HostLimits(3000, 10000, 1000, 300, 2000, 262144))
+        Fence(ClaimId(UUID.randomUUID()), 1), HostLimits(3000, 1000, 300, 2000, 262144))
       val wire = DispatchRequest_JsonCodec.encode(BaboonCodecContext.Default, request)
       assert(ChildContracts.decodeRequest(project, wire) == request)
       val missing = intercept[RuntimeException](ChildContracts.decodeRequest(project, Json.fromJsonObject(wire.asObject.get.remove("previous"))))
@@ -123,7 +123,7 @@ final class ChildContractsLocal extends AnyWordSpec {
       val project = ProjectId(UUID.randomUUID())
       val member = ItemRevision(ItemId(project, Ledger.Tasks, 1), Revision(1))
       val request = DispatchRequest(RequestId(UUID.randomUUID()), DispatchWork.Worker(WorkerMode.Implement), Harness.Codex, List(member), Nil, Nil, None,
-        Fence(ClaimId(UUID.randomUUID()), 1), HostLimits(3000, 10000, 1000, 300, 2000, 262144))
+        Fence(ClaimId(UUID.randomUUID()), 1), HostLimits(3000, 1000, 300, 2000, 262144))
       val decisive = ArtifactId(UUID.randomUUID())
       val earlier = List.fill(3)(ArtifactId(UUID.randomUUID()))
       def result(failures: List[ArtifactId]): ChildResult = ChildResult(AttemptId(UUID.randomUUID()), request, GitCommit("a" * 40), Some(GitCommit("b" * 40)),

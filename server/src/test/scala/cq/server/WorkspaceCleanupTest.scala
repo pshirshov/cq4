@@ -35,7 +35,7 @@ final class WorkspaceCleanupLocal extends SpecZIO with AssertZIO {
         HostFiles.directory(directory)
         HostFiles.immutable(directory.resolve("ticket.json"), "{}", 16)
         phase.foreach(value => HostFiles.immutable(directory.resolve("receipt.json"), HostFiles.encode(DispatchStatus_JsonCodec, DispatchStatus(RequestId(UUID.randomUUID()),
-          spec.attempt, value, None, Nil, DispatchProjection.EmptyCounts, ChildNext.Wait, None, None, None, true, true, None)), 16384))
+          spec.attempt, value, None, Nil, DispatchProjection.EmptyCounts, ChildNext.Wait, None, None, None, true, true, None, None)), 16384))
       }
       for {
         session <- ZIO.attemptBlocking {

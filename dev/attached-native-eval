@@ -61,7 +61,7 @@ def main():
     subprocess.run(["git", "-C", str(repository), "-c", "user.name=CQ consumer", "-c", "user.email=cq@example.invalid", "commit", "--quiet", "-m", "Consumer base"], check=True)
     settings = root / "settings.json"
     settings.write_text(json.dumps({"stateRoot": str(root / "sessions"), "guardian": str(args.guardian.resolve()), "harnesses": routes,
-        "limits": {"startupMillis": "10000", "executionMillis": "600000", "heartbeatMillis": "2000", "graceMillis": "1000", "killMillis": "3000", "retainedOutputBytes": 2097152},
+        "limits": {"startupMillis": "10000", "heartbeatMillis": "2000", "graceMillis": "1000", "killMillis": "3000", "retainedOutputBytes": 2097152},
         "checks": [], "integrationTarget": None, "evaluation": {"run": root.name, "scenario": "attached-" + args.harness, "assessor": False}}, indent=2))
     port = module["free_port"]()
     env.update(CQ_HOST="127.0.0.1", CQ_PORT=str(port), CQ_ORIGIN=f"http://127.0.0.1:{port}", CQ_TOKEN=uuid.uuid4().hex, CQ_SESSION=str(uuid.uuid4()))

@@ -2,7 +2,7 @@
 
 M2 host primitive, currently Linux 5.9+ only. The current locally verified release platform is Linux amd64 (observed kernel 7.1.9). A macOS guardian is not implemented; the Scala supervisor must reject an unsupported host explicitly. This helper is not linked into the CQ server and does not contain project, workflow or harness policy.
 
-One small native helper owns one root command and its descendants. The Scala driver supplies an explicit working directory/environment, prepared input file, private output paths and required startup/execution/heartbeat/termination deadlines and the output ceiling. The helper receives `H` heartbeats and `C` cancellation on its standard input. Closing the pipe cancels the job, including when its owning process receives `SIGKILL`. Missing heartbeats handle a frozen owner. Standard output contains a bounded lifecycle protocol; command stdout and stderr are drained separately into private files.
+One small native helper owns one root command and its descendants. The Scala driver supplies an explicit working directory/environment, prepared input file, private output paths, the startup/heartbeat/termination deadlines, an execution deadline or `0` for none, and the output ceiling. The helper receives `H` heartbeats and `C` cancellation on its standard input. Closing the pipe cancels the job, including when its owning process receives `SIGKILL`. Missing heartbeats handle a frozen owner. Standard output contains a bounded lifecycle protocol; command stdout and stderr are drained separately into private files.
 
 At entry, the helper closes every inherited descriptor above stderr before creating its own descriptors. This prevents accidental file/socket leakage and inherited control writers concealing owner exit. It resets signal dispositions for itself and again for the command before unblocking command signals. Descriptor closure uses `close_range`, available since Linux 5.9; an unsupported syscall causes explicit setup failure. [Descriptor closure semantics](https://man7.org/linux/man-pages/man2/close_range.2.html).
 
@@ -23,13 +23,39 @@ A healthy process is never stopped for the size of its output (D95: a Claude wor
 
 The `--capture` mode used for merge diagnostics keeps its own explicit byte bound and fails on overflow.
 
+## Deadlines that stay and deadlines that went
+
+A fixed execution deadline killed legitimate work and could not be tuned per task (D78: workers killed mid-run, their work lost). A harness job, the governing harness or a dispatched child, therefore has **no** wall-clock deadline: it ends when it exits, when the governor or operator cancels it, or when its owner is gone. What bounds the remaining risk is liveness and ownership, not elapsed time.
+
+| Budget | Where | Decision |
+|---|---|---|
+| Exec acknowledgement `startupMillis` | `guardian.c` `StartupDeadline`, `GuardianDriver.monitor` | stays |
+| Owner heartbeat `heartbeatMillis` (frozen or dead owner) | `guardian.c` `HeartbeatLost`, control-pipe EOF `OwnerExited` | stays |
+| Termination `graceMillis`, `killMillis`, the driver's 2 s drain | `guardian.c`, `GuardianDriver` | stays |
+| Output disk-safety ceiling, 1 GiB per stream | `ExecutionLimits.OutputCeilingBytes` | stays |
+| Shutdown drain grace + kill + 10 s, then exit 75 | `SupervisorWatchdog`, armed by `beginShutdown` | stays |
+| Host operation bounds: 1 s journal/ticket acknowledgements, 10 s HTTP and Git inspection, 30 s per attached MCP operation, 60 s integration preparation (server calls) | `JobSupervisor`, `HttpServerApi`, `BoundedHostCommand`, `AttachedProgram`, `IntegrationPreparation` | stays |
+| Claim lease, 3 min renewed every 20 s | `ChildRunner`, `IntegrationController` | stays |
+| Configured check `ValidationCheck.executionMillis` (at most 24 h) | `HostValidation`, `ReviewerChecks` → guardian `ExecutionDeadline` | stays, per check |
+| Git job, 30 min (above the sum of the checkout executor's own 30 s command deadlines) | `SupervisedGitIntegration.Execution` | stays, fixed |
+| Harness execution deadline `HostLimits.executionMillis` | `guardian.c` `ExecutionDeadline` for harness jobs | **removed**: the field is gone, `run-ms 0` means none |
+| Driver wall-clock maximum startup + execution + grace + kill + drain → `Uncertain` | `GuardianDriver.monitor` | **removed** for a job without an execution deadline |
+| Session deadline before shutdown (managed: startup + execution; attached: 8 h) → exit 75 | `SupervisorWatchdog` | **removed** |
+| Attached session lifetime, 8 h | `AttachedProgram.run` | **removed** |
+| `check.executionMillis ≤ limits.executionMillis` and startup + execution + cleanup + 10 min ≤ 24 h | `SupervisorConfig.load` | **removed** |
+| One expiry fixed at session start, copied into the host, child and local credentials | `SupervisorAuthority`, `ChildRunner`, `LocalAccess` | **removed**, see below |
+
+Credentials no longer bound a session. The server grants a scoped credential for at most 24 hours. The host's collector and governor credentials are granted for that lifetime less a ten-minute clock margin and granted again from the operator credential once under an hour remains (`RenewingServerApi`). A harness process keeps the credential it was launched with: the governing harness of `cq run` and each child receive a domain credential at their own start for the same lifetime. A single harness process that runs longer than that loses its domain tools (a child's ledger reads; a batch governor's reads, claims and changes) while its local tools, its work and the host's publication of its result continue. An attached governor is not affected: the attached host serves its domain calls with the renewed credential. Local capabilities do not expire; a child's is revoked when its attempt ends. There is no automatic stop for an idle child and no cost or token budget stop.
+
+`DispatchStatus.quietMillis` makes a stalled child visible instead: for a child whose active job is running, it is the time since that job last wrote to stdout or stderr, taken from the modification times of `payload/<attempt>/stdout` and `stderr` when a status is requested (nothing polls). It is absent when no job is running. A harness writes nothing during a long tool call (a worker running a ten-minute test is silent), so quiet time is evidence for a human, not a trigger: the governor's instructions tell it to report a long-quiet child to the operator and not to cancel it on its own.
+
 The root also receives a parent-death signal if the helper dies. That signal does not guarantee termination of the complete hierarchy. Missing/malformed terminal protocol, helper failure, unsettled descendants or a driver timeout therefore produce `Uncertain` from the Scala driver. The [durable local job service](local-jobs.md) persists uncertainty and workspace quarantine before admitting further work. A timeout is not proof of termination. [Parent-death signal scope](https://man7.org/linux/man-pages/man2/PR_SET_PDEATHSIG.2const.html).
 
 ## Scala driver
 
 `GuardianDriver.start` returns a managed execution immediately, with nonblocking status and cancellation. Required execution limits remain distinct. Launch runs separately from monitoring; heartbeats run separately from both so a blocked write cannot freeze the monitor. The driver retains the actual Java process object for helper cleanup. Numeric PIDs in status are diagnostic only.
 
-Startup acknowledgement, observed stopping, cancellation and a helper that reports completion but hangs each have independent deadlines. Lifecycle and diagnostic streams are capped at 4096 bytes; a lifecycle line is capped at 512 bytes. The typed parser rejects contradictory ordering, malformed fields, missing completion and a helper exit code that contradicts its record. A complete terminal record is insufficient until the helper exits and both drains finish.
+Startup acknowledgement, observed stopping, cancellation and a helper that reports completion but hangs each have independent deadlines. Only a job with an execution deadline also has a wall-clock maximum. Lifecycle and diagnostic streams are capped at 4096 bytes; a lifecycle line is capped at 512 bytes. The typed parser rejects contradictory ordering, malformed fields, missing completion and a helper exit code that contradicts its record. A complete terminal record is insufficient until the helper exits and both drains finish.
 
 Cancellation is idempotent after settlement and cannot relabel completed work. On uncertainty the driver stops heartbeat delivery, requests pipe closure through its writer, and retains a bounded cleanup attempt before force-killing the helper if necessary. The state remains uncertain even if that later cleanup succeeds: it cannot prove termination of descendants after helper failure. Pending workspaces must remain unavailable for integration or reuse until the durable supervisor resolves them.
 

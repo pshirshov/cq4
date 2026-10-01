@@ -44,7 +44,7 @@ object IntegrationApiCheck {
     val worker = attempt(Role.Worker, UsagePhase.Work, Some(parent.id))
     val reviewer = attempt(Role.Reviewer, UsagePhase.Review, Some(parent.id))
     val request = DispatchRequest(RequestId(uuid), DispatchWork.Worker(WorkerMode.Implement), Harness.Codex, members, Nil, Nil, None,
-      claim.fence, HostLimits(3000, 10000, 1000, 300, 2000, 262144))
+      claim.fence, HostLimits(3000, 1000, 300, 2000, 262144))
     val base = GitCommit("a" * 40)
     val candidate = GitCommit("b" * 40)
     def publish(result: ChildResult): ArtifactId = {

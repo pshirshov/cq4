@@ -10,7 +10,7 @@ import izumi.distage.testkit.scalatest.{AssertZIO, SpecZIO}
 import java.net.URI
 import java.nio.file.{Files, Path}
 import java.nio.file.attribute.PosixFilePermissions
-import java.time.Clock
+import java.time.{Clock, Duration}
 import java.util.UUID
 import zio.{IO, Promise, Runtime, Semaphore, Task, Unsafe, ZIO}
 
@@ -66,14 +66,35 @@ emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_toke
 """ + """target.write_text(json.dumps({"Review": {"members": [{"item": item, "verdict": "Accepted", "findings": []} for item in members], "proposal": None}}))
 emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_tokens": 0, "cache_write_input_tokens": 0, "output_tokens": 5, "reasoning_output_tokens": 0}})
 """
-  private val Stalling = Header + """Path("tracked.txt").write_text("partial change\n")
+  /** A child that records the payload of the domain credential it was launched with. */
+  private val Credentialed = Header + """import base64, os
+payload = os.environ["CQ_MCP_CQ_TOKEN"].split(".")[0]
+Path(".work/evidence").mkdir(parents=True)
+Path(".work/evidence/credential.json").write_bytes(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+target.write_text(json.dumps({"Work": {"members": [{"item": item, "disposition": "Blocked", "summary": "Recorded the credential", "evidence": []} for item in members]}}))
+emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_tokens": 0, "cache_write_input_tokens": 0, "output_tokens": 5, "reasoning_output_tokens": 0}})
+"""
+  /** A child that is silent, writes one event, and is silent again before it reports. */
+  private val Intermittent = Header + """time.sleep(2.5)
+emit({"type": "item.completed", "item": {"id": "item_0", "type": "agent_message", "text": "still working"}})
+time.sleep(2.5)
+target.write_text(json.dumps({"Work": {"members": [{"item": item, "disposition": "Blocked", "summary": "Reported after two silences", "evidence": []} for item in members]}}))
+emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_tokens": 0, "cache_write_input_tokens": 0, "output_tokens": 5, "reasoning_output_tokens": 0}})
+"""
+  /** A healthy child that is silent for longer than any former execution deadline of this suite before it reports. */
+  private val Slow = Header + """time.sleep(3)
+target.write_text(json.dumps({"Work": {"members": [{"item": item, "disposition": "Blocked", "summary": "Reported after a long silence", "evidence": []} for item in members]}}))
+emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_tokens": 0, "cache_write_input_tokens": 0, "output_tokens": 5, "reasoning_output_tokens": 0}})
+"""
+  private val Partial = Header + """Path("tracked.txt").write_text("partial change\n")
 Path("new.txt").write_text("untracked partial file\n")
 Path(".work/evidence").mkdir(parents=True)
 Path(".work/evidence/partial.log").write_text("still running\n")
 sys.stderr.write("worker diagnostic\n")
 sys.stderr.flush()
-time.sleep(30)
 """
+  private val Stalling = Partial + "time.sleep(30)\n"
+  private val Failing = Partial + "sys.exit(3)\n"
 
   private final class Receiver(application: Application, auth: Authorization, root: Authority, authority: Authority, runtime: Runtime[Any]) extends ServerApi {
     private def execute[A](value: Task[A]): A = Unsafe.unsafe { implicit unsafe => runtime.unsafe.run(value).getOrThrowFiberFailure() }
@@ -87,7 +108,7 @@ time.sleep(30)
 
   private final case class Fixture(owner: Scope, collector: Scope, config: SupervisorConfig, authority: SupervisorAuthority, runner: ChildRunner, agents: AgentCatalog,
     jobs: JobSupervisor, members: List[ItemRevision], fence: Fence, governor: Attempt, profile: HarnessSetting, clock: Clock) {
-    val limits: HostLimits = HostLimits(3000, 30000, 900, 100, 1000, 262144)
+    val limits: HostLimits = HostLimits(3000, 900, 100, 1000, 262144)
     /** Runs one child of `controller` to its terminal status. */
     def child(controller: DispatchController, script: String, request: DispatchRequest): Task[DispatchStatus] = for {
       _ <- ZIO.attemptBlocking(install(script))
@@ -136,7 +157,7 @@ time.sleep(30)
     val root = auth.authenticate(token, Some(owner.actor.session.value.toString))
     val expires = clock.millis() + 60L * 60 * 1000
     val application = new Application(ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, auth)
-    val limits = HostLimits(3000, 30000, 900, 100, 1000, 262144)
+    val limits = HostLimits(3000, 900, 100, 1000, 262144)
     for {
       runtime <- ZIO.runtime[Any]
       _ <- ledger.initialize(owner, project.name)
@@ -154,11 +175,11 @@ time.sleep(30)
       collectorAuthority = auth.authenticate(auth.grant(root, GrantRequest(owner.project, collector.actor, expires)).value, None)
       governorAuthority = auth.authenticate(auth.grant(root, GrantRequest(owner.project, owner.actor, expires)).value, None)
       authority = SupervisorAuthority(new Receiver(application, auth, root, root, runtime), new Receiver(application, auth, root, collectorAuthority, runtime),
-        new Receiver(application, auth, root, governorAuthority, runtime), AccessToken("governor", expires), expires)
+        new Receiver(application, auth, root, governorAuthority, runtime), AccessToken("governor", expires))
       workspaces = local.fixture.service
       jobs <- JobSupervisor.acquire(config.owner, ZIO.attemptBlocking(FileJobRepository.open(directory.resolve("journal"), project.project, owner.actor.session)),
         workspaces, new GuardianDriver(guardian.binary), directory.resolve("payload"), clock)
-      access = new LocalAccess(authority, clock)
+      access = new LocalAccess
       _ <- ZIO.succeed(access.bind(URI.create("http://127.0.0.1:1")))
       agents = new AgentCatalog(new McpSchemas, new ChildInstructions)
       runner = new ChildRunner(config, authority, new HarnessRegistry(Set(new ClaudeAdapter, new CodexAdapter, new PiAdapter)), jobs, workspaces,
@@ -188,7 +209,7 @@ time.sleep(30)
       (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
         artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
       fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None, Nil) { f => for {
-        entry <- f.dispatch(Completing, HostLimits(3000, 30000, 900, 100, 1000, 262144))
+        entry <- f.dispatch(Completing, HostLimits(3000, 900, 100, 1000, 262144))
         _ <- f.runner.run(entry).timeoutFail(new IllegalStateException("Worker did not finish"))(zio.Duration.fromSeconds(60))
         status = entry.status
         _ <- ZIO.attempt(assert(status.phase == DispatchPhase.Completed && status.result.nonEmpty, status.toString))
@@ -220,7 +241,7 @@ time.sleep(30)
       fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None, Nil) { f =>
         val bound = 65536
         for {
-          entry <- f.dispatch(Verbose, HostLimits(3000, 30000, 900, 100, 1000, bound))
+          entry <- f.dispatch(Verbose, HostLimits(3000, 900, 100, 1000, bound))
           _ <- f.runner.run(entry).timeoutFail(new IllegalStateException("Worker did not finish"))(zio.Duration.fromSeconds(60))
           status = entry.status
           _ <- ZIO.attempt(assert(status.phase == DispatchPhase.Completed && status.result.nonEmpty && status.usageDelivered,
@@ -250,7 +271,7 @@ time.sleep(30)
       (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
         artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
       fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None, Nil) { f => for {
-        entry <- f.dispatch(Recording, HostLimits(3000, 30000, 900, 100, 1000, 262144))
+        entry <- f.dispatch(Recording, HostLimits(3000, 900, 100, 1000, 262144))
         _ <- f.runner.run(entry).timeoutFail(new IllegalStateException("Worker did not finish"))(zio.Duration.fromSeconds(60))
         status = entry.status
         _ <- ZIO.attempt(assert(status.phase == DispatchPhase.Completed && status.result.nonEmpty, status.toString))
@@ -284,7 +305,42 @@ time.sleep(30)
       } yield () }
     }
 
-    "collect partial work when the worker is killed at its execution deadline or cancelled" in {
+    "I21: complete a worker that runs past the former execution deadline" in {
+      (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None, Nil) { f => for {
+        entry <- f.dispatch(Slow, HostLimits(3000, 900, 100, 1000, 262144))
+        _ <- f.runner.run(entry).timeoutFail(new IllegalStateException("Worker did not finish"))(zio.Duration.fromSeconds(60))
+        job <- f.jobs.status(f.config.owner, entry.ticket.attempt.id)
+        _ <- ZIO.attempt(assert(entry.status.phase == DispatchPhase.Completed && entry.status.result.nonEmpty &&
+          job.exit.exists(exit => exit.reason == StopReason.Exited && exit.code.contains(0)), s"${entry.status} $job"))
+      } yield () }
+    }
+
+    "I21: grant a child its domain credential at its own start for the server's grant lifetime" in {
+      (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None, Nil) { f => for {
+        entry <- f.dispatch(Credentialed, HostLimits(3000, 900, 100, 1000, 262144))
+        _ <- f.runner.run(entry).timeoutFail(new IllegalStateException("Worker did not finish"))(zio.Duration.fromSeconds(60))
+        _ <- ZIO.attempt(assert(entry.status.phase == DispatchPhase.Completed && entry.status.result.nonEmpty, entry.status.toString))
+        result <- text(artifacts, f.owner, entry.status.result.get).map(Wire.decode(ChildResult_JsonCodec, _))
+        credential <- text(artifacts, f.owner, result.evidence.files.find(_.path == ".work/evidence/credential.json").get.artifact).map(Wire.decode(Credential_JsonCodec, _))
+        _ <- ZIO.attempt {
+          val attempt = entry.ticket.attempt
+          val day = Duration.ofHours(24).toMillis
+          credential match {
+            case Credential.Scoped(grant) =>
+              assert(grant.actor == Actor("CQ child " + attempt.id.value, attempt.session, Role.Worker) && grant.project == f.owner.project, grant.toString)
+              assert(grant.expiresAt > attempt.startedAt + day - Duration.ofMinutes(15).toMillis && grant.expiresAt <= f.clock.millis() + day,
+                s"Child credential expires ${grant.expiresAt - attempt.startedAt} ms after the child started")
+            case other => fail(other.toString)
+          }
+        }
+      } yield () }
+    }
+
+    "collect partial work when the worker fails or is cancelled" in {
       (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
         artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
       fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None, Nil) { f =>
@@ -313,10 +369,10 @@ time.sleep(30)
           }
         } yield ()
         for {
-          killed <- f.dispatch(Stalling, HostLimits(3000, 1500, 900, 100, 1000, 262144))
-          _ <- f.runner.run(killed).timeoutFail(new IllegalStateException("Killed worker did not settle"))(zio.Duration.fromSeconds(60))
-          _ <- verify(killed, DispatchPhase.Failed, AttemptState.Failed)
-          cancelled <- f.dispatch(Stalling, HostLimits(3000, 30000, 900, 100, 1000, 262144))
+          failed <- f.dispatch(Failing, HostLimits(3000, 900, 100, 1000, 262144))
+          _ <- f.runner.run(failed).timeoutFail(new IllegalStateException("Failed worker did not settle"))(zio.Duration.fromSeconds(60))
+          _ <- verify(failed, DispatchPhase.Failed, AttemptState.Failed)
+          cancelled <- f.dispatch(Stalling, HostLimits(3000, 900, 100, 1000, 262144))
           running <- f.runner.run(cancelled).fork
           _ <- (ZIO.sleep(zio.Duration.fromMillis(50)) *> f.jobs.status(f.config.owner, cancelled.ticket.attempt.id).either)
             .repeatUntil(_.exists(_.phase == JobPhase.Running)).timeoutFail(new IllegalStateException("Worker did not start"))(zio.Duration.fromSeconds(20))
@@ -338,7 +394,7 @@ time.sleep(30)
         artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
       val counter = local.directory.resolve("flaky-" + uuid)
       fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None, List(counting("flaky", counter, 1, 2))) { f => for {
-        entry <- f.dispatch(Completing, HostLimits(3000, 30000, 900, 100, 1000, 262144))
+        entry <- f.dispatch(Completing, HostLimits(3000, 900, 100, 1000, 262144))
         _ <- f.runner.run(entry).timeoutFail(new IllegalStateException("Worker did not finish"))(zio.Duration.fromSeconds(60))
         status = entry.status
         _ <- ZIO.attempt(assert(status.phase == DispatchPhase.Completed && status.result.nonEmpty, status.toString))
@@ -366,7 +422,7 @@ time.sleep(30)
       val single = local.directory.resolve("single-" + uuid)
       fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None,
         List(counting("failing", failing, 100, 3), counting("steady", steady, 0, 3), counting("single", single, 100, 1))) { f => for {
-        entry <- f.dispatch(Completing, HostLimits(3000, 30000, 900, 100, 1000, 262144))
+        entry <- f.dispatch(Completing, HostLimits(3000, 900, 100, 1000, 262144))
         _ <- f.runner.run(entry).timeoutFail(new IllegalStateException("Worker did not finish"))(zio.Duration.fromSeconds(60))
         status = entry.status
         _ <- ZIO.attempt(assert(status.phase == DispatchPhase.Completed && status.result.nonEmpty, status.toString))
@@ -508,33 +564,59 @@ time.sleep(30)
           Files.readString(disabled).trim == "1", refused.toString))
       } yield () } }
     }
-
-    "D91: start a child while the operator checkout has staged, unstaged and untracked work, which the host preserves" in {
+    "I21: report how long a running child has been silent, reset it when the child writes, and omit it once the child settles" in {
       (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
         artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
-      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, Some("refs/heads/integration"), Nil) { f =>
-        val limits = HostLimits(3000, 30000, 900, 100, 1000, 262144)
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None, Nil) { f =>
         val controller = new DispatchController(f.config, f.runner, f.jobs, f.clock)
+        def observe(attempt: AttemptId, seen: List[DispatchStatus]): Task[List[DispatchStatus]] = controller.status(attempt, 0).flatMap { status =>
+          if (DispatchController.terminal(status.phase)) ZIO.succeed((status :: seen).reverse)
+          else ZIO.sleep(zio.Duration.fromMillis(100)) *> observe(attempt, status :: seen)
+        }
         for {
-          _ <- ZIO.attemptBlocking {
-            local.git(local.source, "branch", "integration", local.base.value)
-            f.install(Completing)
-            Files.writeString(local.source.resolve("tracked.txt"), "operator edit in progress\n")
-            Files.writeString(local.source.resolve("staged.txt"), "operator staged work\n")
-            local.git(local.source, "add", "staged.txt")
-            Files.writeString(local.source.resolve("untracked.log"), "operator notes\n")
-          }
-          started <- controller.start(f.request(limits))
-          settled <- controller.status(started.attempt, 20000).repeatUntil(status => DispatchController.terminal(status.phase))
-            .timeoutFail(new IllegalStateException("Worker did not finish"))(zio.Duration.fromSeconds(60))
+          _ <- ZIO.attemptBlocking(f.install(Intermittent))
+          started <- controller.start(f.request(HostLimits(3000, 900, 100, 1000, 262144)))
+          seen <- observe(started.attempt, Nil).timeoutFail(new IllegalStateException("Worker did not finish"))(zio.Duration.fromSeconds(60))
           _ <- ZIO.attempt {
-            assert(settled.phase == DispatchPhase.Completed && settled.result.nonEmpty, settled.toString)
-            assert(Files.readString(local.source.resolve("tracked.txt")) == "operator edit in progress\n")
-            assert(local.git(local.source, "show", ":staged.txt") == "operator staged work")
-            assert(Files.readString(local.source.resolve("untracked.log")) == "operator notes\n")
+            val running = seen.filter(_.process.contains(JobPhase.Running))
+            val quiet = running.map(_.quietMillis)
+            assert(seen.last.phase == DispatchPhase.Completed && seen.last.quietMillis.isEmpty, seen.last.toString)
+            assert(running.nonEmpty && quiet.forall(_.nonEmpty), s"A running child reported no quiet time: $quiet")
+            assert(seen.filterNot(_.process.contains(JobPhase.Running)).forall(_.quietMillis.isEmpty))
+            val grown = quiet.flatten.indexWhere(_ >= 1500)
+            assert(grown >= 0, s"Quiet time did not grow while the child was silent: $quiet")
+            assert(quiet.flatten.drop(grown).exists(_ < 1000), s"Quiet time was not reset by the child's output: $quiet")
           }
         } yield ()
       }
+    }
+
+    "D91: start a child while the operator checkout has staged, unstaged and untracked work, which the host preserves" in {
+    (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
+      artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
+    fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, Some("refs/heads/integration"), Nil) { f =>
+      val limits = HostLimits(3000, 900, 100, 1000, 262144)
+      val controller = new DispatchController(f.config, f.runner, f.jobs, f.clock)
+      for {
+        _ <- ZIO.attemptBlocking {
+          local.git(local.source, "branch", "integration", local.base.value)
+          f.install(Completing)
+          Files.writeString(local.source.resolve("tracked.txt"), "operator edit in progress\n")
+          Files.writeString(local.source.resolve("staged.txt"), "operator staged work\n")
+          local.git(local.source, "add", "staged.txt")
+          Files.writeString(local.source.resolve("untracked.log"), "operator notes\n")
+        }
+        started <- controller.start(f.request(limits))
+        settled <- controller.status(started.attempt, 20000).repeatUntil(status => DispatchController.terminal(status.phase))
+          .timeoutFail(new IllegalStateException("Worker did not finish"))(zio.Duration.fromSeconds(60))
+        _ <- ZIO.attempt {
+          assert(settled.phase == DispatchPhase.Completed && settled.result.nonEmpty, settled.toString)
+          assert(Files.readString(local.source.resolve("tracked.txt")) == "operator edit in progress\n")
+          assert(local.git(local.source, "show", ":staged.txt") == "operator staged work")
+          assert(Files.readString(local.source.resolve("untracked.log")) == "operator notes\n")
+        }
+      } yield ()
+    }
     }
   }
 }

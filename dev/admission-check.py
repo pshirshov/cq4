@@ -68,7 +68,7 @@ def reproduce(checks, command, scenario):
         "evaluation": {"run": "claim-admission-reproduction", "scenario": scenario, "assessor": False},
         "harnesses": [{"harness": "Codex", "executable": str(executable), "model": "fixture-model", "provider": "fixture-provider",
                        "version": "0.156.1", "providerExtensions": [], "providerEnvironment": []}],
-        "limits": {"startupMillis": "5000", "executionMillis": "60000", "heartbeatMillis": "1000",
+        "limits": {"startupMillis": "5000", "heartbeatMillis": "1000",
                    "graceMillis": "300", "killMillis": "2000", "retainedOutputBytes": 262144},
         "checks": [{"name": "consumer-content", "command": [sys.executable, "-c",
             "from pathlib import Path; assert Path('consumer.txt').read_text() == 'candidate from isolated worker\\n'"],

@@ -22,7 +22,7 @@ final case class JobCommand(arguments: List[String], environment: Map[String, St
     Json.arr(arguments.map(Json.fromString)*),
     Json.arr(environment.toList.sortBy(_._1).map { case (key, value) => Json.arr(Json.fromString(key), Json.fromString(value)) }*),
     Json.fromString(input),
-    Json.arr(List(limits.startup, limits.execution, limits.heartbeat, limits.grace, limits.kill).map(d => Json.fromLong(d.toMillis))*),
+    Json.arr(List(Some(limits.startup), limits.execution, Some(limits.heartbeat), Some(limits.grace), Some(limits.kill)).map(_.fold(Json.Null)(d => Json.fromLong(d.toMillis)))*),
     Json.fromInt(limits.retainedOutputBytes),
   ).noSpaces.getBytes(UTF_8)
   require(encoded.length <= MaxLaunchBytes, "Job launch exceeds its byte bound")
