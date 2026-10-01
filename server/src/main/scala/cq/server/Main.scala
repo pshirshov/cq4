@@ -6,7 +6,7 @@ import distage.{Activation, Lifecycle, ModuleDef}
 import distage.StandardAxis.Repo
 import izumi.distage.plugins.{PluginConfig, PluginDef}
 import izumi.distage.roles.RoleAppMain
-import izumi.distage.roles.launcher.{EarlyLoggerFactory, RouterFactory}
+import izumi.distage.roles.launcher.{AppFailureHandler, EarlyLoggerFactory, RouterFactory}
 import izumi.distage.roles.model.{RoleDescriptor, RoleService}
 import izumi.distage.roles.model.definition.RoleModuleDef
 import izumi.fundamentals.platform.cli.{CLIParser, CLIParserImpl}
@@ -117,4 +117,7 @@ object Main extends RoleAppMain.LauncherBIO[IO] {
       make[EarlyLoggerFactory].from[EarlyDiagnostics]
       make[RouterFactory].from[DiagnosticRouter]
     }
+  override protected def earlyFailureHandler(argv: RoleAppMain.ArgV): AppFailureHandler =
+    if (argv.args.headOption.contains(AttachedRole.id)) new AttachedStartup.Handler(System.in, System.out, System.err, super.earlyFailureHandler(argv))
+    else super.earlyFailureHandler(argv)
 }

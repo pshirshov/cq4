@@ -101,6 +101,8 @@ rollout and therefore report unavailable outer usage; CQ tools still work.
 
 Settings select managed-child executable/model/provider/version, deadlines, validation checks and the integration branch. They do not select the interactive model: use the harness's own model controls. Reconfigure after changing the executable/settings path or CQ tool contracts. Existing user-owned `.codex/config.toml` is refused; export into an empty directory and merge the generated `mcp_servers.cq` table manually. `--replace` only updates CQ-generated files/entries.
 
+Troubleshooting: when a startup precondition fails (missing token, missing or invalid settings file, uninitialized project, unverified or mismatching harness version, unreachable CQ server), `cq host` answers the harness's `initialize` with JSON-RPC error `-32003` whose message is one line with the cause and the remedy, writes that line to stderr and exits with code 78. Claude Code reports it as `Failed to connect — -32003: CQ_TOKEN or CQ_TOKEN_FILE is required; start the harness with CQ_TOKEN_FILE set, see docs/interactive.md` (`claude mcp list`, MCP log) instead of `CONNECTION_CLOSED`.
+
 ## Shutdown and accounting
 
 Ending the harness ends its CQ host and managed hierarchy. Freezing the native owner is detected through the heartbeat deadline; reconnecting creates a fresh session and does not adopt uncertain children. A session has an eight-hour absolute lifetime.
