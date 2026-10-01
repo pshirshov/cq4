@@ -105,5 +105,6 @@ final class StdioPeer(input: InputStream, output: OutputStream, owner: OwnerLive
       Thread.sleep(PollMillis)
     }
   }
-  override def close(): Unit = stop("CQ host closed the connection")
+  def close(reason: String): Unit = stop(reason)
+  override def close(): Unit = close("CQ host closed the connection")
 }

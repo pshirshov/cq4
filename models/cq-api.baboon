@@ -434,6 +434,11 @@ root data WorkspaceSpec { project: ProjectId owner: SessionId attempt: AttemptId
 enum WorkspaceAdmission { Open Quarantined Removed }
 root data WorkspaceObservation { head: GitCommit gitCommon: str gitDirectory: str verifiedAt: i64 }
 root data WorkspaceRecord { spec: WorkspaceSpec directory: str admission: WorkspaceAdmission observed: opt[WorkspaceObservation] quarantineReason: opt[str] }
+root data RetainedWorkspace { attempt: AttemptId reason: str }
+root data WorkspaceCleanupReceipt {
+  owner: SessionId startedAt: i64 finishedAt: i64 deadlineExceeded: bit
+  removed: lst[AttemptId] quarantined: lst[RetainedWorkspace] retained: lst[RetainedWorkspace]
+}
 
 enum ArtifactKind { Prompt Input Result Transcript Validation Combination Selection Evidence }
 root data ArtifactUpload { project: ProjectId id: ArtifactId attempt: AttemptId kind: ArtifactKind mediaType: str body: str }

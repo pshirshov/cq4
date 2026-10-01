@@ -10,7 +10,8 @@ final class SupervisorWatchdog(config: SupervisorConfig) extends AutoCloseable {
   private val PollMillis = 20L
   private val HostDrain = Duration.ofSeconds(10)
   private val UnresolvedExit = 75
-  private val drain = config.limits.grace.plus(config.limits.kill).plus(HostDrain).toNanos
+  // Shutdown drain: process termination, then the bounded workspace sweep, then host delivery.
+  private val drain = config.limits.grace.plus(config.limits.kill).plus(WorkspaceCleanup.Budget).plus(HostDrain).toNanos
   private var deadline = System.nanoTime() + (if (config.run.ownership == cq.api.SessionOwnership.Attached) SupervisorConfig.AttachedLifetime else config.limits.startup.plus(config.limits.execution)).toNanos + drain
   private var governor = Option.empty[ManagedExecution]
   @volatile private var draining = false
