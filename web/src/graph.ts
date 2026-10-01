@@ -18,7 +18,8 @@ interface GraphEffects {
 }
 
 export class GraphActions {
-  readonly dialog = new Dialog('standard', () => { this.shown = null; });
+  // Closing discards an unconfirmed preview, so a confirmation still counting down cannot act on it afterwards.
+  readonly dialog = new Dialog('standard', () => { this.shown = null; this.generation++; this.preview = null; this.renderPreview(); });
   private shown: { project: string; request: string } | null = null;
   readonly element = element('section', '');
   private readonly references = element('div', '');
@@ -207,7 +208,7 @@ export class GraphActions {
           if (localStorage.getItem(key) !== null) throw new Error('Another graph change is stored for this project; reload to resolve it.');
           localStorage.setItem(key, this.encode(preview.input));
           this.pending = preview.input; this.preview = null; await this.submit(preview.input);
-        })), button('Cancel graph preview', () => { this.generation++; this.preview = null; this.renderPreview(); this.dialog.close(); }));
+        })), button('Cancel graph preview', () => this.dialog.close()));
     }
   }
   private async submit(input: api.ChangeInput): Promise<void> {
