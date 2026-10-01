@@ -50,6 +50,8 @@ Proposal eligibility is explicit:
 
 Every report still covers every frozen member exactly once. Admission establishes successful process/shape and current ownership, not semantic reviewer acceptance. A reviewer does not accept its own proposed changes by emitting them. Where the process calls for independent review, the amended proposal/candidate receives a separate review of its exact identity. The governor owns the application decision; existing correction permissions are preserved.
 
+A proposed Memory draft must be `Current` and carry at least one evidence entry, each with at least one citation; otherwise the proposal is rejected with "Proposed Memory requires Current status and cited evidence". Roles without an applicable proposal flag a "Memory candidate" in their report, and a Planner proposes it from the forwarded result handle. Superseding or retracting a Memory is not proposed by a child.
+
 Reviewer execution is limited to host-configured declared checks against the exact candidate, exposed through a bounded host operation. It does not receive unrestricted native shell tools. Such checks can have effects inside their assigned disposable workspace; they do not prove a hostile read-only OS sandbox. Explorer/planner receive neither that check operation nor native execution tools. Real probes must verify direct-call denial as well as advertised tool inventories.
 
 ## Verification criteria
