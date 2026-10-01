@@ -146,7 +146,7 @@ abstract class SessionDeliveryTest extends SpecZIO with AssertZIO {
               if (index != 1) {
                 val settled = reserved.copy(phase = JobPhase.Settled, exit = Some(JobExit(Some(if (index == 0) 0 else 1), None, StopReason.Exited, 0, 0, true, false)), revision = 2, updatedAt = 1001)
                 journal.replace(reserved, settled)
-                new DeclaredCheckPublication(path, retained, directory.resolve("payload")).seal(Some(settled), None)
+                new DeclaredCheckPublication(path, retained, childAssignment.id, directory.resolve("payload")).seal(Some(settled), None)
               }
             }
             // I19: the sealed first run of d-rerun failed and the supervisor was killed while its rerun was running.
@@ -200,6 +200,72 @@ abstract class SessionDeliveryTest extends SpecZIO with AssertZIO {
             ValidationEvidence("d-rerun", ValidationState.Unknown, NativeArtifacts.id(reviewer.id, "recheck-2-d-rerun"), List(first))), rerun.toString)
           assert(!Files.exists(child.resolve("receipt.json")))
         }
+        // I20: every run with a job is one Check span on the reviewer's assignment, however often recovery replays it; the unstarted check has none.
+        checked <- usage.phases(owner, UsageFilter.TaskOnly(created.items.head.id))
+        again <- delivery.flush(directory, run, lossy)
+        stable <- usage.phases(owner, UsageFilter.TaskOnly(created.items.head.id))
+        _ <- ZIO.attempt(assert(checked.phases.find(_.phase == UsagePhase.Check).map(value => (value.attempts, value.spans)).contains((0L, 4L)), checked.toString))
+        _ <- assertIO(again.acknowledged == 0 && stable == checked)
+      } yield () }
+    }
+
+    "I20: replay a retained session span after a lost acknowledgement and record it once" in {
+      (ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO],
+        admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO], fixture: WorkspaceFixture) =>
+      val clock = Clock.systemUTC()
+      def uuid: UUID = UUID.randomUUID()
+      val owner = Scope(ProjectId(uuid), Actor("CQ governor", SessionId(uuid), Role.Governor))
+      val collector = owner.copy(actor = owner.actor.copy(role = Role.Collector))
+      val auth = new Authorization(AccessConfig("span-recovery-root-token", "http://localhost"), clock)
+      val root = auth.authenticate("span-recovery-root-token", Some(owner.actor.session.value.toString))
+      val authority = auth.authenticate(auth.grant(root, GrantRequest(owner.project, collector.actor, clock.millis() + 60000)).value, None)
+      val application = new Application(ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, auth)
+      ZIO.scoped { for {
+        runtime <- ZIO.runtime[Any]
+        _ <- ledger.initialize(owner, "Span recovery")
+        created <- ledger.change(owner, ChangeRequest(RequestId(uuid), List(Mutation.Create(ItemDraft("Task", "Integrate", Set.empty, false,
+          Content.Task(TaskStatus.Ready, List("Verified"), None, Nil), Nil))), Nil, "Fixture"))
+        assignment <- usage.assign(collector, Assignment(AssignmentId(uuid), owner.project, Set.empty, Attribution.Unattributed, None, None))
+        governor <- usage.start(collector, Attempt(AttemptId(uuid), assignment.id, None, owner.actor.session, Role.Governor,
+          Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Govern))
+        worked <- usage.assign(collector, Assignment(AssignmentId(uuid), owner.project, created.items.map(_.id).toSet, Attribution.Direct, None, None))
+        run = SupervisorRun(ProjectConfig(owner.project, "http://localhost", "Span recovery"), assignment, governor, "0.156.1", fixture.source.toString, fixture.base, SessionOwnership.Managed)
+        directory <- ZIO.attemptBlocking(Files.createTempDirectory("cq-span-recovery-"))
+        journal <- ZIO.acquireRelease(ZIO.attemptBlocking(FileJobRepository.open(directory.resolve("journal"), owner.project, owner.actor.session)))(value => ZIO.attemptBlocking(value.close()).orDie)
+        integrated = PhaseSpans.integration(IntegrationId(uuid), worked.id, owner.actor.session, 2000, 9500, AttemptState.Completed)
+        combined = PhaseSpans.combination(RequestId(uuid), worked.id, owner.actor.session, 9500, 9600, AttemptState.Unknown)
+        _ <- ZIO.attemptBlocking {
+          new DeliveryQueue(directory.resolve("delivery")).commit(List(HostDelivery.Usage(HostUsageInput(owner.project,
+            HostUsage.Finish(AttemptOutcome(RequestId(uuid), governor.id, AttemptState.Completed, 10000, Nil, None))))))
+          val spans = new SpanDelivery(directory.resolve("spans"), owner.project)
+          List(integrated, combined).foreach(spans.retain)
+        }
+        receiver = new Receiver(application, authority, runtime, AttemptId(uuid))
+        lossy = new ServerApi {
+          private var lost = false
+          override def usage(value: HostUsageInput): HostUsageResult = {
+            val result = receiver.usage(value)
+            value.operation match {
+              case HostUsage.Span(span) if span == integrated && !lost => lost = true; throw new IOException("Lost span acknowledgement")
+              case _ => result
+            }
+          }
+          override def artifact(value: ArtifactUpload): ArtifactMetadata = receiver.artifact(value)
+          override def call(value: Command): Result = receiver.call(value)
+          override def grant(value: GrantRequest): AccessToken = receiver.grant(value)
+          override def admit(value: HostAdmissionInput): ResultAdmission = receiver.admit(value)
+          override def integrate(value: HostIntegrationInput): IntegrationRecord = receiver.integrate(value)
+        }
+        delivery = new SessionDelivery(journal, fixture.service, clock)
+        failed <- delivery.flush(directory, run, lossy).either
+        _ <- assertIO(failed.left.exists(_.isInstanceOf[IOException]))
+        recovered <- delivery.flush(directory, run, lossy)
+        report <- usage.phases(owner, UsageFilter.TaskOnly(created.items.head.id))
+        repeated <- delivery.flush(directory, run, lossy)
+        stable <- usage.phases(owner, UsageFilter.TaskOnly(created.items.head.id))
+        _ <- assertIO(recovered.acknowledged >= 1 && repeated.acknowledged == 0 && stable == report)
+        _ <- ZIO.attempt(assert(report.phases.map(value => (value.phase, value.attempts, value.spans, value.wallMillis)) ==
+          List((UsagePhase.Combine, 0L, 1L, 100L), (UsagePhase.Integrate, 0L, 1L, 7500L)), report.toString))
       } yield () }
     }
 

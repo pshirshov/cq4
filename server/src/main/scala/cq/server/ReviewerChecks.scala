@@ -72,7 +72,7 @@ private[server] final class ReviewerChecks(entry: DispatchExecution, candidate: 
       publication <- ZIO.attemptBlocking {
         HostFiles.directory(directory)
         HostFiles.immutable(directory.resolve("ticket.json"), HostFiles.encode(DeclaredCheckTicket_JsonCodec, ticket), 32768)
-        new DeclaredCheckPublication(directory, ticket, config.directory.resolve("payload"))
+        new DeclaredCheckPublication(directory, ticket, entry.ticket.assignment.id, config.directory.resolve("payload"))
       }
       _ <- ZIO.attempt { entry.check(); require(!stopping, "Reviewer ended before its check started") }
       _ <- jobs.start(config.owner, ticket.workspace, value.command)

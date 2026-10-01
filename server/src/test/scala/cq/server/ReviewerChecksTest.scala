@@ -21,7 +21,9 @@ final class ReviewerChecksProcess extends SpecZIO with AssertZIO {
   private def uuid: UUID = UUID.randomUUID()
   private final class Receiver(session: SessionId, hook: ArtifactUpload => Unit) extends ServerApi {
     private var values = Map.empty[ArtifactId, ArtifactUpload]
+    private var recorded = List.empty[PhaseSpan]
     def uploaded: List[ArtifactUpload] = synchronized(values.values.toList)
+    def spans: List[PhaseSpan] = synchronized(recorded)
     override def artifact(value: ArtifactUpload): ArtifactMetadata = {
       hook(value)
       synchronized {
@@ -34,7 +36,10 @@ final class ReviewerChecksProcess extends SpecZIO with AssertZIO {
         Actor("check collector", session, Role.Collector), 1000)
     }
     override def call(value: Command): Result = throw new AssertionError("Check cannot invoke domain commands")
-    override def usage(value: HostUsageInput): HostUsageResult = throw new AssertionError("Check is not a new model attempt")
+    override def usage(value: HostUsageInput): HostUsageResult = value.operation match {
+      case HostUsage.Span(span) => synchronized { recorded = recorded :+ span }; HostUsageResult.Spanned(span)
+      case _ => throw new AssertionError("Check is not a new model attempt")
+    }
     override def grant(value: GrantRequest): AccessToken = throw new AssertionError("Check cannot grant authority")
     override def admit(value: HostAdmissionInput): ResultAdmission = throw new AssertionError("Check cannot admit a review")
     override def integrate(value: HostIntegrationInput): IntegrationRecord = throw new AssertionError("Check cannot integrate")
@@ -199,6 +204,27 @@ final class ReviewerChecksProcess extends SpecZIO with AssertZIO {
           println(s"Persistently failing reviewer check: ${settled._1} runs=${Files.readString(failing)}")
           assert(settled._1.phase == DeclaredCheckPhase.Completed && evidence.state == ValidationState.Failed && evidence.failures.size == 1, settled._1.toString)
           assert(Files.readString(failing) == "2" && f.journal.records.size == 3 && closed.evidence == List(evidence) && !closed.pending && !closed.uncertain)
+        }
+      } yield () }
+    }
+
+    "I20: deliver each run of a declared check, the failed one too, as one Check span of its job on the reviewer's assignment" in { (local: LocalWorkspaceFixture, guardian: GuardianFixture) =>
+      val counter = local.directory.resolve("spanned-" + uuid)
+      val script = "from pathlib import Path; import sys, time; counter=Path('" + counter + "'); time.sleep(0.2);\n" +
+        "n=int(counter.read_text())+1 if counter.exists() else 1; counter.write_text(str(n)); sys.exit(1 if n <= 1 else 0)"
+      fixture(local, guardian, List("verify" -> script), 2, _ => ()) { f => for {
+        complete <- f.checks.request("verify", 1000).repeatUntil(value => Set(DeclaredCheckPhase.Completed, DeclaredCheckPhase.Failed, DeclaredCheckPhase.Unknown)(value.phase))
+          .timeoutFail(new IllegalStateException("Declared check did not terminate"))(zio.Duration.fromSeconds(20))
+        _ <- f.checks.close
+        _ <- ZIO.attemptBlocking {
+          val assignment = f.entry.ticket.assignment.id
+          val records = List(1, 2).map(run => DeclaredCheckPublication.job(f.entry.ticket.attempt.id, "verify", run)).map(job => f.journal.records.find(_.workspace.attempt == job).get)
+          println(s"Reviewer check spans: ${f.receiver.spans}")
+          assert(complete.evidence.exists(value => value.state == ValidationState.Passed && value.failures.size == 1), complete.toString)
+          assert(f.receiver.spans == records.zip(List(AttemptState.Failed, AttemptState.Completed)).map { case (record, state) =>
+            PhaseSpan(PhaseSpans.check(record, assignment).id, assignment, f.config.owner.actor.session, UsagePhase.Check, record.createdAt, record.updatedAt, state)
+          }, f.receiver.spans.toString)
+          assert(f.receiver.spans.map(_.id).distinct.size == 2 && f.receiver.spans.forall(span => span.finishedAt - span.startedAt >= 200))
         }
       } yield () }
     }

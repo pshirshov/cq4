@@ -49,6 +49,7 @@ final class AttachedProgram(config: SupervisorConfig, authority: SupervisorAutho
             codex.gaps, None)
         queue.commit(List(HostDelivery.Usage(HostUsageInput(config.project.project, HostUsage.Finish(outcome)))))
         queue.flush(authority.collector)
+        new SessionSpans(config, authority).flush()
       }.unit).ensuring(ZIO.attemptBlocking(codex.close()).orDie)
   private def loop(peer: StdioPeer): Task[Unit] = ZIO.attemptBlocking(peer.receive()).flatMap {
     case None => ZIO.unit

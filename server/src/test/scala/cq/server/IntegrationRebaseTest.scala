@@ -42,7 +42,8 @@ final class IntegrationRebaseProcess extends SpecZIO with AssertZIO {
   }
 
   private final case class Fixture(local: LocalWorkspaceFixture, owner: Scope, config: SupervisorConfig, controller: IntegrationController, jobs: JobSupervisor,
-    governor: AttemptId, reviewer: ArtifactId, reviewed: GitCommit, head: GitCommit, members: List[ItemRevision], fence: Fence, renewals: AtomicInteger) {
+    governor: AttemptId, reviewer: ArtifactId, reviewed: GitCommit, head: GitCommit, members: List[ItemRevision], fence: Fence, renewals: AtomicInteger,
+    worker: AssignmentId) {
     def target: GitCommit = GitCommit(local.git(local.source, "show-ref", "--verify", "--hash", Target))
     def commit(name: String, base: GitCommit, files: Map[String, String]): GitCommit = {
       val directory = local.directory.resolve(name + "-" + UUID.randomUUID())
@@ -80,7 +81,7 @@ final class IntegrationRebaseProcess extends SpecZIO with AssertZIO {
     val limits = HostLimits(5000, 900, 100, 1000, 262144)
     val renewals = new AtomicInteger(0)
     def publish(value: ChildResult): Task[ArtifactId] = for {
-      artifact <- artifacts.upload(collector, ArtifactUpload(owner.project, ArtifactId(uuid), value.attempt, ArtifactKind.Result,
+      artifact <- artifacts.upload(collector, ArtifactUpload(owner.project, NativeArtifacts.id(value.attempt, "result"), value.attempt, ArtifactKind.Result,
         "application/json", Wire.encode(ChildResult_JsonCodec, value)))
       admitted <- admissions.admit(collector, HostAdmissionInput(owner.project, artifact.id, owner.actor))
       _ <- assertIO(admitted.decision == AdmissionDecision.Accepted())
@@ -108,7 +109,7 @@ final class IntegrationRebaseProcess extends SpecZIO with AssertZIO {
         local.fixture.service, new GuardianDriver(guardian.binary), directory.resolve("payload"), clock)
       admission <- Semaphore.make(1)
       controller <- ZIO.acquireRelease(ZIO.succeed(new IntegrationController(config, authority, jobs, new CandidateWorkspace(config), clock, admission)))(_.shutdown.orDie)
-      empty = Fixture(local, owner, config, controller, jobs, governor.id, ArtifactId(uuid), local.base, local.base, created.items, claim.fence, renewals)
+      empty = Fixture(local, owner, config, controller, jobs, governor.id, ArtifactId(uuid), local.base, local.base, created.items, claim.fence, renewals, AssignmentId(uuid))
       commits <- ZIO.attemptBlocking {
         local.git(local.source, "branch", "integration", local.base.value)
         val reviewed = empty.commit("candidate", local.base, Map("right.txt" -> "right\n") ++ (if (conflict) Map("tracked.txt" -> "candidate line\n") else Map.empty))
@@ -134,6 +135,12 @@ final class IntegrationRebaseProcess extends SpecZIO with AssertZIO {
       worker = ChildResult(workerAttempt.id, request, local.base, Some(reviewed),
         ChildReport.Work(created.items.map(ref => WorkMember(ref.id, WorkDisposition.CandidateReady, "Ready", Nil))), validation, RetainedEvidence(Nil, Nil))
       workerArtifact <- publish(worker)
+      // The worker was a child of this session: its dispatch ticket names the assignment its host spans belong to.
+      _ <- ZIO.attemptBlocking {
+        val child = directory.resolve("children").resolve(workerAttempt.id.value.toString)
+        HostFiles.directory(child)
+        HostFiles.immutable(child.resolve("ticket.json"), HostFiles.encode(DispatchTicket_JsonCodec, DispatchTicket(request, workerAssignment, workerAttempt, profile, None)), 65536)
+      }
       _ <- ZIO.when(revalidated)(ZIO.foreach(checks)(observe(governor.id, _, true)).flatMap(round => artifacts.upload(collector, ArtifactUpload(owner.project,
         IntegrationValidation.amendmentId(workerArtifact, 1), governor.id, ArtifactKind.Amendment, "application/json",
         Wire.encode(ValidationAmendment_JsonCodec, ValidationAmendment(workerArtifact, reviewed, governor.id, 1, round))))))
@@ -142,7 +149,7 @@ final class IntegrationRebaseProcess extends SpecZIO with AssertZIO {
       review = ChildResult(reviewAttempt.id, request.copy(request = RequestId(uuid), work = DispatchWork.Reviewer(ReviewerMode.Candidate), previous = Some(workerArtifact)),
         reviewed, Some(reviewed), ChildReport.Review(created.items.map(ref => ReviewMember(ref.id, ReviewVerdict.Accepted, Nil)), None), validation, RetainedEvidence(Nil, Nil))
       reviewArtifact <- publish(review)
-      _ <- test(empty.copy(reviewer = reviewArtifact, reviewed = reviewed, head = head))
+      _ <- test(empty.copy(reviewer = reviewArtifact, reviewed = reviewed, head = head, worker = workerAssignment.id))
     } yield ()
   }
 
@@ -212,7 +219,8 @@ final class IntegrationRebaseProcess extends SpecZIO with AssertZIO {
             Citation.Commit(local.source.toString, merged.value), Citation.Commit(local.source.toString, f.reviewed.value)) &&
             task.validation.last.citations.contains(Citation.Artifact(rebase.validation.head.artifact)))
           // No child attempt ran: the session's attempts are unchanged and the host ran one check job and one Git job.
-          assert(attemptsAfter.entries.map(_.attempt.id) == attemptsBefore.entries.map(_.attempt.id) && !Files.exists(f.config.directory.resolve("children")))
+          assert(attemptsAfter.entries.map(_.attempt.id) == attemptsBefore.entries.map(_.attempt.id) &&
+            scala.util.Using.resource(Files.list(f.config.directory.resolve("children")))(_.count()) == 1)
           assert(records.size == 2 && records.map(_.workspace.base).toSet == Set(merged))
           assert((local.git(local.source, "rev-parse", "HEAD"), Files.readAllBytes(local.source.resolve(".git/index")).toList) == governing)
           assert(List("left.txt", "right.txt").forall(name => local.git(local.source, "show", Target + ":" + name) == name.stripSuffix(".txt")))
@@ -271,6 +279,77 @@ final class IntegrationRebaseProcess extends SpecZIO with AssertZIO {
           assert(cited.last.citations == List(Citation.Artifact(IntegrationValidation.amendmentId(record.intent.worker, 1)), Citation.Artifact(worker.validation.head.artifact)))
           assert(cited.head.citations.contains(Citation.Artifact(record.intent.rebase.get.validation.head.artifact)) &&
             !cited.head.citations.contains(Citation.Artifact(worker.validation.head.artifact)))
+        }
+      } yield () }
+    }
+
+    "I20: record each check run on the rebased commit as a Check span and the integration, from its preparation to its resolution, as one Integrate span on the worker's assignment" in {
+      (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO],
+        spans: UsageRepository[IO]) =>
+      val counter = local.directory.resolve("spanned-" + uuid)
+      // Each run takes 300 ms; the first fails.
+      val flaky = ValidationCheck("flaky", List("sh", "-c", s"sleep 0.3; n=$$(cat $counter 2>/dev/null || echo 0); echo $$((n + 1)) > $counter; test $$n -ge 1"), 10000, 65536, 2, 0)
+      def span(f: Fixture, id: IntegrationId): Task[Option[PhaseSpan]] =
+        spans.read(f.owner.project)(_.span(PhaseSpans.integration(id, f.worker, f.owner.actor.session, 0, 0, AttemptState.Completed).id))
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, List(flaky), false, false) { f =>
+        val task = UsageFilter.TaskOnly(f.members.head.id)
+        for {
+          began <- ZIO.succeed(System.currentTimeMillis())
+          ready <- f.prepare
+          prepared <- usage.phases(f.owner, task)
+          open <- span(f, ready.id)
+          recorded <- f.integrate(ready.id)
+          ended <- ZIO.succeed(System.currentTimeMillis())
+          _ <- f.controller.prepare(IntegrationTicket(ready.id, f.reviewer))
+          _ <- f.controller.apply(ready.id)
+          resolved <- usage.phases(f.owner, task)
+          integrated <- span(f, ready.id)
+          records <- f.jobs.records(f.config.owner)
+          _ <- f.controller.shutdown
+          closed <- usage.phases(f.owner, task)
+          _ <- ZIO.attemptBlocking {
+            val checks = records.sortBy(_.createdAt).take(2)
+            val checked = resolved.phases.find(_.phase == UsagePhase.Check)
+            println(s"Integration spans: check=${checked.map(value => (value.spans, value.wallMillis))} integrate=$integrated window=${ended - began} ms")
+            assert(ready.phase == IntegrationPhase.Ready && recorded.phase == IntegrationPhase.Recorded && records.size == 3, s"$ready $recorded")
+            // Preparation alone records its check runs; the integration's own span stays open until it resolves.
+            assert(prepared.phases.find(_.phase == UsagePhase.Check) == checked && prepared.phases.forall(_.phase != UsagePhase.Integrate) && open.isEmpty, prepared.toString)
+            assert(checked.exists(value => value.attempts == 0 && value.spans == 2 && value.wallMillis == checks.map(run => run.updatedAt - run.createdAt).sum &&
+              value.wallMillis >= 600), checked.toString)
+            assert(integrated.exists(value => value.assignment == f.worker && value.session == f.owner.actor.session && value.phase == UsagePhase.Integrate &&
+              value.state == AttemptState.Completed && value.startedAt >= began && value.finishedAt <= ended &&
+              value.startedAt <= checks.head.createdAt && value.finishedAt >= records.map(_.updatedAt).max), integrated.toString)
+            assert(resolved.phases.find(_.phase == UsagePhase.Integrate).map(value => (value.attempts, value.spans, value.wallMillis))
+              .contains((0L, 1L, integrated.get.finishedAt - integrated.get.startedAt)), resolved.toString)
+            // Replayed requests and the owner's shutdown record nothing more for a resolved integration.
+            assert(closed == resolved)
+          }
+        } yield ()
+      }
+    }
+
+    "I20: end the span of an integration that records NotApplied as Failed and of a prepared one its owner never applied as Cancelled" in {
+      (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO],
+        spans: UsageRepository[IO]) =>
+      def span(f: Fixture, id: IntegrationId): Task[Option[PhaseSpan]] =
+        spans.read(f.owner.project)(_.span(PhaseSpans.integration(id, f.worker, f.owner.actor.session, 0, 0, AttemptState.Completed).id))
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, List(BothSides), true, false) { f => for {
+        // A conflicting preparation runs no check; the first integration is applied and records NotApplied, the second is never applied.
+        applied <- f.prepare
+        refused <- f.integrate(applied.id)
+        abandoned <- f.prepare
+        before <- span(f, abandoned.id)
+        _ <- f.controller.shutdown
+        failed <- span(f, applied.id)
+        cancelled <- span(f, abandoned.id)
+        report <- usage.phases(f.owner, UsageFilter.TaskOnly(f.members.head.id))
+        _ <- ZIO.attempt {
+          println(s"Unapplied integration spans: failed=$failed cancelled=$cancelled")
+          assert(refused.phase == IntegrationPhase.NotApplied && abandoned.phase == IntegrationPhase.Ready && before.isEmpty, s"$refused $abandoned $before")
+          assert(failed.exists(_.state == AttemptState.Failed) && cancelled.exists(_.state == AttemptState.Cancelled) && failed.get.id != cancelled.get.id)
+          assert(report.phases.find(_.phase == UsagePhase.Integrate).exists(_.spans == 2) && report.phases.forall(_.phase != UsagePhase.Check), report.toString)
         }
       } yield () }
     }
@@ -363,7 +442,8 @@ final class IntegrationRebaseProcess extends SpecZIO with AssertZIO {
 
     "stop a running check and fail the preparation when the claim is lost" in {
       (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
-        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO],
+        spans: UsageRepository[IO]) =>
       fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, List(Slow), false, false) { f =>
         val id = IntegrationId(uuid)
         for {
@@ -378,6 +458,11 @@ final class IntegrationRebaseProcess extends SpecZIO with AssertZIO {
             println(s"Claim lost during a check: status=$status job=${record.phase} ${record.exit}")
             assert(status.phase == IntegrationPhase.Failed && record.phase == JobPhase.Settled && record.exit.exists(_.reason == StopReason.Cancelled), status.toString)
           }
+          // I20: the stopped run is a Cancelled Check span and the failed preparation a Failed Integrate span.
+          recorded <- spans.read(f.owner.project)(reader => List(PhaseSpans.check(record, f.worker).id,
+            PhaseSpans.integration(id, f.worker, f.owner.actor.session, 0, 0, AttemptState.Failed).id).map(reader.span))
+          _ <- ZIO.attempt(assert(recorded.map(_.map(value => (value.phase, value.state))) == List(Some((UsagePhase.Check, AttemptState.Cancelled)),
+            Some((UsagePhase.Integrate, AttemptState.Failed))) && recorded.head.contains(PhaseSpans.check(record, f.worker)), recorded.toString))
         } yield ()
       }
     }

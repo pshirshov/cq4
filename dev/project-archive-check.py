@@ -88,6 +88,11 @@ def verify(checks, command, name):
             outcome = {"request": {"value": str(uuid.uuid4())}, "attempt": state["upload"]["observation"]["attempt"],
                        "state": "Completed", "finishedAt": "3000", "gaps": [], "supersedes": None}
             assert post("/api/usage", {"project": project, "operation": {"Finish": {"value": outcome}}})[0] == 200
+            attempt = call(checks.environment, {"Usage": {"input": {"project": project, "selection": {"Attempts": {
+                "filter": {"ProjectAll": {}}, "after": None, "snapshot": None, "limit": 10}}}}})["UsageAttempts"]["page"]["entries"][0]["attempt"]
+            span = {"id": {"value": str(uuid.uuid4())}, "assignment": attempt["assignment"], "session": attempt["session"], "phase": "Check",
+                    "startedAt": "3000", "finishedAt": "3700", "state": "Failed"}
+            assert post("/api/usage", {"project": project, "operation": {"Span": {"value": span}}}) == (200, {"Spanned": {"value": span}})
             pending_id = str(uuid.uuid4())
             sql(names[0], f"INSERT INTO cq_integrations(project_id,integration_id,body,hold) VALUES ('{project['value']}','{pending_id}', '{{\"resolution\":{{\"Pending\":{{}}}}}}'::jsonb, '{{}}'::jsonb)")
             failure = cli("pending-integration", args, 1)
@@ -110,8 +115,11 @@ def verify(checks, command, name):
             other = {"value": str(uuid.uuid4())}
             call(checks.environment, {"Initialize": {"config": {"project": other, "endpoint": checks.environment["CQ_ORIGIN"], "name": "Excluded project"}}})
             before = fingerprint(names[0]); write(out / "before.json", before)
+            phases = call(checks.environment, {"Usage": {"input": {"project": project, "selection": {"Phases": {"filter": {"ProjectAll": {}}}}}}})
+            assert [(value["spans"], value["wallMillis"]) for value in phases["UsagePhases"]["report"]["phases"] if value["phase"] == "Check"] == [("1", "700")], phases
+            assert len(before["cq_usage_spans"]) == 1 and before["cq_usage_spans"][0]["span_id"] == span["id"]["value"], before["cq_usage_spans"]
             manifest = json.loads(cli("backup", args + ["--json"]).stdout)
-            assert len(manifest["entries"]) == len(before) == 24 and len(before["cq_worksets"]) == 1
+            assert len(manifest["entries"]) == len(before) == 25 and len(before["cq_worksets"]) == 1
             assert archive.stat().st_mode & 0o077 == 0, "Archive must not expose operator data to other users"
             digest = hashlib.sha256(archive.read_bytes()).hexdigest()
             assert "already exists" in cli("no-clobber", args, 1).stderr
@@ -243,6 +251,9 @@ def verify(checks, command, name):
             assert fingerprint(names[1]) == before, "Collision mutated existing data"
             assert call(checks.environment, state["operation"]) == state["ack"], "Request acknowledgement changed"
             assert post("/api/usage", {"project": project, "operation": {"Ingest": {"value": state["upload"]}}})[1] == state["receipt"]
+            assert call(checks.environment, {"Usage": {"input": {"project": project, "selection": {"Phases": {"filter": {"ProjectAll": {}}}}}}}) == phases
+            assert post("/api/usage", {"project": project, "operation": {"Span": {"value": span}}})[1] == {"Spanned": {"value": span}}
+            assert fingerprint(names[1])["cq_usage_spans"] == before["cq_usage_spans"], "Span replay changed the restored audit"
             assert post("/api/artifact", state["artifact"])[1] == state["artifactMetadata"]
             operation = copy.deepcopy(state["operation"])
             operation["Change"]["input"]["change"]["request"] = {"value": str(uuid.uuid4())}
@@ -259,7 +270,7 @@ def verify(checks, command, name):
                 write(out / "lost-commit-observation.json", {"commitAcknowledgementDropped": True, "projectCommitted": True, "stderr": uncertain.stderr})
                 assert "no restore was committed" not in uncertain.stderr, "Committed restore was falsely reported as rolled back"
                 assert "verify" in uncertain.stderr.lower() and "retry" in uncertain.stderr.lower(), uncertain.stderr
-        result = {"status": "passed", "tables": 24, "snapshotConsistent": True, "recordsEqual": True,
+        result = {"status": "passed", "tables": 25, "snapshotConsistent": True, "recordsEqual": True,
                   "collisionRefused": True, "counterContinued": True, "authorizationEnforced": True}
         write(out / "result.json", result)
         return result

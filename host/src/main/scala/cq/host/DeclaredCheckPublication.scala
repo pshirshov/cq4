@@ -5,8 +5,9 @@ import java.nio.file.{Files, Path}
 
 final case class DeclaredCheckReceipt(status: DeclaredCheckStatus, acknowledged: Int)
 
-/** One run of a declared check; the ticket's `failures` are the observations of the failed runs before it. */
-final class DeclaredCheckPublication(directory: Path, ticket: DeclaredCheckTicket, payload: Path) {
+/** One run of a declared check; the ticket's `failures` are the observations of the failed runs before it.
+  * The run's job is a Check span on `assignment`, the reviewer's own. */
+final class DeclaredCheckPublication(directory: Path, ticket: DeclaredCheckTicket, assignment: AssignmentId, payload: Path) {
   private val MaxStatusBytes = 4096
   private val prefix = DeclaredCheckPublication.label(ticket.check.name, ticket.failures.size + 1)
   private val statusFile = directory.resolve("result.json")
@@ -39,7 +40,8 @@ final class DeclaredCheckPublication(directory: Path, ticket: DeclaredCheckTicke
       if (settled && complete) DeclaredCheckPhase.Completed else DeclaredCheckPhase.Unknown, evidence, blocker)
     val summary = ArtifactUpload(project, NativeArtifacts.id(ticket.parent, prefix + "-status"), ticket.parent, ArtifactKind.Transcript,
       "application/json", HostFiles.encode(DeclaredCheckStatus_JsonCodec, status))
-    queue.commit((outParts ++ errParts ++ artifact.toList :+ summary).map(HostDelivery.Artifact.apply))
+    queue.commit((outParts ++ errParts ++ artifact.toList :+ summary).map(HostDelivery.Artifact.apply) ++
+      record.map(value => PhaseSpans.delivery(project, PhaseSpans.check(value, assignment))))
     retain(status)
   }
 

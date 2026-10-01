@@ -214,6 +214,23 @@ def main():
                 assert recorded["intent"]["rebase"] is None
             assert recorded["resolution"]["Recorded"]["acknowledgement"]["items"] == [
                 {**member, "revision": {"value": str(int(member["revision"]["value"]) + 1)}} for member in final["members"]]
+            # Host time on beta's task. Check: one run on each worker candidate (the original and, after a combination, the resolver's) and one on
+            # each rebased commit. Integrate: one span per integration from its preparation to its resolution; the stale first intent and every
+            # NotApplied integration end Failed. The conflict scenario's last integration was resolved by recovery after its supervisor was
+            # killed during the Git update: it has no span, which leaves both scenarios with a combination at three.
+            task = "T" + final["members"][0]["id"]["number"]
+            for scope in [["--task", task], ["--session", manifest["attempt"]["session"]["value"]]]:
+                phases = {value["phase"]: value for value in json.loads(run(["status", "phases", *scope, "--json"]))["UsagePhases"]["report"]["phases"]}
+                spans = {name: (phases[name]["attempts"], phases[name]["spans"]) for name in ["Check", "Integrate"]}
+                assert spans == {"Check": ("0", "2"), "Integrate": ("0", "2")} if scenario == "clean" else spans == {"Check": ("0", "3"), "Integrate": ("0", "3")}, phases
+                assert all(int(phases[name]["wallMillis"]) > 0 for name in ["Check", "Integrate"]), phases
+                if scenario == "clean":
+                    assert "Combine" not in phases, phases
+                else:
+                    assert (phases["Combine"]["attempts"], phases["Combine"]["spans"]) == ("1", "1") and int(phases["Combine"]["wallMillis"]) > 0, phases
+                table = run(["status", "phases", *scope])
+                rows = {line.split()[0]: line.split() for line in table[:table.index("Costs —")].splitlines() if line.split()[:1] in (["Check"], ["Integrate"])}
+                assert rows["Check"][1:4] == ["0", "0", phases["Check"]["spans"]] and rows["Integrate"][4] != "0:00:00", table
             summary_request = {"Usage": {"input": {"project": manifest["project"]["project"], "selection": {"Summary": {
                 "filter": {"SessionOnly": {"id": manifest["attempt"]["session"]}}}}}}}
             usage_before = api(summary_request)

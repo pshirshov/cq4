@@ -160,7 +160,7 @@ final class SessionDelivery(journal: JobRepository, workspaces: WorkspaceService
             ticket.check.retainedOutputBytes > 0 && ticket.check.retainedOutputBytes <= 1024 * 1024 && ticket.fingerprint.matches("[0-9a-f]{64}") &&
             ticket.workspace == WorkspaceSpec(run.project.project, run.attempt.session, id, run.repository, native.workspace.base),
             "Declared check ticket differs from its owner, configuration or reviewed candidate")
-          val pending = new DeclaredCheckPublication(path, ticket, directory.resolve("payload"))
+          val pending = new DeclaredCheckPublication(path, ticket, publication.assignment.id, directory.resolve("payload"))
           pending.reconcile(record)
           SessionDeliveryReport(pending.finish(api).acknowledged, Nil)
         }
@@ -200,6 +200,7 @@ final class SessionDelivery(journal: JobRepository, workspaces: WorkspaceService
     }
     attached <- (if (run.ownership == SessionOwnership.Attached) ZIO.attemptBlocking(new AttachedUsage(directory, run, clock).recover(api)) else ZIO.succeed(SessionDeliveryReport(0, Nil))).either
     codex <- ZIO.attemptBlocking(Using.resource(new AttachedCodexUsage(directory, run, new CodexRollout, clock))(_.recover(api))).either
-    recovered <- independent(checked ++ delivered.map(_.map(count => SessionDeliveryReport(count, Nil))) ++ List(attached, codex))
+    spans <- ZIO.attemptBlocking(SessionDeliveryReport(new SpanDelivery(directory.resolve("spans"), run.project.project).flush(api), Nil)).either
+    recovered <- independent(checked ++ delivered.map(_.map(count => SessionDeliveryReport(count, Nil))) ++ List(attached, codex, spans))
   } yield SessionDeliveryReport(recovered.map(_.acknowledged).sum, inventory.incompleteTickets ++ recovered.flatMap(_.incompleteTickets))
 }

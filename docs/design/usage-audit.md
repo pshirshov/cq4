@@ -1,6 +1,6 @@
 # Operational usage audit
 
-The `UsageService[F]` / `UsageRepository[F]` boundary implements accounting separately from `LedgerService`. PostgreSQL stores immutable assignments, attempts, meter definitions, observations and attempt outcomes. Mutable meter projections and observation-head pointers are derived accounting state. These tables are outside the fourteen workflow ledgers. No usage operation creates an item revision or ledger change event.
+The `UsageService[F]` / `UsageRepository[F]` boundary implements accounting separately from `LedgerService`. PostgreSQL stores immutable assignments, attempts, meter definitions, observations, attempt outcomes and host spans. Mutable meter projections and observation-head pointers are derived accounting state. These tables are outside the fourteen workflow ledgers. No usage operation creates an item revision or ledger change event.
 
 All types remain in the single mutable `cq.api` 0.1.0 model. Breaking development changes are permitted; version bumps require explicit user instruction.
 
@@ -31,6 +31,27 @@ Attempt outcomes are immutable records with authenticated actor, receipt time an
 
 Overlapping aggregate/component evidence can be uploaded as `Detail` against the same meter with an explicit exclusion reason. It remains in the raw audit and does not contribute to the meter total. Installed-harness collectors select the authoritative contribution stream from observed harness semantics; [native collector evidence](../validation/m2-collectors.md) and [live evaluation evidence](../validation/m4-review.md) establish that separately from synthetic accounting fixtures.
 
+## Phases and host spans
+
+`Usage.Phases` reports, for a filter, one `PhaseUsage` per phase that has an attempt or a span: attempts, running attempts, host spans, wall time, token totals and grouped costs. Every attempt carries its `UsagePhase` (Govern, Explore, Probe, Plan, Work, Review, and Combine for a conflict resolver). Wall time is the sum of `finishedAt − startedAt` over the phase's attempts with an outcome and over its spans; a running attempt is counted in `running` and adds no wall time. Wall time is busy time per phase, not elapsed time: phases overlap (the governor's attempt spans the whole session, a reviewer waits for the checks it requests, an integration contains the checks of its rebased commit), so the rows must not be added up.
+
+A `PhaseSpan` is host time outside any attempt. It has an identity, the assignment it belongs to, the session, a phase (Check, Combine or Integrate), start and finish times and an `AttemptState`. It carries no tokens and no cost. Registration (`HostUsage.Span`, Collector/Human scope) requires a registered assignment, one of the three host phases, a state other than Running and `finishedAt ≥ startedAt`. A span is immutable: repeating an identity with the same content returns it without advancing the audit cursor; changed content is a conflict. Spans are stored in `cq_usage_spans` and are part of project archives.
+
+What the host records:
+
+| Work | Span | Times | State |
+| --- | --- | --- | --- |
+| One run of a configured check: on a worker's candidate, each rerun of a failed run, a reviewer-declared check, a governor-requested revalidation round, a check of a rebased commit | Check, identity derived from the check job | The job's registration to its last recorded transition (its settlement) | The job's outcome: Completed (exit 0), Failed, Cancelled (stopped by its owner, including a run interrupted by a lost claim) or Unknown (unconfirmed cleanup) |
+| One integration | Integrate, identity derived from the integration ID | `PrepareIntegration` to the resolution | Completed for Recorded; Failed for NotApplied and for a failed preparation |
+| One combination preparation | Combine, identity derived from the request ID | The first `Combine` request to the published plan | Completed when Ready |
+
+- **Assignment.** A span belongs to the assignment of the dispatch whose members the work covers: a worker's or reviewer's own assignment for the checks run for that child, and the original worker's assignment for what the governing session runs on its result (revalidation, integration with the checks of its rebased commit, combination preparation). The governing session finds that assignment in the dispatch ticket of the child that produced the result. A check that covers several members therefore lands once on the Shared assignment that holds them all; a task filter for any member includes it, as it includes that assignment's attempts, and nothing is divided between members.
+- **Work excludes Check.** A child's attempt ends when its native job settles, not when its result is published, so a worker's host checks are Check time and not Work time. A reviewer's declared checks run while the reviewer waits for them: that time is in both Review and Check.
+- **Unresolved work.** An integration that is Ready but never applied when its owner shuts down ends as Cancelled, a Pending one as Unknown, and a combination whose publication is still pending as Unknown; each ends at the time the host last finished working on it, not at the shutdown. Before its members are known (the reviewer handle or the source integration was refused) the work has no assignment and records no span.
+- **Delivery.** Spans travel in the same immutable delivery batches as attempts, so recovery replays them and the identity makes the replay idempotent. A worker's check spans are sealed with its publication; a reviewer-declared check's span with that check's evidence; a span of work the governing session runs itself is retained in its own queue under `spans/` in the session directory before it is sent. A send that fails leaves the span retained; the session's final delivery and `cq job upload` send it.
+
+Not recorded: a worker's check runs when its supervisor died before sealing the worker's publication (their evidence is not published either); the span of an integration that only `cq job upload` resolved after its supervisor died during the Git update; an attempt reconciled by recovery ends at the recovery time, not at its job's settlement. Attempts registered before the settle-time rule keep their publication time as `finishedAt`, so historical Work wall time includes the worker's checks.
+
 ## Storage, access and retention
 
 The initial PostgreSQL DDL includes indexes for assignment membership, cohort, evaluation/scenario, session, attempt and source position. Writes serialize on a separate project audit cursor, not the ledger change cursor. Ingestion accesses the target meter, relevant observation/head, and that meter's projection. It does not reload item content or update unrelated task/cohort aggregates. Meter token projections have a fixed shape. Monetary projections use separate rows keyed by meter, currency, cost basis and pricing version. Ingestion updates only the previous/new contribution groups in the same audit transaction; corrections remove zero-measurement groups and retain measured zero amounts. Cumulative cost changes only with the effective latest observation. Historical cumulative corrections remain audit evidence without changing the current cost.
@@ -50,5 +71,6 @@ CQ retains numerical records, frozen membership, corrections and published artif
 - Cumulative resumed usage with a nonzero baseline, out-of-order delivery, corrected current and historical observations, and exact decimal cost differences.
 - Pending collection, measured zero, missing/unsupported metrics, source-position replay, rejected malformed values and unchanged state after failed ingestion.
 - Late collection after claim release, denied model/collector cross-permission writes, project-filter denial, and multi-page summaries with bounded shared references.
+- Phase reports: attempts with finished wall time and running attempts apart, bounded cost groups, and host spans added to their phase's span count and wall time once per identity under session, task and project filters.
 
 These are deterministic accounting scenarios. They are not real Claude/Codex/Pi consumer evaluations, collector-completeness evidence or an efficiency claim.

@@ -95,6 +95,18 @@ def main():
         assert [line.split()[:5] for line in phases.splitlines() if line.startswith("Work ")][0] == ["Work", "1", "0", "0", "0:00:02"], phases
         measured = json.loads(run("json-phases-measured", ["status", "phases", "--task", "T1", "--json"], 0, False).stdout)["UsagePhases"]["report"]["phases"]
         assert [(entry["phase"], entry["attempts"], entry["wallMillis"], entry["totals"]["total"]["known"]) for entry in measured] == [("Work", "1", "2000", "108")], measured
+        # Host spans on the task's assignment appear as their own phases; a replayed span is recorded once.
+        spans = [{"id": identity(), "assignment": attempt["assignment"], "session": attempt["session"], "phase": name,
+                  "startedAt": started, "finishedAt": finished, "state": state}
+                 for name, started, finished, state in [("Check", "3000", "68000", "Failed"), ("Integrate", "68000", "72500", "Completed")]]
+        for span in spans + spans[:1]:
+            assert call("/api/usage", {"project": project, "operation": {"Span": {"value": span}}}) == {"Spanned": {"value": span}}
+        for scope in [["--task", "T1"], ["--session", attempt["session"]["value"]]]:
+            spanned = run("human-phases-spans" + scope[0], ["status", "phases", *scope], 0, False).stdout
+            usage_table = spanned[:spanned.index("Costs —")]
+            rows = {line.split()[0]: line.split()[1:5] for line in usage_table.splitlines() if line.split()[:1] in (["Work"], ["Check"], ["Integrate"])}
+            assert rows == {"Work": ["1", "0", "0", "0:00:02"], "Check": ["0", "0", "1", "0:01:05"], "Integrate": ["0", "0", "1", "0:00:04"]}, spanned
+            assert "host spans" in spanned, spanned
         audit = run("human-audit-measured", ["status", "audit"], 0, False).stdout
         assert all(value in audit for value in ["cli-fixture", "101", "Partial", "Deliberate fixture gap"]), audit
         attempts = run("human-attempts-measured", ["status", "attempts"], 0, False).stdout

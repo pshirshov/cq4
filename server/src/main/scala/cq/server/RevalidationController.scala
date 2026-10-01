@@ -20,6 +20,7 @@ final class RevalidationController(config: SupervisorConfig, authority: Supervis
   private val AdmissionNanos = Duration.ofSeconds(60).toNanos
   private val validation = new HostValidation(config)
   private val execution = new GovernedIntegrationJobs(config.owner, jobs, admission)
+  private val spans = new SessionSpans(config, authority)
   private var entries = Map.empty[RequestId, RevalidationExecution]
   private var closing = false
   private final case class Round(result: ChildResult, number: Int, failing: List[EffectiveCheck], effective: EffectiveValidation)
@@ -75,10 +76,6 @@ final class RevalidationController(config: SupervisorConfig, authority: Supervis
         (entry, Some(round))
     }
 
-  private def check(id: AttemptId, base: GitCommit, command: JobCommand): Task[JobRecord] =
-    execution.execute(WorkspaceSpec(config.owner.project, config.owner.actor.session, id, config.run.repository, base), command)
-      .onInterrupt(jobs.cancel(config.owner, id).ignore) *> execution.status(id)
-
   private def run(id: RequestId, result: ArtifactId, round: Round): Task[RevalidationStatus] = {
     val author = config.run.attempt.id
     val candidate = round.result.candidate.get
@@ -86,8 +83,9 @@ final class RevalidationController(config: SupervisorConfig, authority: Supervis
     // The claim is renewed while the checks run; a failed renewal stops them and no round is recorded.
     val renewal = (ZIO.sleep(zio.Duration.fromSeconds(RenewalSeconds)) *> ZIO.attemptBlocking(bounded(renew(_, round.result.request)))).forever
     for {
+      assignment <- ZIO.attemptBlocking(PhaseSpans.producer(config.directory, result))
       results <- ZIO.interruptible(ZIO.foreach(round.failing.zipWithIndex) { case (failing, index) =>
-        validation(author, s"$label-$index", candidate, failing.original.declaration, check)
+        validation(author, s"$label-$index", candidate, failing.original.declaration, spans.check(jobs, execution, assignment))
       }.raceFirst(renewal))
       evidence = results.map(_.evidence)
       // Shutdown cancels a running check, which then reads as failed; that outcome is discarded rather than recorded as a round.

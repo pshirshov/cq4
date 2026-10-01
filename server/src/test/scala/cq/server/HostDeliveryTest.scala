@@ -13,10 +13,12 @@ import org.scalatest.wordspec.AnyWordSpec
 final class HostDeliveryLocal extends AnyWordSpec {
   private def project: ProjectId = ProjectId(UUID.randomUUID())
   private def attempt: AttemptId = AttemptId(UUID.randomUUID())
+  private val reviewing = AssignmentId(UUID.randomUUID())
   private final class Receiver extends ServerApi {
     var values = Map.empty[ArtifactId, ArtifactUpload]
     var calls = 0
     var loseAcknowledgement = true
+    var spans = List.empty[PhaseSpan]
     override def artifact(value: ArtifactUpload): ArtifactMetadata = {
       calls += 1
       require(values.get(value.id).forall(_ == value), "Artifact replay changed its content")
@@ -26,7 +28,13 @@ final class HostDeliveryLocal extends AnyWordSpec {
         value.body.codePointCount(0, value.body.length), Actor("fixture", SessionId(UUID.randomUUID()), Role.Collector), 1)
     }
     override def call(value: Command): Result = throw new IllegalStateException("Not a publication operation")
-    override def usage(value: HostUsageInput): HostUsageResult = throw new IllegalStateException("Not used in artifact replay scenario")
+    override def usage(value: HostUsageInput): HostUsageResult = value.operation match {
+      case HostUsage.Span(span) =>
+        spans = spans :+ span
+        if (loseAcknowledgement) { loseAcknowledgement = false; throw new IOException("Acknowledgement lost after the span was recorded") }
+        HostUsageResult.Spanned(span)
+      case _ => throw new IllegalStateException("Not used in artifact replay scenario")
+    }
     override def admit(value: HostAdmissionInput): ResultAdmission = throw new IllegalStateException("This publication has no admission request")
     override def integrate(value: HostIntegrationInput): IntegrationRecord = throw new IllegalStateException("Publication cannot integrate candidates")
     override def grant(value: GrantRequest): AccessToken = throw new IllegalStateException("Publication queue cannot grant authority")
@@ -54,12 +62,12 @@ final class HostDeliveryLocal extends AnyWordSpec {
       Files.writeString(payload.resolve("stdout"), "pass")
       val directory = root.resolve("check")
       HostFiles.directory(directory)
-      val publication = new DeclaredCheckPublication(directory, ticket, root.resolve("payload"))
+      val publication = new DeclaredCheckPublication(directory, ticket, reviewing, root.resolve("payload"))
       publication.seal(Some(record), None)
       val receiver = new Receiver
       intercept[IOException](publication.finish(receiver))
       Files.writeString(payload.resolve("stdout"), "different output after interruption")
-      val reopened = new DeclaredCheckPublication(directory, ticket, root.resolve("payload"))
+      val reopened = new DeclaredCheckPublication(directory, ticket, reviewing, root.resolve("payload"))
       reopened.reconcile(Some(record))
       val receipt = reopened.finish(receiver)
       assert(receipt.status.phase == DeclaredCheckPhase.Completed && receipt.status.evidence.exists(_.state == ValidationState.Passed))
@@ -83,7 +91,7 @@ final class HostDeliveryLocal extends AnyWordSpec {
       Files.writeString(payload.resolve("stdout"), "pass")
       val directory = root.resolve("check")
       HostFiles.directory(directory)
-      val publication = new DeclaredCheckPublication(directory, ticket, root.resolve("payload"))
+      val publication = new DeclaredCheckPublication(directory, ticket, reviewing, root.resolve("payload"))
       publication.seal(Some(record), None)
       val receiver = new Receiver
       receiver.loseAcknowledgement = false
@@ -94,11 +102,78 @@ final class HostDeliveryLocal extends AnyWordSpec {
       assert(receiver.values.contains(observation) && receiver.values.contains(NativeArtifacts.id(parent, "recheck-2-verify-stdout")) && !receiver.values.contains(first))
     }
 
+    "I20: seal each reviewer check run with one Check span of its job on the reviewer's assignment, and none without a job" in {
+      val root = Files.createTempDirectory("cq-review-check-span-")
+      val session = SessionId(UUID.randomUUID())
+      val parent = attempt
+      val check = ValidationCheck("verify", List("verify"), 1000, 65536, 2, 0)
+      def sealing(name: String, run: Int, exit: Option[JobExit], phase: JobPhase): (DeclaredCheckPublication, JobRecord) = {
+        val spec = WorkspaceSpec(project, session, DeclaredCheckPublication.job(parent, "verify", run), "/consumer", GitCommit("a" * 40))
+        val ticket = DeclaredCheckTicket(parent, check, spec, "a" * 64, DeclaredCheckPublication.earlier(parent, "verify", run))
+        val directory = root.resolve(name)
+        HostFiles.directory(directory)
+        (new DeclaredCheckPublication(directory, ticket, reviewing, root.resolve("payload")), JobRecord(spec, ticket.fingerprint, JobTarget.Run, phase, exit, None, 2, 5000, 5700))
+      }
+      val receiver = new Receiver
+      receiver.loseAcknowledgement = false
+      val (failed, first) = sealing("first", 1, Some(JobExit(Some(1), None, StopReason.Exited, 0, 0, true, false)), JobPhase.Settled)
+      failed.seal(Some(first), None)
+      failed.finish(receiver)
+      val (uncertain, second) = sealing("second", 2, None, JobPhase.Uncertain)
+      uncertain.reconcile(Some(second))
+      uncertain.finish(receiver)
+      val (missing, _) = sealing("missing", 3, None, JobPhase.Settled)
+      missing.reconcile(None)
+      missing.finish(receiver)
+      assert(receiver.spans == List(first -> AttemptState.Failed, second -> AttemptState.Unknown).map { case (record, state) =>
+        PhaseSpan(PhaseSpans.check(record, reviewing).id, reviewing, session, UsagePhase.Check, 5000, 5700, state)
+      }, receiver.spans.toString)
+      assert(receiver.spans.map(_.id).distinct.size == 2 && failed.finish(receiver).acknowledged == 0 && receiver.spans.size == 2)
+    }
+
+    "I20: retain a session span before sending it, replay the same span after a lost acknowledgement and find the producing child's assignment" in {
+      val root = Files.createTempDirectory("cq-session-spans-")
+      val p = project
+      val session = SessionId(UUID.randomUUID())
+      val delivery = new SpanDelivery(root.resolve("spans"), p)
+      val receiver = new Receiver
+      assert(delivery.flush(receiver) == 0)
+      val id = IntegrationId(UUID.randomUUID())
+      val span = PhaseSpans.integration(id, reviewing, session, 1000, 4000, AttemptState.Completed)
+      val other = PhaseSpans.combination(RequestId(id.value), reviewing, session, 4000, 4100, AttemptState.Unknown)
+      assert(span.id != other.id && span.id.value != id.value && span.phase == UsagePhase.Integrate && other.phase == UsagePhase.Combine)
+      assert(PhaseSpans.integration(id, reviewing, session, 1000, 4000, AttemptState.Completed) == span)
+      delivery.retain(span)
+      delivery.retain(span)
+      intercept[IllegalArgumentException](delivery.retain(span.copy(finishedAt = 4001)))
+      intercept[IOException](delivery.send(span, receiver))
+      delivery.retain(other)
+      assert(new SpanDelivery(root.resolve("spans"), p).flush(receiver) == 2)
+      assert(receiver.spans.toSet == Set(span, other) && receiver.spans.count(_ == span) == 2)
+      assert(delivery.flush(receiver) == 0 && delivery.send(span, receiver) == 0 && receiver.spans.size == 3)
+
+      val item = ItemRevision(ItemId(p, Ledger.Tasks, 1), Revision(1))
+      val request = DispatchRequest(RequestId(UUID.randomUUID()), DispatchWork.Worker(WorkerMode.Implement), Harness.Codex, List(item), Nil, Nil, None,
+        Fence(ClaimId(UUID.randomUUID()), 1), HostLimits(3000, 1000, 300, 2000, 262144))
+      val tickets = List.fill(2) {
+        val assignment = Assignment(AssignmentId(UUID.randomUUID()), p, Set(item.id), Attribution.Direct, None, None)
+        val worker = Attempt(attempt, assignment.id, Some(attempt), session, Role.Worker, Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Work)
+        val ticket = DispatchTicket(request, assignment, worker, HarnessSetting(Harness.Codex, "/fixture", "fixture", "fixture", "0.156.1", Nil, Set.empty), None)
+        HostFiles.directory(root.resolve("children").resolve(worker.id.value.toString))
+        HostFiles.immutable(root.resolve("children").resolve(worker.id.value.toString).resolve("ticket.json"), HostFiles.encode(DispatchTicket_JsonCodec, ticket), 65536)
+        ticket
+      }
+      HostFiles.directory(root.resolve("children").resolve(UUID.randomUUID().toString))
+      tickets.foreach(ticket => assert(PhaseSpans.producer(root, NativeArtifacts.id(ticket.attempt.id, "result")) == ticket.assignment.id))
+      intercept[IllegalStateException](PhaseSpans.producer(root, ArtifactId(UUID.randomUUID())))
+      intercept[IllegalStateException](PhaseSpans.producer(Files.createTempDirectory("cq-no-children-"), NativeArtifacts.id(tickets.head.attempt.id, "result")))
+    }
+
     "preserve unknown reviewer checks without inventing observations when no job was committed" in {
       val root = Files.createTempDirectory("cq-review-check-missing-")
       val spec = WorkspaceSpec(project, SessionId(UUID.randomUUID()), attempt, "/consumer", GitCommit("a" * 40))
       val ticket = DeclaredCheckTicket(attempt, ValidationCheck("verify", List("verify"), 1000, 65536, 1, 0), spec, "a" * 64, Nil)
-      val publication = new DeclaredCheckPublication(root, ticket, root.resolve("payload"))
+      val publication = new DeclaredCheckPublication(root, ticket, reviewing, root.resolve("payload"))
       publication.reconcile(None)
       val receiver = new Receiver
       receiver.loseAcknowledgement = false
@@ -114,7 +189,7 @@ final class HostDeliveryLocal extends AnyWordSpec {
       val ticket = DeclaredCheckTicket(attempt, ValidationCheck("verify", List("verify"), 1000, 65536, 1, 0), spec, "a" * 64, Nil)
       val record = JobRecord(spec, ticket.fingerprint, JobTarget.Run, JobPhase.Settled,
         Some(JobExit(Some(0), None, StopReason.Exited, 10, 0, true, false)), None, 1, 1, 2)
-      val publication = new DeclaredCheckPublication(root, ticket, root.resolve("payload"))
+      val publication = new DeclaredCheckPublication(root, ticket, reviewing, root.resolve("payload"))
       publication.seal(Some(record), None)
       val receiver = new Receiver
       receiver.loseAcknowledgement = false
