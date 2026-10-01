@@ -68,6 +68,13 @@ Path(".work/evidence/credential.json").write_bytes(base64.urlsafe_b64decode(payl
 target.write_text(json.dumps({"Work": {"members": [{"item": item, "disposition": "Blocked", "summary": "Recorded the credential", "evidence": []} for item in members]}}))
 emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_tokens": 0, "cache_write_input_tokens": 0, "output_tokens": 5, "reasoning_output_tokens": 0}})
 """
+  /** A child that is silent, writes one event, and is silent again before it reports. */
+  private val Intermittent = Header + """time.sleep(2.5)
+emit({"type": "item.completed", "item": {"id": "item_0", "type": "agent_message", "text": "still working"}})
+time.sleep(2.5)
+target.write_text(json.dumps({"Work": {"members": [{"item": item, "disposition": "Blocked", "summary": "Reported after two silences", "evidence": []} for item in members]}}))
+emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_tokens": 0, "cache_write_input_tokens": 0, "output_tokens": 5, "reasoning_output_tokens": 0}})
+"""
   /** A healthy child that is silent for longer than any former execution deadline of this suite before it reports. */
   private val Slow = Header + """time.sleep(3)
 target.write_text(json.dumps({"Work": {"members": [{"item": item, "disposition": "Blocked", "summary": "Reported after a long silence", "evidence": []} for item in members]}}))
@@ -350,6 +357,33 @@ sys.stderr.flush()
           _ <- f.jobs.cancel(f.config.owner, cancelled.ticket.attempt.id)
           _ <- running.join.timeoutFail(new IllegalStateException("Cancelled worker did not settle"))(zio.Duration.fromSeconds(60))
           _ <- verify(cancelled, DispatchPhase.Cancelled, AttemptState.Cancelled)
+        } yield ()
+      }
+    }
+
+    "I21: report how long a running child has been silent, reset it when the child writes, and omit it once the child settles" in {
+      (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None) { f =>
+        val controller = new DispatchController(f.config, f.runner, f.jobs, f.clock)
+        def observe(attempt: AttemptId, seen: List[DispatchStatus]): Task[List[DispatchStatus]] = controller.status(attempt, 0).flatMap { status =>
+          if (DispatchController.terminal(status.phase)) ZIO.succeed((status :: seen).reverse)
+          else ZIO.sleep(zio.Duration.fromMillis(100)) *> observe(attempt, status :: seen)
+        }
+        for {
+          _ <- ZIO.attemptBlocking(f.install(Intermittent))
+          started <- controller.start(f.request(HostLimits(3000, 900, 100, 1000, 262144)))
+          seen <- observe(started.attempt, Nil).timeoutFail(new IllegalStateException("Worker did not finish"))(zio.Duration.fromSeconds(60))
+          _ <- ZIO.attempt {
+            val running = seen.filter(_.process.contains(JobPhase.Running))
+            val quiet = running.map(_.quietMillis)
+            assert(seen.last.phase == DispatchPhase.Completed && seen.last.quietMillis.isEmpty, seen.last.toString)
+            assert(running.nonEmpty && quiet.forall(_.nonEmpty), s"A running child reported no quiet time: $quiet")
+            assert(seen.filterNot(_.process.contains(JobPhase.Running)).forall(_.quietMillis.isEmpty))
+            val grown = quiet.flatten.indexWhere(_ >= 1500)
+            assert(grown >= 0, s"Quiet time did not grow while the child was silent: $quiet")
+            assert(quiet.flatten.drop(grown).exists(_ < 1000), s"Quiet time was not reset by the child's output: $quiet")
+          }
         } yield ()
       }
     }

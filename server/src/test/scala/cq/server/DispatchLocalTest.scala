@@ -73,7 +73,7 @@ final class DispatchLocal extends AnyWordSpec {
       val request = DispatchRequest(RequestId(UUID.randomUUID()), DispatchWork.Worker(WorkerMode.Implement), Harness.Codex,
         members, Nil, Nil, None, Fence(ClaimId(UUID.randomUUID()), 1), HostLimits(3000, 1000, 300, 2000, 262144))
       val initial = DispatchStatus(request.request, attempt, DispatchPhase.Running, Some(JobPhase.Settled), members.map(_.id),
-        DispatchProjection.EmptyCounts, ChildNext.Wait, None, None, None, false, true, None)
+        DispatchProjection.EmptyCounts, ChildNext.Wait, None, None, None, false, true, None, None)
       val handle = ArtifactId(UUID.randomUUID())
       val report = ChildReport.Work(members.map(value => WorkMember(value.id, WorkDisposition.Blocked, "🙂" * 4000, Nil)))
       val result = ChildResult(attempt, request, GitCommit("a" * 40), None, report, Nil, RetainedEvidence(Nil, Nil))

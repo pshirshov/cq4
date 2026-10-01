@@ -53,7 +53,7 @@ cq init --name 'Greeting demo'
 
 Use your normal Git identity; if `git commit` asks for one, configure it for this demo repository and repeat the commit. `cq-result` is deliberately **not checked out**: CQ's reviewed integration updates that branch without changing your working files or index.
 
-Create private supervisor settings from the installed example. This selects your installed Codex executable, the configured `gpt-6-sol` model, a 15-minute run limit and the named Go test command:
+Create private supervisor settings from the installed example. This selects your installed Codex executable, the configured `gpt-6-sol` model and the named Go test command with its two-minute deadline. The governing harness and its children have no run limit; cancel a session with Ctrl-C or a child through the governor:
 
 ```sh
 python3 - <<'PY'

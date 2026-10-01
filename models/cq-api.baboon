@@ -761,7 +761,7 @@ root data WorkspaceState { admission: WorkspaceAdmission directory: opt[str] }
 root data DispatchStatus {
   request: RequestId attempt: AttemptId phase: DispatchPhase process: opt[JobPhase] members: lst[ItemId]
   counts: ChildCounts next: ChildNext blocker: opt[str] result: opt[ArtifactId] partial: opt[ArtifactId] detailsOmitted: bit usageDelivered: bit
-  workspace: opt[WorkspaceState]
+  workspace: opt[WorkspaceState] quietMillis: opt[i64]
 }
 root data DispatchTicket { request: DispatchRequest assignment: Assignment attempt: Attempt profile: HarnessSetting selection: opt[ArtifactId] }
 root data CohortRequest {

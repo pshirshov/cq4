@@ -329,12 +329,13 @@ def main():
             deadline = time.monotonic() + 20
             while running["process"] != "Running" and time.monotonic() < deadline:
                 running = closing.tool("dispatch", {"Status": {"attempt": running["attempt"], "waitMillis": 100}})["Status"]["value"]
-            assert running["process"] == "Running", running
+            assert running["process"] == "Running" and int(running["quietMillis"]) >= 0, running
         finally:
             closing.close()
     child_directory = Path(closing_context["directory"]) / "children" / running["attempt"]["value"]
     stopped = json.loads((child_directory / "receipt.json").read_text())
     assert stopped["phase"] == "Cancelled" and stopped["process"] == "Settled" and stopped["result"] is None and stopped["usageDelivered"], stopped
+    assert stopped["quietMillis"] is None, stopped
     assert stopped["workspace"]["admission"] == "Quarantined" and Path(stopped["workspace"]["directory"]).is_dir(), stopped
     print(json.dumps({"disconnectWithRunningChild": "cancelled-and-accounted"}))
 
