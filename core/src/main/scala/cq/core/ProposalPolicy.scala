@@ -30,7 +30,16 @@ object ProposalPolicy {
         invalid(eligible(id), "Proposal endpoint is outside its eligible assignment")
         revisions(id)
       }
-      def draft(value: ItemDraft): ItemDraft = { validate(value); recommended(value); value }
+      def draft(value: ItemDraft): ItemDraft = {
+        validate(value)
+        recommended(value)
+        value.content match {
+          case memory: Content.Memory => invalid(memory.status == MemoryStatus.Current && memory.evidence.nonEmpty && memory.evidence.forall(_.citations.nonEmpty),
+            "Proposed Memory requires Current status and cited evidence")
+          case _ => ()
+        }
+        value
+      }
       def task(value: ItemDraft): Boolean = ledger(value.content) == Ledger.Tasks
       val mutations = value.mutations.zipWithIndex.map {
         case (ProposedMutation.Create(value), _) =>

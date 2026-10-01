@@ -61,6 +61,12 @@ object AgentExamples {
     "", Set("cli"),
     Content.Decision(DecisionStatus.Adopted, "Validate arguments with argparse; do not add a parsing dependency.",
       "The tool has one positional argument and ships without third-party dependencies.", List("Adopt click")), Nil)
+  private val Memory = view(id(Ledger.Memories, 1), 1, Governor, "greet has no third-party dependencies",
+    "", Set("cli"),
+    Content.Memory(MemoryStatus.Current, "greet ships without third-party dependencies; its command line is parsed with argparse from the standard library.",
+      "Any change to how greet parses or validates its arguments.",
+      List(Evidence("pyproject.toml declares an empty dependency list.", EvidenceOrigin.ModelDeclared, List(Citation.File("pyproject.toml", Some(Base.value)))))),
+    List(ItemRef(Relation.DerivedFrom, Decision.item.id)))
   private val TaskDraft = ItemDraft("Reject blank names in greet", "Validate the name argument before formatting the greeting.", Set("cli"), false,
     Content.Task(TaskStatus.Ready, List("`greet ''` and `greet '   '` exit with status 2 and print an error on stderr.",
       "`greet Ada` still prints 'Hello, Ada!' and exits with status 0.",
@@ -88,7 +94,7 @@ object AgentExamples {
     Nil, Nil)))
   private val ResearchResult = ChildResult(AttemptId(uuid(502)), ResearchRequest, Base, None, ResearchReport, Nil, NoEvidence)
 
-  private val PlanRequest = request(3, DispatchWork.Planner(), List(Goal), List(Defect, Research), Nil, None)
+  private val PlanRequest = request(3, DispatchWork.Planner(), List(Goal), List(Defect, Research, Memory), Nil, None)
   private val PlanReport = ChildReport.Plan(
     List(PlanMember(Goal.item.id, PlanDisposition.Proposed, "One task covers the goal: validate the name argument and test both the rejected and the accepted case.")),
     Some(LedgerProposal(List(ProposedMutation.Create(MilestoneDraft), ProposedMutation.Produce(Goal.item.id, List(TaskDraft), Some(MilestoneRef.Created(0)))),
@@ -147,7 +153,7 @@ object AgentExamples {
   def input(work: DispatchWork): ChildExecutionInput = work match {
     case DispatchWork.Explorer(ExplorerMode.Investigate) => execution(InvestigateRequest, List(Defect), Nil, Nil, None, None, Base)
     case DispatchWork.Explorer(ExplorerMode.Research) => execution(ResearchRequest, List(Research), List(Defect), Nil, None, None, Base)
-    case _: DispatchWork.Planner => execution(PlanRequest, List(Goal), List(Defect, Research), Nil, None, Some(Requirements), Base)
+    case _: DispatchWork.Planner => execution(PlanRequest, List(Goal), List(Defect, Research, Memory), Nil, None, Some(Requirements), Base)
     case DispatchWork.Worker(WorkerMode.Implement) => execution(ImplementRequest, List(Task), List(Decision), Nil, None, Some(Requirements), Base)
     case DispatchWork.Worker(WorkerMode.Probe) => execution(ProbeRequest, List(Hypothesis), List(Defect), List(ProbeLog), None, Some(Requirements), Base)
     case DispatchWork.Worker(WorkerMode.ResolveConflict) =>

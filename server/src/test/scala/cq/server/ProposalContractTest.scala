@@ -318,6 +318,32 @@ abstract class ProposalContractTest extends SpecZIO with AssertZIO {
         _ <- assertIO(target.item.revision == Revision(2) && ack.items.count(_.id == open) == 1)
       } yield ()
     }
+
+    "apply an evidenced memory production and reject an unevidenced one" in {
+      (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], proposals: ProposalService[IO]) =>
+      val cited = Evidence("The build file pins the compiler", EvidenceOrigin.ModelDeclared, List(Citation.File("build.sbt", None)))
+      def memory(status: MemoryStatus, evidence: List[Evidence]): ItemDraft = task.copy(title = "Compiler pin",
+        content = Content.Memory(status, "The build pins Scala 3", "Any build change", evidence))
+      val refused = Fault.Invalid("Proposed Memory requires Current status and cited evidence")
+      for {
+        f <- begin(ledger, usage)
+        producer = f.members.head.id
+        _ <- ZIO.foreachDiscard(List(memory(MemoryStatus.Current, Nil), memory(MemoryStatus.Current, List(cited, cited.copy(citations = Nil))),
+          memory(MemoryStatus.Superseded, List(cited)), memory(MemoryStatus.Retracted, List(cited)))) { draft =>
+          ZIO.foreachDiscard(List(ProposedMutation.Produce(producer, List(draft), None), ProposedMutation.Create(draft))) { mutation => for {
+            value <- publish(f, DispatchWork.Planner(), plan(f, List(mutation)), usage, artifacts)
+            _ <- rejected(admissions.admit(f.collector, HostAdmissionInput(f.owner.project, value.artifact.id, f.owner.actor)), _ == refused)
+          } yield () }
+        }
+        value <- publish(f, DispatchWork.Planner(), plan(f, List(ProposedMutation.Produce(producer, List(memory(MemoryStatus.Current, List(cited))), None))), usage, artifacts)
+        _ <- admit(f, value, admissions)
+        ack <- proposals(f.owner, value.artifact.id)
+        applied <- ledger.get(f.owner, ack.items.find(_.id.ledger == Ledger.Memories).get.id)
+        _ <- assertIO(applied.refs == List(ItemRef(Relation.DerivedFrom, producer)) &&
+          applied.item.draft.content == Content.Memory(MemoryStatus.Current, "The build pins Scala 3", "Any build change", List(cited)) &&
+          LedgerPolicy.evidence(applied.item.draft.content).map(_.origin) == List(EvidenceOrigin.ModelDeclared))
+      } yield ()
+    }
   }
 }
 

@@ -28,6 +28,8 @@ abstract class DispatchAssemblyTest extends SpecZIO with AssertZIO {
   private def requestId: RequestId = RequestId(UUID.randomUUID())
   private def draft(body: String): ItemDraft = ItemDraft("Consumer task", body, Set.empty, false,
     Content.Task(TaskStatus.Ready, List("Behavior verified"), None, Nil), Nil)
+  private def memory: ItemDraft = draft("").copy(title = "Consumer memory", content = Content.Memory(MemoryStatus.Current, "The consumer reads UTF-8 stdin", "Any consumer task",
+    List(Evidence("The specification states the encoding", EvidenceOrigin.ModelDeclared, List(Citation.File("README.md", None))))))
   private def milestone: ItemDraft = draft("").copy(title = "Consumer milestone", content = Content.Milestone(MilestoneStatus.Open, "Deliver the consumer"))
 
   "Reference assembly (Behavioral Active Blackbox; dummy Group / PostgreSQL Good Communication)" should {
@@ -47,7 +49,7 @@ abstract class DispatchAssemblyTest extends SpecZIO with AssertZIO {
           runtime <- ZIO.runtime[Any]
           _ <- ledger.initialize(scope, "Assembly consumer")
           ack <- ledger.change(scope, ChangeRequest(requestId, List(Mutation.Create(draft(narrative)), Mutation.Create(draft("Shared guidance")),
-            Mutation.Create(milestone)), Nil, "Fixture"))
+            Mutation.Create(milestone), Mutation.Create(memory)), Nil, "Fixture"))
           organised <- ledger.change(scope, ChangeRequest(requestId, List(Mutation.Reference(ack.items.head.id, ack.items.head.revision, Relation.PartOf,
             ack.items(2).id, ack.items(2).revision, true)), Nil, "Milestone"))
           member = organised.items.find(_.id == ack.items.head.id).get
@@ -123,6 +125,9 @@ abstract class DispatchAssemblyTest extends SpecZIO with AssertZIO {
             // Planner and Worker children receive the operator's governing request as their own bounded section; explorers do not.
             assert(one.operatorRequirements.contains(requirements))
             assert(assembler.assemble(request.copy(work = DispatchWork.Planner())).operatorRequirements.contains(requirements))
+            // A Current Memory selected as guidance reaches the Planner with its knowledge, applicability and evidence.
+            assert(assembler.assemble(request.copy(work = DispatchWork.Planner(), guidance = List(guidance, ack.items(3)))).guidance.map(_.item.draft.content) ==
+              List(draft("Shared guidance").content, memory.content))
             assert(assembler.assemble(request.copy(work = DispatchWork.Explorer(ExplorerMode.Investigate))).operatorRequirements.isEmpty)
             val oversized = "требование 😀\n" * 4096
             val section = new InputAssembler(api, scope, clock, oversized).assemble(request.copy(work = DispatchWork.Planner())).operatorRequirements.get

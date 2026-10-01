@@ -252,6 +252,10 @@ final class AgentCatalogLocal extends AnyWordSpec {
           assert(revisions(example.input.members) == request.members && revisions(example.input.guidance) == request.guidance)
           assert(example.input.artifacts.map(_.metadata.id) == request.artifacts && example.input.previous.nonEmpty == request.previous.nonEmpty)
           (example.input.members ++ example.input.guidance).foreach(view => cq.core.LedgerPolicy.validate(view.item.draft))
+          if (work == DispatchWork.Planner()) assert(example.input.guidance.exists(_.item.draft.content match {
+            case memory: Content.Memory => memory.status == MemoryStatus.Current && memory.evidence.nonEmpty && memory.evidence.forall(_.citations.nonEmpty)
+            case _ => false
+          }), "the Planner example carries a Current, evidenced Memory as guidance")
           example.input.artifacts.foreach { artifact =>
             val bytes = artifact.body.getBytes(UTF_8)
             assert(artifact.metadata.bytes == bytes.length && artifact.metadata.project == example.input.project)

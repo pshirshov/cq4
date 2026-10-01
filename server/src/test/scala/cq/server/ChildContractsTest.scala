@@ -93,6 +93,9 @@ final class ChildContractsLocal extends AnyWordSpec {
       intercept[IllegalArgumentException](ChildContracts.report(DispatchWork.Reviewer(ReviewerMode.Candidate), List(member), encoded(report)))
       val changes = ChildReport.Review(List(ReviewMember(member.id, ReviewVerdict.ChangesRequested, Nil)), None)
       intercept[IllegalArgumentException](ChildContracts.report(DispatchWork.Reviewer(ReviewerMode.Candidate), List(member), encoded(changes)))
+      // A Candidate reviewer has no summary field: it flags a memory candidate as a finding on an accepted member.
+      val flagged = ChildReport.Review(List(ReviewMember(member.id, ReviewVerdict.Accepted, List("Memory candidate: the build pins its compiler"))), None)
+      assert(ChildContracts.report(DispatchWork.Reviewer(ReviewerMode.Candidate), List(member), encoded(flagged)) == flagged)
       val request = DispatchRequest(RequestId(UUID.randomUUID()), work, Harness.Codex, List(member), Nil, Nil, None,
         Fence(ClaimId(UUID.randomUUID()), 1), HostLimits(3000, 10000, 1000, 300, 2000, 262144))
       val wire = DispatchRequest_JsonCodec.encode(BaboonCodecContext.Default, request)
