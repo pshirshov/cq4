@@ -98,11 +98,11 @@ final class HarnessAdapterLocal extends AnyWordSpec {
     "give ledger mutation and dispatch only to governing profiles and native edits only to workers" in {
       val root = Path.of("/test/assets")
       val governor = invocation(Role.Governor, root)
-      assert(governor.tools(McpTarget.Domain).contains("change") && governor.tools(McpTarget.Local) == List("dispatch") && !governor.edits)
+      assert(governor.tools(McpTarget.Domain).contains("change") && governor.tools(McpTarget.Local) == List("dispatch") && !HarnessTools.edits(Role.Governor))
       List(Role.Explorer, Role.Planner, Role.Worker, Role.Reviewer).foreach { role =>
         val child = invocation(role, root)
         assert(child.tools(McpTarget.Domain) == List("search", "read", "usage") && child.tools(McpTarget.Local) == List("workspace"))
-        assert(child.edits == (role == Role.Worker))
+        assert(HarnessTools.edits(role) == (role == Role.Worker))
         adapters.foreach { adapter =>
           val launch = adapter.launch(profile(adapter.harness), child, environment)
           assert(!launch.arguments.mkString(" ").contains("mcp__cq__change"))

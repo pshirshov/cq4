@@ -2,7 +2,7 @@ package cq.server
 
 import baboon.runtime.shared.{BaboonCodecContext, BaboonJsonCodec}
 import cq.api.*
-import cq.host.{ChildContracts, HarnessInvocation, McpTarget}
+import cq.host.{ChildContracts, HarnessInvocation, HarnessTools, McpTarget}
 import io.circe.{Json, JsonObject, parser}
 import java.nio.charset.StandardCharsets.UTF_8
 
@@ -59,7 +59,7 @@ final class McpSchemas {
 
   def workspace(role: Role): Json = {
     val root = definitions("cq_api_WorkspaceCommand").get
-    if (role == Role.Reviewer) closure(root)
+    if (HarnessTools.workspaceCheck(role)) closure(root)
     else {
       val branches = root.hcursor.get[Vector[Json]]("oneOf").fold(throw _, identity)
         .filterNot(_.hcursor.get[List[String]]("required") == Right(List("Check")))
