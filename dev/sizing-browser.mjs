@@ -20,7 +20,7 @@ try{
  await page.getByRole('button',{name:'D1 · Sizing report',exact:true}).click();await page.locator('#detail-pane .item-document').waitFor();await page.getByRole('button',{name:'Dock detail below',exact:true}).click();
  const wide=await settled();assert.ok(Math.abs(wide.width-wide.pane)<1);
  await page.setViewportSize({width:1366,height:768});const narrow=await settled();assert.ok(Math.abs(narrow.width-narrow.pane)<1);
- for(const i of [0,2,3,4])assert.ok(Math.abs(wide.columns[i]-narrow.columns[i])<1);
+ for(const i of [0,2,3,4,5])assert.ok(Math.abs(wide.columns[i]-narrow.columns[i])<1);
  assert.ok(Math.abs((wide.columns[1]-narrow.columns[1])-(wide.pane-narrow.pane))<1);cases.push('Table fills the viewport; only Title absorbs viewport width changes');
  await page.setViewportSize({width:1800,height:1000});await settled();
  const status=page.getByRole('separator',{name:'Resize Status column',exact:true});const box=await status.boundingBox();

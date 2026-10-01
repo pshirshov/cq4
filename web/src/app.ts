@@ -15,7 +15,7 @@ import { ArchiveDialog } from './archive.js';
 import { faultMessage } from './faults.js';
 import { attemptsTable, outcomesTable, auditTable, sharedAssignmentsList } from './usage-view.js';
 import { formatAmount, MoneyDigits } from './money.js';
-import { TableColumns } from './table-columns.js';
+import { TableColumn, TableColumns } from './table-columns.js';
 import { ItemsView } from './items-view.js';
 import { Notifications } from './notifications.js';
 import { ReferencePopup } from './references.js';
@@ -26,6 +26,9 @@ const PAGE_SIZE = 40;
 const LOAD_MORE_DISTANCE = 120;
 const MAX_QUERY_CHARACTERS = 4096;
 const COMPLETION_LIMIT = 30;
+// The ID column carries the item type icon, so the separate Type column is not shown.
+const SORT_COLUMNS = api.ItemOrderField_values.filter(field => field !== api.ItemOrderField.Type);
+const ITEM_COLUMNS = SORT_COLUMNS.length + 1;
 function readResult(result: api.Result): api.Result {
   if (result instanceof api.Result_Failed) throw new Error(faultMessage(result.fault));
   return result;
@@ -35,7 +38,7 @@ type Panel = 'detail' | 'history' | 'usage' | 'audit';
 type UsageScope = api.UsageFilter_ProjectAll | api.UsageFilter_TaskOnly | api.UsageFilter_CohortOnly | api.UsageFilter_SessionOnly;
 interface UsageLoad { dirty: boolean }
 type AuditView = api.UsageSelection_Costs | api.UsageSelection_Attempts | api.UsageSelection_Outcomes | api.UsageSelection_Audit;
-interface ResultRow { element: HTMLTableRowElement; button: HTMLButtonElement; status: HTMLTableCellElement; severity: HTMLTableCellElement; modified: HTMLTimeElement }
+interface ResultRow { element: HTMLTableRowElement; button: HTMLButtonElement; status: HTMLTableCellElement; severity: HTMLTableCellElement; milestone: HTMLTableCellElement; modified: HTMLTimeElement }
 
 class App {
   private readonly notifications = new Notifications();
@@ -66,6 +69,7 @@ class App {
   private countsLoad: UsageLoad | null = null;
   private countsSnapshot: bigint | null = null;
   private readonly rows = new Map<string, ResultRow>();
+  private readonly groupRows = new Map<string, HTMLTableRowElement>();
   private loadedItems: api.BrowseItem[] = [];
   private resultsPane: HTMLElement | null = null;
   private workspace: Workspace | null = null;
@@ -256,9 +260,8 @@ class App {
     side.append(create, questions, usage, archive, element('h3', 'Browse'), shortcuts);
     const table = element('table', ''); table.className = 'items-table'; table.setAttribute('aria-label', 'Items');
     const head = element('thead', ''); const headings = element('tr', '');
-    // The ID column carries the item type icon, so the separate Type column is not shown.
-    const columns = api.ItemOrderField_values.filter(field => field !== api.ItemOrderField.Type);
-    for (const field of columns) {
+    const columns: TableColumn[] = [];
+    for (const field of SORT_COLUMNS) {
       const cell = element('th', ''); cell.scope = 'col'; this.sortHeaders.set(field, cell);
       const label = field === 'Id' ? 'ID' : field === 'Modified' ? 'Last modified' : field;
       const control = button(label, () => this.action(async () => {
@@ -266,11 +269,24 @@ class App {
         this.itemsView.store(this.order); this.updateSort(); await this.search();
       }));
       control.setAttribute('aria-label', `Sort by ${field === 'Id' ? 'ID' : label.toLowerCase()}`); cell.append(control); headings.append(cell);
+      columns.push({ header: cell, label });
+      if (field === api.ItemOrderField.Severity) {
+        // The operator asked for the milestone icon instead of the word; the name is exposed to assistive technology only.
+        const milestone = element('th', ''); milestone.scope = 'col'; milestone.className = 'milestone-heading';
+        const flag = icon(api.Ledger.Milestones); flag.removeAttribute('aria-hidden'); flag.setAttribute('role', 'img'); flag.setAttribute('aria-label', 'Milestone');
+        const grouping = element('input', ''); grouping.type = 'checkbox'; grouping.checked = this.order.grouped;
+        grouping.setAttribute('aria-label', 'Group by milestone'); grouping.title = 'Group by milestone';
+        grouping.addEventListener('change', () => this.action(async () => {
+          this.order = new api.ItemOrder(this.order.field, this.order.direction, grouping.checked);
+          this.itemsView.store(this.order); await this.search();
+        }));
+        milestone.append(flag, grouping); headings.append(milestone); columns.push({ header: milestone, label: 'Milestone' });
+      }
     }
     head.append(headings); table.append(head, this.items); this.updateSort();
     if (this.tableColumns !== null) this.tableColumns.destroy();
-    this.tableColumns = new TableColumns(table, [...this.sortHeaders.values()], workspace.results, this.items);
-    const empty = element('td', 'No matching items.'); empty.colSpan = columns.length; this.emptyResults.append(empty);
+    this.tableColumns = new TableColumns(table, columns, workspace.results, this.items);
+    const empty = element('td', 'No matching items.'); empty.colSpan = ITEM_COLUMNS; this.emptyResults.append(empty);
     this.items.tabIndex = -1; this.items.setAttribute('aria-label', 'Result items');
     this.items.addEventListener('keydown', event => {
       const rows = Array.from(this.items.querySelectorAll<HTMLButtonElement>('button')); const index = rows.indexOf(document.activeElement as HTMLButtonElement);
@@ -344,7 +360,7 @@ class App {
     this.epoch++; this.selectionGeneration++; this.selection = null; this.selected = null; this.editor = null; this.after = undefined; this.snapshot = undefined;
     this.queryInvalid = false; this.itemCursor = null; this.resetCounts(); this.resetUsageWatch(); this.watch();
     this.graph.setScope(this.project, null);
-    this.rows.clear(); this.items.replaceChildren(); this.loadedItems = []; this.page = null; this.resultStatus.textContent = 'Loading items…';
+    this.rows.clear(); this.groupRows.clear(); this.items.replaceChildren(); this.loadedItems = []; this.page = null; this.resultStatus.textContent = 'Loading items…';
     if (this.resultsPane !== null) this.resultsPane.scrollTop = 0;
     this.detail.replaceChildren(); this.editorPanel.replaceChildren(); this.conflictPanel.replaceChildren(); this.historyPanel.replaceChildren(); this.usagePanel.replaceChildren(); this.auditPanel.replaceChildren();
     this.notifications.clear(); this.setUsageScope(new api.UsageFilter_ProjectAll());
@@ -487,11 +503,30 @@ class App {
     } catch (error) { if (current()) throw error; }
     finally { if (current()) this.countsLoad = null; }
   }
+  private groupRow(key: string, milestone: api.ItemId | undefined): HTMLTableRowElement {
+    let row = this.groupRows.get(key);
+    if (row === undefined) {
+      row = element('tr', ''); row.className = 'item-group';
+      const cell = element('td', ''); cell.colSpan = ITEM_COLUMNS;
+      if (milestone === undefined) cell.append('No milestone'); else cell.append(icon(api.Ledger.Milestones), key);
+      row.append(cell); this.groupRows.set(key, row);
+    }
+    return row;
+  }
   private renderItems(items: api.BrowseItem[]): void {
     const focused = this.items.contains(document.activeElement) ? document.activeElement as HTMLElement : null;
-    const retained = new Set<string>(); this.emptyResults.remove();
-    for (const [index, entry] of items.entries()) {
+    const retained = new Set<string>(); const groups = new Set<string>(); this.emptyResults.remove();
+    let position = 0; let group: string | null = null;
+    const place = (line: HTMLTableRowElement): void => {
+      const before = this.items.children.item(position++);
+      if (before !== line) this.items.insertBefore(line, before);
+    };
+    for (const entry of items) {
       const item = entry.summary;
+      if (this.order.grouped) {
+        const name = entry.milestone === undefined ? '' : itemName(entry.milestone);
+        if (name !== group) { group = name; groups.add(name); place(this.groupRow(name, entry.milestone)); }
+      }
       const key = `${item.id.project.value}-${itemName(item.id)}`; retained.add(key);
       let row = this.rows.get(key);
       if (row === undefined) {
@@ -504,19 +539,21 @@ class App {
         const title = element('td', ''); title.append(node);
         const status = element('td', ''); status.className = 'item-status'; status.id = `status-${key}`;
         const severity = element('td', ''); severity.className = 'item-severity';
+        const milestone = element('td', ''); milestone.className = 'item-milestone';
         const modified = element('time', ''); const timestamp = element('td', ''); timestamp.className = 'item-modified'; timestamp.append(modified);
-        node.setAttribute('aria-describedby', status.id); line.append(id, title, status, severity, timestamp);
-        row = { element: line, button: node, status, severity, modified }; this.rows.set(key, row);
+        node.setAttribute('aria-describedby', status.id); line.append(id, title, status, severity, milestone, timestamp);
+        row = { element: line, button: node, status, severity, milestone, modified }; this.rows.set(key, row);
       }
       const caption = `${itemName(item.id)} · ${item.title}${item.archived ? ' · archived' : ''}`;
       row.button.textContent = item.title + (item.archived ? ' · archived' : ''); row.button.setAttribute('aria-label', caption);
       row.status.textContent = item.status; row.severity.textContent = entry.severity === undefined ? '—' : entry.severity;
+      row.milestone.textContent = entry.milestone === undefined ? '' : itemName(entry.milestone);
       const date = new Date(Number(item.updatedAt)); row.modified.dateTime = date.toISOString(); row.modified.title = date.toLocaleString();
       row.modified.replaceChildren(element('span', date.toLocaleDateString(undefined, { dateStyle: 'short' })), element('span', date.toLocaleTimeString(undefined, { timeStyle: 'short' })));
-      const before = this.items.children.item(index);
-      if (before !== row.element) this.items.insertBefore(row.element, before);
+      place(row.element);
     }
     for (const [key, row] of this.rows) if (!retained.has(key)) { row.element.remove(); this.rows.delete(key); }
+    for (const [key, row] of this.groupRows) if (!groups.has(key)) { row.remove(); this.groupRows.delete(key); }
     if (items.length === 0) this.items.append(this.emptyResults);
     this.markSelection();
     if (focused !== null && document.activeElement !== focused) (focused.isConnected ? focused : this.items).focus();
