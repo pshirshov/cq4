@@ -70,14 +70,19 @@ time.sleep(30)
 
   private final case class Fixture(owner: Scope, config: SupervisorConfig, runner: ChildRunner, jobs: JobSupervisor, members: List[ItemRevision], fence: Fence,
     governor: Attempt, profile: HarnessSetting, clock: Clock) {
+    def install(script: String): Unit = {
+      val executable = Path.of(profile.executable)
+      Files.writeString(executable, script)
+      Files.setPosixFilePermissions(executable, PosixFilePermissions.fromString("rwx------"))
+    }
+    def request(limits: HostLimits): DispatchRequest =
+      DispatchRequest(RequestId(uuid), DispatchWork.Worker(WorkerMode.Implement), Harness.Codex, members, Nil, Nil, None, fence, limits)
     def dispatch(script: String, limits: HostLimits): Task[DispatchExecution] = for {
       ready <- Promise.make[Throwable, Unit]
       done <- Promise.make[Nothing, Unit]
       entry <- ZIO.attemptBlocking {
-        val executable = Path.of(profile.executable)
-        Files.writeString(executable, script)
-        Files.setPosixFilePermissions(executable, PosixFilePermissions.fromString("rwx------"))
-        val request = DispatchRequest(RequestId(uuid), DispatchWork.Worker(WorkerMode.Implement), Harness.Codex, members, Nil, Nil, None, fence, limits)
+        install(script)
+        val request = this.request(limits)
         val assignment = Assignment(AssignmentId(uuid), owner.project, members.map(_.id).toSet, Attribution.Direct, None, None)
         val attempt = Attempt(AttemptId(uuid), assignment.id, Some(governor.id), owner.actor.session, Role.Worker, Harness.Codex,
           profile.provider, profile.model, "fixture", clock.millis())
@@ -91,7 +96,7 @@ time.sleep(30)
 
   private def fixture(local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO],
     usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO],
-    proposals: ProposalService[IO])(test: Fixture => Task[Unit]): Task[Unit] = ZIO.scoped {
+    proposals: ProposalService[IO], target: Option[String])(test: Fixture => Task[Unit]): Task[Unit] = ZIO.scoped {
     val clock = Clock.systemUTC()
     val project = ProjectConfig(ProjectId(uuid), "http://localhost", "Child runner")
     val owner = Scope(project.project, Actor("CQ governor", SessionId(uuid), Role.Governor))
@@ -113,7 +118,7 @@ time.sleep(30)
         "fixture-provider", "fixture-model", "fixture", clock.millis()))
       directory <- ZIO.attemptBlocking(Files.createTempDirectory(local.directory, "child-runner-"))
       profile = HarnessSetting(Harness.Codex, directory.resolve("fixture-harness").toString, "fixture-model", "fixture-provider", "0.156.1", Nil, Set.empty)
-      settings = SupervisorSettings(directory.toString, guardian.binary.toString, List(profile), limits, Nil, None, None)
+      settings = SupervisorSettings(directory.toString, guardian.binary.toString, List(profile), limits, Nil, None, target)
       run = SupervisorRun(project, assignment, governor, profile.version, local.source.toString, local.base, SessionOwnership.Managed)
       config = SupervisorConfig(settings, project, SupervisorConfig.profile(profile), SupervisorConfig.limits(limits), run, directory, "", None, guardian.environment)
       collectorAuthority = auth.authenticate(auth.grant(root, GrantRequest(owner.project, collector.actor, expires)).value, None)
@@ -142,7 +147,7 @@ time.sleep(30)
     "retain the worker's evidence directory and named files as readable result artifacts" in {
       (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
         artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
-      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals) { f => for {
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None) { f => for {
         entry <- f.dispatch(Completing, HostLimits(3000, 30000, 900, 100, 1000, 262144))
         _ <- f.runner.run(entry).timeoutFail(new IllegalStateException("Worker did not finish"))(zio.Duration.fromSeconds(60))
         status = entry.status
@@ -168,7 +173,7 @@ time.sleep(30)
     "collect partial work when the worker is killed at its execution deadline or cancelled" in {
       (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
         artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
-      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals) { f =>
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None) { f =>
         def verify(entry: DispatchExecution, phase: DispatchPhase, state: AttemptState): Task[Unit] = for {
           status <- ZIO.succeed(entry.status)
           _ <- ZIO.attempt(assert(status.phase == phase && status.result.isEmpty, status.toString))
@@ -206,6 +211,37 @@ time.sleep(30)
           _ <- f.jobs.cancel(f.config.owner, cancelled.ticket.attempt.id)
           _ <- running.join.timeoutFail(new IllegalStateException("Cancelled worker did not settle"))(zio.Duration.fromSeconds(60))
           _ <- verify(cancelled, DispatchPhase.Cancelled, AttemptState.Cancelled)
+        } yield ()
+      }
+    }
+
+    "D91: refuse to start a child while the integration target checkout has uncommitted tracked changes, then start once it is clean" in {
+      (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, Some("refs/heads/integration")) { f =>
+        val limits = HostLimits(3000, 30000, 900, 100, 1000, 262144)
+        val controller = new DispatchController(f.config, f.runner, f.jobs, new CandidateWorkspace(f.config), f.clock)
+        for {
+          _ <- ZIO.attemptBlocking {
+            local.git(local.source, "branch", "integration", local.base.value)
+            f.install(Completing)
+            Files.writeString(local.source.resolve("tracked.txt"), "governor edit in the operator checkout\n")
+            Files.writeString(local.source.resolve("untracked.log"), "worker evidence\n")
+          }
+          refused <- controller.start(f.request(limits)).either
+          _ <- ZIO.attempt {
+            val message = refused match {
+              case Left(DomainFailure(Fault.Conflict(message))) => message
+              case other => fail(s"Expected a dirty-target conflict, observed $other")
+            }
+            println(s"Dirty target start refusal: $message")
+            assert(message == "Integration target checkout has uncommitted changes: tracked.txt", message)
+          }
+          _ <- ZIO.attemptBlocking { local.git(local.source, "checkout", "--", "tracked.txt"); () }
+          started <- controller.start(f.request(limits))
+          settled <- controller.status(started.attempt, 20000).repeatUntil(status => DispatchController.terminal(status.phase))
+            .timeoutFail(new IllegalStateException("Worker did not finish"))(zio.Duration.fromSeconds(60))
+          _ <- ZIO.attempt(assert(settled.phase == DispatchPhase.Completed && settled.result.nonEmpty, settled.toString))
         } yield ()
       }
     }
