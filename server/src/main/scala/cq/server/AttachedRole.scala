@@ -8,6 +8,7 @@ import izumi.fundamentals.platform.cli.model.schema.{ParserDef, RoleParserSchema
 import logstage.IzLogger
 import java.io.{InputStream, OutputStream}
 import java.time.{Clock, Duration}
+import java.util.concurrent.CountDownLatch
 import zio.{Task, Unsafe, ZIO}
 
 final case class AttachedChannels(input: InputStream, output: OutputStream, owner: ProcessOwner)
@@ -39,6 +40,12 @@ final class AttachedProgram(config: SupervisorConfig, authority: SupervisorAutho
     logger.warn(s"Attached usage observation failed: $problem")
   }}.uninterruptible
   private val monitor: Task[Nothing] = (observe(codex.poll(authority.collector)) *> ZIO.sleep(zio.Duration.fromSeconds(5))).forever
+  private val finished = new CountDownLatch(1)
+  /** SIGINT/SIGTERM from the owning harness: the JVM exits once its hooks return, so the hook holds the exit until `finish` has run; the watchdog's halt deadline fences a stalled finish. */
+  private def guard(peer: StdioPeer): Unit = Runtime.getRuntime.addShutdownHook(Thread.ofPlatform().name("cq-attached-termination").unstarted(() => {
+    peer.close("Owning harness signalled termination")
+    finished.await()
+  }))
   private def finish(peer: StdioPeer): Task[Unit] =
     (ZIO.succeed(peer.close()) *> shutdown *> cleanup.run *> observe(codex.finish(authority.collector)) *>
       ZIO.attemptBlocking {
@@ -49,7 +56,7 @@ final class AttachedProgram(config: SupervisorConfig, authority: SupervisorAutho
             codex.gaps, None)
         queue.commit(List(HostDelivery.Usage(HostUsageInput(config.project.project, HostUsage.Finish(outcome)))))
         queue.flush(authority.collector)
-      }.unit).ensuring(ZIO.attemptBlocking(codex.close()).orDie)
+      }.unit).ensuring(ZIO.attemptBlocking(codex.close()).orDie).ensuring(ZIO.succeed(finished.countDown()))
   private def loop(peer: StdioPeer): Task[Unit] = ZIO.attemptBlocking(peer.receive()).flatMap {
     case None => ZIO.unit
     case Some(request) => (ZIO.attempt(peer.beginOperation()) *> gateway.handle(peer, request))
@@ -58,10 +65,14 @@ final class AttachedProgram(config: SupervisorConfig, authority: SupervisorAutho
       .flatMap(value => ZIO.attempt(value.foreach(peer.send))) *> ZIO.suspendSucceed(loop(peer))
   }
   def run: Task[Unit] = ZIO.runtime[Any].flatMap { runtime => ZIO.acquireReleaseWith(
-    ZIO.attempt(new StdioPeer(channels.input, channels.output, channels.owner, limits, () => {
-      watchdog.beginShutdown()
-      Unsafe.unsafe { implicit unsafe => runtime.unsafe.fork(shutdown.orDie); () }
-    })))(
+    ZIO.attempt {
+      val peer = new StdioPeer(channels.input, channels.output, channels.owner, limits, () => {
+        watchdog.beginShutdown()
+        Unsafe.unsafe { implicit unsafe => runtime.unsafe.fork(shutdown.orDie); () }
+      })
+      guard(peer)
+      peer
+    })(
     peer => finish(peer).orDie)(peer => (initial *> ZIO.acquireReleaseWith(monitor.interruptible.fork)(_.interrupt)( _ => loop(peer))).timeoutFail(new IllegalStateException("Attached session lifetime expired"))(
       zio.Duration.fromJava(SupervisorConfig.AttachedLifetime))) }
 }
