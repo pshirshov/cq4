@@ -141,6 +141,8 @@ final class ReviewerChecksProcess extends SpecZIO with AssertZIO {
         closed <- f.checks.close
         late <- f.checks.request("verify", 0).either
         _ <- assertIO(!closed.pending && !closed.uncertain && closed.evidence == complete.evidence.toList && late.isLeft)
+        released <- local.fixture.service.get(f.config.owner, observed.job)
+        _ <- assertIO(released.admission == WorkspaceAdmission.Removed && !Files.exists(Path.of(released.directory)))
         _ <- ZIO.attemptBlocking {
           assert(f.journal.records.size == 2)
           val observation = f.receiver.uploaded.find(_.kind == ArtifactKind.Validation).get

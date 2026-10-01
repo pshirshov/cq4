@@ -8,7 +8,7 @@ One journal belongs to one project and governing session. A filesystem lock prev
 
 Reservation is forced to disk before creating a worktree or process. Each record replacement writes a private temporary file, forces it, atomically renames it, and forces the containing directory. Records have monotonic revisions and receipt times, immutable ownership/base/fingerprint, a desired Run/Stop target, and a separately observed process phase. Stop cannot be reversed and terminal states cannot become runnable. Existing development records use the same mutable 0.1.0 contract; no historical decoder is added.
 
-The journal is bounded to 256 jobs per governing session and 64 KiB per record. Capacity exhaustion is explicit and requires a new governing session. Payload input is bounded to 256 KiB of valid UTF-8, and the complete host launch description is bounded to 1 MiB. The process driver's separate stdout/stderr limits apply to retained output. A session's terminal records and payloads remain available; automatic retention/deletion is not implemented here.
+The journal is bounded to 256 jobs per governing session and 64 KiB per record. Capacity exhaustion is explicit and requires a new governing session. Payload input is bounded to 256 KiB of valid UTF-8, and the complete host launch description is bounded to 1 MiB. Stdout and stderr are written whole to the payload directory; the job's `retainedOutputBytes` bounds only the published transcripts, and a fixed 1 GiB per-stream disk-safety ceiling stops a runaway writer (see [process guardian](process-guardian.md#output-retention-bound-and-disk-safety-ceiling)). A session's terminal records and payloads remain available; automatic retention/deletion is not implemented here.
 
 ## Cancellation, failure and recovery
 

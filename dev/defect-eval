@@ -125,7 +125,7 @@ def main():
                            "providerExtensions": [], "providerEnvironment": []})
         settings = {"integrationTarget": None, "stateRoot": str(evidence / "sessions"), "guardian": str(guardian), "harnesses": routes,
                     "limits": {"startupMillis": "10000", "executionMillis": str(evaluation["EXECUTION_MILLIS"]), "heartbeatMillis": "2000",
-                               "graceMillis": "1000", "killMillis": "3000", "outputBytes": 8388608}, "checks": [],
+                               "graceMillis": "1000", "killMillis": "3000", "retainedOutputBytes": 8388608}, "checks": [],
                     "evaluation": {"run": identifier, "scenario": "synthetic-dependency", "assessor": False}}
         if prior is not None:
             settings["evaluation"] = json.loads((original / "settings.json").read_text())["evaluation"]
@@ -136,7 +136,7 @@ def main():
             checks.run(["git", "-C", str(consumer), "branch", "integration"], "integration-branch", 10)
             settings["integrationTarget"] = "refs/heads/integration"
             settings["checks"] = [{"name": "defect-oracle", "command": [sys.executable, str(root / "dev/defect-oracle.py")],
-                                   "executionMillis": "180000", "outputBytes": 262144}]
+                                   "executionMillis": "180000", "retainedOutputBytes": 262144}]
         write(evidence / "settings.json", settings)
         request = (root / "dev/defect-begin.md").read_text() + "\n\n" + json.dumps({"fixtureCommit": base, "specification": (consumer / "README.md").read_text(),
             "reproduction": {"command": "python3 -m unittest -v", "exit": reproduction.returncode, "stdout": reproduction.stdout, "stderr": reproduction.stderr}}, ensure_ascii=False)

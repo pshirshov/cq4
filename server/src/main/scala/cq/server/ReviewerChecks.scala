@@ -29,7 +29,7 @@ private[server] final class ReviewerChecks(entry: DispatchExecution, candidate: 
         if (executions.values.exists(value => !Set(DeclaredCheckPhase.Completed, DeclaredCheckPhase.Unknown, DeclaredCheckPhase.Failed)(value.status.phase)))
           throw DomainFailure(Fault.Conflict("Another declared check is running; poll it before requesting another name"))
         val source = config.limits
-        val limits = ExecutionLimits(source.startup, Duration.ofMillis(declaration.executionMillis), source.heartbeat, source.grace, source.kill, declaration.outputBytes)
+        val limits = ExecutionLimits(source.startup, Duration.ofMillis(declaration.executionMillis), source.heartbeat, source.grace, source.kill, declaration.retainedOutputBytes)
         val command = JobCommand(declaration.command, HostEnvironment.runtime(config.environment), "", limits)
         val id = AttemptId(NativeArtifacts.id(entry.ticket.attempt.id, "declared-check-job-" + name).value)
         val spec = WorkspaceSpec(config.project.project, config.run.attempt.session, id, config.run.repository, candidate)
@@ -74,7 +74,8 @@ private[server] final class ReviewerChecks(entry: DispatchExecution, candidate: 
         diagnostic = if (errors.isEmpty) reason else DispatchProjection.concise(reason + "; cleanup uncertain: " + errors.mkString(", "))
         _ <- ZIO.succeed(update(value)(_.copy(phase = DeclaredCheckPhase.Unknown, evidence = None, blocker = Some(diagnostic))))
       } yield ()
-    }.ensuring(value.done.succeed(()).unit)
+    // A check's evidence is its retained output; its tree is never read. A failed removal is retried by the next host startup.
+    }.ensuring(jobs.release(config.owner, value.ticket.workspace.attempt).ignore *> value.done.succeed(()).unit)
   }
 
   def request(name: String, waitMillis: Int): Task[DeclaredCheckStatus] = ZIO.uninterruptibleMask { restore => for {

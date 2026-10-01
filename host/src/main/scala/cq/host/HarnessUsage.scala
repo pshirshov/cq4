@@ -21,7 +21,7 @@ final case class UsageCollectionRequest(attempt: AttemptId, harness: Harness, ve
 final case class CollectedMeter(meter: UsageMeter, observations: List[UsageUpload])
 final case class CollectedUsage(meters: List[CollectedMeter], terminalSeen: Boolean, nativeFailure: Boolean, gaps: List[String])
 
-/** Reads a completed, bounded native output file; never owns or drains a live process pipe. */
+/** Reads a completed native output stream line by line, whatever its length; never owns or drains a live process pipe. */
 final class HarnessUsage {
   import HarnessUsage.*
 
@@ -41,19 +41,13 @@ final class HarnessUsage {
     val collector = new Collection(request)
     val bytes = new Array[Byte](ReadBytes)
     val line = new ByteArrayOutputStream()
-    var total = 0L
     var position = 0L
     var oversized = false
-    var stopped = false
     var size = input.read(bytes)
-    while (size != -1 && !stopped) {
+    while (size != -1) {
       var index = 0
-      while (index < size && !stopped) {
-        total += 1
-        if (total > MaxStreamBytes || position >= MaxLines) {
-          collector.gap("Native output exceeded the collection byte/event bound; remaining usage is unavailable")
-          stopped = true
-        } else if (bytes(index) == '\n') {
+      while (index < size) {
+        if (bytes(index) == '\n') {
           position += 1
           if (!oversized) {
             try {
@@ -77,17 +71,15 @@ final class HarnessUsage {
         }
         index += 1
       }
-      if (!stopped) size = input.read(bytes)
+      size = input.read(bytes)
     }
-    if (!stopped && (line.size() != 0 || oversized)) collector.gap("Native output ended without a line terminator; trailing event was not collected")
+    if (line.size() != 0 || oversized) collector.gap("Native output ended without a line terminator; trailing event was not collected")
     collector.result()
   }
 }
 
 object HarnessUsage {
-  val MaxStreamBytes = 32 * 1024 * 1024
   val MaxLineBytes = 1024 * 1024
-  val MaxLines = 100000
   val MaxSamples = 4096
   val MaxMeters = 64
   private val ReadBytes = 8192

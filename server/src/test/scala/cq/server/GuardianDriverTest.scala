@@ -54,6 +54,16 @@ final class GuardianDriverProcess extends SpecZIO with AssertZIO {
       }
     }}
 
+    "D95: let a command exceed its retained output bound and exit normally with the whole stream on disk" in { (fixture: GuardianFixture) => ZIO.attemptBlocking {
+      val spec = fixture.spec(List("python3", "-c", "import os\nfor _ in range(128): os.write(1, b'o' * 8192)"), Duration.ofSeconds(10))
+      Using.resource(new GuardianDriver(fixture.binary).start(spec)) { running =>
+        val observed = running.await(Duration.ofSeconds(15))
+        assert(observed.phase == ProcessPhase.Settled && observed.result.exists(r => r.code.contains(0) && r.reason == StopReason.Exited && r.stdoutBytes == 1048576),
+          observed.toString)
+        assert(Files.size(spec.stdout) == 1048576)
+      }
+    }}
+
     "cancel promptly and settle the actual root before declaring cleanup complete" in { (fixture: GuardianFixture) => ZIO.attemptBlocking {
       val spec = fixture.spec(List("sleep", "30"), Duration.ofSeconds(40))
       Using.resource(new GuardianDriver(fixture.binary).start(spec)) { running =>

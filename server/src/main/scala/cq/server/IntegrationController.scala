@@ -18,7 +18,8 @@ private[server] final class GovernedIntegrationJobs(owner: Scope, jobs: JobSuper
     admission.withPermit(ZIO.attempt {
       if (closed) throw new IntegrationAdmissionClosed
       admitted += workspace.attempt
-    } *> jobs.start(owner, workspace, command)).unit *> jobs.await(owner, workspace.attempt).unit
+    // The Git job leaves its evidence under checkouts/ and payload/; its tree is never read. A failed removal is retried by the next host startup.
+    } *> jobs.start(owner, workspace, command)).unit *> jobs.await(owner, workspace.attempt).unit *> jobs.release(owner, workspace.attempt).ignore
   override def status(id: AttemptId): Task[JobRecord] = jobs.status(owner, id)
   def shutdown: Task[Unit] = for {
     ids <- admission.withPermit(ZIO.succeed { closed = true; admitted.toList })
@@ -132,10 +133,6 @@ final class IntegrationController(config: SupervisorConfig, authority: Superviso
   } yield snapshot(entry)
 
   def quiescent: Boolean = synchronized(entries.values.forall(value => IntegrationController.terminal(value.view.phase)))
-
-  /** Git jobs of integrations that are prepared, running or awaiting server acknowledgement; their workspaces must be retained. */
-  def pendingJobs: Set[AttemptId] = synchronized(entries.values.filterNot(value => IntegrationController.terminal(value.view.phase))
-    .map(value => AttemptId(value.ticket.id.value)).toSet)
 
   def shutdown: Task[Unit] = for {
     pending <- ZIO.succeed(synchronized { closing = true; entries.values.map(_.done).toList })

@@ -348,6 +348,8 @@ abstract class SessionDeliveryTest extends SpecZIO with AssertZIO {
                 HostUsage.Finish(AttemptOutcome(RequestId(uuid), committed.attempt.id, AttemptState.Completed, clock.millis(), Nil, None))))))
               val payload = directory.resolve("payload").resolve(governor.id.value.toString)
               HostFiles.directory(payload)
+              HostFiles.immutable(directory.resolve("settings.json"), HostFiles.encode(SupervisorSettings_JsonCodec,
+                SupervisorSettings(directory.toString, "/fixture/guardian", List(profile), limits, Nil, None, None)), 65536)
               Files.writeString(payload.resolve("stdout"), native(100) + "{\"type\":")
               Files.write(payload.resolve("stderr"), Array[Byte](0, -1, 10))
               // Simulate an interrupted collection that never committed its candidate publication.

@@ -2,6 +2,7 @@ package cq.host
 
 import cq.api.*
 import io.circe.{Json, parser}
+import java.io.{ByteArrayOutputStream, InputStream}
 import java.nio.charset.StandardCharsets.UTF_8
 import java.nio.file.Path
 import java.security.MessageDigest
@@ -25,41 +26,53 @@ object NativeArtifacts {
   }
 }
 
+/** Extracts the final structured result from a completed native output stream, read line by line whatever its length. */
 final class HarnessOutput {
-  private val MaxBytes = 32 * 1024 * 1024
   private val MaxLineBytes = 1024 * 1024
-  private val MaxEvents = 100000
   private val MaxResultBytes = 256 * 1024
+  private val ReadBytes = 8192
   private val LineFeed = '\n'.toByte
 
-  def result(harness: Harness, stdout: Array[Byte], assets: Path): Json = {
-    require(stdout.length <= MaxBytes, "Native output exceeds its byte bound")
-    require(stdout.lastOption.contains(LineFeed), "Native output has an incomplete final event")
-    var offset = 0
-    var count = 0
+  def result(harness: Harness, stdout: InputStream, assets: Path): Json = {
     var lastType = Option.empty[String]
     var claudeResult = Option.empty[Json]
     var piMessage = Option.empty[Json]
-    while (offset < stdout.length) {
-      var end = offset
-      while (end < stdout.length && stdout(end) != LineFeed) end += 1
-      count += 1
-      require(count <= MaxEvents && end - offset <= MaxLineBytes, "Native event bounds exceeded")
-      if (end > offset) {
-        val line = UTF_8.newDecoder().decode(java.nio.ByteBuffer.wrap(stdout, offset, end - offset)).toString
-        val event = parser.parse(line).fold(throw _, identity)
-        require(event.isObject, "Native event must be an object")
-        val cursor = event.hcursor
-        lastType = cursor.get[String]("type").toOption
-        if (harness == Harness.Claude && lastType.contains("result")) {
-          require(claudeResult.isEmpty, "Claude emitted multiple terminal results")
-          claudeResult = Some(event)
-        }
-        if (harness == Harness.Pi && lastType.contains("message_end") && cursor.downField("message").get[String]("role").contains("assistant"))
-          piMessage = cursor.downField("message").focus
+    def accept(line: Array[Byte]): Unit = if (line.nonEmpty) {
+      val event = parser.parse(UTF_8.newDecoder().decode(java.nio.ByteBuffer.wrap(line)).toString).fold(throw _, identity)
+      require(event.isObject, "Native event must be an object")
+      val cursor = event.hcursor
+      lastType = cursor.get[String]("type").toOption
+      if (harness == Harness.Claude && lastType.contains("result")) {
+        require(claudeResult.isEmpty, "Claude emitted multiple terminal results")
+        claudeResult = Some(event)
       }
-      offset = end + 1
+      if (harness == Harness.Pi && lastType.contains("message_end") && cursor.downField("message").get[String]("role").contains("assistant"))
+        piMessage = cursor.downField("message").focus
     }
+    val bytes = new Array[Byte](ReadBytes)
+    val line = new ByteArrayOutputStream()
+    var oversized = false
+    var last = Option.empty[Byte]
+    var size = stdout.read(bytes)
+    while (size != -1) {
+      var index = 0
+      while (index < size) {
+        val value = bytes(index)
+        if (value == LineFeed) {
+          // An event beyond the line bound cannot be a result (results are bounded far below it); it is skipped as an event of unknown type,
+          // which also withdraws an earlier Pi assistant message it may have superseded.
+          if (oversized) { lastType = None; piMessage = None } else accept(line.toByteArray)
+          line.reset()
+          oversized = false
+        } else if (!oversized) {
+          if (line.size() == MaxLineBytes) { oversized = true; line.reset() } else line.write(value)
+        }
+        last = Some(value)
+        index += 1
+      }
+      size = stdout.read(bytes)
+    }
+    require(last.contains(LineFeed), "Native output has an incomplete final event")
     val output = harness match {
       case Harness.Claude =>
         val result = claudeResult.getOrElse(throw new IllegalArgumentException("Claude terminal result is missing")).hcursor

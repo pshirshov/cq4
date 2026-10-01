@@ -2,7 +2,6 @@ package cq.host
 
 import cq.api.*
 import cq.core.{DomainFailure, Scope, WorkspaceService}
-import java.io.ByteArrayInputStream
 import java.nio.file.{Files, LinkOption, Path}
 import java.time.Clock
 import java.util.UUID
@@ -17,17 +16,16 @@ final class SessionDelivery(journal: JobRepository, workspaces: WorkspaceService
   private val MaxChildren = 32
   private val MaxPartialTicketFiles = 32
   private val MaxRecordBytes = 64 * 1024
-  private val MaxOutputBytes = 32 * 1024 * 1024
   private val MaxGaps = 32
   private val Interrupted = "Supervisor publication was interrupted; retained output is a bounded snapshot, process settlement and remaining usage are unknown"
-  private final case class Publication(assignment: Assignment, attempt: Attempt, version: String, queue: DeliveryQueue, child: Option[ChildPublicationDelivery])
+  private final case class Publication(assignment: Assignment, attempt: Attempt, version: String, retainedOutputBytes: Option[Int], queue: DeliveryQueue, child: Option[ChildPublicationDelivery])
 
   private final case class Inventory(publications: List[Publication], incompleteTickets: List[Path])
 
   private def inventory(directory: Path, run: SupervisorRun): Inventory = {
     require(run.assignment.project == run.project.project && run.attempt.assignment == run.assignment.id &&
       run.attempt.parent.isEmpty && run.attempt.role == Role.Governor, "Invalid governing publication identity")
-    val governing = Publication(run.assignment, run.attempt, run.harnessVersion, new DeliveryQueue(directory.resolve("delivery")), None)
+    val governing = Publication(run.assignment, run.attempt, run.harnessVersion, None, new DeliveryQueue(directory.resolve("delivery")), None)
     val root = directory.resolve("children")
     val (children, incomplete) = if (!Files.exists(root)) (Nil, Nil) else {
       require(Files.isDirectory(root) && !Files.isSymbolicLink(root), "Child delivery root must be a directory")
@@ -54,7 +52,8 @@ final class SessionDelivery(journal: JobRepository, workspaces: WorkspaceService
           ticket.attempt.role == ChildContracts.role(ticket.request.work) && ticket.attempt.harness == ticket.profile.harness &&
           ticket.attempt.model == ticket.profile.model && ticket.attempt.provider == ticket.profile.provider,
           "Child delivery ticket has another assignment or governing owner")
-        Publication(ticket.assignment, ticket.attempt, ticket.profile.version, new DeliveryQueue(child.resolve("delivery")), Some(new ChildPublicationDelivery(child, ticket)))
+        Publication(ticket.assignment, ticket.attempt, ticket.profile.version, Some(ticket.request.limits.retainedOutputBytes), new DeliveryQueue(child.resolve("delivery")),
+          Some(new ChildPublicationDelivery(child, ticket)))
       }
       (publications, incomplete)
     }
@@ -67,14 +66,8 @@ final class SessionDelivery(journal: JobRepository, workspaces: WorkspaceService
       else workspaces.quarantine(owner, attempt, Interrupted).unit
     }.catchSome { case DomainFailure(_: Fault.Missing) => ZIO.unit }
 
-  private def snapshot(path: Path): (Array[Byte], List[String]) = {
-    if (!Files.exists(path)) (Array.emptyByteArray, List(s"Native ${path.getFileName} was absent at reconciliation"))
-    else {
-      require(Files.isRegularFile(path) && !Files.isSymbolicLink(path), "Native snapshot source must be a regular file")
-      val bytes = Using.resource(Files.newInputStream(path))(_.readNBytes(MaxOutputBytes))
-      (bytes, Nil)
-    }
-  }
+  private def snapshot(path: Path, bound: => Int): (Array[Byte], List[String]) =
+    if (Files.exists(path)) (NativeTranscript.retained(path, bound), Nil) else (Array.emptyByteArray, List(s"Native ${path.getFileName} was absent at reconciliation"))
 
   private def reconcile(directory: Path, publication: Publication, ownership: SessionOwnership): Unit = {
     if (ownership == SessionOwnership.Attached && publication.child.isEmpty) {
@@ -90,13 +83,16 @@ final class SessionDelivery(journal: JobRepository, workspaces: WorkspaceService
     val attempt = publication.attempt
     val project = publication.assignment.project
     val payload = directory.resolve("payload").resolve(attempt.id.value.toString)
-    val (stdout, outGaps) = snapshot(payload.resolve("stdout"))
-    val (stderr, errGaps) = snapshot(payload.resolve("stderr"))
+    // A child retains what its dispatch request bounds; the managed governor retains what the session settings bound.
+    lazy val bound = publication.retainedOutputBytes.getOrElse(
+      HostFiles.read(directory.resolve("settings.json"), SupervisorSettings_JsonCodec, MaxRecordBytes).limits.retainedOutputBytes)
+    val (stdout, outGaps) = snapshot(payload.resolve("stdout"), bound)
+    val (stderr, errGaps) = snapshot(payload.resolve("stderr"), bound)
     val (nativeId, outParts) = NativeArtifacts.binary(project, attempt.id, "stdout", "application/x-ndjson", stdout)
     val (_, errParts) = NativeArtifacts.binary(project, attempt.id, "stderr", "application/octet-stream", stderr)
     val collectedAt = math.max(attempt.startedAt, clock.millis())
-    val usage = new HarnessUsage().collect(new ByteArrayInputStream(stdout), UsageCollectionRequest(attempt.id,
-      attempt.harness, publication.version, UsageOrigin.Fresh, collectedAt, nativeId))
+    val usage = Using.resource(NativeTranscript.stream(payload.resolve("stdout")))(new HarnessUsage().collect(_, UsageCollectionRequest(attempt.id,
+      attempt.harness, publication.version, UsageOrigin.Fresh, collectedAt, nativeId)))
     def entry(value: HostUsage): HostDelivery = HostDelivery.Usage(HostUsageInput(project, value))
     val observations = usage.meters.flatMap { batch =>
       entry(HostUsage.Meter(batch.meter)) :: batch.observations.map { upload =>
@@ -155,7 +151,7 @@ final class SessionDelivery(journal: JobRepository, workspaces: WorkspaceService
             .getOrElse(throw new IllegalStateException("Declared check has no governing reviewer job"))
           require(dispatch.request.work == DispatchWork.Reviewer(ReviewerMode.Candidate) && ticket.parent == publication.attempt.id &&
             ticket.check.name == name && settings.checks.find(_.name == name).contains(ticket.check) &&
-            ticket.check.outputBytes > 0 && ticket.check.outputBytes <= 1024 * 1024 && ticket.fingerprint.matches("[0-9a-f]{64}") &&
+            ticket.check.retainedOutputBytes > 0 && ticket.check.retainedOutputBytes <= 1024 * 1024 && ticket.fingerprint.matches("[0-9a-f]{64}") &&
             ticket.workspace == WorkspaceSpec(run.project.project, run.attempt.session, id, run.repository, native.workspace.base),
             "Declared check ticket differs from its owner, configuration or reviewed candidate")
           val pending = new DeclaredCheckPublication(path, ticket, directory.resolve("payload"))

@@ -18,7 +18,9 @@ object JobOutcome {
       case _ => AttemptState.Failed
     }
     val problem = if (state == AttemptState.Completed) None else {
-      val detail = exit.map(value => s"${value.reason}, code=${value.code}, signal=${value.signal}").getOrElse("no confirmed exit")
+      val ceiling = exit.filter(_.reason == StopReason.OutputLimit).map(_ =>
+        s"an output stream exceeded the ${ExecutionLimits.OutputCeilingBytes} byte disk-safety ceiling and the process was stopped; ")
+      val detail = exit.map(value => s"${ceiling.getOrElse("")}${value.reason}, code=${value.code}, signal=${value.signal}").getOrElse("no confirmed exit")
       Some(s"Job ${record.phase}: $detail" + record.problem.fold("")(value => s"; $value"))
     }
     JobOutcome(state, problem)

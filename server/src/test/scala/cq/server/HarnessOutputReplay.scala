@@ -1,8 +1,12 @@
 package cq.server
 
 import cq.api.*
-import cq.host.{HarnessOutput, HostFiles}
+import cq.host.{HarnessOutput, HarnessUsage, HostFiles, UsageCollectionRequest, UsageOrigin}
+import java.io.{BufferedInputStream, ByteArrayInputStream, InputStream, SequenceInputStream}
+import java.nio.charset.StandardCharsets.UTF_8
 import java.nio.file.{Files, Path}
+import java.util.UUID
+import scala.util.Using
 
 object HarnessOutputReplay {
   def main(args: Array[String]): Unit = {
@@ -16,8 +20,8 @@ object HarnessOutputReplay {
       val harness = Harness.all.find(_.toString.equalsIgnoreCase(name)).get
       val directory = root.resolve(name + "-" + role.toLowerCase)
       val job = HostFiles.read(directory.resolve("job.json"), JobRecord_JsonCodec, 65536)
-      val bytes = HostFiles.bytes(directory.resolve("payload").resolve(job.workspace.attempt.value.toString).resolve("stdout"), 32 * 1024 * 1024)
-      val result = new HarnessOutput().result(harness, bytes, directory.resolve("assets"))
+      val result = Using.resource(Files.newInputStream(directory.resolve("payload").resolve(job.workspace.attempt.value.toString).resolve("stdout")))(
+        new HarnessOutput().result(harness, _, directory.resolve("assets")))
       require(result.hcursor.get[String]("status").contains("ok"))
       val observed = result.hcursor.get[String]("observed").fold(throw _, identity)
       require(observed.startsWith("read-from-cq-"))
@@ -27,16 +31,31 @@ object HarnessOutputReplay {
   }
 }
 
+/** Reads a synthetic Codex stream far larger than the heap: a session start, filler events, then the terminal usage event. */
 object HarnessOutputBounds {
-  def main(args: Array[String]): Unit = {
-    try {
-      new HarnessOutput().result(Harness.Pi, Array.fill[Byte](4 * 1024 * 1024)(10), Path.of("/unused"))
-      throw new IllegalStateException("Native event limit was not enforced")
-    } catch {
-      case _: IllegalArgumentException => println("BOUNDED_NATIVE_EVENT_REJECTION")
-      case failure: OutOfMemoryError =>
-        System.err.println("UNBOUNDED_NATIVE_EVENT_ALLOCATION")
-        throw failure
+  private val StreamBytes = 256L * 1024 * 1024
+  private def stream(): InputStream = {
+    val head = "{\"type\":\"thread.started\",\"thread_id\":\"bounds\"}\n{\"type\":\"turn.started\"}\n".getBytes(UTF_8)
+    val filler = ("{\"type\":\"item.completed\",\"text\":\"" + "x" * 4000 + "\"}\n").getBytes(UTF_8)
+    val tail = "{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":10,\"cached_input_tokens\":0,\"cache_write_input_tokens\":0,\"output_tokens\":5,\"reasoning_output_tokens\":0}}\n".getBytes(UTF_8)
+    val repeated = new InputStream {
+      private var position = 0L
+      override def read(): Int = if (position >= StreamBytes / filler.length * filler.length) -1 else {
+        val value = filler((position % filler.length).toInt) & 0xff
+        position += 1
+        value
+      }
     }
+    new SequenceInputStream(java.util.Collections.enumeration(java.util.List.of[InputStream](new ByteArrayInputStream(head), new BufferedInputStream(repeated), new ByteArrayInputStream(tail))))
+  }
+  def main(args: Array[String]): Unit = {
+    val assets = Files.createTempDirectory("cq-native-bounds-")
+    Files.writeString(assets.resolve("last-message.json"), "{\"summary\":\"streamed\"}")
+    val result = new HarnessOutput().result(Harness.Codex, stream(), assets)
+    val usage = new HarnessUsage().collect(stream(), UsageCollectionRequest(AttemptId(UUID.randomUUID()), Harness.Codex, HarnessUsage.version(Harness.Codex),
+      UsageOrigin.Fresh, 1, ArtifactId(UUID.randomUUID())))
+    require(result.noSpaces == "{\"summary\":\"streamed\"}" && usage.terminalSeen && !usage.nativeFailure && usage.meters.map(_.observations.size) == List(1),
+      s"Streamed output was not collected: $result $usage")
+    println("STREAMED_NATIVE_OUTPUT")
   }
 }

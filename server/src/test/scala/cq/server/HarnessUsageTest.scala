@@ -55,7 +55,7 @@ final class HarnessUsageLocal extends AnyWordSpec {
           assert(total(report) == tokens)
           val observation = report.meters.head.observations.head.observation
           assert(observation.source == source && observation.cost.amount.map(_.value) == amount)
-          assert(new HarnessOutput().result(harness, native.getBytes(UTF_8), assets) == Json.obj("reply" -> Json.fromString("OK")))
+          assert(new HarnessOutput().result(harness, new ByteArrayInputStream(native.getBytes(UTF_8)), assets) == Json.obj("reply" -> Json.fromString("OK")))
         }
       } finally { Files.deleteIfExists(assets.resolve("last-message.json")); Files.deleteIfExists(assets) }
     }

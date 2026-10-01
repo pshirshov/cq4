@@ -301,7 +301,7 @@ final class AgentCatalogLocal extends AnyWordSpec {
           rejects(entry.inputSchema, replaced(in, "harness", Json.fromString("Emacs")), "is not one of")
           rejects(entry.inputSchema, replaced(in, "project", Json.obj("value" -> Json.fromString("not-a-uuid"))), "is not a UUID")
           rejects(entry.inputSchema, replaced(in, "generation", Json.fromInt(1)), "expected \"string\"")
-          rejects(entry.inputSchema, replaced(in, "outputBytes", Json.fromLong(4294967296L)), "violates maximum")
+          rejects(entry.inputSchema, replaced(in, "retainedOutputBytes", Json.fromLong(4294967296L)), "violates maximum")
           val out = output(entry)
           rejects(view.outputSchema, replaced(out, "members", Json.arr()), "violate minItems")
           rejects(view.outputSchema, replaced(out, "item", Json.fromString("T12")), "expected \"object\"")

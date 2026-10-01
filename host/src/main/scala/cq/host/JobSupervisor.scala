@@ -23,7 +23,7 @@ final case class JobCommand(arguments: List[String], environment: Map[String, St
     Json.arr(environment.toList.sortBy(_._1).map { case (key, value) => Json.arr(Json.fromString(key), Json.fromString(value)) }*),
     Json.fromString(input),
     Json.arr(List(limits.startup, limits.execution, limits.heartbeat, limits.grace, limits.kill).map(d => Json.fromLong(d.toMillis))*),
-    Json.fromInt(limits.outputBytes),
+    Json.fromInt(limits.retainedOutputBytes),
   ).noSpaces.getBytes(UTF_8)
   require(encoded.length <= MaxLaunchBytes, "Job launch exceeds its byte bound")
   val fingerprint: String = java.util.HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(encoded))
@@ -135,6 +135,14 @@ final class JobSupervisor private (owner: Scope, repository: JobRepository, work
     _ <- ZIO.foreachDiscard(current.jobs.get(attempt))(_.done.await)
     result <- status(scope, attempt)
   } yield result
+
+  /** Removes the workspace of a settled job once no host reader needs its tree; an unsettled job and a quarantined, removed or never prepared workspace are left as they are. */
+  def release(scope: Scope, attempt: AttemptId): IO[Throwable, Option[WorkspaceRecord]] =
+    ZIO.attempt { authorized(scope); read(attempt).phase == JobPhase.Settled }.flatMap { settled =>
+      workspaces.get(owner, attempt).flatMap { record =>
+        if (settled && record.admission == WorkspaceAdmission.Open) workspaces.remove(owner, attempt).map(Some(_)) else ZIO.succeed(Some(record))
+      }.catchSome { case DomainFailure(_: Fault.Missing) => ZIO.succeed(None) }
+    }
 
   private def recover: IO[Throwable, Unit] = for {
     records <- ZIO.attemptBlocking(repository.records)

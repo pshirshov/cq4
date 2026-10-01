@@ -110,13 +110,13 @@ def main():
             checks.run(["git", "-C", str(consumer), "branch", "integration"], "integration-branch", 10)
         settings = {"integrationTarget": None, "stateRoot": str(evidence / "sessions"), "guardian": str(guardian), "harnesses": routes,
                     "limits": {"startupMillis": "10000", "executionMillis": str(evaluation["EXECUTION_MILLIS"]), "heartbeatMillis": "2000",
-                               "graceMillis": "1000", "killMillis": "3000", "outputBytes": 8388608}, "checks": [],
+                               "graceMillis": "1000", "killMillis": "3000", "retainedOutputBytes": 8388608}, "checks": [],
                     "evaluation": {"run": identifier, "scenario": "worked-wordfreq", "assessor": False}}
         if original is not None:
             settings["evaluation"] = json.loads((original / "settings.json").read_text())["evaluation"]
             settings["integrationTarget"] = "refs/heads/integration"
             settings["checks"] = [{"name": "consumer-oracle", "command": [sys.executable, str(root / "dev/consumer-oracle.py"), language],
-                                   "executionMillis": "180000", "outputBytes": 262144}]
+                                   "executionMillis": "180000", "retainedOutputBytes": 262144}]
         write(evidence / "settings.json", settings)
         request = ("Begin a new word-frequency consumer project from the specification below. Its implementation language is a genuine user preference and has not been chosen. "
                    "Capture exactly one Idea without a milestone. Claim it and ask a Codex Planner to propose exactly one language-neutral Goal derived from it, preserving the complete specification. "
