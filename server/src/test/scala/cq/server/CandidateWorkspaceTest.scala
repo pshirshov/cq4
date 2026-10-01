@@ -148,6 +148,98 @@ final class CandidateWorkspaceLocal extends SpecZIO with AssertZIO {
       } yield ()
     }
 
+    "I18: merge a reviewed candidate onto an advanced head with ordered parents, leaving the governing checkout untouched" in { (local: LocalWorkspaceFixture) =>
+      val settings = configuration(local)
+      val candidates = new CandidateWorkspace(settings)
+      val fixture = local.fixture
+      def makeCandidate(name: String) = for {
+        workspace <- fixture.service.prepare(settings.owner, fixture.spec(settings.owner))
+        commit <- ZIO.attemptBlocking {
+          Files.writeString(Path.of(workspace.directory).resolve(name), name + "\n")
+          candidates.capture(workspace, None, name + "\n")
+        }
+      } yield commit
+      for {
+        head <- makeCandidate("left.txt")
+        reviewed <- makeCandidate("right.txt")
+        _ <- ZIO.attemptBlocking {
+          local.git(local.source, "branch", "integration", head.value)
+          Files.writeString(local.source.resolve("staged.txt"), "staged governing change\n")
+          local.git(local.source, "add", "staged.txt")
+          Files.writeString(local.source.resolve("tracked.txt"), "unstaged governing change\n")
+          Files.writeString(local.source.resolve("untracked.log"), "operator notes\n")
+          def governing = (local.git(local.source, "rev-parse", "HEAD"), local.git(local.source, "symbolic-ref", "HEAD"),
+            Files.readAllBytes(local.source.resolve(".git/index")).toList, local.git(local.source, "status", "--porcelain=v1", "--untracked-files=all"),
+            Files.readString(local.source.resolve("tracked.txt")))
+          val before = governing
+          val id = IntegrationId(uuid)
+          val message = s"Rebase reviewed candidate\n\n${CandidateMessage.IntegrationTrailer}: ${id.value}\n"
+          val result = candidates.rebase(head, reviewed, id, message)
+          val merged = result match { case HostRebase.Merged(commit) => commit; case other => fail(s"Clean rebase was not merged: $other") }
+          println(s"Host rebase: head=${head.value.take(7)} reviewed=${reviewed.value.take(7)} merged=${merged.value.take(7)} " +
+            s"parents=${local.git(local.source, "rev-list", "--parents", "-n", "1", merged.value)}")
+          assert(local.git(local.source, "rev-list", "--parents", "-n", "1", merged.value).split(" ").toList == List(merged.value, head.value, reviewed.value))
+          assert(local.git(local.source, "show-ref", "--verify", "--hash", "refs/cq/candidates/" + id.value) == merged.value)
+          assert(local.git(local.source, "ls-tree", "-r", "--name-only", merged.value).linesIterator.toSet == Set("left.txt", "right.txt", "tracked.txt"))
+          assert(local.git(local.source, "show", merged.value + ":tracked.txt") == "committed")
+          assert(local.git(local.source, "log", "-1", "--format=%B", merged.value) == message.trim)
+          assert(local.git(local.source, "log", "-1", "--format=%an <%ae>", merged.value) == "CQ host <cq@localhost>")
+          assert(governing == before, "Host rebase changed the governing HEAD, index or files")
+          // The rebased commit is a host-captured candidate, so checks may start from it; its identity cannot be reused.
+          candidates.verifyBase(merged)
+          intercept[IllegalArgumentException](candidates.rebase(head, reviewed, id, message))
+        }
+      } yield ()
+    }
+
+    "I18: report textual and directory-rename conflicts without a ref, whatever the checkout's attributes or merge settings, and refuse merge drivers" in { (local: LocalWorkspaceFixture) =>
+      val settings = configuration(local)
+      val candidates = new CandidateWorkspace(settings)
+      val fixture = local.fixture
+      def makeCandidate(base: GitCommit)(change: Path => Unit) = for {
+        workspace <- fixture.service.prepare(settings.owner, fixture.spec(settings.owner).copy(base = base))
+        commit <- ZIO.attemptBlocking { change(Path.of(workspace.directory)); candidates.capture(workspace, None, "Candidate\n") }
+      } yield commit
+      def refs: String = local.git(local.source, "for-each-ref", "--format=%(refname)", "refs/cq/candidates/")
+      for {
+        nested <- ZIO.attemptBlocking {
+          Files.createDirectory(local.source.resolve("before"))
+          Files.writeString(local.source.resolve("before/one.txt"), "one\n")
+          local.git(local.source, "add", "before/one.txt")
+          local.git(local.source, "-c", "user.name=CQ test", "-c", "user.email=test@localhost", "commit", "-q", "-m", "Add a directory")
+          local.git(local.source, "branch", "integration")
+          GitCommit(local.git(local.source, "rev-parse", "HEAD"))
+        }
+        textHead <- makeCandidate(nested)(tree => Files.writeString(tree.resolve("tracked.txt"), "target line\n"))
+        textCandidate <- makeCandidate(nested)(tree => Files.writeString(tree.resolve("tracked.txt"), "candidate line\n"))
+        renamedHead <- makeCandidate(nested)(tree => Files.move(tree.resolve("before"), tree.resolve("after")))
+        addingCandidate <- makeCandidate(nested)(tree => Files.writeString(tree.resolve("before/two.txt"), "two\n"))
+        cleanCandidate <- makeCandidate(nested)(tree => Files.writeString(tree.resolve("clean.txt"), "clean\n"))
+        _ <- ZIO.attemptBlocking {
+          val captured = refs
+          def conflicted(head: GitCommit, candidate: GitCommit): Unit = {
+            val result = candidates.rebase(head, candidate, IntegrationId(uuid), "Rebase\n")
+            assert(result == HostRebase.Conflicted && refs == captured, s"Conflicting rebase gave $result")
+          }
+          conflicted(textHead, textCandidate)
+          conflicted(renamedHead, addingCandidate)
+          // An untracked attribute file in the governing checkout would select the union driver and hide the textual conflict.
+          Files.writeString(local.source.resolve(".gitattributes"), "tracked.txt merge=union\n")
+          conflicted(textHead, textCandidate)
+          Files.delete(local.source.resolve(".gitattributes"))
+          // Repository configuration that moves a file added to a renamed directory would hide the directory-rename conflict.
+          local.git(local.source, "config", "merge.directoryRenames", "true")
+          conflicted(renamedHead, addingCandidate)
+          local.git(local.source, "config", "merge.fixture.driver", "true")
+          val refused = candidates.rebase(textHead, cleanCandidate, IntegrationId(uuid), "Rebase\n")
+          println(s"Host rebase with a configured merge driver: $refused")
+          assert(refused == HostRebase.Refused("Host rebase refuses repository-defined merge drivers") && refs == captured)
+          local.git(local.source, "config", "--unset", "merge.fixture.driver")
+          assert(candidates.rebase(textHead, cleanCandidate, IntegrationId(uuid), "Rebase\n").isInstanceOf[HostRebase.Merged])
+        }
+      } yield ()
+    }
+
     "capture both ordered immutable parents and reject changed HEAD or merge inputs" in { (local: LocalWorkspaceFixture) =>
       val settings = configuration(local)
       val candidates = new CandidateWorkspace(settings)

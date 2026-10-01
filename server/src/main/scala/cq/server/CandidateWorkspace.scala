@@ -60,6 +60,28 @@ final class CandidateWorkspace(config: SupervisorConfig) extends ExecutionBase {
     MergeInputs(config.directory.toRealPath().resolve("workspaces").resolve(attempt.value.toString).resolve("tree"), common,
       plan.observedTarget, plan.candidate)
   }
+  def rebase(head: GitCommit, candidate: GitCommit, id: IntegrationId, message: String): HostRebase = {
+    verifyPair(head, candidate)
+    val repository = Path.of(config.run.repository)
+    val drivers = command.run(repository, GitArguments ++ List("config", "--get-regexp", "^merge\\..*\\.driver$"))
+    require(drivers.exit == 0 || drivers.exit == 1 && drivers.text.isEmpty, "Candidate merge driver inspection failed")
+    if (drivers.exit == 0) HostRebase.Refused("Host rebase refuses repository-defined merge drivers")
+    else {
+      // The merge reads attributes from the target head's tree rather than the governing checkout's files, and repository configuration
+      // can neither move files into a renamed directory nor run content filters.
+      val merged = command.run(repository, GitArguments ++ List("--attr-source=" + head.value, "-c", "merge.directoryRenames=conflict",
+        "-c", "merge.renormalize=false", "merge-tree", "--write-tree", "--no-messages", head.value, candidate.value))
+      val objectId = merged.text.linesIterator.nextOption().getOrElse("")
+      require(Set(0, 1)(merged.exit) && objectId.matches("[0-9a-f]{40}|[0-9a-f]{64}"), s"Candidate Git operation failed: ${merged.text.take(300)}")
+      if (merged.exit == 1) HostRebase.Conflicted
+      else {
+        val commit = GitCommit(git(repository, "-c", "user.name=CQ host", "-c", "user.email=cq@localhost", "commit-tree", objectId,
+          "-p", head.value, "-p", candidate.value, "-m", message))
+        git(repository, "update-ref", "refs/cq/candidates/" + id.value, commit.value, "0" * commit.value.length)
+        HostRebase.Merged(commit)
+      }
+    }
+  }
   def capture(workspace: WorkspaceRecord, combination: Option[CombinationPlan], message: String): GitCommit = {
     require(workspace.admission == WorkspaceAdmission.Open && workspace.observed.nonEmpty, "Candidate workspace is quarantined or unconfirmed")
     val tree = Path.of(workspace.directory)

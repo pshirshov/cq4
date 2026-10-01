@@ -2,6 +2,13 @@ package cq.host
 
 import cq.api.GitCommit
 
+/** Outcome of merging a reviewed candidate onto an advanced target head without a workspace or a model. */
+enum HostRebase {
+  case Merged(commit: GitCommit)
+  case Conflicted
+  case Refused(reason: String)
+}
+
 /** Git observations of the configured integration target that host coordination consumes without running Git itself. */
 trait ExecutionBase {
   /** The commit fresh work starts from: the current integration target head, or the session base without a configured target. */
