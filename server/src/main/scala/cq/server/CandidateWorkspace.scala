@@ -1,12 +1,14 @@
 package cq.server
 
 import cq.api.*
+import cq.core.DomainFailure
 import cq.host.*
 import java.nio.file.{Files, LinkOption, Path}
 import java.time.Duration
 
 final class CandidateWorkspace(config: SupervisorConfig) extends ExecutionBase {
   private val MaxOutputBytes = 1024 * 1024
+  private val MaxDirtyPaths = 5
   private val command = new BoundedHostCommand(GitEnvironment.isolated(HostEnvironment.runtime(config.environment)), Duration.ofSeconds(10), MaxOutputBytes)
   private val GitArguments = List("git", "--no-replace-objects", "--no-pager", "-c", "core.hooksPath=/dev/null", "-c", "submodule.recurse=false")
   private def git(directory: Path, arguments: String*): String = {
@@ -23,6 +25,18 @@ final class CandidateWorkspace(config: SupervisorConfig) extends ExecutionBase {
   private def targetHead: Option[GitCommit] =
     config.settings.integrationTarget.map(target => GitCommit(git(Path.of(config.run.repository), "show-ref", "--verify", "--hash", target)))
   override def fresh(): GitCommit = targetHead.getOrElse(config.run.base)
+  /** Refuses child starts, integrations and combinations while the operator's checkout, the integration target's repository, has uncommitted
+    * changes to tracked files (D91). Untracked and ignored files (worker evidence, debug logs) do not count, and without a configured target
+    * the checkout is not an integration target. The status read takes no optional lock, so the checkout's index is left untouched. */
+  def verifyTargetClean(): Unit = config.settings.integrationTarget.foreach { _ =>
+    val result = command.run(Path.of(config.run.repository), GitArguments ++ List("--no-optional-locks", "status", "--porcelain=v1", "--untracked-files=no"))
+    require(result.exit == 0, s"Candidate Git operation failed: ${result.text.take(300)}")
+    val dirty = result.text.linesIterator.map(_.drop(3)).toList
+    if (dirty.nonEmpty) {
+      val more = if (dirty.size > MaxDirtyPaths) s" and ${dirty.size - MaxDirtyPaths} more" else ""
+      throw DomainFailure(Fault.Conflict(s"Integration target checkout has uncommitted changes: ${dirty.take(MaxDirtyPaths).mkString(", ")}$more"))
+    }
+  }
   override def expected(base: GitCommit, candidate: GitCommit): GitCommit = targetHead match {
     case Some(head) if head != candidate && ancestor(head, candidate) => head
     case _ => base

@@ -1,6 +1,7 @@
 package cq.server
 
 import cq.api.*
+import cq.core.DomainFailure
 import cq.host.*
 import distage.Activation
 import distage.StandardAxis.Repo
@@ -146,6 +147,38 @@ final class CandidateWorkspaceLocal extends SpecZIO with AssertZIO {
           assert(scala.util.Try(candidates.verifyBase(foreign)).isFailure)
         }
       } yield ()
+    }
+
+    "D91: refuse admission while the integration target checkout has uncommitted tracked changes, ignoring untracked files and unconfigured targets" in { (local: LocalWorkspaceFixture) =>
+      val settings = configuration(local)
+      val candidates = new CandidateWorkspace(settings)
+      def refusal(): String = intercept[DomainFailure](candidates.verifyTargetClean()).fault match {
+        case Fault.Conflict(message) => message
+        case other => fail(s"Expected a conflict, observed $other")
+      }
+      ZIO.attemptBlocking {
+        local.git(local.source, "branch", "integration", local.base.value)
+        Files.writeString(local.source.resolve("second.txt"), "committed\n")
+        local.git(local.source, "add", "second.txt")
+        local.git(local.source, "-c", "user.name=CQ test", "-c", "user.email=test@localhost", "commit", "-q", "-m", "Second file")
+        candidates.verifyTargetClean()
+        // Workers' evidence and debug logs are untracked or ignored; neither makes the checkout dirty.
+        Files.writeString(local.source.resolve("notes.txt"), "untracked\n")
+        Files.createDirectories(local.source.resolve(".git/info"))
+        Files.writeString(local.source.resolve(".git/info/exclude"), "debug/\n")
+        Files.createDirectories(local.source.resolve("debug"))
+        Files.writeString(local.source.resolve("debug/run.log"), "ignored\n")
+        candidates.verifyTargetClean()
+        Files.writeString(local.source.resolve("tracked.txt"), "governor edit\n")
+        val unstaged = refusal()
+        println(s"Dirty target refusal: $unstaged")
+        assert(unstaged == "Integration target checkout has uncommitted changes: tracked.txt")
+        local.git(local.source, "add", "tracked.txt")
+        Files.writeString(local.source.resolve("second.txt"), "governor edit\n")
+        assert(refusal() == "Integration target checkout has uncommitted changes: second.txt, tracked.txt")
+        // Without a configured target the checkout is not an integration target; its working tree is the operator's own.
+        new CandidateWorkspace(settings.copy(settings = settings.settings.copy(integrationTarget = None))).verifyTargetClean()
+      }
     }
 
     "capture both ordered immutable parents and reject changed HEAD or merge inputs" in { (local: LocalWorkspaceFixture) =>
