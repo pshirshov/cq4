@@ -257,6 +257,68 @@ abstract class LedgerContractTest extends SpecZIO with AssertZIO {
       } yield ()
     }
 
+    "assign produced tasks to an existing or same-batch milestone and refuse closed milestones and bad indexes" in { (service: LedgerService[IO]) =>
+      val owner = scope()
+      val other = owner.copy(actor = owner.actor.copy(session = SessionId(UUID.randomUUID())))
+      val goal = task("Goal").copy(content = Content.Goal(GoalStatus.Open, "Outcome", List("Acceptance"), "Scope"))
+      val research = task("Research").copy(content = Content.Research(ResearchStatus.Open, "Unknown", Nil, None, None))
+      def milestone(status: MilestoneStatus): ItemDraft = task(s"$status milestone").copy(content = Content.Milestone(status, "Deliver the tasks"))
+      val index = Fault.Invalid("Produce milestone must reference an earlier Create of a Milestone in this batch")
+      val once = Fault.Invalid("An item may be changed only once in a batch")
+      def produce(producer: ItemRevision, drafts: List[ItemDraft], ref: MilestoneRef): Mutation = Mutation.Produce(producer.id, producer.revision, drafts, Some(ref))
+      for {
+        _ <- service.initialize(owner, "milestone assignment")
+        first <- create(service, owner, goal)
+        second <- create(service, owner, goal)
+        open <- create(service, owner, milestone(MilestoneStatus.Open))
+        complete <- create(service, owner, milestone(MilestoneStatus.Complete))
+        held <- create(service, owner, milestone(MilestoneStatus.Open))
+        claim <- service.acquire(owner, ClaimId(UUID.randomUUID()), Set(first.id, second.id), 300000)
+        foreign <- service.acquire(other, ClaimId(UUID.randomUUID()), Set(held.id), 300000)
+        fences = List(claim.fence)
+        before <- service.changes(owner, ChangeCursor(0), 200)
+        _ <- denied(service.change(owner, request(List(produce(first, List(task("Closed")), MilestoneRef.Existing(complete.id))), fences)))(
+          _ == Fault.Invalid(s"Tasks can be assigned only to an Open milestone; M${complete.id.number} is Complete"))
+        _ <- ZIO.foreachDiscard(List(
+          List(produce(first, List(task("No create")), MilestoneRef.Created(0))),
+          List(produce(first, List(task("Negative")), MilestoneRef.Created(-1))),
+          List(Mutation.Create(task("Not a milestone")), produce(first, List(task("Wrong ledger")), MilestoneRef.Created(0))),
+          List(produce(first, List(task("Later create")), MilestoneRef.Created(1)), Mutation.Create(milestone(MilestoneStatus.Open))),
+        ))(mutations => denied(service.change(owner, request(mutations, fences)))(_ == index))
+        _ <- denied(service.change(owner, request(List(produce(first, List(research), MilestoneRef.Existing(open.id))), fences)))(_ == Fault.Invalid("A Produce milestone requires a Task draft"))
+        _ <- denied(service.change(owner, request(List(produce(first, List(task("Under a goal")), MilestoneRef.Existing(second.id))), fences)))(_ == Fault.Invalid("PartOf target must be a milestone"))
+        _ <- denied(service.change(owner, request(List(produce(first, List(task("Missing")), MilestoneRef.Existing(open.id.copy(number = 99)))), fences)))(_.isInstanceOf[Fault.Missing])
+        _ <- denied(service.change(owner, request(List(produce(first, List(task("Held")), MilestoneRef.Existing(held.id))), fences)))(_.isInstanceOf[Fault.StaleFence])
+        retitled = Mutation.Replace(open.id, open.revision, milestone(MilestoneStatus.Open).copy(title = "Retitled"))
+        assigned = produce(first, List(task("Twice")), MilestoneRef.Existing(open.id))
+        _ <- denied(service.change(owner, request(List(retitled, assigned), fences)))(_ == once)
+        _ <- denied(service.change(owner, request(List(assigned, retitled), fences)))(_ == once)
+        after <- service.changes(owner, ChangeCursor(0), 200)
+        _ <- assertIO(before == after)
+        ack <- service.change(owner, request(List(produce(first, List(task("One"), research, task("Two")), MilestoneRef.Existing(open.id)),
+          produce(second, List(task("Three")), MilestoneRef.Existing(open.id))), fences))
+        _ <- assertIO(ack.items.count(_.id == open.id) == 1 && ack.items.find(_.id == open.id).exists(_.revision == Revision(2)) && ack.items.size == 7)
+        views <- ZIO.foreach(ack.items.map(_.id))(service.get(owner, _))
+        produced = views.filter(view => Set("One", "Two", "Three")(view.item.draft.title))
+        _ <- assertIO(produced.map(view => view.item.draft.title -> view.refs.toSet).toMap == Map(
+          "One" -> Set(ItemRef(Relation.DerivedFrom, first.id), ItemRef(Relation.PartOf, open.id)),
+          "Two" -> Set(ItemRef(Relation.DerivedFrom, first.id), ItemRef(Relation.PartOf, open.id)),
+          "Three" -> Set(ItemRef(Relation.DerivedFrom, second.id), ItemRef(Relation.PartOf, open.id))))
+        _ <- assertIO(views.find(_.item.draft.title == "Research").exists(_.refs == List(ItemRef(Relation.DerivedFrom, first.id))))
+        history <- service.history(owner, open.id, Revision(Long.MaxValue), 200)
+        _ <- assertIO(history.entries.size == 2 && history.entries.head.item.refs.toSet == produced.map(view => ItemRef(Relation.Contains, view.item.id)).toSet)
+        current <- service.get(owner, first.id)
+        batch <- service.change(owner, request(List(Mutation.Create(research), Mutation.Create(milestone(MilestoneStatus.Open)),
+          produce(ItemRevision(first.id, current.item.revision), List(task("Four")), MilestoneRef.Created(1))), fences))
+        created = batch.items.find(_.id.ledger == Ledger.Milestones).get
+        four <- service.get(owner, batch.items.filter(_.id.ledger == Ledger.Tasks).head.id)
+        proposed <- service.history(owner, created.id, Revision(Long.MaxValue), 200)
+        _ <- assertIO(created.revision == Revision(1) && four.refs.toSet == Set(ItemRef(Relation.DerivedFrom, first.id), ItemRef(Relation.PartOf, created.id)) &&
+          proposed.entries.map(_.item.refs) == List(List(ItemRef(Relation.Contains, four.item.id))))
+        _ <- service.release(other, foreign.fence)
+      } yield ()
+    }
+
     "retain terminal items while related items are still open" in { (service: LedgerService[IO]) =>
       val owner = scope()
       val done = task("Done").copy(content = Content.Task(TaskStatus.Done, List("Observable result"), Some("Result"), Nil))

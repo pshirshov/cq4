@@ -47,13 +47,17 @@ final class LedgerMutation(terminationPlanner: TerminationPlanner) {
             case _ => ()
           }
         }
-        def check(id: ItemId, revision: Revision): Item = {
+        def writable(id: ItemId): Item = {
           invalid(!touched.contains(id), "An item may be changed only once in a batch")
           val item = required(tx, scope, id)
           reservation match {
             case Some(record) => require(tx.pendingIntegration(id).contains(IntegrationPolicy.hold(record.intent)), "Integration reservation membership changed")
             case None => IntegrationPolicy.unreserved(tx, Set(id)); fenced(tx, scope, id, request.fences, now)
           }
+          item
+        }
+        def check(id: ItemId, revision: Revision): Item = {
+          val item = writable(id)
           expected(item, revision)
           item
         }
@@ -84,10 +88,31 @@ final class LedgerMutation(terminationPlanner: TerminationPlanner) {
           touched.update(id, item)
           item
         }
+        val createdMilestones = scala.collection.mutable.Map.empty[Int, ItemId]
+        val assignedMilestones = scala.collection.mutable.Set.empty[ItemId]
+        def openMilestone(item: Item): Unit = item.draft.content match {
+          case milestone: Content.Milestone => invalid(milestone.status == MilestoneStatus.Open,
+            s"Tasks can be assigned only to an Open milestone; ${prefix(item.id.ledger)}${item.id.number} is ${milestone.status}")
+          case _ => invalid(false, "PartOf target must be a milestone")
+        }
+        // The assigned milestone carries no expected revision: it is fenced, must be Open, and is revised once per batch.
+        def assign(milestone: MilestoneRef, parent: Item): ItemId = milestone match {
+          case MilestoneRef.Existing(id) =>
+            if (id == parent.id) openMilestone(parent)
+            else if (!assignedMilestones(id)) {
+              val item = writable(id)
+              openMilestone(item)
+              revise(item, item.draft, None)
+              assignedMilestones += id
+            }
+            id
+          case MilestoneRef.Created(mutation) => createdMilestones.getOrElse(mutation,
+            throw DomainFailure(Fault.Invalid("Produce milestone must reference an earlier Create of a Milestone in this batch")))
+        }
         invalid(!request.mutations.exists(_.isInstanceOf[Mutation.Terminate]) || request.mutations.size == 1,
           "Termination must be the only mutation in its request")
-        request.mutations.foreach {
-          case Mutation.Archive(members) =>
+        request.mutations.zipWithIndex.foreach {
+          case (Mutation.Archive(members), _) =>
             invalid(members.nonEmpty && members.size <= MaxTouchedItems && members.map(_.id).distinct.size == members.size,
               s"Archive requires 1–$MaxTouchedItems distinct item revisions")
             members.foreach { member =>
@@ -99,7 +124,7 @@ final class LedgerMutation(terminationPlanner: TerminationPlanner) {
               invalid(open.isEmpty, s"Archive excludes ${LedgerPolicy.prefix(member.id.ledger)}${member.id.number}: related open items ${open.map(o => LedgerPolicy.prefix(o.ledger) + o.number).mkString(", ")}")
               revise(item, item.draft.copy(archived = true), None)
             }
-          case Mutation.Terminate(roots, intent, snapshot) =>
+          case (Mutation.Terminate(roots, intent, snapshot), _) =>
             if (tx.cursor != snapshot.cursor) throw DomainFailure(Fault.Conflict("Termination graph changed; review a fresh preview"))
             val preview = terminationPlanner.preview(tx, scope, roots, intent, now)
             if (preview.snapshot != snapshot) throw DomainFailure(Fault.Conflict("Termination preview changed; review a fresh preview"))
@@ -118,21 +143,28 @@ final class LedgerMutation(terminationPlanner: TerminationPlanner) {
                 revise(item, item.draft.copy(content = terminationPlanner.applyStatus(item.draft.content, status)), None)
               case _ => ()
             }}
-          case Mutation.Produce(producer, revision, drafts) =>
+          case (Mutation.Produce(producer, revision, drafts, milestone), _) =>
             val parent = check(producer, revision)
             invalid(drafts.nonEmpty && drafts.size <= MaxBatch, s"Production requires 1–$MaxBatch drafts")
             val claim = tx.claim(producer).filter(ClaimPolicy.active(tx, _, now))
               .getOrElse(throw DomainFailure(Fault.StaleFence("Production requires an active producer claim")))
             if (claim.owner != scope.actor || !request.fences.contains(claim.fence))
               throw DomainFailure(Fault.StaleFence("Production requires the current producer owner and fence"))
+            val target = milestone.map { value =>
+              invalid(drafts.exists(draft => ledger(draft.content) == Ledger.Tasks), "A Produce milestone requires a Task draft")
+              assign(value, parent)
+            }
             drafts.foreach { draft =>
               val child = create(draft)
               edgeChange(canonical(child.id, Relation.DerivedFrom, producer), true)
+              if (child.id.ledger == Ledger.Tasks) target.foreach(id => edgeChange(canonical(child.id, Relation.PartOf, id), true))
             }
             revise(parent, parent.draft, None)
-          case Mutation.Create(draft) => create(draft); ()
-          case Mutation.Replace(id, revision, draft) => revise(check(id, revision), draft, None)
-          case Mutation.Restore(id, revision, historical, neighbors) =>
+          case (Mutation.Create(draft), index) =>
+            val item = create(draft)
+            if (item.id.ledger == Ledger.Milestones) createdMilestones.update(index, item.id)
+          case (Mutation.Replace(id, revision, draft), _) => revise(check(id, revision), draft, None)
+          case (Mutation.Restore(id, revision, historical, neighbors), _) =>
             val item = check(id, revision)
             val previous = tx.historical(id, historical).getOrElse(throw DomainFailure(Fault.Missing("Historical revision not found")))
             val currentRefs = tx.refs(id).toSet
@@ -147,7 +179,7 @@ final class LedgerMutation(terminationPlanner: TerminationPlanner) {
             added.foreach(ref => edgeChange(canonical(id, ref.relation, ref.target), true))
             revise(item, previous.item.item.draft, Some(previous.item.item.draft))
             checked.foreach(other => revise(other, other.draft, None))
-          case Mutation.Reference(source, sourceRevision, relation, target, targetRevision, present) =>
+          case (Mutation.Reference(source, sourceRevision, relation, target, targetRevision, present), _) =>
             val left = check(source, sourceRevision)
             val right = check(target, targetRevision)
             val edge = canonical(source, relation, target)

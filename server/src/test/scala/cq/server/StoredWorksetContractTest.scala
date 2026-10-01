@@ -190,7 +190,7 @@ abstract class StoredWorksetContractTest extends SpecZIO with AssertZIO {
         strangerClaim <- service.acquire(owner, ClaimId(UUID.randomUUID()), Set(stranger), 600000L)
         before <- service.previewWorkset(owner, WorksetTarget.Stored(stored.id))
         current <- service.get(owner, product)
-        produced = ChangeRequest(RequestId(UUID.randomUUID()), List(Mutation.Produce(product, current.item.revision, List(task("Descendant")))), List(claim.fence), "Hypothetical descendant")
+        produced = ChangeRequest(RequestId(UUID.randomUUID()), List(Mutation.Produce(product, current.item.revision, List(task("Descendant")), None)), List(claim.fence), "Hypothetical descendant")
         after <- service.previewWorksetAfter(owner, WorksetTarget.Stored(stored.id), produced)
         added = advanceable(after) -- advanceable(before)
         _ <- assertIO(advanceable(before) == Set(product) && added.size == 1 && added.head.ledger == Ledger.Tasks && after.snapshot.cursor.value > before.snapshot.cursor.value)
@@ -200,7 +200,7 @@ abstract class StoredWorksetContractTest extends SpecZIO with AssertZIO {
         lost <- service.get(owner, added.head).either
         _ <- assertIO(missing(lost))
         strangerRevision <- service.get(owner, stranger)
-        outside = ChangeRequest(RequestId(UUID.randomUUID()), List(Mutation.Produce(stranger, strangerRevision.item.revision, List(task("Outside descendant")))), List(strangerClaim.fence), "Outside")
+        outside = ChangeRequest(RequestId(UUID.randomUUID()), List(Mutation.Produce(stranger, strangerRevision.item.revision, List(task("Outside descendant")), None)), List(strangerClaim.fence), "Outside")
         outsideAfter <- service.previewWorksetAfter(owner, WorksetTarget.Inline(Set(product), WorkflowPhase.Work), outside)
         _ <- assertIO(advanceable(outsideAfter) == Set(product) && outsideAfter.snapshot.cursor.value > before.snapshot.cursor.value)
         committed <- service.change(owner, produced.copy(request = RequestId(UUID.randomUUID())))

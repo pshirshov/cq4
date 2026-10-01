@@ -50,7 +50,7 @@ final class ProposalServiceImpl[F[+_, +_]: Error2](ledger: LedgerRepository[F], 
       case Mutation.Replace(id, revision, draft) =>
         val before = tx.historical(id, revision).getOrElse(throw DomainFailure(Fault.Missing("Proposed source revision is unavailable"))).item.item.draft
         ProposalOperationSummary.Replace(id, ProposalPolicy.summary(before), ProposalPolicy.summary(draft), ProposalPolicy.fields(before, draft))
-      case Mutation.Produce(producer, _, drafts) => ProposalOperationSummary.Produce(producer, drafts.map(ProposalPolicy.summary))
+      case Mutation.Produce(producer, _, drafts, milestone) => ProposalOperationSummary.Produce(producer, drafts.map(ProposalPolicy.summary), milestone)
       case Mutation.Reference(source, _, relation, target, _, present) => ProposalOperationSummary.Reference(source, relation, target, present)
       case _ => throw new IllegalStateException("Prepared proposal contains an unsupported mutation")
     }

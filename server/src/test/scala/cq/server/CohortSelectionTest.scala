@@ -351,7 +351,7 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
         original <- ledger.get(fixture.scope, producer.id)
         research = ItemDraft("Reproduction evidence", "Observed the failure, then the pass", Set.empty, false,
           Content.Research(ResearchStatus.Open, "Does the candidate hold?", Nil, None, None), Nil)
-        _ <- ledger.change(fixture.scope, ChangeRequest(RequestId(uuid), List(Mutation.Produce(producer.id, producer.revision, List(research))),
+        _ <- ledger.change(fixture.scope, ChangeRequest(RequestId(uuid), List(Mutation.Produce(producer.id, producer.revision, List(research), None)),
           List(fixture.fence), "Record evidence under the task"))
         revised <- ledger.get(fixture.scope, producer.id)
         _ <- assertIO(revised.item.revision == Revision(producer.revision.value + 1) && revised.item.draft == original.item.draft &&

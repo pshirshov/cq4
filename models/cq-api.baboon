@@ -132,9 +132,13 @@ root data TerminationSnapshot { cursor: ChangeCursor digest: str }
 root data TerminationPreview { plan: TerminationPlan snapshot: TerminationSnapshot }
 root data ArchiveRetention { item: ItemSummary open: lst[ItemId] }
 root data ArchivePlan { members: lst[ItemSummary] retained: lst[ArchiveRetention] scanned: i32 limited: bit cursor: ChangeCursor }
+root adt MilestoneRef {
+  data Existing { id: ItemId }
+  data Created { mutation: i32 }
+}
 root adt Mutation {
   data Archive { members: lst[ItemRevision] }
-  data Produce { producer: ItemId expected: Revision drafts: lst[ItemDraft] }
+  data Produce { producer: ItemId expected: Revision drafts: lst[ItemDraft] milestone: opt[MilestoneRef] }
   data Terminate { roots: set[ItemId] intent: TerminationIntent snapshot: TerminationSnapshot }
   data Create { draft: ItemDraft }
   data Replace { id: ItemId expected: Revision draft: ItemDraft }
@@ -546,7 +550,7 @@ root data EvidenceMember {
 root adt ProposedMutation {
   data Create { draft: ItemDraft }
   data Replace { id: ItemId draft: ItemDraft }
-  data Produce { producer: ItemId drafts: lst[ItemDraft] }
+  data Produce { producer: ItemId drafts: lst[ItemDraft] milestone: opt[MilestoneRef] }
   data Reference { source: ItemId relation: Relation target: ItemId present: bit }
 }
 root data LedgerProposal { mutations: lst[ProposedMutation] reason: str }
@@ -557,7 +561,7 @@ root data ProposalFieldChanges {
 root adt ProposalOperationSummary {
   data Create { draft: ProposalDraftSummary }
   data Replace { id: ItemId before: ProposalDraftSummary after: ProposalDraftSummary fields: ProposalFieldChanges }
-  data Produce { producer: ItemId drafts: lst[ProposalDraftSummary] }
+  data Produce { producer: ItemId drafts: lst[ProposalDraftSummary] milestone: opt[MilestoneRef] }
   data Reference { source: ItemId relation: Relation target: ItemId present: bit }
 }
 root data ProposalPreview {

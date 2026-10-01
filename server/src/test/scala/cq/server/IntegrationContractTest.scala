@@ -171,7 +171,7 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
           runtime <- ZIO.runtime[Any]
           original <- begin(ledger, usage, artifacts, admissions)
           producer = original.items.head
-          _ <- ledger.change(original.owner, ChangeRequest(RequestId(uuid), List(Mutation.Produce(producer.id, producer.revision, List(research))),
+          _ <- ledger.change(original.owner, ChangeRequest(RequestId(uuid), List(Mutation.Produce(producer.id, producer.revision, List(research), None)),
             List(original.claim.fence), "Record evidence under the task"))
           reviewed <- reviewCurrent(original)
           (f, current) = reviewed
@@ -297,7 +297,8 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
         attempt <- usage.start(f.collector, Attempt(AttemptId(uuid), assignment.id, Some(f.governor), f.owner.actor.session, Role.Planner,
           Harness.Codex, "fixture", "fixture", "fixture", 1000))
         report = ChildReport.Plan(f.intent.members.map(ref => PlanMember(ref.id, PlanDisposition.Proposed, "Follow-up")),
-          Some(LedgerProposal(List(ProposedMutation.Create(task)), "Create after integration settles")), Nil)
+          Some(LedgerProposal(List(ProposedMutation.Create(task.copy(content = Content.Research(ResearchStatus.Open, "What remains?", Nil, None, None)))),
+            "Create after integration settles")), Nil)
         result = f.worker.copy(attempt = attempt.id, candidate = None, report = report, validation = Nil,
           request = f.worker.request.copy(request = RequestId(uuid), work = DispatchWork.Planner()))
         handle <- publish(f.collector, result, artifacts, admissions)
@@ -307,7 +308,7 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
         _ <- assertIO(before.events.size == 1)
         _ <- integrations.observe(f.collector, f.intent.id, IntegrationObservation.NotApplied("Target unchanged; executor settled"))
         ack <- proposals(f.owner, handle)
-        _ <- assertIO(ack.items.map(_.id.number) == List(3))
+        _ <- assertIO(ack.items.map(_.id) == List(ItemId(f.owner.project, Ledger.Researches, 1)))
       } yield ()
     }
 
@@ -430,7 +431,7 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
         _ <- reject(ledger.change(f.owner, ChangeRequest(RequestId(uuid), List(Mutation.Replace(member.id, member.revision,
           member.draft.copy(title = "Forbidden"))), List(f.claim.fence), "Same owner edit")), pending(f.intent.id))
         _ <- reject(ledger.change(f.owner, ChangeRequest(RequestId(uuid), List(Mutation.Restore(member.id, member.revision, member.revision, Nil)), List(f.claim.fence), "Restore")), pending(f.intent.id))
-        _ <- reject(ledger.change(f.owner, ChangeRequest(RequestId(uuid), List(Mutation.Produce(member.id, member.revision, List(task))), List(f.claim.fence), "Produce")), pending(f.intent.id))
+        _ <- reject(ledger.change(f.owner, ChangeRequest(RequestId(uuid), List(Mutation.Produce(member.id, member.revision, List(task), None)), List(f.claim.fence), "Produce")), pending(f.intent.id))
         _ <- reject(ledger.release(f.owner, f.claim.fence), pending(f.intent.id))
         human = f.owner.copy(actor = f.owner.actor.copy(role = Role.Human))
         preview <- ledger.claimPreview(human, Set(member.id))
