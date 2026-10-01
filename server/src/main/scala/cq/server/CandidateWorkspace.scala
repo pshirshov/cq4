@@ -27,6 +27,10 @@ final class CandidateWorkspace(config: SupervisorConfig) extends ExecutionBase {
     case Some(head) if head != candidate && ancestor(head, candidate) => head
     case _ => base
   }
+  /** The current target head when it diverged from `candidate`: neither the candidate, one of its ancestors nor one of its descendants. */
+  def advanced(candidate: GitCommit): Option[GitCommit] =
+    targetHead.filter(head => head != candidate && !ancestor(head, candidate) && !ancestor(candidate, head))
+  def subject(commit: GitCommit): String = git(Path.of(config.run.repository), "log", "-1", "--format=%s", commit.value)
   def verifyBase(base: GitCommit): Unit = {
     val repository = Path.of(config.run.repository)
     require(git(repository, "rev-parse", "--verify", "--end-of-options", base.value + "^{commit}") == base.value, "Candidate object is unavailable")

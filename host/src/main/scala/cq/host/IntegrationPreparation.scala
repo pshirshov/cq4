@@ -4,20 +4,38 @@ import cq.api.*
 import cq.core.{DomainFailure, IntegrationPolicy, Scope}
 import java.time.{Clock, Duration}
 
+/** Worker and reviewer results whose evidence establishes an independently reviewed candidate. */
+final case class ReviewedCandidate(ticket: IntegrationTicket, workerId: ArtifactId, worker: ChildResult, validation: List[ArtifactId]) {
+  def candidate: GitCommit = worker.candidate.get
+}
+
+/** A host rebase of the reviewed candidate: `commit` merges it onto the advanced target `head`. */
+final case class AppliedRebase(head: GitCommit, commit: GitCommit, evidence: IntegrationRebase)
+
 final class IntegrationPreparation(api: ServerApi, owner: Scope, repository: String, target: String,
   checks: List[ValidationCheck], clock: Clock, bases: ExecutionBase) {
   private val PreparationNanos = Duration.ofSeconds(60).toNanos
   private val ClaimMillis = Duration.ofMinutes(3).toMillis
 
-  def prepare(ticket: IntegrationTicket): IntegrationIntent = {
+  /** The deadline bounds the server calls of one operation; host checks of a rebased commit run between operations. */
+  private def bounded[A](operation: (Command => Result) => A): A = {
     val began = System.nanoTime()
-    def call(command: Command): Result = {
+    operation { command =>
       require(System.nanoTime() - began < PreparationNanos, "Integration preparation deadline exceeded")
       api.call(command) match {
         case Result.Failed(fault) => throw DomainFailure(fault)
         case value => value
       }
     }
+  }
+  private def renew(call: Command => Result, worker: ChildResult): Unit =
+    call(Command.ClaimWork(ClaimInput(owner.project, ClaimAction.Renew(worker.request.fence, ClaimMillis)))) match {
+      case Result.Claimed(claim) => require(claim.owner == owner.actor && claim.fence == worker.request.fence && !claim.released &&
+        claim.members == worker.request.members.map(_.id).toSet && claim.expiresAt > clock.millis(), "Integration claim no longer covers this assignment")
+      case _ => throw new IllegalStateException("Integration claim renewal returned an unexpected result")
+    }
+
+  def review(ticket: IntegrationTicket): ReviewedCandidate = bounded { call =>
     val reader = new ArtifactReader(call, owner.project)
     val drafts = new HistoricalDrafts(call, owner.project)
     val review = reader.result(ticket.reviewer)
@@ -43,12 +61,17 @@ final class IntegrationPreparation(api: ServerApi, owner: Scope, repository: Str
       IntegrationValidation.verify(owner.project, owner.actor.session, worker.candidate.get, expected,
         stored.metadata, IntegrationValidation.decode(stored))
     }
-    def renew(): Unit = call(Command.ClaimWork(ClaimInput(owner.project, ClaimAction.Renew(worker.request.fence, ClaimMillis)))) match {
-      case Result.Claimed(claim) => require(claim.owner == owner.actor && claim.fence == worker.request.fence && !claim.released &&
-        claim.members == worker.request.members.map(_.id).toSet && claim.expiresAt > clock.millis(), "Integration claim no longer covers this assignment")
-      case _ => throw new IllegalStateException("Integration claim renewal returned an unexpected result")
-    }
-    renew()
+    renew(call, worker)
+    ReviewedCandidate(ticket, workerId, worker, IntegrationValidation.citations(worker, reviewer))
+  }
+
+  def renew(reviewed: ReviewedCandidate): Unit = bounded(renew(_, reviewed.worker))
+
+  /** Without a rebase the intent expects the reviewed candidate at the target; with one it expects the rebased commit on the advanced head. */
+  def freeze(reviewed: ReviewedCandidate, rebase: Option[AppliedRebase]): IntegrationIntent = bounded { call =>
+    val drafts = new HistoricalDrafts(call, owner.project)
+    val worker = reviewed.worker
+    val ticket = reviewed.ticket
     val items = worker.request.members.map { reference =>
       call(Command.Read(ReadInput(owner.project, ReadSelection.ItemDetail(reference.id)))) match {
         case Result.Detail(value) =>
@@ -57,10 +80,12 @@ final class IntegrationPreparation(api: ServerApi, owner: Scope, repository: Str
         case _ => throw new IllegalStateException("Integration member read returned an unexpected result")
       }
     }
-    val change = IntegrationPolicy.completion(ticket.id, repository, target, worker.candidate.get, None, workerId, ticket.reviewer,
-      IntegrationValidation.citations(worker, reviewer), worker.request.fence, items)
-    renew()
-    IntegrationIntent(ticket.id, owner.project, owner.actor, repository, target, bases.expected(worker.base, worker.candidate.get), worker.candidate.get,
-      workerId, ticket.reviewer, checks, worker.request.fence, items.map(item => ItemRevision(item.id, item.revision)), change, None)
+    val candidate = rebase.fold(reviewed.candidate)(_.commit)
+    val change = IntegrationPolicy.completion(ticket.id, repository, target, candidate, rebase.map(_.evidence), reviewed.workerId, ticket.reviewer,
+      reviewed.validation, worker.request.fence, items)
+    renew(call, worker)
+    IntegrationIntent(ticket.id, owner.project, owner.actor, repository, target,
+      rebase.fold(bases.expected(worker.base, reviewed.candidate))(_.head), candidate,
+      reviewed.workerId, ticket.reviewer, checks, worker.request.fence, items.map(item => ItemRevision(item.id, item.revision)), change, rebase.map(_.evidence))
   }
 }

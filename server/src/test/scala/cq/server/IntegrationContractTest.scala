@@ -26,6 +26,7 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
     override def fresh(): GitCommit = throw new IllegalStateException("Fresh work is not started by these cases")
     override def expected(base: GitCommit, candidate: GitCommit): GitCommit = base
   }
+  private def prepare(preparation: IntegrationPreparation, ticket: IntegrationTicket): IntegrationIntent = preparation.freeze(preparation.review(ticket), None)
   private final class ServiceApi(scope: Scope, ledger: LedgerService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], runtime: Runtime[Any]) extends ServerApi {
     override def call(command: Command): Result = {
       val effect: IO[Throwable, Result] = command match {
@@ -188,8 +189,8 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
           reviewed <- reviewCurrent(original)
           (f, current) = reviewed
           _ <- assertIO(f.intent.members != original.intent.members && current.map(_.draft) == original.items.map(_.draft))
-          prepared <- ZIO.attemptBlocking(new IntegrationPreparation(new ServiceApi(f.owner, ledger, artifacts, admissions, runtime), f.owner,
-            f.intent.repository, f.intent.target, f.intent.checks, Clock.systemUTC(), recordedBases).prepare(IntegrationTicket(f.intent.id, f.intent.reviewer)))
+          prepared <- ZIO.attemptBlocking(prepare(new IntegrationPreparation(new ServiceApi(f.owner, ledger, artifacts, admissions, runtime), f.owner,
+            f.intent.repository, f.intent.target, f.intent.checks, Clock.systemUTC(), recordedBases), IntegrationTicket(f.intent.id, f.intent.reviewer)))
           _ <- assertIO(prepared == f.intent)
           reserved <- integrations.reserve(f.collector, f.intent)
           _ <- assertIO(reserved.resolution == IntegrationResolution.Pending())
@@ -206,8 +207,8 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
             edited.draft.copy(body = "Changed requirements"))), List(changed.claim.fence), "Change the task content"))
           stale <- reviewCurrent(changed)
           _ <- reject(integrations.reserve(stale._1.collector, stale._1.intent), _.isInstanceOf[Fault.Invalid])
-          refused <- ZIO.attemptBlocking(new IntegrationPreparation(new ServiceApi(stale._1.owner, ledger, artifacts, admissions, runtime), stale._1.owner,
-            stale._1.intent.repository, stale._1.intent.target, stale._1.intent.checks, Clock.systemUTC(), recordedBases).prepare(IntegrationTicket(stale._1.intent.id, stale._1.intent.reviewer))).either
+          refused <- ZIO.attemptBlocking(prepare(new IntegrationPreparation(new ServiceApi(stale._1.owner, ledger, artifacts, admissions, runtime), stale._1.owner,
+            stale._1.intent.repository, stale._1.intent.target, stale._1.intent.checks, Clock.systemUTC(), recordedBases), IntegrationTicket(stale._1.intent.id, stale._1.intent.reviewer))).either
           _ <- assertIO(refused.isLeft)
         } yield ()
       }
@@ -368,7 +369,7 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
             override def expected(base: GitCommit, candidate: GitCommit): GitCommit = { observed :+= (base, candidate); head }
           }
           val preparation = new IntegrationPreparation(governor, f.owner, f.intent.repository, f.intent.target, Nil, clock, bases)
-          val intent = preparation.prepare(IntegrationTicket(IntegrationId(uuid), reviewArtifact))
+          val intent = prepare(preparation, IntegrationTicket(IntegrationId(uuid), reviewArtifact))
           println(s"Continuation preparation: worker base=${worker.base.value.take(7)} head=${head.value.take(7)} expected=${intent.expected.value.take(7)} observed=$observed")
           assert(observed == List((worker.base, continuation)))
           assert(intent.expected == head && intent.candidate == continuation && intent.worker == workerArtifact && intent.reviewer == reviewArtifact)
