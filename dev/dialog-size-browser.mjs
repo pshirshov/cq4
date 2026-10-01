@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {writeFile} from 'node:fs/promises';
 import {chromium} from 'playwright';
+import {hold, HOLD_SETTLE_MS} from './hold.mjs';
 
 const origin = process.env.CQ_ORIGIN, evidence = process.env.CQ_BROWSER_EVIDENCE;
 const headers = {Authorization: `Bearer ${process.env.CQ_TOKEN}`, 'CQ-Session': randomUUID(), 'CQ-Protocol-Version': '0.1.0', 'Content-Type': 'application/json'};
@@ -131,7 +132,11 @@ try {
       await create.getByRole('alert').filter({hasText: /\S/}).waitFor(); same(created, await large(create, 'create item'), 'create item validation error');
       await headerStays(create, 'create item');
       await create.screenshot({path: `${evidence}/dialog-size-create-${label}.png`});
-      await create.getByRole('button', {name: 'Discard local draft', exact: true}).click(); await create.waitFor({state: 'hidden'});
+      const drafts = () => page.evaluate(() => Object.keys(localStorage).filter(key => key.startsWith('cq-draft:') && key.endsWith(':new')).length);
+      const discard = create.getByRole('button', {name: 'Discard local draft', exact: true});
+      assert.equal(await drafts(), 1); await discard.click(); await page.waitForTimeout(HOLD_SETTLE_MS);
+      assert.equal(await drafts(), 1, 'A plain click must keep the stored draft'); assert.equal(await create.isVisible(), true);
+      await hold(page, discard); await create.waitFor({state: 'hidden'}); assert.equal(await drafts(), 0, 'Holding removes the stored draft');
       cases.push('New item dialog is 90%×90% and stable across item type changes and a validation error');
 
       const panels = () => page.evaluate(() => {

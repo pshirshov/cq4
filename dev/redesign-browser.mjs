@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { writeFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { chromium } from 'playwright';
+import { hold } from './hold.mjs';
 
 export async function redesignChecks(browser, storageState, origin, evidence) {
   const headers = { Authorization: `Bearer ${process.env.CQ_TOKEN}`, 'CQ-Session': randomUUID(), 'CQ-Protocol-Version': '0.1.0', 'Content-Type': 'application/json' };
@@ -62,9 +63,9 @@ export async function redesignChecks(browser, storageState, origin, evidence) {
       assert.equal(await page.getByRole('heading', { name: 'D1 · Explain the integration guard', exact: true }).count(), 1);
       await page.getByRole('button', { name: 'New item', exact: true }).click();
       assert.equal(await dialog.getByLabel('title', { exact: true }).inputValue(), 'Saved local dialog draft');
-      await dialog.getByRole('button', { name: 'Discard local draft', exact: true }).click();
+      await hold(page, dialog.getByRole('button', { name: 'Discard local draft', exact: true }));
     });
-    if (await page.getByRole('button', { name: 'Discard local draft', exact: true }).isVisible()) await page.getByRole('button', { name: 'Discard local draft', exact: true }).click();
+    if (await page.getByRole('button', { name: 'Discard local draft', exact: true }).isVisible()) await hold(page, page.getByRole('button', { name: 'Discard local draft', exact: true }));
     await check('D85/D86 title-only idea is accepted and faults are shown as text', async () => {
       await page.getByRole('button', { name: 'New item', exact: true }).click();
       const dialog = page.getByRole('dialog', { name: 'New item', exact: true });

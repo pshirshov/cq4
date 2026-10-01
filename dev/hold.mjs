@@ -1,4 +1,6 @@
 const HOLD_DEADLINE_MS = 5000;
+// Longer than the control's HOLD_MS: by then a click mistaken for a hold would have run the action.
+export const HOLD_SETTLE_MS = 1500;
 // Presses and holds a hold-to-confirm control (web/src/hold-button.ts) with the mouse until its action has run.
 export async function hold(page, locator) {
   const outcome = await locator.evaluateHandle((node, deadline) => {

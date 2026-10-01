@@ -10,6 +10,7 @@ import { GraphActions } from './graph.js';
 import { itemName } from './items.js';
 import { itemView } from './presentation.js';
 import { Dialog } from './dialog.js';
+import { holdButton } from './hold-button.js';
 import { icon } from './icons.js';
 import { ArchiveDialog } from './archive.js';
 import { faultMessage } from './faults.js';
@@ -614,7 +615,7 @@ class App {
     }
     const caption = record.item === undefined ? 'New item' : `Edit ${itemName(record.item.id)} from revision ${record.item.revision.value}`;
     const form = editItem(api.ItemDraft_JsonCodec.instance.encode(CONTEXT, record.value) as Json, caption);
-    const discard = button('Discard local draft', () => {
+    const discard = holdButton('Discard local draft', () => {
       if (this.editor !== editor || editor.record.pending !== undefined) return;
       localStorage.removeItem(key); localStorage.removeItem(key + ':next'); this.closeEditor(); this.createDialog.close();
     });

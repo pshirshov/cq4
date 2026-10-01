@@ -4,10 +4,11 @@ import { BaboonCodecContext } from '../../generated/typescript/BaboonSharedRunti
 import { button, element } from './editor.js';
 import { itemName, parseItem } from './items.js';
 import { Dialog } from './dialog.js';
+import { holdButton } from './hold-button.js';
 import { faultMessage } from './faults.js';
 
 const CONTEXT = BaboonCodecContext.Default;
-interface Preview { input: api.ChangeInput; description: HTMLElement[] }
+interface Preview { input: api.ChangeInput; description: HTMLElement[]; destructive: boolean }
 interface GraphEffects {
   call(command: api.Command): Promise<api.Result>;
   select(id: api.ItemId): Promise<void>;
@@ -32,6 +33,7 @@ export class GraphActions {
   private view: api.ItemView | null = null;
   private generation = 0;
   private preview: Preview | null = null;
+  private rendered: Preview | null = null;
   private pending: api.ChangeInput | null = null;
   private readonly busy = new Set<string>();
 
@@ -150,7 +152,7 @@ export class GraphActions {
     const source = view.item;
     this.preview = { input: this.request(source.id.project, new api.Mutation_Reference(source.id, source.revision, relation, target, neighbor.item.revision, present), 'Browser relationship'),
       description: [element('p', `${present ? 'Add' : 'Remove'} ${itemName(source.id)} ${relation} ${itemName(target)}.`),
-        element('p', `Expected revisions: ${itemName(source.id)} @ ${source.revision.value}; ${itemName(target)} @ ${neighbor.item.revision.value}. Both endpoints receive a new revision if the relationship changes.`)] };
+        element('p', `Expected revisions: ${itemName(source.id)} @ ${source.revision.value}; ${itemName(target)} @ ${neighbor.item.revision.value}. Both endpoints receive a new revision if the relationship changes.`)], destructive: !present };
     this.renderPreview(); this.focusPreview();
   }
   async restore(historical: api.ItemView): Promise<void> {
@@ -172,7 +174,7 @@ export class GraphActions {
         ...removed.map(ref => element('p', `Remove ${ref.relation} ${itemName(ref.target)}`)), ...added.map(ref => element('p', `Add ${ref.relation} ${itemName(ref.target)}`)),
         element('p', neighbors.length === 0 ? 'No relationships change.' : `Neighbors receiving new revisions: ${neighbors.map(value => `${itemName(value.id)} @ ${value.revision.value}`).join('; ')}. Their content is preserved.`),
         element('h4', 'Current content'), this.effects.view(view.item),
-        element('h4', 'Content to restore'), this.effects.view(historical.item)] };
+        element('h4', 'Content to restore'), this.effects.view(historical.item)], destructive: true };
     this.renderPreview(); this.focusPreview();
   }
   private focusPreview(): void {
@@ -185,7 +187,10 @@ export class GraphActions {
     this.review.hidden = this.pending === null && this.preview === null;
     for (const control of this.form.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>('input,select,button')) control.disabled = this.pending !== null;
     for (const control of this.references.querySelectorAll<HTMLButtonElement>('button')) if (control.textContent !== null && control.textContent.startsWith('Remove ')) control.disabled = this.pending !== null;
-    this.previewPanel.replaceChildren();
+    // A live refresh renders the same preview again; replacing its controls would cancel a hold in progress.
+    const shown = this.pending === null ? this.preview : null;
+    if (shown !== null && shown === this.rendered) return;
+    this.rendered = shown; this.previewPanel.replaceChildren();
     if (this.pending !== null) {
       const input = this.pending;
       const retry = button('Retry exact graph change', () => this.action(() => this.submit(input)));
@@ -196,7 +201,7 @@ export class GraphActions {
       const preview = this.preview;
       this.previewPanel.append(element('h3', 'Graph change preview'), ...preview.description,
         element('p', 'Confirmation uses these exact revisions. Concurrent edits reject the entire change; prepare a fresh preview after inspecting them.'),
-        button('Confirm graph change', () => this.action(async () => {
+        (preview.destructive ? holdButton : button)('Confirm graph change', () => this.action(async () => {
           if (this.preview !== preview || this.pending !== null) return;
           const key = this.key(preview.input.project);
           if (localStorage.getItem(key) !== null) throw new Error('Another graph change is stored for this project; reload to resolve it.');

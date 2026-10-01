@@ -2,6 +2,7 @@ import * as api from '../../generated/typescript/cq/api/index.js';
 import { BaboonCodecContext } from '../../generated/typescript/BaboonSharedRuntime.js';
 import { button, element } from './editor.js';
 import { Dialog } from './dialog.js';
+import { holdButton } from './hold-button.js';
 import { itemName } from './items.js';
 import { faultMessage } from './faults.js';
 import { uuidV4 } from './uuid.js';
@@ -87,7 +88,7 @@ export class ArchiveDialog {
     const input = new api.ChangeInput(project, new api.ChangeRequest(new api.RequestId(uuidV4(crypto)),
       [new api.Mutation_Archive(preview.members.map(item => new api.ItemRevision(item.id, item.revision)))], [], 'Browser archive of previewed terminal items'));
     panel.append(element('p', 'Confirmation uses these exact revisions. If any selected item changed or cannot be archived, the entire operation is rejected.'),
-      button('Confirm archive', () => this.action(generation, async () => {
+      holdButton('Confirm archive', () => this.action(generation, async () => {
         if (generation !== this.generation) return;
         if (this.pending(project).length > 0) throw new Error('Another archival awaits acknowledgement. Reopen this dialog to resolve it first.');
         this.storage.setItem(this.prefix(project) + input.change.request.value, this.encode(input));

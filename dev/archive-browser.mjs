@@ -4,6 +4,7 @@ import {randomUUID} from 'node:crypto';
 import {writeFile} from 'node:fs/promises';
 import {chromium} from 'playwright';
 import {trackProtocol,receivedReply} from './browser-protocol.mjs';
+import {hold as holdControl,HOLD_SETTLE_MS} from './hold.mjs';
 const origin=process.env.CQ_ORIGIN,evidence=process.env.CQ_BROWSER_EVIDENCE;
 const headers={'Authorization':`Bearer ${process.env.CQ_TOKEN}`,'CQ-Session':randomUUID(),'CQ-Protocol-Version':'0.1.0','Content-Type':'application/json'};
 async function call(command){const response=await fetch(origin+'/api/call',{method:'POST',headers,body:JSON.stringify(command)});assert.equal(response.status,200);return response.json();}
@@ -54,10 +55,10 @@ try{
  const direct=await change([{Archive:{members:[{id:retainedRev.id,revision:(await detail(retainedRev.id)).revision}]}}]);assert.match(direct.Failed?.fault.Invalid?.message??'',/Archive excludes T6: related open items G1/);
  cases.push('D68 terminal item with an open related item is kept out of the selection and refused by the server');
  await change([{Replace:{id:ids[1],expected:{value:'1'},draft:{...cancelled,title:'Edited after preview'}}}]);
- await dialog().getByRole('button',{name:'Confirm archive',exact:true}).click();await dialog().getByText('Archival rejected. Close this dialog and prepare a fresh preview.',{exact:true}).waitFor();
+ await holdControl(page,dialog().getByRole('button',{name:'Confirm archive',exact:true}));await dialog().getByText('Archival rejected. Close this dialog and prepare a fresh preview.',{exact:true}).waitFor();
  assert.equal((await detail(ids[0])).draft.archived,false);assert.equal((await detail(ids[1])).draft.archived,false);cases.push('Stale member rejects whole preview');
  await dialog().getByRole('button',{name:'Close',exact:true}).click();await open();await dialog().getByRole('button',{name:'Confirm archive',exact:true}).waitFor();
- hold=true;await dialog().getByRole('button',{name:'Confirm archive',exact:true}).click();
+ hold=true;await holdControl(page,dialog().getByRole('button',{name:'Confirm archive',exact:true}));
  let timer;try{await Promise.race([captured,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('Missing held archival reply')),6000);})]);}finally{clearTimeout(timer);}
  assert.ok(held.result.Changed);await page.reload();await page.getByText('Connection: ALIVE',{exact:true}).waitFor();await page.getByLabel('Project',{exact:true}).selectOption(other.value);await open();
  assert.equal(await dialog().getByRole('button',{name:'Retry exact archive',exact:true}).count(),0);await dialog().getByRole('button',{name:'Close',exact:true}).click();
@@ -76,7 +77,12 @@ try{
  await open();await dialog().getByRole('button',{name:'Confirm archive',exact:true}).waitFor();
  assert.equal(await dialog().getByRole('table',{name:'Archive selection',exact:true}).locator('tbody tr').count(),512);
  await dialog().getByText(/^Limited preview:/).waitFor();
- await dialog().getByRole('button',{name:'Confirm archive',exact:true}).click();await page.locator('.notification-toast').getByText('Archived 512 items.',{exact:true}).waitFor();
+ await dialog().getByRole('button',{name:'Confirm archive',exact:true}).click();await page.waitForTimeout(HOLD_SETTLE_MS);
+ assert.equal((await detail(bounded[0].id)).draft.archived,false);assert.equal(await dialog().getByRole('button',{name:'Confirm archive',exact:true}).getAttribute('data-hold'),'idle');cases.push('I22 plain click on Confirm archive archives nothing');
+ await dialog().getByRole('button',{name:'Confirm archive',exact:true}).focus();await page.keyboard.down('Space');await dialog().locator('[data-hold=holding]').waitFor();await page.keyboard.press('Escape');
+ assert.equal(await dialog().getByRole('button',{name:'Confirm archive',exact:true}).getAttribute('data-hold'),'idle');await page.keyboard.up('Space');await page.waitForTimeout(HOLD_SETTLE_MS);
+ assert.equal(await dialog().isVisible(),true);assert.equal((await detail(bounded[0].id)).draft.archived,false);cases.push('I22 Escape cancels the hold and keeps the dialog open');
+ await holdControl(page,dialog().getByRole('button',{name:'Confirm archive',exact:true}));await page.locator('.notification-toast').getByText('Archived 512 items.',{exact:true}).waitFor();
  assert.equal((await detail(bounded[0].id)).draft.archived,true);assert.equal((await detail(bounded[512].id)).draft.archived,false);
  cases.push('513-member request rejected; capped 512-member preview and transport acknowledgement succeed without touching the undisplayed item');
  await page.screenshot({path:evidence+'/archive.png',fullPage:true});
