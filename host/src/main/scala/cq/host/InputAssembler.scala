@@ -37,7 +37,9 @@ final class InputAssembler(api: ServerApi, owner: Scope, clock: Clock, operatorR
     claim()
     val members = request.members.map(item)
     val guidance = request.guidance.map(item)
-    val artifacts = request.artifacts.map(reader.read)
+    // A candidate reviewer also receives the revalidation rounds of its subject, which supersede the failed checks of the unchanged result.
+    val amendments = if (request.work == DispatchWork.Reviewer(ReviewerMode.Candidate)) request.previous.toList.flatMap(reader.amendments).map(_.stored) else Nil
+    val artifacts = request.artifacts.map(reader.read) ++ amendments
     val previous = request.previous.map { id =>
       val value = reader.result(id).value
       require(drafts.unchanged(value.request.members, request.members), "Prior result belongs to another assignment revision")

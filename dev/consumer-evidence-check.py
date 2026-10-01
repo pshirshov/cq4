@@ -16,7 +16,7 @@ class ConsumerEvidenceCheck(unittest.TestCase):
         members = [{"id": item, "revision": {"value": "1"}}]
         worker_id, review_id = {"value": "worker"}, {"value": "reviewer"}
         commit = {"value": "a" * 40}
-        check = {"name": "consumer-oracle", "command": ["python", "oracle.py", "python"], "executionMillis": "1000", "retainedOutputBytes": 65536, "attempts": 1}
+        check = {"name": "consumer-oracle", "command": ["python", "oracle.py", "python"], "executionMillis": "1000", "retainedOutputBytes": 65536, "attempts": 1, "revalidations": 0}
         validation = [{"check": check["name"], "state": "Passed", "artifact": {"value": "validation"}}]
         worker = {"attempt": worker_id, "request": {"request": {"value": "worker-request"}, "harness": "Codex", "members": members},
                   "candidate": commit, "report": {"Work": {"members": [{"item": item, "disposition": "CandidateReady"}]}}, "validation": validation}

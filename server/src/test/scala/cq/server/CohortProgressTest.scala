@@ -12,7 +12,7 @@ final class CohortProgressLocal extends AnyWordSpec {
   private def item(number: Long): ItemView = ItemView(Item(id(number), Revision(1),
     ItemDraft("Task", "Required behavior", Set.empty, false, Content.Task(TaskStatus.Ready, List("Acceptance"), None, Nil), Nil),
     1, 1, Provenance(actor, 1, RequestId(UUID.randomUUID()))), Nil)
-  private val checks = List(ValidationCheck("test", List("verify", "first", "second"), 1000, 4096, 1))
+  private val checks = List(ValidationCheck("test", List("verify", "first", "second"), 1000, 4096, 1, 0))
   private val work = DispatchWork.Worker(WorkerMode.Implement)
   private def hash(members: List[ItemView], guidance: List[ItemView], declared: List[ValidationCheck]): String =
     CohortFingerprint(work, members, guidance, Nil, Nil, GitCommit("a" * 40), declared)

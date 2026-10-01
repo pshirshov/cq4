@@ -526,7 +526,7 @@ root data WorkspaceCleanupReceipt {
   live: lst[SessionId] sessions: lst[SessionCleanup]
 }
 
-enum ArtifactKind { Prompt Input Result Transcript Validation Combination Selection Evidence }
+enum ArtifactKind { Prompt Input Result Transcript Validation Combination Selection Evidence Amendment }
 root data ArtifactUpload { project: ProjectId id: ArtifactId attempt: AttemptId kind: ArtifactKind mediaType: str body: str }
 root data ArtifactMetadata { project: ProjectId id: ArtifactId attempt: AttemptId kind: ArtifactKind mediaType: str sha256: str bytes: i32 codePoints: i32 actor: Actor receivedAt: i64 }
 root data ArtifactPage { metadata: ArtifactMetadata offset: i32 next: i32 hasMore: bit text: str }
@@ -545,7 +545,7 @@ root data HarnessSetting {
   providerExtensions: lst[str] providerEnvironment: set[str]
 }
 root data HostLimits { startupMillis: i64 executionMillis: i64 heartbeatMillis: i64 graceMillis: i64 killMillis: i64 retainedOutputBytes: i32 }
-root data ValidationCheck { name: str command: lst[str] executionMillis: i64 retainedOutputBytes: i32 attempts: i32 }
+root data ValidationCheck { name: str command: lst[str] executionMillis: i64 retainedOutputBytes: i32 attempts: i32 revalidations: i32 }
 root data SupervisorSettings { stateRoot: str guardian: str harnesses: lst[HarnessSetting] limits: HostLimits checks: lst[ValidationCheck] evaluation: opt[EvaluationScope] integrationTarget: opt[str] }
 root data GoverningReport { summary: str }
 root data HarnessRoute { harness: Harness model: str provider: str }
@@ -748,6 +748,11 @@ root data ChildExecutionInput { input: ChildInput base: GitCommit checks: lst[Va
 enum ValidationState { Passed Failed Unknown }
 root data ValidationEvidence { check: str state: ValidationState artifact: ArtifactId failures: lst[ArtifactId] }
 root data ValidationObservation { check: ValidationCheck candidate: GitCommit job: JobRecord stdout: ArtifactId stderr: ArtifactId }
+root data ValidationAmendment { result: ArtifactId candidate: GitCommit author: AttemptId round: i32 validation: lst[ValidationEvidence] }
+enum RevalidationPhase { Running Completed Failed }
+root data RevalidationStatus {
+  id: RequestId result: ArtifactId phase: RevalidationPhase amendment: opt[ArtifactId] validation: lst[ValidationEvidence] blocker: opt[str]
+}
 enum DeclaredCheckPhase { Starting Running Publishing Completed Failed Unknown }
 root data DeclaredCheckTicket { parent: AttemptId check: ValidationCheck workspace: WorkspaceSpec fingerprint: str failures: lst[ArtifactId] }
 root data DeclaredCheckStatus { name: str job: AttemptId phase: DeclaredCheckPhase evidence: opt[ValidationEvidence] blocker: opt[str] }
@@ -792,12 +797,14 @@ root adt DispatchCommand {
   data IntegrationStatus { id: IntegrationId waitMillis: i32 }
   data Combine { id: RequestId source: IntegrationId fence: Fence }
   data CombinationStatus { id: RequestId waitMillis: i32 }
+  data Revalidate { id: RequestId result: ArtifactId fence: Fence }
 }
 root adt DispatchReply {
   data Selection { value: CohortDecision }
   data Status { value: DispatchStatus }
   data Integration { value: IntegrationStatus }
   data Combination { value: CombinationStatus }
+  data Revalidation { value: RevalidationStatus }
   data Failed { fault: Fault }
 }
 root adt WorkspaceCommand {

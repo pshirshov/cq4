@@ -72,7 +72,7 @@ def reproduce(checks, command, scenario):
                    "graceMillis": "300", "killMillis": "2000", "retainedOutputBytes": 262144},
         "checks": [{"name": "consumer-content", "command": [sys.executable, "-c",
             "from pathlib import Path; assert Path('consumer.txt').read_text() == 'candidate from isolated worker\\n'"],
-            "executionMillis": "5000", "retainedOutputBytes": 65536, "attempts": 1}],
+            "executionMillis": "5000", "retainedOutputBytes": 65536, "attempts": 1, "revalidations": 0}],
     }))
     request_file = evidence / "request.txt"
     request_file.write_text("Observe claim loss at result publication")

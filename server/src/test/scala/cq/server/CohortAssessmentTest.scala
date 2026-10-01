@@ -10,7 +10,7 @@ import org.scalatest.wordspec.AnyWordSpec
 final class CohortAssessmentLocal extends AnyWordSpec {
   private val project = ProjectId(UUID.randomUUID())
   private val members = (1L to 3L).map(number => ItemRevision(ItemId(project, Ledger.Tasks, number), Revision(1))).toList
-  private val checks = List(ValidationCheck("contract", List("verify"), 1000, 4096, 1))
+  private val checks = List(ValidationCheck("contract", List("verify"), 1000, 4096, 1, 0))
   private def assessment: CohortAssessment = CohortAssessment(CohortCompatibility.Compatible, "Share one parser change",
     "No dependency between members", "All members use the same parser; their acceptance checks remain separate",
     members.map(member => CohortMemberAssessment(member, List(CohortCriterion(0, Set("contract"), "Inspect this member's expected result")))))

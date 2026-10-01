@@ -23,9 +23,9 @@ final class IntegrationRebaseProcess extends SpecZIO with AssertZIO {
   )
   private def uuid: UUID = UUID.randomUUID()
   private val Target = "refs/heads/integration"
-  private val BothSides = ValidationCheck("both-sides", List("sh", "-c", "test -f left.txt && test -f right.txt"), 10000, 65536, 1)
-  private val CandidateOnly = ValidationCheck("candidate-only", List("sh", "-c", "echo target change present >&2; test ! -f left.txt"), 10000, 65536, 1)
-  private val Slow = ValidationCheck("slow", List("sleep", "60"), 90000, 65536, 1)
+  private val BothSides = ValidationCheck("both-sides", List("sh", "-c", "test -f left.txt && test -f right.txt"), 10000, 65536, 1, 0)
+  private val CandidateOnly = ValidationCheck("candidate-only", List("sh", "-c", "echo target change present >&2; test ! -f left.txt"), 10000, 65536, 1, 0)
+  private val Slow = ValidationCheck("slow", List("sleep", "60"), 90000, 65536, 1, 0)
 
   private final class Receiver(application: Application, auth: Authorization, root: Authority, authority: Authority, runtime: Runtime[Any],
     renewals: AtomicInteger) extends ServerApi {
@@ -63,10 +63,11 @@ final class IntegrationRebaseProcess extends SpecZIO with AssertZIO {
   }
 
   /** The integration target advanced from the session base to a commit adding `left.txt`; the reviewed candidate adds `right.txt` on the base.
-    * With `conflict` both also rewrite `tracked.txt`. */
+    * With `conflict` both also rewrite `tracked.txt`. With `revalidated` every check failed at the worker's admission and passed in one
+    * governor-requested revalidation round published before the review. */
   private def fixture(local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO],
     usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO],
-    proposals: ProposalService[IO], checks: List[ValidationCheck], conflict: Boolean)(test: Fixture => Task[Unit]): Task[Unit] = ZIO.scoped {
+    proposals: ProposalService[IO], checks: List[ValidationCheck], conflict: Boolean, revalidated: Boolean)(test: Fixture => Task[Unit]): Task[Unit] = ZIO.scoped {
     val clock = Clock.systemUTC()
     val project = ProjectConfig(ProjectId(uuid), "http://localhost", "Integration rebase")
     val owner = Scope(project.project, Actor("CQ governor", SessionId(uuid), Role.Governor))
@@ -121,17 +122,21 @@ final class IntegrationRebaseProcess extends SpecZIO with AssertZIO {
         local.git(local.source, "update-ref", "refs/cq/candidates/" + workerAttempt.id.value, reviewed.value)
         local.git(local.source, "update-ref", Target, head.value, local.base.value)
       }
-      validation <- ZIO.foreach(checks) { check =>
+      observe = (author: AttemptId, check: ValidationCheck, passed: Boolean) => {
         val job = JobRecord(WorkspaceSpec(owner.project, owner.actor.session, AttemptId(uuid), local.source.toString, reviewed), "fixture", JobTarget.Run,
-          JobPhase.Settled, Some(JobExit(Some(0), None, StopReason.Exited, 0, 0, true, false)), None, 1, 1000, 1001)
-        artifacts.upload(collector, ArtifactUpload(owner.project, ArtifactId(uuid), workerAttempt.id, ArtifactKind.Validation, "application/json",
+          JobPhase.Settled, Some(JobExit(Some(if (passed) 0 else 1), None, StopReason.Exited, 0, 0, true, false)), None, 1, 1000, 1001)
+        artifacts.upload(collector, ArtifactUpload(owner.project, ArtifactId(uuid), author, ArtifactKind.Validation, "application/json",
           Wire.encode(ValidationObservation_JsonCodec, ValidationObservation(check, reviewed, job, ArtifactId(uuid), ArtifactId(uuid)))))
-          .map(metadata => ValidationEvidence(check.name, ValidationState.Passed, metadata.id, Nil))
+          .map(metadata => ValidationEvidence(check.name, if (passed) ValidationState.Passed else ValidationState.Failed, metadata.id, Nil))
       }
+      validation <- ZIO.foreach(checks)(observe(workerAttempt.id, _, !revalidated))
       request = DispatchRequest(RequestId(uuid), DispatchWork.Worker(WorkerMode.Implement), Harness.Codex, created.items, Nil, Nil, None, claim.fence, limits)
       worker = ChildResult(workerAttempt.id, request, local.base, Some(reviewed),
         ChildReport.Work(created.items.map(ref => WorkMember(ref.id, WorkDisposition.CandidateReady, "Ready", Nil))), validation, RetainedEvidence(Nil, Nil))
       workerArtifact <- publish(worker)
+      _ <- ZIO.when(revalidated)(ZIO.foreach(checks)(observe(governor.id, _, true)).flatMap(round => artifacts.upload(collector, ArtifactUpload(owner.project,
+        IntegrationValidation.amendmentId(workerArtifact, 1), governor.id, ArtifactKind.Amendment, "application/json",
+        Wire.encode(ValidationAmendment_JsonCodec, ValidationAmendment(workerArtifact, reviewed, governor.id, 1, round))))))
       reviewAssignment <- usage.assign(collector, workerAssignment.copy(id = AssignmentId(uuid)))
       reviewAttempt <- usage.start(collector, workerAttempt.copy(id = AttemptId(uuid), assignment = reviewAssignment.id, role = Role.Reviewer, phase = UsagePhase.Review))
       review = ChildResult(reviewAttempt.id, request.copy(request = RequestId(uuid), work = DispatchWork.Reviewer(ReviewerMode.Candidate), previous = Some(workerArtifact)),
@@ -163,7 +168,7 @@ final class IntegrationRebaseProcess extends SpecZIO with AssertZIO {
     "rebase the reviewed candidate, rerun the configured check on the rebased commit and record it without a child attempt" in {
       (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
         artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
-      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, List(BothSides), false) { f => for {
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, List(BothSides), false, false) { f => for {
         attemptsBefore <- usage.attempts(f.owner, UsageFilter.SessionOnly(f.owner.actor.session), None, None, 100)
         governing <- ZIO.attemptBlocking {
           Files.writeString(local.source.resolve("staged.txt"), "governing staged\n")
@@ -220,8 +225,8 @@ final class IntegrationRebaseProcess extends SpecZIO with AssertZIO {
         artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
       val counter = local.directory.resolve("flaky-" + uuid)
       val flaky = ValidationCheck("flaky", List("sh", "-c",
-        s"test -f left.txt && test -f right.txt || exit 2; n=$$(cat $counter 2>/dev/null || echo 0); echo $$((n + 1)) > $counter; test $$n -ge 1"), 10000, 65536, 2)
-      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, List(flaky), false) { f => for {
+        s"test -f left.txt && test -f right.txt || exit 2; n=$$(cat $counter 2>/dev/null || echo 0); echo $$((n + 1)) > $counter; test $$n -ge 1"), 10000, 65536, 2, 0)
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, List(flaky), false, false) { f => for {
         ready <- f.prepare
         _ <- ZIO.attempt(assert(ready.phase == IntegrationPhase.Ready && ready.blocker.isEmpty &&
           ready.preview.exists(_.rebase == RebaseOutcome.Applied(f.reviewed)), ready.toString))
@@ -246,10 +251,34 @@ final class IntegrationRebaseProcess extends SpecZIO with AssertZIO {
       } yield () }
     }
 
+    "I19: rebase and integrate a reviewed candidate whose failed check passed on a governor-requested revalidation" in {
+      (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, List(BothSides.copy(revalidations = 1)), false, true) { f => for {
+        ready <- f.prepare
+        _ <- ZIO.attempt(assert(ready.phase == IntegrationPhase.Ready && ready.blocker.isEmpty &&
+          ready.preview.exists(_.rebase == RebaseOutcome.Applied(f.reviewed)), ready.toString))
+        recorded <- f.integrate(ready.id)
+        record <- integrations.get(f.owner, ready.id)
+        worker <- text(artifacts, f.owner, record.intent.worker).map(Wire.decode(ChildResult_JsonCodec, _))
+        task <- ledger.get(f.owner, f.members.head.id).map(_.item.draft.content.asInstanceOf[Content.Task])
+        _ <- ZIO.attempt {
+          val cited = task.validation.takeRight(2)
+          println(s"Rebase of a revalidated candidate: ${recorded.phase} worker=${worker.validation} citations=${cited.map(_.citations)}")
+          assert(recorded.phase == IntegrationPhase.Recorded && f.target == ready.preview.get.candidate, recorded.toString)
+          // The admitted worker result still records the failure; the amendment and that failure are cited beside the passing observations.
+          assert(worker.validation.map(_.state) == List(ValidationState.Failed))
+          assert(cited.last.citations == List(Citation.Artifact(IntegrationValidation.amendmentId(record.intent.worker, 1)), Citation.Artifact(worker.validation.head.artifact)))
+          assert(cited.head.citations.contains(Citation.Artifact(record.intent.rebase.get.validation.head.artifact)) &&
+            !cited.head.citations.contains(Citation.Artifact(worker.validation.head.artifact)))
+        }
+      } yield () }
+    }
+
     "record NotApplied when the target advances again after the rebase, and rebase again under a new identity" in {
       (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
         artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
-      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, List(BothSides), false) { f => for {
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, List(BothSides), false, false) { f => for {
         first <- f.prepare
         _ <- assertIO(first.preview.exists(_.rebase == RebaseOutcome.Applied(f.reviewed)))
         further <- ZIO.attemptBlocking {
@@ -275,7 +304,7 @@ final class IntegrationRebaseProcess extends SpecZIO with AssertZIO {
     "freeze the reviewed candidate with a Conflicted preview when the merge conflicts, so Integrate records NotApplied" in {
       (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
         artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
-      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, List(BothSides), true) { f => for {
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, List(BothSides), true, false) { f => for {
         ready <- f.prepare
         _ <- ZIO.attemptBlocking {
           println(s"Conflicting preparation: $ready")
@@ -295,7 +324,7 @@ final class IntegrationRebaseProcess extends SpecZIO with AssertZIO {
     "freeze the reviewed candidate with a ChecksFailed preview and the failing evidence when a configured check fails on the rebased commit" in {
       (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
         artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
-      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, List(BothSides, CandidateOnly), false) { f => for {
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, List(BothSides, CandidateOnly), false, false) { f => for {
         ready <- f.prepare
         evidence = ready.preview.get.rebase match { case RebaseOutcome.ChecksFailed(_, validation) => validation; case other => fail(s"Unexpected outcome $other") }
         observation <- text(artifacts, f.owner, evidence.last.artifact).map(Wire.decode(ValidationObservation_JsonCodec, _))
@@ -319,14 +348,14 @@ final class IntegrationRebaseProcess extends SpecZIO with AssertZIO {
     "refuse the host rebase without configured checks, leaving the reviewed candidate to Combine" in {
       (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
         artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
-      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, Nil, false)(
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, Nil, false, false)(
         refused(_, "No configured check would verify the rebased commit"))
     }
 
     "refuse the host rebase in a repository that defines a merge driver, leaving the reviewed candidate to Combine" in {
       (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
         artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
-      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, List(BothSides), false) { f =>
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, List(BothSides), false, false) { f =>
         ZIO.attemptBlocking(local.git(local.source, "config", "merge.fixture.driver", "true")) *>
           refused(f, "Host rebase refuses repository-defined merge drivers")
       }
@@ -335,7 +364,7 @@ final class IntegrationRebaseProcess extends SpecZIO with AssertZIO {
     "stop a running check and fail the preparation when the claim is lost" in {
       (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
         artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
-      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, List(Slow), false) { f =>
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, List(Slow), false, false) { f =>
         val id = IntegrationId(uuid)
         for {
           _ <- f.controller.prepare(IntegrationTicket(id, f.reviewer))
@@ -356,7 +385,7 @@ final class IntegrationRebaseProcess extends SpecZIO with AssertZIO {
     "renew the claim while a check runs and cancel the check on shutdown" in {
       (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
         artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
-      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, List(Slow), false) { f =>
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, List(Slow), false, false) { f =>
         val id = IntegrationId(uuid)
         for {
           _ <- f.controller.prepare(IntegrationTicket(id, f.reviewer))

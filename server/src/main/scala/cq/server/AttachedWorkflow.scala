@@ -7,7 +7,7 @@ import zio.{Task, ZIO}
 
 final class AttachedWorkflow(config: SupervisorConfig, authority: SupervisorAuthority, assets: WorkflowAssets, execution: WorkflowExecution,
   requirements: OperatorRequirements, dispatch: DispatchController, integrations: IntegrationController, combinations: CombinationController,
-  driver: AttachedDriver) {
+  revalidations: RevalidationController, driver: AttachedDriver) {
   private val MaxActivations = 64
   // Instructions plus a session request of up to 64 KiB (the gateway bound) no longer fit the former 64 KiB record.
   private val MaxActivationBytes = 131072
@@ -30,7 +30,7 @@ final class AttachedWorkflow(config: SupervisorConfig, authority: SupervisorAuth
         active.filter(value => value.id == run && value.cycle.contains(cycle))
           .getOrElse(throw DomainFailure(Fault.Conflict("The resumed driver run is not this session's active workflow")))
       case started =>
-        require(dispatch.quiescent && integrations.quiescent && combinations.quiescent,
+        require(dispatch.quiescent && integrations.quiescent && combinations.quiescent && revalidations.quiescent,
           "Settle active child/check/integration/combination work before changing workflow")
         require(activations.size < MaxActivations, "Session workflow activation limit reached")
         val cycle = started match {

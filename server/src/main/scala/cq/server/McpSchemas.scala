@@ -9,6 +9,11 @@ import java.nio.charset.StandardCharsets.UTF_8
 final case class McpTool(name: String, description: String, inputType: String, results: Set[String], writes: Boolean,
   decode: Json => Either[Throwable, Command])
 
+object McpSchemas {
+  /** Dispatch guidance every governor receives with the tool rather than in its bounded system instructions. */
+  val DispatchFollowUp: String = " After Combine is Ready, dispatch Worker ResolveConflict with the Ready plan in artifacts, its worker as previous and exact preview members/fence; obtain fresh validation and Reviewer from the new worker handle, omitting the plan from reviewer artifacts; integrate with a fresh ID. For PublicationPending, replay identical Combine or cq job upload. Revalidate reruns the failed configured checks of an admitted worker result on its exact candidate, within each check's configured rounds; repeat its ID to poll. Use it when the retained output shows an intermittent failure rather than a candidate defect; otherwise send the result to a worker."
+}
+
 final class McpSchemas {
   private val definitions = {
     val stream = Option(getClass.getResourceAsStream("/cq-schemas.json")).getOrElse(throw new IllegalStateException("Missing generated schemas"))
@@ -128,7 +133,7 @@ final class McpSchemas {
     List(local("session", "SessionCommand", "SessionReply",
       "First call Context for project, routes, limits, governing instructions and complete argument guide. Then Workflow with a fresh id and typed scope before dispatch; token is null unless the invocation carries a CQ driver --start-token or --resume-token, which you pass unchanged. An identical retry returns its original receipt without reactivating a superseded workflow. Context identifies the active workflow. Bind presents the token a CQ drive command printed; Driver reads this session's driver status. Neither starts nor parks a driver."),
       local("dispatch", "DispatchCommand", "DispatchReply",
-        s"Select bounded cohorts, claim one complete choice, then StartChoice by ID, harness and fence. Up to ${DispatchController.MaxActiveChildren} children with disjoint members may run at once. Poll compact Status or Cancel; Status carries the child's workspace admission and retained directory. Direct Start is unavailable. Prepare/apply reviewed integration; Combine a NotApplied integration and poll CombinationStatus. Forward handles; full child prompts/results stay outside your context.")) ++ tools.map(advertised)
+        s"Select bounded cohorts, claim one complete choice, then StartChoice by ID, harness and fence. Up to ${DispatchController.MaxActiveChildren} children with disjoint members may run at once. Poll compact Status or Cancel; Status carries the child's workspace admission and retained directory. Direct Start is unavailable. Prepare/apply reviewed integration; Combine a NotApplied integration and poll CombinationStatus. Forward handles; full child prompts/results stay outside your context." + McpSchemas.DispatchFollowUp)) ++ tools.map(advertised)
   }
 
   private def argumentGuide(inputs: List[(String, Json)]): String = {

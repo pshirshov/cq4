@@ -97,8 +97,17 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
           entry.check()
           val ticket = entry.ticket
           val profile = SupervisorConfig.profile(ticket.profile)
-          if (ticket.request.work == DispatchWork.Reviewer(ReviewerMode.Candidate))
+          // A candidate reviewer inherits the worker's validation as its revalidation rounds left it; the worker result itself is unchanged.
+          val inherited = if (ticket.request.work != DispatchWork.Reviewer(ReviewerMode.Candidate)) Nil else {
             ReviewerValidation.inventory(input.previous.toList.flatMap(_.validation), config.settings.checks)
+            val subject = ticket.request.previous.get
+            val reader = new ArtifactReader(command => authority.governor.call(command) match {
+              case Result.Failed(fault) => throw DomainFailure(fault)
+              case value => value
+            }, config.project.project)
+            IntegrationValidation.effective(config.project.project, config.owner.actor.session, subject, input.previous.get, config.settings.checks,
+              reader.amendments(subject)).current
+          }
           SupervisorConfig.verifyProfile(config, profile)
           val combination = if (input.artifacts.exists(_.metadata.kind == ArtifactKind.Combination)) {
             val target = config.settings.integrationTarget.getOrElse(throw new IllegalArgumentException("No integration target configured"))
@@ -129,9 +138,9 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
             ArtifactUpload(config.project.project, NativeArtifacts.id(ticket.attempt.id, "prompt"), ticket.attempt.id, ArtifactKind.Prompt, "text/markdown", invocation.system))
           queue.enqueue(1, DeliveryBatch(artifacts.map(HostDelivery.Artifact.apply)))
           queue.flush(authority.collector)
-          (base, JobCommand(launched.arguments, launched.environment, body, SupervisorConfig.limits(ticket.request.limits)), combination)
+          (base, JobCommand(launched.arguments, launched.environment, body, SupervisorConfig.limits(ticket.request.limits)), combination, inherited)
         }
-        (base, command, combination) = prepared
+        (base, command, combination, inherited) = prepared
         _ <- ZIO.succeed {
           if (entry.ticket.request.work == DispatchWork.Reviewer(ReviewerMode.Candidate))
             entry.installChecks(new ReviewerChecks(entry, base, config, authority.collector, jobs))
@@ -184,7 +193,7 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
             validate(entry, candidate.get, check, index, trace)
           }
         } else if (entry.ticket.request.work == DispatchWork.Reviewer(ReviewerMode.Candidate)) ZIO.succeed {
-          ReviewerValidation.overlay(input.previous.toList.flatMap(_.validation), checks.evidence)
+          ReviewerValidation.overlay(inherited, checks.evidence)
         }
         else ZIO.succeed(Nil)
         stored <- ZIO.attemptBlocking {

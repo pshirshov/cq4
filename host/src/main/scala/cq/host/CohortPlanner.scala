@@ -76,7 +76,9 @@ final class CohortPlanner(api: ServerApi, owner: Scope, bases: ExecutionBase, ch
     val reader = new ArtifactReader(call, owner.project)
     val guidance = details(call, request.guidance)
     require(guidance.omitted.isEmpty, "Cohort guidance exceeds its content budget")
-    val artifacts = request.artifacts.map(reader.read)
+    // As input assembly does: a candidate review's operative input includes its subject's revalidation rounds, so a round changes it.
+    val amendments = if (request.work == DispatchWork.Reviewer(ReviewerMode.Candidate)) request.previous.toList.flatMap(reader.amendments).map(_.stored) else Nil
+    val artifacts = request.artifacts.map(reader.read) ++ amendments
     val results = artifacts.filter(_.metadata.kind == ArtifactKind.Result).map(value => reader.result(value.metadata.id))
     val previous = request.previous.map(reader.result)
     val sources = (results ++ previous).distinct

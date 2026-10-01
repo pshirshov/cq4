@@ -18,7 +18,7 @@ object AgentExamples {
   private val Base = GitCommit("3f2a9c1d5e7b8a6f4c2d1e0f9a8b7c6d5e4f3a2b")
   private val Candidate = GitCommit("a81c4e2f6b9d0c3e5f7a1b2c4d6e8f0a9b7c5d3e")
   private val Limits = HostLimits(10000, 3600000, 2000, 1000, 3000, 2097152)
-  private val UnitCheck = ValidationCheck("unit", List("python3", "-m", "pytest", "-q"), 600000, 1048576, 1)
+  private val UnitCheck = ValidationCheck("unit", List("python3", "-m", "pytest", "-q"), 600000, 1048576, 1, 0)
   private val Requirements = "Demonstrate each acceptance criterion with a failing-then-passing test. Do not change the output for valid names."
 
   private def id(ledger: Ledger, number: Long): ItemId = ItemId(Project, ledger, number)

@@ -51,7 +51,7 @@ final class ReviewerChecksProcess extends SpecZIO with AssertZIO {
     for {
       directory <- ZIO.attemptBlocking(Files.createTempDirectory(local.directory, "reviewer-checks-"))
       settings = SupervisorSettings(directory.toString, guardian.binary.toString, List(profile), limits,
-        scripts.map { case (name, script) => ValidationCheck(name, List("python3", "-c", script), 10000, 65536, attempts) }, None, None)
+        scripts.map { case (name, script) => ValidationCheck(name, List("python3", "-c", script), 10000, 65536, attempts, 0) }, None, None)
       run = SupervisorRun(project, assignment, governor, profile.version, local.source.toString, local.base, SessionOwnership.Managed)
       config = SupervisorConfig(settings, project, SupervisorConfig.profile(profile), SupervisorConfig.limits(limits), run, directory, "", None, guardian.environment)
       failCancellation = new AtomicBoolean(false)

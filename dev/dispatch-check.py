@@ -41,7 +41,7 @@ def main():
             "limits": {"startupMillis": "5000", "executionMillis": "90000", "heartbeatMillis": "1000",
                        "graceMillis": "300", "killMillis": "2000", "retainedOutputBytes": 262144},
             "checks": [{"name": "consumer-content", "command": [sys.executable, "-c", "from pathlib import Path; assert Path('consumer.txt').read_text() == 'candidate from isolated worker\\n'; Path('check-private').write_text('isolated check')"],
-                        "executionMillis": "5000", "retainedOutputBytes": 65536, "attempts": 1}],
+                        "executionMillis": "5000", "retainedOutputBytes": 65536, "attempts": 1, "revalidations": 0}],
         }))
         source = root / "request.txt"
         source.write_text("Run the worker/reviewer dispatch fixture")
@@ -312,6 +312,63 @@ def main():
         assert integration_traffic and max(len(json.dumps(value["reply"]).encode()) for value in integration_traffic) < 4096
         print(json.dumps({"integration": result, "session": integrated["session"], "maxIntegrationReplyBytes": max(len(json.dumps(value["reply"]).encode()) for value in integration_traffic)}))
         subprocess.run(["git", "-C", str(repository), "update-ref", "refs/heads/integration", original_head, preview["candidate"]["value"]], check=True)
+
+        # I19: a check that failed at admission passes on a governor-requested revalidation of the unchanged result,
+        # which is then reviewed and integrated; the Task evidence cites the original failure and the round.
+        integrating_settings = settings.read_text()
+        counter = root / "revalidated-check-count"
+        configured = json.loads(integrating_settings)
+        configured["checks"][0].update(command=[sys.executable, "-c", counting(counter, 1)], revalidations=1)
+        settings.write_text(json.dumps(configured))
+        source.write_text("revalidate-and-integrate")
+        revalidated = json.loads(run(["run", "codex", "--settings", str(settings), "--input", str(source)]))
+        revalidated_session = Path(revalidated["directory"])
+        events = [json.loads(line) for line in (revalidated_session / "payload" / revalidated["attempt"]["value"] / "stdout").read_text().splitlines()]
+        completed, = next(value for value in events if value.get("type") == "fixture.revalidation")["rounds"]
+        worked = json.loads((child(revalidated_session, "Worker") / "publication.json").read_text())["result"]
+        admitted, = worked["validation"]
+        assert admitted["state"] == "Failed" and json.loads((child(revalidated_session, "Worker") / "receipt.json").read_text())["counts"]["validationFailed"] == 1
+
+        def artifact_text(handle):
+            return request("/api/call", {"Read": {"input": {"project": project, "selection": {"ArtifactText": {
+                "id": handle, "offset": 0, "limit": 8192}}}}}, environment["CQ_TOKEN"])["ArtifactText"]["page"]
+
+        amendment_page = artifact_text(completed["amendment"])
+        amendment = json.loads(amendment_page["text"])
+        assert amendment_page["metadata"]["kind"] == "Amendment" and amendment_page["metadata"]["attempt"] == revalidated["attempt"], amendment_page["metadata"]
+        assert amendment["result"] == completed["result"] and amendment["round"] == 1 and amendment["candidate"] == worked["candidate"], amendment
+        assert amendment["author"] == revalidated["attempt"] and amendment["validation"] == completed["validation"], amendment
+        rerun, = amendment["validation"]
+        assert rerun["state"] == "Passed" and rerun["artifact"] != admitted["artifact"], rerun
+        observation = json.loads(artifact_text(rerun["artifact"])["text"])
+        assert observation["candidate"] == worked["candidate"] and observation["job"]["workspace"]["base"] == worked["candidate"], observation
+        # The admitted result is unchanged on the server as well.
+        assert json.loads(artifact_text(completed["result"])["text"])["validation"] == [admitted]
+        integration = next(value for value in events if value.get("type") == "fixture.integration")
+        established, superseded = integration["item"]["draft"]["content"]["Task"]["validation"][-2:]
+        assert {"Artifact": {"id": rerun["artifact"]}} in established["citations"] and {"Artifact": {"id": admitted["artifact"]}} not in established["citations"]
+        assert superseded["citations"] == [{"Artifact": {"id": completed["amendment"]}}, {"Artifact": {"id": admitted["artifact"]}}], superseded
+        landed = integration["recorded"]["preview"]["candidate"]["value"]
+        assert subprocess.check_output(["git", "-C", str(repository), "rev-parse", "refs/heads/integration"], text=True).strip() == landed
+        # Admission (failed), the revalidation round (passed) and the reviewer's own run.
+        assert counter.read_text() == "3", counter.read_text()
+        print(json.dumps({"revalidatedIntegration": {"round": completed, "citations": superseded["citations"]}, "session": revalidated["session"], "executions": 3}))
+        subprocess.run(["git", "-C", str(repository), "update-ref", "refs/heads/integration", original_head, landed], check=True)
+
+        # I19: the bound. A check that keeps failing uses its one allowed round; the next request is refused and runs nothing.
+        counter = root / "bounded-check-count"
+        configured["checks"][0].update(command=[sys.executable, "-c", counting(counter, 100)], revalidations=1)
+        settings.write_text(json.dumps(configured))
+        source.write_text("revalidate-bound")
+        bounded = json.loads(run(["run", "codex", "--settings", str(settings), "--input", str(source)]))
+        bounded_session = Path(bounded["directory"])
+        events = [json.loads(line) for line in (bounded_session / "payload" / bounded["attempt"]["value"] / "stdout").read_text().splitlines()]
+        exhausted, = next(value for value in events if value.get("type") == "fixture.revalidation")["rounds"]
+        assert exhausted["phase"] == "Completed" and [value["state"] for value in exhausted["validation"]] == ["Failed"], exhausted
+        assert len(list((bounded_session / "children").iterdir())) == 1 and counter.read_text() == "2", counter.read_text()
+        print(json.dumps({"revalidationBound": exhausted, "session": bounded["session"], "executions": 2}))
+        settings.write_text(integrating_settings)
+        source.write_text("integrate-reviewed-candidate")
         subprocess.run(["git", "-C", str(repository), "switch", "integration"], check=True)
         (repository / "governing.txt").write_text("unstaged over staged governing work\n")
         preload = root / "integration-stall.so"

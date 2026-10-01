@@ -132,6 +132,21 @@ final class DispatchController(config: SupervisorConfig, runner: ChildRunner, jo
   }
   def quiescent: Boolean = synchronized(entries.values.forall(value => DispatchController.terminal(value.status.phase)))
 
+  /** A result's checks are rerun only while no child runs on its members and no later worker result for them exists. */
+  def revalidatable(result: ChildResult): Unit = synchronized {
+    val members = result.request.members.map(_.id).toSet
+    val sharing = entries.values.filter(_.ticket.request.members.exists(reference => members(reference.id))).toList
+    val active = sharing.filter(entry => !DispatchController.terminal(entry.status.phase)).flatMap(_.ticket.request.members.map(_.id)).filter(members)
+      .distinct.sortBy(LedgerPolicy.key)
+    if (active.nonEmpty)
+      throw DomainFailure(Fault.Conflict(s"An active child covers ${active.map(id => LedgerPolicy.prefix(id.ledger) + id.number).mkString(", ")}; poll its status before revalidating"))
+    val own = sharing.find(_.ticket.attempt.id == result.attempt)
+      .getOrElse(throw DomainFailure(Fault.Missing("Result was not produced by a child of this governing session")))
+    if (sharing.exists(entry => (entry ne own) && entry.ticket.attempt.startedAt >= own.ticket.attempt.startedAt && entry.status.result.nonEmpty &&
+      entry.ticket.attempt.role == Role.Worker && entry.ticket.request.work != DispatchWork.Worker(WorkerMode.Probe)))
+      throw DomainFailure(Fault.Conflict("Result is superseded by a later result for the same members"))
+  }
+
   def shutdown: Task[Unit] = for {
     owned <- ZIO.succeed(synchronized { closing = true; entries.values.toList })
     _ <- ZIO.foreachDiscard(owned)(stop(_, "Governing harness ended; stopping its child hierarchy"))

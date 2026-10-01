@@ -116,7 +116,7 @@ def main():
             settings["evaluation"] = json.loads((original / "settings.json").read_text())["evaluation"]
             settings["integrationTarget"] = "refs/heads/integration"
             settings["checks"] = [{"name": "consumer-oracle", "command": [sys.executable, str(root / "dev/consumer-oracle.py"), language],
-                                   "executionMillis": "180000", "retainedOutputBytes": 262144, "attempts": 1}]
+                                   "executionMillis": "180000", "retainedOutputBytes": 262144, "attempts": 1, "revalidations": 0}]
         write(evidence / "settings.json", settings)
         request = ("Begin a new word-frequency consumer project from the specification below. Its implementation language is a genuine user preference and has not been chosen. "
                    "Capture exactly one Idea without a milestone. Claim it and ask a Codex Planner to propose exactly one language-neutral Goal derived from it, preserving the complete specification. "

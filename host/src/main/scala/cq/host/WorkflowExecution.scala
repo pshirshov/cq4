@@ -120,6 +120,12 @@ final class WorkflowExecution(api: ServerApi, project: ProjectId, session: Sessi
           case Result.Integration(record) => members(record.intent.members)
           case _ => throw new IllegalStateException("Workflow integration read returned an unexpected result")
         }
+      case DispatchCommand.Revalidate(_, result, _) =>
+        permit(request match {
+          case WorkflowRequest.Advance(_, through) => within(WorkflowPhase.Work, through)
+          case _ => false
+        }, "revalidation requires advance through work")
+        members(new ArtifactReader(call, project).result(result).value.request.members)
       case _: DispatchCommand.Status | _: DispatchCommand.Cancel | _: DispatchCommand.IntegrationStatus | _: DispatchCommand.CombinationStatus => ()
     }
   }}

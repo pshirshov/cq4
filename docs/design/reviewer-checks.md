@@ -30,12 +30,43 @@ A [host rebase](git-integration.md#host-rebase-onto-an-advanced-target) adds a t
 
 A reviewer is not required to repeat every already observed check by a new execution. The operation supplies independent execution when needed; it cannot waive worker checks or hide a requested failure. Plan/Audit reviewers inspect evidence by handle and use Candidate mode when fresh executable verification of a code candidate is required.
 
+## Governor-requested revalidation
+
+Automatic reruns ([intermittent checks](local-dispatch.md#intermittent-checks)) end with the worker's result: once admitted, a `ChildResult` and its `validation` never change. A check that still failed there used to cost a worker pass even when the failure was not the candidate's. `dispatch Revalidate { id, result, fence }` lets the governor ask the host to run the failed checks of that admitted result again, on the same commit, a bounded number of times.
+
+**What runs.** The host reruns only the checks whose *effective* state is `Failed`, each with its automatic `attempts` policy, as guardian jobs in fresh disposable workspaces whose base is the result's recorded `candidate` commit (the commit captured under `refs/cq/candidates/<worker attempt>`; the job's `WorkspaceSpec.base`, the observation's `candidate` and its `job.workspace.base` are that commit). The claim is renewed every 20 seconds while the checks run. Observations and output are published under the governing attempt, like the checks of a host rebase, and then one `ValidationAmendment { result, candidate, author, round, validation }` is published as an `Amendment` artifact whose identity is derived from the result handle and the round number. No journal exists besides that artifact: a round interrupted before its amendment is published leaves nothing and consumes nothing.
+
+**Effective validation.** The effective validation of a result is its admitted evidence with each check replaced by that check's latest amendment round. Every consumer derives it from the result and its published rounds; nothing is rewritten:
+
+- A candidate reviewer inherits the effective evidence, receives the amendment artifacts among its input artifacts next to the unchanged prior result, and its installed instructions say that a round supersedes the checks it reran. A candidate-review selection includes the rounds in its operative input, so a review deferred as unchanged is offered again after a round.
+- Host integration preparation (including the [host rebase](git-integration.md#host-rebase-onto-an-advanced-target)) and server reservation require every effective check to pass. A reviewer entry is either one of the worker's entries (as admitted or as any round left it) or the reviewer's own fresh observation; a review that ran before the round therefore still integrates. The observation behind an effective entry is verified as before with the amendment's author as its author.
+- The Task evidence cites the passing observations in its first entry and, in the second, every amendment round and the admission evidence a round replaced (the failed observation and its failed reruns). The runs inside a round are recorded by the cited amendment.
+
+**Bounds and refusals.** `ValidationCheck.revalidations` (0–3, per check) is the number of rounds that may rerun that check for one admitted result; `0` disables revalidation of the check. A round reruns every currently failed check, so a result has at most three rounds. Host and server apply the same rule to the published rounds (`Validation amendment does not record a bounded revalidation of this result's failed checks on its candidate`): round numbers are consecutive from 1, each round is published by the governing session's collector under its author, names this result and its candidate, reran exactly the checks that were failed before it, and no check has more rounds than its declaration allows. `Revalidate` is refused, running nothing, when:
+
+| Condition | Fault |
+| --- | --- |
+| the result is not an admitted result of this session, or is not a worker (Implement or ResolveConflict) result with a candidate | `Invalid`, or `Missing` for an unknown handle |
+| `fence` is not the fence the result was admitted under | `StaleFence: Revalidation requires the claim fence its result was admitted under` |
+| that claim is released, expired or no longer covers the members | the server's claim fault (`StaleFence: Claim released`), or `Invalid: Revalidation claim no longer covers this assignment` |
+| a child of this session is running on any of the members | `Conflict: An active child covers T1; poll its status before revalidating` |
+| a later worker result for any of the members exists in this session | `Conflict: Result is superseded by a later result for the same members` |
+| an effective check is `Unknown` | `Conflict: Check NAME is Unknown; a check whose cleanup is unconfirmed is never rerun` |
+| no effective check is `Failed` | `Conflict: Result has no failed check to revalidate` |
+| a failed check has used its rounds | `Limit: Revalidation limit reached for check NAME: N rounds` |
+| another revalidation of this session is running | `Conflict: A revalidation is running; poll it before starting another` |
+
+The first call with an `id` admits and starts the round and waits up to 20 seconds; repeating the same `id`, `result` and `fence` observes the same round (`Running`, `Completed` with the amendment handle and the effective validation, or `Failed` with a blocker and no amendment). A round whose check fails again is `Completed`: it is recorded and counts. Shutdown cancels a running check and records no round. In a workflow, `Revalidate` requires `advance` through at least `work` and members inside the workflow scope.
+
+**When to use it.** Revalidate when the retained output of the failed check shows a failure of the check's environment (a browser step, a port, a timeout) rather than of the candidate. A failure the candidate caused will fail again and spend a round; send that result to a worker instead. Prefer raising `attempts` for a check that is known to be intermittent, so that it never needs a governor's attention.
+
 ## Verification
 
 - Shared service scenarios cover duplicate calls, unknown names, direct mode/role denial, bound enforcement, immutable candidate/declaration and publication retry.
 - Actual supervised processes prove workspace isolation, check failure despite Accepted review, request polling, cancellation of both live jobs, reviewer exit with a pending check, and hierarchy shutdown.
 - Shared dummy/PostgreSQL integration checks reject foreign reviewer evidence, altered candidate/declaration, missing/extra names and failed observations; both inherited and fresh passing evidence are supported.
 - Recovery after actual supervisor SIGKILL preserves available observations without another check job; lost publication acknowledgements remain idempotent. A check that never committed its job record cannot yield invented Passed/Failed evidence.
+- I19: `ChildRunnerProcess` (automatic reruns; a revalidation round on the recorded candidate commit with the admitted result unchanged, the reviewer inheriting it, the per-check bound and every refusal), `ReviewerChecksProcess` and `SessionDeliveryDummy`/`Postgres` (reruns of declared checks and their recovery), `IntegrationContractDummy`/`Postgres` (failed-run and amendment citations; rounds past the bound, by a foreign author, of another candidate, out of order or still failing are refused by host and server), `IntegrationRebaseProcess` (rerun on the rebased commit; rebase of a revalidated candidate), `CohortSelectionDummy`/`Postgres` (a round changes the review's operative input) and `dev/dispatch-check.py` (fail-then-pass, reviewer rerun, revalidation through integration, the bound).
 - Native role probes verify direct-call denial and permitted reviewer checks for Claude, Codex and Pi during the remaining M4 native evaluation gate.
 
 Independent Astra design review found no fundamental blocker after requiring atomic close/freeze, lifecycle ownership independent of MCP waiting, exact recovery fingerprint binding and the measurable completion criterion above. Required race coverage includes disconnects and reviewer exit versus registration/publication.

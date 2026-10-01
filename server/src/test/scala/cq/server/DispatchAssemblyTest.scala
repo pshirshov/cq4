@@ -104,10 +104,14 @@ abstract class DispatchAssemblyTest extends SpecZIO with AssertZIO {
               denied(execution, DispatchCommand.PrepareIntegration(IntegrationId(UUID.randomUUID()), previous.id))
               denied(execution, DispatchCommand.Integrate(IntegrationId(UUID.randomUUID())))
               denied(execution, DispatchCommand.Combine(requestId, IntegrationId(UUID.randomUUID()), claim.fence))
+              denied(execution, DispatchCommand.Revalidate(RequestId(UUID.randomUUID()), previous.id, claim.fence))
               execution.authorize(DispatchCommand.Status(attempt.id, 0))
               execution.authorize(DispatchCommand.Cancel(attempt.id))
               execution.authorize(DispatchCommand.IntegrationStatus(IntegrationId(UUID.randomUUID()), 0))
             }
+            // I19: revalidation belongs to the work phase and to the workflow's selected members.
+            policy(WorkflowRequest.Advance(Set(member.id), WorkflowPhase.Work)).authorize(DispatchCommand.Revalidate(RequestId(UUID.randomUUID()), previous.id, claim.fence))
+            denied(policy(WorkflowRequest.Advance(Set(guidance.id), WorkflowPhase.Integrate)), DispatchCommand.Revalidate(RequestId(UUID.randomUUID()), previous.id, claim.fence))
             val one = assembler.assemble(request)
             val largeRequest = request.copy(artifacts = List(large.id))
             val two = assembler.assemble(largeRequest)

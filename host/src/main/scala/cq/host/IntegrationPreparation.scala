@@ -56,17 +56,20 @@ final class IntegrationPreparation(api: ServerApi, owner: Scope, repository: Str
       "Integration requires every worker member to be ready")
     require(reviewer.report match { case ChildReport.Review(members, _) => members.forall(_.verdict == ReviewVerdict.Accepted); case _ => false },
       "Integration requires every reviewer member to be accepted")
-    IntegrationValidation.applicable(worker, reviewer, checks).foreach { expected =>
+    val evidence = IntegrationValidation.applicable(IntegrationValidation.effective(owner.project, owner.actor.session, workerId, worker, checks,
+      reader.amendments(workerId)), reviewer)
+    evidence.passing.foreach { expected =>
       val stored = reader.read(expected.evidence.artifact)
       IntegrationValidation.verify(owner.project, owner.actor.session, worker.candidate.get, expected,
         stored.metadata, IntegrationValidation.decode(stored))
-      expected.evidence.failures.map(reader.read).foreach { failed =>
-        IntegrationValidation.verifyFailure(owner.project, owner.actor.session, worker.candidate.get, expected,
-          failed.metadata, IntegrationValidation.decode(failed))
-      }
+    }
+    evidence.failed.foreach { expected =>
+      val stored = reader.read(expected.artifact)
+      IntegrationValidation.verifyFailure(owner.project, owner.actor.session, worker.candidate.get, expected,
+        stored.metadata, IntegrationValidation.decode(stored))
     }
     renew(call, worker)
-    ReviewedCandidate(ticket, workerId, worker, IntegrationValidation.citations(worker, reviewer))
+    ReviewedCandidate(ticket, workerId, worker, evidence.citations)
   }
 
   def renew(reviewed: ReviewedCandidate): Unit = bounded(renew(_, reviewed.worker))

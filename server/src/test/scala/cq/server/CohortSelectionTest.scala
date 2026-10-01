@@ -61,7 +61,11 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
         case Command.Read(ReadInput(_, ReadSelection.Admission(attempt))) => Some(admissions.get(scope, attempt).map(Result.Admission.apply))
         case _ => None
       }
-      read.fold(underlying.call(command))(effect => Unsafe.unsafe { implicit unsafe => runtime.unsafe.run(effect).getOrThrowFiberFailure() })
+      read.fold(underlying.call(command))(effect => Unsafe.unsafe { implicit unsafe => runtime.unsafe.run(effect.either).getOrThrowFiberFailure() } match {
+        case Right(value) => value
+        case Left(DomainFailure(fault)) => Result.Failed(fault)
+        case Left(error) => throw error
+      })
     }
     override def usage(input: HostUsageInput): HostUsageResult = underlying.usage(input)
     override def artifact(input: ArtifactUpload): ArtifactMetadata = underlying.artifact(input)
@@ -75,7 +79,7 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
   private def assessed(ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], count: Int, compatibility: CohortCompatibility): IO[Throwable, Assessed] = {
     val scope = owner
     val collector = scope.copy(actor = scope.actor.copy(subject = "host", role = Role.Collector))
-    val checks = List(ValidationCheck("acceptance", List("verify"), 5000, 4096, 1))
+    val checks = List(ValidationCheck("acceptance", List("verify"), 5000, 4096, 1, 0))
     val base = GitCommit("a" * 40)
     for {
       _ <- ledger.initialize(scope, "Assessment selection")
@@ -260,6 +264,45 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
         revised <- ZIO.attemptBlocking(nested.plan(input.copy(request = RequestId(uuid), artifacts = List(reviews(2).id)), ArtifactId(uuid)))
         _ <- assertIO(repeated.evidence.decision.choices.isEmpty)
         _ <- assertIO(revised.evidence.decision.choices.size == 1)
+      } yield ()
+    }
+
+    "I19: offer a candidate review again once a revalidation round amends its subject, with the round in its operative input" in {
+      (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO]) => for {
+        runtime <- ZIO.runtime[Any]
+        fixture <- assessed(ledger, usage, artifacts, admissions, 2, CohortCompatibility.Compatible)
+        candidate = GitCommit("b" * 40)
+        observations <- ZIO.foreach(List(("failed", 1), ("passed", 0))) { (name, code) =>
+          val (out, uploads) = NativeArtifacts.binary(fixture.scope.project, fixture.parent, name, "text/plain", name.getBytes(java.nio.charset.StandardCharsets.UTF_8))
+          val spec = WorkspaceSpec(fixture.scope.project, fixture.scope.actor.session, AttemptId(uuid), "/consumer", candidate)
+          val job = JobRecord(spec, uuid.toString, JobTarget.Run, JobPhase.Settled, Some(JobExit(Some(code), None, StopReason.Exited, name.length.toLong, name.length.toLong, true, false)), None, 1, 1, 2)
+          ZIO.foreachDiscard(uploads)(artifacts.upload(fixture.collector, _)) *>
+            artifacts.upload(fixture.collector, ArtifactUpload(fixture.scope.project, ArtifactId(uuid), fixture.parent, ArtifactKind.Validation,
+              "application/json", Wire.encode(ValidationObservation_JsonCodec, ValidationObservation(fixture.checks.head, candidate, job, out, out)))).map(_.id)
+        }
+        worker <- publish(fixture, DispatchWork.Worker(WorkerMode.Implement), ChildReport.Work(fixture.members.map(ref =>
+          WorkMember(ref.id, WorkDisposition.CandidateReady, "Implemented", Nil))), None,
+          List(ValidationEvidence(fixture.checks.head.name, ValidationState.Failed, observations.head, Nil)), ledger, usage, artifacts, admissions)
+        reads = new EvidenceApi(api(ledger, fixture.scope, runtime), artifacts, admissions, fixture.scope, runtime)
+        progress = new CohortProgress
+        planner = new CohortPlanner(reads, fixture.scope, fixed(fixture.base), fixture.checks, progress, new OperatorRequirements(""))
+        input = request(fixture.members.map(_.id).toSet, DispatchWork.Reviewer(ReviewerMode.Candidate)).copy(previous = Some(worker.id))
+        first <- ZIO.attemptBlocking(planner.plan(input, ArtifactId(uuid)))
+        _ <- ZIO.attempt(assert(first.evidence.decision.choices.size == 1, first.evidence.toString))
+        _ <- ZIO.attempt(progress.started(first.fingerprints(first.evidence.decision.choices.head.id)))
+        unchanged <- ZIO.attemptBlocking(planner.plan(input.copy(request = RequestId(uuid)), ArtifactId(uuid)))
+        _ <- ZIO.attempt(assert(unchanged.evidence.decision.choices.isEmpty && unchanged.evidence.considered.exists(_.reason == CohortReason.Deferred), unchanged.evidence.toString))
+        amendment = ValidationAmendment(worker.id, candidate, fixture.parent, 1, List(ValidationEvidence(fixture.checks.head.name, ValidationState.Passed, observations.last, Nil)))
+        _ <- artifacts.upload(fixture.collector, ArtifactUpload(fixture.scope.project, IntegrationValidation.amendmentId(worker.id, 1), fixture.parent,
+          ArtifactKind.Amendment, "application/json", Wire.encode(ValidationAmendment_JsonCodec, amendment)))
+        amended <- ZIO.attemptBlocking(planner.plan(input.copy(request = RequestId(uuid)), ArtifactId(uuid)))
+        _ <- ZIO.attempt {
+          println(s"Review after revalidation: ${amended.evidence.decision.choices.map(_.reason)} considered=${amended.evidence.considered.map(_.reason)}")
+          assert(amended.evidence.decision.choices.size == 1 && amended.evidence.decision.choices.head.previous.contains(worker.id) &&
+            amended.evidence.decision.choices.head.work == DispatchWork.Reviewer(ReviewerMode.Candidate), amended.evidence.toString)
+          assert(amended.fingerprints(amended.evidence.decision.choices.head.id) != first.fingerprints(first.evidence.decision.choices.head.id))
+        }
+        _ <- ZIO.attemptBlocking(planner.verify(input, amended.evidence.decision.choices.head, amended.fingerprints(amended.evidence.decision.choices.head.id)))
       } yield ()
     }
 
