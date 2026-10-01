@@ -7,7 +7,7 @@ final case class WriteAttribution(key: DriverKey, cycle: CycleId, parent: Lineag
 
 // The write-time boundary of driven cycles. Each call runs inside the writing transaction, so a rejection rolls the ledger back.
 final class DriverBoundary(registry: DriverRegistry, planner: WorksetPlanner) {
-  import DriverPolicy.references
+  import DriverPolicy.{reference, references}
 
   private def current(project: ProjectId, attribution: WriteAttribution): (DriverRecord, CycleRecord) = {
     val record = registry.get(project, attribution.key).getOrElse(throw new IllegalStateException("Attributed driver disappeared inside its transaction"))
@@ -58,6 +58,20 @@ final class DriverBoundary(registry: DriverRegistry, planner: WorksetPlanner) {
     case _ => false
   })
 
+  private def question(item: Item): Content.Question = item.draft.content match {
+    case value: Content.Question => value
+    case other => throw new IllegalStateException(s"Question ${reference(item.id)} holds ${other.getClass.getSimpleName}")
+  }
+
+  // Whether the applied write made the Question Answered or changed its answer.
+  private def answers(tx: LedgerTransaction, written: ItemRevision): Boolean = {
+    val after = question(tx.get(written.id).getOrElse(throw new IllegalStateException("A written Question disappeared inside its transaction")))
+    val before = if (written.revision == Revision(1)) None
+      else Some(question(tx.historical(written.id, Revision(written.revision.value - 1))
+        .getOrElse(throw new IllegalStateException("A written Question has no previous revision")).item.item))
+    (after.status == QuestionStatus.Answered && !before.exists(_.status == QuestionStatus.Answered)) || after.answer != before.flatMap(_.answer)
+  }
+
   // Admission, before the write is applied: every existing item the request names is in the cycle's stored snapshot or was created by the cycle.
   // The one exception is the milestone of an assignment, which may be any Open milestone.
   def check(tx: LedgerTransaction, attribution: WriteAttribution, request: ChangeRequest, now: Long): Unit = {
@@ -78,6 +92,9 @@ final class DriverBoundary(registry: DriverRegistry, planner: WorksetPlanner) {
     val outside = changed.map(_.id).filterNot(id => cycle.boundary(id) || milestones(id))
     if (outside.nonEmpty)
       registry.fail(record, s"out-of-set change: ${references(outside)} is outside the advanceable set stored for cycle ${cycle.number}", now)
+    // Only a person answers a Question. The refusal leaves the driver on: the operator parks, the answer is recorded, and the drive starts again.
+    val answered = acknowledgement.items.filter(item => item.id.ledger == Ledger.Questions && answers(tx, item)).map(_.id)
+    if (answered.nonEmpty) throw DomainFailure(Fault.Denied(DriverPolicy.answerRefused(answered)))
     if (created.nonEmpty) {
       val selected = try planner.evaluate(tx, record.targets, record.through, record.workset).advanceable.map(_.item.id).toSet catch {
         case DomainFailure(fault) => registry.fail(record, s"the advanceable set cannot be recomputed after the write: $fault", now)

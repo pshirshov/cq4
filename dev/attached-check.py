@@ -190,6 +190,9 @@ def main():
             def change(mutations, fences, denied=False):
                 return driven.tool("change", {"project": project, "change": {"request": identity(), "mutations": mutations, "fences": fences, "reason": "Driven fixture"}}, denied=denied)
             target, outsider = change([{"Create": {"draft": draft}}, {"Create": {"draft": draft}}], [])["Changed"]["ack"]["items"]
+            # A long attached session: more workflow activations than one drive issues directives do not exhaust the host before the drive starts.
+            for _ in range(65):
+                assert driven.tool("session", {"Workflow": {"id": identity(), "request": {"Begin": {"roots": []}}, "operatorRequirements": "Undriven fixture", "token": None}})["Workflow"]["value"]["cycle"] is None
             started = control("UserPromptSubmit", {"Start": {"target": {"Inline": {"targets": [target["id"]], "through": "Explore"}}, "attached": None}})["Started"]
             assert started["status"]["state"] == "Binding" and [member["item"]["id"] for member in started["preview"]["advanceable"]] == [target["id"]], started
             driven.tool("session", {"Bind": {"token": identity()}}, denied=True)

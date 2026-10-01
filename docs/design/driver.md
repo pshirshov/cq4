@@ -33,8 +33,10 @@ The targets and the phase are frozen. Drive-start on a driver that is binding or
 
 A driver turns on only when it is bound to exactly one CQ attached session:
 
-- **Claude Code and Codex:** drive-start leaves the driver `Binding` and mints a single-use bind token valid for ten minutes. The token appears only in that drive-start reply, which the hook returns as context for its own session. `Bind` from an attached session presents the token and binds the caller. An unknown, already used or expired token is `Denied`, and a session already bound to another driver is a `Conflict`.
+- **Claude Code and Codex:** drive-start leaves the driver `Binding` and mints a single-use bind token valid for ten minutes. The token appears only in that drive-start reply, which the hook returns as context for its own session. `Bind` from an attached session presents the token and binds the caller. An unknown, already used or expired token is `Denied`.
 - **Pi:** the extension's attached host supplies its attached session at drive-start, so the driver is on immediately and no token is minted.
+
+An attached session is bound to at most one driver, and the binding follows the key that drives now. A harness can issue a new session key while its attached host process lives on; the drive command then arrives under the new key while the attached session is still bound to the old key's driver. Binding it to the new driver (`Bind`, or a Pi drive-start) parks the old key's driver with reason `Parked` and the detail `Its attached session was bound to the CQ driver of session <new key>`, ends its cycle, and turns the new driver on.
 
 If no session binds, the driver never turns on, and the next continuation query stops it with reason `NotBound`, whose detail names it as a failure.
 
@@ -51,9 +53,12 @@ The query takes the key and returns either a directive (`Continue`) or `Stop`.
 | Binding | `Stop` with `NotBound`; the driver turns off |
 | On, cycle issued but not started | `Stop` with `Failure` (directive not started) |
 | On, cycle started and its run still active | `Continue` with a resume directive |
+| On, cycle started, nothing in flight, work resting on the session | `Continue` with one resume directive for that work, then `Stop` with `Failure` |
 | On, no cycle, or the cycle's run is over | a new cycle decision, below |
 
-A cycle's run is still active while any lineage member registered under it is unsettled: a child attempt, an integration or a combination that has not reached a terminal phase, or a delegated session.
+A cycle's run is still active while a lineage member registered under it is **in flight**: work the attached host is carrying out, which finishes without the session. That is a child attempt that has not reached a terminal phase, an integration that is `Preparing` or `Running`, a combination that is `Preparing`, or a delegated session. Each stop of the session then yields a resume directive.
+
+A member **rests** when it is unsettled but only the session can move it: an integration that is `Ready` (prepared, not applied) or `Pending` (awaiting reconciliation), and a combination whose publication is pending. Resting work does not hold a cycle open indefinitely. When nothing is in flight and some member rests, the query issues one resume directive, so the session can resolve that work inside the cycle that owns it. If the next query finds the same members still resting, the driver stops with `Failure` and the detail `cycle N is held by integration <id>, which only the session can resolve, and a resume directive did not resolve it`. A member the session resumed (it is in flight again) and that comes to rest again earns a new resume directive. A member that reaches a terminal phase is settled and holds nothing.
 
 For a new cycle the query first computes the advanceable set from the frozen targets with `WorksetPlanner.evaluate`. This issue-time snapshot is the only input to the readiness decision, and it is stored with the cycle it creates:
 
@@ -76,10 +81,10 @@ $cq-advance --roots G1,T4 --through work --resume-token 91ab…
 
 Claude Code and Pi receive `/cq:advance`, Codex `$cq-advance`. The roots are the frozen targets in `(ledger, number)` order and the phase is the frozen one. The advance entry point passes the token as `SessionCommand.Workflow.token`; it is `null` in a session without a driver. The token travels only in that field: the attached host refuses, with `Invalid`, an activation whose `operatorRequirements` text contains its own token, because that text is delivered to Planner and Worker children. The refusal comes before the token is presented to the server, so the session can activate again with the token left out of the text.
 
-The attached host asks the server before every new activation (`DriverSession.Activate`):
+The attached host asks the server before every new activation (`DriverSession.Activate`). For a start token, or no token, it first checks its own precondition: no child, check, integration or combination of the session is still active. A refusal there (`Settle active child/check/integration/combination work before changing workflow`) is made before the token is presented, so the token stays unused and the same activation succeeds once the work has settled. The host retains its last 64 activations only to answer a repeated request; the number of activations of one attached session is not limited.
 
 - **Start token.** A run starts only if the token is the pending cycle's unused start token, the caller is the bound session of an on driver, and the request is `Advance` with exactly the cycle's roots and phase. The cycle becomes active and records the run. A retry with the same activation ID returns the same result.
-- **Resume token.** It returns the cycle's existing run and never creates one. It is valid once, for the active cycle, from the bound session, with the same roots and phase. Each resume directive carries a fresh token.
+- **Resume token.** It returns the cycle's existing run and never creates one. It is valid once, for the active cycle, from the bound session, with the same roots and phase. Each resume directive carries a fresh token. If the run the server returns is not the attached host's active workflow, the host holds no record of that run and no resume directive can succeed there: the host reports it (`DriverSession.Fail`), the driver stops with `Failure` and the detail `run <id> of cycle N is not the active workflow of its attached host`, and the activation is refused with that reason.
 - **Rejections.** An omitted token, a start token presented as a resume token or the reverse, an unknown or reused token, altered roots or phase, another workflow (begin, review or upstream) and a caller other than the bound session are all rejected. No run starts, and the driver stops with reason `Failure`.
 
 A session whose driver is off, or that has none, activates exactly as before and receives no cycle.
@@ -109,17 +114,21 @@ Everything else that names or changes a milestone outside the set is rejected as
 
 The snapshot is never recomputed at activation or at write time. An item attached to the targets after the directive was issued is outside that cycle and becomes advanceable in the next one. A descendant created in cycle N is in the snapshot issued for cycle N+1.
 
-Any rejection stops the driver with reason `Failure` and a detail naming the items.
+Any such rejection stops the driver with reason `Failure` and a detail naming the items.
+
+**Questions.** Only a person answers a Question. An attributed write that leaves a Question `Answered` when it was not, or with a different `answer`, is rejected with `Denied`: `The CQ driver never answers Questions: Q3 would be answered by a driven session; park the driver before recording the user's answer`. This holds while a cycle continues on other ready work, and for a Question the write creates. The check runs after the write is applied and before it commits, so nothing is written. Unlike the rejections above it leaves the driver on: the session has not left its set, and the operator parks, has the answer recorded and drives again. Any other change of an in-set Question is admitted.
 
 ## Cycle lineage
 
 The accepted cycle ID is stamped on the advance run: the server records the run in the cycle, and the attached host writes it into the `WorkflowActivation` it stores. A cycle's lineage lists everything that inherits the ID, each entry with its parent and whether it has settled:
 
 - the server adds the Change request, Claim, Proposal and Integration of every attributed write and of every claim the bound session acquires during the cycle;
-- the attached host registers each dispatch Request and child Attempt, each prepared Integration and each Combination when the dispatch tool returns, and settles each when it reaches a terminal phase;
+- the attached host registers each dispatch Request and child Attempt, each prepared Integration and each Combination when the dispatch tool returns. It then follows the member: it reports it as resting (`DriverSession.Rest`) when it comes to rest, registers it again when the host works on it again, and settles it when it reaches a terminal phase;
 - a session delegated under the cycle is registered as a `Session` member and may register further members, including further sessions, beneath itself.
 
 A session other than the bound one is attributed only when its write carries the cycle ID (`DriverSession.Change`) and the session is an unsettled member of that cycle. A write that names an unknown cycle, an ended cycle or a cycle the caller is not part of is rejected; when the cycle's driver is on it stops with reason `Failure`. A cycle holds at most 1,024 lineage members.
+
+The host's lineage calls are made reliable rather than best-effort. A call lost in transit is repeated up to six times with a doubling pause (250 ms at first); a fault the server returns is its answer and is not repeated. If a member cannot be registered, its state on the host cannot be read, or it cannot be settled, the host reports it with `DriverSession.Fail` and the driver stops with `Failure` and a detail naming the member: `attempt <id> of cycle N could not be registered: <cause>` or `… could not be settled: <cause>`. If that report cannot be delivered either, the host logs it; the drive is then bounded only by its directive limit.
 
 ## Status
 
