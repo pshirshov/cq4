@@ -30,37 +30,62 @@ final class DriverBoundary(registry: DriverRegistry, planner: WorksetPlanner) {
       }
     }
 
+  // The Task and the milestone of a membership a Reference adds, in either direction the edge may be written.
+  private def joined(mutation: Mutation): Option[(ItemId, ItemId)] = (mutation match {
+    case Mutation.Reference(source, _, Relation.PartOf, target, _, true) => Some(source -> target)
+    case Mutation.Reference(source, _, Relation.Contains, target, _, true) => Some(target -> source)
+    case _ => None
+  }).filter((task, _) => task.ledger == Ledger.Tasks)
+
+  // The existing milestone a mutation assigns Tasks to. A drive plans Tasks under milestones that workset traversal never selects.
+  private def assigned(mutation: Mutation): Option[ItemId] = mutation match {
+    case Mutation.Produce(_, _, _, milestone) => milestone.collect { case MilestoneRef.Existing(id) => id }
+    case other => joined(other).map((_, milestone) => milestone)
+  }
+
   private def existing(mutation: Mutation): List[ItemId] = mutation match {
     case Mutation.Archive(members) => members.map(_.id)
-    case Mutation.Produce(producer, _, _, milestone) => producer :: milestone.collect { case MilestoneRef.Existing(id) => id }.toList
+    case Mutation.Produce(producer, _, _, _) => List(producer)
     case Mutation.Terminate(roots, _, _) => roots.toList
     case _: Mutation.Create => Nil
     case Mutation.Replace(id, _, _) => List(id)
-    case Mutation.Reference(source, _, _, target, _, _) => List(source, target)
+    case Mutation.Reference(source, _, _, target, _, _) => joined(mutation).fold(List(source, target))((task, _) => List(task))
     case Mutation.Restore(id, _, _, neighbors) => id :: neighbors.map(_.id)
   }
 
+  private def openMilestone(tx: LedgerTransaction, id: ItemId): Boolean = tx.get(id).exists(_.draft.content match {
+    case milestone: Content.Milestone => milestone.status == MilestoneStatus.Open
+    case _ => false
+  })
+
   // Admission, before the write is applied: every existing item the request names is in the cycle's stored snapshot or was created by the cycle.
-  def check(project: ProjectId, attribution: WriteAttribution, request: ChangeRequest, now: Long): Unit = {
-    val (record, cycle) = current(project, attribution)
-    val outside = request.mutations.flatMap(existing).filterNot(cycle.boundary).distinct
+  // The one exception is the milestone of an assignment, which may be any Open milestone.
+  def check(tx: LedgerTransaction, attribution: WriteAttribution, request: ChangeRequest, now: Long): Unit = {
+    val (record, cycle) = current(tx.project.id, attribution)
+    val named = request.mutations.flatMap(existing) ++ request.mutations.flatMap(assigned).filterNot(openMilestone(tx, _))
+    val outside = named.filterNot(cycle.boundary).distinct
     if (outside.nonEmpty)
       registry.fail(record, s"out-of-set change: ${references(outside)} is outside the advanceable set stored for cycle ${cycle.number}", now)
   }
 
   // After the write is applied and before it commits: the items it actually touched are in the boundary, every item it created is selected by
   // roots-bound enumeration of the frozen targets on the resulting state, and the write is stamped with the cycle.
-  def verify(tx: LedgerTransaction, attribution: WriteAttribution, acknowledgement: ChangeAck, stamps: List[LineageMember], now: Long): Unit = {
+  def verify(tx: LedgerTransaction, attribution: WriteAttribution, request: ChangeRequest, acknowledgement: ChangeAck, stamps: List[LineageMember], now: Long): Unit = {
     val (record, cycle) = current(tx.project.id, attribution)
     val (created, changed) = acknowledgement.items.partition(_.revision == Revision(1))
-    val outside = changed.map(_.id).filterNot(cycle.boundary)
+    // A batch changes an item once, so a milestone that passed `check` only as an assignment was revised for its new member alone.
+    val milestones = request.mutations.flatMap(assigned).toSet
+    val outside = changed.map(_.id).filterNot(id => cycle.boundary(id) || milestones(id))
     if (outside.nonEmpty)
       registry.fail(record, s"out-of-set change: ${references(outside)} is outside the advanceable set stored for cycle ${cycle.number}", now)
     if (created.nonEmpty) {
       val selected = try planner.evaluate(tx, record.targets, record.through, record.workset).advanceable.map(_.item.id).toSet catch {
         case DomainFailure(fault) => registry.fail(record, s"the advanceable set cannot be recomputed after the write: $fault", now)
       }
-      val unselected = created.map(_.id).filterNot(selected)
+      val produced = created.map(_.id).filter(selected).toSet
+      // A Milestone created for the Tasks this write produced is reached from them as context, never selected.
+      def planned(id: ItemId): Boolean = id.ledger == Ledger.Milestones && tx.refs(id).exists(ref => ref.relation == Relation.Contains && produced(ref.target))
+      val unselected = created.map(_.id).filterNot(id => selected(id) || planned(id))
       if (unselected.nonEmpty)
         registry.fail(record, s"non-selected creation: ${references(unselected)} is not a selected descendant of ${references(record.targets)}", now)
     }

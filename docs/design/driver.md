@@ -100,6 +100,13 @@ The boundary runs inside the writing transaction, so a rejection leaves the ledg
 2. **After the write, before commit:** every item the write actually changed must satisfy the same rule, and every item it created must be selected by roots-bound enumeration of the frozen targets on the resulting ledger state. A plain Create is therefore rejected; a Produce under an in-set producer is admitted.
 3. **After the cycle:** the next continuation query checks that every item the cycle created is in the recomputed set.
 
+**Milestone assignment.** Work admission requires every Task to belong to a milestone, and workset traversal selects only through `Produces` and `Contains`, so the milestone of a planned Task is context and never a member of the set. A drive therefore assigns Tasks to milestones under one exception to rules 1 and 2:
+
+- A `Produce` from an in-set producer may name an existing milestone outside the set (`MilestoneRef.Existing`), and a `Reference` may add `PartOf` from an in-set Task to one (written either as `PartOf` or as `Contains`). The milestone must be Open. The write adds the membership edge and revises the milestone with an unchanged draft; a batch changes an item once, so no other mutation of that batch can name it.
+- A Milestone created in the same batch that an in-set `Produce` names with `MilestoneRef.Created` is an admitted creation: after the write it must contain a Task that write produced. It joins the cycle's created items, so the cycle that created it may change it. Rule 3 accepts a created Milestone while it is context of the recomputed set.
+
+Everything else that names or changes a milestone outside the set is rejected as an out-of-set change: replacing its draft, archiving, restoring or terminating it, removing a membership, any other relation, and an assignment to a milestone that is not Open. A Milestone created without such a `Produce` is a non-selected creation.
+
 The snapshot is never recomputed at activation or at write time. An item attached to the targets after the directive was issued is outside that cycle and becomes advanceable in the next one. A descendant created in cycle N is in the snapshot issued for cycle N+1.
 
 Any rejection stops the driver with reason `Failure` and a detail naming the items.

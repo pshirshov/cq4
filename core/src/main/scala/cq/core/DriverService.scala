@@ -97,7 +97,9 @@ final class DriverService(registry: DriverRegistry, planner: WorksetPlanner) {
         case Success(snapshot) =>
           val messages = finished.flatMap(changed(_, snapshot)).toList
           val selected = snapshot.advanceable.map(_.item.id).toSet
-          val unselected = finished.toList.flatMap(_.created).filterNot(selected)
+          // A Milestone the cycle created for its Tasks stays context: it is accounted for while a selected item still belongs to it.
+          val milestones = snapshot.context.map(_.item.id).filter(_.ledger == Ledger.Milestones).toSet
+          val unselected = finished.toList.flatMap(_.created).filterNot(id => selected(id) || milestones(id))
           if (unselected.nonEmpty) stop(settled, DriverStopped(DriverStop.Failure,
             s"${references(unselected)} created by cycle ${finished.get.number} is not in the recomputed advanceable set"), messages, now)
           else decide(snapshot, finished) match {
