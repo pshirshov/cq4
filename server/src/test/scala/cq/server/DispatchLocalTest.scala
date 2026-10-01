@@ -51,7 +51,7 @@ final class DispatchLocal extends AnyWordSpec {
       val project = ProjectId(UUID.randomUUID())
       def request(numbers: Long*): DispatchRequest = DispatchRequest(RequestId(UUID.randomUUID()), DispatchWork.Worker(WorkerMode.Probe), Harness.Codex,
         numbers.toList.map(number => ItemRevision(ItemId(project, Ledger.Tasks, number), Revision(1))), Nil, Nil, None,
-        Fence(ClaimId(UUID.randomUUID()), 1), HostLimits(3000, 10000, 1000, 300, 2000, 262144))
+        Fence(ClaimId(UUID.randomUUID()), 1), HostLimits(3000, 1000, 300, 2000, 262144))
       def conflict(active: List[DispatchRequest], next: DispatchRequest): String =
         intercept[cq.core.DomainFailure](DispatchController.admissible(active, next)).fault match {
           case Fault.Conflict(message) => message
@@ -71,7 +71,7 @@ final class DispatchLocal extends AnyWordSpec {
       val members = (1L to 16L).map(number => ItemRevision(ItemId(project, Ledger.Tasks, number), Revision(1))).toList
       val attempt = AttemptId(UUID.randomUUID())
       val request = DispatchRequest(RequestId(UUID.randomUUID()), DispatchWork.Worker(WorkerMode.Implement), Harness.Codex,
-        members, Nil, Nil, None, Fence(ClaimId(UUID.randomUUID()), 1), HostLimits(3000, 10000, 1000, 300, 2000, 262144))
+        members, Nil, Nil, None, Fence(ClaimId(UUID.randomUUID()), 1), HostLimits(3000, 1000, 300, 2000, 262144))
       val initial = DispatchStatus(request.request, attempt, DispatchPhase.Running, Some(JobPhase.Settled), members.map(_.id),
         DispatchProjection.EmptyCounts, ChildNext.Wait, None, None, None, false, true, None)
       val handle = ArtifactId(UUID.randomUUID())

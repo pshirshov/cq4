@@ -35,7 +35,7 @@ else:
     Path('root.pid').write_text(str(os.getpid()))
 time.sleep(30)
 """
-      launch = JobCommand(List("python3", "-c", script), sys.env, "", ExecutionLimits(Duration.ofSeconds(2), Duration.ofSeconds(40),
+      launch = JobCommand(List("python3", "-c", script), sys.env, "", ExecutionLimits(Duration.ofSeconds(2), None,
         Duration.ofMillis(900), Duration.ofMillis(100), Duration.ofSeconds(1), 262144))
       _ <- supervisor.start(scope, workspace, launch)
       tree = root.resolve("workspaces").resolve(workspace.attempt.value.toString).resolve("tree")

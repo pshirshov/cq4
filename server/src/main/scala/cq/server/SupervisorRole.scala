@@ -33,16 +33,16 @@ object SupervisorConfig {
   private val MaxInputBytes = 192 * 1024
   private val MaxOutputBytes = 32 * 1024 * 1024
   val AttachedLifetime = Duration.ofHours(8)
-  private val CredentialMargin = Duration.ofMinutes(10)
-  private val MaxCredentialLifetime = Duration.ofHours(24)
+  /** The server grants scoped credentials for at most 24 hours; the margin absorbs clock difference between host and server. */
+  val ManagedLifetime = Duration.ofHours(24).minus(Duration.ofMinutes(10))
   val VersionMismatch = "Installed harness version differs from its configured verified route"
   def profile(value: HarnessSetting): HarnessProfile = HarnessProfile(value.harness, Path.of(value.executable), value.model, value.provider, value.version,
     value.providerExtensions.map(Path.of(_)), value.providerEnvironment)
-  def limits(value: HostLimits): ExecutionLimits = ExecutionLimits(Duration.ofMillis(value.startupMillis), Duration.ofMillis(value.executionMillis),
+  def limits(value: HostLimits): ExecutionLimits = ExecutionLimits(Duration.ofMillis(value.startupMillis), None,
     Duration.ofMillis(value.heartbeatMillis), Duration.ofMillis(value.graceMillis), Duration.ofMillis(value.killMillis), value.retainedOutputBytes)
   def within(value: HostLimits, ceiling: HostLimits): Unit = {
     limits(value)
-    require(List(value.startupMillis -> ceiling.startupMillis, value.executionMillis -> ceiling.executionMillis,
+    require(List(value.startupMillis -> ceiling.startupMillis,
       value.heartbeatMillis -> ceiling.heartbeatMillis, value.graceMillis -> ceiling.graceMillis, value.killMillis -> ceiling.killMillis,
       value.retainedOutputBytes.toLong -> ceiling.retainedOutputBytes.toLong).forall((actual, maximum) => actual <= maximum), "Child limits exceed the governing session's configured bounds")
   }
@@ -50,11 +50,6 @@ object SupervisorConfig {
     val version = new BoundedHostCommand(HarnessEnvironment.isolated(value, config.environment), Duration.ofSeconds(10), 4096)
       .run(Path.of(config.run.repository), List(value.executable.toString, "--version"))
     require(version.exit == 0 && version.text.split("[\\s()]+").contains(value.version), VersionMismatch)
-  }
-  def credentialLifetime(limits: ExecutionLimits): Duration = {
-    val lifetime = limits.startup.plus(limits.execution).plus(limits.grace).plus(limits.kill).plus(CredentialMargin)
-    require(lifetime.compareTo(MaxCredentialLifetime) <= 0, "Process deadline budget exceeds scoped credential lifetime")
-    lifetime
   }
   def load(arguments: RoleAppArgs, context: CliContext, location: ProjectLocation, clock: Clock): Task[SupervisorConfig] = ZIO.attemptBlocking {
     val raw = arguments.roles.find(value => Set(SupervisorRole.id, AttachedRole.id)(value.role)).getOrElse(throw new IllegalArgumentException("Supervisor role arguments missing")).roleParameters.raw.toList
@@ -78,14 +73,13 @@ object SupervisorConfig {
     val profile = profiles.find(_.harness == harness).getOrElse(throw new IllegalArgumentException("Governing harness route is not configured"))
     val limits = SupervisorConfig.limits(settings.limits)
     require(limits.retainedOutputBytes <= MaxOutputBytes, "Native output retention exceeds 32 MiB per stream")
-    credentialLifetime(limits)
     require(settings.evaluation.forall(value => List(value.run, value.scenario).forall(text => text.trim.nonEmpty && text.length <= 300)),
       "Evaluation identity must contain a bounded run and scenario")
     require(settings.checks.size <= 8 && settings.checks.map(_.name).distinct.size == settings.checks.size, "At most eight uniquely named validation checks are supported")
     settings.checks.foreach { check =>
       require(check.name.matches("[a-z][a-z0-9-]{0,49}") && check.command.nonEmpty && check.command.size <= 32 &&
         check.command.forall(value => value.nonEmpty && value.length <= 4096 && !value.contains('\u0000')) &&
-        check.executionMillis > 0 && check.executionMillis <= settings.limits.executionMillis && check.retainedOutputBytes > 0 && check.retainedOutputBytes <= 1024 * 1024,
+        check.executionMillis > 0 && check.executionMillis <= ExecutionLimits.MaximumMillis && check.retainedOutputBytes > 0 && check.retainedOutputBytes <= 1024 * 1024,
         "Invalid configured validation check")
     }
     require(settings.checks.map(value => HostFiles.encode(ValidationCheck_JsonCodec, value).getBytes(java.nio.charset.StandardCharsets.UTF_8).length).sum <= 16384,

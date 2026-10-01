@@ -31,7 +31,7 @@ const python = execFileSync("python3", ["-c", "import sys; print(sys.executable)
 const native = join(root, "fixture-harness");
 writeFileSync(native, `#!${python}\n` + readFileSync("dev/dispatch-fixture.py", "utf8").replace('print("codex-cli 0.156.1")', 'print("fixture 0.156.1 2.1.280 0.99.1")'));
 chmodSync(native, 0o700);
-const limits = { startupMillis: "5000", executionMillis: "60000", heartbeatMillis: "1000", graceMillis: "300", killMillis: "2000", retainedOutputBytes: 262144 };
+const limits = { startupMillis: "5000", heartbeatMillis: "1000", graceMillis: "300", killMillis: "2000", retainedOutputBytes: 262144 };
 const settings = join(root, "settings.json");
 writeFileSync(settings, JSON.stringify({ integrationTarget: null, stateRoot: join(root, "sessions"), guardian, checks: [], evaluation: null, limits,
   harnesses: [["Codex", "fixture-provider", "0.156.1"], ["Claude", "anthropic", "2.1.280"], ["Pi", "fixture-provider", "0.99.1"]].map(([harness, provider, version]) =>

@@ -695,7 +695,7 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
             parent <- usage.start(collector, Attempt(AttemptId(uuid), governing.id, None, w.governor.actor.session, Role.Governor, Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Govern))
             assignment <- usage.assign(collector, Assignment(AssignmentId(uuid), w.project, claim.members, Attribution.Shared, Some(uuid), None))
             attempt <- usage.start(collector, Attempt(AttemptId(uuid), assignment.id, Some(parent.id), w.governor.actor.session, Role.Planner, Harness.Codex, "fixture", "fixture", "fixture", 1001, UsagePhase.Plan))
-            dispatch = DispatchRequest(RequestId(uuid), DispatchWork.Planner(), Harness.Codex, members, Nil, Nil, None, claim.fence, HostLimits(3000, 10000, 1000, 300, 2000, 262144))
+            dispatch = DispatchRequest(RequestId(uuid), DispatchWork.Planner(), Harness.Codex, members, Nil, Nil, None, claim.fence, HostLimits(3000, 1000, 300, 2000, 262144))
             report = ChildReport.Plan(members.map(ref => PlanMember(ref.id, PlanDisposition.Proposed, "Proposed next step")),
               Some(LedgerProposal(List(ProposedMutation.Replace(members(member).id, task("Proposed title"))), "Apply the proposed next step")), Nil)
             result = ChildResult(attempt.id, dispatch, GitCommit("a" * 40), None, report, Nil, RetainedEvidence(Nil, Nil))

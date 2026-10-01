@@ -29,7 +29,7 @@ private[server] final class ReviewerChecks(entry: DispatchExecution, candidate: 
         if (executions.values.exists(value => !Set(DeclaredCheckPhase.Completed, DeclaredCheckPhase.Unknown, DeclaredCheckPhase.Failed)(value.status.phase)))
           throw DomainFailure(Fault.Conflict("Another declared check is running; poll it before requesting another name"))
         val source = config.limits
-        val limits = ExecutionLimits(source.startup, Duration.ofMillis(declaration.executionMillis), source.heartbeat, source.grace, source.kill, declaration.retainedOutputBytes)
+        val limits = ExecutionLimits(source.startup, Some(Duration.ofMillis(declaration.executionMillis)), source.heartbeat, source.grace, source.kill, declaration.retainedOutputBytes)
         val command = JobCommand(declaration.command, HostEnvironment.runtime(config.environment), "", limits)
         val id = AttemptId(NativeArtifacts.id(entry.ticket.attempt.id, "declared-check-job-" + name).value)
         val spec = WorkspaceSpec(config.project.project, config.run.attempt.session, id, config.run.repository, candidate)

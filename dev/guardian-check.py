@@ -191,6 +191,21 @@ except OSError:
         terminal = self.wait_until_exited(process)
         self.assertEqual(terminal[3], "ExecutionDeadline")
 
+    def test_run_ms_zero_is_no_execution_deadline(self):
+        process = self.launch([sys.executable, "-c", "import time; time.sleep(1.5); print('done')"], 0, 3000, 10000)
+        terminal = self.wait_until_exited(process)
+        self.assertEqual(terminal[1:4], ["0", "0", "Exited"])
+        self.assertEqual((self.directory / "stdout").read_text(), "done\n")
+
+    def test_malformed_execution_deadline_is_rejected_before_launch(self):
+        for value in ["-1", "00", "invalid", ""]:
+            process = self.launch([sys.executable, "-c", "raise SystemExit(0)"], value, 3000, 10000)
+            output, errors = process.communicate("", timeout=2)
+            self.assertEqual(process.returncode, 2, (value, output, errors))
+            self.assertNotIn("START", output)
+            for name in ["stdout", "stderr"]:
+                (self.directory / name).unlink(missing_ok=True)
+
     def test_frozen_owner_heartbeat_deadline(self):
         process = self.launch([sys.executable, "-c", "import time; time.sleep(30)"], 3000, 200, 10000)
         terminal = self.wait_until_exited(process)

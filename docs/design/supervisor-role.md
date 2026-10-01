@@ -25,7 +25,6 @@ Initialize the consumer with the existing `cq init --endpoint URL`. It must be a
   }],
   "limits": {
     "startupMillis": "10000",
-    "executionMillis": "600000",
     "heartbeatMillis": "2000",
     "graceMillis": "1000",
     "killMillis": "3000",

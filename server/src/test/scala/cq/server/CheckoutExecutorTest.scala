@@ -123,7 +123,7 @@ final class CheckoutExecutorLocal extends SpecZIO {
       }
       val git = new SupervisedGitIntegration(Scope(value.project, value.owner), local.source, value.target, local.command, jobs,
         local.directory.resolve("payload"), sys.env,
-        ExecutionLimits(Duration.ofSeconds(3), Duration.ofSeconds(20), Duration.ofSeconds(1), Duration.ofMillis(100), Duration.ofSeconds(2), 65536), CqEntrypoint.command)
+        ExecutionLimits(Duration.ofSeconds(3), None, Duration.ofSeconds(1), Duration.ofMillis(100), Duration.ofSeconds(2), 65536), CqEntrypoint.command)
       git.execute(value) *> ZIO.attemptBlocking {
         val head = local.git(local.source, "rev-parse", "HEAD")
         assert(head == local.base.value || (head == value.candidate.value && Files.exists(local.source.resolve("new.txt"))),

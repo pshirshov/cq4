@@ -9,15 +9,19 @@ import java.util.concurrent.{CompletableFuture, FutureTask, TimeUnit}
 import java.util.concurrent.atomic.{AtomicBoolean, AtomicReference}
 import scala.jdk.CollectionConverters.*
 
-/** `retainedOutputBytes` bounds what the host publishes of each output stream; it never stops the process (see `OutputCeilingBytes`). */
-final case class ExecutionLimits(startup: Duration, execution: Duration, heartbeat: Duration, grace: Duration, kill: Duration, retainedOutputBytes: Int) {
-  private val MaximumMillis = Duration.ofHours(24).toMillis
-  require(List(startup, execution, heartbeat, grace, kill).forall(d => d.toMillis > 0 && d.toMillis <= MaximumMillis), "Invalid process deadline")
+/**
+ * `execution` is the wall-clock deadline of a host command (a configured check, the Git job); a harness job has none and runs until it exits,
+ * is cancelled or loses its owner. `retainedOutputBytes` bounds what the host publishes of each output stream; it never stops the process
+ * (see `OutputCeilingBytes`).
+ */
+final case class ExecutionLimits(startup: Duration, execution: Option[Duration], heartbeat: Duration, grace: Duration, kill: Duration, retainedOutputBytes: Int) {
+  require((List(startup, heartbeat, grace, kill) ++ execution).forall(d => d.toMillis > 0 && d.toMillis <= ExecutionLimits.MaximumMillis), "Invalid process deadline")
   require(heartbeat.toMillis >= 300, "Driver heartbeat deadline must be at least 300 ms")
   require(retainedOutputBytes > 0 && retainedOutputBytes <= 64 * 1024 * 1024, "Invalid retained output bound")
 }
 
 object ExecutionLimits {
+  val MaximumMillis: Long = Duration.ofHours(24).toMillis
   /**
    * Disk-safety ceiling of one output stream on disk, fixed for every job: a process that writes more is stopped with
    * `StopReason.OutputLimit`. It exists only so that a runaway writer cannot fill the state volume.
@@ -54,6 +58,7 @@ final class GuardianDriver(binary: Path) extends ExecutionDriver {
     private val DrainMillis = 2000L
     private val MaxProtocolBytes = 4096
     private val MaxLineBytes = 512
+    private val NoExecutionDeadline = 0L
     private val observation = new AtomicReference(ProcessObservation(ProcessPhase.Starting, false, None, None, None, None))
     private val active = new AtomicBoolean(true)
     private val process = new AtomicReference[Option[Process]](None)
@@ -65,7 +70,7 @@ final class GuardianDriver(binary: Path) extends ExecutionDriver {
     Thread.ofVirtual().name("cq-guardian-launch").start(() => {
       try {
         val limits = spec.limits
-        val arguments = List(binary.toString, limits.startup.toMillis.toString, limits.execution.toMillis.toString,
+        val arguments = List(binary.toString, limits.startup.toMillis.toString, limits.execution.fold(NoExecutionDeadline)(_.toMillis).toString,
           limits.heartbeat.toMillis.toString, limits.grace.toMillis.toString, limits.kill.toMillis.toString,
           ExecutionLimits.OutputCeilingBytes.toString, spec.input.toString, spec.stdout.toString, spec.stderr.toString, "--") ++ spec.arguments
         val builder = new ProcessBuilder(arguments.asJava).directory(spec.directory.toFile)
@@ -160,7 +165,7 @@ final class GuardianDriver(binary: Path) extends ExecutionDriver {
         })
         val writer = Thread.ofVirtual().name("cq-guardian-heartbeat").start(writerResult)
         try {
-          val maximum = spec.limits.startup.plus(spec.limits.execution).plus(spec.limits.grace).plus(spec.limits.kill).plusMillis(DrainMillis).toNanos
+          val maximum = spec.limits.execution.map(spec.limits.startup.plus(_).plus(spec.limits.grace).plus(spec.limits.kill).plusMillis(DrainMillis).toNanos)
           var cancelledAt = Option.empty[Long]
           var terminalAt = Option.empty[Long]
           var stoppedAt = Option.empty[Long]
@@ -183,7 +188,7 @@ final class GuardianDriver(binary: Path) extends ExecutionDriver {
             else if (terminalAt.exists(now - _ >= TimeUnit.MILLISECONDS.toNanos(DrainMillis)))
               uncertain("Guardian reported completion but did not exit within its deadline")
             else if (stoppedAt.exists(now - _ >= stopLimit)) uncertain("Guardian stopping deadline exceeded; process termination is unconfirmed")
-            else if (now - began >= maximum || cancelledAt.exists(now - _ >= cancelLimit)) uncertain("Guardian cleanup deadline exceeded; process termination is unconfirmed")
+            else if (maximum.exists(now - began >= _) || cancelledAt.exists(now - _ >= cancelLimit)) uncertain("Guardian cleanup deadline exceeded; process termination is unconfirmed")
             else Thread.sleep(PollMillis)
           }
           if (active.get()) {

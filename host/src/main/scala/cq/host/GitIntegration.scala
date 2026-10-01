@@ -3,6 +3,7 @@ package cq.host
 import cq.api.*
 import cq.core.{DomainFailure, Scope}
 import java.nio.file.{Files, Path}
+import java.time.Duration
 import zio.{Task, ZIO}
 
 final case class IntegrationTarget(commit: GitCommit, incorporated: Boolean, checkoutBlocked: Boolean)
@@ -31,6 +32,11 @@ final class RetainedIntegrationJobs(journal: JobRepository) extends IntegrationJ
   override def status(id: AttemptId): Task[JobRecord] = ZIO.attemptBlocking {
     journal.records.find(_.workspace.attempt == id).getOrElse(throw DomainFailure(Fault.Missing("Retained integration job is missing")))
   }
+}
+
+object SupervisedGitIntegration {
+  /** Above the sum of the checkout executor's own 30 s command deadlines, so it stops only a Git job those failed to bound. */
+  val Execution: Duration = Duration.ofMinutes(30)
 }
 
 final class SupervisedGitIntegration(owner: Scope, repository: Path, target: String, command: HostCommand, jobs: IntegrationJobs,
@@ -69,7 +75,7 @@ final class SupervisedGitIntegration(owner: Scope, repository: Path, target: Str
   private def launch(intent: IntegrationIntent): JobCommand = {
     require(HostFiles.read(checkoutInput(intent), CheckoutPlan_JsonCodec, CheckoutRecords.MaxBytes).intent == intent, "Checkout intent differs from integration")
     JobCommand(entrypoint ++ List(":checkout", "--", checkoutInput(intent).toString),
-      GitEnvironment.isolated(HostEnvironment.runtime(environment)) ++ Map("LC_ALL" -> "C"), "", limits)
+      GitEnvironment.isolated(HostEnvironment.runtime(environment)) ++ Map("LC_ALL" -> "C"), "", limits.copy(execution = Some(SupervisedGitIntegration.Execution)))
   }
 
   override def inspect(intent: IntegrationIntent): Task[IntegrationTarget] = ZIO.attemptBlocking {

@@ -33,7 +33,7 @@ abstract class ResultAdmissionTest extends SpecZIO with AssertZIO {
       child <- usage.start(collector, Attempt(AttemptId(UUID.randomUUID()), assigned.id, Some(parent.id), owner.actor.session, Role.Worker,
         Harness.Codex, "fixture", "fixture", "fixture", 1001, UsagePhase.Work))
       request = DispatchRequest(RequestId(UUID.randomUUID()), DispatchWork.Worker(WorkerMode.Implement), Harness.Codex,
-        created.items, Nil, Nil, None, claim.fence, HostLimits(3000, 10000, 1000, 300, 2000, 262144))
+        created.items, Nil, Nil, None, claim.fence, HostLimits(3000, 1000, 300, 2000, 262144))
       result = ChildResult(child.id, request, GitCommit("a" * 40), Some(GitCommit("b" * 40)),
         ChildReport.Work(created.items.map(item => WorkMember(item.id, WorkDisposition.CandidateReady, "Candidate", Nil))), Nil, RetainedEvidence(Nil, Nil))
       metadata <- artifacts.upload(collector, ArtifactUpload(owner.project, ArtifactId(UUID.randomUUID()), child.id,

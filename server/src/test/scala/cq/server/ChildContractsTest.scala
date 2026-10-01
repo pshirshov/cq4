@@ -33,7 +33,7 @@ final class ChildContractsLocal extends AnyWordSpec {
         DispatchWork.Reviewer(ReviewerMode.Plan) -> review, DispatchWork.Reviewer(ReviewerMode.Audit) -> review)
       cases.foreach { case (work, report) =>
         val request = DispatchRequest(RequestId(UUID.randomUUID()), work, Harness.Codex, List(member), Nil, Nil,
-          Some(ArtifactId(UUID.randomUUID())), Fence(ClaimId(UUID.randomUUID()), 1), HostLimits(3000, 10000, 1000, 300, 2000, 262144))
+          Some(ArtifactId(UUID.randomUUID())), Fence(ClaimId(UUID.randomUUID()), 1), HostLimits(3000, 1000, 300, 2000, 262144))
         val result = ChildResult(AttemptId(UUID.randomUUID()), request, GitCommit("a" * 40), None, report, Nil, RetainedEvidence(Nil, Nil))
         ChildContracts.result(project, result)
         intercept[IllegalArgumentException](ChildContracts.result(project, result.copy(candidate = Some(GitCommit("b" * 40)))))
@@ -73,7 +73,7 @@ final class ChildContractsLocal extends AnyWordSpec {
       val handle = ArtifactId(UUID.randomUUID())
       val attempt = AttemptId(UUID.randomUUID())
       val request = DispatchRequest(RequestId(UUID.randomUUID()), DispatchWork.Planner(), Harness.Codex, members, Nil, Nil, None,
-        Fence(ClaimId(UUID.randomUUID()), 1), HostLimits(3000, 10000, 1000, 300, 2000, 262144))
+        Fence(ClaimId(UUID.randomUUID()), 1), HostLimits(3000, 1000, 300, 2000, 262144))
       val initial = DispatchStatus(request.request, attempt, DispatchPhase.Running, Some(JobPhase.Settled), members.map(_.id),
         DispatchProjection.EmptyCounts, ChildNext.Wait, None, None, None, false, true, None)
       val reports = List(
@@ -104,7 +104,7 @@ final class ChildContractsLocal extends AnyWordSpec {
       val changes = ChildReport.Review(List(ReviewMember(member.id, ReviewVerdict.ChangesRequested, Nil)), None)
       intercept[IllegalArgumentException](ChildContracts.report(DispatchWork.Reviewer(ReviewerMode.Candidate), List(member), encoded(changes)))
       val request = DispatchRequest(RequestId(UUID.randomUUID()), work, Harness.Codex, List(member), Nil, Nil, None,
-        Fence(ClaimId(UUID.randomUUID()), 1), HostLimits(3000, 10000, 1000, 300, 2000, 262144))
+        Fence(ClaimId(UUID.randomUUID()), 1), HostLimits(3000, 1000, 300, 2000, 262144))
       val wire = DispatchRequest_JsonCodec.encode(BaboonCodecContext.Default, request)
       assert(ChildContracts.decodeRequest(project, wire) == request)
       val missing = intercept[RuntimeException](ChildContracts.decodeRequest(project, Json.fromJsonObject(wire.asObject.get.remove("previous"))))

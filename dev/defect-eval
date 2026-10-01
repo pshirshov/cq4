@@ -124,7 +124,7 @@ def main():
             routes.append({"harness": harness, "executable": executable, "model": model, "provider": provider, "version": version,
                            "providerExtensions": [], "providerEnvironment": []})
         settings = {"integrationTarget": None, "stateRoot": str(evidence / "sessions"), "guardian": str(guardian), "harnesses": routes,
-                    "limits": {"startupMillis": "10000", "executionMillis": str(evaluation["EXECUTION_MILLIS"]), "heartbeatMillis": "2000",
+                    "limits": {"startupMillis": "10000", "heartbeatMillis": "2000",
                                "graceMillis": "1000", "killMillis": "3000", "retainedOutputBytes": 8388608}, "checks": [],
                     "evaluation": {"run": identifier, "scenario": "synthetic-dependency", "assessor": False}}
         if prior is not None:

@@ -18,7 +18,7 @@ final class HostValidation(config: SupervisorConfig) {
     launch: (AttemptId, GitCommit, JobCommand) => Task[JobRecord]): Task[HostValidated] = for {
     id <- ZIO.succeed(AttemptId(UUID.randomUUID()))
     source = config.limits
-    limits = ExecutionLimits(source.startup, Duration.ofMillis(check.executionMillis), source.heartbeat, source.grace, source.kill, check.retainedOutputBytes)
+    limits = ExecutionLimits(source.startup, Some(Duration.ofMillis(check.executionMillis)), source.heartbeat, source.grace, source.kill, check.retainedOutputBytes)
     record <- launch(id, candidate, JobCommand(check.command, HostEnvironment.runtime(config.environment), "", limits))
     validated <- ZIO.attemptBlocking {
       val project = config.project.project

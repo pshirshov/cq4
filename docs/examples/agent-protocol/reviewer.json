@@ -85,11 +85,10 @@
         },
         "limits": {
           "startupMillis": "10000",
-          "executionMillis": "900000",
           "heartbeatMillis": "2000",
           "graceMillis": "1000",
           "killMillis": "3000",
-          "outputBytes": 8388608
+          "retainedOutputBytes": 8388608
         }
       },
       "members": [
@@ -351,11 +350,10 @@
           },
           "limits": {
             "startupMillis": "10000",
-            "executionMillis": "900000",
             "heartbeatMillis": "2000",
             "graceMillis": "1000",
             "killMillis": "3000",
-            "outputBytes": 8388608
+            "retainedOutputBytes": 8388608
           }
         },
         "base": {
@@ -415,7 +413,7 @@
           "python"
         ],
         "executionMillis": "180000",
-        "outputBytes": 262144
+        "retainedOutputBytes": 262144
       }
     ]
   },
@@ -514,11 +512,10 @@
       },
       "limits": {
         "startupMillis": "10000",
-        "executionMillis": "900000",
         "heartbeatMillis": "2000",
         "graceMillis": "1000",
         "killMillis": "3000",
-        "outputBytes": 8388608
+        "retainedOutputBytes": 8388608
       }
     },
     "base": {

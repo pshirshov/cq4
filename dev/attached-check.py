@@ -98,7 +98,7 @@ def main():
     native = root / "fixture-harness"
     native.write_text(f"#!{sys.executable}\n" + Path("dev/dispatch-fixture.py").read_text().replace('print("codex-cli 0.156.1")', 'print("fixture 0.156.1 2.1.280 0.87.1")'))
     native.chmod(0o700)
-    limits = {"startupMillis": "5000", "executionMillis": "60000", "heartbeatMillis": "1000", "graceMillis": "300", "killMillis": "2000", "retainedOutputBytes": 262144}
+    limits = {"startupMillis": "5000", "heartbeatMillis": "1000", "graceMillis": "300", "killMillis": "2000", "retainedOutputBytes": 262144}
     settings = root / "settings.json"
     settings.write_text(json.dumps({"integrationTarget": None, "stateRoot": str(root / "sessions"), "guardian": str(guardian), "checks": [], "evaluation": None,
         "harnesses": [{"harness": name, "executable": str(native), "model": "fixture-model", "provider": provider, "version": version, "providerExtensions": [], "providerEnvironment": []}

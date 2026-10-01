@@ -47,11 +47,10 @@
     ],
     "limits": {
       "startupMillis": "10000",
-      "executionMillis": "900000",
       "heartbeatMillis": "2000",
       "graceMillis": "1000",
       "killMillis": "3000",
-      "outputBytes": 8388608
+      "retainedOutputBytes": 8388608
     },
     "integrationTarget": null,
     "request": "Advance the two existing related tasks under the supplied goal through independent candidate review. Keep their exact revisions for deferred independent assessment; do not create replacement tasks or edit their acceptance. Use the goal revision as guidance in every selection: it contains the complete consumer specification and review obligations. Ask dispatch Select for Worker Implement over the two task roots. The host may first offer a compatibility Planner; claim the complete offered group and start it on Codex. Forward its result handle as artifact context in a fresh selection; do not read the full assessment. Start a compatible shared Worker on Claude; after host checks pass, select Candidate Reviewer using the exact Worker result handle and start it on Pi. Use StartChoice, configured limits, compact Status and exact complete-group claims throughout. The reviewer must execute a fresh consumer-oracle check and independently accept each member. Continue correction through handles if needed; do not force a compatibility verdict or claim success after a blocker. Release claims after review without changing member revisions. Return result handles and bounded outcomes. Do not compose child prompts, copy full results or claim integration.\n{\"goal\": {\"id\": {\"project\": {\"value\": \"2ecd3f9d-43aa-42e0-b0d1-34b892e871d3\"}, \"ledger\": \"Goals\", \"number\": \"1\"}, \"revision\": {\"value\": \"3\"}}, \"members\": [{\"id\": {\"project\": {\"value\": \"2ecd3f9d-43aa-42e0-b0d1-34b892e871d3\"}, \"ledger\": \"Tasks\", \"number\": \"1\"}, \"revision\": {\"value\": \"2\"}}, {\"id\": {\"project\": {\"value\": \"2ecd3f9d-43aa-42e0-b0d1-34b892e871d3\"}, \"ledger\": \"Tasks\", \"number\": \"2\"}, \"revision\": {\"value\": \"2\"}}]}",

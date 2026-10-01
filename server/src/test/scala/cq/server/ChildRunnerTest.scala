@@ -60,14 +60,20 @@ emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_toke
 target.write_text(json.dumps({"Work": {"members": [{"item": item, "disposition": "Blocked", "summary": "Reported at length", "evidence": []} for item in members]}}))
 emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_tokens": 0, "cache_write_input_tokens": 0, "output_tokens": 5, "reasoning_output_tokens": 0}})
 """
-  private val Stalling = Header + """Path("tracked.txt").write_text("partial change\n")
+  /** A healthy child that is silent for longer than any former execution deadline of this suite before it reports. */
+  private val Slow = Header + """time.sleep(3)
+target.write_text(json.dumps({"Work": {"members": [{"item": item, "disposition": "Blocked", "summary": "Reported after a long silence", "evidence": []} for item in members]}}))
+emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_tokens": 0, "cache_write_input_tokens": 0, "output_tokens": 5, "reasoning_output_tokens": 0}})
+"""
+  private val Partial = Header + """Path("tracked.txt").write_text("partial change\n")
 Path("new.txt").write_text("untracked partial file\n")
 Path(".work/evidence").mkdir(parents=True)
 Path(".work/evidence/partial.log").write_text("still running\n")
 sys.stderr.write("worker diagnostic\n")
 sys.stderr.flush()
-time.sleep(30)
 """
+  private val Stalling = Partial + "time.sleep(30)\n"
+  private val Failing = Partial + "sys.exit(3)\n"
 
   private final class Receiver(application: Application, auth: Authorization, root: Authority, authority: Authority, runtime: Runtime[Any]) extends ServerApi {
     private def execute[A](value: Task[A]): A = Unsafe.unsafe { implicit unsafe => runtime.unsafe.run(value).getOrThrowFiberFailure() }
@@ -117,7 +123,7 @@ time.sleep(30)
     val root = auth.authenticate(token, Some(owner.actor.session.value.toString))
     val expires = clock.millis() + 60L * 60 * 1000
     val application = new Application(ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, auth)
-    val limits = HostLimits(3000, 30000, 900, 100, 1000, 262144)
+    val limits = HostLimits(3000, 900, 100, 1000, 262144)
     for {
       runtime <- ZIO.runtime[Any]
       _ <- ledger.initialize(owner, project.name)
@@ -160,7 +166,7 @@ time.sleep(30)
       (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
         artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
       fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None) { f => for {
-        entry <- f.dispatch(Completing, HostLimits(3000, 30000, 900, 100, 1000, 262144))
+        entry <- f.dispatch(Completing, HostLimits(3000, 900, 100, 1000, 262144))
         _ <- f.runner.run(entry).timeoutFail(new IllegalStateException("Worker did not finish"))(zio.Duration.fromSeconds(60))
         status = entry.status
         _ <- ZIO.attempt(assert(status.phase == DispatchPhase.Completed && status.result.nonEmpty, status.toString))
@@ -192,7 +198,7 @@ time.sleep(30)
       fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None) { f =>
         val bound = 65536
         for {
-          entry <- f.dispatch(Verbose, HostLimits(3000, 30000, 900, 100, 1000, bound))
+          entry <- f.dispatch(Verbose, HostLimits(3000, 900, 100, 1000, bound))
           _ <- f.runner.run(entry).timeoutFail(new IllegalStateException("Worker did not finish"))(zio.Duration.fromSeconds(60))
           status = entry.status
           _ <- ZIO.attempt(assert(status.phase == DispatchPhase.Completed && status.result.nonEmpty && status.usageDelivered,
@@ -222,7 +228,7 @@ time.sleep(30)
       (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
         artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
       fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None) { f => for {
-        entry <- f.dispatch(Recording, HostLimits(3000, 30000, 900, 100, 1000, 262144))
+        entry <- f.dispatch(Recording, HostLimits(3000, 900, 100, 1000, 262144))
         _ <- f.runner.run(entry).timeoutFail(new IllegalStateException("Worker did not finish"))(zio.Duration.fromSeconds(60))
         status = entry.status
         _ <- ZIO.attempt(assert(status.phase == DispatchPhase.Completed && status.result.nonEmpty, status.toString))
@@ -256,7 +262,19 @@ time.sleep(30)
       } yield () }
     }
 
-    "collect partial work when the worker is killed at its execution deadline or cancelled" in {
+    "I21: complete a worker that runs past the former execution deadline" in {
+      (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None) { f => for {
+        entry <- f.dispatch(Slow, HostLimits(3000, 900, 100, 1000, 262144))
+        _ <- f.runner.run(entry).timeoutFail(new IllegalStateException("Worker did not finish"))(zio.Duration.fromSeconds(60))
+        job <- f.jobs.status(f.config.owner, entry.ticket.attempt.id)
+        _ <- ZIO.attempt(assert(entry.status.phase == DispatchPhase.Completed && entry.status.result.nonEmpty &&
+          job.exit.exists(exit => exit.reason == StopReason.Exited && exit.code.contains(0)), s"${entry.status} $job"))
+      } yield () }
+    }
+
+    "collect partial work when the worker fails or is cancelled" in {
       (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
         artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
       fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None) { f =>
@@ -285,10 +303,10 @@ time.sleep(30)
           }
         } yield ()
         for {
-          killed <- f.dispatch(Stalling, HostLimits(3000, 1500, 900, 100, 1000, 262144))
-          _ <- f.runner.run(killed).timeoutFail(new IllegalStateException("Killed worker did not settle"))(zio.Duration.fromSeconds(60))
-          _ <- verify(killed, DispatchPhase.Failed, AttemptState.Failed)
-          cancelled <- f.dispatch(Stalling, HostLimits(3000, 30000, 900, 100, 1000, 262144))
+          failed <- f.dispatch(Failing, HostLimits(3000, 900, 100, 1000, 262144))
+          _ <- f.runner.run(failed).timeoutFail(new IllegalStateException("Failed worker did not settle"))(zio.Duration.fromSeconds(60))
+          _ <- verify(failed, DispatchPhase.Failed, AttemptState.Failed)
+          cancelled <- f.dispatch(Stalling, HostLimits(3000, 900, 100, 1000, 262144))
           running <- f.runner.run(cancelled).fork
           _ <- (ZIO.sleep(zio.Duration.fromMillis(50)) *> f.jobs.status(f.config.owner, cancelled.ticket.attempt.id).either)
             .repeatUntil(_.exists(_.phase == JobPhase.Running)).timeoutFail(new IllegalStateException("Worker did not start"))(zio.Duration.fromSeconds(20))
@@ -309,7 +327,7 @@ time.sleep(30)
       (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
         artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
       fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, Some("refs/heads/integration")) { f =>
-        val limits = HostLimits(3000, 30000, 900, 100, 1000, 262144)
+        val limits = HostLimits(3000, 900, 100, 1000, 262144)
         val controller = new DispatchController(f.config, f.runner, f.jobs, f.clock)
         for {
           _ <- ZIO.attemptBlocking {

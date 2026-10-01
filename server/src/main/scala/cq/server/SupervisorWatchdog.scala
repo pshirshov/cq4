@@ -11,7 +11,7 @@ final class SupervisorWatchdog(config: SupervisorConfig) extends AutoCloseable {
   private val HostDrain = Duration.ofSeconds(10)
   private val UnresolvedExit = 75
   private val drain = config.limits.grace.plus(config.limits.kill).plus(HostDrain).toNanos
-  private var deadline = System.nanoTime() + (if (config.run.ownership == cq.api.SessionOwnership.Attached) SupervisorConfig.AttachedLifetime else config.limits.startup.plus(config.limits.execution)).toNanos + drain
+  private var deadline = Option.when(config.run.ownership == cq.api.SessionOwnership.Attached)(System.nanoTime() + SupervisorConfig.AttachedLifetime.toNanos + drain)
   private var governor = Option.empty[ManagedExecution]
   @volatile private var draining = false
   private var closed = false
@@ -22,7 +22,7 @@ final class SupervisorWatchdog(config: SupervisorConfig) extends AutoCloseable {
         if (closed) running = false
         else {
           if (governor.exists(value => Set(ProcessPhase.Settled, ProcessPhase.Uncertain)(value.status.phase))) beginShutdown()
-          if (System.nanoTime() - deadline >= 0) {
+          if (deadline.exists(System.nanoTime() - _ >= 0)) {
             // Forced process exit also fences retained I/O continuations; no settlement is inferred.
             Runtime.getRuntime.halt(UnresolvedExit)
           }
@@ -37,7 +37,8 @@ final class SupervisorWatchdog(config: SupervisorConfig) extends AutoCloseable {
   }
   def beginShutdown(): Unit = synchronized {
     if (!draining) {
-      deadline = math.min(deadline, System.nanoTime() + drain)
+      val limit = System.nanoTime() + drain
+      deadline = Some(deadline.fold(limit)(math.min(_, limit)))
       draining = true
     }
   }
