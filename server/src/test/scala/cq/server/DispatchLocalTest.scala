@@ -81,8 +81,15 @@ final class DispatchLocal extends AnyWordSpec {
       assert(projected.counts.blocked == 16 && projected.next == ChildNext.ResolveBlocker && projected.result.contains(handle))
       assert(projected.blocker.contains("🙂" * 300) && projected.detailsOmitted && projected.usageDelivered)
       assert(HostFiles.encode(DispatchStatus_JsonCodec, projected).getBytes(UTF_8).length < 12 * 1024)
-      val checked = DispatchProjection.completed(initial, result.copy(validation = List(ValidationEvidence("test", ValidationState.Failed, handle))), handle)
+      val checked = DispatchProjection.completed(initial, result.copy(validation = List(ValidationEvidence("test", ValidationState.Failed, handle, Nil))), handle)
       assert(checked.counts.validationFailed == 1 && checked.next == ChildNext.Revise && checked.blocker.contains("Host check test: Failed"))
+      // I19: a check that passed on a rerun is counted as intermittent and does not block.
+      val ready = result.copy(candidate = Some(GitCommit("b" * 40)), report = ChildReport.Work(members.map(value => WorkMember(value.id, WorkDisposition.CandidateReady, "Ready", Nil))))
+      val intermittent = DispatchProjection.completed(initial, ready.copy(validation = List(
+        ValidationEvidence("flaky", ValidationState.Passed, handle, List(ArtifactId(UUID.randomUUID()))), ValidationEvidence("steady", ValidationState.Passed, handle, Nil))), handle)
+      assert(intermittent.counts.validationIntermittent == 1 && intermittent.counts.validationFailed == 0 && intermittent.next == ChildNext.Review && intermittent.blocker.isEmpty)
+      val exhausted = DispatchProjection.completed(initial, ready.copy(validation = List(ValidationEvidence("flaky", ValidationState.Failed, handle, List(ArtifactId(UUID.randomUUID()))))), handle)
+      assert(exhausted.counts.validationIntermittent == 0 && exhausted.counts.validationFailed == 1 && exhausted.next == ChildNext.Revise)
     }
     "report a retained workspace with its directory and a removed workspace without one" in {
       val spec = WorkspaceSpec(ProjectId(UUID.randomUUID()), SessionId(UUID.randomUUID()), AttemptId(UUID.randomUUID()), "/repo", GitCommit("a" * 40))

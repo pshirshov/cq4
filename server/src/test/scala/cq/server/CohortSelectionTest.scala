@@ -75,7 +75,7 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
   private def assessed(ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], count: Int, compatibility: CohortCompatibility): IO[Throwable, Assessed] = {
     val scope = owner
     val collector = scope.copy(actor = scope.actor.copy(subject = "host", role = Role.Collector))
-    val checks = List(ValidationCheck("acceptance", List("verify"), 5000, 4096))
+    val checks = List(ValidationCheck("acceptance", List("verify"), 5000, 4096, 1))
     val base = GitCommit("a" * 40)
     for {
       _ <- ledger.initialize(scope, "Assessment selection")
@@ -251,7 +251,7 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
         _ <- assertIO(replay.evidence.decision.choices.isEmpty && changed.evidence.decision.choices.size == 1)
         reviews <- ZIO.foreach(observed)(id => publish(fixture, DispatchWork.Reviewer(ReviewerMode.Candidate),
           ChildReport.Review(fixture.members.map(ref => ReviewMember(ref.id, ReviewVerdict.ChangesRequested, List("Correct the failure"))), None),
-          Some(worker), List(ValidationEvidence(fixture.checks.head.name, ValidationState.Failed, id)), ledger, usage, artifacts, admissions))
+          Some(worker), List(ValidationEvidence(fixture.checks.head.name, ValidationState.Failed, id, Nil)), ledger, usage, artifacts, admissions))
         nestedProgress = new CohortProgress
         nested = new CohortPlanner(reads, fixture.scope, fixed(fixture.base), fixture.checks, nestedProgress, new OperatorRequirements(""))
         initial <- ZIO.attemptBlocking(nested.plan(input.copy(artifacts = List(reviews.head.id)), ArtifactId(uuid)))

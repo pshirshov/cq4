@@ -545,7 +545,7 @@ root data HarnessSetting {
   providerExtensions: lst[str] providerEnvironment: set[str]
 }
 root data HostLimits { startupMillis: i64 executionMillis: i64 heartbeatMillis: i64 graceMillis: i64 killMillis: i64 retainedOutputBytes: i32 }
-root data ValidationCheck { name: str command: lst[str] executionMillis: i64 retainedOutputBytes: i32 }
+root data ValidationCheck { name: str command: lst[str] executionMillis: i64 retainedOutputBytes: i32 attempts: i32 }
 root data SupervisorSettings { stateRoot: str guardian: str harnesses: lst[HarnessSetting] limits: HostLimits checks: lst[ValidationCheck] evaluation: opt[EvaluationScope] integrationTarget: opt[str] }
 root data GoverningReport { summary: str }
 root data HarnessRoute { harness: Harness model: str provider: str }
@@ -746,7 +746,7 @@ root data ChildInput {
 }
 root data ChildExecutionInput { input: ChildInput base: GitCommit checks: lst[ValidationCheck] }
 enum ValidationState { Passed Failed Unknown }
-root data ValidationEvidence { check: str state: ValidationState artifact: ArtifactId }
+root data ValidationEvidence { check: str state: ValidationState artifact: ArtifactId failures: lst[ArtifactId] }
 root data ValidationObservation { check: ValidationCheck candidate: GitCommit job: JobRecord stdout: ArtifactId stderr: ArtifactId }
 enum DeclaredCheckPhase { Starting Running Publishing Completed Failed Unknown }
 root data DeclaredCheckTicket { parent: AttemptId check: ValidationCheck workspace: WorkspaceSpec fingerprint: str }
@@ -755,7 +755,7 @@ enum DispatchPhase { Preparing Running Stopping Validating Publishing Completed 
 enum ChildNext { Wait Plan Review Revise ResolveBlocker Retry ConsiderAcceptance ConsiderProposal ConsiderGrouping InspectEvidence RetryDelivery }
 root data ChildCounts {
   ready: i32 accepted: i32 changesRequested: i32 blocked: i32 failed: i32 validationFailed: i32 validationUnknown: i32
-  proposed: i32 evidence: i32 abstained: i32 assessed: i32
+  proposed: i32 evidence: i32 abstained: i32 assessed: i32 validationIntermittent: i32
 }
 root data WorkspaceState { admission: WorkspaceAdmission directory: opt[str] }
 root data DispatchStatus {

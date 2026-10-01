@@ -31,7 +31,7 @@ final class DeclaredCheckPublication(directory: Path, ticket: DeclaredCheckTicke
     val artifact = record.map { value => ArtifactUpload(project, NativeArtifacts.id(ticket.parent, prefix), ticket.parent,
       ArtifactKind.Validation, "application/json", HostFiles.encode(ValidationObservation_JsonCodec,
         ValidationObservation(ticket.check, ticket.workspace.base, value, out, err))) }
-    val evidence = artifact.map(value => ValidationEvidence(ticket.check.name, state, value.id))
+    val evidence = artifact.map(value => ValidationEvidence(ticket.check.name, state, value.id, Nil))
     val blocker = problem.orElse(if (!settled || !complete) Some("Declared check settlement or retained output is incomplete") else observed.flatMap(_.problem))
       .map(DispatchProjection.concise)
     val status = DeclaredCheckStatus(ticket.check.name, ticket.workspace.attempt,

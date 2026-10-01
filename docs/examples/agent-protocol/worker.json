@@ -327,7 +327,8 @@
           "python"
         ],
         "executionMillis": "180000",
-        "outputBytes": 262144
+        "outputBytes": 262144,
+        "attempts": 1
       }
     ]
   },

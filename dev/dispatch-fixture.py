@@ -520,6 +520,7 @@ def main():
 
     worker = poll(first["attempt"])
     assert worker["phase"] == "Completed" and worker["counts"]["ready"] == 1 and worker["counts"]["validationFailed"] == 0, worker
+    assert worker["counts"]["validationIntermittent"] == (1 if data["request"] == "intermittent-check" else 0) and worker["next"] == "Review", worker
     assert worker["result"] and worker["usageDelivered"] and worker["detailsOmitted"]
     assert poll(first["attempt"]) == worker
     review_request = {**request, "request": identity(), "work": {"Reviewer": {"mode": "Candidate"}}, "previous": worker["result"]}
@@ -547,6 +548,10 @@ def main():
         return
     reviewed = poll(review["attempt"])
     assert reviewed["phase"] == "Completed" and reviewed["counts"]["accepted"] == 1, reviewed
+    if data["request"] == "intermittent-check":
+        assert reviewed["counts"]["validationFailed"] == 0 and reviewed["next"] == "ConsiderAcceptance", reviewed
+        finish({"summary": "A check that failed once passed on its rerun; the candidate was reviewed without a worker pass"})
+        return
     if data["request"] == "integrate-reviewed-candidate":
         assert data["integrationTarget"] == "refs/heads/integration"
         operation = identity()

@@ -51,6 +51,9 @@ object SupervisorConfig {
       .run(Path.of(config.run.repository), List(value.executable.toString, "--version"))
     require(version.exit == 0 && version.text.split("[\\s()]+").contains(value.version), VersionMismatch)
   }
+  /** A failing check is run at most `attempts` times on one commit. */
+  def reruns(check: ValidationCheck): Unit =
+    require(check.attempts >= 1 && check.attempts <= IntegrationValidation.MaxAttempts, "Invalid configured validation check")
   def credentialLifetime(limits: ExecutionLimits): Duration = {
     val lifetime = limits.startup.plus(limits.execution).plus(limits.grace).plus(limits.kill).plus(CredentialMargin)
     require(lifetime.compareTo(MaxCredentialLifetime) <= 0, "Process deadline budget exceeds scoped credential lifetime")
@@ -88,6 +91,7 @@ object SupervisorConfig {
         check.executionMillis > 0 && check.executionMillis <= settings.limits.executionMillis && check.retainedOutputBytes > 0 && check.retainedOutputBytes <= 1024 * 1024,
         "Invalid configured validation check")
     }
+    settings.checks.foreach(reruns)
     require(settings.checks.map(value => HostFiles.encode(ValidationCheck_JsonCodec, value).getBytes(java.nio.charset.StandardCharsets.UTF_8).length).sum <= 16384,
       "Configured validation arguments exceed 16 KiB")
     val guardian = Path.of(settings.guardian)

@@ -71,7 +71,7 @@ settings['integrationTarget'] = 'refs/heads/cq-result'
 settings['harnesses'][0].update(executable=codex, version=version.removeprefix('codex-cli '))
 settings['limits'].update(executionMillis='900000', retainedOutputBytes=8388608)
 settings['checks'] = [{'name': 'go-tests', 'command': [go, 'test', './...'],
-                       'executionMillis': '120000', 'retainedOutputBytes': 262144}]
+                       'executionMillis': '120000', 'retainedOutputBytes': 262144, 'attempts': 1}]
 with (state / 'supervisor.json').open('x') as output:
     json.dump(settings, output, indent=2)
 PY

@@ -42,7 +42,7 @@ def main():
                        "graceMillis": "300", "killMillis": "2000", "retainedOutputBytes": 262144},
             "checks": [{"name": "consumer-content", "command": [sys.executable, "-c",
                 "from pathlib import Path; assert Path('consumer.txt').read_text() == 'candidate from isolated worker\\n'; Path('check-private').write_text('isolated')"],
-                "executionMillis": "5000", "retainedOutputBytes": 65536}],
+                "executionMillis": "5000", "retainedOutputBytes": 65536, "attempts": 1}],
         }))
         source = root / "request.txt"
         source.write_text("cohort-choice-ack")

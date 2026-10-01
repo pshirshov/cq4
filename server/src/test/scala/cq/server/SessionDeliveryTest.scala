@@ -122,7 +122,7 @@ abstract class SessionDeliveryTest extends SpecZIO with AssertZIO {
           Some(ArtifactId(uuid)), Fence(ClaimId(uuid), 1), limits)
         ticket = DispatchTicket(request, childAssignment, reviewer, profile, None)
         run = SupervisorRun(ProjectConfig(owner.project, "http://localhost", "Check recovery"), assignment, governor, profile.version, fixture.source.toString, fixture.base, SessionOwnership.Managed)
-        declarations = List("a-sealed", "b-interrupted", "c-unstarted").map(name => ValidationCheck(name, List("verify"), 1000, 65536))
+        declarations = List("a-sealed", "b-interrupted", "c-unstarted").map(name => ValidationCheck(name, List("verify"), 1000, 65536, 1))
         directory <- ZIO.attemptBlocking(Files.createTempDirectory("cq-check-recovery-"))
         journal <- ZIO.acquireRelease(ZIO.attemptBlocking(FileJobRepository.open(directory.resolve("journal"), owner.project, owner.actor.session)))(value => ZIO.attemptBlocking(value.close()).orDie)
         _ <- ZIO.attemptBlocking {

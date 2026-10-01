@@ -23,9 +23,9 @@ final class IntegrationRebaseProcess extends SpecZIO with AssertZIO {
   )
   private def uuid: UUID = UUID.randomUUID()
   private val Target = "refs/heads/integration"
-  private val BothSides = ValidationCheck("both-sides", List("sh", "-c", "test -f left.txt && test -f right.txt"), 10000, 65536)
-  private val CandidateOnly = ValidationCheck("candidate-only", List("sh", "-c", "echo target change present >&2; test ! -f left.txt"), 10000, 65536)
-  private val Slow = ValidationCheck("slow", List("sleep", "60"), 90000, 65536)
+  private val BothSides = ValidationCheck("both-sides", List("sh", "-c", "test -f left.txt && test -f right.txt"), 10000, 65536, 1)
+  private val CandidateOnly = ValidationCheck("candidate-only", List("sh", "-c", "echo target change present >&2; test ! -f left.txt"), 10000, 65536, 1)
+  private val Slow = ValidationCheck("slow", List("sleep", "60"), 90000, 65536, 1)
 
   private final class Receiver(application: Application, auth: Authorization, root: Authority, authority: Authority, runtime: Runtime[Any],
     renewals: AtomicInteger) extends ServerApi {
@@ -126,7 +126,7 @@ final class IntegrationRebaseProcess extends SpecZIO with AssertZIO {
           JobPhase.Settled, Some(JobExit(Some(0), None, StopReason.Exited, 0, 0, true, false)), None, 1, 1000, 1001)
         artifacts.upload(collector, ArtifactUpload(owner.project, ArtifactId(uuid), workerAttempt.id, ArtifactKind.Validation, "application/json",
           Wire.encode(ValidationObservation_JsonCodec, ValidationObservation(check, reviewed, job, ArtifactId(uuid), ArtifactId(uuid)))))
-          .map(metadata => ValidationEvidence(check.name, ValidationState.Passed, metadata.id))
+          .map(metadata => ValidationEvidence(check.name, ValidationState.Passed, metadata.id, Nil))
       }
       request = DispatchRequest(RequestId(uuid), DispatchWork.Worker(WorkerMode.Implement), Harness.Codex, created.items, Nil, Nil, None, claim.fence, limits)
       worker = ChildResult(workerAttempt.id, request, local.base, Some(reviewed),
@@ -211,6 +211,37 @@ final class IntegrationRebaseProcess extends SpecZIO with AssertZIO {
           assert(records.size == 2 && records.map(_.workspace.base).toSet == Set(merged))
           assert((local.git(local.source, "rev-parse", "HEAD"), Files.readAllBytes(local.source.resolve(".git/index")).toList) == governing)
           assert(List("left.txt", "right.txt").forall(name => local.git(local.source, "show", Target + ":" + name) == name.stripSuffix(".txt")))
+        }
+      } yield () }
+    }
+
+    "I19: rerun a check that fails once on the rebased commit and cite the failed run in the Task evidence" in {
+      (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
+      val counter = local.directory.resolve("flaky-" + uuid)
+      val flaky = ValidationCheck("flaky", List("sh", "-c",
+        s"test -f left.txt && test -f right.txt || exit 2; n=$$(cat $counter 2>/dev/null || echo 0); echo $$((n + 1)) > $counter; test $$n -ge 1"), 10000, 65536, 2)
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, List(flaky), false) { f => for {
+        ready <- f.prepare
+        _ <- ZIO.attempt(assert(ready.phase == IntegrationPhase.Ready && ready.blocker.isEmpty &&
+          ready.preview.exists(_.rebase == RebaseOutcome.Applied(f.reviewed)), ready.toString))
+        recorded <- f.integrate(ready.id)
+        record <- integrations.get(f.owner, ready.id)
+        evidence = record.intent.rebase.get.validation.head
+        observations <- ZIO.foreach(evidence.failures :+ evidence.artifact)(id => text(artifacts, f.owner, id).map(Wire.decode(ValidationObservation_JsonCodec, _)))
+        task <- ledger.get(f.owner, f.members.head.id).map(_.item.draft.content.asInstanceOf[Content.Task])
+        records <- f.jobs.records(f.config.owner)
+        _ <- ZIO.attemptBlocking {
+          val merged = ready.preview.get.candidate
+          println(s"Intermittent check on the rebased commit: evidence=$evidence runs=${Files.readString(counter).trim} citations=${task.validation.takeRight(2).map(_.citations)}")
+          assert(recorded.phase == IntegrationPhase.Recorded && f.target == merged, recorded.toString)
+          assert(evidence.state == ValidationState.Passed && evidence.failures.size == 1 && Files.readString(counter).trim == "2", evidence.toString)
+          assert(observations.forall(value => value.candidate == merged && value.job.workspace.base == merged) &&
+            observations.map(value => JobOutcome.observed(value.job).succeeded) == List(false, true))
+          // Two check jobs and one Git job, each on the rebased commit.
+          assert(records.size == 3 && records.map(_.workspace.base).toSet == Set(merged))
+          val cited = task.validation.takeRight(2)
+          assert(cited.head.citations.contains(Citation.Artifact(evidence.artifact)) && cited.last.citations == List(Citation.Artifact(evidence.failures.head)), cited.toString)
         }
       } yield () }
     }

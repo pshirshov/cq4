@@ -41,7 +41,7 @@ def main():
             "limits": {"startupMillis": "5000", "executionMillis": "90000", "heartbeatMillis": "1000",
                        "graceMillis": "300", "killMillis": "2000", "retainedOutputBytes": 262144},
             "checks": [{"name": "consumer-content", "command": [sys.executable, "-c", "from pathlib import Path; assert Path('consumer.txt').read_text() == 'candidate from isolated worker\\n'; Path('check-private').write_text('isolated check')"],
-                        "executionMillis": "5000", "retainedOutputBytes": 65536}],
+                        "executionMillis": "5000", "retainedOutputBytes": 65536, "attempts": 1}],
         }))
         source = root / "request.txt"
         source.write_text("Run the worker/reviewer dispatch fixture")
@@ -226,6 +226,37 @@ def main():
                 assert time.monotonic() < deadline, "Reviewer check process survived hierarchy termination"
                 time.sleep(0.05)
             print(json.dumps({"reviewerCheckInterruption": mode, "session": str(interrupted_session), "executions": 2}))
+        settings.write_text(ordinary_settings)
+
+        def counting(counter, failing):
+            return (f"from pathlib import Path; import sys; counter=Path({str(counter)!r}); "
+                    "n=int(counter.read_text())+1 if counter.exists() else 1; counter.write_text(str(n)); "
+                    "assert Path('consumer.txt').read_text() == 'candidate from isolated worker\\n'; "
+                    f"sys.exit(1 if n <= {failing} else 0)")
+
+        def child(session_directory, role):
+            return next(path for path in (session_directory / "children").iterdir()
+                        if json.loads((path / "ticket.json").read_text())["attempt"]["role"] == role)
+
+        # I19: a configured check that fails once and passes on its automatic rerun does not block the review.
+        counter = root / "intermittent-check-count"
+        configured = json.loads(ordinary_settings)
+        configured["checks"][0].update(command=[sys.executable, "-c", counting(counter, 1)], attempts=2)
+        settings.write_text(json.dumps(configured))
+        source.write_text("intermittent-check")
+        intermittent = json.loads(run(["run", "codex", "--settings", str(settings), "--input", str(source)]))
+        intermittent_session = Path(intermittent["directory"])
+        worked = json.loads((child(intermittent_session, "Worker") / "publication.json").read_text())
+        evidence, = worked["result"]["validation"]
+        assert evidence["state"] == "Passed" and len(evidence["failures"]) == 1 and evidence["artifact"] not in evidence["failures"], evidence
+        receipt = json.loads((child(intermittent_session, "Worker") / "receipt.json").read_text())
+        assert receipt["counts"]["validationIntermittent"] == 1 and receipt["counts"]["validationFailed"] == 0, receipt
+        assert receipt["next"] == "Review" and receipt["blocker"] is None, receipt
+        reviewed = json.loads((child(intermittent_session, "Reviewer") / "receipt.json").read_text())
+        assert reviewed["phase"] == "Completed" and reviewed["counts"]["accepted"] == 1 and reviewed["counts"]["validationFailed"] == 0, reviewed
+        # Two worker runs (failed, then passed) and the reviewer's own run.
+        assert counter.read_text() == "3", counter.read_text()
+        print(json.dumps({"intermittentCheck": evidence, "session": intermittent["session"], "executions": 3}))
         settings.write_text(ordinary_settings)
         subprocess.run(["git", "-C", str(repository), "branch", "integration"], check=True)
         (repository / "governing.txt").write_text("staged governing work\n")
