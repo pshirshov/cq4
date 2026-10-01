@@ -39,6 +39,13 @@ def seed(call, project, language, specification):
             "target": member["id"], "expectedTarget": member["revision"], "present": True}}])
         goal = next(value for value in linked if value["id"] == goal["id"])
         members[index] = next(value for value in linked if value["id"] == member["id"])
+    # Implementation is admitted only for Tasks under a milestone.
+    milestone, = change([{"Create": {"draft": draft("Word-frequency consumer delivery", "", {"Milestone": {"status": "Open", "objective": "Deliver the specified consumer"}})}}])
+    for index, member in enumerate(members):
+        linked = change([{"Reference": {"source": member["id"], "expectedSource": member["revision"], "relation": "PartOf",
+            "target": milestone["id"], "expectedTarget": milestone["revision"], "present": True}}])
+        milestone = next(value for value in linked if value["id"] == milestone["id"])
+        members[index] = next(value for value in linked if value["id"] == member["id"])
     return {"goal": goal, "members": members, "drafts": drafts, "operations": operations}
 
 

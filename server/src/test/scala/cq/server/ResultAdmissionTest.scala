@@ -24,8 +24,8 @@ abstract class ResultAdmissionTest extends SpecZIO with AssertZIO {
     val collector = owner.copy(actor = owner.actor.copy(subject = "host", role = Role.Collector))
     for {
       _ <- ledger.initialize(owner, "Admission")
-      created <- ledger.change(owner, ChangeRequest(RequestId(UUID.randomUUID()), List.fill(2)(Mutation.Create(task)), Nil, "Fixture"))
-      claim <- ledger.acquire(owner, ClaimId(UUID.randomUUID()), created.items.map(_.id).toSet, 300000)
+      members <- MilestoneFixture.assigned(ledger, owner, List.fill(2)(task))
+      claim <- ledger.acquire(owner, ClaimId(UUID.randomUUID()), members.map(_.id).toSet, 300000)
       assignment <- usage.assign(collector, Assignment(AssignmentId(UUID.randomUUID()), owner.project, Set.empty, Attribution.Unattributed, None, None))
       parent <- usage.start(collector, Attempt(AttemptId(UUID.randomUUID()), assignment.id, None, owner.actor.session, Role.Governor,
         Harness.Codex, "fixture", "fixture", "fixture", 1000))
@@ -33,9 +33,9 @@ abstract class ResultAdmissionTest extends SpecZIO with AssertZIO {
       child <- usage.start(collector, Attempt(AttemptId(UUID.randomUUID()), assigned.id, Some(parent.id), owner.actor.session, Role.Worker,
         Harness.Codex, "fixture", "fixture", "fixture", 1001))
       request = DispatchRequest(RequestId(UUID.randomUUID()), DispatchWork.Worker(WorkerMode.Implement), Harness.Codex,
-        created.items, Nil, Nil, None, claim.fence, HostLimits(3000, 10000, 1000, 300, 2000, 262144))
+        members, Nil, Nil, None, claim.fence, HostLimits(3000, 10000, 1000, 300, 2000, 262144))
       result = ChildResult(child.id, request, GitCommit("a" * 40), Some(GitCommit("b" * 40)),
-        ChildReport.Work(created.items.map(item => WorkMember(item.id, WorkDisposition.CandidateReady, "Candidate", Nil))), Nil, RetainedEvidence(Nil, Nil))
+        ChildReport.Work(members.map(item => WorkMember(item.id, WorkDisposition.CandidateReady, "Candidate", Nil))), Nil, RetainedEvidence(Nil, Nil))
       metadata <- artifacts.upload(collector, ArtifactUpload(owner.project, ArtifactId(UUID.randomUUID()), child.id,
         ArtifactKind.Result, "application/json", Wire.encode(ChildResult_JsonCodec, result)))
     } yield Fixture(owner, collector, claim, result, metadata)

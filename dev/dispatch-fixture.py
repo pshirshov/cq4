@@ -446,6 +446,16 @@ def main():
         emit({"type": "fixture.growth-seed", "members": members})
         finish({"summary": "Registered fixture artifact owner and unchanged task"})
         return
+    # Implementation is admitted only for Tasks under a milestone.
+    milestone = tool("cq", "change", {"project": project, "change": {"request": identity(), "mutations": [{"Create": {"draft": {
+        "title": "Fixture milestone", "body": "", "labels": [], "archived": False, "citations": [],
+        "content": {"Milestone": {"status": "Open", "objective": "Deliver the fixture tasks"}}}}}], "fences": [], "reason": "Fixture milestone"}})["Changed"]["ack"]["items"][0]
+    for index, member in enumerate(members):
+        linked = tool("cq", "change", {"project": project, "change": {"request": identity(), "mutations": [{"Reference": {
+            "source": member["id"], "expectedSource": member["revision"], "relation": "PartOf", "target": milestone["id"],
+            "expectedTarget": milestone["revision"], "present": True}}], "fences": [], "reason": "Fixture milestone"}})["Changed"]["ack"]["items"]
+        milestone = next(value for value in linked if value["id"] == milestone["id"])
+        members[index] = next(value for value in linked if value["id"] == member["id"])
     claim = tool("cq", "claim", {"project": project, "action": {"Acquire": {"id": identity(), "members": [value["id"] for value in members], "durationMillis": "180000"}}})
     request = {"request": identity(), "work": {"Worker": {"mode": "Implement"}}, "harness": "Codex", "members": members,
                "guidance": [], "artifacts": [], "previous": None, "fence": claim["Claimed"]["claim"]["fence"], "limits": data["limits"]}

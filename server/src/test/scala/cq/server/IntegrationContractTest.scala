@@ -71,9 +71,9 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
     val check = ValidationCheck("consumer", List("consumer-check"), 1000, 65536)
     for {
       _ <- ledger.initialize(owner, "Integration")
-      created <- ledger.change(owner, ChangeRequest(RequestId(uuid), List.fill(2)(Mutation.Create(task)), Nil, "Consumer tasks"))
-      items <- ZIO.foreach(created.items)(ref => ledger.get(owner, ref.id).map(_.item))
-      claim <- ledger.acquire(owner, ClaimId(uuid), created.items.map(_.id).toSet, 300000)
+      members <- MilestoneFixture.assigned(ledger, owner, List.fill(2)(task))
+      items <- ZIO.foreach(members)(ref => ledger.get(owner, ref.id).map(_.item))
+      claim <- ledger.acquire(owner, ClaimId(uuid), members.map(_.id).toSet, 300000)
       parentAssignment <- usage.assign(collector, Assignment(AssignmentId(uuid), owner.project, Set.empty, Attribution.Unattributed, None, None))
       parent <- usage.start(collector, Attempt(AttemptId(uuid), parentAssignment.id, None, owner.actor.session, Role.Governor, Harness.Codex, "fixture", "fixture", "fixture", 1000))
       workerAssignment <- usage.assign(collector, Assignment(AssignmentId(uuid), owner.project, claim.members, Attribution.Shared, Some(uuid), None))
@@ -82,20 +82,20 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
         JobPhase.Settled, Some(JobExit(Some(0), None, StopReason.Exited, 0, 0, true, false)), None, 1, 1000, 1001)
       validation <- artifacts.upload(collector, ArtifactUpload(owner.project, ArtifactId(uuid), workerAttempt.id, ArtifactKind.Validation, "application/json",
         Wire.encode(ValidationObservation_JsonCodec, ValidationObservation(check, candidate, job, ArtifactId(uuid), ArtifactId(uuid)))))
-      request = DispatchRequest(RequestId(uuid), DispatchWork.Worker(WorkerMode.Implement), Harness.Codex, created.items, Nil, Nil, None,
+      request = DispatchRequest(RequestId(uuid), DispatchWork.Worker(WorkerMode.Implement), Harness.Codex, members, Nil, Nil, None,
         claim.fence, HostLimits(3000, 10000, 1000, 300, 2000, 262144))
       worker = ChildResult(workerAttempt.id, request, GitCommit("a" * 40), Some(candidate),
-        ChildReport.Work(created.items.map(ref => WorkMember(ref.id, WorkDisposition.CandidateReady, "Ready", Nil))), List(ValidationEvidence(check.name, ValidationState.Passed, validation.id)), RetainedEvidence(Nil, Nil))
+        ChildReport.Work(members.map(ref => WorkMember(ref.id, WorkDisposition.CandidateReady, "Ready", Nil))), List(ValidationEvidence(check.name, ValidationState.Passed, validation.id)), RetainedEvidence(Nil, Nil))
       workerArtifact <- publish(collector, worker, artifacts, admissions)
       reviewAssignment <- usage.assign(collector, workerAssignment.copy(id = AssignmentId(uuid), cohort = Some(uuid)))
       reviewAttempt <- usage.start(collector, workerAttempt.copy(id = AttemptId(uuid), assignment = reviewAssignment.id, role = Role.Reviewer))
       reviewer = ChildResult(reviewAttempt.id, request.copy(request = RequestId(uuid), work = DispatchWork.Reviewer(ReviewerMode.Candidate), previous = Some(workerArtifact)),
-        candidate, Some(candidate), ChildReport.Review(created.items.map(ref => ReviewMember(ref.id, ReviewVerdict.Accepted, Nil)), None), worker.validation, RetainedEvidence(Nil, Nil))
+        candidate, Some(candidate), ChildReport.Review(members.map(ref => ReviewMember(ref.id, ReviewVerdict.Accepted, Nil)), None), worker.validation, RetainedEvidence(Nil, Nil))
       reviewArtifact <- publish(collector, reviewer, artifacts, admissions)
       id = IntegrationId(uuid)
       change = IntegrationPolicy.completion(id, "/consumer", "refs/heads/integration", candidate, workerArtifact, reviewArtifact, List(validation.id), claim.fence, items)
       intent = IntegrationIntent(id, owner.project, owner.actor, "/consumer", "refs/heads/integration", worker.base, candidate,
-        workerArtifact, reviewArtifact, List(check), claim.fence, created.items, change)
+        workerArtifact, reviewArtifact, List(check), claim.fence, members, change)
     } yield Fixture(owner, collector, parent.id, claim, items, worker, reviewer, intent)
   }
   private def reject[A](operation: IO[Throwable, A], accepts: Fault => Boolean): IO[Throwable, Unit] = operation.either.flatMap { value =>
@@ -305,7 +305,7 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
         _ <- integrations.reserve(f.collector, f.intent)
         _ <- reject(proposals(f.owner, handle), pending(f.intent.id))
         before <- ledger.changes(f.owner, ChangeCursor(0), 20)
-        _ <- assertIO(before.events.size == 1)
+        _ <- assertIO(before.events.size == 3)
         _ <- integrations.observe(f.collector, f.intent.id, IntegrationObservation.NotApplied("Target unchanged; executor settled"))
         ack <- proposals(f.owner, handle)
         _ <- assertIO(ack.items.map(_.id) == List(ItemId(f.owner.project, Ledger.Researches, 1)))
@@ -469,9 +469,9 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
         _ <- assertIO(ordinaryReplay == acknowledgement)
         items <- ZIO.foreach(f.items)(item => ledger.get(f.owner, item.id))
         histories <- ZIO.foreach(f.items)(item => ledger.history(f.owner, item.id, Revision(Long.MaxValue), 20))
-        _ <- assertIO(items.forall(item => item.item.revision == Revision(2) && item.item.draft.body == task.body && item.item.draft.labels == task.labels &&
+        _ <- assertIO(items.forall(item => item.item.revision == Revision(3) && item.item.draft.body == task.body && item.item.draft.labels == task.labels &&
           item.item.draft.content.asInstanceOf[Content.Task].status == TaskStatus.Done && item.item.draft.content.asInstanceOf[Content.Task].validation.last.origin == EvidenceOrigin.HostObserved))
-        _ <- assertIO(histories.forall(page => page.entries.size == 2 && page.entries.head.cursor == acknowledgement.cursor))
+        _ <- assertIO(histories.forall(page => page.entries.size == 3 && page.entries.head.cursor == acknowledgement.cursor))
         preview <- expired.claimPreview(f.owner, f.claim.members)
         _ <- assertIO(preview.claims.isEmpty && preview.integrations.isEmpty)
         _ <- expired.acquire(f.owner, ClaimId(uuid), f.claim.members, 300000)
@@ -563,12 +563,12 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
             before <- integrations.get(f.owner, f.intent.id)
             _ <- assertIO(before.resolution.isInstanceOf[IntegrationResolution.Pending] == abort)
             items <- ZIO.foreach(f.items)(item => ledger.get(f.owner, item.id))
-            _ <- assertIO(items.forall(_.item.revision == Revision(if (abort) 1 else 2)))
+            _ <- assertIO(items.forall(_.item.revision == Revision(if (abort) 2 else 3)))
             recorded <- integrations.observe(f.collector, f.intent.id, IntegrationObservation.Incorporated(f.intent.candidate))
             replay <- integrations.observe(f.collector, f.intent.id, IntegrationObservation.Incorporated(f.intent.candidate))
             _ <- assertIO(recorded == replay)
             history <- ledger.history(f.owner, f.items.head.id, Revision(Long.MaxValue), 20)
-            _ <- assertIO(history.entries.size == 2)
+            _ <- assertIO(history.entries.size == 3)
           } yield ()
         }
     }

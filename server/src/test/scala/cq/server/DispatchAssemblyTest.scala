@@ -28,6 +28,7 @@ abstract class DispatchAssemblyTest extends SpecZIO with AssertZIO {
   private def requestId: RequestId = RequestId(UUID.randomUUID())
   private def draft(body: String): ItemDraft = ItemDraft("Consumer task", body, Set.empty, false,
     Content.Task(TaskStatus.Ready, List("Behavior verified"), None, Nil), Nil)
+  private def milestone: ItemDraft = draft("").copy(title = "Consumer milestone", content = Content.Milestone(MilestoneStatus.Open, "Deliver the consumer"))
 
   "Reference assembly (Behavioral Active Blackbox; dummy Group / PostgreSQL Good Communication)" should {
     "resolve paginated Unicode and chain an exact candidate by handle while enforcing revisions and claim ownership" in {
@@ -45,8 +46,11 @@ abstract class DispatchAssemblyTest extends SpecZIO with AssertZIO {
         for {
           runtime <- ZIO.runtime[Any]
           _ <- ledger.initialize(scope, "Assembly consumer")
-          ack <- ledger.change(scope, ChangeRequest(requestId, List(Mutation.Create(draft(narrative)), Mutation.Create(draft("Shared guidance"))), Nil, "Fixture"))
-          member = ack.items.head
+          ack <- ledger.change(scope, ChangeRequest(requestId, List(Mutation.Create(draft(narrative)), Mutation.Create(draft("Shared guidance")),
+            Mutation.Create(milestone)), Nil, "Fixture"))
+          organised <- ledger.change(scope, ChangeRequest(requestId, List(Mutation.Reference(ack.items.head.id, ack.items.head.revision, Relation.PartOf,
+            ack.items(2).id, ack.items(2).revision, true)), Nil, "Milestone"))
+          member = organised.items.find(_.id == ack.items.head.id).get
           guidance = ack.items(1)
           claim <- ledger.acquire(scope, ClaimId(UUID.randomUUID()), Set(member.id), 60000)
           assignment <- usage.assign(collector, Assignment(AssignmentId(UUID.randomUUID()), scope.project, Set(member.id), Attribution.Direct, None, None))
@@ -155,6 +159,39 @@ abstract class DispatchAssemblyTest extends SpecZIO with AssertZIO {
             val stale = intercept[IllegalArgumentException](workflows.assemble(WorkflowRequest.Review(previous.id, ReviewerMode.Candidate)))
             assert(stale.getMessage.contains("stale"))
           }
+        } yield ()
+    }
+
+    "refuse implementation input for a task without a milestone" in {
+      (ledger: LedgerService[IO], repository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
+        val clock = Clock.systemUTC()
+        val scope = Scope(ProjectId(UUID.randomUUID()), Actor("assembly governor", SessionId(UUID.randomUUID()), Role.Governor))
+        val authorization = new Authorization(AccessConfig("assembly-contract-test-root", "http://localhost"), clock)
+        val root = authorization.authenticate("assembly-contract-test-root", Some(scope.actor.session.value.toString))
+        val authority = authorization.authenticate(authorization.grant(root, GrantRequest(scope.project, scope.actor, clock.millis() + 60000)).value, None)
+        val application = new Application(ledger, repository, usage, artifacts, admissions, integrations, proposals, authorization)
+        for {
+          runtime <- ZIO.runtime[Any]
+          _ <- ledger.initialize(scope, "Milestone admission")
+          ack <- ledger.change(scope, ChangeRequest(requestId, List(Mutation.Create(draft("Unassigned work")), Mutation.Create(milestone)), Nil, "Fixture"))
+          member = ack.items.head
+          target = ack.items(1)
+          claim <- ledger.acquire(scope, ClaimId(UUID.randomUUID()), Set(member.id), 60000)
+          request = DispatchRequest(requestId, DispatchWork.Worker(WorkerMode.Implement), Harness.Codex, List(member), Nil, Nil, None, claim.fence,
+            HostLimits(3000, 10000, 1000, 300, 2000, 262144))
+          assembler = new InputAssembler(new ApplicationApi(application, authority, runtime), scope, clock, "")
+          refusal = Fault.Invalid(s"Work refused: T${member.id.number} has no milestone. A Planner must assign each Task to a milestone under plan review before work starts")
+          _ <- ZIO.attemptBlocking {
+            assert(intercept[DomainFailure](assembler.assemble(request)).fault == refusal)
+            assert(intercept[DomainFailure](assembler.assemble(request.copy(work = DispatchWork.Worker(WorkerMode.ResolveConflict)))).fault == refusal)
+            List[DispatchWork](DispatchWork.Explorer(ExplorerMode.Investigate), DispatchWork.Explorer(ExplorerMode.Research), DispatchWork.Planner(),
+              DispatchWork.Worker(WorkerMode.Probe), DispatchWork.Reviewer(ReviewerMode.Audit)).foreach(work =>
+              assert(assembler.assemble(request.copy(work = work)).members.map(_.item.id) == List(member.id)))
+          }
+          linked <- ledger.change(scope, ChangeRequest(requestId, List(Mutation.Reference(member.id, member.revision, Relation.PartOf, target.id, target.revision, true)),
+            List(claim.fence), "Assign the milestone"))
+          assigned = linked.items.find(_.id == member.id).get
+          _ <- ZIO.attemptBlocking(assert(assembler.assemble(request.copy(members = List(assigned))).members.map(_.refs) == List(List(ItemRef(Relation.PartOf, target.id)))))
         } yield ()
     }
   }

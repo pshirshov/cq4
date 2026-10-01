@@ -678,7 +678,7 @@ root data CohortRequest {
 enum CohortReason {
   CommonProducer CompatibleAssessment AssessmentRequired UnknownAssessment IncompatibleAssessment
   NoCommonProducer ExactPrevious Single InputBound Claimed Deferred NotReady ReviewAccepted ReviewBlocked FreshFromBase CandidateContinuity
-  PlannerOrganisation
+  PlannerOrganisation NoMilestone
 }
 root data CohortChoice {
   id: RequestId work: DispatchWork members: lst[ItemRevision] guidance: lst[ItemRevision] artifacts: lst[ArtifactId]
