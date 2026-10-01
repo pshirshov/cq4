@@ -111,7 +111,7 @@ object ShutdownFixture extends RoleAppMain.LauncherBIO[IO] {
       }
       make[SupervisorAuthority].from { (clock: Clock) =>
         val expires = clock.millis() + Duration.ofHours(1).toMillis
-        SupervisorAuthority(new Receiver, new Receiver, new Receiver, AccessToken("governor", expires), expires)
+        SupervisorAuthority(new Receiver, new Receiver, new Receiver, AccessToken("governor", expires))
       }
       make[SessionCollectors].fromValue(new SessionCollectors { override def collector(run: SupervisorRun): ServerApi = new Receiver })
       make[CliContext].from((config: SupervisorConfig) => CliContext(sys.env, config.directory, System.out))

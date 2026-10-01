@@ -10,7 +10,7 @@ import izumi.distage.testkit.scalatest.{AssertZIO, SpecZIO}
 import java.net.URI
 import java.nio.file.{Files, Path}
 import java.nio.file.attribute.PosixFilePermissions
-import java.time.Clock
+import java.time.{Clock, Duration}
 import java.util.UUID
 import zio.{IO, Promise, Runtime, Task, Unsafe, ZIO}
 
@@ -58,6 +58,14 @@ emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_toke
   private val Verbose = Header + """for index in range(400):
     emit({"type": "item.completed", "item": {"id": "item_%d" % index, "type": "agent_message", "text": "x" * 1000}})
 target.write_text(json.dumps({"Work": {"members": [{"item": item, "disposition": "Blocked", "summary": "Reported at length", "evidence": []} for item in members]}}))
+emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_tokens": 0, "cache_write_input_tokens": 0, "output_tokens": 5, "reasoning_output_tokens": 0}})
+"""
+  /** A child that records the payload of the domain credential it was launched with. */
+  private val Credentialed = Header + """import base64, os
+payload = os.environ["CQ_MCP_CQ_TOKEN"].split(".")[0]
+Path(".work/evidence").mkdir(parents=True)
+Path(".work/evidence/credential.json").write_bytes(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+target.write_text(json.dumps({"Work": {"members": [{"item": item, "disposition": "Blocked", "summary": "Recorded the credential", "evidence": []} for item in members]}}))
 emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_tokens": 0, "cache_write_input_tokens": 0, "output_tokens": 5, "reasoning_output_tokens": 0}})
 """
   /** A healthy child that is silent for longer than any former execution deadline of this suite before it reports. */
@@ -141,11 +149,11 @@ sys.stderr.flush()
       collectorAuthority = auth.authenticate(auth.grant(root, GrantRequest(owner.project, collector.actor, expires)).value, None)
       governorAuthority = auth.authenticate(auth.grant(root, GrantRequest(owner.project, owner.actor, expires)).value, None)
       authority = SupervisorAuthority(new Receiver(application, auth, root, root, runtime), new Receiver(application, auth, root, collectorAuthority, runtime),
-        new Receiver(application, auth, root, governorAuthority, runtime), AccessToken("governor", expires), expires)
+        new Receiver(application, auth, root, governorAuthority, runtime), AccessToken("governor", expires))
       workspaces = local.fixture.service
       jobs <- JobSupervisor.acquire(config.owner, ZIO.attemptBlocking(FileJobRepository.open(directory.resolve("journal"), project.project, owner.actor.session)),
         workspaces, new GuardianDriver(guardian.binary), directory.resolve("payload"), clock)
-      access = new LocalAccess(authority, clock)
+      access = new LocalAccess
       _ <- ZIO.succeed(access.bind(URI.create("http://127.0.0.1:1")))
       agents = new AgentCatalog(new McpSchemas, new ChildInstructions)
       runner = new ChildRunner(config, authority, new HarnessRegistry(Set(new ClaudeAdapter, new CodexAdapter, new PiAdapter)), jobs, workspaces,
@@ -271,6 +279,29 @@ sys.stderr.flush()
         job <- f.jobs.status(f.config.owner, entry.ticket.attempt.id)
         _ <- ZIO.attempt(assert(entry.status.phase == DispatchPhase.Completed && entry.status.result.nonEmpty &&
           job.exit.exists(exit => exit.reason == StopReason.Exited && exit.code.contains(0)), s"${entry.status} $job"))
+      } yield () }
+    }
+
+    "I21: grant a child its domain credential at its own start for the server's grant lifetime" in {
+      (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None) { f => for {
+        entry <- f.dispatch(Credentialed, HostLimits(3000, 900, 100, 1000, 262144))
+        _ <- f.runner.run(entry).timeoutFail(new IllegalStateException("Worker did not finish"))(zio.Duration.fromSeconds(60))
+        _ <- ZIO.attempt(assert(entry.status.phase == DispatchPhase.Completed && entry.status.result.nonEmpty, entry.status.toString))
+        result <- text(artifacts, f.owner, entry.status.result.get).map(Wire.decode(ChildResult_JsonCodec, _))
+        credential <- text(artifacts, f.owner, result.evidence.files.find(_.path == ".work/evidence/credential.json").get.artifact).map(Wire.decode(Credential_JsonCodec, _))
+        _ <- ZIO.attempt {
+          val attempt = entry.ticket.attempt
+          val day = Duration.ofHours(24).toMillis
+          credential match {
+            case Credential.Scoped(grant) =>
+              assert(grant.actor == Actor("CQ child " + attempt.id.value, attempt.session, Role.Worker) && grant.project == f.owner.project, grant.toString)
+              assert(grant.expiresAt > attempt.startedAt + day - Duration.ofMinutes(15).toMillis && grant.expiresAt <= f.clock.millis() + day,
+                s"Child credential expires ${grant.expiresAt - attempt.startedAt} ms after the child started")
+            case other => fail(other.toString)
+          }
+        }
       } yield () }
     }
 

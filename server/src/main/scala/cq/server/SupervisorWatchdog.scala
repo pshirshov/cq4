@@ -6,12 +6,13 @@ import java.nio.file.Path
 import java.time.Duration
 import zio.{Task, ZIO}
 
-final class SupervisorWatchdog(config: SupervisorConfig) extends AutoCloseable {
+final class SupervisorWatchdog(config: SupervisorConfig, nanoTime: () => Long, halt: Int => Unit) extends AutoCloseable {
   private val PollMillis = 20L
   private val HostDrain = Duration.ofSeconds(10)
   private val UnresolvedExit = 75
   private val drain = config.limits.grace.plus(config.limits.kill).plus(HostDrain).toNanos
-  private var deadline = Option.when(config.run.ownership == cq.api.SessionOwnership.Attached)(System.nanoTime() + SupervisorConfig.AttachedLifetime.toNanos + drain)
+  /** Armed only once shutdown begins: a session runs for as long as its owner does. */
+  private var deadline = Option.empty[Long]
   private var governor = Option.empty[ManagedExecution]
   @volatile private var draining = false
   private var closed = false
@@ -22,9 +23,9 @@ final class SupervisorWatchdog(config: SupervisorConfig) extends AutoCloseable {
         if (closed) running = false
         else {
           if (governor.exists(value => Set(ProcessPhase.Settled, ProcessPhase.Uncertain)(value.status.phase))) beginShutdown()
-          if (deadline.exists(System.nanoTime() - _ >= 0)) {
+          if (deadline.exists(nanoTime() - _ >= 0)) {
             // Forced process exit also fences retained I/O continuations; no settlement is inferred.
-            Runtime.getRuntime.halt(UnresolvedExit)
+            halt(UnresolvedExit)
           }
         }
       }
@@ -37,8 +38,7 @@ final class SupervisorWatchdog(config: SupervisorConfig) extends AutoCloseable {
   }
   def beginShutdown(): Unit = synchronized {
     if (!draining) {
-      val limit = System.nanoTime() + drain
-      deadline = Some(deadline.fold(limit)(math.min(_, limit)))
+      deadline = Some(nanoTime() + drain)
       draining = true
     }
   }
@@ -51,7 +51,7 @@ final class SupervisorWatchdog(config: SupervisorConfig) extends AutoCloseable {
 
 object SupervisorWatchdog {
   final class Resource(config: SupervisorConfig) extends Lifecycle.Of[Task, SupervisorWatchdog](
-    Lifecycle.make(ZIO.succeed(new SupervisorWatchdog(config)))(value => ZIO.attemptBlocking(value.close()).orDie)
+    Lifecycle.make(ZIO.succeed(new SupervisorWatchdog(config, () => System.nanoTime(), Runtime.getRuntime.halt(_))))(value => ZIO.attemptBlocking(value.close()).orDie)
   )
 }
 

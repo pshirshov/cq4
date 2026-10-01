@@ -102,7 +102,7 @@ final class IntegrationRebaseProcess extends SpecZIO with AssertZIO {
       governorAuthority = auth.authenticate(auth.grant(root, GrantRequest(owner.project, owner.actor, expires)).value, None)
       authority = SupervisorAuthority(new Receiver(application, auth, root, root, runtime, new AtomicInteger(0)),
         new Receiver(application, auth, root, collectorAuthority, runtime, new AtomicInteger(0)),
-        new Receiver(application, auth, root, governorAuthority, runtime, renewals), AccessToken("governor", expires), expires)
+        new Receiver(application, auth, root, governorAuthority, runtime, renewals), AccessToken("governor", expires))
       jobs <- JobSupervisor.acquire(config.owner, ZIO.attemptBlocking(FileJobRepository.open(directory.resolve("journal"), project.project, owner.actor.session)),
         local.fixture.service, new GuardianDriver(guardian.binary), directory.resolve("payload"), clock)
       admission <- Semaphore.make(1)

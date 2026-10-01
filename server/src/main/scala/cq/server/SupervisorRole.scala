@@ -32,9 +32,6 @@ object SupervisorConfig {
   private val MaxConfigBytes = 64 * 1024
   private val MaxInputBytes = 192 * 1024
   private val MaxOutputBytes = 32 * 1024 * 1024
-  val AttachedLifetime = Duration.ofHours(8)
-  /** The server grants scoped credentials for at most 24 hours; the margin absorbs clock difference between host and server. */
-  val ManagedLifetime = Duration.ofHours(24).minus(Duration.ofMinutes(10))
   val VersionMismatch = "Installed harness version differs from its configured verified route"
   def profile(value: HarnessSetting): HarnessProfile = HarnessProfile(value.harness, Path.of(value.executable), value.model, value.provider, value.version,
     value.providerExtensions.map(Path.of(_)), value.providerEnvironment)
