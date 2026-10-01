@@ -12,7 +12,6 @@ final class SupervisorWatchdog(config: SupervisorConfig) extends AutoCloseable {
   private val UnresolvedExit = 75
   private val drain = config.limits.grace.plus(config.limits.kill).plus(HostDrain).toNanos
   private var deadline = System.nanoTime() + (if (config.run.ownership == cq.api.SessionOwnership.Attached) SupervisorConfig.AttachedLifetime else config.limits.startup.plus(config.limits.execution)).toNanos + drain
-  private var sweepBudget = Long.MaxValue
   private var governor = Option.empty[ManagedExecution]
   @volatile private var draining = false
   private var closed = false
@@ -39,13 +38,8 @@ final class SupervisorWatchdog(config: SupervisorConfig) extends AutoCloseable {
   def beginShutdown(): Unit = synchronized {
     if (!draining) {
       deadline = math.min(deadline, System.nanoTime() + drain)
-      sweepBudget = deadline + WorkspaceCleanup.Budget.toNanos
       draining = true
     }
-  }
-  /** A completed workspace removal or quarantine restarts the drain window, never beyond the sweep budget; a stalled sweep still halts at the current deadline. */
-  def progress(): Unit = synchronized {
-    if (draining) deadline = math.min(sweepBudget, System.nanoTime() + drain)
   }
   def stopping: Boolean = draining
   override def close(): Unit = {

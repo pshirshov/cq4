@@ -21,7 +21,7 @@ final class BatchShutdownProcess extends SpecZIO with AssertZIO {
   private val SigintExit = 130
 
   "Batch supervisor shutdown (Behavioral Active Blackbox; JVM/Git/process Communication)" should {
-    "stop the governor, sweep its workspace and deliver the receipt and Finish usage when interrupted by SIGINT" in { (local: LocalWorkspaceFixture, guardian: GuardianFixture) =>
+    "stop the governor, remove its workspace and deliver the receipt and Finish usage when interrupted by SIGINT" in { (local: LocalWorkspaceFixture, guardian: GuardianFixture) =>
       val scope = Scope(ProjectId(UUID.randomUUID()), Actor("CQ governor", SessionId(UUID.randomUUID()), Role.Governor))
       val workspace = local.fixture.spec(scope)
       for {
@@ -32,11 +32,12 @@ final class BatchShutdownProcess extends SpecZIO with AssertZIO {
         }
         session = at.resolve("session")
         governor <- ZIO.attemptBlocking {
-          val process = ShutdownFixture.launch(at, ShutdownFixture.BatchFixtureRole, guardian.binary, Map.empty)
+          val process = ShutdownFixture.launch(at, ShutdownFixture.BatchFixtureRole, guardian.binary, Map.empty, Map.empty)
           try {
             def running: Boolean = Files.isDirectory(session.resolve("workspaces")) &&
               Using.resource(Files.list(session.resolve("workspaces")))(_.iterator().asScala.exists(entry => Files.exists(entry.resolve("tree").resolve("running"))))
-            ShutdownFixture.awaitUntil(process, at, Duration.ofSeconds(60))(running)
+            // The startup recovery records its receipt in the background while the governor starts.
+            ShutdownFixture.awaitUntil(process, at, Duration.ofSeconds(60))(running && Files.exists(session.resolve("workspaces").resolve("cleanup.json")))
             assert(new ProcessBuilder("kill", "-INT", process.pid().toString).inheritIO().start().waitFor() == 0)
             assert(process.waitFor(60, TimeUnit.SECONDS), "Batch supervisor did not exit after SIGINT")
             assert(process.exitValue() == SigintExit, Files.readString(at.resolve("owner.log")))
@@ -49,7 +50,7 @@ final class BatchShutdownProcess extends SpecZIO with AssertZIO {
           val log = Files.readString(at.resolve("owner.log"))
           assert(record.admission == WorkspaceAdmission.Removed && !Files.exists(Path.of(record.directory)), record.toString + "\n" + log)
           val cleanup = HostFiles.read(session.resolve("workspaces").resolve("cleanup.json"), WorkspaceCleanupReceipt_JsonCodec, 65536)
-          assert(cleanup.removed == List(governor) && cleanup.quarantined.isEmpty && cleanup.retained.isEmpty, cleanup.toString)
+          assert(cleanup.owner == scope.actor.session && cleanup.live.isEmpty && cleanup.sessions.isEmpty && !cleanup.deadlineExceeded, cleanup.toString)
           val receipt = HostFiles.read(session.resolve("receipt.json"), SupervisorReceipt_JsonCodec, 65536)
           assert(receipt.attempt == governor && receipt.phase == JobPhase.Settled && !receipt.processSucceeded && receipt.usageDelivered, receipt.toString)
           // The Finish usage is part of the committed final publication, stored under delivery/final with its acknowledgement.

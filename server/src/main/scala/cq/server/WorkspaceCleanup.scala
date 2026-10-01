@@ -2,69 +2,210 @@ package cq.server
 
 import cq.api.*
 import cq.core.{DomainFailure, Scope, WorkspaceService}
-import cq.host.{HostFiles, JobSupervisor}
-import java.nio.file.Files
+import cq.host.*
+import java.net.URI
+import java.nio.file.{Files, LinkOption, Path}
 import java.time.{Clock, Duration}
+import java.util.UUID
 import logstage.IzLogger
-import zio.{IO, Task, ZIO}
+import scala.jdk.CollectionConverters.*
+import scala.util.{Try, Using}
+import zio.{IO, Task, UIO, ZIO}
 
-final case class WorkspaceCleanupReport(removed: List[AttemptId], quarantined: List[RetainedWorkspace], retained: List[RetainedWorkspace], deadlineExceeded: Boolean)
+/** Workspace services of this state root's sessions; each session keeps its records under its own directory. */
+final class SessionWorkspaces(config: SupervisorConfig, clock: Clock) {
+  def at(session: Path): WorkspaceService[IO] = new WorkspaceService.Impl[IO](new GitWorkspaceRepository(session.resolve("workspaces"),
+    // Worktree creation and removal move whole checkouts; the ten-second bound of the other Git probes is too short for them.
+    new BoundedHostCommand(GitEnvironment.isolated(config.environment), Duration.ofMinutes(5), 65536), clock))
+}
+
+/** Collector authority for another session of this host's project, obtained as `cq job upload` obtains it. */
+trait SessionCollectors {
+  def collector(run: SupervisorRun): ServerApi
+}
+
+final class HttpSessionCollectors(config: SupervisorConfig, clock: Clock) extends SessionCollectors {
+  private val RequestTimeout = Duration.ofSeconds(30)
+  private val CredentialLifetime = Duration.ofHours(1)
+  override def collector(run: SupervisorRun): ServerApi = {
+    val endpoint = URI.create(run.project.endpoint)
+    val root = new HttpServerApi(endpoint, HostCredential.read(config.environment), run.attempt.session, RequestTimeout)
+    val token = root.grant(GrantRequest(run.project.project, Actor("CQ host collector", run.attempt.session, Role.Collector),
+      Math.addExact(clock.millis(), CredentialLifetime.toMillis)))
+    new HttpServerApi(endpoint, token.value, run.attempt.session, RequestTimeout)
+  }
+}
 
 object WorkspaceCleanup {
-  /** Upper bound of one session's shutdown sweep; the supervisor watchdog extends its halt deadline by at most this much, one drain window per completed Git operation. */
+  /** Upper bound of one startup recovery; sessions not reached within it are left for the next host startup. */
   val Budget: Duration = Duration.ofMinutes(5)
-  val DeadlineExceeded = "Cleanup deadline exceeded"
-  private val MaxReceiptBytes = 65536
+  val MaxSessions = 4096
+  val Unsettled = "Owning session ended before the job settled; termination is unconfirmed"
+  val Unpublished = "Child result is not published as Completed; run cq job upload"
+  private val MaxReceiptBytes = 1024 * 1024
+  private val MaxRecordBytes = 64 * 1024
+  private val MaxProblemCharacters = 300
 
-  /** Removes the workspace of every settled job whose record is open and which no pending integration references, until `deadline` (epoch millis), reporting each completed Git operation to `progress`; everything else is retained with its reason. */
-  def sweep(owner: Scope, records: List[JobRecord], pending: Set[AttemptId], workspaces: WorkspaceService[IO], clock: Clock, deadline: Long,
-    progress: () => Unit): Task[WorkspaceCleanupReport] =
-    ZIO.foldLeft(records.sortBy(_.workspace.attempt.value.toString))(WorkspaceCleanupReport(Nil, Nil, Nil, false)) { (report, record) =>
-      val attempt = record.workspace.attempt
-      def retain(reason: String): WorkspaceCleanupReport = report.copy(retained = report.retained :+ RetainedWorkspace(attempt, reason))
-      def quarantined(reason: String): WorkspaceCleanupReport = report.copy(quarantined = report.quarantined :+ RetainedWorkspace(attempt, reason))
-      if (report.deadlineExceeded || clock.millis() >= deadline) ZIO.succeed(retain(DeadlineExceeded).copy(deadlineExceeded = true))
-      else workspaces.get(owner, attempt).either.flatMap {
-        case Left(DomainFailure(_: Fault.Missing)) => ZIO.succeed(report)
-        case Left(error) => ZIO.succeed(retain("Workspace record unreadable: " + error.getClass.getSimpleName))
-        case Right(workspace) => workspace.admission match {
-          case WorkspaceAdmission.Removed => ZIO.succeed(report)
-          case WorkspaceAdmission.Quarantined => ZIO.succeed(quarantined(workspace.quarantineReason.getOrElse("no reason recorded")))
-          case WorkspaceAdmission.Open if record.phase != JobPhase.Settled => ZIO.succeed(retain("Job not settled: " + record.phase))
-          case WorkspaceAdmission.Open if pending(attempt) => ZIO.succeed(retain("Referenced by a pending integration"))
-          case WorkspaceAdmission.Open => workspaces.remove(owner, attempt).either.map {
-            case Right(removed) if removed.admission == WorkspaceAdmission.Removed => report.copy(removed = report.removed :+ attempt)
-            case Right(refused) => quarantined(refused.quarantineReason.getOrElse("Removal refused"))
-            case Left(error) => retain("Removal failed: " + Option(error.getMessage).getOrElse(error.getClass.getSimpleName))
-          }.tap(_ => ZIO.succeed(progress()))
+  private enum Disposition {
+    case Unrelated
+    case Live(session: SessionId)
+    case Recovered(report: SessionCleanup)
+  }
+  private final case class Outcome(live: List[SessionId], sessions: List[SessionCleanup], deadlineExceeded: Boolean)
+
+  private def problem(prefix: String, error: Throwable): String =
+    (prefix + ": " + Option(error.getMessage).getOrElse(error.getClass.getSimpleName)).take(MaxProblemCharacters)
+
+  private def childDirectories(session: Path): List[Path] = {
+    val root = session.resolve("children")
+    if (!Files.isDirectory(root, LinkOption.NOFOLLOW_LINKS)) Nil
+    else Using.resource(Files.list(root))(_.iterator().asScala.filter(path => Files.exists(path.resolve("ticket.json"), LinkOption.NOFOLLOW_LINKS)).toList)
+  }
+
+  /** A child's `receipt.json` is written once its result, usage and admission are acknowledged; only a Completed one releases its tree. */
+  private def completed(child: Path): Boolean = {
+    val receipt = child.resolve("receipt.json")
+    Files.exists(receipt, LinkOption.NOFOLLOW_LINKS) && HostFiles.read(receipt, DispatchStatus_JsonCodec, MaxRecordBytes).phase == DispatchPhase.Completed
+  }
+
+  /** The governing final publication or a child's publication has not been acknowledged by the server. */
+  def undelivered(session: Path): Boolean = {
+    val committed = session.resolve("delivery").resolve("final")
+    val governing = !Files.isDirectory(committed, LinkOption.NOFOLLOW_LINKS) || Using.resource(Files.list(committed)) { entries =>
+      val names = entries.iterator().asScala.map(_.getFileName.toString).toSet
+      names.exists(name => name.endsWith(".json") && !names(name.stripSuffix(".json") + ".ack"))
+    }
+    governing || childDirectories(session).exists(child => !Files.exists(child.resolve("receipt.json"), LinkOption.NOFOLLOW_LINKS))
+  }
+
+  /**
+   * Disposes of what a session whose host is gone left under `session`: an open workspace of an unsettled job is quarantined,
+   * a child's is kept until its result is published as Completed, every other settled job's is removed. `expired` ends the sweep early.
+   */
+  def sweep(owner: Scope, session: Path, records: List[JobRecord], workspaces: WorkspaceService[IO], expired: () => Boolean): Task[SessionCleanup] =
+    ZIO.attemptBlocking(childDirectories(session).map(child => child.getFileName.toString -> child).toMap).flatMap { children =>
+      ZIO.foldLeft(records.sortBy(_.workspace.attempt.value.toString))(SessionCleanup(owner.actor.session, Nil, Nil, Nil, 0, None)) { (report, record) =>
+        val attempt = record.workspace.attempt
+        def retain(reason: String): SessionCleanup = report.copy(retained = report.retained :+ RetainedWorkspace(attempt, reason))
+        def quarantined(reason: String): SessionCleanup = report.copy(quarantined = report.quarantined :+ RetainedWorkspace(attempt, reason))
+        if (expired()) ZIO.succeed(report)
+        else workspaces.get(owner, attempt).either.flatMap {
+          case Left(DomainFailure(_: Fault.Missing)) => ZIO.succeed(report)
+          case Left(error) => ZIO.succeed(retain(problem("Workspace record unreadable", error)))
+          case Right(workspace) if workspace.admission != WorkspaceAdmission.Open => ZIO.succeed(report)
+          case Right(_) if record.phase != JobPhase.Settled => workspaces.quarantine(owner, attempt, Unsettled).either.map {
+            case Right(_) => quarantined(Unsettled)
+            case Left(error) => retain(problem("Quarantine failed", error))
+          }
+          case Right(_) => ZIO.attemptBlocking(children.get(attempt.value.toString).forall(completed)).either.flatMap {
+            case Left(error) => ZIO.succeed(retain(problem("Child receipt unreadable", error)))
+            case Right(false) => ZIO.succeed(retain(Unpublished))
+            case Right(true) => workspaces.remove(owner, attempt).either.map {
+              case Right(removed) if removed.admission == WorkspaceAdmission.Removed => report.copy(removed = report.removed :+ attempt)
+              case Right(refused) => quarantined(refused.quarantineReason.getOrElse("Removal refused"))
+              case Left(error) => retain(problem("Removal failed", error))
+            }
+          }
         }
       }
     }
 }
 
-final class WorkspaceCleanup(config: SupervisorConfig, jobs: JobSupervisor, workspaces: WorkspaceService[IO],
-  integrations: IntegrationController, watchdog: SupervisorWatchdog, clock: Clock, logger: IzLogger) {
+/**
+ * Startup housekeeping for the sessions an earlier host of this project left in the state root. Workspaces of the running session
+ * are released by their owners as soon as nothing reads their tree again (`JobSupervisor.release`); nothing here runs at shutdown.
+ */
+final class WorkspaceCleanup(config: SupervisorConfig, sessions: SessionWorkspaces, collectors: SessionCollectors, clock: Clock, logger: IzLogger) {
   import WorkspaceCleanup.*
-  /** Governing-session shutdown housekeeping: runs after every controller has settled its work, records `workspaces/cleanup.json` and never fails the session. */
-  def run: Task[Unit] = (for {
+
+  private def candidates: List[Path] = {
+    val root = config.directory.getParent
+    val own = config.directory.getFileName.toString
+    Using.resource(Files.list(root)) { entries =>
+      val found = entries.iterator().asScala.filter { path =>
+        val name = path.getFileName.toString
+        name != own && Try(UUID.fromString(name)).toOption.exists(_.toString == name) && Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS) &&
+          Files.isRegularFile(path.resolve("run.json"), LinkOption.NOFOLLOW_LINKS)
+      }.take(MaxSessions + 1).toList
+      if (found.size > MaxSessions) logger.warn(s"State root $root holds more than $MaxSessions sessions; the remainder is not examined")
+      found.take(MaxSessions).sortBy(_.getFileName.toString)
+    }
+  }
+
+  private def openWorkspace(directory: Path): Boolean = {
+    val root = directory.resolve("workspaces")
+    Files.isDirectory(root, LinkOption.NOFOLLOW_LINKS) && Using.resource(Files.list(root))(_.iterator().asScala.exists(path => Files.isDirectory(path.resolve("tree"), LinkOption.NOFOLLOW_LINKS)))
+  }
+
+  /**
+   * `run.json` is written after its session has taken the exclusive lock on `journal/owner.lock`, which the operating system releases
+   * when that host process ends: acquiring the lock therefore proves the owner is gone, and holding it excludes `cq job upload`.
+   */
+  private def session(directory: Path, expired: () => Boolean): Task[Disposition] = ZIO.scoped {
+    ZIO.attemptBlocking(HostFiles.read(directory.resolve("run.json"), SupervisorRun_JsonCodec, MaxRecordBytes)).flatMap { run =>
+      val related = run.project.project == config.project.project && run.repository == config.run.repository &&
+        run.attempt.session.value.toString == directory.getFileName.toString
+      if (!related) ZIO.succeed(Disposition.Unrelated)
+      else ZIO.attemptBlocking(undelivered(directory) || openWorkspace(directory)).flatMap {
+        case false => ZIO.succeed(Disposition.Unrelated)
+        case true => ZIO.acquireRelease(ZIO.attemptBlocking(FileJobRepository.open(directory.resolve("journal"), run.project.project, run.attempt.session)).either)(
+          opened => ZIO.attemptBlocking(opened.foreach(_.close())).orDie).flatMap {
+          case Left(DomainFailure(_: Fault.Conflict)) => ZIO.succeed(Disposition.Live(run.attempt.session))
+          case Left(error) => ZIO.fail(error)
+          case Right(journal) =>
+            val owner = Scope(run.project.project, Actor("CQ governor", run.attempt.session, Role.Governor))
+            val workspaces = sessions.at(directory)
+            for {
+              delivered <- (if (undelivered(directory)) ZIO.attemptBlocking(collectors.collector(run)).flatMap(new SessionDelivery(journal, workspaces, clock).flush(directory, run, _))
+                else ZIO.succeed(SessionDeliveryReport(0, Nil))).either
+              swept <- sweep(owner, directory, journal.records, workspaces, expired)
+            } yield Disposition.Recovered(swept.copy(acknowledged = delivered.fold(_ => 0, _.acknowledged), problem = delivered match {
+              case Left(error) => Some(problem("Delivery reconciliation failed", error))
+              case Right(report) if report.incompleteTickets.nonEmpty => Some(s"${report.incompleteTickets.size} incomplete tickets or usage samples retained for inspection")
+              case Right(_) => None
+            }))
+        }
+      }
+    }.catchAll(error => ZIO.succeed(Disposition.Recovered(SessionCleanup(SessionId(UUID.fromString(directory.getFileName.toString)), Nil, Nil, Nil, 0,
+      Some(problem("Session could not be examined", error))))))
+  }
+
+  private def prune: UIO[Unit] = sessions.at(config.directory).prune(config.owner, config.run.repository)
+    .flatMap(count => ZIO.succeed(logger.info(s"Pruned $count stale worktree registrations from ${config.run.repository}")))
+    .catchAll(error => ZIO.succeed(logger.warn(s"Worktree pruning did not complete: ${error.getMessage}")))
+
+  /**
+   * Run in the background once the session has recorded itself: reconciles the pending deliveries (including the Finish usage) and
+   * the workspaces of this project's sessions whose host is gone, records `workspaces/cleanup.json` and never fails the session.
+   * It may be cut at any instant: every removal and quarantine rewrites its own record before the next begins.
+   */
+  def recover: UIO[Unit] = prune *> (for {
     startedAt <- ZIO.succeed(clock.millis())
-    records <- jobs.records(config.owner)
-    report <- sweep(config.owner, records, integrations.pendingJobs, workspaces, clock, startedAt + Budget.toMillis, () => watchdog.progress())
+    expired = () => clock.millis() - startedAt >= Budget.toMillis
+    found <- ZIO.attemptBlocking(candidates)
+    outcome <- ZIO.foldLeft(found)(Outcome(Nil, Nil, false)) { (outcome, directory) =>
+      if (outcome.deadlineExceeded || expired()) ZIO.succeed(outcome.copy(deadlineExceeded = true))
+      else session(directory, expired).map {
+        case Disposition.Unrelated => outcome
+        case Disposition.Live(value) => outcome.copy(live = outcome.live :+ value)
+        case Disposition.Recovered(report) => outcome.copy(sessions = outcome.sessions :+ report)
+      }
+    }
     _ <- ZIO.attemptBlocking {
-      val receipt = WorkspaceCleanupReceipt(config.owner.actor.session, startedAt, clock.millis(), report.deadlineExceeded,
-        report.removed, report.quarantined, report.retained)
+      val reported = outcome.sessions.filter(value => value.removed.nonEmpty || value.quarantined.nonEmpty || value.retained.nonEmpty || value.acknowledged > 0 || value.problem.nonEmpty)
+      val receipt = WorkspaceCleanupReceipt(config.owner.actor.session, startedAt, clock.millis(), outcome.deadlineExceeded || expired(), outcome.live, reported)
       val directory = config.directory.resolve("workspaces")
       Files.createDirectories(directory)
       HostFiles.immutable(directory.resolve("cleanup.json"), HostFiles.encode(WorkspaceCleanupReceipt_JsonCodec, receipt), MaxReceiptBytes)
-      val removed = report.removed.size
-      val quarantined = report.quarantined.size
-      val retained = report.retained.size
-      logger.info(s"Workspace cleanup removed $removed worktrees, left $quarantined quarantined and retained $retained under $directory")
-      (report.quarantined ++ report.retained).foreach(value => logger.info(s"Retained workspace ${value.attempt.value}: ${value.reason}"))
+      logger.info(s"Startup recovery examined ${outcome.sessions.size} ended sessions and skipped ${outcome.live.size} live ones; receipt under $directory")
+      reported.foreach { value =>
+        val removed = value.removed.size
+        val kept = value.quarantined.size + value.retained.size
+        val acknowledged = value.acknowledged
+        logger.info(s"Ended session ${value.session.value}: removed $removed worktrees, kept $kept, acknowledged $acknowledged delivery batches")
+        (value.quarantined ++ value.retained).foreach(kept => logger.info(s"Retained workspace ${kept.attempt.value}: ${kept.reason}"))
+        value.problem.foreach(text => logger.warn(s"Ended session ${value.session.value}: $text"))
+      }
     }
-  } yield ()).catchAll(error => ZIO.succeed(logger.warn(s"Workspace cleanup did not complete: ${error.getMessage}")))
-
-  def prune: Task[Unit] = workspaces.prune(config.owner, config.run.repository)
-    .flatMap(count => ZIO.succeed(logger.info(s"Pruned $count stale worktree registrations from ${config.run.repository}")))
-    .catchAll(error => ZIO.succeed(logger.warn(s"Worktree pruning did not complete: ${error.getMessage}")))
+  } yield ()).catchAll(error => ZIO.succeed(logger.warn(s"Startup recovery did not complete: ${error.getMessage}")))
 }

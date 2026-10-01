@@ -24,6 +24,8 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
     val path = directory(attempt).resolve(name)
     if (Files.exists(path)) HostFiles.bytes(path, MaxOutputBytes) else Array.emptyByteArray
   }
+  /** A failed removal leaves the record open; the next host startup retries it and reports the outcome in its cleanup receipt. */
+  private def release(attempt: AttemptId): Task[Option[WorkspaceRecord]] = jobs.release(config.owner, attempt)
   private def claim(entry: DispatchExecution, revisions: Boolean): Unit = {
     val request = entry.ticket.request
     authority.governor.call(Command.ClaimWork(ClaimInput(config.project.project, ClaimAction.Renew(request.fence, ClaimMillis)))) match {
@@ -228,7 +230,7 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
       val outcome = JobOutcome.observed(record)
       val state = if (outcome.succeeded) ValidationState.Passed else if (outcome.state == AttemptState.Unknown) ValidationState.Unknown else ValidationState.Failed
       (ValidationEvidence(check.name, state, artifact.id), outParts ++ errParts :+ artifact)
-    }
+    }.ensuring(release(id).ignore)
     (evidence, artifacts) = captured
     _ <- trace.update(value => value.copy(extra = value.extra ++ artifacts, uncertain = value.uncertain || evidence.state == ValidationState.Unknown))
     _ <- ZIO.attempt(require(evidence.state != ValidationState.Unknown, "Host validation cleanup is unconfirmed"))
@@ -280,6 +282,9 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
       _ <- if (entry.status.phase == DispatchPhase.Failed && result.isRight)
         workspaces.quarantine(config.owner, entry.ticket.attempt.id, "Server result admission rejected; inspect retained evidence")
           .map(record => entry.finish(entry.status.copy(workspace = Some(DispatchProjection.workspace(record)))))
+      // The candidate is a commit under refs/cq/candidates and the evidence is published: nothing reads a completed attempt's tree again.
+      else if (entry.status.phase == DispatchPhase.Completed) release(attempt.id)
+        .map(_.foreach(record => entry.finish(entry.status.copy(workspace = Some(DispatchProjection.workspace(record)))))).ignore
       else ZIO.unit
     } yield ()
   }

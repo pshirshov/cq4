@@ -164,7 +164,7 @@ final class SupervisorProgram(config: SupervisorConfig, registry: HarnessRegistr
     val project = config.project.project
     val assets = config.directory.resolve("assets").resolve(attempt.id.value.toString)
     val payload = config.directory.resolve("payload").resolve(attempt.id.value.toString)
-    // Interruption closes process admission, stops the governor and lets the usual settlement (sweep, receipt, Finish usage) run before the exit.
+    // Interruption closes process admission, stops the governor and lets the usual settlement (receipt, Finish usage) run before the exit.
     val guard = new TerminationGuard("cq-supervisor-termination", () => {
       watchdog.beginShutdown()
       Unsafe.unsafe { implicit unsafe =>
@@ -200,10 +200,12 @@ final class SupervisorProgram(config: SupervisorConfig, registry: HarnessRegistr
         (collector, queue, JobCommand(launch.arguments, launch.environment, input, config.limits))
       }
       (collector, queue, command) = prepared
+      _ <- cleanup.recover.forkDaemon
       _ <- jobs.start(config.owner, WorkspaceSpec(project, attempt.session, attempt.id, config.run.repository, config.run.base), command)
       record <- jobs.await(config.owner, attempt.id)
+      // The governor's result is read from its retained output and assets; a failed removal is retried by the next host startup.
+      _ <- jobs.release(config.owner, attempt.id).ignore
       _ <- integrations.shutdown.zipPar(combinations.shutdown).zipPar(dispatch.shutdown)
-      _ <- cleanup.run
       receipt <- ZIO.attemptBlocking {
         val stdout = if (Files.exists(payload.resolve("stdout"))) HostFiles.bytes(payload.resolve("stdout"), MaxOutputBytes) else Array.emptyByteArray
         val stderr = if (Files.exists(payload.resolve("stderr"))) HostFiles.bytes(payload.resolve("stderr"), MaxOutputBytes) else Array.emptyByteArray
@@ -292,11 +294,9 @@ object SupervisorPlugin extends PluginDef {
     }
     make[SupervisorWatchdog].fromResource[SupervisorWatchdog.Resource]
     make[ExecutionDriver].from[SupervisorDriver]
-    make[WorkspaceService[IO]].from { (config: SupervisorConfig, clock: Clock) =>
-      new WorkspaceService.Impl[IO](new GitWorkspaceRepository(config.directory.resolve("workspaces"),
-        // Worktree creation and removal move whole checkouts; the ten-second bound of the other Git probes is too short for them.
-        new BoundedHostCommand(GitEnvironment.isolated(config.environment), Duration.ofMinutes(5), 65536), clock))
-    }
+    make[SessionWorkspaces]
+    make[SessionCollectors].from[HttpSessionCollectors]
+    make[WorkspaceService[IO]].from((config: SupervisorConfig, sessions: SessionWorkspaces) => sessions.at(config.directory))
     make[JobSupervisor].fromResource[SupervisorJobs]
   })
 }

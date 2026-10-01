@@ -159,8 +159,9 @@ time.sleep(30)
         status = entry.status
         _ <- ZIO.attempt(assert(status.phase == DispatchPhase.Completed && status.result.nonEmpty, status.toString))
         record <- local.fixture.service.get(f.owner, entry.ticket.attempt.id)
-        _ <- ZIO.attempt(assert(status.workspace.contains(WorkspaceState(WorkspaceAdmission.Open, Some(record.directory))),
-          s"Status does not report the retained workspace of the completed attempt: $status"))
+        _ <- ZIO.attempt(assert(record.admission == WorkspaceAdmission.Removed && !Files.exists(Path.of(record.directory)) &&
+          status.workspace.contains(WorkspaceState(WorkspaceAdmission.Removed, None)),
+          s"The completed attempt's workspace outlived the capture of its candidate and evidence: $record $status"))
         stored <- text(artifacts, f.owner, status.result.get)
         result = Wire.decode(ChildResult_JsonCodec, stored)
         retained = result.evidence.files.map(file => file.path -> file).toMap

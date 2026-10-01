@@ -24,6 +24,10 @@ object ShutdownFixture extends RoleAppMain.LauncherBIO[IO] {
   val Children = 3
   val RootProperty = "cq.fixture.root"
   val GuardianProperty = "cq.fixture.guardian"
+  /** Optional shared state root: the session directory is then `<state>/<session id>`, as `cq host` lays it out, instead of `<root>/session`. */
+  val StateProperty = "cq.fixture.state"
+  /** When `true`, the attached fixture leaves its settled children's workspaces in place, as a host killed before releasing them does. */
+  val RetainProperty = "cq.fixture.retain"
   val Limits = HostLimits(3000, 30000, 900, 100, 1000, 262144)
   /** The batch governor: a harness stand-in that marks its workspace and then runs until stopped. */
   val GovernorScript = "#!/usr/bin/env python3\nimport time\nfrom pathlib import Path\nPath('running').write_text('governor')\ntime.sleep(60)\n"
@@ -56,17 +60,18 @@ object ShutdownFixture extends RoleAppMain.LauncherBIO[IO] {
     Files.setPosixFilePermissions(executable, PosixFilePermissions.fromString("rwx------"))
     val harness = if (attached) Harness.Claude else Harness.Codex
     val profile = HarnessSetting(harness, executable.toString, "fixture-model", if (attached) "anthropic" else "fixture-provider", HarnessUsage.version(harness), Nil, Set.empty)
-    val settings = SupervisorSettings(root.toString, guardian.toString, List(profile), Limits, Nil, None, None)
+    val state = Option(System.getProperty(StateProperty)).map(Path.of(_))
+    val settings = SupervisorSettings(state.getOrElse(root).toString, guardian.toString, List(profile), Limits, Nil, None, None)
     val assignment = Assignment(AssignmentId(UUID.randomUUID()), project.project, Set.empty, Attribution.Unattributed, None, None)
     val attempt = Attempt(AttemptId(UUID.randomUUID()), assignment.id, None, workspace.owner, Role.Governor, harness,
       if (attached) "unobserved-interactive-provider" else profile.provider, if (attached) "unobserved-interactive-model" else profile.model, "fixture", clock.millis())
     Files.writeString(root.resolve("governor-attempt"), attempt.id.value.toString)
     SupervisorConfig(settings, project, SupervisorConfig.profile(profile), SupervisorConfig.limits(Limits),
       SupervisorRun(project, assignment, attempt, profile.version, workspace.repository, workspace.base, if (attached) SessionOwnership.Attached else SessionOwnership.Managed),
-      root.resolve("session"), if (attached) "" else "Fixture governing input", None, sys.env)
+      state.fold(root.resolve("session"))(_.resolve(workspace.owner.value.toString)), if (attached) "" else "Fixture governing input", None, sys.env)
   }
 
-  /** `cq host` with three settled children, then the attached program on stdin/stdout. */
+  /** `cq host` with three settled children, released as their production owners release them unless `RetainProperty` is set, then the attached program on stdin/stdout. */
   final class AttachedFixtureRole(config: SupervisorConfig, program: AttachedProgram, jobs: JobSupervisor) extends RoleTask[Task] {
     override def start(parameters: EntrypointArgs): Task[Unit] = {
       val command = JobCommand(List("python3", "-c", "pass"), sys.env, "input", config.limits)
@@ -76,7 +81,7 @@ object ShutdownFixture extends RoleAppMain.LauncherBIO[IO] {
           jobs.start(config.owner, spec, command) *> jobs.await(config.owner, id).map { record =>
             require(record.phase == JobPhase.Settled && record.exit.exists(_.code.contains(0)), "Fixture child did not settle cleanly: " + record)
             id
-          }
+          } <* (if (java.lang.Boolean.getBoolean(RetainProperty)) ZIO.unit else jobs.release(config.owner, id))
         }
         _ <- ZIO.attemptBlocking(Files.writeString(property(RootProperty).resolve("attempts"), attempts.map(_.value.toString).mkString("", "\n", "\n")))
         _ <- program.run
@@ -108,6 +113,7 @@ object ShutdownFixture extends RoleAppMain.LauncherBIO[IO] {
         val expires = clock.millis() + Duration.ofHours(1).toMillis
         SupervisorAuthority(new Receiver, new Receiver, new Receiver, AccessToken("governor", expires), expires)
       }
+      make[SessionCollectors].fromValue(new SessionCollectors { override def collector(run: SupervisorRun): ServerApi = new Receiver })
       make[CliContext].from((config: SupervisorConfig) => CliContext(sys.env, config.directory, System.out))
       make[McpSchemas]
       make[WorkflowAssets]
@@ -116,12 +122,13 @@ object ShutdownFixture extends RoleAppMain.LauncherBIO[IO] {
 
   override def pluginConfig: PluginConfig = PluginConfig.const(List(FixturePlugin))
 
-  /** Launches the fixture JVM for `role` with stdout/stderr in `at/owner.log`; `environment` extends the inherited one. */
-  def launch(at: Path, role: RoleDescriptor, guardian: Path, environment: Map[String, String]): Process = {
+  /** Launches the fixture JVM for `role` with stdout/stderr in `at/owner.log`; `environment` extends the inherited one, `properties` are further system properties. */
+  def launch(at: Path, role: RoleDescriptor, guardian: Path, environment: Map[String, String], properties: Map[String, String]): Process = {
     val javaBinary = Path.of(System.getProperty("java.home"), "bin", "java")
     val classpath = Option(System.getProperty("cq.test.classpath")).getOrElse(throw new IllegalStateException("Fork fixture classpath is required"))
-    val builder = new ProcessBuilder(javaBinary.toString, "-cp", classpath, s"-D$RootProperty=$at", s"-D$GuardianProperty=$guardian",
-      "cq.server.ShutdownFixture", ":" + role.id).redirectErrorStream(true).redirectOutput(at.resolve("owner.log").toFile)
+    val arguments = List(javaBinary.toString, "-cp", classpath, s"-D$RootProperty=$at", s"-D$GuardianProperty=$guardian") ++
+      properties.toList.sorted.map((name, value) => s"-D$name=$value") ++ List("cq.server.ShutdownFixture", ":" + role.id)
+    val builder = new ProcessBuilder(arguments.asJava).redirectErrorStream(true).redirectOutput(at.resolve("owner.log").toFile)
     builder.environment().putAll(environment.asJava)
     builder.start()
   }

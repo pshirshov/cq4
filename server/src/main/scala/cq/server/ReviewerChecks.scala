@@ -74,7 +74,8 @@ private[server] final class ReviewerChecks(entry: DispatchExecution, candidate: 
         diagnostic = if (errors.isEmpty) reason else DispatchProjection.concise(reason + "; cleanup uncertain: " + errors.mkString(", "))
         _ <- ZIO.succeed(update(value)(_.copy(phase = DeclaredCheckPhase.Unknown, evidence = None, blocker = Some(diagnostic))))
       } yield ()
-    }.ensuring(value.done.succeed(()).unit)
+    // A check's evidence is its retained output; its tree is never read. A failed removal is retried by the next host startup.
+    }.ensuring(jobs.release(config.owner, value.ticket.workspace.attempt).ignore *> value.done.succeed(()).unit)
   }
 
   def request(name: String, waitMillis: Int): Task[DeclaredCheckStatus] = ZIO.uninterruptibleMask { restore => for {

@@ -136,6 +136,14 @@ final class JobSupervisor private (owner: Scope, repository: JobRepository, work
     result <- status(scope, attempt)
   } yield result
 
+  /** Removes the workspace of a settled job once no host reader needs its tree; an unsettled job and a quarantined, removed or never prepared workspace are left as they are. */
+  def release(scope: Scope, attempt: AttemptId): IO[Throwable, Option[WorkspaceRecord]] =
+    ZIO.attempt { authorized(scope); read(attempt).phase == JobPhase.Settled }.flatMap { settled =>
+      workspaces.get(owner, attempt).flatMap { record =>
+        if (settled && record.admission == WorkspaceAdmission.Open) workspaces.remove(owner, attempt).map(Some(_)) else ZIO.succeed(Some(record))
+      }.catchSome { case DomainFailure(_: Fault.Missing) => ZIO.succeed(None) }
+    }
+
   private def recover: IO[Throwable, Unit] = for {
     records <- ZIO.attemptBlocking(repository.records)
     _ <- ZIO.succeed(observations.set(records.map(record => record.workspace.attempt -> record).toMap))
