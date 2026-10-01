@@ -1,7 +1,7 @@
 import * as api from '../../generated/typescript/cq/api/index.js';
 import { button, element } from './editor.js';
 import { itemName } from './items.js';
-import { formatAmount, MoneyDigits } from './money.js';
+import { formatAmount, MoneyDigits, sumAmounts } from './money.js';
 
 type Cell = string | HTMLElement;
 function table(label: string, headings: string[], rows: Cell[][]): HTMLTableElement {
@@ -43,6 +43,31 @@ function money(value: api.Money): HTMLElement {
 function tokens(label: string, counts: api.TokenCounts): HTMLTableElement {
   return table(label, ['Counter', 'Value / measurement'], [['Input', counter(counts.input)], ['Output', counter(counts.output)],
     ['Cache read', counter(counts.cacheRead)], ['Cache write', counter(counts.cacheWrite)], ['Reasoning', counter(counts.reasoning)]]);
+}
+// Truncated to whole seconds, and to whole minutes from one hour on: `45 s`, `3 min 20 s`, `1 h 02 min`.
+function duration(millis: bigint): HTMLElement {
+  const seconds = millis / 1000n; const minutes = seconds / 60n; const hours = minutes / 60n;
+  const padded = (value: bigint) => value.toString().padStart(2, '0');
+  const result = element('span', hours > 0n ? `${hours} h ${padded(minutes % 60n)} min` : minutes > 0n ? `${minutes} min ${padded(seconds % 60n)} s` : `${seconds} s`);
+  result.title = `${millis} ms`; return result;
+}
+// Amounts are added per currency and basis, so estimates and billing stay apart.
+function phaseCosts(costs: readonly api.CostTotal[]): HTMLElement {
+  const groups = new Map<string, string[]>();
+  for (const cost of costs) {
+    const key = `${cost.group.currency} · ${cost.group.basis}`; const amounts = groups.get(key);
+    if (amounts === undefined) groups.set(key, [cost.amount.value]); else amounts.push(cost.amount.value);
+  }
+  const result = element('div', '');
+  for (const [key, amounts] of groups) {
+    const total = sumAmounts(amounts); const line = element('div', `${formatAmount(total, MoneyDigits)} ${key}`); line.title = total; result.append(line);
+  }
+  return result;
+}
+export function phasesTable(phases: readonly api.PhaseUsage[]): HTMLTableElement {
+  return table('Usage by phase', ['Phase', 'Attempts', 'Running', 'Busy wall time', 'Known tokens', 'Unknown measurements', 'Estimated measurements', 'Unknown costs', 'Cost'],
+    phases.map(entry => [entry.phase, String(entry.attempts), String(entry.running), duration(entry.wallMillis), String(entry.totals.total.known),
+      String(entry.totals.total.unknown), String(entry.totals.total.estimated), String(entry.totals.unknownCosts), phaseCosts(entry.costs)]));
 }
 interface AttemptActions {
   scope(filter: api.UsageFilter_ProjectAll | api.UsageFilter_TaskOnly | api.UsageFilter_CohortOnly | api.UsageFilter_SessionOnly): void;
