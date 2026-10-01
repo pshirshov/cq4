@@ -68,6 +68,28 @@ abstract class ApplicationContractTest extends SpecZIO with AssertZIO {
         } yield ()
     }
 
+    "serve the per-phase usage report to the usage tool" in {
+      (ledger: LedgerService[IO], repository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
+        val auth = authorization(Now)
+        val root = auth.authenticate(Token, Some(UUID.randomUUID().toString))
+        val application = new Application(ledger, repository, usage, artifacts, admissions, integrations, proposals, auth)
+        val project = ProjectId(UUID.randomUUID())
+        val collector = Scope(project, Actor("collector", SessionId(UUID.randomUUID()), Role.Collector))
+        val assignment = Assignment(AssignmentId(UUID.randomUUID()), project, Set.empty, Attribution.Unattributed, None, None)
+        val attempt = Attempt(AttemptId(UUID.randomUUID()), assignment.id, None, collector.actor.session, Role.Governor, Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Govern)
+        val tool = new McpSchemas().tools.find(_.name == "usage").get
+        val input = io.circe.parser.parse(s"""{"project":{"value":"${project.value}"},"selection":{"Phases":{"filter":{"SessionOnly":{"id":{"value":"${collector.actor.session.value}"}}}}}}""").toTry.get
+        for {
+          _ <- application.execute(root, Command.Initialize(ProjectConfig(project, "http://localhost", "phases")))
+          _ <- usage.assign(collector, assignment)
+          _ <- usage.start(collector, attempt)
+          command <- ZIO.fromEither(tool.decode(input))
+          result <- application.execute(root, command)
+          _ <- assertIO(result match { case Result.UsagePhases(report) => report.phases.map(value => (value.phase, value.attempts, value.running)) == List((UsagePhase.Govern, 1L, 1L)); case _ => false })
+          _ <- assertIO(tool.results.contains("UsagePhases") && new McpSchemas().advertised(tool).noSpaces.contains("cq_api_Result_UsagePhases"))
+        } yield ()
+    }
+
     "rename display metadata with revision comparison and preserve item identity and counters" in {
       (ledger: LedgerService[IO], repository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
         val auth = authorization(Now)

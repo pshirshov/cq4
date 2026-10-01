@@ -14,6 +14,7 @@ trait UsageService[F[_, _]] {
   def finish(scope: Scope, value: AttemptOutcome): F[Throwable, AttemptOutcome]
   def costs(scope: Scope, filter: UsageFilter, after: Option[CostGroup], snapshot: Option[Long], limit: Int): F[Throwable, CostPage]
   def summary(scope: Scope, filter: UsageFilter): F[Throwable, UsageReport]
+  def phases(scope: Scope, filter: UsageFilter): F[Throwable, PhaseReport]
   def attempts(scope: Scope, filter: UsageFilter, after: Option[AttemptId], snapshot: Option[Long], limit: Int): F[Throwable, AttemptPage]
   def outcomes(scope: Scope, attempt: AttemptId, after: Long, limit: Int): F[Throwable, OutcomePage]
   def audit(scope: Scope, filter: UsageFilter, after: Long, limit: Int): F[Throwable, UsagePage]
@@ -203,6 +204,46 @@ object UsageService {
         more = page.size == ReadBatch
       }
       UsageReport(direct, shared, unattributed, sharedAssignments.values.toList.sortBy(_.id.value.toString), sharedAssignmentsTruncated, reader.cursor, incomplete, reader.attemptsWithoutMeters(value), reader.coverage(value), costPage(reader, value, None, ReadBatch))
+    }
+
+    private final case class PhaseTally(attempts: Long, running: Long, wallMillis: Long)
+
+    override def phases(scope: Scope, value: UsageFilter): F[Throwable, PhaseReport] = repository.read(scope.project) { reader =>
+      filter(scope, value)
+      var totals = Map.empty[UsagePhase, UsageTotals]
+      var meter = Option.empty[MeterKey]
+      var more = true
+      while (more) {
+        val page = reader.meters(value, meter, ReadBatch)
+        page.foreach { entry =>
+          totals = totals.updated(entry.attempt.phase, UsageMath.combine(totals.getOrElse(entry.attempt.phase, UsageMath.zeroTotals), entry.projection.totals, 1))
+        }
+        meter = page.lastOption.map(p => MeterKey(p.attempt.id, p.meter.key))
+        more = page.size == ReadBatch
+      }
+      var tallies = Map.empty[UsagePhase, PhaseTally]
+      var attempt = Option.empty[AttemptId]
+      more = true
+      while (more) {
+        val page = reader.attempts(value, attempt, ReadBatch)
+        page.entries.foreach { entry =>
+          val tally = tallies.getOrElse(entry.attempt.phase, PhaseTally(0, 0, 0))
+          tallies = tallies.updated(entry.attempt.phase, entry.outcome match {
+            case Some(outcome) => tally.copy(attempts = Math.addExact(tally.attempts, 1),
+              wallMillis = Math.addExact(tally.wallMillis, Math.subtractExact(outcome.value.finishedAt, entry.attempt.startedAt)))
+            case None => tally.copy(attempts = Math.addExact(tally.attempts, 1), running = Math.addExact(tally.running, 1))
+          })
+        }
+        attempt = page.entries.lastOption.map(_.attempt.id)
+        more = page.hasMore
+      }
+      val costs = reader.phaseCosts(value, ReadBatch + 1)
+      // Host spans are not recorded yet, so every phase reports none.
+      PhaseReport(UsagePhase.all.filter(tallies.contains).map { phase =>
+        val tally = tallies(phase)
+        PhaseUsage(phase, tally.attempts, 0, tally.running, tally.wallMillis, totals.getOrElse(phase, UsageMath.zeroTotals),
+          costs.take(ReadBatch).filter(_.phase == phase).map(_.total))
+      }, costs.size > ReadBatch, reader.cursor)
     }
 
     private def costPage(reader: UsageReader, filter: UsageFilter, after: Option[CostGroup], limit: Int): CostPage = {

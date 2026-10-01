@@ -141,6 +141,30 @@ final class CliOutput(output: PrintStream, format: CliFormat, invocation: List[S
     costs(value.costs)
     if (value.sharedAssignmentsTruncated) line("Shared assignment list is truncated; use the paged audit for further records.")
   }
+  private def duration(millis: Long): String = {
+    val seconds = millis / 1000
+    f"${seconds / 3600}%d:${seconds / 60 % 60}%02d:${seconds % 60}%02d"
+  }
+  private def phases(value: PhaseReport): Unit = {
+    table(List("Phase", "Attempts", "Running", "Spans", "Wall h:mm:ss", "Input", "Output", "Cache read", "Cache write", "Reasoning", "Total", "Unknown costs"),
+      value.phases.map { entry =>
+        List(entry.phase.toString, entry.attempts.toString, entry.running.toString, entry.spans.toString, duration(entry.wallMillis),
+          metric(entry.totals.input), metric(entry.totals.output), metric(entry.totals.cacheRead), metric(entry.totals.cacheWrite),
+          metric(entry.totals.reasoning), metric(entry.totals.total), entry.totals.unknownCosts.toString)
+      })
+    line("Wall time sums finished attempts from start to finish; running attempts are counted without wall time.")
+    line("Costs — estimates and billing remain separate")
+    table(List("Phase", "Attribution", "Amount", "Currency", "Basis", "Pricing", "Measurements"), value.phases.flatMap { entry =>
+      entry.costs.map { cost =>
+        List(entry.phase.toString, cost.group.attribution.toString, cost.amount.value, cost.group.currency, cost.group.basis.toString,
+          cost.group.pricingVersion.getOrElse("—"), cost.measurements.toString)
+      }
+    })
+    if (value.costsTruncated) invocation match {
+      case "status" :: "phases" :: scope => line("Cost groups are truncated; list every group with: cq " + ("status" :: "costs" :: scope).mkString(" "))
+      case _ => throw new IllegalStateException("Phases require a status phases invocation")
+    }
+  }
   private def proposal(value: ProposalPreview): Unit = {
     line(s"Proposal ${value.result.value} · ${value.role} · request ${value.request.value}")
     line("Members: " + value.members.map(item => s"${id(item.id)} @ ${item.revision.value}").mkString(", "))
@@ -179,6 +203,7 @@ final class CliOutput(output: PrintStream, format: CliFormat, invocation: List[S
       table(List("ID", "Revision"), value.items.map(item => List(id(item.id), item.revision.value.toString)))
     case Result.UsageSummary(value) => usage(value)
     case Result.UsageCosts(value) => costs(value)
+    case Result.UsagePhases(value) => phases(value)
     case Result.UsageAttempts(value) =>
       table(List("Attempt", "Role", "Harness", "Model", "State", "Started", "Items"), value.entries.map(entry =>
         List(entry.attempt.id.value.toString, entry.attempt.role.toString, entry.attempt.harness.toString, entry.attempt.model,

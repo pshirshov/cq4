@@ -55,7 +55,7 @@ abstract class SessionDeliveryTest extends SpecZIO with AssertZIO {
         _ <- ledger.initialize(owner, "Attached accounting")
         assignment <- usage.assign(collector, Assignment(AssignmentId(uuid), owner.project, Set.empty, Attribution.Unattributed, None, None))
         attempt <- usage.start(collector, Attempt(AttemptId(uuid), assignment.id, None, owner.actor.session, Role.Governor,
-          Harness.Pi, "unobserved-interactive-provider", "unobserved-interactive-model", "fixture", clock.millis()))
+          Harness.Pi, "unobserved-interactive-provider", "unobserved-interactive-model", "fixture", clock.millis(), UsagePhase.Govern))
         run = SupervisorRun(ProjectConfig(owner.project, "http://localhost", "Attached accounting"), assignment, attempt, "0.87.1",
           fixture.source.toString, fixture.base, SessionOwnership.Attached)
         directory <- ZIO.attemptBlocking(Files.createTempDirectory("cq-attached-usage-"))
@@ -113,7 +113,7 @@ abstract class SessionDeliveryTest extends SpecZIO with AssertZIO {
           Content.Task(TaskStatus.Ready, List("Verified"), None, Nil), Nil))), Nil, "Fixture"))
         assignment <- usage.assign(collector, Assignment(AssignmentId(uuid), owner.project, Set.empty, Attribution.Unattributed, None, None))
         governor <- usage.start(collector, Attempt(AttemptId(uuid), assignment.id, None, owner.actor.session, Role.Governor,
-          Harness.Codex, "fixture", "fixture", "fixture", 1000))
+          Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Govern))
         childAssignment <- usage.assign(collector, Assignment(AssignmentId(uuid), owner.project, created.items.map(_.id).toSet, Attribution.Direct, None, None))
         reviewer <- usage.start(collector, governor.copy(id = AttemptId(uuid), assignment = childAssignment.id, parent = Some(governor.id), role = Role.Reviewer))
         limits = HostLimits(3000, 10000, 1000, 300, 2000, 65536)
@@ -212,7 +212,7 @@ abstract class SessionDeliveryTest extends SpecZIO with AssertZIO {
               claim <- ledger.acquire(owner, ClaimId(uuid), Set(member.id), 300000)
               assignment <- usage.assign(collector, Assignment(AssignmentId(uuid), owner.project, Set.empty, Attribution.Unattributed, None, None))
               governor <- usage.start(collector, Attempt(AttemptId(uuid), assignment.id, None, owner.actor.session, Role.Governor,
-                Harness.Codex, "fixture", "fixture", "fixture", 1000))
+                Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Govern))
               run = SupervisorRun(ProjectConfig(owner.project, "http://localhost", "Sealed"), assignment, governor, "0.156.1", fixture.source.toString, fixture.base, SessionOwnership.Managed)
               childAssignment = Assignment(AssignmentId(uuid), owner.project, Set(member.id), Attribution.Direct, None, None)
               attempt = governor.copy(id = AttemptId(uuid), assignment = childAssignment.id, parent = Some(governor.id), role = Role.Worker, startedAt = 1001)
@@ -301,7 +301,7 @@ abstract class SessionDeliveryTest extends SpecZIO with AssertZIO {
         val application = new Application(ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, auth)
         val assignment = Assignment(AssignmentId(UUID.randomUUID()), owner.project, Set.empty, Attribution.Unattributed, None, None)
         val governor = Attempt(AttemptId(UUID.randomUUID()), assignment.id, None, owner.actor.session, Role.Governor,
-          Harness.Codex, "fixture", "fixture", "fixture", clock.millis())
+          Harness.Codex, "fixture", "fixture", "fixture", clock.millis(), UsagePhase.Govern)
         val run = SupervisorRun(ProjectConfig(owner.project, "http://localhost", "Recovery"), assignment, governor, "0.156.1", fixture.source.toString, fixture.base, SessionOwnership.Managed)
         val limits = HostLimits(3000, 10000, 1000, 300, 2000, 262144)
         val profile = HarnessSetting(Harness.Codex, "/fixture/codex", "fixture", "fixture", "0.156.1", Nil, Set.empty)

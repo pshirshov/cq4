@@ -27,7 +27,7 @@ export async function selectionChecks(browser, storageState, origin, evidence) {
     const host = operation => post('/api/usage', { project: member.project, operation });
     const assignment = { id: id(), project: member.project, members: [member], attribution: 'Direct', cohort: null, evaluation: null };
     const attempt = { id: id(), assignment: assignment.id, parent: null, session: id(), role: 'Worker', harness: 'Codex',
-      provider: 'controlled-browser-fixture', model: 'no-model-call', collector: 'fixture', startedAt: '1000' };
+      provider: 'controlled-browser-fixture', model: 'no-model-call', collector: 'fixture', startedAt: '1000', phase: 'Work' };
     const counter = value => ({ value: String(value), measurement: 'Observed' });
     const counts = input => ({ input: counter(input), output: counter(0), cacheRead: counter(0), cacheWrite: counter(0), reasoning: counter(0) });
     const cost = { amount: null, currency: null, basis: 'Unknown', pricingVersion: null };

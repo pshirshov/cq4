@@ -24,7 +24,7 @@ object ServerApiCheck {
     val collector = new HttpServerApi(endpoint, token.value, session, timeout)
     val assignment = Assignment(AssignmentId(UUID.randomUUID()), project, Set.empty, Attribution.Unattributed, None, None)
     require(collector.usage(HostUsageInput(project, HostUsage.Assign(assignment))) == HostUsageResult.Assigned(assignment))
-    val attempt = Attempt(AttemptId(UUID.randomUUID()), assignment.id, None, session, Role.Worker, Harness.Codex, "fixture", "fixture", "fixture", 1000)
+    val attempt = Attempt(AttemptId(UUID.randomUUID()), assignment.id, None, session, Role.Worker, Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Work)
     require(collector.usage(HostUsageInput(project, HostUsage.Start(attempt))) == HostUsageResult.Started(attempt))
     val upload = ArtifactUpload(project, ArtifactId(UUID.randomUUID()), attempt.id, ArtifactKind.Input, "text/plain", "assembled host input λ😀")
     val metadata = collector.artifact(upload)

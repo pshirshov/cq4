@@ -28,5 +28,29 @@ final class CliOutputLocal extends AnyWordSpec {
       assert(text.contains("Produce from T1: Tasks: Follow-up · Ready"))
       assert(text.contains("complete content") && !text.contains("Task(Ready)"))
     }
+
+    "print one row per usage phase with attempts, wall time, tokens and grouped costs" in {
+      def metric(value: Long): MetricTotal = MetricTotal(value, 0, 0)
+      def totals(input: Long, output: Long, unknownCosts: Long): UsageTotals =
+        UsageTotals(metric(input), metric(output), metric(0), metric(0), metric(0), metric(input + output), unknownCosts)
+      val cost = CostTotal(CostGroup(Attribution.Direct, "USD", CostBasis.ProviderEstimate, Some("provider-v1")), DecimalAmount("0.3"), 2)
+      val report = PhaseReport(List(
+        PhaseUsage(UsagePhase.Work, 2, 0, 0, 3723500, totals(300, 30, 0), List(cost)),
+        PhaseUsage(UsagePhase.Review, 1, 0, 1, 0, totals(50, 5, 1), Nil)), true, 7)
+      val bytes = new ByteArrayOutputStream()
+      val session = UUID.randomUUID().toString
+      new CliOutput(new PrintStream(bytes, true, UTF_8), CliFormat.Human, List("status", "phases", "--session", session)).result(Result.UsagePhases(report))
+      val lines = bytes.toString(UTF_8).linesIterator.toList
+      def row(phase: String): List[String] = lines.filter(_.startsWith(phase + " ")).map(_.split(" {2,}").toList).head
+      assert(lines.head.split(" {2,}").toList == List("Phase", "Attempts", "Running", "Spans", "Wall h:mm:ss", "Input", "Output", "Cache read", "Cache write", "Reasoning", "Total", "Unknown costs"))
+      assert(row("Work") == List("Work", "2", "0", "0", "1:02:03", "300", "30", "0", "0", "0", "330", "0"))
+      assert(row("Review") == List("Review", "1", "1", "0", "0:00:00", "50", "5", "0", "0", "0", "55", "1"))
+      assert(lines.count(line => UsagePhase.all.exists(phase => line.startsWith(phase.toString + " "))) == 3)
+      assert(lines.exists(_.split(" {2,}").toList == List("Work", "Direct", "0.3", "USD", "ProviderEstimate", "provider-v1", "2")))
+      assert(lines.exists(line => line.contains("truncated") && line.contains(s"cq status costs --session $session")))
+      bytes.reset()
+      new CliOutput(new PrintStream(bytes, true, UTF_8), CliFormat.Json, List("status", "phases")).result(Result.UsagePhases(report))
+      assert(Wire.decode(Result_JsonCodec, bytes.toString(UTF_8).trim) == Result.UsagePhases(report))
+    }
   }
 }

@@ -17,7 +17,7 @@ export async function usageChecks(page, origin, projectId) {
   const before = await detail();
   const assignment = { id: id(), project, members: [member], attribution: 'Direct', cohort: null, evaluation: null };
   const attempt = { id: id(), assignment: assignment.id, parent: null, session: id(), role: 'Worker', harness: 'Codex',
-    provider: 'controlled-browser-fixture', model: 'no-model-call', collector: 'fixture', startedAt: '1000' };
+    provider: 'controlled-browser-fixture', model: 'no-model-call', collector: 'fixture', startedAt: '1000', phase: 'Work' };
   await host({ Assign: { value: assignment } }); await host({ Start: { value: attempt } });
   await page.getByRole('button', { name: 'Project usage', exact: true }).click();
   await page.getByText('Attempt coverage: 1 running; 0 unknown outcomes; 0 with reported gaps.', { exact: true }).waitFor();

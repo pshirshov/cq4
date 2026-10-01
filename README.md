@@ -142,6 +142,7 @@ cq query --query 'status:Re' --complete 9 --limit 20
 cq query --roots T1,M1 --limit 50
 cq status --task T1
 cq status audit --task T1 --limit 20
+cq status phases --session <session-uuid>
 cq status costs --task T1 --limit 20
 cq status attempts --task T1 --limit 20
 cq status outcomes --attempt <attempt-uuid> --limit 20

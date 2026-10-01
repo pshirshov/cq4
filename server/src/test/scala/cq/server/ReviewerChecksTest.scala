@@ -45,7 +45,7 @@ final class ReviewerChecksProcess extends SpecZIO with AssertZIO {
     (test: Fixture => Task[Unit]): Task[Unit] = ZIO.scoped {
     val project = ProjectConfig(ProjectId(uuid), "http://localhost", "Reviewer checks")
     val assignment = Assignment(AssignmentId(uuid), project.project, Set.empty, Attribution.Unattributed, None, None)
-    val governor = Attempt(AttemptId(uuid), assignment.id, None, SessionId(uuid), Role.Governor, Harness.Codex, "fixture", "fixture", "fixture", 1000)
+    val governor = Attempt(AttemptId(uuid), assignment.id, None, SessionId(uuid), Role.Governor, Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Govern)
     val limits = HostLimits(3000, 30000, 900, 100, 1000, 65536)
     val profile = HarnessSetting(Harness.Codex, "/fixture", "fixture", "fixture", "0.156.1", Nil, Set.empty)
     for {

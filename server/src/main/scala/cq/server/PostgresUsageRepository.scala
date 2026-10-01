@@ -127,6 +127,15 @@ private final class PostgresUsageTransaction(connection: Connection, project: Pr
     }
   }
 
+  override def phaseCosts(filter: UsageFilter, limit: Int): List[PhaseCost] = {
+    val grouping = "t.body->>'phase' COLLATE \"C\", a.attribution COLLATE \"C\", c.currency, c.basis, c.pricing_version"
+    sql.query("SELECT " + grouping + ", sum(c.amount), sum(c.measurements) FROM cq_usage_costs c" + JoinedScope +
+      "WHERE c.project_id = ?" + filterSql(filter) + " GROUP BY " + grouping + " ORDER BY " + grouping + " LIMIT ?")(s => s.setInt(bindFilter(s, filter), limit)) { r =>
+      val group = CostGroup(Attribution.parse(r.getString(2)).get, r.getString(3), CostBasis.parse(r.getString(4)).get, Option(r.getString(5)).filter(_.nonEmpty))
+      PhaseCost(UsagePhase.parse(r.getString(1)).get, CostTotal(group, UsageMath.decimal(BigDecimal(r.getBigDecimal(6))), r.getBigDecimal(7).longValueExact()))
+    }
+  }
+
   override def append(value: UsageUpload, normalized: TokenCounts, actor: Actor): RecordedUsage = {
     val record = RecordedUsage(value, normalized, actor, tick())
     val observation = value.observation

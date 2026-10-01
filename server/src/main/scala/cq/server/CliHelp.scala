@@ -104,6 +104,7 @@ Examples:
 
 Modes:
   (omitted)   Usage summary: known tokens, missing measurements and estimated costs
+  phases      Attempts, finished wall time, tokens and costs per workflow phase
   audit       Recorded observations and normalized contributions
   costs       Cost totals grouped by attribution, currency and pricing basis
   attempts    Execution attempts and their latest outcome
@@ -126,6 +127,7 @@ Shared usage is counted once per assignment, not divided among its members.
 Unknown measurements/costs remain unknown; estimates are not actual billing.
 
 Examples: cq status --task T1
+          cq status phases --session SESSION_UUID
           cq status attempts --session SESSION_UUID --json
           cq status outcomes --attempt ATTEMPT_UUID
 """
