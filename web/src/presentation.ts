@@ -6,7 +6,7 @@ import { element, type Json } from './editor.js';
 export const CONTENT_FIELDS = {
   Milestone: ['objective'], Idea: ['outcome', 'motivation'], Defect: ['observed', 'expected', 'reproduction', 'cause', 'resolution'],
   Goal: ['outcome', 'scope', 'acceptance'], Task: ['acceptance', 'result', 'validation'], Research: ['question', 'findings', 'conclusion', 'recommendation'],
-  Hypothesis: ['claim', 'rationale', 'evidence', 'adjudication'], Question: ['prompt', 'context', 'alternatives', 'answer'],
+  Hypothesis: ['claim', 'rationale', 'evidence', 'adjudication'], Question: ['prompt', 'context', 'alternatives', 'recommendation', 'answer'],
   Decision: ['choice', 'rationale', 'alternatives'], Review: ['subjects', 'candidate', 'findings', 'summary'],
   Handoff: ['outcome', 'remaining', 'blockers'], OperatorAction: ['action', 'expectedEvidence', 'confirmation', 'observedEvidence'],
   Memory: ['knowledge', 'applicability', 'evidence'], Upstream: ['component', 'version', 'reproduction', 'report', 'outcome'],
@@ -76,7 +76,7 @@ export function itemView(draft: api.ItemDraft, renderText: TextRenderer): HTMLEl
     const block = element('section', ''); block.className = 'document-field'; block.dataset.field = name; block.append(element('h3', fieldLabel(name)), renderValue(name, value, renderText)); node.append(block);
   };
   section('body', draft.body);
-  for (const name of CONTENT_FIELDS[kind as ItemKind]) if (values[name] !== undefined) section(name, values[name]);
+  for (const name of CONTENT_FIELDS[kind as ItemKind]) if (values[name] !== undefined && !(kind === 'Question' && name === 'recommendation')) section(name, values[name]);
   section('citations', [...draft.citations].map(value => api.Citation_JsonCodec.instance.encode(BaboonCodecContext.Default, value) as Json));
   return node;
 }

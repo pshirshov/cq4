@@ -15,7 +15,7 @@ const call = command => post('/api/call', command);
 const id = () => ({value: randomUUID()});
 const paragraphs = count => Array.from({length: count}, (_, i) => `Paragraph ${i + 1} of the long question context keeps the dialog body overflowing.`).join('\n\n');
 const question = (number, context) => ({title: `Question ${number}`, body: `Question body ${number}`, labels: [], archived: false, citations: [], content: {
-  Question: {status: 'Open', prompt: `Choose ${number}`, context, alternatives: ['Go', 'Python'], answer: null},
+  Question: {status: 'Open', prompt: `Choose ${number}`, context, alternatives: ['Go', 'Python'], recommendation: null, answer: null},
 }});
 const task = title => ({title, body: 'Task body', labels: [], archived: false, citations: [],
   content: {Task: {status: 'Ready', acceptance: ['Accept'], result: null, validation: []}}});

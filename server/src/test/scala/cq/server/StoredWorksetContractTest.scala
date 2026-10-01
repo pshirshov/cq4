@@ -21,7 +21,7 @@ abstract class StoredWorksetContractTest extends SpecZIO with AssertZIO {
   private def goal(title: String): ItemDraft = task(title).copy(content = Content.Goal(GoalStatus.Open, "Outcome", List("Acceptance"), "Scope"))
   private def idea(title: String, status: IdeaStatus): ItemDraft = task(title).copy(content = Content.Idea(status, "Outcome", "Motivation"))
   private def milestone(title: String): ItemDraft = task(title).copy(content = Content.Milestone(MilestoneStatus.Open, "Release"))
-  private def question(title: String): ItemDraft = task(title).copy(content = Content.Question(QuestionStatus.Open, "Prompt", "Context", Nil, None))
+  private def question(title: String): ItemDraft = task(title).copy(content = Content.Question(QuestionStatus.Open, "Prompt", "Context", Nil, None, None))
   private def decision(title: String): ItemDraft = task(title).copy(content = Content.Decision(DecisionStatus.Proposed, "Choice", "Rationale", Nil))
   private def memory(title: String): ItemDraft = task(title).copy(content = Content.Memory(MemoryStatus.Current, "Knowledge", "Applicability", Nil))
   private def review(title: String): ItemDraft = task(title).copy(content = Content.Review(ReviewStatus.Pending, Nil, Some(Citation.Commit("consumer", "abc123")), Nil, None))

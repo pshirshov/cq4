@@ -11,7 +11,7 @@ async function call(command) {
   assert.equal(response.status, 200); const result = await response.json(); assert.equal(result.Failed, undefined); return result;
 }
 const draft = (kind, number) => ({title: `${kind} ${number}`, body: '', labels: [], archived: false, citations: [], content: kind === 'Question'
-  ? {Question: {status: 'Open', prompt: `Choose ${number}`, context: 'Review race', alternatives: [], answer: null}}
+  ? {Question: {status: 'Open', prompt: `Choose ${number}`, context: 'Review race', alternatives: [], recommendation: null, answer: null}}
   : {Task: {status: 'Ready', acceptance: ['Review race'], result: null, validation: []}}});
 const change = (project, mutations) => call({Change: {input: {project, change: {request: {value: randomUUID()}, mutations, fences: [], reason: 'Race fixture'}}}});
 const browser = await chromium.launch({headless: true}); const cases = [], failures = [];

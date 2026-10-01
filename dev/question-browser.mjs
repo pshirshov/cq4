@@ -13,7 +13,7 @@ async function call(command) {
 const project = {value: randomUUID()};
 await call({Initialize: {config: {project, endpoint: origin, name: 'Question and reference checks'}}});
 const question = number => ({title: `Question ${number}`, body: 'See Q2 for context.', labels: [], archived: false, citations: [], content: {
-  Question: {status: 'Open', prompt: `Choose ${number}`, context: 'A human answer is required.', alternatives: ['Go', 'Python', 'Same as Q3'], answer: null},
+  Question: {status: 'Open', prompt: `Choose ${number}`, context: 'A human answer is required.', alternatives: ['Go', 'Python', 'Same as Q3'], recommendation: null, answer: null},
 }});
 const source = {title: 'References', body: 'See Q1 and Q2. Missing Q999. Plain XQ1 Q01 path/Q1.txt `Q1` https://example.org/Q1?a=Q2.', labels: [], archived: false, citations: [],
   content: {Defect: {status: 'Open', severity: 'Medium', observed: 'References', expected: 'Popups', reproduction: 'Activate', cause: null, resolution: []}}};

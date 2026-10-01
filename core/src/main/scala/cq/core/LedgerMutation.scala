@@ -38,6 +38,7 @@ final class LedgerMutation(terminationPlanner: TerminationPlanner) {
         def validateDraft(draft: ItemDraft, recorded: List[ItemDraft]): Unit = {
           validate(draft)
           LedgerPolicy.provenance(scope.actor.role, draft, recorded ++ reservation.toList.map(_ => draft))
+          LedgerPolicy.recommendation(scope.actor.role, draft, recorded ++ reservation.toList.map(_ => draft))
           draft.content match {
             case review: Content.Review => review.subjects.foreach { subject =>
               required(tx, scope, subject.item)

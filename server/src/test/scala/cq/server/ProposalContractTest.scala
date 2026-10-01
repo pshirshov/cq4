@@ -242,6 +242,27 @@ abstract class ProposalContractTest extends SpecZIO with AssertZIO {
         _ <- assertIO(changes.events.size == 1)
       } yield ()
     }
+
+    "reject a proposed question whose alternatives carry no recommendation" in {
+      (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], proposals: ProposalService[IO]) =>
+      def question(recommendation: Option[QuestionRecommendation]): ItemDraft = task.copy(title = "Which store?",
+        content = Content.Question(QuestionStatus.Open, "Which store?", "Both satisfy the goal", List("PostgreSQL", "SQLite"), recommendation, None))
+      val required = Fault.Invalid("An agent-created Question with alternatives must state its recommended alternative and reason")
+      for {
+        f <- begin(ledger, usage)
+        _ <- ZIO.foreachDiscard(List(ProposedMutation.Create(question(None)), ProposedMutation.Produce(f.members.head.id, List(question(None))),
+          ProposedMutation.Replace(f.members.head.id, question(None)))) { mutation => for {
+          value <- publish(f, DispatchWork.Planner(), plan(f, List(mutation)), usage, artifacts)
+          _ <- rejected(admissions.admit(f.collector, HostAdmissionInput(f.owner.project, value.artifact.id, f.owner.actor)), _ == required)
+        } yield () }
+        recommended = question(Some(QuestionRecommendation(0, "The server already runs PostgreSQL")))
+        value <- publish(f, DispatchWork.Planner(), plan(f, List(ProposedMutation.Create(recommended))), usage, artifacts)
+        _ <- admit(f, value, admissions)
+        ack <- proposals(f.owner, value.artifact.id)
+        created <- ledger.get(f.owner, ack.items.head.id)
+        _ <- assertIO(created.item.draft.content == recommended.content)
+      } yield ()
+    }
   }
 }
 

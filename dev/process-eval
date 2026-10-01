@@ -121,7 +121,7 @@ def main():
         request = ("Begin a new word-frequency consumer project from the specification below. Its implementation language is a genuine user preference and has not been chosen. "
                    "Capture exactly one Idea without a milestone. Claim it and ask a Codex Planner to propose exactly one language-neutral Goal derived from it, preserving the complete specification. "
                    "Obtain an independent Pi Reviewer in Plan mode, then preview/apply the accepted stored proposal by handle. "
-                   "Create exactly one Question derived from that Goal, asking the user to choose the language with alternatives exactly [Python, Go]. "
+                   "Create exactly one Question derived from that Goal, asking the user to choose the language with alternatives exactly [Python, Go] and stating your recommended alternative with its reason. "
                    "Leave its status Open and answer null; do not invent an answer or adopt a Decision. Do not create tasks/milestones or start implementation yet. "
                    "Release every claim and end this checkpoint with a bounded report containing the actual Question ID and both alternatives. "
                    "Use configured limits, exact revisions, compact status and result handles. Do not compose child prompts or copy full results. "

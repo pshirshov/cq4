@@ -61,7 +61,7 @@ abstract class LedgerContractTest extends SpecZIO with AssertZIO {
         Content.Task(TaskStatus.Ready, List("Acceptance"), None, Nil),
         Content.Research(ResearchStatus.Open, "Empirical uncertainty", Nil, None, None),
         Content.Hypothesis(HypothesisStatus.Proposed, "Falsifiable claim", "Rationale", Nil, None),
-        Content.Question(QuestionStatus.Open, "Preference?", "Context", List("A", "B"), None),
+        Content.Question(QuestionStatus.Open, "Preference?", "Context", List("A", "B"), Some(QuestionRecommendation(0, "A needs no migration")), None),
         Content.Decision(DecisionStatus.Proposed, "Choice", "Rationale", List("Alternative")),
         Content.Review(ReviewStatus.Pending, Nil, Some(Citation.Commit("consumer", "abc123")), Nil, None),
         Content.Handoff(HandoffStatus.Open, "Result so far", List("Remaining"), Nil),
@@ -213,6 +213,47 @@ abstract class LedgerContractTest extends SpecZIO with AssertZIO {
         _ <- create(service, owner, draft(Content.Goal(GoalStatus.Open, "", Nil, "")))
         _ <- denied(create(service, owner, draft(Content.Idea(IdeaStatus.Proposed, "x" * 100001, ""))))(_.isInstanceOf[Fault.Invalid])
         _ <- denied(create(service, owner, ItemDraft(" ", "", Set.empty, false, Content.Idea(IdeaStatus.Proposed, "", ""), Nil)))(_.isInstanceOf[Fault.Invalid])
+      } yield ()
+    }
+
+    "require a recommended alternative from agent-written questions and accept human ones" in { (service: LedgerService[IO]) =>
+      val owner = scope()
+      val human = owner.copy(actor = owner.actor.copy(role = Role.Human))
+      val recommended = QuestionRecommendation(1, "B avoids the migration")
+      def question(alternatives: List[String], recommendation: Option[QuestionRecommendation]): ItemDraft =
+        task("Which option?").copy(content = Content.Question(QuestionStatus.Open, "Preference?", "Context", alternatives, recommendation, None))
+      def content(recommendation: Option[QuestionRecommendation], status: QuestionStatus, answer: Option[String]): ItemDraft =
+        task("Which option?").copy(content = Content.Question(status, "Preference?", "Context", List("A", "B"), recommendation, answer))
+      val required = Fault.Invalid("An agent-created Question with alternatives must state its recommended alternative and reason")
+      val index = Fault.Invalid("Recommended alternative must index the alternatives list")
+      val reason = Fault.Invalid("Invalid recommendation reason")
+      for {
+        _ <- service.initialize(owner, "question recommendation")
+        _ <- denied(create(service, owner, question(List("A", "B"), None)))(_ == required)
+        _ <- ZIO.foreachDiscard(List(owner, human)) { author => for {
+          _ <- denied(create(service, author, question(List("A", "B"), Some(recommended.copy(alternative = 2)))))(_ == index)
+          _ <- denied(create(service, author, question(List("A", "B"), Some(recommended.copy(alternative = -1)))))(_ == index)
+          _ <- denied(create(service, author, question(Nil, Some(recommended.copy(alternative = 0)))))(_ == index)
+          _ <- denied(create(service, author, question(List("A", "B"), Some(recommended.copy(reason = " ")))))(_ == reason)
+        } yield () }
+        none <- service.search(owner, "archived:all", None, 200)
+        _ <- assertIO(none.items.isEmpty)
+        agent <- create(service, owner, question(List("A", "B"), Some(recommended)))
+        stored <- service.get(owner, agent.id)
+        _ <- assertIO(stored.item.draft.content == question(List("A", "B"), Some(recommended)).content)
+        _ <- denied(service.change(owner, request(List(Mutation.Replace(agent.id, agent.revision, question(List("A", "B"), None))), Nil)))(_ == required)
+        _ <- create(service, owner, question(Nil, None))
+        _ <- create(service, owner, content(None, QuestionStatus.Withdrawn, None))
+        asked <- create(service, human, question(List("A", "B"), None))
+        linked <- service.change(owner, request(List(Mutation.Reference(asked.id, asked.revision, Relation.RelatesTo, agent.id, agent.revision, true)), Nil))
+        current = linked.items.find(_.id == asked.id).get
+        _ <- denied(service.change(owner, request(List(Mutation.Replace(current.id, current.revision,
+          question(List("A", "C"), None))), Nil)))(_ == required)
+        recorded <- service.change(owner, request(List(Mutation.Replace(current.id, current.revision, content(None, QuestionStatus.Answered, Some("A")))), Nil))
+        _ <- assertIO(recorded.items.head.revision == Revision(3))
+        answered <- service.change(human, request(List(Mutation.Replace(agent.id, linked.items.find(_.id == agent.id).get.revision,
+          content(Some(recommended), QuestionStatus.Answered, Some("A")))), Nil))
+        _ <- assertIO(answered.items.head.revision == Revision(3))
       } yield ()
     }
 

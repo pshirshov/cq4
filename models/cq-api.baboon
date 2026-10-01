@@ -64,6 +64,7 @@ root adt Citation {
 }
 root data Evidence { description: str origin: EvidenceOrigin citations: lst[Citation] }
 root data ReviewedItem { item: ItemId revision: Revision }
+root data QuestionRecommendation { alternative: i32 reason: str }
 root adt Content {
   data Milestone { status: MilestoneStatus objective: str }
   data Idea { status: IdeaStatus outcome: str motivation: str }
@@ -72,7 +73,7 @@ root adt Content {
   data Task { status: TaskStatus acceptance: lst[str] result: opt[str] validation: lst[Evidence] }
   data Research { status: ResearchStatus question: str findings: lst[Evidence] conclusion: opt[str] recommendation: opt[str] }
   data Hypothesis { status: HypothesisStatus claim: str rationale: str evidence: lst[Evidence] adjudication: opt[str] }
-  data Question { status: QuestionStatus prompt: str context: str alternatives: lst[str] answer: opt[str] }
+  data Question { status: QuestionStatus prompt: str context: str alternatives: lst[str] recommendation: opt[QuestionRecommendation] answer: opt[str] }
   data Decision { status: DecisionStatus choice: str rationale: str alternatives: lst[str] }
   data Review { status: ReviewStatus subjects: lst[ReviewedItem] candidate: opt[Citation.Commit] findings: lst[Evidence] summary: opt[str] }
   data Handoff { status: HandoffStatus outcome: str remaining: lst[str] blockers: lst[str] }

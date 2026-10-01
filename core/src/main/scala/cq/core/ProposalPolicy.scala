@@ -30,7 +30,7 @@ object ProposalPolicy {
         invalid(eligible(id), "Proposal endpoint is outside its eligible assignment")
         revisions(id)
       }
-      def draft(value: ItemDraft): ItemDraft = { validate(value); value }
+      def draft(value: ItemDraft): ItemDraft = { validate(value); recommended(value); value }
       val mutations = value.mutations.map {
         case ProposedMutation.Create(value) => Mutation.Create(draft(value))
         case ProposedMutation.Replace(id, value) => Mutation.Replace(id, revision(id), draft(value))
