@@ -34,12 +34,14 @@ const { default: load } = await import(pathToFileURL(extension));
 function runtime() {
   const handlers = new Map();
   const registered = new Map();
-  return { handlers, registered, on: (name, handler) => handlers.set(name, handler), registerTool: tool => registered.set(tool.name, tool) };
+  return { handlers, registered, on: (name, handler) => handlers.set(name, handler), registerTool: tool => registered.set(tool.name, tool),
+    registerCommand: () => {}, registerShortcut: () => {} };
 }
+const idle = { ui: { setStatus: () => {} } };
 const pi = runtime();
 await load(pi);
 assert.equal(pi.registered.size, 9);
-await pi.handlers.get("session_start")();
+await pi.handlers.get("session_start")(undefined, idle);
 const response = await pi.registered.get("cq_session").execute("first", {}, undefined);
 assert.deepEqual(response.content, [{ type: "text", text: "bounded reply" }]);
 pi.handlers.get("turn_start")();
@@ -58,7 +60,7 @@ assert.equal(usage.reasoning, null);
 assert.deepEqual(usage.costUSD, { value: "0.001" });
 assert(!JSON.stringify(seen).includes("PRIVATE_ASSISTANT_TEXT"));
 await assert.rejects(() => pi.registered.get("cq_session").execute("after-close", {}, undefined), /unavailable/);
-await pi.handlers.get("session_start")();
+await pi.handlers.get("session_start")(undefined, idle);
 pi.handlers.get("turn_start")();
 await pi.handlers.get("message_end")({ message: { role: "assistant", provider: "provider", model: "model", timestamp: 2000, stopReason: "stop",
   usage: { input: 5, output: 2, cacheRead: 0, cacheWrite: 0, totalTokens: 7 } } },
@@ -70,7 +72,7 @@ assert.equal(restarted.turn, "1");
 assert.equal(restarted.session, "next-native-session");
 const interrupted = runtime();
 await load(interrupted);
-await interrupted.handlers.get("session_start")();
+await interrupted.handlers.get("session_start")(undefined, idle);
 const controller = new AbortController();
 const request = interrupted.registered.get("cq_session").execute("aborted", { hold: true }, controller.signal);
 controller.abort();

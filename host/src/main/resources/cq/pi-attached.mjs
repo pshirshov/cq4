@@ -7,6 +7,46 @@ const MAX_FRAME_BYTES = 2097152;
 const MAX_PENDING = 32;
 const REQUEST_MILLIS = 35000;
 const PROTOCOL = "2025-03-26";
+const DRIVER_FOOTER = "cq-driver";
+const DRIVER_TOGGLE = "ctrl+alt+a";
+const DRIVER_OFF = "CQ driver off";
+const DRIVE_USAGE = "/cq:drive <target IDs> through=<phase> or /cq:drive workset=<id>";
+const PREVIEW_LINES = 12;
+const LEDGER_PREFIX = { Milestones: "M", Ideas: "I", Defects: "D", Goals: "G", Tasks: "T", Researches: "RS", Hypothesis: "H", Questions: "Q",
+  Decisions: "K", Reviews: "R", Handoffs: "HO", OperatorActions: "OA", Memories: "MEM", Upstream: "U" };
+const FAILURE_STOPS = new Set(["Failure", "NotBound"]);
+
+function reference(id) {
+  const prefix = LEDGER_PREFIX[id.ledger];
+  if (prefix === undefined) throw new Error("Unknown CQ ledger " + id.ledger);
+  return prefix + id.number;
+}
+function variant(value) {
+  const entries = Object.entries(value);
+  if (entries.length !== 1) throw new Error("Invalid CQ variant");
+  return entries[0];
+}
+function reason(value) {
+  const [name, body] = variant(value);
+  switch (name) {
+    case "Blocked": return "blocked by " + reference(body.prerequisite);
+    case "Shared": return "shared with " + reference(body.producer);
+    case "Context": return body.relation + " " + reference(body.source);
+    default: return name.toLowerCase();
+  }
+}
+// The host preview as three separate groups: what the driver may advance, what it only shows, and why each item is or is not ready.
+function previewText(preview) {
+  const reasons = values => values.length === 0 ? "" : " — " + values.map(reason).join(", ");
+  const group = (title, lines) => [`${title} (${lines.length}):`, ...lines.slice(0, PREVIEW_LINES).map(line => "  " + line),
+    ...(lines.length > PREVIEW_LINES ? [`  … ${lines.length - PREVIEW_LINES} more`] : [])];
+  const summary = item => `${item.status}: ${item.title}`;
+  return [
+    ...group("Advanceable", preview.advanceable.map(member => `${reference(member.item.id)}${member.root ? " (target)" : ""} ${summary(member.item)}`)),
+    ...group("Context only, never advanced", preview.context.map(entry => `${reference(entry.item.id)} ${summary(entry.item)}${reasons(entry.reasons)}`)),
+    ...group("Readiness", preview.readiness.map(entry => `${reference(entry.item)}: ${entry.ready ? "ready" : "not ready"}${reasons(entry.reasons)}`)),
+  ].join("\n");
+}
 
 class Connection {
   constructor(configuration) {
@@ -105,10 +145,81 @@ export default async function (pi) {
   let connection;
   let sequence = 0;
   let turn = 0;
-  pi.on("session_start", async () => {
+  // Host-held driver state as the last control reply reported it, the drive input last accepted in this Pi session and how the last turn ended.
+  let driving = false;
+  let workset;
+  let outcome = "completed";
+  const show = (context, status) => context.ui.setStatus(DRIVER_FOOTER, status === null ? DRIVER_OFF : status.line);
+  // The session key is Pi's own session identifier; the attached host adds its attached session.
+  async function driver(context, action, fields) {
+    if (connection === undefined) throw new Error("CQ attached host is unavailable; restart the session");
+    const reply = await connection.rpc("cq/driver", { [action]: { session: context.sessionManager.getSessionId(), ...fields } }, undefined);
+    const [name, body] = variant(reply);
+    if (name !== "Failed") return reply;
+    const [fault, detail] = variant(body.fault);
+    throw new Error(typeof detail.message === "string" ? `${fault}: ${detail.message}` : JSON.stringify(body.fault));
+  }
+  function expect(reply, expected) {
+    const [name, body] = variant(reply);
+    if (name !== expected) throw new Error(`Unexpected CQ driver reply ${name}; expected ${expected}`);
+    return body;
+  }
+  // The continuation decision is the host's: a directive is submitted unchanged, a stop is shown and nothing is sent.
+  async function proceed(context) {
+    let reply;
+    try { reply = await driver(context, "Continue", {}); }
+    catch (error) {
+      driving = false;
+      context.ui.setStatus(DRIVER_FOOTER, DRIVER_OFF + ": continuation query failed");
+      context.ui.notify(`CQ driver stopped: continuation query failed: ${error.message}; run /cq:park to release the driver`, "error");
+      return;
+    }
+    const [name, body] = variant(reply);
+    if (name === "Continue") {
+      show(context, body.status);
+      for (const message of body.messages) context.ui.notify(message, "info");
+      pi.sendUserMessage(body.directive.text, { deliverAs: "followUp", expandPromptTemplates: true });
+    } else if (name === "Stop") {
+      driving = false;
+      show(context, body.status);
+      const messages = body.messages.length === 0 ? ["CQ driver stopped: " + body.stopped.detail] : body.messages;
+      for (const message of messages) context.ui.notify(message, FAILURE_STOPS.has(body.stopped.reason) ? "error" : "info");
+    } else throw new Error("Unexpected CQ driver continuation reply " + name);
+  }
+  async function drive(input, context) {
+    let started;
+    try { started = expect(await driver(context, "Start", { input }), "Started"); }
+    catch (error) { context.ui.notify("CQ driver not started: " + error.message, "error"); return; }
+    driving = true;
+    workset = input;
+    show(context, started.status);
+    context.ui.notify(started.message + "\n" + previewText(started.preview), "info");
+    if (context.isIdle()) await proceed(context);
+  }
+  async function park(context) {
+    let parked;
+    try { parked = expect(await driver(context, "Park", {}), "Parked"); }
+    catch (error) { context.ui.notify("CQ driver not parked: " + error.message, "error"); return; }
+    driving = false;
+    show(context, parked.status);
+    context.ui.notify(parked.message, "info");
+  }
+  pi.registerCommand("cq:drive", { description: "Turn the CQ auto-driver on: " + DRIVE_USAGE, handler: drive });
+  pi.registerCommand("cq:park", { description: "Turn the CQ auto-driver off", handler: (_arguments, context) => park(context) });
+  pi.registerShortcut(DRIVER_TOGGLE, {
+    description: "Toggle the CQ auto-driver",
+    async handler(context) {
+      if (driving) await park(context);
+      else if (workset === undefined) context.ui.notify("CQ driver not started: this session has no workset yet; run " + DRIVE_USAGE, "warning");
+      else await drive(workset, context);
+    },
+  });
+  pi.on("session_start", async (_event, context) => {
     if (connection !== undefined) throw new Error("CQ connection is already active");
     sequence = 0;
     turn = 0;
+    driving = false;
+    workset = undefined;
     const started = new Connection(configuration);
     connection = started;
     try {
@@ -122,13 +233,32 @@ export default async function (pi) {
       await started.close();
       throw error;
     }
+    context.ui.setStatus(DRIVER_FOOTER, DRIVER_OFF);
   });
-  pi.on("session_shutdown", async () => {
+  pi.on("session_shutdown", async (_event, context) => {
     const active = connection;
-    connection = undefined;
-    if (active !== undefined) await active.close();
+    if (active === undefined) return;
+    // The attached session ends with this host, so a driver bound to it is parked first.
+    try { if (driving) await driver(context, "Park", {}); }
+    finally {
+      driving = false;
+      connection = undefined;
+      await active.close();
+    }
   });
   pi.on("turn_start", () => { turn += 1; });
+  pi.on("turn_end", async (event, context) => {
+    outcome = event.outcome;
+    if (driving) show(context, expect(await driver(context, "Status", {}), "Status").value);
+  });
+  pi.on("agent_settled", async (_event, context) => {
+    if (!driving) return;
+    if (outcome === "completed") await proceed(context);
+    else {
+      context.ui.notify(`CQ driver: the last turn ended ${outcome}, so the driver parks instead of continuing`, "warning");
+      await park(context);
+    }
+  });
   pi.on("message_end", async (event, context) => {
     const message = event.message;
     if (message.role !== "assistant") return;

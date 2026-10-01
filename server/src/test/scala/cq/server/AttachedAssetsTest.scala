@@ -5,6 +5,7 @@ import cq.host.{HostFiles, WorkflowAssets}
 import io.circe.parser
 import java.nio.file.Files
 import org.scalatest.wordspec.AnyWordSpec
+import scala.jdk.CollectionConverters.*
 
 final class AttachedAssetsLocal extends AnyWordSpec {
   "Attached setup (Behavioral Active Effectual filesystem Good Communication)" should {
@@ -33,6 +34,14 @@ final class AttachedAssetsLocal extends AnyWordSpec {
       assert(codex.contains("CQ_TOKEN_FILE") && codex.contains("PROVIDER_API_KEY") && codex.contains("\"host\", \"codex\""))
       val pi = parser.parse(Files.readString(root.resolve(".pi/extensions/cq-host.json"))).fold(throw _, identity)
       assert(pi.hcursor.get[List[io.circe.Json]]("tools").toOption.get.size == 9)
+      // Drive and park are commands of the Pi extension, with one toggle key; the prompt templates stay the four workflow prompts.
+      val extension = Files.readString(root.resolve(".pi/extensions/cq-host.js"))
+      assert(List("pi.registerCommand(\"cq:drive\"", "pi.registerCommand(\"cq:park\"", "pi.registerShortcut(DRIVER_TOGGLE", "DRIVER_TOGGLE = \"ctrl+alt+a\"",
+        "connection.rpc(\"cq/driver\"").forall(extension.contains))
+      val prompts = new WorkflowAssets().commands(Harness.Pi)
+      assert(scala.util.Using.resource(Files.list(root.resolve(".pi/prompts")))(_.toList.asScala.toSet) == prompts.map(value => root.resolve(value.path)).toSet)
+      assert(prompts.map(_.path.getFileName.toString) == List("cq:begin.md", "cq:advance.md", "cq:review.md", "cq:upstream.md") &&
+        prompts.forall(value => Files.readString(root.resolve(value.path)) == value.body))
     }
     "approve the cq project server in Claude local settings while preserving existing local settings" in {
       val root = Files.createTempDirectory("cq-attached-approval-").toAbsolutePath
