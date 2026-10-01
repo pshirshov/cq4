@@ -205,7 +205,8 @@ def main():
             started = tool("cq_host", "dispatch", {"StartChoice": {"choice": choice["id"], "harness": "Codex", "fence": claim["fence"]}})["Status"]["value"]
             settled = poll(started["attempt"])
             assert settled["phase"] == "Completed" and settled["result"] and settled["usageDelivered"], settled
-            assert settled["workspace"]["admission"] == "Open" and Path(settled["workspace"]["directory"]).is_dir(), settled
+            # A completed child's workspace is released as soon as its result is published (D96).
+            assert settled["workspace"] == {"admission": "Removed", "directory": None}, settled
             result = settled["result"]
             tool("cq", "claim", {"project": project, "action": {"Release": {"fence": claim["fence"]}}})
         if scenario["name"] == "review":
