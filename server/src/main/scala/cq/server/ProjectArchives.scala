@@ -39,6 +39,7 @@ final class PostgresProjectArchives(database: LedgerDatabase, clock: Clock) exte
     BackupTable.UsageAttempts -> "cq_usage_attempts", BackupTable.UsageMeters -> "cq_usage_meters",
     BackupTable.UsageCosts -> "cq_usage_costs", BackupTable.UsageRecords -> "cq_usage_records",
     BackupTable.UsageHeads -> "cq_usage_heads", BackupTable.UsageOutcomes -> "cq_usage_outcomes",
+    BackupTable.UsageSpans -> "cq_usage_spans",
     BackupTable.Artifacts -> "cq_artifacts", BackupTable.ResultAdmissions -> "cq_result_admissions",
     BackupTable.Integrations -> "cq_integrations", BackupTable.IntegrationMembers -> "cq_integration_members",
     BackupTable.Worksets -> "cq_worksets",

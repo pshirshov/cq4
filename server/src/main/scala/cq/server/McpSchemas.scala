@@ -37,7 +37,7 @@ final class McpSchemas {
       decoder(ProposalApplyInput_JsonCodec)(Command.ApplyProposal.apply)),
     McpTool("claim", s"Acquire, renew or release an explicit item-set claim. Duration is 1–${cq.core.LedgerPolicy.MaxClaimMillis} ms (at most ${cq.core.LedgerPolicy.MaxClaimMillis / 60000} minutes); the host renews the claim covering a running child and one it is preparing for integration or combination, and a renewal never shortens a lease, so renew only claims you hold outside running work before they expire. Governor authority required. Takeover requires Human authority and a freshly reviewed read/Claims snapshot; replaced claims lose their entire membership.", "ClaimInput", Set("Claimed"), true,
       decoder(ClaimInput_JsonCodec)(Command.ClaimWork.apply)),
-    McpTool("usage", "Read task, cohort, session, evaluation or project usage totals, a per-phase report of attempts, finished wall time, tokens and costs, and bounded cost, observation, attempt and outcome audit pages. Shared totals are not per-member allocations.", "UsageInput", Set("UsageSummary", "UsagePhases", "UsageCosts", "UsageAudit", "UsageAttempts", "UsageOutcomes"), false,
+    McpTool("usage", "Read task, cohort, session, evaluation or project usage totals, a per-phase report of attempts, host spans, finished wall time, tokens and costs, and bounded cost, observation, attempt and outcome audit pages. Shared totals are not per-member allocations.", "UsageInput", Set("UsageSummary", "UsagePhases", "UsageCosts", "UsageAudit", "UsageAttempts", "UsageOutcomes"), false,
       decoder(UsageInput_JsonCodec)(Command.Usage.apply)),
   )
 

@@ -61,5 +61,22 @@ final class CliOutputLocal extends AnyWordSpec {
       new CliOutput(new PrintStream(bytes, true, UTF_8), CliFormat.Json, List("status", "phases")).result(Result.UsagePhases(report))
       assert(Wire.decode(Result_JsonCodec, bytes.toString(UTF_8).trim) == Result.UsagePhases(report))
     }
+
+    "I20: print a phase of host spans with its span count and wall time and say that wall time includes spans" in {
+      val none = MetricTotal(0, 0, 0)
+      val empty = UsageTotals(none, none, none, none, none, none, 0)
+      val report = PhaseReport(List(
+        PhaseUsage(UsagePhase.Check, 0, 3, 0, 65000, empty, Nil),
+        PhaseUsage(UsagePhase.Combine, 1, 1, 0, 1500, empty, Nil),
+        PhaseUsage(UsagePhase.Integrate, 0, 1, 0, 4000, empty, Nil)), false, 9)
+      val bytes = new ByteArrayOutputStream()
+      new CliOutput(new PrintStream(bytes, true, UTF_8), CliFormat.Human, List("status", "phases", "--task", "T3")).result(Result.UsagePhases(report))
+      val lines = bytes.toString(UTF_8).linesIterator.toList
+      def row(phase: String): List[String] = lines.filter(_.startsWith(phase + " ")).map(_.split(" {2,}").toList.take(5)).head
+      assert(row("Check") == List("Check", "0", "0", "3", "0:01:05") && row("Combine") == List("Combine", "1", "0", "1", "0:00:01") &&
+        row("Integrate") == List("Integrate", "0", "0", "1", "0:00:04"), lines.mkString("\n"))
+      assert(lines.contains("Wall time sums finished attempts and host spans (check, combination and integration time outside any attempt) " +
+        "from start to finish; running attempts are counted without wall time."), lines.mkString("\n"))
+    }
   }
 }

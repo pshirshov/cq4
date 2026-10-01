@@ -237,7 +237,7 @@ final class SupervisorProgram(config: SupervisorConfig, registry: HarnessRegistr
         val entries = artifacts.map(HostDelivery.Artifact.apply) ++ observations :+
           HostDelivery.Usage(HostUsageInput(project, HostUsage.Finish(outcome)))
         queue.commit(entries)
-        val delivered = Try(queue.flush(collector)).toEither
+        val delivered = Try { queue.flush(collector); new SessionSpans(config, authority).flush() }.toEither
         val pending = delivered.left.toOption.map(_ => "Operational usage/artifact delivery is pending; retain the session directory and retry cq job upload")
         val receipt = SupervisorReceipt(attempt.session, attempt.id, config.directory.toString, record.phase, succeeded,
           report.toOption.map(_.id), report.toOption.map(value => Wire.decode(GoverningReport_JsonCodec, value.body)), delivered.isRight, pending.orElse(problem))

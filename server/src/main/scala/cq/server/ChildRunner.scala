@@ -16,7 +16,7 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
   private val RenewalSeconds = 20L
   private val partials = new PartialWorkCapture(config)
   private val validation = new HostValidation(config)
-  private final case class Trace(native: Option[JobRecord], extra: List[ArtifactUpload], uncertain: Boolean)
+  private final case class Trace(native: Option[JobRecord], extra: List[ArtifactUpload], spans: List[PhaseSpan], uncertain: Boolean)
   private def directory(attempt: AttemptId): Path = config.directory.resolve("payload").resolve(attempt.value.toString)
   private def transcript(attempt: AttemptId, name: String, bound: Int): Array[Byte] = NativeTranscript.retained(directory(attempt).resolve(name), bound)
   private def collect(attempt: Attempt, version: String, collectedAt: Long): CollectedUsage =
@@ -80,7 +80,7 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
   }
 
   def run(entry: DispatchExecution): Task[Unit] = for {
-    trace <- Ref.make(Trace(None, Nil, false))
+    trace <- Ref.make(Trace(None, Nil, Nil, false))
     queue <- ZIO.attemptBlocking(new DeliveryQueue(entry.directory.resolve("delivery")))
     result <- ZIO.scoped {
       for {
@@ -220,7 +220,8 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
   } yield closed
 
   private def validate(entry: DispatchExecution, candidate: GitCommit, check: ValidationCheck, index: Int, trace: Ref[Trace]): Task[ValidationEvidence] = for {
-    validated <- validation(entry.ticket.attempt.id, s"check-$index", candidate, check, (id, base, command) => launch(entry, id, base, command).ensuring(release(id).ignore))
+    validated <- validation(entry.ticket.attempt.id, s"check-$index", candidate, check, (id, base, command) => launch(entry, id, base, command).ensuring(release(id).ignore)
+      .tap(record => trace.update(value => value.copy(spans = value.spans :+ PhaseSpans.check(record, entry.ticket.assignment.id)))))
     evidence = validated.evidence
     _ <- trace.update(value => value.copy(extra = value.extra ++ validated.artifacts, uncertain = value.uncertain || evidence.state == ValidationState.Unknown))
     _ <- ZIO.attempt(require(evidence.state != ValidationState.Unknown, "Host validation cleanup is unconfirmed"))
@@ -256,9 +257,11 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
         val allArtifacts = outParts ++ errParts ++ trace.extra ++ partial.flatMap(_.toOption).toList.flatMap(_._2)
         val observations = usage.meters.flatMap(batch => HostDelivery.Usage(HostUsageInput(project, HostUsage.Meter(batch.meter))) ::
           batch.observations.map(value => HostDelivery.Usage(HostUsageInput(project, HostUsage.Ingest(value)))))
-        val outcome = AttemptOutcome(RequestId(NativeArtifacts.id(attempt.id, "outcome").value), attempt.id, state, collectedAt,
+        // The attempt ends when its native job settles; host checks that follow are spans of their own.
+        val finishedAt = job.filter(_.phase == JobPhase.Settled).fold(collectedAt)(record => math.max(attempt.startedAt, record.updatedAt))
+        val outcome = AttemptOutcome(RequestId(NativeArtifacts.id(attempt.id, "outcome").value), attempt.id, state, finishedAt,
           (problem.toList ++ observed.toList.flatMap(_.problem).map(DispatchProjection.concise) ++ partialGap.map(DispatchProjection.concise) ++ usage.gaps).take(MaxGaps), None)
-        val entries = allArtifacts.map(HostDelivery.Artifact.apply) ++ observations
+        val entries = allArtifacts.map(HostDelivery.Artifact.apply) ++ observations ++ trace.spans.map(PhaseSpans.delivery(project, _))
         val base = entry.status.copy(process = job.map(_.phase), blocker = problem, partial = partial.flatMap(_.toOption).map(_._1),
           usageDelivered = false, detailsOmitted = true, workspace = workspace.map(DispatchProjection.workspace))
         val publication = new ChildPublicationDelivery(entry.directory, entry.ticket)

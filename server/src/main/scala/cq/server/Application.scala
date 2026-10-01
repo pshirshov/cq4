@@ -103,5 +103,6 @@ final class Application(ledger: LedgerService[IO], repository: LedgerRepository[
       case HostUsage.Meter(value) => usage.meter(scope, value).map(HostUsageResult.Metered.apply)
       case HostUsage.Ingest(value) => usage.ingest(scope, value).map(HostUsageResult.Ingested.apply)
       case HostUsage.Finish(value) => usage.finish(scope, value).map(HostUsageResult.Finished.apply)
+      case HostUsage.Span(value) => usage.span(scope, value).map(HostUsageResult.Spanned.apply)
     }}
 }

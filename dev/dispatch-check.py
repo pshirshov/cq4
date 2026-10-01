@@ -92,8 +92,26 @@ def main():
         expected = {receipt["attempt"]["value"]: "Govern", **{value["attempt"]["id"]["value"]: phase(value["request"]["work"]) for value in tickets}}
         assert {value["attempt"]["id"]["value"]: value["attempt"]["phase"] for value in attempts} == expected, attempts
         phases = api({"Phases": {"filter": filter_value}})["UsagePhases"]["report"]["phases"]
-        assert {value["phase"]: value["attempts"] for value in phases} == {name: str(list(expected.values()).count(name)) for name in expected.values()}, phases
-        assert all(value["running"] == "0" and value["spans"] == "0" and int(value["wallMillis"]) > 0 for value in phases), phases
+        # The configured check ran once on the worker's candidate and once more when the reviewer declared it: host time outside any attempt.
+        checked = [value for value in phases if value["phase"] == "Check"]
+        assert [(value["attempts"], value["running"], value["spans"]) for value in checked] == [("0", "0", "2")] and int(checked[0]["wallMillis"]) > 0, phases
+        attempted = [value for value in phases if value["phase"] != "Check"]
+        assert {value["phase"]: value["attempts"] for value in attempted} == {name: str(list(expected.values()).count(name)) for name in expected.values()}, phases
+        assert all(value["running"] == "0" and value["spans"] == "0" and int(value["wallMillis"]) > 0 for value in attempted), phases
+        worker = next(value for value in tickets if phase(value["request"]["work"]) == "Work" and (session / "children" / value["attempt"]["id"]["value"] / "candidate.json").exists())
+        task = "T" + worker["request"]["members"][0]["id"]["number"]
+        by_task = json.loads(run(["status", "phases", "--task", task, "--json"]))["UsagePhases"]["report"]["phases"]
+        assert [value for value in by_task if value["phase"] == "Check"] == checked, by_task
+        # The worker's attempt ended when its native job settled, before its check ran; the check jobs' lifetimes are the Check spans.
+        publication = json.loads((session / "children" / worker["attempt"]["id"]["value"] / "publication.json").read_text())
+        jobs = {path.stem: json.loads(path.read_text()) for path in (session / "journal").glob("*.json")}
+        native = jobs[worker["attempt"]["id"]["value"]]
+        check_jobs = [job for name, job in jobs.items() if name not in expected and job["workspace"]["base"] == publication["result"]["candidate"]]
+        assert publication["outcome"]["finishedAt"] == native["updatedAt"] and native["phase"] == "Settled", publication["outcome"]
+        assert len(check_jobs) == 2 and all(int(job["createdAt"]) >= int(native["updatedAt"]) for job in check_jobs), check_jobs
+        assert int(checked[0]["wallMillis"]) == sum(int(job["updatedAt"]) - int(job["createdAt"]) for job in check_jobs), (checked, check_jobs)
+        table = run(["status", "phases", "--session", receipt["session"]["value"]])
+        assert [line.split()[:4] for line in table.splitlines() if line.startswith("Check ")] == [["Check", "0", "0", "2"]], table
         assert all(value["assignment"]["evaluation"] == {"run": "deterministic-dispatch", "scenario": "worker-reviewer", "assessor": False} for value in attempts)
         assert api({"Summary": {"filter": {"EvaluationOnly": {"run": "deterministic-dispatch", "scenario": "worker-reviewer"}}}}) == before
         assert before["UsageSummary"]["report"]["attempts"]["running"] == "0"

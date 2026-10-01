@@ -8,8 +8,13 @@ import java.nio.file.Path
 import java.time.{Clock, Duration}
 import zio.{Promise, Semaphore, Task, ZIO}
 
+/** `assignment` is known once the reviewed worker is; `observedAt` is when the host last finished working on the integration. */
 private[server] final class IntegrationExecutionState(val ticket: IntegrationTicket, val ready: Promise[Throwable, Unit],
-  var done: Promise[Nothing, Unit], var view: IntegrationStatus)
+  var done: Promise[Nothing, Unit], var view: IntegrationStatus, val startedAt: Long) {
+  var assignment = Option.empty[AssignmentId]
+  var observedAt = startedAt
+  var spanned = false
+}
 
 private[server] final class GovernedIntegrationJobs(owner: Scope, jobs: JobSupervisor, admission: Semaphore) extends IntegrationJobs {
   private var closed = false
@@ -41,6 +46,7 @@ final class IntegrationController(config: SupervisorConfig, authority: Superviso
       config.directory.resolve("payload"), config.environment, config.limits, CqEntrypoint.command), authority.governor, authority.collector)
   }
   private val rebase = new RebasePreparation(config, authority, candidates)
+  private val spans = new SessionSpans(config, authority)
   private var entries = Map.empty[IntegrationId, IntegrationExecutionState]
   private var closing = false
   private var disabled = false
@@ -65,18 +71,28 @@ final class IntegrationController(config: SupervisorConfig, authority: Superviso
     }
     IntegrationStatus(value.record.intent.id, phase, snapshot(entry).preview, next, blocker.map(DispatchProjection.concise))
   }
-  private def check(id: AttemptId, base: GitCommit, command: JobCommand): Task[JobRecord] =
-    execution.execute(WorkspaceSpec(config.owner.project, config.owner.actor.session, id, config.run.repository, base), command)
-      .onInterrupt(jobs.cancel(config.owner, id).ignore) *> execution.status(id)
+  /** One Integrate span per integration whose members are known, from its preparation request to where the host last worked on it. */
+  private def span(entry: IntegrationExecutionState, state: AttemptState): Task[Unit] = ZIO.succeed(synchronized {
+    val open = entry.assignment.filter(_ => !entry.spanned)
+    entry.spanned = entry.spanned || open.nonEmpty
+    open.map(PhaseSpans.integration(entry.ticket.id, _, config.owner.actor.session, entry.startedAt, entry.observedAt, state))
+  }).flatMap(ZIO.foreachDiscard(_)(spans.record))
+  /** A resolved integration or a failed preparation ends its span; one that is Ready or Pending stays open for its Integrate. */
+  private def resolved(entry: IntegrationExecutionState): Task[Unit] =
+    ZIO.succeed(synchronized { entry.observedAt = clock.millis(); entry.view.phase }).flatMap {
+      case IntegrationPhase.Recorded => span(entry, AttemptState.Completed)
+      case IntegrationPhase.NotApplied | IntegrationPhase.Failed => span(entry, AttemptState.Failed)
+      case _ => ZIO.unit
+    }
   private def background(entry: IntegrationExecutionState, done: Promise[Nothing, Unit], operation: Task[IntegrationStatus]): Task[Unit] =
-    operation.flatMap(value => ZIO.succeed(update(entry, value))).catchAll { error =>
+    (operation.flatMap(value => ZIO.succeed(update(entry, value))).catchAll { error =>
       ZIO.succeed {
         val value = snapshot(entry)
         update(entry, value.copy(phase = if (value.phase == IntegrationPhase.Preparing) IntegrationPhase.Failed else IntegrationPhase.Pending,
           next = IntegrationNext.InspectEvidence, blocker = Some(DispatchProjection.concise("Integration failed: " +
             Option(error.getMessage).getOrElse(error.getClass.getSimpleName)))))
       } *> entry.ready.fail(error).unit
-    }.ensuring(done.succeed(()).unit).forkDaemon.unit
+    } *> resolved(entry)).ensuring(done.succeed(()).unit).forkDaemon.unit
 
   def prepare(ticket: IntegrationTicket): Task[IntegrationStatus] = ZIO.uninterruptibleMask { restore => for {
     ready <- Promise.make[Throwable, Unit]
@@ -88,7 +104,7 @@ final class IntegrationController(config: SupervisorConfig, authority: Superviso
           admit()
           require(entries.size < IntegrationEntries.MaxOperations, "Session integration limit reached")
           val entry = new IntegrationExecutionState(ticket, ready, done,
-            IntegrationStatus(ticket.id, IntegrationPhase.Preparing, None, IntegrationNext.Wait, None))
+            IntegrationStatus(ticket.id, IntegrationPhase.Preparing, None, IntegrationNext.Wait, None), clock.millis())
           entries = entries.updated(ticket.id, entry)
           (entry, true)
       }
@@ -104,9 +120,11 @@ final class IntegrationController(config: SupervisorConfig, authority: Superviso
       preparation = new IntegrationPreparation(authority.governor, config.owner, config.run.repository,
         config.settings.integrationTarget.get, config.settings.checks, clock, candidates)
       reviewed <- ZIO.attemptBlocking(preparation.review(ticket))
+      assignment <- ZIO.attemptBlocking(PhaseSpans.producer(config.directory, reviewed.workerId))
+      _ <- ZIO.succeed(synchronized { entry.assignment = Some(assignment) })
       // The claim is renewed while host checks of a rebased commit run; a failed renewal stops them.
       renewal = (ZIO.sleep(zio.Duration.fromSeconds(RenewalSeconds)) *> ZIO.attemptBlocking(preparation.renew(reviewed))).forever
-      rebased <- ZIO.interruptible(rebase(ticket.id, config.settings.integrationTarget.get, reviewed.candidate, check).raceFirst(renewal))
+      rebased <- ZIO.interruptible(rebase(ticket.id, config.settings.integrationTarget.get, reviewed.candidate, spans.check(jobs, execution, assignment)).raceFirst(renewal))
       // Shutdown cancels a running check, which then reads as failed; that outcome is discarded rather than reported.
       _ <- ZIO.attempt(synchronized(require(!closing || !rebased.outcome.isInstanceOf[RebaseOutcome.ChecksFailed],
         "Integration admission closed while host checks ran")))
@@ -152,6 +170,10 @@ final class IntegrationController(config: SupervisorConfig, authority: Superviso
     pending <- ZIO.succeed(synchronized { closing = true; entries.values.map(_.done).toList })
     stopped <- execution.shutdown.exit
     _ <- ZIO.foreachDiscard(pending)(_.await)
+    // What its owner leaves unresolved ends here: a prepared integration never applied as Cancelled, a pending one as Unknown.
+    _ <- ZIO.foreachDiscard(synchronized(entries.values.toList)) { entry =>
+      span(entry, if (snapshot(entry).phase == IntegrationPhase.Ready) AttemptState.Cancelled else AttemptState.Unknown)
+    }
     _ <- ZIO.done(stopped)
   } yield ()
 }

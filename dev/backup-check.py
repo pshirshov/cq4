@@ -57,6 +57,7 @@ def verify(checks, command):
                   "histories": [read({"History": {"id": item["id"], "before": {"value": "9223372036854775807"}, "limit": 100}}) for item in items],
                   "usage": summary, "audit": usage({"Audit": {"filter": {"ProjectAll": {}}, "after": "0", "limit": 100}}),
                   "attempts": usage({"Attempts": {"filter": {"ProjectAll": {}}, "after": None, "snapshot": None, "limit": 100}}),
+                  "phases": usage({"Phases": {"filter": {"ProjectAll": {}}}}),
                   "artifact": read({"ArtifactText": {"id": state["artifact"]["id"], "offset": 0, "limit": 8192}})}
         assert result["artifact"]["ArtifactText"]["page"]["text"] == state["artifact"]["body"]
         assert result["details"][-1]["Detail"]["view"]["item"]["draft"]["archived"]
@@ -79,6 +80,13 @@ def verify(checks, command):
                 headers={"Authorization": "Bearer " + checks.environment["CQ_TOKEN"], "CQ-Session": checks.environment["CQ_SESSION"], "Content-Type": "application/json", "CQ-Protocol-Version": "0.1.0"})
             with urllib.request.urlopen(request, timeout=15) as response:
                 assert response.status == 200
+            attempt = usage({"Attempts": {"filter": {"ProjectAll": {}}, "after": None, "snapshot": None, "limit": 100}})["UsageAttempts"]["page"]["entries"][0]["attempt"]
+            span = {"id": {"value": str(uuid.uuid4())}, "assignment": attempt["assignment"], "session": attempt["session"], "phase": "Integrate",
+                    "startedAt": "3000", "finishedAt": "4200", "state": "Completed"}
+            request = urllib.request.Request(checks.environment["CQ_ORIGIN"] + "/api/usage", data=json.dumps({"project": project, "operation": {"Span": {"value": span}}}).encode(),
+                headers={"Authorization": "Bearer " + checks.environment["CQ_TOKEN"], "CQ-Session": checks.environment["CQ_SESSION"], "Content-Type": "application/json", "CQ-Protocol-Version": "0.1.0"})
+            with urllib.request.urlopen(request, timeout=15) as response:
+                assert response.status == 200
             item = read({"ItemDetail": {"id": state["source"]["id"]}})["Detail"]["view"]["item"]
             item["draft"]["content"]["Task"]["status"] = "Done"
             item["draft"]["archived"] = True
@@ -86,10 +94,12 @@ def verify(checks, command):
                 "reason": "Retain archived item across backup", "fences": [], "mutations": [{"Replace": {"id": item["id"], "expected": item["revision"], "draft": item["draft"]}}]}}}})
             before = snapshot(state)
             write(checks.evidence / "api-before.json", before)
+            assert [(value["spans"], value["wallMillis"]) for value in before["phases"]["UsagePhases"]["report"]["phases"] if value["phase"] == "Integrate"] == [("1", "1200")], before["phases"]
             support["export_meters"](checks.environment, checks.evidence, project, {"value": checks.environment["CQ_SESSION"]})
             meters = json.loads((checks.evidence / "usage-meters.json").read_text())["entries"]
             assert len(meters) == 1 and meters[0]["projection"]["totals"] == before["usage"]["UsageSummary"]["report"]["direct"]
         before_database = fingerprint(names[0], "database-before")
+        assert before_database["tables"]["cq_usage_spans"]["rows"] == 1, before_database["tables"]
         dump = checks.evidence / "cq-database.dump"
         checks.run(["pg_dump", *connection, "--dbname", names[0], "--format=custom", "--file", str(dump)], "backup-export", 60)
         checks.run(["pg_restore", *connection, "--dbname", names[1], "--exit-on-error", "--no-owner", "--no-privileges", str(dump)], "backup-import", 60)

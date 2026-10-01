@@ -105,7 +105,7 @@ Examples:
 
 Modes:
   (omitted)   Usage summary: known tokens, missing measurements and estimated costs
-  phases      Attempts, finished wall time, tokens and costs per workflow phase
+  phases      Attempts, host spans, finished wall time, tokens and costs per workflow phase
   audit       Recorded observations and normalized contributions
   costs       Cost totals grouped by attribution, currency and pricing basis
   attempts    Execution attempts and their latest outcome

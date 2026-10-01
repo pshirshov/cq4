@@ -31,10 +31,11 @@ private final case class DummyUsageState(
   observations: Map[ObservationId, RecordedUsage],
   heads: Map[(MeterKey, Long), ObservationId],
   outcomes: Map[RequestId, RecordedOutcome],
+  spans: Map[RequestId, PhaseSpan],
 )
 
 private object DummyUsageState {
-  def empty: DummyUsageState = DummyUsageState(0, Map.empty, Map.empty, Map.empty, Map.empty, Map.empty, Map.empty, Map.empty)
+  def empty: DummyUsageState = DummyUsageState(0, Map.empty, Map.empty, Map.empty, Map.empty, Map.empty, Map.empty, Map.empty, Map.empty)
 }
 
 private final class DummyUsageTransaction(initial: DummyUsageState) extends UsageTransaction {
@@ -110,13 +111,20 @@ private final class DummyUsageTransaction(initial: DummyUsageState) extends Usag
     val outcomes = state.attempts.valuesIterator.filter(matches(filter, _)).map(a => latestOutcome(a.id)).toList
     AttemptCoverage(outcomes.count(_.isEmpty).toLong, outcomes.count(_.exists(_.value.state == AttemptState.Unknown)).toLong, outcomes.count(_.exists(_.value.gaps.nonEmpty)).toLong)
   }
-  private def matches(filter: UsageFilter, attempt: Attempt): Boolean = {
-    val assignment = state.assignments(attempt.assignment)
+  override def span(id: RequestId): Option[PhaseSpan] = state.spans.get(id)
+  override def putSpan(value: PhaseSpan, actor: Actor, receivedAt: Long): Unit = { state = state.copy(spans = state.spans.updated(value.id, value)); tick(); () }
+  override def spans(filter: UsageFilter): List[SpanTally] =
+    state.spans.values.filter(value => matches(filter, value.assignment, value.session)).groupBy(_.phase).toList.map { case (phase, values) =>
+      SpanTally(phase, values.size.toLong, values.foldLeft(0L)((sum, value) => Math.addExact(sum, Math.subtractExact(value.finishedAt, value.startedAt))))
+    }
+  private def matches(filter: UsageFilter, attempt: Attempt): Boolean = matches(filter, attempt.assignment, attempt.session)
+  private def matches(filter: UsageFilter, id: AssignmentId, session: SessionId): Boolean = {
+    val assignment = state.assignments(id)
     filter match {
       case _: UsageFilter.ProjectAll => true
       case UsageFilter.TaskOnly(item) => assignment.members.contains(item)
       case UsageFilter.CohortOnly(id) => assignment.cohort.contains(id)
-      case UsageFilter.SessionOnly(id) => attempt.session == id
+      case UsageFilter.SessionOnly(id) => session == id
       case UsageFilter.EvaluationOnly(run, scenario) => assignment.evaluation.exists(e => e.run == run && scenario.forall(_ == e.scenario))
     }
   }

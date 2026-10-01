@@ -36,7 +36,7 @@ enum Role { Human Governor Explorer Planner Worker Reviewer Collector }
 root data Actor { subject: str session: SessionId role: Role }
 root data Provenance { actor: Actor receivedAt: i64 request: RequestId }
 root data Project { id: ProjectId name: str revision: Revision createdAt: i64 }
-enum BackupTable { Projects Counters Items Labels Edges History Requests Changes Claims ClaimMembers UsageClock UsageAssignments UsageMembers UsageAttempts UsageMeters UsageCosts UsageRecords UsageHeads UsageOutcomes Artifacts ResultAdmissions Integrations IntegrationMembers Worksets }
+enum BackupTable { Projects Counters Items Labels Edges History Requests Changes Claims ClaimMembers UsageClock UsageAssignments UsageMembers UsageAttempts UsageMeters UsageCosts UsageRecords UsageHeads UsageOutcomes UsageSpans Artifacts ResultAdmissions Integrations IntegrationMembers Worksets }
 root data BackupEntry { table: BackupTable rows: i64 bytes: i64 sha256: str }
 root data BackupManifest { project: ProjectId schemaSha256: str postgresMajor: i32 createdAt: i64 entries: lst[BackupEntry] }
 
@@ -279,6 +279,7 @@ root data UsageReport {
   costs: CostPage
 }
 root data UsagePage { entries: lst[RecordedUsage] after: i64 hasMore: bit cursor: i64 }
+root data PhaseSpan { id: RequestId assignment: AssignmentId session: SessionId phase: UsagePhase startedAt: i64 finishedAt: i64 state: AttemptState }
 root data PhaseUsage { phase: UsagePhase attempts: i64 spans: i64 running: i64 wallMillis: i64 totals: UsageTotals costs: lst[CostTotal] }
 root data PhaseReport { phases: lst[PhaseUsage] costsTruncated: bit cursor: i64 }
 
@@ -484,6 +485,7 @@ root adt HostUsage {
   data Meter { value: UsageMeter }
   data Ingest { value: UsageUpload }
   data Finish { value: AttemptOutcome }
+  data Span { value: PhaseSpan }
 }
 root data HostUsageInput { project: ProjectId operation: HostUsage }
 root adt HostUsageResult {
@@ -492,6 +494,7 @@ root adt HostUsageResult {
   data Metered { value: UsageMeter }
   data Ingested { value: UsageReceipt }
   data Finished { value: AttemptOutcome }
+  data Spanned { value: PhaseSpan }
 }
 root data GrantRequest { project: ProjectId actor: Actor expiresAt: i64 }
 root adt Credential {

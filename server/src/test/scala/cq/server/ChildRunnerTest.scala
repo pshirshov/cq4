@@ -564,6 +564,59 @@ sys.stderr.flush()
           Files.readString(disabled).trim == "1", refused.toString))
       } yield () } }
     }
+    "I20: end a worker attempt at its native job's settlement and record each check run and each revalidation run as one Check span on the worker's assignment" in {
+      (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
+      val counter = local.directory.resolve("spanned-" + uuid)
+      // Each run takes 300 ms; the first two fail.
+      val check = ValidationCheck("flaky", List("sh", "-c", s"sleep 0.3; n=$$(cat $counter 2>/dev/null || echo 0); echo $$((n + 1)) > $counter; test $$n -ge 2"), 10000, 65536, 2, 1)
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None, List(check)) { f => ZIO.scoped { for {
+        controller <- ZIO.succeed(new DispatchController(f.config, f.runner, f.jobs, f.clock))
+        revalidations <- f.revalidations(controller)
+        worked <- f.child(controller, Completing, f.request(f.limits))
+        _ <- ZIO.attempt(assert(worked.phase == DispatchPhase.Completed && worked.counts.validationFailed == 1, worked.toString))
+        handle = worked.result.get
+        task = UsageFilter.TaskOnly(f.members.head.id)
+        job <- f.jobs.status(f.config.owner, worked.attempt)
+        outcomes <- usage.outcomes(f.owner, worked.attempt, 0, 20)
+        attempts <- usage.attempts(f.owner, task, None, None, 100)
+        admitted <- usage.phases(f.owner, task)
+        result <- text(artifacts, f.owner, handle).map(Wire.decode(ChildResult_JsonCodec, _))
+        evidence = result.validation.head
+        runs <- ZIO.foreach(evidence.failures :+ evidence.artifact)(id => text(artifacts, f.owner, id).map(Wire.decode(ValidationObservation_JsonCodec, _).job))
+        _ <- ZIO.attempt {
+          val attempt = attempts.entries.map(_.attempt).find(_.id == worked.attempt).get
+          val work = admitted.phases.find(_.phase == UsagePhase.Work).get
+          val checked = admitted.phases.find(_.phase == UsagePhase.Check)
+          println(s"Worker phases: work=${work.wallMillis} ms check=${checked.map(value => (value.spans, value.wallMillis))} settled=${job.updatedAt} " +
+            s"finished=${outcomes.entries.map(_.value.finishedAt)} runs=${runs.map(run => (run.createdAt, run.updatedAt))}")
+          assert(job.phase == JobPhase.Settled && outcomes.entries.map(_.value.finishedAt) == List(job.updatedAt), outcomes.toString)
+          assert(work.attempts == 1 && work.spans == 0 && work.wallMillis == job.updatedAt - attempt.startedAt, work.toString)
+          assert(runs.size == 2 && runs.forall(_.createdAt >= job.updatedAt), s"A check began before the worker's attempt ended: $runs")
+          assert(checked.exists(value => value.attempts == 0 && value.spans == 2 && value.wallMillis == runs.map(run => run.updatedAt - run.createdAt).sum &&
+            value.wallMillis >= 600), checked.toString)
+        }
+        id = RequestId(uuid)
+        status <- revalidations.request(id, handle, f.fence).repeatUntil(_.phase != RevalidationPhase.Running)
+          .timeoutFail(new IllegalStateException("Revalidation did not finish"))(zio.Duration.fromSeconds(60))
+        _ <- revalidations.request(id, handle, f.fence)
+        round <- text(artifacts, f.owner, status.validation.head.artifact).map(Wire.decode(ValidationObservation_JsonCodec, _).job)
+        revalidated <- usage.phases(f.owner, task)
+        session <- usage.phases(f.owner, UsageFilter.SessionOnly(f.owner.actor.session))
+        _ <- ZIO.attemptBlocking {
+          val before = admitted.phases.find(_.phase == UsagePhase.Check).get
+          val after = revalidated.phases.find(_.phase == UsagePhase.Check).get
+          println(s"Revalidated phases: check=${(after.spans, after.wallMillis)} round=${(round.createdAt, round.updatedAt)}")
+          assert(status.phase == RevalidationPhase.Completed && status.validation.map(_.state) == List(ValidationState.Passed), status.toString)
+          assert(after.spans == 3 && after.wallMillis == before.wallMillis + round.updatedAt - round.createdAt, after.toString)
+          assert(session.phases.find(_.phase == UsagePhase.Check).contains(after) && revalidated.phases.find(_.phase == UsagePhase.Work) == admitted.phases.find(_.phase == UsagePhase.Work))
+          // The round's span was retained in the session's own queue before it was sent; the worker's check spans travelled with its publication.
+          val retained = scala.util.Using.resource(Files.list(f.config.directory.resolve("spans")))(_.toList)
+          assert(retained.size == 1 && Files.exists(retained.get(0).resolve("000000.ack")), retained.toString)
+        }
+      } yield () } }
+    }
+
     "I21: report how long a running child has been silent, reset it when the child writes, and omit it once the child settles" in {
       (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
         artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>

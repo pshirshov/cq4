@@ -4,6 +4,7 @@ import cq.api.*
 
 final case class MeterKey(attempt: AttemptId, meter: String)
 final case class PhaseCost(phase: UsagePhase, total: CostTotal)
+final case class SpanTally(phase: UsagePhase, spans: Long, wallMillis: Long)
 
 trait UsageRepository[F[_, _]] {
   def transact[A](project: ProjectId)(operation: UsageTransaction => A): F[Throwable, A]
@@ -29,6 +30,9 @@ trait UsageReader {
   def meters(filter: UsageFilter, after: Option[MeterKey], limit: Int): List[MeterView]
   def attemptsWithoutMeters(filter: UsageFilter): Long
   def audit(filter: UsageFilter, after: Long, limit: Int): ReadPage[RecordedUsage]
+  def span(id: RequestId): Option[PhaseSpan]
+  /** One tally per phase that has a matching span. */
+  def spans(filter: UsageFilter): List[SpanTally]
 }
 
 trait UsageTransaction extends UsageReader {
@@ -40,4 +44,5 @@ trait UsageTransaction extends UsageReader {
   def append(value: UsageUpload, normalized: TokenCounts, actor: Actor): RecordedUsage
   def head(value: RecordedUsage): Unit
   def putOutcome(value: AttemptOutcome, actor: Actor, receivedAt: Long): Unit
+  def putSpan(value: PhaseSpan, actor: Actor, receivedAt: Long): Unit
 }
