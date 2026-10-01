@@ -680,9 +680,11 @@ root data ResultAdmission {
   artifact: ArtifactMetadata owner: Actor fence: Fence members: lst[ItemRevision] decision: AdmissionDecision decidedAt: i64
 }
 root id IntegrationId { value: uid }
+root data IntegrationRebase { reviewed: GitCommit author: AttemptId validation: lst[ValidationEvidence] }
 root data IntegrationIntent {
   id: IntegrationId project: ProjectId owner: Actor repository: str target: str expected: GitCommit candidate: GitCommit
   worker: ArtifactId reviewer: ArtifactId checks: lst[ValidationCheck] fence: Fence members: lst[ItemRevision] change: ChangeRequest
+  rebase: opt[IntegrationRebase]
 }
 root data IntegrationHold {
   id: IntegrationId owner: Actor target: str expected: GitCommit candidate: GitCommit members: lst[ItemRevision]

@@ -57,10 +57,10 @@ final class IntegrationPreparation(api: ServerApi, owner: Scope, repository: Str
         case _ => throw new IllegalStateException("Integration member read returned an unexpected result")
       }
     }
-    val change = IntegrationPolicy.completion(ticket.id, repository, target, worker.candidate.get, workerId, ticket.reviewer,
+    val change = IntegrationPolicy.completion(ticket.id, repository, target, worker.candidate.get, None, workerId, ticket.reviewer,
       IntegrationValidation.citations(worker, reviewer), worker.request.fence, items)
     renew()
     IntegrationIntent(ticket.id, owner.project, owner.actor, repository, target, bases.expected(worker.base, worker.candidate.get), worker.candidate.get,
-      workerId, ticket.reviewer, checks, worker.request.fence, items.map(item => ItemRevision(item.id, item.revision)), change)
+      workerId, ticket.reviewer, checks, worker.request.fence, items.map(item => ItemRevision(item.id, item.revision)), change, None)
   }
 }

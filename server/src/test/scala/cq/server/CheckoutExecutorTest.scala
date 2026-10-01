@@ -26,7 +26,7 @@ final class CheckoutExecutorLocal extends SpecZIO {
     val owner = Actor("governor", SessionId(UUID.randomUUID()), Role.Governor)
     IntegrationIntent(id, project, owner, local.source.toString, "refs/heads/integration", local.base,
       GitCommit(local.git(candidate, "rev-parse", "HEAD")), ArtifactId(UUID.randomUUID()), ArtifactId(UUID.randomUUID()), Nil,
-      Fence(ClaimId(UUID.randomUUID()), 1), Nil, ChangeRequest(RequestId(id.value), Nil, Nil, "Fixture"))
+      Fence(ClaimId(UUID.randomUUID()), 1), Nil, ChangeRequest(RequestId(id.value), Nil, Nil, "Fixture"), None)
   }
 
   "Checkout executor (Behavioral Active Effectual; local Git Communication)" should {
