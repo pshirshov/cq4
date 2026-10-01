@@ -156,7 +156,8 @@ final class PostgresProjectArchives(database: LedgerDatabase, clock: Clock) exte
           while (rows.next()) {
             val item = Wire.decode(Item_JsonCodec, rows.getString(1))
             LedgerPolicy.validate(item.draft)
-            val summary = Wire.decode(ItemSummary_JsonCodec, rows.getString(2))
+            // Persisted outcomes may predate the current terminal policy; the comparison uses the recomputed outcome like every read.
+            val summary = PersistedItems.summary(rows.getString(2))
             check(rows.getBoolean(3) == item.draft.archived && summary == LedgerPolicy.summary(item),
               "Archive current item projections disagree with its content")
           }
