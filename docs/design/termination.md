@@ -36,7 +36,7 @@ Only status fields change. Narratives, citations, findings, confirmation and rec
 | Reviews | Cancelled | Conflict: approval needs an applicable independent review |
 | Handoffs | Cancelled | Conflict: acceptance needs an explicit decision |
 | OperatorActions | Cancelled | Conflict: observed success needs explicit evidence |
-| Memories | Preserve (all memory states are terminal records) | Preserve |
+| Memories | Retracted | Conflict: a current memory has no completion; supersede or retract it explicitly |
 | Upstream | Withdrawn | Conflict: resolution needs an explicit outcome |
 
 `DefectStatus.Withdrawn` expresses abandoned investigation without asserting rejection or non-reproducibility. Generic completion is an authorized declared management outcome for milestone/goal/task records; it does not fabricate validation, approval or host observations. Unsupported effects block the entire apply; callers can record the explicit typed factual result through an ordinary revision-checked edit and preview again. These bulk-operation rules do not restrict schema-valid corrections or reopening.

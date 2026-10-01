@@ -20,11 +20,11 @@ The schema lists exact required, optional and collection fields. Every content b
 | researches/RS | question, findings, optional conclusion/recommendation | Concluded, Inconclusive, Cancelled | Concluded |
 | hypothesis/H | claim, rationale, evidence, optional adjudication | Supported, Refuted, Inconclusive, Withdrawn | Supported, Refuted |
 | questions/Q | prompt, context, alternatives, optional answer | Answered, Withdrawn | Answered |
-| decisions/K | choice, rationale, alternatives | Adopted, Superseded, Withdrawn | Adopted |
+| decisions/K | choice, rationale, alternatives | Superseded, Withdrawn | Adopted |
 | reviews/R | reviewed revisions, optional candidate, findings, optional summary | Approved, ChangesRequested, Cancelled | Approved |
 | handoffs/HO | outcome, remaining work, blockers | Accepted, Cancelled | Accepted |
 | operatorActions/OA | action, expected evidence, optional confirmation, observed evidence | Observed, Failed, Cancelled | Observed |
-| memories/MEM | knowledge, applicability, evidence | Current, Superseded, Retracted | Current |
+| memories/MEM | knowledge, applicability, evidence | Superseded, Retracted | Current |
 | upstream/U | component, version, reproduction, optional report/outcome | Resolved, Declined, Withdrawn | Resolved |
 
 These are nominal outcome classifications. Readiness must additionally explain missing evidence and stale reviews; a status does not establish that validation was observed. In particular, operator confirmation is not observed completion. Facts may be corrected and records reopened. Archive is independent of these classifications.

@@ -242,6 +242,34 @@ abstract class LedgerContractTest extends SpecZIO with AssertZIO {
       } yield ()
     }
 
+    "keep adopted decisions and current memories active and archive only superseded, withdrawn or retracted ones" in { (service: LedgerService[IO]) =>
+      val owner = scope()
+      def decision(status: DecisionStatus): ItemDraft = task(s"Decision $status").copy(content = Content.Decision(status, "Choice", "Rationale", Nil))
+      def memory(status: MemoryStatus): ItemDraft = task(s"Memory $status").copy(content = Content.Memory(status, "Knowledge", "Applies here", Nil))
+      for {
+        _ <- service.initialize(owner, "Active decisions and memories")
+        adopted <- create(service, owner, decision(DecisionStatus.Adopted))
+        current <- create(service, owner, memory(MemoryStatus.Current))
+        supersededDecision <- create(service, owner, decision(DecisionStatus.Superseded))
+        supersededMemory <- create(service, owner, memory(MemoryStatus.Superseded))
+        withdrawn <- create(service, owner, decision(DecisionStatus.Withdrawn))
+        retracted <- create(service, owner, memory(MemoryStatus.Retracted))
+        decisions <- service.archivePreview(owner, "ledger:Decisions", 50)
+        memories <- service.archivePreview(owner, "ledger:Memories", 50)
+        _ <- assertIO(decisions.members.map(_.id).toSet == Set(supersededDecision.id, withdrawn.id) && decisions.retained.isEmpty)
+        _ <- assertIO(memories.members.map(_.id).toSet == Set(supersededMemory.id, retracted.id) && memories.retained.isEmpty)
+        _ <- assertIO((decisions.members ++ memories.members).forall(_.outcome == ItemOutcome(true, false)))
+        active <- service.search(owner, "status:Adopted OR status:Current", None, 200)
+        _ <- assertIO(active.items.map(_.id).toSet == Set(adopted.id, current.id) && active.items.forall(_.outcome == ItemOutcome(false, true)))
+        _ <- denied(service.change(owner, request(List(Mutation.Archive(List(adopted))), Nil)))(_.isInstanceOf[Fault.Invalid])
+        _ <- denied(service.change(owner, request(List(Mutation.Archive(List(current))), Nil)))(_.isInstanceOf[Fault.Invalid])
+        _ <- denied(create(service, owner, decision(DecisionStatus.Adopted).copy(archived = true)))(_.isInstanceOf[Fault.Invalid])
+        _ <- denied(create(service, owner, memory(MemoryStatus.Current).copy(archived = true)))(_.isInstanceOf[Fault.Invalid])
+        archived <- service.change(owner, request(List(Mutation.Archive(List(supersededDecision, supersededMemory))), Nil))
+        _ <- assertIO(archived.items.size == 2)
+      } yield ()
+    }
+
     "archive only terminal current revisions atomically and replay the exact acknowledgement" in { (service: LedgerService[IO]) =>
       val owner = scope()
       val done = task("Completed").copy(content = Content.Task(TaskStatus.Done, List("Observable result"), Some("Result"), Nil))

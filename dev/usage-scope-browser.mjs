@@ -80,7 +80,10 @@ export async function usageScopeChecks(browser, storageState, origin, evidence) 
     await page.screenshot({path: `${evidence}/usage-attempts-table.png`,fullPage:true});
     await click(`Session usage · ${attempts[0].session.value}`); await summary(`session ${attempts[0].session.value}`, 0, 100, 0);
     await click('Attempts'); await click(`Cohort usage · ${cohort}`); await summary(`cohort ${cohort}`, 40, 100, 0);
-    await page.getByText(`Shared assignments: ${assignments[0].id.value}.`, { exact: true }).waitFor();
+    await page.getByText('1 shared assignment', { exact: true }).click();
+    const shared = page.getByRole('list', { name: 'Shared assignments', exact: true }).getByRole('listitem');
+    await shared.filter({ hasText: `T1, T2 · cohort ${cohort}` }).waitFor();
+    assert.equal(await shared.count(), 1); assert.equal(await shared.first().getAttribute('title'), `Assignment ${assignments[0].id.value}`);
     await click('Attempts'); await click('Task usage · T2'); await summary('T2', 0, 100, 0);
     assert.equal(await page.getByRole('heading', { name: 'T1 · Scope A', exact: true, includeHidden: true }).count(), 1, 'Usage scope navigation retains the selected item');
     await click('Usage audit'); await page.getByRole('table', {name: 'Usage audit', exact: true}).getByRole('cell', {name: 'Shared fixture · Complete', exact: true}).waitFor();

@@ -65,13 +65,13 @@ export async function usageChecks(page, origin, projectId) {
   assert.equal(await page.getByText('Data: invalid query', { exact: true }).count(), 1, 'Usage refresh is independent of query validity');
   await page.getByRole('button', { name: 'More costs', exact: true }).click();
   await page.getByRole('heading', { name: 'Cost breakdown', exact: true }).waitFor();
-  await page.getByRole('table', { name: 'Costs' }).getByRole('row').filter({ has: page.getByRole('cell', { name: 'price-200', exact: true }) }).getByRole('cell', { name: '0.01', exact: true }).waitFor();
+  await page.getByRole('table', { name: 'Costs' }).getByRole('row').filter({ has: page.getByRole('cell', { name: 'price-200', exact: true }) }).getByRole('cell', { name: '0.0100', exact: true }).waitFor();
   assert.equal(await page.getByRole('button', { name: 'Next cost page', exact: true }).count(), 0);
   await host({ Ingest: { value: { observation: { id: id(), attempt: attempt.id, source: 'fixture', position: '203', occurredAt: '5000', receivedAt: '0',
     scope: 'Increment', counters: counts(1), inputIncludesCache: true, outputIncludesReasoning: true,
     cost: { amount: { value: '0.02' }, currency: 'USD', basis: 'ProviderEstimate', pricingVersion: 'price-200' },
     completeness: 'Complete', gaps: [], evidence: null, supersedes: null }, meter: 'fixture', disposition: 'Contribution', detailReason: null } } });
-  await page.getByRole('table', { name: 'Costs' }).getByRole('row').filter({ has: page.getByRole('cell', { name: 'price-200', exact: true }) }).getByRole('cell', { name: '0.03', exact: true }).waitFor();
+  await page.getByRole('table', { name: 'Costs' }).getByRole('row').filter({ has: page.getByRole('cell', { name: 'price-200', exact: true }) }).getByRole('cell', { name: '0.0300', exact: true }).waitFor();
   assert.deepEqual(await detail(), before, 'Usage lifecycle writes must not revise the item');
   await page.getByRole('dialog').getByRole('button', { name: 'Close', exact: true }).click();
   await query.fill(''); await page.getByRole('button', { name: 'Search', exact: true }).click();
