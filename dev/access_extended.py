@@ -93,7 +93,7 @@ class ExtendedAccess:
         reviewer = self.attempt(project, members, "Reviewer", parent["id"])
         request = {"request": identity(), "work": {"Worker": {"mode": "Implement"}}, "harness": "Codex", "members": refs,
             "guidance": [], "artifacts": [], "previous": None, "fence": fence,
-            "limits": {"startupMillis": "3000", "executionMillis": "10000", "heartbeatMillis": "1000", "graceMillis": "300", "killMillis": "2000", "outputBytes": 262144}}
+            "limits": {"startupMillis": "3000", "executionMillis": "10000", "heartbeatMillis": "1000", "graceMillis": "300", "killMillis": "2000", "retainedOutputBytes": 262144}}
         base, candidate = {"value": "a" * 40}, {"value": "b" * 40}
 
         def publish(result):

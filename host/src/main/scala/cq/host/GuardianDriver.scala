@@ -9,11 +9,20 @@ import java.util.concurrent.{CompletableFuture, FutureTask, TimeUnit}
 import java.util.concurrent.atomic.{AtomicBoolean, AtomicReference}
 import scala.jdk.CollectionConverters.*
 
-final case class ExecutionLimits(startup: Duration, execution: Duration, heartbeat: Duration, grace: Duration, kill: Duration, outputBytes: Int) {
+/** `retainedOutputBytes` bounds what the host publishes of each output stream; it never stops the process (see `OutputCeilingBytes`). */
+final case class ExecutionLimits(startup: Duration, execution: Duration, heartbeat: Duration, grace: Duration, kill: Duration, retainedOutputBytes: Int) {
   private val MaximumMillis = Duration.ofHours(24).toMillis
   require(List(startup, execution, heartbeat, grace, kill).forall(d => d.toMillis > 0 && d.toMillis <= MaximumMillis), "Invalid process deadline")
   require(heartbeat.toMillis >= 300, "Driver heartbeat deadline must be at least 300 ms")
-  require(outputBytes > 0 && outputBytes <= 64 * 1024 * 1024, "Invalid process output bound")
+  require(retainedOutputBytes > 0 && retainedOutputBytes <= 64 * 1024 * 1024, "Invalid retained output bound")
+}
+
+object ExecutionLimits {
+  /**
+   * Disk-safety ceiling of one output stream on disk, fixed for every job: a process that writes more is stopped with
+   * `StopReason.OutputLimit`. It exists only so that a runaway writer cannot fill the state volume.
+   */
+  val OutputCeilingBytes: Long = 1024L * 1024 * 1024
 }
 
 final case class ExecutionSpec(directory: Path, arguments: List[String], environment: Map[String, String], input: Path,
@@ -58,7 +67,7 @@ final class GuardianDriver(binary: Path) extends ExecutionDriver {
         val limits = spec.limits
         val arguments = List(binary.toString, limits.startup.toMillis.toString, limits.execution.toMillis.toString,
           limits.heartbeat.toMillis.toString, limits.grace.toMillis.toString, limits.kill.toMillis.toString,
-          limits.outputBytes.toString, spec.input.toString, spec.stdout.toString, spec.stderr.toString, "--") ++ spec.arguments
+          ExecutionLimits.OutputCeilingBytes.toString, spec.input.toString, spec.stdout.toString, spec.stderr.toString, "--") ++ spec.arguments
         val builder = new ProcessBuilder(arguments.asJava).directory(spec.directory.toFile)
         builder.environment().clear()
         builder.environment().putAll(spec.environment.asJava)

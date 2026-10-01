@@ -69,9 +69,9 @@ settings['guardian'] = str(release / 'bin/cq-guardian')
 settings['stateRoot'] = str(state / 'sessions')
 settings['integrationTarget'] = 'refs/heads/cq-result'
 settings['harnesses'][0].update(executable=codex, version=version.removeprefix('codex-cli '))
-settings['limits'].update(executionMillis='900000', outputBytes=8388608)
+settings['limits'].update(executionMillis='900000', retainedOutputBytes=8388608)
 settings['checks'] = [{'name': 'go-tests', 'command': [go, 'test', './...'],
-                       'executionMillis': '120000', 'outputBytes': 262144}]
+                       'executionMillis': '120000', 'retainedOutputBytes': 262144}]
 with (state / 'supervisor.json').open('x') as output:
     json.dump(settings, output, indent=2)
 PY

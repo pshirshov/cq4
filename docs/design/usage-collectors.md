@@ -1,6 +1,6 @@
 # Native usage collection
 
-`host/HarnessUsage` reads a completed native JSONL output file into the existing `UsageMeter` and `UsageUpload` contracts. It does not read live process pipes; the guardian owns draining and byte limits. Collection requires an explicit attempt, verified harness version, fresh/resumed origin, frozen collection timestamp and native-evidence artifact handle. Process settlement, native completion, usage coverage and semantic acceptance remain separate facts.
+`host/HarnessUsage` reads a completed native JSONL output file into the existing `UsageMeter` and `UsageUpload` contracts. It does not read live process pipes; the guardian owns draining and the disk-safety ceiling. Collection requires an explicit attempt, verified harness version, fresh/resumed origin, frozen collection timestamp and native-evidence artifact handle. Process settlement, native completion, usage coverage and semantic acceptance remain separate facts.
 
 | Source | Counted records | Accounting scope |
 | --- | --- | --- |
@@ -26,7 +26,7 @@ Fresh cumulative meters have zero token baselines. Claude's fresh USD estimate b
 
 ## Bounds and replay
 
-Collection accepts at most 32 MiB, 100,000 LF-delimited events, 1 MiB per event, 4,096 samples and 64 meters. It uses strict UTF-8; Unicode line/paragraph separators inside JSON strings do not split events. An unterminated final line is retained only in native evidence and reported as a gap. Diagnostics are bounded to 32 entries, with an explicit omission marker. Earlier usable observations survive later malformed or truncated events.
+Collection reads the complete stream line by line, with no bound on its length or event count; it accepts 1 MiB per event, 4,096 samples and 64 meters. It uses strict UTF-8; Unicode line/paragraph separators inside JSON strings do not split events. An unterminated final line is retained only in native evidence and reported as a gap. Diagnostics are bounded to 32 entries, with an explicit omission marker. Earlier usable observations survive later malformed or truncated events.
 
 Observation IDs are deterministic for a frozen attempt/meter/native line position. Recollection of the same immutable evidence and context yields identical uploads. Cumulative snapshots replace the projected total rather than adding to it. Changed evidence requires an explicit audit correction, not reuse of an observation ID. A changed native session identity is not attributed to the original attempt.
 

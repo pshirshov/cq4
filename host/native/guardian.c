@@ -199,13 +199,14 @@ int main(int argc, char **argv) {
     if (close_range(3, UINT_MAX, 0) != 0 || !reset_signals()) return 2;
     if (argc == 4 && strcmp(argv[1], "--capture") == 0) return capture(argv[2], argv[3]);
     if (argc < 12 || strcmp(argv[10], "--") != 0) {
-        fputs("Usage: cq-guardian startup-ms run-ms heartbeat-ms grace-ms kill-ms max-output-bytes input stdout stderr -- command [args]\n", stderr);
+        fputs("Usage: cq-guardian startup-ms run-ms heartbeat-ms grace-ms kill-ms output-ceiling-bytes input stdout stderr -- command [args]\n", stderr);
         return 2;
     }
     const int64_t max_duration = 24LL * 60 * 60 * 1000;
     int64_t startup = number(argv[1], max_duration), duration = number(argv[2], max_duration);
     int64_t heartbeat = number(argv[3], max_duration), grace = number(argv[4], max_duration), force = number(argv[5], max_duration);
-    int64_t maximum = number(argv[6], 64LL * 1024 * 1024);
+    /* Disk-safety ceiling per stream: everything below it is written to the output file, and only exceeding it stops the job. */
+    int64_t maximum = number(argv[6], INT64_MAX);
     if (startup < 0 || duration < 0 || heartbeat < 0 || grace < 0 || force < 0 || maximum < 0) return 2;
     sigset_t signals;
     sigemptyset(&signals);

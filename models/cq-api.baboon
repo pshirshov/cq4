@@ -463,8 +463,8 @@ root data HarnessSetting {
   harness: Harness executable: str model: str provider: str version: str
   providerExtensions: lst[str] providerEnvironment: set[str]
 }
-root data HostLimits { startupMillis: i64 executionMillis: i64 heartbeatMillis: i64 graceMillis: i64 killMillis: i64 outputBytes: i32 }
-root data ValidationCheck { name: str command: lst[str] executionMillis: i64 outputBytes: i32 }
+root data HostLimits { startupMillis: i64 executionMillis: i64 heartbeatMillis: i64 graceMillis: i64 killMillis: i64 retainedOutputBytes: i32 }
+root data ValidationCheck { name: str command: lst[str] executionMillis: i64 retainedOutputBytes: i32 }
 root data SupervisorSettings { stateRoot: str guardian: str harnesses: lst[HarnessSetting] limits: HostLimits checks: lst[ValidationCheck] evaluation: opt[EvaluationScope] integrationTarget: opt[str] }
 root data GoverningReport { summary: str }
 root data HarnessRoute { harness: Harness model: str provider: str }

@@ -133,7 +133,7 @@ object HarnessAdapterProbe extends ZIOAppDefault {
           api.call(Command.Usage(UsageInput(project, UsageSelection.Outcomes(attempt.id, 0, 200))))))
         require(completed && usage.terminalSeen && !usage.nativeFailure, "Harness did not finish successfully; inspect retained process output and usage")
         require(usage.meters.nonEmpty && usage.meters.exists(_.observations.nonEmpty), "Native probe must retain operational usage observations")
-        val output = new HarnessOutput().result(harness, native, directory.resolve("assets"))
+        val output = new HarnessOutput().result(harness, new ByteArrayInputStream(native), directory.resolve("assets"))
         require(output.asObject.exists(_.keys.toSet == Set("status", "observed")) && output.hcursor.get[String]("status").contains("ok") &&
           output.hcursor.get[String]("observed").contains(marker), "Harness did not return the exact scoped CQ artifact text")
         val tree = directory.resolve("workspaces").resolve(attempt.id.value.toString).resolve("tree")

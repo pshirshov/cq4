@@ -3,27 +3,25 @@ package cq.server
 import cq.api.*
 import cq.core.{DomainFailure, WorkspaceService}
 import cq.host.*
-import java.io.ByteArrayInputStream
 import java.nio.file.{Files, Path}
 import java.time.{Clock, Duration}
 import java.util.UUID
-import scala.util.Try
+import scala.util.{Try, Using}
 import zio.{IO, Ref, Task, ZIO}
 
 final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority, registry: HarnessRegistry, jobs: JobSupervisor,
   workspaces: WorkspaceService[IO], agents: AgentCatalog, output: HarnessOutput,
   candidates: CandidateWorkspace, reader: WorkspaceReader, access: LocalAccess, requirements: OperatorRequirements, clock: Clock) {
-  private val MaxOutputBytes = 32 * 1024 * 1024
   private val MaxGaps = 32
   private val ClaimMillis = Duration.ofMinutes(3).toMillis
   private val RenewalSeconds = 20L
   private val partials = new PartialWorkCapture(config)
   private final case class Trace(native: Option[JobRecord], extra: List[ArtifactUpload], uncertain: Boolean)
   private def directory(attempt: AttemptId): Path = config.directory.resolve("payload").resolve(attempt.value.toString)
-  private def bytes(attempt: AttemptId, name: String): Array[Byte] = {
-    val path = directory(attempt).resolve(name)
-    if (Files.exists(path)) HostFiles.bytes(path, MaxOutputBytes) else Array.emptyByteArray
-  }
+  private def transcript(attempt: AttemptId, name: String, bound: Int): Array[Byte] = NativeTranscript.retained(directory(attempt).resolve(name), bound)
+  private def collect(attempt: Attempt, version: String, collectedAt: Long): CollectedUsage =
+    Using.resource(NativeTranscript.stream(directory(attempt.id).resolve("stdout")))(new HarnessUsage().collect(_, UsageCollectionRequest(attempt.id,
+      attempt.harness, version, UsageOrigin.Fresh, collectedAt, NativeArtifacts.id(attempt.id, "stdout"))))
   /** A failed removal leaves the record open; the next host startup retries it and reports the outcome in its cleanup receipt. */
   private def release(attempt: AttemptId): Task[Option[WorkspaceRecord]] = jobs.release(config.owner, attempt)
   private def claim(entry: DispatchExecution, revisions: Boolean): Unit = {
@@ -147,12 +145,10 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
           entry.check()
           val observed = JobOutcome.observed(native)
           require(observed.succeeded, observed.problem.getOrElse("Child process did not complete successfully"))
-          val stdout = bytes(entry.ticket.attempt.id, "stdout")
-          val usage = new HarnessUsage().collect(new ByteArrayInputStream(stdout), UsageCollectionRequest(entry.ticket.attempt.id,
-            entry.ticket.attempt.harness, entry.ticket.profile.version, UsageOrigin.Fresh, clock.millis(), NativeArtifacts.id(entry.ticket.attempt.id, "stdout")))
+          val usage = collect(entry.ticket.attempt, entry.ticket.profile.version, clock.millis())
           require(usage.terminalSeen && !usage.nativeFailure, "Child native output did not complete successfully")
           val report = ChildContracts.report(entry.ticket.request.work, entry.ticket.request.members,
-            output.result(entry.ticket.attempt.harness, stdout, entry.directory.resolve("assets")))
+            Using.resource(NativeTranscript.stream(directory(entry.ticket.attempt.id).resolve("stdout")))(output.result(entry.ticket.attempt.harness, _, entry.directory.resolve("assets"))))
           report match {
             case plan: ChildReport.Plan =>
               val members = input.members.map(value => value.item.id -> value.item).toMap
@@ -217,13 +213,13 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
   private def validate(entry: DispatchExecution, candidate: GitCommit, check: ValidationCheck, index: Int, trace: Ref[Trace]): Task[ValidationEvidence] = for {
     id <- ZIO.succeed(AttemptId(UUID.randomUUID()))
     source = config.limits
-    limits = ExecutionLimits(source.startup, Duration.ofMillis(check.executionMillis), source.heartbeat, source.grace, source.kill, check.outputBytes)
+    limits = ExecutionLimits(source.startup, Duration.ofMillis(check.executionMillis), source.heartbeat, source.grace, source.kill, check.retainedOutputBytes)
     record <- launch(entry, id, candidate, JobCommand(check.command, HostEnvironment.runtime(config.environment), "", limits))
     captured <- ZIO.attemptBlocking {
       val parent = entry.ticket.attempt.id
       val project = config.project.project
-      val (stdout, outParts) = NativeArtifacts.binary(project, parent, s"check-$index-stdout", "application/octet-stream", bytes(id, "stdout"))
-      val (stderr, errParts) = NativeArtifacts.binary(project, parent, s"check-$index-stderr", "application/octet-stream", bytes(id, "stderr"))
+      val (stdout, outParts) = NativeArtifacts.binary(project, parent, s"check-$index-stdout", "application/octet-stream", transcript(id, "stdout", check.retainedOutputBytes))
+      val (stderr, errParts) = NativeArtifacts.binary(project, parent, s"check-$index-stderr", "application/octet-stream", transcript(id, "stderr", check.retainedOutputBytes))
       val observation = ValidationObservation(check, candidate, record, stdout, stderr)
       val artifact = ArtifactUpload(project, NativeArtifacts.id(parent, s"check-$index"), parent, ArtifactKind.Validation,
         "application/json", HostFiles.encode(ValidationObservation_JsonCodec, observation))
@@ -247,13 +243,12 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
       _ <- ZIO.attemptBlocking {
         val cancelled = entry.freeze()
         val project = config.project.project
-        val stdout = bytes(attempt.id, "stdout")
-        val stderr = bytes(attempt.id, "stderr")
-        val (nativeId, outParts) = NativeArtifacts.binary(project, attempt.id, "stdout", "application/x-ndjson", stdout)
+        val stdout = transcript(attempt.id, "stdout", entry.ticket.request.limits.retainedOutputBytes)
+        val stderr = transcript(attempt.id, "stderr", entry.ticket.request.limits.retainedOutputBytes)
+        val (_, outParts) = NativeArtifacts.binary(project, attempt.id, "stdout", "application/x-ndjson", stdout)
         val (_, errParts) = NativeArtifacts.binary(project, attempt.id, "stderr", "application/octet-stream", stderr)
         val collectedAt = math.max(attempt.startedAt, clock.millis())
-        val usage = new HarnessUsage().collect(new ByteArrayInputStream(stdout), UsageCollectionRequest(attempt.id, attempt.harness,
-          entry.ticket.profile.version, UsageOrigin.Fresh, collectedAt, nativeId))
+        val usage = collect(attempt, entry.ticket.profile.version, collectedAt)
         val problem = cancelled.orElse(result.left.toOption.map(error => Option(error.getMessage).getOrElse(error.getClass.getSimpleName))).map(DispatchProjection.concise)
         val valid = if (cancelled.nonEmpty) None else result.toOption
         val observed = job.map(JobOutcome.observed)

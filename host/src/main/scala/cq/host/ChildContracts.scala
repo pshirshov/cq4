@@ -58,8 +58,8 @@ object ChildContracts {
     require(HostFiles.encode(DispatchRequest_JsonCodec, value).getBytes(UTF_8).length <= MaxRequestBytes, "Dispatch request exceeds its byte bound")
     val limits = value.limits
     ExecutionLimits(Duration.ofMillis(limits.startupMillis), Duration.ofMillis(limits.executionMillis), Duration.ofMillis(limits.heartbeatMillis),
-      Duration.ofMillis(limits.graceMillis), Duration.ofMillis(limits.killMillis), limits.outputBytes)
-    require(limits.outputBytes <= MaxOutputBytes, "Dispatch output exceeds its retained byte bound")
+      Duration.ofMillis(limits.graceMillis), Duration.ofMillis(limits.killMillis), limits.retainedOutputBytes)
+    require(limits.retainedOutputBytes <= MaxOutputBytes, "Dispatch output exceeds its retained byte bound")
   }
 
   def report(work: DispatchWork, members: List[ItemRevision], json: Json): ChildReport = {

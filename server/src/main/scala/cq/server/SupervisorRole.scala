@@ -9,12 +9,11 @@ import izumi.distage.roles.model.{RoleDescriptor, RoleTask}
 import izumi.distage.roles.model.definition.RoleModuleDef
 import izumi.fundamentals.platform.cli.model.{EntrypointArgs, RoleAppArgs}
 import izumi.fundamentals.platform.cli.model.schema.{ParserDef, RoleParserSchema}
-import java.io.ByteArrayInputStream
 import java.net.URI
 import java.nio.file.{Files, Path}
 import java.time.{Clock, Duration}
 import java.util.UUID
-import scala.util.Try
+import scala.util.{Try, Using}
 import zio.{IO, Task, Unsafe, ZEnvironment, ZIO}
 
 final class HarnessRegistry(adapters: Set[HarnessAdapter]) {
@@ -38,12 +37,12 @@ object SupervisorConfig {
   def profile(value: HarnessSetting): HarnessProfile = HarnessProfile(value.harness, Path.of(value.executable), value.model, value.provider, value.version,
     value.providerExtensions.map(Path.of(_)), value.providerEnvironment)
   def limits(value: HostLimits): ExecutionLimits = ExecutionLimits(Duration.ofMillis(value.startupMillis), Duration.ofMillis(value.executionMillis),
-    Duration.ofMillis(value.heartbeatMillis), Duration.ofMillis(value.graceMillis), Duration.ofMillis(value.killMillis), value.outputBytes)
+    Duration.ofMillis(value.heartbeatMillis), Duration.ofMillis(value.graceMillis), Duration.ofMillis(value.killMillis), value.retainedOutputBytes)
   def within(value: HostLimits, ceiling: HostLimits): Unit = {
     limits(value)
     require(List(value.startupMillis -> ceiling.startupMillis, value.executionMillis -> ceiling.executionMillis,
       value.heartbeatMillis -> ceiling.heartbeatMillis, value.graceMillis -> ceiling.graceMillis, value.killMillis -> ceiling.killMillis,
-      value.outputBytes.toLong -> ceiling.outputBytes.toLong).forall((actual, maximum) => actual <= maximum), "Child limits exceed the governing session's configured bounds")
+      value.retainedOutputBytes.toLong -> ceiling.retainedOutputBytes.toLong).forall((actual, maximum) => actual <= maximum), "Child limits exceed the governing session's configured bounds")
   }
   def verifyProfile(config: SupervisorConfig, value: HarnessProfile): Unit = {
     val version = new BoundedHostCommand(HarnessEnvironment.isolated(value, config.environment), Duration.ofSeconds(10), 4096)
@@ -74,7 +73,7 @@ object SupervisorConfig {
     require(profiles.nonEmpty && profiles.map(_.harness).distinct.size == profiles.size, "Harness settings must have unique routes")
     val profile = profiles.find(_.harness == harness).getOrElse(throw new IllegalArgumentException("Governing harness route is not configured"))
     val limits = SupervisorConfig.limits(settings.limits)
-    require(limits.outputBytes <= MaxOutputBytes, "Native output retention exceeds 32 MiB per stream")
+    require(limits.retainedOutputBytes <= MaxOutputBytes, "Native output retention exceeds 32 MiB per stream")
     credentialLifetime(limits)
     require(settings.evaluation.forall(value => List(value.run, value.scenario).forall(text => text.trim.nonEmpty && text.length <= 300)),
       "Evaluation identity must contain a bounded run and scenario")
@@ -82,7 +81,7 @@ object SupervisorConfig {
     settings.checks.foreach { check =>
       require(check.name.matches("[a-z][a-z0-9-]{0,49}") && check.command.nonEmpty && check.command.size <= 32 &&
         check.command.forall(value => value.nonEmpty && value.length <= 4096 && !value.contains('\u0000')) &&
-        check.executionMillis > 0 && check.executionMillis <= settings.limits.executionMillis && check.outputBytes > 0 && check.outputBytes <= 1024 * 1024,
+        check.executionMillis > 0 && check.executionMillis <= settings.limits.executionMillis && check.retainedOutputBytes > 0 && check.retainedOutputBytes <= 1024 * 1024,
         "Invalid configured validation check")
     }
     require(settings.checks.map(value => HostFiles.encode(ValidationCheck_JsonCodec, value).getBytes(java.nio.charset.StandardCharsets.UTF_8).length).sum <= 16384,
@@ -153,7 +152,6 @@ final class SupervisorProgram(config: SupervisorConfig, registry: HarnessRegistr
   local: LocalControlServer, access: LocalAccess, dispatch: DispatchController, integrations: IntegrationController, combinations: CombinationController,
   schemas: McpSchemas, output: HarnessOutput, workflows: WorkflowAssets, cleanup: WorkspaceCleanup, watchdog: SupervisorWatchdog, clock: Clock, context: CliContext) {
   private val MaxInputBytes = 192 * 1024
-  private val MaxOutputBytes = 32 * 1024 * 1024
   private val MaxRecordBytes = 64 * 1024
   private val MaxSummaryCharacters = 8192
   private val MaxGaps = 32
@@ -207,19 +205,19 @@ final class SupervisorProgram(config: SupervisorConfig, registry: HarnessRegistr
       _ <- jobs.release(config.owner, attempt.id).ignore
       _ <- integrations.shutdown.zipPar(combinations.shutdown).zipPar(dispatch.shutdown)
       receipt <- ZIO.attemptBlocking {
-        val stdout = if (Files.exists(payload.resolve("stdout"))) HostFiles.bytes(payload.resolve("stdout"), MaxOutputBytes) else Array.emptyByteArray
-        val stderr = if (Files.exists(payload.resolve("stderr"))) HostFiles.bytes(payload.resolve("stderr"), MaxOutputBytes) else Array.emptyByteArray
+        val stdout = NativeTranscript.retained(payload.resolve("stdout"), config.limits.retainedOutputBytes)
+        val stderr = NativeTranscript.retained(payload.resolve("stderr"), config.limits.retainedOutputBytes)
         val (nativeId, stdoutArtifacts) = NativeArtifacts.binary(project, attempt.id, "stdout", "application/x-ndjson", stdout)
         val (_, stderrArtifacts) = NativeArtifacts.binary(project, attempt.id, "stderr", "application/octet-stream", stderr)
         val collectedAt = math.max(attempt.startedAt, clock.millis())
-        val usage = new HarnessUsage().collect(new ByteArrayInputStream(stdout),
-          UsageCollectionRequest(attempt.id, attempt.harness, config.profile.version, UsageOrigin.Fresh, collectedAt, nativeId))
+        val usage = Using.resource(NativeTranscript.stream(payload.resolve("stdout")))(new HarnessUsage().collect(_,
+          UsageCollectionRequest(attempt.id, attempt.harness, config.profile.version, UsageOrigin.Fresh, collectedAt, nativeId)))
         val observed = JobOutcome.observed(record)
         val succeeded = observed.succeeded
         val report = Try {
           require(succeeded, observed.problem.getOrElse("Governing process did not complete successfully"))
           require(usage.terminalSeen && !usage.nativeFailure, "Governing native output did not complete successfully")
-          val json = output.result(attempt.harness, stdout, assets)
+          val json = Using.resource(NativeTranscript.stream(payload.resolve("stdout")))(output.result(attempt.harness, _, assets))
           val result = GoverningReport_JsonCodec.decode(baboon.runtime.shared.BaboonCodecContext.Default, json).fold(throw _, identity)
           require(json.asObject.exists(_.keys.toSet == Set("summary")) && result.summary.trim.nonEmpty && result.summary.length <= MaxSummaryCharacters,
             "Governing result does not match its bounded contract")

@@ -29,7 +29,7 @@ Initialize the consumer with the existing `cq init --endpoint URL`. It must be a
     "heartbeatMillis": "2000",
     "graceMillis": "1000",
     "killMillis": "3000",
-    "outputBytes": 1048576
+    "retainedOutputBytes": 1048576
   },
   "checks": [],
   "evaluation": null,
@@ -51,7 +51,7 @@ Use the JVM launcher described in the [README](../../README.md#current-cli) from
 cq run codex --settings /absolute/settings.json --input /absolute/request.txt
 ```
 
-The input is a nonempty UTF-8 file of at most 192 KiB. Settings/project records are bounded to 64 KiB. Native streams are independently bounded, up to 32 MiB each. The combined startup, execution and cleanup limits plus a ten-minute delivery margin must fit the server's 24-hour scoped-credential lifetime. Installed harness versions are checked before launch; missing or unverified routes fail explicitly. `CQ_TOKEN` must authorize host credential grants. It remains in the host and is excluded from the harness environment.
+The input is a nonempty UTF-8 file of at most 192 KiB. Settings/project records are bounded to 64 KiB. `limits.retainedOutputBytes` bounds the published transcript of each native stream, up to 32 MiB each; it does not stop a process (see [process guardian](process-guardian.md#output-retention-bound-and-disk-safety-ceiling)). The combined startup, execution and cleanup limits plus a ten-minute delivery margin must fit the server's 24-hour scoped-credential lifetime. Installed harness versions are checked before launch; missing or unverified routes fail explicitly. `CQ_TOKEN` must authorize host credential grants. It remains in the host and is excluded from the harness environment.
 
 Set `integrationTarget` to an explicit existing full branch reference such as `refs/heads/integration` to enable reviewed-candidate integration. The branch must not be checked out when applying the update. Use `null` for candidate-only sessions.
 
@@ -85,7 +85,7 @@ See [verification evidence](../validation/m2-supervisor-role.md).
 
 The implemented [atomic publication boundary](../validation/m2-publication.md) commits a complete set of final delivery batches. Initial assignment/input publication remains separate. Final artifact/usage/outcome batches become eligible for HTTP only after every batch and its staging directory are forced, the directory is atomically renamed, and its parent is forced. Replay uses the committed bytes and identities verbatim, including after ambiguous acknowledgement; uncommitted staging is ineligible for delivery.
 
-The bounded inventory includes the governing run and at most 32 child tickets, including attempts interrupted before job creation. If final publication was not committed, recovery retains a byte snapshot of available stdout/stderr (at most 32 MiB each), collects observable usage, quarantines unresolved workspaces and publishes an `Unknown` outcome with an explicit interruption/coverage gap. Missing streams produce an absence gap. Observations from a recovery snapshot cannot have complete coverage, even if the snapshot contains a native terminal event. Attempts without observable meters retain missing-meter coverage.
+The bounded inventory includes the governing run and at most 32 child tickets, including attempts interrupted before job creation. If final publication was not committed, recovery retains the available stdout/stderr as bounded transcripts (the attempt's `retainedOutputBytes`), collects observable usage from the complete streams, quarantines unresolved workspaces and publishes an `Unknown` outcome with an explicit interruption/coverage gap. Missing streams produce an absence gap. Observations from a recovery snapshot cannot have complete coverage, even if the snapshot contains a native terminal event. Attempts without observable meters retain missing-meter coverage.
 
 A journal lock does not prove guardians stopped writing; a quiet file cannot establish process settlement. Recovery does not adopt saved PIDs or admit an uncommitted candidate result. Nonterminal jobs become `Uncertain` with target `Stop`; separate unresolved validation workspaces are also quarantined without inventing model attempts. Once the recovery set commits, later output cannot change its bytes, timestamps, observation identities or totals on replay.
 

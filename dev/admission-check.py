@@ -69,10 +69,10 @@ def reproduce(checks, command, scenario):
         "harnesses": [{"harness": "Codex", "executable": str(executable), "model": "fixture-model", "provider": "fixture-provider",
                        "version": "0.156.1", "providerExtensions": [], "providerEnvironment": []}],
         "limits": {"startupMillis": "5000", "executionMillis": "60000", "heartbeatMillis": "1000",
-                   "graceMillis": "300", "killMillis": "2000", "outputBytes": 262144},
+                   "graceMillis": "300", "killMillis": "2000", "retainedOutputBytes": 262144},
         "checks": [{"name": "consumer-content", "command": [sys.executable, "-c",
             "from pathlib import Path; assert Path('consumer.txt').read_text() == 'candidate from isolated worker\\n'"],
-            "executionMillis": "5000", "outputBytes": 65536}],
+            "executionMillis": "5000", "retainedOutputBytes": 65536}],
     }))
     request_file = evidence / "request.txt"
     request_file.write_text("Observe claim loss at result publication")

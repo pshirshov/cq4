@@ -137,6 +137,7 @@ final class HostDeliveryLocal extends AnyWordSpec {
         assert(value.withResult(false) == (if (expected == AttemptState.Completed) AttemptState.Failed else expected))
         assert(value.problem.isEmpty == value.succeeded)
         value.problem.foreach(message => assert(message.contains(reason.toString)))
+        assert(value.problem.exists(_.contains("disk-safety ceiling")) == (reason == StopReason.OutputLimit), reason.toString)
       }
       List(normal.copy(phase = JobPhase.Uncertain), normal.copy(exit = None),
         normal.copy(exit = normal.exit.map(_.copy(settled = false))),
@@ -231,25 +232,54 @@ final class HostDeliveryLocal extends AnyWordSpec {
     "extract structured native results and reject incomplete or nonterminal output" in {
       val directory = Files.createTempDirectory("cq-native-output-")
       val parser = new HarnessOutput
+      def stream(text: String): java.io.InputStream = new java.io.ByteArrayInputStream(text.getBytes(UTF_8))
       val expected = io.circe.Json.obj("summary" -> io.circe.Json.fromString("observed λ"))
       val claude = s"""{"type":"result","subtype":"success","is_error":false,"structured_output":${expected.noSpaces}}\n"""
-      assert(parser.result(Harness.Claude, claude.getBytes(UTF_8), directory) == expected)
-      intercept[IllegalArgumentException](parser.result(Harness.Claude, claude.stripSuffix("\n").getBytes(UTF_8), directory))
+      assert(parser.result(Harness.Claude, stream(claude), directory) == expected)
+      intercept[IllegalArgumentException](parser.result(Harness.Claude, stream(claude.stripSuffix("\n")), directory))
       Files.writeString(directory.resolve("last-message.json"), expected.noSpaces)
-      assert(parser.result(Harness.Codex, "{\"type\":\"turn.completed\"}\n".getBytes(UTF_8), directory) == expected)
-      intercept[IllegalArgumentException](parser.result(Harness.Codex, "{\"type\":\"turn.started\"}\n".getBytes(UTF_8), directory))
+      assert(parser.result(Harness.Codex, stream("{\"type\":\"turn.completed\"}\n"), directory) == expected)
+      intercept[IllegalArgumentException](parser.result(Harness.Codex, stream("{\"type\":\"turn.started\"}\n"), directory))
       val message = io.circe.Json.obj("type" -> io.circe.Json.fromString("message_end"), "message" -> io.circe.Json.obj(
         "role" -> io.circe.Json.fromString("assistant"), "stopReason" -> io.circe.Json.fromString("stop"), "content" -> io.circe.Json.arr(
           io.circe.Json.obj("type" -> io.circe.Json.fromString("text"), "text" -> io.circe.Json.fromString(expected.noSpaces)))))
-      assert(parser.result(Harness.Pi, (message.noSpaces + "\n").getBytes(UTF_8), directory) == expected)
-      intercept[IllegalArgumentException](parser.result(Harness.Pi, (message.noSpaces.replace("\"stop\"", "\"error\"") + "\n").getBytes(UTF_8), directory))
+      assert(parser.result(Harness.Pi, stream(message.noSpaces + "\n"), directory) == expected)
+      intercept[IllegalArgumentException](parser.result(Harness.Pi, stream(message.noSpaces.replace("\"stop\"", "\"error\"") + "\n"), directory))
+      // An event beyond the line bound is skipped; it withdraws the Pi assistant message it may have superseded and is never a Codex terminal event.
+      val oversized = "{\"type\":\"tool\",\"text\":\"" + "x" * (1024 * 1024) + "\"}\n"
+      assert(parser.result(Harness.Claude, stream(oversized + claude), directory) == expected)
+      assert(parser.result(Harness.Pi, stream(message.noSpaces + "\n" + oversized + message.noSpaces + "\n"), directory) == expected)
+      intercept[IllegalArgumentException](parser.result(Harness.Pi, stream(message.noSpaces + "\n" + oversized), directory))
+      intercept[IllegalArgumentException](parser.result(Harness.Codex, stream("{\"type\":\"turn.completed\"}\n" + oversized), directory))
     }
 
-    "reject excessive native event counts before exhausting a 64 MiB heap" in {
+    "retain a stream that fits its bound whole and a longer one as head, truncation marker and tail" in {
+      val directory = Files.createTempDirectory("cq-native-transcript-")
+      val lines = (0 until 200).map(index => s"""{"type":"event","index":$index}""" + "\n").mkString
+      val source = directory.resolve("stdout")
+      Files.writeString(source, lines)
+      val total = lines.length.toLong
+      assert(new String(NativeTranscript.retained(source, lines.length), UTF_8) == lines)
+      assert(NativeTranscript.retained(directory.resolve("absent"), 1024).isEmpty)
+      val retained = new String(NativeTranscript.retained(source, 1024), UTF_8)
+      val kept = retained.linesIterator.toList
+      val marker = kept.indexWhere(_.contains(NativeTranscript.MarkerType))
+      val (head, tail) = (kept.take(marker), kept.drop(marker + 1))
+      assert(retained.length <= 1024 && retained.endsWith("\n") && head.nonEmpty && tail.nonEmpty && kept.count(_.contains(NativeTranscript.MarkerType)) == 1)
+      assert(lines.startsWith(head.mkString("", "\n", "\n")) && lines.endsWith(tail.mkString("", "\n", "\n")))
+      val omitted = total - head.map(_.length + 1).sum - tail.map(_.length + 1).sum
+      assert(kept(marker) == s"""{"type":"cq.truncated","totalBytes":$total,"omittedBytes":$omitted}""")
+      Files.writeString(source, "x" * 5000)
+      val unbroken = new String(NativeTranscript.retained(source, 1024), UTF_8).linesIterator.toList
+      assert(unbroken.size == 3 && unbroken(1).contains("\"totalBytes\":5000") && unbroken.head.forall(_ == 'x') && unbroken.last.forall(_ == 'x'))
+      assert(new String(NativeTranscript.retained(source, 16), UTF_8) == "{\"type\":\"cq.truncated\",\"totalBytes\":5000,\"omittedBytes\":5000}\n")
+    }
+
+    "extract the result and the usage of a 256 MiB native stream within a 64 MiB heap" in {
       val java = Path.of(System.getProperty("java.home"), "bin", "java").toString
-      val value = new BoundedHostCommand(Map.empty, Duration.ofSeconds(15), 4096).run(Path.of("").toAbsolutePath.normalize(),
+      val value = new BoundedHostCommand(Map.empty, Duration.ofSeconds(120), 4096).run(Path.of("").toAbsolutePath.normalize(),
         List(java, "-Xmx64m", "-cp", System.getProperty("cq.test.classpath"), "cq.server.HarnessOutputBounds"))
-      assert(value.exit == 0 && value.text.contains("BOUNDED_NATIVE_EVENT_REJECTION"), value.text)
+      assert(value.exit == 0 && value.text.contains("STREAMED_NATIVE_OUTPUT"), value.text)
     }
   }
 }

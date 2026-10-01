@@ -174,6 +174,12 @@ except OSError:
         self.assertEqual(terminal[1:4], ["0", "0", "Exited"])
         self.assertEqual([len((self.directory / name).read_bytes()) for name in ["stdout", "stderr"]], [1048576, 1048576])
 
+    def test_disk_safety_ceiling_above_any_retention_bound_is_accepted(self):
+        process = self.launch([sys.executable, "-c", "import os; os.write(1, b'done')"], 2000, 3000, 1024 * 1024 * 1024)
+        terminal = self.wait_until_exited(process)
+        self.assertEqual(terminal[1:4], ["0", "0", "Exited"])
+        self.assertEqual((self.directory / "stdout").read_bytes(), b"done")
+
     def test_output_limit_preserves_bounded_prefix(self):
         process = self.launch([sys.executable, "-c", "import os; [os.write(1,b'x'*8192) for _ in range(1000)]"], 2000, 3000, 1024)
         terminal = self.wait_until_exited(process)

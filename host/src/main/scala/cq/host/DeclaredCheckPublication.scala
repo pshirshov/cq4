@@ -9,10 +9,9 @@ final class DeclaredCheckPublication(directory: Path, ticket: DeclaredCheckTicke
   private val MaxStatusBytes = 4096
   private val statusFile = directory.resolve("result.json")
   private val queue = new DeliveryQueue(directory.resolve("delivery"))
-  private def bytes(name: String): Array[Byte] = {
-    val file = payload.resolve(ticket.workspace.attempt.value.toString).resolve(name)
-    if (Files.exists(file)) HostFiles.bytes(file, ticket.check.outputBytes) else Array.emptyByteArray
-  }
+  private def output(name: String): Path = payload.resolve(ticket.workspace.attempt.value.toString).resolve(name)
+  private def bytes(name: String): Array[Byte] = NativeTranscript.retained(output(name), ticket.check.retainedOutputBytes)
+  private def size(name: String): Long = if (Files.exists(output(name))) Files.size(output(name)) else 0L
   private def retain(status: DeclaredCheckStatus): Unit =
     HostFiles.immutable(statusFile, HostFiles.encode(DeclaredCheckStatus_JsonCodec, status), MaxStatusBytes)
 
@@ -27,7 +26,7 @@ final class DeclaredCheckPublication(directory: Path, ticket: DeclaredCheckTicke
     val (err, errParts) = NativeArtifacts.binary(project, ticket.parent, prefix + "-stderr", "application/octet-stream", stderr)
     val observed = record.map(JobOutcome.observed)
     val settled = record.exists(_.phase == JobPhase.Settled) && observed.exists(_.state != AttemptState.Unknown)
-    val complete = record.flatMap(_.exit).exists(value => value.stdoutBytes == stdout.length && value.stderrBytes == stderr.length)
+    val complete = record.flatMap(_.exit).exists(value => value.stdoutBytes == size("stdout") && value.stderrBytes == size("stderr"))
     val state = if (!settled || !complete) ValidationState.Unknown else if (observed.exists(_.succeeded)) ValidationState.Passed else ValidationState.Failed
     val artifact = record.map { value => ArtifactUpload(project, NativeArtifacts.id(ticket.parent, prefix), ticket.parent,
       ArtifactKind.Validation, "application/json", HostFiles.encode(ValidationObservation_JsonCodec,

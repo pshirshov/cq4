@@ -54,6 +54,12 @@ Path(".work/evidence/argv.json").write_text(json.dumps(sys.argv))
 target.write_text(json.dumps({"Work": {"members": [{"item": item, "disposition": "Blocked", "summary": "Recorded the launch", "evidence": []} for item in members]}}))
 emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_tokens": 0, "cache_write_input_tokens": 0, "output_tokens": 5, "reasoning_output_tokens": 0}})
 """
+  /** A healthy child whose native stream is several times its retained bound before it completes with a valid result. */
+  private val Verbose = Header + """for index in range(400):
+    emit({"type": "item.completed", "item": {"id": "item_%d" % index, "type": "agent_message", "text": "x" * 1000}})
+target.write_text(json.dumps({"Work": {"members": [{"item": item, "disposition": "Blocked", "summary": "Reported at length", "evidence": []} for item in members]}}))
+emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_tokens": 0, "cache_write_input_tokens": 0, "output_tokens": 5, "reasoning_output_tokens": 0}})
+"""
   private val Stalling = Header + """Path("tracked.txt").write_text("partial change\n")
 Path("new.txt").write_text("untracked partial file\n")
 Path(".work/evidence").mkdir(parents=True)
@@ -178,6 +184,38 @@ time.sleep(30)
           assert(!retained.contains("unnamed.log") && !retained.contains("tracked.txt"))
         }
       } yield () }
+    }
+
+    "D95: complete a healthy child whose native output exceeds its retained bound and retain a bounded head-and-tail transcript" in {
+      (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None) { f =>
+        val bound = 65536
+        for {
+          entry <- f.dispatch(Verbose, HostLimits(3000, 30000, 900, 100, 1000, bound))
+          _ <- f.runner.run(entry).timeoutFail(new IllegalStateException("Worker did not finish"))(zio.Duration.fromSeconds(60))
+          status = entry.status
+          _ <- ZIO.attempt(assert(status.phase == DispatchPhase.Completed && status.result.nonEmpty && status.usageDelivered,
+            s"A healthy child was not completed after exceeding its output bound: $status"))
+          job <- f.jobs.status(f.config.owner, entry.ticket.attempt.id)
+          manifest <- text(artifacts, f.owner, NativeArtifacts.id(entry.ticket.attempt.id, "stdout")).map(Wire.decode(NativeManifest_JsonCodec, _))
+          parts <- ZIO.foreach(manifest.parts)(part => text(artifacts, f.owner, part))
+          _ <- ZIO.attemptBlocking {
+            val exit = job.exit.get
+            val stream = f.config.directory.resolve("payload").resolve(entry.ticket.attempt.id.value.toString).resolve("stdout")
+            assert(exit.reason == StopReason.Exited && exit.code.contains(0) && exit.stdoutBytes > 4L * bound && Files.size(stream) == exit.stdoutBytes, job.toString)
+            val retained = parts.flatMap(part => java.util.Base64.getDecoder.decode(part)).toArray
+            assert(manifest.bytes == retained.length && retained.length <= bound, manifest.toString)
+            val lines = new String(retained, java.nio.charset.StandardCharsets.UTF_8).linesIterator.map(line => io.circe.parser.parse(line).fold(throw _, identity)).toList
+            val kinds = lines.map(_.hcursor.get[String]("type").fold(throw _, identity))
+            assert(kinds.head == "thread.started" && kinds.last == "turn.completed" && kinds.count(_ == "cq.truncated") == 1, kinds.distinct.toString)
+            val marker = lines(kinds.indexOf("cq.truncated")).hcursor
+            val markerBytes = lines(kinds.indexOf("cq.truncated")).noSpaces.length + 1
+            assert(marker.get[Long]("totalBytes") == Right(exit.stdoutBytes) &&
+              marker.get[Long]("omittedBytes") == Right(exit.stdoutBytes - (retained.length - markerBytes)), marker.focus.toString)
+          }
+        } yield ()
+      }
     }
 
     "launch the child with the agent catalog's effective prompt, output schema and tool configuration" in {
