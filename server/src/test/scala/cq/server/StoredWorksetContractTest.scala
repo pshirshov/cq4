@@ -171,7 +171,7 @@ abstract class StoredWorksetContractTest extends SpecZIO with AssertZIO {
         _ <- assertIO(readiness(preview, ready) == WorksetReadiness(ready, true, List(WorksetReason.Shared(producer))))
         _ <- assertIO(readiness(preview, lesson) == WorksetReadiness(lesson, false, List(WorksetReason.Terminal())))
         _ <- assertIO(readiness(preview, product).ready && readiness(preview, audit).ready && readiness(preview, choice).ready)
-        _ <- assertIO(readiness(preview, known) == WorksetReadiness(known, true, Nil))
+        _ <- assertIO(readiness(preview, known) == WorksetReadiness(known, false, List(WorksetReason.Settled())))
         promoted <- service.previewWorkset(owner, WorksetTarget.Inline(Set(product, prerequisite, release), WorkflowPhase.Work))
         _ <- assertIO(Set(prerequisite, release, sibling).subsetOf(advanceable(promoted)) && (advanceable(promoted) & context(promoted)).isEmpty)
         narrow <- service.previewWorkset(owner, WorksetTarget.Inline(Set(work), WorkflowPhase.Explore))

@@ -105,7 +105,7 @@ final class CohortPlanner(api: ServerApi, owner: Scope, bases: ExecutionBase, ch
   private def ready(work: DispatchWork, entry: WorksetEntry): Boolean =
     entry.ready || (work == DispatchWork.Planner() && entry.role == WorksetRole.Selected && !entry.item.archived && (
       (entry.root && entry.item.outcome.terminal && !blocked(entry)) ||
-      (!entry.item.outcome.terminal && blocked(entry))))
+      (!entry.item.outcome.terminal && !LedgerPolicy.settled(entry.item) && blocked(entry))))
   private def fingerprint(work: DispatchWork, members: List[ItemView], context: Context): String =
     CohortFingerprint(work, members, context.guidance, context.operative, context.operativeResults, context.executionBase, checks)
   private def executionFingerprint(work: DispatchWork, members: List[ItemView], context: Context, reason: CohortReason): CohortExecutionFingerprint = {

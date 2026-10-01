@@ -216,7 +216,9 @@ final class HarnessUsageLocal extends AnyWordSpec {
         report.meters.headOption.flatMap(_.observations.head.observation.cost.amount.map(_.value))
       }
       assert(claudeCost("0.0006150000000000001") == Some("0.000615"))
-      assert(claudeCost("0." + "0" * 34 + "5") == Some("0"))
+      assert(claudeCost("0") == Some("0"))
+      val rounded = collect(fixture(Harness.Claude).replace("\"costUSD\":0.00176", "\"costUSD\":0." + "0" * 34 + "5"), request(Harness.Claude))
+      assert(rounded.meters.head.observations.head.observation.cost == UsageMath.unknownMoney)
       assert(claudeCost("0." + "0" * 35 + "5") == None)
       val pi = fixture(Harness.Pi, "0.99.1")
       val tiny = collect(pi.replace("\"total\":0.0006150000000000001", "\"total\":1e-30"), request(Harness.Pi).copy(version = "0.99.1"))

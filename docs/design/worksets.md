@@ -12,7 +12,7 @@
 
 ## Readiness and authority
 
-A selected item is ready when it is not archived, is not terminal, and every direct `BlockedBy` prerequisite satisfies dependencies under the existing per-ledger outcome policy. Cancelled work can be terminal without satisfying a dependency; successfully completed archived prerequisites still satisfy it. `Archived`, `Terminal` and `Blocked` reasons explain a non-ready selection. Context always has `ready = false` because it is not scheduled work. Shared membership is informational.
+A selected item is ready when it is not archived, is neither terminal nor settled (an adopted decision or a current memory; see [ledgers](ledgers.md)), and every direct `BlockedBy` prerequisite satisfies dependencies under the existing per-ledger outcome policy. Cancelled work can be terminal without satisfying a dependency; successfully completed archived prerequisites still satisfy it. `Archived`, `Terminal`, `Settled` and `Blocked` reasons explain a non-ready selection. Settled records are never candidate roots for subgraph discovery and never count as ready descendants. Context always has `ready = false` because it is not scheduled work. Shared membership is informational.
 
 Readiness here concerns record state and direct dependencies. It does not assert claim availability, active-process settlement, independent-review applicability, or permission to mutate/integrate. Claims remain the authority for acquiring work. A ready active item can be continued by its current owner; this field is not a state transition gate. Corrections and reopening remain ordinary authorized mutations.
 

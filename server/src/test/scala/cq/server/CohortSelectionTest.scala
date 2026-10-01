@@ -417,6 +417,27 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
       } yield ()
     }
 
+    "never offer a settled decision or memory while a proposed decision stays selectable" in { (ledger: LedgerService[IO]) =>
+      val scope = owner
+      def decision(status: DecisionStatus): ItemDraft = task.copy(title = s"Decision $status", content = Content.Decision(status, "Choice", "Rationale", Nil))
+      for {
+        runtime <- ZIO.runtime[Any]
+        _ <- ledger.initialize(scope, "settled records")
+        created <- ledger.change(scope, ChangeRequest(RequestId(uuid), List(Mutation.Create(goal), Mutation.Create(decision(DecisionStatus.Adopted)),
+          Mutation.Create(decision(DecisionStatus.Proposed)), Mutation.Create(task.copy(title = "Memory", content = Content.Memory(MemoryStatus.Current, "Knowledge", "Applies here", Nil)))),
+          Nil, "Goal with reference records"))
+        ids = created.items.map(_.id)
+        _ <- ZIO.foreachDiscard(ids.tail)(id => link(ledger, scope, ids.head, Relation.Produces, id))
+        planner = new CohortPlanner(api(ledger, scope, runtime), scope, fixed(GitCommit("a" * 40)), Nil, new CohortProgress, new OperatorRequirements(""))
+        explorer <- ZIO.attemptBlocking(planner.plan(request(Set(ids.head), DispatchWork.Explorer(ExplorerMode.Investigate)), ArtifactId(uuid)))
+        offered = explorer.evidence.decision.choices.flatMap(_.members.map(_.id))
+        _ <- assertIO(offered.toSet == Set(ids.head, ids(2)) && explorer.evidence.decision.counts.notReady == 2)
+        planning <- ZIO.attemptBlocking(planner.plan(request(Set(ids.head), DispatchWork.Planner()), ArtifactId(uuid)))
+        planned = planning.evidence.decision.choices.flatMap(_.members.map(_.id))
+        _ <- assertIO(planned.toSet == Set(ids.head, ids(2)) && planning.evidence.decision.counts.notReady == 2)
+      } yield ()
+    }
+
     "require one common producer for the complete group and exclude contextual siblings" in { (ledger: LedgerService[IO]) =>
       val scope = owner
       for {

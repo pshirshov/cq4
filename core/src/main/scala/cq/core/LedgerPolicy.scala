@@ -70,21 +70,62 @@ object LedgerPolicy {
     case c: Content.Upstream => c.status.toString
   }
 
-  def outcome(value: Content): ItemOutcome = value match {
-    case c: Content.Milestone => ItemOutcome(c.status != MilestoneStatus.Open, c.status == MilestoneStatus.Complete)
-    case c: Content.Idea => ItemOutcome(!Set[IdeaStatus](IdeaStatus.Proposed, IdeaStatus.Accepted).contains(c.status), c.status == IdeaStatus.Implemented)
-    case c: Content.Defect => ItemOutcome(c.status != DefectStatus.Open, c.status == DefectStatus.Resolved)
-    case c: Content.Goal => ItemOutcome(c.status != GoalStatus.Open, c.status == GoalStatus.Achieved)
-    case c: Content.Task => ItemOutcome(Set[TaskStatus](TaskStatus.Done, TaskStatus.Cancelled).contains(c.status), c.status == TaskStatus.Done)
-    case c: Content.Research => ItemOutcome(Set[ResearchStatus](ResearchStatus.Concluded, ResearchStatus.Inconclusive, ResearchStatus.Cancelled).contains(c.status), c.status == ResearchStatus.Concluded)
-    case c: Content.Hypothesis => ItemOutcome(!Set[HypothesisStatus](HypothesisStatus.Proposed, HypothesisStatus.Investigating).contains(c.status), Set[HypothesisStatus](HypothesisStatus.Supported, HypothesisStatus.Refuted).contains(c.status))
-    case c: Content.Question => ItemOutcome(c.status != QuestionStatus.Open, c.status == QuestionStatus.Answered)
-    case c: Content.Decision => ItemOutcome(Set[DecisionStatus](DecisionStatus.Superseded, DecisionStatus.Withdrawn).contains(c.status), c.status == DecisionStatus.Adopted)
-    case c: Content.Review => ItemOutcome(!Set[ReviewStatus](ReviewStatus.Pending, ReviewStatus.Active).contains(c.status), c.status == ReviewStatus.Approved)
-    case c: Content.Handoff => ItemOutcome(c.status != HandoffStatus.Open, c.status == HandoffStatus.Accepted)
-    case c: Content.OperatorAction => ItemOutcome(!Set[OperatorActionStatus](OperatorActionStatus.Requested, OperatorActionStatus.Confirmed).contains(c.status), c.status == OperatorActionStatus.Observed)
-    case c: Content.Memory => ItemOutcome(Set[MemoryStatus](MemoryStatus.Superseded, MemoryStatus.Retracted).contains(c.status), c.status == MemoryStatus.Current)
-    case c: Content.Upstream => ItemOutcome(!Set[UpstreamStatus](UpstreamStatus.Identified, UpstreamStatus.Reported).contains(c.status), c.status == UpstreamStatus.Resolved)
+  def outcome(value: Content): ItemOutcome = outcome(ledger(value), status(value))
+
+  private def parsed[A](ledger: Ledger, status: String)(parse: String => Option[A]): A =
+    parse(status).getOrElse(throw new IllegalStateException(s"Invalid persisted $ledger status $status"))
+
+  // Outcome classifications derive from the ledger and its status alone, so a summary read back from storage recomputes them.
+  def outcome(ledger: Ledger, status: String): ItemOutcome = {
+    def of[A](parse: String => Option[A])(terminal: A => Boolean, satisfies: A => Boolean): ItemOutcome = {
+      val value = parsed(ledger, status)(parse)
+      ItemOutcome(terminal(value), satisfies(value))
+    }
+    ledger match {
+      case Ledger.Milestones => of(MilestoneStatus.parse)(_ != MilestoneStatus.Open, _ == MilestoneStatus.Complete)
+      case Ledger.Ideas => of(IdeaStatus.parse)(!Set[IdeaStatus](IdeaStatus.Proposed, IdeaStatus.Accepted).contains(_), _ == IdeaStatus.Implemented)
+      case Ledger.Defects => of(DefectStatus.parse)(_ != DefectStatus.Open, _ == DefectStatus.Resolved)
+      case Ledger.Goals => of(GoalStatus.parse)(_ != GoalStatus.Open, _ == GoalStatus.Achieved)
+      case Ledger.Tasks => of(TaskStatus.parse)(Set[TaskStatus](TaskStatus.Done, TaskStatus.Cancelled).contains, _ == TaskStatus.Done)
+      case Ledger.Researches => of(ResearchStatus.parse)(Set[ResearchStatus](ResearchStatus.Concluded, ResearchStatus.Inconclusive, ResearchStatus.Cancelled).contains, _ == ResearchStatus.Concluded)
+      case Ledger.Hypothesis => of(HypothesisStatus.parse)(!Set[HypothesisStatus](HypothesisStatus.Proposed, HypothesisStatus.Investigating).contains(_), Set[HypothesisStatus](HypothesisStatus.Supported, HypothesisStatus.Refuted).contains)
+      case Ledger.Questions => of(QuestionStatus.parse)(_ != QuestionStatus.Open, _ == QuestionStatus.Answered)
+      case Ledger.Decisions => of(DecisionStatus.parse)(Set[DecisionStatus](DecisionStatus.Superseded, DecisionStatus.Withdrawn).contains, _ == DecisionStatus.Adopted)
+      case Ledger.Reviews => of(ReviewStatus.parse)(!Set[ReviewStatus](ReviewStatus.Pending, ReviewStatus.Active).contains(_), _ == ReviewStatus.Approved)
+      case Ledger.Handoffs => of(HandoffStatus.parse)(_ != HandoffStatus.Open, _ == HandoffStatus.Accepted)
+      case Ledger.OperatorActions => of(OperatorActionStatus.parse)(!Set[OperatorActionStatus](OperatorActionStatus.Requested, OperatorActionStatus.Confirmed).contains(_), _ == OperatorActionStatus.Observed)
+      case Ledger.Memories => of(MemoryStatus.parse)(Set[MemoryStatus](MemoryStatus.Superseded, MemoryStatus.Retracted).contains, _ == MemoryStatus.Current)
+      case Ledger.Upstream => of(UpstreamStatus.parse)(!Set[UpstreamStatus](UpstreamStatus.Identified, UpstreamStatus.Reported).contains(_), _ == UpstreamStatus.Resolved)
+    }
+  }
+
+  // A settled record is a reference record in its live state (an adopted decision, a current memory): neither terminal nor open work.
+  def settled(ledger: Ledger, status: String): Boolean = ledger match {
+    case Ledger.Decisions => parsed(ledger, status)(DecisionStatus.parse) == DecisionStatus.Adopted
+    case Ledger.Memories => parsed(ledger, status)(MemoryStatus.parse) == MemoryStatus.Current
+    case _ => false
+  }
+  def settled(item: ItemSummary): Boolean = settled(item.id.ledger, item.status)
+
+  // Open work: neither terminal nor settled; an open item is also unarchived.
+  def open(ledger: Ledger, status: String): Boolean = !outcome(ledger, status).terminal && !settled(ledger, status)
+  def open(item: ItemSummary): Boolean = !item.archived && open(item.id.ledger, item.status)
+
+  def statuses(ledger: Ledger): List[String] = ledger match {
+    case Ledger.Milestones => MilestoneStatus.all.map(_.toString)
+    case Ledger.Ideas => IdeaStatus.all.map(_.toString)
+    case Ledger.Defects => DefectStatus.all.map(_.toString)
+    case Ledger.Goals => GoalStatus.all.map(_.toString)
+    case Ledger.Tasks => TaskStatus.all.map(_.toString)
+    case Ledger.Researches => ResearchStatus.all.map(_.toString)
+    case Ledger.Hypothesis => HypothesisStatus.all.map(_.toString)
+    case Ledger.Questions => QuestionStatus.all.map(_.toString)
+    case Ledger.Decisions => DecisionStatus.all.map(_.toString)
+    case Ledger.Reviews => ReviewStatus.all.map(_.toString)
+    case Ledger.Handoffs => HandoffStatus.all.map(_.toString)
+    case Ledger.OperatorActions => OperatorActionStatus.all.map(_.toString)
+    case Ledger.Memories => MemoryStatus.all.map(_.toString)
+    case Ledger.Upstream => UpstreamStatus.all.map(_.toString)
   }
 
   def validateCitation(value: Citation): Unit = value match {
@@ -206,9 +247,9 @@ object LedgerPolicy {
   }
 
   def key(id: ItemId): (String, Long) = (id.ledger.toString, id.number)
-  // A terminal item stays out of archival while any related item (either direction) is still open: unarchived and not terminal.
+  // A terminal item stays out of archival while any related item (either direction) is still open; settled records retain nothing.
   def openRelated(tx: LedgerTransaction, id: ItemId): List[ItemId] =
-    tx.refs(id).map(_.target).distinct.filter(target => tx.summary(target).exists(related => !related.archived && !related.outcome.terminal)).sortBy(key)
+    tx.refs(id).map(_.target).distinct.filter(target => tx.summary(target).exists(open)).sortBy(key)
 
   def canonical(source: ItemId, relation: Relation, target: ItemId): CanonicalEdge = {
     invalid(source != target, "Self references are not allowed")

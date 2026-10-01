@@ -270,6 +270,30 @@ abstract class LedgerContractTest extends SpecZIO with AssertZIO {
       } yield ()
     }
 
+    "let settled records neither archive nor retain their terminal neighbours" in { (service: LedgerService[IO]) =>
+      val owner = scope()
+      val done = task("Done").copy(content = Content.Task(TaskStatus.Done, List("Observable result"), Some("Result"), Nil))
+      val adopted = task("Adopted decision").copy(content = Content.Decision(DecisionStatus.Adopted, "Choice", "Rationale", Nil))
+      val current = task("Current memory").copy(content = Content.Memory(MemoryStatus.Current, "Knowledge", "Applies here", Nil))
+      def link(source: ItemRevision, target: ItemRevision): Mutation =
+        Mutation.Reference(source.id, source.revision, Relation.DerivedFrom, target.id, target.revision, true)
+      for {
+        _ <- service.initialize(owner, "Settled retention")
+        decision <- create(service, owner, adopted)
+        memory <- create(service, owner, current)
+        t <- create(service, owner, done)
+        u <- create(service, owner, done.copy(title = "Done under memory"))
+        _ <- service.change(owner, request(List(link(t, decision), link(u, memory)), Nil))
+        preview <- service.archivePreview(owner, "", 50)
+        _ <- assertIO(preview.members.map(_.id).toSet == Set(t.id, u.id) && preview.retained.isEmpty)
+        _ <- service.change(owner, request(List(Mutation.Archive(preview.members.map(m => ItemRevision(m.id, m.revision)))), Nil))
+        after <- service.archivePreview(owner, "", 50)
+        _ <- assertIO(after.members.isEmpty && after.retained.isEmpty)
+        active <- service.search(owner, "", None, 200)
+        _ <- assertIO(active.items.map(_.id).toSet == Set(decision.id, memory.id))
+      } yield ()
+    }
+
     "archive only terminal current revisions atomically and replay the exact acknowledgement" in { (service: LedgerService[IO]) =>
       val owner = scope()
       val done = task("Completed").copy(content = Content.Task(TaskStatus.Done, List("Observable result"), Some("Result"), Nil))
