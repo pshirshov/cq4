@@ -146,7 +146,7 @@ assert.deepEqual(resumed.cycle.run, run, "a resume reattaches to the cycle's run
 assert.equal(resumed.cycle.lineage.filter(entry => entry.member.Run !== undefined).length, 1, "no duplicate run");
 assert.deepEqual((await first.tool("session", { Context: {} })).Context.value.workflow.id, run);
 const current = await detail(target.id);
-const produced = (await change(first, [{ Produce: { producer: target.id, expected: current.revision, drafts: [{ ...draft, title: "Descendant of cycle 1" }] } }], [claim.fence])).Changed.ack.items
+const produced = (await change(first, [{ Produce: { producer: target.id, expected: current.revision, drafts: [{ ...draft, title: "Descendant of cycle 1" }], milestone: null } }], [claim.fence])).Changed.ack.items
   .find(item => item.id.number !== target.id.number);
 await first.tool("dispatch", { Cancel: { attempt: child.attempt } });
 const deadline = Date.now() + 60000;
