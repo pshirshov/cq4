@@ -5,44 +5,29 @@ import java.nio.charset.StandardCharsets.UTF_8
 import java.nio.file.{Files, LinkOption, Path, StandardOpenOption}
 import scala.util.Using
 
-enum WorkflowName { case Begin, Advance, Review, Upstream }
 final case class CommandAsset(path: Path, body: String)
 
 final class WorkflowAssets {
   private val MaxResourceBytes = 16384
 
-  private def resource(name: String): String = Using.resource(Option(getClass.getResourceAsStream(s"/cq/workflows/$name.md"))
+  private def resource(path: String): String = Using.resource(Option(getClass.getResourceAsStream("/" + path))
     .getOrElse(throw new IllegalStateException("Installed workflow resource is missing"))) { stream =>
     val bytes = stream.readNBytes(MaxResourceBytes + 1)
     require(bytes.length <= MaxResourceBytes, "Installed workflow resource exceeds its byte bound")
     UTF_8.newDecoder().decode(java.nio.ByteBuffer.wrap(bytes)).toString
   }
 
-  def name(request: WorkflowRequest): WorkflowName = request match {
-    case _: WorkflowRequest.Begin => WorkflowName.Begin
-    case _: WorkflowRequest.Advance => WorkflowName.Advance
-    case _: WorkflowRequest.Review => WorkflowName.Review
-    case _: WorkflowRequest.Upstream => WorkflowName.Upstream
-  }
+  def instructions(request: WorkflowRequest): String = WorkflowCatalog.of(request).instructions.map(resource).mkString("\n")
 
-  def instructions(request: WorkflowRequest): String = resource("common") + "\n" + resource(name(request).toString.toLowerCase)
-
-  def commands(harness: Harness): List[CommandAsset] = WorkflowName.values.toList.map { workflow =>
-    val command = workflow.toString.toLowerCase
-    val description = workflow match {
-      case WorkflowName.Begin => "Capture CQ intake or a scope follow-up"
-      case WorkflowName.Advance => "Advance selected CQ work through a specified phase"
-      case WorkflowName.Review => "Independently review a stored CQ result"
-      case WorkflowName.Upstream => "Prepare, report or recheck a CQ upstream defect"
-    }
-    val body = resource("entrypoint").replace("{{WORKFLOW}}", command).replace("{{HARNESS}}", harness.toString.toLowerCase).replace("{{VARIANT}}", workflow.toString)
+  def commands(harness: Harness): List[CommandAsset] = WorkflowCatalog.commands.map { command =>
+    val alias = command.alias(harness)
+    val body = resource(command.template).replace("{{WORKFLOW}}", command.command).replace("{{HARNESS}}", harness.toString.toLowerCase)
+      .replace("{{VARIANT}}", command.variant).replace("{{ARGUMENTS}}", WorkflowCatalog.argumentGuide)
     harness match {
-      case Harness.Codex => CommandAsset(Path.of(s".agents/skills/cq-$command/SKILL.md"),
-        s"---\nname: cq-$command\ndescription: $description. Use for the corresponding CQ workflow request.\n---\n\n$body")
-      case Harness.Claude => CommandAsset(Path.of(s".claude/commands/cq/$command.md"),
-        s"---\ndescription: $description\n---\n\nInvocation arguments: $$ARGUMENTS\n\n$body")
-      case Harness.Pi => CommandAsset(Path.of(s".pi/prompts/cq:$command.md"),
-        s"---\ndescription: $description\n---\n\nInvocation arguments: $$ARGUMENTS\n\n$body")
+      case Harness.Codex => CommandAsset(alias.path,
+        s"---\nname: ${alias.alias}\ndescription: ${command.description}. Use for the corresponding CQ workflow request.\n---\n\n$body")
+      case Harness.Claude | Harness.Pi => CommandAsset(alias.path,
+        s"---\ndescription: ${command.description}\n---\n\nInvocation arguments: $$ARGUMENTS\n\n$body")
     }
   }
 
