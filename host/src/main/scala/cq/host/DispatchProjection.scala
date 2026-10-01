@@ -9,7 +9,7 @@ object DispatchProjection {
   private val MaxBlockerCodePoints = 300
   def concise(value: String): String = value.substring(0, value.offsetByCodePoints(0, value.codePointCount(0, value.length).min(MaxBlockerCodePoints)))
   def pending(ticket: DispatchTicket): DispatchStatus = DispatchStatus(ticket.request.request, ticket.attempt.id,
-    DispatchPhase.Preparing, None, ticket.request.members.map(_.id), EmptyCounts, ChildNext.Wait, None, None, None, false, false)
+    DispatchPhase.Preparing, None, ticket.request.members.map(_.id), EmptyCounts, ChildNext.Wait, None, None, None, false, false, None)
   def completed(previous: DispatchStatus, result: ChildResult, handle: ArtifactId): DispatchStatus = {
     val failures = result.validation.count(_.state == ValidationState.Failed)
     val unknown = result.validation.count(_.state == ValidationState.Unknown)
@@ -51,6 +51,8 @@ object DispatchProjection {
       blocker = result.validation.find(_.state != ValidationState.Passed).map(value => s"Host check ${value.check}: ${value.state}").orElse(blocker).map(concise),
       result = Some(handle), detailsOmitted = true))
   }
+  def workspace(record: WorkspaceRecord): WorkspaceState =
+    WorkspaceState(record.admission, if (record.admission == WorkspaceAdmission.Removed) None else Some(record.directory))
   def bounded(value: DispatchStatus): DispatchStatus = {
     require(HostFiles.encode(DispatchStatus_JsonCodec, value).getBytes(UTF_8).length <= MaxBytes, "Dispatch projection exceeds its byte bound")
     value

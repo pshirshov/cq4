@@ -623,9 +623,11 @@ root data ChildCounts {
   ready: i32 accepted: i32 changesRequested: i32 blocked: i32 failed: i32 validationFailed: i32 validationUnknown: i32
   proposed: i32 evidence: i32 abstained: i32 assessed: i32
 }
+root data WorkspaceState { admission: WorkspaceAdmission directory: opt[str] }
 root data DispatchStatus {
   request: RequestId attempt: AttemptId phase: DispatchPhase process: opt[JobPhase] members: lst[ItemId]
   counts: ChildCounts next: ChildNext blocker: opt[str] result: opt[ArtifactId] partial: opt[ArtifactId] detailsOmitted: bit usageDelivered: bit
+  workspace: opt[WorkspaceState]
 }
 root data DispatchTicket { request: DispatchRequest assignment: Assignment attempt: Attempt profile: HarnessSetting selection: opt[ArtifactId] }
 root data CohortRequest {

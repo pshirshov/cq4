@@ -247,6 +247,7 @@ def main():
     child_directory = Path(closing_context["directory"]) / "children" / running["attempt"]["value"]
     stopped = json.loads((child_directory / "receipt.json").read_text())
     assert stopped["phase"] == "Cancelled" and stopped["process"] == "Settled" and stopped["result"] is None and stopped["usageDelivered"], stopped
+    assert stopped["workspace"]["admission"] == "Quarantined" and Path(stopped["workspace"]["directory"]).is_dir(), stopped
     print(json.dumps({"disconnectWithRunningChild": "cancelled-and-accounted"}))
 
     preload = root / "stall.so"
