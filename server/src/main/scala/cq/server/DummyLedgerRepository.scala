@@ -24,7 +24,7 @@ final class DummyLedgerResource extends Lifecycle.LiftF[Task, LedgerRepository[I
         current.projects.get(project.id) match {
           case Some(existing) => (existing.project, current)
           case None =>
-            val state = DummyLedgerState(project, 0L, 0L, Map.empty, Map.empty, Set.empty, Map.empty, Map.empty, List.empty, Map.empty, Map.empty, Map.empty, Map.empty, Map.empty)
+            val state = DummyLedgerState(project, 0L, 0L, Map.empty, Map.empty, Set.empty, Map.empty, Map.empty, List.empty, Map.empty, Map.empty, Map.empty, Map.empty, Map.empty, Map.empty)
             (project, current.copy(cursor = CatalogueCursor(Math.addExact(current.cursor.value, 1L)), projects = current.projects.updated(project.id, state)))
         }
       }
@@ -56,6 +56,7 @@ private final case class DummyLedgerState(
   admissions: Map[AttemptId, ResultAdmission],
   integrations: Map[IntegrationId, IntegrationRecord],
   reserved: Map[ItemId, IntegrationId],
+  worksets: Map[WorksetId, StoredWorkset],
 )
 
 private final class DummyLedgerTransaction(initial: DummyLedgerState) extends LedgerTransaction {
@@ -180,5 +181,18 @@ private final class DummyLedgerTransaction(initial: DummyLedgerState) extends Le
       value.resolution != IntegrationResolution.Pending(), "Integration resolution requires the exact pending intent")
     require(value.intent.members.forall(ref => state.reserved.get(ref.id).contains(value.intent.id)), "Integration membership is inconsistent")
     state = state.copy(integrations = state.integrations.updated(value.intent.id, value), reserved = state.reserved -- value.intent.members.map(_.id))
+  }
+  override def workset(id: WorksetId): Option[StoredWorkset] = state.worksets.get(id)
+  override def insertWorkset(value: StoredWorkset): Unit = {
+    require(!state.worksets.contains(value.id), "Workset identity already exists")
+    state = state.copy(worksets = state.worksets.updated(value.id, value))
+  }
+  override def candidateRoots(after: Option[ItemId], limit: Int): ReadPage[ItemSummary] = {
+    def open(item: ItemSummary): Boolean = !item.archived && !item.outcome.terminal
+    val candidates = state.items.valuesIterator.map(LedgerPolicy.summary).filter { item =>
+      open(item) && after.forall(id => Ordering[(String, Long)].gt(LedgerPolicy.key(item.id), LedgerPolicy.key(id))) &&
+        !refs(item.id).exists(ref => Set[Relation](Relation.DerivedFrom, Relation.PartOf).contains(ref.relation) && summary(ref.target).exists(open))
+    }.toList.sortBy(item => LedgerPolicy.key(item.id))
+    ReadPage.select(candidates.iterator, limit, ItemSummary_JsonCodec)
   }
 }

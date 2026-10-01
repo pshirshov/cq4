@@ -18,6 +18,12 @@ trait LedgerService[F[_, _]] {
   def termination(scope: Scope, roots: Set[ItemId], intent: TerminationIntent): F[Throwable, TerminationPreview]
   def archivePreview(scope: Scope, query: String, limit: Int): F[Throwable, ArchivePlan]
   def workset(scope: Scope, roots: Set[ItemId], after: Option[ItemId], snapshot: Option[WorksetSnapshot], limit: Int): F[Throwable, WorksetPage]
+  def subgraphs(scope: Scope, after: Option[ItemId], snapshot: Option[ChangeCursor], limit: Int): F[Throwable, SubgraphPage]
+  def createWorkset(scope: Scope, targets: Set[ItemId], through: WorkflowPhase): F[Throwable, StoredWorkset]
+  def lookupWorkset(scope: Scope, id: WorksetId): F[Throwable, StoredWorkset]
+  def previewWorkset(scope: Scope, target: WorksetTarget): F[Throwable, WorksetPreview]
+  // Evaluates the workset on the ledger state after `change` inside one transaction that is always rolled back.
+  def previewWorksetAfter(scope: Scope, target: WorksetTarget, change: ChangeRequest): F[Throwable, WorksetPreview]
   def history(scope: Scope, id: ItemId, before: Revision, limit: Int): F[Throwable, HistoryPage]
   def changes(scope: Scope, after: ChangeCursor, limit: Int): F[Throwable, ChangePage]
   def claimPreview(scope: Scope, members: Set[ItemId]): F[Throwable, ClaimPreview]
@@ -28,6 +34,8 @@ trait LedgerService[F[_, _]] {
 }
 
 object LedgerService {
+  private final case class Hypothetical(preview: WorksetPreview) extends RuntimeException("Hypothetical workset evaluation", null, false, false)
+
   final class Impl[F[+_, +_]: Error2](repository: LedgerRepository[F], clock: Clock, queries: QueryParser, completions: QueryCompleter, worksets: WorksetTraversal, terminationPlanner: TerminationPlanner, claimPlanner: ClaimPlanner, mutations: LedgerMutation) extends LedgerService[F] {
     import LedgerPolicy.*
     import LedgerAccess.*
@@ -120,6 +128,35 @@ object LedgerService {
 
     override def workset(scope: Scope, roots: Set[ItemId], after: Option[ItemId], snapshot: Option[WorksetSnapshot], limit: Int): F[Throwable, WorksetPage] =
       repository.transact(scope.project)(tx => worksets.page(tx, roots, after, snapshot, limit))
+
+    private val planner = new WorksetPlanner(worksets)
+
+    override def subgraphs(scope: Scope, after: Option[ItemId], snapshot: Option[ChangeCursor], limit: Int): F[Throwable, SubgraphPage] =
+      repository.transact(scope.project) { tx =>
+        invalid(after.isEmpty || snapshot.nonEmpty, "Subgraph continuation requires its snapshot")
+        if (snapshot.exists(_ != tx.cursor)) throw DomainFailure(Fault.Resync("Items changed; restart subgraph discovery"))
+        planner.discover(tx, after, limit)
+      }
+
+    override def createWorkset(scope: Scope, targets: Set[ItemId], through: WorkflowPhase): F[Throwable, StoredWorkset] =
+      repository.transact(scope.project) { tx =>
+        write(scope)
+        planner.create(tx, scope.actor, WorksetId(java.util.UUID.randomUUID()), targets, through, clock.millis())
+      }
+
+    override def lookupWorkset(scope: Scope, id: WorksetId): F[Throwable, StoredWorkset] =
+      repository.transact(scope.project)(tx => planner.stored(tx, id))
+
+    override def previewWorkset(scope: Scope, target: WorksetTarget): F[Throwable, WorksetPreview] =
+      repository.transact(scope.project)(tx => planner.resolve(tx, target))
+
+    override def previewWorksetAfter(scope: Scope, target: WorksetTarget, change: ChangeRequest): F[Throwable, WorksetPreview] = {
+      import izumi.functional.bio.{F, *}
+      repository.transact(scope.project) { tx =>
+        mutations(tx, scope, change, clock.millis())
+        throw Hypothetical(planner.resolve(tx, target))
+      }.catchSome { case Hypothetical(preview) => F.pure(preview) }
+    }
 
     override def search(scope: Scope, query: String, after: Option[ItemId], limit: Int): F[Throwable, ItemPage] = {
       import izumi.functional.bio.{F, *}

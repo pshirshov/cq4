@@ -41,6 +41,7 @@ final class PostgresProjectArchives(database: LedgerDatabase, clock: Clock) exte
     BackupTable.UsageHeads -> "cq_usage_heads", BackupTable.UsageOutcomes -> "cq_usage_outcomes",
     BackupTable.Artifacts -> "cq_artifacts", BackupTable.ResultAdmissions -> "cq_result_admissions",
     BackupTable.Integrations -> "cq_integrations", BackupTable.IntegrationMembers -> "cq_integration_members",
+    BackupTable.Worksets -> "cq_worksets",
   )
   private def schema(sql: Jdbc): String = sql.query("SELECT checksum FROM cq_schema_migrations WHERE version = 1")(_ => ())(_.getString(1)).head
   private def columns(sql: Jdbc, table: String): String = sql.query(

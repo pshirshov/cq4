@@ -105,11 +105,13 @@ def verify(checks, command, name):
             priced_response = post("/api/usage", {"project": project, "operation": {"Ingest": {"value": priced}}})
             write(out / "priced-response.json", priced_response)
             assert priced_response[0] == 200, priced_response
+            stored = call(checks.environment, {"Workset": {"input": {"project": project, "action": {"Create": {"targets": [state["target"]["id"]], "through": "Work"}}}}})
+            assert stored["WorksetStored"]["workset"]["targets"] == [state["target"]["id"]], stored
             other = {"value": str(uuid.uuid4())}
             call(checks.environment, {"Initialize": {"config": {"project": other, "endpoint": checks.environment["CQ_ORIGIN"], "name": "Excluded project"}}})
             before = fingerprint(names[0]); write(out / "before.json", before)
             manifest = json.loads(cli("backup", args + ["--json"]).stdout)
-            assert len(manifest["entries"]) == len(before) == 23
+            assert len(manifest["entries"]) == len(before) == 24 and len(before["cq_worksets"]) == 1
             assert archive.stat().st_mode & 0o077 == 0, "Archive must not expose operator data to other users"
             digest = hashlib.sha256(archive.read_bytes()).hexdigest()
             assert "already exists" in cli("no-clobber", args, 1).stderr
@@ -257,7 +259,7 @@ def verify(checks, command, name):
                 write(out / "lost-commit-observation.json", {"commitAcknowledgementDropped": True, "projectCommitted": True, "stderr": uncertain.stderr})
                 assert "no restore was committed" not in uncertain.stderr, "Committed restore was falsely reported as rolled back"
                 assert "verify" in uncertain.stderr.lower() and "retry" in uncertain.stderr.lower(), uncertain.stderr
-        result = {"status": "passed", "tables": 23, "snapshotConsistent": True, "recordsEqual": True,
+        result = {"status": "passed", "tables": 24, "snapshotConsistent": True, "recordsEqual": True,
                   "collisionRefused": True, "counterContinued": True, "authorizationEnforced": True}
         write(out / "result.json", result)
         return result

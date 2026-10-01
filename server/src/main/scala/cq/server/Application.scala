@@ -47,6 +47,12 @@ final class Application(ledger: LedgerService[IO], repository: LedgerRepository[
       case Command.Graph(input) => scoped(authority, input.project) { scope =>
         ledger.workset(scope, input.roots, input.after, input.snapshot, input.limit).map(Result.Workset.apply)
       }
+      case Command.Workset(input) => scoped(authority, input.project) { scope => input.action match {
+        case WorksetAction.Discover(after, snapshot, limit) => ledger.subgraphs(scope, after, snapshot, limit).map(Result.Subgraphs.apply)
+        case WorksetAction.Create(targets, through) => ledger.createWorkset(scope, targets, through).map(Result.WorksetStored.apply)
+        case WorksetAction.Lookup(id) => ledger.lookupWorkset(scope, id).map(Result.WorksetStored.apply)
+        case WorksetAction.Preview(target) => ledger.previewWorkset(scope, target).map(Result.WorksetPreviewed.apply)
+      }}
       case Command.Change(input) => scoped(authority, input.project)(scope => ledger.change(scope, input.change).map(Result.Changed.apply))
       case Command.ApplyProposal(input) => scoped(authority, input.project)(scope => proposals(scope, input.result).map(Result.Changed.apply))
       case Command.ClaimWork(input) => scoped(authority, input.project) { scope => input.action match {

@@ -36,7 +36,7 @@ enum Role { Human Governor Explorer Planner Worker Reviewer Collector }
 root data Actor { subject: str session: SessionId role: Role }
 root data Provenance { actor: Actor receivedAt: i64 request: RequestId }
 root data Project { id: ProjectId name: str revision: Revision createdAt: i64 }
-enum BackupTable { Projects Counters Items Labels Edges History Requests Changes Claims ClaimMembers UsageClock UsageAssignments UsageMembers UsageAttempts UsageMeters UsageCosts UsageRecords UsageHeads UsageOutcomes Artifacts ResultAdmissions Integrations IntegrationMembers }
+enum BackupTable { Projects Counters Items Labels Edges History Requests Changes Claims ClaimMembers UsageClock UsageAssignments UsageMembers UsageAttempts UsageMeters UsageCosts UsageRecords UsageHeads UsageOutcomes Artifacts ResultAdmissions Integrations IntegrationMembers Worksets }
 root data BackupEntry { table: BackupTable rows: i64 bytes: i64 sha256: str }
 root data BackupManifest { project: ProjectId schemaSha256: str postgresMajor: i32 createdAt: i64 entries: lst[BackupEntry] }
 
@@ -285,6 +285,32 @@ root data BrowsePage { items: lst[BrowseItem] cursor: ChangeCursor after: opt[It
 root data LedgerCount { ledger: Ledger count: i64 }
 root data LedgerCounts { entries: lst[LedgerCount] cursor: ChangeCursor }
 root data GraphInput { project: ProjectId roots: set[ItemId] after: opt[ItemId] snapshot: opt[WorksetSnapshot] limit: i32 }
+root id WorksetId { value: uid }
+root data StoredWorkset { id: WorksetId targets: set[ItemId] through: WorkflowPhase actor: Actor createdAt: i64 }
+root adt WorksetTarget {
+  data Stored { id: WorksetId }
+  data Inline { targets: set[ItemId] through: WorkflowPhase }
+}
+root data WorksetMember { item: ItemSummary root: bit }
+root data WorksetContextItem { item: ItemSummary reasons: lst[WorksetReason] }
+root data WorksetReadiness { item: ItemId ready: bit reasons: lst[WorksetReason] }
+root data WorksetPreview {
+  workset: opt[WorksetId] targets: set[ItemId] through: WorkflowPhase snapshot: WorksetSnapshot
+  advanceable: lst[WorksetMember] context: lst[WorksetContextItem] readiness: lst[WorksetReadiness]
+}
+root adt SubgraphExtent {
+  data Measured { descendants: i32 ready: i32 context: i32 ledgers: lst[LedgerCount] }
+  data Oversized { limit: i32 }
+}
+root data Subgraph { root: ItemSummary extent: SubgraphExtent }
+root data SubgraphPage { entries: lst[Subgraph] cursor: ChangeCursor after: opt[ItemId] hasMore: bit }
+root adt WorksetAction {
+  data Discover { after: opt[ItemId] snapshot: opt[ChangeCursor] limit: i32 }
+  data Create { targets: set[ItemId] through: WorkflowPhase }
+  data Lookup { id: WorksetId }
+  data Preview { target: WorksetTarget }
+}
+root data WorksetInput { project: ProjectId action: WorksetAction }
 root adt ReadSelection {
   data Browse { query: str order: ItemOrder after: opt[ItemId] snapshot: opt[ChangeCursor] limit: i32 }
   data Counts {}
@@ -326,6 +352,7 @@ root adt Command {
   data RenameProject { project: ProjectId expected: Revision name: str }
   data Search { input: SearchInput }
   data Graph { input: GraphInput }
+  data Workset { input: WorksetInput }
   data Read { input: ReadInput }
   data Change { input: ChangeInput }
   data ApplyProposal { input: ProposalApplyInput }
@@ -343,6 +370,9 @@ root adt Result {
   data Termination { preview: TerminationPreview }
   data ArchivePreview { plan: ArchivePlan }
   data Workset { page: WorksetPage }
+  data Subgraphs { page: SubgraphPage }
+  data WorksetStored { workset: StoredWorkset }
+  data WorksetPreviewed { preview: WorksetPreview }
   data QueryAnalyzed { analysis: QueryAnalysis }
   data ArtifactInfo { metadata: ArtifactMetadata }
   data ArtifactText { page: ArtifactPage }

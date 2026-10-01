@@ -50,4 +50,8 @@ trait LedgerTransaction {
   def insertIntegration(value: IntegrationRecord): Unit
   def resolveIntegration(value: IntegrationRecord): Unit
   def nextFence(): Long
+  def workset(id: WorksetId): Option[StoredWorkset]
+  def insertWorkset(value: StoredWorkset): Unit
+  // Open (unarchived, non-terminal) items without an open DerivedFrom producer or PartOf milestone, in (ledger, number) order.
+  def candidateRoots(after: Option[ItemId], limit: Int): ReadPage[ItemSummary]
 }
