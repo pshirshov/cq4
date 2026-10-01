@@ -27,7 +27,7 @@ def main():
     executable.write_text(f"#!{sys.executable}\nCONTROL_ROOT = {str(root)!r}\n" + Path("dev/combination-fixture.py").read_text())
     executable.chmod(0o700)
     summaries = []
-    for scenario in ["clean", "conflict"]:
+    for scenario in ["clean", "conflict", "check"]:
         case = root / scenario
         case.mkdir()
         repository = case / "repository"
@@ -52,6 +52,9 @@ def main():
         (repository / "untracked.txt").write_text("governing untracked work\n")
         index = (repository / ".git/index").read_bytes()
         checks = "from pathlib import Path; names=[n for n in ['alpha','beta'] if Path(n+'.txt').exists()]; assert names; assert all(Path(n+'.txt').read_text()==n+'\\n' for n in names); assert '<<<<<<<' not in Path('shared.txt').read_text()"
+        if scenario == "check":
+            # Each candidate passes alone; together they pass only after a resolver reconciles them, which no textual merge does.
+            checks += "; assert len(names) < 2 or Path('resolved.txt').exists(), 'alpha and beta are not reconciled'"
         settings = case / "settings.json"
         settings.write_text(json.dumps({"integrationTarget": "refs/heads/integration", "stateRoot": str(case / "sessions"), "guardian": str(guardian),
             "evaluation": {"run": "deterministic-combination", "scenario": scenario, "assessor": False},
@@ -111,35 +114,66 @@ def main():
             alpha_commit = alpha_done["integration"]["preview"]["candidate"]["value"]
             assert git("rev-parse", "refs/heads/integration") == alpha_commit
             (case / "beta-initial").touch()
-            _, combined = wait_event("beta", "fixture.combined_ready", lambda value: value["round"] == 0)
-            rounds = [combined]
-            assert combined["integration"]["preview"]["expected"]["value"] == alpha_commit
-            if scenario == "conflict":
-                third = case / "third-worktree"
-                git("worktree", "add", "--detach", str(third), alpha_commit)
-                (third / "gamma.txt").write_text("gamma\n")
-                subprocess.run(["git", "-C", str(third), "add", "gamma.txt"], check=True)
-                subprocess.run(["git", "-C", str(third), "-c", "user.name=CQ fixture", "-c", "user.email=cq@localhost", "commit", "--quiet", "-m", "Further target advancement"], check=True)
-                third_commit = subprocess.check_output(["git", "-C", str(third), "rev-parse", "HEAD"], text=True).strip()
-                git("update-ref", "refs/heads/integration", third_commit, alpha_commit)
-                (case / "beta-combined-0").touch()
-                _, combined = wait_event("beta", "fixture.combined_ready", lambda value: value["round"] == 1)
-                rounds.append(combined)
-                assert combined["integration"]["preview"]["expected"]["value"] == third_commit
-                (case / "beta-combined-1").touch()
-                deadline = time.monotonic() + WAIT_SECONDS
-                while not (latch / "entered").exists():
-                    assert processes["beta"].poll() is None, (case / "beta.stderr").read_text()[-5000:]
-                    assert time.monotonic() < deadline, "Final combined incorporation did not reach its crash latch"
-                    time.sleep(0.05)
-                processes["beta"].kill()
-                assert processes["beta"].wait(timeout=10) == -9
-                (latch / "release").touch()
-            else:
-                (case / "beta-combined-0").touch()
+            _, rebased = wait_event("beta", "fixture.rebased", lambda value: value["round"] == 0)
+            beta_commit = beta_ready["integration"]["preview"]["candidate"]["value"]
+            first = rebased["integration"]
+            rounds, rebases = [], []
+            if scenario == "clean":
+                # The host merged the reviewed candidate onto the advanced target and reran the configured check: no worker, no new review.
+                assert first["blocker"] is None and first["preview"]["rebase"] == {"Applied": {"reviewed": {"value": beta_commit}}}, first
+                assert first["preview"]["expected"]["value"] == alpha_commit
+                rebases.append((first["preview"], alpha_commit, beta_commit))
+                (case / "beta-rebased-0").touch()
                 wait_event("beta", "fixture.recorded", lambda _: True)
                 assert processes["beta"].wait(timeout=20) == 0
-            final = combined["integration"]["preview"]
+                final = first["preview"]
+            else:
+                # The reviewed candidate stays frozen; its NotApplied integration feeds the existing combination path.
+                assert first["preview"]["candidate"]["value"] == beta_commit and first["preview"]["expected"]["value"] == base, first
+                outcome = first["preview"]["rebase"]
+                if scenario == "conflict":
+                    assert outcome == {"Conflicted": {"target": {"value": alpha_commit}}}, first
+                    cause = "conflict"
+                else:
+                    failed = outcome["ChecksFailed"]
+                    assert failed["target"] == {"value": alpha_commit} and [(value["check"], value["state"]) for value in failed["validation"]] == [("independent-changes", "Failed")], first
+                    cause = "check independent-changes failed on the rebased commit"
+                assert first["blocker"] == f"Target advanced to {alpha_commit}; {cause}; Integrate records NotApplied, then Combine", first
+                (case / "beta-rebased-0").touch()
+                _, combined = wait_event("beta", "fixture.combined_ready", lambda value: value["round"] == 0)
+                rounds.append(combined)
+                assert combined["integration"]["preview"]["expected"]["value"] == alpha_commit
+                assert combined["integration"]["preview"]["rebase"] == {"Unneeded": {}}
+                final = combined["integration"]["preview"]
+                if scenario == "conflict":
+                    third = case / "third-worktree"
+                    git("worktree", "add", "--detach", str(third), alpha_commit)
+                    (third / "gamma.txt").write_text("gamma\n")
+                    subprocess.run(["git", "-C", str(third), "add", "gamma.txt"], check=True)
+                    subprocess.run(["git", "-C", str(third), "-c", "user.name=CQ fixture", "-c", "user.email=cq@localhost", "commit", "--quiet", "-m", "Further target advancement"], check=True)
+                    third_commit = subprocess.check_output(["git", "-C", str(third), "rev-parse", "HEAD"], text=True).strip()
+                    git("update-ref", "refs/heads/integration", third_commit, alpha_commit)
+                    (case / "beta-combined-0").touch()
+                    # The combined candidate is clean against the further advance: the host rebases it instead of another resolver round.
+                    _, again = wait_event("beta", "fixture.rebased", lambda value: value["round"] == 1)
+                    final = again["integration"]["preview"]
+                    combined_commit = combined["integration"]["preview"]["candidate"]["value"]
+                    assert again["integration"]["blocker"] is None and final["rebase"] == {"Applied": {"reviewed": {"value": combined_commit}}}, again
+                    assert final["expected"]["value"] == third_commit
+                    rebases.append((final, third_commit, combined_commit))
+                    (case / "beta-rebased-1").touch()
+                    deadline = time.monotonic() + WAIT_SECONDS
+                    while not (latch / "entered").exists():
+                        assert processes["beta"].poll() is None, (case / "beta.stderr").read_text()[-5000:]
+                        assert time.monotonic() < deadline, "Final rebased incorporation did not reach its crash latch"
+                        time.sleep(0.05)
+                    processes["beta"].kill()
+                    assert processes["beta"].wait(timeout=10) == -9
+                    (latch / "release").touch()
+                else:
+                    (case / "beta-combined-0").touch()
+                    wait_event("beta", "fixture.recorded", lambda _: True)
+                    assert processes["beta"].wait(timeout=20) == 0
             assert git("rev-parse", "refs/heads/integration") == final["candidate"]["value"]
             jobs = {path.name: path.read_bytes() for path in (beta_session / "journal").glob("*.json")
                 if (beta_session / "integrations" / path.name).exists()}
@@ -162,6 +196,22 @@ def main():
             (case / "recovery.txt").write_text(recovery)
             recorded = integration()
             assert "Recorded" in recorded["resolution"]
+            # A rebased integration records the reviewed commit, the governing attempt and its passing check of the landed commit.
+            for preview, head, reviewed in rebases:
+                landed = preview["candidate"]["value"]
+                assert git("rev-list", "--parents", "-n", "1", landed).split() == [landed, head, reviewed]
+                assert git("rev-parse", "refs/cq/candidates/" + preview["id"]["value"]) == landed
+            if rebases:
+                rebase = recorded["intent"]["rebase"]
+                assert rebase["reviewed"] == {"value": rebases[-1][2]} and rebase["author"] == manifest["attempt"]["id"]
+                assert [(value["check"], value["state"]) for value in rebase["validation"]] == [("independent-changes", "Passed")]
+                completed = api({"Read": {"input": {"project": manifest["project"]["project"], "selection": {"ItemDetail": {"id": final["members"][0]["id"]}}}}})["Detail"]["view"]
+                citations = completed["item"]["draft"]["content"]["Task"]["validation"][-1]["citations"]
+                assert citations[:2] == [{"Commit": {"repository": str(repository), "hash": final["candidate"]["value"]}},
+                    {"Commit": {"repository": str(repository), "hash": rebases[-1][2]}}], citations
+                assert {"Artifact": {"id": rebase["validation"][0]["artifact"]}} in citations
+            else:
+                assert recorded["intent"]["rebase"] is None
             assert recorded["resolution"]["Recorded"]["acknowledgement"]["items"] == [
                 {**member, "revision": {"value": str(int(member["revision"]["value"]) + 1)}} for member in final["members"]]
             summary_request = {"Usage": {"input": {"project": manifest["project"]["project"], "selection": {"Summary": {
@@ -177,6 +227,8 @@ def main():
                 assert git("show", "refs/heads/integration:" + name + ".txt") == name
                 assert not (repository / (name + ".txt")).exists()
             assert git("show", "refs/heads/integration:shared.txt") == ("alpha\nbeta" if scenario == "conflict" else "base")
+            if scenario == "check":
+                assert git("show", "refs/heads/integration:resolved.txt") == "alpha and beta reconciled"
             assert git("rev-parse", "HEAD") == base and (repository / ".git/index").read_bytes() == index
             assert (repository / "staged.txt").read_text() == "governing staged work\n" and (repository / "untracked.txt").read_text() == "governing untracked work\n"
             for combined_round in rounds:
@@ -186,8 +238,9 @@ def main():
                 assert git("rev-list", "--parents", "-n", "1", candidate).split() == [candidate, plan["observedTarget"]["value"], plan["candidate"]["value"]]
                 assert (child / "assets/merge-ready").read_text() in ["0\n", "1\n"]
                 assert plan["members"] == final["members"]
-            first_child = beta_session / "children" / rounds[0]["worker"]["attempt"]["value"]
-            assert (first_child / "assets/merge-ready").read_text() == ("1\n" if scenario == "conflict" else "0\n")
+            if rounds:
+                first_child = beta_session / "children" / rounds[0]["worker"]["attempt"]["value"]
+                assert (first_child / "assets/merge-ready").read_text() == ("1\n" if scenario == "conflict" else "0\n")
             all_traffic = []
             for actor in ["alpha", "beta"]:
                 session, values = events(actor)
@@ -205,8 +258,11 @@ def main():
                         assert value["assignment"]["members"] == [member["id"] for member in ticket["request"]["members"]]
             maximum = max(len(json.dumps(value["reply"]).encode()) for value in all_traffic)
             assert maximum < 4096
+            resolvers = [value for value in all_traffic if value["request"].get("Start", {}).get("request", {}).get("work") == {"Worker": {"mode": "ResolveConflict"}}]
+            assert len(resolvers) == len(rounds) == (0 if scenario == "clean" else 1), resolvers
+            assert len(list((beta_session / "children").iterdir())) == 2 + 2 * len(rounds)
             summaries.append({"scenario": scenario, "alphaSession": str(alpha_session), "betaSession": str(beta_session),
-                "combinationRounds": len(rounds), "finalIntegration": recorded, "maxParentReplyBytes": maximum,
+                "combinationRounds": len(rounds), "hostRebases": len(rebases), "finalIntegration": recorded, "maxParentReplyBytes": maximum,
                 "crashRecovered": scenario == "conflict", "additionalGitJobsOrRefUpdatesDuringRecovery": 0})
         finally:
             for process in processes.values():
@@ -218,7 +274,7 @@ def main():
                 stream.close()
     (root / "results.json").write_text(json.dumps(summaries, indent=2) + "\n")
     print(json.dumps(summaries))
-    print("Two governors: stale target rejection, clean/conflicting combination, fresh validation/review, further advancement, SIGKILL reconciliation, audit attribution and checkout/index isolation passed")
+    print("Two governors: stale target rejection, host rebase without a worker, conflicting and check-failing combination, fresh validation/review, rebase onto a further advancement, SIGKILL reconciliation, audit attribution and checkout/index isolation passed")
 
 
 if __name__ == "__main__":

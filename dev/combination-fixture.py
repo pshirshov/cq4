@@ -77,6 +77,8 @@ def main():
                 assert Path("alpha.txt").read_text() == "alpha\n" and Path("beta.txt").read_text() == "beta\n"
                 if scenario == "conflict":
                     Path("shared.txt").write_text("alpha\nbeta\n")
+                if scenario == "check":
+                    Path("resolved.txt").write_text("alpha and beta reconciled\n")
             else:
                 tool("cq_host", "workspace", {"MergeReport": {"offset": 0, "limit": 64}}, denied=True)
                 Path(actor + ".txt").write_text(actor + "\n")
@@ -157,9 +159,18 @@ def main():
     if actor == "alpha":
         assert result["phase"] == "Recorded", result
     else:
-        rounds = 2 if scenario == "conflict" else 1
-        for index in range(rounds):
-            assert result["phase"] == "NotApplied", result
+        def rebase(index):
+            # The target advanced past the prepared intent: a new identity lets the host rebase the reviewed candidate.
+            assert result["phase"] == "NotApplied" and "Applied" not in result["preview"]["rebase"], result
+            ready = prepare(review)
+            emit({"type": "fixture.rebased", "round": index, "integration": ready})
+            wait("beta-rebased-" + str(index))
+            return ready, integrate(ready)
+
+        prepared, result = rebase(0)
+        if scenario != "clean":
+            # A conflict or a failing check leaves the reviewed candidate frozen; its NotApplied integration is the combination source.
+            assert prepared["blocker"] and result["phase"] == "NotApplied", result
             ticket = {"id": identity(), "source": result["id"], "fence": claim["fence"]}
             dispatch({"Combine": ticket})
             ready = poll("CombinationStatus", "id", ticket["id"], "Combination", ["Preparing"])
@@ -171,9 +182,12 @@ def main():
             worker = child_result({"Worker": {"mode": "ResolveConflict"}}, preview["worker"], [preview["plan"]])
             review = child_result({"Reviewer": {"mode": "Candidate"}}, worker["result"], [])
             prepared = prepare(review)
-            emit({"type": "fixture.combined_ready", "round": index, "plan": preview, "worker": worker, "review": review, "integration": prepared})
-            wait("beta-combined-" + str(index))
+            emit({"type": "fixture.combined_ready", "round": 0, "plan": preview, "worker": worker, "review": review, "integration": prepared})
+            wait("beta-combined-0")
             result = integrate(prepared)
+            if scenario == "conflict":
+                # The target advanced again while the combined candidate was prepared; the host rebases it without another worker.
+                prepared, result = rebase(1)
         assert result["phase"] == "Recorded", result
     emit({"type": "fixture.recorded", "actor": actor, "integration": result})
     finish({"summary": "Independent changes integrated and task completion recorded"})
