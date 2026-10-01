@@ -58,7 +58,7 @@ sys() { local label=$1; shift
   out=$(bwrap --dev-bind / / --tmpfs /etc --ro-bind "$W/system-attributes" /etc/gitattributes "${base_env[@]}" "$@" "$GIT" -C "$R" --no-replace-objects --no-pager \
      --attr-source="$H" ${EXTRA:-} -c merge.directoryRenames=conflict -c merge.renormalize=false merge-tree --write-tree --no-messages "$H" "$C" 2>&1); code=$?
   verdict "$label" "$code" "$out"; }
-sys "3- control: bwrap with the file present and readable: $(bwrap --dev-bind / / --tmpfs /etc --ro-bind "$W/system-attributes" /etc/gitattributes cat /etc/gitattributes)" GIT_ATTR_NOSYSTEM=1
+sys "3- control with GIT_ATTR_NOSYSTEM=1; the file is present and readable: $(bwrap --dev-bind / / --tmpfs /etc --ro-bind "$W/system-attributes" /etc/gitattributes cat /etc/gitattributes)" GIT_ATTR_NOSYSTEM=1
 sys "3 /etc/gitattributes merge=union (bind-mounted; GIT_CONFIG_NOSYSTEM=1)"
 sys "3b   + GIT_ATTR_NOSYSTEM=1" GIT_ATTR_NOSYSTEM=1
 EXTRA="-c core.attributesFile=/dev/null" sys "3c   + -c core.attributesFile=/dev/null"

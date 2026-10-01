@@ -284,6 +284,7 @@ object SupervisorPlugin extends PluginDef {
     make[CombinationController].fromResource[CombinationController.Resource]
     make[RevalidationController].fromResource[RevalidationController.Resource]
     make[LocalControl]
+    make[WorkspaceCleanup.Bounds].fromValue(WorkspaceCleanup.Default)
     make[WorkspaceCleanup]
     make[LocalControlServer].fromResource[LocalControlServer.Resource]
     make[SupervisorProgram]
