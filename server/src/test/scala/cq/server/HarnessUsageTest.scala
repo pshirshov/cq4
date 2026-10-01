@@ -6,6 +6,7 @@ import cq.host.*
 import io.circe.Json
 import java.io.ByteArrayInputStream
 import java.nio.charset.StandardCharsets.UTF_8
+import java.nio.file.{Files, Path}
 import java.util.UUID
 import org.scalatest.wordspec.AnyWordSpec
 import scala.util.Using
@@ -15,8 +16,10 @@ final class HarnessUsageLocal extends AnyWordSpec {
     HarnessUsage.version(harness), UsageOrigin.Fresh, 2000, ArtifactId(UUID.randomUUID()))
   private def collect(text: String, request: UsageCollectionRequest): CollectedUsage =
     new HarnessUsage().collect(new ByteArrayInputStream(text.getBytes(UTF_8)), request)
-  private def fixture(harness: Harness): String = Using.resource(getClass.getResourceAsStream(s"/harness-usage/${harness.toString.toLowerCase}.jsonl")) { stream =>
-    require(stream != null)
+  private def fixture(harness: Harness): String = resource(harness.toString.toLowerCase)
+  private def fixture(harness: Harness, version: String): String = resource(harness.toString.toLowerCase + "-" + version)
+  private def resource(name: String): String = Using.resource(getClass.getResourceAsStream(s"/harness-usage/$name.jsonl")) { stream =>
+    require(stream != null, s"Missing fixture $name")
     new String(stream.readAllBytes(), UTF_8)
   }
   private def events(text: String): List[Json] = text.split("\n").toList.filter(_.nonEmpty).map(io.circe.parser.parse(_).toOption.get)
@@ -32,6 +35,31 @@ final class HarnessUsageLocal extends AnyWordSpec {
   }.sum
 
   "Harness usage collectors (Behavioral Active Blackbox Group)" should {
+    "accept the installed harness versions and collect their retained observations and final results" in {
+      val installed = List(
+        (Harness.Claude, "2.1.285", 1102L, Some("0.010548"), "Claude/2.1.285/model=claude-opus-5-5"),
+        (Harness.Codex, "0.159.2", 13126L, None, "Codex/0.159.2"),
+        (Harness.Pi, "0.99.1", 78L, Some("0.000615"), "Pi/0.99.1/openai-codex/gpt-5.5"))
+      val assets = Files.createTempDirectory("cq-harness-result-").toAbsolutePath
+      try {
+        Files.writeString(assets.resolve("last-message.json"), "{\"reply\":\"OK\"}")
+        installed.foreach { case (harness, version, tokens, amount, source) =>
+          val profile = HarnessProfile(harness, Path.of("/test/harness"), "selected-model",
+            if (harness == Harness.Claude) "anthropic" else "selected-provider", version, Nil, Set.empty)
+          assert(profile.version == version)
+          val input = request(harness).copy(version = version)
+          val native = fixture(harness, version)
+          val report = collect(native, input)
+          assert(report.terminalSeen && !report.nativeFailure, s"$harness $version: ${report.gaps}")
+          assert(report.meters.size == 1 && report.meters.head.observations.size == 1, s"$harness $version: ${report.gaps}")
+          assert(total(report) == tokens)
+          val observation = report.meters.head.observations.head.observation
+          assert(observation.source == source && observation.cost.amount.map(_.value) == amount)
+          assert(new HarnessOutput().result(harness, native.getBytes(UTF_8), assets) == Json.obj("reply" -> Json.fromString("OK")))
+        }
+      } finally { Files.deleteIfExists(assets.resolve("last-message.json")); Files.deleteIfExists(assets) }
+    }
+
     "collect retained installed-harness observations with their native counter scopes and cost provenance" in {
       val expected = List((Harness.Claude, 424L, Some("0.00176")), (Harness.Codex, 18237L, None), (Harness.Pi, 68L, Some("0.00084")))
       expected.foreach { case (harness, tokens, amount) =>
@@ -180,6 +208,19 @@ final class HarnessUsageLocal extends AnyWordSpec {
       }
       val boundary = collect(fixture(Harness.Claude).replace("\"costUSD\":0.00176", "\"costUSD\":1e63"), request(Harness.Claude))
       assert(boundary.meters.head.observations.head.observation.cost.amount.get.value.length == 64)
+    }
+
+    "round binary noise beyond the audit scale and reject deeper scales" in {
+      def claudeCost(amount: String): Option[String] = {
+        val report = collect(fixture(Harness.Claude).replace("\"costUSD\":0.00176", s"\"costUSD\":$amount"), request(Harness.Claude))
+        report.meters.headOption.flatMap(_.observations.head.observation.cost.amount.map(_.value))
+      }
+      assert(claudeCost("0.0006150000000000001") == Some("0.000615"))
+      assert(claudeCost("0." + "0" * 34 + "5") == Some("0"))
+      assert(claudeCost("0." + "0" * 35 + "5") == None)
+      val pi = fixture(Harness.Pi, "0.99.1")
+      val tiny = collect(pi.replace("\"total\":0.0006150000000000001", "\"total\":1e-30"), request(Harness.Pi).copy(version = "0.99.1"))
+      assert(tiny.meters.head.observations.head.observation.cost == UsageMath.unknownMoney)
     }
   }
 }

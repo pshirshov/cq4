@@ -4,9 +4,11 @@
 
 | Source | Counted records | Accounting scope |
 | --- | --- | --- |
-| Claude Code 2.1.280 | Final `result.modelUsage`, separately per model | Session cumulative; main-loop `usage` and overall cost are not added again |
-| Codex 0.156.1 | `turn.completed.usage` | Thread cumulative, including cached input and reasoning output |
-| Pi 0.87.1 | Final assistant `message_end.message.usage` | Per-response increments; partial updates, turn/run aggregates are excluded |
+| Claude Code 2.1.280, 2.1.285 | Final `result.modelUsage`, separately per model | Session cumulative; main-loop `usage` and overall cost are not added again |
+| Codex 0.156.1, 0.159.2 | `turn.completed.usage` | Thread cumulative, including cached input and reasoning output |
+| Pi 0.87.1, 0.99.1 | Final assistant `message_end.message.usage` | Per-response increments; partial updates, turn/run aggregates are excluded |
+
+The attached Codex rollout reader additionally accepts the `0.157.1` and `0.159.2` native headers; the 0.159.2 `token_usage_record` carries the same `usage` fields plus ignored `session_id`/`root_turn_id`.
 
 Pi response IDs deduplicate repeated responses even across repeated turn wrappers. Where a provider omits response IDs, the collector reports that its fallback identity is limited to native turn/model/timestamp. A contradictory repetition retains the first observation and adds a coverage gap. Pi's default-zero `totalTokens` does not invalidate separately reported positive counts; a contradictory positive total is rejected.
 
@@ -18,7 +20,7 @@ Claude's per-model input excludes cache; the audit normalizer adds both cache ca
 
 Codex and Pi use zero defaults in their adapters. Zero token fields are therefore unknown unless the collector has evidence of a measured value; positive inclusive totals remain available. Pi's inclusive input can be known while its zero cache subdivisions remain unknown. Claude's final per-model counters retain explicitly reported zeroes. Missing fields never become measured zeroes. Malformed, negative, overflowing or inconsistent counts produce an explicit gap.
 
-Claude and Pi USD values are **client estimates**, never actual billing. The pricing revision is unavailable and recorded as a gap. Codex exposes no native monetary cost. Pi's zero cost is ambiguous and remains unknown. Estimated amounts use the audit's decimal arithmetic. Decimal scale and expanded length are bounded before formatting, preventing a short exponential number from allocating an arbitrarily large string.
+Claude and Pi USD values are **client estimates**, never actual billing. The pricing revision is unavailable and recorded as a gap. Codex exposes no native monetary cost. Pi's zero cost is ambiguous and remains unknown. Estimated amounts use the audit's decimal arithmetic. Native amounts are IEEE doubles: Pi 0.99.1 reported a response total of `0.0006150000000000001`, 19 decimal places of binary noise that previously discarded the whole sample as out of bounds. Up to 17 decimal places beyond the 18-place audit scale are rounded half-even to that scale; a larger scale or expanded length is still rejected before formatting, preventing a short exponential number from allocating an arbitrarily large string.
 
 Fresh cumulative meters have zero token baselines. Claude's fresh USD estimate baseline is zero even when an early observation lacks a cost. Resumed cumulative meters require captured inclusive token and cost baselines; missing baselines leave deltas unknown. Decreasing totals or values below a captured baseline stop collection for that meter and require explicit correction or a new meter. The validation retains prior known values across missing samples, without replacing missing observations with those older values. Collection does not invent a reset.
 

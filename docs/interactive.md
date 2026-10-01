@@ -115,7 +115,7 @@ CQ_TOKEN_FILE=/srv/nvme/tmp/cq4-playground/token \
 Recovery never launches/adopts a process. Repeated completed recovery acknowledges zero batches. An incomplete retained record is reported explicitly after valid records are replayed; it is not silently discarded.
 
 Managed children retain their task/cohort token and cost accounting. With the
-updated package, observed Codex 0.156.1/0.157.1 native response records contribute
+updated package, observed Codex 0.156.1/0.157.1/0.159.2 native response records contribute
 to the outer session's unattributed usage, deduplicated across host restarts.
 Outer task/model grouping and cost remain unknown. Claude outer usage remains
 unavailable; Pi observes finalized assistant usage. Auxiliary, compaction,
