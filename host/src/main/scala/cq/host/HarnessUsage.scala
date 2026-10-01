@@ -132,7 +132,8 @@ object HarnessUsage {
       // Native amounts are IEEE doubles; decimal places beyond the audit scale are binary noise, not price precision.
       val decimal = if (reported.scale() > UsageMath.MaxAmountScale)
         reported.setScale(UsageMath.MaxAmountScale, RoundingMode.HALF_EVEN).stripTrailingZeros() else reported
-      if (decimal.signum() == 0 && zeroIsUnknown) UsageMath.unknownMoney
+      // A positive amount that rounds to zero is below the audit scale, not a known zero.
+      if (decimal.signum() == 0 && (zeroIsUnknown || reported.signum() != 0)) UsageMath.unknownMoney
       else {
         val scale = decimal.scale().toLong
         val precision = decimal.precision().toLong
