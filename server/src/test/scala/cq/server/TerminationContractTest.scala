@@ -63,19 +63,19 @@ abstract class TerminationContractTest extends SpecZIO with AssertZIO {
         Content.Upstream(UpstreamStatus.Reported, "Library", "1", "Reproduction", Some(Citation.Url("https://example.org/issue")), None),
       )
       val expected = List("Cancelled", "Withdrawn", "Withdrawn", "Abandoned", "Cancelled", "Cancelled", "Withdrawn", "Withdrawn",
-        "Withdrawn", "Cancelled", "Cancelled", "Cancelled", "Retracted", "Withdrawn")
+        "Withdrawn", "Cancelled", "Cancelled", "Cancelled", "Current", "Withdrawn")
       for {
         _ <- service.initialize(owner, "typed outcomes")
         ids <- ZIO.foreach(contents)(content => create(service, human, task(LedgerPolicy.ledger(content).toString).copy(content = content, archived = LedgerPolicy.outcome(content).terminal)))
         originals <- ZIO.foreach(ids)(service.get(owner, _))
         completion <- service.termination(owner, ids.toSet, TerminationIntent.Complete)
-        _ <- assertIO(!completion.plan.canApply && changed(completion).size == 3 && completion.plan.entries.count(_.effect.isInstanceOf[TerminationEffect.Unsupported]) == 11)
+        _ <- assertIO(!completion.plan.canApply && changed(completion).size == 3 && completion.plan.entries.count(_.effect.isInstanceOf[TerminationEffect.Unsupported]) == 10)
         _ <- reject(service.change(owner, request(completion)), _.isInstanceOf[Fault.Conflict])
         cancelled <- service.termination(owner, ids.toSet, TerminationIntent.Cancel)
-        _ <- assertIO(cancelled.plan.canApply && changed(cancelled).size == 14)
+        _ <- assertIO(cancelled.plan.canApply && changed(cancelled).size == 13 && effect(cancelled, ids(12)) == TerminationEffect.Preserve())
         ack <- service.change(owner, request(cancelled))
         after <- ZIO.foreach(ids)(service.get(owner, _))
-        _ <- assertIO(after.map(v => LedgerPolicy.status(v.item.draft.content)) == expected && ack.items.size == 14)
+        _ <- assertIO(after.map(v => LedgerPolicy.status(v.item.draft.content)) == expected && ack.items.size == 13)
         _ <- ZIO.foreachDiscard(originals.zip(after)) { case (before, current) =>
           val oldContent = Wire.encode(Content_JsonCodec, before.item.draft.content)
           val newContent = Wire.encode(Content_JsonCodec, current.item.draft.content)
@@ -86,6 +86,29 @@ abstract class TerminationContractTest extends SpecZIO with AssertZIO {
         _ <- assertIO(factual.plan.entries.forall(_.effect == TerminationEffect.Preserve()) && factual.plan.canApply)
         noop <- service.change(owner, request(factual))
         _ <- assertIO(noop.items.isEmpty && noop.cursor == ack.cursor)
+      } yield ()
+    }
+
+    "preserve settled decisions and memories under every intent while completing the goal that produced them" in { (service: LedgerService[IO]) =>
+      val owner = scope()
+      for {
+        _ <- service.initialize(owner, "settled records")
+        goal <- create(service, owner, task("Goal").copy(content = Content.Goal(GoalStatus.Open, "Outcome", List("Acceptance"), "Scope")))
+        decision <- create(service, owner, task("Adopted").copy(content = Content.Decision(DecisionStatus.Adopted, "Choice", "Rationale", Nil)))
+        memory <- create(service, owner, task("Current").copy(content = Content.Memory(MemoryStatus.Current, "Knowledge", "Applicability", Nil)))
+        proposed <- create(service, owner, task("Proposed").copy(content = Content.Decision(DecisionStatus.Proposed, "Choice", "Rationale", Nil)))
+        _ <- ZIO.foreachDiscard(List(decision, memory, proposed))(link(service, owner, goal, Relation.Produces, _))
+        completion <- service.termination(owner, Set(goal), TerminationIntent.Complete)
+        _ <- assertIO(effect(completion, decision) == TerminationEffect.Preserve() && effect(completion, memory) == TerminationEffect.Preserve())
+        _ <- assertIO(!completion.plan.canApply && effect(completion, proposed).isInstanceOf[TerminationEffect.Unsupported])
+        cancellation <- service.termination(owner, Set(goal), TerminationIntent.Cancel)
+        _ <- assertIO(cancellation.plan.canApply && changed(cancellation) == Set(goal, proposed))
+        _ <- assertIO(effect(cancellation, decision) == TerminationEffect.Preserve() && effect(cancellation, memory) == TerminationEffect.Preserve())
+        ack <- service.change(owner, request(cancellation))
+        kept <- ZIO.foreach(List(decision, memory, proposed))(service.get(owner, _))
+        _ <- assertIO(ack.items.map(_.id).toSet == Set(goal, proposed) && kept.map(v => LedgerPolicy.status(v.item.draft.content)) == List("Adopted", "Current", "Withdrawn"))
+        completed <- service.termination(owner, Set(goal), TerminationIntent.Complete)
+        _ <- assertIO(completed.plan.canApply && completed.plan.entries.forall(_.effect == TerminationEffect.Preserve()))
       } yield ()
     }
 

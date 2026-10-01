@@ -106,6 +106,7 @@ final class CliOutput(output: PrintStream, format: CliFormat, invocation: List[S
   private def reason(value: WorksetReason): String = value match {
     case WorksetReason.Archived() => "Archived"
     case WorksetReason.Terminal() => "Terminal"
+    case WorksetReason.Settled() => "Settled"
     case WorksetReason.Blocked(prerequisite) => s"Blocked by ${id(prerequisite)}"
     case WorksetReason.Shared(producer) => s"Shared by ${id(producer)}"
     case WorksetReason.Context(source, relation) => s"Context: ${id(source)} $relation"

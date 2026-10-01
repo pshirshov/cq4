@@ -66,7 +66,8 @@ final class WorksetTraversal {
       if (!selected.contains(id)) WorksetEntry(item, WorksetRole.Context, false, false, context(id))
       else {
         val state = (if (item.archived) List(WorksetReason.Archived()) else Nil) ++
-          (if (item.outcome.terminal) List(WorksetReason.Terminal()) else Nil)
+          (if (item.outcome.terminal) List(WorksetReason.Terminal()) else Nil) ++
+          (if (LedgerPolicy.settled(item)) List(WorksetReason.Settled()) else Nil)
         val blocked = references(id).collect {
           case ItemRef(Relation.BlockedBy, prerequisite) if !summaries(prerequisite).outcome.satisfiesDependency => WorksetReason.Blocked(prerequisite)
         }

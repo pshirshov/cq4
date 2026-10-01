@@ -16,7 +16,7 @@ Start from the bounded workset closure, following only produced work and selecte
 
 Remove these protected nodes, recompute reachability from roots, and repeat outside-producer exclusion until stable. This prevents an excluded shared branch from pulling in its own descendants; cycles settle by visited sets and a monotonically shrinking selection. Explicit roots override these exclusions. Contextual milestones do not include siblings. Every visited excluded item remains in the preview with a context, shared-producer, prerequisite or excluded-branch reason.
 
-Archived nodes are traversed and keep their archive attribute. Existing terminal records are preserved regardless of intent; cancellation never rewrites a factual result into a different conclusion. The preview can therefore preserve a terminal ancestor while changing active descendants.
+Archived nodes are traversed and keep their archive attribute. Existing terminal records and settled records (adopted decisions, current memories; see [ledgers](ledgers.md)) are preserved regardless of intent; cancellation never rewrites a factual result into a different conclusion, and termination never withdraws, retracts or completes a reference record in its live state. The preview can therefore preserve a terminal ancestor or a produced decision while changing active descendants.
 
 ## Terminal mappings
 
@@ -32,11 +32,11 @@ Only status fields change. Narratives, citations, findings, confirmation and rec
 | Researches | Cancelled | Conflict: conclusion needs an explicit assessment |
 | Hypothesis | Withdrawn | Conflict: adjudication needs an explicit assessment |
 | Questions | Withdrawn | Conflict: answering needs an explicit answer |
-| Decisions | Withdrawn | Conflict: adoption needs an explicit decision |
+| Decisions | Withdrawn (a proposed decision; an adopted one is settled and preserved) | Conflict: adoption needs an explicit decision |
 | Reviews | Cancelled | Conflict: approval needs an applicable independent review |
 | Handoffs | Cancelled | Conflict: acceptance needs an explicit decision |
 | OperatorActions | Cancelled | Conflict: observed success needs explicit evidence |
-| Memories | Retracted | Conflict: a current memory has no completion; supersede or retract it explicitly |
+| Memories | Preserve (a current memory is settled; superseded and retracted ones are terminal) | Preserve; supersede or retract a memory explicitly |
 | Upstream | Withdrawn | Conflict: resolution needs an explicit outcome |
 
 `DefectStatus.Withdrawn` expresses abandoned investigation without asserting rejection or non-reproducibility. Generic completion is an authorized declared management outcome for milestone/goal/task records; it does not fabricate validation, approval or host observations. Unsupported effects block the entire apply; callers can record the explicit typed factual result through an ordinary revision-checked edit and preview again. These bulk-operation rules do not restrict schema-valid corrections or reopening.

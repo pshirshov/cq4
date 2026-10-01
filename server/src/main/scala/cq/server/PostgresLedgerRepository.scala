@@ -54,6 +54,18 @@ private[server] object Wire {
     parse(value).flatMap(codec.decode(BaboonCodecContext.Default, _)).fold(throw _, identity)
 }
 
+// The persisted summary records the classification current when the row was written; the ledger and status columns are the authority.
+private object PersistedItems {
+  def summary(json: String): ItemSummary = {
+    val stored = Wire.decode(ItemSummary_JsonCodec, json)
+    stored.copy(outcome = LedgerPolicy.outcome(stored.id.ledger, stored.status))
+  }
+  private val openStatuses = Ledger.all.flatMap(ledger => LedgerPolicy.statuses(ledger).filter(LedgerPolicy.open(ledger, _))
+    .map(status => s"('$ledger', '${status.toLowerCase(java.util.Locale.ROOT)}')")).mkString(", ")
+  /** SQL predicate for an open row of the aliased `cq_items` table (`%1$s` is the alias). */
+  val open: String = s"NOT %1$$s.archived AND (%1$$s.ledger, %1$$s.status) IN ($openStatuses)"
+}
+
 private final class PostgresLedgerTransaction(connection: Connection, override val project: Project) extends LedgerTransaction {
   private val sql = new Jdbc(connection)
   private def projectKey(s: PreparedStatement): Unit = s.setObject(1, project.id.value)
@@ -85,9 +97,9 @@ private final class PostgresLedgerTransaction(connection: Connection, override v
 
   override def get(id: ItemId): Option[Item] = sql.query("SELECT body::text FROM cq_items WHERE project_id = ? AND ledger = ? AND number = ?")(itemKey(_, id))(r => Wire.decode(Item_JsonCodec, r.getString(1))).headOption
 
-  override def summary(id: ItemId): Option[ItemSummary] = sql.query("SELECT summary::text FROM cq_items WHERE project_id = ? AND ledger = ? AND number = ?")(itemKey(_, id))(r => Wire.decode(ItemSummary_JsonCodec, r.getString(1))).headOption
+  override def summary(id: ItemId): Option[ItemSummary] = sql.query("SELECT summary::text FROM cq_items WHERE project_id = ? AND ledger = ? AND number = ?")(itemKey(_, id))(r => PersistedItems.summary(r.getString(1))).headOption
 
-  private def readBrowseItem(row: ResultSet): BrowseItem = BrowseItem(Wire.decode(ItemSummary_JsonCodec, row.getString(1)), Option(row.getString(2)).map(value =>
+  private def readBrowseItem(row: ResultSet): BrowseItem = BrowseItem(PersistedItems.summary(row.getString(1)), Option(row.getString(2)).map(value =>
     Severity.parse(value).getOrElse(throw new IllegalStateException(s"Invalid persisted severity $value"))))
 
   override def browseItem(id: ItemId): Option[BrowseItem] =
@@ -184,12 +196,12 @@ private final class PostgresLedgerTransaction(connection: Connection, override v
   override def scan(query: QueryExpression, after: Option[ItemId], limit: Int): ReadPage[ItemSummary] = {
     val compiled = QuerySql.compile(query, project.id)
     val pagination = after.fold("")(_ => " AND (i.ledger, i.number) > (?, ?)")
-    sql.page(s"SELECT i.summary::text FROM cq_items i WHERE i.project_id = ? AND (${compiled.predicate})$pagination ORDER BY i.ledger, i.number LIMIT ?", limit, ItemSummary_JsonCodec) { s =>
+    sql.pageBy(s"SELECT i.summary::text FROM cq_items i WHERE i.project_id = ? AND (${compiled.predicate})$pagination ORDER BY i.ledger, i.number LIMIT ?", limit, ItemSummary_JsonCodec) { s =>
       projectKey(s)
       var index = compiled.bind(s, 2)
       after.foreach { id => s.setString(index, id.ledger.toString); s.setLong(index + 1, id.number); index += 2 }
       s.setInt(index, limit + 1)
-    }
+    }(rows => PersistedItems.summary(rows.getString(1)))
   }
 
   override def browse(query: QueryExpression, order: ItemOrder, after: Option[BrowseItem], limit: Int): ReadPage[BrowseItem] = {
@@ -253,7 +265,7 @@ private final class PostgresLedgerTransaction(connection: Connection, override v
       case ArchiveFilter.All => "TRUE"
     }
     sql.query(s"SELECT summary::text FROM cq_items WHERE project_id = ? AND $scope AND ${prefixWhere("display_id", prefix)} ORDER BY display_id LIMIT ?")
-      (bindPrefix(prefix, limit))(r => Wire.decode(ItemSummary_JsonCodec, r.getString(1)))
+      (bindPrefix(prefix, limit))(r => PersistedItems.summary(r.getString(1)))
   }
   override def completeLabels(prefix: SearchPrefix, limit: Int): List[String] =
     sql.query(s"SELECT label FROM cq_labels WHERE project_id = ? AND ${prefixWhere("label", prefix)} ORDER BY label LIMIT ?")
@@ -321,9 +333,9 @@ private final class PostgresLedgerTransaction(connection: Connection, override v
   }
 
   override def candidateRoots(after: Option[ItemId], limit: Int): ReadPage[ItemSummary] = {
-    val open = "NOT %1$s.archived AND NOT (%1$s.summary->'outcome'->>'terminal')::boolean"
+    val open = PersistedItems.open
     val pagination = after.fold("")(_ => " AND (i.ledger, i.number) > (?, ?)")
-    sql.page(s"SELECT i.summary::text FROM cq_items i WHERE i.project_id = ? AND ${open.format("i")}$pagination AND NOT EXISTS (" +
+    sql.pageBy(s"SELECT i.summary::text FROM cq_items i WHERE i.project_id = ? AND ${open.format("i")}$pagination AND NOT EXISTS (" +
       "SELECT 1 FROM cq_edges e JOIN cq_items p ON p.project_id = e.project_id AND p.ledger = e.target_ledger AND p.number = e.target_number " +
       s"WHERE e.project_id = i.project_id AND e.source_ledger = i.ledger AND e.source_number = i.number AND e.relation IN ('DerivedFrom', 'PartOf') AND ${open.format("p")}) " +
       "ORDER BY i.ledger, i.number LIMIT ?", limit, ItemSummary_JsonCodec) { s =>
@@ -331,7 +343,7 @@ private final class PostgresLedgerTransaction(connection: Connection, override v
       var index = 2
       after.foreach { id => s.setString(index, id.ledger.toString); s.setLong(index + 1, id.number); index += 2 }
       s.setInt(index, limit + 1)
-    }
+    }(rows => PersistedItems.summary(rows.getString(1)))
   }
 
   override def nextFence(): Long = sql.query("UPDATE cq_projects SET fence_counter = fence_counter + 1 WHERE project_id = ? RETURNING fence_counter")(projectKey)(_.getLong(1)).head

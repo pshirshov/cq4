@@ -38,7 +38,7 @@ final class TerminationPlanner(worksets: WorksetTraversal) {
     val entries = graph.entries.map { entry =>
       val id = entry.item.id
       val effect = if (selected.contains(id)) {
-        if (entry.item.outcome.terminal) TerminationEffect.Preserve()
+        if (entry.item.outcome.terminal || LedgerPolicy.settled(entry.item)) TerminationEffect.Preserve()
         else target(id.ledger, intent)
       } else {
         val reasons = if (entry.role == WorksetRole.Context) entry.reasons.collect {
@@ -90,7 +90,7 @@ final class TerminationPlanner(worksets: WorksetTraversal) {
         case Ledger.Reviews => change(TerminalStatus.Review(ReviewStatus.Cancelled))
         case Ledger.Handoffs => change(TerminalStatus.Handoff(HandoffStatus.Cancelled))
         case Ledger.OperatorActions => change(TerminalStatus.OperatorAction(OperatorActionStatus.Cancelled))
-        case Ledger.Memories => change(TerminalStatus.Memory(MemoryStatus.Retracted))
+        case Ledger.Memories => throw new IllegalStateException("A memory is settled or terminal and is preserved")
         case Ledger.Upstream => change(TerminalStatus.Upstream(UpstreamStatus.Withdrawn))
       }
     }

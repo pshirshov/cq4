@@ -111,6 +111,30 @@ abstract class WorksetContractTest extends SpecZIO with AssertZIO {
       } yield ()
     }
 
+    "keep settled decisions and memories out of readiness and candidate roots while a proposed decision stays ready" in { (service: LedgerService[IO]) =>
+      val owner = scope()
+      def decision(status: DecisionStatus): ItemDraft = task(s"Decision $status").copy(content = Content.Decision(status, "Choice", "Rationale", Nil))
+      for {
+        _ <- service.initialize(owner, "settled readiness")
+        goal <- create(service, owner, task("Goal").copy(content = Content.Goal(GoalStatus.Open, "Outcome", List("Acceptance"), "Scope")))
+        adopted <- create(service, owner, decision(DecisionStatus.Adopted))
+        proposed <- create(service, owner, decision(DecisionStatus.Proposed))
+        memory <- create(service, owner, task("Memory").copy(content = Content.Memory(MemoryStatus.Current, "Knowledge", "Applies here", Nil)))
+        lone <- create(service, owner, decision(DecisionStatus.Adopted))
+        open <- create(service, owner, decision(DecisionStatus.Proposed))
+        _ <- ZIO.foreachDiscard(List(adopted, proposed, memory))(link(service, owner, goal, Relation.Produces, _))
+        page <- graph(service, owner, Set(goal))
+        _ <- assertIO(selected(page) == Set(goal, adopted, proposed, memory) && page.readyCount == 2)
+        _ <- assertIO(!entry(page, adopted).ready && entry(page, adopted).reasons == List(WorksetReason.Settled()))
+        _ <- assertIO(!entry(page, memory).ready && entry(page, memory).reasons == List(WorksetReason.Settled()))
+        _ <- assertIO(entry(page, proposed).ready && entry(page, proposed).reasons.isEmpty)
+        subgraphs <- service.subgraphs(owner, None, None, 32)
+        _ <- assertIO(subgraphs.entries.map(_.root.id).toSet == Set(goal, open))
+        _ <- assertIO(subgraphs.entries.find(_.root.id == goal).get.extent ==
+          SubgraphExtent.Measured(3, 1, 0, List(LedgerCount(Ledger.Decisions, 2), LedgerCount(Ledger.Memories, 1))))
+      } yield ()
+    }
+
     "bind stable pages to roots and revisions, reject scope violations and return an empty selection for empty roots" in { (service: LedgerService[IO]) =>
       val owner = scope()
       val other = scope()

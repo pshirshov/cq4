@@ -188,10 +188,9 @@ private final class DummyLedgerTransaction(initial: DummyLedgerState) extends Le
     state = state.copy(worksets = state.worksets.updated(value.id, value))
   }
   override def candidateRoots(after: Option[ItemId], limit: Int): ReadPage[ItemSummary] = {
-    def open(item: ItemSummary): Boolean = !item.archived && !item.outcome.terminal
     val candidates = state.items.valuesIterator.map(LedgerPolicy.summary).filter { item =>
-      open(item) && after.forall(id => Ordering[(String, Long)].gt(LedgerPolicy.key(item.id), LedgerPolicy.key(id))) &&
-        !refs(item.id).exists(ref => Set[Relation](Relation.DerivedFrom, Relation.PartOf).contains(ref.relation) && summary(ref.target).exists(open))
+      LedgerPolicy.open(item) && after.forall(id => Ordering[(String, Long)].gt(LedgerPolicy.key(item.id), LedgerPolicy.key(id))) &&
+        !refs(item.id).exists(ref => Set[Relation](Relation.DerivedFrom, Relation.PartOf).contains(ref.relation) && summary(ref.target).exists(LedgerPolicy.open))
     }.toList.sortBy(item => LedgerPolicy.key(item.id))
     ReadPage.select(candidates.iterator, limit, ItemSummary_JsonCodec)
   }
