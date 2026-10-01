@@ -48,6 +48,7 @@ def reproduce(checks, command, scenario):
     elapsed = time.monotonic() - started
     assert worker["phase"] == "Cancelled" and worker["process"] == "Settled", worker
     assert worker["result"] is None and worker["usageDelivered"], worker
+    assert worker["workspace"]["admission"] == "Quarantined" and Path(worker["workspace"]["directory"]).is_dir(), worker
     assert elapsed <= 40, elapsed
     emit({"type": "fixture.admission", "status": worker, "release": released, "settlementSeconds": elapsed, "boundSeconds": 40})
     finish({"summary": "Claim loss cancelled the running child within the measured bound"})

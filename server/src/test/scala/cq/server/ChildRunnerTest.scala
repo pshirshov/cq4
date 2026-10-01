@@ -147,6 +147,9 @@ time.sleep(30)
         _ <- f.runner.run(entry).timeoutFail(new IllegalStateException("Worker did not finish"))(zio.Duration.fromSeconds(60))
         status = entry.status
         _ <- ZIO.attempt(assert(status.phase == DispatchPhase.Completed && status.result.nonEmpty, status.toString))
+        record <- local.fixture.service.get(f.owner, entry.ticket.attempt.id)
+        _ <- ZIO.attempt(assert(status.workspace.contains(WorkspaceState(WorkspaceAdmission.Open, Some(record.directory))),
+          s"Status does not report the retained workspace of the completed attempt: $status"))
         stored <- text(artifacts, f.owner, status.result.get)
         result = Wire.decode(ChildResult_JsonCodec, stored)
         retained = result.evidence.files.map(file => file.path -> file).toMap
@@ -173,6 +176,10 @@ time.sleep(30)
           status <- ZIO.succeed(entry.status)
           _ <- ZIO.attempt(assert(status.phase == phase && status.result.isEmpty, status.toString))
           _ <- ZIO.attempt(assert(status.partial.nonEmpty, s"No partial work was attached to the $phase attempt: $status"))
+          record <- local.fixture.service.get(f.owner, entry.ticket.attempt.id)
+          _ <- ZIO.attempt(assert(record.admission == WorkspaceAdmission.Quarantined, record.toString))
+          _ <- ZIO.attempt(assert(status.workspace.contains(WorkspaceState(WorkspaceAdmission.Quarantined, Some(record.directory))),
+            s"Status does not report the quarantined workspace of the $phase attempt: $status"))
           partial <- text(artifacts, f.owner, status.partial.get).map(Wire.decode(PartialWork_JsonCodec, _))
           gitStatus <- text(artifacts, f.owner, partial.status.get)
           diff <- text(artifacts, f.owner, partial.diff.get)

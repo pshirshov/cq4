@@ -269,7 +269,7 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
           (problem.toList ++ observed.toList.flatMap(_.problem).map(DispatchProjection.concise) ++ partialGap.map(DispatchProjection.concise) ++ usage.gaps).take(MaxGaps), None)
         val entries = allArtifacts.map(HostDelivery.Artifact.apply) ++ observations
         val base = entry.status.copy(process = job.map(_.phase), blocker = problem, partial = partial.flatMap(_.toOption).map(_._1),
-          usageDelivered = false, detailsOmitted = true)
+          usageDelivered = false, detailsOmitted = true, workspace = workspace.map(DispatchProjection.workspace))
         val publication = new ChildPublicationDelivery(entry.directory, entry.ticket)
         publication.seal(ChildPublication(project, config.owner.actor, valid, base, outcome), entries)
         val retained = Try(publication.finish(authority.collector)).toOption.map(_.status).getOrElse(base.copy(
@@ -278,7 +278,8 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
         entry.finish(retained)
       }
       _ <- if (entry.status.phase == DispatchPhase.Failed && result.isRight)
-        workspaces.quarantine(config.owner, entry.ticket.attempt.id, "Server result admission rejected; inspect retained evidence").unit
+        workspaces.quarantine(config.owner, entry.ticket.attempt.id, "Server result admission rejected; inspect retained evidence")
+          .map(record => entry.finish(entry.status.copy(workspace = Some(DispatchProjection.workspace(record)))))
       else ZIO.unit
     } yield ()
   }

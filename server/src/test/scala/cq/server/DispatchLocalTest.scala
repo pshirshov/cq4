@@ -73,7 +73,7 @@ final class DispatchLocal extends AnyWordSpec {
       val request = DispatchRequest(RequestId(UUID.randomUUID()), DispatchWork.Worker(WorkerMode.Implement), Harness.Codex,
         members, Nil, Nil, None, Fence(ClaimId(UUID.randomUUID()), 1), HostLimits(3000, 10000, 1000, 300, 2000, 262144))
       val initial = DispatchStatus(request.request, attempt, DispatchPhase.Running, Some(JobPhase.Settled), members.map(_.id),
-        DispatchProjection.EmptyCounts, ChildNext.Wait, None, None, None, false, true)
+        DispatchProjection.EmptyCounts, ChildNext.Wait, None, None, None, false, true, None)
       val handle = ArtifactId(UUID.randomUUID())
       val report = ChildReport.Work(members.map(value => WorkMember(value.id, WorkDisposition.Blocked, "🙂" * 4000, Nil)))
       val result = ChildResult(attempt, request, GitCommit("a" * 40), None, report, Nil, RetainedEvidence(Nil, Nil))
@@ -83,6 +83,14 @@ final class DispatchLocal extends AnyWordSpec {
       assert(HostFiles.encode(DispatchStatus_JsonCodec, projected).getBytes(UTF_8).length < 12 * 1024)
       val checked = DispatchProjection.completed(initial, result.copy(validation = List(ValidationEvidence("test", ValidationState.Failed, handle))), handle)
       assert(checked.counts.validationFailed == 1 && checked.next == ChildNext.Revise && checked.blocker.contains("Host check test: Failed"))
+    }
+    "report a retained workspace with its directory and a removed workspace without one" in {
+      val spec = WorkspaceSpec(ProjectId(UUID.randomUUID()), SessionId(UUID.randomUUID()), AttemptId(UUID.randomUUID()), "/repo", GitCommit("a" * 40))
+      val record = WorkspaceRecord(spec, "/workspaces/" + spec.attempt.value + "/tree", WorkspaceAdmission.Open, None, None)
+      assert(DispatchProjection.workspace(record) == WorkspaceState(WorkspaceAdmission.Open, Some(record.directory)))
+      val quarantined = record.copy(admission = WorkspaceAdmission.Quarantined, quarantineReason = Some("Child result failed"))
+      assert(DispatchProjection.workspace(quarantined) == WorkspaceState(WorkspaceAdmission.Quarantined, Some(record.directory)))
+      assert(DispatchProjection.workspace(record.copy(admission = WorkspaceAdmission.Removed)) == WorkspaceState(WorkspaceAdmission.Removed, None))
     }
   }
 }

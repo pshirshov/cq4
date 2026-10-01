@@ -205,6 +205,7 @@ def main():
             started = tool("cq_host", "dispatch", {"StartChoice": {"choice": choice["id"], "harness": "Codex", "fence": claim["fence"]}})["Status"]["value"]
             settled = poll(started["attempt"])
             assert settled["phase"] == "Completed" and settled["result"] and settled["usageDelivered"], settled
+            assert settled["workspace"]["admission"] == "Open" and Path(settled["workspace"]["directory"]).is_dir(), settled
             result = settled["result"]
             tool("cq", "claim", {"project": project, "action": {"Release": {"fence": claim["fence"]}}})
         if scenario["name"] == "review":
@@ -589,6 +590,7 @@ def main():
     tool("cq_host", "dispatch", {"Cancel": {"attempt": cancelled["attempt"]}})
     stopped = poll(cancelled["attempt"])
     assert stopped["phase"] == "Cancelled" and stopped["result"] is None and stopped["usageDelivered"], stopped
+    assert stopped["workspace"]["admission"] == "Quarantined" and Path(stopped["workspace"]["directory"]).is_dir(), stopped
     finish({"summary": "Worker candidate validated, reviewed by handle, cancellation and permissions verified; integration remains pending"})
 
 
