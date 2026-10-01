@@ -27,8 +27,9 @@ object IntegrationApiCheck {
     val task = ItemDraft("Reviewed task", "Preserved HTTP narrative", Set("consumer"), false,
       Content.Task(TaskStatus.Ready, List("Reviewed behavior"), None, Nil), Nil)
     val created = governor.call(Command.Change(ChangeInput(project,
-      ChangeRequest(RequestId(uuid), List(Mutation.Create(task)), Nil, "HTTP fixture")))).asInstanceOf[Result.Changed].ack
-    val members = created.items
+      ChangeRequest(RequestId(uuid), List(Mutation.Create(task), Mutation.Create(MilestoneFixture.Milestone)), Nil, "HTTP fixture")))).asInstanceOf[Result.Changed].ack
+    val members = governor.call(Command.Change(ChangeInput(project, ChangeRequest(RequestId(uuid), List(Mutation.Reference(created.items.head.id, created.items.head.revision,
+      Relation.PartOf, created.items.last.id, created.items.last.revision, true)), Nil, "HTTP fixture milestone")))).asInstanceOf[Result.Changed].ack.items.filter(_.id == created.items.head.id)
     val item = governor.call(Command.Read(ReadInput(project, ReadSelection.ItemDetail(members.head.id)))).asInstanceOf[Result.Detail].view.item
     val claim = governor.call(Command.ClaimWork(ClaimInput(project, ClaimAction.Acquire(ClaimId(uuid), members.map(_.id).toSet, 300000))))
       .asInstanceOf[Result.Claimed].claim
@@ -79,7 +80,7 @@ object IntegrationApiCheck {
     val acknowledgement = recorded.resolution.asInstanceOf[IntegrationResolution.Recorded].acknowledgement
     require(governor.call(Command.Change(ChangeInput(project, change))) == Result.Changed(acknowledgement))
     val completed = governor.call(Command.Read(ReadInput(project, ReadSelection.ItemDetail(item.id)))).asInstanceOf[Result.Detail].view.item
-    require(completed.revision == Revision(2) && completed.draft.body == task.body && completed.draft.content.asInstanceOf[Content.Task].status == TaskStatus.Done)
+    require(completed.revision == Revision(item.revision.value + 1) && completed.draft.body == task.body && completed.draft.content.asInstanceOf[Content.Task].status == TaskStatus.Done)
     require(governor.call(Command.ClaimWork(ClaimInput(project, ClaimAction.Release(claim.fence)))).isInstanceOf[Result.Claimed])
     println("Integration HTTP: owning host authority, exact reservation replay, pending exclusions, recorded completion and idempotent domain acknowledgement passed; Git execution is not part of this fixture")
   }

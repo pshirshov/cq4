@@ -48,7 +48,7 @@ abstract class TerminationContractTest extends SpecZIO with AssertZIO {
         Content.Task(TaskStatus.Active, List("Acceptance"), Some("Partial result"), evidence),
         Content.Research(ResearchStatus.Active, "Question", evidence, Some("Partial finding"), None),
         Content.Hypothesis(HypothesisStatus.Investigating, "Claim", "Rationale", evidence, None),
-        Content.Question(QuestionStatus.Open, "Prompt", "Context", List("Alternative"), None),
+        Content.Question(QuestionStatus.Open, "Prompt", "Context", List("Alternative"), Some(QuestionRecommendation(0, "The only alternative")), None),
         Content.Decision(DecisionStatus.Proposed, "Choice", "Rationale", Nil),
         Content.Review(ReviewStatus.Active, Nil, Some(Citation.Commit("consumer", "abc123")), evidence, Some("Partial review")),
         Content.Handoff(HandoffStatus.Open, "Outcome", List("Remaining"), List("Blocker")),

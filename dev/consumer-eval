@@ -244,7 +244,7 @@ def main():
                                 "executionMillis": "180000", "retainedOutputBytes": 262144}],
                     "evaluation": {"run": identifier, "scenario": ("cohort-wordfreq-" if arguments.cohort else "wordfreq-") + language, "assessor": False}}
         write(evidence / "settings.json", settings)
-        request = (f"Build the following unrelated consumer in {language}. Create one CQ task containing the complete specification below and claim it. "
+        request = (f"Build the following unrelated consumer in {language}. Create one CQ task containing the complete specification below, assign it PartOf one new Open milestone and claim the task. "
                    f"Dispatch {PROFILES[worker][0]} Worker Implement with that exact task revision; after host validation passes, dispatch {PROFILES[reviewer][0]} Reviewer using its result handle. "
                    "Use references only; do not read or compose child prompts or read full child result bodies. Use compact status for correction loops when necessary. "
                    "After the accepted review, retain the exact reviewed task revision for the separate assessment step: release its claim and report handles without editing the task. "

@@ -18,6 +18,7 @@ def question_checkpoint(views, histories, tickets, receipt, claims):
             assert not any(ref["relation"] == "PartOf" and ref["target"]["ledger"] == "Milestones" for ref in view["refs"]), "Intake/goal acquired milestone ownership"
     content = question["draft"]["content"]["Question"]
     assert content["status"] == "Open" and content["answer"] is None and sorted(content["alternatives"]) == ["Go", "Python"], "Language was selected without an actual answer"
+    assert content["recommendation"] is not None and content["recommendation"]["reason"].strip(), "Question states no recommended alternative"
     summary = receipt["report"]["summary"]
     assert "Q" + question["id"]["number"] in summary and all(value in summary for value in ["Python", "Go"]), "Bounded receipt omitted the actual question or alternatives"
     assert all(ticket["request"]["work"] not in [{"Worker": {"mode": "Implement"}}, {"Worker": {"mode": "ResolveConflict"}}] for ticket in tickets), "Implementation started before the user answer"

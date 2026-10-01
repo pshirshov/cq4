@@ -36,10 +36,16 @@ final case class HarnessMcp(target: McpTarget, endpoint: URI, token: AccessToken
   def environmentKey: String = "CQ_MCP_" + name.toUpperCase + "_TOKEN"
 }
 
+object HarnessInvocation {
+  // The Codex Governor's instructions carry the generated argument guide for its tools (about 33 KB with the current model);
+  // the bound stays well inside the 128 KiB a single argument may occupy on Linux, also after JSON escaping.
+  val MaxSystemBytes = 49152
+}
+
 final case class HarnessInvocation(role: Role, attempt: AttemptId, system: String, resultSchema: Json, endpoints: List[HarnessMcp], assets: Path) {
   require(Set(Role.Governor, Role.Explorer, Role.Planner, Role.Worker, Role.Reviewer)(role), "Harness role must be a governing or dispatched agent")
   require(assets.isAbsolute && assets.normalize() == assets, "Harness asset directory must be absolute and normalized")
-  require(UTF_8.newEncoder().canEncode(system) && system.getBytes(UTF_8).length <= 32768, "Harness system instructions exceed bounds")
+  require(UTF_8.newEncoder().canEncode(system) && system.getBytes(UTF_8).length <= HarnessInvocation.MaxSystemBytes, "Harness system instructions exceed bounds")
   require(resultSchema.isObject && resultSchema.noSpaces.getBytes(UTF_8).length <= 32768, "Harness result schema exceeds bounds")
   require(endpoints.map(_.target).distinct.size == endpoints.size, "Duplicate MCP target")
   def tools(target: McpTarget): List[String] = HarnessTools.mcp(role, target)

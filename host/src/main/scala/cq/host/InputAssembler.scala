@@ -1,7 +1,7 @@
 package cq.host
 
 import cq.api.*
-import cq.core.{DomainFailure, Scope}
+import cq.core.{DomainFailure, MilestonePolicy, Scope}
 import java.nio.charset.StandardCharsets.UTF_8
 import java.time.{Clock, Duration}
 
@@ -36,6 +36,7 @@ final class InputAssembler(api: ServerApi, owner: Scope, clock: Clock, operatorR
     val drafts = new HistoricalDrafts(call, owner.project)
     claim()
     val members = request.members.map(item)
+    MilestonePolicy.admit(request.work, members)
     val guidance = request.guidance.map(item)
     val artifacts = request.artifacts.map(reader.read)
     val previous = request.previous.map { id =>

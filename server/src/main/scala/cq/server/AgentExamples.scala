@@ -61,12 +61,21 @@ object AgentExamples {
     "", Set("cli"),
     Content.Decision(DecisionStatus.Adopted, "Validate arguments with argparse; do not add a parsing dependency.",
       "The tool has one positional argument and ships without third-party dependencies.", List("Adopt click")), Nil)
+  private val Memory = view(id(Ledger.Memories, 1), 1, Governor, "greet has no third-party dependencies",
+    "", Set("cli"),
+    Content.Memory(MemoryStatus.Current, "greet ships without third-party dependencies; its command line is parsed with argparse from the standard library.",
+      "Any change to how greet parses or validates its arguments.",
+      List(Evidence("pyproject.toml declares an empty dependency list.", EvidenceOrigin.ModelDeclared, List(Citation.File("pyproject.toml", Some(Base.value)))))),
+    List(ItemRef(Relation.DerivedFrom, Decision.item.id)))
   private val TaskDraft = ItemDraft("Reject blank names in greet", "Validate the name argument before formatting the greeting.", Set("cli"), false,
     Content.Task(TaskStatus.Ready, List("`greet ''` and `greet '   '` exit with status 2 and print an error on stderr.",
       "`greet Ada` still prints 'Hello, Ada!' and exits with status 0.",
       "Each criterion above is demonstrated with a failing-then-passing test."), None, Nil), Nil)
+  private val MilestoneDraft = ItemDraft("greet input validation", "", Set("cli"), false,
+    Content.Milestone(MilestoneStatus.Open, "greet rejects invalid names with a clear error and keeps its output for valid ones."), Nil)
   private val Task = ItemView(Item(id(Ledger.Tasks, 12), Revision(1), TaskDraft, ReceivedAt + 600000, ReceivedAt + 600000,
-    Provenance(Governor, ReceivedAt + 600000, RequestId(uuid(112)))), List(ItemRef(Relation.DerivedFrom, Goal.item.id)))
+    Provenance(Governor, ReceivedAt + 600000, RequestId(uuid(112)))),
+    List(ItemRef(Relation.DerivedFrom, Goal.item.id), ItemRef(Relation.PartOf, id(Ledger.Milestones, 1))))
 
   private val InvestigateRequest = request(1, DispatchWork.Explorer(ExplorerMode.Investigate), List(Defect), Nil, Nil, None)
   private val InvestigateReport = ChildReport.Evidence(List(EvidenceMember(Defect.item.id, EvidenceDisposition.Findings,
@@ -85,10 +94,11 @@ object AgentExamples {
     Nil, Nil)))
   private val ResearchResult = ChildResult(AttemptId(uuid(502)), ResearchRequest, Base, None, ResearchReport, Nil, NoEvidence)
 
-  private val PlanRequest = request(3, DispatchWork.Planner(), List(Goal), List(Defect, Research), Nil, None)
+  private val PlanRequest = request(3, DispatchWork.Planner(), List(Goal), List(Defect, Research, Memory), Nil, None)
   private val PlanReport = ChildReport.Plan(
     List(PlanMember(Goal.item.id, PlanDisposition.Proposed, "One task covers the goal: validate the name argument and test both the rejected and the accepted case.")),
-    Some(LedgerProposal(List(ProposedMutation.Produce(Goal.item.id, List(TaskDraft))), "Produce the implementation task for the blank-name goal")),
+    Some(LedgerProposal(List(ProposedMutation.Create(MilestoneDraft), ProposedMutation.Produce(Goal.item.id, List(TaskDraft), Some(MilestoneRef.Created(0)))),
+      "Produce the implementation task for the blank-name goal under a new milestone")),
     Nil)
   private val PlanResult = ChildResult(AttemptId(uuid(503)), PlanRequest, Base, None, PlanReport, Nil, NoEvidence)
 
@@ -127,7 +137,7 @@ object AgentExamples {
 
   private val PlanReviewRequest = request(8, DispatchWork.Reviewer(ReviewerMode.Plan), List(Goal), Nil, Nil, Some(ArtifactId(uuid(603))))
   private val PlanReviewReport = ChildReport.Review(List(ReviewMember(Goal.item.id, ReviewVerdict.Accepted,
-    List("The single Produce operation changes the goal once and its task carries both goal criteria and the operator's failing-then-passing requirement."))),
+    List("The single Produce operation changes the goal once, assigns its task to the milestone created in the same proposal, and the task carries both goal criteria and the operator's failing-then-passing requirement."))),
     None)
 
   private val AuditRequest = request(9, DispatchWork.Reviewer(ReviewerMode.Audit), List(Research), Nil, Nil, Some(ArtifactId(uuid(602))))
@@ -143,7 +153,7 @@ object AgentExamples {
   def input(work: DispatchWork): ChildExecutionInput = work match {
     case DispatchWork.Explorer(ExplorerMode.Investigate) => execution(InvestigateRequest, List(Defect), Nil, Nil, None, None, Base)
     case DispatchWork.Explorer(ExplorerMode.Research) => execution(ResearchRequest, List(Research), List(Defect), Nil, None, None, Base)
-    case _: DispatchWork.Planner => execution(PlanRequest, List(Goal), List(Defect, Research), Nil, None, Some(Requirements), Base)
+    case _: DispatchWork.Planner => execution(PlanRequest, List(Goal), List(Defect, Research, Memory), Nil, None, Some(Requirements), Base)
     case DispatchWork.Worker(WorkerMode.Implement) => execution(ImplementRequest, List(Task), List(Decision), Nil, None, Some(Requirements), Base)
     case DispatchWork.Worker(WorkerMode.Probe) => execution(ProbeRequest, List(Hypothesis), List(Defect), List(ProbeLog), None, Some(Requirements), Base)
     case DispatchWork.Worker(WorkerMode.ResolveConflict) =>

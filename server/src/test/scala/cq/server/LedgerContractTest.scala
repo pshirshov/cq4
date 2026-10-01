@@ -60,7 +60,7 @@ abstract class LedgerContractTest extends SpecZIO with AssertZIO {
         Content.Task(TaskStatus.Ready, List("Acceptance"), None, Nil),
         Content.Research(ResearchStatus.Open, "Empirical uncertainty", Nil, None, None),
         Content.Hypothesis(HypothesisStatus.Proposed, "Falsifiable claim", "Rationale", Nil, None),
-        Content.Question(QuestionStatus.Open, "Preference?", "Context", List("A", "B"), None),
+        Content.Question(QuestionStatus.Open, "Preference?", "Context", List("A", "B"), Some(QuestionRecommendation(0, "A needs no migration")), None),
         Content.Decision(DecisionStatus.Proposed, "Choice", "Rationale", List("Alternative")),
         Content.Review(ReviewStatus.Pending, Nil, Some(Citation.Commit("consumer", "abc123")), Nil, None),
         Content.Handoff(HandoffStatus.Open, "Result so far", List("Remaining"), Nil),
@@ -212,6 +212,109 @@ abstract class LedgerContractTest extends SpecZIO with AssertZIO {
         _ <- create(service, owner, draft(Content.Goal(GoalStatus.Open, "", Nil, "")))
         _ <- denied(create(service, owner, draft(Content.Idea(IdeaStatus.Proposed, "x" * 100001, ""))))(_.isInstanceOf[Fault.Invalid])
         _ <- denied(create(service, owner, ItemDraft(" ", "", Set.empty, false, Content.Idea(IdeaStatus.Proposed, "", ""), Nil)))(_.isInstanceOf[Fault.Invalid])
+      } yield ()
+    }
+
+    "require a recommended alternative from agent-written questions and accept human ones" in { (service: LedgerService[IO]) =>
+      val owner = scope()
+      val human = owner.copy(actor = owner.actor.copy(role = Role.Human))
+      val recommended = QuestionRecommendation(1, "B avoids the migration")
+      def question(alternatives: List[String], recommendation: Option[QuestionRecommendation]): ItemDraft =
+        task("Which option?").copy(content = Content.Question(QuestionStatus.Open, "Preference?", "Context", alternatives, recommendation, None))
+      def content(recommendation: Option[QuestionRecommendation], status: QuestionStatus, answer: Option[String]): ItemDraft =
+        task("Which option?").copy(content = Content.Question(status, "Preference?", "Context", List("A", "B"), recommendation, answer))
+      val required = Fault.Invalid("An agent-created Question with alternatives must state its recommended alternative and reason")
+      val index = Fault.Invalid("Recommended alternative must index the alternatives list")
+      val reason = Fault.Invalid("Invalid recommendation reason")
+      for {
+        _ <- service.initialize(owner, "question recommendation")
+        _ <- denied(create(service, owner, question(List("A", "B"), None)))(_ == required)
+        _ <- ZIO.foreachDiscard(List(owner, human)) { author => for {
+          _ <- denied(create(service, author, question(List("A", "B"), Some(recommended.copy(alternative = 2)))))(_ == index)
+          _ <- denied(create(service, author, question(List("A", "B"), Some(recommended.copy(alternative = -1)))))(_ == index)
+          _ <- denied(create(service, author, question(Nil, Some(recommended.copy(alternative = 0)))))(_ == index)
+          _ <- denied(create(service, author, question(List("A", "B"), Some(recommended.copy(reason = " ")))))(_ == reason)
+        } yield () }
+        none <- service.search(owner, "archived:all", None, 200)
+        _ <- assertIO(none.items.isEmpty)
+        agent <- create(service, owner, question(List("A", "B"), Some(recommended)))
+        stored <- service.get(owner, agent.id)
+        _ <- assertIO(stored.item.draft.content == question(List("A", "B"), Some(recommended)).content)
+        _ <- denied(service.change(owner, request(List(Mutation.Replace(agent.id, agent.revision, question(List("A", "B"), None))), Nil)))(_ == required)
+        _ <- create(service, owner, question(Nil, None))
+        _ <- create(service, owner, content(None, QuestionStatus.Withdrawn, None))
+        asked <- create(service, human, question(List("A", "B"), None))
+        linked <- service.change(owner, request(List(Mutation.Reference(asked.id, asked.revision, Relation.RelatesTo, agent.id, agent.revision, true)), Nil))
+        current = linked.items.find(_.id == asked.id).get
+        _ <- denied(service.change(owner, request(List(Mutation.Replace(current.id, current.revision,
+          question(List("A", "C"), None))), Nil)))(_ == required)
+        recorded <- service.change(owner, request(List(Mutation.Replace(current.id, current.revision, content(None, QuestionStatus.Answered, Some("A")))), Nil))
+        _ <- assertIO(recorded.items.head.revision == Revision(3))
+        answered <- service.change(human, request(List(Mutation.Replace(agent.id, linked.items.find(_.id == agent.id).get.revision,
+          content(Some(recommended), QuestionStatus.Answered, Some("A")))), Nil))
+        _ <- assertIO(answered.items.head.revision == Revision(3))
+      } yield ()
+    }
+
+    "assign produced tasks to an existing or same-batch milestone and refuse closed milestones and bad indexes" in { (service: LedgerService[IO]) =>
+      val owner = scope()
+      val other = owner.copy(actor = owner.actor.copy(session = SessionId(UUID.randomUUID())))
+      val goal = task("Goal").copy(content = Content.Goal(GoalStatus.Open, "Outcome", List("Acceptance"), "Scope"))
+      val research = task("Research").copy(content = Content.Research(ResearchStatus.Open, "Unknown", Nil, None, None))
+      def milestone(status: MilestoneStatus): ItemDraft = task(s"$status milestone").copy(content = Content.Milestone(status, "Deliver the tasks"))
+      val index = Fault.Invalid("Produce milestone must reference an earlier Create of a Milestone in this batch")
+      val once = Fault.Invalid("An item may be changed only once in a batch")
+      def produce(producer: ItemRevision, drafts: List[ItemDraft], ref: MilestoneRef): Mutation = Mutation.Produce(producer.id, producer.revision, drafts, Some(ref))
+      for {
+        _ <- service.initialize(owner, "milestone assignment")
+        first <- create(service, owner, goal)
+        second <- create(service, owner, goal)
+        open <- create(service, owner, milestone(MilestoneStatus.Open))
+        complete <- create(service, owner, milestone(MilestoneStatus.Complete))
+        held <- create(service, owner, milestone(MilestoneStatus.Open))
+        claim <- service.acquire(owner, ClaimId(UUID.randomUUID()), Set(first.id, second.id), 300000)
+        foreign <- service.acquire(other, ClaimId(UUID.randomUUID()), Set(held.id), 300000)
+        fences = List(claim.fence)
+        before <- service.changes(owner, ChangeCursor(0), 200)
+        _ <- denied(service.change(owner, request(List(produce(first, List(task("Closed")), MilestoneRef.Existing(complete.id))), fences)))(
+          _ == Fault.Invalid(s"Tasks can be assigned only to an Open milestone; M${complete.id.number} is Complete"))
+        _ <- ZIO.foreachDiscard(List(
+          List(produce(first, List(task("No create")), MilestoneRef.Created(0))),
+          List(produce(first, List(task("Negative")), MilestoneRef.Created(-1))),
+          List(Mutation.Create(task("Not a milestone")), produce(first, List(task("Wrong ledger")), MilestoneRef.Created(0))),
+          List(produce(first, List(task("Later create")), MilestoneRef.Created(1)), Mutation.Create(milestone(MilestoneStatus.Open))),
+        ))(mutations => denied(service.change(owner, request(mutations, fences)))(_ == index))
+        _ <- denied(service.change(owner, request(List(produce(first, List(research), MilestoneRef.Existing(open.id))), fences)))(_ == Fault.Invalid("A Produce milestone requires a Task draft"))
+        _ <- denied(service.change(owner, request(List(produce(first, List(task("Under a goal")), MilestoneRef.Existing(second.id))), fences)))(_ == Fault.Invalid("PartOf target must be a milestone"))
+        _ <- denied(service.change(owner, request(List(produce(first, List(task("Missing")), MilestoneRef.Existing(open.id.copy(number = 99)))), fences)))(_.isInstanceOf[Fault.Missing])
+        _ <- denied(service.change(owner, request(List(produce(first, List(task("Held")), MilestoneRef.Existing(held.id))), fences)))(_.isInstanceOf[Fault.StaleFence])
+        retitled = Mutation.Replace(open.id, open.revision, milestone(MilestoneStatus.Open).copy(title = "Retitled"))
+        assigned = produce(first, List(task("Twice")), MilestoneRef.Existing(open.id))
+        _ <- denied(service.change(owner, request(List(retitled, assigned), fences)))(_ == once)
+        _ <- denied(service.change(owner, request(List(assigned, retitled), fences)))(_ == once)
+        after <- service.changes(owner, ChangeCursor(0), 200)
+        _ <- assertIO(before == after)
+        ack <- service.change(owner, request(List(produce(first, List(task("One"), research, task("Two")), MilestoneRef.Existing(open.id)),
+          produce(second, List(task("Three")), MilestoneRef.Existing(open.id))), fences))
+        _ <- assertIO(ack.items.count(_.id == open.id) == 1 && ack.items.find(_.id == open.id).exists(_.revision == Revision(2)) && ack.items.size == 7)
+        views <- ZIO.foreach(ack.items.map(_.id))(service.get(owner, _))
+        produced = views.filter(view => Set("One", "Two", "Three")(view.item.draft.title))
+        _ <- assertIO(produced.map(view => view.item.draft.title -> view.refs.toSet).toMap == Map(
+          "One" -> Set(ItemRef(Relation.DerivedFrom, first.id), ItemRef(Relation.PartOf, open.id)),
+          "Two" -> Set(ItemRef(Relation.DerivedFrom, first.id), ItemRef(Relation.PartOf, open.id)),
+          "Three" -> Set(ItemRef(Relation.DerivedFrom, second.id), ItemRef(Relation.PartOf, open.id))))
+        _ <- assertIO(views.find(_.item.draft.title == "Research").exists(_.refs == List(ItemRef(Relation.DerivedFrom, first.id))))
+        history <- service.history(owner, open.id, Revision(Long.MaxValue), 200)
+        _ <- assertIO(history.entries.size == 2 && history.entries.head.item.refs.toSet == produced.map(view => ItemRef(Relation.Contains, view.item.id)).toSet)
+        current <- service.get(owner, first.id)
+        batch <- service.change(owner, request(List(Mutation.Create(research), Mutation.Create(milestone(MilestoneStatus.Open)),
+          produce(ItemRevision(first.id, current.item.revision), List(task("Four")), MilestoneRef.Created(1))), fences))
+        created = batch.items.find(_.id.ledger == Ledger.Milestones).get
+        four <- service.get(owner, batch.items.filter(_.id.ledger == Ledger.Tasks).head.id)
+        proposed <- service.history(owner, created.id, Revision(Long.MaxValue), 200)
+        _ <- assertIO(created.revision == Revision(1) && four.refs.toSet == Set(ItemRef(Relation.DerivedFrom, first.id), ItemRef(Relation.PartOf, created.id)) &&
+          proposed.entries.map(_.item.refs) == List(List(ItemRef(Relation.Contains, four.item.id))))
+        _ <- service.release(other, foreign.fence)
       } yield ()
     }
 

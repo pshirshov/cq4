@@ -30,14 +30,38 @@ object ProposalPolicy {
         invalid(eligible(id), "Proposal endpoint is outside its eligible assignment")
         revisions(id)
       }
-      def draft(value: ItemDraft): ItemDraft = { validate(value); value }
-      val mutations = value.mutations.map {
-        case ProposedMutation.Create(value) => Mutation.Create(draft(value))
-        case ProposedMutation.Replace(id, value) => Mutation.Replace(id, revision(id), draft(value))
-        case ProposedMutation.Produce(producer, values) =>
+      def draft(value: ItemDraft): ItemDraft = {
+        validate(value)
+        recommended(value)
+        value.content match {
+          case memory: Content.Memory => invalid(memory.status == MemoryStatus.Current && memory.evidence.nonEmpty && memory.evidence.forall(_.citations.nonEmpty),
+            "Proposed Memory requires Current status and cited evidence")
+          case _ => ()
+        }
+        value
+      }
+      def task(value: ItemDraft): Boolean = ledger(value.content) == Ledger.Tasks
+      val mutations = value.mutations.zipWithIndex.map {
+        case (ProposedMutation.Create(value), _) =>
+          invalid(!task(value), "Proposed Tasks must be produced from an assigned producer and assigned to a milestone")
+          Mutation.Create(draft(value))
+        case (ProposedMutation.Replace(id, value), _) => Mutation.Replace(id, revision(id), draft(value))
+        case (ProposedMutation.Produce(producer, values, milestone), index) =>
           invalid(values.nonEmpty && values.size <= MaxBatch, "Invalid proposed production count")
-          Mutation.Produce(producer, revision(producer), values.map(draft))
-        case ProposedMutation.Reference(source, relation, target, present) =>
+          invalid(milestone.nonEmpty || !values.exists(task),
+            "Produce creates Tasks without a milestone: assign an existing Open milestone or a Milestone created earlier in this proposal")
+          milestone.foreach { assigned =>
+            invalid(values.exists(task), "A Produce milestone requires a Task draft")
+            assigned match {
+              case MilestoneRef.Existing(id) => invalid(id.ledger == Ledger.Milestones, "PartOf target must be a milestone")
+              case MilestoneRef.Created(mutation) => invalid(value.mutations.take(index).lift(mutation).exists {
+                case ProposedMutation.Create(created) => ledger(created.content) == Ledger.Milestones
+                case _ => false
+              }, "Produce milestone must reference an earlier Create of a Milestone in this batch")
+            }
+          }
+          Mutation.Produce(producer, revision(producer), values.map(draft), milestone)
+        case (ProposedMutation.Reference(source, relation, target, present), _) =>
           endpoints(canonical(source, relation, target))
           Mutation.Reference(source, revision(source), relation, target, revision(target), present)
       }

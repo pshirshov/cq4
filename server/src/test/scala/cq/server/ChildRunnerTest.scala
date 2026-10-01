@@ -121,9 +121,9 @@ time.sleep(30)
     for {
       runtime <- ZIO.runtime[Any]
       _ <- ledger.initialize(owner, project.name)
-      created <- ledger.change(owner, ChangeRequest(RequestId(uuid), List(Mutation.Create(ItemDraft("Task", "Implement", Set.empty, false,
-        Content.Task(TaskStatus.Ready, List("Verified"), None, Nil), Nil))), Nil, "Fixture"))
-      claim <- ledger.acquire(owner, ClaimId(uuid), created.items.map(_.id).toSet, 300000)
+      members <- MilestoneFixture.assigned(ledger, owner, List(ItemDraft("Task", "Implement", Set.empty, false,
+        Content.Task(TaskStatus.Ready, List("Verified"), None, Nil), Nil)))
+      claim <- ledger.acquire(owner, ClaimId(uuid), members.map(_.id).toSet, 300000)
       assignment <- usage.assign(collector, Assignment(AssignmentId(uuid), owner.project, Set.empty, Attribution.Unattributed, None, None))
       governor <- usage.start(collector, Attempt(AttemptId(uuid), assignment.id, None, owner.actor.session, Role.Governor, Harness.Codex,
         "fixture-provider", "fixture-model", "fixture", clock.millis(), UsagePhase.Govern))
@@ -144,7 +144,7 @@ time.sleep(30)
       agents = new AgentCatalog(new McpSchemas, new ChildInstructions)
       runner = new ChildRunner(config, authority, new HarnessRegistry(Set(new ClaudeAdapter, new CodexAdapter, new PiAdapter)), jobs, workspaces,
         agents, new HarnessOutput, new CandidateWorkspace(config), new WorkspaceReader, access, new OperatorRequirements(""), clock)
-      _ <- test(Fixture(owner, config, runner, agents, jobs, created.items, claim.fence, governor, profile, clock))
+      _ <- test(Fixture(owner, config, runner, agents, jobs, members, claim.fence, governor, profile, clock))
     } yield ()
   }
 

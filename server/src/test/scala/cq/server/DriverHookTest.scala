@@ -84,7 +84,7 @@ abstract class DriverHookTest extends SpecZIO with AssertZIO {
     def produce(scope: Scope, producer: ItemId, title: String): ItemId = await(for {
       claim <- ledger.acquire(scope, ClaimId(uuid), Set(producer), 600000L)
       current <- ledger.get(scope, producer)
-      change = request(List(Mutation.Produce(producer, current.item.revision, List(draft(title, Content.Task(TaskStatus.Ready, List("Observed outcome"), None, Nil))))), List(claim.fence))
+      change = request(List(Mutation.Produce(producer, current.item.revision, List(draft(title, Content.Task(TaskStatus.Ready, List("Observed outcome"), None, Nil))), None)), List(claim.fence))
       ack <- ledger.change(scope, change).ensuring(ledger.release(scope, claim.fence).ignore)
     } yield ack.items.find(_.id != producer).get.id)
     def change(scope: Scope, value: ChangeRequest): ChangeAck = await(ledger.change(scope, value))

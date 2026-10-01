@@ -30,7 +30,7 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
   private def claude(name: String): DriverKey = DriverKey(Harness.Claude, name)
   private def task(title: String): ItemDraft = ItemDraft(title, "Narrative", Set.empty, false, Content.Task(TaskStatus.Ready, List("Observed outcome"), None, Nil), Nil)
   private def goal(title: String): ItemDraft = task(title).copy(content = Content.Goal(GoalStatus.Open, "Outcome", List("Acceptance"), "Scope"))
-  private def question(title: String): ItemDraft = task(title).copy(content = Content.Question(QuestionStatus.Open, "Prompt", "Context", Nil, None))
+  private def question(title: String): ItemDraft = task(title).copy(content = Content.Question(QuestionStatus.Open, "Prompt", "Context", Nil, None, None))
   private def request(mutations: List[Mutation], fences: List[Fence]): ChangeRequest = ChangeRequest(RequestId(uuid), mutations, fences, "Driver scenario")
   private def create(service: LedgerService[IO], scope: Scope, draft: ItemDraft): IO[Throwable, ItemId] =
     service.change(scope, request(List(Mutation.Create(draft)), Nil)).map(_.items.head.id)
@@ -44,7 +44,7 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
   private def produce(service: LedgerService[IO], scope: Scope, producer: ItemId, title: String): IO[Throwable, (ChangeRequest, ChangeAck)] = for {
     claim <- service.acquire(scope, ClaimId(uuid), Set(producer), 600000L)
     current <- service.get(scope, producer)
-    change = request(List(Mutation.Produce(producer, current.item.revision, List(task(title)))), List(claim.fence))
+    change = request(List(Mutation.Produce(producer, current.item.revision, List(task(title)), None)), List(claim.fence))
     ack <- service.change(scope, change).ensuring(service.release(scope, claim.fence).ignore)
   } yield (change, ack)
   private def cursor(service: LedgerService[IO], w: World): IO[Throwable, ChangeCursor] = service.counts(w.operator).map(_.cursor)

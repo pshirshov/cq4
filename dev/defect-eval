@@ -238,8 +238,8 @@ def main():
                         request = ("Advance D1 through Plan only. Intake and empirical exploration are complete; earlier intake-only restrictions are historical. "
                             "Use Codex Planners and independent Pi Plan reviews for every stored proposal before applying it. "
                             "First adjudicate existing R1/H1/H2/H3 from the empirical evidence; preserve their question/claims. "
-                            "Then Produce one fix Goal from D1; in a fresh round Produce one Milestone and one Task from that Goal; "
-                            "finally connect Task PartOf Milestone using both allocated endpoints as assigned members. No direct ledger changes. "
+                            "Then Produce one fix Goal from D1; in a fresh round Produce one Milestone from that Goal; "
+                            "finally, in another round, Produce one Task from that Goal assigned to that existing Milestone. No direct ledger changes. "
                             "Pass ALL supplied artifact handles to EVERY Planner and Reviewer; the host materializes the exact instructions, investigation and observations. "
                             "Do not read or copy those bodies. Use current revisions and claims for each round; a failed proposal requires new planning/review. "
                             "Preserve Git, leave D1/Goal/Milestone Open and Task Ready, release all claims. No Worker, implementation or integration.\n" +
