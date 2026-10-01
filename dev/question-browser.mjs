@@ -12,8 +12,11 @@ async function call(command) {
 }
 const project = {value: randomUUID()};
 await call({Initialize: {config: {project, endpoint: origin, name: 'Question and reference checks'}}});
+// I14: only the second question states a recommended alternative.
+const recommendation = {alternative: 1, reason: 'The existing tests already cover it.'};
 const question = number => ({title: `Question ${number}`, body: 'See Q2 for context.', labels: [], archived: false, citations: [], content: {
-  Question: {status: 'Open', prompt: `Choose ${number}`, context: 'A human answer is required.', alternatives: ['Go', 'Python', 'Same as Q3'], recommendation: null, answer: null},
+  Question: {status: 'Open', prompt: `Choose ${number}`, context: 'A human answer is required.', alternatives: ['Go', 'Python', 'Same as Q3'],
+    recommendation: number === 2 ? recommendation : null, answer: null},
 }});
 const source = {title: 'References', body: 'See Q1 and Q2. Missing Q999. Plain XQ1 Q01 path/Q1.txt `Q1` https://example.org/Q1?a=Q2.', labels: [], archived: false, citations: [],
   content: {Defect: {status: 'Open', severity: 'Medium', observed: 'References', expected: 'Popups', reproduction: 'Activate', cause: null, resolution: []}}};
@@ -82,7 +85,17 @@ try {
   await reference.getByRole('button', {name: 'Close', exact: true}).click();
   cases.push('D57 token boundaries, nested popup/back, keyboard, missing target and preserved selection');
 
+  await page.getByRole('button', {name: 'Q2 · Question 2', exact: true}).click();
+  await page.locator('#detail-pane').getByRole('heading', {name: 'Q2 · Question 2', exact: true}).waitFor();
+  const recommended = page.locator('#detail-pane .recommended-alternative');
+  assert.equal(await recommended.count(), 1);
+  assert.equal(await recommended.textContent(), 'PythonRecommended' + recommendation.reason);
+  assert.equal(await page.locator('#detail-pane section[data-field="recommendation"]').count(), 0, 'the recommendation is marked in the alternatives, not repeated as a section');
+  cases.push('I14 item view marks the recommended alternative with its reason');
+
   await open(); await batch().getByRole('heading', {name: 'Q1 · Question 1', exact: true}).waitFor();
+  assert.equal(await batch().locator('.recommended-alternative, .recommended-badge, .recommendation-reason').count(), 0, 'a question without a recommendation shows no badge');
+  assert.equal(await batch().getByRole('button', {name: /^Pick alternative: /}).count(), 3);
   await batch().getByRole('button', {name: 'View Q2', exact: true}).click();
   reference = page.getByRole('dialog', {name: 'Item reference · Q2', exact: true});
   await reference.getByRole('heading', {name: 'Q2 · Question 2', exact: true}).waitFor();
@@ -96,15 +109,20 @@ try {
   assert.equal(await batch().locator('.answer-alternatives').count(), 0);
   for (const name of ['Go', 'Python', 'Same as Q3']) assert.equal(await batch().getByRole('button', {name, exact: true}).count(), 0);
   const alternatives = batch().locator('section[data-field="alternatives"] li');
-  assert.deepEqual(await alternatives.allTextContents(), ['PickGo', 'PickPython', 'PickSame as Q3']);
-  assert.equal(await batch().getByRole('button', {name: /^Pick alternative: /}).count(), 3);
+  assert.deepEqual(await alternatives.allTextContents(), ['PickGo', 'PickPythonRecommended' + recommendation.reason, 'PickSame as Q3']);
+  assert.equal(await batch().locator('.recommended-badge').count(), 1);
+  assert.equal(await batch().getByText('Recommended', {exact: true}).count(), 1);
+  assert.equal(await alternatives.nth(1).locator('.recommendation-reason').isVisible(), true);
+  assert.equal(await batch().getByRole('button', {name: /^Pick alternative: /}).count(), 2);
+  assert.equal(await batch().getByRole('button', {name: /^Pick recommended alternative: /}).count(), 1);
   await alternatives.nth(2).getByRole('button', {name: 'View Q3', exact: true}).click();
   reference = page.getByRole('dialog', {name: 'Item reference · Q3', exact: true});
   await reference.getByRole('heading', {name: 'Q3 · Question 3', exact: true}).waitFor();
   await reference.getByRole('button', {name: 'Close', exact: true}).click();
   assert.equal(await batch().getByLabel('Answer', {exact: true}).inputValue(), '');
-  await alternatives.nth(1).getByRole('button', {name: 'Pick alternative: Python', exact: true}).click();
+  await alternatives.nth(1).getByRole('button', {name: 'Pick recommended alternative: Python', exact: true}).click();
   assert.equal(await batch().getByLabel('Answer', {exact: true}).inputValue(), 'Python');
+  // The operator may still pick another alternative than the recommended one.
   await alternatives.first().getByRole('button', {name: 'Pick alternative: Go', exact: true}).click();
   assert.equal(await batch().getByLabel('Answer', {exact: true}).inputValue(), 'Go');
   await batch().screenshot({path: evidence + '/question-alternatives.png'});
@@ -113,6 +131,7 @@ try {
   await batch().getByRole('button', {name: 'Save answer and next', exact: true}).click();
   await batch().getByRole('heading', {name: 'Q3 · Question 3', exact: true}).waitFor();
   assert.equal((await detail(ids[1])).draft.content.Question.answer, 'Go');
+  assert.deepEqual((await detail(ids[1])).draft.content.Question.recommendation, recommendation, 'answering keeps the recorded recommendation');
   assert.equal((await detail(ids[0])).draft.content.Question.status, 'Open');
   await batch().getByRole('button', {name: 'Previous question', exact: true}).click();
   await batch().getByRole('heading', {name: 'Q1 · Question 1', exact: true}).waitFor();
@@ -127,7 +146,7 @@ try {
   await batch().getByRole('heading', {name: 'Q3 · Question 3', exact: true}).waitFor();
   assert.equal((await detail(ids[0])).draft.body, 'Concurrent clarification');
   assert.equal((await detail(ids[0])).draft.content.Question.status, 'Answered');
-  cases.push('D56/D69 alternatives listed once with pick controls and working links, pick fills without saving, free text, skips, navigation, persisted answers and explicit conflict rebase');
+  cases.push('D56/D69/I14 alternatives listed once with pick controls and working links, one recommended badge with its reason, any pick fills without saving, free text, skips, navigation, persisted answers and explicit conflict rebase');
 
   await batch().getByRole('button', {name: 'Save answer and next', exact: true}).click();
   await batch().getByRole('alert').filter({hasText: 'Enter an answer'}).waitFor();
@@ -147,6 +166,11 @@ try {
 
   await page.getByRole('button', {name: 'New item', exact: true}).click();
   const create = page.getByRole('dialog', {name: 'New item', exact: true});
+  await create.getByLabel('content', {exact: true}).selectOption('Question');
+  assert.equal(await create.getByLabel('reason', {exact: true}).isVisible(), false);
+  await create.getByLabel('Add recommendation', {exact: true}).check();
+  assert.equal(await create.getByLabel('alternative', {exact: true}).isVisible() && await create.getByLabel('reason', {exact: true}).isVisible(), true);
+  cases.push('I14 the item editor offers the recommended alternative index and its reason');
   await create.getByRole('button', {name: 'Create Idea', exact: true}).click();
   await create.getByLabel('title', {exact: true}).fill('Uncertain repeated entry');
   await create.getByLabel('outcome', {exact: true}).fill('One creation');

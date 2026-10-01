@@ -161,6 +161,8 @@ progress { width: 50px; height: 6px; margin-left: 12px; }
 .dialog-actions [aria-pressed=true] { background: #245576; border-color: #69a7cb; }
 .answer-alternative { overflow-wrap: anywhere; }
 .answer-alternative > .pick-alternative { margin-right: 8px; padding: 2px 10px; }
+.recommended-alternative > .recommended-badge { margin-left: 8px; background: #2f5d46; }
+.recommendation-reason { margin: 3px 0 0; color: #a4c1d3; font-size: 12px; overflow-wrap: anywhere; }
 .notification-toast { position: fixed; inset: auto 16px 42px auto; margin: 0; max-width: min(540px, calc(100vw - 32px)); color: #e1e8ef; background: #24323e; border: 1px solid #61788a; padding: 12px; box-shadow: 0 6px 20px #0009; }
 .notification-toast:popover-open { display: flex; align-items: flex-start; gap: 12px; }
 .notification-toast > div { white-space: pre-wrap; overflow-wrap: anywhere; }

@@ -61,6 +61,15 @@ export function renderValue(name: string, value: Json, renderText: TextRenderer)
   else node.append(renderText(String(value)));
   return node;
 }
+// The recommended alternative is marked in the alternatives list itself; a separate section would repeat it out of context.
+function markRecommendation(view: HTMLElement, recommendation: api.QuestionRecommendation, renderText: TextRenderer): void {
+  const row = view.querySelectorAll<HTMLLIElement>('section[data-field="alternatives"] > .field-value > ul > li')[recommendation.alternative];
+  if (row === undefined) throw new Error('Question recommendation is outside its alternatives');
+  row.classList.add('recommended-alternative');
+  const badge = element('span', 'Recommended'); badge.className = 'badge recommended-badge';
+  const reason = element('p', ''); reason.className = 'recommendation-reason'; reason.append(renderText(recommendation.reason));
+  row.append(badge, reason);
+}
 export function itemView(draft: api.ItemDraft, renderText: TextRenderer): HTMLElement {
   const node = element('div', ''); node.className = 'item-document';
   const encoded = api.Content_JsonCodec.instance.encode(BaboonCodecContext.Default, draft.content) as Json;
@@ -78,5 +87,6 @@ export function itemView(draft: api.ItemDraft, renderText: TextRenderer): HTMLEl
   section('body', draft.body);
   for (const name of CONTENT_FIELDS[kind as ItemKind]) if (values[name] !== undefined && !(kind === 'Question' && name === 'recommendation')) section(name, values[name]);
   section('citations', [...draft.citations].map(value => api.Citation_JsonCodec.instance.encode(BaboonCodecContext.Default, value) as Json));
+  if (draft.content instanceof api.Content_Question && draft.content.recommendation !== undefined) markRecommendation(node, draft.content.recommendation, renderText);
   return node;
 }
