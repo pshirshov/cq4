@@ -6,6 +6,8 @@ const MIN_TITLE = 80;
 const MAX_WIDTH = 1200;
 const STEP = 16;
 
+export interface TableColumn { header: HTMLTableCellElement; label: string }
+
 export class TableColumns {
   private readonly columns: HTMLTableColElement[];
   private readonly handles: HTMLDivElement[];
@@ -21,13 +23,13 @@ export class TableColumns {
     this.frame = requestAnimationFrame(() => { this.frame = null; this.measure(); });
   };
 
-  constructor(private readonly table: HTMLTableElement, private readonly headers: HTMLTableCellElement[], private readonly pane: HTMLElement, body: HTMLTableSectionElement) {
+  constructor(private readonly table: HTMLTableElement, private readonly headers: TableColumn[], private readonly pane: HTMLElement, body: HTMLTableSectionElement) {
     this.overrides = headers.map(() => null); this.minima = headers.map(() => 0); this.widths = headers.map(() => 0);
     const group = element('colgroup', ''); this.columns = headers.map(() => element('col', '')); group.append(...this.columns); table.prepend(group);
-    this.handles = headers.map((header, index) => {
+    this.handles = headers.map(({ header, label }, index) => {
       const handle = element('div', ''); handle.className = 'column-resizer'; handle.tabIndex = 0;
       handle.setAttribute('role', 'separator'); handle.setAttribute('aria-orientation', 'vertical');
-      handle.setAttribute('aria-label', `Resize ${header.textContent} column`);
+      handle.setAttribute('aria-label', `Resize ${label} column`);
       const resize = (width: number): void => {
         if (index === TITLE) this.overrides[TITLE_NEIGHBOR] = Math.max(this.minima[TITLE_NEIGHBOR], this.widths[TITLE_NEIGHBOR] + this.widths[TITLE] - Math.max(MIN_TITLE, width));
         else this.overrides[index] = Math.min(MAX_WIDTH, Math.max(this.minima[index], width));

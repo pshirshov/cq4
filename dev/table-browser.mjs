@@ -20,6 +20,15 @@ export async function tableChecks(browser, storageState, origin, evidence) {
   const context = await browser.newContext({ storageState, viewport: { width: 1366, height: 768 } });
   await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
   const page = await context.newPage(); page.setDefaultTimeout(5000);
+  const browses = []; const errors = []; page.on('pageerror', error => errors.push(String(error)));
+  page.on('websocket', socket => socket.on('framesent', frame => {
+    const browse = JSON.parse(String(frame.payload)).Call?.command.Read?.input.selection.Browse; if (browse) browses.push(browse);
+  }));
+  const reopen = async () => {
+    browses.length = 0; await page.reload(); await page.getByText('Connection: ALIVE', { exact: true }).waitFor();
+    await page.getByLabel('Project', { exact: true }).selectOption(project.value); await page.getByText('Data: current', { exact: true }).waitFor();
+  };
+  const savedView = () => page.evaluate(() => JSON.parse(localStorage.getItem('cq-items-view')));
   const cases = []; const failures = [];
   const check = async (name, body) => { try { await body(); cases.push(name); } catch (error) { failures.push(`${name}: ${String(error)}`); } };
   try {
@@ -29,7 +38,13 @@ export async function tableChecks(browser, storageState, origin, evidence) {
     await check('D30 semantic table with merged ID/type column', async () => {
       const table = page.getByRole('table', { name: 'Items', exact: true });
       assert.equal(await table.count(), 1);
-      assert.deepEqual(await table.getByRole('columnheader').allTextContents(), ['ID', 'Title', 'Status', 'Severity', 'Last modified']);
+      assert.deepEqual(await table.getByRole('columnheader').allTextContents(), ['ID', 'Title', 'Status', 'Severity', '', 'Last modified']);
+      const milestone = table.getByRole('columnheader').nth(4);
+      assert.equal(await milestone.getByRole('img', { name: 'Milestone', exact: true }).locator('path').getAttribute('d'),
+        await page.getByRole('button', { name: 'Milestones', exact: true }).locator('.navigation-icon path').getAttribute('d'));
+      assert.equal(await milestone.locator('svg[aria-label="Milestone"]').count(), 1);
+      assert.deepEqual(await table.getByRole('separator').evaluateAll(nodes => nodes.map(node => node.getAttribute('aria-label'))),
+        ['ID', 'Title', 'Status', 'Severity', 'Milestone', 'Last modified'].map(name => `Resize ${name} column`));
       const id = table.locator('tbody .item-id').first();
       assert.equal(await id.locator('svg').count(), 1); assert.equal(await id.getAttribute('title'), 'Defects');
       assert.equal(await table.getByRole('cell', { name: 'High', exact: true }).count(), 1);
@@ -83,6 +98,98 @@ export async function tableChecks(browser, storageState, origin, evidence) {
       await page.getByRole('button', { name: 'All items', exact: true }).click();
       await page.getByText('Data: current', { exact: true }).waitFor();
       assert.equal(await page.getByRole('button', { name: 'D1 · Visible defect', exact: true }).count(), 0);
+    });
+    const table = page.getByRole('table', { name: 'Items', exact: true });
+    const sorted = (index, direction) => page.waitForFunction(([column, value]) =>
+      document.querySelectorAll('.items-table th')[column].getAttribute('aria-sort') === value, [index, direction]);
+    await check('I15 sort field and direction survive a reload', async () => {
+      const title = table.getByRole('button', { name: 'Sort by title', exact: true });
+      await title.click(); await sorted(1, 'ascending'); await title.click(); await sorted(1, 'descending');
+      assert.deepEqual(await savedView(), { field: 'Title', direction: 'Descending', grouped: false });
+      await reopen();
+      assert.equal(await table.getByRole('columnheader').nth(1).getAttribute('aria-sort'), 'descending');
+      assert.deepEqual(browses[0].order, { field: 'Title', direction: 'Descending', grouped: false });
+    });
+    await check('I15 malformed or outdated view state falls back to ID ascending and is overwritten', async () => {
+      for (const saved of ['{"field":"Title"', 'null', '{"field":"Title","direction":"Descending"}', '{"field":"Rank","direction":"Descending","grouped":false}']) {
+        await page.evaluate(value => localStorage.setItem('cq-items-view', value), saved);
+        await reopen();
+        assert.equal(await table.getByRole('columnheader').first().getAttribute('aria-sort'), 'ascending');
+        assert.deepEqual(browses[0].order, { field: 'Id', direction: 'Ascending', grouped: false });
+        assert.equal(await page.getByRole('alert').count(), 0); assert.deepEqual(errors, []);
+      }
+      await table.getByRole('button', { name: 'Sort by status', exact: true }).click(); await sorted(2, 'ascending');
+      assert.deepEqual(await savedView(), { field: 'Status', direction: 'Ascending', grouped: false });
+    });
+    await check('I15 a failed view-state write warns and keeps the chosen order', async () => {
+      await page.evaluate(() => { Storage.prototype.setItem = () => { throw new DOMException('Quota exceeded', 'QuotaExceededError'); }; });
+      await table.getByRole('button', { name: 'Sort by severity', exact: true }).click(); await sorted(3, 'ascending');
+      await page.getByRole('alert').getByText('Items view could not be saved in this browser.').waitFor();
+      await reopen();
+      assert.equal(await table.getByRole('columnheader').nth(2).getAttribute('aria-sort'), 'ascending');
+    });
+    const change = mutations => call({ Change: { input: { project, change: { request: { value: randomUUID() }, fences: [], reason: 'Milestone fixture', mutations } } } });
+    const item = (ledger, number) => ({ project, ledger, number: String(number) });
+    const membership = (task, revision, milestone, expected, present) => ({ Reference: { source: item('Tasks', task), expectedSource: { value: String(revision) },
+      relation: 'PartOf', target: item('Milestones', milestone), expectedTarget: { value: String(expected) }, present } });
+    const search = async text => {
+      await page.getByLabel('Search query').fill(text); await page.getByRole('button', { name: 'Search', exact: true }).click();
+      await page.getByText('Data: current', { exact: true }).waitFor();
+    };
+    // Item rows by ID; group header rows by their text behind '#'.
+    const lines = () => table.locator('tbody tr').evaluateAll(rows => rows.map(row =>
+      row.classList.contains('item-row') ? row.querySelector('.item-id').textContent : `#${row.textContent}`));
+    const shows = expected => page.waitForFunction(value => JSON.stringify([...document.querySelectorAll('.items-table tbody tr')].map(row =>
+      row.classList.contains('item-row') ? row.querySelector('.item-id').textContent : `#${row.textContent}`)) === value, JSON.stringify(expected));
+    const grouping = table.getByRole('checkbox', { name: 'Group by milestone', exact: true });
+    await check('I15 milestone cells show M<n> for members only, without controls', async () => {
+      await change([...['Later', 'Sooner'].map(title => ({ Create: { draft: { ...draft, title, content: { Milestone: { status: 'Open', objective: 'Group rows' } } } } })),
+        ...['One', 'Two', 'Three', 'Four'].map(title => ({ Create: { draft: { ...draft, title, content: { Task: { status: 'Ready', acceptance: ['Listed'], result: null, validation: [] } } } } }))]);
+      await change([membership(1, 1, 2, 1, true), membership(2, 1, 1, 1, true)]); await change([membership(4, 1, 1, 2, true)]);
+      await table.getByRole('button', { name: 'Sort by ID', exact: true }).click(); await sorted(0, 'ascending');
+      await search('ledger:Tasks'); await shows(['T1', 'T2', 'T3', 'T4']);
+      const cells = table.locator('tbody td.item-milestone');
+      assert.deepEqual(await cells.allTextContents(), ['M2', 'M1', '', 'M1']);
+      assert.equal(await cells.locator('button, a, input, [tabindex]').count(), 0);
+      assert.deepEqual(await table.locator('tbody tr').first().locator('td').evaluateAll(nodes => nodes.map(node => node.className)),
+        ['item-id', '', 'item-status', 'item-severity', 'item-milestone', 'item-modified']);
+      assert.ok(await cells.evaluateAll(nodes => nodes.every(node => node.scrollWidth <= node.clientWidth)));
+      assert.equal(await table.locator('thead').evaluate(node => /milestone/i.test(node.innerText)), false);
+    });
+    await check('I15 grouping reissues the browse and inserts one unfocusable header per group', async () => {
+      assert.equal(await grouping.isChecked(), false); browses.length = 0;
+      await grouping.check(); await shows(['#M1', 'T2', 'T4', '#M2', 'T1', '#No milestone', 'T3']);
+      assert.deepEqual(browses[0].order, { field: 'Id', direction: 'Ascending', grouped: true });
+      assert.deepEqual(await savedView(), { field: 'Id', direction: 'Ascending', grouped: true });
+      const headings = table.locator('tbody tr.item-group');
+      assert.equal(await headings.locator('button, a, input, [tabindex]').count(), 0);
+      assert.deepEqual(await headings.evaluateAll(rows => rows.map(row => [row.querySelectorAll('svg').length, row.cells.length, row.cells[0].colSpan])), [[1, 1, 6], [1, 1, 6], [0, 1, 6]]);
+      const focus = () => page.evaluate(() => document.activeElement.getAttribute('aria-label'));
+      await table.getByRole('button', { name: 'T2 · Two', exact: true }).focus();
+      for (const [key, expected] of [['ArrowDown', 'T4 · Four'], ['ArrowDown', 'T1 · One'], ['ArrowDown', 'T3 · Three'], ['ArrowDown', 'T3 · Three'], ['ArrowUp', 'T1 · One'],
+        ['ArrowUp', 'T4 · Four'], ['Home', 'T2 · Two'], ['End', 'T3 · Three']]) { await page.keyboard.press(key); assert.equal(await focus(), expected); }
+      await page.screenshot({ path: `${evidence}/table-grouped.png`, fullPage: true });
+      await table.getByRole('button', { name: 'Sort by title', exact: true }).click(); await shows(['#M1', 'T4', 'T2', '#M2', 'T1', '#No milestone', 'T3']);
+      await table.getByRole('button', { name: 'Sort by ID', exact: true }).click(); await shows(['#M1', 'T2', 'T4', '#M2', 'T1', '#No milestone', 'T3']);
+    });
+    await check('I15 live updates move rows between groups without duplicating headers', async () => {
+      await change([membership(3, 1, 2, 2, true)]); await shows(['#M1', 'T2', 'T4', '#M2', 'T1', 'T3']);
+      await change([membership(3, 2, 2, 3, false), { Create: { draft: { ...draft, title: 'Five', content: { Task: { status: 'Ready', acceptance: ['Listed'], result: null, validation: [] } } } } }]);
+      await shows(['#M1', 'T2', 'T4', '#M2', 'T1', '#No milestone', 'T3', 'T5']);
+      assert.deepEqual(await table.locator('tbody td.item-milestone').allTextContents(), ['M1', 'M1', 'M2', '', '']);
+    });
+    await check('I15 milestones themselves are listed under No milestone; an empty result has no group header', async () => {
+      await search('ledger:Milestones'); await shows(['#No milestone', 'M1', 'M2']);
+      await search('ledger:Tasks Absent'); await shows(['#No matching items.']);
+      assert.equal(await table.locator('tbody td').getAttribute('colspan'), String(await table.getByRole('columnheader').count()));
+    });
+    await check('I15 grouping survives a reload and can be switched off', async () => {
+      await reopen();
+      assert.equal(await grouping.isChecked(), true); assert.equal(browses[0].order.grouped, true);
+      await search('ledger:Tasks'); await shows(['#M1', 'T2', 'T4', '#M2', 'T1', '#No milestone', 'T3', 'T5']);
+      browses.length = 0; await grouping.uncheck(); await shows(['T1', 'T2', 'T3', 'T4', 'T5']);
+      assert.equal(browses[0].order.grouped, false); assert.equal((await savedView()).grouped, false);
+      assert.deepEqual(errors, []);
     });
     await page.screenshot({ path: `${evidence}/table.png`, fullPage: true });
     assert.deepEqual(failures, []);

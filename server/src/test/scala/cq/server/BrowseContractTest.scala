@@ -21,6 +21,17 @@ abstract class BrowseContractTest extends SpecZIO with AssertZIO {
     Content.Defect(DefectStatus.Open, severity, "Cards", "Table", "Browse", None, Nil), Nil)
   private def change(service: LedgerService[IO], owner: Scope, mutations: List[Mutation]): IO[Throwable, ChangeAck] =
     service.change(owner, ChangeRequest(RequestId(UUID.randomUUID()), mutations, Nil, "Browse contract"))
+  private def collect(service: LedgerService[IO], owner: Scope, order: ItemOrder, after: Option[ItemId], snapshot: Option[ChangeCursor], limit: Int): IO[Throwable, List[BrowseItem]] =
+    service.browse(owner, "", order, after, snapshot, limit).flatMap { page =>
+      if (page.hasMore) collect(service, owner, order, page.after, Some(page.cursor), limit).map(page.items ++ _)
+      else ZIO.succeed(page.items)
+    }
+  private def milestone(title: String): ItemDraft = ItemDraft(title, "", Set.empty, false, Content.Milestone(MilestoneStatus.Open, "Browse"), Nil)
+  private def membership(service: LedgerService[IO], owner: Scope, member: ItemId, target: ItemId, present: Boolean): IO[Throwable, ChangeAck] = for {
+    source <- service.get(owner, member)
+    container <- service.get(owner, target)
+    acknowledgement <- change(service, owner, List(Mutation.Reference(member, source.item.revision, Relation.PartOf, target, container.item.revision, present)))
+  } yield acknowledgement
 
   "Sorted browse (Behavioral Active Blackbox; dummy Group / PostgreSQL Good Communication)" should {
     "sort the whole query in either direction with stable ties, Unicode order and absent severity last" in { (service: LedgerService[IO]) =>
@@ -35,23 +46,50 @@ abstract class BrowseContractTest extends SpecZIO with AssertZIO {
         (ItemOrderField.Modified, List(1, 2, 4, 0, 3, 5, 6), List(1, 2, 4, 0, 3, 5, 6)),
         (ItemOrderField.Severity, List(2, 4, 1, 0, 3, 5, 6), List(1, 4, 2, 0, 3, 5, 6)),
       )
-      def collect(order: ItemOrder, after: Option[ItemId], snapshot: Option[ChangeCursor], limit: Int): IO[Throwable, List[BrowseItem]] =
-        service.browse(owner, "", order, after, snapshot, limit).flatMap { page =>
-          if (page.hasMore) collect(order, page.after, Some(page.cursor), limit).map(page.items ++ _)
-          else ZIO.succeed(page.items)
-        }
       for {
         _ <- service.initialize(owner, "Browse ordering")
         created <- change(service, owner, fixtures.map(Mutation.Create.apply))
         _ <- ZIO.foreachDiscard(orders) { case (field, ascending, descending) =>
           ZIO.foreachDiscard(List((SortDirection.Ascending, ascending), (SortDirection.Descending, descending))) { case (direction, expected) =>
-            ZIO.foreachDiscard(List(1, 3, 200)) { limit => collect(ItemOrder(field, direction), None, None, limit).flatMap { actual =>
+            ZIO.foreachDiscard(List(1, 3, 200)) { limit => collect(service, owner, ItemOrder(field, direction, false), None, None, limit).flatMap { actual =>
               assertIO(actual.map(_.summary.id) == expected.map(created.items(_).id) && actual.filter(_.summary.id.ledger == Ledger.Tasks).forall(_.severity.isEmpty))
             } }
           }
         }
-        filtered <- service.browse(owner, "ledger:Defects Same", ItemOrder(ItemOrderField.Severity, SortDirection.Ascending), None, None, 1)
+        filtered <- service.browse(owner, "ledger:Defects Same", ItemOrder(ItemOrderField.Severity, SortDirection.Ascending, false), None, None, 1)
         _ <- assertIO(filtered.items.map(_.summary.id) == List(created.items(4).id) && filtered.hasMore)
+      } yield ()
+    }
+
+    "report each row's milestone and group by it with unassigned rows last across page boundaries" in { (service: LedgerService[IO], repository: LedgerRepository[IO]) =>
+      val owner = scope()
+      val fixtures = List(milestone("Later"), milestone("Sooner"), task("Zulu", TaskStatus.Ready), task("Alpha", TaskStatus.Done), task("Same", TaskStatus.Ready),
+        task("Same", TaskStatus.Ready), task("Mike", TaskStatus.Ready), defect("Alpha", Severity.High), defect("Same", Severity.Low))
+      // Fixture index of each member -> fixture index of its milestone; "Mike" joins and leaves again.
+      val members = List(2 -> 1, 3 -> 0, 4 -> 1, 5 -> 0)
+      for {
+        _ <- service.initialize(owner, "Browse grouping")
+        created <- change(service, owner, fixtures.map(Mutation.Create.apply))
+        ids = created.items.map(_.id)
+        _ <- ZIO.foreachDiscard((6 -> 0) :: members) { case (member, target) => membership(service, owner, ids(member), ids(target), true) }
+        joined <- collect(service, owner, ItemOrder(ItemOrderField.Id, SortDirection.Ascending, false), None, None, 200)
+        _ <- assertIO(joined.find(_.summary.id == ids(6)).flatMap(_.milestone).contains(ids(0)))
+        _ <- membership(service, owner, ids(6), ids(0), false)
+        expected = members.map { case (member, target) => ids(member) -> ids(target) }.toMap
+        _ <- ZIO.foreachDiscard(ItemOrderField.all) { field =>
+          ZIO.foreachDiscard(SortDirection.all) { direction =>
+            collect(service, owner, ItemOrder(field, direction, false), None, None, 200).flatMap { flat =>
+              val grouped = flat.sortBy(item => expected.get(item.summary.id).fold(Long.MaxValue)(_.number))
+              assertIO(flat.size == fixtures.size && flat.forall(item => item.milestone == expected.get(item.summary.id))) *>
+                ZIO.foreachDiscard(List(1, 3, 200)) { limit =>
+                  collect(service, owner, ItemOrder(field, direction, true), None, None, limit).flatMap(actual => assertIO(actual == grouped))
+                }
+            }
+          }
+        }
+        rows <- collect(service, owner, ItemOrder(ItemOrderField.Id, SortDirection.Ascending, true), None, None, 200)
+        single <- repository.transact(owner.project)(tx => rows.map(row => tx.browseItem(row.summary.id)))
+        _ <- assertIO(single == rows.map(Some(_)) && rows.map(_.milestone.map(_.number)) == List(Some(1L), Some(1L), Some(2L), Some(2L), None, None, None, None, None))
       } yield ()
     }
 
@@ -67,17 +105,17 @@ abstract class BrowseContractTest extends SpecZIO with AssertZIO {
         _ <- earlier.initialize(owner, "Modified ordering")
         created <- change(earlier, owner, List(Mutation.Create(task("First", TaskStatus.Ready)), Mutation.Create(task("Second", TaskStatus.Ready))))
         _ <- change(later, owner, List(Mutation.Replace(created.items.head.id, Revision(1), task("Changed", TaskStatus.Ready))))
-        asc <- later.browse(owner, "", ItemOrder(ItemOrderField.Modified, SortDirection.Ascending), None, None, 1)
-        desc <- later.browse(owner, "", ItemOrder(ItemOrderField.Modified, SortDirection.Descending), None, None, 1)
+        asc <- later.browse(owner, "", ItemOrder(ItemOrderField.Modified, SortDirection.Ascending, false), None, None, 1)
+        desc <- later.browse(owner, "", ItemOrder(ItemOrderField.Modified, SortDirection.Descending, false), None, None, 1)
         _ <- assertIO(asc.items.head.summary.id == created.items(1).id && asc.items.head.summary.updatedAt == 9 && asc.hasMore)
         _ <- assertIO(desc.items.head.summary.id == created.items.head.id && desc.items.head.summary.updatedAt == 100 && desc.hasMore)
-        next <- later.browse(owner, "", ItemOrder(ItemOrderField.Modified, SortDirection.Ascending), asc.after, Some(asc.cursor), 1)
+        next <- later.browse(owner, "", ItemOrder(ItemOrderField.Modified, SortDirection.Ascending, false), asc.after, Some(asc.cursor), 1)
         _ <- assertIO(next.items == desc.items && !next.hasMore)
       } yield ()
     }
 
     "count only unarchived items in the selected project and reject stale or unscoped continuations" in { (service: LedgerService[IO]) =>
-      val owner = scope(); val other = scope(); val order = ItemOrder(ItemOrderField.Title, SortDirection.Ascending)
+      val owner = scope(); val other = scope(); val order = ItemOrder(ItemOrderField.Title, SortDirection.Ascending, false)
       val original = task("First", TaskStatus.Done)
       for {
         _ <- service.initialize(owner, "Counts and snapshots")

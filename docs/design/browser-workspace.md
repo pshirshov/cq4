@@ -29,6 +29,10 @@ The query editor calls `QueryComplete` with the current text and caret position.
 
 Navigation shortcuts write a complete, visible query and use the same submission path. Result rows expose selection and status. Keyboard navigation stays within the visible page, with an explicit path into detail and back. Splitters support pointer and keyboard resizing with minimum widths. At narrow widths, stack or switch pane presentation while preserving selected item, query and draft; do not keep invisible focusable controls. Long IDs, queries, code and structured values wrap or scroll within their pane.
 
+The results table has a milestone column between Severity and Last modified. Its header shows the milestone icon, named "Milestone" for assistive technology only, and its cells show `M<n>` for members of a milestone and stay empty otherwise; they contain no controls. The "Group by milestone" checkbox in that header reissues the browse with `ItemOrder.grouped`, so grouping is the server's major sort key and holds across keyset pages: milestone number ascending, then rows without a milestone (milestones themselves included), each group in the selected sort order. Every run of rows is preceded by a group row (the icon and `M<n>`, or "No milestone") that holds no focusable element, so result keyboard navigation moves between item rows only. Group rows are reconciled by group like item rows, so live updates neither duplicate nor strand them.
+
+The results table keeps its view state per browser: the sort field, direction and grouping mode are stored in local storage under `cq-items-view` as the `ItemOrder` JSON and applied to the first browse request after a reload. An unreadable or outdated value yields ID ascending without a notification and is replaced by the next change; a failed write is reported like a failed pane-layout write.
+
 Top-bar metrics identify their scope and last successful observation. Loading and stale values are labeled; missing counters are not rendered as zero. Forms expose labels, validation errors and pending-save state. Draft notices identify the project/item they belong to.
 
 ## Usage and synchronization

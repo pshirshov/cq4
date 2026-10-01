@@ -58,7 +58,12 @@ nav .navigation-entry { display: flex; align-items: center; gap: 8px; text-align
 .item-row:hover { background: #253541; }
 .item-id { font-variant-numeric: tabular-nums; color: #a4c1d3; }
 .item-id svg { margin-right: 4px; vertical-align: -3px; }
-.item-status, .item-severity { color: #a4c1d3; font-size: 11px; }
+.item-status, .item-severity, .item-milestone { color: #a4c1d3; font-size: 11px; }
+.item-milestone { font-variant-numeric: tabular-nums; }
+.milestone-heading svg, .item-group svg { vertical-align: -3px; }
+.milestone-heading input { min-height: 0; margin: 0 0 0 4px; padding: 0; vertical-align: -2px; }
+.item-group td { background: #1c2630; color: #a4c1d3; font-size: 11px; font-weight: 600; border-top: 1px solid #435364; }
+.item-group svg { margin-right: 4px; }
 .actions { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0; }
 fieldset { border: 1px solid #435364; min-width: 0; margin: 6px 0; padding: 7px; }
 legend { max-width: 100%; overflow-wrap: anywhere; color: #a4c1d3; padding: 0 5px; }
