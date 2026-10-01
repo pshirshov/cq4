@@ -297,6 +297,7 @@ abstract class ProposalContractTest extends SpecZIO with AssertZIO {
           ProposedMutation.Produce(first, List(task), Some(MilestoneRef.Existing(closed))))), usage, artifacts)
         _ <- admit(f, refused, admissions)
         before <- ledger.changes(f.owner, ChangeCursor(0), 20)
+        _ <- rejected(proposals.preview(f.owner, refused.artifact.id), _ == Fault.Invalid(s"Tasks can be assigned only to an Open milestone; M${closed.number} is Complete"))
         _ <- rejected(proposals(f.owner, refused.artifact.id), _ == Fault.Invalid(s"Tasks can be assigned only to an Open milestone; M${closed.number} is Complete"))
         unchanged <- ledger.changes(f.owner, ChangeCursor(0), 20)
         _ <- assertIO(before == unchanged)
@@ -318,6 +319,48 @@ abstract class ProposalContractTest extends SpecZIO with AssertZIO {
           "Under the existing milestone" -> Set(ItemRef(Relation.DerivedFrom, second), ItemRef(Relation.PartOf, open))))
         _ <- assertIO(researches.size == 2 && researches.forall(_.refs.forall(_.relation == Relation.DerivedFrom)))
         _ <- assertIO(target.item.revision == Revision(2) && ack.items.count(_.id == open) == 1)
+      } yield ()
+    }
+
+    "report an Existing milestone's ledger state at preview and its claim at application" in {
+      (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], proposals: ProposalService[IO]) =>
+      def assigned(f: Fixture, milestone: ItemId): IO[Throwable, Published] = for {
+        value <- publish(f, DispatchWork.Planner(), plan(f, List(ProposedMutation.Produce(f.members.head.id, List(task), Some(MilestoneRef.Existing(milestone))))), usage, artifacts)
+        _ <- admit(f, value, admissions)
+      } yield value
+      for {
+        f <- begin(ledger, usage)
+        existing <- ledger.change(f.owner, ChangeRequest(RequestId(uuid), List(Mutation.Create(milestone(MilestoneStatus.Open)),
+          Mutation.Create(milestone(MilestoneStatus.Cancelled).copy(archived = true))), Nil, "Milestones outside the assignment"))
+        open = existing.items.head.id
+        archived = existing.items.last.id
+        before <- ledger.changes(f.owner, ChangeCursor(0), 20)
+        // Admission checks the proposal's shape only: each of these is admitted and refused by the preview with the fault application would return.
+        _ <- ZIO.foreachDiscard(List[(ItemId, Fault)](
+          open.copy(number = 99) -> Fault.Missing("Missing M99"),
+          open.copy(project = ProjectId(uuid)) -> Fault.Denied("Item belongs to another project"),
+          archived -> Fault.Invalid(s"Tasks can be assigned only to an Open milestone; M${archived.number} is Cancelled"),
+        )) { case (milestone, fault) => for {
+          value <- assigned(f, milestone)
+          _ <- rejected(proposals.preview(f.owner, value.artifact.id), _ == fault)
+          _ <- rejected(proposals(f.owner, value.artifact.id), _ == fault)
+        } yield () }
+        // A claim on the milestone is transient, so only application reports it: also when the applying Governor holds it under another fence.
+        value <- assigned(f, open)
+        held <- ledger.acquire(f.owner, ClaimId(uuid), Set(open), 300000)
+        shown <- proposals.preview(f.owner, value.artifact.id)
+        _ <- assertIO(shown.operations == List(ProposalOperationSummary.Produce(f.members.head.id, List(ProposalPolicy.summary(task)), Some(MilestoneRef.Existing(open)))))
+        _ <- rejected(proposals(f.owner, value.artifact.id), _ == Fault.StaleFence("Item has an active claim; current owner and fence required"))
+        unchanged <- ledger.changes(f.owner, ChangeCursor(0), 20)
+        _ <- assertIO(before == unchanged)
+        _ <- ledger.release(f.owner, held.fence)
+        ack <- proposals(f.owner, value.artifact.id)
+        target = ack.items.find(_.id == open).get
+        // The preview of an applied proposal stays readable as a record after its milestone closes.
+        _ <- ledger.change(f.owner, ChangeRequest(RequestId(uuid), List(Mutation.Replace(open, target.revision, milestone(MilestoneStatus.Complete))), Nil, "Complete the milestone"))
+        recorded <- proposals.preview(f.owner, value.artifact.id)
+        replayed <- proposals(f.owner, value.artifact.id)
+        _ <- assertIO(recorded == shown && replayed == ack)
       } yield ()
     }
 

@@ -44,6 +44,15 @@ final class ProposalServiceImpl[F[+_, +_]: Error2](ledger: LedgerRepository[F], 
     admission
   }
 
+  // The ledger state of each Existing milestone, with the fault application would return; its claim is transient and checked at application.
+  private def assignable(tx: LedgerTransaction, scope: Scope, loaded: Loaded): Unit = loaded.proposal.mutations.foreach {
+    case Mutation.Produce(_, _, _, Some(MilestoneRef.Existing(id))) => LedgerAccess.required(tx, scope, id).draft.content match {
+      case milestone: Content.Milestone => LedgerPolicy.openMilestone(milestone.status, LedgerPolicy.name(id))
+      case _ => LedgerPolicy.invalid(false, "PartOf target must be a milestone")
+    }
+    case _ => ()
+  }
+
   private def boundedPreview(tx: LedgerTransaction, loaded: Loaded): ProposalPreview = {
     val operations = loaded.proposal.mutations.map {
       case Mutation.Create(draft) => ProposalOperationSummary.Create(ProposalPolicy.summary(draft))
@@ -62,7 +71,9 @@ final class ProposalServiceImpl[F[+_, +_]: Error2](ledger: LedgerRepository[F], 
 
   override def preview(scope: Scope, id: ArtifactId): F[Throwable, ProposalPreview] = load(scope, id).flatMap { loaded =>
     ledger.transact(scope.project) { tx =>
-      admitted(tx, loaded)
+      val admission = admitted(tx, loaded)
+      // An applied proposal is a record: its preview no longer depends on what became of the milestone.
+      if (tx.request(admission.owner, loaded.change.request).isEmpty) assignable(tx, scope, loaded)
       boundedPreview(tx, loaded)
     }
   }
