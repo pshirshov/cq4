@@ -19,7 +19,7 @@ import zio.{Task, ZIO}
 import zio.interop.catz.*
 
 final class LocalControl(dispatch: DispatchController, cohorts: CohortController, integrations: IntegrationController, combinations: CombinationController,
-  access: LocalAccess, schemas: McpSchemas, config: SupervisorConfig, workflow: WorkflowExecution) extends Http4sDsl[Task] {
+  revalidations: RevalidationController, access: LocalAccess, schemas: McpSchemas, config: SupervisorConfig, workflow: WorkflowExecution) extends Http4sDsl[Task] {
   private val Versions = List("2025-03-26", "2025-06-18", "2025-11-25")
   private val MaxRequestBytes = 65536
   private val Context = BaboonCodecContext.Default
@@ -34,7 +34,7 @@ final class LocalControl(dispatch: DispatchController, cohorts: CohortController
     "name" -> Json.fromString(name), "description" -> Json.fromString(description), "inputSchema" -> schemas.schema(input), "outputSchema" -> schemas.schema(output),
     "annotations" -> Json.obj("readOnlyHint" -> Json.fromBoolean(readOnly), "openWorldHint" -> Json.False))
   private[server] def advertised(capability: LocalCapability): Json = if (capability.role == Role.Governor)
-    tool("dispatch", "DispatchCommand", "DispatchReply", "Select bounded cohorts, claim one complete choice, then StartChoice by ID, harness and fence. Workflow runs require choices; direct Start supports explicitly assigned non-workflow runs. Poll compact Status or cancel. Prepare/apply reviewed integration; Combine a NotApplied integration and poll CombinationStatus. Forward handles directly; full prompts/results stay outside your context.", false)
+    tool("dispatch", "DispatchCommand", "DispatchReply", "Select bounded cohorts, claim one complete choice, then StartChoice by ID, harness and fence. Workflow runs require choices; direct Start supports explicitly assigned non-workflow runs. Poll compact Status or cancel. Prepare/apply reviewed integration; Combine a NotApplied integration and poll CombinationStatus. Forward handles directly; full prompts/results stay outside your context." + McpSchemas.Revalidation, false)
   else tool("workspace", "WorkspaceCommand", "WorkspaceReply", "List or read bounded pages in your assigned workspace. A prepared resolver may read MergeReport. A candidate reviewer may request a configured Check by name and poll the same operation; wait for Completed evidence before returning. Relative paths only; Git metadata and symlink traversal are denied.", capability.role != Role.Reviewer)
     .mapObject(_.add("inputSchema", schemas.workspace(capability.role)))
   private def decode[A](codec: BaboonJsonCodec[A], json: Json): Task[A] = ZIO.attempt {
@@ -63,6 +63,7 @@ final class LocalControl(dispatch: DispatchController, cohorts: CohortController
         case DispatchCommand.IntegrationStatus(id, wait) => integrations.status(id, wait).map(DispatchReply.Integration.apply)
         case DispatchCommand.Combine(id, source, fence) => combinations.prepare(CombinationTicket(id, source, fence)).map(DispatchReply.Combination.apply)
         case DispatchCommand.CombinationStatus(id, wait) => combinations.status(id, wait).map(DispatchReply.Combination.apply)
+        case DispatchCommand.Revalidate(id, result, fence) => revalidations.request(id, result, fence).map(DispatchReply.Revalidation.apply)
       }
       operation.map(value => (DispatchReply_JsonCodec.encode(Context, value), false))
         .catchAll(error => ZIO.succeed((DispatchReply_JsonCodec.encode(Context, DispatchReply.Failed(fault(error))), true)))

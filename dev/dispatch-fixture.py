@@ -167,16 +167,25 @@ def main():
             text = tool("cq_host", "workspace", {"Read": {"path": "consumer.txt", "offset": 0, "limit": 8192}})
             assert text["Text"]["page"]["text"] == "candidate from isolated worker\n"
             tool("cq_host", "workspace", {"Read": {"path": ".git", "offset": 0, "limit": 10}}, denied=True)
-            assert context["previous"]["validation"] and all(value["state"] == "Passed" for value in context["previous"]["validation"])
+            # The prior result is delivered unchanged; a revalidation round among the artifacts supersedes the checks it reran (I19).
+            effective = {value["check"]: value["state"] for value in context["previous"]["validation"]}
+            rounds = [json.loads(value["body"]) for value in context["artifacts"] if value["metadata"]["kind"] == "Amendment"]
+            for amendment in sorted(rounds, key=lambda value: value["round"]):
+                assert amendment["candidate"] == context["previous"]["candidate"], amendment
+                effective.update({value["check"]: value["state"] for value in amendment["validation"]})
+            assert effective and all(state == "Passed" for state in effective.values()), effective
+            assert bool(rounds) == any(value["state"] != "Passed" for value in context["previous"]["validation"])
             tool("cq_host", "workspace", {"Check": {"name": "undeclared", "waitMillis": 0}}, denied=True)
             tool("cq_host", "workspace", {"Check": {"name": "consumer-content", "waitMillis": 20001}}, denied=True)
             check = tool("cq_host", "workspace", {"Check": {"name": "consumer-content", "waitMillis": 0}})["Check"]["value"]
-            job = check["job"]
+            jobs = {check["job"]["value"]}
             deadline = time.monotonic() + 20
             while check["phase"] != "Completed":
                 assert time.monotonic() < deadline and check["phase"] not in ["Failed", "Unknown"], check
                 check = tool("cq_host", "workspace", {"Check": {"name": "consumer-content", "waitMillis": 1000}})["Check"]["value"]
-                assert check["job"] == job
+                jobs.add(check["job"]["value"])
+            # The job changes only when the host reruns a failed run (I19); one request never starts a second check by itself.
+            assert len(jobs) <= 1 + len(check["evidence"]["failures"]) and (len(jobs) == 1) == (check["evidence"]["failures"] == []), check
             expected = "Failed" if "failed-reviewer-check" in context["members"][0]["item"]["draft"]["labels"] else "Passed"
             assert check["evidence"]["state"] == expected and check["evidence"] != context["previous"]["validation"][0]
             assert not Path("check-private").exists()
@@ -533,7 +542,42 @@ def main():
     tool("cq_host", "dispatch", {"Start": {"request": changed}}, denied=True)
 
     worker = poll(first["attempt"])
-    assert worker["phase"] == "Completed" and worker["counts"]["ready"] == 1 and worker["counts"]["validationFailed"] == 0, worker
+    revalidating = data["request"] in ["revalidate-and-integrate", "revalidate-bound"]
+    assert worker["phase"] == "Completed" and worker["counts"]["ready"] == 1 and worker["counts"]["validationFailed"] == (1 if revalidating else 0), worker
+    assert worker["counts"]["validationIntermittent"] == (1 if data["request"] == "intermittent-check" else 0), worker
+    assert worker["next"] == ("Revise" if revalidating else "Review"), worker
+    if revalidating:
+        assert worker["blocker"] == "Host check consumer-content: Failed", worker
+        fence = request["fence"]
+
+        def revalidate(identity_value):
+            for _ in range(8):
+                value = tool("cq_host", "dispatch", {"Revalidate": {"id": identity_value, "result": worker["result"], "fence": fence}})["Revalidation"]["value"]
+                if value["phase"] != "Running":
+                    return value
+            raise AssertionError("Revalidation did not finish")
+
+        def refused(operation, text):
+            response = tool("cq_host", "dispatch", operation, denied=True)
+            assert text in json.dumps(response), response
+
+        operation = identity()
+        round_one = revalidate(operation)
+        assert round_one["phase"] == "Completed" and round_one["amendment"] and round_one["result"] == worker["result"], round_one
+        assert revalidate(operation) == round_one
+        refused({"Revalidate": {"id": operation, "result": worker["result"], "fence": {"claim": identity(), "generation": "1"}}}, "Revalidation request identity changed")
+        refused({"Revalidate": {"id": identity(), "result": worker["result"], "fence": {"claim": identity(), "generation": "1"}}}, "claim fence its result was admitted under")
+        # The worker's own compact status is its sealed admission outcome; a round never rewrites it.
+        assert poll(first["attempt"]) == worker
+        if data["request"] == "revalidate-bound":
+            assert [value["state"] for value in round_one["validation"]] == ["Failed"] and round_one["blocker"] == "Host check consumer-content: Failed", round_one
+            refused({"Revalidate": {"id": identity(), "result": worker["result"], "fence": fence}}, "Revalidation limit reached for check consumer-content: 1 rounds")
+            emit({"type": "fixture.revalidation", "rounds": [round_one]})
+            finish({"summary": "A check that kept failing used its one revalidation round; a further round was refused"})
+            return
+        assert [value["state"] for value in round_one["validation"]] == ["Passed"] and round_one["blocker"] is None, round_one
+        refused({"Revalidate": {"id": identity(), "result": worker["result"], "fence": fence}}, "Result has no failed check to revalidate")
+        emit({"type": "fixture.revalidation", "rounds": [round_one]})
     assert worker["result"] and worker["usageDelivered"] and worker["detailsOmitted"]
     assert poll(first["attempt"]) == worker
     review_request = {**request, "request": identity(), "work": {"Reviewer": {"mode": "Candidate"}}, "previous": worker["result"]}
@@ -561,7 +605,13 @@ def main():
         return
     reviewed = poll(review["attempt"])
     assert reviewed["phase"] == "Completed" and reviewed["counts"]["accepted"] == 1, reviewed
-    if data["request"] == "integrate-reviewed-candidate":
+    if data["request"] in ["intermittent-check", "intermittent-reviewer-check"]:
+        assert reviewed["counts"]["validationFailed"] == 0 and reviewed["next"] == "ConsiderAcceptance", reviewed
+        # The reviewer's own observation replaces the inherited one, so only a rerun of the reviewer's check counts here.
+        assert reviewed["counts"]["validationIntermittent"] == (1 if data["request"] == "intermittent-reviewer-check" else 0), reviewed
+        finish({"summary": "A check that failed once passed on its rerun; the candidate was reviewed without a worker pass"})
+        return
+    if data["request"] in ["integrate-reviewed-candidate", "revalidate-and-integrate"]:
         assert data["integrationTarget"] == "refs/heads/integration"
         operation = identity()
         prepared_request = {"PrepareIntegration": {"id": operation, "reviewer": reviewed["result"]}}

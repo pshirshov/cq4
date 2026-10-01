@@ -203,7 +203,7 @@ final class AgentCatalogLocal extends AnyWordSpec {
 
     "show the workspace Check branch only for reviewers, as the local workspace tool advertises it" in {
       // `advertised` reads only the schemas; the controllers a running LocalControl serves are not involved.
-      val control = new LocalControl(null, null, null, null, null, schemas, null, null)
+      val control = new LocalControl(null, null, null, null, null, null, schemas, null, null)
       works.foreach { work =>
         withClue(s"$work: ") {
           val entry = catalog.entry(work)

@@ -2,7 +2,7 @@ package cq.host
 
 import baboon.runtime.shared.BaboonCodecContext
 import cq.api.*
-import cq.core.JsonRoundtrip
+import cq.core.{DomainFailure, JsonRoundtrip}
 import io.circe.parser
 import java.nio.charset.StandardCharsets.UTF_8
 import java.security.MessageDigest
@@ -46,6 +46,19 @@ final class ArtifactReader(call: Command => Result, project: ProjectId) {
       "Input artifact digest or length differs from its metadata")
     ResolvedArtifact(metadata, text)
   }
+
+  private def find(id: ArtifactId): Option[ResolvedArtifact] = {
+    val present = try call(Command.Read(ReadInput(project, ReadSelection.ArtifactInfo(id)))) match {
+      case Result.Failed(_: Fault.Missing) => false
+      case _ => true
+    } catch { case DomainFailure(_: Fault.Missing) => false }
+    if (present) Some(read(id)) else None
+  }
+
+  /** The published revalidation rounds of a result, in order; none when the result was never revalidated. */
+  def amendments(result: ArtifactId): List[PublishedAmendment] =
+    LazyList.from(1).take(IntegrationValidation.MaxRevalidations).map(round => find(IntegrationValidation.amendmentId(result, round)))
+      .takeWhile(_.nonEmpty).flatten.map(stored => PublishedAmendment(stored, IntegrationValidation.amendment(stored))).toList
 
   def result(id: ArtifactId): AdmittedResult = {
     val stored = read(id)

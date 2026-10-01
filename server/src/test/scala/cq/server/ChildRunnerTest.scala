@@ -12,7 +12,7 @@ import java.nio.file.{Files, Path}
 import java.nio.file.attribute.PosixFilePermissions
 import java.time.{Clock, Duration}
 import java.util.UUID
-import zio.{IO, Promise, Runtime, Task, Unsafe, ZIO}
+import zio.{IO, Promise, Runtime, Semaphore, Task, Unsafe, ZIO}
 
 /** Runs the real ChildRunner against an in-process server, a scripted Codex-shaped harness and the native guardian. */
 final class ChildRunnerProcess extends SpecZIO with AssertZIO {
@@ -60,6 +60,12 @@ emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_toke
 target.write_text(json.dumps({"Work": {"members": [{"item": item, "disposition": "Blocked", "summary": "Reported at length", "evidence": []} for item in members]}}))
 emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_tokens": 0, "cache_write_input_tokens": 0, "output_tokens": 5, "reasoning_output_tokens": 0}})
 """
+  /** A candidate reviewer that accepts every member and records in `record` the artifacts the host assembled for it. */
+  private def reviewing(record: Path): String = Header + s"""Path("$record").write_text(
+    json.dumps([{"kind": value["metadata"]["kind"], "body": value["body"]} for value in data["input"]["artifacts"]]))
+""" + """target.write_text(json.dumps({"Review": {"members": [{"item": item, "verdict": "Accepted", "findings": []} for item in members], "proposal": None}}))
+emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_tokens": 0, "cache_write_input_tokens": 0, "output_tokens": 5, "reasoning_output_tokens": 0}})
+"""
   /** A child that records the payload of the domain credential it was launched with. */
   private val Credentialed = Header + """import base64, os
 payload = os.environ["CQ_MCP_CQ_TOKEN"].split(".")[0]
@@ -100,8 +106,21 @@ sys.stderr.flush()
     override def grant(value: GrantRequest): AccessToken = auth.grant(root, value)
   }
 
-  private final case class Fixture(owner: Scope, config: SupervisorConfig, runner: ChildRunner, agents: AgentCatalog, jobs: JobSupervisor, members: List[ItemRevision], fence: Fence,
-    governor: Attempt, profile: HarnessSetting, clock: Clock) {
+  private final case class Fixture(owner: Scope, collector: Scope, config: SupervisorConfig, authority: SupervisorAuthority, runner: ChildRunner, agents: AgentCatalog,
+    jobs: JobSupervisor, members: List[ItemRevision], fence: Fence, governor: Attempt, profile: HarnessSetting, clock: Clock) {
+    val limits: HostLimits = HostLimits(3000, 900, 100, 1000, 262144)
+    /** Runs one child of `controller` to its terminal status. */
+    def child(controller: DispatchController, script: String, request: DispatchRequest): Task[DispatchStatus] = for {
+      _ <- ZIO.attemptBlocking(install(script))
+      started <- controller.start(request)
+      settled <- controller.status(started.attempt, 20000).repeatUntil(status => DispatchController.terminal(status.phase))
+        .timeoutFail(new IllegalStateException("Child did not finish"))(zio.Duration.fromSeconds(60))
+    } yield settled
+    def revalidations(controller: DispatchController): ZIO[zio.Scope, Throwable, RevalidationController] = for {
+      requests <- Semaphore.make(1)
+      admission <- Semaphore.make(1)
+      value <- ZIO.acquireRelease(ZIO.succeed(new RevalidationController(config, authority, jobs, controller, clock, requests, admission)))(_.shutdown.orDie)
+    } yield value
     def install(script: String): Unit = {
       val executable = Path.of(profile.executable)
       Files.writeString(executable, script)
@@ -128,7 +147,7 @@ sys.stderr.flush()
 
   private def fixture(local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO],
     usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO],
-    proposals: ProposalService[IO], target: Option[String])(test: Fixture => Task[Unit]): Task[Unit] = ZIO.scoped {
+    proposals: ProposalService[IO], target: Option[String], checks: List[ValidationCheck])(test: Fixture => Task[Unit]): Task[Unit] = ZIO.scoped {
     val clock = Clock.systemUTC()
     val project = ProjectConfig(ProjectId(uuid), "http://localhost", "Child runner")
     val owner = Scope(project.project, Actor("CQ governor", SessionId(uuid), Role.Governor))
@@ -150,7 +169,7 @@ sys.stderr.flush()
         "fixture-provider", "fixture-model", "fixture", clock.millis(), UsagePhase.Govern))
       directory <- ZIO.attemptBlocking(Files.createTempDirectory(local.directory, "child-runner-"))
       profile = HarnessSetting(Harness.Codex, directory.resolve("fixture-harness").toString, "fixture-model", "fixture-provider", "0.156.1", Nil, Set.empty)
-      settings = SupervisorSettings(directory.toString, guardian.binary.toString, List(profile), limits, Nil, None, target)
+      settings = SupervisorSettings(directory.toString, guardian.binary.toString, List(profile), limits, checks, None, target)
       run = SupervisorRun(project, assignment, governor, profile.version, local.source.toString, local.base, SessionOwnership.Managed)
       config = SupervisorConfig(settings, project, SupervisorConfig.profile(profile), SupervisorConfig.limits(limits), run, directory, "", None, guardian.environment)
       collectorAuthority = auth.authenticate(auth.grant(root, GrantRequest(owner.project, collector.actor, expires)).value, None)
@@ -165,8 +184,17 @@ sys.stderr.flush()
       agents = new AgentCatalog(new McpSchemas, new ChildInstructions)
       runner = new ChildRunner(config, authority, new HarnessRegistry(Set(new ClaudeAdapter, new CodexAdapter, new PiAdapter)), jobs, workspaces,
         agents, new HarnessOutput, new CandidateWorkspace(config), new WorkspaceReader, access, new OperatorRequirements(""), clock)
-      _ <- test(Fixture(owner, config, runner, agents, jobs, members, claim.fence, governor, profile, clock))
+      _ <- test(Fixture(owner, collector, config, authority, runner, agents, jobs, members, claim.fence, governor, profile, clock))
     } yield ()
+  }
+
+  /** A check that counts its runs in `counter` and fails the first `failing` of them. */
+  private def counting(name: String, counter: Path, failing: Int, attempts: Int): ValidationCheck = ValidationCheck(name,
+    List("sh", "-c", s"n=$$(cat $counter 2>/dev/null || echo 0); echo $$((n + 1)) > $counter; test $$n -ge $failing"), 10000, 65536, attempts, 0)
+  private def fault[A](operation: Task[A]): Task[Option[Fault]] = operation.either.map {
+    case Left(DomainFailure(value)) => Some(value)
+    case Left(error) => throw error
+    case Right(_) => None
   }
 
   private def text(artifacts: ArtifactService[IO], owner: Scope, id: ArtifactId): Task[String] = artifacts.metadata(owner, id).flatMap { metadata =>
@@ -180,7 +208,7 @@ sys.stderr.flush()
     "retain the worker's evidence directory and named files as readable result artifacts" in {
       (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
         artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
-      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None) { f => for {
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None, Nil) { f => for {
         entry <- f.dispatch(Completing, HostLimits(3000, 900, 100, 1000, 262144))
         _ <- f.runner.run(entry).timeoutFail(new IllegalStateException("Worker did not finish"))(zio.Duration.fromSeconds(60))
         status = entry.status
@@ -210,7 +238,7 @@ sys.stderr.flush()
     "D95: complete a healthy child whose native output exceeds its retained bound and retain a bounded head-and-tail transcript" in {
       (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
         artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
-      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None) { f =>
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None, Nil) { f =>
         val bound = 65536
         for {
           entry <- f.dispatch(Verbose, HostLimits(3000, 900, 100, 1000, bound))
@@ -242,7 +270,7 @@ sys.stderr.flush()
     "launch the child with the agent catalog's effective prompt, output schema and tool configuration" in {
       (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
         artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
-      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None) { f => for {
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None, Nil) { f => for {
         entry <- f.dispatch(Recording, HostLimits(3000, 900, 100, 1000, 262144))
         _ <- f.runner.run(entry).timeoutFail(new IllegalStateException("Worker did not finish"))(zio.Duration.fromSeconds(60))
         status = entry.status
@@ -280,7 +308,7 @@ sys.stderr.flush()
     "I21: complete a worker that runs past the former execution deadline" in {
       (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
         artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
-      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None) { f => for {
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None, Nil) { f => for {
         entry <- f.dispatch(Slow, HostLimits(3000, 900, 100, 1000, 262144))
         _ <- f.runner.run(entry).timeoutFail(new IllegalStateException("Worker did not finish"))(zio.Duration.fromSeconds(60))
         job <- f.jobs.status(f.config.owner, entry.ticket.attempt.id)
@@ -292,7 +320,7 @@ sys.stderr.flush()
     "I21: grant a child its domain credential at its own start for the server's grant lifetime" in {
       (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
         artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
-      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None) { f => for {
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None, Nil) { f => for {
         entry <- f.dispatch(Credentialed, HostLimits(3000, 900, 100, 1000, 262144))
         _ <- f.runner.run(entry).timeoutFail(new IllegalStateException("Worker did not finish"))(zio.Duration.fromSeconds(60))
         _ <- ZIO.attempt(assert(entry.status.phase == DispatchPhase.Completed && entry.status.result.nonEmpty, entry.status.toString))
@@ -315,7 +343,7 @@ sys.stderr.flush()
     "collect partial work when the worker fails or is cancelled" in {
       (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
         artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
-      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None) { f =>
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None, Nil) { f =>
         def verify(entry: DispatchExecution, phase: DispatchPhase, state: AttemptState): Task[Unit] = for {
           status <- ZIO.succeed(entry.status)
           _ <- ZIO.attempt(assert(status.phase == phase && status.result.isEmpty, status.toString))
@@ -361,10 +389,185 @@ sys.stderr.flush()
       }
     }
 
+    "I19: rerun a failing configured check on the same candidate and record a fail-then-pass as intermittent" in {
+      (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
+      val counter = local.directory.resolve("flaky-" + uuid)
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None, List(counting("flaky", counter, 1, 2))) { f => for {
+        entry <- f.dispatch(Completing, HostLimits(3000, 900, 100, 1000, 262144))
+        _ <- f.runner.run(entry).timeoutFail(new IllegalStateException("Worker did not finish"))(zio.Duration.fromSeconds(60))
+        status = entry.status
+        _ <- ZIO.attempt(assert(status.phase == DispatchPhase.Completed && status.result.nonEmpty, status.toString))
+        result <- text(artifacts, f.owner, status.result.get).map(Wire.decode(ChildResult_JsonCodec, _))
+        evidence = result.validation.head
+        observations <- ZIO.foreach(evidence.failures :+ evidence.artifact)(id => text(artifacts, f.owner, id).map(Wire.decode(ValidationObservation_JsonCodec, _)))
+        workspaces <- ZIO.foreach(observations)(value => local.fixture.service.get(f.owner, value.job.workspace.attempt))
+        _ <- ZIO.attemptBlocking {
+          println(s"Intermittent check: counts=${status.counts} next=${status.next} evidence=$evidence runs=${Files.readString(counter).trim}")
+          assert(status.counts.validationIntermittent == 1 && status.counts.validationFailed == 0 && status.next == ChildNext.Review && status.blocker.isEmpty, status.toString)
+          assert(result.validation.map(value => (value.check, value.state, value.failures.size)) == List(("flaky", ValidationState.Passed, 1)), result.validation.toString)
+          assert(Files.readString(counter).trim == "2")
+          assert(observations.map(value => JobOutcome.observed(value.job).succeeded) == List(false, true))
+          assert(observations.forall(value => result.candidate.contains(value.candidate) && value.job.workspace.base == value.candidate))
+          assert(observations.map(_.job.workspace.attempt).distinct.size == 2 && workspaces.forall(_.admission == WorkspaceAdmission.Removed))
+        }
+      } yield () }
+    }
+
+    "I19: run a check that keeps failing exactly its configured attempts and a passing check once" in {
+      (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
+      val failing = local.directory.resolve("failing-" + uuid)
+      val steady = local.directory.resolve("steady-" + uuid)
+      val single = local.directory.resolve("single-" + uuid)
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None,
+        List(counting("failing", failing, 100, 3), counting("steady", steady, 0, 3), counting("single", single, 100, 1))) { f => for {
+        entry <- f.dispatch(Completing, HostLimits(3000, 900, 100, 1000, 262144))
+        _ <- f.runner.run(entry).timeoutFail(new IllegalStateException("Worker did not finish"))(zio.Duration.fromSeconds(60))
+        status = entry.status
+        _ <- ZIO.attempt(assert(status.phase == DispatchPhase.Completed && status.result.nonEmpty, status.toString))
+        result <- text(artifacts, f.owner, status.result.get).map(Wire.decode(ChildResult_JsonCodec, _))
+        _ <- ZIO.attemptBlocking {
+          println(s"Persistent failure: counts=${status.counts} next=${status.next} validation=${result.validation}")
+          assert(result.validation.map(value => (value.check, value.state, value.failures.size)) == List(
+            ("failing", ValidationState.Failed, 2), ("steady", ValidationState.Passed, 0), ("single", ValidationState.Failed, 0)), result.validation.toString)
+          assert(List(failing, steady, single).map(Files.readString(_).trim) == List("3", "1", "1"))
+          assert(result.validation.flatMap(value => value.artifact :: value.failures).distinct.size == 5)
+          assert(status.counts.validationFailed == 2 && status.counts.validationIntermittent == 0 && status.next == ChildNext.Revise, status.toString)
+        }
+      } yield () }
+    }
+
+    "I19: revalidate an admitted result whose check failed at admission, on its exact candidate, and let its reviewer inherit the round" in {
+      (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
+      val counter = local.directory.resolve("revalidated-" + uuid)
+      val heads = local.directory.resolve("heads-" + uuid)
+      val check = ValidationCheck("flaky", List("sh", "-c",
+        s"n=$$(cat $counter 2>/dev/null || echo 0); echo $$((n + 1)) > $counter; git rev-parse HEAD >> $heads; test $$n -ge 1"), 10000, 65536, 1, 2)
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None, List(check)) { f => ZIO.scoped { for {
+        controller <- ZIO.succeed(new DispatchController(f.config, f.runner, f.jobs, f.clock))
+        revalidations <- f.revalidations(controller)
+        worked <- f.child(controller, Completing, f.request(f.limits))
+        _ <- ZIO.attempt(assert(worked.phase == DispatchPhase.Completed && worked.counts.validationFailed == 1 && worked.next == ChildNext.Revise, worked.toString))
+        handle = worked.result.get
+        before <- artifacts.metadata(f.owner, handle)
+        id = RequestId(uuid)
+        status <- revalidations.request(id, handle, f.fence).repeatUntil(_.phase != RevalidationPhase.Running)
+          .timeoutFail(new IllegalStateException("Revalidation did not finish"))(zio.Duration.fromSeconds(60))
+        replay <- revalidations.request(id, handle, f.fence)
+        reused <- fault(revalidations.request(id, handle, Fence(ClaimId(uuid), 1)))
+        again <- fault(revalidations.request(RequestId(uuid), handle, f.fence))
+        after <- artifacts.metadata(f.owner, handle)
+        result <- text(artifacts, f.owner, handle).map(Wire.decode(ChildResult_JsonCodec, _))
+        metadata <- artifacts.metadata(f.owner, status.amendment.get)
+        amendment <- text(artifacts, f.owner, status.amendment.get).map(Wire.decode(ValidationAmendment_JsonCodec, _))
+        observation <- text(artifacts, f.owner, amendment.validation.head.artifact).map(Wire.decode(ValidationObservation_JsonCodec, _))
+        workspace <- local.fixture.service.get(f.owner, observation.job.workspace.attempt)
+        _ <- ZIO.attemptBlocking {
+          val candidate = result.candidate.get
+          println(s"Revalidation: $status amendment=$amendment heads=${Files.readAllLines(heads)} runs=${Files.readString(counter).trim}")
+          assert(status.phase == RevalidationPhase.Completed && status.blocker.isEmpty && replay == status, status.toString)
+          assert(status.amendment.contains(IntegrationValidation.amendmentId(handle, 1)) && status.validation == amendment.validation)
+          assert(status.validation.map(value => (value.check, value.state)) == List(("flaky", ValidationState.Passed)))
+          assert(metadata.kind == ArtifactKind.Amendment && metadata.attempt == f.governor.id && metadata.actor.role == Role.Collector)
+          assert(amendment.result == handle && amendment.candidate == candidate && amendment.author == f.governor.id && amendment.round == 1)
+          // The check ran once at admission and once in the round, each time in a workspace at the recorded candidate commit.
+          assert(observation.candidate == candidate && observation.job.workspace.base == candidate && observation.job.workspace.attempt != result.attempt)
+          assert(Files.readAllLines(heads) == java.util.List.of(candidate.value, candidate.value) && Files.readString(counter).trim == "2")
+          assert(workspace.admission == WorkspaceAdmission.Removed)
+          // The admitted result is the same artifact with the same failed evidence.
+          assert(after == before && result.validation.map(_.state) == List(ValidationState.Failed))
+          assert(reused.contains(Fault.Conflict("Revalidation request identity changed")), reused.toString)
+          assert(again.contains(Fault.Conflict("Result has no failed check to revalidate")), again.toString)
+        }
+        review = DispatchRequest(RequestId(uuid), DispatchWork.Reviewer(ReviewerMode.Candidate), Harness.Codex, f.members, Nil, Nil, Some(handle), f.fence, f.limits)
+        record = local.directory.resolve("review-artifacts-" + uuid)
+        reviewed <- f.child(controller, reviewing(record), review)
+        _ <- ZIO.attempt(assert(reviewed.phase == DispatchPhase.Completed && reviewed.result.nonEmpty, reviewed.toString))
+        verdict <- text(artifacts, f.owner, reviewed.result.get).map(Wire.decode(ChildResult_JsonCodec, _))
+        delivered <- ZIO.attemptBlocking(io.circe.parser.parse(Files.readString(record)).fold(throw _, identity))
+        _ <- ZIO.attempt {
+          println(s"Review of the revalidated result: counts=${reviewed.counts} next=${reviewed.next} validation=${verdict.validation} artifacts=$delivered")
+          assert(verdict.validation == amendment.validation && reviewed.counts.accepted == 1 && reviewed.counts.validationFailed == 0 &&
+            reviewed.next == ChildNext.ConsiderAcceptance, reviewed.toString)
+          assert(delivered.asArray.get.map(_.hcursor.get[String]("kind").toOption.get) == Vector("Amendment"))
+          assert(delivered.asArray.get.head.hcursor.get[String]("body").toOption.map(Wire.decode(ValidationAmendment_JsonCodec, _)).contains(amendment))
+        }
+      } yield () } }
+    }
+
+    "I19: bound revalidation rounds per check of a result and refuse a foreign fence, a running child, a superseded result, an Unknown check and a released claim" in {
+      (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
+      val counter = local.directory.resolve("always-" + uuid)
+      val disabled = local.directory.resolve("disabled-" + uuid)
+      def settled(revalidations: RevalidationController, handle: ArtifactId, fence: Fence): Task[RevalidationStatus] = {
+        val id = RequestId(uuid)
+        revalidations.request(id, handle, fence).repeatUntil(_.phase != RevalidationPhase.Running)
+          .timeoutFail(new IllegalStateException("Revalidation did not finish"))(zio.Duration.fromSeconds(60))
+      }
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None,
+        List(counting("always", counter, 100, 1).copy(revalidations = 2))) { f => ZIO.scoped { for {
+        controller <- ZIO.succeed(new DispatchController(f.config, f.runner, f.jobs, f.clock))
+        revalidations <- f.revalidations(controller)
+        worked <- f.child(controller, Completing, f.request(f.limits))
+        handle = worked.result.get
+        foreign <- fault(revalidations.request(RequestId(uuid), handle, Fence(ClaimId(uuid), 1)))
+        missing <- fault(revalidations.request(RequestId(uuid), ArtifactId(uuid), f.fence))
+        _ <- ZIO.attemptBlocking(f.install(Stalling))
+        running <- controller.start(f.request(f.limits))
+        occupied <- fault(revalidations.request(RequestId(uuid), handle, f.fence))
+        _ <- controller.cancel(running.attempt)
+        stopped <- controller.status(running.attempt, 20000).repeatUntil(status => DispatchController.terminal(status.phase))
+          .timeoutFail(new IllegalStateException("Cancelled child did not settle"))(zio.Duration.fromSeconds(60))
+        first <- settled(revalidations, handle, f.fence)
+        second <- settled(revalidations, handle, f.fence)
+        third <- fault(revalidations.request(RequestId(uuid), handle, f.fence))
+        _ <- ZIO.attemptBlocking {
+          println(s"Bounded revalidation: first=$first second=$second third=$third runs=${Files.readString(counter).trim}")
+          assert(foreign.contains(Fault.StaleFence("Revalidation requires the claim fence its result was admitted under")), foreign.toString)
+          assert(missing.exists(_.isInstanceOf[Fault.Missing]), missing.toString)
+          assert(occupied.contains(Fault.Conflict("An active child covers T1; poll its status before revalidating")), occupied.toString)
+          assert(stopped.phase == DispatchPhase.Cancelled && stopped.result.isEmpty, stopped.toString)
+          assert(List(first, second).map(value => (value.phase, value.validation.map(_.state), value.blocker)) ==
+            List.fill(2)((RevalidationPhase.Completed, List(ValidationState.Failed), Some("Host check always: Failed"))))
+          assert(first.amendment.contains(IntegrationValidation.amendmentId(handle, 1)) && second.amendment.contains(IntegrationValidation.amendmentId(handle, 2)))
+          assert(third.contains(Fault.Limit("Revalidation limit reached for check always: 2 rounds")), third.toString)
+          // One run at admission and one per round; the refused requests ran nothing.
+          assert(Files.readString(counter).trim == "3")
+        }
+        later <- f.child(controller, Completing, f.request(f.limits))
+        superseded <- fault(revalidations.request(RequestId(uuid), handle, f.fence))
+        current = later.result.get
+        candidate <- text(artifacts, f.owner, current).map(Wire.decode(ChildResult_JsonCodec, _).candidate.get)
+        _ <- artifacts.upload(f.collector, ArtifactUpload(f.owner.project, IntegrationValidation.amendmentId(current, 1), f.governor.id, ArtifactKind.Amendment,
+          "application/json", Wire.encode(ValidationAmendment_JsonCodec, ValidationAmendment(current, candidate, f.governor.id, 1,
+            List(ValidationEvidence("always", ValidationState.Unknown, ArtifactId(uuid), Nil))))))
+        unknown <- fault(revalidations.request(RequestId(uuid), current, f.fence))
+        _ <- ledger.release(f.owner, f.fence)
+        released <- fault(revalidations.request(RequestId(uuid), current, f.fence))
+        _ <- ZIO.attemptBlocking {
+          println(s"Refused revalidation: superseded=$superseded unknown=$unknown released=$released runs=${Files.readString(counter).trim}")
+          assert(superseded.contains(Fault.Conflict("Result is superseded by a later result for the same members")), superseded.toString)
+          assert(unknown.contains(Fault.Conflict("Check always is Unknown; a check whose cleanup is unconfirmed is never rerun")), unknown.toString)
+          assert(released.contains(Fault.StaleFence("Claim released")), released.toString)
+          assert(Files.readString(counter).trim == "4")
+        }
+      } yield () } } *> fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None,
+        List(counting("always", disabled, 100, 1))) { f => ZIO.scoped { for {
+        controller <- ZIO.succeed(new DispatchController(f.config, f.runner, f.jobs, f.clock))
+        revalidations <- f.revalidations(controller)
+        worked <- f.child(controller, Completing, f.request(f.limits))
+        refused <- fault(revalidations.request(RequestId(uuid), worked.result.get, f.fence))
+        _ <- ZIO.attemptBlocking(assert(refused.contains(Fault.Limit("Revalidation limit reached for check always: 0 rounds")) &&
+          Files.readString(disabled).trim == "1", refused.toString))
+      } yield () } }
+    }
     "I21: report how long a running child has been silent, reset it when the child writes, and omit it once the child settles" in {
       (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
         artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
-      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None) { f =>
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None, Nil) { f =>
         val controller = new DispatchController(f.config, f.runner, f.jobs, f.clock)
         def observe(attempt: AttemptId, seen: List[DispatchStatus]): Task[List[DispatchStatus]] = controller.status(attempt, 0).flatMap { status =>
           if (DispatchController.terminal(status.phase)) ZIO.succeed((status :: seen).reverse)
@@ -389,31 +592,31 @@ sys.stderr.flush()
     }
 
     "D91: start a child while the operator checkout has staged, unstaged and untracked work, which the host preserves" in {
-      (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
-        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
-      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, Some("refs/heads/integration")) { f =>
-        val limits = HostLimits(3000, 900, 100, 1000, 262144)
-        val controller = new DispatchController(f.config, f.runner, f.jobs, f.clock)
-        for {
-          _ <- ZIO.attemptBlocking {
-            local.git(local.source, "branch", "integration", local.base.value)
-            f.install(Completing)
-            Files.writeString(local.source.resolve("tracked.txt"), "operator edit in progress\n")
-            Files.writeString(local.source.resolve("staged.txt"), "operator staged work\n")
-            local.git(local.source, "add", "staged.txt")
-            Files.writeString(local.source.resolve("untracked.log"), "operator notes\n")
-          }
-          started <- controller.start(f.request(limits))
-          settled <- controller.status(started.attempt, 20000).repeatUntil(status => DispatchController.terminal(status.phase))
-            .timeoutFail(new IllegalStateException("Worker did not finish"))(zio.Duration.fromSeconds(60))
-          _ <- ZIO.attempt {
-            assert(settled.phase == DispatchPhase.Completed && settled.result.nonEmpty, settled.toString)
-            assert(Files.readString(local.source.resolve("tracked.txt")) == "operator edit in progress\n")
-            assert(local.git(local.source, "show", ":staged.txt") == "operator staged work")
-            assert(Files.readString(local.source.resolve("untracked.log")) == "operator notes\n")
-          }
-        } yield ()
-      }
+    (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
+      artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
+    fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, Some("refs/heads/integration"), Nil) { f =>
+      val limits = HostLimits(3000, 900, 100, 1000, 262144)
+      val controller = new DispatchController(f.config, f.runner, f.jobs, f.clock)
+      for {
+        _ <- ZIO.attemptBlocking {
+          local.git(local.source, "branch", "integration", local.base.value)
+          f.install(Completing)
+          Files.writeString(local.source.resolve("tracked.txt"), "operator edit in progress\n")
+          Files.writeString(local.source.resolve("staged.txt"), "operator staged work\n")
+          local.git(local.source, "add", "staged.txt")
+          Files.writeString(local.source.resolve("untracked.log"), "operator notes\n")
+        }
+        started <- controller.start(f.request(limits))
+        settled <- controller.status(started.attempt, 20000).repeatUntil(status => DispatchController.terminal(status.phase))
+          .timeoutFail(new IllegalStateException("Worker did not finish"))(zio.Duration.fromSeconds(60))
+        _ <- ZIO.attempt {
+          assert(settled.phase == DispatchPhase.Completed && settled.result.nonEmpty, settled.toString)
+          assert(Files.readString(local.source.resolve("tracked.txt")) == "operator edit in progress\n")
+          assert(local.git(local.source, "show", ":staged.txt") == "operator staged work")
+          assert(Files.readString(local.source.resolve("untracked.log")) == "operator notes\n")
+        }
+      } yield ()
+    }
     }
   }
 }

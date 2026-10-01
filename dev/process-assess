@@ -213,7 +213,7 @@ def main():
                             "artifacts": [prior["result"], *retained_context], "candidate": candidate}))
                     settings["integrationTarget"] = "refs/heads/integration"
                     settings["evaluation"]["assessor"] = False
-                    settings["checks"].append({"name": "empty-input-sensitivity", "command": [sys.executable, str(root / "dev/consumer-empty-check.py")], "executionMillis": "180000", "retainedOutputBytes": 262144})
+                    settings["checks"].append({"name": "empty-input-sensitivity", "command": [sys.executable, str(root / "dev/consumer-empty-check.py")], "executionMillis": "180000", "retainedOutputBytes": 262144, "attempts": 1, "revalidations": 0})
                     values = execute(directory, stage_result, request_text, ["--workflow", "advance", "--roots", "T1", "--through", "integrate"])
                     integrations = json.loads((directory / "integrations.json").read_text())
                     reopened = reopening["reopening_stage"](current, values, settings, integrations, prior["result"])

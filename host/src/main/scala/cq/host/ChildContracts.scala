@@ -130,7 +130,9 @@ object ChildContracts {
     require(value.report.isInstanceOf[ChildReport.Work] || value.request.work == DispatchWork.Reviewer(ReviewerMode.Candidate) ||
       (value.candidate.isEmpty && value.validation.isEmpty), "Non-candidate results cannot inherit candidate validation")
     require(value.validation.size <= 8 && value.validation.map(_.check).distinct.size == value.validation.size &&
-      value.validation.forall(_.check.matches("[a-z][a-z0-9-]{0,49}")), "Invalid host validation inventory")
+      value.validation.forall(_.check.matches("[a-z][a-z0-9-]{0,49}")) &&
+      value.validation.forall(entry => entry.failures.size < IntegrationValidation.MaxAttempts && (entry.artifact :: entry.failures).distinct.size == entry.failures.size + 1),
+      "Invalid host validation inventory")
     val evidence = value.evidence
     require(value.request.work.isInstanceOf[DispatchWork.Worker] || (evidence.files.isEmpty && evidence.omitted.isEmpty), "Only worker results retain workspace evidence")
     require(evidence.files.size <= WorkspaceEvidence.MaxFiles && evidence.files.map(_.path).distinct.size == evidence.files.size &&

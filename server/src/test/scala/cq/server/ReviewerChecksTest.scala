@@ -41,7 +41,7 @@ final class ReviewerChecksProcess extends SpecZIO with AssertZIO {
   }
   private final case class Fixture(config: SupervisorConfig, entry: DispatchExecution, checks: ReviewerChecks, jobs: JobSupervisor,
     receiver: Receiver, journal: JobRepository, failCancellation: AtomicBoolean)
-  private def fixture(local: LocalWorkspaceFixture, guardian: GuardianFixture, scripts: List[(String, String)], hook: ArtifactUpload => Unit)
+  private def fixture(local: LocalWorkspaceFixture, guardian: GuardianFixture, scripts: List[(String, String)], attempts: Int, hook: ArtifactUpload => Unit)
     (test: Fixture => Task[Unit]): Task[Unit] = ZIO.scoped {
     val project = ProjectConfig(ProjectId(uuid), "http://localhost", "Reviewer checks")
     val assignment = Assignment(AssignmentId(uuid), project.project, Set.empty, Attribution.Unattributed, None, None)
@@ -51,7 +51,7 @@ final class ReviewerChecksProcess extends SpecZIO with AssertZIO {
     for {
       directory <- ZIO.attemptBlocking(Files.createTempDirectory(local.directory, "reviewer-checks-"))
       settings = SupervisorSettings(directory.toString, guardian.binary.toString, List(profile), limits,
-        scripts.map { case (name, script) => ValidationCheck(name, List("python3", "-c", script), 10000, 65536) }, None, None)
+        scripts.map { case (name, script) => ValidationCheck(name, List("python3", "-c", script), 10000, 65536, attempts, 0) }, None, None)
       run = SupervisorRun(project, assignment, governor, profile.version, local.source.toString, local.base, SessionOwnership.Managed)
       config = SupervisorConfig(settings, project, SupervisorConfig.profile(profile), SupervisorConfig.limits(limits), run, directory, "", None, guardian.environment)
       failCancellation = new AtomicBoolean(false)
@@ -99,7 +99,7 @@ final class ReviewerChecksProcess extends SpecZIO with AssertZIO {
     "report uncertain cleanup after cancellation persistence failure instead of abandoning the check owner" in { (local: LocalWorkspaceFixture, guardian: GuardianFixture) =>
       val verified = new AtomicBoolean(false)
       for {
-        result <- fixture(local, guardian, List("verify" -> "import time; time.sleep(30)"), _ => ()) { f => for {
+        result <- fixture(local, guardian, List("verify" -> "import time; time.sleep(30)"), 1, _ => ()) { f => for {
         started <- (ZIO.sleep(zio.Duration.fromMillis(20)) *> f.checks.request("verify", 0)).repeatUntil(_.phase == DeclaredCheckPhase.Running)
           .timeoutFail(new IllegalStateException("Check was not registered"))(zio.Duration.fromSeconds(5))
         _ <- (ZIO.sleep(zio.Duration.fromMillis(20)) *> f.jobs.status(f.config.owner, started.job)).repeatUntil(_.phase == JobPhase.Running)
@@ -114,7 +114,7 @@ final class ReviewerChecksProcess extends SpecZIO with AssertZIO {
     }
 
     "stop the native reviewer when check publication loses acknowledgement" in { (local: LocalWorkspaceFixture, guardian: GuardianFixture) =>
-      fixture(local, guardian, List("verify" -> "pass"), _ => throw new IOException("Lost check publication acknowledgement")) { f => for {
+      fixture(local, guardian, List("verify" -> "pass"), 1, _ => throw new IOException("Lost check publication acknowledgement")) { f => for {
         unknown <- terminal(f.checks, "verify")
         _ <- assertIO(unknown.phase == DeclaredCheckPhase.Unknown && f.entry.stopReason.nonEmpty)
         native <- (ZIO.sleep(zio.Duration.fromMillis(20)) *> f.jobs.status(f.config.owner, f.entry.ticket.attempt.id)).repeatUntil(_.target == JobTarget.Stop)
@@ -126,7 +126,7 @@ final class ReviewerChecksProcess extends SpecZIO with AssertZIO {
     "join duplicates after a waiting caller disconnects and isolate the check workspace" in { (local: LocalWorkspaceFixture, guardian: GuardianFixture) =>
       val gate = local.directory.resolve("release-" + uuid)
       val script = "from pathlib import Path; import time; gate=Path('" + gate + "');\nwhile not gate.exists(): time.sleep(0.01)\nPath('check-only').write_text('check')"
-      fixture(local, guardian, List("verify" -> script, "other" -> "pass"), _ => ()) { f => for {
+      fixture(local, guardian, List("verify" -> script, "other" -> "pass"), 1, _ => ()) { f => for {
         waiting <- f.checks.request("verify", 20000).fork
         observed <- f.checks.request("verify", 0).repeatUntil(_.phase == DeclaredCheckPhase.Running)
           .timeoutFail(new IllegalStateException("Check did not start"))(zio.Duration.fromSeconds(5))
@@ -153,8 +153,58 @@ final class ReviewerChecksProcess extends SpecZIO with AssertZIO {
       } yield () }
     }
 
+    "I19: rerun a failing declared check under a distinct job and ticket and report the final evidence with its failed runs" in { (local: LocalWorkspaceFixture, guardian: GuardianFixture) =>
+      def counting(counter: Path, failing: Int): String = "from pathlib import Path; import sys; counter=Path('" + counter + "');\n" +
+        "n=int(counter.read_text())+1 if counter.exists() else 1; counter.write_text(str(n)); sys.exit(1 if n <= " + failing + " else 0)"
+      def settle(f: Fixture): Task[(DeclaredCheckStatus, List[DeclaredCheckStatus])] = for {
+        seen <- zio.Ref.make(List.empty[DeclaredCheckStatus])
+        last <- f.checks.request("verify", 50).tap(value => seen.update(_ :+ value))
+          .repeatUntil(value => Set(DeclaredCheckPhase.Completed, DeclaredCheckPhase.Failed, DeclaredCheckPhase.Unknown)(value.phase))
+          .timeoutFail(new IllegalStateException("Declared check did not terminate"))(zio.Duration.fromSeconds(20))
+        statuses <- seen.get
+      } yield (last, statuses)
+      val flaky = local.directory.resolve("flaky-" + uuid)
+      val failing = local.directory.resolve("failing-" + uuid)
+      fixture(local, guardian, List("verify" -> counting(flaky, 1)), 2, _ => ()) { f => for {
+        settled <- settle(f)
+        (complete, statuses) = settled
+        closed <- f.checks.close
+        root = f.entry.directory.resolve("checks").resolve("verify")
+        tickets <- ZIO.attemptBlocking(List(root, root.resolve("rerun-2")).map(path => HostFiles.read(path.resolve("ticket.json"), DeclaredCheckTicket_JsonCodec, 32768)))
+        jobs = tickets.map(_.workspace.attempt)
+        released <- ZIO.foreach(jobs)(job => local.fixture.service.get(f.config.owner, job))
+        _ <- ZIO.attemptBlocking {
+          println(s"Intermittent reviewer check: $complete runs=${Files.readString(flaky)} polled=${statuses.map(_.phase).distinct}")
+          val evidence = complete.evidence.get
+          assert(complete.phase == DeclaredCheckPhase.Completed && evidence.state == ValidationState.Passed && evidence.failures.size == 1, complete.toString)
+          // The failed first run is never reported as the check's outcome while its rerun is outstanding.
+          assert(statuses.init.forall(_.evidence.isEmpty), statuses.toString)
+          assert(Files.readString(flaky) == "2")
+          assert(tickets.map(_.failures) == List(Nil, evidence.failures) && tickets.map(_.fingerprint).distinct.size == 1)
+          assert(jobs.distinct.size == 2 && complete.job == jobs.last && f.entry.ownedJobs == jobs.toSet + f.entry.ticket.attempt.id)
+          assert(f.journal.records.map(_.workspace.attempt).toSet == jobs.toSet + f.entry.ticket.attempt.id)
+          val observations = f.receiver.uploaded.filter(_.kind == ArtifactKind.Validation).map(upload => upload.id ->
+            io.circe.parser.parse(upload.body).flatMap(ValidationObservation_JsonCodec.decode(baboon.runtime.shared.BaboonCodecContext.Default, _)).toOption.get).toMap
+          assert(observations.keySet == evidence.failures.toSet + evidence.artifact)
+          assert(observations(evidence.failures.head).job.workspace.attempt == jobs.head && observations(evidence.artifact).job.workspace.attempt == jobs.last)
+          assert(observations.values.forall(value => value.candidate == local.base && value.job.workspace.base == local.base))
+          assert(!closed.pending && !closed.uncertain && closed.evidence == List(evidence))
+          assert(released.forall(_.admission == WorkspaceAdmission.Removed))
+        }
+      } yield () } *> fixture(local, guardian, List("verify" -> counting(failing, 100)), 2, _ => ()) { f => for {
+        settled <- settle(f)
+        closed <- f.checks.close
+        _ <- ZIO.attemptBlocking {
+          val evidence = settled._1.evidence.get
+          println(s"Persistently failing reviewer check: ${settled._1} runs=${Files.readString(failing)}")
+          assert(settled._1.phase == DeclaredCheckPhase.Completed && evidence.state == ValidationState.Failed && evidence.failures.size == 1, settled._1.toString)
+          assert(Files.readString(failing) == "2" && f.journal.records.size == 3 && closed.evidence == List(evidence) && !closed.pending && !closed.uncertain)
+        }
+      } yield () }
+    }
+
     "close admission while a process is running and settle it before returning" in { (local: LocalWorkspaceFixture, guardian: GuardianFixture) =>
-      fixture(local, guardian, List("verify" -> "import time; time.sleep(30)"), _ => ()) { f => for {
+      fixture(local, guardian, List("verify" -> "import time; time.sleep(30)"), 1, _ => ()) { f => for {
         started <- f.checks.request("verify", 0).repeatUntil(_.phase == DeclaredCheckPhase.Running)
           .timeoutFail(new IllegalStateException("Check did not start"))(zio.Duration.fromSeconds(5))
         _ <- (ZIO.sleep(zio.Duration.fromMillis(20)) *> f.jobs.status(f.config.owner, started.job)).repeatUntil(_.phase == JobPhase.Running)
@@ -170,7 +220,7 @@ final class ReviewerChecksProcess extends SpecZIO with AssertZIO {
     "freeze pending publication even when upload completes after reviewer exit" in { (local: LocalWorkspaceFixture, guardian: GuardianFixture) =>
       val entered = new CountDownLatch(1)
       val release = new CountDownLatch(1)
-      fixture(local, guardian, List("verify" -> "print('verified')"), _ => {
+      fixture(local, guardian, List("verify" -> "print('verified')"), 1, _ => {
         entered.countDown()
         require(release.await(10, TimeUnit.SECONDS), "Publication fixture was not released")
       }) { f => (for {

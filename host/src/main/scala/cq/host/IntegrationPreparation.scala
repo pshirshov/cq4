@@ -5,7 +5,7 @@ import cq.core.{DomainFailure, IntegrationPolicy, Scope}
 import java.time.{Clock, Duration}
 
 /** Worker and reviewer results whose evidence establishes an independently reviewed candidate. */
-final case class ReviewedCandidate(ticket: IntegrationTicket, workerId: ArtifactId, worker: ChildResult, validation: List[ArtifactId]) {
+final case class ReviewedCandidate(ticket: IntegrationTicket, workerId: ArtifactId, worker: ChildResult, validation: ValidationCitations) {
   def candidate: GitCommit = worker.candidate.get
 }
 
@@ -56,13 +56,20 @@ final class IntegrationPreparation(api: ServerApi, owner: Scope, repository: Str
       "Integration requires every worker member to be ready")
     require(reviewer.report match { case ChildReport.Review(members, _) => members.forall(_.verdict == ReviewVerdict.Accepted); case _ => false },
       "Integration requires every reviewer member to be accepted")
-    IntegrationValidation.applicable(worker, reviewer, checks).foreach { expected =>
+    val evidence = IntegrationValidation.applicable(IntegrationValidation.effective(owner.project, owner.actor.session, workerId, worker, checks,
+      reader.amendments(workerId)), reviewer)
+    evidence.passing.foreach { expected =>
       val stored = reader.read(expected.evidence.artifact)
       IntegrationValidation.verify(owner.project, owner.actor.session, worker.candidate.get, expected,
         stored.metadata, IntegrationValidation.decode(stored))
     }
+    evidence.failed.foreach { expected =>
+      val stored = reader.read(expected.artifact)
+      IntegrationValidation.verifyFailure(owner.project, owner.actor.session, worker.candidate.get, expected,
+        stored.metadata, IntegrationValidation.decode(stored))
+    }
     renew(call, worker)
-    ReviewedCandidate(ticket, workerId, worker, IntegrationValidation.citations(worker, reviewer))
+    ReviewedCandidate(ticket, workerId, worker, evidence.citations)
   }
 
   def renew(reviewed: ReviewedCandidate): Unit = bounded(renew(_, reviewed.worker))
@@ -82,7 +89,7 @@ final class IntegrationPreparation(api: ServerApi, owner: Scope, repository: Str
     }
     val candidate = rebase.fold(reviewed.candidate)(_.commit)
     val change = IntegrationPolicy.completion(ticket.id, repository, target, candidate, rebase.map(_.evidence), reviewed.workerId, ticket.reviewer,
-      reviewed.validation, worker.request.fence, items)
+      reviewed.validation.established, reviewed.validation.superseded, worker.request.fence, items)
     renew(call, worker)
     IntegrationIntent(ticket.id, owner.project, owner.actor, repository, target,
       rebase.fold(bases.expected(worker.base, reviewed.candidate))(_.head), candidate,

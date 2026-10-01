@@ -12,7 +12,7 @@ final class CohortProgressLocal extends AnyWordSpec {
   private def item(number: Long): ItemView = ItemView(Item(id(number), Revision(1),
     ItemDraft("Task", "Required behavior", Set.empty, false, Content.Task(TaskStatus.Ready, List("Acceptance"), None, Nil), Nil),
     1, 1, Provenance(actor, 1, RequestId(UUID.randomUUID()))), List(ItemRef(Relation.PartOf, ItemId(project, Ledger.Milestones, 1))))
-  private val checks = List(ValidationCheck("test", List("verify", "first", "second"), 1000, 4096))
+  private val checks = List(ValidationCheck("test", List("verify", "first", "second"), 1000, 4096, 1, 0))
   private val work = DispatchWork.Worker(WorkerMode.Implement)
   private def hash(members: List[ItemView], guidance: List[ItemView], declared: List[ValidationCheck]): String =
     CohortFingerprint(work, members, guidance, Nil, Nil, GitCommit("a" * 40), declared)
@@ -118,7 +118,7 @@ final class CohortProgressLocal extends AnyWordSpec {
         1, 1, actor.copy(role = Role.Collector), 1)
       val value = ChildResult(attempt, request, GitCommit("a" * 40), Some(GitCommit("b" * 40)),
         ChildReport.Review(List(ReviewMember(id(1), ReviewVerdict.Accepted, Nil)), None),
-        List(ValidationEvidence("test", ValidationState.Failed, ArtifactId(UUID.randomUUID()))), RetainedEvidence(Nil, Nil))
+        List(ValidationEvidence("test", ValidationState.Failed, ArtifactId(UUID.randomUUID()), Nil)), RetainedEvidence(Nil, Nil))
       def source(result: ChildResult): CohortResultFingerprint = CohortResultFingerprint(result, Nil)
       def hash(result: ChildResult, artifacts: List[ResolvedArtifact]): String = CohortFingerprint(work, List(item(1)), Nil,
         artifacts.map(operative), List(source(result)), GitCommit("a" * 40), checks)

@@ -128,12 +128,17 @@ final class SessionDelivery(journal: JobRepository, workspaces: WorkspaceService
           val found = Using.resource(Files.list(root))(_.iterator().asScala.take(9).toList)
           require(found.size <= 8 && found.forall(path => !Files.isSymbolicLink(path) && Files.isDirectory(path) &&
             path.getFileName.toString.matches("[a-z][a-z0-9-]{0,49}")), "Invalid declared check inventory")
-          found.sortBy(_.getFileName.toString)
+          // Each check has its first run in its own directory and every rerun of a failed run in a directory below it.
+          found.sortBy(_.getFileName.toString).flatMap { check =>
+            val reruns = (2 to IntegrationValidation.MaxAttempts).map(number => (check.getFileName.toString, DeclaredCheckPublication.directory(check, number), number))
+              .filter((_, rerun, _) => Files.exists(rerun, LinkOption.NOFOLLOW_LINKS))
+            require(reruns.forall((_, rerun, _) => !Files.isSymbolicLink(rerun) && Files.isDirectory(rerun)), "Invalid declared check inventory")
+            (check.getFileName.toString, check, 1) :: reruns.toList
+          }
         }
       }
-      results <- ZIO.foreach(paths) { path => ZIO.attemptBlocking {
-        val name = path.getFileName.toString
-        val id = AttemptId(NativeArtifacts.id(publication.attempt.id, "declared-check-job-" + name).value)
+      results <- ZIO.foreach(paths) { case (name, path, number) => ZIO.attemptBlocking {
+        val id = DeclaredCheckPublication.job(publication.attempt.id, name, number)
         val records = journal.records
         val record = records.find(_.workspace.attempt == id)
         val ticketFile = path.resolve("ticket.json")
@@ -151,6 +156,7 @@ final class SessionDelivery(journal: JobRepository, workspaces: WorkspaceService
             .getOrElse(throw new IllegalStateException("Declared check has no governing reviewer job"))
           require(dispatch.request.work == DispatchWork.Reviewer(ReviewerMode.Candidate) && ticket.parent == publication.attempt.id &&
             ticket.check.name == name && settings.checks.find(_.name == name).contains(ticket.check) &&
+            ticket.failures == DeclaredCheckPublication.earlier(publication.attempt.id, name, number) &&
             ticket.check.retainedOutputBytes > 0 && ticket.check.retainedOutputBytes <= 1024 * 1024 && ticket.fingerprint.matches("[0-9a-f]{64}") &&
             ticket.workspace == WorkspaceSpec(run.project.project, run.attempt.session, id, run.repository, native.workspace.base),
             "Declared check ticket differs from its owner, configuration or reviewed candidate")

@@ -136,7 +136,7 @@ def main():
             checks.run(["git", "-C", str(consumer), "branch", "integration"], "integration-branch", 10)
             settings["integrationTarget"] = "refs/heads/integration"
             settings["checks"] = [{"name": "defect-oracle", "command": [sys.executable, str(root / "dev/defect-oracle.py")],
-                                   "executionMillis": "180000", "retainedOutputBytes": 262144}]
+                                   "executionMillis": "180000", "retainedOutputBytes": 262144, "attempts": 1, "revalidations": 0}]
         write(evidence / "settings.json", settings)
         request = (root / "dev/defect-begin.md").read_text() + "\n\n" + json.dumps({"fixtureCommit": base, "specification": (consumer / "README.md").read_text(),
             "reproduction": {"command": "python3 -m unittest -v", "exit": reproduction.returncode, "stdout": reproduction.stdout, "stderr": reproduction.stderr}}, ensure_ascii=False)

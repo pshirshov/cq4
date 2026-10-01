@@ -48,6 +48,11 @@ object SupervisorConfig {
       .run(Path.of(config.run.repository), List(value.executable.toString, "--version"))
     require(version.exit == 0 && version.text.split("[\\s()]+").contains(value.version), VersionMismatch)
   }
+  /** A failing check is run at most `attempts` times on one commit, and a governor may request at most `revalidations` further
+    * rounds of it for one admitted result. */
+  def reruns(check: ValidationCheck): Unit =
+    require(check.attempts >= 1 && check.attempts <= IntegrationValidation.MaxAttempts &&
+      check.revalidations >= 0 && check.revalidations <= IntegrationValidation.MaxRevalidations, "Invalid configured validation check")
   def load(arguments: RoleAppArgs, context: CliContext, location: ProjectLocation, clock: Clock): Task[SupervisorConfig] = ZIO.attemptBlocking {
     val raw = arguments.roles.find(value => Set(SupervisorRole.id, AttachedRole.id)(value.role)).getOrElse(throw new IllegalArgumentException("Supervisor role arguments missing")).roleParameters.raw.toList
     val args = if (raw.headOption.contains("--")) raw.tail else raw
@@ -79,6 +84,7 @@ object SupervisorConfig {
         check.executionMillis > 0 && check.executionMillis <= ExecutionLimits.MaximumMillis && check.retainedOutputBytes > 0 && check.retainedOutputBytes <= 1024 * 1024,
         "Invalid configured validation check")
     }
+    settings.checks.foreach(reruns)
     require(settings.checks.map(value => HostFiles.encode(ValidationCheck_JsonCodec, value).getBytes(java.nio.charset.StandardCharsets.UTF_8).length).sum <= 16384,
       "Configured validation arguments exceed 16 KiB")
     val guardian = Path.of(settings.guardian)
@@ -276,6 +282,7 @@ object SupervisorPlugin extends PluginDef {
     make[CohortController]
     make[IntegrationController].fromResource[IntegrationController.Resource]
     make[CombinationController].fromResource[CombinationController.Resource]
+    make[RevalidationController].fromResource[RevalidationController.Resource]
     make[LocalControl]
     make[WorkspaceCleanup]
     make[LocalControlServer].fromResource[LocalControlServer.Resource]

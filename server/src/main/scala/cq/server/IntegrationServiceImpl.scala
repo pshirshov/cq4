@@ -3,7 +3,7 @@ package cq.server
 import baboon.runtime.shared.{BaboonCodecContext, BaboonJsonCodec}
 import cq.api.*
 import cq.core.*
-import cq.host.{ChildContracts, IntegrationValidation}
+import cq.host.{ChildContracts, FailedRun, IntegrationValidation, PublishedAmendment}
 import io.circe.parser
 import izumi.functional.bio.{Error2, F, *}
 import java.nio.charset.StandardCharsets.UTF_8
@@ -36,6 +36,24 @@ final class IntegrationServiceImpl[F[+_, +_]: Error2](ledger: LedgerRepository[F
       (metadata, value)
     }.toEither)
   } yield result
+
+  /** Failed runs are cited in the Task evidence, so each must be what it claims. */
+  private def failures(scope: Scope, candidate: GitCommit, cited: List[FailedRun]): F[Throwable, Unit] =
+    F.traverse_(cited) { expected =>
+      artifact(scope, expected.artifact, ArtifactKind.Validation, ValidationObservation_JsonCodec).flatMap { case (metadata, observed) => F.fromEither(Try {
+        IntegrationValidation.verifyFailure(scope.project, scope.actor.session, candidate, expected, metadata, observed)
+      }.toEither) }
+    }
+
+  /** The published revalidation rounds of a result, in order: round n has one identity, and the first absent round ends them. */
+  private def amendments(scope: Scope, result: ArtifactId, round: Int): F[Throwable, List[PublishedAmendment]] =
+    if (round > IntegrationValidation.MaxRevalidations) F.pure(Nil)
+    else artifacts.get(scope.project, IntegrationValidation.amendmentId(result, round)).flatMap {
+      case None => F.pure(Nil)
+      case Some(stored) => artifact(scope, stored.metadata.id, ArtifactKind.Amendment, ValidationAmendment_JsonCodec).flatMap { case (metadata, value) =>
+        amendments(scope, result, round + 1).map(PublishedAmendment(ResolvedArtifact(metadata, stored.body), value) :: _)
+      }
+    }
 
   override def reserve(scope: Scope, intent: IntegrationIntent): F[Throwable, IntegrationRecord] = for {
     _ <- F.fromEither(Try {
@@ -74,18 +92,22 @@ final class IntegrationServiceImpl[F[+_, +_]: Error2](ledger: LedgerRepository[F
       invalid(work.report match { case ChildReport.Work(members) => members.forall(_.disposition == WorkDisposition.CandidateReady); case _ => false }, "Every integration member must be candidate-ready")
       invalid(review.report match { case ChildReport.Review(members, _) => members.forall(_.verdict == ReviewVerdict.Accepted); case _ => false }, "Every integration member must be independently accepted")
     }.toEither)
-    applicable <- F.fromEither(Try(IntegrationValidation.applicable(worker._2, reviewer._2, intent.checks)).toEither)
-    _ <- F.traverse_(applicable) { expected =>
+    rounds <- amendments(scope, intent.worker, 1)
+    evidence <- F.fromEither(Try(IntegrationValidation.applicable(
+      IntegrationValidation.effective(scope.project, scope.actor.session, intent.worker, worker._2, intent.checks, rounds), reviewer._2)).toEither)
+    _ <- F.traverse_(evidence.passing) { expected =>
       artifact(scope, expected.evidence.artifact, ArtifactKind.Validation, ValidationObservation_JsonCodec).flatMap { case (metadata, observed) => F.fromEither(Try {
         IntegrationValidation.verify(scope.project, scope.actor.session, reviewed, expected, metadata, observed)
       }.toEither) }
     }
+    _ <- failures(scope, reviewed, evidence.failed)
     rebased <- F.fromEither(Try(intent.rebase.toList.flatMap(IntegrationValidation.rebased(_, intent.checks))).toEither)
     _ <- F.traverse_(rebased) { expected =>
       artifact(scope, expected.evidence.artifact, ArtifactKind.Validation, ValidationObservation_JsonCodec).flatMap { case (metadata, observed) => F.fromEither(Try {
         IntegrationValidation.verifyRebased(scope.project, scope.actor.session, intent.candidate, expected, metadata, observed)
       }.toEither) }
     }
+    _ <- failures(scope, intent.candidate, rebased.flatMap(IntegrationValidation.failures))
     result <- ledger.transact(scope.project) { tx =>
       tx.integration(intent.id) match {
         case Some(previous) =>
@@ -111,8 +133,9 @@ final class IntegrationServiceImpl[F[+_, +_]: Error2](ledger: LedgerRepository[F
             LedgerAccess.expected(item, ref.revision)
             item
           }
+          val cited = evidence.citations
           val change = IntegrationPolicy.completion(intent.id, intent.repository, intent.target, intent.candidate, intent.rebase, intent.worker, intent.reviewer,
-            IntegrationValidation.citations(worker._2, reviewer._2), intent.fence, items)
+            cited.established, cited.superseded, intent.fence, items)
           invalid(intent.change == change, "Integration may only apply the exact narrative-preserving task completion request")
           if (tx.request(intent.owner, change.request).nonEmpty) throw DomainFailure(Fault.Conflict("Integration domain request was already used"))
           val value = IntegrationRecord(intent, IntegrationResolution.Pending(), now, None)

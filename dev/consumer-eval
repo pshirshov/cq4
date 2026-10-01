@@ -241,7 +241,7 @@ def main():
                     "limits": {"startupMillis": "10000", "heartbeatMillis": "2000",
                                "graceMillis": "1000", "killMillis": "3000", "retainedOutputBytes": 8 * 1024 * 1024},
                     "checks": [{"name": "consumer-oracle", "command": [sys.executable, str(ROOT / "dev/consumer-oracle.py"), language],
-                                "executionMillis": "180000", "retainedOutputBytes": 262144}],
+                                "executionMillis": "180000", "retainedOutputBytes": 262144, "attempts": 1, "revalidations": 0}],
                     "evaluation": {"run": identifier, "scenario": ("cohort-wordfreq-" if arguments.cohort else "wordfreq-") + language, "assessor": False}}
         write(evidence / "settings.json", settings)
         request = (f"Build the following unrelated consumer in {language}. Create one CQ task containing the complete specification below, assign it PartOf one new Open milestone and claim the task. "

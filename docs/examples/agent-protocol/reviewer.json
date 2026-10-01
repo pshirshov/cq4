@@ -413,7 +413,9 @@
           "python"
         ],
         "executionMillis": "180000",
-        "retainedOutputBytes": 262144
+        "retainedOutputBytes": 262144,
+        "attempts": 1,
+        "revalidations": 0
       }
     ]
   },

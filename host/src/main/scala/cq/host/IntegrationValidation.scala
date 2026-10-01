@@ -1,27 +1,104 @@
 package cq.host
 
-import baboon.runtime.shared.BaboonCodecContext
+import baboon.runtime.shared.{BaboonCodecContext, BaboonJsonCodec}
 import cq.api.*
-import cq.core.JsonRoundtrip
-import cq.core.IntegrationPolicy
+import cq.core.{DomainFailure, IntegrationPolicy, JsonRoundtrip}
 import cq.core.LedgerPolicy.invalid
 import io.circe.parser
+import java.nio.charset.StandardCharsets.UTF_8
+import java.util.UUID
 
 final case class ApplicableValidation(evidence: ValidationEvidence, declaration: ValidationCheck, author: AttemptId)
+/** A run of a check that failed before the observation the integration relies on, cited in the Task evidence. */
+final case class FailedRun(artifact: ArtifactId, declaration: ValidationCheck, author: AttemptId)
+/** What the Task evidence cites: the observations that establish each check, and the failed runs and revalidation rounds they superseded. */
+final case class ValidationCitations(established: List[ArtifactId], superseded: List[ArtifactId])
+/** A revalidation round of an admitted result as the server stores it. */
+final case class PublishedAmendment(stored: ResolvedArtifact, value: ValidationAmendment)
+/** One configured check of an admitted result: its evidence at admission and each revalidation round that reran it. */
+final case class EffectiveCheck(original: ApplicableValidation, rounds: List[ApplicableValidation]) {
+  def current: ApplicableValidation = rounds.lastOption.getOrElse(original)
+}
+/** An admitted result's validation with each check replaced by its latest revalidation round. The result itself never changes. */
+final case class EffectiveValidation(result: ChildResult, checks: List[EffectiveCheck], amendments: List[ArtifactId]) {
+  def current: List[ValidationEvidence] = checks.map(_.current.evidence)
+}
+/** The evidence one integration relies on (`passing`) and additionally cites (`failed`, `amendments`). */
+final case class IntegrationEvidence(passing: List[ApplicableValidation], failed: List[FailedRun], amendments: List[ArtifactId]) {
+  def citations: ValidationCitations = ValidationCitations(passing.map(_.evidence.artifact).distinct, (amendments ++ failed.map(_.artifact)).distinct)
+}
 
 object IntegrationValidation {
   private val RebasedRule = "Rebased integration requires passing host checks on the exact rebased commit"
+  private val FailureRule = "Validation failure does not record this author's failed run of the check on this candidate"
+  private val InventoryRule = "Worker and reviewer validation must cover the configured check inventory"
+  private val AmendmentRule = "Validation amendment does not record a bounded revalidation of this result's failed checks on its candidate"
+  /** Runs of one check on one commit: the first and its automatic reruns. */
+  val MaxAttempts = 3
+  /** Governor-requested revalidation rounds of one check of one admitted result. */
+  val MaxRevalidations = 3
 
-  def applicable(worker: ChildResult, reviewer: ChildResult, declarations: List[ValidationCheck]): List[ApplicableValidation] = {
+  /** Round `round` of a result's revalidation has one identity, so host and server find the rounds without a mutable index. */
+  def amendmentId(result: ArtifactId, round: Int): ArtifactId =
+    ArtifactId(UUID.nameUUIDFromBytes(s"${result.value}:validation-amendment:$round".getBytes(UTF_8)))
+
+  private def runs(entry: ValidationEvidence): Boolean =
+    entry.failures.size < MaxAttempts && (entry.artifact :: entry.failures).distinct.size == entry.failures.size + 1
+
+  /** `amendments` are the published rounds of `result` (stored as `id`) in order. Each round reran exactly the checks that were failed
+    * before it, and no check has more rounds than its declaration allows. */
+  def effective(project: ProjectId, session: SessionId, id: ArtifactId, result: ChildResult, declarations: List[ValidationCheck],
+    amendments: List[PublishedAmendment]): EffectiveValidation = {
     val names = declarations.map(_.name)
-    invalid(names.distinct == names && names.size <= IntegrationPolicy.MaxChecks && worker.validation.map(_.check) == names && reviewer.validation.map(_.check) == names,
-      "Worker and reviewer validation must cover the configured check inventory")
-    invalid((worker.validation ++ reviewer.validation).forall(_.state == ValidationState.Passed), "All worker and reviewer checks must pass")
-    val original = worker.validation.zip(declarations).map { case (evidence, declaration) => ApplicableValidation(evidence, declaration, worker.attempt) }
-    val fresh = reviewer.validation.zip(original).collect {
-      case (evidence, previous) if evidence != previous.evidence => ApplicableValidation(evidence, previous.declaration, reviewer.attempt)
+    invalid(names.distinct == names && names.size <= IntegrationPolicy.MaxChecks && result.validation.map(_.check) == names, InventoryRule)
+    val admitted = result.validation.zip(declarations).map { case (evidence, declaration) =>
+      EffectiveCheck(ApplicableValidation(evidence, declaration, result.attempt), Nil)
     }
-    original ++ fresh
+    val checks = amendments.zipWithIndex.foldLeft(admitted) { case (checks, (published, index)) =>
+      val metadata = published.stored.metadata
+      val amendment = published.value
+      val failing = checks.filter(_.current.evidence.state == ValidationState.Failed)
+      invalid(metadata.id == amendmentId(id, index + 1) && metadata.project == project && metadata.kind == ArtifactKind.Amendment &&
+        metadata.mediaType == "application/json" && metadata.actor.session == session && metadata.actor.role == Role.Collector &&
+        metadata.attempt == amendment.author && amendment.result == id && result.candidate.contains(amendment.candidate) &&
+        amendment.round == index + 1 && failing.nonEmpty && amendment.validation.map(_.check) == failing.map(_.original.declaration.name) &&
+        amendment.validation.forall(runs) && failing.forall(check => check.rounds.size < check.original.declaration.revalidations), AmendmentRule)
+      checks.map(check => amendment.validation.find(_.check == check.original.declaration.name).fold(check)(evidence =>
+        check.copy(rounds = check.rounds :+ ApplicableValidation(evidence, check.original.declaration, amendment.author))))
+    }
+    EffectiveValidation(result, checks, amendments.map(_.stored.metadata.id))
+  }
+
+  /** The checks a further revalidation round reruns: every currently failed check, each within its bound. */
+  def revalidated(effective: EffectiveValidation): List[EffectiveCheck] = {
+    def name(check: EffectiveCheck): String = check.original.declaration.name
+    effective.checks.find(_.current.evidence.state == ValidationState.Unknown).foreach(check =>
+      throw DomainFailure(Fault.Conflict(s"Check ${name(check)} is Unknown; a check whose cleanup is unconfirmed is never rerun")))
+    val failing = effective.checks.filter(_.current.evidence.state == ValidationState.Failed)
+    if (failing.isEmpty) throw DomainFailure(Fault.Conflict("Result has no failed check to revalidate"))
+    failing.find(check => check.rounds.size >= check.original.declaration.revalidations).foreach(check =>
+      throw DomainFailure(Fault.Limit(s"Revalidation limit reached for check ${name(check)}: ${check.original.declaration.revalidations} rounds")))
+    failing
+  }
+
+  /** The reviewer's entries are the worker's (as admitted or as any round left them) or its own fresh observations; the worker's
+    * effective checks and the reviewer's fresh ones must all pass. */
+  def applicable(worker: EffectiveValidation, reviewer: ChildResult): IntegrationEvidence = {
+    val declarations = worker.checks.map(_.original.declaration)
+    invalid(reviewer.validation.map(_.check) == declarations.map(_.name), InventoryRule)
+    val inherited = worker.checks.flatMap(check => (check.original :: check.rounds).map(_.evidence))
+    val fresh = reviewer.validation.zip(declarations).collect {
+      case (evidence, declaration) if !inherited.contains(evidence) => ApplicableValidation(evidence, declaration, reviewer.attempt)
+    }
+    val passing = worker.checks.map(_.current) ++ fresh
+    invalid(passing.forall(_.evidence.state == ValidationState.Passed), "All worker and reviewer checks must pass")
+    // A revalidated check cites its admission evidence whole; the runs inside a round are recorded by the cited amendment.
+    val replaced = worker.checks.flatMap { check =>
+      val evidence = check.original.evidence
+      (if (check.rounds.isEmpty) evidence.failures else evidence.artifact :: evidence.failures).map(FailedRun(_, check.original.declaration, check.original.author))
+    }
+    val rerun = fresh.flatMap(value => value.evidence.failures.map(FailedRun(_, value.declaration, value.author)))
+    IntegrationEvidence(passing, replaced ++ rerun, worker.amendments)
   }
 
   /** The host's own checks of a rebased commit: every configured check, at least one, each passed. */
@@ -31,16 +108,21 @@ object IntegrationValidation {
     rebase.validation.zip(declarations).map { case (evidence, declaration) => ApplicableValidation(evidence, declaration, rebase.author) }
   }
 
-  def citations(worker: ChildResult, reviewer: ChildResult): List[ArtifactId] =
-    (worker.validation ++ reviewer.validation).map(_.artifact).distinct
+  def failures(expected: ApplicableValidation): List[FailedRun] = expected.evidence.failures.map(FailedRun(_, expected.declaration, expected.author))
+
+  /** A settled run of the check on the candidate, published by the session's collector under the author. */
+  private def observed(project: ProjectId, session: SessionId, candidate: GitCommit, declaration: ValidationCheck, author: AttemptId,
+    metadata: ArtifactMetadata, observation: ValidationObservation): Boolean =
+    metadata.project == project && metadata.attempt == author &&
+      metadata.kind == ArtifactKind.Validation && metadata.mediaType == "application/json" &&
+      metadata.actor.session == session && metadata.actor.role == Role.Collector && observation.check == declaration &&
+      observation.candidate == candidate && observation.job.workspace.project == project && observation.job.workspace.owner == session &&
+      observation.job.workspace.base == candidate && observation.job.phase == JobPhase.Settled
 
   private def established(project: ProjectId, session: SessionId, candidate: GitCommit, expected: ApplicableValidation,
     metadata: ArtifactMetadata, observation: ValidationObservation): Boolean =
-    metadata.id == expected.evidence.artifact && metadata.project == project && metadata.attempt == expected.author &&
-      metadata.kind == ArtifactKind.Validation && metadata.mediaType == "application/json" &&
-      metadata.actor.session == session && metadata.actor.role == Role.Collector && observation.check == expected.declaration &&
-      observation.candidate == candidate && observation.job.workspace.project == project && observation.job.workspace.owner == session &&
-      observation.job.workspace.base == candidate && observation.job.phase == JobPhase.Settled && JobOutcome.observed(observation.job).succeeded
+    metadata.id == expected.evidence.artifact && observed(project, session, candidate, expected.declaration, expected.author, metadata, observation) &&
+      JobOutcome.observed(observation.job).succeeded
 
   def verify(project: ProjectId, session: SessionId, candidate: GitCommit, expected: ApplicableValidation,
     metadata: ArtifactMetadata, observation: ValidationObservation): Unit =
@@ -51,11 +133,21 @@ object IntegrationValidation {
     metadata: ArtifactMetadata, observation: ValidationObservation): Unit =
     invalid(established(project, session, candidate, expected, metadata, observation), RebasedRule)
 
-  def decode(value: ResolvedArtifact): ValidationObservation = {
+  def verifyFailure(project: ProjectId, session: SessionId, candidate: GitCommit, expected: FailedRun,
+    metadata: ArtifactMetadata, observation: ValidationObservation): Unit =
+    invalid(metadata.id == expected.artifact && observed(project, session, candidate, expected.declaration, expected.author, metadata, observation) &&
+      !JobOutcome.observed(observation.job).succeeded, FailureRule)
+
+  private def decoded[A](codec: BaboonJsonCodec[A], value: ResolvedArtifact, rule: String): A = {
     val json = parser.parse(value.body).fold(throw _, identity)
-    val observed = ValidationObservation_JsonCodec.decode(BaboonCodecContext.Default, json).fold(throw _, identity)
-    invalid(JsonRoundtrip.lossless(json, ValidationObservation_JsonCodec.encode(BaboonCodecContext.Default, observed)),
-      "Validation observation contains undeclared or noncanonical fields")
+    val observed = codec.decode(BaboonCodecContext.Default, json).fold(throw _, identity)
+    invalid(JsonRoundtrip.lossless(json, codec.encode(BaboonCodecContext.Default, observed)), rule)
     observed
   }
+
+  def decode(value: ResolvedArtifact): ValidationObservation =
+    decoded(ValidationObservation_JsonCodec, value, "Validation observation contains undeclared or noncanonical fields")
+
+  def amendment(value: ResolvedArtifact): ValidationAmendment =
+    decoded(ValidationAmendment_JsonCodec, value, "Validation amendment contains undeclared or noncanonical fields")
 }

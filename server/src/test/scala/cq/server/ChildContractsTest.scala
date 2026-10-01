@@ -37,7 +37,7 @@ final class ChildContractsLocal extends AnyWordSpec {
         val result = ChildResult(AttemptId(UUID.randomUUID()), request, GitCommit("a" * 40), None, report, Nil, RetainedEvidence(Nil, Nil))
         ChildContracts.result(project, result)
         intercept[IllegalArgumentException](ChildContracts.result(project, result.copy(candidate = Some(GitCommit("b" * 40)))))
-        intercept[IllegalArgumentException](ChildContracts.result(project, result.copy(validation = List(ValidationEvidence("check", ValidationState.Passed, ArtifactId(UUID.randomUUID()))))))
+        intercept[IllegalArgumentException](ChildContracts.result(project, result.copy(validation = List(ValidationEvidence("check", ValidationState.Passed, ArtifactId(UUID.randomUUID()), Nil)))))
         intercept[IllegalArgumentException](ChildContracts.report(DispatchWork.Worker(WorkerMode.Implement), List(member), encoded(report)))
       }
       intercept[IllegalArgumentException](ChildContracts.report(DispatchWork.Planner(), List(member), encoded(evidenceReport)))
@@ -117,6 +117,24 @@ final class ChildContractsLocal extends AnyWordSpec {
       val result = ChildResult(AttemptId(UUID.randomUUID()), request, GitCommit("a" * 40), None, report, Nil, RetainedEvidence(Nil, Nil))
       intercept[IllegalArgumentException](ChildContracts.result(project, result))
       ChildContracts.result(project, result.copy(candidate = Some(GitCommit("b" * 40))))
+    }
+
+    "I19: bound the failed runs a validation entry records to the reruns one check may have" in {
+      val project = ProjectId(UUID.randomUUID())
+      val member = ItemRevision(ItemId(project, Ledger.Tasks, 1), Revision(1))
+      val request = DispatchRequest(RequestId(UUID.randomUUID()), DispatchWork.Worker(WorkerMode.Implement), Harness.Codex, List(member), Nil, Nil, None,
+        Fence(ClaimId(UUID.randomUUID()), 1), HostLimits(3000, 1000, 300, 2000, 262144))
+      val decisive = ArtifactId(UUID.randomUUID())
+      val earlier = List.fill(3)(ArtifactId(UUID.randomUUID()))
+      def result(failures: List[ArtifactId]): ChildResult = ChildResult(AttemptId(UUID.randomUUID()), request, GitCommit("a" * 40), Some(GitCommit("b" * 40)),
+        ChildReport.Work(List(WorkMember(member.id, WorkDisposition.CandidateReady, "Implemented", Nil))),
+        List(ValidationEvidence("check", ValidationState.Passed, decisive, failures)), RetainedEvidence(Nil, Nil))
+      ChildContracts.result(project, result(Nil))
+      ChildContracts.result(project, result(earlier.take(2)))
+      List(earlier, List(earlier.head, earlier.head), List(decisive)).foreach { failures =>
+        val refused = intercept[IllegalArgumentException](ChildContracts.result(project, result(failures)))
+        assert(refused.getMessage.contains("Invalid host validation inventory"), failures.toString)
+      }
     }
   }
 }

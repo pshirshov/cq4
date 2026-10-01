@@ -122,7 +122,8 @@ abstract class SessionDeliveryTest extends SpecZIO with AssertZIO {
           Some(ArtifactId(uuid)), Fence(ClaimId(uuid), 1), limits)
         ticket = DispatchTicket(request, childAssignment, reviewer, profile, None)
         run = SupervisorRun(ProjectConfig(owner.project, "http://localhost", "Check recovery"), assignment, governor, profile.version, fixture.source.toString, fixture.base, SessionOwnership.Managed)
-        declarations = List("a-sealed", "b-interrupted", "c-unstarted").map(name => ValidationCheck(name, List("verify"), 1000, 65536))
+        declarations = List("a-sealed", "b-interrupted", "c-unstarted").map(name => ValidationCheck(name, List("verify"), 1000, 65536, 1, 0)) :+
+          ValidationCheck("d-rerun", List("verify"), 1000, 65536, 2, 0)
         directory <- ZIO.attemptBlocking(Files.createTempDirectory("cq-check-recovery-"))
         journal <- ZIO.acquireRelease(ZIO.attemptBlocking(FileJobRepository.open(directory.resolve("journal"), owner.project, owner.actor.session)))(value => ZIO.attemptBlocking(value.close()).orDie)
         _ <- ZIO.attemptBlocking {
@@ -136,17 +137,25 @@ abstract class SessionDeliveryTest extends SpecZIO with AssertZIO {
           declarations.zipWithIndex.foreach { case (check, index) =>
             val id = AttemptId(NativeArtifacts.id(reviewer.id, "declared-check-job-" + check.name).value)
             val spec = native.copy(attempt = id)
-            val retained = DeclaredCheckTicket(reviewer.id, check, spec, "b" * 64)
+            val retained = DeclaredCheckTicket(reviewer.id, check, spec, "b" * 64, Nil)
             val path = child.resolve("checks").resolve(check.name)
             HostFiles.directory(path)
             HostFiles.immutable(path.resolve("ticket.json"), HostFiles.encode(DeclaredCheckTicket_JsonCodec, retained), 32768)
-            if (index < 2) {
+            if (index != 2) {
               val reserved = journal.reserve(spec, retained.fingerprint, 1000)._1
-              if (index == 0) {
-                val settled = reserved.copy(phase = JobPhase.Settled, exit = Some(JobExit(Some(0), None, StopReason.Exited, 0, 0, true, false)), revision = 2, updatedAt = 1001)
+              if (index != 1) {
+                val settled = reserved.copy(phase = JobPhase.Settled, exit = Some(JobExit(Some(if (index == 0) 0 else 1), None, StopReason.Exited, 0, 0, true, false)), revision = 2, updatedAt = 1001)
                 journal.replace(reserved, settled)
                 new DeclaredCheckPublication(path, retained, directory.resolve("payload")).seal(Some(settled), None)
               }
+            }
+            // I19: the sealed first run of d-rerun failed and the supervisor was killed while its rerun was running.
+            if (index == 3) {
+              val rerun = native.copy(attempt = AttemptId(NativeArtifacts.id(reviewer.id, "declared-check-job-" + check.name + ":2").value))
+              val again = DeclaredCheckTicket(reviewer.id, check, rerun, "b" * 64, List(NativeArtifacts.id(reviewer.id, "review-check-" + check.name)))
+              HostFiles.directory(path.resolve("rerun-2"))
+              HostFiles.immutable(path.resolve("rerun-2").resolve("ticket.json"), HostFiles.encode(DeclaredCheckTicket_JsonCodec, again), 32768)
+              journal.reserve(rerun, again.fingerprint, 1000)
             }
           }
         }
@@ -181,8 +190,14 @@ abstract class SessionDeliveryTest extends SpecZIO with AssertZIO {
         _ <- ZIO.attemptBlocking {
           val child = directory.resolve("children").resolve(reviewer.id.value.toString)
           val states = declarations.map(check => HostFiles.read(child.resolve("checks").resolve(check.name).resolve("result.json"), DeclaredCheckStatus_JsonCodec, 4096))
-          assert(states.map(_.phase) == List(DeclaredCheckPhase.Completed, DeclaredCheckPhase.Unknown, DeclaredCheckPhase.Unknown))
+          assert(states.map(_.phase) == List(DeclaredCheckPhase.Completed, DeclaredCheckPhase.Unknown, DeclaredCheckPhase.Unknown, DeclaredCheckPhase.Completed))
           assert(states(1).evidence.exists(_.state == ValidationState.Unknown) && states(2).evidence.isEmpty)
+          // I19: the sealed failed run is replayed and its interrupted rerun is sealed Unknown with that run as its failure; neither is executed again.
+          val first = NativeArtifacts.id(reviewer.id, "review-check-d-rerun")
+          val rerun = HostFiles.read(child.resolve("checks").resolve("d-rerun").resolve("rerun-2").resolve("result.json"), DeclaredCheckStatus_JsonCodec, 4096)
+          assert(states(3).evidence.contains(ValidationEvidence("d-rerun", ValidationState.Failed, first, Nil)), states(3).toString)
+          assert(rerun.phase == DeclaredCheckPhase.Unknown && rerun.evidence.contains(
+            ValidationEvidence("d-rerun", ValidationState.Unknown, NativeArtifacts.id(reviewer.id, "recheck-2-d-rerun"), List(first))), rerun.toString)
           assert(!Files.exists(child.resolve("receipt.json")))
         }
       } yield () }
