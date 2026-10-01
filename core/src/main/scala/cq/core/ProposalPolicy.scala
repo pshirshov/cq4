@@ -54,10 +54,12 @@ object ProposalPolicy {
             invalid(values.exists(task), "A Produce milestone requires a Task draft")
             assigned match {
               case MilestoneRef.Existing(id) => invalid(id.ledger == Ledger.Milestones, "PartOf target must be a milestone")
-              case MilestoneRef.Created(mutation) => invalid(value.mutations.take(index).lift(mutation).exists {
-                case ProposedMutation.Create(created) => ledger(created.content) == Ledger.Milestones
-                case _ => false
-              }, "Produce milestone must reference an earlier Create of a Milestone in this batch")
+              case MilestoneRef.Created(mutation) => value.mutations.take(index).lift(mutation).collect {
+                case ProposedMutation.Create(created) => created.content
+              } match {
+                case Some(created: Content.Milestone) => openMilestone(created.status, batchMilestone(mutation))
+                case _ => invalid(false, "Produce milestone must reference an earlier Create of a Milestone in this batch")
+              }
             }
           }
           Mutation.Produce(producer, revision(producer), values.map(draft), milestone)

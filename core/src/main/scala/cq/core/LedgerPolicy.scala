@@ -53,6 +53,8 @@ object LedgerPolicy {
     case Ledger.Upstream => "U"
   }
 
+  def name(id: ItemId): String = s"${prefix(id.ledger)}${id.number}"
+
   def status(value: Content): String = value match {
     case c: Content.Milestone => c.status.toString
     case c: Content.Idea => c.status.toString
@@ -240,6 +242,11 @@ object LedgerPolicy {
   // An agent that revises an item without changing its recorded content (a reference, a title) has not written the Question.
   def recommendation(role: Role, draft: ItemDraft, recorded: List[ItemDraft]): Unit =
     if (role != Role.Human && !recorded.exists(_.content == draft.content)) recommended(draft)
+
+  // An archived item is terminal or settled (validate), so an Open milestone is also unarchived.
+  def openMilestone(status: MilestoneStatus, name: String): Unit =
+    invalid(status == MilestoneStatus.Open, s"Tasks can be assigned only to an Open milestone; $name is $status")
+  def batchMilestone(index: Int): String = s"the Milestone created at index $index of this batch"
 
   def summary(item: Item): ItemSummary = ItemSummary(item.id, item.revision, item.draft.title,
     status(item.draft.content), item.draft.archived, item.draft.labels, item.updatedAt, outcome(item.draft.content))

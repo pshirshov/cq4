@@ -36,6 +36,37 @@ export function editItem(value: Json | undefined, caption: string): ItemEditor {
     kind: () => choice.value as ItemKind,
     selectKind: kind => { choice.value = kind; choice.dispatchEvent(new Event('change', { bubbles: true })); } };
 }
+function named(fields: { key: string; editor: Editor }[], key: string): Editor {
+  return required(fields.find(entry => entry.key === key), key).editor;
+}
+function control<T extends Element>(scope: HTMLElement, selector: string): T {
+  const node = scope.querySelector<T>(selector);
+  if (node === null) throw new Error(`Question form has no ${selector}`);
+  return node;
+}
+// A recommendation names its alternative by position. When the list changes under it, the index follows that
+// alternative's text; when the text is gone, the recommendation is cleared and the form says so.
+function followRecommendation(alternatives: Editor, recommendation: Editor): void {
+  const included = control<HTMLInputElement>(recommendation.element, 'input[type=checkbox]');
+  const index = control<HTMLTextAreaElement>(recommendation.element, 'textarea[aria-label=alternative]');
+  const note = element('p', ''); note.className = 'recommendation-note'; note.setAttribute('role', 'status'); note.hidden = true;
+  recommendation.element.append(note);
+  const listed = (): Json[] => alternatives.read() as Json[];
+  const recommended = (): Json | undefined => included.checked ? listed()[Number(index.value)] : undefined;
+  let text = recommended();
+  const reconcile = (): void => {
+    if (text === undefined) return;
+    const current = listed();
+    if (current[Number(index.value)] === text) return;
+    const moved = current.indexOf(text);
+    if (moved >= 0) { index.value = String(moved); return; }
+    included.checked = false; included.dispatchEvent(new Event('change'));
+    note.textContent = `Recommendation cleared: its alternative “${String(text)}” is no longer in the list. Tick “Add recommendation” to state it again.`;
+    note.hidden = false; text = undefined;
+  };
+  for (const type of ['input', 'click']) alternatives.element.addEventListener(type, reconcile);
+  for (const type of ['input', 'change']) recommendation.element.addEventListener(type, () => { text = recommended(); if (included.checked) note.hidden = true; });
+}
 function field(unresolved: Schema, value: Json | undefined, label: string, description: HTMLElement | null): Editor {
   const schema = resolve(unresolved);
   const container = element('div', ''); container.className = 'form-field'; container.dataset.field = label;
@@ -91,6 +122,7 @@ function field(unresolved: Schema, value: Json | undefined, label: string, descr
     }
     if (metadata.childElementCount > 0) container.prepend(metadata);
     if (description !== null) metadata.after(description);
+    if (label === 'Question') followRecommendation(named(fields, 'alternatives'), named(fields, 'recommendation'));
     return { element: container, read: () => Object.fromEntries(fields.map(entry => [entry.key, entry.editor.read()])) };
   }
   if (schema.type === 'array') {

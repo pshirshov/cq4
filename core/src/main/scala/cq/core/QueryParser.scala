@@ -195,6 +195,15 @@ final class QueryParser {
     private var nodes = 0
     private def current: Token = input(offset)
     private def take(): Token = { val result = current; offset += 1; result }
+    // The keyword operator taken last, while it directly precedes the current token.
+    private var preceding = Option.empty[(Int, Token)]
+    private def operator(): Token = { val result = take(); if (result.kind == Kind.Word) preceding = Some(offset -> result); result }
+    // A Boolean keyword where a term is expected, or directly before the missing term, may have been meant as a search word.
+    private def expectedTerm(): Nothing = {
+      val word = if (keyword("AND") || keyword("OR")) Some(current) else preceding.collect { case (position, token) if position == offset => token }
+      fail(current.span, "Expected query term" + word.fold("")(token =>
+        s""": ${token.value} is a Boolean operator; quote it to search for the word ("${token.value}")"""))
+    }
     private def keyword(value: String): Boolean = current.kind == Kind.Word && current.value.equalsIgnoreCase(value)
     private def node(value: QueryExpression, span: QuerySpan): QueryExpression = {
       nodes += 1
@@ -208,14 +217,14 @@ final class QueryParser {
     }
     private def disjunction(depth: Int): QueryExpression = {
       var value = conjunction(depth)
-      while (keyword("OR")) { val operator = take(); value = node(QueryExpression.Or(value, conjunction(depth)), operator.span) }
+      while (keyword("OR")) { val taken = operator(); value = node(QueryExpression.Or(value, conjunction(depth)), taken.span) }
       value
     }
     private def conjunction(depth: Int): QueryExpression = {
       var value = unary(depth)
       while (!keyword("OR") && current.kind != Kind.End && current.kind != Kind.Right) {
         val span = current.span
-        if (keyword("AND")) take()
+        if (keyword("AND")) operator()
         value = node(QueryExpression.And(value, unary(depth)), span)
       }
       value
@@ -223,8 +232,8 @@ final class QueryParser {
     private def unary(depth: Int): QueryExpression = {
       if (depth > MaxDepth) fail(current.span, s"Query nesting exceeds $MaxDepth levels")
       if (keyword("NOT") || current.kind == Kind.Minus) {
-        val operator = take()
-        node(QueryExpression.Not(unary(depth + 1)), operator.span)
+        val taken = operator()
+        node(QueryExpression.Not(unary(depth + 1)), taken.span)
       } else if (current.kind == Kind.Left) {
         take()
         val value = disjunction(depth + 1)
@@ -232,7 +241,7 @@ final class QueryParser {
         else if (!allowOpenGroups || current.kind != Kind.End) fail(current.span, "Expected closing parenthesis")
         value
       } else {
-        if (!Set(Kind.Word, Kind.Quoted).contains(current.kind) || keyword("AND") || keyword("OR")) fail(current.span, "Expected query term")
+        if (!Set(Kind.Word, Kind.Quoted).contains(current.kind) || keyword("AND") || keyword("OR")) expectedTerm()
         val token = take()
         val value = if (token.kind == Kind.Word && current.kind == Kind.Colon) {
           take()

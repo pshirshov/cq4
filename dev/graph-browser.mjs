@@ -96,6 +96,15 @@ export async function graphChecks(browser, storageState, origin, evidence) {
         assert.deepEqual(a.refs, [{ relation: 'RelatesTo', target: item(2) }]);
         await click('Open T2'); await page.getByRole('heading', { name: 'T2 · Graph B', exact: true }).waitFor();
         await click('Open T1'); await click('Remove RelatesTo T2'); await clickKeeps(item(1), '2');
+        // A countdown started without a press (assistive activation) must not confirm after its dialog was closed.
+        // Neither focus nor the pointer is on the control, so closing the dialog produces no blur or pointerleave to cancel it.
+        await page.mouse.move(0, 0); await page.getByRole('region', { name: 'Graph change preview', exact: true }).focus();
+        await confirmation.evaluate(node => node.click()); await page.locator('dialog[open] [data-hold=holding]').waitFor();
+        await page.keyboard.press('Escape'); await page.getByRole('dialog', { name: 'Graph change', exact: true }).waitFor({ state: 'hidden' });
+        await page.waitForTimeout(HOLD_SETTLE_MS); await settledRequests(page);
+        assert.equal((await detail(item(1))).item.revision.value, '2', 'A countdown outliving its closed dialog must not remove the relationship');
+        assert.equal(await page.getByRole('button', { name: 'Review graph change', exact: true }).isVisible(), false, 'Closing the dialog discards its unconfirmed preview');
+        await click('Remove RelatesTo T2'); await page.getByRole('heading', { name: 'Graph change preview', exact: true }).waitFor();
         const rendered = await confirmation.elementHandle();
         await change(project, [{ Create: { draft: draft('Graph C', 'Unrelated live change') } }]);
         await page.getByText('Graph C', { exact: true }).waitFor(); await settledRequests(page);

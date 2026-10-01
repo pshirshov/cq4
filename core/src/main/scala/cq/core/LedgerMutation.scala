@@ -95,13 +95,19 @@ final class LedgerMutation(terminationPlanner: TerminationPlanner, boundary: Dri
           tx.put(next)
           touched.update(next.id, next)
         }
+        def openMilestone(item: Item): Unit = item.draft.content match {
+          case milestone: Content.Milestone => LedgerPolicy.openMilestone(milestone.status, name(item.id))
+          case _ => invalid(false, "PartOf target must be a milestone")
+        }
         def edgeChange(edge: CanonicalEdge, present: Boolean): Boolean = {
           endpoints(edge)
           if (present && !tx.refs(edge.source).contains(ItemRef(edge.relation, edge.target))) {
             if (List(edge.source, edge.target).exists(id => tx.refs(id).size >= MaxRefs))
               throw DomainFailure(Fault.Limit(s"An item supports at most $MaxRefs incident references"))
-            if (edge.relation == Relation.PartOf)
+            if (edge.relation == Relation.PartOf) {
               invalid(!tx.refs(edge.source).exists(r => r.relation == Relation.PartOf && r.target != edge.target), "An item has at most one milestone")
+              if (edge.source.ledger == Ledger.Tasks) openMilestone(touched.getOrElse(edge.target, required(tx, scope, edge.target)))
+            }
           }
           tx.edge(edge, present)
         }
@@ -114,13 +120,8 @@ final class LedgerMutation(terminationPlanner: TerminationPlanner, boundary: Dri
           touched.update(id, item)
           item
         }
-        val createdMilestones = scala.collection.mutable.Map.empty[Int, ItemId]
+        val createdMilestones = scala.collection.mutable.Map.empty[Int, Item]
         val assignedMilestones = scala.collection.mutable.Set.empty[ItemId]
-        def openMilestone(item: Item): Unit = item.draft.content match {
-          case milestone: Content.Milestone => invalid(milestone.status == MilestoneStatus.Open,
-            s"Tasks can be assigned only to an Open milestone; ${prefix(item.id.ledger)}${item.id.number} is ${milestone.status}")
-          case _ => invalid(false, "PartOf target must be a milestone")
-        }
         // The assigned milestone carries no expected revision: it is fenced, must be Open, and is revised once per batch.
         def assign(milestone: MilestoneRef, parent: Item): ItemId = milestone match {
           case MilestoneRef.Existing(id) =>
@@ -132,8 +133,14 @@ final class LedgerMutation(terminationPlanner: TerminationPlanner, boundary: Dri
               assignedMilestones += id
             }
             id
-          case MilestoneRef.Created(mutation) => createdMilestones.getOrElse(mutation,
-            throw DomainFailure(Fault.Invalid("Produce milestone must reference an earlier Create of a Milestone in this batch")))
+          case MilestoneRef.Created(mutation) =>
+            val created = createdMilestones.getOrElse(mutation,
+              throw DomainFailure(Fault.Invalid("Produce milestone must reference an earlier Create of a Milestone in this batch")))
+            created.draft.content match {
+              case milestone: Content.Milestone => LedgerPolicy.openMilestone(milestone.status, batchMilestone(mutation))
+              case _ => throw new IllegalStateException("A created milestone holds another ledger's content")
+            }
+            created.id
         }
         invalid(!request.mutations.exists(_.isInstanceOf[Mutation.Terminate]) || request.mutations.size == 1,
           "Termination must be the only mutation in its request")
@@ -188,7 +195,7 @@ final class LedgerMutation(terminationPlanner: TerminationPlanner, boundary: Dri
             revise(parent, parent.draft, None)
           case (Mutation.Create(draft), index) =>
             val item = create(draft)
-            if (item.id.ledger == Ledger.Milestones) createdMilestones.update(index, item.id)
+            if (item.id.ledger == Ledger.Milestones) createdMilestones.update(index, item)
           case (Mutation.Replace(id, revision, draft), _) => revise(check(id, revision), draft, None)
           case (Mutation.Restore(id, revision, historical, neighbors), _) =>
             val item = check(id, revision)
@@ -201,9 +208,10 @@ final class LedgerMutation(terminationPlanner: TerminationPlanner, boundary: Dri
             invalid(neighbors.size <= MaxRefs * 2 && neighbors.map(_.id).distinct.size == neighbors.size && neighbors.map(_.id).toSet == targets,
               "Restore requires expected revisions for exactly the changed relationship endpoints")
             val checked = neighbors.map(n => check(n.id, n.revision))
+            // The restored draft is written first: a re-added PartOf is checked against the milestone as this batch leaves it.
+            revise(item, previous.item.item.draft, Some(previous.item.item.draft))
             removed.foreach(ref => edgeChange(canonical(id, ref.relation, ref.target), false))
             added.foreach(ref => edgeChange(canonical(id, ref.relation, ref.target), true))
-            revise(item, previous.item.item.draft, Some(previous.item.item.draft))
             checked.foreach(other => revise(other, other.draft, None))
           case (Mutation.Reference(source, sourceRevision, relation, target, targetRevision, present), _) =>
             val left = check(source, sourceRevision)

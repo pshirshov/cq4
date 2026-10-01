@@ -114,6 +114,58 @@ try {
     if (cancel === 'Escape') await page.keyboard.press('Escape'); else await control.evaluate(node => node.blur());
     assert.equal((await state()).hold, 'idle'); await unchanged(holdMs, before);
   });
+  await check('closing its dialog cancels a press-free countdown on an unfocused control', async () => {
+    await page.evaluate(() => {
+      const dialog = document.createElement('dialog'); dialog.id = 'hold-dialog';
+      const first = document.createElement('button'); first.textContent = 'Close fixture';
+      window.holdFixture.enclosed = 0;
+      const node = window.holdModule.holdButton('Enclosed hold', () => {window.holdFixture.enclosed++;}); node.id = 'enclosed-hold';
+      dialog.append(first, node); document.body.append(dialog); dialog.showModal();
+    });
+    const enclosed = page.locator('#enclosed-hold');
+    assert.equal(await page.evaluate(() => document.activeElement.textContent), 'Close fixture');
+    await enclosed.evaluate(node => node.click());
+    await page.waitForFunction(() => document.getElementById('enclosed-hold').dataset.hold === 'holding');
+    await page.evaluate(() => document.getElementById('hold-dialog').close());
+    await settled(holdMs);
+    assert.deepEqual(await enclosed.evaluate(node => [node.dataset.hold, window.holdFixture.enclosed]), ['idle', 0]);
+    await page.evaluate(() => document.getElementById('hold-dialog').showModal()); await enclosed.evaluate(node => node.click());
+    await page.waitForFunction(() => window.holdFixture.enclosed === 1);
+    await page.evaluate(() => document.getElementById('hold-dialog').remove());
+  });
+  await check('hiding the document cancels a countdown', async () => {
+    const before = await state(); await control.evaluate(node => node.click()); await holding(0.2);
+    try {
+      await page.evaluate(() => {
+        Object.defineProperty(document, 'hidden', {configurable: true, get: () => true});
+        document.dispatchEvent(new Event('visibilitychange'));
+      });
+      assert.equal((await state()).hold, 'idle');
+    } finally {await page.evaluate(() => {delete document.hidden; document.dispatchEvent(new Event('visibilitychange'));});}
+    await unchanged(holdMs, before);
+  });
+  await check('time that passed without rendered frames does not complete a hold', async () => {
+    const before = await state(); await control.focus(); await control.evaluate(node => node.click()); await holding(0.2);
+    try {
+      // A suspended page renders no frame while its clock advances: the next frame must not treat the gap as held time.
+      const after = await control.evaluate(node => new Promise(resolve => {
+        const now = performance.now.bind(performance); performance.now = () => now() + 10000;
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve({hold: node.dataset.hold, value: node.querySelector('progress').value, count: window.holdFixture.count})));
+      }));
+      assert.equal(after.count, before.count); assert.equal(after.hold, 'holding'); assert.ok(after.value < 1, `Progress ${after.value}`);
+    } finally {await page.evaluate(() => {delete performance.now;}); await page.keyboard.press('Escape');}
+    await unchanged(holdMs, before);
+  });
+  await check('a polite live region next to the control reports the hold without changing its accessible name', async () => {
+    const status = page.locator('#hold-fixture + [aria-live=polite]');
+    const before = await state(); await control.focus(); await control.evaluate(node => node.click()); await holding(0.2);
+    assert.equal(await status.textContent(), 'Confirming. Escape cancels.');
+    await page.keyboard.press('Escape'); assert.equal(await status.textContent(), 'Not confirmed.');
+    await control.evaluate(node => node.click()); await page.waitForFunction(count => window.holdFixture.count === count + 1, before.count);
+    assert.equal(await status.textContent(), 'Confirmed.');
+    assert.deepEqual(await control.evaluate(node => [node.getAttribute('aria-label'), node.textContent, node.title]), ['Hold fixture', 'Hold fixture', 'Hold to confirm']);
+    assert.equal(await page.getByRole('button', {name: 'Hold fixture', exact: true}).count(), 1);
+  });
   await page.screenshot({path: evidence + '/hold.png', fullPage: true});
   await writeFile(evidence + '/hold-results.json', JSON.stringify({cases, failures}, null, 2) + '\n'); assert.deepEqual(failures, []);
   console.log('Chromium hold control:', cases.length, 'cases');

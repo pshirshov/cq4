@@ -37,8 +37,10 @@ final case class HarnessMcp(target: McpTarget, endpoint: URI, token: AccessToken
 }
 
 object HarnessInvocation {
-  // The Codex Governor's instructions carry the generated argument guide for its tools (about 33 KB with the current model);
-  // the bound stays well inside the 128 KiB a single argument may occupy on Linux, also after JSON escaping.
+  // The Codex Governor's instructions carry the generated argument guide for its tools (about 33 KB with the current model).
+  // Claude and Pi receive them as one argument unchanged. Codex receives them JSON-encoded in one `developer_instructions=`
+  // argument, where a quote, backslash or newline occupies two bytes (at most 96 KiB) and any other control character six
+  // (up to 288 KiB), so this bound alone does not keep that argument inside HarnessLaunch.MaxArgumentBytes.
   val MaxSystemBytes = 49152
 }
 
@@ -55,7 +57,12 @@ final case class HarnessAsset(name: String, body: String) {
   require(name.matches("[a-z][a-z0-9.-]{0,80}"), "Harness asset must have a flat filename")
   require(UTF_8.newEncoder().canEncode(body) && body.getBytes(UTF_8).length <= 262144, "Harness asset exceeds bounds")
 }
+object HarnessLaunch {
+  // Linux refuses an exec whose single argument, with its terminating NUL, exceeds 32 pages of 4 KiB (MAX_ARG_STRLEN).
+  val MaxArgumentBytes = 131071
+}
 final case class HarnessLaunch(arguments: List[String], environment: Map[String, String], assets: List[HarnessAsset]) {
+  require(arguments.forall(_.getBytes(UTF_8).length <= HarnessLaunch.MaxArgumentBytes), "Harness launch argument exceeds the operating system's per-argument limit")
   def install(directory: Path): Unit = {
     require(directory.isAbsolute && directory.normalize() == directory && assets.map(_.name).distinct.size == assets.size, "Invalid private launch directory/assets")
     Files.createDirectories(directory, PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwx------")))
