@@ -9,6 +9,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.request
 import uuid
 from fixture_runtime import guardian_binary
 
@@ -58,6 +59,12 @@ class Peer:
             raise value
         assert value["id"] == self.sequence and "error" not in value, value
         return value["result"]
+
+    def refused(self, method, params):
+        self.sequence += 1
+        self.send({"jsonrpc": "2.0", "id": self.sequence, "method": method, "params": params})
+        value = self.responses.get(timeout=40)
+        assert not isinstance(value, Exception) and value["id"] == self.sequence and value["error"]["code"] == -32601, value
 
     def tool(self, name, arguments, denied=False):
         value = self.rpc("tools/call", {"name": name, "arguments": arguments})
@@ -120,17 +127,17 @@ def main():
             peer.tool("workspace", {"Read": {"path": ".", "offset": 0, "limit": 20}}, denied=True)
             selection = {"request": identity(), "roots": [], "work": {"Explorer": {"mode": "Investigate"}}, "guidance": [], "artifacts": [], "previous": None, "limits": limits}
             peer.tool("dispatch", {"Select": {"request": selection}}, denied=True)
-            first = {"Workflow": {"id": identity(), "request": {"Begin": {"roots": []}}, "operatorRequirements": "Attached fixture: operator requirements text"}}
+            first = {"Workflow": {"id": identity(), "request": {"Begin": {"roots": []}}, "operatorRequirements": "Attached fixture: operator requirements text", "token": None}}
             activated = peer.tool("session", first)
             assert peer.tool("session", first) == activated
-            peer.tool("session", {"Workflow": {"id": first["Workflow"]["id"], "request": {"Advance": {"roots": [], "through": "Explore"}}, "operatorRequirements": "Attached fixture: operator requirements text"}}, denied=True)
+            peer.tool("session", {"Workflow": {"id": first["Workflow"]["id"], "request": {"Advance": {"roots": [], "through": "Explore"}}, "operatorRequirements": "Attached fixture: operator requirements text", "token": None}}, denied=True)
             draft = {"title": "Attached investigation", "body": "Investigate the fixture", "labels": ["proposal-fixture"], "archived": False,
                      "content": {"Task": {"status": "Ready", "acceptance": ["Report findings"], "result": None, "validation": []}}, "citations": []}
             created = peer.tool("change", {"project": project, "change": {"request": identity(), "mutations": [{"Create": {"draft": draft}}], "fences": [], "reason": "Attached fixture"}})["Changed"]["ack"]["items"][0]
             selection["roots"] = [created["id"]]
             choice, = peer.tool("dispatch", {"Select": {"request": selection}})["Selection"]["value"]["choices"]
             claim = peer.tool("claim", {"project": project, "action": {"Acquire": {"id": identity(), "members": [created["id"]], "durationMillis": "180000"}}})["Claimed"]["claim"]
-            next_scope = {"Workflow": {"id": identity(), "request": {"Advance": {"roots": [created["id"]], "through": "Explore"}}, "operatorRequirements": "Attached fixture: operator requirements text"}}
+            next_scope = {"Workflow": {"id": identity(), "request": {"Advance": {"roots": [created["id"]], "through": "Explore"}}, "operatorRequirements": "Attached fixture: operator requirements text", "token": None}}
             peer.tool("session", next_scope)
             peer.tool("dispatch", {"Select": {"request": selection}}, denied=True)
             peer.tool("dispatch", {"StartChoice": {"choice": choice["id"], "harness": "Codex", "fence": claim["fence"]}}, denied=True)
@@ -141,7 +148,7 @@ def main():
             started = peer.tool("dispatch", {"StartChoice": {"choice": choice["id"], "harness": "Codex", "fence": claim["fence"]}})["Status"]["value"]
             # The asynchronous child must finish before a different workflow is admitted.
             if started["phase"] in ["Preparing", "Running"]:
-                peer.tool("session", {"Workflow": {"id": identity(), "request": {"Begin": {"roots": []}}, "operatorRequirements": "Attached fixture: operator requirements text"}}, denied=True)
+                peer.tool("session", {"Workflow": {"id": identity(), "request": {"Begin": {"roots": []}}, "operatorRequirements": "Attached fixture: operator requirements text", "token": None}}, denied=True)
             for _ in range(6):
                 status = peer.tool("dispatch", {"Status": {"attempt": started["attempt"], "waitMillis": 20000}})["Status"]["value"]
                 if status["phase"] not in ["Preparing", "Running", "Stopping", "Validating", "Publishing"]:
@@ -162,6 +169,74 @@ def main():
     assert totals["attempts"]["unknown"] == "1" and totals["attempts"]["running"] == "0" and totals["attemptsWithoutMeters"] == "1", totals
     print(json.dumps({"attachedSession": context["session"], "child": status, "usage": totals, "activationFence": True, "tokenFile": True, "replay": True}))
 
+    # A driven session: the hook entry points hold the operator credential; the attached session binds, activates the issued directive and
+    # writes inside its cycle. Its first out-of-set write is rejected and stops the driver.
+    def operator(value):
+        request = urllib.request.Request(os.environ["CQ_ORIGIN"] + "/api/call", data=json.dumps(value).encode(), method="POST",
+                                         headers={"Authorization": "Bearer " + os.environ["CQ_TOKEN"], "CQ-Session": os.environ["CQ_SESSION"],
+                                                  "CQ-Protocol-Version": "0.1.0", "Content-Type": "application/json"})
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return json.loads(response.read())
+    key = {"harness": "Codex", "session": "attached-fixture-session"}
+    def control(origin, action):
+        return operator({"Driver": {"input": {"project": project, "request": {"Control": {"key": key, "origin": origin, "action": action}}}}})["Driver"]["reply"]
+    def members(value):
+        return [(next(iter(entry["member"])), entry["settled"]) for entry in value["cycle"]["lineage"]]
+    with (root / "driver-host.log").open("w") as log:
+        driven = Peer(command + ["host", "codex"], repository, env, log)
+        try:
+            driven_session = driven.tool("session", {"Context": {}})["Context"]["value"]["session"]
+            assert driven.tool("session", {"Driver": {}}) == {"Driver": {"reply": {"Status": {"value": None}}}}
+            def change(mutations, fences, denied=False):
+                return driven.tool("change", {"project": project, "change": {"request": identity(), "mutations": mutations, "fences": fences, "reason": "Driven fixture"}}, denied=denied)
+            target, outsider = change([{"Create": {"draft": draft}}, {"Create": {"draft": draft}}], [])["Changed"]["ack"]["items"]
+            started = control("UserPromptSubmit", {"Start": {"target": {"Inline": {"targets": [target["id"]], "through": "Explore"}}, "attached": None}})["Started"]
+            assert started["status"]["state"] == "Binding" and [member["item"]["id"] for member in started["preview"]["advanceable"]] == [target["id"]], started
+            driven.tool("session", {"Bind": {"token": identity()}}, denied=True)
+            bound = driven.tool("session", {"Bind": {"token": started["bind"]}})["Driver"]["reply"]["Bound"]["status"]
+            assert bound["state"] == "On" and bound["attached"] == driven_session, bound
+            issued = control("Stop", {"Continue": {}})["Continue"]["directive"]
+            reference = "T" + target["id"]["number"]
+            words = issued["text"].split(" ")
+            assert words[:6] == ["$cq-advance", "--roots", reference, "--through", "explore", "--start-token"] and len(words) == 7, issued
+            advance = {"Advance": {"roots": [target["id"]], "through": "Explore"}}
+            directed = {"Workflow": {"id": identity(), "request": advance, "operatorRequirements": issued["text"], "token": {"Start": {"token": {"value": words[6]}}}}}
+            run = driven.tool("session", directed)["Workflow"]["value"]
+            assert run["cycle"] == issued["cycle"] and driven.tool("session", directed)["Workflow"]["value"] == run, run
+            assert driven.tool("session", {"Context": {}})["Context"]["value"]["workflow"]["cycle"] == issued["cycle"]
+            driven_choice, = driven.tool("dispatch", {"Select": {"request": {**selection, "request": identity(), "roots": [target["id"]]}}})["Selection"]["value"]["choices"]
+            driven_claim = driven.tool("claim", {"project": project, "action": {"Acquire": {"id": identity(), "members": [target["id"]], "durationMillis": "180000"}}})["Claimed"]["claim"]
+            child = driven.tool("dispatch", {"StartChoice": {"choice": driven_choice["id"], "harness": "Codex", "fence": driven_claim["fence"]}})["Status"]["value"]
+            registered = control("StatusLine", {"Status": {}})["Status"]["value"]
+            assert [name for name, _ in members(registered)] == ["Run", "Claim", "Request", "Attempt"] and registered["cycle"]["run"] == directed["Workflow"]["id"], registered
+            for _ in range(6):
+                child = driven.tool("dispatch", {"Status": {"attempt": child["attempt"], "waitMillis": 20000}})["Status"]["value"]
+                if child["phase"] not in ["Preparing", "Running", "Stopping", "Validating", "Publishing"]:
+                    break
+            assert child["phase"] == "Completed", child
+            deadline = time.monotonic() + 30
+            while dict(members(control("StatusLine", {"Status": {}})["Status"]["value"]))["Attempt"] is not True and time.monotonic() < deadline:
+                time.sleep(0.2)
+            settled = control("StatusLine", {"Status": {}})["Status"]["value"]
+            assert members(settled) == [("Run", False), ("Claim", True), ("Request", True), ("Attempt", True)] and settled["activeChildren"] == 0, settled
+            revised = change([{"Replace": {"id": target["id"], "expected": target["revision"], "draft": {**draft, "title": "Advanced inside the cycle"}}}], [driven_claim["fence"]])
+            assert revised["Changed"]["ack"]["items"][0]["id"] == target["id"]
+            assert [name for name, _ in members(control("StatusLine", {"Status": {}})["Status"]["value"])][-1] == "Change"
+            rejected = change([{"Replace": {"id": outsider["id"], "expected": outsider["revision"], "draft": {**draft, "title": "Outside the workset"}}}], [], denied=True)
+            assert "out-of-set change" in rejected["Failed"]["fault"]["Denied"]["message"], rejected
+            unchanged = driven.tool("read", {"project": project, "selection": {"ItemDetail": {"id": outsider["id"]}}})["Detail"]["view"]["item"]
+            assert unchanged["revision"] == outsider["revision"] and unchanged["draft"]["title"] == draft["title"], unchanged
+            stop = control("Stop", {"Continue": {}})["Stop"]
+            assert stop["stopped"]["reason"] == "Failure" and "out-of-set change" in stop["stopped"]["detail"] and stop["status"]["state"] == "Off", stop
+            own = driven.tool("session", {"Driver": {}})["Driver"]["reply"]["Status"]["value"]
+            assert own["state"] == "Off" and own["stopped"] == stop["stopped"], own
+            driven.refused("cq/driver", {"Status": {"session": "attached-fixture-session"}})
+            assert control("Stop", {"Continue": {}})["Stop"]["stopped"]["reason"] == "Off"
+            change([{"Replace": {"id": outsider["id"], "expected": outsider["revision"], "draft": {**draft, "title": "Driver off: written as before"}}}], [])
+        finally:
+            driven.close()
+    print(json.dumps({"drivenSession": driven_session, "cycle": issued["cycle"], "lineage": members(settled), "stop": stop["stopped"]}))
+
     with (root / "pi-host.log").open("w") as log:
         pi = Peer(command + ["host", "pi"], repository, env, log)
         try:
@@ -171,6 +246,19 @@ def main():
                       "cacheWrite": "0", "reasoning": None, "totalTokens": "15", "costUSD": {"value": "0.001"}}
             pi.rpc("cq/piUsage", sample)
             pi.rpc("cq/piUsage", sample)
+            # The Pi extension drives through its attached host, which supplies this attached session at drive-start.
+            pi_key = "fixture-native-pi"
+            assert pi.rpc("cq/driver", {"Status": {"session": pi_key}}) == {"Status": {"value": None}}
+            assert "Invalid" in pi.rpc("cq/driver", {"Start": {"session": pi_key, "input": "through=explore"}})["Failed"]["fault"]
+            assert "Invalid" in pi.rpc("cq/driver", {"Start": {"session": "", "input": reference + " through=explore"}})["Failed"]["fault"]
+            pi_started = pi.rpc("cq/driver", {"Start": {"session": pi_key, "input": reference + " through=explore"}})["Started"]
+            assert pi_started["bind"] is None and pi_started["status"]["state"] == "On" and pi_started["status"]["attached"] == pi_context["session"], pi_started
+            pi_directive = pi.rpc("cq/driver", {"Continue": {"session": pi_key}})["Continue"]["directive"]
+            assert pi_directive["text"].startswith("/cq:advance --roots " + reference + " --through explore --start-token "), pi_directive
+            assert pi.tool("session", {"Driver": {}})["Driver"]["reply"]["Status"]["value"]["cycle"]["id"] == pi_directive["cycle"]
+            pi_parked = pi.rpc("cq/driver", {"Park": {"session": pi_key}})["Parked"]
+            assert pi_parked["status"]["state"] == "Off" and pi_parked["status"]["stopped"]["reason"] == "Parked", pi_parked
+            assert pi.rpc("cq/driver", {"Continue": {"session": pi_key}})["Stop"]["stopped"]["reason"] == "Off"
         finally:
             pi.close()
     pi_totals = json.loads(cli(["status", "--session", pi_context["session"]["value"], "--json"]))["UsageSummary"]["report"]
@@ -233,7 +321,7 @@ def main():
         closing = Peer(command + ["host", "codex"], repository, env, log)
         try:
             closing_context = closing.tool("session", {"Context": {}})["Context"]["value"]
-            closing.tool("session", {"Workflow": {"id": identity(), "request": {"Begin": {"roots": []}}, "operatorRequirements": "Attached fixture: operator requirements text"}})
+            closing.tool("session", {"Workflow": {"id": identity(), "request": {"Begin": {"roots": []}}, "operatorRequirements": "Attached fixture: operator requirements text", "token": None}})
             created = closing.tool("change", {"project": project, "change": {"request": identity(), "mutations": [{"Create": {"draft": {**draft, "labels": []}}}], "fences": [], "reason": "Owned child shutdown"}})["Changed"]["ack"]["items"][0]
             selected, = closing.tool("dispatch", {"Select": {"request": {**selection, "request": identity(), "roots": [created["id"]], "work": {"Worker": {"mode": "Probe"}}}}})["Selection"]["value"]["choices"]
             owned = closing.tool("claim", {"project": project, "action": {"Acquire": {"id": identity(), "members": [created["id"]], "durationMillis": "180000"}}})["Claimed"]["claim"]

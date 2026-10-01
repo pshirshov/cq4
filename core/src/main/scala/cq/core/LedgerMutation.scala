@@ -5,17 +5,43 @@ import cq.api.*
 import java.security.MessageDigest
 import java.nio.charset.StandardCharsets
 
-final class LedgerMutation(terminationPlanner: TerminationPlanner) {
+final class LedgerMutation(terminationPlanner: TerminationPlanner, boundary: DriverBoundary) {
   import LedgerPolicy.*
   import LedgerAccess.*
 
   def apply(tx: LedgerTransaction, scope: Scope, request: ChangeRequest, now: Long): ChangeAck =
+    guarded(tx, scope, request, now, None, None, Nil)
+
+  // A write that carries its driver cycle ID.
+  def attributed(tx: LedgerTransaction, scope: Scope, request: ChangeRequest, now: Long, cycle: CycleId): ChangeAck =
+    guarded(tx, scope, request, now, Some(cycle), None, Nil)
+
+  def proposal(tx: LedgerTransaction, scope: Scope, request: ChangeRequest, now: Long, result: ArtifactId): ChangeAck =
+    guarded(tx, scope, request, now, None, None, List(LineageMember.Proposal(result)))
+
+  // Evaluates a change inside a transaction that is always rolled back; it is never a ledger write, so no driver boundary applies.
+  def hypothetical(tx: LedgerTransaction, scope: Scope, request: ChangeRequest, now: Long): ChangeAck =
     execute(tx, scope, request, now, None)
 
   def integrate(tx: LedgerTransaction, id: IntegrationId, now: Long): ChangeAck = {
     val record = tx.integration(id).getOrElse(throw new IllegalStateException("Integration reservation disappeared"))
     require(record.resolution == IntegrationResolution.Pending(), "Integration is not pending")
-    execute(tx, Scope(record.intent.project, record.intent.owner), record.intent.change, now, Some(record))
+    guarded(tx, Scope(record.intent.project, record.intent.owner), record.intent.change, now, None, Some(record), List(LineageMember.Integration(id)))
+  }
+
+  // A committed request replays its acknowledgement without writing, so only a new write meets the driver boundary.
+  private def guarded(tx: LedgerTransaction, scope: Scope, request: ChangeRequest, now: Long, cycle: Option[CycleId],
+    reservation: Option[IntegrationRecord], stamps: List[LineageMember]): ChangeAck = {
+    write(scope)
+    if (tx.request(scope.actor, request.request).nonEmpty) execute(tx, scope, request, now, reservation)
+    else boundary.admit(scope.project, scope.actor.session, cycle, now) match {
+      case None => execute(tx, scope, request, now, reservation)
+      case Some(attribution) =>
+        boundary.check(scope.project, attribution, request, now)
+        val acknowledgement = execute(tx, scope, request, now, reservation)
+        boundary.verify(tx, attribution, acknowledgement, LineageMember.Change(request.request) :: stamps, now)
+        acknowledgement
+    }
   }
 
   private def execute(tx: LedgerTransaction, scope: Scope, request: ChangeRequest, now: Long, reservation: Option[IntegrationRecord]): ChangeAck = {

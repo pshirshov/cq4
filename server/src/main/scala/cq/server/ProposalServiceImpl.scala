@@ -87,7 +87,7 @@ final class ProposalServiceImpl[F[+_, +_]: Error2](ledger: LedgerRepository[F], 
         admission.members.foreach { ref => LedgerAccess.expected(LedgerAccess.required(tx, scope, ref.id), ref.revision) }
         IntegrationPolicy.unreserved(tx, members)
       }
-      mutations(tx, scope, request, now)
+      mutations.proposal(tx, scope, request, now, id)
     }
   } yield result
 }

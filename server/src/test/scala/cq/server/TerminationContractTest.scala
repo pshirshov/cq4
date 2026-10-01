@@ -6,7 +6,6 @@ import distage.{Activation, DIKey}
 import distage.StandardAxis.Repo
 import izumi.distage.plugins.PluginConfig
 import izumi.distage.testkit.scalatest.{AssertZIO, SpecZIO}
-import java.time.{Clock, Instant, ZoneOffset}
 import java.util.UUID
 import zio.{IO, ZIO}
 
@@ -35,12 +34,7 @@ abstract class TerminationContractTest extends SpecZIO with AssertZIO {
   private def effect(preview: TerminationPreview, id: ItemId): TerminationEffect = preview.plan.entries.find(_.item.id == id).get.effect
   private def reject[A](operation: IO[Throwable, A], accepts: Fault => Boolean): IO[Throwable, Unit] =
     operation.either.flatMap(result => assertIO(result match { case Left(DomainFailure(fault)) => accepts(fault); case _ => false }).unit)
-  private def fixed(repository: LedgerRepository[IO], millis: Long): LedgerService[IO] = {
-    val parser = new QueryParser
-    val worksets = new WorksetTraversal
-    new LedgerService.Impl[IO](repository, Clock.fixed(Instant.ofEpochMilli(millis), ZoneOffset.UTC), parser,
-      new QueryCompleter(parser), worksets, new TerminationPlanner(worksets), new ClaimPlanner, new LedgerMutation(new TerminationPlanner(new WorksetTraversal)))
-  }
+  private def fixed(repository: LedgerRepository[IO], millis: Long): LedgerService[IO] = FixedLedger.at(repository, millis)
 
   "Whole-subgraph termination (Behavioral Active Blackbox; dummy Group / PostgreSQL Good Communication)" should {
     "map all ledgers without manufacturing factual outcomes and preserve every non-status field" in { (service: LedgerService[IO]) =>

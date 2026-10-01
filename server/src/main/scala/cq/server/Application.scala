@@ -53,6 +53,7 @@ final class Application(ledger: LedgerService[IO], repository: LedgerRepository[
         case WorksetAction.Lookup(id) => ledger.lookupWorkset(scope, id).map(Result.WorksetStored.apply)
         case WorksetAction.Preview(target) => ledger.previewWorkset(scope, target).map(Result.WorksetPreviewed.apply)
       }}
+      case Command.Driver(input) => scoped(authority, input.project)(scope => ledger.drive(scope, input.request).map(Result.Driver.apply))
       case Command.Change(input) => scoped(authority, input.project)(scope => ledger.change(scope, input.change).map(Result.Changed.apply))
       case Command.ApplyProposal(input) => scoped(authority, input.project)(scope => proposals(scope, input.result).map(Result.Changed.apply))
       case Command.ClaimWork(input) => scoped(authority, input.project) { scope => input.action match {

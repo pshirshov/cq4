@@ -7,7 +7,6 @@ import distage.StandardAxis.Repo
 import izumi.distage.plugins.PluginConfig
 import izumi.distage.testkit.scalatest.{AssertZIO, SpecZIO}
 import java.util.UUID
-import java.time.{Clock, Instant, ZoneOffset}
 import zio.{IO, ZIO}
 
 abstract class ClaimCoordinationTest extends SpecZIO with AssertZIO {
@@ -26,12 +25,7 @@ abstract class ClaimCoordinationTest extends SpecZIO with AssertZIO {
     value => assertIO(value match { case Left(DomainFailure(fault)) => accepts(fault); case _ => false }).unit
   }
 
-  private def fixed(repository: LedgerRepository[IO], millis: Long): LedgerService[IO] = {
-    val parser = new QueryParser
-    val worksets = new WorksetTraversal
-    new LedgerService.Impl[IO](repository, Clock.fixed(Instant.ofEpochMilli(millis), ZoneOffset.UTC), parser,
-      new QueryCompleter(parser), worksets, new TerminationPlanner(worksets), new ClaimPlanner, new LedgerMutation(new TerminationPlanner(new WorksetTraversal)))
-  }
+  private def fixed(repository: LedgerRepository[IO], millis: Long): LedgerService[IO] = FixedLedger.at(repository, millis)
 
   "Claim coordination (Behavioral Active Blackbox; dummy Group / PostgreSQL Good Communication)" should {
     "bind acquisition retries to the requested duration" in { (service: LedgerService[IO]) =>

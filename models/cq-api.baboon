@@ -312,6 +312,80 @@ root adt WorksetAction {
   data Preview { target: WorksetTarget }
 }
 root data WorksetInput { project: ProjectId action: WorksetAction }
+root id CycleId { value: uid }
+root id DriverToken { value: uid }
+root data DriverKey { harness: Harness session: str }
+enum DriverOrigin { UserPromptSubmit Stop Extension StatusLine }
+enum DriverState { Binding On Off }
+enum DriverStop { Quiescent UserInputRequired LimitReached NotBound Failure Parked Off }
+root data DriverStopped { reason: DriverStop detail: str }
+enum CycleState { Pending Active Ended }
+root adt CycleToken {
+  data Start { token: DriverToken }
+  data Resume { token: DriverToken }
+}
+root adt LineageMember {
+  data Run { id: RequestId }
+  data Session { id: SessionId }
+  data Request { id: RequestId }
+  data Attempt { id: AttemptId }
+  data Claim { id: ClaimId }
+  data Proposal { id: ArtifactId }
+  data Change { id: RequestId }
+  data Integration { id: IntegrationId }
+  data Combination { id: RequestId }
+}
+root data LineageEntry { member: LineageMember parent: opt[LineageMember] settled: bit }
+root data DriverCycle {
+  id: CycleId number: i32 state: CycleState roots: set[ItemId] through: WorkflowPhase snapshot: WorksetSnapshot
+  advanceable: lst[ItemRevision] run: opt[RequestId] created: lst[ItemId] lineage: lst[LineageEntry]
+}
+root data DriverStatus {
+  key: DriverKey state: DriverState attached: opt[SessionId] workset: opt[WorksetId] targets: set[ItemId] through: WorkflowPhase
+  cycle: opt[DriverCycle] activeChildren: i32 directives: i32 stopped: opt[DriverStopped] line: str
+}
+root data DriverDirective { cycle: CycleId token: CycleToken text: str }
+root adt DriverControl {
+  data Start { target: WorksetTarget attached: opt[SessionId] }
+  data Park {}
+  data Continue {}
+  data Status {}
+}
+root adt DriverSession {
+  data Bind { token: DriverToken }
+  data Status {}
+  data Activate { run: RequestId request: WorkflowRequest token: opt[CycleToken] }
+  data Inherit { cycle: CycleId parent: LineageMember member: LineageMember }
+  data Settle { cycle: CycleId member: LineageMember }
+  data Change { cycle: CycleId request: ChangeRequest }
+}
+root adt DriverRequest {
+  data Control { key: DriverKey origin: DriverOrigin action: DriverControl }
+  data Session { action: DriverSession }
+}
+root data DriverInput { project: ProjectId request: DriverRequest }
+root adt DriverActivation {
+  data Undriven {}
+  data Started { cycle: CycleId }
+  data Resumed { cycle: CycleId run: RequestId }
+}
+root adt DriverReply {
+  data Started { status: DriverStatus preview: WorksetPreview bind: opt[DriverToken] message: str }
+  data Parked { status: opt[DriverStatus] message: str }
+  data Continue { directive: DriverDirective status: DriverStatus messages: lst[str] }
+  data Stop { stopped: DriverStopped status: opt[DriverStatus] messages: lst[str] }
+  data Status { value: opt[DriverStatus] }
+  data Bound { status: DriverStatus message: str }
+  data Activation { value: DriverActivation }
+  data Lineage { cycle: CycleId entry: LineageEntry }
+  data Changed { cycle: CycleId ack: ChangeAck }
+}
+root adt ExtensionDriver {
+  data Start { session: str input: str }
+  data Park { session: str }
+  data Continue { session: str }
+  data Status { session: str }
+}
 root adt ReadSelection {
   data Browse { query: str order: ItemOrder after: opt[ItemId] snapshot: opt[ChangeCursor] limit: i32 }
   data Counts {}
@@ -354,6 +428,7 @@ root adt Command {
   data Search { input: SearchInput }
   data Graph { input: GraphInput }
   data Workset { input: WorksetInput }
+  data Driver { input: DriverInput }
   data Read { input: ReadInput }
   data Change { input: ChangeInput }
   data ApplyProposal { input: ProposalApplyInput }
@@ -374,6 +449,7 @@ root adt Result {
   data Subgraphs { page: SubgraphPage }
   data WorksetStored { workset: StoredWorkset }
   data WorksetPreviewed { preview: WorksetPreview }
+  data Driver { reply: DriverReply }
   data QueryAnalyzed { analysis: QueryAnalysis }
   data ArtifactInfo { metadata: ArtifactMetadata }
   data ArtifactText { page: ArtifactPage }
@@ -481,7 +557,7 @@ root data AttachedPiEvent {
   input: opt[i64] output: opt[i64] cacheRead: opt[i64] cacheWrite: opt[i64] reasoning: opt[i64] totalTokens: opt[i64] costUSD: opt[DecimalAmount]
 }
 root data AttachedPiSample { event: AttachedPiEvent receivedAt: i64 }
-root data WorkflowActivation { id: RequestId context: WorkflowContext operatorRequirements: str }
+root data WorkflowActivation { id: RequestId context: WorkflowContext operatorRequirements: str cycle: opt[CycleId] }
 root data AttachedContext {
   session: SessionId attempt: AttemptId directory: str project: ProjectConfig
   routes: lst[HarnessRoute] checks: lst[str] limits: HostLimits integrationTarget: opt[str]
@@ -489,11 +565,14 @@ root data AttachedContext {
 }
 root adt SessionCommand {
   data Context {}
-  data Workflow { id: RequestId request: WorkflowRequest operatorRequirements: str }
+  data Workflow { id: RequestId request: WorkflowRequest operatorRequirements: str token: opt[CycleToken] }
+  data Bind { token: DriverToken }
+  data Driver {}
 }
 root adt SessionReply {
   data Context { value: AttachedContext }
   data Workflow { value: WorkflowActivation }
+  data Driver { reply: DriverReply }
   data Failed { fault: Fault }
 }
 root data NativeManifest { encoding: str mediaType: str bytes: i64 sha256: str parts: lst[ArtifactId] }
