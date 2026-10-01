@@ -287,6 +287,8 @@ abstract class ProposalContractTest extends SpecZIO with AssertZIO {
           List(ProposedMutation.Produce(first, List(task), Some(MilestoneRef.Created(1))), ProposedMutation.Create(milestone(MilestoneStatus.Open))) -> index,
           List(ProposedMutation.Produce(first, List(research), Some(MilestoneRef.Existing(open)))) -> Fault.Invalid("A Produce milestone requires a Task draft"),
           List(ProposedMutation.Produce(first, List(task), Some(MilestoneRef.Existing(first)))) -> Fault.Invalid("PartOf target must be a milestone"),
+          List(ProposedMutation.Create(milestone(MilestoneStatus.Complete)), ProposedMutation.Produce(first, List(task), Some(MilestoneRef.Created(0)))) ->
+            Fault.Invalid("Tasks can be assigned only to an Open milestone; the Milestone created at index 0 of this batch is Complete"),
         )) { case (mutations, fault) => for {
           value <- publish(f, DispatchWork.Planner(), plan(f, mutations), usage, artifacts)
           _ <- rejected(admissions.admit(f.collector, HostAdmissionInput(f.owner.project, value.artifact.id, f.owner.actor)), _ == fault)

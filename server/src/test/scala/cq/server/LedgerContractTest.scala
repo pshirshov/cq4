@@ -318,6 +318,56 @@ abstract class LedgerContractTest extends SpecZIO with AssertZIO {
       } yield ()
     }
 
+    "assign a Task only to an Open milestone through Produce, Reference and Restore while keeping removal allowed" in { (service: LedgerService[IO]) =>
+      val owner = scope()
+      val goal = task("Goal").copy(content = Content.Goal(GoalStatus.Open, "Outcome", List("Acceptance"), "Scope"))
+      def milestone(status: MilestoneStatus): ItemDraft = task(s"$status milestone").copy(content = Content.Milestone(status, "Deliver the tasks"))
+      def closed(name: String, status: MilestoneStatus): Fault = Fault.Invalid(s"Tasks can be assigned only to an Open milestone; $name is $status")
+      def link(source: ItemRevision, relation: Relation, target: ItemRevision, present: Boolean): ChangeRequest =
+        request(List(Mutation.Reference(source.id, source.revision, relation, target.id, target.revision, present)), Nil)
+      def current(id: ItemId): IO[Throwable, ItemRevision] = service.get(owner, id).map(view => ItemRevision(view.item.id, view.item.revision))
+      for {
+        _ <- service.initialize(owner, "open milestone assignment")
+        producer <- create(service, owner, goal)
+        claim <- service.acquire(owner, ClaimId(UUID.randomUUID()), Set(producer.id), 300000)
+        complete <- create(service, owner, milestone(MilestoneStatus.Complete))
+        archived <- create(service, owner, milestone(MilestoneStatus.Cancelled).copy(archived = true))
+        open <- create(service, owner, milestone(MilestoneStatus.Open))
+        loose <- create(service, owner, task("Loose"))
+        before <- service.changes(owner, ChangeCursor(0), 200)
+        _ <- ZIO.foreachDiscard(List(MilestoneStatus.Complete, MilestoneStatus.Cancelled)) { status =>
+          denied(service.change(owner, request(List(Mutation.Create(milestone(status)),
+            Mutation.Produce(producer.id, producer.revision, List(task("Under a closed milestone")), Some(MilestoneRef.Created(0)))), List(claim.fence))))(
+            _ == closed("the Milestone created at index 0 of this batch", status))
+        }
+        _ <- denied(service.change(owner, link(loose, Relation.PartOf, complete, true)))(_ == closed(s"M${complete.id.number}", MilestoneStatus.Complete))
+        _ <- denied(service.change(owner, link(complete, Relation.Contains, loose, true)))(_ == closed(s"M${complete.id.number}", MilestoneStatus.Complete))
+        _ <- denied(service.change(owner, link(loose, Relation.PartOf, archived, true)))(_ == closed(s"M${archived.id.number}", MilestoneStatus.Cancelled))
+        after <- service.changes(owner, ChangeCursor(0), 200)
+        _ <- assertIO(before == after)
+        linked <- service.change(owner, link(loose, Relation.PartOf, open, true))
+        contained = linked.items.find(_.id == open.id).get
+        member = linked.items.find(_.id == loose.id).get
+        completed <- service.change(owner, request(List(Mutation.Replace(open.id, contained.revision, milestone(MilestoneStatus.Complete))), Nil))
+        kept <- service.get(owner, loose.id)
+        _ <- assertIO(kept.refs == List(ItemRef(Relation.PartOf, open.id)))
+        removed <- service.change(owner, link(member, Relation.PartOf, completed.items.head, false))
+        emptied = removed.items.find(_.id == open.id).get
+        unlinked = removed.items.find(_.id == loose.id).get
+        // Restoring either endpoint re-adds the relationship: refused while the milestone, as the batch leaves it, is not Open.
+        _ <- denied(service.change(owner, request(List(Mutation.Restore(loose.id, unlinked.revision, member.revision, List(emptied))), Nil)))(
+          _ == closed(s"M${open.id.number}", MilestoneStatus.Complete))
+        reopened <- service.change(owner, request(List(Mutation.Replace(open.id, emptied.revision, milestone(MilestoneStatus.Open))), Nil))
+        _ <- denied(service.change(owner, request(List(Mutation.Restore(open.id, reopened.items.head.revision, completed.items.head.revision, List(unlinked))), Nil)))(
+          _ == closed(s"M${open.id.number}", MilestoneStatus.Complete))
+        reclosed <- service.change(owner, request(List(Mutation.Replace(open.id, reopened.items.head.revision, milestone(MilestoneStatus.Cancelled))), Nil))
+        restored <- service.change(owner, request(List(Mutation.Restore(open.id, reclosed.items.head.revision, contained.revision, List(unlinked))), Nil))
+        target <- service.get(owner, open.id)
+        _ <- assertIO(restored.items.map(_.id).toSet == Set(open.id, loose.id) && target.refs == List(ItemRef(Relation.Contains, loose.id)) &&
+          target.item.draft.content == milestone(MilestoneStatus.Open).content)
+      } yield ()
+    }
+
     "retain terminal items while related items are still open" in { (service: LedgerService[IO]) =>
       val owner = scope()
       val done = task("Done").copy(content = Content.Task(TaskStatus.Done, List("Observable result"), Some("Result"), Nil))

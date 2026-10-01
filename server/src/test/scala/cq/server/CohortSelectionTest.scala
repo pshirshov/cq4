@@ -485,6 +485,40 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
       } yield ()
     }
 
+    "exclude a task whose milestone is closed from implementation and refuse its start" in { (ledger: LedgerService[IO]) =>
+      val scope = owner
+      def offered(plan: CohortPlan): Set[ItemId] = plan.evidence.decision.choices.flatMap(_.members.map(_.id)).toSet
+      for {
+        runtime <- ZIO.runtime[Any]
+        _ <- ledger.initialize(scope, "Closed milestone admission")
+        created <- ledger.change(scope, ChangeRequest(RequestId(uuid), List(Mutation.Create(milestone), Mutation.Create(milestone), Mutation.Create(task), Mutation.Create(task)),
+          Nil, "Milestones and tasks"))
+        kept = created.items.head.id
+        closing = created.items(1).id
+        current = created.items(2).id
+        stranded = created.items(3).id
+        _ <- link(ledger, scope, current, Relation.PartOf, kept)
+        _ <- link(ledger, scope, stranded, Relation.PartOf, closing)
+        planner = new CohortPlanner(api(ledger, scope, runtime), scope, fixed(GitCommit("a" * 40)), Nil, new CohortProgress, new OperatorRequirements(""))
+        input = request(Set(current, stranded), DispatchWork.Worker(WorkerMode.Implement))
+        both <- ZIO.attemptBlocking(planner.plan(input, ArtifactId(uuid)))
+        _ <- assertIO(offered(both) == Set(current, stranded))
+        choice = both.evidence.decision.choices.find(_.members.exists(_.id == stranded)).get
+        target <- ledger.get(scope, closing)
+        _ <- ledger.change(scope, ChangeRequest(RequestId(uuid), List(Mutation.Replace(closing, target.item.revision,
+          milestone.copy(content = Content.Milestone(MilestoneStatus.Complete, "Deliver the tasks")))), Nil, "Complete the milestone"))
+        refused <- ZIO.attemptBlocking(intercept[DomainFailure](planner.verify(input, choice, both.fingerprints(choice.id))))
+        _ <- assertIO(refused.fault == Fault.Invalid(
+          s"Work refused: T${stranded.number}'s milestone M${closing.number} is Complete; a Planner must reassign it under plan review"))
+        selected <- ZIO.attemptBlocking(planner.plan(input.copy(request = RequestId(uuid)), ArtifactId(uuid)))
+        _ <- assertIO(offered(selected) == Set(current) && selected.evidence.decision.counts.excluded == 1 &&
+          selected.evidence.considered.filter(_.reason == CohortReason.ClosedMilestone).map(_.members.map(_.id)) == List(List(stranded)))
+        others <- ZIO.foreach(List[DispatchWork](DispatchWork.Explorer(ExplorerMode.Investigate), DispatchWork.Planner(), DispatchWork.Worker(WorkerMode.Probe)))(work =>
+          ZIO.attemptBlocking(planner.plan(input.copy(request = RequestId(uuid), work = work), ArtifactId(uuid))))
+        _ <- assertIO(others.forall(plan => offered(plan) == Set(current, stranded) && plan.evidence.decision.counts.excluded == 0))
+      } yield ()
+    }
+
     "never offer a settled decision or memory while a proposed decision stays selectable" in { (ledger: LedgerService[IO]) =>
       val scope = owner
       def decision(status: DecisionStatus): ItemDraft = task.copy(title = s"Decision $status", content = Content.Decision(status, "Choice", "Rationale", Nil))

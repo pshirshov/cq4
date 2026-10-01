@@ -171,7 +171,7 @@ abstract class DispatchAssemblyTest extends SpecZIO with AssertZIO {
         } yield ()
     }
 
-    "refuse implementation input for a task without a milestone" in {
+    "refuse implementation input for a task without an Open milestone" in {
       (ledger: LedgerService[IO], repository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
         val clock = Clock.systemUTC()
         val scope = Scope(ProjectId(UUID.randomUUID()), Actor("assembly governor", SessionId(UUID.randomUUID()), Role.Governor))
@@ -201,6 +201,17 @@ abstract class DispatchAssemblyTest extends SpecZIO with AssertZIO {
             List(claim.fence), "Assign the milestone"))
           assigned = linked.items.find(_.id == member.id).get
           _ <- ZIO.attemptBlocking(assert(assembler.assemble(request.copy(members = List(assigned))).members.map(_.refs) == List(List(ItemRef(Relation.PartOf, target.id)))))
+          contained = linked.items.find(_.id == target.id).get
+          _ <- ledger.change(scope, ChangeRequest(requestId, List(Mutation.Replace(target.id, contained.revision,
+            milestone.copy(content = Content.Milestone(MilestoneStatus.Complete, "Deliver the consumer")))), Nil, "Complete the milestone"))
+          closed = Fault.Invalid(s"Work refused: T${member.id.number}'s milestone M${target.id.number} is Complete; a Planner must reassign it under plan review")
+          _ <- ZIO.attemptBlocking {
+            val current = request.copy(members = List(assigned))
+            assert(intercept[DomainFailure](assembler.assemble(current)).fault == closed)
+            assert(intercept[DomainFailure](assembler.assemble(current.copy(work = DispatchWork.Worker(WorkerMode.ResolveConflict)))).fault == closed)
+            List[DispatchWork](DispatchWork.Planner(), DispatchWork.Worker(WorkerMode.Probe)).foreach(work =>
+              assert(assembler.assemble(current.copy(work = work)).members.map(_.item.id) == List(member.id)))
+          }
         } yield ()
     }
   }
