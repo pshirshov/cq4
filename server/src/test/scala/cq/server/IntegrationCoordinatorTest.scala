@@ -185,6 +185,7 @@ final class RealIntegrationHarness(local: LocalWorkspaceFixture, guardian: Guard
           assert(Files.readString(local.source.resolve("tracked.txt")) == "governing unstaged over staged\n")
           assert(Files.readString(local.source.resolve("untracked.txt")) == "governing untracked\n")
           assert(Files.readString(local.source.resolve("first.txt")) == "first\n")
+          assert(!local.git(local.source, "worktree", "list", "--porcelain").contains(local.workspaces.toString), "The settled integration job kept its workspace")
         },
         ZIO.attemptBlocking {
           assert(java.util.Arrays.equals(index, Files.readAllBytes(local.source.resolve(".git/index"))))
