@@ -24,14 +24,13 @@ final class CombinationController(config: SupervisorConfig, authority: Superviso
     target
     require(!closing && !disabled, "Combination admission is closed")
     require(!entries.values.exists(_.view.phase == CombinationPhase.Preparing), "A combination is active; poll it before starting another")
-    candidates.verifyTargetClean()
   }
   private def snapshot(entry: CombinationExecution): CombinationStatus = synchronized(entry.view)
 
   def prepare(ticket: CombinationTicket): Task[CombinationStatus] = ZIO.uninterruptibleMask { restore => for {
     ready <- Promise.make[Throwable, Unit]
     done <- Promise.make[Nothing, Unit]
-    registered <- ZIO.attemptBlocking(synchronized {
+    registered <- ZIO.attempt(synchronized {
       entries.get(ticket.id) match {
         case Some(entry) =>
           require(entry.ticket == ticket, "Combination request identity changed")

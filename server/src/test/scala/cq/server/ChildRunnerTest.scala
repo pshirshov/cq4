@@ -222,33 +222,30 @@ time.sleep(30)
       }
     }
 
-    "D91: refuse to start a child while the integration target checkout has uncommitted tracked changes, then start once it is clean" in {
+    "D91: start a child while the operator checkout has staged, unstaged and untracked work, which the host preserves" in {
       (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
         artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
       fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, Some("refs/heads/integration")) { f =>
         val limits = HostLimits(3000, 30000, 900, 100, 1000, 262144)
-        val controller = new DispatchController(f.config, f.runner, f.jobs, new CandidateWorkspace(f.config), f.clock)
+        val controller = new DispatchController(f.config, f.runner, f.jobs, f.clock)
         for {
           _ <- ZIO.attemptBlocking {
             local.git(local.source, "branch", "integration", local.base.value)
             f.install(Completing)
-            Files.writeString(local.source.resolve("tracked.txt"), "governor edit in the operator checkout\n")
-            Files.writeString(local.source.resolve("untracked.log"), "worker evidence\n")
+            Files.writeString(local.source.resolve("tracked.txt"), "operator edit in progress\n")
+            Files.writeString(local.source.resolve("staged.txt"), "operator staged work\n")
+            local.git(local.source, "add", "staged.txt")
+            Files.writeString(local.source.resolve("untracked.log"), "operator notes\n")
           }
-          refused <- controller.start(f.request(limits)).either
-          _ <- ZIO.attempt {
-            val message = refused match {
-              case Left(DomainFailure(Fault.Conflict(message))) => message
-              case other => fail(s"Expected a dirty-target conflict, observed $other")
-            }
-            println(s"Dirty target start refusal: $message")
-            assert(message == "Integration target checkout has uncommitted changes: tracked.txt", message)
-          }
-          _ <- ZIO.attemptBlocking { local.git(local.source, "checkout", "--", "tracked.txt"); () }
           started <- controller.start(f.request(limits))
           settled <- controller.status(started.attempt, 20000).repeatUntil(status => DispatchController.terminal(status.phase))
             .timeoutFail(new IllegalStateException("Worker did not finish"))(zio.Duration.fromSeconds(60))
-          _ <- ZIO.attempt(assert(settled.phase == DispatchPhase.Completed && settled.result.nonEmpty, settled.toString))
+          _ <- ZIO.attempt {
+            assert(settled.phase == DispatchPhase.Completed && settled.result.nonEmpty, settled.toString)
+            assert(Files.readString(local.source.resolve("tracked.txt")) == "operator edit in progress\n")
+            assert(local.git(local.source, "show", ":staged.txt") == "operator staged work")
+            assert(Files.readString(local.source.resolve("untracked.log")) == "operator notes\n")
+          }
         } yield ()
       }
     }

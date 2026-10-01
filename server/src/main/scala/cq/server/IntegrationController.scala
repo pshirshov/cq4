@@ -49,7 +49,6 @@ final class IntegrationController(config: SupervisorConfig, authority: Superviso
     require(!closing && !disabled, "Integration admission is closed")
     require(!entries.values.exists(value => Set(IntegrationPhase.Preparing, IntegrationPhase.Running)(value.view.phase)),
       "An integration operation is active; poll it before starting another")
-    candidates.verifyTargetClean()
   }
   private def snapshot(entry: IntegrationExecutionState): IntegrationStatus = synchronized(entry.view)
   private def update(entry: IntegrationExecutionState, value: IntegrationStatus): Unit = synchronized { entry.view = value }
@@ -76,7 +75,7 @@ final class IntegrationController(config: SupervisorConfig, authority: Superviso
   def prepare(ticket: IntegrationTicket): Task[IntegrationStatus] = ZIO.uninterruptibleMask { restore => for {
     ready <- Promise.make[Throwable, Unit]
     done <- Promise.make[Nothing, Unit]
-    registered <- ZIO.attemptBlocking(synchronized {
+    registered <- ZIO.attempt(synchronized {
       entries.get(ticket.id) match {
         case Some(entry) => require(entry.ticket == ticket, "Integration identity was reused with another reviewer handle"); (entry, false)
         case None =>
@@ -106,7 +105,7 @@ final class IntegrationController(config: SupervisorConfig, authority: Superviso
 
   def apply(id: IntegrationId): Task[IntegrationStatus] = ZIO.uninterruptibleMask { _ => for {
     done <- Promise.make[Nothing, Unit]
-    registered <- ZIO.attemptBlocking(synchronized {
+    registered <- ZIO.attempt(synchronized {
       val entry = found(id)
       entry.view.phase match {
         case IntegrationPhase.Ready | IntegrationPhase.Pending =>

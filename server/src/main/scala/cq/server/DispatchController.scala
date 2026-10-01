@@ -42,7 +42,7 @@ private[server] final class DispatchExecution(val ticket: DispatchTicket, val di
 
 final case class SelectedDispatch(cohort: Option[UUID], evidence: ArtifactId, admit: () => Unit)
 
-final class DispatchController(config: SupervisorConfig, runner: ChildRunner, jobs: JobSupervisor, candidates: CandidateWorkspace, clock: Clock) {
+final class DispatchController(config: SupervisorConfig, runner: ChildRunner, jobs: JobSupervisor, clock: Clock) {
   private val AcknowledgementMillis = 1000L
   private val MaxChildren = 32
   private val MaxStatusWaitMillis = 20000
@@ -64,7 +64,6 @@ final class DispatchController(config: SupervisorConfig, runner: ChildRunner, jo
         DispatchController.admissible(entries.values.filter(entry => !DispatchController.terminal(entry.status.phase)).map(_.ticket.request).toList, request)
         SupervisorConfig.within(request.limits, config.settings.limits)
         val profile = config.settings.harnesses.find(_.harness == request.harness).getOrElse(throw new IllegalArgumentException("Requested harness route is not configured"))
-        candidates.verifyTargetClean()
         val id = AttemptId(UUID.randomUUID())
         val members = request.members.map(_.id).toSet
         val assignment = Assignment(AssignmentId(UUID.randomUUID()), config.project.project, members,
@@ -153,8 +152,7 @@ object DispatchController {
     if (active.size >= MaxActiveChildren)
       throw DomainFailure(Fault.Conflict(s"This session permits at most $MaxActiveChildren active children; poll or cancel one before starting another"))
   }
-  final class Resource(config: SupervisorConfig, runner: ChildRunner, jobs: JobSupervisor, candidates: CandidateWorkspace, clock: Clock, watchdog: SupervisorWatchdog)
-    extends Lifecycle.Of[Task, DispatchController](
-    Lifecycle.make(ZIO.succeed(new DispatchController(config, runner, jobs, candidates, clock)))(value => ZIO.succeed(watchdog.beginShutdown()) *> value.shutdown)
+  final class Resource(config: SupervisorConfig, runner: ChildRunner, jobs: JobSupervisor, clock: Clock, watchdog: SupervisorWatchdog) extends Lifecycle.Of[Task, DispatchController](
+    Lifecycle.make(ZIO.succeed(new DispatchController(config, runner, jobs, clock)))(value => ZIO.succeed(watchdog.beginShutdown()) *> value.shutdown)
   )
 }
