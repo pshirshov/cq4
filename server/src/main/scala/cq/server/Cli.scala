@@ -172,10 +172,10 @@ final class Cli(context: CliContext, location: ProjectLocation, upload: SessionU
         else Command.ApplyProposal(ProposalApplyInput(config.project, handle))
       renderer.result(request(config, actorSession, command))
     case "status" :: rest =>
-      val mode = rest.headOption.filter(Set("audit", "costs", "attempts", "outcomes")).getOrElse("summary")
+      val mode = rest.headOption.filter(Set("phases", "audit", "costs", "attempts", "outcomes")).getOrElse("summary")
       val scopes = Set("--task", "--cohort", "--session")
       val allowed = mode match {
-        case "summary" => scopes
+        case "summary" | "phases" => scopes
         case "audit" => scopes ++ Set("--after", "--limit")
         case "costs" => scopes ++ Set("--after", "--snapshot", "--limit")
         case "attempts" => scopes ++ Set("--after", "--snapshot", "--limit")
@@ -191,6 +191,7 @@ final class Cli(context: CliContext, location: ProjectLocation, upload: SessionU
       val limit = opts.get("--limit").map(_.toInt).getOrElse(DefaultPageSize)
       val selection = mode match {
         case "summary" => UsageSelection.Summary(filter)
+        case "phases" => UsageSelection.Phases(filter)
         case "audit" => UsageSelection.Audit(filter, opts.get("--after").map(_.toLong).getOrElse(0L), limit)
         case "costs" => UsageSelection.Costs(filter, opts.get("--after").map(v => Wire.decode(CostGroup_JsonCodec, v)), opts.get("--snapshot").map(_.toLong), limit)
         case "attempts" => UsageSelection.Attempts(filter, opts.get("--after").map(v => AttemptId(UUID.fromString(v))), opts.get("--snapshot").map(_.toLong), limit)

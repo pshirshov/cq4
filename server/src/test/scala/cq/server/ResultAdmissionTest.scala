@@ -28,10 +28,10 @@ abstract class ResultAdmissionTest extends SpecZIO with AssertZIO {
       claim <- ledger.acquire(owner, ClaimId(UUID.randomUUID()), created.items.map(_.id).toSet, 300000)
       assignment <- usage.assign(collector, Assignment(AssignmentId(UUID.randomUUID()), owner.project, Set.empty, Attribution.Unattributed, None, None))
       parent <- usage.start(collector, Attempt(AttemptId(UUID.randomUUID()), assignment.id, None, owner.actor.session, Role.Governor,
-        Harness.Codex, "fixture", "fixture", "fixture", 1000))
+        Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Govern))
       assigned <- usage.assign(collector, Assignment(AssignmentId(UUID.randomUUID()), owner.project, claim.members, Attribution.Shared, Some(UUID.randomUUID()), None))
       child <- usage.start(collector, Attempt(AttemptId(UUID.randomUUID()), assigned.id, Some(parent.id), owner.actor.session, Role.Worker,
-        Harness.Codex, "fixture", "fixture", "fixture", 1001))
+        Harness.Codex, "fixture", "fixture", "fixture", 1001, UsagePhase.Work))
       request = DispatchRequest(RequestId(UUID.randomUUID()), DispatchWork.Worker(WorkerMode.Implement), Harness.Codex,
         created.items, Nil, Nil, None, claim.fence, HostLimits(3000, 10000, 1000, 300, 2000, 262144))
       result = ChildResult(child.id, request, GitCommit("a" * 40), Some(GitCommit("b" * 40)),

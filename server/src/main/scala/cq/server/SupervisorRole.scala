@@ -119,7 +119,7 @@ object SupervisorConfig {
     val attempt = Attempt(AttemptId(UUID.randomUUID()), assignment.id, None, session, Role.Governor, harness,
       if (attached) "unobserved-interactive-provider" else profile.provider,
       if (attached) "unobserved-interactive-model" else profile.model,
-      if (attached) "CQ attached session; outer usage unavailable" else "CQ native collector 0.1.0", clock.millis())
+      if (attached) "CQ attached session; outer usage unavailable" else "CQ native collector 0.1.0", clock.millis(), UsagePhase.Govern)
     val run = SupervisorRun(project, assignment, attempt, profile.version, repository.toString, base,
       if (attached) SessionOwnership.Attached else SessionOwnership.Managed)
     val input = if (attached) "" else HostFiles.text(context.directory.resolve(options("--input")).normalize(), MaxInputBytes)

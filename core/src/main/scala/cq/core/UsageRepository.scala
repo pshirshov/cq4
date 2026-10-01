@@ -3,6 +3,7 @@ package cq.core
 import cq.api.*
 
 final case class MeterKey(attempt: AttemptId, meter: String)
+final case class PhaseCost(phase: UsagePhase, total: CostTotal)
 
 trait UsageRepository[F[_, _]] {
   def transact[A](project: ProjectId)(operation: UsageTransaction => A): F[Throwable, A]
@@ -11,6 +12,8 @@ trait UsageRepository[F[_, _]] {
 
 trait UsageReader {
   def costs(filter: UsageFilter, after: Option[CostGroup], limit: Int): ReadPage[CostTotal]
+  /** At most `limit` cost groups, ordered by phase name and then as `costs` orders its groups. */
+  def phaseCosts(filter: UsageFilter, limit: Int): List[PhaseCost]
   def cost(key: MeterKey, group: MoneyKey): Option[CostProjection]
   def cursor: Long
   def assignment(id: AssignmentId): Option[Assignment]

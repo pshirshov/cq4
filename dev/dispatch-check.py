@@ -83,6 +83,17 @@ def main():
         before = api({"Summary": {"filter": filter_value}})
         attempts = api({"Attempts": {"filter": filter_value, "after": None, "snapshot": None, "limit": 20}})["UsageAttempts"]["page"]["entries"]
         assert len(attempts) == 4 and sum(value["attempt"]["parent"] == receipt["attempt"] for value in attempts) == 3
+
+        def phase(work):
+            kind, body = next(iter(work.items()))
+            return {"Explorer": "Explore", "Planner": "Plan", "Reviewer": "Review"}.get(kind) or {"Implement": "Work", "Probe": "Probe", "ResolveConflict": "Combine"}[body["mode"]]
+
+        tickets = [json.loads((child / "ticket.json").read_text()) for child in children]
+        expected = {receipt["attempt"]["value"]: "Govern", **{value["attempt"]["id"]["value"]: phase(value["request"]["work"]) for value in tickets}}
+        assert {value["attempt"]["id"]["value"]: value["attempt"]["phase"] for value in attempts} == expected, attempts
+        phases = api({"Phases": {"filter": filter_value}})["UsagePhases"]["report"]["phases"]
+        assert {value["phase"]: value["attempts"] for value in phases} == {name: str(list(expected.values()).count(name)) for name in expected.values()}, phases
+        assert all(value["running"] == "0" and value["spans"] == "0" and int(value["wallMillis"]) > 0 for value in phases), phases
         assert all(value["assignment"]["evaluation"] == {"run": "deterministic-dispatch", "scenario": "worker-reviewer", "assessor": False} for value in attempts)
         assert api({"Summary": {"filter": {"EvaluationOnly": {"run": "deterministic-dispatch", "scenario": "worker-reviewer"}}}}) == before
         assert before["UsageSummary"]["report"]["attempts"]["running"] == "0"
@@ -147,6 +158,7 @@ def main():
         proposal_usage = api({"Attempts": {"filter": {"SessionOnly": {"id": proposed["session"]}}, "after": None, "snapshot": None, "limit": 20}})["UsageAttempts"]["page"]["entries"]
         assert len(proposal_usage) == 7 and sum(value["attempt"]["parent"] == proposed["attempt"] for value in proposal_usage) == 6
         assert sorted(value["attempt"]["role"] for value in proposal_usage) == ["Explorer", "Explorer", "Governor", "Planner", "Reviewer", "Reviewer", "Worker"]
+        assert sorted(value["attempt"]["phase"] for value in proposal_usage) == ["Explore", "Explore", "Govern", "Plan", "Probe", "Review", "Review"]
         assert not (repository / "probe.txt").exists()
         print(json.dumps({"proposalSession": str(proposal_session), "proposal": proposal, "cliReplay": True, "directRolesDenied": 5}))
         ordinary_settings = settings.read_text()

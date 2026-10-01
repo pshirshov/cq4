@@ -107,7 +107,7 @@ final class HostDeliveryLocal extends AnyWordSpec {
       val owner = Actor("governor", SessionId(UUID.randomUUID()), Role.Governor)
       val item = ItemRevision(ItemId(p, Ledger.Tasks, 1), Revision(1))
       val assignment = Assignment(AssignmentId(UUID.randomUUID()), p, Set(item.id), Attribution.Direct, None, None)
-      val record = Attempt(a, assignment.id, Some(attempt), owner.session, Role.Worker, Harness.Codex, "fixture", "fixture", "fixture", 1000)
+      val record = Attempt(a, assignment.id, Some(attempt), owner.session, Role.Worker, Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Work)
       val request = DispatchRequest(RequestId(UUID.randomUUID()), DispatchWork.Worker(WorkerMode.Implement), Harness.Codex, List(item), Nil, Nil, None,
         Fence(ClaimId(UUID.randomUUID()), 1), HostLimits(3000, 10000, 1000, 300, 2000, 262144))
       val ticket = DispatchTicket(request, assignment, record, HarnessSetting(Harness.Codex, "/fixture", "fixture", "fixture", "0.156.1", Nil, Set.empty), None)

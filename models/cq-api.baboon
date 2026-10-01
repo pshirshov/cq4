@@ -200,7 +200,8 @@ enum AttemptState { Running Completed Failed Cancelled Unknown }
 enum Attribution { Direct Shared Unattributed }
 root data EvaluationScope { run: str scenario: str assessor: bit }
 root data Assignment { id: AssignmentId project: ProjectId members: set[ItemId] attribution: Attribution cohort: opt[uid] evaluation: opt[EvaluationScope] }
-root data Attempt { id: AttemptId assignment: AssignmentId parent: opt[AttemptId] session: SessionId role: Role harness: Harness provider: str model: str collector: str startedAt: i64 }
+enum UsagePhase { Govern Explore Probe Plan Work Check Review Combine Integrate }
+root data Attempt { id: AttemptId assignment: AssignmentId parent: opt[AttemptId] session: SessionId role: Role harness: Harness provider: str model: str collector: str startedAt: i64 phase: UsagePhase }
 enum CounterScope { Increment Cumulative }
 enum Measurement { Observed Estimated Missing Unsupported }
 root data Counter { value: opt[i64] measurement: Measurement }
@@ -273,6 +274,8 @@ root data UsageReport {
   costs: CostPage
 }
 root data UsagePage { entries: lst[RecordedUsage] after: i64 hasMore: bit cursor: i64 }
+root data PhaseUsage { phase: UsagePhase attempts: i64 spans: i64 running: i64 wallMillis: i64 totals: UsageTotals costs: lst[CostTotal] }
+root data PhaseReport { phases: lst[PhaseUsage] costsTruncated: bit cursor: i64 }
 
 root id CatalogueCursor { value: i64 }
 root data ProjectPage { projects: lst[Project] after: opt[ProjectId] hasMore: bit cursor: CatalogueCursor }
@@ -419,6 +422,7 @@ root adt UsageSelection {
   data Audit { filter: UsageFilter after: i64 limit: i32 }
   data Attempts { filter: UsageFilter after: opt[AttemptId] snapshot: opt[i64] limit: i32 }
   data Outcomes { attempt: AttemptId after: i64 limit: i32 }
+  data Phases { filter: UsageFilter }
 }
 root data UsageInput { project: ProjectId selection: UsageSelection }
 root adt Command {
@@ -466,6 +470,7 @@ root adt Result {
   data UsageAudit { page: UsagePage }
   data UsageAttempts { page: AttemptPage }
   data UsageOutcomes { page: OutcomePage }
+  data UsagePhases { report: PhaseReport }
   data Failed { fault: Fault }
 }
 root adt HostUsage {

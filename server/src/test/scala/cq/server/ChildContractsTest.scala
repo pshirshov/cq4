@@ -44,6 +44,16 @@ final class ChildContractsLocal extends AnyWordSpec {
       intercept[IllegalArgumentException](ChildContracts.report(DispatchWork.Explorer(ExplorerMode.Research), List(member), encoded(plan)))
     }
 
+    "tag every dispatched work mode with its usage phase" in {
+      val expected = List[(DispatchWork, UsagePhase)](
+        DispatchWork.Explorer(ExplorerMode.Investigate) -> UsagePhase.Explore, DispatchWork.Explorer(ExplorerMode.Research) -> UsagePhase.Explore,
+        DispatchWork.Planner() -> UsagePhase.Plan, DispatchWork.Worker(WorkerMode.Implement) -> UsagePhase.Work,
+        DispatchWork.Worker(WorkerMode.Probe) -> UsagePhase.Probe, DispatchWork.Worker(WorkerMode.ResolveConflict) -> UsagePhase.Combine,
+        DispatchWork.Reviewer(ReviewerMode.Candidate) -> UsagePhase.Review, DispatchWork.Reviewer(ReviewerMode.Plan) -> UsagePhase.Review,
+        DispatchWork.Reviewer(ReviewerMode.Audit) -> UsagePhase.Review)
+      assert(expected.map((work, _) => work -> ChildContracts.phase(work)) == expected)
+    }
+
     "reject malformed evidence citations through the shared domain rules" in {
       val project = ProjectId(UUID.randomUUID())
       val member = ItemRevision(ItemId(project, Ledger.Tasks, 1), Revision(1))

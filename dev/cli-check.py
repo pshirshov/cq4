@@ -114,6 +114,7 @@ def main():
         assert [value["item"]["id"]["number"] for value in continued["entries"]] == ["2"] and not continued["hasMore"]
         run(root, "query", "--roots", "T1", "--query", "T1", expected=1)
         assert json.loads(run(root, "status"))["UsageSummary"]["report"]["direct"]["total"]["known"] == "0"
+        assert json.loads(run(root, "status", "phases"))["UsagePhases"]["report"]["phases"] == []
         assert json.loads(run(root, "status", "audit", "--limit", "1"))["UsageAudit"]["page"]["entries"] == []
         assert json.loads(run(root, "status", "attempts", "--limit", "1"))["UsageAttempts"]["page"]["entries"] == []
         assert json.loads(run(root, "status", "costs", "--limit", "1"))["UsageCosts"]["page"]["entries"] == []

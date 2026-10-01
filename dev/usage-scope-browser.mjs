@@ -27,7 +27,7 @@ export async function usageScopeChecks(browser, storageState, origin, evidence) 
   for (const [attribution, members, execution, amount] of [['Shared', [member(1), member(2)], cohort, 100], ['Direct', [member(1)], cohort, 40], ['Unattributed', [], null, 7]]) {
     const assignment = { id: id(), project, attribution, members, cohort: execution, evaluation: null };
     const attempt = { id: id(), assignment: assignment.id, parent: null, session: id(), role: 'Worker', harness: 'Codex',
-      provider: 'controlled-browser-fixture', model: 'no-model-call', collector: 'fixture', startedAt: '1000' };
+      provider: 'controlled-browser-fixture', model: 'no-model-call', collector: 'fixture', startedAt: '1000', phase: 'Work' };
     await host({ Assign: { value: assignment } }); await host({ Start: { value: attempt } });
     await host({ Meter: { value: { key: 'scope', attempt: attempt.id, scope: 'Increment', baseline: counts(0), baselineCost: money } } });
     await host({ Ingest: { value: { observation: { id: id(), attempt: attempt.id, source: `${attribution} fixture`, position: '1', occurredAt: '2000', receivedAt: '0',

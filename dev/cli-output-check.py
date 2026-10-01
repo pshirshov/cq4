@@ -68,7 +68,7 @@ def main():
         summary = run("human-status", ["status"], 0, False).stdout
         assert summary.startswith("Usage — tokens") and "Unknown costs" in summary and "Shared" in summary and "\"UsageSummary\"" not in summary
         assert json.loads(run("json-status", ["status", "--json"], 0, False).stdout)["UsageSummary"]["report"]["direct"]["total"]["known"] == "0"
-        for mode in ["audit", "costs", "attempts"]:
+        for mode in ["phases", "audit", "costs", "attempts"]:
             assert "No entries." in run("human-status-" + mode, ["status", mode], 0, False).stdout
             json.loads(run("json-status-" + mode, ["status", mode, "--json"], 0, False).stdout)
         identity = lambda: {"value": str(uuid.uuid4())}
@@ -78,7 +78,7 @@ def main():
         assignment = {"id": identity(), "project": project, "members": [{"project": project, "ledger": "Tasks", "number": "1"}],
                       "attribution": "Direct", "cohort": None, "evaluation": None}
         attempt = {"id": identity(), "assignment": assignment["id"], "parent": None, "session": identity(), "role": "Worker",
-                   "harness": "Codex", "provider": "fixture", "model": "controlled-model", "collector": "cli-output", "startedAt": "1000"}
+                   "harness": "Codex", "provider": "fixture", "model": "controlled-model", "collector": "cli-output", "startedAt": "1000", "phase": "Work"}
         meter = {"key": "cli", "attempt": attempt["id"], "scope": "Increment", "baseline": counters(0), "baselineCost": unknown_cost}
         observation = {"id": identity(), "attempt": attempt["id"], "source": "cli-fixture", "position": "1", "occurredAt": "2000", "receivedAt": "0", "scope": "Increment",
                        "counters": {**counters(101), "output": counter(7), "cacheRead": counter(20), "cacheWrite": {"value": None, "measurement": "Unsupported"}, "reasoning": counter(2)},
@@ -91,6 +91,10 @@ def main():
             call("/api/usage", {"project": project, "operation": operation})
         summary = run("human-status-measured", ["status", "--task", "T1"], 0, False).stdout
         assert all(value in summary for value in ["101", "108", "unknown", "0.125", "ProviderEstimate"]), summary
+        phases = run("human-phases-measured", ["status", "phases", "--session", attempt["session"]["value"]], 0, False).stdout
+        assert [line.split()[:5] for line in phases.splitlines() if line.startswith("Work ")][0] == ["Work", "1", "0", "0", "0:00:02"], phases
+        measured = json.loads(run("json-phases-measured", ["status", "phases", "--task", "T1", "--json"], 0, False).stdout)["UsagePhases"]["report"]["phases"]
+        assert [(entry["phase"], entry["attempts"], entry["wallMillis"], entry["totals"]["total"]["known"]) for entry in measured] == [("Work", "1", "2000", "108")], measured
         audit = run("human-audit-measured", ["status", "audit"], 0, False).stdout
         assert all(value in audit for value in ["cli-fixture", "101", "Partial", "Deliberate fixture gap"]), audit
         attempts = run("human-attempts-measured", ["status", "attempts"], 0, False).stdout

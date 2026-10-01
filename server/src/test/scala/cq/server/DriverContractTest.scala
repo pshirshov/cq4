@@ -692,7 +692,7 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
             members = created.items
             claim <- service.acquire(w.governor, ClaimId(uuid), members.map(_.id).toSet, 300000)
             governing <- usage.assign(collector, Assignment(AssignmentId(uuid), w.project, Set.empty, Attribution.Unattributed, None, None))
-            parent <- usage.start(collector, Attempt(AttemptId(uuid), governing.id, None, w.governor.actor.session, Role.Governor, Harness.Codex, "fixture", "fixture", "fixture", 1000))
+            parent <- usage.start(collector, Attempt(AttemptId(uuid), governing.id, None, w.governor.actor.session, Role.Governor, Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Govern))
             assignment <- usage.assign(collector, Assignment(AssignmentId(uuid), w.project, claim.members, Attribution.Shared, Some(uuid), None))
             attempt <- usage.start(collector, Attempt(AttemptId(uuid), assignment.id, Some(parent.id), w.governor.actor.session, Role.Planner, Harness.Codex, "fixture", "fixture", "fixture", 1001))
             dispatch = DispatchRequest(RequestId(uuid), DispatchWork.Planner(), Harness.Codex, members, Nil, Nil, None, claim.fence, HostLimits(3000, 10000, 1000, 300, 2000, 262144))

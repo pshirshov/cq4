@@ -70,7 +70,7 @@ final class DispatchController(config: SupervisorConfig, runner: ChildRunner, jo
           if (members.size == 1) Attribution.Direct else Attribution.Shared,
           selection.fold(if (members.size == 1) None else Some(UUID.randomUUID()))(_.cohort), config.run.assignment.evaluation)
         val attempt = Attempt(id, assignment.id, Some(config.run.attempt.id), config.run.attempt.session, ChildContracts.role(request.work),
-          profile.harness, profile.provider, profile.model, "CQ native collector 0.1.0", clock.millis())
+          profile.harness, profile.provider, profile.model, "CQ native collector 0.1.0", clock.millis(), ChildContracts.phase(request.work))
         selection.foreach(_.admit())
         val entry = new DispatchExecution(DispatchTicket(request, assignment, attempt, profile, selection.map(_.evidence)), config.directory.resolve("children").resolve(id.value.toString), ready, done)
         entries = entries.updated(request.request, entry)

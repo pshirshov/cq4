@@ -56,6 +56,16 @@ private final class DummyUsageTransaction(initial: DummyUsageState) extends Usag
       .sortWith((a, b) => UsageCosts.compare(a._1, b._1) < 0).iterator.map { case (group, value) => CostTotal(group, UsageMath.decimal(value.amount), value.measurements) }
     ReadPage.select(rows, limit, CostTotal_JsonCodec)
   }
+  override def phaseCosts(filter: UsageFilter, limit: Int): List[PhaseCost] =
+    state.costs.iterator.filter { case ((meter, _), _) => matches(filter, state.attempts(meter.attempt)) }
+      .map { case ((meter, group), value) =>
+        val attempt = state.attempts(meter.attempt)
+        (attempt.phase, CostGroup(state.assignments(attempt.assignment).attribution, group.currency, group.basis, group.pricingVersion)) -> value
+      }.toList.groupMapReduce(_._1)(_._2)((a, b) => CostProjection(UsageMath.addAmount(a.amount, b.amount, 1), Math.addExact(a.measurements, b.measurements)))
+      .toList.sortWith { case (((leftPhase, left), _), ((rightPhase, right), _)) =>
+        val phases = leftPhase.toString.compareTo(rightPhase.toString)
+        phases < 0 || (phases == 0 && UsageCosts.compare(left, right) < 0)
+      }.take(limit).map { case ((phase, group), value) => PhaseCost(phase, CostTotal(group, UsageMath.decimal(value.amount), value.measurements)) }
   override def cursor: Long = state.cursor
   override def assignment(id: AssignmentId): Option[Assignment] = state.assignments.get(id)
   override def attempt(id: AttemptId): Option[Attempt] = state.attempts.get(id)

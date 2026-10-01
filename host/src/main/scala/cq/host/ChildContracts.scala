@@ -30,6 +30,15 @@ object ChildContracts {
     case _: DispatchWork.Reviewer => Role.Reviewer
   }
 
+  def phase(work: DispatchWork): UsagePhase = work match {
+    case _: DispatchWork.Explorer => UsagePhase.Explore
+    case _: DispatchWork.Planner => UsagePhase.Plan
+    case DispatchWork.Worker(WorkerMode.Implement) => UsagePhase.Work
+    case DispatchWork.Worker(WorkerMode.Probe) => UsagePhase.Probe
+    case DispatchWork.Worker(WorkerMode.ResolveConflict) => UsagePhase.Combine
+    case _: DispatchWork.Reviewer => UsagePhase.Review
+  }
+
   def reportTag(work: DispatchWork): String = work match {
     case _: DispatchWork.Explorer | DispatchWork.Worker(WorkerMode.Probe) => "Evidence"
     case _: DispatchWork.Planner => "Plan"

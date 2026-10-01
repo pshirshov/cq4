@@ -13,7 +13,7 @@ export async function usageLiveChecks(browser, storageState, origin, evidence) {
   await post('/api/call', { Initialize: { config: { project, endpoint: origin, name: `Live usage ${project.value}` } } });
   const host = operation => post('/api/usage', { project, operation });
   const assignment = { id: id(), project, members: [], attribution: 'Unattributed', cohort: null, evaluation: null };
-  const attempt = { id: id(), assignment: assignment.id, parent: null, session: id(), role: 'Governor', harness: 'Codex', provider: 'fixture', model: 'no-model-call', collector: 'fixture', startedAt: '1000' };
+  const attempt = { id: id(), assignment: assignment.id, parent: null, session: id(), role: 'Governor', harness: 'Codex', provider: 'fixture', model: 'no-model-call', collector: 'fixture', startedAt: '1000', phase: 'Govern' };
   const counter = n => ({ value: String(n), measurement: 'Observed' });
   const counts = n => ({ input: counter(n), output: counter(0), cacheRead: counter(0), cacheWrite: counter(0), reasoning: counter(0) });
   const cost = { amount: null, currency: null, basis: 'Unknown', pricingVersion: null };

@@ -32,16 +32,16 @@ object IntegrationApiCheck {
     val item = governor.call(Command.Read(ReadInput(project, ReadSelection.ItemDetail(members.head.id)))).asInstanceOf[Result.Detail].view.item
     val claim = governor.call(Command.ClaimWork(ClaimInput(project, ClaimAction.Acquire(ClaimId(uuid), members.map(_.id).toSet, 300000))))
       .asInstanceOf[Result.Claimed].claim
-    def attempt(role: Role, parent: Option[AttemptId]): Attempt = {
+    def attempt(role: Role, phase: UsagePhase, parent: Option[AttemptId]): Attempt = {
       val assignment = Assignment(AssignmentId(uuid), project, members.map(_.id).toSet, Attribution.Direct, None, None)
       require(collector.usage(HostUsageInput(project, HostUsage.Assign(assignment))) == HostUsageResult.Assigned(assignment))
-      val value = Attempt(AttemptId(uuid), assignment.id, parent, session, role, Harness.Codex, "fixture", "fixture", "fixture", 1000)
+      val value = Attempt(AttemptId(uuid), assignment.id, parent, session, role, Harness.Codex, "fixture", "fixture", "fixture", 1000, phase)
       require(collector.usage(HostUsageInput(project, HostUsage.Start(value))) == HostUsageResult.Started(value))
       value
     }
-    val parent = attempt(Role.Governor, None)
-    val worker = attempt(Role.Worker, Some(parent.id))
-    val reviewer = attempt(Role.Reviewer, Some(parent.id))
+    val parent = attempt(Role.Governor, UsagePhase.Govern, None)
+    val worker = attempt(Role.Worker, UsagePhase.Work, Some(parent.id))
+    val reviewer = attempt(Role.Reviewer, UsagePhase.Review, Some(parent.id))
     val request = DispatchRequest(RequestId(uuid), DispatchWork.Worker(WorkerMode.Implement), Harness.Codex, members, Nil, Nil, None,
       claim.fence, HostLimits(3000, 10000, 1000, 300, 2000, 262144))
     val base = GitCommit("a" * 40)

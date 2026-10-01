@@ -28,10 +28,21 @@ abstract class UsageContractTest extends SpecZIO with AssertZIO {
   }
   private def start(usage: UsageService[IO], owner: Scope, assignment: Assignment, counterScope: CounterScope, baseline: TokenCounts, baselineCost: Money): IO[Throwable, Attempt] = for {
     _ <- usage.assign(collector(owner), assignment)
-    attempt = Attempt(AttemptId(UUID.randomUUID()), assignment.id, None, owner.actor.session, Role.Worker, Harness.Codex, "test-provider", "test-model", "fixture-v1", 1000)
+    attempt = Attempt(AttemptId(UUID.randomUUID()), assignment.id, None, owner.actor.session, Role.Worker, Harness.Codex, "test-provider", "test-model", "fixture-v1", 1000, UsagePhase.Work)
     _ <- usage.start(collector(owner), attempt)
     _ <- usage.meter(collector(owner), UsageMeter("provider", attempt.id, counterScope, baseline, baselineCost))
   } yield attempt
+  private def phased(usage: UsageService[IO], owner: Scope, member: ItemId, role: Role, phase: UsagePhase, startedAt: Long): IO[Throwable, Attempt] = {
+    val work = assignment(owner, Set(member), Attribution.Direct, None)
+    val attempt = Attempt(AttemptId(UUID.randomUUID()), work.id, None, owner.actor.session, role, Harness.Codex, "test-provider", "test-model", "fixture-v1", startedAt, phase)
+    for {
+      _ <- usage.assign(collector(owner), work)
+      _ <- usage.start(collector(owner), attempt)
+      _ <- usage.meter(collector(owner), UsageMeter("provider", attempt.id, CounterScope.Increment, UsageMath.zeroCounts, UsageMath.unknownMoney))
+    } yield attempt
+  }
+  private def finished(attempt: Attempt, finishedAt: Long, supersedes: Option[RequestId]): AttemptOutcome =
+    AttemptOutcome(RequestId(UUID.randomUUID()), attempt.id, AttemptState.Completed, finishedAt, Nil, supersedes)
   private def upload(attempt: Attempt, position: Long, counterScope: CounterScope, tokens: TokenCounts, cost: Money): UsageUpload =
     UsageUpload(UsageObservation(ObservationId(UUID.randomUUID()), attempt.id, "native-source", position, 2000, 0, counterScope, tokens, true, true, cost, UsageCompleteness.Complete, Nil, None, None), "provider", UsageDisposition.Contribution, None)
   private def denied[A](effect: IO[Throwable, A])(expected: Fault => Boolean): IO[Throwable, Unit] =
@@ -181,7 +192,7 @@ abstract class UsageContractTest extends SpecZIO with AssertZIO {
         next <- usage.outcomes(owner, attempt.id, historical.after, 1)
         _ <- assertIO(historical.hasMore && historical.entries.head == recorded && !next.hasMore && next.entries.head.value == corrected)
         _ <- denied(usage.finish(collector(owner), corrected.copy(request = RequestId(UUID.randomUUID()))))(_.isInstanceOf[Fault.Invalid])
-        pending = Attempt(AttemptId(UUID.randomUUID()), attempt.assignment, None, owner.actor.session, Role.Worker, Harness.Claude, "fixture", "fixture", "fixture", 1000)
+        pending = Attempt(AttemptId(UUID.randomUUID()), attempt.assignment, None, owner.actor.session, Role.Worker, Harness.Claude, "fixture", "fixture", "fixture", 1000, UsagePhase.Work)
         _ <- usage.start(collector(owner), pending)
         page <- usage.attempts(owner, UsageFilter.TaskOnly(member), None, None, 1)
         last <- usage.attempts(owner, UsageFilter.TaskOnly(member), page.after, Some(page.cursor), 1)
@@ -308,7 +319,7 @@ abstract class UsageContractTest extends SpecZIO with AssertZIO {
       val owner = scope()
       val host = collector(owner)
       val work = assignment(owner, Set.empty, Attribution.Unattributed, None)
-      val attempt = Attempt(AttemptId(UUID.randomUUID()), work.id, None, owner.actor.session, Role.Governor, Harness.Pi, "provider", "model", "fixture-v1", 1000)
+      val attempt = Attempt(AttemptId(UUID.randomUUID()), work.id, None, owner.actor.session, Role.Governor, Harness.Pi, "provider", "model", "fixture-v1", 1000, UsagePhase.Govern)
       for {
         _ <- ledger.initialize(owner, "coverage")
         _ <- usage.assign(host, work)
@@ -355,6 +366,68 @@ abstract class UsageContractTest extends SpecZIO with AssertZIO {
         report <- usage.summary(owner, UsageFilter.TaskOnly(item))
         _ <- assertIO(report.direct.total.known == 50)
         _ <- denied(usage.summary(owner, UsageFilter.TaskOnly(item.copy(project = ProjectId(UUID.randomUUID())))))(_.isInstanceOf[Fault.Denied])
+      } yield ()
+    }
+
+    "report attempts, finished wall time, tokens and costs per phase with running attempts apart" in { (usage: UsageService[IO], ledger: LedgerService[IO]) =>
+      val owner = scope()
+      val other = owner.copy(actor = owner.actor.copy(session = SessionId(UUID.randomUUID())))
+      val host = collector(owner)
+      val session = UsageFilter.SessionOnly(owner.actor.session)
+      for {
+        _ <- ledger.initialize(owner, "phase report")
+        item <- task(ledger, owner, "Phased task")
+        empty <- usage.phases(owner, session)
+        _ <- assertIO(empty.phases.isEmpty && !empty.costsTruncated)
+        first <- phased(usage, owner, item, Role.Worker, UsagePhase.Work, 1000)
+        second <- phased(usage, owner, item, Role.Worker, UsagePhase.Work, 2000)
+        review <- phased(usage, owner, item, Role.Reviewer, UsagePhase.Review, 5000)
+        probe <- phased(usage, owner, item, Role.Worker, UsagePhase.Probe, 6000)
+        foreign <- phased(usage, other, item, Role.Worker, UsagePhase.Work, 1000)
+        _ <- usage.ingest(host, upload(first, 1, CounterScope.Increment, counts(100, 10), price("0.10")))
+        _ <- usage.ingest(host, upload(second, 1, CounterScope.Increment, counts(200, 20), price("0.20")))
+        _ <- usage.ingest(host, upload(review, 1, CounterScope.Increment, counts(50, 5), UsageMath.unknownMoney))
+        _ <- usage.ingest(host, upload(probe, 1, CounterScope.Increment, counts(7, 1), UsageMath.unknownMoney))
+        _ <- usage.ingest(host, upload(foreign, 1, CounterScope.Increment, counts(1000, 0), price("1")))
+        _ <- usage.finish(host, finished(first, 4000, None))
+        early = finished(second, 2500, None)
+        _ <- usage.finish(host, early)
+        _ <- usage.finish(host, finished(review, 5600, None))
+        _ <- usage.finish(host, finished(foreign, 1100, None))
+        report <- usage.phases(owner, session)
+        cursor <- usage.cursor(owner)
+        byPhase = report.phases.map(value => value.phase -> value).toMap
+        _ <- assertIO(report.phases.map(_.phase) == List(UsagePhase.Probe, UsagePhase.Work, UsagePhase.Review) && report.cursor == cursor && !report.costsTruncated)
+        work = byPhase(UsagePhase.Work)
+        _ <- assertIO(work.attempts == 2 && work.running == 0 && work.spans == 0 && work.wallMillis == 3500)
+        _ <- assertIO(work.totals.input.known == 300 && work.totals.output.known == 30 && work.totals.total.known == 330 && work.totals.unknownCosts == 0)
+        _ <- assertIO(work.costs == List(CostTotal(CostGroup(Attribution.Direct, "USD", CostBasis.ProviderEstimate, Some("provider-v1")), DecimalAmount("0.3"), 2)))
+        reviewed = byPhase(UsagePhase.Review)
+        _ <- assertIO(reviewed.attempts == 1 && reviewed.running == 0 && reviewed.wallMillis == 600 && reviewed.totals.total.known == 55 && reviewed.totals.unknownCosts == 1 && reviewed.costs.isEmpty)
+        probing = byPhase(UsagePhase.Probe)
+        _ <- assertIO(probing.attempts == 1 && probing.running == 1 && probing.wallMillis == 0 && probing.totals.total.known == 8)
+        _ <- usage.finish(host, finished(second, 3000, Some(early.request)))
+        corrected <- usage.phases(owner, session)
+        _ <- assertIO(corrected.phases.find(_.phase == UsagePhase.Work).exists(_.wallMillis == 4000))
+        project <- usage.phases(owner, UsageFilter.ProjectAll())
+        all = project.phases.find(_.phase == UsagePhase.Work).get
+        _ <- assertIO(all.attempts == 3 && all.wallMillis == 4100 && all.totals.total.known == 1330 && all.costs.map(_.amount.value) == List("1.3"))
+        _ <- denied(usage.phases(owner, UsageFilter.TaskOnly(item.copy(project = ProjectId(UUID.randomUUID())))))(_.isInstanceOf[Fault.Denied])
+      } yield ()
+    }
+
+    "bound phase cost groups and report the truncation" in { (usage: UsageService[IO], ledger: LedgerService[IO]) =>
+      val owner = scope()
+      for {
+        _ <- ledger.initialize(owner, "bounded phase costs")
+        run <- start(usage, owner, assignment(owner, Set.empty, Attribution.Unattributed, None), CounterScope.Increment, UsageMath.zeroCounts, UsageMath.unknownMoney)
+        _ <- ZIO.foreachDiscard(1 to 201) { position =>
+          usage.ingest(collector(owner), upload(run, position, CounterScope.Increment, counts(1, 0), price("0.01").copy(pricingVersion = Some(f"price-$position%04d"))))
+        }
+        report <- usage.phases(owner, UsageFilter.ProjectAll())
+        _ <- assertIO(report.costsTruncated && report.phases.map(_.phase) == List(UsagePhase.Work) && report.phases.head.totals.total.known == 201)
+        _ <- assertIO(report.phases.head.costs.map(_.group.pricingVersion.get) == (1 to 200).map(position => f"price-$position%04d").toList)
+        _ <- assertIO(Wire.encode(PhaseReport_JsonCodec, report).getBytes(java.nio.charset.StandardCharsets.UTF_8).length <= ReadPage.MaxBytes)
       } yield ()
     }
 
