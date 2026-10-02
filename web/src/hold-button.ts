@@ -5,6 +5,7 @@ export const HOLD_MS = 1000;
 // rendered nothing for a while (suspended window, hidden tab) gains a single step for the whole gap.
 const MAX_FRAME_MS = 250;
 const HOLD_LABEL = 'Hold to confirm';
+const HOLD_FRACTION = '--hold';
 const HOLDING = 'Confirming. Escape cancels.';
 const CONFIRMED = 'Confirmed.';
 const RELEASED = 'Not confirmed.';
@@ -26,13 +27,13 @@ function holdKey(event: KeyboardEvent): boolean { return event.key === ' ' || ev
 export function holdButton(text: string, action: () => void): HTMLButtonElement {
   let held: number | null = null; let last = 0; let frame = 0;
   const node = button(text, event => { if (event.detail === 0) start(); });
-  const progress = element('progress', ''); progress.max = 1; progress.setAttribute('aria-label', HOLD_LABEL);
-  // The indicator's label would otherwise join the button's accessible name; the title keeps the instruction exposed.
-  node.setAttribute('aria-label', text); node.title = HOLD_LABEL; node.append(progress);
+  // The accessible name stays the caption; the title exposes the instruction.
+  node.setAttribute('aria-label', text); node.title = HOLD_LABEL;
   // A button's content is presentational to assistive technology, so the hold is announced by a polite live region
   // placed next to the control: inside the same modal dialog, which makes everything outside it inert.
   const status = element('span', ''); status.className = 'visually-hidden'; status.setAttribute('aria-live', 'polite');
-  const show = (state: HoldState, value: number): void => { node.dataset.hold = state; progress.value = value; };
+  // The stylesheet draws the held fraction as a fill of the button's own background (button[data-hold] in style.css).
+  const show = (state: HoldState, value: number): void => { node.dataset.hold = state; node.style.setProperty(HOLD_FRACTION, String(value)); };
   // A closed dialog and a hidden panel keep their controls connected; neither renders them. Without checkVisibility()
   // the test is the layout box: an element that is not rendered has no client rectangle.
   const rendered = (): boolean => typeof node.checkVisibility === 'function' ? node.checkVisibility() : node.getClientRects().length > 0;

@@ -15,9 +15,12 @@ async function check(name, body) {
   finally {await page.mouse.up(); await page.keyboard.up('Space'); await page.keyboard.up('Enter'); await control.evaluate(node => {node.disabled = false; node.blur();}); await page.mouse.move(0, 0);}
 }
 const control = page.getByRole('button', {name: 'Hold fixture', exact: true});
-const state = () => control.evaluate(node => ({hold: node.dataset.hold, value: node.querySelector('progress').value, ...window.holdFixture}));
+const state = () => control.evaluate(node => ({hold: node.dataset.hold, value: Number(node.style.getPropertyValue('--hold')), ...window.holdFixture}));
+// The fill is the control's ::before box: its width as a fraction of the control's padding box, next to the fraction that drives it.
+const fill = () => control.evaluate(node => ({value: Number(node.style.getPropertyValue('--hold')), drawn: parseFloat(getComputedStyle(node, '::before').width) / node.clientWidth}));
+const FILL_TOLERANCE = 0.02;
 const holding = minimum => page.waitForFunction(value => {
-  const node = document.getElementById('hold-fixture'); return node.dataset.hold === 'holding' && node.querySelector('progress').value >= value;
+  const node = document.getElementById('hold-fixture'); return node.dataset.hold === 'holding' && Number(node.style.getPropertyValue('--hold')) >= value;
 }, minimum);
 const settled = holdMs => page.waitForTimeout(holdMs + 400);
 async function unchanged(holdMs, before) {
@@ -61,7 +64,7 @@ const enclose = place => page.evaluate(place => {
   container.append(node); document.body.append(container);
 }, place);
 const enclosed = page.locator('#enclosed-hold');
-const enclosedState = () => enclosed.evaluate(node => [node.dataset.hold, node.querySelector('progress').value, window.holdFixture.enclosed]);
+const enclosedState = () => enclosed.evaluate(node => [node.dataset.hold, Number(node.style.getPropertyValue('--hold')), window.holdFixture.enclosed]);
 try {
   await page.goto(origin); await page.getByLabel('Operator token').waitFor();
   await page.evaluate(new TextDecoder().decode(bundled.outputFiles[0].contents) + '\nwindow.holdModule = holdModule;');
@@ -70,16 +73,21 @@ try {
     const node = window.holdModule.holdButton('Hold fixture', () => {window.holdFixture.count++; window.holdFixture.fired = performance.now();});
     node.id = 'hold-fixture';
     for (const type of ['pointerdown', 'keydown']) node.addEventListener(type, event => {if (!event.repeat) window.holdFixture.pressed = performance.now();}, {capture: true});
-    const progress = node.querySelector('progress');
-    new MutationObserver(() => {if (node.dataset.hold === 'holding') {window.holdFixture.samples.push(progress.value); window.holdFixture.times.push(performance.now());}}).observe(node, {attributeFilter: ['data-hold']});
+    new MutationObserver(() => {if (node.dataset.hold === 'holding') {window.holdFixture.samples.push(Number(node.style.getPropertyValue('--hold'))); window.holdFixture.times.push(performance.now());}}).observe(node, {attributeFilter: ['data-hold']});
     document.body.append(node); return window.holdModule.HOLD_MS;
   });
-  await check('control is a labelled button with an idle progress indicator', async () => {
+  await check('control is a labelled button marked by its border, with an empty fill and no indicator element', async () => {
     assert.equal(holdMs, 1000);
     assert.deepEqual(await control.evaluate(node => [node.tagName, node.type, node.textContent, node.title]), ['BUTTON', 'button', 'Hold fixture', 'Hold to confirm']);
-    const progress = control.locator('progress');
-    assert.deepEqual(await progress.evaluate(node => [node.getAttribute('aria-label'), node.max, node.value]), ['Hold to confirm', 1, 0]);
-    assert.equal((await state()).hold, 'idle'); assert.equal(await progress.isVisible(), true);
+    assert.equal(await control.evaluate(node => node.childElementCount), 0);
+    assert.equal((await state()).hold, 'idle'); assert.deepEqual(await fill(), {value: 0, drawn: 0});
+    const plain = await page.evaluate(() => {
+      const node = document.createElement('button'); node.textContent = 'Plain fixture'; document.body.append(node);
+      const found = {border: getComputedStyle(node).borderTopColor, pseudo: getComputedStyle(node, '::before').content}; node.remove(); return found;
+    });
+    const guarded = await control.evaluate(node => [...new Set(['Top', 'Right', 'Bottom', 'Left'].map(side => getComputedStyle(node)[`border${side}Color`]))]);
+    assert.deepEqual(guarded, ['rgb(224, 163, 65)']); assert.notEqual(plain.border, guarded[0]); assert.equal(plain.pseudo, 'none');
+    await control.screenshot({path: evidence + '/hold-idle.png'});
   });
   await check('plain click does not invoke the action', async () => {
     const before = await state(); await control.click(); await unchanged(holdMs, before);
@@ -97,11 +105,14 @@ try {
     const before = await state(); await control.hover(); await page.mouse.down();
     await page.waitForFunction(() => document.getElementById('hold-fixture').dataset.hold === 'done'); await settled(holdMs);
     const held = await state(); assert.deepEqual([held.hold, held.value, held.count], ['done', 1, before.count + 1]);
+    const full = await fill(); assert.ok(full.value === 1 && Math.abs(full.drawn - 1) <= FILL_TOLERANCE, JSON.stringify(full));
     await page.mouse.up(); const after = await state(); assert.deepEqual([after.hold, after.value, after.count], ['idle', 0, before.count + 1]);
     await unchanged(holdMs, after);
   });
   await check('releasing at about half resets progress and state', async () => {
-    const before = await state(); await control.hover(); await page.mouse.down(); await holding(0.4); await page.mouse.up();
+    const before = await state(); await control.hover(); await page.mouse.down(); await holding(0.4);
+    const drawn = await fill(); assert.ok(drawn.value >= 0.4 && drawn.value < 1 && Math.abs(drawn.drawn - drawn.value) <= FILL_TOLERANCE, JSON.stringify(drawn));
+    await control.screenshot({path: evidence + '/hold-holding.png'}); await page.mouse.up();
     const after = await state(); assert.deepEqual([after.hold, after.value], ['idle', 0]); await unchanged(holdMs, before);
   });
   await check('leaving the control cancels', async () => {
@@ -189,7 +200,7 @@ try {
       // A suspended page renders no frame while its clock advances: the next frame must not treat the gap as held time.
       const after = await control.evaluate(node => new Promise(resolve => {
         const now = performance.now.bind(performance); performance.now = () => now() + 10000;
-        requestAnimationFrame(() => requestAnimationFrame(() => resolve({hold: node.dataset.hold, value: node.querySelector('progress').value, count: window.holdFixture.count})));
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve({hold: node.dataset.hold, value: Number(node.style.getPropertyValue('--hold')), count: window.holdFixture.count})));
       }));
       assert.equal(after.count, before.count); assert.equal(after.hold, 'holding'); assert.ok(after.value < 1, `Progress ${after.value}`);
     } finally {await page.evaluate(() => {delete performance.now;}); await page.keyboard.press('Escape');}
@@ -200,7 +211,7 @@ try {
     try {
       const after = await control.evaluate(node => new Promise(resolve => {
         node.click(); const now = performance.now.bind(performance); performance.now = () => now() + 10000;
-        requestAnimationFrame(() => resolve({hold: node.dataset.hold, value: node.querySelector('progress').value, count: window.holdFixture.count}));
+        requestAnimationFrame(() => resolve({hold: node.dataset.hold, value: Number(node.style.getPropertyValue('--hold')), count: window.holdFixture.count}));
       }));
       assert.deepEqual(after, {hold: 'holding', value: 0.25, count: before.count});
     } finally {await page.evaluate(() => {delete performance.now;}); await control.focus(); await page.keyboard.press('Escape');}
