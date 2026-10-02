@@ -22,6 +22,8 @@ import uuid
 
 ROOT = Path(__file__).resolve().parent.parent
 COMMAND_TIMEOUT = 600
+# Suites per sbt session when each is selected by exact name, so that one session stays within COMMAND_TIMEOUT.
+CONTRACT_BATCH = 6
 STARTUP_TIMEOUT = 60
 SHUTDOWN_TIMEOUT = 20
 DISPATCH_FIXTURE_TIMEOUT = 180
@@ -76,10 +78,12 @@ class Checks:
     def contracts_of(self, suffix: str, name: str):
         # One sbt session, one exact-name testOnly command per suite; every command must leave its own report.
         selected = self.selected(suffix, name)
-        output = self.sbt([f"server/testOnly {suite}" for suite in selected], name)
-        reports = len(re.findall(r"Tests: succeeded \d+", output))
-        if reports != len(selected):
-            raise RuntimeError(f"{name}: {reports} test reports for {len(selected)} selected suites")
+        for index in range(0, len(selected), CONTRACT_BATCH):
+            batch = selected[index:index + CONTRACT_BATCH]
+            output = self.sbt([f"server/testOnly {suite}" for suite in batch], f"{name}-{index // CONTRACT_BATCH + 1}")
+            reports = len(re.findall(r"Tests: succeeded \d+", output))
+            if reports != len(batch):
+                raise RuntimeError(f"{name}: {reports} test reports for {len(batch)} selected suites")
 
     def generate(self):
         self.run([str(ROOT / "dev/generate")], "generate", COMMAND_TIMEOUT)
