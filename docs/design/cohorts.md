@@ -35,7 +35,6 @@ Initial measurable limits:
 | Candidate pool per round | 32 items |
 | Group size | At most four members, below the existing 16-member dispatch ceiling |
 | Choices returned per round | At most eight |
-| Retained choices per governing session | 128 |
 | Full candidate content considered per round | 256 KiB |
 | Shared input budget | Existing child assembly byte limit, with explicit exclusion before dispatch |
 
