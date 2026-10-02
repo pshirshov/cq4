@@ -501,9 +501,12 @@ class App {
         if (listed) this.outside = false;
         // An open editor or item dialog keeps its item: a live change must not discard what the operator is working on.
         const engaged = this.editor !== null || this.historyDialog.element.open || this.usageDialog.element.open || this.graph.dialog.element.open;
-        if (!listed && !page.hasMore && !engaged && !this.outside) this.hideItem(); else if (full) await this.select(selected, this.outside); else this.showWork(selected);
+        if (!listed && !page.hasMore && !engaged && !this.outside) this.hideItem();
+        else if (full) await this.select(selected, this.outside).catch(error => { this.fullDue = true; throw error; });
+        else this.showWork(selected);
       }
-      if (full) await this.loadUsage();
+      // A failed item or usage read leaves the next load full, so the view is not reported current on stale detail.
+      if (full) await this.loadUsage().catch(error => { this.fullDue = true; throw error; });
       completed = true;
     } catch (error) { if (current()) { this.sync.textContent = 'Data: stale'; throw error; } }
     finally {
