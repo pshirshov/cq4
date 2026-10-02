@@ -166,6 +166,58 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
     } yield ()
   }
 
+  private def action(title: String, status: OperatorActionStatus = OperatorActionStatus.Requested, confirmation: Option[String] = None): ItemDraft =
+    task(title).copy(content = Content.OperatorAction(status, "Rotate the credential", "The new credential's fingerprint", confirmation, Nil))
+  private def settlementRefused(actions: String): String =
+    s"The CQ driver never settles Operator Actions: $actions would be taken out of Requested by a driven session; park the driver before settling an Operator Action"
+  // The outcome of one driven write that would take OA1 out of Requested. Anything but the driver's refusal fails with what happened instead.
+  private def kept(path: String, result: Either[Throwable, Any]): IO[Throwable, Unit] = result match {
+    case Left(DomainFailure(Fault.Denied(detail))) if detail == settlementRefused("OA1") => ZIO.unit
+    case Left(DomainFailure(other)) => ZIO.fail(new AssertionError(s"$path: refused with another fault: $other"))
+    case Left(other) => ZIO.fail(new AssertionError(s"$path: failed otherwise: $other"))
+    case Right(admitted) => ZIO.fail(new AssertionError(s"$path: ADMITTED: $admitted"))
+  }
+  private final case class Requested(w: World, key: DriverKey, cycle: Driven, ready: ItemId, action: ItemId, item: Item)
+  // An active driven cycle over a ready Task and a Requested Operator Action. `prepare` runs before the drive and returns further workset
+  // targets. `attempt` must write nothing: afterwards the ledger is unchanged, the action is Requested at the same revision, the driver is on,
+  // and once the Task is done its next continuation awaits the user on the action. A further target that `prepare` returns stays ready work,
+  // so there the drive continues with one more cycle, and the stop follows that cycle changing nothing.
+  private def requested(service: LedgerService[IO], name: String, prepare: (World, ItemId, ItemId) => IO[Throwable, List[ItemId]] = (_, _, _) => ZIO.succeed(Nil))(
+    attempt: Requested => IO[Throwable, Unit]): IO[Throwable, Unit] = {
+    val w = world
+    val key = claude(name)
+    for {
+      _ <- service.initialize(w.operator, name)
+      asked <- create(service, w.operator, action("Requested action"))
+      ready <- create(service, w.operator, task("Ready"))
+      targets <- prepare(w, ready, asked)
+      cycle <- driven(service, w, key, workset((ready :: asked :: targets)*))
+      open <- service.get(w.operator, asked).map(_.item)
+      _ <- assertIO(!open.draft.archived && LedgerPolicy.status(open.draft.content) == OperatorActionStatus.Requested.toString)
+      before <- cursor(service, w)
+      _ <- attempt(Requested(w, key, cycle, ready, asked, open))
+      after <- cursor(service, w)
+      current <- service.get(w.operator, asked).map(_.item)
+      on <- status(service, w, key)
+      _ <- assertIO(before == after)
+      _ <- assertIO(current.revision == open.revision && !current.draft.archived &&
+        LedgerPolicy.status(current.draft.content) == OperatorActionStatus.Requested.toString)
+      _ <- assertIO(on.exists(_.state == DriverState.On))
+      // The operator, outside the drive, finishes the only other ready work.
+      task <- service.get(w.operator, ready).map(_.item)
+      _ <- service.change(w.operator, request(List(Mutation.Replace(ready, task.revision, task.draft.copy(content = Content.Task(TaskStatus.Done, List("Observed outcome"), None, Nil)))), Nil))
+      _ <- ZIO.when(targets.nonEmpty)(directive(service, w, key).flatMap(issued => submit(service, w, w.governor, issued.directive.text)))
+      continued <- query(service, w, key)
+      _ <- continued match {
+        case DriverReply.Stop(DriverStopped(DriverStop.UserInputRequired, "Awaiting the user on OA1; the driver never answers questions or infers approval"), Some(value), _)
+          if stopped(Some(value), DriverStop.UserInputRequired) => ZIO.unit
+        case other => ZIO.fail(new AssertionError(s"The continuation did not await the user on OA1: $other"))
+      }
+    } yield ()
+  }
+  private def moved(item: Item, status: OperatorActionStatus, confirmation: Option[String] = None): ItemDraft =
+    item.draft.copy(content = Content.OperatorAction(status, "Rotate the credential", "The new credential's fingerprint", confirmation, Nil))
+
   // An admitted Planner result whose proposal the world's governor may apply; the driver's target is the first dispatch member.
   private def proposed(service: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO],
     name: String, drafts: List[ItemDraft], begun: Boolean)(mutations: List[ItemRevision] => List[ProposedMutation]): IO[Throwable, (World, DriverKey, Option[Driven], ArtifactId, List[ItemRevision])] = {
@@ -1170,6 +1222,162 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
         current <- service.get(w.operator, asked).map(_.item)
         _ <- assertIO(retitled.items == List(ItemRevision(asked, Revision(open.revision.value + 1))) && current.draft.title == "Reworded question" &&
           !current.draft.archived && LedgerPolicy.status(current.draft.content) == QuestionStatus.Open.toString)
+      } yield ()
+    }
+
+    // Only a person settles an Operator Action: every driven write that takes one out of Requested is refused (Question 25).
+    List(OperatorActionStatus.Cancelled, OperatorActionStatus.Failed, OperatorActionStatus.Confirmed, OperatorActionStatus.Observed).foreach { status =>
+      s"refuse a driven Replace that moves a Requested Operator Action to $status" in { (service: LedgerService[IO]) =>
+        requested(service, s"action-replace-$status".toLowerCase) { at =>
+          // No confirmation text is added, so the ledger's own rule on operator confirmation does not apply.
+          service.change(at.w.governor, request(List(Mutation.Replace(at.action, at.item.revision, moved(at.item, status))), Nil)).either
+            .flatMap(kept(s"Replace to $status", _))
+        }
+      }
+    }
+
+    "refuse a driven Cancel termination rooted at a Requested Operator Action" in { (service: LedgerService[IO]) =>
+      requested(service, "action-terminate") { at =>
+        for {
+          preview <- service.termination(at.w.governor, Set(at.action), TerminationIntent.Cancel)
+          _ <- assertIO(preview.plan.canApply && preview.plan.entries.exists(entry =>
+            entry.item.id == at.action && entry.effect == TerminationEffect.Change(TerminalStatus.OperatorAction(OperatorActionStatus.Cancelled))))
+          result <- service.change(at.w.governor, request(List(Mutation.Terminate(Set(at.action), TerminationIntent.Cancel, preview.snapshot)), preview.plan.claims.map(_.fence))).either
+          _ <- kept("Cancel termination rooted at the action", result)
+        } yield ()
+      }
+    }
+
+    "refuse a driven Cancel termination that reaches a Requested Operator Action from an in-set producer" in { (service: LedgerService[IO]) =>
+      // The ready Task produces the action, so a termination rooted at the Task reaches it through Produces.
+      requested(service, "action-terminate-producer", (w, ready, asked) =>
+        reference(service, w.operator, asked, Relation.DerivedFrom, ready, true).flatMap(service.change(w.operator, _)).as(Nil)) { at =>
+        for {
+          preview <- service.termination(at.w.governor, Set(at.ready), TerminationIntent.Cancel)
+          _ <- assertIO(preview.plan.canApply && preview.plan.roots == List(at.ready) && preview.plan.entries.exists(entry =>
+            entry.item.id == at.action && entry.effect == TerminationEffect.Change(TerminalStatus.OperatorAction(OperatorActionStatus.Cancelled))))
+          result <- service.change(at.w.governor, request(List(Mutation.Terminate(Set(at.ready), TerminationIntent.Cancel, preview.snapshot)), preview.plan.claims.map(_.fence))).either
+          _ <- kept("Cancel termination rooted at the producing Task", result)
+          task <- service.get(at.w.operator, at.ready).map(_.item)
+          _ <- assertIO(LedgerPolicy.status(task.draft.content) == TaskStatus.Ready.toString)
+        } yield ()
+      }
+    }
+
+    "refuse a driven Cancel termination that reaches a Requested Operator Action from an in-set milestone" in { (service: LedgerService[IO]) =>
+      // The action is a member of an Open milestone in the workset, so a termination rooted at the milestone reaches it through Contains.
+      requested(service, "action-terminate-milestone", (w, _, asked) => for {
+        containing <- create(service, w.operator, milestone("Containing milestone", MilestoneStatus.Open))
+        _ <- reference(service, w.operator, asked, Relation.PartOf, containing, true).flatMap(service.change(w.operator, _))
+      } yield List(containing)) { at =>
+        for {
+          containing <- service.get(at.w.operator, at.action).map(_.refs.collectFirst { case ItemRef(Relation.PartOf, target) => target }.get)
+          preview <- service.termination(at.w.governor, Set(containing), TerminationIntent.Cancel)
+          _ <- assertIO(preview.plan.canApply && preview.plan.roots == List(containing) && preview.plan.entries.exists(entry =>
+            entry.item.id == at.action && entry.effect == TerminationEffect.Change(TerminalStatus.OperatorAction(OperatorActionStatus.Cancelled))))
+          result <- service.change(at.w.governor, request(List(Mutation.Terminate(Set(containing), TerminationIntent.Cancel, preview.snapshot)), preview.plan.claims.map(_.fence))).either
+          _ <- kept("Cancel termination rooted at the containing milestone", result)
+          open <- service.get(at.w.operator, containing).map(_.item)
+          _ <- assertIO(LedgerPolicy.status(open.draft.content) == MilestoneStatus.Open.toString)
+        } yield ()
+      }
+    }
+
+    "refuse a driven Restore that returns a Requested Operator Action to a revision that was not Requested" in { (service: LedgerService[IO]) =>
+      // Before the drive the operator cancels the action and requests it again, so its history holds a Cancelled revision.
+      def set(w: World, asked: ItemId, status: OperatorActionStatus) = service.get(w.operator, asked).flatMap(view =>
+        service.change(w.operator, request(List(Mutation.Replace(asked, view.item.revision, moved(view.item, status))), Nil)))
+      requested(service, "action-restore", (w, _, asked) =>
+        (set(w, asked, OperatorActionStatus.Cancelled) *> set(w, asked, OperatorActionStatus.Requested)).as(Nil)) { at =>
+        for {
+          _ <- assertIO(at.item.revision == Revision(3))
+          result <- service.change(at.w.governor, request(List(Mutation.Restore(at.action, at.item.revision, Revision(2), Nil)), Nil)).either
+          _ <- kept("Restore to the Cancelled revision", result)
+        } yield ()
+      }
+    }
+
+    "refuse a session the drive delegated to, whatever its role, that takes an Operator Action out of Requested" in { (service: LedgerService[IO]) =>
+      requested(service, "action-delegated") { at =>
+        val delegate = at.w.other(Role.Human)
+        def attributed(path: String, draft: ItemDraft) =
+          act(service, delegate, DriverSession.Change(at.cycle.cycle, request(List(Mutation.Replace(at.action, at.item.revision, draft)), Nil))).either.flatMap(kept(path, _))
+        for {
+          _ <- act(service, at.w.governor, DriverSession.Inherit(at.cycle.cycle, LineageMember.Run(at.cycle.run), LineageMember.Session(delegate.actor.session)))
+          _ <- attributed("Delegated Replace to Cancelled", moved(at.item, OperatorActionStatus.Cancelled))
+          // A human delegate may record confirmation text as far as the ledger is concerned; the write still belongs to the cycle.
+          _ <- attributed("Delegated Replace to Confirmed with confirmation text", moved(at.item, OperatorActionStatus.Confirmed, Some("Rotated by the operator")))
+          // The delegate ends without having written; a lineage member still in flight would resume the cycle instead of stopping it.
+          _ <- act(service, at.w.governor, DriverSession.Settle(at.cycle.cycle, LineageMember.Session(delegate.actor.session)))
+        } yield ()
+      }
+    }
+
+    "leave a Requested Operator Action unarchivable, admit a non-settling edit to it, and admit its settlement by hand once the driver is parked" in { (service: LedgerService[IO]) =>
+      val w = world
+      val key = claude("action-edit")
+      for {
+        _ <- service.initialize(w.operator, "action-edit")
+        asked <- create(service, w.operator, action("Requested action"))
+        ready <- create(service, w.operator, task("Ready"))
+        _ <- driven(service, w, key, workset(ready, asked))
+        open <- service.get(w.operator, asked).map(_.item)
+        // The ledger admits archival of terminal or settled items only, so no write archives an action that is still Requested.
+        before <- cursor(service, w)
+        flagged <- service.change(w.governor, request(List(Mutation.Replace(asked, open.revision, open.draft.copy(archived = true))), Nil)).either
+        bulk <- service.change(w.governor, request(List(Mutation.Archive(List(ItemRevision(asked, open.revision)))), Nil)).either
+        after <- cursor(service, w)
+        _ <- assertIO(fault(flagged).contains(Fault.Invalid("Only terminal or settled items may be archived; unarchive an item before reopening it")) &&
+          fault(bulk).contains(Fault.Invalid("Only terminal items may be archived; unarchive an item before reopening it")) && before == after)
+        retitled <- service.change(w.governor, request(List(Mutation.Replace(asked, open.revision, open.draft.copy(title = "Reworded action", body = "Reworded narrative"))), Nil))
+        edited <- service.get(w.operator, asked).map(_.item)
+        kept <- status(service, w, key)
+        _ <- assertIO(retitled.items == List(ItemRevision(asked, Revision(open.revision.value + 1))) && edited.draft.title == "Reworded action" &&
+          !edited.draft.archived && LedgerPolicy.status(edited.draft.content) == OperatorActionStatus.Requested.toString && kept.exists(_.state == DriverState.On))
+        // The documented way out: park, then the same session settles the action as an undriven write.
+        _ <- park(service, w, key)
+        byHand <- service.change(w.governor, request(List(Mutation.Replace(asked, edited.revision, moved(edited, OperatorActionStatus.Cancelled))), Nil))
+        settled <- service.get(w.operator, asked).map(_.item)
+        _ <- assertIO(byHand.items.map(_.id) == List(asked) && LedgerPolicy.status(settled.draft.content) == OperatorActionStatus.Cancelled.toString)
+      } yield ()
+    }
+
+    "admit a driven write that creates an Operator Action in any status" in { (service: LedgerService[IO]) =>
+      val w = world
+      val key = claude("action-create")
+      for {
+        _ <- service.initialize(w.operator, "action-create")
+        ready <- create(service, w.operator, task("Ready"))
+        _ <- driven(service, w, key, workset(ready))
+        created <- producing(service, w.governor, ready)(revision => List(Mutation.Produce(ready, revision,
+          List(action("Requested by the drive"), action("Created as observed", OperatorActionStatus.Observed), action("Created as cancelled", OperatorActionStatus.Cancelled)), None)))
+        actions = created.items.filter(_.id.ledger == Ledger.OperatorActions)
+        statuses <- ZIO.foreach(actions)(item => service.get(w.operator, item.id).map(view => LedgerPolicy.status(view.item.draft.content)))
+        kept <- status(service, w, key)
+        _ <- assertIO(actions.forall(_.revision == Revision(1)) && statuses.sorted == List("Cancelled", "Observed", "Requested") &&
+          kept.exists(found => found.state == DriverState.On && actions.map(_.id).forall(found.cycle.get.created.contains)))
+      } yield ()
+    }
+
+    "admit a driven write that moves an already Confirmed Operator Action to Observed or Failed" in { (service: LedgerService[IO]) =>
+      val w = world
+      val key = claude("action-confirmed")
+      val confirmation = Some("Rotated by the operator")
+      for {
+        _ <- service.initialize(w.operator, "action-confirmed")
+        observed <- create(service, w.operator, action("Confirmed, to be observed", OperatorActionStatus.Confirmed, confirmation))
+        failing <- create(service, w.operator, action("Confirmed, to fail", OperatorActionStatus.Confirmed, confirmation))
+        ready <- create(service, w.operator, task("Ready"))
+        _ <- driven(service, w, key, workset(ready, observed, failing))
+        results <- ZIO.foreach(List(observed -> OperatorActionStatus.Observed, failing -> OperatorActionStatus.Failed)) { case (id, status) =>
+          for {
+            current <- service.get(w.operator, id).map(_.item)
+            ack <- service.change(w.governor, request(List(Mutation.Replace(id, current.revision, moved(current, status, confirmation))), Nil))
+            after <- service.get(w.operator, id).map(_.item)
+          } yield ack.items == List(ItemRevision(id, Revision(current.revision.value + 1))) && LedgerPolicy.status(after.draft.content) == status.toString
+        }
+        kept <- status(service, w, key)
+        _ <- assertIO(results.forall(identity) && kept.exists(_.state == DriverState.On))
       } yield ()
     }
 

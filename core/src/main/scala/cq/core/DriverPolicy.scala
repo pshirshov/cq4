@@ -65,6 +65,8 @@ object DriverPolicy {
     s"The CQ driver never answers Questions: ${references(questions)} would be answered by a driven session; park the driver before recording the user's answer"
   def withdrawalRefused(questions: Iterable[ItemId]): String =
     s"The CQ driver never settles Questions: ${references(questions)} would be withdrawn by a driven session; park the driver before withdrawing a Question"
+  def settlementRefused(actions: Iterable[ItemId]): String =
+    s"The CQ driver never settles Operator Actions: ${references(actions)} would be taken out of Requested by a driven session; park the driver before settling an Operator Action"
 
   def invocation(harness: Harness): String = harness match {
     case Harness.Claude | Harness.Pi => "/cq:advance"
@@ -82,11 +84,13 @@ object DriverPolicy {
   }
 
   // Only a person can settle these; the driver never answers a question or infers an approval.
-  def awaitsUser(item: ItemSummary): Boolean = !item.archived && (item.id.ledger match {
-    case Ledger.Questions => item.status == QuestionStatus.Open.toString
-    case Ledger.OperatorActions => item.status == OperatorActionStatus.Requested.toString
+  // The write boundary judges a written item by the same predicate, so a write that ends a wait is exactly one that changes this.
+  def awaitsUser(ledger: Ledger, status: String, archived: Boolean): Boolean = !archived && (ledger match {
+    case Ledger.Questions => status == QuestionStatus.Open.toString
+    case Ledger.OperatorActions => status == OperatorActionStatus.Requested.toString
     case _ => false
   })
+  def awaitsUser(item: ItemSummary): Boolean = awaitsUser(item.id.ledger, item.status, item.archived)
 
   // The readiness decision of one cycle, made only from its issue-time snapshot and the snapshot of the cycle before it.
   def decide(snapshot: WorksetPreview, previous: Option[CycleRecord]): DriverDecision = {
