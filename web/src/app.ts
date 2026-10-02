@@ -386,6 +386,7 @@ class App {
     this.questions.reset(); this.references.reset();
     this.archive.invalidate();
     this.createDialog.close(); this.historyDialog.close(); this.usageDialog.close(); this.closeEditor();
+    this.queryEditor.cancelLive();
     this.queryEditor.invalidate(); this.queryEditor.showDiagnostic(undefined, this.query.value);
     this.epoch++; this.selectionGeneration++; this.selection = null; this.selected = null; this.editor = null; this.after = undefined; this.snapshot = undefined;
     this.queryInvalid = false; this.itemCursor = null; this.resetCounts(); this.resetUsageWatch(); this.watch();
