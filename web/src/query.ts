@@ -112,7 +112,7 @@ export class QueryEditor {
     try { await this.analyse(source, source.length); }
     catch (error) {
       if (this.input.value !== source) return;
-      this.liveDue = false; this.status.textContent = `Backend query suggestions unavailable: ${String(error)}`; this.status.hidden = false; this.renderPopup();
+      this.status.textContent = `Backend query suggestions unavailable: ${String(error)}`; this.status.hidden = false; this.renderPopup();
     }
   }
 
@@ -125,6 +125,10 @@ export class QueryEditor {
         if (this.liveDue) { this.liveDue = false; if (this.known.valid && this.pending(source)) this.submit(); }
       }
       return result;
+    } catch (error) {
+      // A pending live update waits on this analysis only; a later analysis of the same text must not submit it.
+      if (this.input.value === source) this.liveDue = false;
+      throw error;
     } finally { if (this.analysing === source) this.analysing = null; }
   }
 

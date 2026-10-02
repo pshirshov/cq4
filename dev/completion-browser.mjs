@@ -12,7 +12,7 @@ const browser=await chromium.launch({headless:true});const context=await browser
 let held=null;const browses=[],pending=new Set();
 await context.routeWebSocket(/\/ws$/,route=>{
  const server=route.connectToServer();route.onMessage(message=>{const f=JSON.parse(String(message));const read=f.Call?.command.Read?.input.selection;if(read?.Browse){browses.push(read.Browse.query);pending.add(f.Call.id.value);}else if(read?.ItemDetail)pending.add(f.Call.id.value);if(held!==null&&held.id===null&&read?.[held.kind]?.query===held.query)held.id=f.Call.id.value;server.send(message);});
- server.onMessage(message=>{const f=JSON.parse(String(message));if(f.Reply)pending.delete(f.Reply.id.value);if(held!==null&&f.Reply?.id.value===held.id){held.release=()=>route.send(message);held.resolve();}else route.send(message);});
+ server.onMessage(message=>{const f=JSON.parse(String(message));if(f.Reply)pending.delete(f.Reply.id.value);if(held!==null&&f.Reply?.id.value===held.id){held.release=()=>route.send(message);held.fail=()=>route.send(JSON.stringify({Reply:{id:f.Reply.id,result:{Failed:{fault:{Invalid:{message:'Completion refused by the fixture'}}}}}}));held.resolve();}else route.send(message);});
 });
 const page=await context.newPage();page.setDefaultTimeout(8000);const cases=[],errors=[];page.on('pageerror',e=>errors.push(String(e)));
 function holdReply(kind,query){let resolve;const ready=new Promise(done=>{resolve=done;});held={kind,query,id:null,release:null,resolve};return ready;}
@@ -124,6 +124,13 @@ try{
   await pause();assert.deepEqual(browses.slice(before),[]);
   await query.evaluate(input=>{input.dispatchEvent(new CompositionEvent('compositionend',{bubbles:true}));});
   await until(()=>browses.length>before,'Composed text was not browsed');await settled();await pause();assert.deepEqual(browses.slice(before),['target']);
+ });
+ await live('I23 a failed completion that the pending update waited on is forgotten: a later analysis of the same text is not browsed',async()=>{
+  await apply('');const ready=hold('id:D1');const before=browses.length;await query.fill('id:D1');await captured(ready);
+  // The update falls due while the completion is held and waits on it.
+  await pause();held.fail();held=null;await page.getByText('Backend query suggestions unavailable: Error: Completion refused by the fixture',{exact:false}).waitFor();
+  await query.press('ArrowLeft');await complete();await pause();
+  assert.equal(await caret(),4);assert.equal(await query.inputValue(),'id:D1');assert.deepEqual(browses.slice(before),[]);
  });
  assert.deepEqual(failures,[]);await apply('');
  await query.fill('ledger:tasks AND status:re');await complete();const end=await popup.boundingBox();await query.press('Home');await complete();const start=await popup.boundingBox();assert.ok(end.x-start.x>100,{end,start});
