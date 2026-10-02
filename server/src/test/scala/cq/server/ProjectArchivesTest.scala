@@ -90,5 +90,31 @@ final class ProjectArchivesPostgres extends SpecZIO with AssertZIO {
         _ <- assertIO(copy == (Some(span), List(SpanTally(UsagePhase.Check, 1, 700)), before.cursor))
       } yield ()
     }
+
+    "Q32: round-trip the project's standing requirements with their revision and author" in {
+      (service: LedgerService[IO], config: DatabaseConfig, archives: ProjectArchives) =>
+      val operator = Scope(ProjectId(UUID.randomUUID()), Actor("operator", SessionId(UUID.randomUUID()), Role.Human))
+      val schema = "cq_restore_" + UUID.randomUUID().toString.replace("-", "")
+      val separator = if (config.url.contains("?")) "&" else "?"
+      val target = new LedgerDatabase(config.copy(url = config.url + separator + "currentSchema=" + schema))
+      for {
+        _ <- service.initialize(operator, "archived requirements")
+        _ <- service.replaceRequirements(operator, Revision(0), "First text")
+        written <- service.replaceRequirements(operator, Revision(1), "Every change carries a focused test λ😀.")
+        file <- ZIO.attempt(Files.createTempFile("cq-archive-", ".zip"))
+        manifest <- archives.backup(operator.project, file)
+        _ <- assertIO(manifest.entries.last.table == BackupTable.Settings && manifest.entries.last.rows == 1)
+        _ <- ZIO.attemptBlocking(Using.resource(DriverManager.getConnection(config.url, config.user, config.password)) { connection =>
+          Using.resource(connection.createStatement())(_.execute(s"CREATE SCHEMA $schema")); ()
+        })
+        _ <- target.initialize
+        restored <- new PostgresProjectArchives(target, Clock.systemUTC()).restore(file).either
+        _ <- ZIO.attempt(Files.deleteIfExists(file))
+        _ <- assertIO(restored.map(_.entries) == Right(manifest.entries))
+        copy <- new PostgresLedgerRepository(target).transact(operator.project)(_.setting(ProjectSettingKind.Requirements))
+        _ <- assertIO(written.revision == Revision(2) && written.change.exists(_.actor == operator.actor) &&
+          copy.contains(StoredSetting(written.revision, ProjectSetting.Requirements(written.text), operator.actor, written.change.get.at)))
+      } yield ()
+    }
   }
 }

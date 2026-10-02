@@ -56,6 +56,10 @@ yolo --profile work --env CQ_TOKEN_FILE=/srv/nvme/tmp/cq4-playground/token pi --
 
 Claude/Pi workflow commands are `/cq:begin`, `/cq:advance`, `/cq:review`, `/cq:upstream`. The Claude settings selector and Pi prompt selector avoid the older personal CQ commands installed on this machine. Pi `--approve` trusts project files; `--no-approve` disables them, including CQ's extension.
 
+## Standing requirements of a project
+
+A session's request reaches the children of that session only, and CQ launches child harnesses with an isolated configuration, so the repository's agent instruction files are not a reliable way to reach them. Rules that must hold in every session of a project, such as its testing policy or an evidence rule, belong in the project's standing requirements. Open the project in the browser, choose *Standing requirements*, edit the text and save it. The host delivers the saved text to every Planner, Worker and plan or candidate reviewer of every later dispatch, under its own heading and ahead of the session's request. The dialog shows the revision, who changed the text and when. A save based on an older revision is refused and shows the current text beside yours. The text is limited to 8,192 code points, and an empty text means none.
+
 ## Automatic advancement
 
 `/cq:drive <target IDs> through=<phase>` (Codex: `$cq-drive …`) switches a session's auto-driver on, and `/cq:park` (`$cq-park`) switches it off. While it is on, the session keeps running `advance` on the chosen items up to the chosen phase and stops with a stated reason. `cq configure` installs the commands, the Claude Code and Codex hooks, the Claude status line and the Pi toggle key (Ctrl+Alt+A); reconfigure each harness with `--replace` after installing a package that contains the driver. Codex additionally needs its `/hooks` review, and Claude needs `--replace-statusline` when `.claude/settings.local.json` already has a status line of its own.

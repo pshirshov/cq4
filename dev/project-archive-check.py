@@ -112,6 +112,8 @@ def verify(checks, command, name):
             assert priced_response[0] == 200, priced_response
             stored = call(checks.environment, {"Workset": {"input": {"project": project, "action": {"Create": {"targets": [state["target"]["id"]], "through": "Work"}}}}})
             assert stored["WorksetStored"]["workset"]["targets"] == [state["target"]["id"]], stored
+            standing = call(checks.environment, {"Requirements": {"input": {"project": project, "action": {"Replace": {"expected": {"value": "0"}, "text": "Archived standing requirement"}}}}})
+            assert standing["Requirements"]["value"]["revision"] == {"value": "1"}, standing
             other = {"value": str(uuid.uuid4())}
             call(checks.environment, {"Initialize": {"config": {"project": other, "endpoint": checks.environment["CQ_ORIGIN"], "name": "Excluded project"}}})
             before = fingerprint(names[0]); write(out / "before.json", before)
@@ -119,7 +121,8 @@ def verify(checks, command, name):
             assert [(value["spans"], value["wallMillis"]) for value in phases["UsagePhases"]["report"]["phases"] if value["phase"] == "Check"] == [("1", "700")], phases
             assert len(before["cq_usage_spans"]) == 1 and before["cq_usage_spans"][0]["span_id"] == span["id"]["value"], before["cq_usage_spans"]
             manifest = json.loads(cli("backup", args + ["--json"]).stdout)
-            assert len(manifest["entries"]) == len(before) == 25 and len(before["cq_worksets"]) == 1
+            assert len(manifest["entries"]) == len(before) == 26 and len(before["cq_worksets"]) == 1
+            assert [row["body"] for row in before["cq_project_settings"]] == [{"Requirements": {"text": "Archived standing requirement"}}], before["cq_project_settings"]
             assert archive.stat().st_mode & 0o077 == 0, "Archive must not expose operator data to other users"
             digest = hashlib.sha256(archive.read_bytes()).hexdigest()
             assert "already exists" in cli("no-clobber", args, 1).stderr
@@ -270,7 +273,7 @@ def verify(checks, command, name):
                 write(out / "lost-commit-observation.json", {"commitAcknowledgementDropped": True, "projectCommitted": True, "stderr": uncertain.stderr})
                 assert "no restore was committed" not in uncertain.stderr, "Committed restore was falsely reported as rolled back"
                 assert "verify" in uncertain.stderr.lower() and "retry" in uncertain.stderr.lower(), uncertain.stderr
-        result = {"status": "passed", "tables": 25, "snapshotConsistent": True, "recordsEqual": True,
+        result = {"status": "passed", "tables": 26, "snapshotConsistent": True, "recordsEqual": True,
                   "collisionRefused": True, "counterContinued": True, "authorizationEnforced": True}
         write(out / "result.json", result)
         return result

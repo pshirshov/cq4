@@ -362,6 +362,20 @@ private final class PostgresLedgerTransaction(connection: Connection, override v
     ()
   }
 
+  override def setting(kind: ProjectSettingKind): Option[StoredSetting] =
+    sql.query("SELECT revision, body::text, actor::text, updated_at FROM cq_project_settings WHERE project_id = ? AND kind = ?") { s =>
+      projectKey(s); s.setString(2, kind.toString)
+    }(r => StoredSetting(Revision(r.getLong(1)), Wire.decode(ProjectSetting_JsonCodec, r.getString(2)), Wire.decode(Actor_JsonCodec, r.getString(3)), r.getLong(4))).headOption
+
+  override def putSetting(value: StoredSetting): Unit = {
+    sql.execute("INSERT INTO cq_project_settings(project_id, kind, revision, actor, updated_at, body) VALUES (?, ?, ?, ?::jsonb, ?, ?::jsonb) " +
+      "ON CONFLICT (project_id, kind) DO UPDATE SET revision = EXCLUDED.revision, actor = EXCLUDED.actor, updated_at = EXCLUDED.updated_at, body = EXCLUDED.body") { s =>
+      projectKey(s); s.setString(2, ProjectSettingKind.of(value.value).toString); s.setLong(3, value.revision.value)
+      s.setString(4, Wire.encode(Actor_JsonCodec, value.actor)); s.setLong(5, value.updatedAt); s.setString(6, Wire.encode(ProjectSetting_JsonCodec, value.value))
+    }
+    ()
+  }
+
   override def candidateRoots(after: Option[ItemId], limit: Int): ReadPage[ItemSummary] = {
     val open = PersistedItems.open
     val pagination = after.fold("")(_ => " AND (i.ledger, i.number) > (?, ?)")

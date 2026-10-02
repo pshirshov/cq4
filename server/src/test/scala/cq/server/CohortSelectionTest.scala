@@ -39,6 +39,7 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
         case Command.Read(ReadInput(_, ReadSelection.ItemDetail(id))) => ledger.get(scope, id).map(Result.Detail.apply)
         case Command.Read(ReadInput(_, ReadSelection.History(id, before, limit))) => ledger.history(scope, id, before, limit).map(Result.History.apply)
         case Command.ClaimWork(ClaimInput(_, ClaimAction.Renew(fence, millis))) => ledger.renew(scope, fence, millis).map(Result.Claimed.apply)
+        case Command.Requirements(RequirementsInput(_, RequirementsAction.Read())) => ledger.requirements(scope).map(Result.Requirements.apply)
         case _ => ZIO.fail(new IllegalStateException("Unexpected selection read"))
       }
       Unsafe.unsafe { implicit unsafe => runtime.unsafe.run(effect.either).getOrThrowFiberFailure() } match {
@@ -653,6 +654,36 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
         choices = result.evidence.decision.choices
         _ <- assertIO(choices.map(_.members.map(_.id).toSet) == List(ids.take(2).toSet, Set(ids(2))) &&
           choices.head.witness.contains(ids(4)) && result.evidence.decision.counts.selected == 3)
+      } yield ()
+    }
+
+    "Q32: measure the project's standing requirements in the input budget of an offered group and of its start" in { (ledger: LedgerService[IO]) =>
+      val scope = owner
+      val operator = scope.copy(actor = scope.actor.copy(subject = "operator", role = Role.Human))
+      val large = task.copy(body = "x" * 60000)
+      val standing = "😀" * LedgerPolicy.MaxRequirementsCodePoints
+      for {
+        runtime <- ZIO.runtime[Any]
+        _ <- ledger.initialize(scope, "standing budget")
+        created <- ledger.change(scope, ChangeRequest(RequestId(uuid), List.fill(3)(Mutation.Create(large)) :+ Mutation.Create(task), Nil, "Candidates and producer"))
+        ids = created.items.map(_.id)
+        _ <- ZIO.foreachDiscard(List(0, 1, 2))(index => link(ledger, scope, ids(3), Relation.Produces, ids(index)))
+        planner = new CohortPlanner(api(ledger, scope, runtime), scope, fixed(GitCommit("a" * 40)), Nil, new CohortProgress, new OperatorRequirements("Session request"))
+        selection = request(ids.take(3).toSet, DispatchWork.Planner())
+        whole <- ZIO.attemptBlocking(planner.plan(selection, ArtifactId(uuid)))
+        choice = whole.evidence.decision.choices.head
+        _ <- assertIO(whole.evidence.decision.choices.map(_.members.size) == List(3))
+        // An Explorer receives no requirements, so its group is not measured with them.
+        _ <- ledger.replaceRequirements(operator, Revision(0), standing)
+        explorers <- ZIO.attemptBlocking(new CohortPlanner(api(ledger, scope, runtime), scope, fixed(GitCommit("a" * 40)), Nil, new CohortProgress, new OperatorRequirements("Session request"))
+          .plan(request(ids.take(3).toSet, DispatchWork.Explorer(ExplorerMode.Investigate)), ArtifactId(uuid)))
+        _ <- assertIO(explorers.evidence.decision.choices.map(_.members.size) == List(3))
+        narrowed <- ZIO.attemptBlocking(new CohortPlanner(api(ledger, scope, runtime), scope, fixed(GitCommit("a" * 40)), Nil, new CohortProgress, new OperatorRequirements("Session request"))
+          .plan(request(ids.take(3).toSet, DispatchWork.Planner()), ArtifactId(uuid)))
+        _ <- assertIO(narrowed.evidence.decision.choices.map(_.members.size) == List(2, 1))
+        // The group offered before the text grew no longer fits when it is started.
+        stale <- ZIO.attemptBlocking(planner.verify(selection, choice, whole.fingerprints(choice.id))).either
+        _ <- assertIO(stale.left.exists(_.getMessage.contains("Cohort operative input changed; select again")))
       } yield ()
     }
 

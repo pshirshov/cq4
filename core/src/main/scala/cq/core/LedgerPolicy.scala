@@ -15,6 +15,8 @@ object LedgerPolicy {
   val MaxLocation = 2048
   val MaxDraftBytes = 262144
   val MaxTouchedItems = 512
+  // Standing requirements reach every Planner, Worker and reviewer untruncated, beside a session request of at most 16384 code points.
+  val MaxRequirementsCodePoints = 8192
 
   def invalid(condition: Boolean, message: String): Unit =
     if (!condition) throw DomainFailure(Fault.Invalid(message))

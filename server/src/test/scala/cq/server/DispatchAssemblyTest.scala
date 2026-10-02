@@ -149,9 +149,52 @@ abstract class DispatchAssemblyTest extends SpecZIO with AssertZIO {
             // D110: Plan and Candidate reviewers receive the requirements they check a result against; an Audit reviewer does not.
             assert(resolved.operatorRequirements.contains(requirements))
             assert(new InputAssembler(api, scope, clock, "").assemble(review).operatorRequirements.isEmpty)
-            assert(OperatorRequirements.delivered(DispatchWork.Reviewer(ReviewerMode.Plan), requirements).contains(requirements) &&
-              OperatorRequirements.delivered(DispatchWork.Reviewer(ReviewerMode.Plan), "").isEmpty &&
-              OperatorRequirements.delivered(DispatchWork.Reviewer(ReviewerMode.Audit), requirements).isEmpty)
+            assert(OperatorRequirements.delivered(DispatchWork.Reviewer(ReviewerMode.Plan), "", requirements).contains(requirements) &&
+              OperatorRequirements.delivered(DispatchWork.Reviewer(ReviewerMode.Plan), "", "").isEmpty &&
+              OperatorRequirements.delivered(DispatchWork.Reviewer(ReviewerMode.Audit), "", requirements).isEmpty)
+            // Q32: the project's standing requirements, as the server holds them at dispatch, precede the session's request under their own heading.
+            val operator = new ApplicationApi(application, root, runtime)
+            def stand(expected: Long, text: String): Unit = assert(operator.call(Command.Requirements(RequirementsInput(scope.project,
+              RequirementsAction.Replace(Revision(expected), text)))).isInstanceOf[Result.Requirements])
+            val standing = "Every change carries a focused test λ😀.\nNo release gate runs in a worker's workspace."
+            val standingSection = "Standing project requirements (set by the operator; they apply to every session of this project):\n" + standing
+            val both = standingSection + "\n\nSession request (the operator's request for this session):\n" + requirements
+            stand(0, standing)
+            assert(standingSection == OperatorRequirements.StandingHeading + "\n" + standing && both.contains("\n\n" + OperatorRequirements.SessionHeading + "\n"))
+            assert(OperatorRequirements.delivered(DispatchWork.Reviewer(ReviewerMode.Plan), standing, requirements).contains(both) &&
+              OperatorRequirements.delivered(DispatchWork.Reviewer(ReviewerMode.Audit), standing, requirements).isEmpty)
+            assert(assembler.assemble(request).operatorRequirements.contains(both))
+            assert(assembler.assemble(request.copy(work = DispatchWork.Planner())).operatorRequirements.contains(both))
+            assert(assembler.assemble(review).operatorRequirements.contains(both))
+            assert(HostFiles.encode(ChildExecutionInput_JsonCodec, ChildExecutionInput(assembler.assemble(request), GitCommit("a" * 40), Nil)).contains("No release gate runs"))
+            // A session without a request of its own, such as a driven one, still delivers the standing requirements.
+            assert(new InputAssembler(api, scope, clock, "").assemble(request).operatorRequirements.contains(standingSection))
+            assert(assembler.assemble(request.copy(work = DispatchWork.Explorer(ExplorerMode.Investigate))).operatorRequirements.isEmpty)
+            stand(1, "Changed before the next dispatch.")
+            assert(assembler.assemble(request).operatorRequirements.exists(text => text.contains("Changed before the next dispatch.") && !text.contains(standing)))
+            // A standing text without content adds nothing: the session's request is delivered as it was before.
+            stand(2, " \n")
+            assert(assembler.assemble(request).operatorRequirements.contains(requirements))
+            assert(new InputAssembler(api, scope, clock, "").assemble(request).operatorRequirements.isEmpty)
+            stand(3, standing)
+            // A failed read of the standing requirements fails the dispatch; it never drops them.
+            final class Unreadable(failure: () => Result) extends ServerApi {
+              override def call(command: Command): Result = command match {
+                case _: Command.Requirements => failure()
+                case other => api.call(other)
+              }
+              override def usage(value: HostUsageInput): HostUsageResult = api.usage(value)
+              override def artifact(value: ArtifactUpload): ArtifactMetadata = api.artifact(value)
+              override def admit(value: HostAdmissionInput): ResultAdmission = api.admit(value)
+              override def integrate(value: HostIntegrationInput): IntegrationRecord = api.integrate(value)
+              override def grant(value: GrantRequest): AccessToken = api.grant(value)
+            }
+            val refused = intercept[DomainFailure](new InputAssembler(new Unreadable(() => Result.Failed(Fault.Denied("Standing requirements unreadable"))), scope, clock, requirements).assemble(request))
+            assert(refused.fault == Fault.Denied("Standing requirements unreadable"))
+            intercept[ServerUnavailable](new InputAssembler(new Unreadable(() => throw new ServerUnavailable("HTTP request failed", null)), scope, clock, requirements).assemble(request))
+            // An Explorer receives no requirements, so its dispatch does not read them.
+            assert(new InputAssembler(new Unreadable(() => throw new ServerUnavailable("HTTP request failed", null)), scope, clock, requirements)
+              .assemble(request.copy(work = DispatchWork.Explorer(ExplorerMode.Investigate))).operatorRequirements.isEmpty)
             intercept[IllegalArgumentException](assembler.assemble(review.copy(previous = Some(unbound.id))))
             intercept[IllegalArgumentException](assembler.assemble(request.copy(members = List(member.copy(revision = Revision(member.revision.value + 1))))))
             intercept[IllegalArgumentException](assembler.assemble(request.copy(members = List(member, guidance), guidance = Nil)))

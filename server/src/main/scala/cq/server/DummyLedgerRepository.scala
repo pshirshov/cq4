@@ -25,7 +25,7 @@ final class DummyLedgerResource extends Lifecycle.LiftF[Task, LedgerRepository[I
         current.projects.get(project.id) match {
           case Some(existing) => (existing.project, current)
           case None =>
-            val state = DummyLedgerState(project, 0L, 0L, Map.empty, Map.empty, Set.empty, Map.empty, Map.empty, List.empty, Map.empty, Map.empty, Map.empty, Map.empty, Map.empty, Map.empty)
+            val state = DummyLedgerState(project, 0L, 0L, Map.empty, Map.empty, Set.empty, Map.empty, Map.empty, List.empty, Map.empty, Map.empty, Map.empty, Map.empty, Map.empty, Map.empty, Map.empty)
             (project, current.copy(cursor = CatalogueCursor(Math.addExact(current.cursor.value, 1L)), projects = current.projects.updated(project.id, state)))
         }
       }
@@ -58,6 +58,7 @@ private final case class DummyLedgerState(
   integrations: Map[IntegrationId, IntegrationRecord],
   reserved: Map[ItemId, IntegrationId],
   worksets: Map[WorksetId, StoredWorkset],
+  settings: Map[ProjectSettingKind, StoredSetting],
 )
 
 private final class DummyLedgerTransaction(initial: DummyLedgerState) extends LedgerTransaction {
@@ -194,6 +195,10 @@ private final class DummyLedgerTransaction(initial: DummyLedgerState) extends Le
   override def insertWorkset(value: StoredWorkset): Unit = {
     require(!state.worksets.contains(value.id), "Workset identity already exists")
     state = state.copy(worksets = state.worksets.updated(value.id, value))
+  }
+  override def setting(kind: ProjectSettingKind): Option[StoredSetting] = state.settings.get(kind)
+  override def putSetting(value: StoredSetting): Unit = {
+    state = state.copy(settings = state.settings.updated(ProjectSettingKind.of(value.value), value))
   }
   override def candidateRoots(after: Option[ItemId], limit: Int): ReadPage[ItemSummary] = {
     val candidates = state.items.valuesIterator.map(LedgerPolicy.summary).filter { item =>

@@ -265,3 +265,12 @@ CREATE TABLE cq_worksets (
   body jsonb NOT NULL,
   PRIMARY KEY (project_id, workset_id)
 );
+CREATE TABLE cq_project_settings (
+  project_id uuid NOT NULL REFERENCES cq_projects,
+  kind text NOT NULL,
+  revision bigint NOT NULL CHECK (revision > 0),
+  actor jsonb NOT NULL,
+  updated_at bigint NOT NULL,
+  body jsonb NOT NULL,
+  PRIMARY KEY (project_id, kind)
+);

@@ -51,7 +51,8 @@ final class InputAssembler(api: ServerApi, owner: Scope, clock: Clock, operatorR
           "Plan review requires a result containing a typed proposal or cohort assessment")
       value
     }
-    val input = ChildInput(owner.project, request, members, guidance, artifacts, previous, OperatorRequirements.delivered(request.work, operatorRequirements))
+    val input = ChildInput(owner.project, request, members, guidance, artifacts, previous,
+      OperatorRequirements.delivered(request.work, OperatorRequirements.standing(call, owner.project), operatorRequirements))
     require(HostFiles.encode(ChildInput_JsonCodec, input).getBytes(UTF_8).length <= ChildContracts.MaxInputBytes, "Assembled input exceeds its byte bound")
     claim()
     input

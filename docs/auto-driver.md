@@ -91,6 +91,8 @@ call '{"Workset":{"input":{"project":{"value":"'$project'"},"action":{"Preview":
 
 IDs are separated by spaces or commas. Inline targets need exactly one `through=<phase>`, in lower case. `workset=<UUID>` stands alone. In Claude Code and Codex the command must be the first word of the prompt; any other prompt passes through untouched.
 
+A drive command carries targets and a phase and no request text. Rules that the driven work must follow, such as the project's testing policy, are therefore set beforehand as the project's standing requirements (*Standing requirements* in the browser): the host delivers them to every Planner, Worker and plan or candidate reviewer the drive dispatches. See [Standing requirements of a project](interactive.md#standing-requirements-of-a-project).
+
 The targets and the phase are frozen for the drive. A second drive command while the driver is binding or on is rejected with `conflict: This session's CQ driver is already on; park it before driving other targets or another phase`. A rejected drive (`CQ driver drive-start rejected: …` in Claude Code and Codex, `CQ driver not started: …` in Pi) changes nothing. The exception is a reply that never arrived: in Claude Code and Codex the hook then reports `The CQ server's reply was not received, so this session's driver may have changed …`. The server may have started or parked the driver, so read the driver status or park before driving again.
 
 ### Claude Code and Codex: the bind step

@@ -16,6 +16,7 @@ import { usageLiveChecks } from './usage-live-browser.mjs';
 import { densityChecks } from './density-browser.mjs';
 import { scrollChecks } from './scroll-browser.mjs';
 import { catalogueChecks } from './catalogue-browser.mjs';
+import { requirementsChecks } from './requirements-browser.mjs';
 import { tableChecks } from './table-browser.mjs';
 import { redesignChecks } from './redesign-browser.mjs';
 import { interactionChecks } from './interaction-browser.mjs';
@@ -120,6 +121,7 @@ try {
   await editChecks(browser, await context.storageState(), origin, evidence);
   await scrollChecks(browser, await context.storageState(), origin, evidence);
   await catalogueChecks(browser, await context.storageState(), origin, evidence);
+  await requirementsChecks(browser, await context.storageState(), origin, evidence);
   await interactionChecks(browser, await context.storageState(), origin, evidence);
   await graphChecks(browser, await context.storageState(), origin, evidence);
   await resyncChecks(browser, await context.storageState(), origin, evidence);

@@ -199,6 +199,59 @@ abstract class ApplicationContractTest extends SpecZIO with AssertZIO {
         } yield ()
     }
 
+    "Q32: keep a project's standing requirements under revision comparison, writable by the operator only and bounded" in {
+      (ledger: LedgerService[IO], repository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
+        val auth = authorization(Now)
+        val session = SessionId(UUID.randomUUID())
+        val root = auth.authenticate(Token, Some(session.value.toString))
+        val application = new Application(ledger, repository, usage, artifacts, admissions, integrations, proposals, auth)
+        val project = ProjectId(UUID.randomUUID())
+        val other = ProjectId(UUID.randomUUID())
+        def granted(role: Role) = auth.authenticate(auth.grant(root, GrantRequest(project, Actor(role.toString, SessionId(UUID.randomUUID()), role), Now + 10000)).value, None)
+        def read(authority: Authority, target: ProjectId) = application.execute(authority, Command.Requirements(RequirementsInput(target, RequirementsAction.Read())))
+        def replace(authority: Authority, expected: Long, text: String) =
+          application.execute(authority, Command.Requirements(RequirementsInput(project, RequirementsAction.Replace(Revision(expected), text))))
+        val text = "Every change carries a focused test λ😀.\nNo release gate runs in a worker's workspace."
+        val operator = Actor("operator", session, Role.Human)
+        val bound = LedgerPolicy.MaxRequirementsCodePoints
+        for {
+          _ <- application.execute(root, Command.Initialize(ProjectConfig(project, "http://localhost", "Standing")))
+          _ <- application.execute(root, Command.Initialize(ProjectConfig(other, "http://localhost", "Other")))
+          initial <- read(root, project)
+          _ <- assertIO(initial == Result.Requirements(ProjectRequirements(project, Revision(0), "", None)))
+          deniedGovernor <- replace(granted(Role.Governor), 0, text)
+          deniedWorker <- replace(granted(Role.Worker), 0, text)
+          _ <- assertIO(List(deniedGovernor, deniedWorker).forall { case Result.Failed(_: Fault.Denied) => true; case _ => false })
+          written <- replace(root, 0, text)
+          _ <- assertIO(written match {
+            case Result.Requirements(ProjectRequirements(`project`, Revision(1), `text`, Some(RequirementsChange(`operator`, at)))) => at > 0
+            case _ => false
+          })
+          readers <- ZIO.foreach(List(root, granted(Role.Governor), granted(Role.Planner), granted(Role.Worker), granted(Role.Reviewer)))(read(_, project))
+          _ <- assertIO(readers.forall(_ == written))
+          stale <- replace(root, 0, "Stale")
+          _ <- assertIO(stale match { case Result.Failed(Fault.Conflict(message)) => message.contains("expected revision 0, actual 1"); case _ => false })
+          same <- replace(root, 1, text)
+          _ <- assertIO(same == written)
+          oversized <- replace(root, 1, "😀" * (bound + 1))
+          _ <- assertIO(oversized == Result.Failed(Fault.Invalid(s"Standing requirements exceed $bound code points: ${bound + 1} supplied")))
+          nul <- replace(root, 1, "a\u0000b")
+          _ <- assertIO(nul match { case Result.Failed(_: Fault.Invalid) => true; case _ => false })
+          unchanged <- read(root, project)
+          _ <- assertIO(unchanged == written)
+          full <- replace(root, 1, "😀" * bound)
+          _ <- assertIO(full match { case Result.Requirements(value) => value.revision == Revision(2) && value.text == "😀" * bound; case _ => false })
+          cleared <- replace(root, 2, "")
+          _ <- assertIO(cleared match { case Result.Requirements(value) => value.revision == Revision(3) && value.text.isEmpty && value.change.nonEmpty; case _ => false })
+          foreign <- read(granted(Role.Worker), other)
+          _ <- assertIO(foreign match { case Result.Failed(_: Fault.Denied) => true; case _ => false })
+          separate <- read(root, other)
+          _ <- assertIO(separate == Result.Requirements(ProjectRequirements(other, Revision(0), "", None)))
+          renamed <- application.execute(root, Command.RenameProject(project, Revision(1), "Renamed"))
+          _ <- assertIO(renamed match { case Result.Initialized(value) => value.revision == Revision(2); case _ => false })
+        } yield ()
+    }
+
     "preserve mutation acknowledgements across service re-creation and reject mixed snapshot pages" in {
       (ledger: LedgerService[IO], repository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
         val auth = authorization(Now)
