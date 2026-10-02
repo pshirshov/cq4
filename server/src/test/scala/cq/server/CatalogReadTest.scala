@@ -110,5 +110,15 @@ final class CatalogReadLocal extends AnyWordSpec {
       val decoded = schemas.tools.find(_.name == "read").get.decode(parsed(s"""{"project":{"value":"${input.project.value}"},"selection":{"Catalog":{}}}"""))
       assert(decoded == Right(Command.Read(input)))
     }
+
+    "be accepted by the read tool's advertised MCP output schema" in {
+      val read = schemas.tools.find(_.name == "read").get
+      assert(read.results.contains("Catalog"))
+      val output = schemas.advertised(read).hcursor.downField("outputSchema").focus.get
+      val body = Result_JsonCodec.encode(Context, Result.Catalog(catalog))
+      assert(JsonSchemaCheck.errors(output, body) == Nil)
+      val tags = output.hcursor.get[Vector[Json]]("oneOf").fold(throw _, identity).flatMap(_.hcursor.get[List[String]]("required").toOption).flatten
+      assert(tags.contains("Catalog"))
+    }
   }
 }
