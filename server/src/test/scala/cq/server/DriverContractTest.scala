@@ -32,6 +32,7 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
   private def task(title: String): ItemDraft = ItemDraft(title, "Narrative", Set.empty, false, Content.Task(TaskStatus.Ready, List("Observed outcome"), None, Nil), Nil)
   private def goal(title: String): ItemDraft = task(title).copy(content = Content.Goal(GoalStatus.Open, "Outcome", List("Acceptance"), "Scope"))
   private def question(title: String): ItemDraft = task(title).copy(content = Content.Question(QuestionStatus.Open, "Prompt", "Context", Nil, None, None))
+  private def defect(title: String): ItemDraft = task(title).copy(content = Content.Defect(DefectStatus.Open, Severity.Medium, "Observed", "Expected", "Reproduction", None, Nil))
   private def request(mutations: List[Mutation], fences: List[Fence]): ChangeRequest = ChangeRequest(RequestId(uuid), mutations, fences, "Driver scenario")
   private def create(service: LedgerService[IO], scope: Scope, draft: ItemDraft): IO[Throwable, ItemId] =
     service.change(scope, request(List(Mutation.Create(draft)), Nil)).map(_.items.head.id)
@@ -1215,6 +1216,43 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
         s"$closed, reopened by Replace" -> reopened(s"reopened-replace-$closed", closed, false),
         s"$closed, reopened by Restore" -> reopened(s"reopened-restore-$closed", closed, true),
         s"$closed, unbound session" -> unbound(s"reopened-unbound-$closed", closed)))*)
+    }
+
+    // Question 31: once the Tasks a Defect produced are integrated, the Governor closes the Defect itself, without a Planner round.
+    "admit a driven Governor's Replace that sets an in-set Defect Resolved with model-declared resolution evidence" in { (service: LedgerService[IO]) =>
+      val w = world
+      val key = claude("defect-closure")
+      def resolved(view: ItemView, origin: EvidenceOrigin): ItemDraft = view.item.draft.copy(content = Content.Defect(DefectStatus.Resolved, Severity.Medium,
+        "Observed", "Expected", "Reproduction", None, List(Evidence("T1 is Done by recorded integration and states that its integration resolves this Defect", origin,
+          List(Citation.Commit("consumer", "a" * 40))))))
+      for {
+        _ <- service.initialize(w.operator, "defect-closure")
+        root <- create(service, w.operator, defect("Defect"))
+        (_, produced) <- produce(service, w.operator, root, "Correction")
+        correction = produced.items.find(_.id != root).get.id
+        done <- service.get(w.operator, correction)
+        _ <- service.change(w.operator, request(List(Mutation.Replace(correction, done.item.revision,
+          done.item.draft.copy(content = Content.Task(TaskStatus.Done, List("Observed outcome"), Some("Integrated"), Nil)))), Nil))
+        cycle <- driven(service, w, key, workset(root))
+        open <- service.get(w.governor, root)
+        // The Governor declares the closure; it cannot give its own entry host provenance. The refusal is the ledger's and leaves the driver on.
+        fabricated <- service.change(w.governor, request(List(Mutation.Replace(root, open.item.revision, resolved(open, EvidenceOrigin.HostObserved))), Nil)).either
+        _ <- assertIO(fault(fabricated).contains(Fault.Denied("Declared evidence cannot fabricate human or host provenance")))
+        // While the Governor holds a claim on the Defect the Replace carries that claim's fence, as any write of a claimed item does.
+        claim <- service.acquire(w.governor, ClaimId(uuid), Set(root), 600000L)
+        closing = Mutation.Replace(root, open.item.revision, resolved(open, EvidenceOrigin.ModelDeclared))
+        unfenced <- service.change(w.governor, request(List(closing), Nil)).either
+        _ <- assertIO(fault(unfenced).exists(_.isInstanceOf[Fault.StaleFence]))
+        change = request(List(closing), List(claim.fence))
+        ack <- service.change(w.governor, change)
+        closed <- service.get(w.operator, root)
+        running <- status(service, w, key)
+        _ <- assertIO(ack.items.map(_.id) == List(root) && LedgerPolicy.status(closed.item.draft.content) == DefectStatus.Resolved.toString &&
+          running.exists(_.state == DriverState.On) && lineage(running).contains(LineageEntry(LineageMember.Change(change.request), Some(LineageMember.Run(cycle.run)), true)))
+        _ <- service.release(w.governor, claim.fence)
+        after <- query(service, w, key)
+        _ <- assertIO(after match { case DriverReply.Stop(DriverStopped(DriverStop.Quiescent, _), _, _) => true; case _ => false })
+      } yield ()
     }
 
     "carry the cycle ID through nested delegation and reject a delegated child's out-of-set writes" in { (service: LedgerService[IO]) =>
