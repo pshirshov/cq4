@@ -70,7 +70,7 @@ Inside the sandbox the consumer repository, the evaluation state root, the CQ pa
 
 ### Terminal control and recording
 
-`dev/eval-session SOCKET ACTION NAME …` wraps a private tmux server on the given socket. `tmux` and `asciinema` (3.2.1 on this machine) come from `PATH`; set `EVAL_TMUX` to use another tmux binary, as `gov/t` did with an absolute path.
+`dev/eval-session SOCKET ACTION NAME …` wraps a private tmux server on the given socket. `tmux` and `asciinema` (3.2.1 on this machine) come from `PATH`; set `EVAL_TMUX` to use another tmux binary, as `gov/t` did with an absolute path. `NAME` addresses exactly the session of that name (`=NAME`), never a session whose name it only begins or matches as a pattern.
 
 | Action | Use |
 | --- | --- |
@@ -348,7 +348,7 @@ Nothing is recorded as Resolved, confirmed or reproduced by the operator. A prob
 After the harness session has exited:
 
 1. `CQ_TOKEN_FILE=<root>/server/token cq job upload --session <root>/sessions/<session>` for every session of the run. Claude Code and Codex may end the host before its final delivery ([interactive](interactive.md)); a repeated upload acknowledges zero batches.
-2. Read the usage with the filter `EvaluationOnly {run, scenario}` (`UsageFilter` in `models/cq-api.baboon`): `dev/eval-usage.py child --project-dir <root>/consumer --token-file <root>/server/token --run <run> --scenario <scenario>`. It posts `Usage` with the selections `Summary` and `Phases` to `/api/call`, as `dev/process-eval` and `dev/consumer-assess` do for `Summary`.
+2. Read the usage with the filter `EvaluationOnly {run, scenario}` (`UsageFilter` in `models/cq-api.baboon`): `dev/eval-usage.py child --project-dir <root>/consumer --token-file <root>/server/token --run <run> --scenario <scenario>`. It posts `Usage` with the selections `Summary` and `Phases` to `/api/call`, as `dev/process-eval` and `dev/consumer-assess` do for `Summary`. The operator token is sent only to the endpoint named in the consumer's `cq/project.json`: the script uses no proxy and treats a redirect as an error.
 
 The `cq status` command line has the scopes `--task`, `--cohort` and `--session` and no evaluation scope (`cq help status`), so the filter is reachable through the API only. `cq status phases --session <session>` gives the same phase table for one session; a run of several sessions needs the filter.
 
@@ -437,7 +437,7 @@ The protocol has not been reviewed. It is ready when R2 and R3 are concluded, th
 ### Not verified
 
 - No run was executed under this protocol. No harness has been driven through S1–S4 on a consumer project from a terminal.
-- `dev/eval-session`, `dev/eval-launch` and `dev/eval-usage.py` were checked with `bash -n` and `python3 -m py_compile` only. They were not run: a release gate occupied the machine.
+- `dev/eval-session`, `dev/eval-launch` and `dev/eval-usage.py` were checked with `bash -n` and `python3 -m py_compile` only. They were not run: a release gate occupied the machine. Later, on 2026-10-02, the `type`, `keys`, `screen`, `wait` and `stop` actions of `dev/eval-session` were run once against a `cat` session on a private tmux 3.7c socket to check the exact-name targets, and `dev/eval-usage.py` once against a local stub endpoint and a three-entry transcript to check the refused redirect, the ignored proxy and the entry without a response identity. `start`, `dev/eval-launch` and a read from a CQ server remain not run.
 - `dev/eval-minesweeper-spec.md` has not been implemented by anyone; its checks have not been run. Whether its size fits the 3-hour and USD 25 defaults is unknown.
 - The isolated server, `cq init` and `cq configure` in a scratch consumer were not carried out for this page. The steps are those of the quickstart and of `dev/attached-native-eval`.
 - Pi: launch against a real server, busy and dialog texts, outer usage in a driven session and the auto-driver with a real model.

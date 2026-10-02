@@ -21,6 +21,12 @@ object LedgerPolicy {
   def invalid(condition: Boolean, message: String): Unit =
     if (!condition) throw DomainFailure(Fault.Invalid(message))
 
+  def validateRequirements(text: String): Unit = {
+    val count = text.codePointCount(0, text.length)
+    invalid(count <= MaxRequirementsCodePoints, s"Standing requirements exceed $MaxRequirementsCodePoints code points: $count supplied")
+    invalid(!text.contains('\u0000') && java.nio.charset.StandardCharsets.UTF_8.newEncoder().canEncode(text), "Standing requirements contain invalid Unicode or NUL")
+  }
+
   def ledger(content: Content): Ledger = content match {
     case _: Content.Milestone => Ledger.Milestones
     case _: Content.Idea => Ledger.Ideas

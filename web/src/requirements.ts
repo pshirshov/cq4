@@ -5,7 +5,8 @@ import { faultMessage } from './faults.js';
 
 interface RequirementsEffects {
   call(command: api.Command): Promise<api.Result>;
-  saved(value: api.ProjectRequirements): void;
+  // `changed` is false when the saved text equals the stored one: the server then keeps the revision.
+  saved(value: api.ProjectRequirements, changed: boolean): void;
 }
 
 function provenance(value: api.ProjectRequirements): string {
@@ -22,8 +23,10 @@ export class RequirementsDialog {
   private readonly metadata = element('p', '');
   private readonly conflict = element('section', '');
   private readonly save = button('Save requirements', () => this.action(() => this.submit()));
-  // The revision the text in the editor was started from; a dirty text survives closing and reopening the dialog.
+  // The revision the text in the editor was started from, null while it is loading; a dirty text survives closing and reopening the dialog.
   private base: api.ProjectRequirements | null = null;
+  // Dirty texts of the projects the dialog was opened for since, by project.
+  private readonly drafts = new Map<string, { base: api.ProjectRequirements; text: string }>();
   private busy = false;
 
   constructor(private readonly effects: RequirementsEffects) {
@@ -49,6 +52,12 @@ export class RequirementsDialog {
     this.base = value; this.metadata.textContent = provenance(value); this.conflict.hidden = true; this.conflict.replaceChildren();
   }
   open(project: api.ProjectId): void {
+    const shown = this.base;
+    if (shown !== null && shown.project.value !== project.value && this.text.value !== shown.text) this.drafts.set(shown.project.value, { base: shown, text: this.text.value });
+    const kept = this.drafts.get(project.value);
+    if (kept !== undefined) {
+      this.drafts.delete(project.value); this.adopt(kept.base); this.text.value = kept.text; this.text.disabled = false; this.save.disabled = this.busy;
+    }
     const dirty = this.base !== null && this.base.project.value === project.value && this.text.value !== this.base.text;
     this.dialog.open('Standing requirements');
     if (dirty) return;
@@ -69,14 +78,15 @@ export class RequirementsDialog {
       const result = await this.effects.call(new api.Command_Requirements(new api.RequirementsInput(base.project,
         new api.RequirementsAction_Replace(base.revision, this.text.value))));
       if (result instanceof api.Result_Requirements) {
-        if (generation === this.generation) this.adopt(result.value); else this.base = result.value;
-        this.effects.saved(result.value);
+        // A reply that arrives after the dialog was reopened for a fresh load or for another project's text must not become its base.
+        if (this.base === base) this.adopt(result.value);
+        this.effects.saved(result.value, result.value.revision.value !== base.revision.value);
       } else if (result instanceof api.Result_Failed && result.fault instanceof api.Fault_Conflict) {
         const current = await this.read(base.project);
         if (generation === this.generation && this.base === base) this.showConflict(base, current);
       } else if (result instanceof api.Result_Failed) throw new Error(faultMessage(result.fault));
       else throw new Error('Unexpected standing requirements response');
-    } finally { this.busy = false; this.save.disabled = false; }
+    } finally { this.busy = false; this.save.disabled = this.base === null; }
   }
   private showConflict(base: api.ProjectRequirements, current: api.ProjectRequirements): void {
     const text = element('pre', current.text); text.setAttribute('aria-label', 'Current standing requirements');

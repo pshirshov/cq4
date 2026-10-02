@@ -37,9 +37,9 @@ object UsageService {
     override def cursors(scope: Scope): F[Throwable, UsageCursors] = repository.read(scope.project)(reader => UsageCursors(reader.cursor, reader.attemptEvents))
 
     override def working(scope: Scope, claimed: Map[ItemId, SessionId]): F[Throwable, WorkAttempts] = repository.read(scope.project) { reader =>
-      WorkAttempts(claimed.toList.flatMap { case (item, session) =>
-        reader.running(item, session).maxByOption(_.startedAt).map(attempt => item -> WorkAttempt(attempt.role, attempt.harness, attempt.startedAt))
-      }.toMap, reader.attemptEvents)
+      WorkAttempts(reader.running(claimed).flatMap { case (item, attempts) =>
+        attempts.maxByOption(_.startedAt).map(attempt => item -> WorkAttempt(attempt.role, attempt.harness, attempt.startedAt))
+      }, reader.attemptEvents)
     }
 
     private def host(scope: Scope): Unit =

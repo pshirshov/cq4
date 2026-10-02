@@ -21,8 +21,8 @@ trait UsageReader {
   def cursor: Long
   /** Attempts started plus attempts with a recorded outcome: it grows when an attempt starts and when its first outcome is recorded. */
   def attemptEvents: Long
-  /** Attempts of `session` without a recorded outcome whose assignment covers `item`. */
-  def running(item: ItemId, session: SessionId): List[Attempt]
+  /** For each item, the attempts of its session without a recorded outcome whose assignment covers the item; items without one are absent. */
+  def running(claimed: Map[ItemId, SessionId]): Map[ItemId, List[Attempt]]
   def assignment(id: AssignmentId): Option[Assignment]
   def attempt(id: AttemptId): Option[Attempt]
   def meter(key: MeterKey): Option[(UsageMeter, MeterProjection)]

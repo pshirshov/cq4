@@ -76,9 +76,7 @@ object LedgerService {
 
     override def replaceRequirements(scope: Scope, expected: Revision, text: String): F[Throwable, ProjectRequirements] = repository.transact(scope.project) { tx =>
       if (scope.actor.role != Role.Human) throw DomainFailure(Fault.Denied("Standing requirements change requires human authority"))
-      val count = text.codePointCount(0, text.length)
-      invalid(count <= MaxRequirementsCodePoints, s"Standing requirements exceed $MaxRequirementsCodePoints code points: $count supplied")
-      invalid(!text.contains('\u0000') && StandardCharsets.UTF_8.newEncoder().canEncode(text), "Standing requirements contain invalid Unicode or NUL")
+      validateRequirements(text)
       val current = standing(tx)
       if (current.revision != expected)
         throw DomainFailure(Fault.Conflict(s"Standing requirements changed: expected revision ${expected.value}, actual ${current.revision.value}; reload before saving"))

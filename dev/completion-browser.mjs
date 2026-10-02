@@ -7,12 +7,14 @@ const origin=process.env.CQ_ORIGIN,evidence=process.env.CQ_BROWSER_EVIDENCE;
 const project={value:randomUUID()},headers={Authorization:`Bearer ${process.env.CQ_TOKEN}`,'CQ-Session':randomUUID(),'CQ-Protocol-Version':'0.1.0','Content-Type':'application/json'};
 async function call(command){const r=await fetch(origin+'/api/call',{method:'POST',headers,body:JSON.stringify(command)});assert.equal(r.status,200);const value=await r.json();assert.equal(value.Failed,undefined);return value;}
 await call({Initialize:{config:{project,endpoint:origin,name:'Completion fixture'}}});
+const second={value:randomUUID()};await call({Initialize:{config:{project:second,endpoint:origin,name:'Completion fixture, second project'}}});
+await call({Change:{input:{project:second,change:{request:{value:randomUUID()},fences:[],reason:'Completion fixture',mutations:[{Create:{draft:{title:'Second project target',body:'',labels:['fixture'],archived:false,citations:[],content:{Defect:{status:'Open',severity:'Low',observed:'Actual',expected:'Expected',reproduction:'Steps',cause:null,resolution:[]}}}}}]}}}});
 await call({Change:{input:{project,change:{request:{value:randomUUID()},fences:[],reason:'Completion fixture',mutations:[{Create:{draft:{title:'Completion target',body:'',labels:['fixture'],archived:false,citations:[],content:{Defect:{status:'Open',severity:'Low',observed:'Actual',expected:'Expected',reproduction:'Steps',cause:null,resolution:[]}}}}}]}}}});
 const browser=await chromium.launch({headless:true});const context=await browser.newContext({viewport:{width:1366,height:768}});
-let held=null;const browses=[],pending=new Set();
+let held=null;const browses=[],browsed=[],pending=new Set();
 await context.routeWebSocket(/\/ws$/,route=>{
- const server=route.connectToServer();route.onMessage(message=>{const f=JSON.parse(String(message));const read=f.Call?.command.Read?.input.selection;if(read?.Browse){browses.push(read.Browse.query);pending.add(f.Call.id.value);}else if(read?.ItemDetail)pending.add(f.Call.id.value);if(held!==null&&held.id===null&&read?.[held.kind]?.query===held.query)held.id=f.Call.id.value;server.send(message);});
- server.onMessage(message=>{const f=JSON.parse(String(message));if(f.Reply)pending.delete(f.Reply.id.value);if(held!==null&&f.Reply?.id.value===held.id){held.release=()=>route.send(message);held.resolve();}else route.send(message);});
+ const server=route.connectToServer();route.onMessage(message=>{const f=JSON.parse(String(message));const read=f.Call?.command.Read?.input.selection;if(read?.Browse){browses.push(read.Browse.query);browsed.push(`${f.Call.command.Read.input.project.value} ${read.Browse.query}`);pending.add(f.Call.id.value);}else if(read?.ItemDetail)pending.add(f.Call.id.value);if(held!==null&&held.id===null&&read?.[held.kind]?.query===held.query)held.id=f.Call.id.value;server.send(message);});
+ server.onMessage(message=>{const f=JSON.parse(String(message));if(f.Reply)pending.delete(f.Reply.id.value);if(held!==null&&f.Reply?.id.value===held.id){held.release=()=>route.send(message);held.fail=()=>route.send(JSON.stringify({Reply:{id:f.Reply.id,result:{Failed:{fault:{Invalid:{message:'Completion refused by the fixture'}}}}}}));held.resolve();}else route.send(message);});
 });
 const page=await context.newPage();page.setDefaultTimeout(8000);const cases=[],errors=[];page.on('pageerror',e=>errors.push(String(e)));
 function holdReply(kind,query){let resolve;const ready=new Promise(done=>{resolve=done;});held={kind,query,id:null,release:null,resolve};return ready;}
@@ -20,7 +22,7 @@ const hold=query=>holdReply('QueryComplete',query);
 async function captured(ready){let timer;try{await Promise.race([ready,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('Held reply did not arrive')),8000);})]);}finally{clearTimeout(timer);}}
 const popup=page.locator('.query-popup'),query=page.getByLabel('Search query',{exact:true});
 const complete=()=>page.waitForFunction(()=>document.querySelector('.query-popup').getAttribute('aria-busy')==='false');
-// D97 helpers. `browses` holds the query of every Browse request in order; `pending` holds the Browse and ItemDetail calls without a reply.
+// D97 helpers. `browses` holds the query of every Browse request in order and `browsed` the same with the project in front; `pending` holds the Browse and ItemDetail calls without a reply.
 async function until(condition,message){const deadline=Date.now()+8000;while(!condition()){if(Date.now()>deadline)assert.fail(message);await new Promise(done=>setTimeout(done,10));}}
 const focused=()=>query.evaluate(n=>document.activeElement===n);
 // The result list is busy from the start of a reload until the selected item and its usage are read again.
@@ -124,6 +126,27 @@ try{
   await pause();assert.deepEqual(browses.slice(before),[]);
   await query.evaluate(input=>{input.dispatchEvent(new CompositionEvent('compositionend',{bubbles:true}));});
   await until(()=>browses.length>before,'Composed text was not browsed');await settled();await pause();assert.deepEqual(browses.slice(before),['target']);
+ });
+ await live('I23 a failed completion that the pending update waited on is forgotten: a later analysis of the same text is not browsed',async()=>{
+  await apply('');const ready=hold('id:D1');const before=browses.length;await query.fill('id:D1');await captured(ready);
+  // The update falls due while the completion is held and waits on it.
+  await pause();held.fail();held=null;await page.getByText('Backend query suggestions unavailable: Error: Completion refused by the fixture',{exact:false}).waitFor();
+  await query.press('ArrowLeft');await complete();await pause();
+  assert.equal(await caret(),4);assert.equal(await query.inputValue(),'id:D1');assert.deepEqual(browses.slice(before),[]);
+ });
+ await live('I23 a project switch within the pause cancels the pending update: the new project is browsed with the applied query only and the typed text stays unsubmitted until Enter',async()=>{
+  const projects=page.getByLabel('Project',{exact:true});
+  try{
+   await apply('');await query.focus();const before=browsed.length;
+   // The text change and the switch happen in one task, so the switch falls inside the pause.
+   await page.evaluate(id=>{const input=document.querySelector('input[aria-label="Search query"]');input.value='id:D1';input.setSelectionRange(5,5);input.dispatchEvent(new Event('input',{bubbles:true}));
+    const select=document.querySelector('select[aria-label=Project]');select.value=id;select.dispatchEvent(new Event('change',{bubbles:true}));},second.value);
+   await page.getByRole('button',{name:'D1 · Second project target',exact:true}).waitFor();await settled();await pause();await settled();
+   // A live frame may repeat the load, so the requests are compared as a set.
+   assert.deepEqual([...new Set(browsed.slice(before))],[`${second.value} `]);assert.equal(await query.inputValue(),'id:D1');
+   const loaded=browsed.length;await query.press('Enter');await until(()=>browsed.length>loaded,'Enter did not browse the typed text');await settled();
+   assert.deepEqual([...new Set(browsed.slice(loaded))],[`${second.value} id:D1`]);
+  }finally{await projects.selectOption(project.value);await target.waitFor();await settled();}
  });
  assert.deepEqual(failures,[]);await apply('');
  await query.fill('ledger:tasks AND status:re');await complete();const end=await popup.boundingBox();await query.press('Home');await complete();const start=await popup.boundingBox();assert.ok(end.x-start.x>100,{end,start});

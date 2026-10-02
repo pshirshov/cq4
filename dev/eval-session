@@ -42,16 +42,16 @@ case $action in
     ;;
   keys)
     [[ $# -ge 1 ]] || usage
-    t send-keys -t "$name" "$@"
+    t send-keys -t "=$name:" -- "$@"
     ;;
   type)
     [[ $# -eq 1 ]] || usage
-    t send-keys -t "$name" -l -- "$1"
+    t send-keys -t "=$name:" -l -- "$1"
     ;;
   screen)
     [[ $# -eq 1 ]] || usage
     number "$1"
-    t capture-pane -p -t "$name" -S "-$1"
+    t capture-pane -p -t "=$name:" -S "-$1"
     ;;
   wait)
     [[ $# -eq 4 ]] || usage
@@ -59,7 +59,7 @@ case $action in
     number "$idle_limit"; number "$timeout"
     end=$((SECONDS + timeout)) quiet_since=$SECONDS
     while (( SECONDS < end )); do
-      screen=$(t capture-pane -p -t "$name" 2>/dev/null) || { echo GONE; exit 0; }
+      screen=$(t capture-pane -p -t "=$name:" 2>/dev/null) || { echo GONE; exit 0; }
       if tail -n 8 <<<"$screen" | grep -qE -- "$prompt"; then echo PROMPT; exit 0; fi
       if grep -qE -- "$busy" <<<"$screen"; then quiet_since=$SECONDS; fi
       if (( SECONDS - quiet_since >= idle_limit )); then echo IDLE; exit 0; fi
@@ -69,7 +69,7 @@ case $action in
     ;;
   stop)
     [[ $# -eq 0 ]] || usage
-    t kill-session -t "$name"
+    t kill-session -t "=$name"
     ;;
   *) usage ;;
 esac
