@@ -1,7 +1,8 @@
 import { button, element } from './editor.js';
 
 export const HOLD_MS = 1000;
-// A longer gap between frames means the page was not rendering (hidden tab, suspended window): it counts as no held time.
+// The most held time one frame gap can add. A slow display still confirms, one capped step per frame; a page that
+// rendered nothing for a while (suspended window, hidden tab) gains a single step for the whole gap.
 const MAX_FRAME_MS = 250;
 const HOLD_LABEL = 'Hold to confirm';
 const HOLDING = 'Confirming. Escape cancels.';
@@ -17,7 +18,10 @@ function holdKey(event: KeyboardEvent): boolean { return event.key === ' ' || ev
  * starts the same timed countdown, which Escape or loss of focus cancels.
  *
  * A hold counts only time across rendered frames of a control that is enabled and rendered in a visible document:
- * closing its dialog, hiding or removing it, or hiding the page cancels the hold.
+ * closing its dialog, hiding or removing it, or hiding the page cancels the hold. Each frame adds the time since the
+ * previous one, at most MAX_FRAME_MS: when every gap is longer the hold still completes, after HOLD_MS / MAX_FRAME_MS
+ * frames. Whether the control is rendered is asked of Element.checkVisibility(); a browser without that method is asked
+ * whether the control has a layout box, which a closed dialog and a display:none ancestor take away.
  */
 export function holdButton(text: string, action: () => void): HTMLButtonElement {
   let held: number | null = null; let last = 0; let frame = 0;
@@ -29,8 +33,10 @@ export function holdButton(text: string, action: () => void): HTMLButtonElement 
   // placed next to the control: inside the same modal dialog, which makes everything outside it inert.
   const status = element('span', ''); status.className = 'visually-hidden'; status.setAttribute('aria-live', 'polite');
   const show = (state: HoldState, value: number): void => { node.dataset.hold = state; progress.value = value; };
-  // A closed dialog and a hidden panel keep their controls connected; neither renders them.
-  const operable = (): boolean => !node.disabled && !document.hidden && node.checkVisibility();
+  // A closed dialog and a hidden panel keep their controls connected; neither renders them. Without checkVisibility()
+  // the test is the layout box: an element that is not rendered has no client rectangle.
+  const rendered = (): boolean => typeof node.checkVisibility === 'function' ? node.checkVisibility() : node.getClientRects().length > 0;
+  const operable = (): boolean => !node.disabled && !document.hidden && rendered();
   const stop = (): void => { cancelAnimationFrame(frame); held = null; document.removeEventListener('visibilitychange', hidden); };
   const release = (): void => { if (held !== null) status.textContent = RELEASED; stop(); show('idle', 0); };
   const hidden = (): void => { if (document.hidden) release(); };
@@ -38,7 +44,7 @@ export function holdButton(text: string, action: () => void): HTMLButtonElement 
     if (held === null) return;
     if (!operable()) { release(); return; }
     const now = performance.now(); const elapsed = now - last; last = now;
-    if (elapsed <= MAX_FRAME_MS) held += elapsed;
+    held += Math.min(elapsed, MAX_FRAME_MS);
     if (held < HOLD_MS) {
       // The region is filled a frame after its insertion, so that the change is announced.
       if (status.textContent !== HOLDING) status.textContent = HOLDING;
