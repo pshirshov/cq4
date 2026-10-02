@@ -172,7 +172,7 @@ export async function selectionChecks(browser, storageState, origin, evidence) {
         await heading('Usage audit').waitFor({ timeout: 5000 });
         const records = page.getByRole('table', { name: 'Usage audit', exact: true }).locator(':scope > tbody > tr > td:nth-child(4)');
         await records.first().waitFor();
-        assert.deepEqual(await records.allTextContents(), [`${expectedUsage} · Observed`], 'Late audit must not replace the newer scope');
+        assert.deepEqual(await records.allTextContents(), [`Observed ${expectedUsage}`], 'Late audit must not replace the newer scope');
       }
       assert.deepEqual(errors, []);
       outcomes.push({ scenario, status: 'passed', exchanges });
