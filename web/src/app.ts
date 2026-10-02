@@ -13,6 +13,7 @@ import { Dialog } from './dialog.js';
 import { holdButton } from './hold-button.js';
 import { icon } from './icons.js';
 import { ArchiveDialog } from './archive.js';
+import { RequirementsDialog } from './requirements.js';
 import { faultMessage } from './faults.js';
 import { attemptsTable, outcomesTable, auditTable, phasesTable, sharedAssignmentsList } from './usage-view.js';
 import { formatAmount, MoneyDigits } from './money.js';
@@ -110,6 +111,10 @@ class App {
       this.after = undefined; this.snapshot = undefined; await this.refresh();
     },
   }, localStorage);
+  private readonly requirements = new RequirementsDialog({
+    call: command => this.connection().call(command),
+    saved: value => this.notifications.show(`Standing requirements saved at revision ${value.revision.value}.`, 'success'),
+  });
   private readonly historyPanel = element('section', '');
   private readonly projectDialog = new Dialog('standard', () => {});
   private readonly createDialog = new Dialog('large', () => this.closeEditor());
@@ -258,7 +263,8 @@ class App {
     const usage = button('Project usage', () => this.action(() => this.selectUsage(new api.UsageFilter_ProjectAll(), true))); usage.className = 'navigation-entry'; usage.prepend(icon('Usage'));
     const archive = button('Archive terminal items', () => this.action(async () => this.archive.open(this.currentProject(), this.activeQuery, this.order))); archive.className = 'navigation-entry';
     const questions = button('Answer questions', () => this.action(async () => this.questions.open(this.currentProject()))); questions.className = 'navigation-entry'; questions.prepend(icon(api.Ledger.Questions));
-    side.append(create, questions, usage, archive, element('h3', 'Browse'), shortcuts);
+    const requirements = button('Standing requirements', () => this.action(async () => this.requirements.open(this.currentProject()))); requirements.className = 'navigation-entry';
+    side.append(create, questions, usage, archive, requirements, element('h3', 'Browse'), shortcuts);
     const table = element('table', ''); table.className = 'items-table'; table.setAttribute('aria-label', 'Items');
     const head = element('thead', ''); const headings = element('tr', '');
     const columns: TableColumn[] = [];
@@ -305,7 +311,7 @@ class App {
     list.append(table);
     content.append(workspace.toggle, this.detail, this.editorPanel, this.graph.element, this.usagePanel, this.auditPanel);
     this.root.replaceChildren(header, workspace.element, status, this.projectDialog.element, this.createDialog.element, this.conflictDialog.element,
-      this.historyDialog.element, this.usageDialog.element, this.archive.element, this.graph.dialog.element, this.references.dialog.element, this.questions.dialog.element, this.notifications.element);
+      this.historyDialog.element, this.usageDialog.element, this.archive.element, this.requirements.element, this.graph.dialog.element, this.references.dialog.element, this.questions.dialog.element, this.notifications.element);
     this.notifications.reveal(); workspace.fit();
     this.manager = new ConnectionManager(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`, {
       status: stats => this.health.update(stats),

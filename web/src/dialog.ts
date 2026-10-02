@@ -2,7 +2,7 @@ import { button, element } from './editor.js';
 
 /**
  * Dialog size variant, chosen explicitly by every caller.
- * - 'standard': the compact dialog (new project, edit conflict, history, graph change, item references, archive).
+ * - 'standard': the compact dialog (new project, edit conflict, history, graph change, item references, archive, standing requirements).
  * - 'large': a fixed 90% × 90% viewport dialog whose header stays in place while only the body scrolls, so the dialog
  *   does not resize as its content changes. Required for the question batch, project usage and New item dialogs,
  *   and for the Help dialog (I10) and any Workset dialog when they are implemented.
