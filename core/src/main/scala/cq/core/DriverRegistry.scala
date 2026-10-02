@@ -31,9 +31,11 @@ final case class DriverRecord(
   directives: Int, stopped: Option[DriverStopped], announced: Boolean, touchedAt: Long, carried: Map[SessionId, Set[IntegrationId]],
 ) {
   def on: Boolean = state == DriverState.On
-  // An integration the bound session may settle before its start directive is accepted: one an earlier drive of that session left unsettled.
-  def carries(session: SessionId, integration: IntegrationId): Boolean =
-    cycle.exists(_.state == CycleState.Pending) && carried.get(session).exists(_.contains(integration))
+  // The integrations the bound session may settle before its start directive is accepted: those earlier drives of that session left
+  // unsettled. There are none unless the start directive is pending.
+  def settleable(session: SessionId): Option[Set[IntegrationId]] =
+    Option.when(cycle.exists(_.state == CycleState.Pending))(carried.getOrElse(session, Set.empty))
+  def carries(session: SessionId, integration: IntegrationId): Boolean = settleable(session).exists(_.contains(integration))
 }
 
 final class DriverRegistry {

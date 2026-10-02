@@ -74,14 +74,22 @@ final class AttachedWorkflow(config: SupervisorConfig, authority: SupervisorAuth
     activations.activate(id, request, operatorRequirements, token)
   })
 
-  // While the driver's start directive is pending, the current workflow is not the one the directive starts. Work it left unsettled may
-  // be settled, because the directive is refused until it has; new integration work would belong to no cycle.
+  // While the driver's start directive is pending, the current workflow is not the one the directive starts. Work an earlier drive left
+  // unsettled may be settled, because the directive is refused until it has; new integration work would belong to no cycle.
   private def unstarted(work: String): Unit =
-    if (driver.awaitingStart) throw DomainFailure(Fault.Denied(s"The CQ driver's start directive is pending: $work waits for the workflow it starts. " +
-      "Only work that is already prepared may be settled before that activation"))
+    if (driver.settleable.nonEmpty) throw DomainFailure(Fault.Denied(s"The CQ driver's start directive is pending: $work waits for the workflow it starts. " +
+      "Only an integration an earlier drive left unsettled may be settled before that activation"))
+
+  // The server admits one completion write under a pending start directive, that of an integration an earlier drive left unsettled.
+  // Any other integration is refused here, before Git is touched: applied, its completion would be an untracked mutation.
+  private def carried(id: IntegrationId): Unit =
+    if (driver.settleable.exists(!_.contains(id))) throw DomainFailure(Fault.Denied(
+      s"The CQ driver's start directive is pending: integration ${id.value} was not left unsettled by an earlier drive of this session, " +
+        "so it cannot be applied before the workflow the directive starts. It can be applied once the driver is parked or has stopped"))
 
   // An integration or combination is applied only in the activation that prepared it. An unsettled one keeps that activation current,
   // so the integration an earlier drive left Ready or Pending is still owned by the current activation when the next drive settles it.
+  // Ownership alone does not make it that drive's: the activation outlives its drive, and the session may have prepared more in it since.
   def authorize(command: DispatchCommand): Unit = synchronized {
     command match {
       case _: DispatchCommand.Status | _: DispatchCommand.Cancel | _: DispatchCommand.IntegrationStatus | _: DispatchCommand.CombinationStatus => ()
@@ -95,6 +103,7 @@ final class AttachedWorkflow(config: SupervisorConfig, authority: SupervisorAuth
             integrationsByEpoch += id -> execution.generation
           case DispatchCommand.Integrate(id) =>
             require(integrationsByEpoch.get(id).contains(execution.generation), "Integration is not prepared in this workflow activation")
+            carried(id)
           case DispatchCommand.Combine(id, source, _) =>
             require(integrationsByEpoch.get(source).contains(execution.generation) &&
               combinationsByEpoch.get(id).forall(_ == execution.generation), "Combination belongs to a previous workflow activation")

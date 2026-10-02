@@ -26,6 +26,13 @@ final class DriverService(registry: DriverRegistry, planner: WorksetPlanner) {
   def own(scope: Scope): DriverReply = DriverReply.Status(registry.all(scope.project).filter(_.attached.contains(scope.actor.session))
     .sortBy(record => (record.on, record.touchedAt)).lastOption.map(status))
 
+  // What the calling attached session may settle while its driver's start directive is pending: the answer `DriverBoundary.admit` gives
+  // the completion write, readable before the integration is applied. A session without an on driver is not restricted.
+  def settleable(scope: Scope): DriverReply = {
+    val allowed = registry.bound(scope.project, scope.actor.session).flatMap(_.settleable(scope.actor.session))
+    DriverReply.Settleable(allowed.nonEmpty, allowed.getOrElse(Set.empty))
+  }
+
   // State-changing entry points: only the CQ hook commands and the Pi extension hold the operator credential they require.
   def control(tx: LedgerTransaction, scope: Scope, key: DriverKey, source: DriverOrigin, action: DriverControl, now: Long): DriverReply = {
     authorized(scope, key, source, action)
@@ -149,6 +156,7 @@ final class DriverService(registry: DriverRegistry, planner: WorksetPlanner) {
     val caller = scope.actor.session
     action match {
       case _: DriverSession.Status => own(scope)
+      case _: DriverSession.Settleable => settleable(scope)
       case DriverSession.Bind(value) =>
         governor(scope)
         val record = registry.all(project).find(record => record.state == DriverState.Binding && record.bind.exists(_.token == value))

@@ -238,6 +238,7 @@ object LedgerService {
         // A status read touches no ledger state: it takes no project transaction, so status-line polling never waits for a ledger write.
         case DriverRequest.Control(key, origin, _: DriverControl.Status) => F.fromEither(scala.util.Try(drivers.read(scope, key, origin)).toEither)
         case DriverRequest.Session(_: DriverSession.Status) => F.fromEither(scala.util.Try(drivers.own(scope)).toEither)
+        case DriverRequest.Session(_: DriverSession.Settleable) => F.fromEither(scala.util.Try(drivers.settleable(scope)).toEither)
         case _ => repository.transact(scope.project) { tx =>
           val now = clock.millis()
           request match {

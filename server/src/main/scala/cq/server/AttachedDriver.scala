@@ -106,12 +106,10 @@ final class AttachedDriver(config: SupervisorConfig, authority: SupervisorAuthor
     }
   }
 
-  // Whether this session's driver has issued a start directive that no activation has used yet. The host's current workflow is then
-  // the one of an earlier drive or of the session before it was driven.
-  def awaitingStart: Boolean = session.status match {
-    case DriverReply.Status(value) => value.exists(status => status.state == DriverState.On && status.cycle.exists(_.state == CycleState.Pending))
-    case other => throw new IllegalStateException(s"Driver status was answered with ${other.getClass.getSimpleName}")
-  }
+  // Defined while this session's driver has issued a start directive that no activation has used yet: the integrations the server lets
+  // the session settle before that activation, which are those earlier drives left unsettled. The host's current workflow is then the
+  // one of an earlier drive or of the session before it was driven.
+  def settleable: Option[Set[IntegrationId]] = session.settleable
 
   // A status wait returns at once once a member has left the phase it was awaited in, so the tracker paces every further read.
   def observe(activation: Option[WorkflowActivation], command: DispatchCommand, reply: DispatchReply): Task[Unit] =

@@ -1290,6 +1290,11 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
       val stranger = w.copy(governor = w.other(Role.Governor))
       def record(key: DriverKey): DriverRecord = registry.get(w.project, key).get
       def carries(key: DriverKey, session: World, integration: IntegrationId): Boolean = record(key).carries(session.governor.actor.session, integration)
+      // What the attached host reads before it applies an integration: whether a start directive is pending and what may be settled before it.
+      def settleable(session: World): IO[Throwable, (Boolean, Set[IntegrationId])] = act(service, session.governor, DriverSession.Settleable()).flatMap {
+        case DriverReply.Settleable(pending, integrations) => ZIO.succeed(pending -> integrations)
+        case other => ZIO.fail(new IllegalStateException("Expected the settleable integrations: " + other))
+      }
       for {
         _ <- service.initialize(w.operator, "carry")
         root <- create(service, w.operator, goal("Goal"))
@@ -1297,13 +1302,20 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
         _ <- ZIO.foreachDiscard(List(unsettled, settled))(id => act(service, w.governor, DriverSession.Inherit(one.cycle, LineageMember.Run(one.run), LineageMember.Integration(id))))
         _ <- act(service, w.governor, DriverSession.Settle(one.cycle, LineageMember.Integration(settled)))
         _ <- assertIO(record(first).carried.isEmpty)
+        active <- settleable(w)
+        _ <- assertIO(active == (false, Set.empty))
         _ <- park(service, w, first)
         // The next drive under the same key carries the unsettled integration once its start directive is pending, and never the settled one.
         _ <- on(service, w, first, workset(root))
         bound = record(first)
         _ <- assertIO(bound.carried == Map(w.governor.actor.session -> Set(unsettled)) && !carries(first, w, unsettled))
+        undirected <- settleable(w)
+        _ <- assertIO(undirected == (false, Set.empty))
         _ <- directive(service, w, first)
         _ <- assertIO(carries(first, w, unsettled) && !carries(first, w, settled) && !carries(first, stranger, unsettled))
+        pending <- settleable(w)
+        unbound <- settleable(stranger)
+        _ <- assertIO(pending == (true, Set(unsettled)) && unbound == (false, Set.empty))
         // A drive that stops without settling it passes it on, also to the driver of a new session key the same attached session binds.
         _ <- on(service, w, renewed, workset(root))
         _ <- directive(service, w, renewed)
@@ -1314,10 +1326,15 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
         _ <- directive(service, stranger, renewed)
         _ <- assertIO(!carries(renewed, stranger, unsettled) && record(renewed).attached.contains(stranger.governor.actor.session) &&
           record(renewed).carried == Map(w.governor.actor.session -> Set(unsettled)))
+        other <- settleable(stranger)
+        parked <- settleable(w)
+        _ <- assertIO(other == (true, Set.empty) && parked == (false, Set.empty))
         // A cycle that has started carries nothing: the write then meets the boundary of the active cycle.
         _ <- park(service, stranger, renewed)
         again <- driven(service, w, renewed, workset(root))
         _ <- assertIO(record(renewed).carried == Map(w.governor.actor.session -> Set(unsettled)) && !carries(renewed, w, unsettled) && again.cycle != one.cycle)
+        started <- settleable(w)
+        _ <- assertIO(started == (false, Set.empty))
       } yield ()
     }
 

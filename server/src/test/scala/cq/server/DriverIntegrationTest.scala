@@ -381,6 +381,47 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
       }
     }
 
+    "D101: refuse to apply an integration no drive carried over while the next drive's start directive is pending, before Git is touched" in {
+      (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO], registry: DriverRegistry) =>
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, registry) { f => for {
+        // The session prepares the integration after its drive was parked: the parked drive's activation is still the host's current one,
+        // so the host owns the integration, and no cycle registered it, so the next drive does not carry it.
+        _ <- f.driven
+        _ <- f.park
+        ready <- f.prepared
+        _ <- f.drive
+        start <- f.directive
+        owned <- ZIO.attemptBlocking(f.driver.session.settleable)
+        integrate <- f.dispatch(DispatchCommand.Integrate(ready.id)).either
+        left <- f.settled(ready.id)
+        git <- ZIO.attemptBlocking(f.target)
+        after <- f.status
+        refused <- f.activate(start).either
+        _ <- ZIO.attempt {
+          println(s"Prepared, not carried-over integration under a pending cycle: prepared ${ready.phase}; integrations the server lets the session settle $owned; " +
+            s"Integrate '${refusal(integrate.map(_ => "admitted"))}'; integration phase ${left.phase}; Git target ${git.value.take(7)} " +
+            s"(candidate ${f.candidate.value.take(7)}, base ${local.base.value.take(7)}); then ${f.describe(after)}; start directive '${refusal(refused.map(_.cycle))}'")
+          assert(ready.phase == IntegrationPhase.Ready && owned.contains(Set.empty), s"$ready $owned")
+          assert(integrate.left.exists { case DomainFailure(Fault.Denied(message)) => message.contains("start directive is pending") && message.contains(ready.id.value.toString); case _ => false },
+            integrate.toString)
+          assert(left.phase == IntegrationPhase.Ready && git == local.base, s"$left $git")
+          assert(after.state == DriverState.On && after.stopped.isEmpty && after.cycle.exists(cycle => cycle.id == start.cycle && cycle.state == CycleState.Pending), after.toString)
+          assert(refused.left.exists(_.getMessage.contains("Settle active child/check/integration/combination work before changing workflow")), refused.toString)
+        }
+        // The turn ends with the directive unused, which stops the drive; the session then applies the integration as an undriven session does.
+        stopped <- f.continuation
+        applied <- f.integrate(ready.id)
+        gitAfter <- ZIO.attemptBlocking(f.target)
+        _ <- ZIO.attempt {
+          println(s"Prepared, not carried-over integration after the drive: continuation query ${brief(stopped)}; Integrate then ${applied.phase}; " +
+            s"Git target ${gitAfter.value.take(7)}")
+          assert(stopped match { case DriverReply.Stop(DriverStopped(DriverStop.Failure, detail), _, _) => detail.contains("directive not started"); case _ => false }, stopped.toString)
+          assert(applied.phase == IntegrationPhase.Recorded && gitAfter == f.candidate, applied.toString)
+        }
+      } yield () }
+    }
+
     "D101: count an integration applied as the last action of a turn as in flight at the next continuation query" in {
       (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
         artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO], registry: DriverRegistry) =>
