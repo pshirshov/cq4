@@ -23,9 +23,40 @@ final class JobSupervisorProcess extends SpecZIO with AssertZIO {
     JobCommand(List("python3", "-c", script), fixture.environment, "input λ", ExecutionLimits(Duration.ofSeconds(2), None,
       Duration.ofMillis(900), Duration.ofMillis(100), Duration.ofSeconds(1), 262144))
   private def root(local: LocalWorkspaceFixture): IO[Throwable, Path] = ZIO.attemptBlocking(Files.createTempDirectory(local.directory, "supervisor-"))
+  private def journal(at: Path, scope: Scope): IO[Throwable, JobRepository] =
+    ZIO.attemptBlocking(FileJobRepository.open(at.resolve("journal"), scope.project, scope.actor.session))
   private def acquire(at: Path, scope: Scope, service: WorkspaceService[IO], driver: ExecutionDriver) =
-    JobSupervisor.acquire(scope, ZIO.attemptBlocking(FileJobRepository.open(at.resolve("journal"), scope.project, scope.actor.session)),
-      service, driver, at.resolve("payload"), Clock.systemUTC())
+    JobSupervisor.acquire(scope, journal(at, scope), service, driver, at.resolve("payload"), Clock.systemUTC())
+  private val SlowJournalMillis = 600L
+  /** A journal whose every write takes `SlowJournalMillis`: longer than any elapsed-time bound a test could set, shorter than the supervisor's acknowledgement deadline. */
+  private def slowJournal(at: Path, scope: Scope): IO[Throwable, JobRepository] = journal(at, scope).map { delegate =>
+    new JobRepository {
+      override def records = delegate.records
+      override def reserve(spec: WorkspaceSpec, fingerprint: String, now: Long) = { Thread.sleep(SlowJournalMillis); delegate.reserve(spec, fingerprint, now) }
+      override def replace(expected: JobRecord, next: JobRecord): Unit = { Thread.sleep(SlowJournalMillis); delegate.replace(expected, next) }
+      override def close(): Unit = delegate.close()
+    }
+  }
+  /**
+   * A supervisor whose workspace preparation waits for `release` and whose launches are counted, so that a test states what had
+   * happened when a call returned instead of how long the call took. The job's fiber is uninterruptible and the supervisor's
+   * shutdown waits for it, so no timeout can end the wait: the body's end releases it before the supervisor's scope closes.
+   */
+  private def held[A](local: LocalWorkspaceFixture, guardian: GuardianFixture, scope: Scope, journal: IO[Throwable, JobRepository], payload: Path, launches: AtomicInteger)
+    (test: (JobSupervisor, Promise[Nothing, Unit], Promise[Nothing, Unit]) => IO[Throwable, A]): IO[Throwable, A] = for {
+    entered <- Promise.make[Nothing, Unit]
+    release <- Promise.make[Nothing, Unit]
+    service = new WorkspaceService[IO] {
+      override def prepare(scope: Scope, spec: WorkspaceSpec) = entered.succeed(()).unit *> release.await *> local.fixture.service.prepare(scope, spec)
+      override def get(scope: Scope, attempt: AttemptId) = local.fixture.service.get(scope, attempt)
+      override def quarantine(scope: Scope, attempt: AttemptId, reason: String) = local.fixture.service.quarantine(scope, attempt, reason)
+      override def remove(scope: Scope, attempt: AttemptId) = local.fixture.service.remove(scope, attempt)
+      override def prune(scope: Scope, repository: String) = local.fixture.service.prune(scope, repository)
+    }
+    driver = new ExecutionDriver { override def start(spec: ExecutionSpec): ManagedExecution = { launches.incrementAndGet(); new GuardianDriver(guardian.binary).start(spec) } }
+    result <- ZIO.scoped(JobSupervisor.acquire(scope, journal, service, driver, payload, Clock.systemUTC())
+      .flatMap(supervisor => test(supervisor, entered, release).ensuring(release.succeed(()))))
+  } yield result
 
   "Durable supervisor (Behavioral Active Blackbox; Git/filesystem/process Communication)" should {
     "I21: keep the journalled fingerprint of a deadline-bound command and give a command without an execution limit its own" in { (_: GuardianFixture) => ZIO.attempt {
@@ -124,13 +155,11 @@ final class JobSupervisorProcess extends SpecZIO with AssertZIO {
               starting <- supervisor.start(scope, second, command(guardian, "print('must not launch')")).fork
               _ <- ZIO.attemptBlocking(assert(entered.await(3, TimeUnit.SECONDS)))
               cancellation <- if (explicitCancellation) supervisor.cancel(scope, first.attempt).fork.map(Some(_)) else ZIO.succeed(None)
-              _ <- ZIO.sleep(zio.Duration.fromMillis(1200))
+              startAck <- starting.await
+              cancelAck <- ZIO.foreach(cancellation)(_.await)
+              _ <- assertIO(startAck.isFailure && cancelAck.forall(_.isFailure))
               observed <- ZIO.attemptBlocking(process.get().get.await(Duration.ofSeconds(3)))
               _ <- assertIO(observed.phase == ProcessPhase.Settled && observed.result.exists(_.reason == StopReason.Cancelled))
-              _ <- ZIO.sleep(zio.Duration.fromMillis(1200))
-              startAck <- starting.poll
-              cancelAck <- ZIO.foreach(cancellation)(_.poll)
-              _ <- assertIO(startAck.exists(_.isFailure) && cancelAck.forall(_.exists(_.isFailure)))
               _ <- ZIO.succeed(release.countDown())
             } yield ()).ensuring(ZIO.succeed(release.countDown()))
           } yield ()
@@ -189,9 +218,8 @@ final class JobSupervisorProcess extends SpecZIO with AssertZIO {
               _ <- ZIO.attemptBlocking(assert(entered.await(3, TimeUnit.SECONDS)))
               observed <- ZIO.attemptBlocking(process.get().get.await(Duration.ofSeconds(3)))
               _ <- assertIO(observed.phase == ProcessPhase.Settled && observed.result.exists(_.reason == StopReason.Cancelled))
-              _ <- ZIO.sleep(zio.Duration.fromMillis(1200))
-              acknowledgement <- cancellation.poll
-              _ <- assertIO(acknowledgement.exists(_.isFailure))
+              acknowledgement <- cancellation.await
+              _ <- assertIO(acknowledgement.isFailure)
               status <- supervisor.status(scope, workspace.attempt).either
               _ <- assertIO(status.isLeft)
             } yield ()).ensuring(ZIO.succeed(release.countDown()))
@@ -286,11 +314,24 @@ final class JobSupervisorProcess extends SpecZIO with AssertZIO {
       val workspace = local.fixture.spec(scope)
       val failWrite = new AtomicBoolean(false)
       val process = new AtomicReference[Option[ManagedExecution]](None)
+      val hold = new AtomicBoolean(false)
+      val held = new CountDownLatch(1)
+      val resume = new CountDownLatch(1)
+      // The supervisor's monitor persists what it observes of the process, and a cancelled process is such an observation. The monitor
+      // is held at its next observation, so that the write that fails is the cancellation's own, whichever would have come first.
       val driver = new ExecutionDriver {
         override def start(spec: ExecutionSpec): ManagedExecution = {
           val running = new GuardianDriver(guardian.binary).start(spec)
           process.set(Some(running))
-          running
+          new ManagedExecution {
+            override def status: ProcessObservation = {
+              if (hold.get()) { held.countDown(); require(resume.await(30, TimeUnit.SECONDS), "Monitor fixture was not released") }
+              running.status
+            }
+            override def cancel(): ProcessObservation = running.cancel()
+            override def await(timeout: Duration): ProcessObservation = running.await(timeout)
+            override def close(): Unit = running.close()
+          }
         }
       }
       for {
@@ -313,8 +354,12 @@ final class JobSupervisorProcess extends SpecZIO with AssertZIO {
             _ <- supervisor.start(scope, workspace, command(guardian, "import time; time.sleep(30)"))
             _ <- (ZIO.sleep(zio.Duration.fromMillis(20)) *> supervisor.status(scope, workspace.attempt)).repeatUntil(_.phase == JobPhase.Running)
               .timeoutFail(new IllegalStateException("Fixture never started"))(zio.Duration.fromSeconds(5))
-            _ <- ZIO.succeed(failWrite.set(true))
-            failed <- supervisor.cancel(scope, workspace.attempt).either
+            _ <- ZIO.succeed(hold.set(true))
+            failed <- (for {
+              _ <- ZIO.attemptBlocking(assert(held.await(10, TimeUnit.SECONDS)))
+              _ <- ZIO.succeed(failWrite.set(true))
+              failed <- supervisor.cancel(scope, workspace.attempt).either
+            } yield failed).ensuring(ZIO.succeed { hold.set(false); resume.countDown() })
             _ <- assertIO(failed.isLeft)
             observed <- ZIO.attemptBlocking(process.get().get.await(Duration.ofSeconds(3)))
             _ <- assertIO(observed.phase == ProcessPhase.Settled && observed.result.exists(_.reason == StopReason.Cancelled))
@@ -329,17 +374,17 @@ final class JobSupervisorProcess extends SpecZIO with AssertZIO {
       val scope = owner
       val workspace = local.fixture.spec(scope)
       val launch = command(guardian, "from pathlib import Path; import sys,time; p=Path('launches'); p.write_text(p.read_text()+'x' if p.exists() else 'x'); print(sys.stdin.read()); time.sleep(0.3)")
+      val count = new AtomicInteger(0)
       for {
         at <- root(local)
-        result <- ZIO.scoped {
+        result <- held(local, guardian, scope, journal(at, scope), at.resolve("payload"), count) { (supervisor, _, release) =>
           for {
-            supervisor <- acquire(at, scope, local.fixture.service, new GuardianDriver(guardian.binary))
-            began <- ZIO.succeed(System.nanoTime())
+            // Preparation is held until `release`, so a call that returns has been acknowledged before preparation and execution.
             first <- supervisor.start(scope, workspace, launch)
-            elapsed <- ZIO.succeed(Duration.ofNanos(System.nanoTime() - began).toMillis)
-            _ <- assertIO(first.phase == JobPhase.Preparing && elapsed < 500)
+            _ <- assertIO(first.phase == JobPhase.Preparing && count.get() == 0)
             retries <- ZIO.collectAllPar(List.fill(4)(supervisor.start(scope, workspace, launch)))
-            _ <- assertIO(retries.forall(_.workspace == workspace))
+            _ <- assertIO(retries.forall(_.workspace == workspace) && count.get() == 0)
+            _ <- release.succeed(())
             completed <- supervisor.await(scope, workspace.attempt)
             _ <- assertIO(completed.phase == JobPhase.Settled && completed.exit.exists(_.code.contains(0)))
             stored <- local.fixture.service.get(scope, workspace.attempt)
@@ -349,7 +394,7 @@ final class JobSupervisorProcess extends SpecZIO with AssertZIO {
               assert(Files.readString(at.resolve("payload").resolve(workspace.attempt.value.toString).resolve("stdout")) == "input λ\n")
             }
             cancelled <- supervisor.cancel(scope, workspace.attempt)
-            _ <- assertIO(cancelled == completed)
+            _ <- assertIO(cancelled == completed && count.get() == 1)
           } yield completed
         }
         _ <- ZIO.scoped {
@@ -368,22 +413,10 @@ final class JobSupervisorProcess extends SpecZIO with AssertZIO {
       val scope = owner
       val workspace = local.fixture.spec(scope)
       val count = new AtomicInteger(0)
-      val driver = new ExecutionDriver { override def start(spec: ExecutionSpec): ManagedExecution = { count.incrementAndGet(); new GuardianDriver(guardian.binary).start(spec) } }
       for {
         at <- root(local)
-        entered <- Promise.make[Nothing, Unit]
-        release <- Promise.make[Nothing, Unit]
-        service = new WorkspaceService[IO] {
-          override def prepare(scope: Scope, spec: WorkspaceSpec) = entered.succeed(()).unit *>
-            release.await.timeoutFail(new IllegalStateException("Preparation fixture was not released"))(zio.Duration.fromSeconds(5)) *> local.fixture.service.prepare(scope, spec)
-          override def get(scope: Scope, attempt: AttemptId) = local.fixture.service.get(scope, attempt)
-          override def quarantine(scope: Scope, attempt: AttemptId, reason: String) = local.fixture.service.quarantine(scope, attempt, reason)
-          override def remove(scope: Scope, attempt: AttemptId) = local.fixture.service.remove(scope, attempt)
-          override def prune(scope: Scope, repository: String) = local.fixture.service.prune(scope, repository)
-        }
-        _ <- ZIO.scoped {
+        _ <- held(local, guardian, scope, journal(at, scope), at.resolve("payload"), count) { (supervisor, entered, release) =>
           for {
-            supervisor <- acquire(at, scope, service, driver)
             _ <- supervisor.start(scope, workspace, command(guardian, "print('forbidden')"))
             _ <- entered.await
             worker = scope.copy(actor = scope.actor.copy(role = Role.Worker))
@@ -391,14 +424,41 @@ final class JobSupervisorProcess extends SpecZIO with AssertZIO {
               supervisor.status(worker, workspace.attempt).either, supervisor.cancel(worker, workspace.attempt).either,
               supervisor.status(scope.copy(actor = scope.actor.copy(session = SessionId(UUID.randomUUID()))), workspace.attempt).either))
             _ <- assertIO(denied.forall(_.isLeft))
-            began <- ZIO.succeed(System.nanoTime())
+            // Preparation has begun and is still held, so a call that returns has not waited for it.
             stopped <- supervisor.cancel(scope, workspace.attempt)
-            _ <- assertIO(stopped.target == JobTarget.Stop && Duration.ofNanos(System.nanoTime() - began).toMillis < 500)
+            _ <- assertIO(stopped.target == JobTarget.Stop && stopped.phase == JobPhase.Preparing && count.get() == 0)
             _ <- release.succeed(())
             result <- supervisor.await(scope, workspace.attempt)
             _ <- assertIO(result.phase == JobPhase.Settled && result.exit.isEmpty && count.get() == 0)
           } yield ()
-        }.ensuring(release.succeed(()))
+        }
+      } yield ()
+    }
+
+    "D112: acknowledge a start and a cancellation before preparation ends when every journal write is slow" in { (local: LocalWorkspaceFixture, guardian: GuardianFixture) =>
+      val scope = owner
+      val workspace = local.fixture.spec(scope)
+      val count = new AtomicInteger(0)
+      def timed[A](operation: IO[Throwable, A]): IO[Throwable, (A, Long)] = for {
+        began <- ZIO.succeed(System.nanoTime())
+        value <- operation
+      } yield (value, Duration.ofNanos(System.nanoTime() - began).toMillis)
+      for {
+        at <- root(local)
+        _ <- held(local, guardian, scope, slowJournal(at, scope), at.resolve("payload"), count) { (supervisor, entered, release) =>
+          for {
+            started <- timed(supervisor.start(scope, workspace, command(guardian, "print('forbidden')")))
+            _ <- assertIO(started._1.phase == JobPhase.Preparing && count.get() == 0)
+            _ <- entered.await
+            stopped <- timed(supervisor.cancel(scope, workspace.attempt))
+            _ <- assertIO(stopped._1.target == JobTarget.Stop && stopped._1.phase == JobPhase.Preparing && count.get() == 0)
+            // Both calls took longer than the 500 ms these acknowledgements were once required to stay under.
+            _ <- assertIO(started._2 >= SlowJournalMillis && stopped._2 >= SlowJournalMillis)
+            _ <- release.succeed(())
+            result <- supervisor.await(scope, workspace.attempt)
+            _ <- assertIO(result.phase == JobPhase.Settled && result.exit.isEmpty && count.get() == 0)
+          } yield ()
+        }
       } yield ()
     }
 

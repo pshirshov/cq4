@@ -59,6 +59,16 @@ class Checks:
             verify_test_report(output)
         return output
 
+    def suites(self, suffix: str, name: str):
+        # distage-testkit executes every suite of the module when sbt selects suites by a pattern, and only one suite when several
+        # are named in one command (docs/validation/process-suite-load.md), so each selected suite gets an sbt run of its own.
+        listing = self.sbt(["show server/Test/definedTestNames"], f"{name}-suites")
+        selected = sorted(set(re.findall(rf"^\[info\] \* (\S+{suffix})$", listing, re.MULTILINE)))
+        if not selected:
+            raise RuntimeError(f"No test suite is named *{suffix}")
+        for suite in selected:
+            self.sbt([f"server/testOnly {suite}"], f"{name}-{suite.rsplit('.', 1)[1]}")
+
     def generate(self):
         self.run([str(ROOT / "dev/generate")], "generate", COMMAND_TIMEOUT)
         self.run(["npm", "ci", "--ignore-scripts"], "npm-ci", COMMAND_TIMEOUT)
@@ -316,7 +326,7 @@ class Checks:
                   "dev/readdir-fault.c", "-ldl"], "readdir-fault-build", COMMAND_TIMEOUT)
         self.environment["CQ_READDIR_FAULT_LIBRARY"] = str(readdir)
         self.generate()
-        self.sbt(["server/testOnly *Process"], "guardian-driver")
+        self.suites("Process", "guardian-driver")
 
     def access(self):
         self.generate()

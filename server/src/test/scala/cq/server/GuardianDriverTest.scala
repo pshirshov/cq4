@@ -42,11 +42,15 @@ final class GuardianDriverProcess extends SpecZIO with AssertZIO {
 
   "Guardian driver (Behavioral Active Blackbox; local Process Communication)" should {
     "report observed execution and retain separate output without blocking the start call" in { (fixture: GuardianFixture) => ZIO.attemptBlocking {
-      val spec = fixture.spec(List("python3", "-c", "import sys,time; print(sys.stdin.read(),end=''); sys.stderr.write('diagnostic'); time.sleep(0.2)"), Some(Duration.ofSeconds(3)))
-      val before = System.nanoTime()
+      // The command ends only once the gate exists, and the gate is created after `start` has returned: a `start` that waited for
+      // the command would end at the execution deadline instead of with the command's own exit.
+      val gate = fixture.root.resolve("gate-" + UUID.randomUUID())
+      val spec = fixture.spec(List("python3", "-c", "import os,sys,time; print(sys.stdin.read(),end=''); sys.stderr.write('diagnostic')\nwhile not os.path.exists(sys.argv[1]): time.sleep(0.01)",
+        gate.toString), Some(Duration.ofSeconds(30)))
       Using.resource(new GuardianDriver(fixture.binary).start(spec)) { running =>
-        assert(Duration.ofNanos(System.nanoTime() - before).toMillis < 200)
-        val observed = running.await(Duration.ofSeconds(5))
+        assert(running.status.result.isEmpty)
+        Files.createFile(gate)
+        val observed = running.await(Duration.ofSeconds(40))
         assert(observed.phase == ProcessPhase.Settled && observed.result.exists(r => r.code.contains(0) && r.reason == StopReason.Exited))
         assert(observed.helperPid.nonEmpty && observed.rootPid.nonEmpty)
         assert(Files.readString(spec.stdout) == "host input λ\n" && Files.readString(spec.stderr) == "diagnostic")
@@ -67,9 +71,9 @@ final class GuardianDriverProcess extends SpecZIO with AssertZIO {
     "cancel promptly and settle the actual root before declaring cleanup complete" in { (fixture: GuardianFixture) => ZIO.attemptBlocking {
       val spec = fixture.spec(List("sleep", "30"), Some(Duration.ofSeconds(40)))
       Using.resource(new GuardianDriver(fixture.binary).start(spec)) { running =>
-        val before = System.nanoTime()
-        assert(running.cancel().cancellationRequested)
-        assert(Duration.ofNanos(System.nanoTime() - before).toMillis < 100)
+        // `sleep 30` cannot have settled by itself, so an unsettled observation is a `cancel` that returned without waiting for the settlement.
+        val requested = running.cancel()
+        assert(requested.cancellationRequested && requested.phase == ProcessPhase.Stopping && requested.result.isEmpty)
         val observed = running.await(Duration.ofSeconds(5))
         assert(observed.phase == ProcessPhase.Settled && observed.result.exists(r => r.settled && r.reason == StopReason.Cancelled))
       }
