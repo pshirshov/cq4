@@ -225,6 +225,9 @@ final class CohortPlanner(api: ServerApi, owner: Scope, bases: ExecutionBase, ch
     val choices = List.newBuilder[CohortChoice]
     var fingerprints = Map.empty[RequestId, CohortExecutionFingerprint]
     var offered = 0
+    val implement = request.work == DispatchWork.Worker(WorkerMode.Implement)
+    // A Task an applicable assessment names keeps that verdict: it is not offered for assessment in another group.
+    lazy val assessedIds = assessments(ctx).flatMap(_.members.map(_.member.id)).toSet
 
     def offer(group: List[ItemView], work: DispatchWork, reason: CohortReason, witness: Option[ItemId], inputs: CohortRequest, content: Context): Unit = {
       val refs = group.map(value => ItemRevision(value.item.id, value.item.revision))
@@ -291,6 +294,10 @@ final class CohortPlanner(api: ServerApi, owner: Scope, bases: ExecutionBase, ch
           } else if (planner && next.forall(organisable)) {
             group = next
             organised = true
+          } else if (implement && independent(next) && !next.exists(member => assessedIds(member.item.id))) {
+            // Ready Tasks of one selection may share a candidate whatever produced them, once a Planner assesses the group as Compatible.
+            group = next
+            common = shared
           }
         }
       }
