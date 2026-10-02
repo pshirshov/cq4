@@ -36,8 +36,9 @@ export class QueryEditor {
     const search = element('button', 'Search'); search.type = 'submit';
     const field = element('div', ''); field.className = 'query-field';
     this.resultCount.className = 'query-result-count'; this.resultCount.setAttribute('role', 'status');
+    // D97: clearing also submits the empty query at once, so the results stop showing the previous filter.
     const clear = button('×', () => {
-      this.input.value = ''; this.input.focus(); this.invalidate(); this.showDiagnostic(undefined, '');
+      this.input.value = ''; this.input.focus(); this.invalidate(); this.showDiagnostic(undefined, ''); submit();
     });
     clear.className = 'query-clear'; clear.setAttribute('aria-label', 'Clear query'); clear.title = 'Clear query';
     clear.addEventListener('pointerdown', event => event.preventDefault());

@@ -1,5 +1,17 @@
 # Clear-query button: I6
 
+> **Superseded in part by D97 (2026-10-02).** The no-submit behaviour recorded below
+> is no longer the contract. At the operator's request, Clear query now submits the
+> empty query at once, by pointer and by keyboard, also when the applied query is
+> already empty: the results reload with all items and live refreshes use the empty
+> query. Focus still returns to the input, and the diagnostic and obsolete completion
+> state are still cleared. Everywhere this record says the button does "not submit a
+> search", that results "continue to represent the last submitted filter", that the
+> check finds "no submitted browse request" or that "zero search requests are issued
+> by clearing", it describes the I6 delivery at `df19bdd`, not current behaviour. The
+> current contract is asserted by the D97 cases in `dev/completion-browser.mjs`. The
+> rest of this record is kept unchanged as history.
+
 The user requested a clear button inside the right edge of the search field that
 only empties the query. Filed as I6; now Implemented at revision 2. Version remains 0.1.0.
 

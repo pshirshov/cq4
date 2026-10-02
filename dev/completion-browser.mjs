@@ -1,4 +1,4 @@
-// Behavioral Active Blackbox Good Communication; D63-D65 and I5.
+// Behavioral Active Blackbox Good Communication; D63-D65, I5 and D97.
 import assert from 'node:assert/strict';
 import {chromium} from 'playwright';
 import {randomUUID} from 'node:crypto';
@@ -9,16 +9,25 @@ async function call(command){const r=await fetch(origin+'/api/call',{method:'POS
 await call({Initialize:{config:{project,endpoint:origin,name:'Completion fixture'}}});
 await call({Change:{input:{project,change:{request:{value:randomUUID()},fences:[],reason:'Completion fixture',mutations:[{Create:{draft:{title:'Completion target',body:'',labels:['fixture'],archived:false,citations:[],content:{Defect:{status:'Open',severity:'Low',observed:'Actual',expected:'Expected',reproduction:'Steps',cause:null,resolution:[]}}}}}]}}}});
 const browser=await chromium.launch({headless:true});const context=await browser.newContext({viewport:{width:1366,height:768}});
-let held=null, searches=0;
+let held=null;const browses=[],pending=new Set();
 await context.routeWebSocket(/\/ws$/,route=>{
- const server=route.connectToServer();route.onMessage(message=>{const f=JSON.parse(String(message));const q=f.Call?.command.Read?.input.selection.QueryComplete;if(f.Call?.command.Read?.input.selection.Browse)searches++;if(held!==null&&held.id===null&&q?.query===held.query)held.id=f.Call.id.value;server.send(message);});
- server.onMessage(message=>{const f=JSON.parse(String(message));if(held!==null&&f.Reply?.id.value===held.id){held.release=()=>route.send(message);held.resolve();}else route.send(message);});
+ const server=route.connectToServer();route.onMessage(message=>{const f=JSON.parse(String(message));const q=f.Call?.command.Read?.input.selection.QueryComplete;const read=f.Call?.command.Read?.input.selection;if(read?.Browse){browses.push(read.Browse.query);pending.add(f.Call.id.value);}else if(read?.ItemDetail)pending.add(f.Call.id.value);if(held!==null&&held.id===null&&q?.query===held.query)held.id=f.Call.id.value;server.send(message);});
+ server.onMessage(message=>{const f=JSON.parse(String(message));if(f.Reply)pending.delete(f.Reply.id.value);if(held!==null&&f.Reply?.id.value===held.id){held.release=()=>route.send(message);held.resolve();}else route.send(message);});
 });
 const page=await context.newPage();page.setDefaultTimeout(8000);const cases=[],errors=[];page.on('pageerror',e=>errors.push(String(e)));
 function hold(query){let resolve;const ready=new Promise(done=>{resolve=done;});held={query,id:null,release:null,resolve};return ready;}
 async function captured(ready){let timer;try{await Promise.race([ready,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('Held completion did not arrive')),8000);})]);}finally{clearTimeout(timer);}}
 const popup=page.locator('.query-popup'),query=page.getByLabel('Search query',{exact:true});
 const complete=()=>page.waitForFunction(()=>document.querySelector('.query-popup').getAttribute('aria-busy')==='false');
+// D97 helpers. `browses` holds the query of every Browse request in order; `pending` holds the Browse and ItemDetail calls without a reply.
+async function until(condition,message){const deadline=Date.now()+8000;while(!condition()){if(Date.now()>deadline)assert.fail(message);await new Promise(done=>setTimeout(done,10));}}
+const focused=()=>query.evaluate(n=>document.activeElement===n);
+// The result list is busy from the start of a reload until the selected item and its usage are read again.
+async function settled(){for(;;){await page.waitForFunction(()=>{const lists=document.querySelectorAll('tbody[aria-busy]');return lists.length===1&&lists[0].getAttribute('aria-busy')==='false'&&[...document.querySelectorAll('span')].some(n=>n.textContent==='Data: current');});if(pending.size===0){await page.evaluate(()=>new Promise(done=>requestAnimationFrame(()=>requestAnimationFrame(done))));if(pending.size===0)return;}await page.waitForTimeout(20);}}
+async function apply(text){const before=browses.length;await query.fill(text);await page.getByRole('button',{name:'Search',exact:true}).click();await until(()=>browses.length>before,`Search did not browse ${text}`);assert.equal(browses.at(-1),text);await settled();}
+// Every Browse request since `before` carries the empty query, and there is at least one.
+async function emptied(before,message){await until(()=>browses.length>before,message);assert.deepEqual([...new Set(browses.slice(before))],[''],message);}
+async function cleared(){assert.equal(await query.inputValue(),'');assert.equal(await focused(),true,'focus stays in the search input');assert.equal(await popup.isVisible(),false);assert.equal(await query.getAttribute('aria-invalid'),null);}
 try{
  await page.goto(origin);await page.getByLabel('Operator token').fill(process.env.CQ_TOKEN);await page.getByRole('button',{name:'Sign in',exact:true}).click();await page.getByText('Connection: ALIVE',{exact:true}).waitFor();await page.getByLabel('Project',{exact:true}).selectOption(project.value);await page.getByText('Data: current',{exact:true}).waitFor();
  let ready=hold('ledger:d');await query.focus();
@@ -29,12 +38,35 @@ try{
  ready=hold('id:D');await query.fill('id:D');assert.equal(await popup.evaluate(n=>n.hidden),false);assert.ok((await page.locator('#query-suggestions button').evaluateAll(nodes=>nodes.map(n=>n.disabled))).every(Boolean));await captured(ready);
  assert.equal(await query.getAttribute('aria-activedescendant'),null);assert.equal(await popup.evaluate(n=>n.hidden),false);held.release();held=null;await complete();await page.getByRole('option',{name:'D1 · Completion target · Item',exact:true}).waitFor();cases.push('Popup remains open through debounce/held response; obsolete suggestions are disabled');
  ready=hold('ledger:t');await query.fill('ledger:t');await captured(ready);await query.fill('status:r');await page.getByRole('option',{name:'ready · Value',exact:true}).waitFor();held.release();held=null;await complete();assert.equal(await page.getByRole('option',{name:'tasks · Value',exact:true}).count(),0);cases.push('Delayed enum response cannot replace a newer local/backend completion');
- ready=hold('ledger:t');await query.fill('ledger:t');await captured(ready);const beforeClear=searches;
- const clear=page.getByRole('button',{name:'Clear query',exact:true});await clear.click();assert.equal(await query.inputValue(),'');assert.equal(await query.evaluate(n=>document.activeElement===n),true);assert.equal(await popup.isVisible(),false);
- held.release();held=null;await page.waitForTimeout(250);assert.equal(await popup.isVisible(),false);assert.equal(searches,beforeClear);
- await query.fill('ledger:unknown');await complete();assert.equal(await query.getAttribute('aria-invalid'),'true');await clear.focus();await clear.press('Enter');assert.equal(await query.inputValue(),'');assert.equal(await query.getAttribute('aria-invalid'),null);assert.equal(await popup.isVisible(),false);assert.equal(searches,beforeClear);
+ // D97: Clear query submits the empty query at once, so the results stop showing the previous filter.
+ const clear=page.getByRole('button',{name:'Clear query',exact:true}),target=page.getByRole('button',{name:'D1 · Completion target',exact:true}),none=page.getByText('No matching items.',{exact:true});
+ await target.waitFor();await apply('ledger:tasks');await none.waitFor();assert.equal(await target.count(),0);
+ ready=hold('ledger:t');await query.fill('ledger:t');await captured(ready);let before=browses.length;
+ await clear.click();await cleared();await emptied(before,'Pointer clear did not browse the empty query');await target.waitFor();await settled();assert.equal(await none.count(),0);await cleared();
+ held.release();held=null;await page.waitForTimeout(250);await cleared();
+ await apply('ledger:tasks');await none.waitFor();await query.fill('ledger:unknown');await complete();assert.equal(await query.getAttribute('aria-invalid'),'true');before=browses.length;
+ await clear.focus();await clear.press('Enter');await emptied(before,'Keyboard clear did not browse the empty query');await target.waitFor();await settled();assert.equal(await none.count(),0);await cleared();
+ cases.push('D97 clear after a submitted filter empties input and diagnostics, browses the empty query without Enter and shows the excluded item again; focus stays in the input and a held reply stays rejected (pointer and keyboard)');
+ // A live change after the clear is read with the empty query: under the old filter the new defect would stay hidden.
+ before=browses.length;await call({Change:{input:{project,change:{request:{value:randomUUID()},fences:[],reason:'Live change after clear',mutations:[{Create:{draft:{title:'Live after clear',body:'',labels:['fixture'],archived:false,citations:[],content:{Defect:{status:'Open',severity:'Low',observed:'Actual',expected:'Expected',reproduction:'Steps',cause:null,resolution:[]}}}}}]}}}});
+ const other=page.getByRole('button',{name:'D2 · Live after clear',exact:true});await other.waitFor();await emptied(before,'Live refresh after clear did not browse the empty query');await settled();
+ cases.push('D97 live refreshes after a clear use the empty query');
+ // With an item selected and its view open, the reload reads the item again and must not take focus from the input.
+ const view=page.getByRole('heading',{name:'D1 · Completion target',exact:true});await target.click();await view.waitFor();
+ await apply('id:D1');await other.waitFor({state:'detached'});await view.waitFor();
+ ready=hold('ledger:t');await query.fill('ledger:t');await captured(ready);before=browses.length;
+ await clear.click();await cleared();await emptied(before,'Pointer clear with a selection did not browse the empty query');await other.waitFor();await settled();await cleared();assert.equal(await view.isVisible(),true);
+ held.release();held=null;await page.waitForTimeout(250);await cleared();
+ await apply('id:D1');await other.waitFor({state:'detached'});await query.fill('ledger:unknown');await complete();assert.equal(await query.getAttribute('aria-invalid'),'true');before=browses.length;
+ await clear.focus();await clear.press('Enter');await emptied(before,'Keyboard clear with a selection did not browse the empty query');await other.waitFor();await settled();await cleared();assert.equal(await view.isVisible(),true);
+ cases.push('D97 clear with an item selected and its view open reloads all items, keeps the view and leaves focus in the input (pointer and keyboard)');
+ // The applied query is already empty here. The reload starts inside the click itself: no debounce and no check of the applied query.
+ before=browses.length;assert.equal(await clear.evaluate(n=>{n.click();return [...document.querySelectorAll('span')].find(s=>s.textContent.startsWith('Data: ')).textContent;}),'Data: synchronizing');
+ await emptied(before,'Clear with an empty applied query did not browse');await settled();await cleared();
+ cases.push('D97 clear submits synchronously, also when the applied query is already empty');
+ await page.getByRole('button',{name:'Close item view',exact:true}).click();await view.waitFor({state:'detached'});
  const clearBounds=await clear.boundingBox(),fieldBounds=await page.locator('.query-field').boundingBox();assert.ok(clearBounds.x>fieldBounds.x&&clearBounds.x+clearBounds.width<=fieldBounds.x+fieldBounds.width);
- cases.push('In-field clear empties input and diagnostics, keeps focus, rejects old replies and does not submit (pointer or keyboard)');
+ cases.push('In-field clear stays inside the search field');
  await query.fill('ledger:tasks AND status:re');await complete();const end=await popup.boundingBox();await query.press('Home');await complete();const start=await popup.boundingBox();assert.ok(end.x-start.x>100,{end,start});
  await query.evaluate(input=>{input.setSelectionRange(7,7);});await page.waitForTimeout(50);const middle=await popup.boundingBox();assert.ok(middle.x>start.x+20&&middle.x<end.x);cases.push('Popup follows caret navigation and selection changes');
  await query.fill('word '.repeat(250)+'ledger:d');await query.press('End');await page.waitForTimeout(50);const long=await popup.boundingBox();assert.ok(long.x>=8&&long.x+long.width<=1366-7);assert.ok(await query.evaluate(n=>n.scrollLeft>0));
