@@ -127,6 +127,45 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
     _ <- failed(service, w, key, detail)
   } yield ()
 
+  private val WithdrawalRefused =
+    "The CQ driver never settles Questions: Q1 would be withdrawn by a driven session; park the driver before withdrawing a Question"
+  private def refused(result: Either[Throwable, ChangeAck]): IO[Throwable, Unit] = result match {
+    case Left(DomainFailure(Fault.Denied(WithdrawalRefused))) => ZIO.unit
+    case Left(other) => ZIO.fail(new AssertionError(s"The driven withdrawal failed otherwise: $other"))
+    case Right(admitted) => ZIO.fail(new AssertionError(s"The driven withdrawal was admitted: $admitted"))
+  }
+  // An active driven cycle over a ready Task and an open Question. `attempt` receives the Question at its current revision and must write nothing:
+  // afterwards the ledger is unchanged, the Question is Open, the driver is on, and once the Task is done its next continuation awaits the user.
+  private def waiting(service: LedgerService[IO], name: String, prepare: (World, ItemId) => IO[Throwable, Unit] = (_, _) => ZIO.unit)(
+    attempt: (World, ItemId, Item) => IO[Throwable, Unit]): IO[Throwable, Unit] = {
+    val w = world
+    val key = claude(name)
+    for {
+      _ <- service.initialize(w.operator, name)
+      asked <- create(service, w.operator, question("Open question"))
+      ready <- create(service, w.operator, task("Ready"))
+      _ <- prepare(w, asked)
+      _ <- driven(service, w, key, workset(ready, asked))
+      open <- service.get(w.operator, asked).map(_.item)
+      before <- cursor(service, w)
+      _ <- attempt(w, asked, open)
+      after <- cursor(service, w)
+      current <- service.get(w.operator, asked).map(_.item)
+      kept <- status(service, w, key)
+      _ <- assertIO(before == after && current.revision == open.revision && !current.draft.archived &&
+        LedgerPolicy.status(current.draft.content) == QuestionStatus.Open.toString && kept.exists(_.state == DriverState.On))
+      // The operator, outside the drive, finishes the only other ready work.
+      task <- service.get(w.operator, ready).map(_.item)
+      _ <- service.change(w.operator, request(List(Mutation.Replace(ready, task.revision, task.draft.copy(content = Content.Task(TaskStatus.Done, List("Observed outcome"), None, Nil)))), Nil))
+      continued <- query(service, w, key)
+      _ <- assertIO(continued match {
+        case DriverReply.Stop(DriverStopped(DriverStop.UserInputRequired, "Awaiting the user on Q1; the driver never answers questions or infers approval"), Some(value), _) =>
+          stopped(Some(value), DriverStop.UserInputRequired)
+        case _ => false
+      })
+    } yield ()
+  }
+
   // An admitted Planner result whose proposal the world's governor may apply; the driver's target is the first dispatch member.
   private def proposed(service: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO],
     name: String, drafts: List[ItemDraft], begun: Boolean)(mutations: List[ItemRevision] => List[ProposedMutation]): IO[Throwable, (World, DriverKey, Option[Driven], ArtifactId, List[ItemRevision])] = {
@@ -1070,6 +1109,67 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
           (parked match { case DriverReply.Parked(Some(value), "CQ driver parked: T3 through work") => stopped(Some(value), DriverStop.Parked); case _ => false }) &&
           unknown == DriverReply.Stop(DriverStopped(DriverStop.Off, "No CQ driver is on for this session"), None, Nil) && none.isEmpty)
         _ <- assertIO(DriverStop.all.map(DriverPolicy.reason) == List("quiescent", "user input required", "limit reached", "not bound", "failure", "parked", "off"))
+      } yield ()
+    }
+
+    "refuse a driven Replace that withdraws an open Question" in { (service: LedgerService[IO]) =>
+      waiting(service, "withdraw-replace") { (w, asked, open) =>
+        val withdrawn = open.draft.copy(content = Content.Question(QuestionStatus.Withdrawn, "Prompt", "Context", Nil, None, None))
+        for {
+          // A withdrawal with archival in the same revision is the one write that both settles and archives the Question.
+          _ <- ZIO.foreachDiscard(List(withdrawn, withdrawn.copy(archived = true)))(draft =>
+            service.change(w.governor, request(List(Mutation.Replace(asked, open.revision, draft)), Nil)).either.flatMap(refused))
+        } yield ()
+      }
+    }
+
+    "refuse a driven Cancel termination that withdraws an open Question" in { (service: LedgerService[IO]) =>
+      waiting(service, "withdraw-terminate") { (w, asked, _) =>
+        for {
+          preview <- service.termination(w.governor, Set(asked), TerminationIntent.Cancel)
+          _ <- assertIO(preview.plan.canApply && preview.plan.entries.exists(entry =>
+            entry.item.id == asked && entry.effect == TerminationEffect.Change(TerminalStatus.Question(QuestionStatus.Withdrawn))))
+          result <- service.change(w.governor, request(List(Mutation.Terminate(Set(asked), TerminationIntent.Cancel, preview.snapshot)), preview.plan.claims.map(_.fence))).either
+          _ <- refused(result)
+        } yield ()
+      }
+    }
+
+    "refuse a driven Restore that returns a reopened Question to its withdrawn revision" in { (service: LedgerService[IO]) =>
+      // Before the drive the operator withdraws the Question and reopens it, so its history holds a withdrawn revision.
+      def set(w: World, asked: ItemId, status: QuestionStatus) = service.get(w.operator, asked).flatMap(view => service.change(w.operator,
+        request(List(Mutation.Replace(asked, view.item.revision, view.item.draft.copy(content = Content.Question(status, "Prompt", "Context", Nil, None, None)))), Nil)))
+      waiting(service, "withdraw-restore", (w, asked) => (set(w, asked, QuestionStatus.Withdrawn) *> set(w, asked, QuestionStatus.Open)).unit) { (w, asked, open) =>
+        for {
+          _ <- assertIO(open.revision == Revision(3))
+          result <- service.change(w.governor, request(List(Mutation.Restore(asked, open.revision, Revision(2), Nil)), Nil)).either
+          _ <- refused(result)
+        } yield ()
+      }
+    }
+
+    "leave an open Question unarchivable by a driven write, while a non-settling edit is admitted" in { (service: LedgerService[IO]) =>
+      val w = world
+      val key = claude("archive-open")
+      for {
+        _ <- service.initialize(w.operator, "archive-open")
+        asked <- create(service, w.operator, question("Open question"))
+        ready <- create(service, w.operator, task("Ready"))
+        _ <- driven(service, w, key, workset(ready, asked))
+        open <- service.get(w.operator, asked).map(_.item)
+        before <- cursor(service, w)
+        // The ledger admits archival of terminal or settled items only, so no write archives a Question that is still Open.
+        flagged <- service.change(w.governor, request(List(Mutation.Replace(asked, open.revision, open.draft.copy(archived = true))), Nil)).either
+        bulk <- service.change(w.governor, request(List(Mutation.Archive(List(ItemRevision(asked, open.revision)))), Nil)).either
+        after <- cursor(service, w)
+        kept <- status(service, w, key)
+        _ <- assertIO(fault(flagged).contains(Fault.Invalid("Only terminal or settled items may be archived; unarchive an item before reopening it")) &&
+          fault(bulk).contains(Fault.Invalid("Only terminal items may be archived; unarchive an item before reopening it")) &&
+          before == after && kept.exists(_.state == DriverState.On))
+        retitled <- service.change(w.governor, request(List(Mutation.Replace(asked, open.revision, open.draft.copy(title = "Reworded question"))), Nil))
+        current <- service.get(w.operator, asked).map(_.item)
+        _ <- assertIO(retitled.items == List(ItemRevision(asked, Revision(open.revision.value + 1))) && current.draft.title == "Reworded question" &&
+          !current.draft.archived && LedgerPolicy.status(current.draft.content) == QuestionStatus.Open.toString)
       } yield ()
     }
 

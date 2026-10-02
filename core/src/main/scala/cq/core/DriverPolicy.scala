@@ -63,6 +63,8 @@ object DriverPolicy {
   }
   def answerRefused(questions: Iterable[ItemId]): String =
     s"The CQ driver never answers Questions: ${references(questions)} would be answered by a driven session; park the driver before recording the user's answer"
+  def withdrawalRefused(questions: Iterable[ItemId]): String =
+    s"The CQ driver never settles Questions: ${references(questions)} would be withdrawn by a driven session; park the driver before withdrawing a Question"
 
   def invocation(harness: Harness): String = harness match {
     case Harness.Claude | Harness.Pi => "/cq:advance"
