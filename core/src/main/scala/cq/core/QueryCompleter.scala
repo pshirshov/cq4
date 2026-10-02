@@ -36,6 +36,7 @@ final class QueryCompleter(parser: QueryParser) {
         case "ledger" => values(span, prefix, QueryCatalog.ledgers.keys)
         case "status" => values(span, prefix, QueryCatalog.statuses)
         case "archived" => values(span, prefix, List("all", "false", "true"))
+        case "wip" => values(span, prefix, List("false", "true"))
         case "project" => values(span, prefix, List(tx.project.id.value.toString))
         case "tag" => tx.completeLabels(SearchPrefix(prefix), limit + 1).map { label =>
           QuerySuggestion(QuerySuggestionKind.Value, span, io.circe.Json.fromString(label).noSpaces, label)

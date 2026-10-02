@@ -61,6 +61,13 @@ final class QueryParserLocal extends AnyWordSpec {
       assert(parser.parse("archived:yes").isLeft)
     }
 
+    "I24: parse the work-in-progress attribute and report any other value at its span" in {
+      assert(parsed("wip:true") == active(QueryExpression.Working()))
+      assert(parsed("WIP:False") == active(QueryExpression.Not(QueryExpression.Working())))
+      assert(parsed("ledger:tasks -wip:true") == active(QueryExpression.And(QueryExpression.LedgerIs(Ledger.Tasks), QueryExpression.Not(QueryExpression.Working()))))
+      assert(parser.parse("ledger:tasks wip:maybe") == Left(QueryDiagnostic(QuerySpan(17, 22), "Wip must be true or false")))
+    }
+
     "decode quoted values and return bounded diagnostics with browser-compatible source spans" in {
       assert(parsed("\"T42\"") == active(QueryExpression.Text(List("t42"), true)))
       assert(parsed("tag:\"a\\\"b\\\\c\"") == active(QueryExpression.Tag("a\"b\\c")))

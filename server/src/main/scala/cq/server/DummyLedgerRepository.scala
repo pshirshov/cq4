@@ -17,8 +17,9 @@ final class DummyLedgerResource extends Lifecycle.LiftF[Task, LedgerRepository[I
         ProjectPage(selected, selected.lastOption.map(_.id), found.size > limit, current.cursor)
       }
       override def catalogueCursor: IO[Throwable, CatalogueCursor] = states.get.map(_.cursor)
-      override def itemCursor(project: ProjectId): IO[Throwable, ChangeCursor] = states.get.flatMap { current =>
-        ZIO.fromOption(current.projects.get(project)).orElseFail(DomainFailure(Fault.Missing("Project not initialized"))).map(state => ChangeCursor(state.cursor))
+      override def cursors(project: ProjectId, now: Long): IO[Throwable, LedgerCursors] = states.get.flatMap { current =>
+        ZIO.fromOption(current.projects.get(project)).orElseFail(DomainFailure(Fault.Missing("Project not initialized")))
+          .map(state => LedgerCursors(ChangeCursor(state.cursor), new DummyLedgerTransaction(state).workCursor(now)))
       }
       override def initialize(project: Project): IO[Throwable, Project] = states.modify { current =>
         current.projects.get(project.id) match {
@@ -78,9 +79,10 @@ private final class DummyLedgerTransaction(initial: DummyLedgerState) extends Le
   }
   override def get(id: ItemId): Option[Item] = state.items.get(id)
   override def summary(id: ItemId): Option[ItemSummary] = state.items.get(id).map(LedgerPolicy.summary)
-  private def browseRow(item: Item): BrowseItem =
-    ItemBrowse.project(item, state.edges.collectFirst { case edge if edge.source == item.id && edge.relation == Relation.PartOf => edge.target })
-  override def browseItem(id: ItemId): Option[BrowseItem] = state.items.get(id).map(browseRow)
+  private def browseRow(item: Item, now: Long): BrowseItem =
+    ItemBrowse.project(item, state.edges.collectFirst { case edge if edge.source == item.id && edge.relation == Relation.PartOf => edge.target }, ClaimPolicy.work(this, item.id, now))
+  override def browseItem(id: ItemId, now: Long): Option[BrowseItem] = state.items.get(id).map(browseRow(_, now))
+  override def workCursor(now: Long): Long = Math.addExact(state.fence, state.claims.valuesIterator.count(claim => claim.released || claim.expiresAt <= now).toLong)
   override def put(item: Item): Unit = { state = state.copy(items = state.items.updated(item.id, item)) }
   override def refs(id: ItemId): List[ItemRef] = state.edges.toList.flatMap { edge =>
     if (edge.source == id) List(ItemRef(edge.relation, edge.target))
@@ -112,7 +114,7 @@ private final class DummyLedgerTransaction(initial: DummyLedgerState) extends Le
     next
   }
   override def changes(after: ChangeCursor, limit: Int): ReadPage[ChangeEvent] = ReadPage.select(state.events.iterator.filter(_.cursor.value > after.value), limit, ChangeEvent_JsonCodec)
-  private def matches(query: QueryExpression, item: Item): Boolean = query match {
+  private def matches(query: QueryExpression, item: Item, now: Long): Boolean = query match {
     case QueryExpression.All() => true
     case QueryExpression.Text(words, phrase) => SearchText.contains(SearchText.document(item.draft.title, item.draft.body), words, phrase)
     case QueryExpression.Id(id) => item.id.ledger == id.ledger && item.id.number == id.number
@@ -124,19 +126,20 @@ private final class DummyLedgerTransaction(initial: DummyLedgerState) extends Le
     case QueryExpression.Archive(ArchiveFilter.Archived) => item.draft.archived
     case QueryExpression.Archive(ArchiveFilter.All) => true
     case QueryExpression.Reference(relation, target) => refs(item.id).contains(ItemRef(relation, ItemId(project.id, target.ledger, target.number)))
-    case QueryExpression.Not(expression) => !matches(expression, item)
-    case QueryExpression.And(left, right) => matches(left, item) && matches(right, item)
-    case QueryExpression.Or(left, right) => matches(left, item) || matches(right, item)
+    case QueryExpression.Working() => ClaimPolicy.work(this, item.id, now).nonEmpty
+    case QueryExpression.Not(expression) => !matches(expression, item, now)
+    case QueryExpression.And(left, right) => matches(left, item, now) && matches(right, item, now)
+    case QueryExpression.Or(left, right) => matches(left, item, now) || matches(right, item, now)
   }
-  override def scan(query: QueryExpression, after: Option[ItemId], limit: Int): ReadPage[ItemSummary] = {
+  override def scan(query: QueryExpression, after: Option[ItemId], limit: Int, now: Long): ReadPage[ItemSummary] = {
     val candidates = state.items.valuesIterator.filter { item =>
-      matches(query, item) && after.forall(id => Ordering[(String, Long)].gt(LedgerPolicy.key(item.id), LedgerPolicy.key(id)))
+      matches(query, item, now) && after.forall(id => Ordering[(String, Long)].gt(LedgerPolicy.key(item.id), LedgerPolicy.key(id)))
     }.toList.sortBy(i => LedgerPolicy.key(i.id)).iterator.map(LedgerPolicy.summary)
     ReadPage.select(candidates, limit, ItemSummary_JsonCodec)
   }
-  override def browse(query: QueryExpression, order: ItemOrder, after: Option[BrowseItem], limit: Int): ReadPage[BrowseItem] = {
+  override def browse(query: QueryExpression, order: ItemOrder, after: Option[BrowseItem], limit: Int, now: Long): ReadPage[BrowseItem] = {
     val ordering = ItemBrowse.ordering(order)
-    val candidates = state.items.valuesIterator.filter(matches(query, _)).map(browseRow)
+    val candidates = state.items.valuesIterator.filter(matches(query, _, now)).map(browseRow(_, now))
       .filter(item => after.forall(ordering.lt(_, item))).toList.sorted(ordering)
     ReadPage.select(candidates.iterator, limit, BrowseItem_JsonCodec)
   }
@@ -145,7 +148,7 @@ private final class DummyLedgerTransaction(initial: DummyLedgerState) extends Le
     Ledger.all.map(ledger => LedgerCount(ledger, counts.getOrElse(ledger, 0L)))
   }
   override def completeItems(prefix: SearchPrefix, archive: ArchiveFilter, limit: Int): List[ItemSummary] = state.items.valuesIterator
-    .filter(matches(QueryExpression.Archive(archive), _))
+    .filter(matches(QueryExpression.Archive(archive), _, 0L)) // an archive predicate does not read the clock
     .filter(item => prefix.matches(LedgerPolicy.prefix(item.id.ledger) + item.id.number))
     .toList.sortBy(item => LedgerPolicy.prefix(item.id.ledger) + item.id.number).take(limit).map(LedgerPolicy.summary)
   override def completeLabels(prefix: SearchPrefix, limit: Int): List[String] = state.items.valuesIterator

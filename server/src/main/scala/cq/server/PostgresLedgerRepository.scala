@@ -23,9 +23,10 @@ final class PostgresLedgerRepository(database: LedgerDatabase) extends LedgerRep
   private def readCatalogueCursor(sql: Jdbc): CatalogueCursor =
     CatalogueCursor(sql.query("SELECT cursor FROM cq_catalogue_clock WHERE singleton")(_ => ())(_.getLong(1)).head)
   override def catalogueCursor: IO[Throwable, CatalogueCursor] = database.transaction(connection => readCatalogueCursor(new Jdbc(connection)))
-  override def itemCursor(project: ProjectId): IO[Throwable, ChangeCursor] = database.transaction { connection =>
-    new Jdbc(connection).query("SELECT change_cursor FROM cq_projects WHERE project_id = ?")(_.setObject(1, project.value))(r => ChangeCursor(r.getLong(1)))
-      .headOption.getOrElse(throw DomainFailure(Fault.Missing("Project not initialized")))
+  override def cursors(project: ProjectId, now: Long): IO[Throwable, LedgerCursors] = database.transaction { connection =>
+    new Jdbc(connection).query(s"SELECT p.change_cursor, ${PersistedClaims.workCursor} FROM cq_projects p WHERE p.project_id = ?") { s =>
+      s.setLong(1, now); s.setObject(2, project.value)
+    }(r => LedgerCursors(ChangeCursor(r.getLong(1)), r.getLong(2))).headOption.getOrElse(throw DomainFailure(Fault.Missing("Project not initialized")))
   }
 
   override def initialize(project: Project): IO[Throwable, Project] = database.transaction { connection =>
@@ -65,6 +66,11 @@ private object PersistedItems {
     .map(status => s"('$ledger', '${status.toLowerCase(java.util.Locale.ROOT)}')")).mkString(", ")
   /** SQL predicate for an open row of the aliased `cq_items` table (`%1$s` is the alias). */
   val open: String = s"NOT %1$$s.archived AND (%1$$s.ledger, %1$$s.status) IN ($openStatuses)"
+}
+
+private object PersistedClaims {
+  /** The work cursor of the aliased `cq_projects` row `p`; binds one bigint, the time. */
+  val workCursor: String = "p.fence_counter + (SELECT count(*) FROM cq_claims c WHERE c.project_id = p.project_id AND (c.released OR c.expires_at <= ?))"
 }
 
 private final class PostgresLedgerTransaction(connection: Connection, override val project: Project) extends LedgerTransaction {
@@ -110,11 +116,18 @@ private final class PostgresLedgerTransaction(connection: Connection, override v
     val number = row.getLong(3)
     val milestone = if (row.wasNull()) None else Some(ItemId(project.id, Ledger.Milestones, number))
     BrowseItem(PersistedItems.summary(row.getString(1)), Option(row.getString(2)).map(value =>
-      Severity.parse(value).getOrElse(throw new IllegalStateException(s"Invalid persisted severity $value"))), milestone)
+      Severity.parse(value).getOrElse(throw new IllegalStateException(s"Invalid persisted severity $value"))), milestone,
+      Option(row.getString(4)).map(body => ClaimPolicy.mark(Wire.decode(Claim_JsonCodec, body))))
   }
+  private val activeClaim = s"(SELECT c.body::text ${QuerySql.activeClaim})"
 
-  override def browseItem(id: ItemId): Option[BrowseItem] =
-    sql.query(s"SELECT i.summary::text, i.severity, $milestoneNumber FROM cq_items i WHERE i.project_id = ? AND i.ledger = ? AND i.number = ?")(itemKey(_, id))(readBrowseItem).headOption
+  override def browseItem(id: ItemId, now: Long): Option[BrowseItem] =
+    sql.query(s"SELECT i.summary::text, i.severity, $milestoneNumber, $activeClaim FROM cq_items i WHERE i.project_id = ? AND i.ledger = ? AND i.number = ?") { s =>
+      s.setLong(1, now); s.setObject(2, project.id.value); s.setString(3, id.ledger.toString); s.setLong(4, id.number)
+    }(readBrowseItem).headOption
+
+  override def workCursor(now: Long): Long =
+    sql.query(s"SELECT ${PersistedClaims.workCursor} FROM cq_projects p WHERE p.project_id = ?") { s => s.setLong(1, now); s.setObject(2, project.id.value) }(_.getLong(1)).head
 
   override def put(item: Item): Unit = {
     val previous = sql.query("SELECT summary::text FROM cq_items WHERE project_id = ? AND ledger = ? AND number = ?")(itemKey(_, item.id))
@@ -204,8 +217,8 @@ private final class PostgresLedgerTransaction(connection: Connection, override v
       projectKey(s); s.setLong(2, after.value); s.setInt(3, limit + 1)
     }
 
-  override def scan(query: QueryExpression, after: Option[ItemId], limit: Int): ReadPage[ItemSummary] = {
-    val compiled = QuerySql.compile(query, project.id)
+  override def scan(query: QueryExpression, after: Option[ItemId], limit: Int, now: Long): ReadPage[ItemSummary] = {
+    val compiled = QuerySql.compile(query, project.id, now)
     val pagination = after.fold("")(_ => " AND (i.ledger, i.number) > (?, ?)")
     sql.pageBy(s"SELECT i.summary::text FROM cq_items i WHERE i.project_id = ? AND (${compiled.predicate})$pagination ORDER BY i.ledger, i.number LIMIT ?", limit, ItemSummary_JsonCodec) { s =>
       projectKey(s)
@@ -215,8 +228,8 @@ private final class PostgresLedgerTransaction(connection: Connection, override v
     }(rows => PersistedItems.summary(rows.getString(1)))
   }
 
-  override def browse(query: QueryExpression, order: ItemOrder, after: Option[BrowseItem], limit: Int): ReadPage[BrowseItem] = {
-    val compiled = QuerySql.compile(query, project.id)
+  override def browse(query: QueryExpression, order: ItemOrder, after: Option[BrowseItem], limit: Int, now: Long): ReadPage[BrowseItem] = {
+    val compiled = QuerySql.compile(query, project.id, now)
     val severity = "i.severity"
     val missing = if (order.field == ItemOrderField.Severity) s"CASE WHEN $severity IS NULL THEN 1 ELSE 0 END" else "0"
     val text = order.field match {
@@ -241,12 +254,12 @@ private final class PostgresLedgerTransaction(connection: Connection, override v
       "((sort_text, sort_number) = (? COLLATE \"C\", ?) AND (ledger, number) > (?, ?))))"
     val pagination = after.fold("")(_ => if (order.grouped) s"WHERE $group > (?, ?) OR ($group = (?, ?) AND ($later))" else s"WHERE $later")
     val grouping = if (order.grouped) "milestone ASC NULLS LAST, " else ""
-    val statement = s"SELECT summary::text, severity, milestone FROM (SELECT i.summary, i.ledger, i.number, $severity AS severity, $milestoneNumber AS milestone, " +
+    val statement = s"SELECT summary::text, severity, milestone, work FROM (SELECT i.summary, i.ledger, i.number, $severity AS severity, $milestoneNumber AS milestone, $activeClaim AS work, " +
       s"$missing AS missing, ($text) COLLATE \"C\" AS sort_text, $number AS sort_number FROM cq_items i WHERE i.project_id = ? AND (${compiled.predicate})) sorted " +
       s"$pagination ORDER BY ${grouping}missing ASC, sort_text $direction, sort_number $direction, ledger ASC, number ASC LIMIT ?"
     sql.pageBy(statement, limit, BrowseItem_JsonCodec) { s =>
-      projectKey(s)
-      var index = compiled.bind(s, 2)
+      s.setLong(1, now); s.setObject(2, project.id.value)
+      var index = compiled.bind(s, 3)
       after.foreach { item =>
         val key = ItemBrowse.key(item, order)
         if (order.grouped) {

@@ -14,6 +14,7 @@ trait LedgerService[F[_, _]] {
   def search(scope: Scope, query: String, after: Option[ItemId], limit: Int): F[Throwable, ItemPage]
   def browse(scope: Scope, query: String, order: ItemOrder, after: Option[ItemId], snapshot: Option[ChangeCursor], limit: Int): F[Throwable, BrowsePage]
   def counts(scope: Scope): F[Throwable, LedgerCounts]
+  def cursors(scope: Scope): F[Throwable, LedgerCursors]
   def complete(scope: Scope, query: String, cursor: Int, limit: Int): F[Throwable, QueryAnalysis]
   def termination(scope: Scope, roots: Set[ItemId], intent: TerminationIntent): F[Throwable, TerminationPreview]
   def archivePreview(scope: Scope, query: String, limit: Int): F[Throwable, ArchivePlan]
@@ -108,7 +109,7 @@ object LedgerService {
           var more = true
           var truncated = false
           while (more && !truncated && scanned < ArchiveScanLimit) {
-            val page = tx.scan(expression, after, MaxPage)
+            val page = tx.scan(expression, after, MaxPage, clock.millis())
             page.entries.foreach { item =>
               scanned += 1
               if (!item.archived && item.outcome.terminal) {
@@ -166,7 +167,7 @@ object LedgerService {
         repository.transact(scope.project) { tx =>
           page(limit)
           after.foreach(inScope(scope, _))
-          val found = tx.scan(expression, after, limit)
+          val found = tx.scan(expression, after, limit, clock.millis())
           ItemPage(found.entries, tx.cursor, found.entries.lastOption.map(_.id), found.hasMore)
         }
       }
@@ -179,17 +180,20 @@ object LedgerService {
           page(limit)
           invalid(after.isEmpty || snapshot.nonEmpty, "Browse continuation requires its snapshot")
           if (snapshot.exists(_ != tx.cursor)) throw DomainFailure(Fault.Resync("Items changed; restart sorted browse"))
+          val now = clock.millis()
           val anchor = after.map { id =>
             inScope(scope, id)
-            tx.browseItem(id).getOrElse(throw DomainFailure(Fault.Missing("Browse continuation item does not exist")))
+            tx.browseItem(id, now).getOrElse(throw DomainFailure(Fault.Missing("Browse continuation item does not exist")))
           }
-          val found = tx.browse(expression, order, anchor, limit)
-          BrowsePage(found.entries, tx.cursor, found.entries.lastOption.map(_.summary.id), found.hasMore)
+          val found = tx.browse(expression, order, anchor, limit, now)
+          BrowsePage(found.entries, tx.cursor, found.entries.lastOption.map(_.summary.id), found.hasMore, tx.workCursor(now))
         }
       }
     }
 
     override def counts(scope: Scope): F[Throwable, LedgerCounts] = repository.transact(scope.project)(tx => LedgerCounts(tx.counts, tx.cursor))
+
+    override def cursors(scope: Scope): F[Throwable, LedgerCursors] = repository.cursors(scope.project, clock.millis())
 
     override def history(scope: Scope, id: ItemId, before: Revision, limit: Int): F[Throwable, HistoryPage] = repository.transact(scope.project) { tx =>
       page(limit)

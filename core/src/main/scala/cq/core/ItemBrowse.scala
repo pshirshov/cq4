@@ -10,7 +10,7 @@ object ItemBrowse {
     case _ => None
   }
 
-  def project(item: Item, milestone: Option[ItemId]): BrowseItem = BrowseItem(LedgerPolicy.summary(item), severity(item), milestone)
+  def project(item: Item, milestone: Option[ItemId], work: Option[ItemWork]): BrowseItem = BrowseItem(LedgerPolicy.summary(item), severity(item), milestone, work)
 
   def key(item: BrowseItem, order: ItemOrder): Key = {
     val summary = item.summary; val field = order.field

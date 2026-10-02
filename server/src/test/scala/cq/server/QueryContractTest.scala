@@ -105,6 +105,46 @@ abstract class QueryContractTest extends SpecZIO with AssertZIO {
       } yield ()
     }
 
+    "I24: match work in progress exactly while an active claim covers the item, without widening project scope" in { (repository: LedgerRepository[IO]) =>
+      val owner = scope()
+      val other = scope()
+      val human = owner.copy(actor = owner.actor.copy(role = Role.Human))
+      val start = FixedLedger.at(repository, 10000)
+      val later = FixedLedger.at(repository, 12000)
+      def acquire(service: LedgerService[IO], holder: Scope, members: Set[ItemId], duration: Long): IO[Throwable, Claim] =
+        service.acquire(holder, ClaimId(UUID.randomUUID()), members, duration)
+      for {
+        _ <- start.initialize(owner, "work query")
+        _ <- start.initialize(other, "other work query")
+        a <- create(start, owner, draft("Held", "body", Set.empty, false))
+        b <- create(start, owner, draft("Short lease", "body", Set.empty, false))
+        c <- create(start, owner, draft("Free", "body", Set.empty, false))
+        d <- create(start, owner, draft("Collateral", "body", Set.empty, false))
+        foreign <- create(start, other, draft("Held", "body", Set.empty, false))
+        all = List(a.id, b.id, c.id, d.id)
+        _ <- matches(start, owner, "wip:true", Nil)
+        _ <- matches(start, owner, "wip:false", all)
+        held <- acquire(start, owner, Set(a.id, d.id), 300000)
+        _ <- acquire(start, owner, Set(b.id), 1000)
+        _ <- acquire(start, other, Set(foreign.id), 300000)
+        _ <- matches(start, owner, "wip:true", List(a.id, b.id, d.id))
+        _ <- matches(start, owner, "NOT wip:true", List(c.id))
+        _ <- matches(start, owner, "wip:false OR held", List(a.id, c.id))
+        _ <- matches(start, owner, "wip:true -collateral", List(a.id, b.id))
+        _ <- matches(start, other, "wip:true", List(foreign.id))
+        _ <- start.renew(owner, held.fence, 600000)
+        _ <- matches(later, owner, "wip:true", List(a.id, d.id))
+        _ <- matches(later, owner, "wip:false", List(b.id, c.id))
+        preview <- later.claimPreview(human, Set(a.id))
+        taken <- later.takeover(human, ClaimId(UUID.randomUUID()), human.actor, Set(a.id), 300000, preview.snapshot)
+        _ <- matches(later, owner, "wip:true", List(a.id))
+        _ <- later.release(human, taken.fence)
+        _ <- matches(later, owner, "wip:true", Nil)
+        _ <- matches(later, owner, "wip:false", all)
+        _ <- matches(later, other, "wip:true", List(foreign.id))
+      } yield ()
+    }
+
     "refresh search projections on edits and restores and retain bounded stable pages" in { (service: LedgerService[IO]) =>
       val owner = scope()
       val original = draft("Before", "first phrase", Set("old"), false)

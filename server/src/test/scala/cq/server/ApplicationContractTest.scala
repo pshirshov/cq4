@@ -90,6 +90,42 @@ abstract class ApplicationContractTest extends SpecZIO with AssertZIO {
         } yield ()
     }
 
+    "I24: move the live work cursor when a claim is acquired, released or expires and not when it is renewed" in {
+      (repository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
+        val auth = authorization(Now)
+        val root = auth.authenticate(Token, Some(UUID.randomUUID().toString))
+        def application(time: Long): Application = new Application(FixedLedger.at(repository, time), repository, usage, artifacts, admissions, integrations, proposals, auth)
+        val start = application(Now)
+        val later = application(Now + 2000)
+        val project = ProjectId(UUID.randomUUID())
+        def cursors(app: Application): IO[Throwable, ProjectCursors] = app.liveRevision(root, LiveScope(false, Some(project))).map(_.project.get)
+        def claim(app: Application, action: ClaimAction): IO[Throwable, Claim] = app.execute(root, Command.ClaimWork(ClaimInput(project, action))).flatMap {
+          case Result.Claimed(value) => ZIO.succeed(value)
+          case other => ZIO.fail(new AssertionError(other))
+        }
+        for {
+          _ <- start.execute(root, Command.Initialize(ProjectConfig(project, "http://localhost", "work cursor")))
+          created <- start.execute(root, Command.Change(ChangeInput(project, ChangeRequest(RequestId(UUID.randomUUID()), List(Mutation.Create(task), Mutation.Create(task)), Nil, "Create"))))
+          ids <- ZIO.attempt(created match { case Result.Changed(ack) => ack.items.map(_.id); case other => throw new AssertionError(other) })
+          initial <- cursors(start)
+          held <- claim(start, ClaimAction.Acquire(ClaimId(UUID.randomUUID()), Set(ids.head), 300000))
+          acquired <- cursors(start)
+          _ <- assertIO(acquired.work > initial.work && acquired.items == initial.items && acquired.usage == initial.usage)
+          _ <- claim(start, ClaimAction.Acquire(ClaimId(UUID.randomUUID()), Set(ids(1)), 1000))
+          leased <- cursors(start)
+          _ <- claim(start, ClaimAction.Renew(held.fence, 600000))
+          renewed <- cursors(start)
+          _ <- assertIO(leased.work > acquired.work && renewed == leased)
+          expired <- cursors(later)
+          _ <- assertIO(expired.work > renewed.work)
+          _ <- claim(later, ClaimAction.Release(held.fence))
+          released <- cursors(later)
+          _ <- assertIO(released.work > expired.work && released.items == initial.items)
+          browsed <- later.execute(root, Command.Read(ReadInput(project, ReadSelection.Browse("wip:true", ItemOrder(ItemOrderField.Id, SortDirection.Ascending, false), None, None, 20))))
+          _ <- assertIO(browsed match { case Result.Browsed(page) => page.items.isEmpty && page.work == released.work; case _ => false })
+        } yield ()
+    }
+
     "rename display metadata with revision comparison and preserve item identity and counters" in {
       (ledger: LedgerService[IO], repository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
         val auth = authorization(Now)

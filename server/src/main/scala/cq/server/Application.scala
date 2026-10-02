@@ -80,7 +80,7 @@ final class Application(ledger: LedgerService[IO], repository: LedgerRepository[
     _ <- ZIO.attempt { authorization.check(authority); if (scope.catalogue) authority.requireRoot() }
     catalogue <- if (scope.catalogue) repository.catalogueCursor.map(Some(_)) else ZIO.none
     project <- ZIO.foreach(scope.project) { project => scoped(authority, project) { permitted =>
-      for { items <- repository.itemCursor(project); cursor <- usage.cursor(permitted) } yield ProjectCursors(project, items, cursor)
+      for { cursors <- ledger.cursors(permitted); cursor <- usage.cursor(permitted) } yield ProjectCursors(project, cursors.items, cursor, cursors.work)
     }}
   } yield LiveRevision(catalogue, project)
 

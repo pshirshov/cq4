@@ -15,7 +15,7 @@ object QueryCatalog {
       ReviewStatus.all.map(_.toString) ++ HandoffStatus.all.map(_.toString) ++ OperatorActionStatus.all.map(_.toString) ++
       MemoryStatus.all.map(_.toString) ++ UpstreamStatus.all.map(_.toString)
   ).map(_.toLowerCase(Locale.ROOT)).toSet
-  val fields: Set[String] = Set("id", "ledger", "status", "tag", "project", "archived") ++ relations.keySet
+  val fields: Set[String] = Set("id", "ledger", "status", "tag", "project", "archived", "wip") ++ relations.keySet
 }
 
 enum QuerySite {
@@ -286,6 +286,11 @@ final class QueryParser {
           case "all" => ArchiveFilter.All
           case _ => fail(value.span, "Archived must be true, false or all")
         })
+        case "wip" => folded match {
+          case "true" => QueryExpression.Working()
+          case "false" => QueryExpression.Not(QueryExpression.Working())
+          case _ => fail(value.span, "Wip must be true or false")
+        }
         case relation if QueryCatalog.relations.contains(relation) => QueryExpression.Reference(QueryCatalog.relations(relation), item(value))
         case _ => fail(key.span, "Unknown query attribute")
       }
