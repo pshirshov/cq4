@@ -23,3 +23,9 @@ Evidence: `/srv/nvme/tmp/cq4-x3-usage-evidence/continued-after/` and `continued-
 ## Limits
 
 The configured `./dev/check ui` gate was not run: current AGENTS.md reserves it for the CQ host. No package, installation or actual-hostname verification has occurred for this increment. D121/D122 remain Open pending delivery evidence.
+
+## Configured-check follow-up
+
+The trial drive's T5 candidate exposed one additional D121 fixture expectation in `selectionChecks`: three delayed-audit cases expected `33 · Observed` / `22 · Observed` / `11 · Observed`, while the redesigned audit cells render the qualifier first (`Observed 33`, etc.). Both host cq-ui attempts failed on this assertion. The host validation observation is artifact `999a827e-37f1-35fb-97fe-d61390d9661f`; its decoded stderr was retained at `/srv/nvme/tmp/cq4-drive9-evidence/t5-cq-ui-decoded.stderr`.
+
+Updated that assertion to the intended qualifier-first format; the race/ownership checks are otherwise unchanged. The focused `selectionChecks` fixture then passed all eleven scenarios, including all three audit cases, using the same private server harness. Evidence: `/srv/nvme/tmp/cq4-x3-usage-evidence/continued-selection/`. No production change or configured gate was run by the supervising agent. The original five-fixture verification was incomplete for this format change; the failure was in an inherited fixture, not T5's catalog implementation. Full configured validation still belongs to the host.
