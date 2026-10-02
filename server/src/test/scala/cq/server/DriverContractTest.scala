@@ -1255,6 +1255,94 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
       } yield ()
     }
 
+    // Defect 109, Question 34: a drive that meets a defect it does not work records it and links the items it blocks.
+    "admit a Defect the bound session records with a plain Create and the BlockedBy links to it, and keep the Defect outside the drive" in { (service: LedgerService[IO]) =>
+      val w = world
+      val key = claude("side-defect")
+      for {
+        _ <- service.initialize(w.operator, "side-defect")
+        first <- create(service, w.operator, task("Blocked in the cycle that records the Defect"))
+        second <- create(service, w.operator, task("Blocked in a later cycle"))
+        one <- driven(service, w, key, workset(first, second))
+        recording = request(List(Mutation.Create(defect("Host defect that blocks the workers"))), Nil)
+        recorded <- service.change(w.governor, recording)
+        side = recorded.items.head.id
+        running <- status(service, w, key)
+        _ <- assertIO(side.ledger == Ledger.Defects && running.exists(value => value.state == DriverState.On && value.cycle.exists(_.created.isEmpty)) &&
+          lineage(running).contains(LineageEntry(LineageMember.Change(recording.request), Some(LineageMember.Run(one.run)), true)))
+        // The cycle that recorded the Defect links an item it blocks; the Defect is revised for that link alone.
+        before <- service.get(w.operator, side)
+        linked <- reference(service, w.governor, first, Relation.BlockedBy, side, true).flatMap(service.change(w.governor, _))
+        after <- service.get(w.operator, side)
+        _ <- assertIO(linked.items.map(_.id).toSet == Set(first, side) && after.item.draft == before.item.draft && after.item.revision == Revision(2))
+        // The Defect is context of the next cycle, never a member, and the continuation does not hold the cycle to account for it.
+        next <- directive(service, w, key)
+        _ <- assertIO(next.messages.isEmpty && next.status.cycle.exists(cycle => cycle.number == 2 && cycle.advanceable.map(_.id).toSet == Set(first, second)))
+        _ <- submit(service, w, w.governor, next.directive.text)
+        // A later cycle links another item to the same Defect, here written from the Defect's side.
+        inverse <- reference(service, w.governor, side, Relation.Blocks, second, true).flatMap(service.change(w.governor, _))
+        preview <- service.previewWorkset(w.operator, workset(first, second))
+        _ <- assertIO(inverse.items.map(_.id).toSet == Set(second, side) && preview.context.map(_.item.id) == List(side) &&
+          preview.readiness.forall(entry => !entry.ready && entry.reasons == List(WorksetReason.Blocked(side))))
+        // Nothing is ready any more: the stop names the blocker the drive cannot change.
+        stop <- query(service, w, key)
+        _ <- assertIO(stop match {
+          case DriverReply.Stop(DriverStopped(DriverStop.Quiescent, "No item of the advanceable set is ready to advance; blocked from outside the set: D1 blocks T1,T2"), Some(value), _) =>
+            stopped(Some(value), DriverStop.Quiescent)
+          case _ => false
+        })
+      } yield ()
+    }
+
+    "keep every other driven write that names a recorded Defect, and every other blocking link, an out-of-set change that stops the drive" in { (service: LedgerService[IO]) =>
+      val w = world
+      def begun(name: String, targets: ItemId*): IO[Throwable, (World, DriverKey, Driven)] = {
+        val bound = w.copy(governor = w.other(Role.Governor))
+        driven(service, bound, claude(name), workset(targets*)).map(cycle => (bound, claude(name), cycle))
+      }
+      def delegate(session: World, cycle: Driven): IO[Throwable, Scope] = {
+        val child = w.other(Role.Governor)
+        act(service, session.governor, DriverSession.Inherit(cycle.cycle, LineageMember.Run(cycle.run), LineageMember.Session(child.actor.session))).as(child)
+      }
+      for {
+        _ <- service.initialize(w.operator, "side-defect-refusals")
+        member <- create(service, w.operator, task("In-set task the Defect blocks"))
+        spare <- create(service, w.operator, task("In-set task that stays ready"))
+        stranger <- create(service, w.operator, task("Out-of-set task"))
+        resolved <- create(service, w.operator, defect("Resolved defect").copy(content =
+          Content.Defect(DefectStatus.Resolved, Severity.Medium, "Observed", "Expected", "Reproduction", None, Nil)))
+        // The drive that recorded the Defect and linked it does not edit it afterwards, even inside the same cycle.
+        (recorder, recorderKey, _) <- begun("side-recorder", member, spare)
+        side <- create(service, recorder.governor, defect("Recorded by the drive"))
+        _ <- reference(service, recorder.governor, member, Relation.BlockedBy, side, true).flatMap(service.change(recorder.governor, _))
+        edit <- replace(service, recorder.governor, side, "Edited by the drive that recorded it")
+        _ <- rejects(service, recorder, recorderKey, "out-of-set change: D2 is outside the advanceable set stored for cycle 1")(service.change(recorder.governor, edit))
+        refusals = List[(String, String, Scope => IO[Throwable, ChangeRequest])](
+          ("side-resolved", "out-of-set change: D1 is outside", reference(service, _, spare, Relation.BlockedBy, resolved, true)),
+          ("side-task", "out-of-set change: T3 is outside", reference(service, _, spare, Relation.BlockedBy, stranger, true)),
+          ("side-related", "out-of-set change: D2 is outside", reference(service, _, spare, Relation.RelatesTo, side, true)),
+          ("side-unlinked", "out-of-set change: D2 is outside", reference(service, _, member, Relation.BlockedBy, side, false)),
+          ("side-blocked", "out-of-set change: D2 is outside", reference(service, _, side, Relation.BlockedBy, spare, true)),
+          ("side-outsider", "out-of-set change: T3 is outside", reference(service, _, stranger, Relation.BlockedBy, side, true)))
+        _ <- ZIO.foreachDiscard(refusals) { case (name, detail, change) =>
+          begun(name, member, spare).flatMap { case (session, key, _) =>
+            change(session.governor).flatMap(value => rejects(service, session, key, detail)(service.change(session.governor, value)))
+          }
+        }
+        // The exemption is the bound session's: a session the cycle delegated to neither records a Defect nor links one.
+        (creating, creatingKey, created) <- begun("side-delegated-create", member, spare)
+        child <- delegate(creating, created)
+        _ <- rejects(service, creating, creatingKey, "non-selected creation: D3 is not a selected descendant of T1,T2")(
+          act(service, child, DriverSession.Change(created.cycle, request(List(Mutation.Create(defect("Recorded by a delegated session"))), Nil))))
+        (linking, linkingKey, link) <- begun("side-delegated-link", member, spare)
+        other <- delegate(linking, link)
+        blocking <- reference(service, other, spare, Relation.BlockedBy, side, true)
+        _ <- rejects(service, linking, linkingKey, "out-of-set change: D2 is outside")(act(service, other, DriverSession.Change(link.cycle, blocking)))
+        untouched <- service.get(w.operator, side)
+        _ <- assertIO(untouched.item.revision == Revision(2) && untouched.refs == List(ItemRef(Relation.Blocks, member)))
+      } yield ()
+    }
+
     "carry the cycle ID through nested delegation and reject a delegated child's out-of-set writes" in { (service: LedgerService[IO]) =>
       val w = world
       val key = claude("lineage")

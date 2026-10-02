@@ -105,7 +105,17 @@ object DriverPolicy {
       s"Awaiting the user on ${references(user)}; the driver never answers questions or infers approval"))
     else if (work.nonEmpty) DriverDecision.Stop(DriverStopped(DriverStop.Quiescent,
       "The previous cycle changed nothing in the advanceable set, its context or its readiness"))
-    else DriverDecision.Stop(DriverStopped(DriverStop.Quiescent, "No item of the advanceable set is ready to advance"))
+    else DriverDecision.Stop(DriverStopped(DriverStop.Quiescent, "No item of the advanceable set is ready to advance" + blocked(snapshot)))
+  }
+
+  // The prerequisites outside the advanceable set that keep its items from being ready. The drive cannot change them, so the stop names them.
+  private def blocked(snapshot: WorksetPreview): String = {
+    val advanceable = snapshot.advanceable.map(_.item.id).toSet
+    val outside = snapshot.readiness.flatMap(entry => entry.reasons.collect {
+      case WorksetReason.Blocked(prerequisite) if !advanceable(prerequisite) => prerequisite -> entry.item
+    }).groupMap((prerequisite, _) => prerequisite)((_, item) => item)
+    if (outside.isEmpty) "" else "; blocked from outside the set: " +
+      outside.toList.sortBy((prerequisite, _) => LedgerPolicy.key(prerequisite)).map((prerequisite, items) => s"${reference(prerequisite)} blocks ${references(items)}").mkString("; ")
   }
 
   def changed(previous: CycleRecord, snapshot: WorksetPreview): Option[String] = {
