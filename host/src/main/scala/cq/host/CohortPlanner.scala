@@ -82,10 +82,14 @@ final class CohortPlanner(api: ServerApi, owner: Scope, bases: ExecutionBase, ch
     val results = artifacts.filter(_.metadata.kind == ArtifactKind.Result).map(value => reader.result(value.metadata.id))
     val previous = request.previous.map(reader.result)
     val sources = (results ++ previous).distinct
+    // An assessment applies under the configured check definitions at its own base or a descendant of it: integrations move the target
+    // without changing the assessed member revisions, which `compatibility` still matches exactly.
+    val executionBase = previous.flatMap(_.value.candidate).getOrElse(base)
     val assessments = sources.collect { case value if value.value.report match {
       case plan: ChildReport.Plan => plan.assessments.nonEmpty
       case _ => false
-    } => reader.assessment(value.metadata.id) }
+    } => reader.assessment(value.metadata.id) }.filter(value => value.input.checks.sortBy(_.name) == checks.sortBy(_.name) &&
+      (value.input.base == executionBase || bases.ancestor(value.input.base, executionBase)))
     val reviews = sources.filter(_.value.request.work == DispatchWork.Reviewer(ReviewerMode.Candidate)).map(value => reader.review(value.metadata.id))
     val cache = scala.collection.mutable.Map.from(artifacts.map(value => value.metadata.id -> value))
     def read(id: ArtifactId): ResolvedArtifact = cache.getOrElseUpdate(id, reader.read(id))
@@ -119,9 +123,8 @@ final class CohortPlanner(api: ServerApi, owner: Scope, bases: ExecutionBase, ch
     } else CohortExecutionFingerprint(semantic, members.map(member => member.item.id -> fingerprint(work, List(member), context)).toMap)
   }
 
-  private def assessments(context: Context): List[CohortAssessment] = context.assessments
-    .filter(value => value.input.base == context.executionBase && value.input.checks.sortBy(_.name) == checks.sortBy(_.name))
-    .flatMap(_.result.value.report.asInstanceOf[ChildReport.Plan].assessments)
+  private def assessments(context: Context): List[CohortAssessment] =
+    context.assessments.flatMap(_.result.value.report.asInstanceOf[ChildReport.Plan].assessments)
 
   private def compatibility(members: List[ItemView], context: Context): Option[CohortCompatibility] = {
     val refs = members.map(value => ItemRevision(value.item.id, value.item.revision)).toSet

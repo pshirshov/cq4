@@ -17,4 +17,7 @@ trait ExecutionBase {
   /** The target head an integration of `candidate` expects: the current head when the candidate strictly descends from it, otherwise
     * `base` (the worker's recorded base), so the conditional update reports NotApplied only when the target advanced past the candidate. */
   def expected(base: GitCommit, candidate: GitCommit): GitCommit
+
+  /** Whether `earlier` is `later` or one of its ancestors in the repository. */
+  def ancestor(earlier: GitCommit, later: GitCommit): Boolean
 }

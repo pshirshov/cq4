@@ -19,11 +19,12 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
     Content.Task(TaskStatus.Ready, List("Independent acceptance"), None, Nil), Nil)
   private def request(roots: Set[ItemId], work: DispatchWork): CohortRequest = CohortRequest(RequestId(uuid), roots, work, Nil, Nil, None,
     HostLimits(3000, 1000, 300, 2000, 262144))
-  private final class MutableBase(var head: GitCommit) extends ExecutionBase {
+  private final class MutableBase(var head: GitCommit, ancestors: Set[GitCommit]) extends ExecutionBase {
     override def fresh(): GitCommit = head
     override def expected(base: GitCommit, candidate: GitCommit): GitCommit = base
+    override def ancestor(earlier: GitCommit, later: GitCommit): Boolean = earlier == later || (later == head && ancestors(earlier))
   }
-  private def fixed(base: GitCommit): ExecutionBase = new MutableBase(base)
+  private def fixed(base: GitCommit): ExecutionBase = new MutableBase(base, Set.empty)
   private def link(ledger: LedgerService[IO], scope: Scope, source: ItemId, relation: Relation, target: ItemId): IO[Throwable, Unit] = for {
     a <- ledger.get(scope, source)
     b <- ledger.get(scope, target)
@@ -390,7 +391,7 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
         fixture <- assessed(ledger, usage, artifacts, admissions, 2, CohortCompatibility.Compatible)
         reads = new EvidenceApi(api(ledger, fixture.scope, runtime), artifacts, admissions, fixture.scope, runtime)
         progress = new CohortProgress
-        target = new MutableBase(fixture.base)
+        target = new MutableBase(fixture.base, Set.empty)
         planner = new CohortPlanner(reads, fixture.scope, target, fixture.checks, progress, new OperatorRequirements(""))
         input = request(Set(fixture.members.head.id), DispatchWork.Worker(WorkerMode.Implement))
         initial <- ZIO.attemptBlocking(planner.plan(input, ArtifactId(uuid)))
@@ -462,26 +463,35 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
       } yield ()
     }
 
-    "use exact whole-group assessment evidence without requiring a common producer" in {
-    (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO]) => for {
-      runtime <- ZIO.runtime[Any]
-      fixture <- assessed(ledger, usage, artifacts, admissions, 6, CohortCompatibility.Compatible)
-      reads = new EvidenceApi(api(ledger, fixture.scope, runtime), artifacts, admissions, fixture.scope, runtime)
-      input = request(fixture.members.map(_.id).toSet, DispatchWork.Worker(WorkerMode.Implement)).copy(artifacts = List(fixture.artifact))
-      choices <- ZIO.attemptBlocking {
-        def select(base: GitCommit, checks: List[ValidationCheck]) = new CohortPlanner(reads, fixture.scope, fixed(base), checks, new CohortProgress, new OperatorRequirements(""))
-          .plan(input, ArtifactId(uuid)).evidence.decision.choices
-        val compatible = select(fixture.base, fixture.checks)
-        val changedBase = select(GitCommit("b" * 40), fixture.checks)
-        val changedCheck = select(fixture.base, fixture.checks.map(_.copy(command = List("different-verifier"))))
-        (compatible, changedBase, changedCheck)
-      }
-      _ <- assertIO(choices._1.map(_.members.toSet).toSet == fixture.members.grouped(2).map(_.toSet).toSet &&
-        choices._1.forall(_.reason == CohortReason.CompatibleAssessment))
-      _ <- assertIO(List(choices._2, choices._3).forall(_.map(_.members.size) == List(4, 2)) &&
-        (choices._2 ++ choices._3).forall(choice => choice.work == DispatchWork.Planner() && choice.reason == CohortReason.AssessmentRequired))
-    } yield ()
-  }
+    "use exact whole-group assessment evidence without requiring a common producer and keep it across a moved target" in {
+      (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO]) => for {
+        runtime <- ZIO.runtime[Any]
+        fixture <- assessed(ledger, usage, artifacts, admissions, 6, CohortCompatibility.Compatible)
+        reads = new EvidenceApi(api(ledger, fixture.scope, runtime), artifacts, admissions, fixture.scope, runtime)
+        input = request(fixture.members.map(_.id).toSet, DispatchWork.Worker(WorkerMode.Implement)).copy(artifacts = List(fixture.artifact))
+        select = (bases: ExecutionBase, checks: List[ValidationCheck]) => ZIO.attemptBlocking(
+          new CohortPlanner(reads, fixture.scope, bases, checks, new CohortProgress, new OperatorRequirements("")).plan(input, ArtifactId(uuid)).evidence.decision.choices)
+        head = GitCommit("b" * 40)
+        compatible <- select(fixed(fixture.base), fixture.checks)
+        // F6: the target moved by an integration, so the assessed base is an ancestor of the new head.
+        advanced <- select(new MutableBase(head, Set(fixture.base)), fixture.checks)
+        diverged <- select(fixed(head), fixture.checks)
+        changedCheck <- select(new MutableBase(head, Set(fixture.base)), fixture.checks.map(_.copy(command = List("different-verifier"))))
+        pairs = fixture.members.grouped(2).map(_.toSet).toSet
+        _ <- ZIO.attempt(assert(List(compatible, advanced).forall(choices => choices.map(_.members.toSet).toSet == pairs &&
+          choices.forall(choice => choice.work == input.work && choice.reason == CohortReason.CompatibleAssessment)), advanced.toString))
+        _ <- assertIO(List(diverged, changedCheck).forall(choices => choices.map(_.members.size) == List(4, 2) &&
+          choices.forall(choice => choice.work == DispatchWork.Planner() && choice.reason == CohortReason.AssessmentRequired)))
+        // A member whose draft changed since the assessment needs a fresh one for its group; the untouched groups stay fused.
+        view <- ledger.get(fixture.scope, fixture.members.head.id)
+        revised <- ledger.change(fixture.scope, ChangeRequest(RequestId(uuid), List(Mutation.Replace(view.item.id, view.item.revision,
+          view.item.draft.copy(body = "Changed requirements"))), List(fixture.fence), "Change the task content"))
+        redrafted <- select(new MutableBase(head, Set(fixture.base)), fixture.checks)
+        _ <- ZIO.attempt(assert(redrafted.map(choice => (choice.work, choice.members.toSet, choice.reason)).toSet ==
+          fixture.members.drop(2).grouped(2).map(pair => (input.work, pair.toSet, CohortReason.CompatibleAssessment)).toSet +
+            ((DispatchWork.Planner(), Set(revised.items.head, fixture.members(1)), CohortReason.AssessmentRequired)), redrafted.toString))
+      } yield ()
+    }
 
     "offer one assessment across producers and fuse on Compatible, split on Unknown" in {
       (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO]) => for {

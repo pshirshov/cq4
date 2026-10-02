@@ -13,7 +13,7 @@ final class CandidateWorkspace(config: SupervisorConfig, command: HostCommand) e
     require(result.exit == 0, s"Candidate Git operation failed: ${result.text.take(300)}")
     result.text.trim
   }
-  private def ancestor(earlier: GitCommit, later: GitCommit): Boolean =
+  override def ancestor(earlier: GitCommit, later: GitCommit): Boolean =
     command.run(Path.of(config.run.repository), GitArguments ++ List("merge-base", "--is-ancestor", earlier.value, later.value)).exit match {
       case 0 => true
       case 1 => false
