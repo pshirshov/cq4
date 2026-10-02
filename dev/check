@@ -500,6 +500,9 @@ def main():
             checks.run(["python3", "dev/release-evaluate-check.py"], "release-scheduling", STARTUP_TIMEOUT)
             checks.run(["python3", "dev/release-report-check.py"], "release-accounting", STARTUP_TIMEOUT)
             checks.run(["python3", "dev/release-metrics-check.py"], "release-metrics", STARTUP_TIMEOUT)
+            # Two JVM CLI starts against local listeners; covers the endpoint choice of dev/project-archive-check.py (D111).
+            checks.run(["python3", "dev/project-archive-endpoint-check.py", "java", "-cp", checks.classpath(), "cq.server.Main"],
+                       "project-archive-endpoint", STARTUP_TIMEOUT * 3)
             # Selected by pattern on purpose: distage then also executes the other suites' bodies unreported (D116), but one test JVM
             # for all suites is several times faster than one per suite, and this step holds no shared database.
             checks.sbt(["server/testOnly *Dummy *Local"], "dummy-contract")

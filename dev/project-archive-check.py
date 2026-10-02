@@ -14,6 +14,20 @@ import uuid
 import zipfile
 
 
+def endpoint_arguments(environment):
+    # A saved project.json above the working directory would otherwise win over CQ_ORIGIN (D111).
+    return ["--endpoint", environment["CQ_ORIGIN"]]
+
+
+def run_cli(command, args, environment, cwd, timeout=60):
+    return subprocess.run([*command, *args, *endpoint_arguments(environment)], env=environment, cwd=cwd, text=True, capture_output=True, timeout=timeout)
+
+
+def start_backup(command, project, destination, environment, cwd, stdout, stderr):
+    return subprocess.Popen([*command, "backup", project, str(destination), "--json", *endpoint_arguments(environment)],
+                            cwd=cwd, env=environment, stdout=stdout, stderr=stderr)
+
+
 def verify(checks, command, name):
     support = runpy.run_path(str(Path(__file__).with_name("consumer-eval")))
     call, write = support["call"], support["write"]
@@ -33,7 +47,7 @@ def verify(checks, command, name):
         return result.stdout.strip()
 
     def cli(label, args, expected=0):
-        result = subprocess.run([*command, *args], env=checks.environment, cwd=out, text=True, capture_output=True, timeout=60)
+        result = run_cli(command, args, checks.environment, out)
         (out / (label + ".stdout")).write_text(result.stdout)
         (out / (label + ".stderr")).write_text(result.stderr)
         commands.append({"label": label, "args": args, "exit": result.returncode})
@@ -140,7 +154,7 @@ def verify(checks, command, name):
                 assert locker.stdout.readline().strip() == "locked"
                 with (out / "concurrent.stdout").open("w") as stdout, (out / "concurrent.stderr").open("w") as stderr:
                     concurrent = out / "concurrent.cqbackup"
-                    simultaneous = subprocess.Popen([*command, "backup", project["value"], str(concurrent), "--json"], cwd=out, env=checks.environment, stdout=stdout, stderr=stderr)
+                    simultaneous = start_backup(command, project["value"], concurrent, checks.environment, out, stdout, stderr)
                     deadline = time.monotonic() + 20
                     while sql(names[0], "SELECT count(*) FROM pg_stat_activity WHERE wait_event_type='Lock' AND query LIKE 'COPY (SELECT%FROM cq_artifacts%' AND pid <> pg_backend_pid()") == "0":
                         assert time.monotonic() < deadline and simultaneous.poll() is None, "Backup did not reach controlled snapshot boundary"
