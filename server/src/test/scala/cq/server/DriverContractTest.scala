@@ -1283,6 +1283,55 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
       }
     }
 
+    // Defect 100, Question 24: the ledger's closure gate refuses the bound session's write as it refuses any other. It is not a boundary
+    // violation, so the driver stays on.
+    "refuse a driven Replace or termination that closes an in-set milestone over a Ready Task with the undriven fault, leaving the driver on" in { (service: LedgerService[IO]) =>
+      def scenario(name: String, intent: TerminationIntent): IO[Throwable, Unit] = {
+        val w = world
+        val key = claude(name)
+        val closed = if (intent == TerminationIntent.Complete) MilestoneStatus.Complete else MilestoneStatus.Cancelled
+        def terminate(scope: Scope): IO[Throwable, (TerminationPreview, Either[Throwable, ChangeAck])] = for {
+          preview <- service.termination(scope, Set(ItemId(w.project, Ledger.Milestones, 1)), intent)
+          result <- service.change(scope, request(List(Mutation.Terminate(preview.plan.roots.toSet, intent, preview.snapshot)), preview.plan.claims.map(_.fence))).either
+        } yield (preview, result)
+        for {
+          _ <- service.initialize(w.operator, name)
+          producer <- create(service, w.operator, goal("Outside producer"))
+          containing <- create(service, w.operator, milestone("Driven milestone", MilestoneStatus.Open))
+          member <- create(service, w.operator, task("Ready member"))
+          _ <- reference(service, w.operator, member, Relation.DerivedFrom, producer, true).flatMap(service.change(w.operator, _))
+          _ <- reference(service, w.operator, member, Relation.PartOf, containing, true).flatMap(service.change(w.operator, _))
+          _ <- driven(service, w, key, workset(containing))
+          open <- service.get(w.operator, containing).map(_.item)
+          ready <- service.get(w.operator, member).map(_.item)
+          closing = Mutation.Replace(containing, open.revision, milestone("Driven milestone", closed))
+          closure = s"M1 cannot be changed to $closed while it contains non-terminal Tasks: T1 (Ready). " +
+            "Make each Done or Cancelled, or reassign it to another Open milestone, before closing M1"
+          retention = closure + ". This termination leaves them unchanged; add them to its roots to terminate them with M1"
+          before <- cursor(service, w)
+          replaced <- service.change(w.governor, request(List(closing), Nil)).either
+          terminated <- terminate(w.governor)
+          undrivenReplace <- service.change(w.operator, request(List(closing), Nil)).either
+          undrivenTerminate <- terminate(w.operator)
+          after <- cursor(service, w)
+          kept <- status(service, w, key)
+          _ <- assertIO(fault(replaced).contains(Fault.Invalid(closure)) && fault(undrivenReplace) == fault(replaced))
+          _ <- assertIO(!terminated._1.plan.canApply && terminated._1.plan.entries.exists(entry =>
+            entry.item.id == containing && entry.effect == TerminationEffect.Unsupported(retention)))
+          _ <- assertIO(fault(terminated._2).contains(Fault.Invalid(retention)) && fault(undrivenTerminate._2) == fault(terminated._2))
+          current <- ZIO.foreach(List(containing, member))(service.get(w.operator, _).map(_.item))
+          _ <- assertIO(before == after && current == List(open, ready))
+          _ <- assertIO(kept.exists(found => found.state == DriverState.On && found.stopped.isEmpty))
+          // The cycle is still active: the bound session's next in-set write commits under it.
+          retitled <- replace(service, w.governor, member, "Retitled member").flatMap(service.change(w.governor, _))
+          _ <- assertIO(retitled.items.map(_.id) == List(member))
+          continued <- status(service, w, key)
+          _ <- assertIO(continued.exists(_.state == DriverState.On))
+        } yield ()
+      }
+      each("Complete" -> scenario("closure-gate-complete", TerminationIntent.Complete), "Cancel" -> scenario("closure-gate-cancel", TerminationIntent.Cancel))
+    }
+
     "refuse a driven Restore that returns a Requested Operator Action to a revision that was not Requested" in { (service: LedgerService[IO]) =>
       // Before the drive the operator cancels the action and requests it again, so its history holds a Cancelled revision.
       def set(w: World, asked: ItemId, status: OperatorActionStatus) = service.get(w.operator, asked).flatMap(view =>

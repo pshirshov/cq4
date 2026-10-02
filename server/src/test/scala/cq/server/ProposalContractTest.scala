@@ -356,8 +356,15 @@ abstract class ProposalContractTest extends SpecZIO with AssertZIO {
         _ <- ledger.release(f.owner, held.fence)
         ack <- proposals(f.owner, value.artifact.id)
         target = ack.items.find(_.id == open).get
-        // The preview of an applied proposal stays readable as a record after its milestone closes.
-        _ <- ledger.change(f.owner, ChangeRequest(RequestId(uuid), List(Mutation.Replace(open, target.revision, milestone(MilestoneStatus.Complete))), Nil, "Complete the milestone"))
+        // The preview of an applied proposal stays readable as a record after its milestone closes. A milestone closes only over terminal
+        // Tasks, so the same request finishes the produced Task.
+        produced = ack.items.find(_.id.ledger == Ledger.Tasks).get
+        finished = task.copy(content = task.content match {
+          case value: Content.Task => value.copy(status = TaskStatus.Done)
+          case other => throw new IllegalStateException(s"The fixture draft is not a Task: $other")
+        })
+        _ <- ledger.change(f.owner, ChangeRequest(RequestId(uuid), List(Mutation.Replace(open, target.revision, milestone(MilestoneStatus.Complete)),
+          Mutation.Replace(produced.id, produced.revision, finished)), Nil, "Complete the milestone"))
         recorded <- proposals.preview(f.owner, value.artifact.id)
         replayed <- proposals(f.owner, value.artifact.id)
         _ <- assertIO(recorded == shown && replayed == ack)

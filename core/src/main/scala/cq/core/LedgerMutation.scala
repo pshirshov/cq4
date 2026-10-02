@@ -142,6 +142,9 @@ final class LedgerMutation(terminationPlanner: TerminationPlanner, boundary: Dri
             }
             created.id
         }
+        // Milestones this batch moves to Complete or Cancelled by Replace or Restore; the closure gate judges them once the batch is applied.
+        val closed = scala.collection.mutable.LinkedHashSet.empty[ItemId]
+        def closing(item: Item, draft: ItemDraft): Unit = if (MilestonePolicy.closes(item.draft.content, draft.content)) closed += item.id
         invalid(!request.mutations.exists(_.isInstanceOf[Mutation.Terminate]) || request.mutations.size == 1,
           "Termination must be the only mutation in its request")
         request.mutations.zipWithIndex.foreach {
@@ -162,6 +165,10 @@ final class LedgerMutation(terminationPlanner: TerminationPlanner, boundary: Dri
             val preview = terminationPlanner.preview(tx, scope, roots, intent, now)
             if (preview.snapshot != snapshot) throw DomainFailure(Fault.Conflict("Termination preview changed; review a fresh preview"))
             preview.plan.integrations.headOption.foreach(value => throw DomainFailure(Fault.IntegrationPending(value.id)))
+            // A milestone has a generic outcome under both intents, so its only unsupported effect is the closure gate's.
+            preview.plan.entries.collectFirst {
+              case TerminationEntry(item, TerminationEffect.Unsupported(reason)) if item.id.ledger == Ledger.Milestones => reason
+            }.foreach(reason => throw DomainFailure(Fault.Invalid(reason)))
             if (!preview.plan.canApply) throw DomainFailure(Fault.Conflict("Termination preview has unresolved outcome or claim-owner conflicts"))
             if (request.fences.toSet != preview.plan.claims.map(_.fence).toSet)
               throw DomainFailure(Fault.StaleFence("Termination requires exactly the reviewed active claim fences"))
@@ -196,7 +203,10 @@ final class LedgerMutation(terminationPlanner: TerminationPlanner, boundary: Dri
           case (Mutation.Create(draft), index) =>
             val item = create(draft)
             if (item.id.ledger == Ledger.Milestones) createdMilestones.update(index, item)
-          case (Mutation.Replace(id, revision, draft), _) => revise(check(id, revision), draft, None)
+          case (Mutation.Replace(id, revision, draft), _) =>
+            val item = check(id, revision)
+            closing(item, draft)
+            revise(item, draft, None)
           case (Mutation.Restore(id, revision, historical, neighbors), _) =>
             val item = check(id, revision)
             val previous = tx.historical(id, historical).getOrElse(throw DomainFailure(Fault.Missing("Historical revision not found")))
@@ -208,6 +218,7 @@ final class LedgerMutation(terminationPlanner: TerminationPlanner, boundary: Dri
             invalid(neighbors.size <= MaxRefs * 2 && neighbors.map(_.id).distinct.size == neighbors.size && neighbors.map(_.id).toSet == targets,
               "Restore requires expected revisions for exactly the changed relationship endpoints")
             val checked = neighbors.map(n => check(n.id, n.revision))
+            closing(item, previous.item.item.draft)
             // The restored draft is written first: a re-added PartOf is checked against the milestone as this batch leaves it.
             revise(item, previous.item.item.draft, Some(previous.item.item.draft))
             removed.foreach(ref => edgeChange(canonical(id, ref.relation, ref.target), false))
@@ -218,6 +229,15 @@ final class LedgerMutation(terminationPlanner: TerminationPlanner, boundary: Dri
             val right = check(target, targetRevision)
             val edge = canonical(source, relation, target)
             if (edgeChange(edge, present)) { revise(left, left.draft, None); revise(right, right.draft, None) }
+        }
+        closed.foreach { id =>
+          val milestone = touched(id)
+          val open = tx.refs(id).collect { case ItemRef(Relation.Contains, member) if member.ledger == Ledger.Tasks => touched.getOrElse(member, required(tx, scope, member)) }
+            .map(task => task.id -> status(task.draft.content)).filter((task, state) => MilestonePolicy.nonTerminal(task, state))
+          milestone.draft.content match {
+            case Content.Milestone(target, _) => invalid(open.isEmpty, MilestonePolicy.closure(id, target, open))
+            case _ => throw new IllegalStateException("A closing milestone holds another ledger's content")
+          }
         }
         val items = touched.valuesIterator.map(i => ItemRevision(i.id, i.revision)).toList
         val cursor = if (items.nonEmpty) tx.publish(request.request, items) else tx.cursor

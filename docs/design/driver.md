@@ -133,6 +133,8 @@ The boundary runs inside the writing transaction, so a rejection leaves the ledg
 
 Everything else that names or changes a milestone outside the set is rejected as an out-of-set change: replacing its draft, archiving, restoring or terminating it, removing a membership, any other relation, and an assignment to a milestone that is not Open. A Milestone created without such a `Produce` is a non-selected creation.
 
+Closing a milestone inside the set is an ordinary ledger write: the [closure gate](ledgers.md#references) refuses a `Replace` or `Terminate` that would close it over a Ready or Active Task with the same `Invalid` fault an undriven write receives, nothing is committed, and the driver stays on because the refusal is not a boundary violation.
+
 The snapshot is never recomputed at activation or at write time. An item attached to the targets after the directive was issued is outside that cycle and becomes advanceable in the next one. A descendant created in cycle N is in the snapshot issued for cycle N+1.
 
 Any such rejection stops the driver with reason `Failure` and a detail naming the items.

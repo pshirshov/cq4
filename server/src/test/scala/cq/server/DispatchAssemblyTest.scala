@@ -201,17 +201,28 @@ abstract class DispatchAssemblyTest extends SpecZIO with AssertZIO {
             List(claim.fence), "Assign the milestone"))
           assigned = linked.items.find(_.id == member.id).get
           _ <- ZIO.attemptBlocking(assert(assembler.assemble(request.copy(members = List(assigned))).members.map(_.refs) == List(List(ItemRef(Relation.PartOf, target.id)))))
-          contained = linked.items.find(_.id == target.id).get
-          _ <- ledger.change(scope, ChangeRequest(requestId, List(Mutation.Replace(target.id, contained.revision,
-            milestone.copy(content = Content.Milestone(MilestoneStatus.Complete, "Deliver the consumer")))), Nil, "Complete the milestone"))
-          closed = Fault.Invalid(s"Work refused: T${member.id.number}'s milestone M${target.id.number} is Complete; a Planner must reassign it under plan review")
-          _ <- ZIO.attemptBlocking {
-            val current = request.copy(members = List(assigned))
-            assert(intercept[DomainFailure](assembler.assemble(current)).fault == closed)
-            assert(intercept[DomainFailure](assembler.assemble(current.copy(work = DispatchWork.Worker(WorkerMode.ResolveConflict)))).fault == closed)
-            List[DispatchWork](DispatchWork.Planner(), DispatchWork.Worker(WorkerMode.Probe)).foreach(work =>
-              assert(assembler.assemble(current.copy(work = work)).members.map(_.item.id) == List(member.id)))
-          }
+          // A milestone closes only over terminal Tasks, so for each closed status the Task is finished, the milestone closed and the Task reopened.
+          replace = (id: ItemId, value: ItemDraft, fences: List[Fence], reason: String) => ledger.get(scope, id).flatMap(view =>
+            ledger.change(scope, ChangeRequest(requestId, List(Mutation.Replace(id, view.item.revision, value)), fences, reason)))
+          work = draft("Unassigned work")
+          finished = work.copy(content = work.content match {
+            case value: Content.Task => value.copy(status = TaskStatus.Done)
+            case other => throw new IllegalStateException(s"The fixture draft is not a Task: $other")
+          })
+          _ <- ZIO.foreachDiscard(List(MilestoneStatus.Complete, MilestoneStatus.Cancelled)) { status => for {
+            _ <- replace(member.id, finished, List(claim.fence), "Finish the task")
+            _ <- replace(target.id, milestone.copy(content = Content.Milestone(status, "Deliver the consumer")), Nil, s"$status milestone")
+            reopened <- replace(member.id, work, List(claim.fence), "Reopen the task")
+            closed = Fault.Invalid(s"Work refused: T${member.id.number}'s milestone M${target.id.number} is $status. " +
+              s"Reopen M${target.id.number} or reassign T${member.id.number} to an Open milestone before work starts")
+            _ <- ZIO.attemptBlocking {
+              val current = request.copy(members = reopened.items)
+              assert(intercept[DomainFailure](assembler.assemble(current)).fault == closed)
+              assert(intercept[DomainFailure](assembler.assemble(current.copy(work = DispatchWork.Worker(WorkerMode.ResolveConflict)))).fault == closed)
+              List[DispatchWork](DispatchWork.Explorer(ExplorerMode.Investigate), DispatchWork.Planner(), DispatchWork.Worker(WorkerMode.Probe)).foreach(admitted =>
+                assert(assembler.assemble(current.copy(work = admitted)).members.map(_.item.id) == List(member.id)))
+            }
+          } yield () }
         } yield ()
     }
   }

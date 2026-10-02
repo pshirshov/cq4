@@ -504,12 +504,19 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
         both <- ZIO.attemptBlocking(planner.plan(input, ArtifactId(uuid)))
         _ <- assertIO(offered(both) == Set(current, stranded))
         choice = both.evidence.decision.choices.find(_.members.exists(_.id == stranded)).get
-        target <- ledger.get(scope, closing)
-        _ <- ledger.change(scope, ChangeRequest(RequestId(uuid), List(Mutation.Replace(closing, target.item.revision,
-          milestone.copy(content = Content.Milestone(MilestoneStatus.Complete, "Deliver the tasks")))), Nil, "Complete the milestone"))
-        refused <- ZIO.attemptBlocking(intercept[DomainFailure](planner.verify(input, choice, both.fingerprints(choice.id))))
+        // A milestone closes only over terminal Tasks, so the Task is finished, the milestone completed and the Task then reopened.
+        replace = (id: ItemId, draft: ItemDraft, reason: String) => ledger.get(scope, id).flatMap(view =>
+          ledger.change(scope, ChangeRequest(RequestId(uuid), List(Mutation.Replace(id, view.item.revision, draft)), Nil, reason)))
+        _ <- replace(stranded, task.copy(content = Content.Task(TaskStatus.Done, List("Independent acceptance"), None, Nil)), "Finish the task")
+        _ <- replace(closing, milestone.copy(content = Content.Milestone(MilestoneStatus.Complete, "Deliver the tasks")), "Complete the milestone")
+        reopened <- replace(stranded, task, "Reopen the task")
+        // The reopened Task has the selected content at a later revision. The choice is pinned to that revision to reach the milestone check:
+        // the earlier one fails verification as no longer current.
+        stale <- ZIO.attemptBlocking(intercept[IllegalArgumentException](planner.verify(input, choice, both.fingerprints(choice.id))))
+        _ <- assertIO(stale.getMessage.contains("Selected cohort is no longer selected, ready or current"))
+        refused <- ZIO.attemptBlocking(intercept[DomainFailure](planner.verify(input, choice.copy(members = reopened.items), both.fingerprints(choice.id))))
         _ <- assertIO(refused.fault == Fault.Invalid(
-          s"Work refused: T${stranded.number}'s milestone M${closing.number} is Complete; a Planner must reassign it under plan review"))
+          s"Work refused: T${stranded.number}'s milestone M${closing.number} is Complete. Reopen M${closing.number} or reassign T${stranded.number} to an Open milestone before work starts"))
         selected <- ZIO.attemptBlocking(planner.plan(input.copy(request = RequestId(uuid)), ArtifactId(uuid)))
         _ <- assertIO(offered(selected) == Set(current) && selected.evidence.decision.counts.excluded == 1 &&
           selected.evidence.considered.filter(_.reason == CohortReason.ClosedMilestone).map(_.members.map(_.id)) == List(List(stranded)))
