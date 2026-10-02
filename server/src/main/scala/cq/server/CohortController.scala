@@ -15,9 +15,13 @@ final class CohortController(config: SupervisorConfig, authority: SupervisorAuth
   private var advertised = Set.empty[RequestId]
 
   def select(request: CohortRequest): Task[CohortDecision] = ZIO.attemptBlocking(synchronized {
+    // A decision of an earlier workflow activation can be neither replayed nor started, so only its generation is kept, to refuse it.
+    val stale = generations.collect { case (id, generation) if generation != workflow.generation => id }.toSet
+    decisions --= stale
+    advertised --= stale
+    require(generations.get(request.request).forall(_ == workflow.generation), "Cohort selection belongs to a previous workflow activation")
     val value = decisions.get(request.request) match {
       case Some(existing) =>
-        require(generations(request.request) == workflow.generation, "Cohort selection belongs to a previous workflow activation")
         if (existing.evidence.request != request) throw DomainFailure(Fault.Conflict("Cohort selection identity changed"))
         existing
       case None =>
@@ -47,7 +51,7 @@ final class CohortController(config: SupervisorConfig, authority: SupervisorAuth
   def start(id: RequestId, harness: Harness, fence: Fence): Task[DispatchStatus] = {
     val resolved = ZIO.attemptBlocking(synchronized {
       val (plan, choice) = decisions.values.filter(plan => advertised(plan.evidence.request.request)).toList.flatMap(plan => plan.evidence.decision.choices.map(plan -> _)).find(_._2.id == id)
-        .getOrElse(throw DomainFailure(Fault.Missing("Cohort choice is not owned by this governing session")))
+        .getOrElse(throw DomainFailure(Fault.Missing("Cohort choice is not owned by this governing session or belongs to a previous workflow activation")))
       require(generations(plan.evidence.request.request) == workflow.generation, "Cohort choice belongs to a previous workflow activation")
       val request = DispatchRequest(choice.id, choice.work, harness, choice.members, choice.guidance, choice.artifacts, choice.previous, fence, choice.limits)
       workflow.authorize(DispatchCommand.Start(request))

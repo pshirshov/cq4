@@ -25,6 +25,20 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
     override def ancestor(earlier: GitCommit, later: GitCommit): Boolean = earlier == later || (later == head && ancestors(earlier))
   }
   private def fixed(base: GitCommit): ExecutionBase = new MutableBase(base, Set.empty)
+  private def unreadable(head: GitCommit): ExecutionBase = new ExecutionBase {
+    override def fresh(): GitCommit = head
+    override def expected(base: GitCommit, candidate: GitCommit): GitCommit = base
+    override def ancestor(earlier: GitCommit, later: GitCommit): Boolean = throw new IllegalStateException("Repository is unreadable")
+  }
+  private def assessment(members: List[ItemRevision], compatibility: CohortCompatibility): CohortAssessment =
+    CohortAssessment(compatibility, "Share implementation", "No dependency conflict", "Separate acceptance",
+      members.map(member => CohortMemberAssessment(member, List(CohortCriterion(0, Set("acceptance"), "Inspect this task")))))
+  // A Planner report that assesses `groups` and abstains on every other assigned member.
+  private def assessing(members: List[ItemRevision], groups: List[CohortAssessment]): ChildReport.Plan = {
+    val assessed = groups.flatMap(_.members.map(_.member.id)).toSet
+    ChildReport.Plan(members.map(ref => if (assessed(ref.id)) PlanMember(ref.id, PlanDisposition.Assessed, "Assessed")
+      else PlanMember(ref.id, PlanDisposition.Abstained, "Not assessed")), None, groups)
+  }
   private def link(ledger: LedgerService[IO], scope: Scope, source: ItemId, relation: Relation, target: ItemId): IO[Throwable, Unit] = for {
     a <- ledger.get(scope, source)
     b <- ledger.get(scope, target)
@@ -164,6 +178,23 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
       again.evidence.toString.take(4000)))
     _ <- ZIO.foreachDiscard(again.evidence.decision.choices)(choice => ZIO.attemptBlocking(planner.verify(retry, choice, again.fingerprints(choice.id))))
   } yield again
+
+  // C2 fixture: four Tasks assessed as the Compatible pairs {0, 1} and {2, 3} at the fixture base, and a target that has since moved to a
+  // descendant. `decide` selects implementation with the carried handles in both orders and requires one decision.
+  private final case class Carried(fixture: Assessed, moved: Assessed, target: ExecutionBase,
+    decide: (ExecutionBase, List[ArtifactId]) => IO[Throwable, Set[(DispatchWork, Set[ItemRevision])]])
+  private def carried(ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO],
+    runtime: Runtime[Any]): IO[Throwable, Carried] = assessed(ledger, usage, artifacts, admissions, 4, CohortCompatibility.Compatible).map { fixture =>
+    val reads = new EvidenceApi(api(ledger, fixture.scope, runtime), artifacts, admissions, fixture.scope, runtime)
+    val head = GitCommit("b" * 40)
+    def select(bases: ExecutionBase, handles: List[ArtifactId]) = ZIO.attemptBlocking(
+      new CohortPlanner(reads, fixture.scope, bases, fixture.checks, new CohortProgress, new OperatorRequirements(""))
+        .plan(request(fixture.members.map(_.id).toSet, Implement).copy(artifacts = handles), ArtifactId(uuid)).evidence.decision.choices
+        .map(choice => (choice.work, choice.members.toSet)).toSet)
+    Carried(fixture, fixture.copy(base = head), new MutableBase(head, Set(fixture.base)), (bases, handles) =>
+      select(bases, handles).zip(select(bases, handles.reverse)).flatMap((forward, backward) =>
+        ZIO.attempt(assert(forward == backward, (forward, backward).toString)).as(forward)))
+  }
 
   "Automatic cohort selection (Behavioral Active Blackbox; dummy Group / PostgreSQL Good Communication)" should {
     "offer an explicit completed root for planning its reopening without executing or rediscovering completed work" in { (ledger: LedgerService[IO]) =>
@@ -600,6 +631,59 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
         again <- unassessed(planner, progress, request(fixture.members.map(_.id).toSet, Implement).copy(previous = Some(failed.id)), fixture.members.map(_.id).toSet, None)
         // The members no longer continue that result: it is carried as context.
         _ <- ZIO.attempt(assert(again.evidence.decision.choices.forall(choice => choice.previous.isEmpty && choice.artifacts == List(failed.id)), again.evidence.toString))
+      } yield ()
+    }
+
+    "C1: name the assessment and its base when their ancestry cannot be inspected" in {
+      (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO]) => for {
+        runtime <- ZIO.runtime[Any]
+        fixture <- assessed(ledger, usage, artifacts, admissions, 2, CohortCompatibility.Compatible)
+        reads = new EvidenceApi(api(ledger, fixture.scope, runtime), artifacts, admissions, fixture.scope, runtime)
+        input = request(fixture.members.map(_.id).toSet, DispatchWork.Worker(WorkerMode.Implement)).copy(artifacts = List(fixture.artifact))
+        head = GitCommit("b" * 40)
+        select = (bases: ExecutionBase) => ZIO.attemptBlocking(
+          new CohortPlanner(reads, fixture.scope, bases, fixture.checks, new CohortProgress, new OperatorRequirements("")).plan(input, ArtifactId(uuid)))
+        // A base the repository does not hold is no ancestor (CandidateWorkspace.ancestor): the assessment does not apply and a new one is asked for.
+        absent <- select(fixed(head))
+        _ <- ZIO.attempt(assert(absent.evidence.decision.choices.map(choice => (choice.work, choice.reason)) ==
+          List((DispatchWork.Planner(), CohortReason.AssessmentRequired)), absent.evidence.toString))
+        failure <- select(unreadable(head)).either
+        _ <- ZIO.attempt(assert(failure.left.exists(error => error.getMessage.contains(fixture.artifact.value.toString) &&
+          error.getMessage.contains(fixture.base.value) && error.getMessage.contains(head.value) && error.getMessage.contains("Repository is unreadable")), failure.toString))
+      } yield ()
+    }
+
+    "C2: let the assessment at the newest base, and at one base the later result, decide between conflicting carried assessments" in {
+      (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO]) => for {
+        runtime <- ZIO.runtime[Any]
+        f <- carried(ledger, usage, artifacts, admissions, runtime)
+        members = f.fixture.members
+        split = Set[(DispatchWork, Set[ItemRevision])]((Implement, Set(members.head)), (Implement, Set(members(1))), (Implement, members.drop(2).toSet))
+        // The first pair is Compatible at the earlier base and Unknown at the later one.
+        conflicting <- publish(f.moved, DispatchWork.Planner(), assessing(members, List(assessment(members.take(2), CohortCompatibility.Unknown))),
+          None, Nil, ledger, usage, artifacts, admissions)
+        newest <- f.decide(f.target, List(f.fixture.artifact, conflicting.id))
+        _ <- ZIO.attempt(assert(newest == split, newest.toString))
+        // At one base the later result decides.
+        tied <- publish(f.fixture, DispatchWork.Planner(), assessing(members, List(assessment(members.take(2), CohortCompatibility.Incompatible))),
+          None, Nil, ledger, usage, artifacts, admissions)
+        received <- ZIO.foreach(List(f.fixture.artifact, tied.id))(id => artifacts.metadata(f.fixture.scope, id).map(_.receivedAt))
+        later <- f.decide(fixed(f.fixture.base), List(f.fixture.artifact, tied.id))
+        _ <- ZIO.attempt(assert(received.head <= received.last && (received.head == received.last || later == split), (received, later).toString))
+      } yield ()
+    }
+
+    "C2: let the assessment at the newest base decide between overlapping carried groups and ask again for the members it leaves" in {
+      (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO]) => for {
+        runtime <- ZIO.runtime[Any]
+        f <- carried(ledger, usage, artifacts, admissions, runtime)
+        members = f.fixture.members
+        // The later base groups Task 0 with Task 2, so both earlier pairs give way and their other members need a new assessment.
+        overlapping <- publish(f.moved, DispatchWork.Planner(), assessing(members, List(assessment(List(members.head, members(2)), CohortCompatibility.Compatible))),
+          None, Nil, ledger, usage, artifacts, admissions)
+        regrouped <- f.decide(f.target, List(f.fixture.artifact, overlapping.id))
+        _ <- ZIO.attempt(assert(regrouped == Set[(DispatchWork, Set[ItemRevision])]((Implement, Set(members.head, members(2))),
+          (DispatchWork.Planner(), Set(members(1), members(3)))), regrouped.toString))
       } yield ()
     }
 

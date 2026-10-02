@@ -18,6 +18,6 @@ trait ExecutionBase {
     * `base` (the worker's recorded base), so the conditional update reports NotApplied only when the target advanced past the candidate. */
   def expected(base: GitCommit, candidate: GitCommit): GitCommit
 
-  /** Whether `earlier` is `later` or one of its ancestors in the repository. */
+  /** Whether `earlier` is `later` or one of its ancestors in the repository; false when the repository does not hold `earlier`. */
   def ancestor(earlier: GitCommit, later: GitCommit): Boolean
 }

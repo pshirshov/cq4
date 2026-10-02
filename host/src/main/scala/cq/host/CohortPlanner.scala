@@ -86,11 +86,11 @@ final class CohortPlanner(api: ServerApi, owner: Scope, bases: ExecutionBase, ch
     // An assessment applies under the configured check definitions at its own base or a descendant of it: integrations move the target
     // without changing the assessed member revisions, which `compatibility` still matches exactly.
     val executionBase = previous.flatMap(_.value.candidate).getOrElse(base)
-    val assessments = sources.collect { case value if value.value.report match {
+    val assessments = precedence(sources.collect { case value if value.value.report match {
       case plan: ChildReport.Plan => plan.assessments.nonEmpty
       case _ => false
     } => reader.assessment(value.metadata.id) }.filter(value => value.input.checks.sortBy(_.name) == checks.sortBy(_.name) &&
-      (value.input.base == executionBase || bases.ancestor(value.input.base, executionBase)))
+      (value.input.base == executionBase || descends(value, executionBase))))
     val reviews = sources.filter(_.value.request.work == DispatchWork.Reviewer(ReviewerMode.Candidate)).map(value => reader.review(value.metadata.id))
     val cache = scala.collection.mutable.Map.from(artifacts.map(value => value.metadata.id -> value))
     def read(id: ArtifactId): ResolvedArtifact = cache.getOrElseUpdate(id, reader.read(id))
@@ -98,6 +98,21 @@ final class CohortPlanner(api: ServerApi, owner: Scope, bases: ExecutionBase, ch
     val operativeResults = sources.map(value => CohortArtifacts.result(value, read))
     Context(guidance.items, artifacts, operative, results, operativeResults, assessments, reviews, previous.map(_.value), base,
       OperatorRequirements.standing(call, owner.project))
+  }
+
+  // A base the repository does not hold is no ancestor, so its assessment does not apply. A comparison Git cannot make fails the selection.
+  private def descends(assessment: ExecutedResult, executionBase: GitCommit): Boolean =
+    try bases.ancestor(assessment.input.base, executionBase) catch {
+      case error: IllegalStateException => throw new IllegalStateException(s"Assessment ${assessment.result.metadata.id.value} at base " +
+        s"${assessment.input.base.value} cannot be compared with execution base ${executionBase.value}: ${error.getMessage}", error)
+    }
+
+  // Applicable assessments carried across target moves, newest first: one whose base descends from another's precedes it, and among
+  // equal or unrelated bases the later result does.
+  private def precedence(applicable: List[ExecutedResult]): List[ExecutedResult] = {
+    val assessed = applicable.map(_.input.base).distinct
+    val depth = assessed.map(base => base -> assessed.count(other => other != base && bases.ancestor(other, base))).toMap
+    applicable.sortBy(value => (-depth(value.input.base), -value.result.metadata.receivedAt, value.result.metadata.id.value.toString))
   }
 
   private def producers(value: ItemView): Set[ItemId] = value.refs.collect { case ItemRef(Relation.DerivedFrom, id) => id }.toSet
@@ -125,14 +140,17 @@ final class CohortPlanner(api: ServerApi, owner: Scope, bases: ExecutionBase, ch
     } else CohortExecutionFingerprint(semantic, members.map(member => member.item.id -> fingerprint(work, List(member), context)).toMap)
   }
 
+  // In precedence order, a group that shares a member with an earlier one is ignored: the newest assessment decides between two verdicts
+  // for one group and between two groups that name one Task, so the groups that remain are disjoint.
   private def assessments(context: Context): List[CohortAssessment] =
-    context.assessments.flatMap(_.result.value.report.asInstanceOf[ChildReport.Plan].assessments)
+    context.assessments.flatMap(_.result.value.report.asInstanceOf[ChildReport.Plan].assessments).foldLeft(List.empty[CohortAssessment]) { (kept, next) =>
+      val ids = next.members.map(_.member.id).toSet
+      if (kept.exists(_.members.exists(member => ids(member.member.id)))) kept else kept :+ next
+    }
 
   private def compatibility(members: List[ItemView], context: Context): Option[CohortCompatibility] = {
     val refs = members.map(value => ItemRevision(value.item.id, value.item.revision)).toSet
-    val applicable = assessments(context).filter(_.members.map(_.member).toSet == refs)
-    require(applicable.map(_.compatibility).distinct.size <= 1, "Conflicting cohort assessments require an explicit narrower context")
-    applicable.headOption.map(_.compatibility)
+    assessments(context).find(_.members.map(_.member).toSet == refs).map(_.compatibility)
   }
 
   private def assessedGroup(first: ItemView, pending: List[ItemView], request: CohortRequest, context: Context): Option[List[ItemView]] = {
@@ -143,7 +161,6 @@ final class CohortPlanner(api: ServerApi, owner: Scope, bases: ExecutionBase, ch
     val groups = (if (exact.nonEmpty) exact else candidates).map(_.map(_.id)).distinct
       .map(ids => pending.filter(value => ids(value.item.id)))
       .filter(group => independent(group) && fits(request, request.work, group, context))
-    require(groups.size <= 1, "Overlapping applicable cohort groups require an explicit narrower context")
     groups.headOption
   }
 
