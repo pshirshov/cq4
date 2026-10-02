@@ -2,12 +2,14 @@ import * as api from '../../generated/typescript/cq/api/index.js';
 import { BaboonCodecContext } from '../../generated/typescript/BaboonSharedRuntime.js';
 import { Dialog } from './dialog.js';
 import { button, element } from './editor.js';
+import { holdButton } from './hold-button.js';
 import { itemName } from './items.js';
 import { faultMessage } from './faults.js';
 import { uuidV4 } from './uuid.js';
 
 const CONTEXT = BaboonCodecContext.Default;
 const BATCH_LIMIT = 100;
+const SAVE_SHORTCUT = 'Ctrl+Enter / ⌘+Enter';
 interface QuestionEffects {
   call(command: api.Command): Promise<api.Result>;
   view(item: api.Item): HTMLElement;
@@ -22,7 +24,7 @@ export class QuestionBatch {
   private completed = new Set<string>();
   private record: api.BrowserDraft | null = null;
   private readonly answer = element('textarea', '');
-  private readonly save = button('Save answer and next', () => this.action(() => this.submit()));
+  private save = this.saveControl(false);
   private readonly previous = button('Previous question', () => this.move(-1));
   private readonly next = button('Skip / next question', () => this.move(1));
   private readonly busy = new Set<string>();
@@ -40,7 +42,15 @@ export class QuestionBatch {
     this.dialog.element.addEventListener('keydown', event => {
       if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && !event.isComposing) { event.preventDefault(); this.action(() => this.submit()); }
     });
-    this.save.title = 'Ctrl+Enter / ⌘+Enter'; this.save.setAttribute('aria-keyshortcuts', 'Control+Enter Meta+Enter');
+  }
+  // Saving an answer needs a hold (D106). Retrying resends the exact request a hold already confirmed, so it stays an
+  // ordinary click. Each rendering gets a new control: a completed hold control returns to idle only on a release
+  // event, which one activated without focus and then disabled by its own action never receives.
+  private saveControl(pending: boolean): HTMLButtonElement {
+    const submit = (): void => this.action(() => this.submit());
+    const control = pending ? button('Retry exact answer', submit) : holdButton('Save answer and next', submit);
+    control.title = pending ? SAVE_SHORTCUT : `${control.title} · ${SAVE_SHORTCUT}`; control.setAttribute('aria-keyshortcuts', 'Control+Enter Meta+Enter');
+    return control;
   }
   reset(): void { this.generation++; this.record = null; this.dialog.close(); }
   private key(id: api.ItemId): string { return `cq-question-draft:${id.project.value}:${itemName(id)}`; }
@@ -124,8 +134,8 @@ export class QuestionBatch {
     const stale = record.item.revision.value !== item.revision.value;
     const unavailable = item.draft.content.status !== api.QuestionStatus.Open || item.draft.archived;
     this.answer.value = record.value.content.answer === undefined ? '' : record.value.content.answer;
-    this.answer.disabled = pending || unavailable; this.save.disabled = this.busy.has(this.key(item.id)) || (!pending && (stale || unavailable));
-    this.save.textContent = pending ? 'Retry exact answer' : 'Save answer and next';
+    this.answer.disabled = pending || unavailable; this.save = this.saveControl(pending);
+    this.save.disabled = this.busy.has(this.key(item.id)) || (!pending && (stale || unavailable));
     this.previous.disabled = this.nextIndex(-1) === null; this.next.disabled = this.nextIndex(1) === null;
     // Pick controls are placed before each rendered alternative so every alternative appears once (D69).
     const view = this.effects.view(item);

@@ -4,6 +4,7 @@ import {randomUUID} from 'node:crypto';
 import {writeFile} from 'node:fs/promises';
 import {chromium} from 'playwright';
 import {trackProtocol, receivedReply, settledRequests} from './browser-protocol.mjs';
+import {hold as holdControl} from './hold.mjs';
 const origin = process.env.CQ_ORIGIN, evidence = process.env.CQ_BROWSER_EVIDENCE;
 const headers = {Authorization: `Bearer ${process.env.CQ_TOKEN}`, 'CQ-Session': randomUUID(), 'CQ-Protocol-Version': '0.1.0', 'Content-Type': 'application/json'};
 async function call(command) {
@@ -69,7 +70,7 @@ try {
         }
         const captured = hold(command => scenario === 'question-obsolete-error'
           ? command.Read?.input.selection.ItemDetail?.id.number === '1' : Boolean(command.Change));
-        await batch().getByRole('button', {name: 'Save answer and next', exact: true}).click(); await captured();
+        await holdControl(page, batch().getByRole('button', {name: 'Save answer and next', exact: true})); await captured();
         if (scenario === 'question-settled-revisit' || scenario === 'question-transport-revisit') {
           await batch().getByRole('button', {name: 'Skip / next question', exact: true}).click();
           await batch().getByRole('heading', {name: 'Q2 · Question 2', exact: true}).waitFor();
