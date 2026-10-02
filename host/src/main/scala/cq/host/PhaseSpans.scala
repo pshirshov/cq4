@@ -25,10 +25,10 @@ object PhaseSpans {
   /** The assignment of the child of this session that produced `result`; work the governing session runs on that result belongs to it. */
   def producer(session: Path, result: ArtifactId): AssignmentId = {
     val root = session.resolve("children")
-    val children = if (!Files.exists(root)) Nil else Using.resource(Files.list(root))(_.iterator().asScala.toList)
-    children.map(_.resolve("ticket.json")).filter(Files.exists(_)).map(HostFiles.read(_, DispatchTicket_JsonCodec, MaxTicketBytes))
-      .find(ticket => NativeArtifacts.id(ticket.attempt.id, "result") == result).map(_.assignment.id)
-      .getOrElse(throw new IllegalStateException("Result was not produced by a child of this governing session"))
+    // The iterator reads one ticket at a time and stops at the producer: a session holds any number of children.
+    val producer = if (!Files.exists(root)) None else Using.resource(Files.list(root))(_.iterator().asScala.map(_.resolve("ticket.json")).filter(Files.exists(_))
+      .map(HostFiles.read(_, DispatchTicket_JsonCodec, MaxTicketBytes)).find(ticket => NativeArtifacts.id(ticket.attempt.id, "result") == result))
+    producer.map(_.assignment.id).getOrElse(throw new IllegalStateException("Result was not produced by a child of this governing session"))
   }
 }
 

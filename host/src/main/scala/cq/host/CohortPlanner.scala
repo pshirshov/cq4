@@ -86,11 +86,11 @@ final class CohortPlanner(api: ServerApi, owner: Scope, bases: ExecutionBase, ch
     // An assessment applies under the configured check definitions at its own base or a descendant of it: integrations move the target
     // without changing the assessed member revisions, which `compatibility` still matches exactly.
     val executionBase = previous.flatMap(_.value.candidate).getOrElse(base)
-    val assessments = sources.collect { case value if value.value.report match {
+    val assessments = precedence(sources.collect { case value if value.value.report match {
       case plan: ChildReport.Plan => plan.assessments.nonEmpty
       case _ => false
     } => reader.assessment(value.metadata.id) }.filter(value => value.input.checks.sortBy(_.name) == checks.sortBy(_.name) &&
-      (value.input.base == executionBase || bases.ancestor(value.input.base, executionBase)))
+      (value.input.base == executionBase || descends(value, executionBase))))
     val reviews = sources.filter(_.value.request.work == DispatchWork.Reviewer(ReviewerMode.Candidate)).map(value => reader.review(value.metadata.id))
     val cache = scala.collection.mutable.Map.from(artifacts.map(value => value.metadata.id -> value))
     def read(id: ArtifactId): ResolvedArtifact = cache.getOrElseUpdate(id, reader.read(id))
@@ -98,6 +98,21 @@ final class CohortPlanner(api: ServerApi, owner: Scope, bases: ExecutionBase, ch
     val operativeResults = sources.map(value => CohortArtifacts.result(value, read))
     Context(guidance.items, artifacts, operative, results, operativeResults, assessments, reviews, previous.map(_.value), base,
       OperatorRequirements.standing(call, owner.project))
+  }
+
+  // A base the repository does not hold is no ancestor, so its assessment does not apply. A comparison Git cannot make fails the selection.
+  private def descends(assessment: ExecutedResult, executionBase: GitCommit): Boolean =
+    try bases.ancestor(assessment.input.base, executionBase) catch {
+      case error: IllegalStateException => throw new IllegalStateException(s"Assessment ${assessment.result.metadata.id.value} at base " +
+        s"${assessment.input.base.value} cannot be compared with execution base ${executionBase.value}: ${error.getMessage}", error)
+    }
+
+  // Applicable assessments carried across target moves, newest first: one whose base descends from another's precedes it, and among
+  // equal or unrelated bases the later result does.
+  private def precedence(applicable: List[ExecutedResult]): List[ExecutedResult] = {
+    val assessed = applicable.map(_.input.base).distinct
+    val depth = assessed.map(base => base -> assessed.count(other => other != base && bases.ancestor(other, base))).toMap
+    applicable.sortBy(value => (-depth(value.input.base), -value.result.metadata.receivedAt, value.result.metadata.id.value.toString))
   }
 
   private def producers(value: ItemView): Set[ItemId] = value.refs.collect { case ItemRef(Relation.DerivedFrom, id) => id }.toSet
@@ -125,14 +140,17 @@ final class CohortPlanner(api: ServerApi, owner: Scope, bases: ExecutionBase, ch
     } else CohortExecutionFingerprint(semantic, members.map(member => member.item.id -> fingerprint(work, List(member), context)).toMap)
   }
 
+  // In precedence order, a group that shares a member with an earlier one is ignored: the newest assessment decides between two verdicts
+  // for one group and between two groups that name one Task, so the groups that remain are disjoint.
   private def assessments(context: Context): List[CohortAssessment] =
-    context.assessments.flatMap(_.result.value.report.asInstanceOf[ChildReport.Plan].assessments)
+    context.assessments.flatMap(_.result.value.report.asInstanceOf[ChildReport.Plan].assessments).foldLeft(List.empty[CohortAssessment]) { (kept, next) =>
+      val ids = next.members.map(_.member.id).toSet
+      if (kept.exists(_.members.exists(member => ids(member.member.id)))) kept else kept :+ next
+    }
 
   private def compatibility(members: List[ItemView], context: Context): Option[CohortCompatibility] = {
     val refs = members.map(value => ItemRevision(value.item.id, value.item.revision)).toSet
-    val applicable = assessments(context).filter(_.members.map(_.member).toSet == refs)
-    require(applicable.map(_.compatibility).distinct.size <= 1, "Conflicting cohort assessments require an explicit narrower context")
-    applicable.headOption.map(_.compatibility)
+    assessments(context).find(_.members.map(_.member).toSet == refs).map(_.compatibility)
   }
 
   private def assessedGroup(first: ItemView, pending: List[ItemView], request: CohortRequest, context: Context): Option[List[ItemView]] = {
@@ -143,7 +161,6 @@ final class CohortPlanner(api: ServerApi, owner: Scope, bases: ExecutionBase, ch
     val groups = (if (exact.nonEmpty) exact else candidates).map(_.map(_.id)).distinct
       .map(ids => pending.filter(value => ids(value.item.id)))
       .filter(group => independent(group) && fits(request, request.work, group, context))
-    require(groups.size <= 1, "Overlapping applicable cohort groups require an explicit narrower context")
     groups.headOption
   }
 
@@ -238,7 +255,12 @@ final class CohortPlanner(api: ServerApi, owner: Scope, bases: ExecutionBase, ch
       val refs = group.map(value => ItemRevision(value.item.id, value.item.revision))
       val hash = executionFingerprint(work, group, content, reason)
       val deferred = group.filter(member => progress.deferred(hash.members(member.item.id)))
-      if (deferred.nonEmpty && deferred.size < group.size && inputs.previous.isEmpty) {
+      if (reason == CohortReason.AssessmentRequired && progress.deferred(hash.group)) {
+        // This assessment already ran for these exact revisions and no applicable verdict followed: the Planner failed or abstained, or its
+        // result was not admitted or forwarded. That is an Unknown verdict, so the members are worked alone instead of waiting for one.
+        considered :+= CohortConsidered(refs, CohortReason.Deferred, Some(hash.group))
+        separately(group, CohortReason.UnknownAssessment, inputs, content)
+      } else if (deferred.nonEmpty && deferred.size < group.size && inputs.previous.isEmpty) {
         considered :+= CohortConsidered(deferred.map(value => ItemRevision(value.item.id, value.item.revision)), CohortReason.Deferred, Some(hash.group))
         group.filterNot(deferred.contains).take(CohortBounds.Choices - offered).foreach(member =>
           offer(List(member), work, if (reason == CohortReason.AssessmentRequired) reason else CohortReason.Single, None, inputs, content))
@@ -258,6 +280,16 @@ final class CohortPlanner(api: ServerApi, owner: Scope, bases: ExecutionBase, ch
       }
     }
 
+    // Members that may not share a candidate start alone and afresh: a previous result they continued together becomes their context.
+    def separately(group: List[ItemView], reason: CohortReason, inputs: CohortRequest, content: Context): Unit = {
+      val (split, splitContext) = if (inputs.previous.isEmpty) (inputs, content) else {
+        val split = inputs.copy(artifacts = (inputs.artifacts ++ inputs.previous).distinct, previous = None)
+        validate(split)
+        (split, context(call, split, base))
+      }
+      group.foreach(member => if (offered < CohortBounds.Choices) offer(List(member), request.work, reason, None, split, splitContext))
+    }
+
     if (exact.nonEmpty && !partition) {
       require(loaded.omitted.isEmpty && !candidates.exists(ref => held(ref.id)), "Exact previous cohort is too large or claimed by another session")
       def continuity(): Unit = if (pending.nonEmpty) considered :+= CohortConsidered(
@@ -271,11 +303,7 @@ final class CohortPlanner(api: ServerApi, owner: Scope, bases: ExecutionBase, ch
         case None => offer(pending, DispatchWork.Planner(), CohortReason.AssessmentRequired, None, request, ctx)
         case Some(_) if continued => continuity()
         case Some(value) =>
-          val split = request.copy(artifacts = (request.artifacts ++ request.previous).distinct, previous = None)
-          validate(split)
-          val splitContext = context(call, split, base)
-          val reason = if (value == CohortCompatibility.Unknown) CohortReason.UnknownAssessment else CohortReason.IncompatibleAssessment
-          pending.foreach(member => offer(List(member), request.work, reason, None, split, splitContext))
+          separately(pending, if (value == CohortCompatibility.Unknown) CohortReason.UnknownAssessment else CohortReason.IncompatibleAssessment, request, ctx)
       } else offer(pending, request.work, CohortReason.ExactPrevious, None, request, ctx)
       pending = Nil
     } else while (pending.nonEmpty && offered < CohortBounds.Choices) {
@@ -324,8 +352,11 @@ final class CohortPlanner(api: ServerApi, owner: Scope, bases: ExecutionBase, ch
     }
     call(Command.Graph(GraphInput(owner.project, request.roots, None, Some(snapshot), 1)))
     val chosen = choices.result()
+    // A member of a group whose assessment is deferred is excluded only when it is not offered alone either.
+    val offeredIds = chosen.flatMap(_.members.map(_.id)).toSet
     val excluded = considered.filter(value => Set(CohortReason.Claimed, CohortReason.Deferred, CohortReason.InputBound,
-      CohortReason.ReviewAccepted, CohortReason.ReviewBlocked, CohortReason.CandidateContinuity, CohortReason.NoMilestone, CohortReason.ClosedMilestone)(value.reason)).map(_.members.size).sum
+      CohortReason.ReviewAccepted, CohortReason.ReviewBlocked, CohortReason.CandidateContinuity, CohortReason.NoMilestone, CohortReason.ClosedMilestone)(value.reason))
+      .flatMap(_.members.map(_.id)).distinct.count(id => !offeredIds(id))
     val counts = CohortCounts(entries.size, selected.size, loaded.items.size, excluded,
       eligible.size - loaded.items.count(value => eligible.contains(value.item.id)), selected.count(entry => !ready(request.work, entry)),
       selected.count(entry => ready(request.work, entry) && !supports(request.work, entry.item.id)), selected.size - chosen.map(_.members.size).sum)

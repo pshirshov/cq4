@@ -317,8 +317,10 @@ def main():
 
         planned = start(choice)
         assert planned["phase"] == "Completed" and planned["counts"]["assessed"] == 2, planned
-        unchanged = tool("cq_host", "dispatch", {"Select": {"request": {**selection, "request": identity()}}})["Selection"]["value"]
-        assert unchanged["choices"] == [] and unchanged["counts"]["excluded"] == 2, unchanged
+        # A Select that does not forward the assessment sees an assessment that ran without a verdict: each member is offered alone.
+        unforwarded = tool("cq_host", "dispatch", {"Select": {"request": {**selection, "request": identity()}}})["Selection"]["value"]
+        assert [(value["work"], len(value["members"]), value["reason"]) for value in unforwarded["choices"]] == \
+            [({"Worker": {"mode": "Implement"}}, 1, "UnknownAssessment")] * 2 and unforwarded["counts"]["excluded"] == 0, unforwarded
         assessed = {**selection, "request": identity(), "artifacts": [planned["result"]]}
         selected = tool("cq_host", "dispatch", {"Select": {"request": assessed}})["Selection"]["value"]
         if scenario["unknown"]:

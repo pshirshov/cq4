@@ -13,12 +13,19 @@ final class CandidateWorkspace(config: SupervisorConfig, command: HostCommand) e
     require(result.exit == 0, s"Candidate Git operation failed: ${result.text.take(300)}")
     result.text.trim
   }
-  override def ancestor(earlier: GitCommit, later: GitCommit): Boolean =
-    command.run(Path.of(config.run.repository), GitArguments ++ List("merge-base", "--is-ancestor", earlier.value, later.value)).exit match {
-      case 0 => true
-      case 1 => false
-      case _ => throw new IllegalStateException("Candidate ancestry inspection failed")
+  override def ancestor(earlier: GitCommit, later: GitCommit): Boolean = {
+    def inspect(arguments: String*): Boolean = {
+      val result = command.run(Path.of(config.run.repository), GitArguments ++ arguments)
+      result.exit match {
+        case 0 => true
+        case 1 => false
+        case _ => throw new IllegalStateException(s"Candidate ancestry inspection of ${earlier.value} in ${later.value} failed: ${result.text.take(300)}")
+      }
     }
+    // `cat-file -e` exits 1 for an object the repository does not hold. Such a commit has no descendant here, which is an answer;
+    // `merge-base` alone would report it as a failure.
+    inspect("cat-file", "-e", earlier.value) && inspect("merge-base", "--is-ancestor", earlier.value, later.value)
+  }
   private def targetHead: Option[GitCommit] =
     config.settings.integrationTarget.map(target => GitCommit(git(Path.of(config.run.repository), "show-ref", "--verify", "--hash", target)))
   override def fresh(): GitCommit = targetHead.getOrElse(config.run.base)

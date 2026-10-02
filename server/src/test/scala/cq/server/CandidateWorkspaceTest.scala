@@ -118,6 +118,12 @@ final class CandidateWorkspaceLocal extends SpecZIO with AssertZIO {
           // The moved target descends from the earlier head; a competing candidate does not.
           assert(candidates.ancestor(local.base, first) && candidates.ancestor(first, first) && !candidates.ancestor(first, local.base) &&
             !candidates.ancestor(other, first))
+          // C1: a commit the repository does not hold is no ancestor; a comparison Git cannot make still fails, naming both commits.
+          val absent = GitCommit("f" * 40)
+          assert(!candidates.ancestor(absent, first))
+          val failure = intercept[IllegalStateException](candidates.ancestor(first, absent))
+          println(s"Ancestry of an absent later commit: ${failure.getMessage}")
+          assert(failure.getMessage.contains(first.value) && failure.getMessage.contains(absent.value))
           assert(candidates.expected(first, second) == first)
           // An incorporated candidate keeps its worker base so inspection reports Incorporated instead of a same-commit update.
           assert(candidates.expected(local.base, first) == local.base)
