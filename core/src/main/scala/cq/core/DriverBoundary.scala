@@ -63,14 +63,26 @@ final class DriverBoundary(registry: DriverRegistry, planner: WorksetPlanner) {
     case other => throw new IllegalStateException(s"Question ${reference(item.id)} holds ${other.getClass.getSimpleName}")
   }
 
-  // Whether the applied write made the Question Answered or changed its answer.
-  private def answers(tx: LedgerTransaction, written: ItemRevision): Boolean = {
-    val after = question(tx.get(written.id).getOrElse(throw new IllegalStateException("A written Question disappeared inside its transaction")))
-    val before = if (written.revision == Revision(1)) None
-      else Some(question(tx.historical(written.id, Revision(written.revision.value - 1))
-        .getOrElse(throw new IllegalStateException("A written Question has no previous revision")).item.item))
-    (after.status == QuestionStatus.Answered && !before.exists(_.status == QuestionStatus.Answered)) || after.answer != before.flatMap(_.answer)
+  // The Question as the applied write left it, and as it was before the write unless the write created it.
+  private def written(tx: LedgerTransaction, revision: ItemRevision): (Option[Item], Item) = {
+    val after = tx.get(revision.id).getOrElse(throw new IllegalStateException("A written Question disappeared inside its transaction"))
+    val before = if (revision.revision == Revision(1)) None
+      else Some(tx.historical(revision.id, Revision(revision.revision.value - 1))
+        .getOrElse(throw new IllegalStateException("A written Question has no previous revision")).item.item)
+    (before, after)
   }
+
+  // Whether the applied write made the Question Answered or changed its answer.
+  private def answers(before: Option[Item], after: Item): Boolean = {
+    val (previous, current) = (before.map(question), question(after))
+    (current.status == QuestionStatus.Answered && !previous.exists(_.status == QuestionStatus.Answered)) || current.answer != previous.flatMap(_.answer)
+  }
+
+  // Whether the Question awaits the user, as `DriverPolicy.awaitsUser` counts it: Open and unarchived.
+  private def waiting(item: Item): Boolean = !item.draft.archived && question(item).status == QuestionStatus.Open
+
+  // Whether the applied write ended the Question's wait for the user without an answer: a withdrawal by Replace, Restore or Cancel termination.
+  private def withdraws(before: Option[Item], after: Item): Boolean = before.exists(waiting) && !waiting(after)
 
   // Admission, before the write is applied: every existing item the request names is in the cycle's stored snapshot or was created by the cycle.
   // The one exception is the milestone of an assignment, which may be any Open milestone.
@@ -92,9 +104,13 @@ final class DriverBoundary(registry: DriverRegistry, planner: WorksetPlanner) {
     val outside = changed.map(_.id).filterNot(id => cycle.boundary(id) || milestones(id))
     if (outside.nonEmpty)
       registry.fail(record, s"out-of-set change: ${references(outside)} is outside the advanceable set stored for cycle ${cycle.number}", now)
-    // Only a person answers a Question. The refusal leaves the driver on: the operator parks, the answer is recorded, and the drive starts again.
-    val answered = acknowledgement.items.filter(item => item.id.ledger == Ledger.Questions && answers(tx, item)).map(_.id)
+    // Only a person settles a Question, by an answer or by withdrawing it. The refusal leaves the driver on: the operator parks, the Question is
+    // settled by hand, and the drive starts again.
+    val questions = acknowledgement.items.filter(_.id.ledger == Ledger.Questions).map(item => item.id -> written(tx, item))
+    val answered = questions.collect { case (id, (before, after)) if answers(before, after) => id }
     if (answered.nonEmpty) throw DomainFailure(Fault.Denied(DriverPolicy.answerRefused(answered)))
+    val withdrawn = questions.collect { case (id, (before, after)) if withdraws(before, after) => id }
+    if (withdrawn.nonEmpty) throw DomainFailure(Fault.Denied(DriverPolicy.withdrawalRefused(withdrawn)))
     if (created.nonEmpty) {
       val selected = try planner.evaluate(tx, record.targets, record.through, record.workset).advanceable.map(_.item.id).toSet catch {
         case DomainFailure(fault) => registry.fail(record, s"the advanceable set cannot be recomputed after the write: $fault", now)
