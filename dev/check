@@ -59,15 +59,27 @@ class Checks:
             verify_test_report(output)
         return output
 
-    def suites(self, suffix: str, name: str):
+    def selected(self, suffix: str, name: str):
         # distage-testkit executes every suite of the module when sbt selects suites by a pattern, and only one suite when several
-        # are named in one command (docs/validation/process-suite-load.md), so each selected suite gets an sbt run of its own.
+        # are named in one command (docs/validation/process-suite-load.md), so each selected suite gets a testOnly command of its own.
         listing = self.sbt(["show server/Test/definedTestNames"], f"{name}-suites")
-        selected = sorted(set(re.findall(rf"^\[info\] \* (\S+{suffix})$", listing, re.MULTILINE)))
+        selected = sorted(set(re.findall(rf"^\[info\] \* (\S+(?:{suffix}))$", listing, re.MULTILINE)))
         if not selected:
             raise RuntimeError(f"No test suite is named *{suffix}")
-        for suite in selected:
+        return selected
+
+    def suites(self, suffix: str, name: str):
+        # One sbt run per suite: the process suites must not share a build server's environment or load.
+        for suite in self.selected(suffix, name):
             self.sbt([f"server/testOnly {suite}"], f"{name}-{suite.rsplit('.', 1)[1]}")
+
+    def contracts_of(self, suffix: str, name: str):
+        # One sbt session, one exact-name testOnly command per suite; every command must leave its own report.
+        selected = self.selected(suffix, name)
+        output = self.sbt([f"server/testOnly {suite}" for suite in selected], name)
+        reports = len(re.findall(r"Tests: succeeded \d+", output))
+        if reports != len(selected):
+            raise RuntimeError(f"{name}: {reports} test reports for {len(selected)} selected suites")
 
     def generate(self):
         self.run([str(ROOT / "dev/generate")], "generate", COMMAND_TIMEOUT)
@@ -271,7 +283,7 @@ class Checks:
         self.generate()
         classpath = self.classpath()
         with self.database([]):
-            self.sbt(["server/testOnly *Postgres"], "postgres-contract")
+            self.contracts_of("Postgres", "postgres-contract")
             self.transport(["java", "-cp", classpath, "cq.server.Main"], "jvm", False, JVM_FIXTURE_SCALE)
             self.restart(["java", "-cp", classpath, "cq.server.Main"])
 
@@ -297,7 +309,7 @@ class Checks:
         command = ["java", "-cp", self.classpath(), "cq.server.Main"]
         with self.database(["shared_preload_libraries = 'pg_stat_statements'"] if usage else []):
             if usage:
-                self.sbt(["server/testOnly *UsageContractDummy *UsageContractPostgres"], "usage-contract")
+                self.contracts_of("UsageContractDummy|UsageContractPostgres", "usage-contract")
             port = free_port()
             self.environment.update(CQ_HOST="127.0.0.1", CQ_PORT=str(port), CQ_ORIGIN=f"http://127.0.0.1:{port}",
                                     CQ_TOKEN=uuid.uuid4().hex, CQ_SESSION=str(uuid.uuid4()), CQ_BROWSER_EVIDENCE=str(self.evidence))
@@ -484,6 +496,8 @@ def main():
             checks.run(["python3", "dev/release-evaluate-check.py"], "release-scheduling", STARTUP_TIMEOUT)
             checks.run(["python3", "dev/release-report-check.py"], "release-accounting", STARTUP_TIMEOUT)
             checks.run(["python3", "dev/release-metrics-check.py"], "release-metrics", STARTUP_TIMEOUT)
+            # Selected by pattern on purpose: distage then also executes the other suites' bodies unreported (D116), but one test JVM
+            # for all suites is several times faster than one per suite, and this step holds no shared database.
             checks.sbt(["server/testOnly *Dummy *Local"], "dummy-contract")
         else:
             getattr(checks, command)()
