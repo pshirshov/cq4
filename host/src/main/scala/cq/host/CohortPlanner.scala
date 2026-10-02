@@ -14,7 +14,8 @@ final class CohortPlanner(api: ServerApi, owner: Scope, bases: ExecutionBase, ch
   private val PageSize = 200
   private val RequestBytes = 16 * 1024
   private final case class Context(guidance: List[ItemView], artifacts: List[ResolvedArtifact], operative: List[CohortArtifactFingerprint], results: List[AdmittedResult],
-    operativeResults: List[CohortResultFingerprint], assessments: List[ExecutedResult], reviews: List[ExecutedResult], previous: Option[ChildResult], base: GitCommit) {
+    operativeResults: List[CohortResultFingerprint], assessments: List[ExecutedResult], reviews: List[ExecutedResult], previous: Option[ChildResult], base: GitCommit,
+    standing: String) {
     def executionBase: GitCommit = previous.flatMap(_.candidate).getOrElse(base)
   }
 
@@ -91,7 +92,8 @@ final class CohortPlanner(api: ServerApi, owner: Scope, bases: ExecutionBase, ch
     def read(id: ArtifactId): ResolvedArtifact = cache.getOrElseUpdate(id, reader.read(id))
     val operative = artifacts.map(value => CohortArtifacts(value, read))
     val operativeResults = sources.map(value => CohortArtifacts.result(value, read))
-    Context(guidance.items, artifacts, operative, results, operativeResults, assessments, reviews, previous.map(_.value), base)
+    Context(guidance.items, artifacts, operative, results, operativeResults, assessments, reviews, previous.map(_.value), base,
+      OperatorRequirements.standing(call, owner.project))
   }
 
   private def producers(value: ItemView): Set[ItemId] = value.refs.collect { case ItemRef(Relation.DerivedFrom, id) => id }.toSet
@@ -166,7 +168,7 @@ final class CohortPlanner(api: ServerApi, owner: Scope, bases: ExecutionBase, ch
       Fence(ClaimId(request.request.value), Long.MaxValue), request.limits)
     // The budget check carries the operator requirements assembly will deliver, so an offered cohort cannot fail at assembly.
     val input = ChildInput(owner.project, dispatch, members, context.guidance, context.artifacts, context.previous,
-      OperatorRequirements.delivered(work, requirements.current))
+      OperatorRequirements.delivered(work, context.standing, requirements.current))
     refs.map(_.id).toSet.intersect(request.guidance.map(_.id).toSet).isEmpty &&
       HostFiles.encode(ChildInput_JsonCodec, input).getBytes(UTF_8).length <= ChildContracts.MaxInputBytes
   }

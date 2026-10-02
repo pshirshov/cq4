@@ -261,7 +261,7 @@ final class AgentCatalogLocal extends AnyWordSpec {
             assert(artifact.metadata.bytes == bytes.length && artifact.metadata.project == example.input.project)
             assert(artifact.metadata.sha256 == java.security.MessageDigest.getInstance("SHA-256").digest(bytes).map("%02x".format(_)).mkString)
           }
-          assert(example.input.operatorRequirements.nonEmpty == OperatorRequirements.delivered(work, "operator request").nonEmpty)
+          assert(example.input.operatorRequirements.nonEmpty == OperatorRequirements.delivered(work, "", "operator request").nonEmpty)
           assert(HostFiles.encode(ChildInput_JsonCodec, example.input).getBytes(UTF_8).length <= ChildContracts.MaxInputBytes)
           example.input.previous.foreach { previous =>
             ChildContracts.result(example.input.project, previous)
