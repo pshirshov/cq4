@@ -1282,6 +1282,120 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
       } yield ()
     }
 
+    "carry the integrations an earlier drive left unsettled to the next drives of the same attached session only" in {
+      (service: LedgerService[IO], registry: DriverRegistry) =>
+      val w = world
+      val (first, renewed) = (claude("carry-first"), claude("carry-renewed"))
+      val (unsettled, settled) = (IntegrationId(uuid), IntegrationId(uuid))
+      val stranger = w.copy(governor = w.other(Role.Governor))
+      def record(key: DriverKey): DriverRecord = registry.get(w.project, key).get
+      def carries(key: DriverKey, session: World, integration: IntegrationId): Boolean = record(key).carries(session.governor.actor.session, integration)
+      for {
+        _ <- service.initialize(w.operator, "carry")
+        root <- create(service, w.operator, goal("Goal"))
+        one <- driven(service, w, first, workset(root))
+        _ <- ZIO.foreachDiscard(List(unsettled, settled))(id => act(service, w.governor, DriverSession.Inherit(one.cycle, LineageMember.Run(one.run), LineageMember.Integration(id))))
+        _ <- act(service, w.governor, DriverSession.Settle(one.cycle, LineageMember.Integration(settled)))
+        _ <- assertIO(record(first).carried.isEmpty)
+        _ <- park(service, w, first)
+        // The next drive under the same key carries the unsettled integration once its start directive is pending, and never the settled one.
+        _ <- on(service, w, first, workset(root))
+        bound = record(first)
+        _ <- assertIO(bound.carried == Map(w.governor.actor.session -> Set(unsettled)) && !carries(first, w, unsettled))
+        _ <- directive(service, w, first)
+        _ <- assertIO(carries(first, w, unsettled) && !carries(first, w, settled) && !carries(first, stranger, unsettled))
+        // A drive that stops without settling it passes it on, also to the driver of a new session key the same attached session binds.
+        _ <- on(service, w, renewed, workset(root))
+        _ <- directive(service, w, renewed)
+        _ <- assertIO(stopped(Some(DriverPolicy.status(record(first))), DriverStop.Parked) && carries(renewed, w, unsettled))
+        _ <- park(service, w, renewed)
+        // Another attached session that drives under either key carries nothing of it.
+        _ <- on(service, stranger, renewed, workset(root))
+        _ <- directive(service, stranger, renewed)
+        _ <- assertIO(!carries(renewed, stranger, unsettled) && record(renewed).attached.contains(stranger.governor.actor.session) &&
+          record(renewed).carried == Map(w.governor.actor.session -> Set(unsettled)))
+        // A cycle that has started carries nothing: the write then meets the boundary of the active cycle.
+        _ <- park(service, stranger, renewed)
+        again <- driven(service, w, renewed, workset(root))
+        _ <- assertIO(record(renewed).carried == Map(w.governor.actor.session -> Set(unsettled)) && !carries(renewed, w, unsettled) && again.cycle != one.cycle)
+      } yield ()
+    }
+
+    "report a member the session resumed as in flight before the resume returns, whatever the tracker read or reported before it" in {
+      (service: LedgerService[IO], registry: DriverRegistry) =>
+      val w = world
+      // One followed member of a started cycle; `transit` runs before each lineage request reaches the server.
+      def scenario(name: String, pause: zio.Duration, observed: zio.Ref[Option[LineageOutcome]] => zio.Task[Option[LineageOutcome]], transit: DriverSession => Unit)(
+        verify: (LineageTracker, zio.Ref[Option[LineageOutcome]], zio.UIO[Option[CycleRecord]], zio.Task[Unit], IO[Throwable, DriverReply]) => IO[Throwable, Unit]): IO[Throwable, Unit] = {
+        val session = w.copy(governor = w.other(Role.Governor))
+        val key = claude(name)
+        val member = LineageMember.Integration(IntegrationId(uuid))
+        for {
+          runtime <- ZIO.runtime[Any]
+          root <- create(service, w.operator, goal(name))
+          one <- driven(service, session, key, workset(root))
+          phase <- zio.Ref.make[Option[LineageOutcome]](Some(LineageOutcome.Resting))
+          tracker = new LineageTracker(new DriverSessionClient(new SessionApi(service, session.governor, runtime, action => { transit(action); false }), w.project), _ => (), pause, Pause)
+          reading = observed(phase)
+          _ <- tracker.track(one.cycle, LineageMember.Run(one.run), member, reading)
+          cycle = ZIO.succeed(registry.get(w.project, key).flatMap(_.cycle))
+          _ <- verify(tracker, phase, cycle, tracker.resume(one.cycle, LineageMember.Run(one.run), member, reading), query(service, session, key))
+          // The host finishes the member: its follower settles it and ends.
+          _ <- phase.set(Some(LineageOutcome.Settled))
+          _ <- (ZIO.sleep(zio.Duration.fromMillis(50)) *> cycle).repeatUntil(_.exists(_.lineage.exists(entry => entry.member == member && entry.settled)))
+            .timeoutFail(new IllegalStateException(s"$name: the member was not settled"))(zio.Duration.fromSeconds(30))
+        } yield ()
+      }
+      def rests(cycle: zio.UIO[Option[CycleRecord]]): IO[Throwable, Unit] = (ZIO.sleep(zio.Duration.fromMillis(20)) *> cycle).repeatUntil(_.exists(_.held.nonEmpty))
+        .timeoutFail(new IllegalStateException("The member did not come to rest"))(zio.Duration.fromSeconds(30)).unit
+      def flying(value: Option[CycleRecord]): Boolean = value.exists(cycle => cycle.held.isEmpty && cycle.inFlight.size == 1)
+      for {
+        _ <- service.initialize(w.operator, "tracker-resume")
+        // The follower sleeps for a second between readings: only the resume itself can report the member before the query that follows it.
+        _ <- scenario("resume-immediate", zio.Duration.fromSeconds(1), _.get, _ => ()) { (_, phase, cycle, resume, continuation) => for {
+          _ <- rests(cycle)
+          prompted <- continuation
+          _ <- phase.set(None)
+          _ <- resume
+          after <- cycle
+          decisions <- ZIO.foreach(List.fill(2)(()))(_ => continuation)
+          _ <- assertIO(prompted.isInstanceOf[DriverReply.Continue] && flying(after) && decisions.forall(_.isInstanceOf[DriverReply.Continue]))
+        } yield () }
+        // A resting report is in transit when the session resumes the member: the resume is reported after it and wins.
+        entered = new java.util.concurrent.CountDownLatch(1)
+        release = new java.util.concurrent.CountDownLatch(1)
+        _ <- scenario("resume-after-rest", Pause, _.get, action => if (action.isInstanceOf[DriverSession.Rest] && entered.getCount > 0) { entered.countDown(); release.await() }) {
+          (_, phase, cycle, resume, continuation) => (for {
+            _ <- ZIO.attemptBlocking(entered.await())
+            _ <- phase.set(None)
+            resuming <- resume.fork
+            early <- ZIO.sleep(zio.Duration.fromMillis(200)) *> resuming.poll
+            _ <- ZIO.succeed(release.countDown())
+            _ <- resuming.join
+            after <- cycle
+            decisions <- ZIO.sleep(Pause.multipliedBy(20)) *> ZIO.foreach(List.fill(2)(()))(_ => continuation)
+            later <- cycle
+            _ <- assertIO(early.isEmpty && flying(after) && flying(later) && decisions.forall(_.isInstanceOf[DriverReply.Continue]))
+          } yield ()).ensuring(ZIO.succeed(release.countDown()))
+        }
+        // A reading taken before the resume arrives after it: it is stale and is never reported as resting.
+        reading = new java.util.concurrent.CountDownLatch(1)
+        arrive = new java.util.concurrent.CountDownLatch(1)
+        stale = new java.util.concurrent.atomic.AtomicBoolean(true)
+        _ <- scenario("resume-before-stale-reading", Pause, phase => ZIO.suspend {
+          if (stale.compareAndSet(true, false)) ZIO.attemptBlocking { reading.countDown(); arrive.await(); Some(LineageOutcome.Resting) } else phase.get
+        }, _ => ()) { (_, phase, cycle, resume, continuation) => (for {
+          _ <- ZIO.attemptBlocking(reading.await())
+          _ <- phase.set(None)
+          _ <- resume
+          _ <- ZIO.succeed(arrive.countDown())
+          decisions <- ZIO.sleep(Pause.multipliedBy(20)) *> ZIO.foreach(List.fill(2)(()))(_ => continuation)
+          after <- cycle
+          _ <- assertIO(flying(after) && decisions.forall(_.isInstanceOf[DriverReply.Continue]))
+        } yield ()).ensuring(ZIO.succeed(arrive.countDown())) }
+      } yield ()
+    }
+
     "record a write in its cycle only once the write is committed" in { (service: LedgerService[IO], repository: LedgerRepository[IO], mutations: LedgerMutation) =>
       val w = world
       val key = claude("uncommitted")

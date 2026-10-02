@@ -34,7 +34,7 @@ final class LedgerMutation(terminationPlanner: TerminationPlanner, boundary: Dri
     reservation: Option[IntegrationRecord], stamps: List[LineageMember]): ChangeAck = {
     write(scope)
     if (tx.request(scope.actor, request.request).nonEmpty) execute(tx, scope, request, now, reservation)
-    else boundary.admit(scope.project, scope.actor.session, cycle, now) match {
+    else boundary.admit(scope.project, scope.actor.session, cycle, reservation.map(_.intent.id), now) match {
       case None => execute(tx, scope, request, now, reservation)
       case Some(attribution) =>
         boundary.check(tx, attribution, request, now)

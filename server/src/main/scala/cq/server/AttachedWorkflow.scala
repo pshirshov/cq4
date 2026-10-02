@@ -74,6 +74,14 @@ final class AttachedWorkflow(config: SupervisorConfig, authority: SupervisorAuth
     activations.activate(id, request, operatorRequirements, token)
   })
 
+  // While the driver's start directive is pending, the current workflow is not the one the directive starts. Work it left unsettled may
+  // be settled, because the directive is refused until it has; new integration work would belong to no cycle.
+  private def unstarted(work: String): Unit =
+    if (driver.awaitingStart) throw DomainFailure(Fault.Denied(s"The CQ driver's start directive is pending: $work waits for the workflow it starts. " +
+      "Only work that is already prepared may be settled before that activation"))
+
+  // An integration or combination is applied only in the activation that prepared it. An unsettled one keeps that activation current,
+  // so the integration an earlier drive left Ready or Pending is still owned by the current activation when the next drive settles it.
   def authorize(command: DispatchCommand): Unit = synchronized {
     command match {
       case _: DispatchCommand.Status | _: DispatchCommand.Cancel | _: DispatchCommand.IntegrationStatus | _: DispatchCommand.CombinationStatus => ()
@@ -83,12 +91,14 @@ final class AttachedWorkflow(config: SupervisorConfig, authority: SupervisorAuth
         command match {
           case DispatchCommand.PrepareIntegration(id, _) =>
             require(integrationsByEpoch.get(id).forall(_ == execution.generation), "Integration belongs to a previous workflow activation")
+            if (!integrationsByEpoch.contains(id)) unstarted("a new integration")
             integrationsByEpoch += id -> execution.generation
           case DispatchCommand.Integrate(id) =>
             require(integrationsByEpoch.get(id).contains(execution.generation), "Integration is not prepared in this workflow activation")
           case DispatchCommand.Combine(id, source, _) =>
             require(integrationsByEpoch.get(source).contains(execution.generation) &&
               combinationsByEpoch.get(id).forall(_ == execution.generation), "Combination belongs to a previous workflow activation")
+            if (!combinationsByEpoch.contains(id)) unstarted("a new combination")
             combinationsByEpoch += id -> execution.generation
           case _ => ()
         }

@@ -883,6 +883,87 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
           } yield ()
         }
     }
+
+    "D101: admit the completion of an integration an earlier drive left unsettled while the next drive's cycle is pending, and no other write" in {
+      (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO]) =>
+        val key = DriverKey(Harness.Claude, "carried-integration-" + uuid)
+        def stoppedAs(value: DriverReply, detail: String): Boolean = value match {
+          case DriverReply.Status(Some(status)) => status.state == DriverState.Off && status.stopped.exists(stop => stop.reason == DriverStop.Failure && stop.detail.startsWith(detail))
+          case _ => false
+        }
+        def pending(value: DriverReply): Boolean = value match {
+          case DriverReply.Status(Some(status)) => status.state == DriverState.On && status.stopped.isEmpty && status.cycle.exists(_.state == CycleState.Pending)
+          case _ => false
+        }
+        for {
+          f <- begin(ledger, usage, artifacts, admissions)
+          operator = Scope(f.owner.project, Actor("operator", SessionId(uuid), Role.Human))
+          advance = WorkflowRequest.Advance(f.items.map(_.id).toSet, WorkflowPhase.Integrate)
+          control = (origin: DriverOrigin, action: DriverControl) => ledger.drive(operator, DriverRequest.Control(key, origin, action))
+          session = (action: DriverSession) => ledger.drive(f.owner, DriverRequest.Session(action))
+          status = control(DriverOrigin.StatusLine, DriverControl.Status())
+          // The operator's drive command and the governing session's bind.
+          drive = control(DriverOrigin.UserPromptSubmit, DriverControl.Start(WorksetTarget.Inline(f.items.map(_.id).toSet, WorkflowPhase.Integrate), None)).flatMap {
+            case DriverReply.Started(_, _, Some(token), _) => session(DriverSession.Bind(token))
+            case other => ZIO.fail(new IllegalStateException("Expected a binding driver: " + other))
+          }
+          directive = control(DriverOrigin.Stop, DriverControl.Continue()).flatMap {
+            case DriverReply.Continue(value, _, _) => ZIO.succeed(value)
+            case other => ZIO.fail(new IllegalStateException("Expected a directive: " + other))
+          }
+          cursor = ledger.counts(f.owner).map(_.cursor)
+          incorporated = IntegrationObservation.Incorporated(f.intent.candidate)
+          untracked = (fault: Fault) => fault.isInstanceOf[Fault.Denied] && fault.toString.contains("untracked mutation")
+          // The earlier drive registers the integration its session prepared and is parked while that integration rests on the session.
+          _ <- drive
+          first <- directive
+          run = RequestId(uuid)
+          _ <- session(DriverSession.Activate(run, advance, Some(first.token)))
+          _ <- session(DriverSession.Inherit(first.cycle, LineageMember.Run(run), LineageMember.Integration(f.intent.id)))
+          _ <- session(DriverSession.Rest(first.cycle, LineageMember.Integration(f.intent.id)))
+          _ <- control(DriverOrigin.UserPromptSubmit, DriverControl.Park())
+          before <- cursor
+          // An integration no earlier drive left behind stays refused while the next cycle is pending; settled as not applied, it frees its members.
+          foreign = f.fresh
+          _ <- drive
+          _ <- directive
+          _ <- integrations.reserve(f.collector, foreign)
+          _ <- reject(integrations.observe(f.collector, foreign.id, incorporated), untracked)
+          unrelated <- status
+          _ <- assertIO(stoppedAs(unrelated, "untracked mutation"))
+          _ <- integrations.observe(f.collector, foreign.id, IntegrationObservation.NotApplied("Replaced by the fixture"))
+          // Before a drive has issued its start directive no cycle is pending: the earlier integration's completion is an untracked mutation.
+          _ <- drive
+          _ <- integrations.reserve(f.collector, f.intent)
+          _ <- reject(integrations.observe(f.collector, f.intent.id, incorporated), untracked)
+          early <- status
+          _ <- assertIO(stoppedAs(early, "untracked mutation"))
+          // Any other write of the bound session while the cycle is pending is an untracked mutation, with the earlier integration outstanding.
+          _ <- drive
+          _ <- directive
+          _ <- reject(ledger.change(f.owner, ChangeRequest(RequestId(uuid), List(Mutation.Create(task)), Nil, "Untracked write")), untracked)
+          other <- status
+          unchanged <- cursor
+          reserved <- integrations.get(f.owner, f.intent.id)
+          _ <- assertIO(stoppedAs(other, "untracked mutation") && unchanged == before && reserved.resolution == IntegrationResolution.Pending())
+          // Each of those drives carried the earlier integration forward: under the next pending cycle its completion is recorded and the drive stays on.
+          _ <- drive
+          start <- directive
+          recorded <- integrations.observe(f.collector, f.intent.id, incorporated).either
+          waiting <- status
+          items <- ZIO.foreach(f.items)(item => ledger.get(f.owner, item.id).map(_.item.draft.content))
+          _ <- ZIO.attempt(println(s"Carried completion under a pending cycle: ${recorded.fold(_.toString, _.resolution.getClass.getSimpleName)}; driver $waiting"))
+          _ <- assertIO(recorded.exists(_.resolution.isInstanceOf[IntegrationResolution.Recorded]) && pending(waiting) &&
+            items.forall { case value: Content.Task => value.status == TaskStatus.Done; case _ => false })
+          // The start directive is unused and starts its cycle once the integration has settled.
+          activated <- session(DriverSession.Activate(RequestId(uuid), advance, Some(start.token)))
+          running <- status
+          _ <- assertIO(activated == DriverReply.Activation(DriverActivation.Started(start.cycle)) && (running match {
+            case DriverReply.Status(Some(value)) => value.state == DriverState.On && value.cycle.exists(_.state == CycleState.Active)
+            case _ => false
+          }))
+        } yield ()
+    }
   }
 }
 
