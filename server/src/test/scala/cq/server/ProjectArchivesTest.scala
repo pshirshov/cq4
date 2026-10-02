@@ -116,5 +116,43 @@ final class ProjectArchivesPostgres extends SpecZIO with AssertZIO {
           copy.contains(StoredSetting(written.revision, ProjectSetting.Requirements(written.text), operator.actor, written.change.get.at)))
       } yield ()
     }
+
+    "Q32: refuse an archive whose settings row breaks the bounds of the write path or misstates its kind" in {
+      (service: LedgerService[IO], database: LedgerDatabase, config: DatabaseConfig, archives: ProjectArchives) =>
+      val schema = "cq_restore_" + UUID.randomUUID().toString.replace("-", "")
+      val separator = if (config.url.contains("?")) "&" else "?"
+      val target = new LedgerDatabase(config.copy(url = config.url + separator + "currentSchema=" + schema))
+      val oversized = Wire.encode(ProjectSetting_JsonCodec, ProjectSetting.Requirements("x" * (LedgerPolicy.MaxRequirementsCodePoints + 1)))
+      // A hand-edited archive is reproduced by editing the stored row before the backup: backup copies the table as it is.
+      def refused(change: String, body: Option[String]): IO[Throwable, Unit] = {
+        val operator = Scope(ProjectId(UUID.randomUUID()), Actor("operator", SessionId(UUID.randomUUID()), Role.Human))
+        for {
+          _ <- service.initialize(operator, "edited requirements")
+          _ <- service.replaceRequirements(operator, Revision(0), "Within the bound")
+          edited <- database.transaction { connection =>
+            new Jdbc(connection).execute(s"UPDATE cq_project_settings SET $change WHERE project_id = ?") { s =>
+              body.foreach(s.setString(1, _)); s.setObject(body.size + 1, operator.project.value)
+            }
+          }
+          _ <- assertIO(edited == 1)
+          file <- ZIO.attempt(Files.createTempFile("cq-archive-", ".zip"))
+          _ <- archives.backup(operator.project, file)
+          restored <- new PostgresProjectArchives(target, Clock.systemUTC()).restore(file).either
+          _ <- ZIO.attempt(Files.deleteIfExists(file))
+          _ <- ZIO.attempt(assert(restored.left.exists { case DomainFailure(_: Fault.Invalid) => true; case _ => false }, s"$change: ${restored.map(_.project)}"))
+          copy <- new PostgresLedgerRepository(target).projects(None, 200)
+          _ <- assertIO(!copy.projects.exists(_.id == operator.project))
+        } yield ()
+      }
+      for {
+        _ <- ZIO.attemptBlocking(Using.resource(DriverManager.getConnection(config.url, config.user, config.password)) { connection =>
+          Using.resource(connection.createStatement())(_.execute(s"CREATE SCHEMA $schema")); ()
+        })
+        _ <- target.initialize
+        _ <- refused("body = ?::jsonb", Some(oversized))
+        _ <- refused("kind = 'Unknown'", None)
+        _ <- refused("body = ?::jsonb", Some("{\"Unknown\":{}}"))
+      } yield ()
+    }
   }
 }
