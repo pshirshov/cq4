@@ -92,7 +92,7 @@ export async function usageChecks(page, origin, projectId) {
   await phaseRows([['Work', '302', '0', '0', '1', '2.0000 USD', '1', '0', '1 s']]);
   await phases.getByTitle('1600 ms', { exact: true }).waitFor();
   assert.equal(await phases.getByTitle('2', { exact: true }).textContent(), '2.0000 USD');
-  await page.getByText('Cost basis: ProviderEstimate.', { exact: true }).waitFor();
+  await phases.locator('..').locator('..').getByText('Cost basis: ProviderEstimate.', { exact: true }).waitFor();
   await phaseTruncation.waitFor();
   const timed = [['Review', 'phase-review', 3720000], ['Plan', 'phase-plan', 200000], ['Probe', 'phase-probe', 45000]].map(([phase, model, finishedAt]) =>
     ({ attempt: { ...attempt, id: id(), session: id(), model, startedAt: '0', phase }, finishedAt }));
