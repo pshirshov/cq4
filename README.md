@@ -2,7 +2,9 @@
 
 CQ is implemented under the [M0–M6 plan](docs/drafts/20260926-1549-cq-implementation-plan.md). The durable ledger/audit core and authenticated HTTP/MCP/WebSocket/CLI interfaces are implemented; [M1 has independent Astra approval](docs/validation/m1-review.md). The [batch supervisor role](docs/design/supervisor-role.md) and [child handle dispatch](docs/design/local-dispatch.md) now run real consumer builds under all three harnesses. All three routes have independent candidate assessments; [current quality evidence](docs/validation/m4-usage-repetitions.md) distinguishes accepted clarified-oracle replacements from the retained earlier failures. Interruption recovery passes the runtime checks. M2 has technical Astra approval and awaits human acceptance. Release functionality and human acceptance are tracked in [implementation status](docs/implementation-status.md) and [requirement coverage](docs/requirement-coverage.md).
 
-## Development checks
+## Delivery gates (operator)
+
+These are the gates the operator runs before a delivery. An agent working in this repository runs focused tests instead and never runs a gate unless a Task's acceptance names it; see [Tests for agents](AGENTS.md#tests-for-agents).
 
 On Linux amd64 with Nix, Git and network access:
 
