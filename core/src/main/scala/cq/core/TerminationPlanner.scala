@@ -35,11 +35,21 @@ final class TerminationPlanner(worksets: WorksetTraversal) {
       settled = next == selected
       selected = next
     }
+    val summaries = graph.entries.map(entry => entry.item.id -> entry.item).toMap
+    // The closure gate: the contained Tasks this termination would leave non-terminal under a milestone it closes. A selected Task becomes
+    // terminal with the milestone, so these are the Tasks excluded as shared, as a prerequisite or with an excluded branch.
+    def retained(milestone: ItemId): List[(ItemId, String)] = graph.references(milestone).collect {
+      case ItemRef(Relation.Contains, member) if !selected.contains(member) => member -> summaries(member).status
+    }.filter((task, state) => MilestonePolicy.nonTerminal(task, state))
     val entries = graph.entries.map { entry =>
       val id = entry.item.id
       val effect = if (selected.contains(id)) {
         if (entry.item.outcome.terminal || LedgerPolicy.settled(entry.item)) TerminationEffect.Preserve()
-        else target(id.ledger, intent)
+        else target(id.ledger, intent) match {
+          case TerminationEffect.Change(TerminalStatus.Milestone(status)) if retained(id).nonEmpty =>
+            TerminationEffect.Unsupported(MilestonePolicy.retention(id, status, retained(id)))
+          case other => other
+        }
       } else {
         val reasons = if (entry.role == WorksetRole.Context) entry.reasons.collect {
           case WorksetReason.Context(source, relation) => TerminationExclusion.Context(source, relation)

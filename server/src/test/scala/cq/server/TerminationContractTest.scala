@@ -141,6 +141,95 @@ abstract class TerminationContractTest extends SpecZIO with AssertZIO {
       } yield ()
     }
 
+    // Defect 100, Question 24: a termination does not close a milestone over a contained Task it leaves Ready or Active.
+    "refuse a termination that would close a milestone over a Task it retains, and apply one that leaves every contained Task terminal" in { (service: LedgerService[IO]) =>
+      val owner = scope()
+      val goal = task("Goal").copy(content = Content.Goal(GoalStatus.Open, "Outcome", List("Acceptance"), "Scope"))
+      val open = task("Milestone").copy(content = Content.Milestone(MilestoneStatus.Open, "Release"))
+      def work(status: TaskStatus): ItemDraft = task(s"$status task").copy(content = Content.Task(status, List("Acceptance"), None, Nil))
+      def closed(intent: TerminationIntent): MilestoneStatus = if (intent == TerminationIntent.Complete) MilestoneStatus.Complete else MilestoneStatus.Cancelled
+      def finished(intent: TerminationIntent): TaskStatus = if (intent == TerminationIntent.Complete) TaskStatus.Done else TaskStatus.Cancelled
+      def retained(target: ItemId, status: MilestoneStatus, member: ItemId, state: TaskStatus): String =
+        s"M${target.number} cannot be changed to $status while it contains non-terminal Tasks: T${member.number} ($state). " +
+          s"Make each Done or Cancelled, or reassign it to another Open milestone, before closing M${target.number}. " +
+          s"This termination leaves them unchanged; add them to its roots to terminate them with M${target.number}"
+      def statuses(ids: ItemId*): IO[Throwable, List[String]] = ZIO.foreach(ids.toList)(id => service.get(owner, id).map(view => LedgerPolicy.status(view.item.draft.content)))
+      // The preview states the reason and the retained Task on the milestone's entry; applying it is refused with the same text and commits nothing.
+      def refused(target: ItemId, member: ItemId, state: TaskStatus, exclusion: TerminationExclusion, intent: TerminationIntent): IO[Throwable, Unit] = for {
+        preview <- service.termination(owner, Set(target), intent)
+        reason = retained(target, closed(intent), member, state)
+        _ <- assertIO(!preview.plan.canApply && effect(preview, target) == TerminationEffect.Unsupported(reason) &&
+          effect(preview, member) == TerminationEffect.Excluded(List(exclusion)))
+        before <- service.counts(owner).map(_.cursor)
+        revisions <- ZIO.foreach(List(target, member))(service.get(owner, _).map(_.item.revision))
+        _ <- reject(service.change(owner, request(preview)), _ == Fault.Invalid(reason))
+        after <- service.counts(owner).map(_.cursor)
+        kept <- ZIO.foreach(List(target, member))(service.get(owner, _).map(_.item.revision))
+        found <- statuses(target, member)
+        _ <- assertIO(before == after && revisions == kept && found == List("Open", state.toString))
+      } yield ()
+      for {
+        _ <- service.initialize(owner, "milestone closure by termination")
+        _ <- ZIO.foreachDiscard(for { intent <- List(TerminationIntent.Complete, TerminationIntent.Cancel); state <- List(TaskStatus.Ready, TaskStatus.Active) } yield (intent, state)) { (intent, state) => for {
+          // Shared: the contained Task has a producer outside the roots.
+          producer <- create(service, owner, goal)
+          sharing <- create(service, owner, open)
+          shared <- create(service, owner, work(state))
+          _ <- link(service, owner, shared, Relation.DerivedFrom, producer)
+          _ <- link(service, owner, shared, Relation.PartOf, sharing)
+          _ <- refused(sharing, shared, state, TerminationExclusion.Shared(producer), intent)
+          // Roots that include the outside producer leave the Task terminal: applied as before.
+          both <- service.termination(owner, Set(sharing, producer), intent)
+          _ <- assertIO(both.plan.canApply && changed(both) == Set(sharing, producer, shared))
+          _ <- service.change(owner, request(both))
+          _ <- statuses(sharing, shared).flatMap(found => assertIO(found == List(closed(intent).toString, finished(intent).toString)))
+          // Prerequisite: the contained Task blocks a selected sibling.
+          holding <- create(service, owner, open)
+          prerequisite <- create(service, owner, work(state))
+          consumer <- create(service, owner, work(TaskStatus.Ready))
+          _ <- link(service, owner, consumer, Relation.BlockedBy, prerequisite)
+          _ <- link(service, owner, prerequisite, Relation.PartOf, holding)
+          _ <- link(service, owner, consumer, Relation.PartOf, holding)
+          _ <- refused(holding, prerequisite, state, TerminationExclusion.Prerequisite(consumer), intent)
+          // The retained Task as a root is terminated with the milestone.
+          explicit <- service.termination(owner, Set(holding, prerequisite), intent)
+          _ <- assertIO(explicit.plan.canApply && changed(explicit) == Set(holding, prerequisite, consumer))
+          _ <- service.change(owner, request(explicit))
+          _ <- statuses(holding, prerequisite, consumer).flatMap(found => assertIO(found == List(closed(intent).toString, finished(intent).toString, finished(intent).toString)))
+          // An exclusive Task is terminated with its milestone, as before.
+          exclusive <- create(service, owner, open)
+          only <- create(service, owner, work(state))
+          _ <- link(service, owner, only, Relation.PartOf, exclusive)
+          plain <- service.termination(owner, Set(exclusive), intent)
+          _ <- assertIO(plain.plan.canApply && changed(plain) == Set(exclusive, only))
+          _ <- service.change(owner, request(plain))
+          _ <- statuses(exclusive, only).flatMap(found => assertIO(found == List(closed(intent).toString, finished(intent).toString)))
+          // A retained Task that is already terminal does not hold the milestone open.
+          origin <- create(service, owner, goal)
+          settled <- create(service, owner, open)
+          done <- create(service, owner, work(TaskStatus.Done))
+          _ <- link(service, owner, done, Relation.DerivedFrom, origin)
+          _ <- link(service, owner, done, Relation.PartOf, settled)
+          terminal <- service.termination(owner, Set(settled), intent)
+          _ <- assertIO(terminal.plan.canApply && changed(terminal) == Set(settled) &&
+            effect(terminal, done) == TerminationEffect.Excluded(List(TerminationExclusion.Shared(origin))))
+          _ <- service.change(owner, request(terminal))
+          _ <- statuses(settled, done).flatMap(found => assertIO(found == List(closed(intent).toString, "Done")))
+          // Rooted at a Goal, the Task is terminated and its milestone stays Open as context, as before.
+          rooted <- create(service, owner, goal)
+          context <- create(service, owner, open)
+          produced <- create(service, owner, work(state))
+          _ <- link(service, owner, produced, Relation.DerivedFrom, rooted)
+          _ <- link(service, owner, produced, Relation.PartOf, context)
+          fromGoal <- service.termination(owner, Set(rooted), intent)
+          _ <- assertIO(fromGoal.plan.canApply && changed(fromGoal) == Set(rooted, produced) &&
+            effect(fromGoal, context) == TerminationEffect.Excluded(List(TerminationExclusion.Context(produced, Relation.PartOf))))
+          _ <- service.change(owner, request(fromGoal))
+          _ <- statuses(context, produced).flatMap(found => assertIO(found == List("Open", finished(intent).toString)))
+        } yield () }
+      } yield ()
+    }
+
     "reject stale and altered plans atomically, bind caller scope, and replay an acknowledgement after later changes" in { (service: LedgerService[IO]) =>
       val owner = scope()
       val other = owner.copy(actor = owner.actor.copy(session = SessionId(UUID.randomUUID())))
