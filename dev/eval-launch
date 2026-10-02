@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# Starts one interactive harness in a configured consumer project for a driven evaluation run.
+# See docs/evaluation-protocol.md. The harness executables come from PATH; the token is passed by file path only.
+set -euo pipefail
+
+usage() {
+  cat >&2 <<'EOF'
+Usage: eval-launch claude PROJECT_DIR TOKEN_FILE
+       eval-launch codex PROJECT_DIR TOKEN_FILE CODEX_HOME
+       eval-launch pi PROJECT_DIR TOKEN_FILE
+       eval-launch prepare-codex-home CODEX_HOME
+
+prepare-codex-home creates a private Codex home with a writable copy of ~/.codex/config.toml and a symbolic
+link to ~/.codex/auth.json, so that Codex can persist project trust and hook reviews when the personal
+configuration is read-only.
+EOF
+  exit 2
+}
+
+[[ $# -ge 2 ]] || usage
+harness=$1
+
+if [[ $harness == prepare-codex-home ]]; then
+  [[ $# -eq 2 ]] || usage
+  home=$2
+  [[ ! -e $home ]] || { echo "Codex home already exists: $home" >&2; exit 1; }
+  [[ -f ~/.codex/config.toml && -f ~/.codex/auth.json ]] || { echo "Missing ~/.codex/config.toml or ~/.codex/auth.json" >&2; exit 1; }
+  mkdir -m 700 -- "$home"
+  cp -- ~/.codex/config.toml "$home/config.toml"
+  chmod 600 "$home/config.toml"
+  ln -s -- "$(realpath -e ~/.codex/auth.json)" "$home/auth.json"
+  exit 0
+fi
+
+[[ $# -ge 3 ]] || usage
+project=$2 token=$3
+[[ -d $project/.git || -f $project/.git ]] || { echo "Not a Git checkout: $project" >&2; exit 1; }
+[[ $token == /* && -r $token ]] || { echo "Token file must be an absolute readable path: $token" >&2; exit 1; }
+
+# A harness started from another Claude session must not inherit that session's identity or CQ selection.
+while IFS= read -r variable; do unset "$variable"; done < <(compgen -e | grep -E '^(CLAUDE|CQ_)' || true)
+export CQ_TOKEN_FILE=$token
+cd -- "$project"
+
+case $harness in
+  claude)
+    [[ $# -eq 3 ]] || usage
+    exec claude --setting-sources project,local
+    ;;
+  codex)
+    [[ $# -eq 4 ]] || usage
+    [[ $4 == /* && -d $4 ]] || { echo "CODEX_HOME must be an absolute existing directory: $4" >&2; exit 1; }
+    export CODEX_HOME=$4
+    exec codex --no-daemon --dangerously-bypass-approvals-and-sandbox
+    ;;
+  pi)
+    [[ $# -eq 3 ]] || usage
+    exec pi --approve --no-prompt-templates --prompt-template .pi/prompts
+    ;;
+  *) usage ;;
+esac

@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# Drives one recorded harness terminal on a private tmux server: keystrokes in, rendered screen out.
+# See docs/evaluation-protocol.md. tmux and asciinema v3 come from PATH; EVAL_TMUX names another tmux binary.
+set -euo pipefail
+
+usage() {
+  cat >&2 <<'EOF'
+Usage: eval-session SOCKET start NAME CAST COLUMNS ROWS -- COMMAND [ARG...]
+       eval-session SOCKET keys NAME KEY...
+       eval-session SOCKET type NAME TEXT
+       eval-session SOCKET screen NAME HISTORY_LINES
+       eval-session SOCKET wait NAME BUSY_REGEX PROMPT_REGEX IDLE_SECONDS TIMEOUT_SECONDS
+       eval-session SOCKET stop NAME
+
+start   Record COMMAND with asciinema into CAST (refused when CAST exists) in a detached session NAME.
+keys    Send tmux key names (Enter, Escape, Up, C-u, ...).
+type    Send TEXT literally, without Enter.
+screen  Print the rendered screen preceded by HISTORY_LINES lines of scrollback.
+wait    Poll every five seconds and print one word: GONE (session ended), PROMPT (PROMPT_REGEX matches the
+        last eight lines), IDLE (BUSY_REGEX absent for IDLE_SECONDS) or TIMEOUT.
+stop    Kill the session; asciinema then closes the recording.
+EOF
+  exit 2
+}
+
+[[ $# -ge 3 ]] || usage
+socket=$1 action=$2 name=$3
+shift 3
+tmux_bin=${EVAL_TMUX:-tmux}
+t() { "$tmux_bin" -S "$socket" "$@"; }
+number() { [[ $1 =~ ^[0-9]+$ ]] || usage; }
+
+case $action in
+  start)
+    [[ $# -ge 5 && $4 == -- ]] || usage
+    cast=$1 columns=$2 rows=$3
+    shift 4
+    number "$columns"; number "$rows"
+    [[ ! -e $cast ]] || { echo "Recording already exists: $cast" >&2; exit 1; }
+    printf -v recorded '%q ' "$@"
+    t new-session -d -s "$name" -x "$columns" -y "$rows" -- asciinema rec -q "$cast" -c "$recorded"
+    ;;
+  keys)
+    [[ $# -ge 1 ]] || usage
+    t send-keys -t "$name" "$@"
+    ;;
+  type)
+    [[ $# -eq 1 ]] || usage
+    t send-keys -t "$name" -l -- "$1"
+    ;;
+  screen)
+    [[ $# -eq 1 ]] || usage
+    number "$1"
+    t capture-pane -p -t "$name" -S "-$1"
+    ;;
+  wait)
+    [[ $# -eq 4 ]] || usage
+    busy=$1 prompt=$2 idle_limit=$3 timeout=$4
+    number "$idle_limit"; number "$timeout"
+    end=$((SECONDS + timeout)) quiet_since=$SECONDS
+    while (( SECONDS < end )); do
+      screen=$(t capture-pane -p -t "$name" 2>/dev/null) || { echo GONE; exit 0; }
+      if tail -n 8 <<<"$screen" | grep -qE -- "$prompt"; then echo PROMPT; exit 0; fi
+      if grep -qE -- "$busy" <<<"$screen"; then quiet_since=$SECONDS; fi
+      if (( SECONDS - quiet_since >= idle_limit )); then echo IDLE; exit 0; fi
+      sleep 5
+    done
+    echo TIMEOUT
+    ;;
+  stop)
+    [[ $# -eq 0 ]] || usage
+    t kill-session -t "$name"
+    ;;
+  *) usage ;;
+esac
