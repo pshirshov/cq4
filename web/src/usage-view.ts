@@ -4,26 +4,57 @@ import { itemName } from './items.js';
 import { formatAmount, MoneyDigits, sumAmounts } from './money.js';
 
 type Cell = string | HTMLElement;
-function table(label: string, headings: string[], rows: Cell[][]): HTMLTableElement {
-  const result = element('table', ''); result.className = 'usage-table'; result.setAttribute('aria-label', label);
+// label: the row's name on the shared grid; text: one line; prose: free text that may wrap; number: right-aligned on the shared grid; tally: a right-aligned small count.
+type ColumnKind = 'label' | 'text' | 'prose' | 'number' | 'tally';
+interface Column { heading: string; kind: ColumnKind }
+interface Layout { label: string; columns: Column[]; rows: Cell[][]; total: Cell[] | undefined }
+const column = (kind: ColumnKind) => (heading: string): Column => ({ heading, kind });
+const rowLabel = column('label'); const text = column('text'); const prose = column('prose'); const number = column('number'); const tally = column('tally');
+const GROUP_SEPARATOR = ' ';
+const NO_VALUE = '—';
+function cell<K extends 'td' | 'th'>(tag: K, kind: ColumnKind, value: Cell): HTMLElementTagNameMap[K] {
+  const result = element(tag, ''); result.className = `usage-${kind}`; result.append(value);
+  if ((kind === 'number' || kind === 'tally') && result.textContent === '0') result.classList.add('usage-zero');
+  return result;
+}
+function tableRow(columns: Column[], values: Cell[]): HTMLTableRowElement {
+  const row = element('tr', '');
+  values.forEach((value, index) => {
+    const kind = (columns[index] as Column).kind;
+    if (kind === 'label') { const header = cell('th', kind, value); header.scope = 'row'; row.append(header); } else row.append(cell('td', kind, value));
+  });
+  return row;
+}
+function table(layout: Layout): HTMLTableElement {
+  const result = element('table', ''); result.className = 'usage-table'; result.setAttribute('aria-label', layout.label);
   const head = element('thead', ''); const titles = element('tr', '');
-  for (const heading of headings) { const cell = element('th', heading); cell.scope = 'col'; titles.append(cell); }
+  for (const { heading, kind } of layout.columns) { const title = cell('th', kind, heading); title.scope = 'col'; titles.append(title); }
   head.append(titles); const body = element('tbody', '');
-  for (const values of rows) {
-    const row = element('tr', '');
+  for (const values of layout.rows) {
+    const row = tableRow(layout.columns, values);
     const expanded: HTMLTableRowElement[] = [];
     for (const value of values) {
-      const cell = element('td', ''); cell.append(value); row.append(cell);
       if (value instanceof HTMLDetailsElement) {
-        const extra = element('tr', ''); extra.hidden = true; const content = element('td', ''); content.colSpan = headings.length;
+        const extra = element('tr', ''); extra.className = 'usage-expansion'; extra.hidden = true; const content = element('td', ''); content.colSpan = layout.columns.length;
         content.append(...Array.from(value.children).slice(1)); extra.append(content); expanded.push(extra);
         value.addEventListener('toggle', () => { extra.hidden = !value.open; });
       }
     }
     body.append(row, ...expanded);
   }
-  result.append(head, body); return result;
+  result.append(head, body);
+  if (layout.total !== undefined) { const foot = element('tfoot', ''); foot.append(tableRow(layout.columns, layout.total)); result.append(foot); }
+  return result;
 }
+// A usage table with its heading and note; the table scrolls horizontally inside the section instead of wrapping its values.
+function section(heading: string | undefined, note: string | undefined, content: HTMLTableElement): HTMLElement {
+  const result = element('div', ''); result.className = 'usage-section';
+  if (heading !== undefined) result.append(element('h4', heading));
+  if (note !== undefined) { const caption = element('p', note); caption.className = 'usage-note'; result.append(caption); }
+  const scroll = element('div', ''); scroll.className = 'usage-scroll'; scroll.append(content); result.append(scroll); return result;
+}
+function quiet(value: string): HTMLElement { const result = element('span', value); result.className = 'usage-quiet'; return result; }
+function qualified(qualifier: string, value: Cell): HTMLElement { const result = element('span', ''); result.append(quiet(qualifier), ' ', value); return result; }
 function fields(values: [string, string][]): HTMLDListElement {
   const result = element('dl', ''); result.className = 'usage-fields';
   for (const [label, value] of values) result.append(element('dt', label), element('dd', value));
@@ -33,48 +64,86 @@ function details(label: string, ...content: HTMLElement[]): HTMLDetailsElement {
   const result = element('details', ''); result.append(element('summary', label), ...content); return result;
 }
 function time(value: bigint): string { return new Date(Number(value)).toLocaleString(); }
-function counter(value: api.Counter): string { return `${value.value === undefined ? 'Unknown' : value.value.toLocaleString()} · ${value.measurement}`; }
-function money(value: api.Money): HTMLElement {
-  const amount = value.amount === undefined ? 'Unknown' : formatAmount(value.amount.value, MoneyDigits);
-  const result = element('span', `${amount} ${value.currency === undefined ? '' : value.currency} · ${value.basis}`.trim());
-  if (value.amount !== undefined) result.title = value.amount.value;
-  return result;
+function count(value: bigint): string { return value.toString().replace(/\B(?=(\d{3})+$)/g, GROUP_SEPARATOR); }
+function sum(values: readonly bigint[]): bigint { return values.reduce((total, value) => total + value, 0n); }
+function counter(value: api.Counter): HTMLElement { return qualified(value.measurement, value.value === undefined ? 'Unknown' : count(value.value)); }
+function amount(value: string, currency: string | undefined): HTMLElement {
+  const result = element('span', currency === undefined ? formatAmount(value, MoneyDigits) : `${formatAmount(value, MoneyDigits)} ${currency}`);
+  result.title = value; return result;
 }
-function tokens(label: string, counts: api.TokenCounts): HTMLTableElement {
-  return table(label, ['Counter', 'Value / measurement'], [['Input', counter(counts.input)], ['Output', counter(counts.output)],
-    ['Cache read', counter(counts.cacheRead)], ['Cache write', counter(counts.cacheWrite)], ['Reasoning', counter(counts.reasoning)]]);
+// The basis is stated once for a table whose amounts share it and per amount otherwise.
+function mixedBases(bases: readonly api.CostBasis[]): boolean { return new Set(bases).size > 1; }
+function basisNote(bases: readonly api.CostBasis[]): string | undefined {
+  return bases.length > 0 && !mixedBases(bases) ? `Cost basis: ${bases[0]}.` : undefined;
+}
+function money(value: api.Money): Cell { return value.amount === undefined ? 'Unknown' : amount(value.amount.value, value.currency); }
+function tokens(label: string, counts: api.TokenCounts): HTMLElement {
+  const row = (name: string, value: api.Counter): Cell[] => [name, value.value === undefined ? 'Unknown' : count(value.value), value.measurement];
+  return section(label, undefined, table({ label, columns: [text('Counter'), number('Value'), text('Measurement')], total: undefined,
+    rows: [row('Input', counts.input), row('Output', counts.output), row('Cache read', counts.cacheRead), row('Cache write', counts.cacheWrite), row('Reasoning', counts.reasoning)] }));
 }
 // Truncated to whole seconds, and to whole minutes from one hour on: `45 s`, `3 min 20 s`, `1 h 02 min`.
 function duration(millis: bigint): HTMLElement {
   const seconds = millis / 1000n; const minutes = seconds / 60n; const hours = minutes / 60n;
   const padded = (value: bigint) => value.toString().padStart(2, '0');
-  const result = element('span', hours > 0n ? `${hours} h ${padded(minutes % 60n)} min` : minutes > 0n ? `${minutes} min ${padded(seconds % 60n)} s` : `${seconds} s`);
+  const result = element('span', hours > 0n ? `${count(hours)} h ${padded(minutes % 60n)} min` : minutes > 0n ? `${minutes} min ${padded(seconds % 60n)} s` : `${seconds} s`);
   result.title = `${millis} ms`; return result;
 }
-// Amounts are added per currency and basis, so estimates and billing stay apart.
-function phaseCosts(costs: readonly api.CostTotal[]): HTMLElement {
-  const groups = new Map<string, string[]>();
+// Amounts are added per currency and basis, so estimates and billing stay apart; without an amount the cost is unknown when
+// a measurement lacks one and absent otherwise, never zero.
+function costSum(costs: readonly api.CostTotal[], unknownCosts: bigint, bases: readonly api.CostBasis[]): Cell {
+  const groups = new Map<string, { currency: string; basis: api.CostBasis; amounts: string[] }>();
   for (const cost of costs) {
-    const key = `${cost.group.currency} · ${cost.group.basis}`; const amounts = groups.get(key);
-    if (amounts === undefined) groups.set(key, [cost.amount.value]); else amounts.push(cost.amount.value);
+    const key = `${cost.group.currency} · ${cost.group.basis}`; const group = groups.get(key);
+    if (group === undefined) groups.set(key, { currency: cost.group.currency, basis: cost.group.basis, amounts: [cost.amount.value] }); else group.amounts.push(cost.amount.value);
   }
+  if (groups.size === 0) return unknownCosts > 0n ? 'Unknown' : quiet(NO_VALUE);
+  const mixed = mixedBases(bases);
   const result = element('div', '');
-  for (const [key, amounts] of groups) {
-    const total = sumAmounts(amounts); const line = element('div', `${formatAmount(total, MoneyDigits)} ${key}`); line.title = total; result.append(line);
+  for (const group of groups.values()) {
+    const value = amount(sumAmounts(group.amounts), group.currency); const line = element('div', '');
+    line.append(mixed ? qualified(group.basis, value) : value); result.append(line);
   }
   return result;
 }
-export function phasesTable(phases: readonly api.PhaseUsage[]): HTMLTableElement {
-  return table('Usage by phase', ['Phase', 'Attempts', 'Running', 'Busy wall time', 'Known tokens', 'Unknown measurements', 'Estimated measurements', 'Unknown costs', 'Cost'],
-    phases.map(entry => [entry.phase, String(entry.attempts), String(entry.running), duration(entry.wallMillis), String(entry.totals.total.known),
-      String(entry.totals.total.unknown), String(entry.totals.total.estimated), String(entry.totals.unknownCosts), phaseCosts(entry.costs)]));
+export function totalsTable(report: api.UsageReport): HTMLElement {
+  const values = (totals: api.UsageTotals) => [totals.total.known, totals.total.unknown, totals.total.estimated, totals.unknownCosts];
+  const rows = ([['Direct', report.direct], ['Shared', report.shared], ['Unattributed', report.unattributed]] as const).map(([name, totals]) => ({ name, values: values(totals) }));
+  return section('Tokens by attribution', undefined, table({ label: 'Usage totals',
+    columns: [rowLabel('Attribution'), number('Known tokens'), number('Unknown measurements'), number('Estimated measurements'), number('Unknown costs')],
+    rows: rows.map(row => [row.name, ...row.values.map(count)]),
+    total: ['Total', ...[0, 1, 2, 3].map(index => count(sum(rows.map(row => row.values[index] as bigint))))] }));
+}
+// `complete` states that the entries are every cost group of the scope, so their total is the scope's.
+export function costsTable(heading: string | undefined, costs: readonly api.CostTotal[], complete: boolean): HTMLElement {
+  const bases = costs.map(cost => cost.group.basis); const mixed = mixedBases(bases);
+  const basis = mixed ? [text('Basis')] : [];
+  return section(heading, basisNote(bases), table({ label: 'Costs',
+    columns: [rowLabel('Attribution'), number('Amount'), number('Measurements'), ...basis, text('Pricing')],
+    rows: costs.map(({ group, amount: value, measurements }) => [group.attribution, amount(value.value, group.currency), count(measurements),
+      ...(mixed ? [group.basis] : []), group.pricingVersion === undefined ? quiet('unspecified') : group.pricingVersion]),
+    total: complete && costs.length > 1 ? ['Total', costSum(costs, 0n, bases), count(sum(costs.map(cost => cost.measurements))), ...basis.map(() => ''), ''] : undefined }));
+}
+export function phasesTable(phases: readonly api.PhaseUsage[]): HTMLElement {
+  const costs = phases.flatMap(entry => entry.costs); const bases = costs.map(cost => cost.group.basis);
+  const values = (entry: api.PhaseUsage) => [entry.totals.total.known, entry.totals.total.unknown, entry.totals.total.estimated, entry.totals.unknownCosts];
+  const total = (value: (entry: api.PhaseUsage) => bigint) => sum(phases.map(value));
+  return section('By phase', basisNote(bases), table({ label: 'Usage by phase',
+    columns: [rowLabel('Phase'), number('Known tokens'), number('Unknown measurements'), number('Estimated measurements'), number('Unknown costs'),
+      number('Cost'), tally('Attempts'), tally('Running'), number('Busy wall time')],
+    rows: phases.map(entry => [entry.phase, ...values(entry).map(count), costSum(entry.costs, entry.totals.unknownCosts, bases),
+      count(entry.attempts), count(entry.running), duration(entry.wallMillis)]),
+    total: phases.length > 1 ? ['Total', ...[0, 1, 2, 3].map(index => count(total(entry => values(entry)[index] as bigint))),
+      costSum(costs, total(entry => entry.totals.unknownCosts), bases), count(total(entry => entry.attempts)), count(total(entry => entry.running)),
+      duration(total(entry => entry.wallMillis))] : undefined }));
 }
 interface AttemptActions {
   scope(filter: api.UsageFilter_ProjectAll | api.UsageFilter_TaskOnly | api.UsageFilter_CohortOnly | api.UsageFilter_SessionOnly): void;
   outcomes(attempt: api.AttemptId): void;
 }
-export function attemptsTable(entries: api.AttemptView[], actions: AttemptActions): HTMLTableElement {
-  return table('Attempts', ['Started', 'Harness / role', 'Model', 'State', 'Attribution / members', 'Details'], entries.map(entry => {
+export function attemptsTable(entries: api.AttemptView[], actions: AttemptActions): HTMLElement {
+  const columns = [text('Started'), text('Harness / role'), text('Model'), text('State'), prose('Attribution / members'), text('Details')];
+  return section(undefined, undefined, table({ label: 'Attempts', columns, total: undefined, rows: entries.map(entry => {
     const {attempt, assignment, outcome} = entry;
     const scopes = element('div', ''); scopes.className = 'usage-scope-actions';
     scopes.append(button(`Session usage · ${attempt.session.value}`, () => actions.scope(new api.UsageFilter_SessionOnly(attempt.session))));
@@ -91,7 +160,7 @@ export function attemptsTable(entries: api.AttemptView[], actions: AttemptAction
       outcome === undefined ? 'Running' : outcome.value.state,
       `${assignment.attribution} · ${[...assignment.members].map(itemName).join(', ') || 'No assigned items'}`,
       details('Attempt details', metadata, scopes, button('Outcome history', () => actions.outcomes(attempt.id)))];
-  }));
+  }) }));
 }
 export function sharedAssignmentsList(assignments: readonly api.Assignment[], open: boolean): HTMLDetailsElement {
   const list = element('ul', ''); list.setAttribute('aria-label', 'Shared assignments');
@@ -106,16 +175,21 @@ export function sharedAssignmentsList(assignments: readonly api.Assignment[], op
   const result = details(`${count} shared ${count === 1 ? 'assignment' : 'assignments'}`, list);
   result.className = 'usage-shared'; result.open = open; return result;
 }
-export function outcomesTable(entries: api.RecordedOutcome[]): HTMLTableElement {
-  return table('Outcome history', ['Sequence', 'State', 'Finished', 'Gaps', 'Provenance'], entries.map(entry => [
-    entry.sequence.toString(), entry.value.state, time(entry.value.finishedAt), entry.value.gaps.join('; ') || 'None recorded',
+export function outcomesTable(entries: api.RecordedOutcome[]): HTMLElement {
+  const columns = [tally('Sequence'), text('State'), text('Finished'), prose('Gaps'), text('Provenance')];
+  return section(undefined, undefined, table({ label: 'Outcome history', columns, total: undefined, rows: entries.map(entry => [
+    count(entry.sequence), entry.value.state, time(entry.value.finishedAt), entry.value.gaps.join('; ') || 'None recorded',
     details('Outcome details', fields([['Attempt', entry.value.attempt.value], ['Request', entry.value.request.value],
       ['Supersedes', entry.value.supersedes === undefined ? 'None' : entry.value.supersedes.value],
       ['Received', time(entry.receivedAt)], ['Actor', `${entry.actor.subject} · ${entry.actor.role}`], ['Session', entry.actor.session.value]])),
-  ]));
+  ]) }));
 }
-export function auditTable(entries: api.RecordedUsage[]): HTMLTableElement {
-  return table('Usage audit', ['Sequence / time', 'Source / coverage', 'Contribution', 'Input', 'Output', 'Cost', 'Details'], entries.map(entry => {
+export function auditTable(entries: api.RecordedUsage[]): HTMLElement {
+  // An observation without an amount shows its cost as unknown and does not decide how the basis of the others is stated.
+  const bases = entries.map(entry => entry.upload.observation.cost).filter(cost => cost.amount !== undefined).map(cost => cost.basis); const mixed = mixedBases(bases);
+  const columns = [text('Sequence / time'), text('Source / coverage'), text('Contribution'), number('Input'), number('Output'), number('Cost'),
+    ...(mixed ? [text('Basis')] : []), text('Details')];
+  return section(undefined, basisNote(bases), table({ label: 'Usage audit', columns, total: undefined, rows: entries.map(entry => {
     const {observation, meter, disposition, detailReason} = entry.upload;
     const metadata = fields([['Observation', observation.id.value], ['Attempt', observation.attempt.value], ['Meter', meter],
       ['Position / scope', `${observation.position} / ${observation.scope}`], ['Received', time(observation.receivedAt)],
@@ -126,7 +200,7 @@ export function auditTable(entries: api.RecordedUsage[]): HTMLTableElement {
       ['Input includes cache', observation.inputIncludesCache ? 'Yes' : 'No'], ['Output includes reasoning', observation.outputIncludesReasoning ? 'Yes' : 'No'],
       ['Actor', `${entry.actor.subject} · ${entry.actor.role}`], ['Session', entry.actor.session.value]]);
     return [`${entry.sequence} · ${time(observation.occurredAt)}`, `${observation.source} · ${observation.completeness}`, disposition,
-      counter(entry.normalized.input), counter(entry.normalized.output), money(observation.cost),
+      counter(entry.normalized.input), counter(entry.normalized.output), money(observation.cost), ...(mixed ? [observation.cost.basis] : []),
       details('Observation details', metadata, tokens('Normalized counters', entry.normalized), tokens('Reported counters', observation.counters))];
-  }));
+  }) }));
 }

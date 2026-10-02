@@ -15,8 +15,7 @@ import { icon } from './icons.js';
 import { ArchiveDialog } from './archive.js';
 import { RequirementsDialog } from './requirements.js';
 import { faultMessage } from './faults.js';
-import { attemptsTable, outcomesTable, auditTable, phasesTable, sharedAssignmentsList } from './usage-view.js';
-import { formatAmount, MoneyDigits } from './money.js';
+import { attemptsTable, outcomesTable, auditTable, costsTable, phasesTable, sharedAssignmentsList, totalsTable } from './usage-view.js';
 import { TableColumn, TableColumns } from './table-columns.js';
 import { ItemsView } from './items-view.js';
 import { Notifications } from './notifications.js';
@@ -675,14 +674,15 @@ class App {
     const item = result.view.item;
     const title = element('h2', `${itemName(item.id)} · ${item.draft.title}`);
     const actions = element('div', ''); actions.className = 'actions document-actions';
-    const close = button('Close', () => this.closeItem()); close.setAttribute('aria-label', 'Close item view'); close.title = 'Close item view (Esc from results)';
-    actions.append(close, button('Edit current revision', () => this.openEditor(result.view)),
+    const close = button('', () => this.closeItem()); close.className = 'close-detail'; close.append(icon('Close'));
+    close.setAttribute('aria-label', 'Close item view'); close.title = 'Close item view (Esc from results)';
+    actions.append(button('Edit current revision', () => this.openEditor(result.view)),
       button('History', () => this.action(async () => { this.historyBefore = new api.Revision(9223372036854775807n);
         // Drop the previous item's or visit's revisions so stale rows cannot be activated while the fresh page loads.
         this.historyPanel.replaceChildren(element('p', 'Loading history…')); this.historyDialog.open(`History · ${itemName(item.id)}`); await this.loadHistory(); })));
     const metadata = element('p', `Revision ${item.revision.value} · ${item.provenance.actor.subject} · ${new Date(Number(item.updatedAt)).toLocaleString()}`); metadata.className = 'revision-meta';
     this.showWork(item.id);
-    this.detail.replaceChildren(title, metadata, this.workLine, actions, this.itemDocument(item));
+    this.detail.replaceChildren(close, title, metadata, this.workLine, actions, this.itemDocument(item));
     this.detail.hidden = this.editor !== null && this.editor.record.item !== undefined;
     this.graph.setScope(this.project, result.view);
     await this.loadUsage();
@@ -884,16 +884,8 @@ class App {
     const previousShared = this.usagePanel.querySelector<HTMLDetailsElement>('details.usage-shared');
     const sharedOpen = previousShared !== null && previousShared.open;
     this.usagePanel.replaceChildren(element('h3', `Usage · ${this.usageScope()}`));
-    const table = element('table', ''); table.setAttribute('aria-label', 'Usage totals');
-    const head = element('tr', ''); for (const label of ['Attribution', 'Known tokens', 'Unknown measurements', 'Estimated measurements', 'Unknown costs']) head.append(element('th', label));
-    const headings = element('thead', ''); headings.append(head); const body = element('tbody', ''); table.append(headings, body);
-    for (const [label, totals] of [['Direct', report.direct], ['Shared', report.shared], ['Unattributed', report.unattributed]] as const) {
-      const row = element('tr', ''); row.append(element('th', label));
-      for (const value of [totals.total.known, totals.total.unknown, totals.total.estimated, totals.unknownCosts]) row.append(element('td', String(value)));
-      body.append(row);
-    }
-    this.usagePanel.append(table);
-    if (report.costs.entries.length > 0) this.usagePanel.append(this.costTable(report.costs.entries));
+    this.usagePanel.append(totalsTable(report));
+    if (report.costs.entries.length > 0) this.usagePanel.append(costsTable('Cost by attribution', report.costs.entries, !report.costs.hasMore));
     if (report.costs.hasMore) this.usagePanel.append(button('More costs', () => this.action(() => this.loadCosts(report.costs.after, report.cursor))));
     if (phases.phases.length > 0) this.usagePanel.append(phasesTable(phases.phases));
     if (phases.costsTruncated) this.usagePanel.append(element('p', 'Per-phase costs are truncated; the amounts shown are lower bounds. The cost breakdown lists every cost group.'));
@@ -912,20 +904,6 @@ class App {
     const latest = this.usageCursor;
     this.auditFreshness.textContent = latest === null ? `Snapshot cursor ${this.auditCursor}; freshness unconfirmed.`
       : `${latest > this.auditCursor ? 'Stale snapshot' : 'Snapshot'} cursor ${this.auditCursor}; latest observed usage cursor ${latest}.`;
-  }
-  private costTable(costs: readonly api.CostTotal[]): HTMLElement {
-    const table = element('table', ''); table.setAttribute('aria-label', 'Costs');
-    const header = element('thead', ''); const headings = element('tr', '');
-    for (const label of ['Attribution', 'Amount', 'Currency', 'Basis', 'Pricing', 'Measurements']) headings.append(element('th', label));
-    header.append(headings); table.append(header); const body = element('tbody', '');
-    for (const cost of costs) {
-      const group = cost.group; const row = element('tr', '');
-      const amount = element('td', formatAmount(cost.amount.value, MoneyDigits)); amount.title = cost.amount.value;
-      row.append(element('td', group.attribution), amount);
-      for (const value of [group.currency, group.basis, group.pricingVersion === undefined ? 'unspecified' : group.pricingVersion, String(cost.measurements)]) row.append(element('td', value));
-      body.append(row);
-    }
-    table.append(body); return table;
   }
   private loadCosts(after: api.CostGroup | undefined, snapshot: bigint | undefined): Promise<void> {
     return this.openAudit(new api.UsageSelection_Costs(this.usageFilter(), after, snapshot, 20));
@@ -984,7 +962,7 @@ class App {
   private renderAudit(view: AuditView, result: api.Result): void {
     if (result instanceof api.Result_UsageCosts && view instanceof api.UsageSelection_Costs) {
       this.auditHeader('Cost breakdown', result.page.cursor);
-      this.auditPanel.append(this.costTable(result.page.entries));
+      this.auditPanel.append(costsTable(undefined, result.page.entries, false));
       if (result.page.hasMore) this.auditPanel.append(button('Next cost page', () => this.action(() => this.loadCosts(result.page.after, result.page.cursor))));
       return;
     }

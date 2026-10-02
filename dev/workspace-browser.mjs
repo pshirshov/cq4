@@ -48,7 +48,18 @@ export async function workspaceChecks(browser, storageState, origin, evidence) {
     assert.equal(await page.getByLabel('Project', { exact: true }).evaluate(node => node.closest('header') !== null), true);
     cases.push('keyboard selection, detail return and pane/query focus');
     const heading = page.getByRole('heading', { name: 'T2 · Keyboard B updated', exact: true });
-    await page.getByRole('button', { name: 'Close item view', exact: true }).click();
+    // D122: the close control is an icon button in the pane's top-right corner, beside the dock control and right of the title.
+    const closeControl = page.getByRole('button', { name: 'Close item view', exact: true });
+    const closeBox = await closeControl.boundingBox(); const paneBox = await detail.boundingBox();
+    const dockBox = await page.getByRole('button', { name: 'Dock detail below', exact: true }).boundingBox();
+    const titleRight = await heading.evaluate(node => { const range = document.createRange(); range.selectNodeContents(node); return range.getBoundingClientRect().right; });
+    assert.deepEqual({ icon: await closeControl.locator('svg').count(), text: await closeControl.textContent(), title: await closeControl.getAttribute('title'),
+      actions: await page.locator('.document-actions').getByRole('button').allTextContents(),
+      top: closeBox.y - paneBox.y < 20, sameRow: Math.abs(closeBox.y - dockBox.y) < 4, besideDock: Math.abs(dockBox.x - (closeBox.x + closeBox.width)) <= 12,
+      corner: paneBox.x + paneBox.width - (closeBox.x + closeBox.width) < 70, rightOfTitle: closeBox.x >= titleRight },
+    { icon: 1, text: '', title: 'Close item view (Esc from results)', actions: ['Edit current revision', 'History'],
+      top: true, sameRow: true, besideDock: true, corner: true, rightOfTitle: true });
+    await closeControl.click();
     await detail.waitFor({ state: 'hidden' }); await heading.waitFor({ state: 'detached' });
     assert.equal(await secondRow.getAttribute('aria-current'), 'false');
     assert.equal(await secondRow.evaluate(node => node === document.activeElement), true, 'Closing returns focus to the results');

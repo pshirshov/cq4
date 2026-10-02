@@ -89,7 +89,7 @@ export async function usageScopeChecks(browser, storageState, origin, evidence) 
     await click('Usage audit'); await page.getByRole('table', {name: 'Usage audit', exact: true}).getByRole('cell', {name: 'Shared fixture · Complete', exact: true}).waitFor();
     assert.equal(await page.getByRole('table', {name: 'Usage audit', exact: true}).getByRole('cell', {name: 'Direct fixture · Complete', exact: true}).count(), 0);
     assert.deepEqual(await page.getByRole('table', {name: 'Usage audit', exact: true}).getByRole('columnheader').allTextContents(), ['Sequence / time','Source / coverage','Contribution','Input','Output','Cost','Details']);
-    await page.getByRole('table', {name: 'Usage audit', exact: true}).getByRole('cell', {name: 'Unknown · Unknown', exact: true}).waitFor();
+    await page.getByRole('table', {name: 'Usage audit', exact: true}).getByRole('cell', {name: 'Unknown', exact: true}).waitFor();
     assert.equal(await page.locator('.usage-table pre').count(),0);
     await page.screenshot({path: `${evidence}/usage-audit-table.png`,fullPage:true});
     await page.getByRole('dialog').getByRole('button', { name: 'Close', exact: true }).click(); await summary('T1', 40, 100, 0);

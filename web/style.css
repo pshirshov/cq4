@@ -165,7 +165,9 @@ progress { width: 50px; height: 6px; margin-left: 12px; }
 .editor-actions button:first-child { background: #245576; border-color: #69a7cb; }
 .button-shortcut { margin-left: 8px; font: inherit; font-size: 11px; color: #a4c1d3; }
 .document-actions { margin: 10px 0 16px; }
-.dock-detail { float: right; margin-left: 8px; }
+/* The item pane's corner controls: the dock control comes first in the pane and floats outermost, the item view's close control sits beside it. */
+.dock-detail, .close-detail { float: right; margin: 0 0 0 8px; }
+.close-detail svg { display: block; width: 16px; height: 16px; }
 .workspace-dialog { width: min(900px, calc(100vw - 32px)); max-height: calc(100dvh - 40px); padding: 0; color: #e1e8ef; background: #141a20; border: 1px solid #506779; border-radius: 0; box-shadow: 0 16px 70px #0009; }
 .workspace-dialog::backdrop { background: #050c14aa; }
 .dialog-header { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 18px; background: #1c2630; border-bottom: 1px solid #435364; }
@@ -216,11 +218,33 @@ tbody tr[aria-selected=true] { background: #243d4c; }
   th, td { padding: 5px 4px; }
 }
 
-.usage-table { table-layout: fixed; }
-.usage-table td { vertical-align: top; overflow-wrap: anywhere; }
-.usage-table details { min-width: 0; }
-.usage-fields { display: grid; grid-template-columns: minmax(80px, 1fr) minmax(0, 2fr); gap: 5px 10px; }
+/* Usage tables (web/src/usage-view.ts). A table is as wide as its content and scrolls horizontally inside its section when the
+   section is narrower. Values stay on one line; only column headings and free text wrap. Label and number columns have one minimum
+   width each, so the tables of one view share their column positions. A heading is capped at that width: it wraps instead of widening its column. */
+.usage-section { margin: 14px 0 18px; }
+.usage-section h4 { margin: 0 0 4px; font-size: 12px; font-weight: 600; color: #a4c1d3; }
+.usage-note { margin: -2px 0 4px; font-size: 11px; color: #a4c1d3; }
+.usage-scroll { overflow-x: auto; }
+.usage-table { width: auto; }
+.usage-table th, .usage-table td { padding: 5px 12px; white-space: nowrap; overflow-wrap: normal; }
+.usage-table tr > :first-child { padding-left: 0; }
+.usage-table thead th { vertical-align: bottom; white-space: normal; font-size: 11px; border-bottom-color: #435364; }
+.usage-table tbody th { color: inherit; font-weight: normal; }
+.usage-table tbody tr:not(.usage-expansion):hover { background: #1c2630; }
+.usage-table .usage-label { min-width: 104px; }
+.usage-table .usage-number, .usage-table .usage-tally { text-align: right; }
+.usage-table .usage-number { width: 120px; max-width: 120px; }
+.usage-table td.usage-number { max-width: none; }
+.usage-table .usage-prose { white-space: normal; min-width: 160px; max-width: 420px; }
+.usage-table tfoot th, .usage-table tfoot td { border-top: 1px solid #61788a; border-bottom: 0; color: #e1e8ef; font-weight: 600; }
+.usage-table .usage-zero, .usage-quiet { color: #8698a6; }
+.usage-table summary, .usage-shared summary { cursor: pointer; }
+.usage-table .usage-expansion > td { padding: 8px 0 14px 16px; white-space: normal; }
+.usage-shared { margin: 10px 0; }
+.usage-shared ul { margin: 6px 0 0; padding-left: 18px; font-size: 12px; font-variant-numeric: tabular-nums; }
+.usage-shared li { padding: 2px 0; }
+.usage-fields { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 16px; margin: 0 0 10px; }
 .usage-fields dt { color: #aebdcc; }
 .usage-fields dd { margin: 0; overflow-wrap: anywhere; }
-.usage-scope-actions { display: flex; flex-direction: column; align-items: stretch; gap: 5px; }
+.usage-scope-actions { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; margin-bottom: 5px; }
 .usage-scope-actions button { overflow-wrap: anywhere; text-align: left; }
