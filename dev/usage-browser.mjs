@@ -18,7 +18,7 @@ export async function usageChecks(page, origin, projectId) {
   const phases = page.getByRole('table', { name: 'Usage by phase', exact: true });
   const phaseTruncation = page.getByText('Per-phase costs are truncated', { exact: false });
   async function phaseRows(expected) {
-    const read = () => phases.locator('tbody tr').evaluateAll(rows => rows.map(row => Array.from(row.querySelectorAll('td'), cell => cell.textContent)));
+    const read = () => phases.locator('tbody tr').evaluateAll(rows => rows.map(row => Array.from(row.querySelectorAll('th, td'), cell => cell.textContent)));
     const deadline = Date.now() + 5000;
     while (JSON.stringify(await read()) !== JSON.stringify(expected) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 50));
     assert.deepEqual(await read(), expected);
@@ -34,7 +34,7 @@ export async function usageChecks(page, origin, projectId) {
   await host({ Assign: { value: assignment } }); await host({ Start: { value: attempt } });
   await page.getByRole('button', { name: 'Project usage', exact: true }).click();
   await page.getByText('Attempt coverage: 1 running; 0 unknown outcomes; 0 with reported gaps.', { exact: true }).waitFor();
-  await phaseRows([['Work', '1', '1', '0 s', '0', '0', '0', '0', '']]);
+  await phaseRows([['Work', '0', '0', '0', '0', '—', '1', '1', '0 s']]);
   await page.getByRole('button', { name: 'Attempts', exact: true }).click();
   await page.getByRole('table', {name: 'Attempts', exact: true}).getByRole('cell', {name: 'Running', exact: true}).waitFor();
   await page.getByText('Attempt details', {exact: true}).click();
@@ -55,7 +55,7 @@ export async function usageChecks(page, origin, projectId) {
   const outcome = { request: id(), attempt: attempt.id, state: 'Cancelled', finishedAt: '3000', gaps: ['Final request usage unavailable'], supersedes: null };
   await host({ Finish: { value: outcome } });
   await page.getByText('Attempt coverage: 0 running; 0 unknown outcomes; 1 with reported gaps.', { exact: true }).waitFor();
-  await phaseRows([['Work', '1', '0', '2 s', '100', '0', '0', '1', '']]);
+  await phaseRows([['Work', '100', '0', '0', '1', 'Unknown', '1', '0', '2 s']]);
   await phases.getByTitle('2000 ms', { exact: true }).waitFor();
   assert.equal(await phaseTruncation.count(), 0);
   await page.getByRole('button', { name: 'Attempts', exact: true }).click();
@@ -82,16 +82,17 @@ export async function usageChecks(page, origin, projectId) {
   assert.equal(await page.getByText('Data: invalid query', { exact: true }).count(), 1, 'Usage refresh is independent of query validity');
   await page.getByRole('button', { name: 'More costs', exact: true }).click();
   await page.getByRole('heading', { name: 'Cost breakdown', exact: true }).waitFor();
-  await page.getByRole('table', { name: 'Costs' }).getByRole('row').filter({ has: page.getByRole('cell', { name: 'price-200', exact: true }) }).getByRole('cell', { name: '0.0100', exact: true }).waitFor();
+  await page.getByRole('table', { name: 'Costs' }).getByRole('row').filter({ has: page.getByRole('cell', { name: 'price-200', exact: true }) }).getByRole('cell', { name: '0.0100 USD', exact: true }).waitFor();
   assert.equal(await page.getByRole('button', { name: 'Next cost page', exact: true }).count(), 0);
   await host({ Ingest: { value: { observation: { id: id(), attempt: attempt.id, source: 'fixture', position: '203', occurredAt: '5000', receivedAt: '0',
     scope: 'Increment', counters: counts(1), inputIncludesCache: true, outputIncludesReasoning: true,
     cost: { amount: { value: '0.02' }, currency: 'USD', basis: 'ProviderEstimate', pricingVersion: 'price-200' },
     completeness: 'Complete', gaps: [], evidence: null, supersedes: null }, meter: 'fixture', disposition: 'Contribution', detailReason: null } } });
-  await page.getByRole('table', { name: 'Costs' }).getByRole('row').filter({ has: page.getByRole('cell', { name: 'price-200', exact: true }) }).getByRole('cell', { name: '0.0300', exact: true }).waitFor();
-  await phaseRows([['Work', '1', '0', '1 s', '302', '0', '0', '1', '2.0000 USD · ProviderEstimate']]);
+  await page.getByRole('table', { name: 'Costs' }).getByRole('row').filter({ has: page.getByRole('cell', { name: 'price-200', exact: true }) }).getByRole('cell', { name: '0.0300 USD', exact: true }).waitFor();
+  await phaseRows([['Work', '302', '0', '0', '1', '2.0000 USD', '1', '0', '1 s']]);
   await phases.getByTitle('1600 ms', { exact: true }).waitFor();
-  assert.equal(await phases.getByTitle('2', { exact: true }).textContent(), '2.0000 USD · ProviderEstimate');
+  assert.equal(await phases.getByTitle('2', { exact: true }).textContent(), '2.0000 USD');
+  await page.getByText('Cost basis: ProviderEstimate.', { exact: true }).waitFor();
   await phaseTruncation.waitFor();
   const timed = [['Review', 'phase-review', 3720000], ['Plan', 'phase-plan', 200000], ['Probe', 'phase-probe', 45000]].map(([phase, model, finishedAt]) =>
     ({ attempt: { ...attempt, id: id(), session: id(), model, startedAt: '0', phase }, finishedAt }));
@@ -100,14 +101,14 @@ export async function usageChecks(page, origin, projectId) {
     await host({ Finish: { value: { request: id(), attempt: entry.attempt.id, state: 'Completed', finishedAt: String(entry.finishedAt), gaps: [], supersedes: null } } });
   }
   await host({ Start: { value: { ...attempt, id: id(), session: id(), phase: 'Review' } } });
-  await phaseRows([['Probe', '1', '0', '45 s', '0', '0', '0', '0', ''], ['Plan', '1', '0', '3 min 20 s', '0', '0', '0', '0', ''],
-    ['Work', '1', '0', '1 s', '302', '0', '0', '1', '2.0000 USD · ProviderEstimate'], ['Review', '2', '1', '1 h 02 min', '0', '0', '0', '0', '']]);
+  await phaseRows([['Probe', '0', '0', '0', '0', '—', '1', '0', '45 s'], ['Plan', '0', '0', '0', '0', '—', '1', '0', '3 min 20 s'],
+    ['Work', '302', '0', '0', '1', '2.0000 USD', '1', '0', '1 s'], ['Review', '0', '0', '0', '0', '—', '2', '1', '1 h 02 min']]);
   await phases.getByTitle('3720000 ms', { exact: true }).waitFor();
   await page.getByRole('button', { name: 'Attempts', exact: true }).click();
   await page.getByRole('table', { name: 'Attempts', exact: true }).getByRole('row').filter({ has: page.getByRole('cell', { name: 'controlled-browser-fixture / phase-probe', exact: true }) }).getByText('Attempt details', { exact: true }).click();
   await page.getByRole('button', { name: `Session usage · ${timed[2].attempt.session.value}`, exact: true }).click();
   await page.getByRole('heading', { name: `Usage · session ${timed[2].attempt.session.value}`, exact: true }).waitFor();
-  await phaseRows([['Probe', '1', '0', '45 s', '0', '0', '0', '0', '']]);
+  await phaseRows([['Probe', '0', '0', '0', '0', '—', '1', '0', '45 s']]);
   assert.equal(await phaseTruncation.count(), 0);
   assert.deepEqual(await detail(), before, 'Usage lifecycle writes must not revise the item');
   await page.getByRole('dialog').getByRole('button', { name: 'Close', exact: true }).click();
