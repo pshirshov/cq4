@@ -314,11 +314,24 @@ final class JobSupervisorProcess extends SpecZIO with AssertZIO {
       val workspace = local.fixture.spec(scope)
       val failWrite = new AtomicBoolean(false)
       val process = new AtomicReference[Option[ManagedExecution]](None)
+      val hold = new AtomicBoolean(false)
+      val held = new CountDownLatch(1)
+      val resume = new CountDownLatch(1)
+      // The supervisor's monitor persists what it observes of the process, and a cancelled process is such an observation. The monitor
+      // is held at its next observation, so that the write that fails is the cancellation's own, whichever would have come first.
       val driver = new ExecutionDriver {
         override def start(spec: ExecutionSpec): ManagedExecution = {
           val running = new GuardianDriver(guardian.binary).start(spec)
           process.set(Some(running))
-          running
+          new ManagedExecution {
+            override def status: ProcessObservation = {
+              if (hold.get()) { held.countDown(); require(resume.await(30, TimeUnit.SECONDS), "Monitor fixture was not released") }
+              running.status
+            }
+            override def cancel(): ProcessObservation = running.cancel()
+            override def await(timeout: Duration): ProcessObservation = running.await(timeout)
+            override def close(): Unit = running.close()
+          }
         }
       }
       for {
@@ -341,8 +354,12 @@ final class JobSupervisorProcess extends SpecZIO with AssertZIO {
             _ <- supervisor.start(scope, workspace, command(guardian, "import time; time.sleep(30)"))
             _ <- (ZIO.sleep(zio.Duration.fromMillis(20)) *> supervisor.status(scope, workspace.attempt)).repeatUntil(_.phase == JobPhase.Running)
               .timeoutFail(new IllegalStateException("Fixture never started"))(zio.Duration.fromSeconds(5))
-            _ <- ZIO.succeed(failWrite.set(true))
-            failed <- supervisor.cancel(scope, workspace.attempt).either
+            _ <- ZIO.succeed(hold.set(true))
+            failed <- (for {
+              _ <- ZIO.attemptBlocking(assert(held.await(10, TimeUnit.SECONDS)))
+              _ <- ZIO.succeed(failWrite.set(true))
+              failed <- supervisor.cancel(scope, workspace.attempt).either
+            } yield failed).ensuring(ZIO.succeed { hold.set(false); resume.countDown() })
             _ <- assertIO(failed.isLeft)
             observed <- ZIO.attemptBlocking(process.get().get.await(Duration.ofSeconds(3)))
             _ <- assertIO(observed.phase == ProcessPhase.Settled && observed.result.exists(_.reason == StopReason.Cancelled))
