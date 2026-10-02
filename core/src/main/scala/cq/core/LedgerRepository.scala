@@ -7,6 +7,15 @@ final case class Scope(project: ProjectId, actor: Actor)
 final case class CanonicalEdge(source: ItemId, relation: Relation, target: ItemId)
 final case class StoredRequest(fingerprint: String, acknowledgement: ChangeAck)
 
+/** The kinds of per-project configuration document; a project holds at most one document of each kind. */
+enum ProjectSettingKind { case Requirements }
+object ProjectSettingKind {
+  def of(value: ProjectSetting): ProjectSettingKind = value match {
+    case _: ProjectSetting.Requirements => ProjectSettingKind.Requirements
+  }
+}
+final case class StoredSetting(revision: Revision, value: ProjectSetting, actor: Actor, updatedAt: Long)
+
 trait LedgerRepository[F[_, _]] {
   def initialize(project: Project): F[Throwable, Project]
   def projects(after: Option[ProjectId], limit: Int): F[Throwable, ProjectPage]
@@ -54,6 +63,9 @@ trait LedgerTransaction {
   def nextFence(): Long
   def workset(id: WorksetId): Option[StoredWorkset]
   def insertWorkset(value: StoredWorkset): Unit
+  def setting(kind: ProjectSettingKind): Option[StoredSetting]
+  // Replaces the project's document of the value's kind.
+  def putSetting(value: StoredSetting): Unit
   // Open (unarchived, non-terminal) items without an open DerivedFrom producer or PartOf milestone, in (ledger, number) order.
   def candidateRoots(after: Option[ItemId], limit: Int): ReadPage[ItemSummary]
 }

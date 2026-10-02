@@ -19,7 +19,8 @@ consistent database snapshot; changes committed afterward are excluded.
 
 The archive preserves the project UUID and stored items, relationships, history,
 request receipts, counters, usage audit and projections, artifacts, completed
-admissions and integration records. Restore refuses an existing project UUID.
+admissions, integration records, stored worksets and the project's settings
+(its standing requirements). Restore refuses an existing project UUID.
 Backup refuses an existing destination file, including one created concurrently.
 Successful restore advances the live project catalogue cursor.
 

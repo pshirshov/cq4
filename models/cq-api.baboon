@@ -36,7 +36,7 @@ enum Role { Human Governor Explorer Planner Worker Reviewer Collector }
 root data Actor { subject: str session: SessionId role: Role }
 root data Provenance { actor: Actor receivedAt: i64 request: RequestId }
 root data Project { id: ProjectId name: str revision: Revision createdAt: i64 }
-enum BackupTable { Projects Counters Items Labels Edges History Requests Changes Claims ClaimMembers UsageClock UsageAssignments UsageMembers UsageAttempts UsageMeters UsageCosts UsageRecords UsageHeads UsageOutcomes UsageSpans Artifacts ResultAdmissions Integrations IntegrationMembers Worksets }
+enum BackupTable { Projects Counters Items Labels Edges History Requests Changes Claims ClaimMembers UsageClock UsageAssignments UsageMembers UsageAttempts UsageMeters UsageCosts UsageRecords UsageHeads UsageOutcomes UsageSpans Artifacts ResultAdmissions Integrations IntegrationMembers Worksets Settings }
 root data BackupEntry { table: BackupTable rows: i64 bytes: i64 sha256: str }
 root data BackupManifest { project: ProjectId schemaSha256: str postgresMajor: i32 createdAt: i64 entries: lst[BackupEntry] }
 
@@ -286,6 +286,16 @@ root data PhaseReport { phases: lst[PhaseUsage] costsTruncated: bit cursor: i64 
 root id CatalogueCursor { value: i64 }
 root data ProjectPage { projects: lst[Project] after: opt[ProjectId] hasMore: bit cursor: CatalogueCursor }
 root data ProjectConfig { project: ProjectId endpoint: str name: str }
+root adt ProjectSetting {
+  data Requirements { text: str }
+}
+root data RequirementsChange { actor: Actor at: i64 }
+root data ProjectRequirements { project: ProjectId revision: Revision text: str change: opt[RequirementsChange] }
+root adt RequirementsAction {
+  data Read {}
+  data Replace { expected: Revision text: str }
+}
+root data RequirementsInput { project: ProjectId action: RequirementsAction }
 root data SearchInput { project: ProjectId query: str after: opt[ItemId] snapshot: opt[ChangeCursor] limit: i32 }
 enum ItemOrderField { Id Type Title Status Severity Modified }
 enum SortDirection { Ascending Descending }
@@ -439,6 +449,7 @@ root adt Command {
   data Projects { after: opt[ProjectId] snapshot: opt[CatalogueCursor] limit: i32 }
   data Initialize { config: ProjectConfig }
   data RenameProject { project: ProjectId expected: Revision name: str }
+  data Requirements { input: RequirementsInput }
   data Search { input: SearchInput }
   data Graph { input: GraphInput }
   data Workset { input: WorksetInput }
@@ -469,6 +480,7 @@ root adt Result {
   data ArtifactText { page: ArtifactPage }
   data Projects { page: ProjectPage }
   data Initialized { project: Project }
+  data Requirements { value: ProjectRequirements }
   data Found { page: ItemPage }
   data Detail { view: ItemView }
   data History { page: HistoryPage }

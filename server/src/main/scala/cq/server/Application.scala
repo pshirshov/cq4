@@ -20,6 +20,10 @@ final class Application(ledger: LedgerService[IO], repository: LedgerRepository[
         ZIO.attempt { authority.requireRoot(); authority.scope(config.project) }.flatMap(ledger.initialize(_, config.name)).map(Result.Initialized.apply)
       case Command.RenameProject(project, expected, name) =>
         ZIO.attempt { authority.requireRoot(); authority.scope(project) }.flatMap(ledger.rename(_, expected, name)).map(Result.Initialized.apply)
+      case Command.Requirements(input) => scoped(authority, input.project) { scope => input.action match {
+        case RequirementsAction.Read() => ledger.requirements(scope).map(Result.Requirements.apply)
+        case RequirementsAction.Replace(expected, text) => ledger.replaceRequirements(scope, expected, text).map(Result.Requirements.apply)
+      }}
       case Command.Search(input) => scoped(authority, input.project) { scope =>
         ledger.search(scope, input.query, input.after, input.limit).flatMap { page =>
           if (input.snapshot.exists(_ != page.cursor)) ZIO.fail(DomainFailure(Fault.Resync("Snapshot changed; restart search")))

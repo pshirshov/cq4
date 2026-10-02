@@ -8,6 +8,8 @@ import java.nio.charset.StandardCharsets
 trait LedgerService[F[_, _]] {
   def initialize(scope: Scope, name: String): F[Throwable, Project]
   def rename(scope: Scope, expected: Revision, name: String): F[Throwable, Project]
+  def requirements(scope: Scope): F[Throwable, ProjectRequirements]
+  def replaceRequirements(scope: Scope, expected: Revision, text: String): F[Throwable, ProjectRequirements]
   def change(scope: Scope, request: ChangeRequest): F[Throwable, ChangeAck]
   def get(scope: Scope, id: ItemId): F[Throwable, ItemView]
   def details(scope: Scope, members: List[ItemRevision], bytes: Int): F[Throwable, ItemViews]
@@ -59,6 +61,30 @@ object LedgerService {
         val next = tx.project.copy(name = name, revision = Revision(Math.addExact(expected.value, 1L)))
         tx.renameProject(next)
         next
+      }
+    }
+
+    // A project without a stored document has the empty text at revision 0.
+    private def standing(tx: LedgerTransaction): ProjectRequirements = tx.setting(ProjectSettingKind.Requirements) match {
+      case Some(StoredSetting(revision, ProjectSetting.Requirements(text), actor, updatedAt)) =>
+        ProjectRequirements(tx.project.id, revision, text, Some(RequirementsChange(actor, updatedAt)))
+      case None => ProjectRequirements(tx.project.id, Revision(0), "", None)
+    }
+
+    override def requirements(scope: Scope): F[Throwable, ProjectRequirements] = repository.transact(scope.project)(standing)
+
+    override def replaceRequirements(scope: Scope, expected: Revision, text: String): F[Throwable, ProjectRequirements] = repository.transact(scope.project) { tx =>
+      if (scope.actor.role != Role.Human) throw DomainFailure(Fault.Denied("Standing requirements change requires human authority"))
+      val count = text.codePointCount(0, text.length)
+      invalid(count <= MaxRequirementsCodePoints, s"Standing requirements exceed $MaxRequirementsCodePoints code points: $count supplied")
+      invalid(!text.contains('\u0000') && StandardCharsets.UTF_8.newEncoder().canEncode(text), "Standing requirements contain invalid Unicode or NUL")
+      val current = standing(tx)
+      if (current.revision != expected)
+        throw DomainFailure(Fault.Conflict(s"Standing requirements changed: expected revision ${expected.value}, actual ${current.revision.value}; reload before saving"))
+      if (current.text == text) current
+      else {
+        tx.putSetting(StoredSetting(Revision(Math.addExact(expected.value, 1L)), ProjectSetting.Requirements(text), scope.actor, clock.millis()))
+        standing(tx)
       }
     }
 
