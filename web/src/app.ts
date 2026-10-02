@@ -105,6 +105,7 @@ class App {
   private updatesRejected = false;
   private usageLoad: UsageLoad | null = null;
   private readonly detail = element('section', '');
+  private readonly workLine = element('p', '');
   private readonly editorPanel = element('section', '');
   private readonly conflictPanel = element('section', '');
   private readonly graph = new GraphActions({
@@ -155,6 +156,7 @@ class App {
   private epoch = 0;
   private refreshing = false;
   private dirty = false;
+  private fullDue = false;
   private historyBefore = new api.Revision(9223372036854775807n);
   private auditView: AuditView | null = null;
   private auditLoad: UsageLoad | null = null;
@@ -237,6 +239,7 @@ class App {
     }
     status.append(guidance);
     this.usageMetric.className = 'status-usage'; this.usageFreshness.className = 'status-freshness';
+    this.workLine.className = 'revision-meta work-meta'; this.workLine.hidden = true;
     const workspace = new Workspace(this.root, localStorage, error => this.showError(error)); const side = workspace.navigation; const list = workspace.results; const content = workspace.content;
     this.resultsPane = list; this.workspace = workspace;
     list.addEventListener('scroll', () => this.loadMore());
@@ -355,7 +358,8 @@ class App {
             if (this.countsSnapshot === null || this.itemCursor > this.countsSnapshot) this.action(() => this.loadCounts());
             // The work cursor is compared for difference only: it can step back with the server clock.
             if (!this.queryInvalid && (this.page === null || this.itemCursor > this.page.cursor.value || project.work !== this.page.work)) {
-              this.after = undefined; this.snapshot = undefined; this.action(() => this.refresh());
+              const marks = this.page !== null && this.itemCursor <= this.page.cursor.value;
+              this.after = undefined; this.snapshot = undefined; this.action(() => marks ? this.load() : this.refresh());
             }
             if (this.usageCursor === null || project.usage > this.usageCursor) this.usageCursor = project.usage;
             this.updateAuditFreshness();
@@ -441,7 +445,13 @@ class App {
   }
   private async refresh(): Promise<void> {
     if (this.project === null) return;
-    this.action(() => this.loadCounts());
+    this.fullDue = true; this.action(() => this.loadCounts());
+    await this.load();
+  }
+  // Reads the rows again. The selected item and its usage are read again only after `refresh` or when the items moved: a claim or
+  // attempt event changes the marks alone and must not rebuild the item view (I24).
+  private async load(): Promise<void> {
+    if (this.project === null) return;
     if (this.refreshing) { this.dirty = true; return; }
     this.refreshing = true; this.dirty = false;
     const project = this.project; const epoch = this.epoch;
@@ -472,10 +482,12 @@ class App {
         if (work !== null && work !== page.work) workMoved = true;
         work = page.work;
       } while (page.hasMore && items.length < target);
+      const full = this.fullDue || this.page === null || this.page.cursor.value !== page.cursor.value;
       this.page = page; this.loadedItems = items;
       this.renderItems(items);
       this.resultStatus.textContent = `${items.length} items${page.hasMore ? ' · more available' : ''}`;
-      this.dirty = this.dirty || workMoved || (this.itemCursor !== null && this.itemCursor > page.cursor.value);
+      this.fullDue = this.itemCursor !== null && this.itemCursor > page.cursor.value;
+      this.dirty = this.dirty || workMoved || this.fullDue;
       this.sync.textContent = this.updatesRejected ? 'Data: updates unavailable' : 'Data: current';
       if (this.selection !== null) {
         // D72/Decision 8: a fully loaded result without the selected item closes the item view; a later page may still hold it.
@@ -483,14 +495,14 @@ class App {
         const listed = items.some(({ summary }) => summary.id.project.value === selected.project.value && itemName(summary.id) === itemName(selected));
         // An open editor or item dialog keeps its item: a live change must not discard what the operator is working on.
         const engaged = this.editor !== null || this.historyDialog.element.open || this.usageDialog.element.open || this.graph.dialog.element.open;
-        if (listed || page.hasMore || engaged) await this.select(selected); else this.hideItem();
+        if (!listed && !page.hasMore && !engaged) this.hideItem(); else if (full) await this.select(selected); else this.showWork(selected);
       }
-      await this.loadUsage();
+      if (full) await this.loadUsage();
       completed = true;
     } catch (error) { if (current()) { this.sync.textContent = 'Data: stale'; throw error; } }
     finally {
       this.refreshing = false; this.items.setAttribute('aria-busy', 'false');
-      if (this.dirty) { this.dirty = false; this.action(() => this.refresh()); }
+      if (this.dirty) { this.dirty = false; this.action(() => this.fullDue ? this.refresh() : this.load()); }
       else if (completed && current()) requestAnimationFrame(() => this.loadMore());
     }
   }
@@ -636,6 +648,15 @@ class App {
     this.choose(null); if (this.workspace !== null) this.workspace.setDetailOpen(false);
     if (inside) this.items.focus();
   }
+  // The item view's work line, taken from the loaded row and replaced in place.
+  private showWork(id: api.ItemId): void {
+    const row = this.loadedItems.find(({ summary }) => summary.id.project.value === id.project.value && itemName(summary.id) === itemName(id));
+    const work = row === undefined ? undefined : row.work;
+    const label = work === undefined ? '' : workLabel(work);
+    if (this.workLine.textContent === label) return;
+    this.workLine.hidden = work === undefined;
+    this.workLine.replaceChildren(...(work === undefined ? [] : [workIcon(work), label]));
+  }
   private async select(id: api.ItemId): Promise<void> {
     this.choose(id); if (this.workspace !== null) this.workspace.setDetailOpen(true);
     const result = await this.readPanel('detail', new api.Command_Read(new api.ReadInput(this.currentProject(), new api.ReadSelection_ItemDetail(id))));
@@ -651,10 +672,8 @@ class App {
         // Drop the previous item's or visit's revisions so stale rows cannot be activated while the fresh page loads.
         this.historyPanel.replaceChildren(element('p', 'Loading history…')); this.historyDialog.open(`History · ${itemName(item.id)}`); await this.loadHistory(); })));
     const metadata = element('p', `Revision ${item.revision.value} · ${item.provenance.actor.subject} · ${new Date(Number(item.updatedAt)).toLocaleString()}`); metadata.className = 'revision-meta';
-    const row = this.loadedItems.find(({ summary }) => summary.id.project.value === item.id.project.value && itemName(summary.id) === itemName(item.id));
-    const progress = element('p', ''); progress.className = 'revision-meta work-meta'; progress.hidden = row === undefined || row.work === undefined;
-    if (row !== undefined && row.work !== undefined) progress.append(workIcon(row.work), workLabel(row.work));
-    this.detail.replaceChildren(title, metadata, progress, actions, this.itemDocument(item));
+    this.showWork(item.id);
+    this.detail.replaceChildren(title, metadata, this.workLine, actions, this.itemDocument(item));
     this.detail.hidden = this.editor !== null && this.editor.record.item !== undefined;
     this.graph.setScope(this.project, result.view);
     await this.loadUsage();

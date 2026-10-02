@@ -13,7 +13,7 @@ async function post(path, body) {
 }
 const call = command => post('/api/call', command);
 const id = () => ({value: randomUUID()});
-const task = title => ({title, body: '', labels: [], archived: false, citations: [], content: {Task: {status: 'Ready', acceptance: ['Marked'], result: null, validation: []}}});
+const task = title => ({title, body: title === 'Free' ? 'A long body makes the item view scroll.\n\n'.repeat(60) : '', labels: [], archived: false, citations: [], content: {Task: {status: 'Ready', acceptance: ['Marked'], result: null, validation: []}}});
 const project = id();
 await call({Initialize: {config: {project, endpoint: origin, name: `Work in progress ${project.value}`}}});
 const created = (await call({Change: {input: {project, change: {request: id(), fences: [], reason: 'Work in progress fixture',
@@ -30,6 +30,14 @@ const page = await context.newPage(); page.setDefaultTimeout(LIVE_MS);
 const cases = [], failures = [], errors = []; let navigations = 0;
 page.on('pageerror', error => errors.push(String(error)));
 page.on('framenavigated', frame => { if (frame === page.mainFrame()) navigations++; });
+// The name of every call the page sends: the selection of a Read, otherwise the command.
+const calls = [];
+page.on('websocket', socket => socket.on('framesent', ({payload}) => {
+  const command = JSON.parse(String(payload)).Call?.command;
+  if (command !== undefined) calls.push(Object.keys(command.Read === undefined ? command : command.Read.input.selection)[0]);
+}));
+const idle = () => page.waitForFunction(() => document.querySelector('.items-table tbody').getAttribute('aria-busy') === 'false' &&
+  [...document.querySelectorAll('span')].some(node => node.textContent === 'Data: current'));
 const check = async (name, body) => { try { await body(); cases.push(name); } catch (error) { failures.push(`${name}: ${String(error)}`); } };
 const table = page.getByRole('table', {name: 'Items', exact: true});
 const row = name => table.locator('tbody tr.item-row').filter({has: page.getByRole('button', {name, exact: true})});
@@ -71,6 +79,31 @@ try {
     assert.equal((await line.textContent()).trim(), await mark('T1 · Held').getAttribute('aria-label'));
     await page.getByRole('button', {name: 'T4 · Free', exact: true}).click(); await detail.getByRole('heading', {name: 'T4 · Free', exact: true}).waitFor();
     assert.equal(await detail.locator('.work-meta').isVisible(), false);
+    await page.getByRole('button', {name: 'Close item view', exact: true}).click();
+  });
+  await check('a claim on another item marks its row and leaves the open item view, its scroll position and focus alone', async () => {
+    await page.getByRole('button', {name: 'T4 · Free', exact: true}).click();
+    const detail = page.locator('#detail-pane'); await detail.getByRole('heading', {name: 'T4 · Free', exact: true}).waitFor();
+    await detail.getByRole('heading', {name: 'Usage · T4', exact: true}).waitFor(); await idle();
+    await detail.getByRole('button', {name: 'History', exact: true}).focus();
+    assert.equal(await detail.evaluate(pane => { pane.scrollTop = 120; window.opened = [pane.querySelector('h2'), document.activeElement]; return pane.scrollTop; }), 120, 'the item view must scroll');
+    const view = () => detail.evaluate(pane => ({same: pane.querySelector('h2') === window.opened[0], focused: document.activeElement === window.opened[1], scroll: pane.scrollTop}));
+    let sent = calls.length;
+    const other = await claim({Acquire: {id: id(), members: [created[2]], durationMillis: '300000'}});
+    await mark('T3 · Short lease').waitFor(); await idle();
+    assert.deepEqual(await view(), {same: true, focused: true, scroll: 120});
+    assert.deepEqual([...new Set(calls.slice(sent))], ['Browse'], 'a claim reads the rows only');
+    // A claim on the open item changes its work line in place; the new line moves the content, so the scroll position is not compared.
+    sent = calls.length;
+    const own = await claim({Acquire: {id: id(), members: [created[3]], durationMillis: '300000'}});
+    const line = detail.locator('.work-meta'); await line.waitFor(); await idle();
+    assert.equal((await line.textContent()).trim(), await mark('T4 · Free').getAttribute('aria-label'));
+    assert.deepEqual((({same, focused}) => ({same, focused}))(await view()), {same: true, focused: true});
+    assert.deepEqual([...new Set(calls.slice(sent))], ['Browse'], 'a claim reads the rows only');
+    await claim({Release: {fence: other.fence}}); await claim({Release: {fence: own.fence}});
+    await line.waitFor({state: 'hidden'}); await mark('T3 · Short lease').waitFor({state: 'detached'}); await idle();
+    assert.deepEqual(await marked(), ['T1', 'T2']);
+    assert.deepEqual((({same, focused}) => ({same, focused}))(await view()), {same: true, focused: true});
     await page.getByRole('button', {name: 'Close item view', exact: true}).click();
   });
   await check('wip:true and wip:false filter by the mark, and the editor completes the attribute values', async () => {
