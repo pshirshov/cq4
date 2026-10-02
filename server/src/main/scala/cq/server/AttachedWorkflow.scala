@@ -87,6 +87,14 @@ final class AttachedWorkflow(config: SupervisorConfig, authority: SupervisorAuth
       s"The CQ driver's start directive is pending: integration ${id.value} was not left unsettled by an earlier drive of this session, " +
         "so it cannot be applied before the workflow the directive starts. It can be applied once the driver is parked or has stopped"))
 
+  // No combination is carried over: the server admits no write for one under a pending start directive, and a combination's source is an
+  // integration that has already settled. Repeating a combination whose publication is pending would publish it for no cycle, so every
+  // Combine is refused there, whichever integration it names; CombinationStatus still reads it.
+  private def unpublished(id: RequestId): Unit =
+    if (driver.settleable.nonEmpty) throw DomainFailure(Fault.Denied(
+      s"The CQ driver's start directive is pending: combination ${id.value} cannot be prepared or published before the workflow the directive starts. " +
+        "It can be repeated once the driver is parked or has stopped"))
+
   // An integration or combination is applied only in the activation that prepared it. An unsettled one keeps that activation current,
   // so the integration an earlier drive left Ready or Pending is still owned by the current activation when the next drive settles it.
   // Ownership alone does not make it that drive's: the activation outlives its drive, and the session may have prepared more in it since.
@@ -107,7 +115,7 @@ final class AttachedWorkflow(config: SupervisorConfig, authority: SupervisorAuth
           case DispatchCommand.Combine(id, source, _) =>
             require(integrationsByEpoch.get(source).contains(execution.generation) &&
               combinationsByEpoch.get(id).forall(_ == execution.generation), "Combination belongs to a previous workflow activation")
-            if (!combinationsByEpoch.contains(id)) unstarted("a new combination")
+            if (combinationsByEpoch.contains(id)) unpublished(id) else unstarted("a new combination")
             combinationsByEpoch += id -> execution.generation
           case _ => ()
         }

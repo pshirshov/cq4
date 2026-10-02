@@ -13,7 +13,7 @@ import java.nio.file.Files
 import java.time.Clock
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
-import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger}
 import zio.{IO, Runtime, Semaphore, Task, Unsafe, ZIO}
 
 /** Drives the workflow, integration controller and lineage tracker of a real attached host against an in-process server with the driver
@@ -30,13 +30,16 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
   private val Target = "refs/heads/integration"
 
   /** What the host's collector does before an integration request reaches the server: a test holds or drops the request here. */
-  private final class Collector { @volatile var before: HostIntegrationInput => Unit = _ => () }
+  private final class Collector {
+    @volatile var before: HostIntegrationInput => Unit = _ => ()
+    @volatile var upload: ArtifactUpload => Unit = _ => ()
+  }
 
   private final class Receiver(application: Application, auth: Authorization, root: Authority, authority: Authority, runtime: Runtime[Any],
     collector: Collector) extends ServerApi {
     private def execute[A](value: Task[A]): A = Unsafe.unsafe { implicit unsafe => runtime.unsafe.run(value).getOrThrowFiberFailure() }
     override def call(command: Command): Result = execute(application.execute(authority, command))
-    override def artifact(value: ArtifactUpload): ArtifactMetadata = execute(application.upload(authority, value))
+    override def artifact(value: ArtifactUpload): ArtifactMetadata = { collector.upload(value); execute(application.upload(authority, value)) }
     override def usage(value: HostUsageInput): HostUsageResult = execute(application.ingest(authority, value))
     override def admit(value: HostAdmissionInput): ResultAdmission = execute(application.admit(authority, value))
     override def integrate(value: HostIntegrationInput): IntegrationRecord = { collector.before(value); execute(application.integrate(authority, value)) }
@@ -105,6 +108,8 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
       dispatch(DispatchCommand.PrepareIntegration(id, reviewer)) *> settled(id)
     }
     def integrate(id: IntegrationId): Task[IntegrationStatus] = dispatch(DispatchCommand.Integrate(id)) *> settled(id)
+    def combined(id: RequestId): Task[CombinationStatus] = combinations.status(id, 20000).repeatUntil(_.phase != CombinationPhase.Preparing)
+      .timeoutFail(new IllegalStateException("Combination did not settle"))(zio.Duration.fromSeconds(90))
 
     /** The server's record of the latest cycle, which holds what the status does not show: the members resting on the session. */
     def cycle: Option[CycleRecord] = registry.get(owner.project, key).flatMap(_.cycle)
@@ -420,6 +425,65 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
           assert(applied.phase == IntegrationPhase.Recorded && gitAfter == f.candidate, applied.toString)
         }
       } yield () }
+    }
+
+    "D101: refuse to publish again a combination an earlier drive left pending while the next drive's start directive is pending" in {
+      (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO], registry: DriverRegistry) =>
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, registry) { f =>
+        val combination = RequestId(uuid)
+        val uploads = new AtomicInteger(0)
+        val failing = new AtomicBoolean(true)
+        for {
+          // The earlier drive: Git refuses the integration, and the combination that follows freezes its plan but cannot publish it.
+          _ <- f.driven
+          ready <- f.prepared
+          _ <- ZIO.attemptBlocking(local.git(local.source, "update-ref", Target, f.commit("target", Map("left.txt" -> "left\n")).value, local.base.value))
+          source <- f.integrate(ready.id)
+          _ <- f.eventually("the refused integration is settled in its cycle")(f.cycle.exists(_.lineage.exists(entry =>
+            entry.member == LineageMember.Integration(ready.id) && entry.settled)))
+          _ <- ZIO.succeed { f.collector.upload = value => if (value.kind == ArtifactKind.Combination) {
+            uploads.incrementAndGet()
+            if (failing.get) throw new IOException("Connection reset")
+          }}
+          command = DispatchCommand.Combine(combination, ready.id, f.fence)
+          _ <- f.dispatch(command)
+          left <- f.combined(combination)
+          _ <- f.eventually("the unpublished combination rests on the session")(f.cycle.exists(_.held == Set(LineageMember.Combination(combination))))
+          _ <- f.park
+          _ <- f.drive
+          start <- f.directive
+          // The server would now accept the publication. The source integration is settled, so no drive carried it over.
+          _ <- ZIO.succeed(failing.set(false))
+          owned <- ZIO.attemptBlocking(f.driver.session.settleable)
+          attempts = uploads.get
+          replay <- f.dispatch(command).either
+          under <- f.combined(combination)
+          after <- f.status
+          refused <- f.activate(start).either
+          _ <- ZIO.attempt {
+            println(s"Publication-pending combination under a pending cycle: source integration ${source.phase}; combination left ${left.phase}, blocker ${left.blocker}; " +
+              s"integrations the server lets the session settle $owned; repeated Combine '${refusal(replay.map(_ => "admitted"))}'; combination phase ${under.phase}; " +
+              s"publication attempts ${uploads.get} (before the repeated Combine $attempts); then ${f.describe(after)}; start directive '${refusal(refused.map(_.cycle))}'")
+            assert(source.phase == IntegrationPhase.NotApplied && left.phase == CombinationPhase.PublicationPending && attempts == 1 && owned.contains(Set.empty), s"$source $left $attempts $owned")
+            assert(replay.left.exists { case DomainFailure(Fault.Denied(message)) => message.contains("start directive is pending") && message.contains(combination.value.toString); case _ => false },
+              replay.toString)
+            assert(under.phase == CombinationPhase.PublicationPending && uploads.get == attempts, s"$under ${uploads.get}")
+            assert(after.state == DriverState.On && after.stopped.isEmpty && after.cycle.exists(cycle => cycle.id == start.cycle && cycle.state == CycleState.Pending), after.toString)
+            assert(refused.left.exists(_.getMessage.contains("Settle active child/check/integration/combination work before changing workflow")), refused.toString)
+          }
+          // The turn ends with the directive unused, which stops the drive; the session then publishes the combination as an undriven session does.
+          stopped <- f.continuation
+          _ <- f.dispatch(command)
+          published <- f.combined(combination)
+          _ <- ZIO.attempt {
+            println(s"Publication-pending combination after the drive: continuation query ${brief(stopped)}; repeated Combine then ${published.phase}; " +
+              s"publication attempts ${uploads.get}")
+            assert(stopped match { case DriverReply.Stop(DriverStopped(DriverStop.Failure, detail), _, _) => detail.contains("directive not started"); case _ => false }, stopped.toString)
+            assert(published.phase == CombinationPhase.Ready && published.preview.nonEmpty && uploads.get == attempts + 1, published.toString)
+          }
+        } yield ()
+      }
     }
 
     "D101: count an integration applied as the last action of a turn as in flight at the next continuation query" in {
