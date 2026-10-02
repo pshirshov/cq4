@@ -177,7 +177,7 @@ final class HostDeliveryLocal extends AnyWordSpec {
       assert(receiver.spans.map(_.id).distinct.size == 2 && failed.finish(receiver).acknowledged == 0 && receiver.spans.size == 2)
     }
 
-    "I20: retain a session span before sending it, replay the same span after a lost acknowledgement and find the producing child's assignment" in {
+    "I20: retain a session span before sending it, replay the same span after a lost acknowledgement and find the producing child's assignment among 33 children" in {
       val root = Files.createTempDirectory("cq-session-spans-")
       val p = project
       val session = SessionId(UUID.randomUUID())
@@ -201,7 +201,8 @@ final class HostDeliveryLocal extends AnyWordSpec {
       val item = ItemRevision(ItemId(p, Ledger.Tasks, 1), Revision(1))
       val request = DispatchRequest(RequestId(UUID.randomUUID()), DispatchWork.Worker(WorkerMode.Implement), Harness.Codex, List(item), Nil, Nil, None,
         Fence(ClaimId(UUID.randomUUID()), 1), HostLimits(3000, 1000, 300, 2000, 262144))
-      val tickets = List.fill(2) {
+      // D108: more children than the former 32-child session bound.
+      val tickets = List.fill(33) {
         val assignment = Assignment(AssignmentId(UUID.randomUUID()), p, Set(item.id), Attribution.Direct, None, None)
         val worker = Attempt(attempt, assignment.id, Some(attempt), session, Role.Worker, Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Work)
         val ticket = DispatchTicket(request, assignment, worker, HarnessSetting(Harness.Codex, "/fixture", "fixture", "fixture", "0.156.1", Nil, Set.empty), None)

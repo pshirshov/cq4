@@ -110,7 +110,7 @@ sys.stderr.flush()
   /** `renewing` builds another runner of the same session with its own server authority and claim renewal policy. */
   private final case class Fixture(owner: Scope, collector: Scope, config: SupervisorConfig, authority: SupervisorAuthority, runner: ChildRunner, agents: AgentCatalog,
     jobs: JobSupervisor, members: List[ItemRevision], fence: Fence, governor: Attempt, profile: HarnessSetting, clock: Clock,
-    renewing: (SupervisorAuthority, ClaimRenewal.Policy) => ChildRunner, access: LocalAccess, jobLimit: java.util.concurrent.atomic.AtomicInteger,
+    renewing: (SupervisorAuthority, ClaimRenewal.Policy) => ChildRunner, access: LocalAccess, reservations: java.util.concurrent.atomic.AtomicInteger,
     failingQuarantine: ChildRunner) {
     val limits: HostLimits = HostLimits(3000, 900, 100, 1000, 262144)
     /** Runs one child of `controller` to its terminal status. */
@@ -181,14 +181,14 @@ sys.stderr.flush()
       authority = SupervisorAuthority(new Receiver(application, auth, root, root, runtime), new Receiver(application, auth, root, collectorAuthority, runtime),
         new Receiver(application, auth, root, governorAuthority, runtime), AccessToken("governor", expires))
       workspaces = local.fixture.service
-      // The journal refuses a reservation once `jobLimit` further ones have been made, as it does at its session bound.
-      jobLimit = new java.util.concurrent.atomic.AtomicInteger(Int.MaxValue)
+      // The journal refuses a reservation with an injected `Limit` fault once `reservations` further ones have been made.
+      reservations = new java.util.concurrent.atomic.AtomicInteger(Int.MaxValue)
       jobs <- JobSupervisor.acquire(config.owner, ZIO.attemptBlocking {
         val journal = FileJobRepository.open(directory.resolve("journal"), project.project, owner.actor.session)
         new JobRepository {
           override def records: List[JobRecord] = journal.records
           override def reserve(workspace: WorkspaceSpec, fingerprint: String, now: Long): (JobRecord, Boolean) = {
-            if (jobLimit.getAndDecrement() <= 0) throw DomainFailure(Fault.Limit("Session job limit reached; start a new governing session"))
+            if (reservations.getAndDecrement() <= 0) throw DomainFailure(Fault.Limit("Injected job reservation refusal"))
             journal.reserve(workspace, fingerprint, now)
           }
           override def replace(expected: JobRecord, next: JobRecord): Unit = journal.replace(expected, next)
@@ -209,7 +209,7 @@ sys.stderr.flush()
         override def prune(scope: Scope, repository: String): IO[Throwable, Int] = workspaces.prune(scope, repository)
       }
       _ <- test(Fixture(owner, collector, config, authority, runner(authority, ClaimRenewal.Default, workspaces), agents, jobs, members, claim.fence, governor, profile, clock,
-        runner(_, _, workspaces), access, jobLimit, runner(authority, ClaimRenewal.Default, unquarantinable)))
+        runner(_, _, workspaces), access, reservations, runner(authority, ClaimRenewal.Default, unquarantinable)))
     } yield ()
   }
 
@@ -410,21 +410,21 @@ sys.stderr.flush()
       } yield () }
     }
 
-    "publish a worker's result with the check Unknown and a named blocker when the session cannot start another job" in {
+    "publish a worker's result with the check Unknown and a named blocker when the journal refuses the check's job with a Limit fault" in {
       (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
         artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
       val check = ValidationCheck("unit", List("true"), 10000, 65536, 1, 0)
       fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None, List(check)) { f => for {
         entry <- f.dispatch(Completing, f.limits)
         // The child's own job is the last the journal admits.
-        _ <- ZIO.succeed(f.jobLimit.set(1))
+        _ <- ZIO.succeed(f.reservations.set(1))
         _ <- f.runner.run(entry).timeoutFail(new IllegalStateException("Worker did not finish"))(zio.Duration.fromSeconds(60))
         status = entry.status
         _ <- ZIO.attempt(assert(status.phase == DispatchPhase.Completed && status.result.nonEmpty, status.toString))
         result <- text(artifacts, f.owner, status.result.get).map(Wire.decode(ChildResult_JsonCodec, _))
         reason <- text(artifacts, f.owner, result.validation.head.artifact)
         _ <- ZIO.attempt {
-          val blocker = "Host check unit was not run: Session job limit reached; start a new governing session"
+          val blocker = "Host check unit was not run: Injected job reservation refusal"
           println(s"Unreserved check: ${status.phase} next=${status.next} blocker=${status.blocker} validation=${result.validation} artifact=$reason")
           assert(result.candidate.nonEmpty && result.validation.map(value => (value.check, value.state, value.failures)) == List(("unit", ValidationState.Unknown, Nil)))
           assert(status.blocker.contains(blocker) && status.next == ChildNext.InspectEvidence && status.counts.validationUnknown == 1 && reason == blocker, status.toString)
@@ -754,6 +754,26 @@ sys.stderr.flush()
             val grown = quiet.flatten.indexWhere(_ >= 1500)
             assert(grown >= 0, s"Quiet time did not grow while the child was silent: $quiet")
             assert(quiet.flatten.drop(grown).exists(_ < 1000), s"Quiet time was not reset by the child's output: $quiet")
+          }
+        } yield ()
+      }
+    }
+
+    "D108: admit and run a 33rd child of one governing session and attribute its result to its assignment" in {
+      (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None, Nil) { f =>
+        val controller = new DispatchController(f.config, f.runner, f.jobs, f.clock)
+        for {
+          settled <- ZIO.foreach((1 to 33).toList)(_ => f.child(controller, Recording, f.request(f.limits)))
+          last = settled.last
+          assignment <- ZIO.attemptBlocking(PhaseSpans.producer(f.config.directory, last.result.get))
+          attempts <- usage.attempts(f.owner, UsageFilter.SessionOnly(f.owner.actor.session), None, None, 100)
+          _ <- ZIO.attempt {
+            println(s"Children of one session: ${settled.map(_.phase).groupBy(identity).view.mapValues(_.size).toMap} last=$last")
+            assert(settled.forall(status => status.phase == DispatchPhase.Completed && status.result.nonEmpty), settled.map(_.phase).toString)
+            assert(settled.map(_.attempt).distinct.size == 33 && controller.quiescent)
+            assert(attempts.entries.find(_.attempt.id == last.attempt).exists(_.attempt.assignment == assignment), attempts.toString)
           }
         } yield ()
       }

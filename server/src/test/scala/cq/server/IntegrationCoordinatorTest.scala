@@ -64,7 +64,6 @@ final class MemoryIntegrationJournal(owner: Scope) extends IntegrationJournal {
       override def read = records.get(id)
       override def write(value: IntegrationLocal): Unit = {
         IntegrationEntries.validate(owner, id, read, value)
-        if (read.isEmpty && records.size >= IntegrationEntries.MaxOperations) throw DomainFailure(Fault.Limit("Journal is full"))
         records = records.updated(id, value)
       }
     })
@@ -395,6 +394,17 @@ abstract class IntegrationCoordinatorTest extends SpecZIO with AssertZIO {
         _ <- assertIO(released.exists(_.record.resolution.isInstanceOf[IntegrationResolution.NotApplied]) && f.executions.get() == 0)
         replay <- coordinator.recover(intent.id)
         _ <- assertIO(replay == released && f.server.observations.get() == 1)
+        _ <- f.isolation
+      } yield ()
+    } }
+
+    "D108: prepare a 33rd integration of one session and recover each as prepared only" in { (harness: IntegrationHarness) => harness.use { f =>
+      val intents = List.fill(33)(f.intent(f.base, f.first))
+      val coordinator = f.coordinator(f.journal)
+      for {
+        _ <- ZIO.foreachDiscard(intents)(coordinator.prepare)
+        recovered <- ZIO.foreach(intents)(intent => coordinator.recover(intent.id))
+        _ <- assertIO(recovered.forall(_.isEmpty) && f.executions.get() == 0)
         _ <- f.isolation
       } yield ()
     } }

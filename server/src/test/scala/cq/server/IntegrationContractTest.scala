@@ -674,6 +674,10 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
           val reopened = new CombinationPublication(directory, f.owner, f.governor, f.intent.repository, f.intent.target)
           assert(reopened.inventory == List(ticket.id) && reopened.publish(ticket.id, collector) == CombinationPlans.preview(plan))
           intercept[IllegalArgumentException](reopened.retain(ticket.copy(source = IntegrationId(uuid))))
+          // D108: a session retains more combinations than its former bound of 32, and recovery inventories all of them.
+          val further = List.fill(32)(CombinationTicket(RequestId(uuid), f.intent.id, f.claim.fence))
+          further.foreach(reopened.retain)
+          assert(reopened.inventory.toSet == (ticket :: further).map(_.id).toSet)
           val request = f.worker.request.copy(request = RequestId(uuid), work = DispatchWork.Worker(WorkerMode.ResolveConflict),
             previous = Some(f.intent.worker), artifacts = List(CombinationPlans.artifact(plan)))
           val assembler = new InputAssembler(governor, f.owner, clock, "")

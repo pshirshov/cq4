@@ -12,7 +12,7 @@ final case class HostValidated(evidence: ValidationEvidence, artifacts: List[Art
 
 /** Runs one configured check on an exact commit and renders its observations; artifacts are named `label` under the `parent` attempt.
   * A failed run is repeated on the same commit until the check passes or has run `attempts` times; a run whose cleanup is unconfirmed
-  * is never repeated. The evidence names the last run and records the failed runs before it. A run the session's job limit refuses
+  * is never repeated. The evidence names the last run and records the failed runs before it. A run whose job is refused with a `Limit` fault
   * ends the check as `Unknown` with that reason instead of failing its caller.
   * `launch` runs the job to settlement and owns its workspace; the check's output is read from the payload directory afterwards. */
 final class HostValidation(config: SupervisorConfig) {

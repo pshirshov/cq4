@@ -21,8 +21,7 @@ final class CombinationPublication(root: Path, owner: Scope, governor: AttemptId
   def inventory: List[RequestId] = {
     if (!Files.exists(root)) Nil else {
       HostFiles.directory(root)
-      val paths = Using.resource(Files.list(root))(_.iterator().asScala.take(CombinationPlans.MaxOperations + 1).toList)
-      require(paths.size <= CombinationPlans.MaxOperations, "Retained combination inventory exceeds its bound")
+      val paths = Using.resource(Files.list(root))(_.iterator().asScala.toList)
       paths.map { path =>
         HostFiles.directory(path)
         val id = UUID.fromString(path.getFileName.toString)
@@ -34,8 +33,6 @@ final class CombinationPublication(root: Path, owner: Scope, governor: AttemptId
   def retain(ticket: CombinationTicket): Unit = {
     HostFiles.directory(root)
     force(root.getParent, false)
-    val ids = inventory
-    require(ids.contains(ticket.id) || ids.size < CombinationPlans.MaxOperations, "Session combination limit reached")
     val entry = directory(ticket.id)
     HostFiles.directory(entry)
     force(root, false)

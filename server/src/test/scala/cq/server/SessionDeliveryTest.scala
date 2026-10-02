@@ -497,6 +497,63 @@ abstract class SessionDeliveryTest extends SpecZIO with AssertZIO {
           } yield ()
         }
     }
+
+    "D108: reconcile and deliver every child of a session that started 33 children" in {
+      (ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO], fixture: WorkspaceFixture) =>
+        val clock = Clock.systemUTC()
+        val owner = Scope(ProjectId(UUID.randomUUID()), Actor("governor", SessionId(UUID.randomUUID()), Role.Governor))
+        val collector = owner.copy(actor = owner.actor.copy(role = Role.Collector))
+        val auth = new Authorization(AccessConfig("recovery-contract-root-token", "http://localhost"), clock)
+        val rootAuthority = auth.authenticate("recovery-contract-root-token", Some(owner.actor.session.value.toString))
+        val authority = auth.authenticate(auth.grant(rootAuthority, GrantRequest(owner.project, collector.actor, clock.millis() + 60000)).value, None)
+        val application = new Application(ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, auth)
+        val assignment = Assignment(AssignmentId(UUID.randomUUID()), owner.project, Set.empty, Attribution.Unattributed, None, None)
+        val governor = Attempt(AttemptId(UUID.randomUUID()), assignment.id, None, owner.actor.session, Role.Governor,
+          Harness.Codex, "fixture", "fixture", "fixture", clock.millis(), UsagePhase.Govern)
+        val run = SupervisorRun(ProjectConfig(owner.project, "http://localhost", "Recovery"), assignment, governor, "0.156.1", fixture.source.toString, fixture.base, SessionOwnership.Attached)
+        val limits = HostLimits(3000, 1000, 300, 2000, 262144)
+        val profile = HarnessSetting(Harness.Codex, "/fixture/codex", "fixture", "fixture", "0.156.1", Nil, Set.empty)
+        val draft = ItemDraft("Recovery consumer", "Deliver every child", Set.empty, false,
+          Content.Task(TaskStatus.Ready, List("Account once"), None, Nil), Nil)
+        def uuid: UUID = UUID.randomUUID()
+        ZIO.scoped {
+          for {
+            runtime <- ZIO.runtime[Any]
+            _ <- ledger.initialize(owner, "Recovery consumer")
+            members <- MilestoneFixture.assigned(ledger, owner, List(draft))
+            member = members.head
+            fence <- ledger.acquire(owner, ClaimId(uuid), Set(member.id), 60000)
+            directory <- ZIO.attemptBlocking(Files.createTempDirectory("cq-session-children-"))
+            journal <- ZIO.acquireRelease(ZIO.attemptBlocking(FileJobRepository.open(directory.resolve("journal"), owner.project, owner.actor.session)))(v => ZIO.attemptBlocking(v.close()).orDie)
+            children <- ZIO.attemptBlocking(List.fill(33) {
+              val assigned = Assignment(AssignmentId(uuid), owner.project, Set(member.id), Attribution.Direct, None, None)
+              val attempt = governor.copy(id = AttemptId(uuid), assignment = assigned.id, parent = Some(governor.id), role = Role.Worker)
+              val request = DispatchRequest(RequestId(uuid), DispatchWork.Worker(WorkerMode.Implement), Harness.Codex, List(member), Nil, Nil, None, fence.fence, limits)
+              val child = directory.resolve("children").resolve(attempt.id.value.toString)
+              HostFiles.directory(child)
+              HostFiles.immutable(child.resolve("ticket.json"), HostFiles.encode(DispatchTicket_JsonCodec, DispatchTicket(request, assigned, attempt, profile, None)), 65536)
+              val queue = new DeliveryQueue(child.resolve("delivery"))
+              queue.enqueue(0, DeliveryBatch(List(HostDelivery.Usage(HostUsageInput(owner.project, HostUsage.Assign(assigned))),
+                HostDelivery.Usage(HostUsageInput(owner.project, HostUsage.Start(attempt))))))
+              queue.commit(List(HostDelivery.Usage(HostUsageInput(owner.project,
+                HostUsage.Finish(AttemptOutcome(RequestId(uuid), attempt.id, AttemptState.Completed, clock.millis(), Nil, None))))))
+              attempt.id
+            })
+            receiver = new Receiver(application, authority, runtime, AttemptId(uuid))
+            delivery = new SessionDelivery(journal, fixture.service, clock)
+            remainder <- ZIO.attemptBlocking(SessionDelivery.remainder(directory, run))
+            report <- delivery.flush(directory, run, receiver)
+            // Two batches per child and the governing session's reconciled publication.
+            _ <- assertIO(remainder == SessionRemainder(true, 0) && report == SessionDeliveryReport(2 * 33 + 1, Nil))
+            page <- usage.attempts(owner, UsageFilter.SessionOnly(owner.actor.session), None, None, 100)
+            _ <- assertIO(children.forall(id => page.entries.find(_.attempt.id == id).exists(_.outcome.exists(_.value.state == AttemptState.Completed))))
+            _ <- assertIO(page.entries.size == 34 && page.entries.find(_.attempt.id == governor.id).exists(_.outcome.exists(_.value.state == AttemptState.Unknown)))
+            repeated <- delivery.flush(directory, run, receiver)
+            after <- ZIO.attemptBlocking(SessionDelivery.remainder(directory, run))
+            _ <- assertIO(repeated == SessionDeliveryReport(0, Nil) && after == SessionRemainder(false, 0))
+          } yield ()
+        }
+    }
   }
 }
 

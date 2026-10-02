@@ -44,7 +44,6 @@ final case class SelectedDispatch(cohort: Option[UUID], evidence: ArtifactId, ad
 
 final class DispatchController(config: SupervisorConfig, runner: ChildRunner, jobs: JobSupervisor, clock: Clock) {
   private val AcknowledgementMillis = 1000L
-  private val MaxChildren = 32
   private val MaxStatusWaitMillis = 20000
   private val disabled = new AtomicBoolean(false)
   private var closing = false
@@ -60,7 +59,6 @@ final class DispatchController(config: SupervisorConfig, runner: ChildRunner, jo
       case None =>
         require(!closing && !disabled.get(), "Dispatch admission is closed")
         ChildContracts.request(config.project.project, request)
-        require(entries.size < MaxChildren, "Governing session reached its child-attempt bound")
         DispatchController.admissible(entries.values.filter(entry => !DispatchController.terminal(entry.status.phase)).map(_.ticket.request).toList, request)
         SupervisorConfig.within(request.limits, config.settings.limits)
         val profile = config.settings.harnesses.find(_.harness == request.harness).getOrElse(throw new IllegalArgumentException("Requested harness route is not configured"))

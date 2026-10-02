@@ -1,7 +1,7 @@
 package cq.server
 
 import cq.api.*
-import cq.core.{ArtifactService, CohortBounds, DomainFailure}
+import cq.core.{ArtifactService, DomainFailure}
 import cq.host.*
 import java.time.Clock
 import zio.{Task, ZIO}
@@ -23,9 +23,6 @@ final class CohortController(config: SupervisorConfig, authority: SupervisorAuth
       case None =>
         workflow.selection(request)
         SupervisorConfig.within(request.limits, config.settings.limits)
-        require(decisions.size < CohortBounds.RetainedDecisions &&
-          decisions.values.map(_.evidence.decision.choices.size).sum + CohortBounds.Choices <= CohortBounds.RetainedChoices,
-          "Governing session reached its retained cohort decision bound")
         val artifact = NativeArtifacts.id(config.run.attempt.id, "selection-" + request.request.value)
         val value = planner.plan(request, artifact)
         val body = HostFiles.encode(CohortEvidence_JsonCodec, value.evidence)

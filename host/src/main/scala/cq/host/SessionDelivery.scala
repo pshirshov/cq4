@@ -57,7 +57,6 @@ object SessionDelivery {
 
 /** The caller holds the journal's exclusive ownership for this entire operation. */
 final class SessionDelivery(journal: JobRepository, workspaces: WorkspaceService[IO], clock: Clock) {
-  private val MaxChildren = 32
   private val MaxPartialTicketFiles = 32
   private val MaxRecordBytes = 64 * 1024
   private val MaxGaps = 32
@@ -73,8 +72,7 @@ final class SessionDelivery(journal: JobRepository, workspaces: WorkspaceService
     val root = directory.resolve("children")
     val (children, incomplete) = if (!Files.exists(root)) (Nil, Nil) else {
       require(Files.isDirectory(root) && !Files.isSymbolicLink(root), "Child delivery root must be a directory")
-      val paths = Using.resource(Files.list(root))(_.iterator().asScala.take(MaxChildren + 1).toList)
-      require(paths.size <= MaxChildren, "Child delivery inventory exceeds its bound")
+      val paths = Using.resource(Files.list(root))(_.iterator().asScala.toList)
       paths.foreach { child =>
         require(Files.isDirectory(child) && !Files.isSymbolicLink(child) &&
           UUID.fromString(child.getFileName.toString).toString == child.getFileName.toString, "Child delivery path must be an attempt directory")

@@ -14,7 +14,6 @@ private[server] final class RevalidationExecution(val result: ArtifactId, val fe
 final class RevalidationController(config: SupervisorConfig, authority: SupervisorAuthority, jobs: JobSupervisor, dispatch: DispatchController,
   renewal: ClaimRenewal, clock: Clock, requests: Semaphore, admission: Semaphore) {
   private val WaitMillis = 20000L
-  private val MaxOperations = 32
   private val ClaimMillis = Duration.ofMinutes(3).toMillis
   private val AdmissionNanos = Duration.ofSeconds(60).toNanos
   private val validation = new HostValidation(config)
@@ -68,7 +67,6 @@ final class RevalidationController(config: SupervisorConfig, authority: Supervis
           require(!closing, "Revalidation admission is closed")
           if (entries.values.exists(_.view.phase == RevalidationPhase.Running))
             throw DomainFailure(Fault.Conflict("A revalidation is running; poll it before starting another"))
-          require(entries.size < MaxOperations, "Session revalidation limit reached")
         }
         val round = admit(result, fence)
         val entry = new RevalidationExecution(result, fence, done,
