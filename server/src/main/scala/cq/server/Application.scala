@@ -28,7 +28,7 @@ final class Application(ledger: LedgerService[IO], repository: LedgerRepository[
         }
       }
       case Command.Read(input) => scoped(authority, input.project) { scope => input.selection match {
-        case ReadSelection.Browse(query, order, after, snapshot, limit) => ledger.browse(scope, query, order, after, snapshot, limit).map(Result.Browsed.apply)
+        case ReadSelection.Browse(query, order, after, snapshot, limit) => ledger.browse(scope, query, order, after, snapshot, limit).flatMap(working(scope, _)).map(Result.Browsed.apply)
         case ReadSelection.Counts() => ledger.counts(scope).map(Result.Counts.apply)
         case ReadSelection.Proposal(id) => proposals.preview(scope, id).map(Result.Proposal.apply)
         case ReadSelection.Integration(id) => integrations.get(scope, id).map(Result.Integration.apply)
@@ -76,11 +76,21 @@ final class Application(ledger: LedgerService[IO], repository: LedgerRepository[
   private def scoped[A](authority: Authority, project: ProjectId)(operation: cq.core.Scope => Task[A]): Task[A] =
     ZIO.attempt(authority.scope(project)).flatMap(operation)
 
+  // The ledger marks claimed rows; usage adds the child attempt running under each claim. The page's work cursor is the sum the live revision
+  // reports, so a browser refreshes when a claim or an attempt on the page's project starts or ends.
+  private def working(scope: cq.core.Scope, page: BrowsePage): Task[BrowsePage] = {
+    val claimed = page.items.flatMap(row => row.work.map(work => row.summary.id -> work.owner.session)).toMap
+    usage.working(scope, claimed).map { attempts =>
+      page.copy(items = page.items.map(row => row.copy(work = row.work.map(_.copy(attempt = attempts.running.get(row.summary.id))))),
+        work = Math.addExact(page.work, attempts.events))
+    }
+  }
+
   def liveRevision(authority: Authority, scope: LiveScope): Task[LiveRevision] = for {
     _ <- ZIO.attempt { authorization.check(authority); if (scope.catalogue) authority.requireRoot() }
     catalogue <- if (scope.catalogue) repository.catalogueCursor.map(Some(_)) else ZIO.none
     project <- ZIO.foreach(scope.project) { project => scoped(authority, project) { permitted =>
-      for { cursors <- ledger.cursors(permitted); cursor <- usage.cursor(permitted) } yield ProjectCursors(project, cursors.items, cursor, cursors.work)
+      for { cursors <- ledger.cursors(permitted); observed <- usage.cursors(permitted) } yield ProjectCursors(project, cursors.items, observed.usage, Math.addExact(cursors.work, observed.attempts))
     }}
   } yield LiveRevision(catalogue, project)
 

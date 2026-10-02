@@ -291,7 +291,8 @@ root data SearchInput { project: ProjectId query: str after: opt[ItemId] snapsho
 enum ItemOrderField { Id Type Title Status Severity Modified }
 enum SortDirection { Ascending Descending }
 root data ItemOrder { field: ItemOrderField direction: SortDirection grouped: bit }
-root data ItemWork { claim: ClaimId owner: Actor members: i32 expiresAt: i64 }
+root data WorkAttempt { role: Role harness: Harness startedAt: i64 }
+root data ItemWork { claim: ClaimId owner: Actor members: i32 expiresAt: i64 attempt: opt[WorkAttempt] }
 root data BrowseItem { summary: ItemSummary severity: opt[Severity] milestone: opt[ItemId] work: opt[ItemWork] }
 root data BrowsePage { items: lst[BrowseItem] cursor: ChangeCursor after: opt[ItemId] hasMore: bit work: i64 }
 root data LedgerCount { ledger: Ledger count: i64 }

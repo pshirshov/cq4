@@ -7,6 +7,9 @@ import scala.util.Try
 
 trait UsageService[F[_, _]] {
   def cursor(scope: Scope): F[Throwable, Long]
+  def cursors(scope: Scope): F[Throwable, UsageCursors]
+  /** For each claimed item, the latest running attempt of its claim owner's session that covers the item, with the attempt events of the same read. */
+  def working(scope: Scope, claimed: Map[ItemId, SessionId]): F[Throwable, WorkAttempts]
   def assign(scope: Scope, value: Assignment): F[Throwable, Assignment]
   def start(scope: Scope, value: Attempt): F[Throwable, Attempt]
   def meter(scope: Scope, value: UsageMeter): F[Throwable, UsageMeter]
@@ -30,6 +33,14 @@ object UsageService {
     private val HostPhases = Set[UsagePhase](UsagePhase.Check, UsagePhase.Combine, UsagePhase.Integrate)
 
     override def cursor(scope: Scope): F[Throwable, Long] = repository.read(scope.project)(_.cursor)
+
+    override def cursors(scope: Scope): F[Throwable, UsageCursors] = repository.read(scope.project)(reader => UsageCursors(reader.cursor, reader.attemptEvents))
+
+    override def working(scope: Scope, claimed: Map[ItemId, SessionId]): F[Throwable, WorkAttempts] = repository.read(scope.project) { reader =>
+      WorkAttempts(claimed.toList.flatMap { case (item, session) =>
+        reader.running(item, session).maxByOption(_.startedAt).map(attempt => item -> WorkAttempt(attempt.role, attempt.harness, attempt.startedAt))
+      }.toMap, reader.attemptEvents)
+    }
 
     private def host(scope: Scope): Unit =
       if (scope.actor.role != Role.Collector && scope.actor.role != Role.Human) throw DomainFailure(Fault.Denied("Usage ingestion requires a host collector or human credential"))

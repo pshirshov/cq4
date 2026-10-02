@@ -5,6 +5,8 @@ import cq.api.*
 final case class MeterKey(attempt: AttemptId, meter: String)
 final case class PhaseCost(phase: UsagePhase, total: CostTotal)
 final case class SpanTally(phase: UsagePhase, spans: Long, wallMillis: Long)
+final case class UsageCursors(usage: Long, attempts: Long)
+final case class WorkAttempts(running: Map[ItemId, WorkAttempt], events: Long)
 
 trait UsageRepository[F[_, _]] {
   def transact[A](project: ProjectId)(operation: UsageTransaction => A): F[Throwable, A]
@@ -17,6 +19,10 @@ trait UsageReader {
   def phaseCosts(filter: UsageFilter, limit: Int): List[PhaseCost]
   def cost(key: MeterKey, group: MoneyKey): Option[CostProjection]
   def cursor: Long
+  /** Attempts started plus attempts with a recorded outcome: it grows when an attempt starts and when its first outcome is recorded. */
+  def attemptEvents: Long
+  /** Attempts of `session` without a recorded outcome whose assignment covers `item`. */
+  def running(item: ItemId, session: SessionId): List[Attempt]
   def assignment(id: AssignmentId): Option[Assignment]
   def attempt(id: AttemptId): Option[Attempt]
   def meter(key: MeterKey): Option[(UsageMeter, MeterProjection)]

@@ -126,6 +126,56 @@ abstract class ApplicationContractTest extends SpecZIO with AssertZIO {
         } yield ()
     }
 
+    "I24: attach the claim owner's running child attempt to a claimed row and move the work cursor when it starts and finishes" in {
+      (repository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
+        val auth = authorization(Now)
+        val root = auth.authenticate(Token, Some(UUID.randomUUID().toString))
+        val application = new Application(FixedLedger.at(repository, Now), repository, usage, artifacts, admissions, integrations, proposals, auth)
+        val project = ProjectId(UUID.randomUUID())
+        def live: IO[Throwable, ProjectCursors] = application.liveRevision(root, LiveScope(false, Some(project))).map(_.project.get)
+        def browse: IO[Throwable, BrowsePage] = application.execute(root, Command.Read(ReadInput(project,
+          ReadSelection.Browse("", ItemOrder(ItemOrderField.Id, SortDirection.Ascending, false), None, None, 20)))).flatMap {
+          case Result.Browsed(page) => ZIO.succeed(page)
+          case other => ZIO.fail(new AssertionError(other))
+        }
+        def host(operation: HostUsage): IO[Throwable, HostUsageResult] = application.ingest(root, HostUsageInput(project, operation))
+        def attempt(assignment: Assignment, session: SessionId, startedAt: Long): Attempt =
+          Attempt(AttemptId(UUID.randomUUID()), assignment.id, None, session, Role.Worker, Harness.Codex, "fixture", "fixture", "fixture", startedAt, UsagePhase.Work)
+        for {
+          _ <- application.execute(root, Command.Initialize(ProjectConfig(project, "http://localhost", "running work")))
+          created <- application.execute(root, Command.Change(ChangeInput(project, ChangeRequest(RequestId(UUID.randomUUID()), List(Mutation.Create(task), Mutation.Create(task)), Nil, "Create"))))
+          ids <- ZIO.attempt(created match { case Result.Changed(ack) => ack.items.map(_.id); case other => throw new AssertionError(other) })
+          assignment = Assignment(AssignmentId(UUID.randomUUID()), project, ids.toSet, Attribution.Shared, None, None)
+          _ <- host(HostUsage.Assign(assignment))
+          // An attempt left running without a claim marks nothing: the mark requires an active claim.
+          orphan = attempt(assignment, SessionId(UUID.randomUUID()), 3000)
+          _ <- host(HostUsage.Start(orphan))
+          unclaimed <- browse
+          _ <- assertIO(unclaimed.items.forall(_.work.isEmpty))
+          claimed <- application.execute(root, Command.ClaimWork(ClaimInput(project, ClaimAction.Acquire(ClaimId(UUID.randomUUID()), Set(ids.head), 300000))))
+          held <- ZIO.attempt(claimed match { case Result.Claimed(value) => value; case other => throw new AssertionError(other) })
+          idle <- browse
+          before <- live
+          // The other session's attempt covers the item and is not the claim owner's child.
+          _ <- assertIO(idle.items.map(_.work.map(_.attempt)) == List(Some(None), None) && idle.work == before.work)
+          earlier = attempt(assignment, held.owner.session, 4000)
+          child = attempt(assignment, held.owner.session, 5000)
+          _ <- host(HostUsage.Start(earlier))
+          _ <- host(HostUsage.Start(child))
+          running <- browse
+          started <- live
+          _ <- assertIO(running.items.map(_.work.flatMap(_.attempt)) == List(Some(WorkAttempt(Role.Worker, Harness.Codex, 5000)), None))
+          _ <- assertIO(started.work > before.work && running.work == started.work && started.items == before.items)
+          _ <- host(HostUsage.Finish(AttemptOutcome(RequestId(UUID.randomUUID()), child.id, AttemptState.Completed, 6000, Nil, None)))
+          one <- browse
+          _ <- assertIO(one.items.head.work.flatMap(_.attempt).contains(WorkAttempt(Role.Worker, Harness.Codex, 4000)))
+          _ <- host(HostUsage.Finish(AttemptOutcome(RequestId(UUID.randomUUID()), earlier.id, AttemptState.Completed, 6000, Nil, None)))
+          finished <- browse
+          ended <- live
+          _ <- assertIO(finished.items.map(_.work.map(_.attempt)) == List(Some(None), None) && ended.work > started.work && finished.work == ended.work)
+        } yield ()
+    }
+
     "rename display metadata with revision comparison and preserve item identity and counters" in {
       (ledger: LedgerService[IO], repository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
         val auth = authorization(Now)
