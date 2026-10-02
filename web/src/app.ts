@@ -126,7 +126,8 @@ class App {
   }, localStorage);
   private readonly requirements = new RequirementsDialog({
     call: command => this.connection().call(command),
-    saved: value => this.notifications.show(`Standing requirements saved at revision ${value.revision.value}.`, 'success'),
+    saved: (value, changed) => this.notifications.show(changed ? `Standing requirements saved at revision ${value.revision.value}.`
+      : 'Standing requirements unchanged: the text equals the saved one.', changed ? 'success' : 'info'),
   });
   private readonly historyPanel = element('section', '');
   private readonly projectDialog = new Dialog('standard', () => {});
