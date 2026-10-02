@@ -164,7 +164,9 @@ def accepted(chain, statuses, artifacts, tickets, attempts, observations, seed, 
             prior = candidates[0]
         reports = evidence(prior["reviewResult"])["report"]["Review"]["members"]
         pending = {identity(value["item"]) for value in reports if value["verdict"] == "ChangesRequested"}
-        assert pending == {item for item, _ in required}, "Correction does not cover exactly the rejected members"
+        # A continuation keeps the whole group on its candidate, accepted members included (D113); a fresh split takes exactly the rejected members.
+        corrected = {item for item, _ in required}
+        assert pending and (pending <= corrected if previous is not None else pending == corrected), "Correction does not cover exactly the rejected members"
         assert all(value["verdict"] in ["Accepted", "ChangesRequested"] for value in reports), "Blocked member has no completed correction"
         current = prior
     plans = []

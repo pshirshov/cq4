@@ -323,27 +323,63 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
       } yield ()
     }
 
-    "separate accepted members from corrections and require explicit fresh selection to abandon a candidate" in {
+    "D113: continue a mixed-review candidate as one whole group and require explicit fresh selection to abandon it" in {
       (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO]) => for {
         runtime <- ZIO.runtime[Any]
-        prepared <- assessed(ledger, usage, artifacts, admissions, 6, CohortCompatibility.Compatible)
-        fixture = prepared.copy(checks = Nil)
-        worker <- publish(fixture, DispatchWork.Worker(WorkerMode.Implement), ChildReport.Work(fixture.members.map(ref =>
-          WorkMember(ref.id, WorkDisposition.CandidateReady, "Candidate", Nil))), None, Nil, ledger, usage, artifacts, admissions)
-        reviewer <- publish(fixture, DispatchWork.Reviewer(ReviewerMode.Candidate), ChildReport.Review(fixture.members.zipWithIndex.map { (ref, index) =>
-          if (index == 0) ReviewMember(ref.id, ReviewVerdict.ChangesRequested, List("Fix this task"))
-          else ReviewMember(ref.id, ReviewVerdict.Accepted, Nil)
-        }, None), Some(worker), Nil, ledger, usage, artifacts, admissions)
+        fixture <- assessed(ledger, usage, artifacts, admissions, 2, CohortCompatibility.Compatible)
         reads = new EvidenceApi(api(ledger, fixture.scope, runtime), artifacts, admissions, fixture.scope, runtime)
-        planner = new CohortPlanner(reads, fixture.scope, fixed(fixture.base), fixture.checks, new CohortProgress, new OperatorRequirements(""))
+        progress = new CohortProgress
+        planner = new CohortPlanner(reads, fixture.scope, fixed(fixture.base), fixture.checks, progress, new OperatorRequirements(""))
         input = request(fixture.members.map(_.id).toSet, DispatchWork.Worker(WorkerMode.Implement))
-        fresh <- ZIO.attemptBlocking(planner.plan(input.copy(artifacts = List(reviewer.id)), ArtifactId(uuid)))
-        exact <- ZIO.attemptBlocking(planner.plan(input.copy(previous = Some(reviewer.id)), ArtifactId(uuid)))
-        _ <- assertIO(exact.evidence.decision.choices.isEmpty && exact.evidence.decision.counts.excluded == fixture.members.size)
-        _ <- assertIO(fresh.evidence.decision.choices.flatMap(_.members.map(_.id)) == List(fixture.members.head.id) &&
-          fresh.evidence.decision.choices.head.reason == CohortReason.FreshFromBase)
-        changed <- ZIO.attemptBlocking(new CohortPlanner(reads, fixture.scope, fixed(fixture.base), prepared.checks, new CohortProgress, new OperatorRequirements(""))
-          .plan(input.copy(artifacts = List(reviewer.id)), ArtifactId(uuid)))
+        initial <- ZIO.attemptBlocking(planner.plan(input.copy(artifacts = List(fixture.artifact)), ArtifactId(uuid)))
+        _ <- assertIO(initial.evidence.decision.choices.map(_.members) == List(fixture.members))
+        _ <- ZIO.attempt(progress.started(initial.fingerprints(initial.evidence.decision.choices.head.id)))
+        worker <- publish(fixture, input.work, ChildReport.Work(fixture.members.map(ref =>
+          WorkMember(ref.id, WorkDisposition.CandidateReady, "Candidate", Nil))), None, Nil, ledger, usage, artifacts, admissions)
+        passed <- {
+          val bytes = "passed".getBytes(java.nio.charset.StandardCharsets.UTF_8)
+          val (out, uploads) = NativeArtifacts.binary(fixture.scope.project, worker.result.attempt, "passed", "text/plain", bytes)
+          val spec = WorkspaceSpec(fixture.scope.project, fixture.scope.actor.session, AttemptId(uuid), "/consumer", GitCommit("b" * 40))
+          val job = JobRecord(spec, uuid.toString, JobTarget.Run, JobPhase.Settled,
+            Some(JobExit(Some(0), None, StopReason.Exited, bytes.length.toLong, bytes.length.toLong, true, false)), None, 1, 1, 2)
+          ZIO.foreachDiscard(uploads)(artifacts.upload(fixture.collector, _)) *>
+            artifacts.upload(fixture.collector, ArtifactUpload(fixture.scope.project, ArtifactId(uuid), worker.result.attempt, ArtifactKind.Validation,
+              "application/json", Wire.encode(ValidationObservation_JsonCodec, ValidationObservation(fixture.checks.head, spec.base, job, out, out)))).map(_.id)
+        }
+        review = (verdicts: List[ReviewVerdict]) => publish(fixture, DispatchWork.Reviewer(ReviewerMode.Candidate),
+          ChildReport.Review(fixture.members.zip(verdicts).map((ref, verdict) =>
+            ReviewMember(ref.id, verdict, if (verdict == ReviewVerdict.Accepted) Nil else List("Fix this task"))), None),
+          Some(worker), List(ValidationEvidence(fixture.checks.head.name, ValidationState.Passed, passed, Nil)), ledger, usage, artifacts, admissions)
+        mixed <- review(List(ReviewVerdict.ChangesRequested, ReviewVerdict.Accepted))
+        accepted <- review(List(ReviewVerdict.Accepted, ReviewVerdict.Accepted))
+        blocked <- review(List(ReviewVerdict.ChangesRequested, ReviewVerdict.Blocked))
+        continuation = input.copy(request = RequestId(uuid), previous = Some(mixed.id))
+        exact <- ZIO.attemptBlocking(planner.plan(continuation, ArtifactId(uuid)))
+        // The accepted member stays in the group: its own execution history does not defer the correction of the shared candidate.
+        _ <- ZIO.attempt(assert(exact.evidence.decision.choices.map(choice => (choice.work, choice.members, choice.previous, choice.reason)) ==
+          List((input.work, fixture.members, Some(mixed.id), CohortReason.ExactPrevious)) && exact.evidence.decision.counts.excluded == 0, exact.evidence.toString))
+        choice = exact.evidence.decision.choices.head
+        _ <- ZIO.attemptBlocking(planner.verify(continuation, choice, exact.fingerprints(choice.id)))
+        // The same continuation named by the worker result, with the review as context, is the same operative input.
+        viaWorker <- ZIO.attemptBlocking(planner.plan(input.copy(request = RequestId(uuid), previous = Some(worker.id), artifacts = List(mixed.id)), ArtifactId(uuid)))
+        _ <- ZIO.attempt(assert(viaWorker.evidence.decision.choices.map(choice => (choice.members, choice.previous, choice.reason)) ==
+          List((fixture.members, Some(worker.id), CohortReason.ExactPrevious)) &&
+          viaWorker.fingerprints(viaWorker.evidence.decision.choices.head.id) == exact.fingerprints(choice.id), viaWorker.evidence.toString))
+        _ <- ZIO.attempt(progress.started(exact.fingerprints(choice.id)))
+        repeated <- ZIO.attemptBlocking(planner.plan(continuation.copy(request = RequestId(uuid)), ArtifactId(uuid)))
+        _ <- assertIO(repeated.evidence.decision.choices.isEmpty && repeated.evidence.considered.map(value => (value.members, value.reason)) ==
+          List((fixture.members, CohortReason.Deferred)))
+        whole <- ZIO.attemptBlocking(planner.plan(input.copy(request = RequestId(uuid), previous = Some(accepted.id)), ArtifactId(uuid)))
+        _ <- assertIO(whole.evidence.decision.choices.isEmpty && whole.evidence.decision.counts.excluded == 2 &&
+          whole.evidence.considered.forall(_.reason == CohortReason.ReviewAccepted))
+        refused <- ZIO.attemptBlocking(planner.plan(input.copy(request = RequestId(uuid), previous = Some(blocked.id)), ArtifactId(uuid)))
+        _ <- assertIO(refused.evidence.decision.choices.isEmpty && refused.evidence.considered.map(value => (value.members, value.reason)).toSet ==
+          Set((fixture.members.take(1), CohortReason.CandidateContinuity), (fixture.members.drop(1), CohortReason.ReviewBlocked)))
+        fresh <- ZIO.attemptBlocking(planner.plan(input.copy(request = RequestId(uuid), artifacts = List(mixed.id)), ArtifactId(uuid)))
+        _ <- assertIO(fresh.evidence.decision.choices.map(choice => (choice.members, choice.previous, choice.reason)) ==
+          List((fixture.members.take(1), None, CohortReason.FreshFromBase)))
+        changed <- ZIO.attemptBlocking(new CohortPlanner(reads, fixture.scope, fixed(fixture.base), fixture.checks.map(_.copy(command = List("different-verifier"))),
+          new CohortProgress, new OperatorRequirements("")).plan(input.copy(request = RequestId(uuid), artifacts = List(mixed.id)), ArtifactId(uuid)))
         _ <- assertIO(changed.evidence.decision.choices.flatMap(_.members.map(_.id)).toSet == fixture.members.map(_.id).toSet)
       } yield ()
     }

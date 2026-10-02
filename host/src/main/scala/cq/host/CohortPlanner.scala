@@ -207,11 +207,18 @@ final class CohortPlanner(api: ServerApi, owner: Scope, bases: ExecutionBase, ch
     val held = claim.toList.flatMap(_.claims.filter(_.owner != owner.actor).flatMap(_.members)).toSet ++
       claim.toList.flatMap(_.integrations.flatMap(_.members.map(_.id))).toSet
     val milestones = new MilestoneRecords(call, owner.project)
-    val excludedMembers = loaded.items.flatMap(value => {
+    val dispositions = loaded.items.flatMap(value => {
       val reason = if (held(value.item.id)) Some(CohortReason.Claimed)
         else MilestonePolicy.refusal(request.work, value, milestones).map(_.reason).orElse(reviewDisposition(value, request.work, ctx))
       reason.map(value.item.id -> _)
     }).toMap
+    // The previous candidate was produced for exactly the frozen members: by the previous worker itself, or by the worker whose members
+    // a candidate review covers one for one (ArtifactReader.review).
+    val continued = exact.nonEmpty && !partition && ctx.previous.exists(_.candidate.nonEmpty)
+    // D113: a review accepting some members of that candidate and requesting changes for others continues the whole group on it, so the
+    // accepted members stay with the correction. A group accepted as a whole, or with any other exclusion, is treated as before.
+    val mixed = continued && dispositions.size < loaded.items.size && dispositions.values.forall(_ == CohortReason.ReviewAccepted)
+    val excludedMembers = if (mixed) Map.empty[ItemId, CohortReason] else dispositions
     var pending = candidates.flatMap(ref => views.get(ref.id)).filterNot(value => excludedMembers.contains(value.item.id))
     var considered = loaded.items.filter(value => excludedMembers.contains(value.item.id)).map(value =>
       CohortConsidered(List(ItemRevision(value.item.id, value.item.revision)), excludedMembers(value.item.id), None))
@@ -250,9 +257,11 @@ final class CohortPlanner(api: ServerApi, owner: Scope, bases: ExecutionBase, ch
       if (pending.size != candidates.size) continuity()
       else if (request.work == DispatchWork.Worker(WorkerMode.Implement) && pending.size > CohortBounds.Members) continuity()
       else if (request.work == DispatchWork.Worker(WorkerMode.Implement) && pending.size > 1) compatibility(pending, ctx) match {
+        // Correcting a candidate these members already share needs no new assessment; only a contrary one at the candidate refuses it.
+        case Some(CohortCompatibility.Compatible) | None if continued => offer(pending, request.work, CohortReason.ExactPrevious, None, request, ctx)
         case Some(CohortCompatibility.Compatible) => offer(pending, request.work, CohortReason.CompatibleAssessment, None, request, ctx)
         case None => offer(pending, DispatchWork.Planner(), CohortReason.AssessmentRequired, None, request, ctx)
-        case Some(_) if ctx.previous.exists(_.candidate.nonEmpty) => continuity()
+        case Some(_) if continued => continuity()
         case Some(value) =>
           val split = request.copy(artifacts = (request.artifacts ++ request.previous).distinct, previous = None)
           validate(split)
