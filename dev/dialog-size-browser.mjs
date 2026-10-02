@@ -111,7 +111,7 @@ try {
       await batch.getByRole('heading', {name: 'Q2 · Question 2', exact: true}).waitFor(); same(first, await large(batch, 'question batch'), 'question skip');
       await headerStays(batch, 'question batch');
       await batch.getByLabel('Answer', {exact: true}).fill('Go');
-      await batch.getByRole('button', {name: 'Save answer and next', exact: true}).click();
+      await hold(page, batch.getByRole('button', {name: 'Save answer and next', exact: true}));
       await batch.getByRole('heading', {name: 'Q3 · Question 3', exact: true}).waitFor(); same(first, await large(batch, 'question batch'), 'question save');
       await batch.getByRole('button', {name: 'Previous question', exact: true}).click();
       await batch.getByRole('heading', {name: /^Q[12] · Question [12]$/}).waitFor(); same(first, await large(batch, 'question batch'), 'question previous');

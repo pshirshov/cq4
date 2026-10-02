@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {writeFile} from 'node:fs/promises';
 import {chromium} from 'playwright';
+import {hold as holdControl, HOLD_SETTLE_MS} from './hold.mjs';
 
 const origin = process.env.CQ_ORIGIN, evidence = process.env.CQ_BROWSER_EVIDENCE;
 const headers = {Authorization: `Bearer ${process.env.CQ_TOKEN}`, 'CQ-Session': randomUUID(), 'CQ-Protocol-Version': '0.1.0', 'Content-Type': 'application/json'};
@@ -139,7 +140,17 @@ try {
   // D70: Q2 is still the selected item, so its item view and result row are on screen behind the dialog.
   await page.evaluate(() => {window.questionFixtureLoaded = true;});
   assert.deepEqual(await shownStatus('Q2'), {heading: 'Q2 · Question 2', badges: ['Question', 'Open'], row: 'Open', loaded: true});
-  await batch().getByRole('button', {name: 'Save answer and next', exact: true}).click();
+  // D106: saving an answer needs a completed hold; a click and an early release save nothing.
+  const save = batch().getByRole('button', {name: 'Save answer and next', exact: true});
+  assert.deepEqual(await save.evaluate(node => [node.dataset.hold, node.title, node.getAttribute('aria-keyshortcuts')]), ['idle', 'Hold to confirm · Ctrl+Enter / ⌘+Enter', 'Control+Enter Meta+Enter']);
+  for (const name of ['Previous question', 'Skip / next question', 'Pick alternative: Go']) assert.equal(await batch().getByRole('button', {name, exact: true}).getAttribute('data-hold'), null, `${name} stays an ordinary click`);
+  await save.click(); await page.waitForTimeout(HOLD_SETTLE_MS);
+  await save.hover(); await page.mouse.down();
+  await page.waitForFunction(node => node.dataset.hold === 'holding' && Number(node.style.getPropertyValue('--hold')) >= 0.5, await save.elementHandle());
+  await batch().screenshot({path: evidence + '/question-save-holding.png'}); await page.mouse.up(); await page.waitForTimeout(HOLD_SETTLE_MS);
+  assert.equal(await batch().getByRole('heading', {name: 'Q2 · Question 2', exact: true}).count(), 1);
+  assert.deepEqual([(await detail(ids[1])).draft.content.Question.status, (await detail(ids[1])).revision.value], ['Open', '1'], 'a click and a released hold do not save');
+  await holdControl(page, save);
   await batch().getByRole('heading', {name: 'Q3 · Question 3', exact: true}).waitFor();
   assert.equal((await detail(ids[1])).draft.content.Question.answer, 'Go');
   await awaitStatus('Q2', 'Answered');
@@ -152,7 +163,7 @@ try {
   await batch().getByRole('heading', {name: 'Q1 · Question 1', exact: true}).waitFor();
   assert.equal(await batch().getByLabel('Answer', {exact: true}).inputValue(), 'Retained answer one');
   await change([{Replace: {id: ids[0], expected: {value: '1'}, draft: {...question(1), body: 'Concurrent clarification'}}}]);
-  await batch().getByRole('button', {name: 'Save answer and next', exact: true}).click();
+  await holdControl(page, batch().getByRole('button', {name: 'Save answer and next', exact: true}));
   await batch().getByRole('alert').filter({hasText: 'Conflict'}).waitFor();
   assert.equal((await detail(ids[0])).revision.value, '2');
   await batch().getByRole('button', {name: 'Use current question as base', exact: true}).click();
@@ -161,13 +172,13 @@ try {
   await batch().getByRole('heading', {name: 'Q3 · Question 3', exact: true}).waitFor();
   assert.equal((await detail(ids[0])).draft.body, 'Concurrent clarification');
   assert.equal((await detail(ids[0])).draft.content.Question.status, 'Answered');
-  cases.push('D56/D69/I14 alternatives listed once with pick controls and working links, one recommended badge with its reason, any pick fills without saving, free text, skips, navigation, persisted answers and explicit conflict rebase');
+  cases.push('D56/D69/I14/D106 alternatives listed once with pick controls and working links, one recommended badge with its reason, any pick fills without saving, an answer saved only by a completed hold, free text, skips, navigation, persisted answers and explicit conflict rebase');
 
-  await batch().getByRole('button', {name: 'Save answer and next', exact: true}).click();
+  await holdControl(page, batch().getByRole('button', {name: 'Save answer and next', exact: true}));
   await batch().getByRole('alert').filter({hasText: 'Enter an answer'}).waitFor();
   await batch().getByLabel('Answer', {exact: true}).fill('Third answer');
   const captured = hold('Browser answer to human question');
-  await batch().getByRole('button', {name: 'Save answer and next', exact: true}).click(); await captured();
+  await holdControl(page, batch().getByRole('button', {name: 'Save answer and next', exact: true})); await captured();
   const picks = batch().getByRole('button', {name: /^Pick alternative: /});
   assert.equal(await picks.count(), 3);
   for (const pick of await picks.all()) assert.equal(await pick.isDisabled(), true, 'pick controls are disabled during submit');
@@ -237,7 +248,7 @@ try {
   assert.deepEqual(await page.locator('.item-row .item-id').allTextContents(), ['Q5']);
   await open(); await batch().getByRole('heading', {name: 'Q5 · Question 5', exact: true}).waitFor();
   await batch().getByLabel('Answer', {exact: true}).fill('Fifth answer');
-  await batch().getByRole('button', {name: 'Save answer and next', exact: true}).click();
+  await holdControl(page, batch().getByRole('button', {name: 'Save answer and next', exact: true}));
   await batch().getByText('All questions in this batch are answered.', {exact: true}).waitFor();
   await page.waitForFunction(() => document.querySelectorAll('.item-row').length === 0 && document.querySelector('.workspace').dataset.detail === 'closed');
   assert.equal(await page.evaluate(() => window.questionFixtureLoaded), true);

@@ -37,11 +37,12 @@ Top-bar metrics identify their scope and last successful observation. Loading an
 
 ## Destructive actions
 
-Controls whose effect removes operator-visible state require a deliberate press-and-hold (I22), following the previous CQ version's hold button. The guarded controls are:
+Controls whose effect removes operator-visible state, and the control that records an operator's answer, require a deliberate press-and-hold (I22), following the previous CQ version's hold button. The guarded controls are:
 
 - **Confirm archive** in the Archive terminal items dialog.
 - **Discard local draft** in the item editor and the New item dialog.
 - **Confirm graph change** when the preview removes a relationship or restores a historical revision. Confirming an added relationship stays an ordinary click.
+- **Save answer and next** in the Answer questions dialog (D106), on every question including the last one. An answer settles its Question, so one stray click must not save it. Its title also names the Ctrl+Enter / ⌘+Enter shortcut, which saves at once: a two-key chord is deliberate. Previous, Skip / next and the Pick controls change nothing stored and stay ordinary clicks.
 
 Controls that only open a preview, retry an already confirmed exact request, cancel, or edit unsaved form or query text are not guarded: `Remove <relation>`, the retry-exact buttons, form-row Remove, clear query, the cancel buttons and "use … as base". Clear query empties the query text and submits the empty query at once (D97): the result list reloads with all items and focus stays in the search field. That removes no stored state, so it stays an ordinary click.
 
