@@ -273,7 +273,7 @@ def verify(checks, command, name):
                 write(out / "lost-commit-observation.json", {"commitAcknowledgementDropped": True, "projectCommitted": True, "stderr": uncertain.stderr})
                 assert "no restore was committed" not in uncertain.stderr, "Committed restore was falsely reported as rolled back"
                 assert "verify" in uncertain.stderr.lower() and "retry" in uncertain.stderr.lower(), uncertain.stderr
-        result = {"status": "passed", "tables": 25, "snapshotConsistent": True, "recordsEqual": True,
+        result = {"status": "passed", "tables": 26, "snapshotConsistent": True, "recordsEqual": True,
                   "collisionRefused": True, "counterContinued": True, "authorizationEnforced": True}
         write(out / "result.json", result)
         return result
