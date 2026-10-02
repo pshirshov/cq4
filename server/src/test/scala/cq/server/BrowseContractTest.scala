@@ -87,7 +87,7 @@ abstract class BrowseContractTest extends SpecZIO with AssertZIO {
           }
         }
         rows <- collect(service, owner, ItemOrder(ItemOrderField.Id, SortDirection.Ascending, true), None, None, 200)
-        single <- repository.transact(owner.project)(tx => rows.map(row => tx.browseItem(row.summary.id)))
+        single <- repository.transact(owner.project)(tx => rows.map(row => tx.browseItem(row.summary.id, 0L)))
         _ <- assertIO(single == rows.map(Some(_)) && rows.map(_.milestone.map(_.number)) == List(Some(1L), Some(1L), Some(2L), Some(2L), None, None, None, None, None))
       } yield ()
     }
@@ -106,6 +106,65 @@ abstract class BrowseContractTest extends SpecZIO with AssertZIO {
         _ <- assertIO(desc.items.head.summary.id == created.items.head.id && desc.items.head.summary.updatedAt == 100 && desc.hasMore)
         next <- later.browse(owner, "", ItemOrder(ItemOrderField.Modified, SortDirection.Ascending, false), asc.after, Some(asc.cursor), 1)
         _ <- assertIO(next.items == desc.items && !next.hasMore)
+      } yield ()
+    }
+
+    "I24: mark rows covered by an active claim and move the work cursor on acquire, release and expiry but not on renewal" in { (repository: LedgerRepository[IO]) =>
+      val owner = scope()
+      val other = owner.copy(actor = owner.actor.copy(session = SessionId(UUID.randomUUID())))
+      val order = ItemOrder(ItemOrderField.Id, SortDirection.Ascending, false)
+      val start = FixedLedger.at(repository, 10000)
+      val later = FixedLedger.at(repository, 12000)
+      def rows(service: LedgerService[IO]): IO[Throwable, BrowsePage] = service.browse(owner, "", order, None, None, 200)
+      def marks(page: BrowsePage): List[Option[ItemWork]] = page.items.map(_.work)
+      for {
+        _ <- start.initialize(owner, "Browse work")
+        created <- change(start, owner, List(task("Held", TaskStatus.Ready), task("Also held", TaskStatus.Ready), task("Short lease", TaskStatus.Ready), task("Free", TaskStatus.Ready)).map(Mutation.Create.apply))
+        ids = created.items.map(_.id)
+        initial <- rows(start)
+        _ <- assertIO(marks(initial).forall(_.isEmpty))
+        held <- start.acquire(owner, ClaimId(UUID.randomUUID()), Set(ids(0), ids(1)), 300000)
+        acquired <- rows(start)
+        expected = ItemWork(held.fence.claim, owner.actor, 2, held.expiresAt, None)
+        _ <- assertIO(marks(acquired) == List(Some(expected), Some(expected), None, None) && acquired.work > initial.work && acquired.cursor == initial.cursor)
+        single <- repository.transact(owner.project)(tx => acquired.items.map(row => tx.browseItem(row.summary.id, 10000)))
+        _ <- assertIO(single == acquired.items.map(Some(_)))
+        short <- start.acquire(owner, ClaimId(UUID.randomUUID()), Set(ids(2)), 1000)
+        leased <- rows(start)
+        _ <- assertIO(leased.items(2).work.contains(ItemWork(short.fence.claim, owner.actor, 1, 11000, None)) && leased.work > acquired.work)
+        renewed <- start.renew(owner, held.fence, 600000)
+        afterRenewal <- rows(start)
+        _ <- assertIO(afterRenewal.work == leased.work && afterRenewal.items.head.work.contains(expected.copy(expiresAt = renewed.expiresAt)) && renewed.expiresAt > held.expiresAt)
+        expired <- rows(later)
+        _ <- assertIO(marks(expired).map(_.map(_.claim)) == List(Some(held.fence.claim), Some(held.fence.claim), None, None) && expired.work > afterRenewal.work)
+        replacement <- later.acquire(other, ClaimId(UUID.randomUUID()), Set(ids(2), ids(3)), 300000)
+        replaced <- rows(later)
+        _ <- assertIO(marks(replaced).drop(2).map(_.map(_.owner)) == List(Some(other.actor), Some(other.actor)) && replaced.work > expired.work)
+        _ <- later.release(owner, renewed.fence)
+        released <- rows(later)
+        _ <- assertIO(marks(released).map(_.map(_.claim)) == List(None, None, Some(replacement.fence.claim), Some(replacement.fence.claim)) && released.work > replaced.work)
+        again <- later.release(owner, renewed.fence)
+        repeated <- rows(later)
+        _ <- assertIO(again.released && repeated.work == released.work)
+      } yield ()
+    }
+
+    "I24: leave the residual member of a partially replaced claim unmarked despite clock rollback" in { (repository: LedgerRepository[IO]) =>
+      val owner = scope()
+      val other = owner.copy(actor = owner.actor.copy(session = SessionId(UUID.randomUUID())))
+      val earlier = FixedLedger.at(repository, 10000)
+      val later = FixedLedger.at(repository, 12000)
+      for {
+        _ <- earlier.initialize(owner, "Browse partial replacement")
+        created <- change(earlier, owner, List(task("Replaced", TaskStatus.Ready), task("Residual", TaskStatus.Ready)).map(Mutation.Create.apply))
+        ids = created.items.map(_.id)
+        _ <- earlier.acquire(owner, ClaimId(UUID.randomUUID()), ids.toSet, 1000)
+        replacement <- later.acquire(other, ClaimId(UUID.randomUUID()), Set(ids.head), 300000)
+        order = ItemOrder(ItemOrderField.Id, SortDirection.Ascending, false)
+        rolledBack <- earlier.browse(owner, "", order, None, None, 200)
+        _ <- assertIO(rolledBack.items.map(_.work.map(_.claim)) == List(Some(replacement.fence.claim), None))
+        working <- earlier.browse(owner, "wip:true", order, None, None, 200)
+        _ <- assertIO(working.items.map(_.summary.id) == List(ids.head))
       } yield ()
     }
 

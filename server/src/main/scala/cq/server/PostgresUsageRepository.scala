@@ -43,6 +43,12 @@ private final class PostgresUsageTransaction(connection: Connection, project: Pr
   }
   private def tick(): Long = sql.query("UPDATE cq_usage_clock SET cursor = cursor + 1 WHERE project_id = ? RETURNING cursor")(projectKey)(_.getLong(1)).head
   override def cursor: Long = sql.query("SELECT cursor FROM cq_usage_clock WHERE project_id = ?")(projectKey)(_.getLong(1)).headOption.getOrElse(0L)
+  override def attemptEvents: Long = sql.query("SELECT count(*) + count(effective_outcome) FROM cq_usage_attempts WHERE project_id = ?")(projectKey)(_.getLong(1)).head
+  override def running(item: ItemId, session: SessionId): List[Attempt] =
+    sql.query("SELECT t.body::text FROM cq_usage_members m JOIN cq_usage_attempts t ON t.project_id = m.project_id AND t.assignment_id = m.assignment_id " +
+      "WHERE m.project_id = ? AND m.ledger = ? AND m.number = ? AND t.session_id = ? AND t.effective_outcome IS NULL") { s =>
+      projectKey(s); s.setString(2, item.ledger.toString); s.setLong(3, item.number); s.setObject(4, session.value)
+    }(r => Wire.decode(Attempt_JsonCodec, r.getString(1)))
   override def assignment(id: AssignmentId): Option[Assignment] = sql.query("SELECT body::text FROM cq_usage_assignments WHERE project_id = ? AND assignment_id = ?")(identity(_, id.value))(r => Wire.decode(Assignment_JsonCodec, r.getString(1))).headOption
   override def attempt(id: AttemptId): Option[Attempt] = sql.query("SELECT body::text FROM cq_usage_attempts WHERE project_id = ? AND attempt_id = ?")(identity(_, id.value))(r => Wire.decode(Attempt_JsonCodec, r.getString(1))).headOption
   override def meter(key: MeterKey): Option[(UsageMeter, MeterProjection)] = sql.query("SELECT body::text, projection::text FROM cq_usage_meters WHERE project_id = ? AND attempt_id = ? AND meter = ?")(meterKey(_, key))(r => (Wire.decode(UsageMeter_JsonCodec, r.getString(1)), Wire.decode(MeterProjection_JsonCodec, r.getString(2)))).headOption

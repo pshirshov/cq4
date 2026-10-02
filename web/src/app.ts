@@ -29,7 +29,18 @@ const MAX_QUERY_CHARACTERS = 4096;
 const COMPLETION_LIMIT = 30;
 // The ID column carries the item type icon, so the separate Type column is not shown.
 const SORT_COLUMNS = api.ItemOrderField_values.filter(field => field !== api.ItemOrderField.Type);
-const ITEM_COLUMNS = SORT_COLUMNS.length + 1;
+const ITEM_COLUMNS = SORT_COLUMNS.length + 2;
+function workLabel(work: api.ItemWork): string {
+  const time = (value: bigint): string => new Date(Number(value)).toLocaleTimeString(undefined, { timeStyle: 'short' });
+  const claim = `Claimed by ${work.owner.subject} (${work.owner.role}) · ${work.members} ${work.members === 1 ? 'item' : 'items'}`;
+  // The host renews the lease under a running child without a refresh here, so the running state names the attempt instead of the lease.
+  return work.attempt === undefined ? `${claim} · lease until ${time(work.expiresAt)}`
+    : `${claim} · ${work.attempt.role} on ${work.attempt.harness} since ${time(work.attempt.startedAt)}`;
+}
+function workIcon(work: api.ItemWork): SVGSVGElement {
+  const mark = icon(work.attempt === undefined ? 'Claimed' : 'Running'); mark.removeAttribute('aria-hidden'); mark.setAttribute('role', 'img'); mark.setAttribute('aria-label', workLabel(work));
+  return mark;
+}
 function readResult(result: api.Result): api.Result {
   if (result instanceof api.Result_Failed) throw new Error(faultMessage(result.fault));
   return result;
@@ -39,7 +50,7 @@ type Panel = 'detail' | 'history' | 'usage' | 'audit';
 type UsageScope = api.UsageFilter_ProjectAll | api.UsageFilter_TaskOnly | api.UsageFilter_CohortOnly | api.UsageFilter_SessionOnly;
 interface UsageLoad { dirty: boolean }
 type AuditView = api.UsageSelection_Costs | api.UsageSelection_Attempts | api.UsageSelection_Outcomes | api.UsageSelection_Audit;
-interface ResultRow { element: HTMLTableRowElement; button: HTMLButtonElement; status: HTMLTableCellElement; severity: HTMLTableCellElement; milestone: HTMLTableCellElement; modified: HTMLTimeElement }
+interface ResultRow { element: HTMLTableRowElement; button: HTMLButtonElement; status: HTMLTableCellElement; work: HTMLTableCellElement; severity: HTMLTableCellElement; milestone: HTMLTableCellElement; modified: HTMLTimeElement }
 
 class App {
   private readonly notifications = new Notifications();
@@ -272,6 +283,12 @@ class App {
       }));
       control.setAttribute('aria-label', `Sort by ${field === 'Id' ? 'ID' : label.toLowerCase()}`); cell.append(control); headings.append(cell);
       columns.push({ header: cell, label });
+      if (field === api.ItemOrderField.Status) {
+        // The operator asked for icons instead of words in headers; the name is exposed to assistive technology only.
+        const work = element('th', ''); work.scope = 'col'; work.className = 'work-heading'; work.title = 'In progress: covered by an active claim';
+        const mark = icon('Work'); mark.removeAttribute('aria-hidden'); mark.setAttribute('role', 'img'); mark.setAttribute('aria-label', 'In progress');
+        work.append(mark); headings.append(work); columns.push({ header: work, label: 'In progress' });
+      }
       if (field === api.ItemOrderField.Severity) {
         // The operator asked for the milestone icon instead of the word; the name is exposed to assistive technology only.
         const milestone = element('th', ''); milestone.scope = 'col'; milestone.className = 'milestone-heading';
@@ -330,7 +347,8 @@ class App {
           if (project !== undefined && this.project !== null && project.project.value === this.project.value) {
             if (this.itemCursor === null || project.items.value > this.itemCursor) this.itemCursor = project.items.value;
             if (this.countsSnapshot === null || this.itemCursor > this.countsSnapshot) this.action(() => this.loadCounts());
-            if (!this.queryInvalid && (this.page === null || this.itemCursor > this.page.cursor.value)) {
+            // The work cursor is compared for difference only: it can step back with the server clock.
+            if (!this.queryInvalid && (this.page === null || this.itemCursor > this.page.cursor.value || project.work !== this.page.work)) {
               this.after = undefined; this.snapshot = undefined; this.action(() => this.refresh());
             }
             if (this.usageCursor === null || project.usage > this.usageCursor) this.usageCursor = project.usage;
@@ -426,6 +444,8 @@ class App {
     const items = append ? [...this.loadedItems] : [];
     const target = append ? items.length + PAGE_SIZE : Math.max(PAGE_SIZE, this.loadedItems.length);
     let after = this.after; let snapshot = this.snapshot; let completed = false;
+    // Rows loaded under different work cursors may disagree on their marks, so such a result is loaded again in full.
+    let work = append && this.page !== null ? this.page.work : null; let workMoved = false;
     this.after = undefined; this.snapshot = undefined;
     this.sync.textContent = 'Data: synchronizing'; this.items.setAttribute('aria-busy', 'true');
     try {
@@ -443,11 +463,13 @@ class App {
         const result = readResult(response);
         if (!(result instanceof api.Result_Browsed)) throw new Error('Unexpected item page');
         page = result.page; items.push(...page.items); after = page.after; snapshot = page.cursor;
+        if (work !== null && work !== page.work) workMoved = true;
+        work = page.work;
       } while (page.hasMore && items.length < target);
       this.page = page; this.loadedItems = items;
       this.renderItems(items);
       this.resultStatus.textContent = `${items.length} items${page.hasMore ? ' · more available' : ''}`;
-      this.dirty = this.dirty || (this.itemCursor !== null && this.itemCursor > page.cursor.value);
+      this.dirty = this.dirty || workMoved || (this.itemCursor !== null && this.itemCursor > page.cursor.value);
       this.sync.textContent = this.updatesRejected ? 'Data: updates unavailable' : 'Data: current';
       if (this.selection !== null) {
         // D72/Decision 8: a fully loaded result without the selected item closes the item view; a later page may still hold it.
@@ -540,16 +562,19 @@ class App {
         const id = element('td', ''); id.className = 'item-id'; id.title = item.id.ledger; id.append(icon(item.id.ledger), itemName(item.id));
         const title = element('td', ''); title.append(node);
         const status = element('td', ''); status.className = 'item-status'; status.id = `status-${key}`;
+        const work = element('td', ''); work.className = 'item-work';
         const severity = element('td', ''); severity.className = 'item-severity';
         const milestone = element('td', ''); milestone.className = 'item-milestone';
         const modified = element('time', ''); const timestamp = element('td', ''); timestamp.className = 'item-modified'; timestamp.append(modified);
-        node.setAttribute('aria-describedby', status.id); line.append(id, title, status, severity, milestone, timestamp);
-        row = { element: line, button: node, status, severity, milestone, modified }; this.rows.set(key, row);
+        node.setAttribute('aria-describedby', status.id); line.append(id, title, status, work, severity, milestone, timestamp);
+        row = { element: line, button: node, status, work, severity, milestone, modified }; this.rows.set(key, row);
       }
       const caption = `${itemName(item.id)} · ${item.title}${item.archived ? ' · archived' : ''}`;
       row.button.textContent = item.title + (item.archived ? ' · archived' : ''); row.button.setAttribute('aria-label', caption);
       row.status.textContent = item.status; row.severity.textContent = entry.severity === undefined ? '—' : entry.severity;
       row.milestone.textContent = entry.milestone === undefined ? '' : itemName(entry.milestone);
+      const mark = entry.work === undefined ? '' : workLabel(entry.work);
+      if (row.work.title !== mark) { row.work.title = mark; row.work.dataset.work = entry.work === undefined ? '' : entry.work.attempt === undefined ? 'claimed' : 'running'; row.work.replaceChildren(...(entry.work === undefined ? [] : [workIcon(entry.work)])); }
       const date = new Date(Number(item.updatedAt)); row.modified.dateTime = date.toISOString(); row.modified.title = date.toLocaleString();
       row.modified.replaceChildren(element('span', date.toLocaleDateString(undefined, { dateStyle: 'short' })), element('span', date.toLocaleTimeString(undefined, { timeStyle: 'short' })));
       place(row.element);
@@ -620,7 +645,10 @@ class App {
         // Drop the previous item's or visit's revisions so stale rows cannot be activated while the fresh page loads.
         this.historyPanel.replaceChildren(element('p', 'Loading history…')); this.historyDialog.open(`History · ${itemName(item.id)}`); await this.loadHistory(); })));
     const metadata = element('p', `Revision ${item.revision.value} · ${item.provenance.actor.subject} · ${new Date(Number(item.updatedAt)).toLocaleString()}`); metadata.className = 'revision-meta';
-    this.detail.replaceChildren(title, metadata, actions, this.itemDocument(item));
+    const row = this.loadedItems.find(({ summary }) => summary.id.project.value === item.id.project.value && itemName(summary.id) === itemName(item.id));
+    const progress = element('p', ''); progress.className = 'revision-meta work-meta'; progress.hidden = row === undefined || row.work === undefined;
+    if (row !== undefined && row.work !== undefined) progress.append(workIcon(row.work), workLabel(row.work));
+    this.detail.replaceChildren(title, metadata, progress, actions, this.itemDocument(item));
     this.detail.hidden = this.editor !== null && this.editor.record.item !== undefined;
     this.graph.setScope(this.project, result.view);
     await this.loadUsage();

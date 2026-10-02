@@ -17,7 +17,7 @@ object ContractCheck {
     val probe = Probe(ProjectId(UUID.fromString("00000000-0000-0000-0000-000000000001")), revision, "round trip λ")
     val conflict = ApiError.Conflict(revision, Revision(Long.MaxValue))
     val watch = ClientFrame.Watch(RequestId(probe.project.value), LiveScope(true, Some(probe.project)))
-    val usageCursor = ServerFrame.Updated(watch.id, LiveRevision(Some(CatalogueCursor(revision.value)), Some(ProjectCursors(probe.project, ChangeCursor(revision.value), revision.value))))
+    val usageCursor = ServerFrame.Updated(watch.id, LiveRevision(Some(CatalogueCursor(revision.value)), Some(ProjectCursors(probe.project, ChangeCursor(revision.value), revision.value, revision.value))))
     val ideas = IdeaStatus.all.toList.map(status => Content.Idea(status, "Outcome", "Motivation"))
     val query = QueryExpression.And(QueryExpression.Archive(ArchiveFilter.Active), QueryExpression.Or(
       QueryExpression.Not(QueryExpression.Reference(Relation.BlockedBy, QueryItem(Ledger.Tasks, Long.MaxValue))),

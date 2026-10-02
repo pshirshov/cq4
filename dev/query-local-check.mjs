@@ -9,7 +9,7 @@ const origin=process.env.CQ_ORIGIN,project={value:randomUUID()},headers={Authori
 async function call(command){const r=await fetch(origin+'/api/call',{method:'POST',headers,body:JSON.stringify(command)});assert.equal(r.status,200);const value=await r.json();assert.equal(value.Failed,undefined);return value;}
 await call({Initialize:{config:{project,endpoint:origin,name:'Local completion parity'}}});
 const examples=[];
-for(const field of ['ledger','status','archived']){
+for(const field of ['ledger','status','archived','wip']){
  for(const value of localSuggestions(field+':',field.length+1))for(let i=0;i<=value.text.length;i++)examples.push([field+':'+value.text.slice(0,i),field.length+1+i]);
 }
 examples.push(['(ledger:tasks AND status:rejected)',26],['-ledger:tasks',9],['ledger:  tasks',8],['ledger:tasks AND status:active',10],['"😀" AND ledger:tasks',16]);

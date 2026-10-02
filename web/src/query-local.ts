@@ -2,7 +2,7 @@ import * as api from '../../generated/typescript/cq/api/index.js';
 
 export function localSuggestions(source: string, cursor: number): api.QuerySuggestion[] {
   const before = source.slice(0, cursor);
-  const match = /(?:^|[\s(])(?:-)?(ledger|status|archived)\s*:\s*([a-z]*)$/i.exec(before);
+  const match = /(?:^|[\s(])(?:-)?(ledger|status|archived|wip)\s*:\s*([a-z]*)$/i.exec(before);
   if (match === null) return [];
   let quoted = false;
   for (let index = 0; index < match.index; index++) {
@@ -19,6 +19,7 @@ export function localSuggestions(source: string, cursor: number): api.QuerySugge
   switch (match[1].toLowerCase()) {
     case 'ledger': values = [...api.Ledger_values]; break;
     case 'archived': values = ['all', 'false', 'true']; break;
+    case 'wip': values = ['false', 'true']; break;
     case 'status': values = [...api.MilestoneStatus_values, ...api.IdeaStatus_values, ...api.DefectStatus_values, ...api.GoalStatus_values,
       ...api.TaskStatus_values, ...api.ResearchStatus_values, ...api.HypothesisStatus_values, ...api.QuestionStatus_values,
       ...api.DecisionStatus_values, ...api.ReviewStatus_values, ...api.HandoffStatus_values, ...api.OperatorActionStatus_values,

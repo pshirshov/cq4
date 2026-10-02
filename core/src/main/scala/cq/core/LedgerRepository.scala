@@ -6,12 +6,13 @@ final case class DomainFailure(fault: Fault) extends RuntimeException(fault.toSt
 final case class Scope(project: ProjectId, actor: Actor)
 final case class CanonicalEdge(source: ItemId, relation: Relation, target: ItemId)
 final case class StoredRequest(fingerprint: String, acknowledgement: ChangeAck)
+final case class LedgerCursors(items: ChangeCursor, work: Long)
 
 trait LedgerRepository[F[_, _]] {
   def initialize(project: Project): F[Throwable, Project]
   def projects(after: Option[ProjectId], limit: Int): F[Throwable, ProjectPage]
   def catalogueCursor: F[Throwable, CatalogueCursor]
-  def itemCursor(project: ProjectId): F[Throwable, ChangeCursor]
+  def cursors(project: ProjectId, now: Long): F[Throwable, LedgerCursors]
   def transact[A](project: ProjectId)(operation: LedgerTransaction => A): F[Throwable, A]
 }
 
@@ -24,7 +25,7 @@ trait LedgerTransaction {
   def allocate(ledger: Ledger): ItemId
   def get(id: ItemId): Option[Item]
   def summary(id: ItemId): Option[ItemSummary]
-  def browseItem(id: ItemId): Option[BrowseItem]
+  def browseItem(id: ItemId, now: Long): Option[BrowseItem]
   def put(item: Item): Unit
   def refs(id: ItemId): List[ItemRef]
   def edge(edge: CanonicalEdge, present: Boolean): Boolean
@@ -35,8 +36,11 @@ trait LedgerTransaction {
   def acknowledge(actor: Actor, value: StoredRequest): Unit
   def publish(request: RequestId, items: List[ItemRevision]): ChangeCursor
   def changes(after: ChangeCursor, limit: Int): ReadPage[ChangeEvent]
-  def scan(query: QueryExpression, after: Option[ItemId], limit: Int): ReadPage[ItemSummary]
-  def browse(query: QueryExpression, order: ItemOrder, after: Option[BrowseItem], limit: Int): ReadPage[BrowseItem]
+  def scan(query: QueryExpression, after: Option[ItemId], limit: Int, now: Long): ReadPage[ItemSummary]
+  def browse(query: QueryExpression, order: ItemOrder, after: Option[BrowseItem], limit: Int, now: Long): ReadPage[BrowseItem]
+  // The project's fence counter plus its claims that are released or expired at `now`: it changes when a claim is acquired, taken over,
+  // released or expires, and not when one is renewed. It only grows while `now` does.
+  def workCursor(now: Long): Long
   def counts: List[LedgerCount]
   def completeItems(prefix: SearchPrefix, archive: ArchiveFilter, limit: Int): List[ItemSummary]
   def completeLabels(prefix: SearchPrefix, limit: Int): List[String]

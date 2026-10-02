@@ -168,6 +168,7 @@ root adt QueryExpression {
   data Project { id: ProjectId }
   data Archive { value: ArchiveFilter }
   data Reference { relation: Relation item: QueryItem }
+  data Working {}
   data Not { expression: QueryExpression }
   data And { left: QueryExpression right: QueryExpression }
   data Or { left: QueryExpression right: QueryExpression }
@@ -290,8 +291,10 @@ root data SearchInput { project: ProjectId query: str after: opt[ItemId] snapsho
 enum ItemOrderField { Id Type Title Status Severity Modified }
 enum SortDirection { Ascending Descending }
 root data ItemOrder { field: ItemOrderField direction: SortDirection grouped: bit }
-root data BrowseItem { summary: ItemSummary severity: opt[Severity] milestone: opt[ItemId] }
-root data BrowsePage { items: lst[BrowseItem] cursor: ChangeCursor after: opt[ItemId] hasMore: bit }
+root data WorkAttempt { role: Role harness: Harness startedAt: i64 }
+root data ItemWork { claim: ClaimId owner: Actor members: i32 expiresAt: i64 attempt: opt[WorkAttempt] }
+root data BrowseItem { summary: ItemSummary severity: opt[Severity] milestone: opt[ItemId] work: opt[ItemWork] }
+root data BrowsePage { items: lst[BrowseItem] cursor: ChangeCursor after: opt[ItemId] hasMore: bit work: i64 }
 root data LedgerCount { ledger: Ledger count: i64 }
 root data LedgerCounts { entries: lst[LedgerCount] cursor: ChangeCursor }
 root data GraphInput { project: ProjectId roots: set[ItemId] after: opt[ItemId] snapshot: opt[WorksetSnapshot] limit: i32 }
@@ -507,7 +510,7 @@ root adt Credential {
 }
 root data AccessToken { value: str expiresAt: i64 }
 root data LiveScope { catalogue: bit project: opt[ProjectId] }
-root data ProjectCursors { project: ProjectId items: ChangeCursor usage: i64 }
+root data ProjectCursors { project: ProjectId items: ChangeCursor usage: i64 work: i64 }
 root data LiveRevision { catalogue: opt[CatalogueCursor] project: opt[ProjectCursors] }
 root adt ClientFrame {
   data Call { id: RequestId command: Command }
