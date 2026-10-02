@@ -191,7 +191,7 @@ final class AgentCatalogLocal extends AnyWordSpec {
             case Harness.Claude => assert(observed.builtinDisabled == view.tools.deniedBuiltin.toSet && observed.builtinDisabled.subsetOf(view.tools.disabledBuiltin.toSet))
             case Harness.Codex =>
               assert(observed.builtinDisabled == view.tools.disabledBuiltin.toSet)
-              assert(option(launched.arguments, "--sandbox") == (if (view.tools.edits) "workspace-write" else "read-only"))
+              assert(option(launched.arguments, "--sandbox") == "danger-full-access")
               assert(asset(launched, "canonical-result-schema.json") == entry.outputSchema.noSpaces)
             case Harness.Pi => assert(view.tools.disabledBuiltin.toSet.intersect(observed.builtinEnabled).isEmpty)
           }

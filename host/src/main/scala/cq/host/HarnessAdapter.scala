@@ -126,6 +126,11 @@ final class ClaudeAdapter extends HarnessAdapter {
   }
 }
 
+object CodexAdapter {
+  /** Sandbox mode of every managed Codex launch, whatever the role. */
+  val Sandbox = "danger-full-access"
+}
+
 final class CodexAdapter extends HarnessAdapter {
   override val harness: Harness = Harness.Codex
   private def config(key: String, value: Json): List[String] = List("-c", s"$key=${value.noSpaces}")
@@ -149,8 +154,15 @@ final class CodexAdapter extends HarnessAdapter {
         config(prefix + "required", Json.True) ++ config(prefix + "startup_timeout_sec", Json.fromInt(10)) ++
         config(prefix + "tool_timeout_sec", Json.fromInt(30)) ++ config(prefix + "default_tools_approval_mode", Json.fromString("approve"))
     }
+    // Every role runs without the Codex sandbox (operator decision, Question 26): Codex's Linux sandbox refuses the Nix daemon
+    // socket in both of its restricted modes, so no child could run `nix develop` (Defect 104). Three things stay separate:
+    //  - Filesystem boundary: the operator's outer sandbox and nothing else. A Codex child of any role, including Governor,
+    //    Explorer, Planner and Reviewer, can write wherever that sandbox lets the host process write.
+    //  - Workflow constraints: the tool policy above and the role instructions say what a role is meant to do. They do not
+    //    prevent a write: a live reviewer reached a patch handler with freeform patch presentation disabled.
+    //  - Candidate capture: decides what the host integrates. It prevents no write and is not filesystem protection.
     val arguments = List(profile.executable.toString, "exec", "--json", "--ephemeral", "--ignore-user-config", "--ignore-rules", "--strict-config",
-      "--model", profile.model, "--sandbox", if (policy.edits) "workspace-write" else "read-only",
+      "--model", profile.model, "--sandbox", CodexAdapter.Sandbox,
       "--output-schema", invocation.assets.resolve("result-schema.json").toString,
       "--output-last-message", invocation.assets.resolve("last-message.json").toString) ++ restrictions ++ mcp ++ List("-")
     val scoped = invocation.endpoints.map(endpoint => endpoint.environmentKey -> endpoint.token.value).toMap

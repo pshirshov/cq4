@@ -95,7 +95,7 @@ def main():
             evidence = {"Evidence": {"members": [{"item": item, "disposition": "Findings", "summary": narrative,
                 "evidence": [{"origin": "ModelDeclared", "description": narrative, "citations": []} for _ in range(4)],
                 "uncertainties": [], "requestedProbes": []} for item in members]}}
-            assert sandbox == "read-only"
+            assert sandbox == "danger-full-access"
             if role == "Explorer":
                 assert assignment["work"] == {"Explorer": {"mode": "Investigate"}} and context["previous"] is None
                 finish(evidence)
@@ -105,7 +105,7 @@ def main():
             return
         assessment_flow = labels and labels[0].startswith("cohort-selected") and (role == "Planner" or assignment["work"] == {"Reviewer": {"mode": "Plan"}})
         if (labels and labels[0].startswith("cohort-assessment")) or assessment_flow:
-            assert sandbox == "read-only" and len(members) == 2
+            assert sandbox == "danger-full-access" and len(members) == 2
             if role == "Planner":
                 check = "not-configured" if labels == ["cohort-assessment-unknown-check"] else data["checks"][0]["name"]
                 assessment = {"compatibility": "Unknown" if labels in [["cohort-assessment-unknown"], ["cohort-selected-unknown"]] else "Compatible",
@@ -123,7 +123,7 @@ def main():
             return
         proposal_fixture = context["members"][0]["item"]["draft"]["labels"] == ["proposal-fixture"]
         if proposal_fixture:
-            assert sandbox == ("workspace-write" if role == "Worker" else "read-only")
+            assert sandbox == "danger-full-access"
             tool("cq_host", "workspace", {"Entries": {"path": ".", "after": None, "limit": 20}})
             narrative = "CHILD_ONLY_NARRATIVE " + "detail " * 800
             if role in ["Explorer", "Worker"]:
@@ -150,7 +150,7 @@ def main():
                     finish({"Review": {"members": [{"item": item, "verdict": "ChangesRequested", "findings": ["Follow-up required", narrative]} for item in members], "proposal": proposal}})
             return
         if "Worker" in assignment["work"]:
-            assert sandbox == "workspace-write"
+            assert sandbox == "danger-full-access"
             Path("consumer.txt").write_text("candidate from isolated worker\n")
             if assignment["work"]["Worker"]["mode"] == "Probe":
                 signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
@@ -161,7 +161,7 @@ def main():
             else:
                 time.sleep(0.5)
         else:
-            assert sandbox == "read-only" and context["previous"]["candidate"] is not None
+            assert sandbox == "danger-full-access" and context["previous"]["candidate"] is not None
             listing = tool("cq_host", "workspace", {"Entries": {"path": ".", "after": None, "limit": 200}})
             assert "consumer.txt" in [entry["name"] for entry in listing["Listed"]["page"]["entries"]]
             text = tool("cq_host", "workspace", {"Read": {"path": "consumer.txt", "offset": 0, "limit": 8192}})
@@ -197,7 +197,7 @@ def main():
                 "findings": ["Correct this member separately"] if mixed and index == 0 else []} for index, item in enumerate(members)]}})
         return
 
-    assert sandbox == "read-only"
+    assert sandbox == "danger-full-access"
     project = data["project"]["project"]
     if data["request"].startswith("workflow-assets:"):
         scenario = json.loads(data["request"].split(":", 1)[1])

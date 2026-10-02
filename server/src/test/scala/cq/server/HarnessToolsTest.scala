@@ -76,12 +76,13 @@ final class HarnessToolsLocal extends AnyWordSpec {
         "disallowedTools" -> policy.deniedBuiltin, "servers" -> List("cq", "cq_host"))
       case Harness.Codex => Map("settings" -> policy.builtin.map(tool => tool.name + "=" +
           (if (tool.name == "web_search") Json.fromString(if (tool.enabled) "live" else "disabled") else Json.fromBoolean(tool.enabled)).noSpaces),
-        "cq" -> domain, "cq_host" -> local, "sandbox" -> List(if (policy.edits) "workspace-write" else "read-only"))
+        "cq" -> domain, "cq_host" -> local, "sandbox" -> List(CodexAdapter.Sandbox))
       case Harness.Pi => Map("tools" -> (policy.enabledBuiltin ++ domain.map("cq_" + _) ++ local.map("cq_host_" + _)), "cq" -> domain, "cq_host" -> local)
     }
   }
 
-  /** Tool arguments recorded from the adapters at base 419f216e, restated as an independent oracle. */
+  /** Tool arguments recorded from the adapters at base 419f216e, restated as an independent oracle. The Codex sandbox mode is the one
+    * exception: since Question 26 every role launches with `danger-full-access`, where 419f216e passed `workspace-write` or `read-only`. */
   private def base(harness: Harness, role: Role): Map[String, List[String]] = {
     val governor = role == Role.Governor
     val worker = role == Role.Worker
@@ -97,14 +98,15 @@ final class HarnessToolsLocal extends AnyWordSpec {
           "skill_search", "skill_mcp_dependency_install").map("features." + _ + "=false")
         val edits = List("shell_tool", "unified_exec", "apply_patch_freeform").map("features." + _ + "=" + worker)
         Map("settings" -> (off ++ List("features.code_mode_host=true") ++ edits ++ List("agents.enabled=false", "web_search=\"disabled\"",
-          "tools.update_plan.enabled=false")), "cq" -> domain, "cq_host" -> local, "sandbox" -> List(if (worker) "workspace-write" else "read-only"))
+          "tools.update_plan.enabled=false")), "cq" -> domain, "cq_host" -> local, "sandbox" -> List("danger-full-access"))
       case Harness.Pi =>
         Map("tools" -> ((if (worker) List("read", "write", "edit", "bash") else Nil) ++ domain.map("cq_" + _) ++ local.map("cq_host_" + _)),
           "cq" -> domain, "cq_host" -> local)
     }
   }
 
-  /** Complete ordered launch arguments as the adapters emitted them at base 419f216e, restated independently of HarnessTools. */
+  /** Complete ordered launch arguments as the adapters emitted them at base 419f216e, restated independently of HarnessTools,
+    * except the Codex sandbox mode (Question 26: `danger-full-access` for every role). */
   private def baseArguments(profile: HarnessProfile, invocation: HarnessInvocation): List[String] = {
     val worker = invocation.role == Role.Worker
     val governor = invocation.role == Role.Governor
@@ -142,7 +144,7 @@ final class HarnessToolsLocal extends AnyWordSpec {
             config(prefix + "tool_timeout_sec", Json.fromInt(30)) ++ config(prefix + "default_tools_approval_mode", Json.fromString("approve"))
         }
         List(profile.executable.toString, "exec", "--json", "--ephemeral", "--ignore-user-config", "--ignore-rules", "--strict-config",
-          "--model", profile.model, "--sandbox", if (worker) "workspace-write" else "read-only",
+          "--model", profile.model, "--sandbox", "danger-full-access",
           "--output-schema", invocation.assets.resolve("result-schema.json").toString,
           "--output-last-message", invocation.assets.resolve("last-message.json").toString) ++ restrictions ++ mcp ++ List("-")
       case Harness.Pi =>
@@ -157,7 +159,7 @@ final class HarnessToolsLocal extends AnyWordSpec {
   }
 
   "Harness tool permissions (Behavioral Active Blackbox; Group / process Communication)" should {
-    "launch with exactly the complete ordered argument lists of base 419f216e for each role mode and harness" in {
+    "launch with the complete ordered argument lists of base 419f216e, apart from the Codex sandbox mode, for each role mode and harness" in {
       for { (name, role) <- subjects; adapter <- adapters } withClue(s"$name on ${adapter.harness}: ") {
         val selected = profile(adapter.harness)
         val invoked = invocation(adapter.harness, role)

@@ -30,7 +30,7 @@ if sys.argv[1:] == ["--version"]:
     print("codex-cli 0.156.1")
     raise SystemExit(0)
 assert "CQ_TOKEN" not in os.environ and "CQ_DATABASE_URL" not in os.environ
-assert sys.argv[sys.argv.index("--sandbox") + 1] == "read-only"
+assert sys.argv[sys.argv.index("--sandbox") + 1] == "danger-full-access"
 assert sys.argv[sys.argv.index("--model") + 1] == "fixture-model"
 governing = json.loads(sys.stdin.read())
 prompt = governing["request"]

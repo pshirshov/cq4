@@ -134,6 +134,33 @@ final class HarnessAdapterLocal extends AnyWordSpec {
       intercept[IllegalArgumentException](invocation(Role.Collector, root))
     }
 
+    // Question 26: the operator's outer sandbox is the only filesystem boundary of a Codex child, whatever its role.
+    // One case per role, so a regression names every role it affects: Worker edits, the other four do not.
+    HarnessTools.Roles.foreach { role =>
+      s"launch a Codex $role (${if (HarnessTools.edits(role)) "editing" else "non-editing"}) without the Codex sandbox, leaving approval and tool policy unchanged" in {
+        assert(HarnessTools.edits(role) == (role == Role.Worker))
+        val arguments = new CodexAdapter().launch(profile(Harness.Codex), invocation(role, Path.of("/test/assets")), environment).arguments
+        assert(arguments.count(_ == "--sandbox") == 1)
+        assert(arguments(arguments.indexOf("--sandbox") + 1) == "danger-full-access")
+        assert(!arguments.contains("workspace-write") && !arguments.contains("read-only"))
+        assert(!arguments.exists(value => value.startsWith("sandbox_mode=") || value.startsWith("sandbox_workspace_write.")))
+        val settings = arguments.sliding(2).collect { case List("-c", value) => value }.toList
+        assert(settings.count(_.startsWith("approval_policy=")) == 1 && settings.contains("approval_policy=\"never\""))
+        val policy = HarnessTools.policy(role, Harness.Codex)
+        policy.builtin.foreach { tool =>
+          val expected = if (tool.name == "web_search") Json.fromString(if (tool.enabled) "live" else "disabled") else Json.fromBoolean(tool.enabled)
+          assert(settings.contains(tool.name + "=" + expected.noSpaces))
+        }
+        McpTarget.values.foreach { target =>
+          assert(settings.contains(s"mcp_servers.${target.server}.enabled_tools=" + Json.arr(policy.enabledMcp(target).map(Json.fromString)*).noSpaces))
+        }
+      }
+    }
+
+    "cover the five launched roles in the per-role Codex sandbox cases" in {
+      assert(HarnessTools.Roles.toSet == Set(Role.Governor, Role.Explorer, Role.Planner, Role.Worker, Role.Reviewer))
+    }
+
     "preserve configured toolchain discovery in child shells" in {
       val root = Files.createTempDirectory("cq-toolchain-").toAbsolutePath
       val probe = root.resolve("cq-toolchain-probe")

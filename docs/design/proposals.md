@@ -45,7 +45,7 @@ The public surface adds `apply`, taking only project and admitted result handle,
 
 All four use the same reference-only request, claim maintenance, native launch, output validation, result admission, audit assignment and bounded projection. Role/mode selects installed semantic instructions and tool policy. A previous result is passed by handle; host materialization checks that its assignment/revisions and kind are appropriate for the mode. Candidate review continues to require the exact worker candidate; plan review takes the planner's result. No new role can turn an unaccepted or failed process into an admitted proposal.
 
-Native Claude, Codex and Pi restrictions remain separately tested. Shared role contracts do not imply identical CLI flags or permission enforcement. Explorer/planner must not inherit reviewer execution permissions merely because all three avoid editing source.
+Native Claude, Codex and Pi restrictions remain separately tested. Shared role contracts do not imply identical CLI flags or permission enforcement. The capability boundaries above are tool policy and role instructions, not filesystem protection: a Codex child of any role is launched without the Codex sandbox and can write files wherever the operator's outer sandbox allows ([Codex sandbox mode](harness-adapters.md#codex-sandbox-mode), Question 26). Explorer/planner must not inherit reviewer execution permissions merely because all three avoid editing source.
 
 Proposal eligibility is explicit:
 

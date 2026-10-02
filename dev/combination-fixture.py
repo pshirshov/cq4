@@ -62,7 +62,7 @@ def main():
         actor, scenario = task["actor"], task["scenario"]
         member = request["members"][0]["id"]
         if "Worker" in request["work"]:
-            assert sandbox == "workspace-write"
+            assert sandbox == "danger-full-access"
             if request["work"]["Worker"]["mode"] == "ResolveConflict":
                 assert len(context["artifacts"]) == 1 and context["artifacts"][0]["metadata"]["kind"] == "Combination"
                 offset, report = 0, ""
@@ -86,7 +86,7 @@ def main():
                     Path("shared.txt").write_text(actor + "\n")
             finish({"Work": {"members": [{"item": member, "disposition": "CandidateReady", "summary": "CHILD_ONLY_NARRATIVE " + "details " * 500, "evidence": []}]}})
         else:
-            assert sandbox == "read-only" and not context["artifacts"]
+            assert sandbox == "danger-full-access" and not context["artifacts"]
             previous = context["previous"]
             assert previous["validation"] and all(check["state"] == "Passed" for check in previous["validation"])
             combined = previous["request"]["work"]["Worker"]["mode"] == "ResolveConflict"
@@ -99,7 +99,7 @@ def main():
             finish({"Review": {"proposal": None, "members": [{"item": member, "verdict": "Accepted", "findings": []}]}})
         return
 
-    assert sandbox == "read-only"
+    assert sandbox == "danger-full-access"
     task = json.loads(data["request"])
     actor, scenario = task["actor"], task["scenario"]
     project = data["project"]["project"]
