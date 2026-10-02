@@ -17,8 +17,12 @@ final class DriverBoundary(registry: DriverRegistry, planner: WorksetPlanner) {
 
   // Bound-session rule: a write from an on driver's bound session belongs to its active cycle whether or not it names one.
   // A write from any other session is attributed only when it carries the ID of a cycle that delegated to it.
-  def admit(project: ProjectId, session: SessionId, explicit: Option[CycleId], now: Long): Option[WriteAttribution] =
+  // `completes` is the integration whose reserved completion the write records. One write is admitted without an active cycle and belongs
+  // to none: the completion of an integration an earlier drive of the bound session left unsettled, while the start directive is pending.
+  // The attached host starts no workflow before that integration settles, so the cycle could not start otherwise.
+  def admit(project: ProjectId, session: SessionId, explicit: Option[CycleId], completes: Option[IntegrationId], now: Long): Option[WriteAttribution] =
     registry.bound(project, session) match {
+      case Some(record) if explicit.isEmpty && completes.exists(record.carries(session, _)) => None
       case Some(record) =>
         val cycle = record.cycle.filter(_.active)
           .getOrElse(registry.fail(record, "untracked mutation: the bound attached session changed the ledger while no driven cycle was active", now))

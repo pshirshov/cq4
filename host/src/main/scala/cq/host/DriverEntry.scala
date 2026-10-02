@@ -53,6 +53,11 @@ final class DriverSessionClient(api: ServerApi, project: ProjectId) {
 
   def bind(token: DriverToken): DriverReply = call(DriverSession.Bind(token))
   def status: DriverReply = call(DriverSession.Status())
+  /** The integrations this session may apply while its driver's start directive is pending; none is returned when no start directive is pending. */
+  def settleable: Option[Set[IntegrationId]] = call(DriverSession.Settleable()) match {
+    case DriverReply.Settleable(pending, integrations) => Option.when(pending)(integrations)
+    case _ => throw new IllegalStateException("Driver settlement query returned an unexpected reply")
+  }
   def activate(run: RequestId, request: WorkflowRequest, token: Option[CycleToken]): DriverActivation = call(DriverSession.Activate(run, request, token)) match {
     case DriverReply.Activation(value) => value
     case _ => throw new IllegalStateException("Driver activation returned an unexpected reply")

@@ -113,6 +113,15 @@ object DriverPolicy {
       (if (added.isEmpty) "" else "; added " + references(added)) + (if (removed.isEmpty) "" else "; removed " + references(removed)))
   }
 
+  // What a drive leaves to the next one: the integrations it carried itself and those of its last cycle that never settled. An attached
+  // host prepares a bounded number of integrations, so the set of one session is bounded by its host.
+  def outstanding(record: DriverRecord): Map[SessionId, Set[IntegrationId]] = {
+    val unsettled = record.cycle.toList.flatMap(_.lineage).collect { case LineageEntry(LineageMember.Integration(id), _, false) => id }.toSet
+    record.attached.filter(_ => unsettled.nonEmpty).fold(record.carried)(session => carry(record.carried, session, unsettled))
+  }
+  def carry(carried: Map[SessionId, Set[IntegrationId]], session: SessionId, integrations: Set[IntegrationId]): Map[SessionId, Set[IntegrationId]] =
+    if (integrations.isEmpty) carried else carried.updated(session, carried.getOrElse(session, Set.empty) ++ integrations)
+
   def ended(cycle: CycleRecord): CycleRecord = cycle.copy(state = CycleState.Ended, resumeToken = None,
     lineage = cycle.lineage.map(entry => if (entry.member.isInstanceOf[LineageMember.Run]) entry.copy(settled = true) else entry))
 

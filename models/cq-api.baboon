@@ -363,6 +363,7 @@ root adt DriverControl {
 root adt DriverSession {
   data Bind { token: DriverToken }
   data Status {}
+  data Settleable {}
   data Activate { run: RequestId request: WorkflowRequest token: opt[CycleToken] }
   data Inherit { cycle: CycleId parent: LineageMember member: LineageMember }
   data Settle { cycle: CycleId member: LineageMember }
@@ -390,6 +391,7 @@ root adt DriverReply {
   data Activation { value: DriverActivation }
   data Lineage { cycle: CycleId entry: LineageEntry }
   data Changed { cycle: CycleId ack: ChangeAck }
+  data Settleable { pending: bit integrations: set[IntegrationId] }
 }
 root adt ExtensionDriver {
   data Start { session: str input: str }

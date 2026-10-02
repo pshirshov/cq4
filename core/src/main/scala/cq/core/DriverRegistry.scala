@@ -24,12 +24,18 @@ final case class CycleRecord(
 
 // Driver state of one harness session. It lives in the server process: a server restart turns every driver off.
 // `attached` outlives a stop so the session can still read why its driver stopped; only an On driver is bound.
+// `carried` holds the integrations that earlier drives left unsettled, by the attached session whose host prepared them.
 final case class DriverRecord(
   project: ProjectId, key: DriverKey, state: DriverState, attached: Option[SessionId], workset: Option[WorksetId],
   targets: Set[ItemId], through: WorkflowPhase, bind: Option[BindOffer], cycle: Option[CycleRecord],
-  directives: Int, stopped: Option[DriverStopped], announced: Boolean, touchedAt: Long,
+  directives: Int, stopped: Option[DriverStopped], announced: Boolean, touchedAt: Long, carried: Map[SessionId, Set[IntegrationId]],
 ) {
   def on: Boolean = state == DriverState.On
+  // The integrations the bound session may settle before its start directive is accepted: those earlier drives of that session left
+  // unsettled. There are none unless the start directive is pending.
+  def settleable(session: SessionId): Option[Set[IntegrationId]] =
+    Option.when(cycle.exists(_.state == CycleState.Pending))(carried.getOrElse(session, Set.empty))
+  def carries(session: SessionId, integration: IntegrationId): Boolean = settleable(session).exists(_.contains(integration))
 }
 
 final class DriverRegistry {

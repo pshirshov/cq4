@@ -26,6 +26,13 @@ final class DriverService(registry: DriverRegistry, planner: WorksetPlanner) {
   def own(scope: Scope): DriverReply = DriverReply.Status(registry.all(scope.project).filter(_.attached.contains(scope.actor.session))
     .sortBy(record => (record.on, record.touchedAt)).lastOption.map(status))
 
+  // What the calling attached session may settle while its driver's start directive is pending: the answer `DriverBoundary.admit` gives
+  // the completion write, readable before the integration is applied. A session without an on driver is not restricted.
+  def settleable(scope: Scope): DriverReply = {
+    val allowed = registry.bound(scope.project, scope.actor.session).flatMap(_.settleable(scope.actor.session))
+    DriverReply.Settleable(allowed.nonEmpty, allowed.getOrElse(Set.empty))
+  }
+
   // State-changing entry points: only the CQ hook commands and the Pi extension hold the operator credential they require.
   def control(tx: LedgerTransaction, scope: Scope, key: DriverKey, source: DriverOrigin, action: DriverControl, now: Long): DriverReply = {
     authorized(scope, key, source, action)
@@ -43,10 +50,11 @@ final class DriverService(registry: DriverRegistry, planner: WorksetPlanner) {
             case None => throw DomainFailure(Fault.Limit(s"A project holds at most $MaxDrivers CQ drivers; park one first"))
           }
         val offer = if (attached.isEmpty) Some(BindOffer(token(), Math.addExact(now, BindMillis))) else None
+        // The record of this key's earlier drive is replaced: what that drive left unsettled passes to the new one.
         val record = DriverRecord(project, key, if (attached.isEmpty) DriverState.Binding else DriverState.On, attached, preview.workset,
-          preview.targets, preview.through, offer, None, 0, None, true, now)
+          preview.targets, preview.through, offer, None, 0, None, true, now, registry.get(project, key).fold(Map.empty[SessionId, Set[IntegrationId]])(outstanding))
         attached.foreach(supersede(project, _, key, now))
-        registry.put(record)
+        registry.put(attached.fold(record)(inherited(record, _)))
         DriverReply.Started(status(record), preview, offer.map(_.token),
           if (attached.isEmpty) s"CQ driver binding: ${describe(record)}; it turns on when this session presents the bind token"
           else s"CQ driver on: ${describe(record)}")
@@ -78,6 +86,11 @@ final class DriverService(registry: DriverRegistry, planner: WorksetPlanner) {
     registry.bound(project, attached).foreach { previous =>
       registry.put(stopped(previous, DriverStopped(DriverStop.Parked, s"Its attached session was bound to the CQ driver of session ${key.session}"), false, now))
     }
+
+  // A driver that binds an attached session also takes over what that session's drives under other session keys left unsettled.
+  private def inherited(record: DriverRecord, attached: SessionId): DriverRecord =
+    record.copy(carried = carry(record.carried, attached,
+      registry.all(record.project).filter(_.key != record.key).flatMap(outstanding(_).get(attached)).flatten.toSet))
 
   private def stop(record: DriverRecord, value: DriverStopped, messages: List[String], now: Long): DriverReply = {
     val next = stopped(record, value, true, now)
@@ -143,13 +156,14 @@ final class DriverService(registry: DriverRegistry, planner: WorksetPlanner) {
     val caller = scope.actor.session
     action match {
       case _: DriverSession.Status => own(scope)
+      case _: DriverSession.Settleable => settleable(scope)
       case DriverSession.Bind(value) =>
         governor(scope)
         val record = registry.all(project).find(record => record.state == DriverState.Binding && record.bind.exists(_.token == value))
           .getOrElse(denied("Unknown or already used CQ driver bind token; run the drive command again"))
         if (record.bind.get.expiresAt <= now) denied("The CQ driver bind token expired; park and run the drive command again")
         supersede(project, caller, record.key, now)
-        val bound = record.copy(state = DriverState.On, attached = Some(caller), bind = None, touchedAt = now)
+        val bound = inherited(record.copy(state = DriverState.On, attached = Some(caller), bind = None, touchedAt = now), caller)
         registry.put(bound)
         DriverReply.Bound(status(bound), s"CQ driver on: ${describe(bound)}")
       case DriverSession.Activate(run, request, presented) =>
