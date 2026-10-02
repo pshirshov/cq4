@@ -2,7 +2,7 @@ package cq.host
 
 import baboon.runtime.shared.BaboonCodecContext
 import cq.api.*
-import cq.core.{DomainFailure, IntegrationPolicy}
+import cq.core.DomainFailure
 import java.nio.channels.{FileChannel, FileLock, OverlappingFileLockException}
 import java.nio.file.{Files, Path, StandardCopyOption, StandardOpenOption}
 import java.nio.file.attribute.PosixFilePermissions
@@ -21,13 +21,6 @@ final class JobRecordUndecodable(val path: Path, cause: Throwable)
   extends IllegalArgumentException(Option(cause.getMessage).getOrElse(cause.getClass.getSimpleName), cause)
 
 object JobRecords {
-  /** A session starts at most this many children, as many integrations and as many revalidation rounds (`DispatchController`,
-    * `IntegrationEntries`, `RevalidationController`). */
-  private val MaxOwners = IntegrationEntries.MaxOperations
-  private val MaxCheckRuns = IntegrationPolicy.MaxChecks * IntegrationValidation.MaxAttempts
-  /** Every job those bounds allow: the governing harness; each child's and each integration's own job with every run of every check;
-    * and those check runs for each revalidation round. The journal bound is therefore reached only after one of them. */
-  val MaxJobs: Int = 1 + 2 * MaxOwners * (1 + MaxCheckRuns) + MaxOwners * MaxCheckRuns
   val MaxRecordBytes = 64 * 1024
   def conflict(message: String): Nothing = throw DomainFailure(Fault.Conflict(message))
   def terminal(phase: JobPhase): Boolean = phase == JobPhase.Settled || phase == JobPhase.Uncertain
@@ -66,8 +59,7 @@ final class FileJobRepository private (root: Path, project: ProjectId, owner: Se
   private var closed = false
   private var state: Map[AttemptId, JobRecord] = {
     Using.resource(Files.list(root)) { entries =>
-      val paths = entries.iterator().asScala.filter(_.getFileName.toString.endsWith(".json")).take(JobRecords.MaxJobs + 1).toList
-      require(paths.size <= JobRecords.MaxJobs, "Job journal exceeds its session limit")
+      val paths = entries.iterator().asScala.filter(_.getFileName.toString.endsWith(".json")).toList
       paths.map { path =>
         require(!Files.isSymbolicLink(path) && Files.isRegularFile(path), "Job record must be a regular file")
         val bytes = Using.resource(Files.newInputStream(path))(_.readNBytes(JobRecords.MaxRecordBytes + 1))
@@ -104,7 +96,6 @@ final class FileJobRepository private (root: Path, project: ProjectId, owner: Se
         if (existing.workspace != workspace || existing.fingerprint != fingerprint) JobRecords.conflict("Job identity reused with another launch")
         (existing, false)
       case None =>
-        if (state.size >= JobRecords.MaxJobs) throw DomainFailure(Fault.Limit("Session job limit reached; start a new governing session"))
         val record = JobRecord(workspace, fingerprint, JobTarget.Run, JobPhase.Preparing, None, None, 1, now, now)
         JobRecords.validate(record)
         persist(record)

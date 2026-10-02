@@ -60,7 +60,6 @@ final class CombinationController(config: SupervisorConfig, authority: Superviso
           }
         case None =>
           available()
-          require(entries.size < CombinationPlans.MaxOperations, "Session combination limit reached")
           val entry = new CombinationExecution(ticket, ready, done, CombinationStatus(ticket.id, CombinationPhase.Preparing, None, None), false, clock.millis())
           entries = entries.updated(ticket.id, entry)
           (entry, true)

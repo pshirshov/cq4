@@ -5,7 +5,6 @@ import cq.core.{DomainFailure, IntegrationPolicy, Scope}
 import java.nio.channels.{FileChannel, OverlappingFileLockException}
 import java.nio.file.{Files, Path, StandardCopyOption, StandardOpenOption}
 import java.nio.file.attribute.PosixFilePermissions
-import scala.jdk.CollectionConverters.*
 import scala.util.Using
 import zio.{Task, ZIO}
 
@@ -20,7 +19,6 @@ trait IntegrationJournal {
 
 object IntegrationEntries {
   val MaxRecordBytes = IntegrationPolicy.MaxIntentBytes + 8192
-  val MaxOperations = 32
   def validate(owner: Scope, id: IntegrationId, previous: Option[IntegrationLocal], next: IntegrationLocal): Unit = {
     require(next.intent.id == id && next.intent.project == owner.project && next.intent.owner == owner.actor && owner.actor.role == Role.Governor,
       "Integration journal identity differs from its governing owner")
@@ -62,11 +60,6 @@ final class FileIntegrationJournal(root: Path, owner: Scope) extends Integration
           override def read: Option[IntegrationLocal] = current
           override def write(value: IntegrationLocal): Unit = {
             IntegrationEntries.validate(owner, id, current, value)
-            if (current.isEmpty) {
-              val count = Using.resource(Files.list(root))(_.iterator().asScala.filter(_.getFileName.toString.endsWith(".json"))
-                .take(IntegrationEntries.MaxOperations).size)
-              if (count >= IntegrationEntries.MaxOperations) throw DomainFailure(Fault.Limit("Session integration journal limit reached"))
-            }
             val temporary = Files.createTempFile(root, ".integration-", ".pending",
               PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------")))
             try {

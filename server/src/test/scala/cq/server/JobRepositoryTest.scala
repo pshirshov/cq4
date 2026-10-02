@@ -23,7 +23,6 @@ final class DummyJobRepository(project: ProjectId, owner: SessionId) extends Job
         if (record.workspace != workspace || record.fingerprint != fingerprint) throw DomainFailure(Fault.Conflict("Different launch"))
         (record, false)
       case None =>
-        if (state.size == JobRecords.MaxJobs) throw DomainFailure(Fault.Limit("Session full"))
         val record = JobRecord(workspace, fingerprint, JobTarget.Run, JobPhase.Preparing, None, None, 1, now, now)
         JobRecords.validate(record)
         state = state.updated(workspace.attempt, record)
@@ -64,6 +63,8 @@ object JobTestPlugin extends PluginDef {
 abstract class JobRepositoryTest extends SpecZIO with AssertZIO {
   override def config = super.config.copy(pluginConfig = PluginConfig.const(List(JobTestPlugin)))
   private def spec: WorkspaceSpec = WorkspaceSpec(ProjectId(UUID.randomUUID()), SessionId(UUID.randomUUID()), AttemptId(UUID.randomUUID()), "/source", GitCommit("a" * 40))
+  /** The journal refused its 2370th job until D108. */
+  protected val FormerJobBound = 2369
 
   "Job journal (Behavioral Active Blackbox; dummy Atomic / filesystem Communication)" should {
     "freeze launch identity, replay the original receipt and reject stale state changes" in { (fixture: JobStorageFixture) => ZIO.attemptBlocking {
@@ -86,7 +87,7 @@ abstract class JobRepositoryTest extends SpecZIO with AssertZIO {
       }
     }}
 
-    "enforce session bounds and ownership and never interpret missing observation as success" in { (fixture: JobStorageFixture) => ZIO.attemptBlocking {
+    "enforce ownership, never interpret missing observation as success and reserve past the former session job bound (D108)" in { (fixture: JobStorageFixture) => ZIO.attemptBlocking {
       val workspace = spec
       Using.resource(fixture.open(workspace.project, workspace.owner)) { repository =>
         val (first, _) = repository.reserve(workspace, "1" * 64, 100)
@@ -95,10 +96,8 @@ abstract class JobRepositoryTest extends SpecZIO with AssertZIO {
         val uncertain = first.copy(phase = JobPhase.Uncertain, target = JobTarget.Stop, problem = Some("No acknowledgement"), revision = 2)
         repository.replace(first, uncertain)
         assert(scala.util.Try(repository.replace(uncertain, uncertain.copy(phase = JobPhase.Settled, revision = 3))).isFailure)
-        for (_ <- 1 until JobRecords.MaxJobs) repository.reserve(workspace.copy(attempt = AttemptId(UUID.randomUUID())), "1" * 64, 100)
-        assert(repository.records.size == JobRecords.MaxJobs)
-        val limit = scala.util.Try(repository.reserve(workspace.copy(attempt = AttemptId(UUID.randomUUID())), "1" * 64, 100)).failed.get
-        assert(limit.isInstanceOf[DomainFailure] && limit.asInstanceOf[DomainFailure].fault.isInstanceOf[Fault.Limit])
+        for (_ <- 1 to FormerJobBound) repository.reserve(workspace.copy(attempt = AttemptId(UUID.randomUUID())), "1" * 64, 100)
+        assert(repository.records.size == FormerJobBound + 1)
       }
     }}
   }
@@ -125,6 +124,18 @@ final class JobRepositoryLocal extends JobRepositoryTest {
       assert(scala.util.Try(FileJobRepository.open(root, workspace.project, workspace.owner)).isFailure)
       Files.delete(record)
       Using.resource(FileJobRepository.open(root, workspace.project, workspace.owner)) { repository => assert(repository.records.isEmpty) }
+    }}
+
+    "D108: reopen a journal that holds more jobs than the former session bound" in { (fixture: JobStorageFixture) => ZIO.attemptBlocking {
+      val root = Files.createTempDirectory(Files.createDirectories(Path.of(".work").toAbsolutePath.normalize()), "journal-unbounded-")
+      val workspace = WorkspaceSpec(ProjectId(UUID.randomUUID()), SessionId(UUID.randomUUID()), AttemptId(UUID.randomUUID()), "/source", GitCommit("a" * 40))
+      val written = Using.resource(FileJobRepository.open(root, workspace.project, workspace.owner)) { repository =>
+        for (_ <- 0 to FormerJobBound) repository.reserve(workspace.copy(attempt = AttemptId(UUID.randomUUID())), "1" * 64, 100)
+        repository.records
+      }
+      Using.resource(FileJobRepository.open(root, workspace.project, workspace.owner)) { repository =>
+        assert(written.size == FormerJobBound + 1 && repository.records == written)
+      }
     }}
   }
 }

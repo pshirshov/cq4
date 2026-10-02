@@ -101,7 +101,6 @@ final class IntegrationController(config: SupervisorConfig, authority: Superviso
         case Some(entry) => require(entry.ticket == ticket, "Integration identity was reused with another reviewer handle"); (entry, false)
         case None =>
           admit()
-          require(entries.size < IntegrationEntries.MaxOperations, "Session integration limit reached")
           val entry = new IntegrationExecutionState(ticket, ready, done,
             IntegrationStatus(ticket.id, IntegrationPhase.Preparing, None, IntegrationNext.Wait, None), clock.millis())
           entries = entries.updated(ticket.id, entry)

@@ -9,7 +9,6 @@ import java.time.{Clock, Duration}
 
 object CombinationPlans {
   val MaxBytes = 16384
-  val MaxOperations = 32
   private val MaxMembers = 16
   def artifact(plan: CombinationPlan): ArtifactId = NativeArtifacts.id(plan.governor, "combination-" + plan.request.id.value)
   def validate(plan: CombinationPlan, owner: Scope, governor: AttemptId, repository: String, target: String): Unit = {

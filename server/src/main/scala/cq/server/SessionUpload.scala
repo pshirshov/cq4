@@ -74,15 +74,13 @@ final class SessionUpload(context: CliContext, clock: Clock) {
       List("integration-requests", "integrations").flatMap { name =>
         val root = directory.resolve(name)
         if (!Files.exists(root)) Nil else Using.resource(Files.list(root)) { paths =>
-          val entries = paths.iterator().asScala.filter(_.getFileName.toString.endsWith(".json")).take(IntegrationEntries.MaxOperations + 1).toList
-          require(entries.size <= IntegrationEntries.MaxOperations, "Retained integrations exceed the session limit")
-          entries.map(path => IntegrationId(UUID.fromString(path.getFileName.toString.stripSuffix(".json"))))
+          paths.iterator().asScala.filter(_.getFileName.toString.endsWith(".json"))
+            .map(path => IntegrationId(UUID.fromString(path.getFileName.toString.stripSuffix(".json")))).toList
         }
       }.distinct.sortBy(_.value.toString)
     }
     _ <- if (ids.isEmpty) ZIO.unit else for {
       coordinator <- ZIO.attemptBlocking {
-        require(ids.size <= IntegrationEntries.MaxOperations, "Retained integrations exceed the session limit")
         val settings = HostFiles.read(directory.resolve("settings.json"), SupervisorSettings_JsonCodec, MaxRecordBytes)
         val owner = Scope(run.project.project, Actor("CQ governor", run.attempt.session, Role.Governor))
         val endpoint = URI.create(run.project.endpoint)

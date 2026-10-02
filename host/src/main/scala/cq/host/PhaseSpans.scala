@@ -11,7 +11,6 @@ import scala.util.Using
   * work's own identity, so a replay delivers the same span. */
 object PhaseSpans {
   private val MaxTicketBytes = 64 * 1024
-  private val MaxChildren = 32
   private def id(kind: String, value: UUID): RequestId = RequestId(UUID.nameUUIDFromBytes(s"$kind:$value".getBytes(UTF_8)))
 
   /** One run of a check: from the job's registration to its last recorded transition, which for a settled job is its settlement. */
@@ -26,8 +25,7 @@ object PhaseSpans {
   /** The assignment of the child of this session that produced `result`; work the governing session runs on that result belongs to it. */
   def producer(session: Path, result: ArtifactId): AssignmentId = {
     val root = session.resolve("children")
-    val children = if (!Files.exists(root)) Nil else Using.resource(Files.list(root))(_.iterator().asScala.take(MaxChildren + 1).toList)
-    require(children.size <= MaxChildren, "Child inventory exceeds its bound")
+    val children = if (!Files.exists(root)) Nil else Using.resource(Files.list(root))(_.iterator().asScala.toList)
     children.map(_.resolve("ticket.json")).filter(Files.exists(_)).map(HostFiles.read(_, DispatchTicket_JsonCodec, MaxTicketBytes))
       .find(ticket => NativeArtifacts.id(ticket.attempt.id, "result") == result).map(_.assignment.id)
       .getOrElse(throw new IllegalStateException("Result was not produced by a child of this governing session"))
@@ -37,7 +35,6 @@ object PhaseSpans {
 /** Spans of work the governing session runs itself. Each is retained in its own queue before it is sent, so session recovery replays
   * one the server did not acknowledge. */
 final class SpanDelivery(root: Path, project: ProjectId) {
-  private val MaxSpans = 4096
   private def queue(id: UUID): DeliveryQueue = new DeliveryQueue(root.resolve(id.toString))
   def retain(span: PhaseSpan): Unit = {
     HostFiles.directory(root)
@@ -47,8 +44,7 @@ final class SpanDelivery(root: Path, project: ProjectId) {
   /** Sends every retained span the server has not acknowledged. */
   def flush(api: ServerApi): Int = if (!Files.exists(root)) 0 else {
     HostFiles.directory(root)
-    val retained = Using.resource(Files.list(root))(_.iterator().asScala.take(MaxSpans + 1).toList)
-    require(retained.size <= MaxSpans, "Retained span inventory exceeds its bound")
+    val retained = Using.resource(Files.list(root))(_.iterator().asScala.toList)
     retained.sortBy(_.getFileName.toString).map { path =>
       val id = UUID.fromString(path.getFileName.toString)
       require(id.toString == path.getFileName.toString && Files.isDirectory(path) && !Files.isSymbolicLink(path), "Invalid retained span identity")

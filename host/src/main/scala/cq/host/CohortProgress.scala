@@ -1,7 +1,7 @@
 package cq.host
 
 import cq.api.*
-import cq.core.{DomainFailure, LedgerPolicy, WorksetTraversal}
+import cq.core.LedgerPolicy
 import io.circe.Json
 import java.nio.charset.StandardCharsets.UTF_8
 import java.security.MessageDigest
@@ -17,10 +17,7 @@ final class CohortProgress {
 
   def order(ids: List[ItemId]): List[ItemId] = synchronized {
     ids.sortBy(LedgerPolicy.key).foreach { id =>
-      if (!members.contains(id)) {
-        if (members.size >= WorksetTraversal.MaxItems) throw DomainFailure(Fault.Limit("Cohort session history is full; start another governing session"))
-        members += id -> Seen(0, 0, members.size)
-      }
+      if (!members.contains(id)) members += id -> Seen(0, 0, members.size)
     }
     ids.sortBy { id => val seen = members(id); (seen.attempts, seen.offered, seen.sequence, LedgerPolicy.key(id)) }
   }
