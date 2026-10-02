@@ -432,6 +432,9 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
         reserved <- integrations.reserve(f.collector, f.intent)
         stored <- integrations.get(f.owner, f.intent.id)
         _ <- ZIO.attempt(assert(reserved.resolution == IntegrationResolution.Pending() && stored == reserved && stored.intent == f.intent))
+        // Startup recovery of an ended session reads its reservations with that session's collector authority.
+        collected <- integrations.get(f.collector, f.intent.id)
+        _ <- assertIO(collected == reserved)
         recorded <- integrations.observe(f.collector, f.intent.id, IntegrationObservation.Incorporated(rebasedCommit))
         _ <- assertIO(recorded.resolution.isInstanceOf[IntegrationResolution.Recorded])
         completed <- ZIO.foreach(f.items)(item => ledger.get(f.owner, item.id).map(_.item.draft.content.asInstanceOf[Content.Task]))

@@ -70,6 +70,9 @@ object IntegrationApiCheck {
     val reserved = collector.integrate(input)
     require(reserved.resolution == IntegrationResolution.Pending() && collector.integrate(input) == reserved)
     require(governor.call(Command.Read(ReadInput(project, ReadSelection.Integration(id)))) == Result.Integration(reserved))
+    // Startup recovery of an ended session asks with collector authority whether a retained reservation is resolved.
+    require(collector.call(Command.Read(ReadInput(project, ReadSelection.Integration(id)))) == Result.Integration(reserved))
+    require(collector.call(Command.Read(ReadInput(project, ReadSelection.Integration(IntegrationId(uuid))))).isInstanceOf[Result.Failed])
     val reused = change.copy(mutations = List(Mutation.Create(task)), fences = Nil)
     require(governor.call(Command.Change(ChangeInput(project, reused))) == Result.Failed(Fault.IntegrationPending(id)))
     require(governor.call(Command.ClaimWork(ClaimInput(project, ClaimAction.Release(claim.fence)))) == Result.Failed(Fault.IntegrationPending(id)))

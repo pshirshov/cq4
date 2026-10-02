@@ -3,7 +3,6 @@ package cq.host
 import baboon.runtime.shared.BaboonCodecContext
 import cq.api.*
 import cq.core.{DomainFailure, IntegrationPolicy}
-import io.circe.parser.parse
 import java.nio.channels.{FileChannel, FileLock, OverlappingFileLockException}
 import java.nio.file.{Files, Path, StandardCopyOption, StandardOpenOption}
 import java.nio.file.attribute.PosixFilePermissions
@@ -15,6 +14,11 @@ trait JobRepository extends AutoCloseable {
   def reserve(workspace: WorkspaceSpec, fingerprint: String, now: Long): (JobRecord, Boolean)
   def replace(expected: JobRecord, next: JobRecord): Unit
 }
+
+/** The bytes of a job record were read and are not a record of this journal. Any other failure to open a journal is a failure to
+  * read it, which may not happen again. */
+final class JobRecordUndecodable(val path: Path, cause: Throwable)
+  extends IllegalArgumentException(Option(cause.getMessage).getOrElse(cause.getClass.getSimpleName), cause)
 
 object JobRecords {
   /** A session starts at most this many children, as many integrations and as many revalidation rounds (`DispatchController`,
@@ -68,12 +72,13 @@ final class FileJobRepository private (root: Path, project: ProjectId, owner: Se
         require(!Files.isSymbolicLink(path) && Files.isRegularFile(path), "Job record must be a regular file")
         val bytes = Using.resource(Files.newInputStream(path))(_.readNBytes(JobRecords.MaxRecordBytes + 1))
         require(bytes.length <= JobRecords.MaxRecordBytes, "Job record exceeds byte bound")
-        val record = parse(new String(bytes, java.nio.charset.StandardCharsets.UTF_8))
-          .flatMap(JobRecord_JsonCodec.decode(BaboonCodecContext.Default, _)).fold(throw _, identity)
-        JobRecords.validate(record)
-        require(record.workspace.project == project && record.workspace.owner == owner, "Job journal belongs to another project/session")
-        require(path == recordPath(record.workspace.attempt), "Job filename and attempt disagree")
-        record.workspace.attempt -> record
+        try {
+          val record = HostFiles.decode(bytes, JobRecord_JsonCodec)
+          JobRecords.validate(record)
+          require(record.workspace.project == project && record.workspace.owner == owner, "Job journal belongs to another project/session")
+          require(path == recordPath(record.workspace.attempt), "Job filename and attempt disagree")
+          record.workspace.attempt -> record
+        } catch { case error: Exception => throw new JobRecordUndecodable(path, error) }
       }.toMap
     }
   }

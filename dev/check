@@ -311,6 +311,10 @@ class Checks:
         self.run(["gcc", "-std=c17", "-shared", "-fPIC", "-Wall", "-Wextra", "-Werror", "-o", str(stall),
                   "dev/shutdown-stall.c", "-ldl"], "shutdown-stall-build", COMMAND_TIMEOUT)
         self.environment["CQ_SHUTDOWN_STALL_LIBRARY"] = str(stall)
+        readdir = self.evidence / "readdir-fault.so"
+        self.run(["gcc", "-std=c17", "-shared", "-fPIC", "-Wall", "-Wextra", "-Werror", "-o", str(readdir),
+                  "dev/readdir-fault.c", "-ldl"], "readdir-fault-build", COMMAND_TIMEOUT)
+        self.environment["CQ_READDIR_FAULT_LIBRARY"] = str(readdir)
         self.generate()
         self.sbt(["server/testOnly *Process"], "guardian-driver")
 
