@@ -35,6 +35,8 @@ These are nominal outcome classifications. Readiness must additionally explain m
 
 Executable examples for all fourteen ledgers are in `LedgerContractTest`. They create records through the same application service using either the dummy or PostgreSQL repository. The schema represents citations separately from canonical ledger relations. Typed review subjects pin applicability to a revision; they do not create a second mutable graph.
 
+The system sets no in-progress status. `Active` (Tasks, Researches, Reviews) and `Investigating` (Hypothesis) are ordinary non-terminal values that only an explicit edit assigns; work in progress is derived from active claims instead ([claims](claims.md#work-in-progress)).
+
 ## Transactions and identity
 
 `LedgerService[F]` implements BIO operations against `LedgerRepository[F]`. A transaction is scoped to one authenticated project. The PostgreSQL adapter acquires that project's row lock, executes bounded row operations, and commits or rolls back the entire operation. Reads currently acquire the same lock for a coherent cursor/content view. This deliberately serializes a project's transactions; [access/lock measurements](../validation/m3-query-access.md) verify same-project blocking and independent-project progress, without claiming same-project parallel throughput. It does not load or rewrite the project.

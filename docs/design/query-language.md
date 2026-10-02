@@ -23,6 +23,7 @@ value       := word | quoted-string
 | `tag:"Needs review"` | Exact, case-sensitive label |
 | `project:<uuid>` | Exact canonical project UUID, intersected with the externally authorized project |
 | `archived:true`, `archived:false`, `archived:all` | Archived, active, or either state |
+| `wip:true`, `wip:false` | Work in progress: the item is, or is not, covered by an active claim at the server clock ([claims](claims.md#work-in-progress)). `wip:false` is `NOT wip:true`. Claims do not move the item cursor, so a continuation snapshot does not pin this attribute: each page is evaluated at its own read time |
 | `<relation>:T42` | Typed outgoing view of an item reference, including inverse views; names are generated camel-case names rendered in kebab-case, e.g. `blocked-by`, `produces`, `part-of`, `reviewed-by` |
 
 Attribute names are case-insensitive. Unknown attributes and malformed typed values return diagnostics; they do not silently become text searches. Bare letter/number words are exact IDs only when their prefix belongs to the fixed ledger vocabulary. `version2` is ordinary full text; `id:version2` is invalid.
