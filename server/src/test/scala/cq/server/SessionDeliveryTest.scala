@@ -49,7 +49,7 @@ abstract class SessionDeliveryTest extends SpecZIO with AssertZIO {
       val auth = new Authorization(AccessConfig("attached-usage-recovery-root-token", "http://localhost"), clock)
       val root = auth.authenticate("attached-usage-recovery-root-token", Some(owner.actor.session.value.toString))
       val authority = auth.authenticate(auth.grant(root, GrantRequest(owner.project, collector.actor, clock.millis() + 60000)).value, None)
-      val application = new Application(ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, auth)
+      val application = new Application(ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, auth, new CatalogRead(new McpSchemas()))
       ZIO.scoped { for {
         runtime <- ZIO.runtime[Any]
         _ <- ledger.initialize(owner, "Attached accounting")
@@ -105,7 +105,7 @@ abstract class SessionDeliveryTest extends SpecZIO with AssertZIO {
       val auth = new Authorization(AccessConfig("reviewer-check-recovery-root-token", "http://localhost"), clock)
       val root = auth.authenticate("reviewer-check-recovery-root-token", Some(owner.actor.session.value.toString))
       val authority = auth.authenticate(auth.grant(root, GrantRequest(owner.project, collector.actor, clock.millis() + 60000)).value, None)
-      val application = new Application(ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, auth)
+      val application = new Application(ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, auth, new CatalogRead(new McpSchemas()))
       ZIO.scoped { for {
         runtime <- ZIO.runtime[Any]
         _ <- ledger.initialize(owner, "Check recovery")
@@ -219,7 +219,7 @@ abstract class SessionDeliveryTest extends SpecZIO with AssertZIO {
       val auth = new Authorization(AccessConfig("span-recovery-root-token", "http://localhost"), clock)
       val root = auth.authenticate("span-recovery-root-token", Some(owner.actor.session.value.toString))
       val authority = auth.authenticate(auth.grant(root, GrantRequest(owner.project, collector.actor, clock.millis() + 60000)).value, None)
-      val application = new Application(ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, auth)
+      val application = new Application(ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, auth, new CatalogRead(new McpSchemas()))
       ZIO.scoped { for {
         runtime <- ZIO.runtime[Any]
         _ <- ledger.initialize(owner, "Span recovery")
@@ -278,7 +278,7 @@ abstract class SessionDeliveryTest extends SpecZIO with AssertZIO {
           val auth = new Authorization(AccessConfig("sealed-publication-root-token", "http://localhost"), clock)
           val root = auth.authenticate("sealed-publication-root-token", Some(owner.actor.session.value.toString))
           val authority = auth.authenticate(auth.grant(root, GrantRequest(owner.project, collector.actor, clock.millis() + 60000)).value, None)
-          val application = new Application(ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, auth)
+          val application = new Application(ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, auth, new CatalogRead(new McpSchemas()))
           val initialUsage = """{"type":"thread.started","thread_id":"sealed-thread"}
 {"type":"turn.completed","usage":{"input_tokens":100,"cached_input_tokens":20,"cache_write_input_tokens":0,"output_tokens":31,"reasoning_output_tokens":3}}
 """
@@ -379,7 +379,7 @@ abstract class SessionDeliveryTest extends SpecZIO with AssertZIO {
         val auth = new Authorization(AccessConfig("recovery-contract-root-token", "http://localhost"), clock)
         val rootAuthority = auth.authenticate("recovery-contract-root-token", Some(owner.actor.session.value.toString))
         val authority = auth.authenticate(auth.grant(rootAuthority, GrantRequest(owner.project, collector.actor, clock.millis() + 60000)).value, None)
-        val application = new Application(ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, auth)
+        val application = new Application(ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, auth, new CatalogRead(new McpSchemas()))
         val assignment = Assignment(AssignmentId(UUID.randomUUID()), owner.project, Set.empty, Attribution.Unattributed, None, None)
         val governor = Attempt(AttemptId(UUID.randomUUID()), assignment.id, None, owner.actor.session, Role.Governor,
           Harness.Codex, "fixture", "fixture", "fixture", clock.millis(), UsagePhase.Govern)
@@ -506,7 +506,7 @@ abstract class SessionDeliveryTest extends SpecZIO with AssertZIO {
         val auth = new Authorization(AccessConfig("recovery-contract-root-token", "http://localhost"), clock)
         val rootAuthority = auth.authenticate("recovery-contract-root-token", Some(owner.actor.session.value.toString))
         val authority = auth.authenticate(auth.grant(rootAuthority, GrantRequest(owner.project, collector.actor, clock.millis() + 60000)).value, None)
-        val application = new Application(ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, auth)
+        val application = new Application(ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, auth, new CatalogRead(new McpSchemas()))
         val assignment = Assignment(AssignmentId(UUID.randomUUID()), owner.project, Set.empty, Attribution.Unattributed, None, None)
         val governor = Attempt(AttemptId(UUID.randomUUID()), assignment.id, None, owner.actor.session, Role.Governor,
           Harness.Codex, "fixture", "fixture", "fixture", clock.millis(), UsagePhase.Govern)

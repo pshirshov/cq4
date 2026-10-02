@@ -4,7 +4,7 @@ import cq.api.*
 import cq.core.{ArtifactService, DomainFailure, LedgerRepository, LedgerService, ResultAdmissionService, IntegrationService, ProposalService, UsageService}
 import zio.{IO, Task, ZIO}
 
-final class Application(ledger: LedgerService[IO], repository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO], authorization: Authorization) {
+final class Application(ledger: LedgerService[IO], repository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO], authorization: Authorization, catalog: CatalogRead) {
   def execute(authority: Authority, command: Command): Task[Result] = ZIO.attempt(authorization.check(authority)).flatMap { _ =>
     command match {
       case Command.Projects(after, snapshot, limit) =>
@@ -47,6 +47,7 @@ final class Application(ledger: LedgerService[IO], repository: LedgerRepository[
         case ReadSelection.ItemDetails(members, bytes) => ledger.details(scope, members, bytes).map(Result.Details.apply)
         case ReadSelection.History(id, before, limit) => ledger.history(scope, id, before, limit).map(Result.History.apply)
         case ReadSelection.Changes(after, limit) => ledger.changes(scope, after, limit).map(Result.Changes.apply)
+        case ReadSelection.Catalog() => ZIO.attempt(Result.Catalog(catalog.value))
       }}
       case Command.Graph(input) => scoped(authority, input.project) { scope =>
         ledger.workset(scope, input.roots, input.after, input.snapshot, input.limit).map(Result.Workset.apply)

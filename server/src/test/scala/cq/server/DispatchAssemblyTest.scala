@@ -41,7 +41,7 @@ abstract class DispatchAssemblyTest extends SpecZIO with AssertZIO {
         val authorization = new Authorization(AccessConfig("assembly-contract-test-root", "http://localhost"), clock)
         val root = authorization.authenticate("assembly-contract-test-root", Some(scope.actor.session.value.toString))
         val authority = authorization.authenticate(authorization.grant(root, GrantRequest(scope.project, scope.actor, clock.millis() + 60000)).value, None)
-        val application = new Application(ledger, repository, usage, artifacts, admissions, integrations, proposals, authorization)
+        val application = new Application(ledger, repository, usage, artifacts, admissions, integrations, proposals, authorization, new CatalogRead(new McpSchemas()))
         val narrative = "Consumer specification λ😀" * 1000
         val largeBody = "evidence λ😀\n" * 5000
         val requirements = "Fail-first reproduction evidence is required; the cq-ui check is not backend evidence λ😀"
@@ -233,7 +233,7 @@ abstract class DispatchAssemblyTest extends SpecZIO with AssertZIO {
         val authorization = new Authorization(AccessConfig("assembly-contract-test-root", "http://localhost"), clock)
         val root = authorization.authenticate("assembly-contract-test-root", Some(scope.actor.session.value.toString))
         val authority = authorization.authenticate(authorization.grant(root, GrantRequest(scope.project, scope.actor, clock.millis() + 60000)).value, None)
-        val application = new Application(ledger, repository, usage, artifacts, admissions, integrations, proposals, authorization)
+        val application = new Application(ledger, repository, usage, artifacts, admissions, integrations, proposals, authorization, new CatalogRead(new McpSchemas()))
         for {
           runtime <- ZIO.runtime[Any]
           _ <- ledger.initialize(scope, "Milestone admission")

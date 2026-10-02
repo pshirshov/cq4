@@ -186,7 +186,7 @@ abstract class DriverHookTest extends SpecZIO with AssertZIO {
     val operatorToken = "driver-hook-test-operator-token-" + uuid
     val authorization = new Authorization(AccessConfig(operatorToken, "http://localhost"), clock)
     val root = authorization.authenticate(operatorToken, Some(uuid.toString))
-    val application = new Application(ledger, repository, usage, artifacts, admissions, integrations, proposals, authorization)
+    val application = new Application(ledger, repository, usage, artifacts, admissions, integrations, proposals, authorization, new CatalogRead(new McpSchemas()))
     ZIO.runtime[Any].flatMap(runtime => ZIO.foreachDiscard(Harnesses)(harness =>
       ZIO.attemptBlocking(body(new World(harness, ledger, application, authorization, root, runtime, clock)))))
   }

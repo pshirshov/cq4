@@ -579,7 +579,7 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
           val clock = Clock.systemUTC()
           val auth = new Authorization(AccessConfig("preparation-contract-root-token", "http://localhost"), clock)
           val root = auth.authenticate("preparation-contract-root-token", Some(f.owner.actor.session.value.toString))
-          val application = new Application(ledger, repository, usage, artifacts, admissions, integrations, proposals, auth)
+          val application = new Application(ledger, repository, usage, artifacts, admissions, integrations, proposals, auth, new CatalogRead(new McpSchemas()))
           val authority = auth.authenticate(auth.grant(root, GrantRequest(f.owner.project, f.owner.actor, clock.millis() + 300000)).value, None)
           val governor = new ServerApi {
             override def call(value: Command): Result = Unsafe.unsafe { implicit unsafe => runtime.unsafe.run(application.execute(authority, value)).getOrThrowFiberFailure() }
@@ -638,7 +638,7 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
           val clock = Clock.systemUTC()
           val auth = new Authorization(AccessConfig("combination-contract-root-token", "http://localhost"), clock)
           val root = auth.authenticate("combination-contract-root-token", Some(f.owner.actor.session.value.toString))
-          val application = new Application(ledger, repository, usage, artifacts, admissions, integrations, proposals, auth)
+          val application = new Application(ledger, repository, usage, artifacts, admissions, integrations, proposals, auth, new CatalogRead(new McpSchemas()))
           def execute[A](effect: Task[A]): A = Unsafe.unsafe { implicit unsafe => runtime.unsafe.run(effect).getOrThrowFiberFailure() }
           final class Api(scope: Scope, lose: Boolean) extends ServerApi {
             private val authority = auth.authenticate(auth.grant(root, GrantRequest(scope.project, scope.actor, clock.millis() + 300000)).value, None)

@@ -487,7 +487,7 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
         def governor(): Authority =
           authorization.authenticate(authorization.grant(root, GrantRequest(project, Actor("attached governor", SessionId(uuid), Role.Governor), clock.millis() + 60000)).value, None)
         val authorityA = governor()
-        val application = new Application(ledger, repository, usage, artifacts, admissions, integrations, proposals, authorization)
+        val application = new Application(ledger, repository, usage, artifacts, admissions, integrations, proposals, authorization, new CatalogRead(new McpSchemas()))
         // What the hook of each session receives from its harness: sessions A and B each supply their own key.
         val a = DriverCall("claude", "UserPromptSubmit", Some("session-a"))
         val b = DriverCall("claude", "UserPromptSubmit", Some("session-b"))
@@ -2191,7 +2191,7 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
         val w = world.copy(operator = root.scope(ProjectId(uuid)))
         val session = w.copy(governor = Scope(w.project, Actor("attached governor", SessionId(uuid), Role.Governor)))
         val authority = authorization.authenticate(authorization.grant(root, GrantRequest(w.project, session.governor.actor, clock.millis() + 60000)).value, None)
-        val application = new Application(ledger, repository, usage, artifacts, admissions, integrations, proposals, authorization)
+        val application = new Application(ledger, repository, usage, artifacts, admissions, integrations, proposals, authorization, new CatalogRead(new McpSchemas()))
         val key = claude("tracker")
         val attempt = LineageMember.Attempt(AttemptId(uuid))
         val dispatch = LineageMember.Request(RequestId(uuid))

@@ -428,6 +428,7 @@ root adt ReadSelection {
   data ItemDetails { members: lst[ItemRevision] bytes: i32 }
   data History { id: ItemId before: Revision limit: i32 }
   data Changes { after: ChangeCursor limit: i32 }
+  data Catalog {}
 }
 root data ReadInput { project: ProjectId selection: ReadSelection }
 root data ChangeInput { project: ProjectId change: ChangeRequest }
@@ -496,6 +497,7 @@ root adt Result {
   data UsageAttempts { page: AttemptPage }
   data UsageOutcomes { page: OutcomePage }
   data UsagePhases { report: PhaseReport }
+  data Catalog { value: HelpCatalog }
   data Failed { fault: Fault }
 }
 root adt HostUsage {
@@ -861,3 +863,23 @@ root adt WorkspaceReply {
   data Check { value: DeclaredCheckStatus }
   data Failed { fault: Fault }
 }
+
+root data CatalogPrompt { resource: str text: str }
+root data CatalogArgument { field: str flag: str value: str summary: str choices: lst[str] required: bit note: opt[str] }
+root data CatalogAlias { harness: Harness alias: str path: str body: str }
+root data CatalogCommand {
+  command: str variant: str description: str parameters: lst[CatalogArgument]
+  template: CatalogPrompt instructions: lst[CatalogPrompt] aliases: lst[CatalogAlias]
+}
+enum CatalogToolAccess { Enabled Unselected Denied }
+enum CatalogMcpTarget { Domain Local }
+root data CatalogTool { name: str access: CatalogToolAccess }
+root data CatalogToolset { target: CatalogMcpTarget server: str tools: lst[CatalogTool] }
+root data CatalogTools { mcp: lst[CatalogToolset] builtin: lst[CatalogTool] edits: bit workspaceCheck: bit }
+root data CatalogAgentHarness { harness: Harness prompt: str outputSchema: str tools: CatalogTools }
+root data CatalogAgent {
+  work: DispatchWork role: Role mode: opt[str] prompt: CatalogPrompt
+  inputType: str inputSchema: str report: str outputSchema: str workspaceSchema: str
+  harnesses: lst[CatalogAgentHarness] inputExample: ChildExecutionInput outputExample: ChildReport
+}
+root data HelpCatalog { commands: lst[CatalogCommand] agents: lst[CatalogAgent] }

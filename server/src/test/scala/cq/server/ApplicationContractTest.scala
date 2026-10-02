@@ -26,7 +26,7 @@ abstract class ApplicationContractTest extends SpecZIO with AssertZIO {
       (ledger: LedgerService[IO], repository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
         val auth = authorization(Now)
         val root = auth.authenticate(Token, Some(UUID.randomUUID().toString))
-        val application = new Application(ledger, repository, usage, artifacts, admissions, integrations, proposals, auth)
+        val application = new Application(ledger, repository, usage, artifacts, admissions, integrations, proposals, auth, new CatalogRead(new McpSchemas()))
         val first = ProjectId(UUID.randomUUID())
         val second = ProjectId(UUID.randomUUID())
         val workerActor = Actor("worker", SessionId(UUID.randomUUID()), Role.Worker)
@@ -72,7 +72,7 @@ abstract class ApplicationContractTest extends SpecZIO with AssertZIO {
       (ledger: LedgerService[IO], repository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
         val auth = authorization(Now)
         val root = auth.authenticate(Token, Some(UUID.randomUUID().toString))
-        val application = new Application(ledger, repository, usage, artifacts, admissions, integrations, proposals, auth)
+        val application = new Application(ledger, repository, usage, artifacts, admissions, integrations, proposals, auth, new CatalogRead(new McpSchemas()))
         val project = ProjectId(UUID.randomUUID())
         val collector = Scope(project, Actor("collector", SessionId(UUID.randomUUID()), Role.Collector))
         val assignment = Assignment(AssignmentId(UUID.randomUUID()), project, Set.empty, Attribution.Unattributed, None, None)
@@ -90,11 +90,32 @@ abstract class ApplicationContractTest extends SpecZIO with AssertZIO {
         } yield ()
     }
 
+    "serve the command and agent catalogs through the typed read path to project readers" in {
+      (ledger: LedgerService[IO], repository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
+        val auth = authorization(Now)
+        val root = auth.authenticate(Token, Some(UUID.randomUUID().toString))
+        val catalog = new CatalogRead(new McpSchemas())
+        val application = new Application(ledger, repository, usage, artifacts, admissions, integrations, proposals, auth, catalog)
+        val project = ProjectId(UUID.randomUUID())
+        val other = ProjectId(UUID.randomUUID())
+        val worker = auth.authenticate(auth.grant(root, GrantRequest(project, Actor("worker", SessionId(UUID.randomUUID()), Role.Worker), Now + 10000)).value, None)
+        for {
+          _ <- application.execute(root, Command.Initialize(ProjectConfig(project, "http://localhost", "catalog")))
+          served <- application.execute(root, Command.Read(ReadInput(project, ReadSelection.Catalog())))
+          _ <- assertIO(served == Result.Catalog(catalog.value))
+          _ <- assertIO(catalog.value.commands.nonEmpty && catalog.value.agents.size == 9)
+          scoped <- application.execute(worker, Command.Read(ReadInput(project, ReadSelection.Catalog())))
+          _ <- assertIO(scoped == served)
+          denied <- application.execute(worker, Command.Read(ReadInput(other, ReadSelection.Catalog())))
+          _ <- assertIO(denied match { case Result.Failed(_: Fault.Denied) => true; case _ => false })
+        } yield ()
+    }
+
     "I24: move the live work cursor when a claim is acquired, released or expires and not when it is renewed" in {
       (repository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
         val auth = authorization(Now)
         val root = auth.authenticate(Token, Some(UUID.randomUUID().toString))
-        def application(time: Long): Application = new Application(FixedLedger.at(repository, time), repository, usage, artifacts, admissions, integrations, proposals, auth)
+        def application(time: Long): Application = new Application(FixedLedger.at(repository, time), repository, usage, artifacts, admissions, integrations, proposals, auth, new CatalogRead(new McpSchemas()))
         val start = application(Now)
         val later = application(Now + 2000)
         val project = ProjectId(UUID.randomUUID())
@@ -130,7 +151,7 @@ abstract class ApplicationContractTest extends SpecZIO with AssertZIO {
       (repository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
         val auth = authorization(Now)
         val root = auth.authenticate(Token, Some(UUID.randomUUID().toString))
-        val application = new Application(FixedLedger.at(repository, Now), repository, usage, artifacts, admissions, integrations, proposals, auth)
+        val application = new Application(FixedLedger.at(repository, Now), repository, usage, artifacts, admissions, integrations, proposals, auth, new CatalogRead(new McpSchemas()))
         val project = ProjectId(UUID.randomUUID())
         def live: IO[Throwable, ProjectCursors] = application.liveRevision(root, LiveScope(false, Some(project))).map(_.project.get)
         def browse: IO[Throwable, BrowsePage] = application.execute(root, Command.Read(ReadInput(project,
@@ -181,7 +202,7 @@ abstract class ApplicationContractTest extends SpecZIO with AssertZIO {
         val auth = authorization(Now)
         val first = auth.authenticate(Token, Some(UUID.randomUUID().toString))
         val second = auth.authenticate(Token, Some(UUID.randomUUID().toString))
-        val application = new Application(FixedLedger.at(repository, Now), repository, usage, artifacts, admissions, integrations, proposals, auth)
+        val application = new Application(FixedLedger.at(repository, Now), repository, usage, artifacts, admissions, integrations, proposals, auth, new CatalogRead(new McpSchemas()))
         val project = ProjectId(UUID.randomUUID())
         def marks: IO[Throwable, List[Option[Option[Long]]]] = application.execute(first, Command.Read(ReadInput(project,
           ReadSelection.Browse("", ItemOrder(ItemOrderField.Id, SortDirection.Ascending, false), None, None, 20)))).flatMap {
@@ -224,7 +245,7 @@ abstract class ApplicationContractTest extends SpecZIO with AssertZIO {
       (ledger: LedgerService[IO], repository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
         val auth = authorization(Now)
         val root = auth.authenticate(Token, Some(UUID.randomUUID().toString))
-        val application = new Application(ledger, repository, usage, artifacts, admissions, integrations, proposals, auth)
+        val application = new Application(ledger, repository, usage, artifacts, admissions, integrations, proposals, auth, new CatalogRead(new McpSchemas()))
         val project = ProjectId(UUID.randomUUID())
         val worker = auth.authenticate(auth.grant(root, GrantRequest(project, Actor("worker", SessionId(UUID.randomUUID()), Role.Worker), Now + 10000)).value, None)
         for {
@@ -248,7 +269,7 @@ abstract class ApplicationContractTest extends SpecZIO with AssertZIO {
         val auth = authorization(Now)
         val session = SessionId(UUID.randomUUID())
         val root = auth.authenticate(Token, Some(session.value.toString))
-        val application = new Application(ledger, repository, usage, artifacts, admissions, integrations, proposals, auth)
+        val application = new Application(ledger, repository, usage, artifacts, admissions, integrations, proposals, auth, new CatalogRead(new McpSchemas()))
         val project = ProjectId(UUID.randomUUID())
         val other = ProjectId(UUID.randomUUID())
         def granted(role: Role) = auth.authenticate(auth.grant(root, GrantRequest(project, Actor(role.toString, SessionId(UUID.randomUUID()), role), Now + 10000)).value, None)
@@ -301,13 +322,13 @@ abstract class ApplicationContractTest extends SpecZIO with AssertZIO {
         val auth = authorization(Now)
         val session = UUID.randomUUID().toString
         val root = auth.authenticate(Token, Some(session))
-        val application = new Application(ledger, repository, usage, artifacts, admissions, integrations, proposals, auth)
+        val application = new Application(ledger, repository, usage, artifacts, admissions, integrations, proposals, auth, new CatalogRead(new McpSchemas()))
         val project = ProjectId(UUID.randomUUID())
         val change = request
         for {
           _ <- application.execute(root, Command.Initialize(ProjectConfig(project, "http://localhost", "snapshots")))
           first <- application.execute(root, Command.Change(ChangeInput(project, change)))
-          restarted = new Application(ledger, repository, usage, artifacts, admissions, integrations, proposals, authorization(Now + 1))
+          restarted = new Application(ledger, repository, usage, artifacts, admissions, integrations, proposals, authorization(Now + 1), new CatalogRead(new McpSchemas()))
           replay <- restarted.execute(authorization(Now + 1).authenticate(Token, Some(session)), Command.Change(ChangeInput(project, change)))
           _ <- assertIO(first == replay)
           _ <- application.execute(root, Command.Change(ChangeInput(project, request)))

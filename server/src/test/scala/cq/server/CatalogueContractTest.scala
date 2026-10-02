@@ -29,7 +29,7 @@ abstract class CatalogueContractTest extends SpecZIO with AssertZIO {
         val token = "catalogue-contract-operator-token-32"
         val auth = new Authorization(AccessConfig(token, "http://localhost"), Clock.systemUTC())
         val root = auth.authenticate(token, Some(UUID.randomUUID().toString))
-        val app = new Application(ledger, repository, usage, artifacts, admissions, integrations, proposals, auth)
+        val app = new Application(ledger, repository, usage, artifacts, admissions, integrations, proposals, auth, new CatalogRead(new McpSchemas()))
         val project = ProjectId(UUID.randomUUID())
         val config = ProjectConfig(project, "http://localhost", "Catalogue fixture")
         val scope = LiveScope(true, Some(project))

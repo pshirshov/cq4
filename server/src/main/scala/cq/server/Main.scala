@@ -72,6 +72,7 @@ object CqPlugin extends PluginDef {
   make[LiveSession]
   make[StaticAssets]
   make[McpSchemas]
+  make[CatalogRead].from((schemas: McpSchemas) => new CatalogRead(schemas))
   make[RunningServer].fromResource[RunningServer.Resource]
   make[DatabaseSetup]
   make[DatabaseConfig].fromEffect(ZIO.attempt {

@@ -10,7 +10,8 @@ final case class CommandAsset(path: Path, body: String)
 final class WorkflowAssets {
   private val MaxResourceBytes = 16384
 
-  private def resource(path: String): String = Using.resource(Option(getClass.getResourceAsStream("/" + path))
+  /** Text of an installed workflow prompt resource. */
+  def resource(path: String): String = Using.resource(Option(getClass.getResourceAsStream("/" + path))
     .getOrElse(throw new IllegalStateException("Installed workflow resource is missing"))) { stream =>
     val bytes = stream.readNBytes(MaxResourceBytes + 1)
     require(bytes.length <= MaxResourceBytes, "Installed workflow resource exceeds its byte bound")

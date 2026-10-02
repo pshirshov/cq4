@@ -160,7 +160,7 @@ sys.stderr.flush()
     val auth = new Authorization(AccessConfig(token, "http://localhost"), clock)
     val root = auth.authenticate(token, Some(owner.actor.session.value.toString))
     val expires = clock.millis() + 60L * 60 * 1000
-    val application = new Application(ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, auth)
+    val application = new Application(ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, auth, new CatalogRead(new McpSchemas()))
     val limits = HostLimits(3000, 900, 100, 1000, 262144)
     for {
       runtime <- ZIO.runtime[Any]
