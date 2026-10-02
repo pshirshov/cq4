@@ -59,7 +59,8 @@ class App {
     const result = await this.call(new api.Command_Read(new api.ReadInput(this.currentProject(), new api.ReadSelection_QueryComplete(query, cursor, COMPLETION_LIMIT))));
     if (!(result instanceof api.Result_QueryAnalyzed)) throw new Error('Unexpected query completion response');
     return result.analysis;
-  }, () => this.action(() => this.search()));
+  }, () => this.action(() => this.search()),
+    query => this.project !== null && (this.queryInvalid || query.trim() !== this.activeQuery.trim()));
   private readonly query = this.queryEditor.input;
   private activeQuery = '';
   private readonly items = element('tbody', '');
@@ -347,7 +348,7 @@ class App {
     });
   }
   private async search(): Promise<void> {
-    this.archive.invalidate();
+    this.queryEditor.cancelLive(); this.archive.invalidate();
     this.activeQuery = this.query.value; this.queryInvalid = false; this.epoch++; this.after = undefined; this.snapshot = undefined;
     this.loadedItems = []; this.page = null;
     if (this.resultsPane !== null) this.resultsPane.scrollTop = 0;

@@ -172,6 +172,30 @@ abstract class QueryCompletionTest extends SpecZIO with AssertZIO {
       } yield ()
     }
 
+    // I23: the browser applies typed text when completion reports no diagnostic, so that must agree with Browse.
+    "report no diagnostic exactly for the queries that browse accepts" in { (service: LedgerService[IO]) =>
+      val owner = scope()
+      val order = ItemOrder(ItemOrderField.Id, SortDirection.Ascending, false)
+      val queries = List("", " ", "alpha", "alpha ", "alpha AND", "alpha AND beta", "alpha OR", "alpha O", "NOT", "NOT alpha", "(alpha", "(alpha)", "\"open phrase",
+        "ledger:", "ledger:t", "ledger:unknown", "ledger:Tasks", "ledger:tasks status:ready", "status:Do", "ledgar:Tasks", "id:", "id:T", "id:T1", "archived:all id:T1",
+        "blocked-by:T", "blocked-by:T1", "tag:", "tag:\"open", "tag:fixture", "project:", "x" * 4096, "x" * 4097)
+      for {
+        _ <- service.initialize(owner, "completion and browse validity")
+        outcomes <- ZIO.foreach(queries) { text =>
+          for {
+            analysis <- service.complete(owner, text, text.length, 50)
+            browsed <- service.browse(owner, text, order, None, None, 1).either.flatMap {
+              case Right(_) => ZIO.succeed(true)
+              case Left(DomainFailure(_: Fault.QuerySyntax)) => ZIO.succeed(false)
+              case Left(error) => ZIO.fail(error)
+            }
+          } yield (text, analysis.diagnostic.isEmpty, browsed)
+        }
+        _ <- assertIO(outcomes.filter { case (_, valid, browsed) => valid != browsed }.map(_._1) == Nil)
+        _ <- assertIO(outcomes.exists(_._3) && outcomes.exists(!_._3))
+      } yield ()
+    }
+
     "reject strings without a lossless database and query representation before allocating items or labels" in { (service: LedgerService[IO]) =>
       val owner = scope()
       val valid = draft("Valid", Set("valid"), false)
