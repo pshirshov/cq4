@@ -541,7 +541,12 @@ root data WorkspaceCleanupReceipt {
   live: lst[SessionId] sessions: lst[SessionCleanup] totals: CleanupTotals
 }
 enum RecoveryOutcome { Recovered Abandoned }
-root data SessionRecovery { outcome: RecoveryOutcome reason: str recordedAt: i64 host: str }
+adt SourceBuild {
+  data Clean { revision: GitCommit }
+  data Modified { revision: GitCommit }
+  data Undetermined { reason: str }
+}
+root data SessionRecovery { outcome: RecoveryOutcome reason: str recordedAt: i64 host: str build: SourceBuild }
 
 enum ArtifactKind { Prompt Input Result Transcript Validation Combination Selection Evidence Amendment }
 root data ArtifactUpload { project: ProjectId id: ArtifactId attempt: AttemptId kind: ArtifactKind mediaType: str body: str }

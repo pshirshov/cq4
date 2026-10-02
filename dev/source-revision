@@ -1,0 +1,51 @@
+#!/usr/bin/env python3
+"""Print the source revision a CQ build is made from, as one line:
+
+    clean <commit>         the tree is exactly the commit
+    modified <commit>      the tree differs from the commit (changed, staged or untracked files)
+    undetermined <reason>  no revision could be read
+
+The build compiles this line into the host (build.sbt, `server / sourceBuild`). A tree that is not the top of its own Git
+work tree is `undetermined`: an enclosing repository's commit says nothing about these sources.
+"""
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+
+def git(root, *arguments):
+    environment = {name: value for name, value in os.environ.items() if not name.startswith("GIT_")}
+    environment["GIT_OPTIONAL_LOCKS"] = "0"
+    result = subprocess.run(["git", "-C", str(root), *arguments], env=environment, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True, timeout=60)
+    if result.returncode != 0:
+        raise RuntimeError(f"git {arguments[0]} exited {result.returncode}")
+    return result.stdout
+
+
+def revision(root):
+    try:
+        top = git(root, "rev-parse", "--show-toplevel").rstrip("\n")
+        if not top or Path(top).resolve() != root.resolve():
+            return "undetermined source root is not the top of a Git work tree"
+        commit = git(root, "rev-parse", "--verify", "HEAD^{commit}").strip()
+        if len(commit) not in (40, 64) or any(character not in "0123456789abcdef" for character in commit):
+            return "undetermined Git reported no full commit object ID"
+        changed = git(root, "status", "--porcelain", "--untracked-files=all")
+    except FileNotFoundError:
+        return "undetermined Git is not installed"
+    except (RuntimeError, OSError, subprocess.TimeoutExpired) as failure:
+        return "undetermined " + " ".join(str(failure).split())[:200]
+    return ("modified " if changed else "clean ") + commit
+
+
+def main():
+    if len(sys.argv) > 2:
+        raise SystemExit("Usage: dev/source-revision [source root]")
+    root = Path(sys.argv[1]) if len(sys.argv) == 2 else Path(__file__).resolve().parent.parent
+    print(revision(root))
+
+
+if __name__ == "__main__":
+    main()

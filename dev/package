@@ -13,7 +13,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parent.parent
 BUILD_FILES = {"build.sbt", ".jvmopts", "project/build.properties", "flake.nix", "flake.lock", "package.json",
-               "package-lock.json", "tsconfig.json", "dev/generate", "dev/build-web.mjs"}
+               "package-lock.json", "tsconfig.json", "dev/generate", "dev/build-web.mjs", "dev/source-revision"}
 RUNTIME_PREFIXES = ("project/", "models/", "contracts/src/main/", "core/src/main/", "host/src/main/", "host/native/", "server/src/main/", "web/")
 
 

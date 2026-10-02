@@ -215,7 +215,7 @@ final class WorkspaceCleanup(config: SupervisorConfig, sessions: SessionWorkspac
   }
 
   private def mark(directory: Path, outcome: RecoveryOutcome, reason: String): Unit =
-    HostFiles.immutable(directory.resolve(Marker), HostFiles.encode(SessionRecovery_JsonCodec, SessionRecovery(outcome, reason, clock.millis(), Host)), MaxRecordBytes)
+    HostFiles.immutable(directory.resolve(Marker), HostFiles.encode(SessionRecovery_JsonCodec, SessionRecovery(outcome, reason, clock.millis(), Host, ProducingBuild.value)), MaxRecordBytes)
 
   /** Every host holds the exclusive lock on its `journal/owner.lock` for its lifetime. */
   private def ownerRuns(directory: Path): Boolean = {
