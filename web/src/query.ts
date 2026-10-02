@@ -3,6 +3,8 @@ import { button, element } from './editor.js';
 import { localSuggestions, suggestionKey } from './query-local.js';
 
 const COMPLETION_DELAY_MS = 180;
+// I23: a valid typed query is submitted this long after the last text change.
+const LIVE_SEARCH_DELAY_MS = 300;
 const POPUP_EDGE = 8;
 const POPUP_GAP = 4;
 
@@ -20,8 +22,14 @@ export class QueryEditor {
   private timer: number | null = null;
   private composing = false;
   private caret = '';
+  private liveTimer: number | null = null;
+  private liveDue = false;
+  private known: { source: string; valid: boolean } | null = null;
+  private analysing: string | null = null;
 
-  constructor(private readonly complete: (query: string, cursor: number) => Promise<api.QueryAnalysis>, submit: () => void) {
+  // `pending` tells whether submitting the text would change the applied query.
+  constructor(private readonly complete: (query: string, cursor: number) => Promise<api.QueryAnalysis>, private readonly submit: () => void,
+    private readonly pending: (query: string) => boolean) {
     this.element.className = 'query-editor';
     this.input.setAttribute('aria-label', 'Search query'); this.input.setAttribute('role', 'combobox');
     this.input.setAttribute('aria-autocomplete', 'list'); this.input.setAttribute('aria-expanded', 'false');
@@ -38,20 +46,20 @@ export class QueryEditor {
     this.resultCount.className = 'query-result-count'; this.resultCount.setAttribute('role', 'status');
     // D97: clearing also submits the empty query at once, so the results stop showing the previous filter.
     const clear = button('×', () => {
-      this.input.value = ''; this.input.focus(); this.invalidate(); this.showDiagnostic(undefined, ''); submit();
+      this.input.value = ''; this.input.focus(); this.invalidate(); this.showDiagnostic(undefined, ''); this.submit();
     });
     clear.className = 'query-clear'; clear.setAttribute('aria-label', 'Clear query'); clear.title = 'Clear query';
     clear.addEventListener('pointerdown', event => event.preventDefault());
     field.append(this.input, this.resultCount, clear);
     const row = element('div', ''); row.className = 'query-input'; row.append(field, search);
     this.popup.append(this.diagnostic, this.options, this.status); this.element.append(row, this.popup);
-    this.element.addEventListener('submit', event => { event.preventDefault(); this.invalidate(); submit(); });
-    this.input.addEventListener('input', () => { this.showDiagnostic(undefined, this.input.value); this.schedule(); });
+    this.element.addEventListener('submit', event => { event.preventDefault(); this.invalidate(); this.submit(); });
+    this.input.addEventListener('input', () => { this.showDiagnostic(undefined, this.input.value); this.schedule(); this.scheduleLive(); });
     this.input.addEventListener('click', () => this.schedule());
     this.input.addEventListener('focus', () => this.schedule());
     this.input.addEventListener('blur', () => this.invalidate());
-    this.input.addEventListener('compositionstart', () => { this.composing = true; this.schedule(); });
-    this.input.addEventListener('compositionend', () => { this.composing = false; this.schedule(); });
+    this.input.addEventListener('compositionstart', () => { this.composing = true; this.schedule(); this.cancelLive(); });
+    this.input.addEventListener('compositionend', () => { this.composing = false; this.schedule(); this.scheduleLive(); });
     this.input.addEventListener('keydown', event => {
       if (event.isComposing || this.composing) return;
       if (event.key === 'Escape') { event.preventDefault(); this.invalidate(); }
@@ -81,6 +89,43 @@ export class QueryEditor {
     this.generation++;
     if (this.timer !== null) { window.clearTimeout(this.timer); this.timer = null; }
     this.caret = this.location();
+  }
+
+  cancelLive(): void {
+    this.liveDue = false;
+    if (this.liveTimer !== null) { window.clearTimeout(this.liveTimer); this.liveTimer = null; }
+  }
+
+  private scheduleLive(): void {
+    this.cancelLive();
+    if (this.composing) return;
+    this.liveTimer = window.setTimeout(() => { this.liveTimer = null; void this.fireLive(); }, LIVE_SEARCH_DELAY_MS);
+  }
+
+  // Validity comes from the completion analysis of the same text; one completion is requested when the editor has none.
+  private async fireLive(): Promise<void> {
+    const source = this.input.value;
+    if (!this.pending(source)) return;
+    if (this.known !== null && this.known.source === source) { if (this.known.valid) this.submit(); return; }
+    this.liveDue = true;
+    if (this.analysing === source) return;
+    try { await this.analyse(source, source.length); }
+    catch (error) {
+      if (this.input.value !== source) return;
+      this.liveDue = false; this.status.textContent = `Backend query suggestions unavailable: ${String(error)}`; this.status.hidden = false; this.renderPopup();
+    }
+  }
+
+  private async analyse(source: string, cursor: number): Promise<api.QueryAnalysis> {
+    this.analysing = source;
+    try {
+      const result = await this.complete(source, cursor);
+      if (this.input.value === source) {
+        this.known = { source, valid: result.diagnostic === undefined };
+        if (this.liveDue) { this.liveDue = false; if (this.known.valid && this.pending(source)) this.submit(); }
+      }
+      return result;
+    } finally { if (this.analysing === source) this.analysing = null; }
   }
 
   invalidate(): void {
@@ -134,7 +179,7 @@ export class QueryEditor {
     const current = () => generation === this.generation && this.input.value === source && this.input.selectionStart === cursor && document.activeElement === this.input;
     this.status.textContent = 'Loading query suggestions…'; this.status.hidden = false; this.renderPopup();
     try {
-      const result = await this.complete(source, cursor);
+      const result = await this.analyse(source, cursor);
       if (!current()) return;
       const diagnostic = result.diagnostic;
       const completingError = diagnostic !== undefined && result.suggestions.some(suggestion =>
@@ -191,6 +236,6 @@ export class QueryEditor {
 
   private accept(suggestion: api.QuerySuggestion): void {
     this.input.setRangeText(suggestion.text, suggestion.span.start, suggestion.span.end, 'end');
-    this.invalidate(); this.showDiagnostic(undefined, this.input.value); this.input.focus();
+    this.invalidate(); this.showDiagnostic(undefined, this.input.value); this.input.focus(); this.scheduleLive();
   }
 }
