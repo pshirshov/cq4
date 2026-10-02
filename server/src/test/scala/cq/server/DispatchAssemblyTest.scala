@@ -129,6 +129,12 @@ abstract class DispatchAssemblyTest extends SpecZIO with AssertZIO {
             // Planner and Worker children receive the operator's governing request as their own bounded section; explorers do not.
             assert(one.operatorRequirements.contains(requirements))
             assert(assembler.assemble(request.copy(work = DispatchWork.Planner())).operatorRequirements.contains(requirements))
+            // D110: a text without content states no requirement, so no child receives a section for it.
+            List("", " \n\t").foreach { blank =>
+              val silent = new InputAssembler(api, scope, clock, blank)
+              assert(List[DispatchWork](DispatchWork.Worker(WorkerMode.Implement), DispatchWork.Planner())
+                .forall(work => silent.assemble(request.copy(work = work)).operatorRequirements.isEmpty), blank)
+            }
             // A Current Memory selected as guidance reaches the Planner with its knowledge, applicability and evidence.
             assert(assembler.assemble(request.copy(work = DispatchWork.Planner(), guidance = List(guidance, ack.items(3)))).guidance.map(_.item.draft.content) ==
               List(draft("Shared guidance").content, memory.content))
@@ -140,6 +146,12 @@ abstract class DispatchAssemblyTest extends SpecZIO with AssertZIO {
             val review = request.copy(work = DispatchWork.Reviewer(ReviewerMode.Candidate), harness = Harness.Pi, artifacts = Nil, previous = Some(previous.id))
             val resolved = assembler.assemble(review)
             assert(resolved.previous.contains(stored) && resolved.previous.get.candidate == stored.candidate)
+            // D110: Plan and Candidate reviewers receive the requirements they check a result against; an Audit reviewer does not.
+            assert(resolved.operatorRequirements.contains(requirements))
+            assert(new InputAssembler(api, scope, clock, "").assemble(review).operatorRequirements.isEmpty)
+            assert(OperatorRequirements.delivered(DispatchWork.Reviewer(ReviewerMode.Plan), requirements).contains(requirements) &&
+              OperatorRequirements.delivered(DispatchWork.Reviewer(ReviewerMode.Plan), "").isEmpty &&
+              OperatorRequirements.delivered(DispatchWork.Reviewer(ReviewerMode.Audit), requirements).isEmpty)
             intercept[IllegalArgumentException](assembler.assemble(review.copy(previous = Some(unbound.id))))
             intercept[IllegalArgumentException](assembler.assemble(request.copy(members = List(member.copy(revision = Revision(member.revision.value + 1))))))
             intercept[IllegalArgumentException](assembler.assemble(request.copy(members = List(member, guidance), guidance = Nil)))
