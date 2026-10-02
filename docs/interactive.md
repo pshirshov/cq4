@@ -62,6 +62,8 @@ Claude/Pi workflow commands are `/cq:begin`, `/cq:advance`, `/cq:review`, `/cq:u
 
 No real model has yet been recorded driving a real CQ server through child dispatch. [Drive CQ work automatically](auto-driver.md) states what was verified, and covers installation, worksets, the indicators, parking, every stop reason, the limits and the trust boundaries.
 
+To evaluate a harness end to end on a fresh consumer project from a recorded terminal, follow the [evaluation protocol](evaluation-protocol.md). It is a draft: no run has been executed under it.
+
 ## Environment and filesystem visibility
 
 On this machine, use `--profile work`: the successful attached-host trial used its authenticated child harnesses; the default profile failed child Claude authentication.

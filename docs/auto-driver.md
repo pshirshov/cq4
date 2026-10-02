@@ -4,7 +4,7 @@ The auto-driver keeps one interactive Claude Code, Codex or Pi session advancing
 
 The four workflow commands (`begin`, `advance`, `review`, `upstream`) are unchanged. With the driver off the harness behaves as it does without the driver.
 
-Setup of the interactive harness itself (server, token, sandbox) is in [Run CQ inside your normal harness](interactive.md). The mechanism is specified in the [driver design](design/driver.md).
+Setup of the interactive harness itself (server, token, sandbox) is in [Run CQ inside your normal harness](interactive.md). The mechanism is specified in the [driver design](design/driver.md). How a driven session is evaluated from a recorded terminal, with and without the driver, is in the [evaluation protocol](evaluation-protocol.md).
 
 ## What is and is not verified
 
