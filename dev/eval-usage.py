@@ -22,19 +22,26 @@ TRANSCRIPT_COUNTERS = {
 }
 
 
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, fp, code, msg, headers, newurl):
+        return None
+
+
 def child(arguments):
     common = subprocess.check_output(["git", "-C", str(arguments.project_dir), "rev-parse", "--path-format=absolute", "--git-common-dir"], text=True).strip()
     config = json.loads((Path(common) / "cq/project.json").read_text())
     token = arguments.token_file.read_text().strip()
     session = str(uuid.uuid4())
     usage_filter = {"EvaluationOnly": {"run": arguments.run, "scenario": arguments.scenario}}
+    # The operator token goes to the endpoint the project file names and nowhere else: no proxy, and a redirect is an HTTP error.
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect)
 
     def call(selection):
         body = {"Usage": {"input": {"project": config["project"], "selection": selection}}}
         request = urllib.request.Request(config["endpoint"] + "/api/call", data=json.dumps(body).encode(), headers={
             "Authorization": "Bearer " + token, "CQ-Session": session,
             "CQ-Protocol-Version": PROTOCOL_VERSION, "Content-Type": "application/json"})
-        with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
+        with opener.open(request, timeout=TIMEOUT_SECONDS) as response:
             payload = response.read(RESPONSE_BYTES + 1)
         if len(payload) > RESPONSE_BYTES:
             raise SystemExit("Usage response exceeded its byte bound")
@@ -52,6 +59,7 @@ def claude_outer(arguments):
     # Claude Code writes one transcript entry per content block of a response, each with the response's usage.
     responses = {}
     unreadable = 0
+    unidentified = 0
     with arguments.transcript.open(encoding="utf-8", errors="replace") as lines:
         for line in lines:
             try:
@@ -61,12 +69,16 @@ def claude_outer(arguments):
                 continue
             message = entry.get("message")
             if entry.get("type") == "assistant" and isinstance(message, dict) and isinstance(message.get("usage"), dict):
+                # Entries are merged by response identity; one without it cannot be counted once and is reported instead.
+                if not isinstance(message.get("id"), str):
+                    unidentified += 1
+                    continue
                 responses[message["id"]] = (message["usage"], bool(entry.get("isSidechain")))
     totals = {name: sum(usage.get(field) or 0 for usage, _ in responses.values()) for name, field in TRANSCRIPT_COUNTERS.items()}
     requests = [sum(usage.get(field) or 0 for name, field in TRANSCRIPT_COUNTERS.items() if name != "output") for usage, _ in responses.values()]
     return {"source": str(arguments.transcript), "basis": "local transcript; tokens only",
             "responses": len(responses), "sidechainResponses": sum(1 for _, side in responses.values() if side),
-            "unreadableLines": unreadable, "tokens": totals,
+            "unreadableLines": unreadable, "entriesWithoutResponseId": unidentified, "tokens": totals,
             "largestRequestInput": max(requests) if requests else None, "cost": "unknown"}
 
 
