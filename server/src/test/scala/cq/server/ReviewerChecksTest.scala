@@ -100,6 +100,13 @@ final class ReviewerChecksProcess extends SpecZIO with AssertZIO {
     checks.request(name, 1000).repeatUntil(value => Set(DeclaredCheckPhase.Completed, DeclaredCheckPhase.Failed, DeclaredCheckPhase.Unknown)(value.phase))
       .timeoutFail(new IllegalStateException("Declared check did not terminate"))(zio.Duration.fromSeconds(8))
 
+  private val LostPublication = "Lost check publication acknowledgement"
+  /** A check whose publication fails; the latch opens when the failing upload has been attempted. */
+  private def lostPublication(local: LocalWorkspaceFixture, guardian: GuardianFixture)(test: (Fixture, CountDownLatch) => Task[Unit]): Task[Unit] = {
+    val failed = new CountDownLatch(1)
+    fixture(local, guardian, List("verify" -> "pass"), 1, _ => { failed.countDown(); throw new IOException(LostPublication) })(test(_, failed))
+  }
+
   "Reviewer declared checks (Behavioral Active Blackbox; real Git and supervised processes Communication)" should {
     "report uncertain cleanup after cancellation persistence failure instead of abandoning the check owner" in { (local: LocalWorkspaceFixture, guardian: GuardianFixture) =>
       val verified = new AtomicBoolean(false)
@@ -119,12 +126,26 @@ final class ReviewerChecksProcess extends SpecZIO with AssertZIO {
     }
 
     "stop the native reviewer when check publication loses acknowledgement" in { (local: LocalWorkspaceFixture, guardian: GuardianFixture) =>
-      fixture(local, guardian, List("verify" -> "pass"), 1, _ => throw new IOException("Lost check publication acknowledgement")) { f => for {
-        unknown <- terminal(f.checks, "verify")
-        _ <- assertIO(unknown.phase == DeclaredCheckPhase.Unknown && f.entry.stopReason.nonEmpty)
-        native <- (ZIO.sleep(zio.Duration.fromMillis(20)) *> f.jobs.status(f.config.owner, f.entry.ticket.attempt.id)).repeatUntil(_.target == JobTarget.Stop)
-          .timeoutFail(new IllegalStateException("Failed check left native reviewer running"))(zio.Duration.fromSeconds(3))
-        _ <- assertIO(native.target == JobTarget.Stop)
+      lostPublication(local, guardian) { (f, failed) => for {
+        _ <- f.checks.request("verify", 0)
+        _ <- ZIO.attemptBlocking(assert(failed.await(30, TimeUnit.SECONDS)))
+        // Closing awaits the failed check's cleanup, which cancels the reviewer's jobs before it ends.
+        closed <- f.checks.close
+        native <- f.jobs.status(f.config.owner, f.entry.ticket.attempt.id)
+        _ <- assertIO(closed.uncertain && closed.evidence.isEmpty && f.entry.stopReason.exists(_.contains(LostPublication)) && native.target == JobTarget.Stop)
+      } yield () }
+    }
+
+    "D112: refuse a further check request with the stop reason once publication has failed" in { (local: LocalWorkspaceFixture, guardian: GuardianFixture) =>
+      lostPublication(local, guardian) { (f, failed) => for {
+        _ <- f.checks.request("verify", 0)
+        _ <- ZIO.attemptBlocking(assert(failed.await(30, TimeUnit.SECONDS)))
+        // While the failure is being cleaned up a request either joins the check and reports it Unknown, or is already refused.
+        racing <- f.checks.request("verify", 20000).either
+        refused <- f.checks.request("verify", 0).either
+        reason = f.entry.stopReason
+        _ <- ZIO.attempt(assert(reason.exists(_.contains(LostPublication)) && racing.fold(error => reason.contains(error.getMessage), _.phase == DeclaredCheckPhase.Unknown) &&
+          refused.left.exists(error => error.isInstanceOf[IllegalStateException] && reason.contains(error.getMessage)), s"$racing $refused $reason"))
       } yield () }
     }
 
