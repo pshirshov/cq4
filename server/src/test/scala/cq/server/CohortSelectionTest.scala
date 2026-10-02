@@ -126,7 +126,10 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
     } yield Organised(scope, ids.head, ids(1), tasks)
   }
   private def publish(f: Assessed, work: DispatchWork, report: ChildReport, previous: Option[Published], validation: List[ValidationEvidence], ledger: LedgerService[IO], usage: UsageService[IO],
-    artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO]): IO[Throwable, Published] = for {
+    artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO]): IO[Throwable, Published] =
+    published(f, work, report, previous, validation, if (work == DispatchWork.Planner()) None else Some(GitCommit("b" * 40)), ledger, usage, artifacts, admissions)
+  private def published(f: Assessed, work: DispatchWork, report: ChildReport, previous: Option[Published], validation: List[ValidationEvidence], candidate: Option[GitCommit],
+    ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO]): IO[Throwable, Published] = for {
     assignment <- usage.assign(f.collector, Assignment(AssignmentId(uuid), f.scope.project, f.members.map(_.id).toSet,
       if (f.members.size == 1) Attribution.Direct else Attribution.Shared, if (f.members.size == 1) None else Some(uuid), None))
     attempt <- usage.start(f.collector, Attempt(AttemptId(uuid), assignment.id, Some(f.parent), f.scope.actor.session, ChildContracts.role(work), Harness.Codex, "fixture", "fixture", "fixture", 1002, ChildContracts.phase(work)))
@@ -137,11 +140,30 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
     input = ChildExecutionInput(ChildInput(f.scope.project, dispatch, views, Nil, Nil, previous.map(_.result), None), base, f.checks)
     _ <- artifacts.upload(f.collector, ArtifactUpload(f.scope.project, NativeArtifacts.id(attempt.id, "input"), attempt.id, ArtifactKind.Input,
       "application/json", Wire.encode(ChildExecutionInput_JsonCodec, input)))
-    result = ChildResult(attempt.id, dispatch, base, if (work == DispatchWork.Planner()) None else Some(GitCommit("b" * 40)), report, validation, RetainedEvidence(Nil, Nil))
+    result = ChildResult(attempt.id, dispatch, base, candidate, report, validation, RetainedEvidence(Nil, Nil))
     stored <- artifacts.upload(f.collector, ArtifactUpload(f.scope.project, ArtifactId(uuid), attempt.id, ArtifactKind.Result, "application/json", Wire.encode(ChildResult_JsonCodec, result)))
     admitted <- admissions.admit(f.collector, HostAdmissionInput(f.scope.project, stored.id, f.scope.actor))
     _ <- assertIO(admitted.decision == AdmissionDecision.Accepted())
   } yield Published(result, stored.id)
+
+  private val Implement: DispatchWork = DispatchWork.Worker(WorkerMode.Implement)
+  private def alone(plan: CohortPlan): Set[(DispatchWork, Set[ItemId], CohortReason)] =
+    plan.evidence.decision.choices.map(choice => (choice.work, choice.members.map(_.id).toSet, choice.reason)).toSet
+  // M1: the assessment of `members` starts and no verdict follows (the Planner failed or abstained, or its result was not admitted). The
+  // next selection must offer every member to the Worker alone, and each such choice must pass start verification.
+  private def unassessed(planner: CohortPlanner, progress: CohortProgress, input: CohortRequest, members: Set[ItemId], witness: Option[ItemId]): IO[Throwable, CohortPlan] = for {
+    required <- ZIO.attemptBlocking(planner.plan(input, ArtifactId(uuid)))
+    _ <- ZIO.attempt(assert(required.evidence.decision.choices.map(choice => (choice.work, choice.members.map(_.id).toSet, choice.reason, choice.witness)) ==
+      List((DispatchWork.Planner(), members, CohortReason.AssessmentRequired, witness)), required.evidence.toString))
+    group = required.fingerprints(required.evidence.decision.choices.head.id)
+    _ <- ZIO.attempt(progress.started(group))
+    retry = input.copy(request = RequestId(uuid))
+    again <- ZIO.attemptBlocking(planner.plan(retry, ArtifactId(uuid)))
+    _ <- ZIO.attempt(assert(alone(again) == members.map(id => (Implement, Set(id), CohortReason.UnknownAssessment)) && again.evidence.decision.counts.excluded == 0 &&
+      again.evidence.considered.exists(value => value.reason == CohortReason.Deferred && value.members.map(_.id).toSet == members && value.fingerprint.contains(group.group)),
+      again.evidence.toString.take(4000)))
+    _ <- ZIO.foreachDiscard(again.evidence.decision.choices)(choice => ZIO.attemptBlocking(planner.verify(retry, choice, again.fingerprints(choice.id))))
+  } yield again
 
   "Automatic cohort selection (Behavioral Active Blackbox; dummy Group / PostgreSQL Good Communication)" should {
     "offer an explicit completed root for planning its reopening without executing or rediscovering completed work" in { (ledger: LedgerService[IO]) =>
@@ -530,6 +552,54 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
         _ <- ZIO.attempt(assert(selections.map(_.map(choice => (choice.work, choice.members.map(_.id).toSet, choice.reason, choice.witness))) == List(
           List((DispatchWork.Planner(), tasks.take(2).map(_.id).toSet, CohortReason.AssessmentRequired, Some(producer.items.head.id))),
           List((DispatchWork.Planner(), tasks.map(_.id).toSet, CohortReason.AssessmentRequired, None))), selections.toString))
+      } yield ()
+    }
+
+    "M1: offer unrelated Tasks alone once their assessment ended without a verdict, deferring only a member whose own Worker ran" in { (ledger: LedgerService[IO]) =>
+      val scope = owner
+      for {
+        runtime <- ZIO.runtime[Any]
+        _ <- ledger.initialize(scope, "Assessment without a verdict")
+        tasks <- MilestoneFixture.assigned(ledger, scope, List.fill(4)(task))
+        ids = tasks.map(_.id).toSet
+        progress = new CohortProgress
+        planner = new CohortPlanner(api(ledger, scope, runtime), scope, fixed(GitCommit("a" * 40)), Nil, progress, new OperatorRequirements(""))
+        input = request(ids, Implement)
+        again <- unassessed(planner, progress, input, ids, None)
+        ran = again.evidence.decision.choices.head
+        _ <- ZIO.attempt(progress.started(again.fingerprints(ran.id)))
+        rest <- ZIO.attemptBlocking(planner.plan(input.copy(request = RequestId(uuid)), ArtifactId(uuid)))
+        _ <- ZIO.attempt(assert(alone(rest) == (ids -- ran.members.map(_.id)).map(id => (Implement, Set(id), CohortReason.UnknownAssessment)) &&
+          rest.evidence.decision.counts.excluded == 1, rest.evidence.toString))
+      } yield ()
+    }
+
+    "M1: offer the Tasks of one producer alone once their witnessed assessment ended without a verdict" in { (ledger: LedgerService[IO]) =>
+      val scope = owner
+      for {
+        runtime <- ZIO.runtime[Any]
+        _ <- ledger.initialize(scope, "Assessment of one producer without a verdict")
+        pair <- MilestoneFixture.assigned(ledger, scope, List.fill(2)(task))
+        producer <- ledger.change(scope, ChangeRequest(RequestId(uuid), List(Mutation.Create(goal)), Nil, "Producer"))
+        _ <- ZIO.foreachDiscard(pair)(member => link(ledger, scope, producer.items.head.id, Relation.Produces, member.id))
+        progress = new CohortProgress
+        planner = new CohortPlanner(api(ledger, scope, runtime), scope, fixed(GitCommit("a" * 40)), Nil, progress, new OperatorRequirements(""))
+        _ <- unassessed(planner, progress, request(pair.map(_.id).toSet, Implement), pair.map(_.id).toSet, Some(producer.items.head.id))
+      } yield ()
+    }
+
+    "M1: start the members of an exact previous result without a candidate afresh once their assessment ended without a verdict" in {
+      (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO]) => for {
+        runtime <- ZIO.runtime[Any]
+        fixture <- assessed(ledger, usage, artifacts, admissions, 2, CohortCompatibility.Compatible)
+        failed <- published(fixture, Implement, ChildReport.Work(fixture.members.map(ref => WorkMember(ref.id, WorkDisposition.Failed, "Observed failure", Nil))),
+          None, Nil, None, ledger, usage, artifacts, admissions)
+        reads = new EvidenceApi(api(ledger, fixture.scope, runtime), artifacts, admissions, fixture.scope, runtime)
+        progress = new CohortProgress
+        planner = new CohortPlanner(reads, fixture.scope, fixed(fixture.base), fixture.checks, progress, new OperatorRequirements(""))
+        again <- unassessed(planner, progress, request(fixture.members.map(_.id).toSet, Implement).copy(previous = Some(failed.id)), fixture.members.map(_.id).toSet, None)
+        // The members no longer continue that result: it is carried as context.
+        _ <- ZIO.attempt(assert(again.evidence.decision.choices.forall(choice => choice.previous.isEmpty && choice.artifacts == List(failed.id)), again.evidence.toString))
       } yield ()
     }
 
