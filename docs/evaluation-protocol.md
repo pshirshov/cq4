@@ -70,7 +70,7 @@ Inside the sandbox the consumer repository, the evaluation state root, the CQ pa
 
 ### Terminal control and recording
 
-`dev/eval-session SOCKET ACTION NAME …` wraps a private tmux server on the given socket. `tmux` and `asciinema` (3.2.1 on this machine) come from `PATH`; set `EVAL_TMUX` to use another tmux binary, as `gov/t` did with an absolute path.
+`dev/eval-session SOCKET ACTION NAME …` wraps a private tmux server on the given socket. `tmux` and `asciinema` (3.2.1 on this machine) come from `PATH`; set `EVAL_TMUX` to use another tmux binary, as `gov/t` did with an absolute path. `NAME` addresses exactly the session of that name (`=NAME`), never a session whose name it only begins or matches as a pattern.
 
 | Action | Use |
 | --- | --- |
