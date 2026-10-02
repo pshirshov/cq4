@@ -109,7 +109,7 @@ class App {
   private readonly editorPanel = element('section', '');
   private readonly conflictPanel = element('section', '');
   private readonly graph = new GraphActions({
-    call: command => this.connection().call(command), select: id => this.select(id), error: error => this.showError(error),
+    call: command => this.connection().call(command), select: id => this.select(id, true), error: error => this.showError(error),
     view: item => this.itemDocument(item),
     committed: async (project, ack) => {
       this.notifications.show(`Graph change saved in project ${project.value}: ${ack.items.length === 0 ? 'no revision changes' : ack.items.map(item => `${itemName(item.id)} @ ${item.revision.value}`).join('; ')}.`, 'success');
@@ -150,6 +150,9 @@ class App {
   private selected: api.ItemView | null = null;
   private selection: api.ItemId | null = null;
   private selectionGeneration = 0;
+  // The selected item was opened from outside the result (a saved new item, a relationship link) and no result has held it since:
+  // reloads of the applied query keep its view, a submitted query closes it.
+  private outside = false;
   private readonly requests: Record<Panel, number> = { detail: 0, history: 0, usage: 0, audit: 0 };
   private after: api.ItemId | undefined;
   private snapshot: api.ChangeCursor | undefined;
@@ -186,10 +189,10 @@ class App {
       return current() ? readResult(result) : null;
     } catch (error) { if (current()) throw error; return null; }
   }
-  private choose(id: api.ItemId | null): void {
+  private choose(id: api.ItemId | null, outside: boolean): void {
     if (this.selection === null ? id === null : id !== null && this.selection.project.value === id.project.value && itemName(this.selection) === itemName(id)) return;
     this.historyDialog.close(); this.usageDialog.close(); this.closeEditor();
-    this.selection = id; this.selectionGeneration++; this.selected = null;
+    this.selection = id; this.outside = outside; this.selectionGeneration++; this.selected = null;
     this.graph.setScope(this.project, null);
     this.detail.replaceChildren(); this.historyPanel.replaceChildren(); this.usagePanel.replaceChildren(); this.auditPanel.replaceChildren();
     this.markSelection(); this.setUsageScope(id === null ? new api.UsageFilter_ProjectAll() : new api.UsageFilter_TaskOnly(id));
@@ -379,7 +382,7 @@ class App {
   private async search(): Promise<void> {
     this.queryEditor.cancelLive(); this.archive.invalidate();
     this.activeQuery = this.query.value; this.queryInvalid = false; this.epoch++; this.after = undefined; this.snapshot = undefined;
-    this.loadedItems = []; this.page = null;
+    this.loadedItems = []; this.page = null; this.outside = false;
     if (this.resultsPane !== null) this.resultsPane.scrollTop = 0;
     this.queryEditor.showDiagnostic(undefined, this.query.value); await this.refresh();
   }
@@ -389,7 +392,7 @@ class App {
     this.createDialog.close(); this.historyDialog.close(); this.usageDialog.close(); this.closeEditor();
     this.queryEditor.cancelLive();
     this.queryEditor.invalidate(); this.queryEditor.showDiagnostic(undefined, this.query.value);
-    this.epoch++; this.selectionGeneration++; this.selection = null; this.selected = null; this.editor = null; this.after = undefined; this.snapshot = undefined;
+    this.epoch++; this.selectionGeneration++; this.selection = null; this.outside = false; this.selected = null; this.editor = null; this.after = undefined; this.snapshot = undefined;
     this.queryInvalid = false; this.itemCursor = null; this.resetCounts(); this.resetUsageWatch(); this.watch();
     this.graph.setScope(this.project, null);
     this.rows.clear(); this.groupRows.clear(); this.items.replaceChildren(); this.loadedItems = []; this.page = null; this.resultStatus.textContent = 'Loading items…';
@@ -495,9 +498,10 @@ class App {
         // D72/Decision 8: a fully loaded result without the selected item closes the item view; a later page may still hold it.
         const selected = this.selection;
         const listed = items.some(({ summary }) => summary.id.project.value === selected.project.value && itemName(summary.id) === itemName(selected));
+        if (listed) this.outside = false;
         // An open editor or item dialog keeps its item: a live change must not discard what the operator is working on.
         const engaged = this.editor !== null || this.historyDialog.element.open || this.usageDialog.element.open || this.graph.dialog.element.open;
-        if (!listed && !page.hasMore && !engaged) this.hideItem(); else if (full) await this.select(selected); else this.showWork(selected);
+        if (!listed && !page.hasMore && !engaged && !this.outside) this.hideItem(); else if (full) await this.select(selected, this.outside); else this.showWork(selected);
       }
       if (full) await this.loadUsage();
       completed = true;
@@ -575,9 +579,9 @@ class App {
       let row = this.rows.get(key);
       if (row === undefined) {
         const line = element('tr', ''); line.className = 'item-row'; line.dataset.item = key;
-        const node = button('', () => this.action(() => this.select(item.id))); node.className = 'item-title';
+        const node = button('', () => this.action(() => this.select(item.id, false))); node.className = 'item-title';
         line.addEventListener('click', event => {
-          if (event.target instanceof Node && !node.contains(event.target)) { node.focus(); this.action(() => this.select(item.id)); }
+          if (event.target instanceof Node && !node.contains(event.target)) { node.focus(); this.action(() => this.select(item.id, false)); }
         });
         const id = element('td', ''); id.className = 'item-id'; id.title = item.id.ledger; id.append(icon(item.id.ledger), itemName(item.id));
         const title = element('td', ''); title.append(node);
@@ -647,7 +651,7 @@ class App {
   // D71 close path without moving focus, shared with refreshes that drop the selection (D72).
   private hideItem(): void {
     const inside = this.workspace !== null && this.workspace.content.contains(document.activeElement);
-    this.choose(null); if (this.workspace !== null) this.workspace.setDetailOpen(false);
+    this.choose(null, false); if (this.workspace !== null) this.workspace.setDetailOpen(false);
     if (inside) this.items.focus();
   }
   // The item view's work line, taken from the loaded row and replaced in place.
@@ -659,8 +663,8 @@ class App {
     this.workLine.hidden = work === undefined;
     this.workLine.replaceChildren(...(work === undefined ? [] : [workIcon(work), label]));
   }
-  private async select(id: api.ItemId): Promise<void> {
-    this.choose(id); if (this.workspace !== null) this.workspace.setDetailOpen(true);
+  private async select(id: api.ItemId, outside: boolean): Promise<void> {
+    this.choose(id, outside); if (this.workspace !== null) this.workspace.setDetailOpen(true);
     const result = await this.readPanel('detail', new api.Command_Read(new api.ReadInput(this.currentProject(), new api.ReadSelection_ItemDetail(id))));
     if (result === null) return;
     if (!(result instanceof api.Result_Detail)) throw new Error('Unexpected item response');
@@ -781,20 +785,21 @@ class App {
       const saved = result.ack.items[0];
       this.notifications.show([element('span', 'Saved'), document.createTextNode(` ${itemName(saved.id)} in project ${editor.record.project.value}.`)], 'success');
       if (this.project === null || this.project.value !== editor.record.project.value) return;
-      this.after = undefined; this.snapshot = undefined; await this.refresh();
-      if (ownsEditor && navigation === this.selectionGeneration) {
-        const selection = this.select(saved.id); const generation = this.selectionGeneration;
-        await selection;
-        if (editor.next && generation === this.selectionGeneration && this.project.value === editor.record.project.value && this.editor === null && localStorage.getItem(editor.key) === null) {
-          this.openEditor(null);
-          const fresh = this.editor as App['editor'];
-          if (fresh === null) throw new Error('New item editor was not opened');
-          fresh.form.selectKind(editor.form.kind());
-          const title = fresh.form.element.querySelector<HTMLTextAreaElement>('textarea[aria-label=title]');
-          if (title === null) throw new Error('New item editor has no title field');
-          title.focus();
-        }
+      this.after = undefined; this.snapshot = undefined;
+      if (!ownsEditor || navigation !== this.selectionGeneration) { await this.refresh(); return; }
+      // The saved item is selected and the next editor opened before anything is awaited: the live frame of this change can
+      // start a reload at any point of the one below, and neither may decide what the save shows.
+      const selection = this.select(saved.id, true);
+      if (editor.next && localStorage.getItem(editor.key) === null) {
+        this.openEditor(null);
+        const fresh = this.editor as App['editor'];
+        if (fresh === null) throw new Error('New item editor was not opened');
+        fresh.form.selectKind(editor.form.kind());
+        const title = fresh.form.element.querySelector<HTMLTextAreaElement>('textarea[aria-label=title]');
+        if (title === null) throw new Error('New item editor has no title field');
+        title.focus();
       }
+      await Promise.all([selection, this.refresh()]);
     } finally { editor.busy = false; }
   }
   private async showConflict(editor: NonNullable<App['editor']>): Promise<void> {
