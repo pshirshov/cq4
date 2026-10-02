@@ -13,8 +13,13 @@ object DriverPolicy {
   val MaxDrivers = 64
   // Start and resume directives issued by one drive; each is one harness continuation.
   val MaxDirectives = 64
+  // Every driver reply carries the whole lineage of the latest cycle in its DriverStatus, and the host reads no reply above 2 MiB
+  // (ServerApi). An entry encodes to about 165 bytes, so a cycle without a bound would, past some 12,000 members, make every reply of
+  // its driver unreadable: continuation, status and park alike. The bound keeps the reply an order of magnitude below that.
   val MaxLineage = 1024
   val MaxDetail = 512
+  // Outside blockers a stop detail names, and blocked items it names for each; the rest are counted.
+  val MaxBlockersNamed = 8
   val BindMillis = 600000L
   // A driver untouched for this long belongs to a harness session that ended without parking.
   val IdleMillis = 8L * 60 * 60 * 1000
@@ -104,18 +109,22 @@ object DriverPolicy {
     else if (user.nonEmpty) DriverDecision.Stop(DriverStopped(DriverStop.UserInputRequired,
       s"Awaiting the user on ${references(user)}; the driver never answers questions or infers approval"))
     else if (work.nonEmpty) DriverDecision.Stop(DriverStopped(DriverStop.Quiescent,
-      "The previous cycle changed nothing in the advanceable set, its context or its readiness"))
+      "The previous cycle changed nothing in the advanceable set, its context or its readiness" + blocked(snapshot)))
     else DriverDecision.Stop(DriverStopped(DriverStop.Quiescent, "No item of the advanceable set is ready to advance" + blocked(snapshot)))
   }
 
-  // The prerequisites outside the advanceable set that keep its items from being ready. The drive cannot change them, so the stop names them.
+  // The prerequisites outside the advanceable set that keep its items from being ready. The drive cannot change them, so the stop names
+  // them: the first MaxBlockersNamed in ledger order, each with as many of the items it blocks, and a count of the rest.
   private def blocked(snapshot: WorksetPreview): String = {
     val advanceable = snapshot.advanceable.map(_.item.id).toSet
     val outside = snapshot.readiness.flatMap(entry => entry.reasons.collect {
       case WorksetReason.Blocked(prerequisite) if !advanceable(prerequisite) => prerequisite -> entry.item
-    }).groupMap((prerequisite, _) => prerequisite)((_, item) => item)
-    if (outside.isEmpty) "" else "; blocked from outside the set: " +
-      outside.toList.sortBy((prerequisite, _) => LedgerPolicy.key(prerequisite)).map((prerequisite, items) => s"${reference(prerequisite)} blocks ${references(items)}").mkString("; ")
+    }).groupMap((prerequisite, _) => prerequisite)((_, item) => item).toList.sortBy((prerequisite, _) => LedgerPolicy.key(prerequisite))
+    def more(count: Int, separator: String): String = if (count > MaxBlockersNamed) s"${separator}and ${count - MaxBlockersNamed} more" else ""
+    if (outside.isEmpty) "" else "; blocked from outside the set: " + outside.take(MaxBlockersNamed).map { (prerequisite, items) =>
+      val blocked = items.distinct.sortBy(LedgerPolicy.key)
+      s"${reference(prerequisite)} blocks ${references(blocked.take(MaxBlockersNamed))}${more(blocked.size, " ")}"
+    }.mkString("; ") + more(outside.size, "; ")
   }
 
   def changed(previous: CycleRecord, snapshot: WorksetPreview): Option[String] = {
@@ -127,8 +136,8 @@ object DriverPolicy {
       (if (added.isEmpty) "" else "; added " + references(added)) + (if (removed.isEmpty) "" else "; removed " + references(removed)))
   }
 
-  // What a drive leaves to the next one: the integrations it carried itself and those of its last cycle that never settled. An attached
-  // host prepares a bounded number of integrations, so the set of one session is bounded by its host.
+  // What a drive leaves to the next one: the integrations it carried itself and those of its last cycle that never settled. The number
+  // of integrations an attached host prepares is not bounded, so only the lineage bound of each contributing cycle bounds this set.
   def outstanding(record: DriverRecord): Map[SessionId, Set[IntegrationId]] = {
     val unsettled = record.cycle.toList.flatMap(_.lineage).collect { case LineageEntry(LineageMember.Integration(id), _, false) => id }.toSet
     record.attached.filter(_ => unsettled.nonEmpty).fold(record.carried)(session => carry(record.carried, session, unsettled))

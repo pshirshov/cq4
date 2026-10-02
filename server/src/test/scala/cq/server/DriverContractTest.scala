@@ -1294,6 +1294,45 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
       } yield ()
     }
 
+    // D1: the root of a Defect drive stays ready, so the drive stops on an unchanged cycle and must still name the blocker it cannot change.
+    "name the blockers outside the set when a drive whose Defect root stays ready stops on an unchanged cycle, listing a bounded number" in { (service: LedgerService[IO]) =>
+      val w = world
+      val key = claude("defect-root-blocker")
+      val unchanged = "The previous cycle changed nothing in the advanceable set, its context or its readiness; blocked from outside the set: "
+      for {
+        _ <- service.initialize(w.operator, "defect-root-blocker")
+        root <- create(service, w.operator, defect("Driven Defect"))
+        (_, produced) <- produce(service, w.operator, root, "Correction")
+        correction = produced.items.find(_.id != root).get.id
+        _ <- driven(service, w, key, workset(root))
+        side <- service.change(w.governor, request(List(Mutation.Create(defect("Host defect that blocks the worker"))), Nil)).map(_.items.head.id)
+        _ <- reference(service, w.governor, correction, Relation.BlockedBy, side, true).flatMap(service.change(w.governor, _))
+        preview <- service.previewWorkset(w.operator, workset(root))
+        _ <- assertIO(preview.readiness.map(entry => entry.item -> entry.ready).toMap == Map(root -> true, correction -> false))
+        next <- directive(service, w, key)
+        _ <- submit(service, w, w.governor, next.directive.text)
+        stop <- query(service, w, key)
+        _ <- ZIO.attempt(assert(stop match {
+          case DriverReply.Stop(DriverStopped(DriverStop.Quiescent, detail), Some(value), _) => detail == unchanged + "D2 blocks T1" && stopped(Some(value), DriverStop.Quiescent)
+          case _ => false
+        }, stop.toString))
+        // More blockers than the detail names: the first are listed in ledger order and the rest are counted.
+        bounded = claude("defect-root-blockers")
+        _ <- driven(service, w, bounded, workset(root))
+        others <- ZIO.foreach((1 to DriverPolicy.MaxBlockersNamed).toList)(number =>
+          service.change(w.governor, request(List(Mutation.Create(defect(s"Further host defect $number"))), Nil)).map(_.items.head.id))
+        _ <- ZIO.foreachDiscard(others)(other => reference(service, w.governor, correction, Relation.BlockedBy, other, true).flatMap(service.change(w.governor, _)))
+        further <- directive(service, w, bounded)
+        _ <- submit(service, w, w.governor, further.directive.text)
+        many <- query(service, w, bounded)
+        named = (side :: others).take(DriverPolicy.MaxBlockersNamed).map(id => s"D${id.number} blocks T1").mkString("; ")
+        _ <- ZIO.attempt(assert(many match {
+          case DriverReply.Stop(DriverStopped(DriverStop.Quiescent, detail), _, _) => detail == unchanged + named + "; and 1 more"
+          case _ => false
+        }, many.toString))
+      } yield ()
+    }
+
     "keep every other driven write that names a recorded Defect, and every other blocking link, an out-of-set change that stops the drive" in { (service: LedgerService[IO]) =>
       val w = world
       def begun(name: String, targets: ItemId*): IO[Throwable, (World, DriverKey, Driven)] = {
