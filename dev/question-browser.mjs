@@ -61,6 +61,14 @@ async function enter() {
 }
 const batch = () => page.getByRole('dialog', {name: 'Answer questions', exact: true});
 const open = () => page.getByRole('button', {name: 'Answer questions', exact: true}).click();
+// D70: the status the open item view and the result row show for a Question, read from the page as it stands.
+const shownStatus = name => page.evaluate(row => ({
+  heading: document.querySelector('#detail-pane h2').textContent, badges: [...document.querySelectorAll('#detail-pane .item-metadata .badge')].map(node => node.textContent),
+  row: document.getElementById(row).textContent, loaded: window.questionFixtureLoaded,
+}), `status-${project.value}-${name}`);
+const awaitStatus = (name, status) => page.waitForFunction(([row, status]) =>
+  document.querySelector('#detail-pane .item-metadata .badge:nth-child(2)')?.textContent === status && document.getElementById(row)?.textContent === status,
+  [`status-${project.value}-${name}`, status]);
 try {
   await enter();
   await page.getByRole('button', {name: 'D1 · References', exact: true}).click();
@@ -128,9 +136,16 @@ try {
   await batch().screenshot({path: evidence + '/question-alternatives.png'});
   assert.equal((await detail(ids[1])).draft.content.Question.status, 'Open', 'picking does not save');
   assert.equal((await detail(ids[1])).revision.value, '1');
+  // D70: Q2 is still the selected item, so its item view and result row are on screen behind the dialog.
+  await page.evaluate(() => {window.questionFixtureLoaded = true;});
+  assert.deepEqual(await shownStatus('Q2'), {heading: 'Q2 · Question 2', badges: ['Question', 'Open'], row: 'Open', loaded: true});
   await batch().getByRole('button', {name: 'Save answer and next', exact: true}).click();
   await batch().getByRole('heading', {name: 'Q3 · Question 3', exact: true}).waitFor();
   assert.equal((await detail(ids[1])).draft.content.Question.answer, 'Go');
+  await awaitStatus('Q2', 'Answered');
+  assert.deepEqual(await shownStatus('Q2'), {heading: 'Q2 · Question 2', badges: ['Question', 'Answered'], row: 'Answered', loaded: true});
+  assert.equal(await page.locator('#detail-pane section[data-field="answer"] .field-value').textContent(), 'Go');
+  cases.push('D70 answering through the batch dialog updates the status and answer in the open item view and the result row without a reload');
   assert.deepEqual((await detail(ids[1])).draft.content.Question.recommendation, recommendation, 'answering keeps the recorded recommendation');
   assert.equal((await detail(ids[0])).draft.content.Question.status, 'Open');
   await batch().getByRole('button', {name: 'Previous question', exact: true}).click();
@@ -198,6 +213,37 @@ try {
   await page.waitForFunction(count => document.querySelectorAll('#detail-pane section[data-field="alternatives"] li').length === count, 1);
   assert.equal(await page.locator('#detail-pane .recommended-alternative').count(), 0);
   cases.push('I14 the item editor keeps the recommendation on its alternative when the list changes and clears it visibly when that alternative is removed');
+
+  // D70: an answer from another session reaches this page only as a change notification.
+  await page.evaluate(() => {window.questionFixtureLoaded = true;});
+  assert.deepEqual(await shownStatus('Q4'), {heading: 'Q4 · Question 4', badges: ['Question', 'Open'], row: 'Open', loaded: true});
+  const current = await detail(fourth);
+  await change([{Replace: {id: fourth, expected: current.revision, draft: {...current.draft, content: {Question: {...current.draft.content.Question, status: 'Answered', answer: 'Other session'}}}}}]);
+  await awaitStatus('Q4', 'Answered');
+  assert.deepEqual(await shownStatus('Q4'), {heading: 'Q4 · Question 4', badges: ['Question', 'Answered'], row: 'Answered', loaded: true});
+  assert.equal(await page.locator('#detail-pane section[data-field="answer"] .field-value').textContent(), 'Other session');
+  cases.push('D70 an answer saved by another session updates the open item view and the result row without a reload');
+
+  // D70: in a list of open Questions the answered one leaves the list, and its item view closes with it (D72).
+  await change([{Create: {draft: question(5)}}]);
+  const search = async query => {
+    await page.getByLabel('Search query').fill(query); await page.getByRole('button', {name: 'Search', exact: true}).click();
+    await page.getByText('Data: current', {exact: true}).waitFor();
+  };
+  await search('ledger:Questions status:Open');
+  await page.getByRole('button', {name: 'Q5 · Question 5', exact: true}).click();
+  await page.locator('#detail-pane').getByRole('heading', {name: 'Q5 · Question 5', exact: true}).waitFor();
+  await page.evaluate(() => {window.questionFixtureLoaded = true;});
+  assert.deepEqual(await page.locator('.item-row .item-id').allTextContents(), ['Q5']);
+  await open(); await batch().getByRole('heading', {name: 'Q5 · Question 5', exact: true}).waitFor();
+  await batch().getByLabel('Answer', {exact: true}).fill('Fifth answer');
+  await batch().getByRole('button', {name: 'Save answer and next', exact: true}).click();
+  await batch().getByText('All questions in this batch are answered.', {exact: true}).waitFor();
+  await page.waitForFunction(() => document.querySelectorAll('.item-row').length === 0 && document.querySelector('.workspace').dataset.detail === 'closed');
+  assert.equal(await page.evaluate(() => window.questionFixtureLoaded), true);
+  assert.equal((await detail({project, ledger: 'Questions', number: '5'})).draft.content.Question.status, 'Answered');
+  await batch().getByRole('button', {name: 'Close', exact: true}).click(); await search('');
+  cases.push('D70 a Question answered through the batch dialog leaves a list of open Questions and closes its item view without a reload');
 
   await page.getByRole('button', {name: 'New item', exact: true}).click();
   const create = page.getByRole('dialog', {name: 'New item', exact: true});
