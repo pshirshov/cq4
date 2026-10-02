@@ -238,7 +238,7 @@ At every stop the proxy classifies before it types anything.
 | Class | Operational definition | Proxy action |
 | --- | --- | --- |
 | Required input | An open Question or a requested Operator Action is ready or blocks a selected item. With the auto-driver: reason `user input required` naming it. | Answer or escalate (section 3). |
-| Limit | Auto-driver reason `limit reached` (64 directives per drive); the session's bound of 32 child attempts (`Governing session reached its child-attempt bound`, `DispatchController.scala`); a budget stop of this protocol. | Directives: drive again. Child bound: end the session, run `cq job upload`, and continue the run in a fresh session of the same harness under the same tag. Budget: escalate. |
+| Limit | Auto-driver reason `limit reached` (64 directives per drive); a budget stop of this protocol. | Directives: drive again. Budget: escalate. |
 | Quiescence | Every root is terminal, or every remaining item waits for something outside the session's authority. With the auto-driver: reason `quiescent` and `cq query --roots` shows no ready item. | Go to the next stage. |
 | Parked | The proxy parked the auto-driver. | None. |
 | Expected without the auto-driver | Baseline scenario only (Q11): the workflow command the session was given has returned, and `cq query --roots` shows a ready item. | Type the follow-up and count it. **Proposed:** the follow-up is the same advance command again, not free text. |
@@ -400,11 +400,10 @@ State on 2026-10-02. The ledger was not read for this page: the `cq` server was 
 | **D73**, the host rejected the installed harness versions | Resolved. Fixed at `008fc0b`: Claude Code 2.1.285, Codex 0.159.2 and Pi 0.99.1 joined the verified set, and the settings pins moved at installation. | Q13: "Wait for D73; allow old pinned versions only as a labelled fallback on request". Runs use the installed versions. If an installed harness is newer than the verified set, the host refuses it (exit 78); the run then waits for the version to be verified. The older pins (2.1.280, 0.156.1, 0.87.1) are used only when the operator asks for it, while their store paths exist, and the scenario name gains `-pinned`. Codex 0.159.2 keeps `--no-daemon`. | `D73: installed <versions>, all in the verified set` or `fallback to <versions> on operator request`. |
 | **G1**, the auto-driver | Installed. It has driven real work from Claude Code and from Codex on the installed release ([cross-cut](validation/crosscut-20261002.md)). G1 stays open only for a live Pi drive: the Pi driver has run against a stub backend and a simulated model only ([Pi extension driver](validation/pi-driver.md)). | Q11: "Both: allow a labelled pre-G1 baseline now, and rerun with the driver after G1". Scenario `<harness>-driver` uses `/cq:drive` (Codex: `$cq-drive`) in S2–S4; scenario `<harness>-baseline` uses the plain advance command and proxy follow-ups. The request says which; **proposed** default: `driver`, with a baseline only when the operator wants the comparison. A `pi-driver` run is the first live Pi drive and is labelled so; its auto-driver failures are evidence for G1, checked against G1's open items before a Defect is recorded. | `G1: auto-driver used / not used (baseline)`, the stop classes that depend on it, and for Pi `first live Pi drive`. |
 
-Three constraints in G4's text no longer hold or need a qualifier:
+Two constraints in G4's text no longer hold or need a qualifier:
 
 - "Sessions have an 8-hour lifetime": removed. A session runs as long as its harness ([process guardian](design/process-guardian.md), [interactive](interactive.md)). The 3-hour budget is this protocol's own.
 - "Launch the harnesses at host level": the recorded sessions were launched inside the driver session's sandbox, without a nested `yolo`.
-- One governing session starts at most 32 child attempts. G4 does not name this bound; section 4 treats it as a limit stop.
 
 [Drive CQ work automatically](auto-driver.md) still says under "Not recorded" that no real model has driven a real server. The cross-cut record of 2026-10-02 supersedes that sentence for Claude Code and Codex.
 
