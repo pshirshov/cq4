@@ -243,9 +243,46 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
       cycle <- if (begun) driven(service, w, key, workset(members.head.id)).map(Some(_)) else on(service, w, key, workset(members.head.id)).as(None)
     } yield (w, key, cycle, artifact.id, members)
   }
-  // Runs independent scenarios to their end and reports every one that failed.
+  private def set(service: LedgerService[IO], scope: Scope, id: ItemId, content: Content): IO[Throwable, ChangeAck] =
+    service.get(scope, id).flatMap(view => service.change(scope, request(List(Mutation.Replace(id, view.item.revision, view.item.draft.copy(content = content))), Nil)))
+  private def tasked(status: TaskStatus): Content = Content.Task(status, List("Observed outcome"), None, Nil)
+  private final case class Stranded(w: World, key: DriverKey, old: ItemId, open: ItemId, member: ItemId, sibling: ItemId, placed: ItemId, free: ItemId)
+  // An active driven cycle over `roots` in a project where the Ready Task T1 (`member`) is PartOf M1 (`old`), which is `closed`. The state is
+  // reached the way the closure gate permits: M1 is closed over Done Tasks and T1 is reopened afterwards. T2 (`sibling`) stays Done under M1,
+  // T3 (`placed`) is Ready under the Open M2 (`open`) and T4 (`free`) is Ready without a milestone. The operator builds all of it before the drive.
+  private def stranded(service: LedgerService[IO], name: String, closed: MilestoneStatus)(roots: Stranded => List[ItemId]): IO[Throwable, (Stranded, Driven)] = {
+    val w = world
+    val key = claude(name)
+    def link(task: ItemId, target: ItemId) = reference(service, w.operator, task, Relation.PartOf, target, true).flatMap(service.change(w.operator, _))
+    for {
+      _ <- service.initialize(w.operator, name)
+      old <- create(service, w.operator, milestone("Reassigned milestone", MilestoneStatus.Open))
+      open <- create(service, w.operator, milestone("Open milestone", MilestoneStatus.Open))
+      member <- create(service, w.operator, task("Reopened member"))
+      sibling <- create(service, w.operator, task("Done member"))
+      placed <- create(service, w.operator, task("Member of the Open milestone"))
+      free <- create(service, w.operator, task("Task without a milestone"))
+      _ <- link(member, old) *> link(sibling, old) *> link(placed, open)
+      _ <- set(service, w.operator, member, tasked(TaskStatus.Done)) *> set(service, w.operator, sibling, tasked(TaskStatus.Done))
+      _ <- set(service, w.operator, old, Content.Milestone(closed, "Deliver the planned tasks"))
+      _ <- set(service, w.operator, member, tasked(TaskStatus.Ready))
+      at = Stranded(w, key, old, open, member, sibling, placed, free)
+      cycle <- driven(service, w, key, workset(roots(at)*))
+    } yield (at, cycle)
+  }
+  // What Worker Implement admission answers for the Task on the current ledger state.
+  private def admission(service: LedgerService[IO], scope: Scope, id: ItemId): IO[Throwable, Option[MilestoneRefusal]] = for {
+    view <- service.get(scope, id)
+    milestones <- ZIO.foreach(view.refs.collect { case ItemRef(Relation.PartOf, target) => target })(target => service.get(scope, target).map(found => target -> found.item))
+    work = DispatchWork.Worker(WorkerMode.Implement)
+    refusal = MilestonePolicy.refusal(work, view, milestones.toMap)
+    // `admit` is the entry point selection verification and input assembly call; it throws the refusal.
+    thrown <- ZIO.attempt(MilestonePolicy.admit(work, List(view), milestones.toMap)).either
+    _ <- assertIO(fault(thrown) == refusal.map(value => Fault.Invalid(value.message)))
+  } yield refusal
+  // Runs independent scenarios to their end and reports every one that failed, by a fault or by a failed assertion.
   private def each(scenarios: (String, IO[Throwable, Any])*): IO[Throwable, Unit] =
-    ZIO.foreach(scenarios.toList) { case (label, scenario) => scenario.either.map(_.left.toOption.map(error => s"$label: $error")) }.flatMap { outcomes =>
+    ZIO.foreach(scenarios.toList) { case (label, scenario) => scenario.absorb.either.map(_.left.toOption.map(error => s"$label: $error")) }.flatMap { outcomes =>
       ZIO.when(outcomes.flatten.nonEmpty)(ZIO.fail(new AssertionError(outcomes.flatten.mkString("\n")))).unit
     }
 
@@ -1015,6 +1052,169 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
           _ <- rejects(service, session, sessionKey, "out-of-set change: M1 is outside the advanceable set stored for cycle 1")(proposals(session.governor, artifact))
         } yield ()
         each("direct Reference" -> direct, "applied proposal" -> applied, "applied proposal to a closed milestone" -> closed)
+    }
+
+    // Defect 100, Question 27: a Task reopened under a closed milestone is recovered inside a Task-root drive by reassignment.
+    "let a Task-root drive move its Task from a closed milestone outside the set to an Open one, one request each" in { (service: LedgerService[IO]) =>
+      def recovered(name: String, closed: MilestoneStatus, inverse: Boolean): IO[Throwable, Unit] = for {
+        (at, first) <- stranded(service, name, closed)(at => List(at.member))
+        w = at.w
+        refusal <- admission(service, w.operator, at.member)
+        _ <- assertIO(refusal.map(_.reason).contains(CohortReason.ClosedMilestone))
+        before <- ZIO.foreach(List(at.old, at.open, at.sibling, at.placed))(service.get(w.operator, _))
+        removal <- if (inverse) reference(service, w.governor, at.old, Relation.Contains, at.member, false) else reference(service, w.governor, at.member, Relation.PartOf, at.old, false)
+        removed <- service.change(w.governor, removal)
+        old <- service.get(w.operator, at.old)
+        loose <- service.get(w.operator, at.member)
+        others <- ZIO.foreach(List(at.open, at.sibling, at.placed))(service.get(w.operator, _))
+        running <- status(service, w, at.key)
+        // Only the Task and its old milestone are revised; the milestone keeps its draft, and so its closed status.
+        _ <- assertIO(removed.items.map(_.id).toSet == Set(at.member, at.old) && old.item.draft == before.head.item.draft &&
+          old.item.revision == Revision(before.head.item.revision.value + 1) && old.refs == List(ItemRef(Relation.Contains, at.sibling)) && loose.refs.isEmpty)
+        _ <- assertIO(others == before.tail && running.exists(found => found.state == DriverState.On && found.stopped.isEmpty))
+        unassigned <- admission(service, w.operator, at.member)
+        _ <- assertIO(unassigned.map(_.reason).contains(CohortReason.NoMilestone))
+        // The assignment is a separate request: a batch changes the Task once.
+        added <- reference(service, w.governor, at.member, Relation.PartOf, at.open, true).flatMap(service.change(w.governor, _))
+        joined <- service.get(w.operator, at.open)
+        kept <- status(service, w, at.key)
+        _ <- assertIO(added.items.map(_.id).toSet == Set(at.member, at.open) && joined.item.draft == before(1).item.draft &&
+          joined.refs.toSet == Set(ItemRef(Relation.Contains, at.member), ItemRef(Relation.Contains, at.placed)))
+        _ <- assertIO(kept.exists(found => found.state == DriverState.On && found.stopped.isEmpty && found.cycle.exists(cycle => cycle.id == first.cycle &&
+          Set(removal.request, added.request).forall(id => cycle.lineage.exists(_.member == LineageMember.Change(id))))))
+        // The next continuation issues a new cycle over the Task.
+        next <- directive(service, w, at.key)
+        _ <- assertIO(next.status.cycle.exists(cycle => cycle.number == 2 && cycle.advanceable.map(_.id) == List(at.member)))
+        second <- submit(service, w, w.governor, next.directive.text)
+        _ <- assertIO(second.cycle == next.directive.cycle)
+        accepted <- admission(service, w.operator, at.member)
+        _ <- assertIO(accepted.isEmpty)
+      } yield ()
+      // Both in one request: the ledger refuses a batch that changes the Task twice. The driven session gets the undriven fault and the drive goes on.
+      def combined(name: String, closed: MilestoneStatus): IO[Throwable, Unit] = for {
+        (at, _) <- stranded(service, name, closed)(at => List(at.member))
+        w = at.w
+        current <- ZIO.foreach(List(at.member, at.old, at.open))(service.get(w.operator, _).map(_.item.revision))
+        both = List(Mutation.Reference(at.member, current.head, Relation.PartOf, at.old, current(1), false),
+          Mutation.Reference(at.member, current.head, Relation.PartOf, at.open, current(2), true))
+        before <- cursor(service, w)
+        undriven <- service.change(w.operator, request(both, Nil)).either
+        bound <- service.change(w.governor, request(both, Nil)).either
+        after <- cursor(service, w)
+        kept <- status(service, w, at.key)
+        _ <- assertIO(fault(undriven).contains(Fault.Invalid("An item may be changed only once in a batch")) && fault(bound) == fault(undriven))
+        _ <- assertIO(before == after && kept.exists(found => found.state == DriverState.On && found.stopped.isEmpty))
+        // The cycle is still active: the two requests then commit under it.
+        _ <- reference(service, w.governor, at.member, Relation.PartOf, at.old, false).flatMap(service.change(w.governor, _))
+        _ <- reference(service, w.governor, at.member, Relation.PartOf, at.open, true).flatMap(service.change(w.governor, _))
+        next <- directive(service, w, at.key)
+        _ <- assertIO(next.status.cycle.exists(cycle => cycle.number == 2 && cycle.advanceable.map(_.id) == List(at.member)))
+      } yield ()
+      each(List(MilestoneStatus.Complete, MilestoneStatus.Cancelled).flatMap(closed => List[(String, IO[Throwable, Any])](
+        s"$closed, removed as PartOf" -> recovered(s"reassigned-partof-$closed", closed, false),
+        s"$closed, removed as Contains" -> recovered(s"reassigned-contains-$closed", closed, true),
+        s"$closed, removed and added in one request" -> combined(s"reassigned-combined-$closed", closed)))*)
+    }
+
+    "keep every other driven write that names a milestone outside the set an out-of-set change that stops the drive" in { (service: LedgerService[IO]) =>
+      type Attempt = Stranded => IO[Throwable, ChangeRequest]
+      def revision(scope: Scope, id: ItemId): IO[Throwable, Revision] = service.get(scope, id).map(_.item.revision)
+      def single(mutation: IO[Throwable, Mutation]): IO[Throwable, ChangeRequest] = mutation.map(value => request(List(value), Nil))
+      val alone: Stranded => List[ItemId] = at => List(at.member)
+      // Each entry: the write, the detail of the stop, the roots of the drive and the request the bound session sends.
+      val refusals = List[(String, String, Stranded => List[ItemId], Attempt)](
+        ("remove an in-set Task from an Open milestone", "out-of-set change: M2 is outside the advanceable set stored for cycle 1", at => List(at.member, at.placed),
+          at => reference(service, at.w.governor, at.placed, Relation.PartOf, at.open, false)),
+        ("remove an in-set Task from an Open milestone, written as Contains", "out-of-set change: M2 is outside the advanceable set stored for cycle 1", at => List(at.member, at.placed),
+          at => reference(service, at.w.governor, at.open, Relation.Contains, at.placed, false)),
+        ("remove a Task outside the set from the closed milestone", "T2 is outside the advanceable set stored for cycle 1", alone,
+          at => reference(service, at.w.governor, at.sibling, Relation.PartOf, at.old, false)),
+        ("remove a Task outside the set, written as Contains", "T2 is outside the advanceable set stored for cycle 1", alone,
+          at => reference(service, at.w.governor, at.old, Relation.Contains, at.sibling, false)),
+        ("reopen the milestone by Replace", "out-of-set change: M1 is outside the advanceable set stored for cycle 1", alone,
+          at => single(service.get(at.w.governor, at.old).map(view => Mutation.Replace(at.old, view.item.revision, milestone("Reassigned milestone", MilestoneStatus.Open))))),
+        ("replace the milestone's draft, keeping its status", "out-of-set change: M1 is outside the advanceable set stored for cycle 1", alone,
+          at => replace(service, at.w.governor, at.old, "Retitled by the drive")),
+        ("restore the Task to its revision without the membership", "out-of-set change: M1 is outside the advanceable set stored for cycle 1", alone,
+          at => single(for { task <- revision(at.w.governor, at.member); old <- revision(at.w.governor, at.old) }
+            yield Mutation.Restore(at.member, task, Revision(1), List(ItemRevision(at.old, old))))),
+        ("reopen the milestone by Restore", "out-of-set change: M1 is outside the advanceable set stored for cycle 1", alone,
+          at => single(revision(at.w.governor, at.old).map(old => Mutation.Restore(at.old, old, Revision(old.value - 1), Nil)))),
+        ("archive the milestone", "out-of-set change: M1 is outside the advanceable set stored for cycle 1", alone,
+          at => single(revision(at.w.governor, at.old).map(old => Mutation.Archive(List(ItemRevision(at.old, old)))))),
+        ("terminate the milestone", "out-of-set change: M1 is outside the advanceable set stored for cycle 1", alone,
+          at => service.termination(at.w.governor, Set(at.old), TerminationIntent.Cancel).map(preview =>
+            request(List(Mutation.Terminate(Set(at.old), TerminationIntent.Cancel, preview.snapshot)), preview.plan.claims.map(_.fence)))),
+        ("relate the Task to the milestone", "out-of-set change: M1 is outside the advanceable set stored for cycle 1", alone,
+          at => reference(service, at.w.governor, at.member, Relation.RelatesTo, at.old, true)),
+        ("block the Task by the milestone", "out-of-set change: M1 is outside the advanceable set stored for cycle 1", alone,
+          at => reference(service, at.w.governor, at.member, Relation.BlockedBy, at.old, true)),
+        ("remove another relation to the milestone", "out-of-set change: M1 is outside the advanceable set stored for cycle 1", alone,
+          at => reference(service, at.w.governor, at.member, Relation.RelatesTo, at.old, false)),
+        ("assign an in-set Task to the closed milestone", "out-of-set change: M1 is outside the advanceable set stored for cycle 1", at => List(at.member, at.free),
+          at => reference(service, at.w.governor, at.free, Relation.PartOf, at.old, true)))
+      def refused(closed: MilestoneStatus, index: Int, detail: String, roots: Stranded => List[ItemId], attempt: Attempt): IO[Throwable, Unit] = for {
+        (at, _) <- stranded(service, s"kept-out-$closed-$index", closed)(roots)
+        w = at.w
+        items = List(at.old, at.open, at.member, at.sibling, at.placed, at.free)
+        before <- ZIO.foreach(items)(service.get(w.operator, _))
+        change <- attempt(at)
+        _ <- rejects(service, w, at.key, detail)(service.change(w.governor, change))
+        after <- ZIO.foreach(items)(service.get(w.operator, _))
+        continued <- query(service, w, at.key)
+        _ <- assertIO(after == before && LedgerPolicy.status(after.head.item.draft.content) == closed.toString)
+        _ <- assertIO(continued match { case DriverReply.Stop(DriverStopped(DriverStop.Failure, found), _, _) => found.contains(detail); case _ => false })
+      } yield ()
+      each(List(MilestoneStatus.Complete, MilestoneStatus.Cancelled).flatMap(closed => refusals.zipWithIndex.map { case ((label, detail, roots, attempt), index) =>
+        s"$closed: $label" -> refused(closed, index, detail, roots, attempt)
+      })*)
+    }
+
+    "keep reopening an in-set milestone, an unbound session's recovery and the ledger's refusal to restore a Task under a closed milestone" in { (service: LedgerService[IO]) =>
+      // A milestone-root drive selects the milestone, so the bound session reopens it and the drive continues with the milestone and its Task.
+      def reopened(name: String, closed: MilestoneStatus, restore: Boolean): IO[Throwable, Unit] = for {
+        (at, _) <- stranded(service, name, closed)(at => List(at.old))
+        w = at.w
+        old <- service.get(w.governor, at.old).map(_.item)
+        reopening = if (restore) Mutation.Restore(at.old, old.revision, Revision(old.revision.value - 1), Nil)
+          else Mutation.Replace(at.old, old.revision, milestone("Reassigned milestone", MilestoneStatus.Open))
+        ack <- service.change(w.governor, request(List(reopening), Nil))
+        open <- service.get(w.operator, at.old)
+        _ <- assertIO(ack.items.map(_.id) == List(at.old) && LedgerPolicy.status(open.item.draft.content) == MilestoneStatus.Open.toString &&
+          open.refs.toSet == Set(ItemRef(Relation.Contains, at.member), ItemRef(Relation.Contains, at.sibling)))
+        next <- directive(service, w, at.key)
+        _ <- assertIO(next.status.state == DriverState.On && next.status.cycle.exists(cycle => cycle.number == 2 && Set(at.old, at.member).subsetOf(cycle.advanceable.map(_.id).toSet)))
+        accepted <- admission(service, w.operator, at.member)
+        _ <- assertIO(accepted.isEmpty)
+      } yield ()
+      // A session that is not bound and names no cycle is not attributed: its unlink and its reopening commit and leave the cycle as it was.
+      def unbound(name: String, closed: MilestoneStatus): IO[Throwable, Unit] = for {
+        (at, _) <- stranded(service, name, closed)(at => List(at.member))
+        w = at.w
+        other = w.other(Role.Governor)
+        before <- status(service, w, at.key)
+        linked <- service.get(w.operator, at.member).map(_.item.revision)
+        removed <- reference(service, other, at.member, Relation.PartOf, at.old, false).flatMap(service.change(other, _))
+        emptied = removed.items.find(_.id == at.old).get
+        unlinked = removed.items.find(_.id == at.member).get
+        // Restoring the Task would re-add its membership in the closed milestone: refused by the ledger, for any session.
+        start <- cursor(service, w)
+        restored <- service.change(w.operator, request(List(Mutation.Restore(at.member, unlinked.revision, linked, List(emptied))), Nil)).either
+        end <- cursor(service, w)
+        _ <- assertIO(fault(restored).contains(Fault.Invalid(s"Tasks can be assigned only to an Open milestone; M1 is $closed")) && start == end)
+        reopening <- service.change(other, request(List(Mutation.Replace(at.old, emptied.revision, milestone("Reassigned milestone", MilestoneStatus.Open))), Nil))
+        // Once the milestone is Open again the same Restore commits.
+        again <- service.change(w.operator, request(List(Mutation.Restore(at.member, unlinked.revision, linked, List(reopening.items.head))), Nil))
+        after <- status(service, w, at.key)
+        _ <- assertIO(removed.items.map(_.id).toSet == Set(at.member, at.old) && again.items.map(_.id).toSet == Set(at.member, at.old))
+        _ <- assertIO(after.exists(_.state == DriverState.On) && lineage(after) == lineage(before))
+        next <- directive(service, w, at.key)
+        _ <- assertIO(next.status.cycle.exists(cycle => cycle.number == 2 && cycle.advanceable.map(_.id) == List(at.member)))
+      } yield ()
+      each(List(MilestoneStatus.Complete, MilestoneStatus.Cancelled).flatMap(closed => List[(String, IO[Throwable, Any])](
+        s"$closed, reopened by Replace" -> reopened(s"reopened-replace-$closed", closed, false),
+        s"$closed, reopened by Restore" -> reopened(s"reopened-restore-$closed", closed, true),
+        s"$closed, unbound session" -> unbound(s"reopened-unbound-$closed", closed)))*)
     }
 
     "carry the cycle ID through nested delegation and reject a delegated child's out-of-set writes" in { (service: LedgerService[IO]) =>

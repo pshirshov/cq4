@@ -34,33 +34,39 @@ final class DriverBoundary(registry: DriverRegistry, planner: WorksetPlanner) {
       }
     }
 
-  // The Task and the milestone of a membership a Reference adds, in either direction the edge may be written.
-  private def joined(mutation: Mutation): Option[(ItemId, ItemId)] = (mutation match {
-    case Mutation.Reference(source, _, Relation.PartOf, target, _, true) => Some(source -> target)
-    case Mutation.Reference(source, _, Relation.Contains, target, _, true) => Some(target -> source)
+  // The Task and the milestone of a membership a Reference adds (`present`) or removes, in either direction the edge may be written.
+  private def membership(mutation: Mutation, present: Boolean): Option[(ItemId, ItemId)] = (mutation match {
+    case Mutation.Reference(source, _, Relation.PartOf, target, _, `present`) => Some(source -> target)
+    case Mutation.Reference(source, _, Relation.Contains, target, _, `present`) => Some(target -> source)
     case _ => None
   }).filter((task, _) => task.ledger == Ledger.Tasks)
 
   // The existing milestone a mutation assigns Tasks to. A drive plans Tasks under milestones that workset traversal never selects.
   private def assigned(mutation: Mutation): Option[ItemId] = mutation match {
     case Mutation.Produce(_, _, _, milestone) => milestone.collect { case MilestoneRef.Existing(id) => id }
-    case other => joined(other).map((_, milestone) => milestone)
+    case other => membership(other, true).map((_, milestone) => milestone)
   }
 
+  // The milestone a Reference takes a Task out of. Work admission refuses a Task under a milestone that is not Open, and a Task has one
+  // milestone, so a drive that does not select such a milestone reassigns the Task: this removal, then an assignment.
+  private def released(mutation: Mutation): Option[ItemId] = membership(mutation, false).map((_, milestone) => milestone)
+
+  // A membership change names its Task. Its milestone is judged by status in `check`: Open to gain a member, not Open to lose one.
   private def existing(mutation: Mutation): List[ItemId] = mutation match {
     case Mutation.Archive(members) => members.map(_.id)
     case Mutation.Produce(producer, _, _, _) => List(producer)
     case Mutation.Terminate(roots, _, _) => roots.toList
     case _: Mutation.Create => Nil
     case Mutation.Replace(id, _, _) => List(id)
-    case Mutation.Reference(source, _, _, target, _, _) => joined(mutation).fold(List(source, target))((task, _) => List(task))
+    case Mutation.Reference(source, _, _, target, _, present) => membership(mutation, present).fold(List(source, target))((task, _) => List(task))
     case Mutation.Restore(id, _, _, neighbors) => id :: neighbors.map(_.id)
   }
 
-  private def openMilestone(tx: LedgerTransaction, id: ItemId): Boolean = tx.get(id).exists(_.draft.content match {
-    case milestone: Content.Milestone => milestone.status == MilestoneStatus.Open
-    case _ => false
-  })
+  private def milestone(tx: LedgerTransaction, id: ItemId): Option[MilestoneStatus] = tx.get(id).map(_.draft.content).collect {
+    case value: Content.Milestone => value.status
+  }
+  private def openMilestone(tx: LedgerTransaction, id: ItemId): Boolean = milestone(tx, id).contains(MilestoneStatus.Open)
+  private def closedMilestone(tx: LedgerTransaction, id: ItemId): Boolean = milestone(tx, id).exists(_ != MilestoneStatus.Open)
 
   private def question(item: Item): Content.Question = item.draft.content match {
     case value: Content.Question => value
@@ -90,10 +96,13 @@ final class DriverBoundary(registry: DriverRegistry, planner: WorksetPlanner) {
   private def settles(before: Option[Item], after: Item): Boolean = before.exists(waiting) && !waiting(after)
 
   // Admission, before the write is applied: every existing item the request names is in the cycle's stored snapshot or was created by the cycle.
-  // The one exception is the milestone of an assignment, which may be any Open milestone.
+  // The two exceptions are the milestone of an assignment, which may be any Open milestone, and the milestone a Reference takes an in-set
+  // Task out of, which may be any Complete or Cancelled milestone. Neither admits another change of that milestone: its Replace, Restore,
+  // Archive or Terminate names it, and so does the removal of a membership in an Open milestone.
   def check(tx: LedgerTransaction, attribution: WriteAttribution, request: ChangeRequest, now: Long): Unit = {
     val (record, cycle) = current(tx.project.id, attribution)
-    val named = request.mutations.flatMap(existing) ++ request.mutations.flatMap(assigned).filterNot(openMilestone(tx, _))
+    val named = request.mutations.flatMap(existing) ++ request.mutations.flatMap(assigned).filterNot(openMilestone(tx, _)) ++
+      request.mutations.flatMap(released).filterNot(closedMilestone(tx, _))
     val outside = named.filterNot(cycle.boundary).distinct
     if (outside.nonEmpty)
       registry.fail(record, s"out-of-set change: ${references(outside)} is outside the advanceable set stored for cycle ${cycle.number}", now)
@@ -104,8 +113,9 @@ final class DriverBoundary(registry: DriverRegistry, planner: WorksetPlanner) {
   def verify(tx: LedgerTransaction, attribution: WriteAttribution, request: ChangeRequest, acknowledgement: ChangeAck, stamps: List[LineageMember], now: Long): Unit = {
     val (record, cycle) = current(tx.project.id, attribution)
     val (created, changed) = acknowledgement.items.partition(_.revision == Revision(1))
-    // A batch changes an item once, so a milestone that passed `check` only as an assignment was revised for its new member alone.
-    val milestones = request.mutations.flatMap(assigned).toSet
+    // A batch changes an item once, so a milestone that passed `check` only as an assignment or as a removal was revised for that one
+    // membership alone, with its draft unchanged.
+    val milestones = request.mutations.flatMap(mutation => assigned(mutation) ++ released(mutation)).toSet
     val outside = changed.map(_.id).filterNot(id => cycle.boundary(id) || milestones(id))
     if (outside.nonEmpty)
       registry.fail(record, s"out-of-set change: ${references(outside)} is outside the advanceable set stored for cycle ${cycle.number}", now)
