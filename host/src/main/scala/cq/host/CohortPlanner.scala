@@ -82,10 +82,14 @@ final class CohortPlanner(api: ServerApi, owner: Scope, bases: ExecutionBase, ch
     val results = artifacts.filter(_.metadata.kind == ArtifactKind.Result).map(value => reader.result(value.metadata.id))
     val previous = request.previous.map(reader.result)
     val sources = (results ++ previous).distinct
+    // An assessment applies under the configured check definitions at its own base or a descendant of it: integrations move the target
+    // without changing the assessed member revisions, which `compatibility` still matches exactly.
+    val executionBase = previous.flatMap(_.value.candidate).getOrElse(base)
     val assessments = sources.collect { case value if value.value.report match {
       case plan: ChildReport.Plan => plan.assessments.nonEmpty
       case _ => false
-    } => reader.assessment(value.metadata.id) }
+    } => reader.assessment(value.metadata.id) }.filter(value => value.input.checks.sortBy(_.name) == checks.sortBy(_.name) &&
+      (value.input.base == executionBase || bases.ancestor(value.input.base, executionBase)))
     val reviews = sources.filter(_.value.request.work == DispatchWork.Reviewer(ReviewerMode.Candidate)).map(value => reader.review(value.metadata.id))
     val cache = scala.collection.mutable.Map.from(artifacts.map(value => value.metadata.id -> value))
     def read(id: ArtifactId): ResolvedArtifact = cache.getOrElseUpdate(id, reader.read(id))
@@ -119,9 +123,8 @@ final class CohortPlanner(api: ServerApi, owner: Scope, bases: ExecutionBase, ch
     } else CohortExecutionFingerprint(semantic, members.map(member => member.item.id -> fingerprint(work, List(member), context)).toMap)
   }
 
-  private def assessments(context: Context): List[CohortAssessment] = context.assessments
-    .filter(value => value.input.base == context.executionBase && value.input.checks.sortBy(_.name) == checks.sortBy(_.name))
-    .flatMap(_.result.value.report.asInstanceOf[ChildReport.Plan].assessments)
+  private def assessments(context: Context): List[CohortAssessment] =
+    context.assessments.flatMap(_.result.value.report.asInstanceOf[ChildReport.Plan].assessments)
 
   private def compatibility(members: List[ItemView], context: Context): Option[CohortCompatibility] = {
     val refs = members.map(value => ItemRevision(value.item.id, value.item.revision)).toSet
@@ -207,17 +210,27 @@ final class CohortPlanner(api: ServerApi, owner: Scope, bases: ExecutionBase, ch
     val held = claim.toList.flatMap(_.claims.filter(_.owner != owner.actor).flatMap(_.members)).toSet ++
       claim.toList.flatMap(_.integrations.flatMap(_.members.map(_.id))).toSet
     val milestones = new MilestoneRecords(call, owner.project)
-    val excludedMembers = loaded.items.flatMap(value => {
+    val dispositions = loaded.items.flatMap(value => {
       val reason = if (held(value.item.id)) Some(CohortReason.Claimed)
         else MilestonePolicy.refusal(request.work, value, milestones).map(_.reason).orElse(reviewDisposition(value, request.work, ctx))
       reason.map(value.item.id -> _)
     }).toMap
+    // The previous candidate was produced for exactly the frozen members: by the previous worker itself, or by the worker whose members
+    // a candidate review covers one for one (ArtifactReader.review).
+    val continued = exact.nonEmpty && !partition && ctx.previous.exists(_.candidate.nonEmpty)
+    // D113: a review accepting some members of that candidate and requesting changes for others continues the whole group on it, so the
+    // accepted members stay with the correction. A group accepted as a whole, or with any other exclusion, is treated as before.
+    val mixed = continued && dispositions.size < loaded.items.size && dispositions.values.forall(_ == CohortReason.ReviewAccepted)
+    val excludedMembers = if (mixed) Map.empty[ItemId, CohortReason] else dispositions
     var pending = candidates.flatMap(ref => views.get(ref.id)).filterNot(value => excludedMembers.contains(value.item.id))
     var considered = loaded.items.filter(value => excludedMembers.contains(value.item.id)).map(value =>
       CohortConsidered(List(ItemRevision(value.item.id, value.item.revision)), excludedMembers(value.item.id), None))
     val choices = List.newBuilder[CohortChoice]
     var fingerprints = Map.empty[RequestId, CohortExecutionFingerprint]
     var offered = 0
+    val implement = request.work == DispatchWork.Worker(WorkerMode.Implement)
+    // A Task an applicable assessment names keeps that verdict: it is not offered for assessment in another group.
+    lazy val assessedIds = assessments(ctx).flatMap(_.members.map(_.member.id)).toSet
 
     def offer(group: List[ItemView], work: DispatchWork, reason: CohortReason, witness: Option[ItemId], inputs: CohortRequest, content: Context): Unit = {
       val refs = group.map(value => ItemRevision(value.item.id, value.item.revision))
@@ -250,9 +263,11 @@ final class CohortPlanner(api: ServerApi, owner: Scope, bases: ExecutionBase, ch
       if (pending.size != candidates.size) continuity()
       else if (request.work == DispatchWork.Worker(WorkerMode.Implement) && pending.size > CohortBounds.Members) continuity()
       else if (request.work == DispatchWork.Worker(WorkerMode.Implement) && pending.size > 1) compatibility(pending, ctx) match {
+        // Correcting a candidate these members already share needs no new assessment; only a contrary one at the candidate refuses it.
+        case Some(CohortCompatibility.Compatible) | None if continued => offer(pending, request.work, CohortReason.ExactPrevious, None, request, ctx)
         case Some(CohortCompatibility.Compatible) => offer(pending, request.work, CohortReason.CompatibleAssessment, None, request, ctx)
         case None => offer(pending, DispatchWork.Planner(), CohortReason.AssessmentRequired, None, request, ctx)
-        case Some(_) if ctx.previous.exists(_.candidate.nonEmpty) => continuity()
+        case Some(_) if continued => continuity()
         case Some(value) =>
           val split = request.copy(artifacts = (request.artifacts ++ request.previous).distinct, previous = None)
           validate(split)
@@ -282,6 +297,10 @@ final class CohortPlanner(api: ServerApi, owner: Scope, bases: ExecutionBase, ch
           } else if (planner && next.forall(organisable)) {
             group = next
             organised = true
+          } else if (implement && independent(next) && !next.exists(member => assessedIds(member.item.id))) {
+            // Ready Tasks of one selection may share a candidate whatever produced them, once a Planner assesses the group as Compatible.
+            group = next
+            common = shared
           }
         }
       }

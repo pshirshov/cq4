@@ -25,6 +25,7 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
   private val recordedBases: ExecutionBase = new ExecutionBase {
     override def fresh(): GitCommit = throw new IllegalStateException("Fresh work is not started by these cases")
     override def expected(base: GitCommit, candidate: GitCommit): GitCommit = base
+    override def ancestor(earlier: GitCommit, later: GitCommit): Boolean = throw new IllegalStateException("Ancestry is not inspected by these cases")
   }
   private def prepare(preparation: IntegrationPreparation, ticket: IntegrationTicket): IntegrationIntent = preparation.freeze(preparation.review(ticket), None)
   /** What an integration of `worker` (stored as `id`) and `reviewer` cites, given the published revalidation rounds of the worker result. */
@@ -593,6 +594,7 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
           val bases = new ExecutionBase {
             override def fresh(): GitCommit = head
             override def expected(base: GitCommit, candidate: GitCommit): GitCommit = { observed :+= (base, candidate); head }
+            override def ancestor(earlier: GitCommit, later: GitCommit): Boolean = throw new IllegalStateException("Ancestry is not inspected by this case")
           }
           val preparation = new IntegrationPreparation(governor, f.owner, f.intent.repository, f.intent.target, Nil, clock, bases)
           val intent = prepare(preparation, IntegrationTicket(IntegrationId(uuid), reviewArtifact))

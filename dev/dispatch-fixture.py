@@ -390,7 +390,9 @@ def main():
             assert cost(original, "Shared") == Decimal("0.125") and cost(before, "Shared") == Decimal("0.375")
             exact = tool("cq_host", "dispatch", {"Select": {"request": {**selection, "request": identity(),
                 "artifacts": [planned["result"]], "previous": reviewed["result"]}}})["Selection"]["value"]
-            assert exact["choices"] == [] and exact["counts"]["excluded"] == 2, exact
+            # D113: a mixed review continues the whole group on its candidate; abandoning the candidate takes the explicit fresh selection below.
+            assert len(exact["choices"]) == 1 and exact["choices"][0]["members"] == choice["members"] and exact["counts"]["excluded"] == 0, exact
+            assert exact["choices"][0]["reason"] == "ExactPrevious" and exact["choices"][0]["previous"] == reviewed["result"], exact
             fresh = tool("cq_host", "dispatch", {"Select": {"request": {**selection, "request": identity(),
                 "artifacts": [planned["result"], reviewed["result"]]}}})["Selection"]["value"]
             assert len(fresh["choices"]) == 1 and fresh["choices"][0]["members"] == choice["members"][:1], fresh

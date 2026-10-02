@@ -115,6 +115,9 @@ final class CandidateWorkspaceLocal extends SpecZIO with AssertZIO {
           local.git(local.source, "update-ref", "refs/heads/integration", first.value)
           println(s"Target at first: fresh=${candidates.fresh().value.take(7)} first=${first.value.take(7)}")
           assert(candidates.fresh() == first)
+          // The moved target descends from the earlier head; a competing candidate does not.
+          assert(candidates.ancestor(local.base, first) && candidates.ancestor(first, first) && !candidates.ancestor(first, local.base) &&
+            !candidates.ancestor(other, first))
           assert(candidates.expected(first, second) == first)
           // An incorporated candidate keeps its worker base so inspection reports Incorporated instead of a same-commit update.
           assert(candidates.expected(local.base, first) == local.base)

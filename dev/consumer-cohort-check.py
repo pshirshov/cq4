@@ -70,6 +70,10 @@ class ConsumerCohortCheck(unittest.TestCase):
         return cohort["accepted"](chain, base=fixture["artifacts"]["plan-result"]["body"]["base"], **fixture)
 
     def split_fixture(self):
+        return self.corrected_fixture(False)
+
+    def corrected_fixture(self, whole):
+        """A mixed review corrected either by the whole group continuing on its candidate (D113) or by a fresh singleton split."""
         fixture = self.fixture()
         correction = self.fixture()
         names = ["worker", "reviewer", "worker-result", "review-result", "worker-request", "review-request", "validation", "review-validation",
@@ -88,7 +92,17 @@ class ConsumerCohortCheck(unittest.TestCase):
         for key in ["artifacts", "tickets"]:
             correction[key] = {rename.get(name, name): value for name, value in correction[key].items()}
         member = correction["seed"]["members"][1]
-        for role, name, handle in [("Worker", "corrected-worker", "corrected-worker-result"), ("Reviewer", "corrected-reviewer", "corrected-review-result")]:
+        if whole:
+            worker = correction["artifacts"]["corrected-worker-result"]["body"]
+            worker.update(base={"value": "a" * 40})
+            worker["request"].update(previous={"value": "review-result"}, artifacts=[])
+            correction["tickets"]["corrected-worker"]["request"] = copy.deepcopy(worker["request"])
+            execution = correction["artifacts"]["corrected-worker-input"]["body"]
+            execution.update(base=worker["base"])
+            execution["input"]["request"] = copy.deepcopy(worker["request"])
+            correction["artifacts"]["corrected-worker-selection"]["body"]["decision"]["choices"][0].update(
+                previous=worker["request"]["previous"], artifacts=[], reason="ExactPrevious")
+        for role, name, handle in [] if whole else [("Worker", "corrected-worker", "corrected-worker-result"), ("Reviewer", "corrected-reviewer", "corrected-review-result")]:
             result = correction["artifacts"][handle]["body"]
             result["request"]["members"] = [copy.deepcopy(member)]
             if role == "Worker":
@@ -128,6 +142,24 @@ class ConsumerCohortCheck(unittest.TestCase):
             "no rejected member": lambda f: f["artifacts"]["review-result"]["body"]["report"]["Review"]["members"][1].update(verdict="Blocked"),
             "missing final oracle": lambda f: f["artifacts"]["corrected-review-result"]["body"].update(validation=[]),
             "old final oracle": lambda f: f["artifacts"]["corrected-review-validation"]["body"].update(candidate={"value": "a" * 40}),
+        }
+        for name, mutation in mutations.items():
+            with self.subTest(name=name):
+                changed = copy.deepcopy(fixture)
+                mutation(changed)
+                with self.assertRaises(AssertionError):
+                    self.accept(changed)
+
+    def test_whole_group_continuation_keeps_accepted_members_on_the_candidate(self):
+        fixture = self.corrected_fixture(True)
+        proof = self.accept(fixture)
+        self.assertEqual(len(proof["lineage"]), 2)
+        self.assertEqual(len(proof["finalMembers"]), 2)
+        mutations = {
+            "no rejected member": lambda f: f["artifacts"]["review-result"]["body"]["report"]["Review"]["members"][1].update(verdict="Blocked"),
+            "fresh base": lambda f: [body.update(base={"value": "b" * 40}) for body in
+                                     [f["artifacts"]["corrected-worker-result"]["body"], f["artifacts"]["corrected-worker-input"]["body"]]],
+            "wrong continuation reason": lambda f: f["artifacts"]["corrected-worker-selection"]["body"]["decision"]["choices"][0].update(reason="FreshFromBase"),
         }
         for name, mutation in mutations.items():
             with self.subTest(name=name):
