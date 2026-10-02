@@ -176,6 +176,50 @@ abstract class ApplicationContractTest extends SpecZIO with AssertZIO {
         } yield ()
     }
 
+    "I24: attach to each of several claimed rows the running attempt of that row's own claim owner" in {
+      (repository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
+        val auth = authorization(Now)
+        val first = auth.authenticate(Token, Some(UUID.randomUUID().toString))
+        val second = auth.authenticate(Token, Some(UUID.randomUUID().toString))
+        val application = new Application(FixedLedger.at(repository, Now), repository, usage, artifacts, admissions, integrations, proposals, auth)
+        val project = ProjectId(UUID.randomUUID())
+        def marks: IO[Throwable, List[Option[Option[Long]]]] = application.execute(first, Command.Read(ReadInput(project,
+          ReadSelection.Browse("", ItemOrder(ItemOrderField.Id, SortDirection.Ascending, false), None, None, 20)))).flatMap {
+          case Result.Browsed(page) => ZIO.succeed(page.items.map(_.work.map(_.attempt.map(_.startedAt))))
+          case other => ZIO.fail(new AssertionError(other))
+        }
+        def claim(authority: Authority, members: Set[ItemId]): IO[Throwable, Claim] =
+          application.execute(authority, Command.ClaimWork(ClaimInput(project, ClaimAction.Acquire(ClaimId(UUID.randomUUID()), members, 300000)))).flatMap {
+            case Result.Claimed(value) => ZIO.succeed(value)
+            case other => ZIO.fail(new AssertionError(other))
+          }
+        def host(operation: HostUsage): IO[Throwable, HostUsageResult] = application.ingest(first, HostUsageInput(project, operation))
+        def attempt(assignment: Assignment, session: SessionId, startedAt: Long): Attempt =
+          Attempt(AttemptId(UUID.randomUUID()), assignment.id, None, session, Role.Worker, Harness.Codex, "fixture", "fixture", "fixture", startedAt, UsagePhase.Work)
+        for {
+          _ <- application.execute(first, Command.Initialize(ProjectConfig(project, "http://localhost", "several claimed rows")))
+          created <- application.execute(first, Command.Change(ChangeInput(project, ChangeRequest(RequestId(UUID.randomUUID()), List.fill(4)(Mutation.Create(task)), Nil, "Create"))))
+          ids <- ZIO.attempt(created match { case Result.Changed(ack) => ack.items.map(_.id); case other => throw new AssertionError(other) })
+          one <- claim(first, Set(ids(0), ids(1)))
+          two <- claim(second, Set(ids(2)))
+          _ <- assertIO(one.owner.session != two.owner.session)
+          shared = Assignment(AssignmentId(UUID.randomUUID()), project, Set(ids(0), ids(2)), Attribution.Shared, None, None)
+          direct = Assignment(AssignmentId(UUID.randomUUID()), project, Set(ids(1)), Attribution.Direct, None, None)
+          _ <- host(HostUsage.Assign(shared))
+          _ <- host(HostUsage.Assign(direct))
+          earlier = attempt(shared, one.owner.session, 4000)
+          // The other owner's later attempt covers the first row as well and must mark only its own row.
+          _ <- host(HostUsage.Start(earlier))
+          _ <- host(HostUsage.Start(attempt(shared, two.owner.session, 5000)))
+          _ <- host(HostUsage.Start(attempt(direct, one.owner.session, 6000)))
+          running <- marks
+          _ <- assertIO(running == List(Some(Some(4000L)), Some(Some(6000L)), Some(Some(5000L)), None))
+          _ <- host(HostUsage.Finish(AttemptOutcome(RequestId(UUID.randomUUID()), earlier.id, AttemptState.Completed, 7000, Nil, None)))
+          finished <- marks
+          _ <- assertIO(finished == List(Some(None), Some(Some(6000L)), Some(Some(5000L)), None))
+        } yield ()
+    }
+
     "rename display metadata with revision comparison and preserve item identity and counters" in {
       (ledger: LedgerService[IO], repository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
         val auth = authorization(Now)

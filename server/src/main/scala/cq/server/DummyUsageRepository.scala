@@ -69,9 +69,12 @@ private final class DummyUsageTransaction(initial: DummyUsageState) extends Usag
       }.take(limit).map { case ((phase, group), value) => PhaseCost(phase, CostTotal(group, UsageMath.decimal(value.amount), value.measurements)) }
   override def cursor: Long = state.cursor
   override def attemptEvents: Long = Math.addExact(state.attempts.size.toLong, state.attempts.keysIterator.count(latestOutcome(_).nonEmpty).toLong)
-  override def running(item: ItemId, session: SessionId): List[Attempt] = state.attempts.valuesIterator.filter { attempt =>
-    attempt.session == session && state.assignments(attempt.assignment).members.contains(item) && latestOutcome(attempt.id).isEmpty
-  }.toList
+  override def running(claimed: Map[ItemId, SessionId]): Map[ItemId, List[Attempt]] = {
+    val open = state.attempts.valuesIterator.filter(attempt => latestOutcome(attempt.id).isEmpty).toList
+    claimed.map { case (item, session) =>
+      item -> open.filter(attempt => attempt.session == session && state.assignments(attempt.assignment).members.contains(item))
+    }.filter(_._2.nonEmpty)
+  }
   override def assignment(id: AssignmentId): Option[Assignment] = state.assignments.get(id)
   override def attempt(id: AttemptId): Option[Attempt] = state.attempts.get(id)
   override def meter(key: MeterKey): Option[(UsageMeter, MeterProjection)] = state.meters.get(key)
