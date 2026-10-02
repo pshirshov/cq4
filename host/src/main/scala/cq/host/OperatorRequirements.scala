@@ -1,6 +1,6 @@
 package cq.host
 
-import cq.api.{CycleToken, DispatchWork, Fault}
+import cq.api.{CycleToken, DispatchWork, Fault, ReviewerMode}
 import cq.core.DomainFailure
 
 /** The operator's governing request text for the current session: the batch input file, or the text supplied at attached workflow activation. */
@@ -33,8 +33,10 @@ object OperatorRequirements {
     text
   }
 
+  // A text without content states no requirement, so it is delivered to no child: an empty section would read as a request.
   def delivered(work: DispatchWork, text: String): Option[String] = work match {
-    case _: DispatchWork.Planner | _: DispatchWork.Worker => Some(bounded(text))
-    case _: DispatchWork.Explorer | _: DispatchWork.Reviewer => None
+    case _: DispatchWork.Planner | _: DispatchWork.Worker | DispatchWork.Reviewer(ReviewerMode.Plan | ReviewerMode.Candidate) =>
+      Option.when(text.trim.nonEmpty)(bounded(text))
+    case _: DispatchWork.Explorer | DispatchWork.Reviewer(ReviewerMode.Audit) => None
   }
 }

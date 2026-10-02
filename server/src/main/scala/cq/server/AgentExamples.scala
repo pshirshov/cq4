@@ -158,8 +158,8 @@ object AgentExamples {
     case DispatchWork.Worker(WorkerMode.Probe) => execution(ProbeRequest, List(Hypothesis), List(Defect), List(ProbeLog), None, Some(Requirements), Base)
     case DispatchWork.Worker(WorkerMode.ResolveConflict) =>
       execution(ResolveRequest, List(Task), List(Decision), Nil, Some(CandidateReviewResult), Some(Requirements), Candidate)
-    case DispatchWork.Reviewer(ReviewerMode.Candidate) => execution(CandidateReviewRequest, List(Task), Nil, Nil, Some(ImplementResult), None, Candidate)
-    case DispatchWork.Reviewer(ReviewerMode.Plan) => execution(PlanReviewRequest, List(Goal), Nil, Nil, Some(PlanResult), None, Base)
+    case DispatchWork.Reviewer(ReviewerMode.Candidate) => execution(CandidateReviewRequest, List(Task), Nil, Nil, Some(ImplementResult), Some(Requirements), Candidate)
+    case DispatchWork.Reviewer(ReviewerMode.Plan) => execution(PlanReviewRequest, List(Goal), Nil, Nil, Some(PlanResult), Some(Requirements), Base)
     case DispatchWork.Reviewer(ReviewerMode.Audit) => execution(AuditRequest, List(Research), Nil, Nil, Some(ResearchResult), None, Base)
   }
 

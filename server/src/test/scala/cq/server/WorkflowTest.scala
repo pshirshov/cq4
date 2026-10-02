@@ -54,6 +54,8 @@ final class WorkflowLocal extends AnyWordSpec {
       Harness.all.foreach { harness =>
         val advance = new WorkflowAssets().commands(harness).find(_.path.toString.contains("advance")).get.body
         assert(advance.contains("Pass the token only in `token`") && advance.contains("leave the `--start-token` or `--resume-token` flag and its UUID out of `operatorRequirements`"))
+        // D110: a directive carries only workflow flags, which are not requirements.
+        assert(advance.contains("when the invocation consists only of workflow flags, as a CQ driver directive does, pass `operatorRequirements` as an empty string"))
       }
     }
   }

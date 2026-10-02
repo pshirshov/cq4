@@ -3,7 +3,10 @@ package cq.core
 import cq.api.*
 
 // A ledger write attributed to an active driven cycle; `parent` is the lineage member the write was made under.
-final case class WriteAttribution(key: DriverKey, cycle: CycleId, parent: LineageMember)
+final case class WriteAttribution(key: DriverKey, cycle: CycleId, parent: LineageMember) {
+  // The bound session writes under the run of its cycle; a session the cycle delegated to writes under its own lineage member.
+  def bound: Boolean = parent.isInstanceOf[LineageMember.Run]
+}
 
 // The write-time boundary of driven cycles. Each call runs inside the writing transaction, so a rejection rolls the ledger back.
 final class DriverBoundary(registry: DriverRegistry, planner: WorksetPlanner) {
@@ -51,14 +54,29 @@ final class DriverBoundary(registry: DriverRegistry, planner: WorksetPlanner) {
   // milestone, so a drive that does not select such a milestone reassigns the Task: this removal, then an assignment.
   private def released(mutation: Mutation): Option[ItemId] = membership(mutation, false).map((_, milestone) => milestone)
 
-  // A membership change names its Task. Its milestone is judged by status in `check`: Open to gain a member, not Open to lose one.
+  // The item and the Defect of a BlockedBy edge a Reference adds, in either direction the edge may be written. A drive that meets a
+  // defect it does not work records it and links the items it blocks, which leave the ready set until someone else resolves the Defect.
+  private def blocking(mutation: Mutation): Option[(ItemId, ItemId)] = (mutation match {
+    case Mutation.Reference(source, _, Relation.BlockedBy, target, _, true) => Some(source -> target)
+    case Mutation.Reference(source, _, Relation.Blocks, target, _, true) => Some(target -> source)
+    case _ => None
+  }).filter((_, prerequisite) => prerequisite.ledger == Ledger.Defects)
+  private def blocker(mutation: Mutation): Option[ItemId] = blocking(mutation).map((_, defect) => defect)
+  private def openDefect(tx: LedgerTransaction, id: ItemId): Boolean = tx.get(id).map(_.draft.content).exists {
+    case value: Content.Defect => value.status == DefectStatus.Open
+    case _ => false
+  }
+
+  // A membership change names its Task, and a blocking link the item it blocks. The other endpoint is judged in `check`: a milestone by
+  // status, Open to gain a member and not Open to lose one; a blocking Defect by being Open and linked by the bound session.
   private def existing(mutation: Mutation): List[ItemId] = mutation match {
     case Mutation.Archive(members) => members.map(_.id)
     case Mutation.Produce(producer, _, _, _) => List(producer)
     case Mutation.Terminate(roots, _, _) => roots.toList
     case _: Mutation.Create => Nil
     case Mutation.Replace(id, _, _) => List(id)
-    case Mutation.Reference(source, _, _, target, _, present) => membership(mutation, present).fold(List(source, target))((task, _) => List(task))
+    case Mutation.Reference(source, _, _, target, _, present) =>
+      membership(mutation, present).orElse(blocking(mutation)).fold(List(source, target))((item, _) => List(item))
     case Mutation.Restore(id, _, _, neighbors) => id :: neighbors.map(_.id)
   }
 
@@ -96,13 +114,15 @@ final class DriverBoundary(registry: DriverRegistry, planner: WorksetPlanner) {
   private def settles(before: Option[Item], after: Item): Boolean = before.exists(waiting) && !waiting(after)
 
   // Admission, before the write is applied: every existing item the request names is in the cycle's stored snapshot or was created by the cycle.
-  // The two exceptions are the milestone of an assignment, which may be any Open milestone, and the milestone a Reference takes an in-set
-  // Task out of, which may be any Complete or Cancelled milestone. Neither admits another change of that milestone: its Replace, Restore,
-  // Archive or Terminate names it, and so does the removal of a membership in an Open milestone.
+  // The exceptions are the milestone of an assignment, which may be any Open milestone, the milestone a Reference takes an in-set
+  // Task out of, which may be any Complete or Cancelled milestone, and the Defect the bound session links an in-set item BlockedBy, which
+  // may be any Open Defect. None admits another change of that item: its Replace, Restore, Archive or Terminate names it, and so does the
+  // removal of a membership in an Open milestone or of a blocking link.
   def check(tx: LedgerTransaction, attribution: WriteAttribution, request: ChangeRequest, now: Long): Unit = {
     val (record, cycle) = current(tx.project.id, attribution)
     val named = request.mutations.flatMap(existing) ++ request.mutations.flatMap(assigned).filterNot(openMilestone(tx, _)) ++
-      request.mutations.flatMap(released).filterNot(closedMilestone(tx, _))
+      request.mutations.flatMap(released).filterNot(closedMilestone(tx, _)) ++
+      request.mutations.flatMap(blocker).filterNot(defect => attribution.bound && openDefect(tx, defect))
     val outside = named.filterNot(cycle.boundary).distinct
     if (outside.nonEmpty)
       registry.fail(record, s"out-of-set change: ${references(outside)} is outside the advanceable set stored for cycle ${cycle.number}", now)
@@ -114,9 +134,9 @@ final class DriverBoundary(registry: DriverRegistry, planner: WorksetPlanner) {
     val (record, cycle) = current(tx.project.id, attribution)
     val (created, changed) = acknowledgement.items.partition(_.revision == Revision(1))
     // A batch changes an item once, so a milestone that passed `check` only as an assignment or as a removal was revised for that one
-    // membership alone, with its draft unchanged.
-    val milestones = request.mutations.flatMap(mutation => assigned(mutation) ++ released(mutation)).toSet
-    val outside = changed.map(_.id).filterNot(id => cycle.boundary(id) || milestones(id))
+    // membership alone, with its draft unchanged, and a Defect that passed it only as a blocker for that one link alone.
+    val linked = request.mutations.flatMap(mutation => assigned(mutation) ++ released(mutation) ++ blocker(mutation)).toSet
+    val outside = changed.map(_.id).filterNot(id => cycle.boundary(id) || linked(id))
     if (outside.nonEmpty)
       registry.fail(record, s"out-of-set change: ${references(outside)} is outside the advanceable set stored for cycle ${cycle.number}", now)
     // Only a person settles a Question, by an answer or by withdrawing it. The refusal leaves the driver on: the operator parks, the item is
@@ -131,18 +151,23 @@ final class DriverBoundary(registry: DriverRegistry, planner: WorksetPlanner) {
     val settled = acknowledgement.items.filter(_.id.ledger == Ledger.OperatorActions).map(item => item.id -> written(tx, item))
       .collect { case (id, (before, after)) if settles(before, after) => id }
     if (settled.nonEmpty) throw DomainFailure(Fault.Denied(DriverPolicy.settlementRefused(settled)))
-    if (created.nonEmpty) {
+    val owned = if (created.isEmpty) Nil else {
       val selected = try planner.evaluate(tx, record.targets, record.through, record.workset).advanceable.map(_.item.id).toSet catch {
         case DomainFailure(fault) => registry.fail(record, s"the advanceable set cannot be recomputed after the write: $fault", now)
       }
       val produced = created.map(_.id).filter(selected).toSet
       // A Milestone created for the Tasks this write produced is reached from them as context, never selected.
       def planned(id: ItemId): Boolean = id.ledger == Ledger.Milestones && tx.refs(id).exists(ref => ref.relation == Relation.Contains && produced(ref.target))
-      val unselected = created.map(_.id).filterNot(id => selected(id) || planned(id))
+      // A Defect the bound session records with a plain Create reports a problem the drive does not work. It is admitted and stays out of
+      // the cycle's created items, so no boundary of this drive contains it and no later driven write may change it.
+      def reported(id: ItemId): Boolean = attribution.bound && id.ledger == Ledger.Defects
+      val (inside, others) = created.map(_.id).partition(id => selected(id) || planned(id))
+      val unselected = others.filterNot(reported)
       if (unselected.nonEmpty)
         registry.fail(record, s"non-selected creation: ${references(unselected)} is not a selected descendant of ${references(record.targets)}", now)
+      inside
     }
-    stamp(tx, record, cycle, created.map(_.id), attribution.parent, stamps, now)
+    stamp(tx, record, cycle, owned, attribution.parent, stamps, now)
   }
 
   def claimed(tx: LedgerTransaction, session: SessionId, claim: ClaimId, now: Long): Unit =
