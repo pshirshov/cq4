@@ -64,6 +64,11 @@ nav .navigation-entry { display: flex; align-items: center; gap: 8px; text-align
 .item-status, .item-severity, .item-milestone { color: #a4c1d3; font-size: 11px; }
 .item-milestone { font-variant-numeric: tabular-nums; }
 .milestone-heading svg, .item-group svg { vertical-align: -3px; }
+.work-heading, .item-work { text-align: center; }
+.work-heading svg, .item-work svg, .work-meta svg { vertical-align: -3px; }
+.item-work { color: #a4c1d3; }
+.item-work[data-work=running] { color: #8be0b2; }
+.work-meta svg { width: 16px; height: 16px; margin-right: 4px; }
 .milestone-heading input { min-height: 0; margin: 0 0 0 4px; padding: 0; vertical-align: -2px; }
 .item-group td { background: #1c2630; color: #a4c1d3; font-size: 11px; font-weight: 600; border-top: 1px solid #435364; }
 .item-group svg { margin-right: 4px; }

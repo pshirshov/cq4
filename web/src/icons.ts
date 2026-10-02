@@ -1,8 +1,10 @@
 import * as api from '../../generated/typescript/cq/api/index.js';
 
-const PATHS: Readonly<Record<api.Ledger | 'All' | 'New' | 'Usage', string>> = {
+const PATHS: Readonly<Record<api.Ledger | 'All' | 'New' | 'Usage' | 'Work' | 'Claimed' | 'Running', string>> = {
   All: 'M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z',
   New: 'M12 4v16 M4 12h16', Usage: 'M4 20V10 M12 20V4 M20 20v-8',
+  Work: 'M12 3a9 9 0 1 0 0 18 9 9 0 1 0 0-18 M12 7v5l3 3', Claimed: 'M6 11h12v10H6z M9 11V7a3 3 0 0 1 6 0v4',
+  Running: 'M12 3a9 9 0 1 0 0 18 9 9 0 1 0 0-18 M10 8l6 4-6 4z',
   Milestones: 'M5 21V3 M5 3h14l-3 5 3 5H5',
   Ideas: 'M9 18h6 M9 21h6 M8 14a6 6 0 1 1 8 0l-1 2H9z',
   Defects: 'M8 8h8v7a4 4 0 0 1-8 0z M9 8V5h6v3 M3 10h5 M16 10h5 M3 16h5 M16 16h5 M6 3l3 2 M18 3l-3 2 M12 8v11',

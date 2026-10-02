@@ -38,13 +38,16 @@ export async function tableChecks(browser, storageState, origin, evidence) {
     await check('D30 semantic table with merged ID/type column', async () => {
       const table = page.getByRole('table', { name: 'Items', exact: true });
       assert.equal(await table.count(), 1);
-      assert.deepEqual(await table.getByRole('columnheader').allTextContents(), ['ID', 'Title', 'Status', 'Severity', '', 'Last modified']);
-      const milestone = table.getByRole('columnheader').nth(4);
+      assert.deepEqual(await table.getByRole('columnheader').allTextContents(), ['ID', 'Title', 'Status', '', 'Severity', '', 'Last modified']);
+      const work = table.getByRole('columnheader').nth(3);
+      assert.equal(await work.getByRole('img', { name: 'In progress', exact: true }).count(), 1);
+      assert.equal(await table.locator('tbody .item-work').first().locator('svg').count(), 0);
+      const milestone = table.getByRole('columnheader').nth(5);
       assert.equal(await milestone.getByRole('img', { name: 'Milestone', exact: true }).locator('path').getAttribute('d'),
         await page.getByRole('button', { name: 'Milestones', exact: true }).locator('.navigation-icon path').getAttribute('d'));
       assert.equal(await milestone.locator('svg[aria-label="Milestone"]').count(), 1);
       assert.deepEqual(await table.getByRole('separator').evaluateAll(nodes => nodes.map(node => node.getAttribute('aria-label'))),
-        ['ID', 'Title', 'Status', 'Severity', 'Milestone', 'Last modified'].map(name => `Resize ${name} column`));
+        ['ID', 'Title', 'Status', 'In progress', 'Severity', 'Milestone', 'Last modified'].map(name => `Resize ${name} column`));
       const id = table.locator('tbody .item-id').first();
       assert.equal(await id.locator('svg').count(), 1); assert.equal(await id.getAttribute('title'), 'Defects');
       assert.equal(await table.getByRole('cell', { name: 'High', exact: true }).count(), 1);
@@ -123,7 +126,7 @@ export async function tableChecks(browser, storageState, origin, evidence) {
     });
     await check('I15 a failed view-state write warns and keeps the chosen order', async () => {
       await page.evaluate(() => { Storage.prototype.setItem = () => { throw new DOMException('Quota exceeded', 'QuotaExceededError'); }; });
-      await table.getByRole('button', { name: 'Sort by severity', exact: true }).click(); await sorted(3, 'ascending');
+      await table.getByRole('button', { name: 'Sort by severity', exact: true }).click(); await sorted(4, 'ascending');
       await page.getByRole('alert').getByText('Items view could not be saved in this browser.').waitFor();
       await reopen();
       assert.equal(await table.getByRole('columnheader').nth(2).getAttribute('aria-sort'), 'ascending');
@@ -152,7 +155,7 @@ export async function tableChecks(browser, storageState, origin, evidence) {
       assert.deepEqual(await cells.allTextContents(), ['M2', 'M1', '', 'M1']);
       assert.equal(await cells.locator('button, a, input, [tabindex]').count(), 0);
       assert.deepEqual(await table.locator('tbody tr').first().locator('td').evaluateAll(nodes => nodes.map(node => node.className)),
-        ['item-id', '', 'item-status', 'item-severity', 'item-milestone', 'item-modified']);
+        ['item-id', '', 'item-status', 'item-work', 'item-severity', 'item-milestone', 'item-modified']);
       assert.ok(await cells.evaluateAll(nodes => nodes.every(node => node.scrollWidth <= node.clientWidth)));
       assert.equal(await table.locator('thead').evaluate(node => /milestone/i.test(node.innerText)), false);
     });
@@ -163,7 +166,7 @@ export async function tableChecks(browser, storageState, origin, evidence) {
       assert.deepEqual(await savedView(), { field: 'Id', direction: 'Ascending', grouped: true });
       const headings = table.locator('tbody tr.item-group');
       assert.equal(await headings.locator('button, a, input, [tabindex]').count(), 0);
-      assert.deepEqual(await headings.evaluateAll(rows => rows.map(row => [row.querySelectorAll('svg').length, row.cells.length, row.cells[0].colSpan])), [[1, 1, 6], [1, 1, 6], [1, 1, 6]]);
+      assert.deepEqual(await headings.evaluateAll(rows => rows.map(row => [row.querySelectorAll('svg').length, row.cells.length, row.cells[0].colSpan])), [[1, 1, 7], [1, 1, 7], [1, 1, 7]]);
       const focus = () => page.evaluate(() => document.activeElement.getAttribute('aria-label'));
       await table.getByRole('button', { name: 'T2 · Two', exact: true }).focus();
       for (const [key, expected] of [['ArrowDown', 'T4 · Four'], ['ArrowDown', 'T1 · One'], ['ArrowDown', 'T3 · Three'], ['ArrowDown', 'T3 · Three'], ['ArrowUp', 'T1 · One'],
