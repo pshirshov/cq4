@@ -11,13 +11,57 @@ import zio.{IO, Task, ZIO}
 
 final case class SessionDeliveryReport(acknowledged: Int, incompleteTickets: List[Path])
 
+/** What `SessionDelivery.flush` would still do for a session. `incomplete` counts the tickets and usage samples whose record was never
+  * committed: they can never be delivered, and `flush` reports them instead. */
+final case class SessionRemainder(undelivered: Boolean, incomplete: Int)
+
+object SessionDelivery {
+  val Interrupted = "Supervisor publication was interrupted; retained output is a bounded snapshot, process settlement and remaining usage are unknown"
+
+  private def entries(directory: Path): List[Path] =
+    if (!Files.isDirectory(directory, LinkOption.NOFOLLOW_LINKS)) Nil else Using.resource(Files.list(directory))(_.iterator().asScala.toList)
+  private def has(directory: Path, name: String): Boolean = Files.exists(directory.resolve(name), LinkOption.NOFOLLOW_LINKS)
+  /** A batch directly under `directory` has no acknowledgement. */
+  def unacknowledged(directory: Path): Boolean = {
+    val names = entries(directory).map(_.getFileName.toString).toSet
+    names.exists(name => name.endsWith(".json") && !names(name.stripSuffix(".json") + ".ack"))
+  }
+  /** The queue's final publication is committed and the server acknowledged it and every batch before it. */
+  private def delivered(queue: Path): Boolean =
+    Files.isDirectory(queue.resolve("final"), LinkOption.NOFOLLOW_LINKS) && !unacknowledged(queue) && !unacknowledged(queue.resolve("final"))
+
+  /**
+   * Reads, without changing anything, whether `flush` has something left to deliver: the governing final publication; a child's
+   * publication (a child whose owner died before sealing it never gets a receipt, and is delivered once its reconciled outcome is
+   * acknowledged); a run of a declared check; an attached Pi or Codex usage sample; a retained span.
+   */
+  def remainder(directory: Path, run: SupervisorRun): SessionRemainder = {
+    val (children, unticketed) = entries(directory.resolve("children")).partition(has(_, "ticket.json"))
+    val (checks, partialChecks) = children.flatMap { child =>
+      entries(child.resolve("checks")).flatMap { check =>
+        check :: (2 to IntegrationValidation.MaxAttempts).map(DeclaredCheckPublication.directory(check, _)).filter(Files.exists(_, LinkOption.NOFOLLOW_LINKS)).toList
+      }
+    }.partition(has(_, "ticket.json"))
+    val attached = run.ownership == SessionOwnership.Attached
+    val codex = directory.resolve("codex-usage")
+    val (samples, partialSamples) = ((if (attached) entries(directory.resolve("pi-usage")) else Nil) ++
+      (if (attached && run.attempt.harness == Harness.Codex && has(codex, "binding.json")) entries(codex.resolve("samples")) else Nil)).partition(has(_, "sample.json"))
+    val undelivered = !delivered(directory.resolve("delivery")) ||
+      children.exists(child => !has(child, "receipt.json") && (has(child, "publication.json") || !delivered(child.resolve("delivery")))) ||
+      checks.exists(check => !has(check, "result.json") || !delivered(check.resolve("delivery"))) ||
+      samples.exists(sample => !delivered(sample.resolve("delivery"))) ||
+      entries(directory.resolve("spans")).exists(unacknowledged)
+    SessionRemainder(undelivered, unticketed.size + partialChecks.size + partialSamples.size)
+  }
+}
+
 /** The caller holds the journal's exclusive ownership for this entire operation. */
 final class SessionDelivery(journal: JobRepository, workspaces: WorkspaceService[IO], clock: Clock) {
   private val MaxChildren = 32
   private val MaxPartialTicketFiles = 32
   private val MaxRecordBytes = 64 * 1024
   private val MaxGaps = 32
-  private val Interrupted = "Supervisor publication was interrupted; retained output is a bounded snapshot, process settlement and remaining usage are unknown"
+  import SessionDelivery.Interrupted
   private final case class Publication(assignment: Assignment, attempt: Attempt, version: String, retainedOutputBytes: Option[Int], queue: DeliveryQueue, child: Option[ChildPublicationDelivery])
 
   private final case class Inventory(publications: List[Publication], incompleteTickets: List[Path])
@@ -118,6 +162,17 @@ final class SessionDelivery(journal: JobRepository, workspaces: WorkspaceService
     values.collect { case Right(value) => value }
   }
 
+  private def uncertain(record: JobRecord): JobRecord = if (record.phase == JobPhase.Uncertain) record else {
+    val next = record.copy(target = JobTarget.Stop, phase = JobPhase.Uncertain, problem = Some(Interrupted),
+      revision = Math.addExact(record.revision, 1), updatedAt = math.max(record.updatedAt, clock.millis()))
+    journal.replace(record, next)
+    next
+  }
+
+  /** Records every job the ended owner left unsettled as `Uncertain`, because nothing observed its termination, and returns the
+    * jobs it changed. `flush` does the same before it delivers; this part needs no server. */
+  def interrupt(): List[JobRecord] = journal.records.filterNot(record => JobRecords.terminal(record.phase)).map(uncertain)
+
   private def checks(directory: Path, run: SupervisorRun, publication: Publication, api: ServerApi): Task[SessionDeliveryReport] = {
     val root = directory.resolve("children").resolve(publication.attempt.id.value.toString).resolve("checks")
     for {
@@ -179,10 +234,7 @@ final class SessionDelivery(journal: JobRepository, workspaces: WorkspaceService
       records
     }
     _ <- ZIO.foreachDiscard(records.filter(_.phase != JobPhase.Settled)) { record =>
-      ZIO.attemptBlocking {
-        if (record.phase != JobPhase.Uncertain) journal.replace(record, record.copy(target = JobTarget.Stop, phase = JobPhase.Uncertain,
-          problem = Some(Interrupted), revision = Math.addExact(record.revision, 1), updatedAt = math.max(record.updatedAt, clock.millis())))
-      } *> quarantine(owner, record.workspace.attempt)
+      ZIO.attemptBlocking(uncertain(record)) *> quarantine(owner, record.workspace.attempt)
     }
     checked <- ZIO.foreach(inventory.publications)(publication => checks(directory, run, publication, api).either)
     delivered <- ZIO.foreach(inventory.publications) { publication =>

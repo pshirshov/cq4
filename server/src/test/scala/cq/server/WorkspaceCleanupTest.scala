@@ -62,7 +62,11 @@ final class WorkspaceCleanupLocal extends SpecZIO with AssertZIO {
       val clock = Clock.systemUTC()
       ZIO.attemptBlocking(HostFiles.directory(config.directory)) *>
         new WorkspaceCleanup(config, new SessionWorkspaces(config, clock), collectors, bounds, clock, IzLogger.NullLogger).recover *>
-        ZIO.attemptBlocking(HostFiles.read(config.directory.resolve("workspaces").resolve("cleanup.json"), WorkspaceCleanupReceipt_JsonCodec, 16 * 1024 * 1024))
+        ZIO.attemptBlocking {
+          val receipt = HostFiles.read(config.directory.resolve("workspaces").resolve("cleanup.json"), WorkspaceCleanupReceipt_JsonCodec, 16 * 1024 * 1024)
+          RecoveryState.discard(config.directory)
+          receipt
+        }
     }
     /** An earlier session as its host recorded it; `settled` jobs are in its journal and their workspaces prepared. */
     def session(run: SupervisorRun, settled: Int): Task[Ended] = {

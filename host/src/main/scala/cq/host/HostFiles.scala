@@ -14,9 +14,12 @@ object HostFiles {
     require(value.length <= maximum, "Host record exceeds its byte bound")
     value
   }
-  def text(path: Path, maximum: Int): String = UTF_8.newDecoder().decode(java.nio.ByteBuffer.wrap(bytes(path, maximum))).toString
-  def read[A](path: Path, codec: BaboonJsonCodec[A], maximum: Int): A =
-    io.circe.parser.parse(text(path, maximum)).flatMap(codec.decode(BaboonCodecContext.Default, _)).fold(throw _, identity)
+  def text(path: Path, maximum: Int): String = text(bytes(path, maximum))
+  private def text(value: Array[Byte]): String = UTF_8.newDecoder().decode(java.nio.ByteBuffer.wrap(value)).toString
+  /** Decodes bytes that were read: a failure here is about the content, not about reaching it. */
+  def decode[A](value: Array[Byte], codec: BaboonJsonCodec[A]): A =
+    io.circe.parser.parse(text(value)).flatMap(codec.decode(BaboonCodecContext.Default, _)).fold(throw _, identity)
+  def read[A](path: Path, codec: BaboonJsonCodec[A], maximum: Int): A = decode(bytes(path, maximum), codec)
   def encode[A](codec: BaboonJsonCodec[A], value: A): String = codec.encode(BaboonCodecContext.Default, value).noSpaces
   def directory(path: Path): Unit = {
     require(path.isAbsolute && path.normalize() == path, "Host directory must be absolute and normalized")

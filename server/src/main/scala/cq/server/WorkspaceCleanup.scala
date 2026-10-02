@@ -3,7 +3,6 @@ package cq.server
 import cq.api.*
 import cq.core.{DomainFailure, Scope, WorkspaceService}
 import cq.host.*
-import java.io.IOException
 import java.net.URI
 import java.nio.channels.{FileChannel, OverlappingFileLockException}
 import java.nio.charset.StandardCharsets.UTF_8
@@ -79,6 +78,7 @@ object WorkspaceCleanup {
   /** Written into a session's own directory once startup recovery has nothing left to do there; later startups skip the session. */
   val Marker = "recovery.json"
   private val Host = s"${SupervisorRun.baboonDomainIdentifier} ${SupervisorRun.baboonDomainVersion} " + ProcessHandle.current().info().command().orElse("unknown executable")
+  val Upload = "cq job upload --session"
 
   private enum Disposition {
     case Unrelated
@@ -104,31 +104,59 @@ object WorkspaceCleanup {
     Files.exists(receipt, LinkOption.NOFOLLOW_LINKS) && HostFiles.read(receipt, DispatchStatus_JsonCodec, MaxRecordBytes).phase == DispatchPhase.Completed
   }
 
-  /** A committed final publication exists under `queue` and the server acknowledged every batch of it. */
-  private def acknowledged(queue: Path): Boolean = {
-    val committed = queue.resolve("final")
-    Files.isDirectory(committed, LinkOption.NOFOLLOW_LINKS) && Using.resource(Files.list(committed)) { entries =>
-      val names = entries.iterator().asScala.map(_.getFileName.toString).toSet
-      names.forall(name => !name.endsWith(".json") || names(name.stripSuffix(".json") + ".ack"))
+  /** What `cq job upload --session` would still resolve (`pending`), and the tickets whose preparation was cut before anything was
+    * frozen or reserved (`unfrozen`): nothing can resolve those, and `cq job upload` reports them as unresolved every time. */
+  final case class UploadRemainder(pending: List[String], unfrozen: Int)
+
+  private enum Leftover {
+    case Resolved, Reservation, Request, Combination, Unfrozen
+  }
+
+  private def counted(count: Int, what: String): Option[String] = Option.when(count > 0)(s"$count $what")
+
+  /**
+   * Reads what `SessionUpload` resolves beyond the deliveries, without resolving it: startup recovery launches no Git update, prepares
+   * no work, publishes no combination and writes no observation. An integration is resolved when the server recorded a terminal
+   * resolution for it, or when it was prepared and never reserved; a frozen combination when its plan's publication is acknowledged.
+   */
+  def unresolved(session: Path, run: SupervisorRun, server: () => ServerApi): UploadRemainder = {
+    def stems(name: String): Set[String] = {
+      val root = session.resolve(name)
+      if (!Files.exists(root, LinkOption.NOFOLLOW_LINKS)) Set.empty
+      else Using.resource(Files.list(root))(_.iterator().asScala.map(_.getFileName.toString).filter(_.endsWith(".json")).map(_.stripSuffix(".json")).toSet)
     }
-  }
-
-  /** A span of host work the session retained and the server has not acknowledged. */
-  private def retainedSpan(session: Path): Boolean = {
-    val root = session.resolve("spans")
-    Files.isDirectory(root, LinkOption.NOFOLLOW_LINKS) && Using.resource(Files.list(root))(_.iterator().asScala.exists { span =>
-      Files.isDirectory(span, LinkOption.NOFOLLOW_LINKS) && Using.resource(Files.list(span)) { entries =>
-        val names = entries.iterator().asScala.map(_.getFileName.toString).toSet
-        names.exists(name => name.endsWith(".json") && !names(name.stripSuffix(".json") + ".ack"))
+    val journals = stems("integrations")
+    val integrations = (stems("integration-requests") ++ journals).toList.sorted.map { name =>
+      val id = IntegrationId(UUID.fromString(name))
+      val local = Option.when(journals(name))(HostFiles.read(session.resolve("integrations").resolve(name + ".json"), IntegrationLocal_JsonCodec, IntegrationEntries.MaxRecordBytes))
+      val record = server().call(Command.Read(ReadInput(run.project.project, ReadSelection.Integration(id)))) match {
+        case Result.Integration(value) => Some(value)
+        case Result.Failed(_: Fault.Missing) => None
+        case Result.Failed(fault) => throw DomainFailure(fault)
+        case _ => throw new IllegalStateException("Integration read returned an unexpected result")
       }
-    })
-  }
-
-  /** The governing final publication, a child's publication or a retained span has not been acknowledged by the server. A child whose
-    * owner died before sealing its publication never gets a receipt: it is delivered once its reconciled outcome is acknowledged. */
-  def undelivered(session: Path): Boolean = !acknowledged(session.resolve("delivery")) || retainedSpan(session) || childDirectories(session).exists { child =>
-    !Files.exists(child.resolve("receipt.json"), LinkOption.NOFOLLOW_LINKS) &&
-      (Files.exists(child.resolve("publication.json"), LinkOption.NOFOLLOW_LINKS) || !acknowledged(child.resolve("delivery")))
+      val terminal = record.exists(_.resolution != IntegrationResolution.Pending())
+      (local, record) match {
+        case (Some(journal), Some(reserved)) => if (terminal && reserved.intent == journal.intent) Leftover.Resolved else Leftover.Reservation
+        // Prepared and never reserved: nothing was launched and nothing is held.
+        case (Some(journal), None) => if (journal.attempted || journal.observation.nonEmpty) Leftover.Reservation else Leftover.Resolved
+        case (None, Some(_)) => if (terminal) Leftover.Resolved else Leftover.Request
+        case (None, None) => Leftover.Unfrozen
+      }
+    }
+    val root = session.resolve("combinations")
+    val combinations = if (!Files.exists(root, LinkOption.NOFOLLOW_LINKS)) Nil else Using.resource(Files.list(root))(_.iterator().asScala.toList).map { entry =>
+      require(Files.isDirectory(entry, LinkOption.NOFOLLOW_LINKS), "Retained combination is not a directory")
+      val queue = entry.resolve("delivery")
+      if (!Files.exists(entry.resolve("plan.json"), LinkOption.NOFOLLOW_LINKS)) Leftover.Unfrozen
+      else if (Files.exists(queue.resolve("000000.json"), LinkOption.NOFOLLOW_LINKS) && !SessionDelivery.unacknowledged(queue)) Leftover.Resolved
+      else Leftover.Combination
+    }
+    val found = integrations ++ combinations
+    UploadRemainder(List(
+      counted(found.count(_ == Leftover.Reservation), "integration reservations without a terminal resolution (integrations/)"),
+      counted(found.count(_ == Leftover.Request), "integration requests reserved without a local journal (integration-requests/)"),
+      counted(found.count(_ == Leftover.Combination), "frozen combinations not published (combinations/)")).flatten, found.count(_ == Leftover.Unfrozen))
   }
 
   /**
@@ -172,15 +200,18 @@ final class WorkspaceCleanup(config: SupervisorConfig, sessions: SessionWorkspac
   clock: Clock, logger: IzLogger) {
   import WorkspaceCleanup.*
 
-  /** The sessions no startup recovery has finished with, oldest first by the time their host recorded them. */
+  /** The session directories no startup recovery has finished with, oldest first by the time their host recorded them. Whether
+    * `run.json` can be reached is not asked here: a directory whose record is absent, is not a regular file or cannot be stat-ed is
+    * examined last, where reading it reports that as the session's problem, finds its host alive or finds that nothing was recorded. */
   private def candidates: List[Path] = {
     val root = config.directory.getParent
     val own = config.directory.getFileName.toString
     Using.resource(Files.list(root))(_.iterator().asScala.filter { path =>
       val name = path.getFileName.toString
       name != own && Try(UUID.fromString(name)).toOption.exists(_.toString == name) && Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS) &&
-        Files.isRegularFile(path.resolve("run.json"), LinkOption.NOFOLLOW_LINKS) && !Files.exists(path.resolve(Marker), LinkOption.NOFOLLOW_LINKS)
-    }.map(path => (Files.getLastModifiedTime(path.resolve("run.json")).toMillis, path.getFileName.toString, path)).toList).sortBy(value => (value._1, value._2)).map(_._3)
+        !Files.exists(path.resolve(Marker), LinkOption.NOFOLLOW_LINKS)
+    }.map(path => (Try(Files.getLastModifiedTime(path.resolve("run.json"), LinkOption.NOFOLLOW_LINKS).toMillis).getOrElse(Long.MaxValue), path.getFileName.toString, path)).toList)
+      .sortBy(value => (value._1, value._2)).map(_._3)
   }
 
   private def mark(directory: Path, outcome: RecoveryOutcome, reason: String): Unit =
@@ -194,56 +225,95 @@ final class WorkspaceCleanup(config: SupervisorConfig, sessions: SessionWorkspac
     }
   }
 
-  /** A session that can never be examined is recorded as such, once: a record of it cannot be decoded and its owner is gone. An
-    * input/output error is not such a case; it is reported and the session examined again at the next startup. */
+  /** A session that can never be examined is recorded as such, once: bytes of its `run.json` or of a job record were read and are
+    * not such a record, and its owner is gone. Failing to reach a record proves nothing about it; that is reported and the session
+    * examined again at the next startup. */
   private def abandon(directory: Path, session: SessionId, reason: String): Disposition = {
     mark(directory, RecoveryOutcome.Abandoned, reason)
     Disposition.Examined(SessionCleanup(session, Nil, Nil, Nil, 0, Some(reason)), Some(RecoveryOutcome.Abandoned))
   }
 
+  /** A host takes its lock before it writes `run.json` and writes everything else after it. A directory holding at most that lock
+    * was never recorded as a session and holds nothing to recover, deliver or report, whichever project its host served. */
+  private def unrecorded(directory: Path): Boolean = {
+    def names(path: Path): Set[String] = Using.resource(Files.list(path))(_.iterator().asScala.map(_.getFileName.toString).toSet)
+    val journal = directory.resolve("journal")
+    names(directory).subsetOf(Set("journal")) && (!Files.exists(journal, LinkOption.NOFOLLOW_LINKS) || names(journal).subsetOf(Set("owner.lock")))
+  }
+
+  private def unexamined(session: SessionId, error: Throwable): Disposition =
+    Disposition.Examined(SessionCleanup(session, Nil, Nil, Nil, 0, Some(problem("Session could not be examined", error))), None)
+
   /**
    * `run.json` is written after its session has taken the exclusive lock on `journal/owner.lock`, which the operating system releases
    * when that host process ends: acquiring the lock therefore proves the owner is gone, and holding it excludes `cq job upload`.
-   * A session with nothing left to deliver and no `Open` workspace is marked `Recovered`; quarantined trees stay for the operator and
-   * do not keep it pending.
+   * A failure of one session's examination is that session's problem and never ends the pass.
    */
-  private def session(directory: Path, expired: () => Boolean): Task[Disposition] = ZIO.scoped {
+  private def session(directory: Path, expired: () => Boolean): UIO[Disposition] = {
     val id = SessionId(UUID.fromString(directory.getFileName.toString))
-    ZIO.attemptBlocking(HostFiles.read(directory.resolve("run.json"), SupervisorRun_JsonCodec, MaxRecordBytes)).either.flatMap {
-      case Left(error: IOException) => ZIO.fail(error)
-      case Left(error) => ZIO.attemptBlocking {
-        if (ownerRuns(directory)) Disposition.Live(id) else abandon(directory, id, problem("Session record run.json could not be decoded", error))
+    ZIO.scoped {
+      // Reaching the record and decoding it are separate steps: only bytes that were read can show that a record is undecodable.
+      ZIO.attemptBlocking(HostFiles.bytes(directory.resolve("run.json"), MaxRecordBytes)).either.flatMap {
+        // Not reached. A host that has not recorded itself yet holds its lock; otherwise the fault is reported and nothing concluded.
+        case Left(error) => ZIO.attemptBlocking {
+          if (ownerRuns(directory)) Disposition.Live(id) else if (unrecorded(directory)) Disposition.Unrelated else unexamined(id, error)
+        }
+        case Right(bytes) => ZIO.attempt(HostFiles.decode(bytes, SupervisorRun_JsonCodec)).either.flatMap {
+          case Left(error) => ZIO.attemptBlocking {
+            if (ownerRuns(directory)) Disposition.Live(id) else abandon(directory, id, problem("Session record run.json could not be decoded", error))
+          }
+          case Right(run) if run.project.project != config.project.project || run.repository != config.run.repository || run.attempt.session != id =>
+            ZIO.succeed(Disposition.Unrelated)
+          case Right(run) => ZIO.acquireRelease(ZIO.attemptBlocking(FileJobRepository.open(directory.resolve("journal"), run.project.project, run.attempt.session)).either)(
+            opened => ZIO.attemptBlocking(opened.foreach(_.close())).orDie).flatMap {
+            case Left(DomainFailure(_: Fault.Conflict)) => ZIO.succeed(Disposition.Live(id))
+            // The lock was free, so the owner is gone and the record it left will not change.
+            case Left(error: JobRecordUndecodable) => ZIO.attemptBlocking(abandon(directory, id, problem("Job journal could not be decoded", error)))
+            case Left(error) => ZIO.fail(error)
+            case Right(_) if Files.exists(directory.resolve(Marker), LinkOption.NOFOLLOW_LINKS) => ZIO.succeed(Disposition.Unrelated)
+            case Right(journal) => examine(directory, run, journal, expired)
+          }
+        }
       }
-      case Right(run) if run.project.project != config.project.project || run.repository != config.run.repository || run.attempt.session != id =>
-        ZIO.succeed(Disposition.Unrelated)
-      case Right(run) => ZIO.acquireRelease(ZIO.attemptBlocking(FileJobRepository.open(directory.resolve("journal"), run.project.project, run.attempt.session)).either)(
-        opened => ZIO.attemptBlocking(opened.foreach(_.close())).orDie).flatMap {
-        case Left(DomainFailure(_: Fault.Conflict)) => ZIO.succeed(Disposition.Live(id))
-        case Left(error: IOException) => ZIO.fail(error)
-        // The lock was free, so the owner is gone and the journal it left will not change.
-        case Left(error) => ZIO.attemptBlocking(abandon(directory, id, problem("Job journal could not be decoded", error)))
-        case Right(_) if Files.exists(directory.resolve(Marker), LinkOption.NOFOLLOW_LINKS) => ZIO.succeed(Disposition.Unrelated)
-        case Right(journal) =>
-          val owner = Scope(run.project.project, Actor("CQ governor", run.attempt.session, Role.Governor))
-          val workspaces = sessions.at(directory)
-          for {
-            delivered <- (if (undelivered(directory)) ZIO.attemptBlocking(collectors.collector(run)).flatMap(new SessionDelivery(journal, workspaces, clock).flush(directory, run, _))
-              else ZIO.succeed(SessionDeliveryReport(0, Nil))).either
-            swept <- sweep(owner, directory, journal.records, workspaces, expired)
-            report = swept.copy(acknowledged = delivered.fold(_ => 0, _.acknowledged), problem = delivered match {
-              case Left(error) => Some(problem("Delivery reconciliation failed", error))
-              case Right(report) if report.incompleteTickets.nonEmpty => Some(s"${report.incompleteTickets.size} incomplete tickets or usage samples retained for inspection")
-              case Right(_) => None
-            })
-            marked <- ZIO.attemptBlocking {
-              val settled = delivered.isRight && report.retained.isEmpty && !expired() && !undelivered(directory)
-              if (settled) mark(directory, RecoveryOutcome.Recovered, (s"${report.removed.size} workspaces removed, ${report.quarantined.size} quarantined, " +
-                s"${report.acknowledged} delivery batches acknowledged" + report.problem.fold("")("; " + _)).take(MaxProblemCharacters))
-              Option.when(settled)(RecoveryOutcome.Recovered)
-            }
-          } yield Disposition.Examined(report, marked)
+    }.catchAll(error => ZIO.succeed(unexamined(id, error))).catchAllDefect(error => ZIO.succeed(unexamined(id, error)))
+  }
+
+  /**
+   * The owner is gone and this recovery holds its journal lock. The session is marked `Recovered` when `cq job upload --session`
+   * would find nothing to deliver and nothing to resolve, and no workspace is `Open`; quarantined trees stay for the operator and do
+   * not keep it pending, nor does a ticket or usage sample that was never committed and so can never be delivered.
+   */
+  private def examine(directory: Path, run: SupervisorRun, journal: JobRepository, expired: () => Boolean): Task[Disposition] = {
+    val owner = Scope(run.project.project, Actor("CQ governor", run.attempt.session, Role.Governor))
+    val workspaces = sessions.at(directory)
+    val delivery = new SessionDelivery(journal, workspaces, clock)
+    // One grant serves the flush and the integration reads of a session, and none is requested for a session that needs neither.
+    lazy val collector = collectors.collector(run)
+    for {
+      interrupted <- ZIO.attemptBlocking(delivery.interrupt())
+      before <- ZIO.attemptBlocking(SessionDelivery.remainder(directory, run))
+      delivered <- (if (before.undelivered) ZIO.attemptBlocking(collector).flatMap(delivery.flush(directory, run, _)).map(Some(_)) else ZIO.none).either
+      swept <- sweep(owner, directory, journal.records, workspaces, expired)
+      after <- ZIO.attemptBlocking(SessionDelivery.remainder(directory, run)).either
+      upload <- ZIO.attemptBlocking(unresolved(directory, run, () => collector)).either
+      marked <- ZIO.attemptBlocking {
+        val incomplete = delivered.toOption.flatten.fold(before.incomplete)(_.incompleteTickets.size)
+        val notes = List(
+          upload.toOption.filter(_.pending.nonEmpty).map(value => s"Left for $Upload: " + value.pending.mkString(", ")),
+          upload.left.toOption.map(problem(s"Integrations and combinations could not be examined; run $Upload", _)),
+          delivered.left.toOption.map(problem("Delivery reconciliation failed", _)),
+          after.left.toOption.map(problem("Deliveries could not be examined", _)),
+          counted(incomplete, "incomplete tickets or usage samples retained for inspection"),
+          upload.toOption.flatMap(value => counted(value.unfrozen, "integration requests or combination tickets never frozen, retained for inspection")),
+          counted(interrupted.size, "unsettled jobs recorded as Uncertain")).flatten
+        val report = swept.copy(acknowledged = delivered.toOption.flatten.fold(0)(_.acknowledged),
+          problem = Option.when(notes.nonEmpty)(notes.mkString("; ").take(MaxProblemCharacters)))
+        val settled = delivered.isRight && after.exists(!_.undelivered) && upload.exists(_.pending.isEmpty) && report.retained.isEmpty && !expired()
+        if (settled) mark(directory, RecoveryOutcome.Recovered, (s"${report.removed.size} workspaces removed, ${report.quarantined.size} quarantined, " +
+          s"${report.acknowledged} delivery batches acknowledged" + report.problem.fold("")("; " + _)).take(MaxProblemCharacters))
+        Disposition.Examined(report, Option.when(settled)(RecoveryOutcome.Recovered))
       }
-    }.catchAll(error => ZIO.succeed(Disposition.Examined(SessionCleanup(id, Nil, Nil, Nil, 0, Some(problem("Session could not be examined", error))), None)))
+    } yield marked
   }
 
   private def prune: UIO[Unit] = sessions.at(config.directory).prune(config.owner, config.run.repository)
