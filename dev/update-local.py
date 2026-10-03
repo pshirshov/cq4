@@ -16,6 +16,7 @@ from typing import Callable, Protocol
 
 SCHEMA_SOURCE = "server/src/main/resources/db/001-ledgers.sql"
 MODEL_SOURCE = "models/cq-api.baboon"
+ATTACHED_GOVERNOR_COLLECTOR = "CQ attached session; outer usage unavailable"
 
 
 def require(condition: bool, message: str) -> None:
@@ -251,10 +252,15 @@ def install(state: Path, release: Path, candidate: Path, rollback: Path, evidenc
         actual = database.run(["psql", "--no-psqlrc", "-v", "ON_ERROR_STOP=1", "-At", "-c",
                               "SELECT checksum FROM cq_schema_migrations WHERE version=1"], "schema-before", 30).strip()
         require(actual == schema_before, "Database schema differs from package; update refused")
-        pending = query("SELECT (SELECT count(*) FROM cq_claims WHERE NOT released AND expires_at > (extract(epoch FROM clock_timestamp()) * 1000)::bigint) + "
-                        "(SELECT count(*) FROM cq_usage_attempts WHERE effective_outcome IS NULL) + "
-                        "(SELECT count(*) FROM cq_integrations WHERE jsonb_exists(body->'resolution','Pending'))", "unsettled-work")
-        require(pending == "0", "Reconcile active claims, attempts and pending integrations before updating")
+        attached = f"parent_id IS NULL AND body->>'role' = 'Governor' AND body->>'collector' = '{ATTACHED_GOVERNOR_COLLECTOR}'"
+        pending = json.loads(query("SELECT json_build_object(" +
+                        "'claims', (SELECT count(*) FROM cq_claims WHERE NOT released AND expires_at > (extract(epoch FROM clock_timestamp()) * 1000)::bigint), " +
+                        "'managedAttempts', (SELECT count(*) FROM cq_usage_attempts WHERE effective_outcome IS NULL AND NOT COALESCE((" + attached + "), false)), " +
+                        "'pendingIntegrations', (SELECT count(*) FROM cq_integrations WHERE jsonb_exists(body->'resolution','Pending')), " +
+                        "'incompleteAttachedGovernors', (SELECT count(*) FROM cq_usage_attempts WHERE effective_outcome IS NULL AND " + attached + "))", "unsettled-work"))
+        receipt["unsettledWork"] = pending
+        require(pending["claims"] == 0 and pending["managedAttempts"] == 0 and pending["pendingIntegrations"] == 0,
+                f"Reconcile active claims, managed attempts and pending integrations before updating: {pending}")
         backup = evidence / "before.dump"
         database.run(["pg_dump", "--format=custom", "--file", str(backup)], "database-backup", 600)
         database.run(["pg_restore", "--list", str(backup)], "backup-inventory", 30)

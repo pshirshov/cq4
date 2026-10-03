@@ -236,7 +236,7 @@ class PostgreSQLInstall(unittest.TestCase):
                 port = listener.getsockname()[1]
             subprocess.run(["pg_ctl", "-D", str(data), "-l", str(root / "setup.log"), "-o", f"-h 127.0.0.1 -p {port} -c unix_socket_directories=''", "-w", "start"], check=True, stdout=subprocess.DEVNULL)
             try:
-                subprocess.run(["psql", "-h", "127.0.0.1", "-p", str(port), "-U", "cq", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-c", "CREATE TABLE cq_schema_migrations(version integer PRIMARY KEY, checksum text); INSERT INTO cq_schema_migrations VALUES (1,'schema'); CREATE TABLE cq_claims(released boolean, expires_at bigint); CREATE TABLE cq_usage_attempts(effective_outcome text); CREATE TABLE cq_integrations(body jsonb); CREATE TABLE cq_fixture(value text); INSERT INTO cq_fixture VALUES ('retained');"], check=True, stdout=subprocess.DEVNULL)
+                subprocess.run(["psql", "-h", "127.0.0.1", "-p", str(port), "-U", "cq", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-c", "CREATE TABLE cq_schema_migrations(version integer PRIMARY KEY, checksum text); INSERT INTO cq_schema_migrations VALUES (1,'schema'); CREATE TABLE cq_claims(released boolean, expires_at bigint); CREATE TABLE cq_usage_attempts(effective_outcome text, parent_id uuid, body jsonb); CREATE TABLE cq_integrations(body jsonb); CREATE TABLE cq_fixture(value text); INSERT INTO cq_fixture VALUES ('retained'); INSERT INTO cq_usage_attempts(body) SELECT '{\"role\":\"Governor\",\"collector\":\"CQ attached session; outer usage unavailable\"}'::jsonb FROM generate_series(1,20);"], check=True, stdout=subprocess.DEVNULL)
             finally:
                 subprocess.run(["pg_ctl", "-D", str(data), "-m", "fast", "-w", "stop"], check=True, stdout=subprocess.DEVNULL)
             release, candidate, rollback = (root / name for name in ("release", "candidate", "rollback"))
@@ -259,7 +259,41 @@ class PostgreSQLInstall(unittest.TestCase):
             self.assertEqual(update.digest(rollback / "manifest.json"), receipt["oldManifest"])
             dump = subprocess.check_output(["pg_restore", "-f", "-", receipt["backup"]], text=True)
             self.assertIn("retained", dump)
+            self.assertEqual(dump.count("CQ attached session; outer usage unavailable"), 20)
             self.assertEqual(receipt["backupSha256"], update.digest(Path(receipt["backup"])))
+            self.assertEqual(receipt["unsettledWork"], {"claims": 0, "managedAttempts": 0,
+                             "pendingIntegrations": 0, "incompleteAttachedGovernors": 20})
+            blocked_candidate = root / "blocked-candidate"
+            fixture(blocked_candidate, "blocked")
+            cases = [
+                ("claims", "INSERT INTO cq_claims VALUES (false,9223372036854775807)", "DELETE FROM cq_claims"),
+                ("managedAttempts", "INSERT INTO cq_usage_attempts(body) VALUES ('{\"role\":\"Worker\",\"collector\":\"CQ native collector 0.1.0\"}')", "DELETE FROM cq_usage_attempts WHERE body->>'role'='Worker'"),
+                ("managedAttempts", "INSERT INTO cq_usage_attempts(body) VALUES ('{\"role\":\"Governor\",\"collector\":\"CQ native collector 0.1.0\"}')", "DELETE FROM cq_usage_attempts WHERE body->>'collector'='CQ native collector 0.1.0'"),
+                ("managedAttempts", "INSERT INTO cq_usage_attempts(body) VALUES ('{}')", "DELETE FROM cq_usage_attempts WHERE body='{}'"),
+                ("managedAttempts", "INSERT INTO cq_usage_attempts(parent_id,body) VALUES ('00000000-0000-0000-0000-000000000001','{\"role\":\"Governor\",\"collector\":\"CQ attached session; outer usage unavailable\"}')", "DELETE FROM cq_usage_attempts WHERE parent_id IS NOT NULL"),
+                ("pendingIntegrations", "INSERT INTO cq_integrations VALUES ('{\"resolution\":{\"Pending\":{}}}')", "DELETE FROM cq_integrations"),
+            ]
+            def execute(statement):
+                subprocess.run(["pg_ctl", "-D", str(data), "-l", str(root / "setup.log"), "-o", f"-h 127.0.0.1 -p {port} -c unix_socket_directories=''", "-w", "start"], check=True, stdout=subprocess.DEVNULL)
+                try:
+                    subprocess.run(["psql", "-h", "127.0.0.1", "-p", str(port), "-U", "cq", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-c", statement], check=True, stdout=subprocess.DEVNULL)
+                finally:
+                    subprocess.run(["pg_ctl", "-D", str(data), "-m", "fast", "-w", "stop"], check=True, stdout=subprocess.DEVNULL)
+            for category, insertion, deletion in cases:
+                with self.subTest(category=category, insertion=insertion):
+                    execute(insertion)
+                    blocked = {"oldManifest": update.digest(release / "manifest.json"), "newManifest": update.digest(blocked_candidate / "manifest.json"), "status": "candidate-verified"}
+                    with self.assertRaisesRegex(RuntimeError, "Reconcile active claims"):
+                        update.install(root, release, blocked_candidate, root / "blocked-rollback", evidence,
+                                       blocked, "schema", update.Commands(root, evidence, dict(os.environ)), "schema", None)
+                    self.assertEqual(blocked["unsettledWork"][category], 1)
+                    self.assertEqual(blocked["status"], "rolled-back")
+                    self.assertEqual(update.digest(release / "manifest.json"), receipt["newManifest"])
+                    self.assertEqual(update.digest(blocked_candidate / "manifest.json"), blocked["newManifest"])
+                    self.assertFalse((root / "blocked-rollback").exists())
+                    self.assertFalse((root / ".cq-update-recovery.json").exists())
+                    self.assertFalse((data / "postmaster.pid").exists())
+                    execute(deletion)
             # A mismatched database refuses without changing either package and clears a verified recovery marker.
             candidate.mkdir()
             (candidate / "manifest.json").write_text("third")

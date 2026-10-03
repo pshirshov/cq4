@@ -1,0 +1,11 @@
+# D133: incomplete attached Governor usage blocks local replacement
+
+Operator update `20261003T212617-f8a6f244` built its native candidate, then refused replacement: `unsettled-work.log` reported 20. The receipt recorded verified rollback and database shutdown; the installed manifest still matched the old package. The old release was temporarily started with the official launcher for HTTP API inspection. API pagination enumerated all 367 attempts in the single project: exactly 20 lacked outcomes, all root Governor attempts using `CQ attached session; outer usage unavailable`. Together these 20 account for the original aggregate refusal; no usage outcomes were invented or modified.
+
+The updater now excludes only root Governor attempts with that exact attached-session collector from the deployment guard. Missing or unrecognized attempt metadata still blocks replacement. Active claims, unfinished managed attempts and pending integrations remain blockers. Category counts, including incomplete attached Governors, are recorded in the receipt and log. Launcher ownership, database-client exclusion, backup, exact schema transition and rollback requirements are unchanged. Consumer runs must still be stopped; missing usage outcomes do not establish process liveness.
+
+Evidence: `/srv/nvme/tmp/cq4-unsettled-update-evidence`.
+
+Before the correction, the disposable PostgreSQL install fixture containing 20 incomplete attached Governor records failed with the same reconciliation error (`guard-before.log`). After the correction, all 16 focused checks passed (`guard-final.log`): installation and backup retain all 20 records; live claims, Workers, native Governors, malformed metadata, non-root attached Governors and Pending integrations each refuse replacement without changing package identities, retaining a recovery marker or leaving the owned database running. Existing package-interruption and schema rollback tests also pass. No native recompilation or operator-state installation is claimed for this correction: application runtime inputs are unchanged.
+
+During temporary API availability, the three queued defect intakes were filed as D130–D132, I29 received its implemented fast native update follow-up, and this defect was filed as D133. IDs were returned by the server.
