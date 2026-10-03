@@ -1,0 +1,56 @@
+[
+  {
+    "Create": {
+      "draft": {
+        "title": "Drivers/worksets navigation addition clips final ledger controls at laptop viewport",
+        "body": "Operator update attempt at a849e3a stopped before installation in the UI gate. The source app has a navigation density regression after D123. The live ledger endpoint is unavailable while the launcher is stopped, so intake is queued for replay after restart. Source correction and focused browser evidence are recorded in docs/validation/update-local-recovery-20261003.md; installed verification remains pending.",
+        "labels": [
+          "ui",
+          "navigation",
+          "density",
+          "release-blocker"
+        ],
+        "archived": false,
+        "content": {
+          "Defect": {
+            "status": "Open",
+            "severity": "Medium",
+            "observed": "At 1280x720 Upstream is y707..735 and clips below the navigation pane/footer; existing density fixture fails.",
+            "expected": "All normal navigation controls including Drivers and worksets and every ledger fit without scrolling at the supported laptop viewports and stay inside the pane.",
+            "reproduction": "Operator reproduction: /srv/nvme/tmp/cq4-playground/updates/20261003T190701-af8375f9/gates/20261003T191553-ui/density-results.json and density-1280.png. Focused reproduction: nix develop -c env CQ_BROWSER_EVIDENCE=<owned evidence dir> node dev/navigation-density-check.mjs.",
+            "cause": "The new Drivers and worksets control added a row without adjusting vertical navigation density.",
+            "resolution": []
+          }
+        },
+        "citations": []
+      }
+    }
+  },
+  {
+    "Create": {
+      "draft": {
+        "title": "Live usage browser fixture expects superseding a pending resume replacement",
+        "body": "The original browser component exposed a second UI gate blocker after the density correction. Its live usage fixture expected the old connection heartbeat to discard an unverified replacement, contradicting the merged D129 correction. The live ledger endpoint is unavailable while the launcher is stopped, so intake is queued. Updated fixture and focused browser evidence are recorded in docs/validation/update-local-recovery-20261003.md.",
+        "labels": [
+          "ui",
+          "tests",
+          "connection",
+          "release-blocker"
+        ],
+        "archived": false,
+        "content": {
+          "Defect": {
+            "status": "Open",
+            "severity": "Medium",
+            "observed": "dev/usage-live-browser.mjs times out waiting for Superseded after a routine heartbeat on the unchanged healthy old socket. The captured connection events show the candidate waiting, then reaching its heartbeat deadline.",
+            "expected": "The fixture must assert that the old usage watch continues while the unverified replacement remains pending, then verify takeover and exactly one usage watch on that same candidate after its Pong is delivered.",
+            "reproduction": "Run the source JVM and dev/browser.mjs against a disposable PostgreSQL fixture. Original captured failure: /srv/nvme/tmp/cq4-navigation-evidence/usage-before/browser-regression.log. Focused corrected fixture fails against the pre-D129 promotion behavior and passes with D129 restored.",
+            "cause": "D129 changed ConnectionManager.promote but the existing usage-live overlap fixture retained the previous connection-race expectation.",
+            "resolution": []
+          }
+        },
+        "citations": []
+      }
+    }
+  }
+]
