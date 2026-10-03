@@ -4,7 +4,7 @@ This is the protocol and the environment for an evaluation the operator requests
 
 The page defines protocol and environment only (Goal G4, Idea I12, Question Q10). It specifies no individual run and no run was executed for it. The operator's answers to Q10–Q16 are binding and are quoted where they decide a rule. A value that no answer decides is marked **proposed** and listed under [Open choices for the operator](#open-choices-for-the-operator).
 
-**Status: draft, not ready.** The protocol has not been reviewed, Researches R2 and R3 are open, and the helper scripts were syntax-checked only. See [Readiness](#8-readiness-and-what-is-not-verified).
+**Status: draft, not ready.** The protocol has not been reviewed, Researches RS2 and RS3 are open, and the helper scripts were syntax-checked only. See [Readiness](#8-readiness-and-what-is-not-verified).
 
 ## Acceptance criteria of G4
 
@@ -101,7 +101,7 @@ A session counts as idle when the busy text has been absent for 60 seconds (`gov
 | Files `cq configure` writes | `.mcp.json` (`cq` server), `.claude/settings.local.json` (`enabledMcpjsonServers`, hooks, `statusLine`), `.claude/commands/cq/` | `.codex/config.toml`, `.codex/hooks.json`, `.agents/skills/cq-*` | `.pi/extensions/cq-host.js`, `.pi/prompts/` |
 | Extra state | None | A private `CODEX_HOME`: `dev/eval-launch prepare-codex-home DIR` copies `~/.codex/config.toml` and links `~/.codex/auth.json`. The personal configuration is read-only in the sandbox, so Codex could not persist project trust without it. It must not be ephemeral: CQ reads outer usage from its rollout. | None |
 | Prompts at launch | With the approval written by `cq configure`, none ("the host loads with no dialog", [defect corrections](validation/defect-fixes-20260930.md)). `gov/start.sh` still handles `New MCP server found` with `Up`, `Up`, `Enter`. `Teach auto mode` was answered with `Down`, `Enter`. | Project trust, once per `CODEX_HOME`; then `/hooks`, which shows `2 hooks need review before they can run`, answered with `t` (trust all). Both are stored in the private `config.toml`, so later launches show neither. If Codex lists a personal and a project skill of one name, select the project one. | None seen with `--approve`. |
-| Check that `cq` is connected | `/mcp`, `Enter`; the screen must match `✔ cq +[0-9]+ tools` (`gov/start.sh`), then `Escape`. Nine tools were listed on the installed release. | `/mcp` must list `cq`. Not scripted so far: for the recorded Codex drive the only connection evidence is its `cq` tool calls (`Called cq.session` in `gov/drive4-final-screen.txt`). | The footer reads `CQ driver off` once `cq-host.js` is loaded ([Pi extension driver](validation/pi-driver.md), stub backend). That shows the extension, not a connected server: a check against a real server is not established (R2). |
+| Check that `cq` is connected | `/mcp`, `Enter`; the screen must match `✔ cq +[0-9]+ tools` (`gov/start.sh`), then `Escape`. Nine tools were listed on the installed release. | `/mcp` must list `cq`. Not scripted so far: for the recorded Codex drive the only connection evidence is its `cq` tool calls (`Called cq.session` in `gov/drive4-final-screen.txt`). | The footer reads `CQ driver off` once `cq-host.js` is loaded ([Pi extension driver](validation/pi-driver.md), stub backend). That shows the extension, not a connected server: a check against a real server is not established (RS2). |
 | Workflow commands | `/cq:begin`, `/cq:advance`, `/cq:drive`, `/cq:park` | `$cq-begin`, `$cq-advance`, `$cq-drive`, `$cq-park` | As Claude Code |
 
 If the connection check fails, the run ends in S0 as a launch failure. A missing token, an uninitialised project or a harness version outside the verified set makes `cq host` answer `initialize` with error `-32003` and one line naming the cause, and exit 78 ([interactive](interactive.md)).
@@ -427,12 +427,12 @@ Choices these answers do not decide are in the last section. Each needs a Questi
 
 | Research | State | What exists |
 | --- | --- | --- |
-| R2 Launch of each harness from tmux with `cq` connected, in a scratch consumer | Open | Claude Code and Codex were launched this way in the CQ checkout, with `cq` connected and real work driven (section 1). Not done: either harness in a scratch consumer on a private server through `dev/eval-launch`; Pi against a real server at all. |
-| R3 A reliable outer token source for Claude Code | Open | The local transcripts carry per-response token counts (section 6). Not done: comparison with `/cost` or with billing; subagent, compaction and auxiliary coverage. |
+| RS2 Launch of each harness from tmux with `cq` connected, in a scratch consumer | Open | Claude Code and Codex were launched this way in the CQ checkout, with `cq` connected and real work driven (section 1). Not done: either harness in a scratch consumer on a private server through `dev/eval-launch`; Pi against a real server at all. |
+| RS3 A reliable outer token source for Claude Code | Open | The local transcripts carry per-response token counts (section 6). Not done: comparison with `/cost` or with billing; subagent, compaction and auxiliary coverage. |
 
 ### Review
 
-The protocol has not been reviewed. It is ready when R2 and R3 are concluded, the open choices are answered and an independent review has accepted this page.
+The protocol has not been reviewed. It is ready when RS2 and RS3 are concluded, the open choices are answered and an independent review has accepted this page.
 
 ### Not verified
 
@@ -477,7 +477,7 @@ Each is a Question to derive; the recommended alternative is marked.
    - (a) The proposed table of section 4, recalibrated after the first run of each harness. **Recommended.**
    - (b) No absolute thresholds until a first run exists: report the figures and flag only rework and the governor share.
    - (c) Relative thresholds only: an attempt above three times the median of its role within the run.
-7. **How are R2 and R3 concluded?**
+7. **How are RS2 and RS3 concluded?**
    - (a) One short probe per harness in a scratch consumer on a private server: launch, connection check, one small begin, exit, upload, usage read, and for Claude Code a comparison of the transcript sum with `/cost`. **Recommended:** it exercises exactly the unverified steps for a small cost and is not an evaluation run.
    - (b) Treat the first requested run as the probe and mark the protocol provisional until it ends.
    - (c) Accept the recorded drives on the CQ repository as the findings for Claude Code and Codex, and probe Pi only.
