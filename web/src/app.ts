@@ -21,6 +21,7 @@ import { ItemsView } from './items-view.js';
 import { Notifications } from './notifications.js';
 import { ReferencePopup } from './references.js';
 import { QuestionBatch } from './questions.js';
+import { DriversDialog } from './drivers.js';
 import { HelpDialog } from './help.js';
 
 const CONTEXT = BaboonCodecContext.Default;
@@ -63,6 +64,16 @@ class App {
       if (this.project !== null && this.project.value === project.value) await this.refresh();
     },
   }, localStorage);
+  private worksetFilter: api.StoredWorkset | null = null;
+  private readonly worksetLabel = element('span', '');
+  private readonly clearWorkset = button('Clear workset filter', () => this.action(async () => {
+    this.worksetFilter = null; this.worksetLabel.textContent = ''; this.clearWorkset.hidden = true; await this.search();
+  }));
+  private readonly drivers = new DriversDialog({
+    call: command => this.connection().call(command),
+    filter: async workset => { this.worksetFilter = workset; this.worksetLabel.textContent = `Workset ${workset.id.value}`; this.clearWorkset.hidden = false; await this.search(); },
+    view: id => this.references.show(id),
+  });
   private mounted = false;
   private tableColumns: TableColumns | null = null;
   private manager: ConnectionManager | null = null;
@@ -289,7 +300,9 @@ class App {
     const archive = button('Archive terminal items', () => this.action(async () => this.archive.open(this.currentProject(), this.activeQuery, this.order))); archive.className = 'navigation-entry';
     const questions = button('Answer questions', () => this.action(async () => this.questions.open(this.currentProject()))); questions.className = 'navigation-entry'; questions.prepend(icon(api.Ledger.Questions));
     const requirements = button('Standing requirements', () => this.action(async () => this.requirements.open(this.currentProject()))); requirements.className = 'navigation-entry';
-    side.append(create, questions, usage, archive, requirements, element('h3', 'Browse'), shortcuts);
+    const drivers = button('Drivers and worksets', () => this.drivers.open(this.currentProject(), this.selection)); drivers.className = 'navigation-entry';
+    this.clearWorkset.hidden = this.worksetFilter === null;
+    side.append(create, questions, usage, archive, requirements, drivers, this.worksetLabel, this.clearWorkset, element('h3', 'Browse'), shortcuts);
     const table = element('table', ''); table.className = 'items-table'; table.setAttribute('aria-label', 'Items');
     const head = element('thead', ''); const headings = element('tr', '');
     const columns: TableColumn[] = [];
@@ -342,7 +355,7 @@ class App {
     list.append(table);
     content.append(workspace.toggle, this.detail, this.editorPanel, this.graph.element, this.usagePanel, this.auditPanel);
     this.root.replaceChildren(header, workspace.element, status, this.projectDialog.element, this.createDialog.element, this.conflictDialog.element,
-      this.historyDialog.element, this.usageDialog.element, this.archive.element, this.requirements.element, this.graph.dialog.element, this.references.dialog.element, this.questions.dialog.element, this.help.element, this.notifications.element);
+      this.historyDialog.element, this.usageDialog.element, this.archive.element, this.requirements.element, this.graph.dialog.element, this.references.dialog.element, this.questions.dialog.element, this.drivers.element, this.help.element, this.notifications.element);
     this.notifications.reveal(); workspace.fit();
     this.manager = new ConnectionManager(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`, {
       status: stats => this.health.update(stats),
@@ -393,7 +406,7 @@ class App {
     this.queryEditor.showDiagnostic(undefined, this.query.value); await this.refresh();
   }
   private reset(): void {
-    this.questions.reset(); this.references.reset();
+    this.questions.reset(); this.references.reset(); this.drivers.reset(); this.drivers.element.close(); this.worksetFilter = null; this.worksetLabel.textContent = ''; this.clearWorkset.hidden = true;
     this.archive.invalidate();
     this.createDialog.close(); this.historyDialog.close(); this.usageDialog.close(); this.closeEditor();
     this.queryEditor.cancelLive();
@@ -478,7 +491,8 @@ class App {
     try {
       let page: api.BrowsePage;
       do {
-        const selection = new api.ReadSelection_Browse(this.activeQuery, this.order, after, snapshot, PAGE_SIZE);
+        const selection = this.worksetFilter === null ? new api.ReadSelection_Browse(this.activeQuery, this.order, after, snapshot, PAGE_SIZE)
+          : new api.ReadSelection_WorksetBrowse(this.activeQuery, this.order, after, snapshot, PAGE_SIZE, this.worksetFilter.id);
         const response = await this.connection().call(new api.Command_Read(new api.ReadInput(project, selection)));
         if (!current()) return;
         if (response instanceof api.Result_Failed && response.fault instanceof api.Fault_Resync) { this.dirty = true; return; }

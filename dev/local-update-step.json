@@ -1,7 +1,12 @@
 {
-  "kind": "unchanged-data",
+  "kind": "add-driver-table",
   "schema": "f64a63cd716367f15d9f4425087442ee34ce75afd71279618e5d04233b2cd23c",
-  "modelBefore": "8b60b55c53cf1726dd840235645ab649f611f16e9e8e8b56bf7881c27baf6b67",
-  "modelAfter": "905b2d0da0241fb3c9d10ab51f08075bdbbf57b6e4799c6bbe6e53a0c7863366",
-  "reason": "Catalog is a new request/result and new help-only types; no stored type changes."
+  "schemaAfter": "f0aaf1d080e961fdd09b6a098cbcaac3e108afca1af1df2a4515fa03ff924945",
+  "modelsBefore": [
+    "8b60b55c53cf1726dd840235645ab649f611f16e9e8e8b56bf7881c27baf6b67",
+    "905b2d0da0241fb3c9d10ab51f08075bdbbf57b6e4799c6bbe6e53a0c7863366"
+  ],
+  "modelAfter": "b74cb9095b127cf383ccb46e79d42a3f70b4497cbcd59a7c9a036733b42f488a",
+  "sqlSha256": "ca5b2203ee0363debf26013a81fa6b226fa438de5ee0220f844836ab58be5676",
+  "reason": "D123 adds durable driver records; existing stored types are unchanged. Previous in-memory drivers must be parked/reconciled before stopping the previous server."
 }

@@ -169,7 +169,7 @@ class PostgreSQLInstall(unittest.TestCase):
                 port = listener.getsockname()[1]
             subprocess.run(["pg_ctl", "-D", str(data), "-l", str(root / "setup.log"), "-o", f"-h 127.0.0.1 -p {port} -c unix_socket_directories=''", "-w", "start"], check=True, stdout=subprocess.DEVNULL)
             try:
-                subprocess.run(["psql", "-h", "127.0.0.1", "-p", str(port), "-U", "cq", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-c", "CREATE TABLE cq_schema_migrations(version integer PRIMARY KEY, checksum text); INSERT INTO cq_schema_migrations VALUES (1,'schema'); CREATE TABLE cq_fixture(value text); INSERT INTO cq_fixture VALUES ('retained');"], check=True, stdout=subprocess.DEVNULL)
+                subprocess.run(["psql", "-h", "127.0.0.1", "-p", str(port), "-U", "cq", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-c", "CREATE TABLE cq_schema_migrations(version integer PRIMARY KEY, checksum text); INSERT INTO cq_schema_migrations VALUES (1,'schema'); CREATE TABLE cq_claims(released boolean, expires_at bigint); CREATE TABLE cq_usage_attempts(effective_outcome text); CREATE TABLE cq_integrations(body jsonb); CREATE TABLE cq_fixture(value text); INSERT INTO cq_fixture VALUES ('retained');"], check=True, stdout=subprocess.DEVNULL)
             finally:
                 subprocess.run(["pg_ctl", "-D", str(data), "-m", "fast", "-w", "stop"], check=True, stdout=subprocess.DEVNULL)
             release, candidate, rollback = (root / name for name in ("release", "candidate", "rollback"))
@@ -185,7 +185,7 @@ class PostgreSQLInstall(unittest.TestCase):
             for path, content in ((release, "old"), (candidate, "new")):
                 fixture(path, content)
             receipt = {"oldManifest": update.digest(release / "manifest.json"), "newManifest": update.digest(candidate / "manifest.json"), "status": "candidate-verified"}
-            update.install(root, release, candidate, rollback, evidence, receipt, "schema", update.Commands(root, evidence, dict(os.environ)))
+            update.install(root, release, candidate, rollback, evidence, receipt, "schema", update.Commands(root, evidence, dict(os.environ)), "schema", None)
             self.assertEqual(receipt["status"], "installed")
             self.assertFalse((data / "postmaster.pid").exists())
             self.assertFalse((root / ".cq-update-recovery.json").exists())
@@ -198,10 +198,23 @@ class PostgreSQLInstall(unittest.TestCase):
             (candidate / "manifest.json").write_text("third")
             next_receipt = {"oldManifest": update.digest(release / "manifest.json"), "newManifest": update.digest(candidate / "manifest.json"), "status": "candidate-verified"}
             with self.assertRaisesRegex(RuntimeError, "Database schema differs"):
-                update.install(root, release, candidate, root / "next-rollback", evidence, next_receipt, "different", update.Commands(root, evidence, dict(os.environ)))
+                update.install(root, release, candidate, root / "next-rollback", evidence, next_receipt, "different", update.Commands(root, evidence, dict(os.environ)), "different", None)
             self.assertEqual(next_receipt["status"], "rolled-back")
             self.assertFalse((root / ".cq-update-recovery.json").exists())
             self.assertEqual(update.digest(release / "manifest.json"), receipt["newManifest"])
+            shutil.rmtree(candidate)
+            fixture(candidate, "third")
+            transformed = {"oldManifest": update.digest(release / "manifest.json"), "newManifest": update.digest(candidate / "manifest.json"), "status": "candidate-verified"}
+            (candidate / "bin/cq").write_text("modified after candidate verification")
+            sql = "BEGIN; CREATE TABLE cq_drivers(value text); UPDATE cq_schema_migrations SET checksum='next'; COMMIT;"
+            with self.assertRaisesRegex(RuntimeError, "Package file differs"):
+                update.install(root, release, candidate, root / "transform-rollback", evidence, transformed, "next",
+                               update.Commands(root, evidence, dict(os.environ)), "schema", sql)
+            self.assertEqual(transformed["status"], "rolled-back")
+            self.assertFalse((root / ".cq-update-recovery.json").exists())
+            self.assertEqual(update.digest(release / "manifest.json"), receipt["newManifest"])
+            self.assertEqual(json.loads((evidence / "data-before.json").read_text()), json.loads((evidence / "data-restored.json").read_text()))
+
 
 
 if __name__ == "__main__":

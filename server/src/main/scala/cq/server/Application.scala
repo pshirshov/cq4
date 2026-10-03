@@ -47,6 +47,7 @@ final class Application(ledger: LedgerService[IO], repository: LedgerRepository[
         case ReadSelection.ItemDetails(members, bytes) => ledger.details(scope, members, bytes).map(Result.Details.apply)
         case ReadSelection.History(id, before, limit) => ledger.history(scope, id, before, limit).map(Result.History.apply)
         case ReadSelection.Changes(after, limit) => ledger.changes(scope, after, limit).map(Result.Changes.apply)
+        case ReadSelection.WorksetBrowse(query, order, after, snapshot, limit, workset) => ledger.browseWorkset(scope, query, order, after, snapshot, limit, workset).flatMap(working(scope, _)).map(Result.Browsed.apply)
         case ReadSelection.Catalog() => ZIO.attempt(Result.Catalog(catalog.value))
       }}
       case Command.Graph(input) => scoped(authority, input.project) { scope =>
@@ -56,6 +57,7 @@ final class Application(ledger: LedgerService[IO], repository: LedgerRepository[
         case WorksetAction.Discover(after, snapshot, limit) => ledger.subgraphs(scope, after, snapshot, limit).map(Result.Subgraphs.apply)
         case WorksetAction.Create(targets, through) => ledger.createWorkset(scope, targets, through).map(Result.WorksetStored.apply)
         case WorksetAction.Lookup(id) => ledger.lookupWorkset(scope, id).map(Result.WorksetStored.apply)
+        case WorksetAction.StorePreview(preview) => ledger.storeWorksetPreview(scope, preview).map(Result.WorksetStored.apply)
         case WorksetAction.Preview(target) => ledger.previewWorkset(scope, target).map(Result.WorksetPreviewed.apply)
       }}
       case Command.Driver(input) => scoped(authority, input.project)(scope => ledger.drive(scope, input.request).map(Result.Driver.apply))

@@ -3,8 +3,9 @@ package cq.server
 import baboon.runtime.shared.BaboonCodecContext
 import cq.api.*
 import cq.core.*
+import cq.core.DriverRecords.*
 import cq.host.*
-import distage.{Activation, DIKey}
+import distage.{Activation, DIKey, ModuleDef}
 import distage.StandardAxis.Repo
 import io.circe.parser.parse
 import izumi.distage.plugins.PluginConfig
@@ -15,6 +16,7 @@ import zio.{IO, Promise, Runtime, Unsafe, ZIO}
 
 abstract class DriverContractTest extends SpecZIO with AssertZIO {
   override def config = super.config.copy(
+    moduleOverrides = super.config.moduleOverrides ++ new ModuleDef { make[DriverInspector] },
     pluginConfig = PluginConfig.const(List(CqPlugin)),
     memoizationRoots = Set(DIKey[LedgerRepository[IO]], DIKey[LedgerService[IO]], DIKey[UsageService[IO]], DIKey[ArtifactService[IO]], DIKey[ProposalService[IO]]),
   )
@@ -320,6 +322,25 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
   }
 
   "The CQ driver core (Behavioral Active Blackbox; dummy Group / PostgreSQL Good Communication)" should {
+
+    "preserve committed driver and consumed tokens when service instances restart" in { (service: LedgerService[IO], repository: LedgerRepository[IO]) =>
+      val w = world
+      val key = claude("durable-restart")
+      for {
+        _ <- service.initialize(w.operator, "durable restart")
+        root <- create(service, w.operator, goal("Goal"))
+        cycle <- driven(service, w, key, workset(root))
+        before <- status(service, w, key)
+        restarted = FixedLedger.at(repository, System.currentTimeMillis())
+        after <- status(restarted, w, key)
+        _ <- assertIO(after == before && after.exists(_.state == DriverState.On))
+        replay <- activate(restarted, w.governor, cycle.run, cycle.workflow, Some(cycle.token))
+        _ <- assertIO(replay == DriverActivation.Started(cycle.cycle))
+        reused <- activate(restarted, w.governor, RequestId(uuid), cycle.workflow, Some(cycle.token)).either
+        _ <- assertIO(denied(reused))
+        _ <- failed(restarted, w, key, "already used")
+      } yield ()
+    }
     "validate drive-start again, return the preview, reject invalid requests with the driver off, and park" in { (service: LedgerService[IO]) =>
       val w = world
       val key = claude("drive-start")
@@ -380,8 +401,109 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
       } yield ()
     }
 
+    "roll back rejected writes and callbacks while committing only the driver's failure stop" in { (service: LedgerService[IO], repository: LedgerRepository[IO]) =>
+      val w = world
+      val key = claude("durable-failure")
+      val callbacks = new java.util.concurrent.atomic.AtomicInteger(0)
+      for {
+        project <- service.initialize(w.operator, "original")
+        root <- create(service, w.operator, goal("Goal"))
+        _ <- driven(service, w, key, workset(root))
+        before <- repository.driverRecords(w.project)
+        aborted <- repository.transact(w.project) { tx =>
+          tx.putDriver(before.head.copy(touchedAt = before.head.touchedAt + 1))
+          tx.afterCommit(() => { callbacks.incrementAndGet(); () })
+          throw new java.io.IOException("ordinary abort")
+        }.either
+        unchanged <- repository.driverRecords(w.project)
+        _ <- assertIO(aborted.isLeft && unchanged == before && callbacks.get() == 0)
+        rejected <- repository.transact(w.project) { tx =>
+          tx.renameProject(project.copy(name = "rejected"))
+          tx.allocate(Ledger.Tasks)
+          tx.afterCommit(() => { callbacks.incrementAndGet(); () })
+          new DriverRegistry().fail(tx.driver(key).get, "durable rejection", System.currentTimeMillis())
+        }.either
+        after <- repository.driverRecords(w.project)
+        metadata <- repository.transact(w.project)(_.project)
+        first <- create(service, w.operator, task("First task"))
+        _ <- assertIO(denied(rejected) && metadata == project && callbacks.get() == 0 && first.number == 1 &&
+          after.head.state == DriverState.Off && after.head.stopped.exists(_.detail == "durable rejection") &&
+          after.head.revision.value == before.head.revision.value + 1)
+      } yield ()
+    }
+
+    "require the current driver revision and Human authority for browser park" in { (service: LedgerService[IO]) =>
+      val w = world
+      val key = claude("browser-park")
+      def listed: IO[Throwable, List[DriverSummary]] = service.drive(w.operator, DriverRequest.Summaries()).map {
+        case DriverReply.Listed(values) => values
+        case other => throw new IllegalStateException(other.toString)
+      }
+      for {
+        _ <- service.initialize(w.operator, "browser park")
+        root <- create(service, w.operator, goal("Goal"))
+        _ <- on(service, w, key, workset(root))
+        before <- listed
+        wrong <- service.drive(w.governor, DriverRequest.Park(key, before.head.revision)).either
+        _ <- directive(service, w, key)
+        stale <- service.drive(w.operator, DriverRequest.Park(key, before.head.revision)).either
+        current <- listed
+        _ <- assertIO(denied(wrong) && conflict(stale) && current.head.state == DriverState.On && current.head.revision != before.head.revision)
+        _ <- service.drive(w.operator, DriverRequest.Park(key, current.head.revision))
+        after <- listed
+        _ <- assertIO(after.head.state == DriverState.Off && after.head.stoppedAt.nonEmpty && after.head.attached.contains(w.governor.actor.session))
+      } yield ()
+    }
+
+    "store the exact preview and browse only selected members in server order at one snapshot" in { (service: LedgerService[IO]) =>
+      val w = world
+      val order = ItemOrder(ItemOrderField.Id, SortDirection.Ascending, false)
+      for {
+        _ <- service.initialize(w.operator, "browser workset")
+        root <- create(service, w.operator, goal("Goal"))
+        produced <- produce(service, w.operator, root, "Child")
+        child = produced._2.items.find(_.id.ledger == Ledger.Tasks).get.id
+        outside <- create(service, w.operator, task("Outside"))
+        preview <- service.previewWorkset(w.operator, workset(root))
+        stored <- service.storeWorksetPreview(w.operator, preview)
+        first <- service.browseWorkset(w.operator, "", order, None, None, 1, stored.id)
+        second <- service.browseWorkset(w.operator, "", order, first.after, Some(first.cursor), 1, stored.id)
+        _ <- assertIO(first.hasMore && !second.hasMore && (first.items ++ second.items).map(_.summary.id).toSet == Set(root, child))
+        tasks <- service.browseWorkset(w.operator, "ledger:Tasks", order, None, None, 10, stored.id)
+        _ <- assertIO(tasks.items.map(_.summary.id) == List(child) && !tasks.items.exists(_.summary.id == outside))
+        _ <- create(service, w.operator, task("Later"))
+        stale <- service.storeWorksetPreview(w.operator, preview).either
+        moved <- service.browseWorkset(w.operator, "", order, first.after, Some(first.cursor), 1, stored.id).either
+        _ <- assertIO(fault(stale).exists(_.isInstanceOf[Fault.Resync]) && fault(moved).exists(_.isInstanceOf[Fault.Resync]))
+      } yield ()
+    }
+
+    "never reuse a driver revision after idle eviction and recreation of the same key" in { (repository: LedgerRepository[IO]) =>
+      val w = world
+      val key = claude("evicted")
+      val begin = 1000000L
+      def at(now: Long): LedgerService[IO] = FixedLedger.at(repository, now)
+      def summary(service: LedgerService[IO]): IO[Throwable, DriverSummary] = service.drive(w.operator, DriverRequest.Summaries()).map {
+        case DriverReply.Listed(values) => values.find(_.key == key).get
+        case other => throw new IllegalStateException(other.toString)
+      }
+      for {
+        _ <- at(begin).initialize(w.operator, "eviction revision")
+        root <- create(at(begin), w.operator, goal("Goal"))
+        _ <- start(at(begin), w, key, workset(root))
+        before <- summary(at(begin))
+        _ <- ZIO.foreachDiscard(2 to DriverPolicy.MaxDrivers)(index => start(at(begin + 1), w, claude(s"idle-$index"), workset(root)))
+        late = at(begin + DriverPolicy.IdleMillis + 2)
+        _ <- start(late, w, claude("displaces-oldest"), workset(root))
+        _ <- start(late, w, key, workset(root))
+        after <- summary(late)
+        stale <- late.drive(w.operator, DriverRequest.Park(key, before.revision)).either
+        _ <- assertIO(after.revision != before.revision && conflict(stale))
+      } yield ()
+    }
+
     "turn on only when exactly one attached session binds with the hook-minted single-use token" in {
-      (service: LedgerService[IO], repository: LedgerRepository[IO], registry: DriverRegistry) =>
+      (service: LedgerService[IO], repository: LedgerRepository[IO]) =>
         val w = world
         val key = claude("binding")
         val second = w.other(Role.Governor)
@@ -410,7 +532,7 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
           _ <- act(service, second, DriverSession.Bind(other.bind.get))
           expiring = claude("binding-expired")
           offer <- start(service, w, expiring, workset(root))
-          late = FixedLedger.service(repository, Clock.fixed(Instant.now().plusMillis(DriverPolicy.BindMillis + 60000), ZoneOffset.UTC), registry)
+          late = FixedLedger.service(repository, Clock.fixed(Instant.now().plusMillis(DriverPolicy.BindMillis + 60000), ZoneOffset.UTC))
           third = w.other(Role.Governor)
           expired <- act(late, third, DriverSession.Bind(offer.bind.get)).either
           _ <- assertIO(denied(expired) && fault(expired).exists(_.toString.contains("expired")))
@@ -450,9 +572,8 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
 
     "hold a bounded number of drivers per project and displace only off or silent ones" in { (repository: LedgerRepository[IO]) =>
       val w = world
-      val registry = new DriverRegistry
       val begin = 1000000L
-      def at(millis: Long): LedgerService[IO] = FixedLedger.service(repository, Clock.fixed(Instant.ofEpochMilli(millis), ZoneOffset.UTC), registry)
+      def at(millis: Long): LedgerService[IO] = FixedLedger.service(repository, Clock.fixed(Instant.ofEpochMilli(millis), ZoneOffset.UTC))
       val service = at(begin)
       for {
         _ <- service.initialize(w.operator, "capacity")
@@ -471,8 +592,9 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
         _ <- directive(at(begin + DriverPolicy.IdleMillis), w, claude("driver-1"))
         _ <- start(at(begin + DriverPolicy.IdleMillis + 1), w, claude("replaces-silent"), workset(root))
         kept <- status(service, w, claude("driver-1"))
-        _ <- assertIO(kept.exists(_.state == DriverState.On) && registry.all(w.project).size == DriverPolicy.MaxDrivers &&
-          registry.all(w.project).count(_.touchedAt == begin) == DriverPolicy.MaxDrivers - 2)
+        records <- repository.driverRecords(w.project)
+        _ <- assertIO(kept.exists(_.state == DriverState.On) && records.size == DriverPolicy.MaxDrivers &&
+          records.count(_.touchedAt == begin) == DriverPolicy.MaxDrivers - 2)
       } yield ()
     }
 
@@ -1525,7 +1647,7 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
         _ <- assertIO(reason(notBound).contains(DriverStop.NotBound) && reason(skipped).contains(DriverStop.Failure) &&
           (parked match { case DriverReply.Parked(Some(value), "CQ driver parked: T3 through work") => stopped(Some(value), DriverStop.Parked); case _ => false }) &&
           unknown == DriverReply.Stop(DriverStopped(DriverStop.Off, "No CQ driver is on for this session"), None, Nil) && none.isEmpty)
-        _ <- assertIO(DriverStop.all.map(DriverPolicy.reason) == List("quiescent", "user input required", "limit reached", "not bound", "failure", "parked", "off"))
+        _ <- assertIO(DriverStop.all.map(DriverPolicy.reason) == List("quiescent", "user input required", "limit reached", "not bound", "failure", "parked", "off", "restored archive"))
       } yield ()
     }
 
@@ -2005,7 +2127,7 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
     }
 
     "carry the integrations an earlier drive left unsettled to the next drives of the same attached session only" in {
-      (service: LedgerService[IO], registry: DriverRegistry) =>
+      (service: LedgerService[IO], registry: DriverInspector) =>
       val w = world
       val (first, renewed) = (claude("carry-first"), claude("carry-renewed"))
       val (unsettled, settled) = (IntegrationId(uuid), IntegrationId(uuid))
@@ -2061,7 +2183,7 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
     }
 
     "report a member the session resumed as in flight before the resume returns, whatever the tracker read or reported before it" in {
-      (service: LedgerService[IO], registry: DriverRegistry) =>
+      (service: LedgerService[IO], registry: DriverInspector) =>
       val w = world
       // One followed member of a started cycle; `transit` runs before each lineage request reaches the server.
       def scenario(name: String, pause: zio.Duration, observed: zio.Ref[Option[LineageOutcome]] => zio.Task[Option[LineageOutcome]], transit: DriverSession => Unit)(

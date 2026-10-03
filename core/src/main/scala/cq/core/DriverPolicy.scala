@@ -1,6 +1,7 @@
 package cq.core
 
 import cq.api.*
+import DriverRecords.*
 
 sealed trait DriverDecision
 object DriverDecision {
@@ -150,7 +151,7 @@ object DriverPolicy {
 
   // A stop turns the driver off, ends its cycle and releases the bind offer. `announced` records whether a control reply carried the reason.
   def stopped(record: DriverRecord, value: DriverStopped, announced: Boolean, now: Long): DriverRecord =
-    record.copy(state = DriverState.Off, bind = None, cycle = record.cycle.map(ended), stopped = Some(value), announced = announced, touchedAt = now)
+    record.copy(state = DriverState.Off, bind = None, cycle = record.cycle.map(ended), stopped = Some(value), announced = announced, touchedAt = now, stoppedAt = Some(now))
 
   def reason(value: DriverStop): String = value match {
     case DriverStop.Quiescent => "quiescent"
@@ -160,6 +161,7 @@ object DriverPolicy {
     case DriverStop.Failure => "failure"
     case DriverStop.Parked => "parked"
     case DriverStop.Off => "off"
+    case DriverStop.RestoredArchive => "restored archive"
   }
 
   def describe(record: DriverRecord): String = s"${references(record.targets)} through ${phase(record.through)}"

@@ -25,19 +25,22 @@ final class DummyLedgerResource extends Lifecycle.LiftF[Task, LedgerRepository[I
         current.projects.get(project.id) match {
           case Some(existing) => (existing.project, current)
           case None =>
-            val state = DummyLedgerState(project, 0L, 0L, Map.empty, Map.empty, Set.empty, Map.empty, Map.empty, List.empty, Map.empty, Map.empty, Map.empty, Map.empty, Map.empty, Map.empty, Map.empty)
+            val state = DummyLedgerState(project, 0L, 0L, 0L, Map.empty, Map.empty, Set.empty, Map.empty, Map.empty, List.empty, Map.empty, Map.empty, Map.empty, Map.empty, Map.empty, Map.empty, Map.empty, Map.empty)
             (project, current.copy(cursor = CatalogueCursor(Math.addExact(current.cursor.value, 1L)), projects = current.projects.updated(project.id, state)))
         }
       }
+      override def driverRecords(project: ProjectId): IO[Throwable, List[DriverRecord]] = states.get.flatMap(current =>
+        ZIO.fromOption(current.projects.get(project)).orElseFail(DomainFailure(Fault.Missing("Project not initialized"))).map(_.drivers.values.toList))
+      override def driverSummaries(project: ProjectId): IO[Throwable, List[DriverSummary]] = driverRecords(project).map(_.map(DriverRecords.summary))
       override def transact[A](project: ProjectId)(operation: LedgerTransaction => A): IO[Throwable, A] = states.modifyZIO { current =>
         ZIO.attempt {
           val state = current.projects.getOrElse(project, throw DomainFailure(Fault.Missing("Project not initialized")))
           val tx = new DummyLedgerTransaction(state)
-          val result = operation(tx)
+          val result = tx.driverOperation(operation(tx))
           val cursor = if (tx.result.project == state.project) current.cursor else CatalogueCursor(Math.addExact(current.cursor.value, 1L))
           ((result, tx.committed), current.copy(cursor = cursor, projects = current.projects.updated(project, tx.result)))
         }
-      }.map { (result, committed) => committed.foreach(_()); result }
+      }.flatMap { (result, committed) => ZIO.attempt(committed.foreach(_())) *> ZIO.fromEither(result) }
     }
   }
 )
@@ -46,6 +49,7 @@ private final case class DummyLedgerState(
   project: Project,
   cursor: Long,
   fence: Long,
+  driverClock: Long,
   counters: Map[Ledger, Long],
   items: Map[ItemId, Item],
   edges: Set[CanonicalEdge],
@@ -59,6 +63,7 @@ private final case class DummyLedgerState(
   reserved: Map[ItemId, IntegrationId],
   worksets: Map[WorksetId, StoredWorkset],
   settings: Map[ProjectSettingKind, StoredSetting],
+  drivers: Map[DriverKey, DriverRecord],
 )
 
 private final class DummyLedgerTransaction(initial: DummyLedgerState) extends LedgerTransaction {
@@ -67,6 +72,31 @@ private final class DummyLedgerTransaction(initial: DummyLedgerState) extends Le
   def result: DummyLedgerState = state
   def committed: List[() => Unit] = effects.reverse
   override def afterCommit(effect: () => Unit): Unit = effects = effect :: effects
+  override def nextDriverRevision(): Revision = {
+    val next = Math.addExact(state.driverClock, 1L)
+    state = state.copy(driverClock = next)
+    Revision(next)
+  }
+  override def driverOperation[A](operation: => A): Either[DomainFailure, A] = {
+    val before = state
+    val callbacks = effects
+    try Right(operation) catch {
+      case intent: DriverStopIntent =>
+        state = before
+        effects = callbacks
+        Left(DriverRejection.persist(this, intent))
+    }
+  }
+  override def drivers: List[DriverRecord] = state.drivers.values.toList
+  override def driver(key: DriverKey): Option[DriverRecord] = state.drivers.get(key)
+  override def putDriver(record: DriverRecord): Unit = {
+    PersistedDrivers.validate(record, project.id)
+    require(record.revision.value <= state.driverClock, "Driver revision exceeds the project clock")
+    require(!state.drivers.values.exists(other => other.key != record.key && other.state == DriverState.On && record.state == DriverState.On && other.attached == record.attached), "Attached session already has an on driver")
+    require(!state.drivers.values.exists(other => other.key != record.key && other.cycle.nonEmpty && other.cycle.map(_.id) == record.cycle.map(_.id)), "Driver cycle already belongs to another key")
+    state = state.copy(drivers = state.drivers.updated(record.key, record))
+  }
+  override def removeDriver(key: DriverKey): Unit = state = state.copy(drivers = state.drivers - key)
   override def project: Project = state.project
   override def renameProject(project: Project): Unit = {
     require(project.id == state.project.id, "Project identity cannot change")

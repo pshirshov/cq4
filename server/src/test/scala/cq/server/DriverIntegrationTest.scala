@@ -2,6 +2,7 @@ package cq.server
 
 import cq.api.*
 import cq.core.*
+import cq.core.DriverRecords.*
 import cq.host.*
 import distage.{Activation, DIKey, ModuleDef}
 import distage.StandardAxis.Repo
@@ -21,10 +22,10 @@ import zio.{IO, Runtime, Semaphore, Task, Unsafe, ZIO}
 final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
   override def config = super.config.copy(
     pluginConfig = PluginConfig.const(List(CqPlugin, GuardianTestPlugin)),
-    moduleOverrides = super.config.moduleOverrides ++ new ModuleDef { make[LocalWorkspaceFixture].fromResource[LocalWorkspaceResource] },
+    moduleOverrides = super.config.moduleOverrides ++ new ModuleDef { make[LocalWorkspaceFixture].fromResource[LocalWorkspaceResource]; make[DriverInspector] },
     activation = Activation(Repo -> Repo.Dummy),
     memoizationRoots = Set(DIKey[LedgerService[IO]], DIKey[UsageService[IO]], DIKey[ArtifactService[IO]], DIKey[ResultAdmissionService[IO]],
-      DIKey[IntegrationService[IO]], DIKey[DriverRegistry]),
+      DIKey[IntegrationService[IO]], DIKey[DriverInspector]),
   )
   private def uuid: UUID = UUID.randomUUID()
   private val Target = "refs/heads/integration"
@@ -47,7 +48,7 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
   }
 
   private final case class Fixture(local: LocalWorkspaceFixture, owner: Scope, authority: SupervisorAuthority, controller: IntegrationController,
-    combinations: CombinationController, workflow: AttachedWorkflow, driver: AttachedDriver, registry: DriverRegistry, collector: Collector,
+    combinations: CombinationController, workflow: AttachedWorkflow, driver: AttachedDriver, registry: DriverInspector, collector: Collector,
     task: ItemId, reviewer: ArtifactId, candidate: GitCommit, fence: Fence) {
     val key: DriverKey = DriverKey(Harness.Codex, "driver-integration-" + UUID.randomUUID())
     val advance: WorkflowRequest = WorkflowRequest.Advance(Set(task), WorkflowPhase.Integrate)
@@ -133,7 +134,7 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
   /** One Ready Task claimed by the governing session, with an admitted worker result and an accepting review of a candidate that fast-forwards the target. */
   private def fixture(local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO],
     usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO],
-    proposals: ProposalService[IO], registry: DriverRegistry)(test: Fixture => Task[Unit]): Task[Unit] = ZIO.scoped {
+    proposals: ProposalService[IO], registry: DriverInspector)(test: Fixture => Task[Unit]): Task[Unit] = ZIO.scoped {
     val clock = Clock.systemUTC()
     val project = ProjectConfig(ProjectId(uuid), "http://localhost", "Driver integration")
     val owner = Scope(project.project, Actor("CQ governor", SessionId(uuid), Role.Governor))
@@ -250,7 +251,7 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
   "A driven session's integrations (Behavioral Active Blackbox; real Git, supervised processes and in-process server Communication)" should {
     "D101: settle the integration an earlier drive left Ready while the next drive's start directive is pending, then start that directive" in {
       (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
-        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO], registry: DriverRegistry) =>
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO], registry: DriverInspector) =>
       fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, registry) { f => for {
         (ready, start) <- f.carried
         refused <- f.activate(start).either
@@ -282,7 +283,7 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
 
     "D101: settle a carried-over integration that Git refuses as NotApplied without stopping the next drive" in {
       (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
-        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO], registry: DriverRegistry) =>
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO], registry: DriverInspector) =>
       fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, registry) { f => for {
         (ready, start) <- f.carried
         // The target advances before the carried-over integration is applied: Git refuses the update and nothing is written to the ledger.
@@ -315,7 +316,7 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
 
     "D101: leave a carried-over integration Pending when its acknowledgement is lost and record it when it is applied again" in {
       (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
-        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO], registry: DriverRegistry) =>
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO], registry: DriverInspector) =>
       fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, registry) { f => for {
         (ready, start) <- f.carried
         // The first acknowledgement of the Git observation is lost in transit: the integration stays Pending and is applied again.
@@ -345,7 +346,7 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
 
     "D101: keep everything but the carried-over integration's settlement refused while the next drive's start directive is pending" in {
       (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
-        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO], registry: DriverRegistry) =>
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO], registry: DriverInspector) =>
       fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, registry) { f =>
         val other = IntegrationId(uuid)
         for {
@@ -388,7 +389,7 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
 
     "D101: refuse to apply an integration no drive carried over while the next drive's start directive is pending, before Git is touched" in {
       (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
-        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO], registry: DriverRegistry) =>
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO], registry: DriverInspector) =>
       fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, registry) { f => for {
         // The session prepares the integration after its drive was parked: the parked drive's activation is still the host's current one,
         // so the host owns the integration, and no cycle registered it, so the next drive does not carry it.
@@ -429,7 +430,7 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
 
     "D101: refuse to publish again a combination an earlier drive left pending while the next drive's start directive is pending" in {
       (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
-        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO], registry: DriverRegistry) =>
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO], registry: DriverInspector) =>
       fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, registry) { f =>
         val combination = RequestId(uuid)
         val uploads = new AtomicInteger(0)
@@ -488,7 +489,7 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
 
     "D101: count an integration applied as the last action of a turn as in flight at the next continuation query" in {
       (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
-        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO], registry: DriverRegistry) =>
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO], registry: DriverInspector) =>
       // The turn ends at once after Integrate: the query arrives while the Git job runs and before the tracker polls again.
       fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, registry) { f => for {
         member <- resumed(f).map(_.asInstanceOf[LineageMember.Integration])
@@ -505,7 +506,7 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
 
     "D101: keep a slowly applied integration in flight at every continuation query until it settles" in {
       (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
-        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO], registry: DriverRegistry) =>
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO], registry: DriverInspector) =>
       // A slow application: the server's reservation of the integration is held, so the integration stays Running past the tracker's poll pause.
       fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, registry) { f =>
         val release = new CountDownLatch(1)

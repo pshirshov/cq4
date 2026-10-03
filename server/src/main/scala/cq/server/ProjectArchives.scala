@@ -1,7 +1,7 @@
 package cq.server
 
 import cq.api.*
-import cq.core.{DomainFailure, LedgerPolicy, ProjectSettingKind}
+import cq.core.{DomainFailure, DriverRecords, LedgerPolicy, ProjectSettingKind}
 import java.io.{FilterInputStream, FilterOutputStream}
 import java.nio.charset.StandardCharsets.UTF_8
 import java.nio.file.{Files, Path}
@@ -42,7 +42,7 @@ final class PostgresProjectArchives(database: LedgerDatabase, clock: Clock) exte
     BackupTable.UsageSpans -> "cq_usage_spans",
     BackupTable.Artifacts -> "cq_artifacts", BackupTable.ResultAdmissions -> "cq_result_admissions",
     BackupTable.Integrations -> "cq_integrations", BackupTable.IntegrationMembers -> "cq_integration_members",
-    BackupTable.Worksets -> "cq_worksets", BackupTable.Settings -> "cq_project_settings",
+    BackupTable.Worksets -> "cq_worksets", BackupTable.Drivers -> "cq_drivers", BackupTable.Settings -> "cq_project_settings",
   )
   private def schema(sql: Jdbc): String = sql.query("SELECT checksum FROM cq_schema_migrations WHERE version = 1")(_ => ())(_.getString(1)).head
   private def columns(sql: Jdbc, table: String): String = sql.query(
@@ -170,9 +170,23 @@ final class PostgresProjectArchives(database: LedgerDatabase, clock: Clock) exte
         check(ProjectSettingKind.of(setting).toString == kind, "Archive project setting kind disagrees with its content")
         setting match { case ProjectSetting.Requirements(text) => LedgerPolicy.validateRequirements(text) }
       }
+      sql.query("SELECT body::text, summary::text, harness, session_key, revision FROM restore_cq_drivers")(_ => ()) { row =>
+        val record = scala.util.Try(Wire.decode(DriverRecord_JsonCodec, row.getString(1))).getOrElse(invalid("Archive holds an undecodable driver"))
+        scala.util.Try(PersistedDrivers.validate(record, manifest.project)).getOrElse(invalid("Archive driver content violates its invariants"))
+        check(DriverRecords.summary(record) == Wire.decode(DriverSummary_JsonCodec, row.getString(2)) &&
+          record.key.harness.toString == row.getString(3) && record.key.session == row.getString(4) && record.revision.value == row.getLong(5),
+          "Archive driver identity or summary disagrees with its content")
+        record
+      }
+      check(!sql.query("SELECT EXISTS (SELECT 1 FROM restore_cq_drivers d JOIN restore_cq_projects p USING(project_id) WHERE d.revision > p.driver_clock)")(_ => ())(_.getBoolean(1)).head,
+        "Archive driver revision exceeds its project clock")
       tables.foreach { case (_, table) =>
         val fields = columns(sql, table)
         sql.execute(s"INSERT INTO $table ($fields) SELECT $fields FROM restore_$table")(_ => ())
+      }
+      PersistedDrivers.records(sql, manifest.project).foreach { record =>
+        val revision = Revision(sql.query("UPDATE cq_projects SET driver_clock = driver_clock + 1 WHERE project_id = ? RETURNING driver_clock")(_.setObject(1, manifest.project.value))(_.getLong(1)).head)
+        PersistedDrivers.put(sql, manifest.project, DriverRecords.restored(record, clock.millis()).copy(revision = revision))
       }
       sql.execute("UPDATE cq_catalogue_clock SET cursor = cursor + 1 WHERE singleton")(_ => ())
       manifest

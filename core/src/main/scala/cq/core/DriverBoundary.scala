@@ -1,6 +1,7 @@
 package cq.core
 
 import cq.api.*
+import DriverRecords.*
 
 // A ledger write attributed to an active driven cycle; `parent` is the lineage member the write was made under.
 final case class WriteAttribution(key: DriverKey, cycle: CycleId, parent: LineageMember) {
@@ -12,7 +13,7 @@ final case class WriteAttribution(key: DriverKey, cycle: CycleId, parent: Lineag
 final class DriverBoundary(registry: DriverRegistry, planner: WorksetPlanner) {
   import DriverPolicy.{reference, references}
 
-  private def current(project: ProjectId, attribution: WriteAttribution): (DriverRecord, CycleRecord) = {
+  private def current(project: ProjectId, attribution: WriteAttribution)(using tx: LedgerTransaction): (DriverRecord, CycleRecord) = {
     val record = registry.get(project, attribution.key).getOrElse(throw new IllegalStateException("Attributed driver disappeared inside its transaction"))
     (record, record.cycle.filter(cycle => cycle.id == attribution.cycle && cycle.active)
       .getOrElse(throw new IllegalStateException("Attributed cycle ended inside its transaction")))
@@ -23,7 +24,8 @@ final class DriverBoundary(registry: DriverRegistry, planner: WorksetPlanner) {
   // `completes` is the integration whose reserved completion the write records. One write is admitted without an active cycle and belongs
   // to none: the completion of an integration an earlier drive of the bound session left unsettled, while the start directive is pending.
   // The attached host starts no workflow before that integration settles, so the cycle could not start otherwise.
-  def admit(project: ProjectId, session: SessionId, explicit: Option[CycleId], completes: Option[IntegrationId], now: Long): Option[WriteAttribution] =
+  def admit(tx: LedgerTransaction, project: ProjectId, session: SessionId, explicit: Option[CycleId], completes: Option[IntegrationId], now: Long): Option[WriteAttribution] = {
+    given LedgerTransaction = tx
     registry.bound(project, session) match {
       case Some(record) if explicit.isEmpty && completes.exists(record.carries(session, _)) => None
       case Some(record) =>
@@ -36,6 +38,8 @@ final class DriverBoundary(registry: DriverRegistry, planner: WorksetPlanner) {
         WriteAttribution(record.key, id, LineageMember.Session(session))
       }
     }
+
+  }
 
   // The Task and the milestone of a membership a Reference adds (`present`) or removes, in either direction the edge may be written.
   private def membership(mutation: Mutation, present: Boolean): Option[(ItemId, ItemId)] = (mutation match {
@@ -119,6 +123,7 @@ final class DriverBoundary(registry: DriverRegistry, planner: WorksetPlanner) {
   // may be any Open Defect. None admits another change of that item: its Replace, Restore, Archive or Terminate names it, and so does the
   // removal of a membership in an Open milestone or of a blocking link.
   def check(tx: LedgerTransaction, attribution: WriteAttribution, request: ChangeRequest, now: Long): Unit = {
+    given LedgerTransaction = tx
     val (record, cycle) = current(tx.project.id, attribution)
     val named = request.mutations.flatMap(existing) ++ request.mutations.flatMap(assigned).filterNot(openMilestone(tx, _)) ++
       request.mutations.flatMap(released).filterNot(closedMilestone(tx, _)) ++
@@ -131,6 +136,7 @@ final class DriverBoundary(registry: DriverRegistry, planner: WorksetPlanner) {
   // After the write is applied and before it commits: the items it actually touched are in the boundary, every item it created is selected by
   // roots-bound enumeration of the frozen targets on the resulting state, and the write is stamped with the cycle.
   def verify(tx: LedgerTransaction, attribution: WriteAttribution, request: ChangeRequest, acknowledgement: ChangeAck, stamps: List[LineageMember], now: Long): Unit = {
+    given LedgerTransaction = tx
     val (record, cycle) = current(tx.project.id, attribution)
     val (created, changed) = acknowledgement.items.partition(_.revision == Revision(1))
     // A batch changes an item once, so a milestone that passed `check` only as an assignment or as a removal was revised for that one
@@ -170,21 +176,25 @@ final class DriverBoundary(registry: DriverRegistry, planner: WorksetPlanner) {
     stamp(tx, record, cycle, owned, attribution.parent, stamps, now)
   }
 
-  def claimed(tx: LedgerTransaction, session: SessionId, claim: ClaimId, now: Long): Unit =
+  def claimed(tx: LedgerTransaction, session: SessionId, claim: ClaimId, now: Long): Unit = {
+    given LedgerTransaction = tx
     registry.bound(tx.project.id, session).foreach { record =>
       record.cycle.filter(_.active).foreach(cycle => stamp(tx, record, cycle, Nil, LineageMember.Run(cycle.run.get), List(LineageMember.Claim(claim)), now))
     }
 
-  // The cycle records a write only once the write is committed: a transaction that fails leaves no created item or lineage member behind.
+  }
+
+  // The cycle records a write in the transaction: a transaction that fails leaves no created item or lineage member behind.
   private def stamp(tx: LedgerTransaction, record: DriverRecord, cycle: CycleRecord, created: List[ItemId], parent: LineageMember, stamps: List[LineageMember], now: Long): Unit = {
+    given LedgerTransaction = tx
     val added = stamps.filterNot(member => cycle.lineage.exists(_.member == member)).map(LineageEntry(_, Some(parent), true))
     if (cycle.lineage.size + added.size > DriverPolicy.MaxLineage)
       registry.fail(record, s"cycle ${cycle.number} exceeds ${DriverPolicy.MaxLineage} lineage members", now)
-    tx.afterCommit(() => registry.update(record.project, record.key) { current =>
+    registry.update(record.project, record.key) { current =>
       current.cycle.filter(_.id == cycle.id).fold(current) { live =>
         val entries = added.filterNot(entry => live.lineage.exists(_.member == entry.member))
         current.copy(cycle = Some(live.copy(created = live.created ++ created, lineage = live.lineage ++ entries)), touchedAt = now)
       }
-    })
+    }
   }
 }

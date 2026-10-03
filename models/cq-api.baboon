@@ -36,7 +36,7 @@ enum Role { Human Governor Explorer Planner Worker Reviewer Collector }
 root data Actor { subject: str session: SessionId role: Role }
 root data Provenance { actor: Actor receivedAt: i64 request: RequestId }
 root data Project { id: ProjectId name: str revision: Revision createdAt: i64 }
-enum BackupTable { Projects Counters Items Labels Edges History Requests Changes Claims ClaimMembers UsageClock UsageAssignments UsageMembers UsageAttempts UsageMeters UsageCosts UsageRecords UsageHeads UsageOutcomes UsageSpans Artifacts ResultAdmissions Integrations IntegrationMembers Worksets Settings }
+enum BackupTable { Projects Counters Items Labels Edges History Requests Changes Claims ClaimMembers UsageClock UsageAssignments UsageMembers UsageAttempts UsageMeters UsageCosts UsageRecords UsageHeads UsageOutcomes UsageSpans Artifacts ResultAdmissions Integrations IntegrationMembers Worksets Settings Drivers }
 root data BackupEntry { table: BackupTable rows: i64 bytes: i64 sha256: str }
 root data BackupManifest { project: ProjectId schemaSha256: str postgresMajor: i32 createdAt: i64 entries: lst[BackupEntry] }
 
@@ -332,6 +332,7 @@ root adt WorksetAction {
   data Create { targets: set[ItemId] through: WorkflowPhase }
   data Lookup { id: WorksetId }
   data Preview { target: WorksetTarget }
+  data StorePreview { preview: WorksetPreview }
 }
 root data WorksetInput { project: ProjectId action: WorksetAction }
 root id CycleId { value: uid }
@@ -339,7 +340,7 @@ root id DriverToken { value: uid }
 root data DriverKey { harness: Harness session: str }
 enum DriverOrigin { UserPromptSubmit Stop Extension StatusLine }
 enum DriverState { Binding On Off }
-enum DriverStop { Quiescent UserInputRequired LimitReached NotBound Failure Parked Off }
+enum DriverStop { Quiescent UserInputRequired LimitReached NotBound Failure Parked Off RestoredArchive }
 root data DriverStopped { reason: DriverStop detail: str }
 enum CycleState { Pending Active Ended }
 root adt CycleToken {
@@ -366,6 +367,22 @@ root data DriverStatus {
   key: DriverKey state: DriverState attached: opt[SessionId] workset: opt[WorksetId] targets: set[ItemId] through: WorkflowPhase
   cycle: opt[DriverCycle] activeChildren: i32 directives: i32 stopped: opt[DriverStopped] line: str
 }
+root data BindOffer { token: DriverToken expiresAt: i64 }
+root data CycleRecord {
+  id: CycleId number: i32 roots: set[ItemId] through: WorkflowPhase snapshot: WorksetPreview state: CycleState
+  startToken: opt[DriverToken] resumeToken: opt[DriverToken] resumed: map[DriverToken, RequestId] run: opt[RequestId]
+  created: lst[ItemId] lineage: lst[LineageEntry] resting: set[LineageMember] prompted: set[LineageMember]
+}
+root data DriverRecord {
+  project: ProjectId key: DriverKey state: DriverState attached: opt[SessionId] workset: opt[WorksetId]
+  targets: set[ItemId] through: WorkflowPhase bind: opt[BindOffer] cycle: opt[CycleRecord]
+  directives: i32 stopped: opt[DriverStopped] announced: bit touchedAt: i64 carried: map[SessionId, set[IntegrationId]]
+  revision: Revision stoppedAt: opt[i64]
+}
+root data DriverSummary {
+  key: DriverKey state: DriverState attached: opt[SessionId] workset: opt[WorksetId] targets: set[ItemId] through: WorkflowPhase
+  cycle: opt[CycleId] activeChildren: i32 stopped: opt[DriverStopped] touchedAt: i64 stoppedAt: opt[i64] revision: Revision
+}
 root data DriverDirective { cycle: CycleId token: CycleToken text: str }
 root adt DriverControl {
   data Start { target: WorksetTarget attached: opt[SessionId] }
@@ -387,6 +404,9 @@ root adt DriverSession {
 root adt DriverRequest {
   data Control { key: DriverKey origin: DriverOrigin action: DriverControl }
   data Session { action: DriverSession }
+  data Summaries {}
+  data Park { key: DriverKey expected: Revision }
+  data Snapshot { key: DriverKey expected: Revision }
 }
 root data DriverInput { project: ProjectId request: DriverRequest }
 root adt DriverActivation {
@@ -405,6 +425,8 @@ root adt DriverReply {
   data Lineage { cycle: CycleId entry: LineageEntry }
   data Changed { cycle: CycleId ack: ChangeAck }
   data Settleable { pending: bit integrations: set[IntegrationId] }
+  data Listed { drivers: lst[DriverSummary] }
+  data Snapshot { preview: WorksetPreview }
 }
 root adt ExtensionDriver {
   data Start { session: str input: str }
@@ -429,6 +451,7 @@ root adt ReadSelection {
   data History { id: ItemId before: Revision limit: i32 }
   data Changes { after: ChangeCursor limit: i32 }
   data Catalog {}
+  data WorksetBrowse { query: str order: ItemOrder after: opt[ItemId] snapshot: opt[ChangeCursor] limit: i32 workset: WorksetId }
 }
 root data ReadInput { project: ProjectId selection: ReadSelection }
 root data ChangeInput { project: ProjectId change: ChangeRequest }

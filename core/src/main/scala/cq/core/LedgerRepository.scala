@@ -22,10 +22,18 @@ trait LedgerRepository[F[_, _]] {
   def projects(after: Option[ProjectId], limit: Int): F[Throwable, ProjectPage]
   def catalogueCursor: F[Throwable, CatalogueCursor]
   def cursors(project: ProjectId, now: Long): F[Throwable, LedgerCursors]
+  def driverRecords(project: ProjectId): F[Throwable, List[DriverRecord]]
+  def driverSummaries(project: ProjectId): F[Throwable, List[DriverSummary]]
   def transact[A](project: ProjectId)(operation: LedgerTransaction => A): F[Throwable, A]
 }
 
 trait LedgerTransaction {
+  def nextDriverRevision(): Revision
+  def driverOperation[A](operation: => A): Either[DomainFailure, A]
+  def drivers: List[DriverRecord]
+  def driver(key: DriverKey): Option[DriverRecord]
+  def putDriver(record: DriverRecord): Unit
+  def removeDriver(key: DriverKey): Unit
   def project: Project
   // Runs `effect` once this transaction has committed, and never when it fails or is rolled back. For state held outside the repository.
   def afterCommit(effect: () => Unit): Unit

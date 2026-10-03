@@ -22,6 +22,8 @@ trait LedgerService[F[_, _]] {
   def archivePreview(scope: Scope, query: String, limit: Int): F[Throwable, ArchivePlan]
   def workset(scope: Scope, roots: Set[ItemId], after: Option[ItemId], snapshot: Option[WorksetSnapshot], limit: Int): F[Throwable, WorksetPage]
   def subgraphs(scope: Scope, after: Option[ItemId], snapshot: Option[ChangeCursor], limit: Int): F[Throwable, SubgraphPage]
+  def storeWorksetPreview(scope: Scope, preview: WorksetPreview): F[Throwable, StoredWorkset]
+  def browseWorkset(scope: Scope, query: String, order: ItemOrder, after: Option[ItemId], snapshot: Option[ChangeCursor], limit: Int, workset: WorksetId): F[Throwable, BrowsePage]
   def createWorkset(scope: Scope, targets: Set[ItemId], through: WorkflowPhase): F[Throwable, StoredWorkset]
   def lookupWorkset(scope: Scope, id: WorksetId): F[Throwable, StoredWorkset]
   def previewWorkset(scope: Scope, target: WorksetTarget): F[Throwable, WorksetPreview]
@@ -171,6 +173,41 @@ object LedgerService {
         planner.create(tx, scope.actor, WorksetId(java.util.UUID.randomUUID()), targets, through, clock.millis())
       }
 
+    override def storeWorksetPreview(scope: Scope, preview: WorksetPreview): F[Throwable, StoredWorkset] = repository.transact(scope.project) { tx =>
+      write(scope)
+      val current = planner.evaluate(tx, preview.targets, preview.through, preview.workset)
+      if (current != preview) throw DomainFailure(Fault.Resync("Workset preview changed; preview again before storing"))
+      planner.create(tx, scope.actor, WorksetId(java.util.UUID.randomUUID()), preview.targets, preview.through, clock.millis())
+    }
+
+    override def browseWorkset(scope: Scope, query: String, order: ItemOrder, after: Option[ItemId], snapshot: Option[ChangeCursor], limit: Int, workset: WorksetId): F[Throwable, BrowsePage] = {
+      import izumi.functional.bio.{F, *}
+      F.fromEither(queries.parse(query).left.map(error => DomainFailure(Fault.QuerySyntax(error)))).flatMap { expression =>
+        repository.transact(scope.project) { tx =>
+          page(limit)
+          invalid(after.isEmpty || snapshot.nonEmpty, "Browse continuation requires its snapshot")
+          if (snapshot.exists(_ != tx.cursor)) throw DomainFailure(Fault.Resync("Items changed; restart sorted browse"))
+          val selected = planner.resolve(tx, WorksetTarget.Stored(workset)).advanceable.map(_.item.id)
+          def union(entries: List[QueryExpression]): QueryExpression = entries match {
+            case Nil => QueryExpression.Not(QueryExpression.All())
+            case one :: Nil => one
+            case others =>
+              val (left, right) = others.splitAt(others.size / 2)
+              QueryExpression.Or(union(left), union(right))
+          }
+          val restriction = union(selected.map(id => QueryExpression.Id(QueryItem(id.ledger, id.number))))
+          val query = QueryExpression.And(expression, restriction)
+          val now = clock.millis()
+          val anchor = after.map { id =>
+            inScope(scope, id)
+            tx.browseItem(id, now).getOrElse(throw DomainFailure(Fault.Missing("Browse continuation item does not exist")))
+          }
+          val found = tx.browse(query, order, anchor, limit, now)
+          BrowsePage(found.entries, tx.cursor, found.entries.lastOption.map(_.summary.id), found.hasMore, tx.workCursor(now))
+        }
+      }
+    }
+
     override def lookupWorkset(scope: Scope, id: WorksetId): F[Throwable, StoredWorkset] =
       repository.transact(scope.project)(tx => planner.stored(tx, id))
 
@@ -264,15 +301,26 @@ object LedgerService {
       import izumi.functional.bio.{F, *}
       request match {
         // A status read touches no ledger state: it takes no project transaction, so status-line polling never waits for a ledger write.
-        case DriverRequest.Control(key, origin, _: DriverControl.Status) => F.fromEither(scala.util.Try(drivers.read(scope, key, origin)).toEither)
-        case DriverRequest.Session(_: DriverSession.Status) => F.fromEither(scala.util.Try(drivers.own(scope)).toEither)
-        case DriverRequest.Session(_: DriverSession.Settleable) => F.fromEither(scala.util.Try(drivers.settleable(scope)).toEither)
+        case DriverRequest.Control(key, origin, _: DriverControl.Status) => repository.driverRecords(scope.project).flatMap(records => F.fromEither(scala.util.Try(drivers.read(scope, key, origin, records)).toEither))
+        case DriverRequest.Session(_: DriverSession.Status) => repository.driverRecords(scope.project).map(records => drivers.own(scope, records))
+        case DriverRequest.Session(_: DriverSession.Settleable) => repository.driverRecords(scope.project).map(records => drivers.settleable(scope, records))
+        case DriverRequest.Snapshot(key, expected) => repository.driverRecords(scope.project).flatMap { records =>
+          F.fromEither(scala.util.Try {
+            val record = records.find(_.key == key).getOrElse(throw DomainFailure(Fault.Missing("Driver does not exist")))
+            if (record.revision != expected) throw DomainFailure(Fault.Conflict("Driver changed; refresh its snapshot"))
+            DriverReply.Snapshot(record.cycle.getOrElse(throw DomainFailure(Fault.Missing("Driver has no cycle snapshot"))).snapshot)
+          }.toEither)
+        }
+        case _: DriverRequest.Summaries => repository.driverSummaries(scope.project).map(DriverReply.Listed.apply)
         case _ => repository.transact(scope.project) { tx =>
           val now = clock.millis()
           request match {
             case DriverRequest.Control(key, origin, action) => drivers.control(tx, scope, key, origin, action, now)
             case DriverRequest.Session(DriverSession.Change(cycle, change)) => DriverReply.Changed(cycle, mutations.attributed(tx, scope, change, now, cycle))
-            case DriverRequest.Session(action) => drivers.session(scope, action, now)
+            case DriverRequest.Park(key, expected) => drivers.park(tx, scope, key, expected, now)
+            case _: DriverRequest.Snapshot => throw new IllegalStateException("Driver snapshot is a read")
+            case _: DriverRequest.Summaries => throw new IllegalStateException("Driver list is a read")
+            case DriverRequest.Session(action) => drivers.session(tx, scope, action, now)
           }
         }
       }

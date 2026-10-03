@@ -17,6 +17,7 @@ import { usageLayoutChecks } from './usage-layout-browser.mjs';
 import { densityChecks } from './density-browser.mjs';
 import { scrollChecks } from './scroll-browser.mjs';
 import { catalogueChecks } from './catalogue-browser.mjs';
+import { driversChecks } from './drivers-browser.mjs';
 import { requirementsChecks } from './requirements-browser.mjs';
 import { tableChecks } from './table-browser.mjs';
 import { redesignChecks } from './redesign-browser.mjs';
@@ -122,6 +123,7 @@ try {
   await editChecks(browser, await context.storageState(), origin, evidence);
   await scrollChecks(browser, await context.storageState(), origin, evidence);
   await catalogueChecks(browser, await context.storageState(), origin, evidence);
+  await driversChecks(browser, await context.storageState(), origin, evidence).catch(error => failures.push(String(error)));
   await requirementsChecks(browser, await context.storageState(), origin, evidence);
   await interactionChecks(browser, await context.storageState(), origin, evidence);
   await graphChecks(browser, await context.storageState(), origin, evidence);

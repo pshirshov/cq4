@@ -1,6 +1,7 @@
 package cq.core
 
 import cq.api.*
+import DriverRecords.*
 import java.util.UUID
 import scala.util.{Failure, Success, Try}
 
@@ -18,23 +19,24 @@ final class DriverService(registry: DriverRegistry, planner: WorksetPlanner) {
     origin(key, source, action)
   }
 
-  // The status reads use the registry alone, outside any project transaction.
-  def read(scope: Scope, key: DriverKey, source: DriverOrigin): DriverReply = {
+  // Status reads project only committed repository records; they do not take the project write lock.
+  def read(scope: Scope, key: DriverKey, source: DriverOrigin, records: List[DriverRecord]): DriverReply = {
     authorized(scope, key, source, DriverControl.Status())
-    DriverReply.Status(registry.get(scope.project, key).map(status))
+    DriverReply.Status(records.find(_.key == key).map(status))
   }
-  def own(scope: Scope): DriverReply = DriverReply.Status(registry.all(scope.project).filter(_.attached.contains(scope.actor.session))
+  def own(scope: Scope, records: List[DriverRecord]): DriverReply = DriverReply.Status(records.filter(_.attached.contains(scope.actor.session))
     .sortBy(record => (record.on, record.touchedAt)).lastOption.map(status))
 
   // What the calling attached session may settle while its driver's start directive is pending: the answer `DriverBoundary.admit` gives
   // the completion write, readable before the integration is applied. A session without an on driver is not restricted.
-  def settleable(scope: Scope): DriverReply = {
-    val allowed = registry.bound(scope.project, scope.actor.session).flatMap(_.settleable(scope.actor.session))
+  def settleable(scope: Scope, records: List[DriverRecord]): DriverReply = {
+    val allowed = records.find(record => record.on && record.attached.contains(scope.actor.session)).flatMap(_.settleable(scope.actor.session))
     DriverReply.Settleable(allowed.nonEmpty, allowed.getOrElse(Set.empty))
   }
 
   // State-changing entry points: only the CQ hook commands and the Pi extension hold the operator credential they require.
   def control(tx: LedgerTransaction, scope: Scope, key: DriverKey, source: DriverOrigin, action: DriverControl, now: Long): DriverReply = {
+    given LedgerTransaction = tx
     authorized(scope, key, source, action)
     val project = scope.project
     action match {
@@ -52,7 +54,7 @@ final class DriverService(registry: DriverRegistry, planner: WorksetPlanner) {
         val offer = if (attached.isEmpty) Some(BindOffer(token(), Math.addExact(now, BindMillis))) else None
         // The record of this key's earlier drive is replaced: what that drive left unsettled passes to the new one.
         val record = DriverRecord(project, key, if (attached.isEmpty) DriverState.Binding else DriverState.On, attached, preview.workset,
-          preview.targets, preview.through, offer, None, 0, None, true, now, registry.get(project, key).fold(Map.empty[SessionId, Set[IntegrationId]])(outstanding))
+          preview.targets, preview.through, offer, None, 0, None, true, now, registry.get(project, key).fold(Map.empty[SessionId, Set[IntegrationId]])(outstanding), Revision(0L), None)
         attached.foreach(supersede(project, _, key, now))
         registry.put(attached.fold(record)(inherited(record, _)))
         DriverReply.Started(status(record), preview, offer.map(_.token),
@@ -65,7 +67,7 @@ final class DriverService(registry: DriverRegistry, planner: WorksetPlanner) {
           DriverReply.Parked(Some(status(parked)), s"CQ driver parked: ${describe(parked)}")
         case other => DriverReply.Parked(other.map(status), "CQ driver is already off")
       }
-      case _: DriverControl.Status => read(scope, key, source)
+      case _: DriverControl.Status => read(scope, key, source, tx.drivers)
       case _: DriverControl.Continue => registry.get(project, key) match {
         case None => DriverReply.Stop(DriverStopped(DriverStop.Off, "No CQ driver is on for this session"), None, Nil)
         case Some(record) => record.state match {
@@ -81,30 +83,41 @@ final class DriverService(registry: DriverRegistry, planner: WorksetPlanner) {
     }
   }
 
+  def park(tx: LedgerTransaction, scope: Scope, key: DriverKey, expected: Revision, now: Long): DriverReply = {
+    given LedgerTransaction = tx
+    if (scope.actor.role != Role.Human) denied("Browser park requires Human authority")
+    DriverPolicy.key(key)
+    val record = registry.get(scope.project, key).getOrElse(throw DomainFailure(Fault.Missing("Driver does not exist")))
+    if (record.revision != expected) throw DomainFailure(Fault.Conflict("Driver changed; refresh before parking"))
+    val parked = stopped(record, DriverStopped(DriverStop.Parked, "Parked by the operator"), true, now)
+    registry.put(parked)
+    DriverReply.Parked(Some(status(parked)), s"CQ driver parked: ${describe(parked)}")
+  }
+
   // A harness may issue a new session key while its attached host lives on: the attached session's binding follows the key that drives now.
-  private def supersede(project: ProjectId, attached: SessionId, key: DriverKey, now: Long): Unit =
+  private def supersede(project: ProjectId, attached: SessionId, key: DriverKey, now: Long)(using tx: LedgerTransaction): Unit =
     registry.bound(project, attached).foreach { previous =>
       registry.put(stopped(previous, DriverStopped(DriverStop.Parked, s"Its attached session was bound to the CQ driver of session ${key.session}"), false, now))
     }
 
   // A driver that binds an attached session also takes over what that session's drives under other session keys left unsettled.
-  private def inherited(record: DriverRecord, attached: SessionId): DriverRecord =
+  private def inherited(record: DriverRecord, attached: SessionId)(using tx: LedgerTransaction): DriverRecord =
     record.copy(carried = carry(record.carried, attached,
       registry.all(record.project).filter(_.key != record.key).flatMap(outstanding(_).get(attached)).flatten.toSet))
 
-  private def stop(record: DriverRecord, value: DriverStopped, messages: List[String], now: Long): DriverReply = {
+  private def stop(record: DriverRecord, value: DriverStopped, messages: List[String], now: Long)(using tx: LedgerTransaction): DriverReply = {
     val next = stopped(record, value, true, now)
     registry.put(next)
     DriverReply.Stop(value, Some(status(next)), messages :+ stopMessage(value))
   }
 
-  private def directed(record: DriverRecord, cycle: CycleRecord, value: CycleToken, messages: List[String], now: Long): DriverReply = {
+  private def directed(record: DriverRecord, cycle: CycleRecord, value: CycleToken, messages: List[String], now: Long)(using tx: LedgerTransaction): DriverReply = {
     val next = record.copy(cycle = Some(cycle), directives = record.directives + 1, touchedAt = now)
     registry.put(next)
     DriverReply.Continue(directive(record.key.harness, cycle, value), status(next), messages)
   }
 
-  private def resume(record: DriverRecord, cycle: CycleRecord, now: Long): DriverReply =
+  private def resume(record: DriverRecord, cycle: CycleRecord, now: Long)(using tx: LedgerTransaction): DriverReply =
     if (record.directives >= MaxDirectives) stop(record, limit, Nil, now)
     else {
       val resume = token()
@@ -113,7 +126,9 @@ final class DriverService(registry: DriverRegistry, planner: WorksetPlanner) {
 
   private def limit: DriverStopped = DriverStopped(DriverStop.LimitReached, s"This drive issued its $MaxDirectives directives; drive again to continue")
 
-  private def continuation(tx: LedgerTransaction, record: DriverRecord, now: Long): DriverReply = record.cycle match {
+  private def continuation(tx: LedgerTransaction, record: DriverRecord, now: Long): DriverReply = {
+    given LedgerTransaction = tx
+    record.cycle match {
     case Some(cycle) if cycle.state == CycleState.Pending =>
       stop(record, DriverStopped(DriverStop.Failure, s"directive not started: the start directive of cycle ${cycle.number} was not submitted"), Nil, now)
     case Some(cycle) if cycle.active && cycle.inFlight.nonEmpty => resume(record, cycle, now)
@@ -144,19 +159,22 @@ final class DriverService(registry: DriverRegistry, planner: WorksetPlanner) {
             case DriverDecision.Continue =>
               val start = token()
               val cycle = CycleRecord(CycleId(UUID.randomUUID()), finished.fold(1)(_.number + 1), record.targets, record.through, snapshot,
-                CycleState.Pending, start, None, Map.empty, None, Nil, Nil, Set.empty, Set.empty)
+                CycleState.Pending, Some(start), None, Map.empty, None, Nil, Nil, Set.empty, Set.empty)
               directed(record, cycle, CycleToken.Start(start), messages, now)
           }
       }
   }
 
+  }
+
   // Operations of one attached session under its own credential: the token-gated bind, the read-only status, activation and lineage.
-  def session(scope: Scope, action: DriverSession, now: Long): DriverReply = {
+  def session(tx: LedgerTransaction, scope: Scope, action: DriverSession, now: Long): DriverReply = {
+    given LedgerTransaction = tx
     val project = scope.project
     val caller = scope.actor.session
     action match {
-      case _: DriverSession.Status => own(scope)
-      case _: DriverSession.Settleable => settleable(scope)
+      case _: DriverSession.Status => own(scope, tx.drivers)
+      case _: DriverSession.Settleable => settleable(scope, tx.drivers)
       case DriverSession.Bind(value) =>
         governor(scope)
         val record = registry.all(project).find(record => record.state == DriverState.Binding && record.bind.exists(_.token == value))
@@ -207,7 +225,7 @@ final class DriverService(registry: DriverRegistry, planner: WorksetPlanner) {
     }
   }
 
-  private def registered(scope: Scope, id: CycleId, member: LineageMember): (DriverRecord, CycleRecord, LineageEntry) = {
+  private def registered(scope: Scope, id: CycleId, member: LineageMember)(using tx: LedgerTransaction): (DriverRecord, CycleRecord, LineageEntry) = {
     LedgerAccess.write(scope)
     val record = registry.all(scope.project).find(_.cycle.exists(_.id == id)).getOrElse(throw DomainFailure(Fault.Missing("Unknown CQ driver cycle")))
     val cycle = record.cycle.get
@@ -219,7 +237,7 @@ final class DriverService(registry: DriverRegistry, planner: WorksetPlanner) {
     if (scope.actor.role != Role.Governor) denied("Only a CQ attached session binds a driver or activates a driven workflow")
 
   // Start and resume are separate: a start token creates the cycle's one run, a resume token only reattaches to it.
-  private def activate(project: ProjectId, caller: SessionId, run: RequestId, request: WorkflowRequest, presented: Option[CycleToken], now: Long): DriverActivation =
+  private def activate(project: ProjectId, caller: SessionId, run: RequestId, request: WorkflowRequest, presented: Option[CycleToken], now: Long)(using tx: LedgerTransaction): DriverActivation =
     registry.bound(project, caller) match {
       case None => presented match {
         case None => DriverActivation.Undriven()
@@ -237,7 +255,7 @@ final class DriverService(registry: DriverRegistry, planner: WorksetPlanner) {
           fail(s"the activation's workflow, roots or phase differ from the directive of cycle ${cycle.number}")
         value match {
           case CycleToken.Start(start) =>
-            if (start != cycle.startToken) fail("unknown start token")
+            if (!cycle.startToken.contains(start)) fail("unknown start token")
             if (cycle.run.contains(run)) DriverActivation.Started(cycle.id)
             else {
               if (cycle.state != CycleState.Pending) fail(s"the start token of cycle ${cycle.number} was already used")
