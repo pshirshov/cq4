@@ -22,10 +22,12 @@ Evidence: `/srv/nvme/tmp/cq4-x3-usage-evidence/continued-after/` and `continued-
 
 ## Limits
 
-The configured `./dev/check ui` gate was not run: current AGENTS.md reserves it for the CQ host. No package, installation or actual-hostname verification has occurred for this increment. D121/D122 remain Open pending delivery evidence.
+The supervising agent did not run the configured `./dev/check ui` gate: current AGENTS.md reserves it for the CQ host. The later host pass is recorded below. No package, installation or actual-hostname verification has occurred for this increment. D121/D122 remain Open pending delivery evidence.
 
 ## Configured-check follow-up
 
 The trial drive's T5 candidate exposed one additional D121 fixture expectation in `selectionChecks`: three delayed-audit cases expected `33 · Observed` / `22 · Observed` / `11 · Observed`, while the redesigned audit cells render the qualifier first (`Observed 33`, etc.). Both host cq-ui attempts failed on this assertion. The host validation observation is artifact `999a827e-37f1-35fb-97fe-d61390d9661f`; its decoded stderr was retained at `/srv/nvme/tmp/cq4-drive9-evidence/t5-cq-ui-decoded.stderr`.
 
-Updated that assertion to the intended qualifier-first format; the race/ownership checks are otherwise unchanged. The focused `selectionChecks` fixture then passed all eleven scenarios, including all three audit cases, using the same private server harness. Evidence: `/srv/nvme/tmp/cq4-x3-usage-evidence/continued-selection/`. No production change or configured gate was run by the supervising agent. The original five-fixture verification was incomplete for this format change; the failure was in an inherited fixture, not T5's catalog implementation. Full configured validation still belongs to the host.
+Updated that assertion to the intended qualifier-first format; the race/ownership checks are otherwise unchanged. The focused `selectionChecks` fixture then passed all eleven scenarios, including all three audit cases, using the same private server harness. Evidence: `/srv/nvme/tmp/cq4-x3-usage-evidence/continued-selection/`. No production change or configured gate was run by the supervising agent. The original five-fixture verification was incomplete for this format change; the failure was in an inherited fixture, not T5's catalog implementation.
+
+The CQ host subsequently ran its configured UI check on T5 candidate `1113eaeeb3a2fe6f56c4653500bf1514cb0c091f`: observation artifact `d08c6f06-044a-32dd-9583-785cd74f250f` records a settled exit 0 with no stderr. The candidate has the same `web/` sources and browser fixtures as main `0e6029b` (verified by an empty scoped diff). This supplies full configured UI-check evidence for the merged D121/D122 changes. The observation was copied to `/srv/nvme/tmp/cq4-drive9-evidence/t5-fresh-cq-ui.json`.
