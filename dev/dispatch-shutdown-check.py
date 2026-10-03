@@ -52,6 +52,9 @@ def main():
                             time.sleep(0.05)
                         assert (latch / "entered").exists(), (mode, "I/O stall was not reached", (latch / "stderr").read_text()[-4000:])
                         print(json.dumps({"mode": mode, "stalledFile": (latch / "entered").read_text()}), flush=True)
+                        if mode == "ticket":
+                            # Durable dispatch acknowledgement holds the governor's Start reply; request shutdown while it waits.
+                            process.terminate()
                     try:
                         code = process.wait(timeout=25)
                     except subprocess.TimeoutExpired:
