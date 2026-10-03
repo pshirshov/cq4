@@ -236,3 +236,14 @@ Pi adds two local outcomes. `CQ driver stopped: continuation query failed: …; 
 | Pi | The recorded sessions were launched with `pi --approve`. | Recorded. |
 | Claude Code, Codex | If the harness issues a new `session_id` while the `cq` MCP server keeps running, drive again under the new id: binding moves the attached session to the new driver and parks the old id's driver (`Its attached session was bound to the CQ driver of session <new id>`). | Contract test; not observed in a real harness. |
 | All | A driver whose harness session ended without parking stays in the server until it is displaced at capacity or the server restarts. Pi parks on quit; Claude Code and Codex have no session-end hook installed. | Code. |
+
+
+## Durable state and browser worksets (D123)
+
+Driver state now belongs to the project repository. Ordinary server restart preserves its committed binding expiry, active cycle, consumed tokens and lineage; persistence does not establish that a child process is alive. The host still reconciles its own journal and workspaces. Project archive restore keeps lineage and carried integrations, turns restored drivers Off with reason `RestoredArchive`, and invalidates bind/start/resume tokens.
+
+The browser's **Drivers and worksets** dialog lists committed drivers, refreshes their status, shows current target evaluations or the frozen cycle snapshot, and parks a driver with the existing hold control. Park requires Human authority and the row's revision; revisions remain unique after idle eviction. Browser Start is outside this scope.
+
+Define a workset from up to 64 explicit IDs or a submitted query, preview its advanceable and context members, then store that exact preview. Query pages share one snapshot; a changed snapshot is refused. The stored workset can filter the item table while retaining its query, order and pagination; **Clear workset filter** removes the constraint. Worksets remain immutable and can be reopened by UUID.
+
+Source implementation and focused validation: [D123 evidence](validation/durable-drivers-20261003.md). Native packaging and operator installation remain delivery checks. Use [the local updater](local-update.md) for the pinned transition after parking/reconciling previous drives and stopping the launcher.

@@ -38,13 +38,28 @@ final class PostgresLedgerRepository(database: LedgerDatabase) extends LedgerRep
     sql.query("SELECT body::text FROM cq_projects WHERE project_id = ?")(_.setObject(1, project.id.value))(r => Wire.decode(Project_JsonCodec, r.getString(1))).head
   }
 
+  override def driverRecords(project: ProjectId): IO[Throwable, List[DriverRecord]] = database.transaction { connection =>
+    val sql = new Jdbc(connection)
+    requireProject(sql, project)
+    PersistedDrivers.records(sql, project)
+  }
+  override def driverSummaries(project: ProjectId): IO[Throwable, List[DriverSummary]] = database.transaction { connection =>
+    val sql = new Jdbc(connection)
+    requireProject(sql, project)
+    sql.query("SELECT summary::text FROM cq_drivers WHERE project_id = ? ORDER BY harness, session_key")(_.setObject(1, project.value))(
+      row => Wire.decode(DriverSummary_JsonCodec, row.getString(1)))
+  }
+  private def requireProject(sql: Jdbc, project: ProjectId): Unit =
+    if (sql.query("SELECT 1 FROM cq_projects WHERE project_id = ?")(_.setObject(1, project.value))(_.getInt(1)).isEmpty)
+      throw DomainFailure(Fault.Missing("Project not initialized"))
+
   override def transact[A](project: ProjectId)(operation: LedgerTransaction => A): IO[Throwable, A] = database.transaction { connection =>
     val sql = new Jdbc(connection)
     val found = sql.query("SELECT body::text FROM cq_projects WHERE project_id = ? FOR UPDATE")(_.setObject(1, project.value))(r => Wire.decode(Project_JsonCodec, r.getString(1)))
     val metadata = found.headOption.getOrElse(throw DomainFailure(Fault.Missing("Project not initialized")))
     val tx = new PostgresLedgerTransaction(connection, metadata)
-    (operation(tx), tx.committed)
-  }.map { (result, committed) => committed.foreach(_()); result }
+    (tx.driverOperation(operation(tx)), tx.committed)
+  }.flatMap { (result, committed) => zio.ZIO.attempt(committed.foreach(_())) *> zio.ZIO.fromEither(result) }
 }
 
 final class PostgresLedgerResource(repository: PostgresLedgerRepository, database: LedgerDatabase)
@@ -78,6 +93,27 @@ private final class PostgresLedgerTransaction(connection: Connection, override v
   private var effects = List.empty[() => Unit]
   def committed: List[() => Unit] = effects.reverse
   override def afterCommit(effect: () => Unit): Unit = effects = effect :: effects
+  override def nextDriverRevision(): Revision = Revision(sql.query("UPDATE cq_projects SET driver_clock = driver_clock + 1 WHERE project_id = ? RETURNING driver_clock")(
+    _.setObject(1, project.id.value))(_.getLong(1)).head)
+  override def driverOperation[A](operation: => A): Either[DomainFailure, A] = {
+    val savepoint = connection.setSavepoint()
+    val callbacks = effects
+    try Right(operation) catch {
+      case intent: DriverStopIntent =>
+        connection.rollback(savepoint)
+        effects = callbacks
+        Left(DriverRejection.persist(this, intent))
+    } finally connection.releaseSavepoint(savepoint)
+  }
+  override def drivers: List[DriverRecord] = PersistedDrivers.records(sql, project.id)
+  override def driver(key: DriverKey): Option[DriverRecord] = drivers.find(_.key == key)
+  override def putDriver(record: DriverRecord): Unit = PersistedDrivers.put(sql, project.id, record)
+  override def removeDriver(key: DriverKey): Unit = {
+    sql.execute("DELETE FROM cq_drivers WHERE project_id = ? AND harness = ? AND session_key = ?") { statement =>
+      statement.setObject(1, project.id.value); statement.setString(2, key.harness.toString); statement.setString(3, key.session)
+    }
+    ()
+  }
   private def projectKey(s: PreparedStatement): Unit = s.setObject(1, project.id.value)
   private def itemKey(s: PreparedStatement, id: ItemId): Unit = {
     require(id.project == project.id, "Transaction project invariant violated")

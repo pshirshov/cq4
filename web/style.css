@@ -274,3 +274,6 @@ tbody tr[aria-selected=true] { background: #243d4c; }
   .help-layout { grid-template-columns: minmax(0, 1fr); }
   .help-list { position: static; }
 }
+
+.drivers-table th { white-space: nowrap; overflow-wrap: normal; }
+.drivers-table th:nth-child(3) { min-width: 120px; }

@@ -7,7 +7,8 @@ CREATE TABLE cq_projects (
   project_id uuid PRIMARY KEY,
   body jsonb NOT NULL,
   change_cursor bigint NOT NULL DEFAULT 0 CHECK (change_cursor >= 0),
-  fence_counter bigint NOT NULL DEFAULT 0 CHECK (fence_counter >= 0)
+  fence_counter bigint NOT NULL DEFAULT 0 CHECK (fence_counter >= 0),
+  driver_clock bigint NOT NULL DEFAULT 0 CHECK (driver_clock >= 0)
 );
 CREATE TABLE cq_counters (
   project_id uuid NOT NULL REFERENCES cq_projects,
@@ -274,3 +275,20 @@ CREATE TABLE cq_project_settings (
   body jsonb NOT NULL,
   PRIMARY KEY (project_id, kind)
 );
+
+CREATE TABLE cq_drivers (
+  project_id uuid NOT NULL REFERENCES cq_projects,
+  harness text NOT NULL,
+  session_key text NOT NULL,
+  revision bigint NOT NULL CHECK (revision > 0),
+  state text NOT NULL CHECK (state IN ('Binding', 'On', 'Off')),
+  attached uuid,
+  cycle_id uuid,
+  touched_at bigint NOT NULL,
+  stopped_at bigint,
+  summary jsonb NOT NULL,
+  body jsonb NOT NULL,
+  PRIMARY KEY (project_id, harness, session_key)
+);
+CREATE UNIQUE INDEX cq_drivers_bound ON cq_drivers(project_id, attached) WHERE state = 'On';
+CREATE UNIQUE INDEX cq_drivers_cycle ON cq_drivers(project_id, cycle_id) WHERE cycle_id IS NOT NULL;

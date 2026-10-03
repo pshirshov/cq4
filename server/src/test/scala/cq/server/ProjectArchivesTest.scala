@@ -23,6 +23,46 @@ final class ProjectArchivesPostgres extends SpecZIO with AssertZIO {
   private def request(mutations: List[Mutation]): ChangeRequest = ChangeRequest(RequestId(UUID.randomUUID()), mutations, Nil, "Archive scenario")
 
   "Project archives (Behavioral Active Blackbox; PostgreSQL Good Communication)" should {
+    "restore drivers off with invalid control tokens and retained lineage" in {
+      (service: LedgerService[IO], repository: LedgerRepository[IO], config: DatabaseConfig, archives: ProjectArchives) =>
+      val operator = Scope(ProjectId(UUID.randomUUID()), Actor("operator", SessionId(UUID.randomUUID()), Role.Human))
+      val governor = operator.copy(actor = Actor("governor", SessionId(UUID.randomUUID()), Role.Governor))
+      val key = DriverKey(Harness.Claude, "archived-driver")
+      val schema = "cq_restore_" + UUID.randomUUID().toString.replace("-", "")
+      val separator = if (config.url.contains("?")) "&" else "?"
+      val target = new LedgerDatabase(config.copy(url = config.url + separator + "currentSchema=" + schema))
+      val draft = ItemDraft("Ready", "", Set.empty, false, Content.Task(TaskStatus.Ready, List("Observable result"), None, Nil), Nil)
+      for {
+        _ <- service.initialize(operator, "archived driver")
+        created <- service.change(operator, request(List(Mutation.Create(draft))))
+        roots = created.items.map(_.id).toSet
+        started <- service.drive(operator, DriverRequest.Control(key, DriverOrigin.UserPromptSubmit, DriverControl.Start(WorksetTarget.Inline(roots, WorkflowPhase.Work), None)))
+        _ <- service.drive(governor, DriverRequest.Session(DriverSession.Bind(started.asInstanceOf[DriverReply.Started].bind.get)))
+        issued <- service.drive(operator, DriverRequest.Control(key, DriverOrigin.Stop, DriverControl.Continue()))
+        directive = issued.asInstanceOf[DriverReply.Continue].directive
+        run = RequestId(UUID.randomUUID())
+        _ <- service.drive(governor, DriverRequest.Session(DriverSession.Activate(run, WorkflowRequest.Advance(roots, WorkflowPhase.Work), Some(directive.token))))
+        before <- repository.driverRecords(operator.project)
+        file <- ZIO.attempt(Files.createTempFile("cq-driver-archive-", ".zip"))
+        manifest <- archives.backup(operator.project, file)
+        _ <- assertIO(manifest.entries.exists(entry => entry.table == BackupTable.Drivers && entry.rows == 1))
+        _ <- ZIO.attemptBlocking(Using.resource(DriverManager.getConnection(config.url, config.user, config.password)) { connection =>
+          Using.resource(connection.createStatement())(_.execute(s"CREATE SCHEMA $schema")); ()
+        })
+        _ <- target.initialize
+        _ <- new PostgresProjectArchives(target, Clock.systemUTC()).restore(file)
+        restored <- new PostgresLedgerRepository(target).driverRecords(operator.project)
+        record = restored.head
+        _ <- assertIO(record.state == DriverState.Off && record.stopped.exists(_.reason == DriverStop.RestoredArchive) && record.bind.isEmpty &&
+          record.cycle.exists(cycle => cycle.state == CycleState.Ended && cycle.startToken.isEmpty && cycle.resumeToken.isEmpty && cycle.resumed.isEmpty &&
+            cycle.lineage.map(_.member) == before.head.cycle.get.lineage.map(_.member)) && record.revision.value == before.head.revision.value + 1)
+        serviceAfter = FixedLedger.at(new PostgresLedgerRepository(target), System.currentTimeMillis())
+        replay <- serviceAfter.drive(governor, DriverRequest.Session(DriverSession.Activate(run, WorkflowRequest.Advance(roots, WorkflowPhase.Work), Some(directive.token)))).either
+        _ <- assertIO(replay.left.exists { case DomainFailure(_: Fault.Denied) => true; case _ => false })
+        _ <- ZIO.attempt(Files.deleteIfExists(file))
+      } yield ()
+    }
+
     "restore a project whose installed-release rows hold an explicitly archived settled record" in {
       (service: LedgerService[IO], database: LedgerDatabase, config: DatabaseConfig, archives: ProjectArchives) =>
       val owner = Scope(ProjectId(UUID.randomUUID()), Actor("operator", SessionId(UUID.randomUUID()), Role.Governor))

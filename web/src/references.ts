@@ -14,6 +14,8 @@ export class ReferencePopup {
 
   constructor(private readonly call: (command: api.Command) => Promise<api.Result>) {}
 
+  show(id: api.ItemId): void { void this.open(id, false); }
+
   reset(): void { this.generation++; this.trail = []; this.dialog.close(); }
 
   render(project: api.ProjectId, text: string): DocumentFragment {

@@ -1,6 +1,6 @@
 # D123: durable drivers and browser worksets — proposed implementation
 
-This is a source-informed plan, not an implemented or verified result. Q46 (ordinary restart) and Q47 (archive restore) are Open and linked to D123. The operator already authorized including D123 and durable driver state in this batch. I17 remains outside scope pending the operator's configuration comments.
+This historical plan describes the pre-implementation boundaries. Q46/Q47 are answered: preserve committed state on ordinary restart; restore archived drivers Off with invalidated tokens and retained evidence. The authorized source implementation and focused verification are recorded in [D123 validation](../validation/durable-drivers-20261003.md). Delivery gates and installed verification remain pending. I17 remains outside scope pending the operator's configuration comments.
 
 ## Observed boundaries
 
@@ -45,9 +45,9 @@ Filter results to the evaluated advanceable members of a chosen workset, label t
 3. Reproduce absent browser controls, then add focused browser checks for driver summaries, preview/store, hold-to-park, stale revisions, query pagination and workset filtering; run npm type checking and the focused fixtures.
 4. Operator/host run configured and delivery gates, then package/update/rollback rehearsals, install and verify on the actual hostname. No ledger closure based solely on source or a proposed plan.
 
-## Pending decisions
+## Decisions (answered after this plan)
 
-- Q46: preserve active state on ordinary restart (recommended), or stop explicitly on startup.
-- Q47: retain stopped/token-invalidated records on archive restore (recommended), restore exact live state, or exclude drivers from archives.
+- Q46: preserve complete committed state on ordinary restart; reconcile external child state through existing host recovery.
+- Q47: retain stopped/token-invalidated records on archive restore, including lineage and outstanding integration evidence.
 
 The plan keeps current eviction limits and harness control rules; no new configuration or model version is proposed. Exact class/schema names are implementation choices, not additional product requirements.
