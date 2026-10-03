@@ -204,8 +204,10 @@ export class ConnectionManager {
     connection.state = 'ALIVE'; connection.staleAt = null;
     if (connection.verified === null) connection.verified = Date.now();
     this.activeId = connection.id; this.attempts = 0; this.nextAttempt = null; this.backoff = null; this.deferred = false;
-    for (const other of [...this.connections.values()]) if (other !== connection) this.close(other, 'Superseded');
-    if (changed || recovered) { this.log(`Connection ${connection.id} verified by heartbeat`); this.listener.active(); }
+    if (changed || recovered) {
+      for (const other of [...this.connections.values()]) if (other !== connection) this.close(other, 'Superseded');
+      this.log(`Connection ${connection.id} verified by heartbeat`); this.listener.active();
+    }
     this.publish();
   }
   private close(connection: Connection, reason: string): void {

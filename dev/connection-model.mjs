@@ -45,6 +45,17 @@ await check('native OPEN alone is not liveness; first overdue probe is STALE', f
   f.advance(5000); assert.equal(f.stats().state, 'STALE'); assert.equal(f.sockets.length, 2);
   f.sockets[0].pong(); assert.equal(f.stats().state, 'ALIVE'); assert.equal(f.sockets[1].readyState, 3);
 });
+await check('healthy old heartbeat preserves a pending resume replacement until it verifies', f => {
+  f.sockets[0].open(); f.sockets[0].pong();
+  const activations = f.activations();
+  f.document.dispatchEvent(new Event('resume')); assert.equal(f.sockets.length, 2);
+  f.sockets[0].pong();
+  assert.equal(f.stats().connections, 2, 'A routine heartbeat must not discard the pending replacement');
+  assert.equal(f.sockets[1].readyState, 0); assert.equal(f.activations(), activations);
+  f.sockets[1].open(); f.sockets[1].pong();
+  assert.equal(f.stats().active, 2); assert.equal(f.stats().connections, 1);
+  assert.equal(f.sockets[0].readyState, 3); assert.equal(f.activations(), activations + 1);
+});
 await check('hidden replacement resumes immediately with an existing stale active connection', f => {
   f.sockets[0].open(); f.sockets[0].pong(); f.visible('hidden'); f.advance(15000);
   assert.equal(f.stats().state, 'DEFERRED'); const attempts = f.stats().attempts;
