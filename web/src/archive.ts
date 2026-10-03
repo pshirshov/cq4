@@ -68,15 +68,17 @@ export class ArchiveDialog {
   private render(project: api.ProjectId, query: string, preview: api.ArchivePlan, generation: number): void {
     const panel = this.dialog.body;
     panel.replaceChildren(element('p', `Filter: ${query || 'All items'}. ${preview.scanned} matching items examined.`),
-      element('p', `${preview.members.length} unarchived terminal items selected. Their status, content and history are preserved.`));
+      element('p', `${preview.members.length} unarchived items selected: terminal records and Decisions with fully archived scope. Their status, content and history are preserved.`));
     if (preview.retained.length > 0) {
-      panel.append(element('p', `${preview.retained.length} terminal items are kept because related items are still open:`));
+      panel.append(element('p', `${preview.retained.length} eligible items are kept because related items are still open:`));
       const kept = element('ul', ''); kept.setAttribute('aria-label', 'Retained items');
       for (const retention of preview.retained) kept.append(element('li', `${itemName(retention.item.id)} · ${retention.item.title} · open: ${retention.open.map(itemName).join(', ')}`));
       panel.append(kept);
     }
-    if (preview.limited) panel.append(element('p', `Limited preview: at most ${MAX_MEMBERS} terminal items and ${MAX_SCANNED} examined matches per operation. Only the items below will be archived. Refine the filter or repeat after this batch.`));
-    if (preview.members.length === 0) { panel.append(element('p', 'No terminal items selected.')); return; }
+    if (preview.limited) panel.append(element('p', `Limited preview: at most ${MAX_MEMBERS} eligible items and ${MAX_SCANNED} examined matches per operation. Only the items below will be archived. Refine the filter or repeat after this batch.`));
+    if (preview.members.length === 0) { panel.append(element('p', 'No eligible items selected.')); return; }
+    if (preview.members.some(item => item.id.ledger === api.Ledger.Decisions && item.status === 'Adopted'))
+      panel.append(element('p', 'Before archiving these Decisions, preserve knowledge or rules that still apply as Memories or standing requirements.'));
     const table = element('table', ''); table.setAttribute('aria-label', 'Archive selection');
     const head = element('thead', ''); const headings = element('tr', '');
     for (const label of ['ID', 'Title', 'Status']) headings.append(element('th', label));
@@ -86,7 +88,7 @@ export class ArchiveDialog {
     }
     table.append(body); panel.append(table);
     const input = new api.ChangeInput(project, new api.ChangeRequest(new api.RequestId(uuidV4(crypto)),
-      [new api.Mutation_Archive(preview.members.map(item => new api.ItemRevision(item.id, item.revision)))], [], 'Browser archive of previewed terminal items'));
+      [new api.Mutation_Archive(preview.members.map(item => new api.ItemRevision(item.id, item.revision)))], [], 'Browser archive of previewed eligible items'));
     panel.append(element('p', 'Confirmation uses these exact revisions. If any selected item changed or cannot be archived, the entire operation is rejected.'),
       holdButton('Confirm archive', () => this.action(generation, async () => {
         if (generation !== this.generation) return;

@@ -6,6 +6,7 @@ import { icon } from './icons.js';
 import { itemName, parseItem } from './items.js';
 import { faultMessage } from './faults.js';
 import { itemView } from './presentation.js';
+import { markdown } from './markdown.js';
 
 export class ReferencePopup {
   readonly dialog = new Dialog('standard', () => { this.generation++; });
@@ -19,6 +20,10 @@ export class ReferencePopup {
   reset(): void { this.generation++; this.trail = []; this.dialog.close(); }
 
   render(project: api.ProjectId, text: string): DocumentFragment {
+    return markdown(text, value => this.inline(project, value));
+  }
+
+  private inline(project: api.ProjectId, text: string): DocumentFragment {
     const fragment = document.createDocumentFragment();
     const tokens = /https?:\/\/\S+|`[^`]*`|[A-Z]+[0-9]+/g;
     let end = 0;

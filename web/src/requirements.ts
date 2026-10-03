@@ -80,6 +80,11 @@ export class RequirementsDialog {
       if (result instanceof api.Result_Requirements) {
         // A reply that arrives after the dialog was reopened for a fresh load or for another project's text must not become its base.
         if (this.base === base) this.adopt(result.value);
+        const kept = this.drafts.get(base.project.value);
+        if (kept !== undefined && kept.base === base) {
+          if (kept.text === result.value.text) this.drafts.delete(base.project.value);
+          else this.drafts.set(base.project.value, { base: result.value, text: kept.text });
+        }
         this.effects.saved(result.value, result.value.revision.value !== base.revision.value);
       } else if (result instanceof api.Result_Failed && result.fault instanceof api.Fault_Conflict) {
         const current = await this.read(base.project);

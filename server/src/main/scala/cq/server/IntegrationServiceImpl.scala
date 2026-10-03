@@ -27,8 +27,8 @@ final class IntegrationServiceImpl[F[+_, +_]: Error2](ledger: LedgerRepository[F
     }
     result <- F.fromEither(Try {
       val metadata = stored.metadata
-      if (metadata.actor.role != Role.Collector || metadata.actor.session != scope.actor.session)
-        throw DomainFailure(Fault.Denied("Integration evidence belongs to another publisher session"))
+      if (metadata.actor.role != Role.Collector)
+        throw DomainFailure(Fault.Denied("Integration evidence was not published by a host collector"))
       invalid(metadata.kind == kind && metadata.mediaType == "application/json", "Unexpected integration evidence artifact type")
       val json = parser.parse(stored.body).fold(_ => throw DomainFailure(Fault.Invalid("Integration evidence is not JSON")), identity)
       val value = codec.decode(BaboonCodecContext.Default, json).fold(_ => throw DomainFailure(Fault.Invalid("Integration evidence differs from its schema")), identity)
@@ -38,10 +38,10 @@ final class IntegrationServiceImpl[F[+_, +_]: Error2](ledger: LedgerRepository[F
   } yield result
 
   /** Failed runs are cited in the Task evidence, so each must be what it claims. */
-  private def failures(scope: Scope, candidate: GitCommit, cited: List[FailedRun]): F[Throwable, Unit] =
+  private def failures(scope: Scope, candidate: GitCommit, cited: List[FailedRun], publisher: AttemptId => SessionId): F[Throwable, Unit] =
     F.traverse_(cited) { expected =>
       artifact(scope, expected.artifact, ArtifactKind.Validation, ValidationObservation_JsonCodec).flatMap { case (metadata, observed) => F.fromEither(Try {
-        IntegrationValidation.verifyFailure(scope.project, scope.actor.session, candidate, expected, metadata, observed)
+        IntegrationValidation.verifyFailure(scope.project, publisher(expected.author), candidate, expected, metadata, observed)
       }.toEither) }
     }
 
@@ -85,31 +85,32 @@ final class IntegrationServiceImpl[F[+_, +_]: Error2](ledger: LedgerRepository[F
         work.request.work.isInstanceOf[DispatchWork.Worker] && work.request.work != DispatchWork.Worker(WorkerMode.Probe) &&
         review.request.work == DispatchWork.Reviewer(ReviewerMode.Candidate) && review.request.previous.contains(intent.worker) &&
         work.request.members.map(_.id).toSet == intent.members.map(_.id).toSet && review.request.members.map(_.id).toSet == intent.members.map(_.id).toSet &&
-        work.request.fence == intent.fence && review.request.fence == intent.fence &&
         reviewed != intent.expected && (intent.rebase.isEmpty || reviewed != intent.candidate) &&
         work.candidate.contains(reviewed) && review.candidate == work.candidate && review.base == reviewed,
         "Integration requires an independently reviewed exact worker candidate and assignment")
       invalid(work.report match { case ChildReport.Work(members) => members.forall(_.disposition == WorkDisposition.CandidateReady); case _ => false }, "Every integration member must be candidate-ready")
       invalid(review.report match { case ChildReport.Review(members, _) => members.forall(_.verdict == ReviewVerdict.Accepted); case _ => false }, "Every integration member must be independently accepted")
     }.toEither)
-    rounds <- amendments(scope, intent.worker, 1)
+    workerScope = scope.copy(actor = scope.actor.copy(session = worker._1.actor.session))
+    publisher = (author: AttemptId) => if (author == reviewer._2.attempt) reviewer._1.actor.session else worker._1.actor.session
+    rounds <- amendments(workerScope, intent.worker, 1)
     evidence <- F.fromEither(Try(IntegrationValidation.applicable(
-      IntegrationValidation.effective(scope.project, scope.actor.session, intent.worker, worker._2, intent.checks, rounds), reviewer._2)).toEither)
+      IntegrationValidation.effective(scope.project, worker._1.actor.session, intent.worker, worker._2, intent.checks, rounds), reviewer._2)).toEither)
     _ <- F.traverse_(evidence.passing) { expected =>
       artifact(scope, expected.evidence.artifact, ArtifactKind.Validation, ValidationObservation_JsonCodec).flatMap { case (metadata, observed) => F.fromEither(Try {
-        IntegrationValidation.verify(scope.project, scope.actor.session, reviewed, expected, metadata, observed)
+        IntegrationValidation.verify(scope.project, publisher(expected.author), reviewed, expected, metadata, observed)
       }.toEither) }
     }
-    _ <- failures(scope, reviewed, evidence.failed)
+    _ <- failures(scope, reviewed, evidence.failed, publisher)
     rebased <- F.fromEither(Try(intent.rebase.toList.flatMap(IntegrationValidation.rebased(_, intent.checks))).toEither)
     _ <- F.traverse_(rebased) { expected =>
       artifact(scope, expected.evidence.artifact, ArtifactKind.Validation, ValidationObservation_JsonCodec).flatMap { case (metadata, observed) => F.fromEither(Try {
         IntegrationValidation.verifyRebased(scope.project, scope.actor.session, intent.candidate, expected, metadata, observed)
       }.toEither) }
     }
-    _ <- failures(scope, intent.candidate, rebased.flatMap(IntegrationValidation.failures))
+    _ <- failures(scope, intent.candidate, rebased.flatMap(IntegrationValidation.failures), _ => scope.actor.session)
     earlier <- F.fromEither(Try(intent.rebase.toList.flatMap(IntegrationValidation.attempts(_, intent.candidate, intent.checks))).toEither)
-    _ <- F.traverse_(earlier)((commit, run) => failures(scope, commit, List(run)))
+    _ <- F.traverse_(earlier)((commit, run) => failures(scope, commit, List(run), _ => scope.actor.session))
     result <- ledger.transact(scope.project) { tx =>
       tx.integration(intent.id) match {
         case Some(previous) =>
@@ -118,7 +119,7 @@ final class IntegrationServiceImpl[F[+_, +_]: Error2](ledger: LedgerRepository[F
         case None =>
           val now = clock.millis()
           List(worker, reviewer).foreach { case (metadata, body) =>
-            invalid(tx.admission(body.attempt).exists(value => value.artifact == metadata && value.owner == intent.owner && value.fence == intent.fence &&
+            invalid(tx.admission(body.attempt).exists(value => value.artifact == metadata && value.owner.role == Role.Governor && value.owner.session == metadata.actor.session && value.fence == body.request.fence &&
               value.members == body.request.members && value.decision == AdmissionDecision.Accepted()), "Integration evidence has no matching accepted admission")
           }
           // Members may have been revised by reference or provenance changes since the worker and reviewer ran (D80); their drafts must be unchanged.

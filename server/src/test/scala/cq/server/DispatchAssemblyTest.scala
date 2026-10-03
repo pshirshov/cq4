@@ -170,7 +170,12 @@ abstract class DispatchAssemblyTest extends SpecZIO with AssertZIO {
             // A session without a request of its own, such as a driven one, still delivers the standing requirements.
             assert(new InputAssembler(api, scope, clock, "").assemble(request).operatorRequirements.contains(standingSection))
             assert(assembler.assemble(request.copy(work = DispatchWork.Explorer(ExplorerMode.Investigate))).operatorRequirements.isEmpty)
+            val governing = new WorkflowAssembly(api, scope.project, new WorkflowAssets)
+            val activated = governing.assemble(WorkflowRequest.Begin(Set(member.id)))
+            assert(activated.instructions.contains(standingSection), "Governor activation omitted standing requirements")
             stand(1, "Changed before the next dispatch.")
+            assert(governing.assemble(WorkflowRequest.Begin(Set(member.id))).instructions.contains("Changed before the next dispatch."))
+            assert(activated.instructions.contains(standing), "Earlier activation lost its frozen requirements")
             assert(assembler.assemble(request).operatorRequirements.exists(text => text.contains("Changed before the next dispatch.") && !text.contains(standing)))
             // A standing text without content adds nothing: the session's request is delivered as it was before.
             stand(2, " \n")

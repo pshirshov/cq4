@@ -69,11 +69,16 @@ final class GuardianDriverProcess extends SpecZIO with AssertZIO {
     }}
 
     "cancel promptly and settle the actual root before declaring cleanup complete" in { (fixture: GuardianFixture) => ZIO.attemptBlocking {
-      val spec = fixture.spec(List("sleep", "30"), Some(Duration.ofSeconds(40)))
+      val spec = fixture.spec(List("python3", "-c", "import signal,time; signal.signal(signal.SIGTERM, lambda *args: time.sleep(30)); print('ready',flush=True); time.sleep(30)"), Some(Duration.ofSeconds(40)))
       Using.resource(new GuardianDriver(fixture.binary).start(spec)) { running =>
-        // `sleep 30` cannot have settled by itself, so an unsettled observation is a `cancel` that returned without waiting for the settlement.
+        val readinessDeadline = System.nanoTime() + Duration.ofSeconds(5).toNanos
+        while (!Files.exists(spec.stdout) || !Files.readString(spec.stdout).contains("ready")) {
+          require(System.nanoTime() < readinessDeadline, "Cancellation fixture never installed its termination handler")
+          Thread.sleep(10)
+        }
         val requested = running.cancel()
         assert(requested.cancellationRequested && requested.phase == ProcessPhase.Stopping && requested.result.isEmpty)
+        assert(running.status.result.isEmpty, "Cancellation waited for actual settlement before returning its earlier observation")
         val observed = running.await(Duration.ofSeconds(5))
         assert(observed.phase == ProcessPhase.Settled && observed.result.exists(r => r.settled && r.reason == StopReason.Cancelled))
       }

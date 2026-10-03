@@ -58,14 +58,7 @@ final class JobSupervisor private (owner: Scope, repository: JobRepository, work
   private def acknowledge[A](operation: IO[Throwable, A]): IO[Throwable, A] = ZIO.uninterruptibleMask { restore =>
     for {
       pending <- operation.forkDaemon
-      result <- restore(pending.join).timeout(zio.Duration.fromMillis(AcknowledgementMillis))
-      value <- result match {
-        case Some(value) => ZIO.succeed(value)
-        case None => state.get.flatMap { current =>
-          val cause = new java.io.IOException("Job journal acknowledgement deadline exceeded; execution admission is disabled")
-          ZIO.succeed(disable(cause, current)) *> ZIO.fail(cause)
-        }
-      }
+      value <- restore(pending.join)
     } yield value
   }
   private def mutate[A](operation: State => IO[Throwable, (A, State)]): IO[Throwable, A] = state.modifyZIO { current =>
@@ -244,7 +237,6 @@ final class JobSupervisor private (owner: Scope, repository: JobRepository, work
 
 object JobSupervisor {
   private val PollMillis = 20L
-  private val AcknowledgementMillis = 1000L
   private final class Live(val done: Promise[Throwable, Unit]) {
     private var stopping = false
     private var running = Option.empty[ManagedExecution]

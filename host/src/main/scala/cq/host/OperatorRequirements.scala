@@ -34,6 +34,9 @@ object OperatorRequirements {
   }
 
   val StandingHeading = "Standing project requirements (set by the operator; they apply to every session of this project):"
+  def governing(instructions: String, standing: String): String =
+    if (standing.trim.isEmpty) instructions else StandingHeading + "\n" + standing + "\n\n" + instructions
+
   val SessionHeading = "Session request (the operator's request for this session):"
 
   /** The project's standing requirements as the server holds them now. `call` raises a failed read, so no caller proceeds without them. */

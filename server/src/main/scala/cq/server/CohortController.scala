@@ -67,7 +67,7 @@ final class CohortController(config: SupervisorConfig, authority: SupervisorAuth
           !claim.released && claim.expiresAt > clock.millis()), "Cohort start requires its exact current governing claim")
         progress.started(plan.fingerprints(id))
       }
-      request -> SelectedDispatch(choice.cohort, plan.evidence.decision.artifact, admission)
+      request -> SelectedDispatch(choice.cohort, plan.evidence.decision.artifact, admission, () => progress.finished(plan.fingerprints(id)))
     })
     resolved.flatMap((request, selected) => dispatch.startSelected(request, selected))
   }

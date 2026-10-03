@@ -154,8 +154,8 @@ final class LedgerMutation(terminationPlanner: TerminationPlanner, boundary: Dri
             members.foreach { member =>
               val item = check(member.id, member.revision)
               invalid(!item.draft.archived, "Archive preview contains an already archived item")
-              // Bulk archival selects finished work only; a settled record is archived explicitly through a revision, never here.
-              invalid(outcome(item.draft.content).terminal, "Only terminal items may be archived; unarchive an item before reopening it")
+              // Recheck scope anchors in the transaction: they may have changed since preview.
+              invalid(bulkArchivable(tx, item.id, status(item.draft.content)), "Only terminal items or adopted Decisions with fully archived scope may be bulk archived")
               val open = LedgerPolicy.openRelated(tx, member.id)
               invalid(open.isEmpty, s"Archive excludes ${LedgerPolicy.prefix(member.id.ledger)}${member.id.number}: related open items ${open.map(o => LedgerPolicy.prefix(o.ledger) + o.number).mkString(", ")}")
               revise(item, item.draft.copy(archived = true), None)

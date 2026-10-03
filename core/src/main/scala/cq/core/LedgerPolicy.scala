@@ -278,6 +278,14 @@ object LedgerPolicy {
   }
 
   def key(id: ItemId): (String, Long) = (id.ledger.toString, id.number)
+  def bulkArchivable(tx: LedgerTransaction, id: ItemId, status: String): Boolean = {
+    outcome(id.ledger, status).terminal || (id.ledger == Ledger.Decisions && status == DecisionStatus.Adopted.toString && {
+      val anchors = tx.refs(id).filter(ref => ref.relation == Relation.DerivedFrom || ref.relation == Relation.PartOf).map(_.target).distinct
+      anchors.nonEmpty && anchors.forall(target => tx.summary(target).getOrElse(
+        throw new IllegalStateException("Decision scope anchor is missing")).archived)
+    })
+  }
+
   // A terminal item stays out of archival while any related item (either direction) is still open; settled records retain nothing.
   def openRelated(tx: LedgerTransaction, id: ItemId): List[ItemId] =
     tx.refs(id).map(_.target).distinct.filter(target => tx.summary(target).exists(open)).sortBy(key)

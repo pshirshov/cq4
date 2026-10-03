@@ -3,7 +3,7 @@ package cq.server
 import baboon.runtime.shared.BaboonCodecContext
 import cq.api.*
 import cq.core.{DomainFailure, JsonRoundtrip}
-import cq.host.{AttachedCodexUsage, AttachedUsage, DispatchProjection, StdioPeer}
+import cq.host.{AttachedCodexUsage, AttachedUsage, DispatchProjection, OperatorRequirements, StdioPeer}
 import io.circe.Json
 import zio.{Task, ZIO}
 
@@ -21,7 +21,8 @@ final class AttachedGateway(config: SupervisorConfig, authority: SupervisorAutho
     "content" -> Json.arr(Json.obj("type" -> Json.fromString("text"), "text" -> Json.fromString(body.noSpaces))), "structuredContent" -> body)
   private def context: AttachedContext = AttachedContext(config.run.attempt.session, config.run.attempt.id, config.directory.toString,
     config.project, config.settings.harnesses.map(value => HarnessRoute(value.harness, value.model, value.provider)), config.settings.checks.map(_.name),
-    config.settings.limits, config.settings.integrationTarget, schemas.attachedInstructions(config.run.attempt.harness), workflow.current,
+    config.settings.limits, config.settings.integrationTarget, OperatorRequirements.governing(schemas.attachedInstructions(config.run.attempt.harness),
+      OperatorRequirements.standing(authority.governor.call, config.project.project)), workflow.current,
     if (config.run.attempt.harness == Harness.Pi)
       "Interactive Pi finalized assistant usage is collected by the extension; compaction, auxiliary calls and unreported/interrupted responses remain unobserved. Managed child usage is collected independently."
     else if (config.run.attempt.harness == Harness.Codex) codex.status
@@ -34,7 +35,7 @@ final class AttachedGateway(config: SupervisorConfig, authority: SupervisorAutho
         require(JsonRoundtrip.lossless(arguments, SessionCommand_JsonCodec.encode(CodecContext, command)), "Noncanonical session request")
         command
       }.flatMap {
-        case _: SessionCommand.Context => ZIO.succeed(SessionReply.Context(context))
+        case _: SessionCommand.Context => ZIO.attemptBlocking(SessionReply.Context(context))
         case SessionCommand.Workflow(id, request, operatorRequirements, token) => workflow.activate(id, request, operatorRequirements, token).map(SessionReply.Workflow.apply)
         // The model-facing driver surface: a bind gated by the hook-minted token and a read-only status. Neither starts nor parks a driver.
         case SessionCommand.Bind(token) => ZIO.attemptBlocking(SessionReply.Driver(driver.session.bind(token)))

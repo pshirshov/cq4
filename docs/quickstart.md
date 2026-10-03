@@ -150,13 +150,17 @@ latest revision timestamp. Query suggestions and diagnostics appear in a popup
 while the filter field has focus.
 
 Apply your filter, then choose **Archive terminal items**. The preview includes
-only unarchived terminal items matching that applied filter, including cancelled
-or rejected outcomes. Confirm the displayed revisions. A batch contains at most
+unarchived terminal items matching that applied filter, including cancelled
+or rejected outcomes, and Adopted Decisions with fully archived scope. A Decision
+must have at least one outgoing DerivedFrom or PartOf anchor, and every anchor
+must be archived. Decisions with active or no anchors remain visible. Preserve
+knowledge or rules that still apply as Memories or standing requirements before
+archiving a Decision; governing agents are instructed to do this. Confirm the displayed revisions. A batch contains at most
 512 items; limited previews are labelled explicitly. A stale or unavailable item
 rejects the entire batch. If the connection drops during confirmation, reopen
 the action and use **Retry exact archive** to recover the retained request.
 
-Archived items must remain terminal. Unarchive an item before reopening it, or
+Archived items must remain terminal or settled (Adopted Decisions and Current Memories). Unarchive an item before reopening it, or
 change both fields together. Prior revisions remain available in history.
 
 **Project usage → Attempts** and **Usage audit** show tables. Expand a row's

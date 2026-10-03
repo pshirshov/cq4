@@ -12,6 +12,7 @@ final case class CohortExecutionFingerprint(group: String, members: Map[ItemId, 
 final class CohortProgress {
   private final case class Seen(attempts: Int, offered: Int, sequence: Int)
   private var members = Map.empty[ItemId, Seen]
+  private var completed = Set.empty[String]
   private var executed = Set.empty[String]
   private var inspectedAfter = Option.empty[ItemId]
 
@@ -36,6 +37,11 @@ final class CohortProgress {
     executed ++= fingerprint.members.values.toSet + fingerprint.group
     fingerprint.members.keys.foreach(id => members = members.updated(id, members(id).copy(attempts = members(id).attempts + 1)))
   }
+  def finished(fingerprint: CohortExecutionFingerprint): Unit = synchronized {
+    require(executed(fingerprint.group), "Unstarted cohort cannot finish")
+    completed += fingerprint.group
+  }
+  def ended(fingerprint: String): Boolean = synchronized(completed(fingerprint))
   def deferred(fingerprint: String): Boolean = synchronized(executed(fingerprint))
 }
 

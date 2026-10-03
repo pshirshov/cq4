@@ -40,10 +40,9 @@ private[server] final class DispatchExecution(val ticket: DispatchTicket, val di
   def finish(value: DispatchStatus): Unit = synchronized { view = DispatchProjection.bounded(value); publishing = true }
 }
 
-final case class SelectedDispatch(cohort: Option[UUID], evidence: ArtifactId, admit: () => Unit)
+final case class SelectedDispatch(cohort: Option[UUID], evidence: ArtifactId, admit: () => Unit, finished: () => Unit)
 
 final class DispatchController(config: SupervisorConfig, runner: ChildRunner, jobs: JobSupervisor, clock: Clock) {
-  private val AcknowledgementMillis = 1000L
   private val MaxStatusWaitMillis = 20000
   private val disabled = new AtomicBoolean(false)
   private var closing = false
@@ -92,10 +91,10 @@ final class DispatchController(config: SupervisorConfig, runner: ChildRunner, jo
           entry.finish(entry.status.copy(phase = DispatchPhase.Unknown, next = ChildNext.InspectEvidence,
             blocker = Some(DispatchProjection.concise("Dispatch storage/publication failed: " + Option(failure.getMessage).getOrElse(failure.getClass.getSimpleName))), detailsOmitted = true))
         } *> ready.fail(failure).unit
-      }.ensuring(done.succeed(()).unit)
+      }.ensuring(ZIO.succeed(selection.foreach(_.finished())) *> done.succeed(()).unit)
       execute.forkDaemon.unit
     }
-    _ <- entry.ready.await.timeoutFail(new IllegalStateException("Dispatch journal acknowledgement deadline exceeded; admission disabled"))(zio.Duration.fromMillis(AcknowledgementMillis))
+    _ <- entry.ready.await
       .tapError(error => ZIO.succeed { disabled.set(true); entry.requestStop(error.getMessage) })
     result <- snapshot(entry)
   } yield result

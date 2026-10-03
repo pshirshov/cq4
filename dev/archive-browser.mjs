@@ -85,5 +85,23 @@ try{
  await holdControl(page,dialog().getByRole('button',{name:'Confirm archive',exact:true}));await page.locator('.notification-toast').getByText('Archived 512 items.',{exact:true}).waitFor();
  assert.equal((await detail(bounded[0].id)).draft.archived,true);assert.equal((await detail(bounded[512].id)).draft.archived,false);
  cases.push('513-member request rejected; capped 512-member preview and transport acknowledgement succeed without touching the undisplayed item');
+ const decision=(title)=>({title,body:'Scoped choice',labels:['decision-scope'],archived:false,citations:[],content:{Decision:{status:'Adopted',choice:'Choice',rationale:'Rationale',alternatives:[]}}});
+ const scopeBatch=await change([{Create:{draft:draft('Archived decision scope','Done',[],true)}},{Create:{draft:decision('Decision with archived scope')}},
+   {Create:{draft:decision('Unanchored decision')}},{Create:{draft:decision('Decision with active scope')}},
+   {Create:{draft:{...decision('Current memory'),content:{Memory:{status:'Current',knowledge:'Still useful',applicability:'Future work',evidence:[]}}}}}]);
+ assert.ok(scopeBatch.Changed);const [scopeAnchor,scopedDecision,unanchoredDecision,activeDecision,currentMemory]=scopeBatch.Changed.ack.items;
+ assert.ok((await change([{Reference:{source:scopedDecision.id,expectedSource:scopedDecision.revision,relation:'DerivedFrom',target:scopeAnchor.id,expectedTarget:scopeAnchor.revision,present:true}}])).Changed);
+ const activeAnchor=await detail(ids[2]);
+ assert.ok((await change([{Reference:{source:activeDecision.id,expectedSource:activeDecision.revision,relation:'DerivedFrom',target:activeAnchor.id,expectedTarget:activeAnchor.revision,present:true}}])).Changed);
+ await page.getByLabel('Search query').fill('tag:decision-scope');await page.getByRole('button',{name:'Search',exact:true}).click();await page.getByText('Data: current',{exact:true}).waitFor();
+ await open();await dialog().getByRole('button',{name:'Confirm archive',exact:true}).waitFor();
+ const decisionSelection=dialog().getByRole('table',{name:'Archive selection',exact:true});
+ assert.equal(await decisionSelection.locator('tbody tr').count(),1);assert.match(await decisionSelection.textContent(),/Decision with archived scope/);
+ await dialog().getByText('Before archiving these Decisions, preserve knowledge or rules that still apply as Memories or standing requirements.',{exact:true}).waitFor();
+ await page.screenshot({path:evidence+'/archive-decision-scope.png',fullPage:true});
+ await holdControl(page,dialog().getByRole('button',{name:'Confirm archive',exact:true}));await page.locator('.notification-toast').getByText('Archived 1 items.',{exact:true}).waitFor();
+ assert.equal((await detail(scopedDecision.id)).draft.archived,true);
+ for(const kept of [unanchoredDecision,activeDecision,currentMemory])assert.equal((await detail(kept.id)).draft.archived,false);
+ cases.push('D128 scoped Adopted Decision is offered and archived with preservation guidance; active/unanchored Decisions and Current Memories stay visible');
  await page.screenshot({path:evidence+'/archive.png',fullPage:true});
 }finally{await writeFile(evidence+'/archive-browser-results.json',JSON.stringify({cases},null,2));await browser.close();}
