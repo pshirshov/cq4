@@ -131,6 +131,73 @@ class FilesystemReplacement(ReplacementContract, unittest.TestCase):
         return update.digest(path / "manifest.json")
 
 
+class BuildCommands:
+    def __init__(self):
+        self.calls = []
+
+    def run(self, arguments, label, timeout):
+        self.calls.append((arguments, label))
+        return ""
+
+
+class LocalBuild(unittest.TestCase):
+    def test_redeploy_builds_without_release_gates(self):
+        with tempfile.TemporaryDirectory() as directory:
+            evidence = Path(directory)
+            candidate = evidence / "candidate"
+            build = BuildCommands()
+            update.build_candidate(build, evidence, "fixture-revision", candidate, evidence / "metadata")
+            self.assertEqual([label for _, label in build.calls], ["package-local"],
+                             "Local redeploy must build and smoke-check without running release qualification")
+            self.assertEqual(build.calls[0][0], ["nix", "develop", "-c", "./dev/package-local",
+                             "--output", str(candidate), "--evidence-root", str(evidence / "local-build"),
+                             "--revision", "fixture-revision", "--metadata", str(evidence / "metadata")])
+
+
+class TestCommand(unittest.TestCase):
+    def test_full_validation_propagates_first_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory)
+            (fixture / "bin").mkdir()
+            (fixture / "dev").mkdir()
+            shutil.copy2(Path(__file__).resolve().parent.parent / "test-local.sh", fixture / "test-local.sh")
+            nix = fixture / "bin/nix"
+            nix.write_text('#!/bin/sh\nshift 2\nshift\nexec "$@"\n')
+            nix.chmod(0o755)
+            check = fixture / "dev/check"
+            check.write_text('#!/bin/sh\necho "$1" >> "$CQ_TEST_CALLS"\n[ "$1" != "$CQ_TEST_FAIL" ]\n')
+            check.chmod(0o755)
+            calls = fixture / "calls"
+            environment = {**os.environ, "PATH": str(fixture / "bin") + os.pathsep + os.environ["PATH"],
+                           "CQ_TEST_CALLS": str(calls), "CQ_TEST_FAIL": "ui"}
+            failed = subprocess.run([str(fixture / "test-local.sh")], env=environment, capture_output=True, text=True, timeout=10)
+            self.assertNotEqual(failed.returncode, 0, "Full validation must report a failed gate")
+            self.assertEqual(calls.read_text().splitlines(), ["fast", "ui"])
+            calls.unlink()
+            environment["CQ_TEST_FAIL"] = "none"
+            passed = subprocess.run([str(fixture / "test-local.sh")], env=environment, capture_output=True, text=True, timeout=10)
+            self.assertEqual(passed.returncode, 0, passed.stderr)
+            self.assertEqual(calls.read_text().splitlines(), ["fast", "ui", "postgres", "native"])
+
+
+class CandidateSmoke(unittest.TestCase):
+    def test_source_matched_completed_native_smoke(self):
+        with tempfile.TemporaryDirectory() as directory:
+            smoke = Path(directory) / "smoke.json"
+            smoke.write_text(json.dumps({"status": "passed"}))
+            manifest = {"runtime": "native", "validation": "local-smoke", "sourceRevision": "revision",
+                        "localSmokeSha256": update.digest(smoke)}
+            update.verify_local_candidate(manifest, "revision", smoke)
+            for changed, reason in [({"validation": "built"}, "native smoke"),
+                                    ({"sourceRevision": "other"}, "revision differs"),
+                                    ({"localSmokeSha256": "other"}, "evidence differs")]:
+                with self.subTest(changed=changed), self.assertRaisesRegex(RuntimeError, reason):
+                    update.verify_local_candidate({**manifest, **changed}, "revision", smoke)
+            smoke.write_text(json.dumps({"status": "failed"}))
+            with self.assertRaisesRegex(RuntimeError, "did not pass"):
+                update.verify_local_candidate({**manifest, "localSmokeSha256": update.digest(smoke)}, "revision", smoke)
+
+
 class Compatibility(unittest.TestCase):
     def manifest(self, schema, model):
         return {"runtimeSourceSha256": {update.SCHEMA_SOURCE: schema, update.MODEL_SOURCE: model}}

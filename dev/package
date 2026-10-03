@@ -60,19 +60,10 @@ def load_release(directory):
     }
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--native-evidence", type=Path, required=True)
-    parser.add_argument("--output", type=Path, required=True)
-    arguments = parser.parse_args()
-    if "CQ_BABOON" not in os.environ:
-        os.execvp("nix", ["nix", "develop", str(ROOT), "-c", str(ROOT / "dev/package"), *sys.argv[1:]])
-    assert sys.platform == "linux" and os.uname().machine == "x86_64", "First native release targets Linux x86-64"
-    evidence = arguments.native_evidence.resolve(strict=True)
-    binary, sources = verified_native(evidence)
-    output = arguments.output.resolve()
+def assemble(output, binary, sources, provenance, config):
     output.mkdir(parents=True, exist_ok=False)
     (output / "bin").mkdir()
+    shutil.copytree(config, output / "native-config")
     shutil.copy2(binary, output / "bin/cq")
     guardian = output / "bin/cq-guardian"
     subprocess.run(["gcc", "-std=c17", "-O2", "-Wall", "-Wextra", "-Werror", "-o", str(guardian),
@@ -141,16 +132,29 @@ For batch work, `cq run codex --settings /absolute/settings.json --input /absolu
 
 Git and the configured Claude/Codex/Pi executables and their credentials remain external dependencies. Node is needed by the Pi bridge; Python, Go or other consumer tools are needed when selected by the consumer checks. Installing this archive does not install or authenticate harnesses.
 
-Retain PostgreSQL data, supervisor journals and consumer Git repositories. Database-only backup requires settled supervisors and no unresolved integration reservation. There is no automatic audit/artifact deletion. This package manifest binds artifacts to native gate evidence; final release evaluation and human acceptance are recorded separately.
+Retain PostgreSQL data, supervisor journals and consumer Git repositories. Database-only backup requires settled supervisors and no unresolved integration reservation. There is no automatic audit/artifact deletion. This package manifest records build and validation provenance; final release evaluation and human acceptance are recorded separately.
 """)
-    manifest = {"modelVersion": "0.1.0", "platform": "x86_64-linux", "minimumKernel": "5.9",
-                "nativeEvidence": str(evidence), "nativeResultSha256": digest(evidence / "result.json"),
-                "nativeSourceManifestSha256": digest(evidence / "source-sha256.json"),
+    manifest = {"modelVersion": "0.1.0", "platform": "x86_64-linux", "minimumKernel": "5.9", **provenance,
                 "runtimeSourceSha256": sources, "runtimeClosure": closure,
                 "filesSha256": {str(path.relative_to(output)): digest(path) for path in sorted(output.rglob("*")) if path.is_file()}}
     (output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     load_release(output)
     print(output)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--native-evidence", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    arguments = parser.parse_args()
+    if "CQ_BABOON" not in os.environ:
+        os.execvp("nix", ["nix", "develop", str(ROOT), "-c", str(ROOT / "dev/package"), *sys.argv[1:]])
+    assert sys.platform == "linux" and os.uname().machine == "x86_64", "First native release targets Linux x86-64"
+    evidence = arguments.native_evidence.resolve(strict=True)
+    binary, sources = verified_native(evidence)
+    assemble(arguments.output.resolve(), binary, sources,
+             {"nativeEvidence": str(evidence), "nativeResultSha256": digest(evidence / "result.json"),
+              "nativeSourceManifestSha256": digest(evidence / "source-sha256.json")}, evidence / "native-config")
 
 
 if __name__ == "__main__":

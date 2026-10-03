@@ -4,7 +4,11 @@ The interactive harness is the Governor. It starts `cq host` automatically; that
 
 ## This checkout and this machine
 
-Keep the server running with `./run-local.sh` in a separate host terminal. After a package update, stop it with Ctrl-C, wait for `CQ stopped`, and start it again.
+Keep the server running with `./run-local.sh` in a separate host terminal. To redeploy committed source, park/reconcile active drives, stop the launcher with Ctrl-C, wait for `CQ stopped`, run `./update-local.sh`, and restart `./run-local.sh` after it succeeds. Reload the browser.
+
+The local updater builds a native package and the guardian. It combines the prior package’s native metadata with a short current-source trace to support incremental native builds. It runs a short CLI/startup/API/embedded-assets smoke against a disposable database, then backs up the local database and replaces the package with recovery support. It runs native-image without the full test and tracing sweeps. The installed package requires neither Java nor a source checkout. The receipt distinguishes `local-smoke` validation from release qualification.
+
+Testing is separate: the implementing agent runs appropriate focused checks before delivery. `./test-local.sh` runs the existing fast, UI, PostgreSQL and native gates when full validation is wanted. Native distribution packaging and package verification remain separate release operations. A local redeploy is not evidence that those gates passed.
 
 The local integration uses `.local/release/bin/cq` and `.local/interactive/settings.json`. The prepared settings enable reviewed integration into `refs/heads/main` and declare `cq-ui`: `nix develop -c ./dev/check ui` (ten-minute deadline). This runs scoped UI/browser verification without the model evaluation matrix. Backend/CLI changes need appropriate additional checks before their implementation; this UI check is not evidence of backend correctness. All three integrations are installed in this checkout. On a fresh checkout, setup installs project-local commands and native configuration:
 

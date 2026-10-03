@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Operator-run, verified local package replacement. Never runs from run-local.sh."""
+"""Local native build, smoke check and recoverable replacement; full tests run separately."""
 import datetime
 import fcntl
 import hashlib
@@ -16,7 +16,6 @@ from typing import Callable, Protocol
 
 SCHEMA_SOURCE = "server/src/main/resources/db/001-ledgers.sql"
 MODEL_SOURCE = "models/cq-api.baboon"
-GATES = ("fast", "ui", "postgres", "native")
 
 
 def require(condition: bool, message: str) -> None:
@@ -130,15 +129,17 @@ class Commands:
         return log.read_text()
 
 
-def gate_result(root: Path, name: str, revision: str, status: str) -> Path:
-    matches = []
-    for path in root.glob("*/result.json"):
-        result = json.loads(path.read_text())
-        if result.get("check") == name:
-            require(result["status"] == status and result["baseline"] == revision, f"Invalid {name} evidence: {path}")
-            matches.append(path.parent)
-    require(len(matches) == 1, f"Expected one {name} result, found {len(matches)}")
-    return matches[0]
+def build_candidate(build: Commands, evidence: Path, revision: str, candidate: Path, metadata: Path) -> None:
+    build.run(["nix", "develop", "-c", "./dev/package-local", "--output", str(candidate),
+               "--evidence-root", str(evidence / "local-build"), "--revision", revision, "--metadata", str(metadata)], "package-local", 1200)
+
+
+def verify_local_candidate(manifest: dict, revision: str, smoke: Path) -> None:
+    require(manifest["runtime"] == "native" and manifest["validation"] == "local-smoke",
+            "Local candidate has not passed native smoke")
+    require(manifest["sourceRevision"] == revision, "Local candidate revision differs from snapshot")
+    require(manifest["localSmokeSha256"] == digest(smoke) and json.loads(smoke.read_text())["status"] == "passed",
+            "Local smoke evidence differs or did not pass")
 
 
 def main() -> None:
@@ -166,7 +167,8 @@ def main() -> None:
         candidate = release.with_name("release-candidate-" + attempt)
         rollback = release.with_name("release-before-" + attempt)
         receipt = {"status": "building", "sourceRevision": revision, "state": str(state), "release": str(release),
-                   "candidate": str(candidate), "rollbackPackage": str(rollback), "oldManifest": old}
+                   "candidate": str(candidate), "rollbackPackage": str(rollback), "oldManifest": old,
+                   "runtime": "native", "validation": "local-smoke"}
         write_json(evidence / "receipt.json", receipt)
         commands = Commands(root, evidence, dict(os.environ))
         commands.run(["git", "worktree", "add", "--detach", str(checkout), revision], "source-snapshot", 60)
@@ -176,16 +178,10 @@ def main() -> None:
             compatible(before, {"runtimeSourceSha256": runtime_sources(checkout)},
                        json.loads((checkout / "dev/local-update-step.json").read_text()))
             build = Commands(checkout, evidence, {**os.environ, "CQ_EVIDENCE_ROOT": str(evidence / "gates")})
-            for name in GATES:
-                build.run(["nix", "develop", "-c", "./dev/check", name], name, 14400)
-                gate_result(evidence / "gates", name, revision, "passed")
-            native = gate_result(evidence / "gates", "native", revision, "passed")
-            build.run(["nix", "develop", "-c", "./dev/package", "--native-evidence", str(native), "--output", str(candidate)], "package", 600)
-            build.run(["nix", "develop", "-c", "./dev/package-check", "--release", str(candidate),
-                       "--evidence-root", str(evidence / "installed")], "package-check", 14400)
-            results = list((evidence / "installed").glob("*/result.json"))
-            require(len(results) == 1 and json.loads(results[0].read_text())["status"] == "package-checked", "Installed package verification did not pass")
+            metadata = release / "native-config" if (release / "native-config").is_dir() else Path(before["nativeEvidence"]) / "native-config"
+            build_candidate(build, evidence, revision, candidate, metadata)
             after = package(candidate)
+            verify_local_candidate(after, revision, evidence / "local-build" / "native-smoke.json")
             require(after["runtimeSourceSha256"] == runtime_sources(checkout), "Candidate sources differ from the snapshot")
             schema = compatible(before, after, json.loads((checkout / "dev/local-update-step.json").read_text()))
             new = digest(candidate / "manifest.json")

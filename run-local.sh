@@ -8,7 +8,7 @@ if [[ $# != 0 ]]; then
 fi
 repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 release="$repo/.local/release"
-[[ -x "$release/bin/cq" ]] || { echo "Verified native package is missing: $release" >&2; exit 1; }
+[[ -x "$release/bin/cq" ]] || { echo "Local package is missing: $release" >&2; exit 1; }
 export CQ_ORIGIN="${CQ_ORIGIN:-http://vm.home.7mind.io:${CQ_LOCAL_PORT:-8080}}"
 exec nix develop "$repo" -c bash "$repo/docs/examples/launch-local.sh" \
   "$release" "${CQ_LOCAL_STATE:-/srv/nvme/tmp/cq4-playground}"

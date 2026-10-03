@@ -52,5 +52,31 @@
         "citations": []
       }
     }
+  },
+  {
+    "Create": {
+      "draft": {
+        "title": "Supervisor shutdown exceeds exit bound with child ticket I/O held",
+        "body": "The operator update at f02981c stopped before installation during the PostgreSQL gate. The shutdown fixture observed a supervisor still alive after 25 seconds with ticket publication I/O deliberately held. Root cause and JVM/native applicability remain unconfirmed. This remains an open validation defect; separating local redeployment from full tests does not resolve it. Live intake is queued while the launcher is stopped.",
+        "labels": [
+          "supervisor",
+          "shutdown",
+          "validation"
+        ],
+        "archived": false,
+        "content": {
+          "Defect": {
+            "status": "Open",
+            "severity": "Medium",
+            "observed": "jvm-dispatch-shutdown failed in ticket mode: supervisor still alive after 25 s with I/O held; expected bounded unresolved exit.",
+            "expected": "The held-ticket shutdown fixture observes bounded unresolved exit without falsely successful publication, late launch or surviving owned child hierarchy.",
+            "reproduction": "Operator evidence: /srv/nvme/tmp/cq4-playground/updates/20261003T200305-611c2534/gates/20261003T202109-postgres/jvm-dispatch-shutdown.log. Focused reproduction command: python3 dev/dispatch-shutdown-check.py java -cp <source runtime classpath> cq.server.Main against an owned disposable server/database; requires CQ_TOKEN and CQ_ORIGIN.",
+            "cause": null,
+            "resolution": []
+          }
+        },
+        "citations": []
+      }
+    }
   }
 ]

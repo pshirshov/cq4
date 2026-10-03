@@ -1,0 +1,112 @@
+#!/usr/bin/env python3
+"""Build and smoke-check a native local package without release gates."""
+import argparse
+import json
+import os
+from pathlib import Path
+import runpy
+import shutil
+import subprocess
+import sys
+import urllib.request
+import uuid
+
+
+ROOT = Path(__file__).resolve().parent.parent
+
+
+def smoke(checks, command: list[str], name: str, support: dict) -> None:
+    checks.run(command + ["--help"], name + "-cli", 30)
+    commands = checks.evidence / (name + "-commands")
+    commands.mkdir()
+    checks.run(command + ["commands", "export", "pi", "--directory", str(commands)], name + "-export", 30)
+    report = checks.run(command + ["doctor", "commands", "pi", "--directory", str(commands), "--json"], name + "-doctor", 30)
+    if json.loads(report)["current"] is not True:
+        raise RuntimeError("Packaged command templates differ")
+    with checks.database([]):
+        port = support["free_port"]()
+        origin = f"http://127.0.0.1:{port}"
+        checks.environment.update(CQ_HOST="127.0.0.1", CQ_PORT=str(port), CQ_ORIGIN=origin, CQ_TOKEN=uuid.uuid4().hex, CQ_SESSION=str(uuid.uuid4()))
+        with checks.server(command, name):
+            headers = {"Authorization": "Bearer " + checks.environment["CQ_TOKEN"], "CQ-Protocol-Version": "0.1.0",
+                       "CQ-Session": str(uuid.uuid4()), "Content-Type": "application/json"}
+            def get(path):
+                with urllib.request.urlopen(urllib.request.Request(origin + path, headers=headers), timeout=10) as response:
+                    return response.read()
+            if json.loads(get("/api/hello")) != {"version": "0.1.0", "supported": ["0.1.0"]}:
+                raise RuntimeError("Local package protocol mismatch")
+            for asset in ["index.html", "style.css", "app.js"]:
+                actual = get("/" if asset == "index.html" else "/" + asset)
+                if actual != (ROOT / "generated/resources/web" / asset).read_bytes():
+                    raise RuntimeError(f"Embedded browser asset differs: {asset}")
+            project = {"value": str(uuid.uuid4())}
+            def call(body):
+                request = urllib.request.Request(origin + "/api/call", data=json.dumps(body).encode(), headers=headers)
+                with urllib.request.urlopen(request, timeout=10) as response:
+                    result = json.load(response)
+                if "Failed" in result:
+                    raise RuntimeError(f"Local smoke API failed: {result}")
+                return result
+            call({"Initialize": {"config": {"project": project, "endpoint": origin, "name": "Local smoke"}}})
+            result = call({"Search": {"input": {"project": project, "query": "archived:all", "after": None, "snapshot": None, "limit": 1}}})
+            if result["Found"]["page"]["items"] != []:
+                raise RuntimeError("Fresh smoke project is not empty")
+    (checks.evidence / (name + "-smoke.json")).write_text(json.dumps({"status": "passed", "cases": ["CLI", "command templates", "protocol", "embedded browser assets", "initialize/search"]}, indent=2) + "\n")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--evidence-root", type=Path, required=True)
+    parser.add_argument("--revision", required=True)
+    parser.add_argument("--metadata", type=Path, required=True)
+    args = parser.parse_args()
+    if sys.platform != "linux" or os.uname().machine != "x86_64":
+        raise RuntimeError("Local package targets Linux x86-64")
+    revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+    if revision != args.revision:
+        raise RuntimeError("Local build revision differs from the snapshot")
+    evidence = args.evidence_root.resolve()
+    evidence.mkdir(parents=True, exist_ok=False)
+    support = runpy.run_path(str(ROOT / "dev/check"))
+    checks = support["Checks"](evidence, dict(os.environ))
+    (ROOT / ".work").mkdir(exist_ok=True)
+    checks.generate()
+    classpath = checks.classpath()
+    helpers = runpy.run_path(str(ROOT / "dev/package"))
+    sources = helpers["runtime_sources"](ROOT)
+    baseline = evidence / "native-baseline"
+    shutil.copytree(args.metadata.resolve(strict=True), baseline)
+    files = list(baseline.glob("*.json"))
+    if not files:
+        raise RuntimeError("Prior native metadata is missing; run native validation to collect it")
+    for file in files:
+        json.loads(file.read_text())
+    traces = evidence / "native-traces"
+    traces.mkdir()
+    agent = f"-agentlib:native-image-agent=config-output-dir={traces}/{{pid}}-{{datetime}},config-write-period-secs=1"
+    java_options = [line.strip() for line in (ROOT / ".jvmopts").read_text().splitlines() if line.strip()]
+    smoke(checks, ["java", *java_options, agent, "-cp", classpath, "cq.server.Main"], "trace", support)
+    current = checks.native_config(traces)
+    config = evidence / "native-merged-config"
+    config.mkdir()
+    checks.run(["native-image-utils", "generate", f"--input-dir={baseline}", f"--input-dir={current}",
+                f"--output-dir={config}"], "local-config-merge", 60)
+    binary = evidence / "cq"
+    checks.run(["native-image", "--no-fallback", "-march=compatibility", "-O1", "-J-Xmx8g", *support["native_jvm_options"](),
+                f"-H:ConfigurationFileDirectories={config}", "-cp", classpath, "cq.server.Main", str(binary)], "local-native-image", 600)
+    output = args.output.resolve()
+    helpers["assemble"](output, binary, sources,
+                        {"localEvidence": str(evidence), "sourceRevision": revision, "runtime": "native", "validation": "built"}, config)
+    smoke(checks, [str(output / "bin/cq")], "native", support)
+    if helpers["runtime_sources"](ROOT) != sources:
+        raise RuntimeError("Runtime inputs changed during local build")
+    manifest = json.loads((output / "manifest.json").read_text())
+    manifest.update(validation="local-smoke", localSmokeSha256=helpers["digest"](evidence / "native-smoke.json"))
+    (output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    helpers["load_release"](output)
+    print(f"Local native build and smoke passed: {output}")
+
+
+if __name__ == "__main__":
+    main()
