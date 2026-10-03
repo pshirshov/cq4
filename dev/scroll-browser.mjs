@@ -45,8 +45,11 @@ export async function scrollChecks(browser, storageState, origin, evidence) {
     try {
       for (const width of [1280, 320]) {
         await page.setViewportSize({ width, height: 720 });
+        // The Help button (T6) is the last header control; the indicator sits directly to its left.
         const box = await page.locator('.connection-indicator').boundingBox(); assert.notEqual(box, null);
-        assert.ok(Math.abs(box.x + box.width - (width - 12)) < 2 && box.y < 20, `Indicator must be at top right: ${JSON.stringify({ width, box })}`);
+        const help = await page.locator('header').getByRole('button', { name: 'Help', exact: true }).boundingBox(); assert.notEqual(help, null);
+        assert.ok(Math.abs(help.x + help.width - (width - 12)) < 2 && help.x - (box.x + box.width) >= 0 && help.x - (box.x + box.width) <= 12 && box.y < 20,
+          `Indicator must be at top right, left of Help: ${JSON.stringify({ width, box, help })}`);
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
       }
       cases.push('connection indicator remains in the top-right corner on laptop and narrow screens');

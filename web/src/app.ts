@@ -21,6 +21,7 @@ import { ItemsView } from './items-view.js';
 import { Notifications } from './notifications.js';
 import { ReferencePopup } from './references.js';
 import { QuestionBatch } from './questions.js';
+import { HelpDialog } from './help.js';
 
 const CONTEXT = BaboonCodecContext.Default;
 const PAGE_SIZE = 40;
@@ -128,6 +129,7 @@ class App {
     saved: (value, changed) => this.notifications.show(changed ? `Standing requirements saved at revision ${value.revision.value}.`
       : 'Standing requirements unchanged: the text equals the saved one.', changed ? 'success' : 'info'),
   });
+  private readonly help = new HelpDialog({ call: command => this.connection().call(command) });
   private readonly historyPanel = element('section', '');
   private readonly projectDialog = new Dialog('standard', () => {});
   private readonly createDialog = new Dialog('large', () => this.closeEditor());
@@ -228,7 +230,12 @@ class App {
     const projectControl = element('div', ''); projectControl.className = 'project-control';
     const projectLabel = element('label', 'Project'); projectLabel.append(this.projects); projectControl.append(projectLabel);
     const createProject = button('+', () => { this.projectDialog.open('New project'); }); createProject.setAttribute('aria-label', 'New project'); createProject.title = 'New project';
-    projectControl.append(createProject); identity.append(element('h1', 'CQ'), projectControl, this.health.element);
+    projectControl.append(createProject);
+    // The catalog read is project-scoped on the wire only; the operator's root session reads it for any project, so Help works before one is selected.
+    const help = button('Help', () => this.help.open(this.project ?? new api.ProjectId('00000000-0000-4000-8000-000000000000')));
+    help.className = 'help-button'; help.setAttribute('aria-haspopup', 'dialog');
+    const actions = element('div', ''); actions.className = 'top-actions'; actions.append(this.health.element, help);
+    identity.append(element('h1', 'CQ'), projectControl, actions);
     const metrics = element('div', ''); metrics.className = 'status-metrics'; metrics.setAttribute('role', 'region'); metrics.setAttribute('aria-label', 'Usage metrics');
     metrics.append(this.sync, this.usageMetric, this.usageFreshness); header.append(identity, this.queryEditor.element);
     const status = element('footer', ''); status.className = 'status-bar'; status.setAttribute('aria-label', 'Workspace status'); status.append(metrics);
@@ -335,7 +342,7 @@ class App {
     list.append(table);
     content.append(workspace.toggle, this.detail, this.editorPanel, this.graph.element, this.usagePanel, this.auditPanel);
     this.root.replaceChildren(header, workspace.element, status, this.projectDialog.element, this.createDialog.element, this.conflictDialog.element,
-      this.historyDialog.element, this.usageDialog.element, this.archive.element, this.requirements.element, this.graph.dialog.element, this.references.dialog.element, this.questions.dialog.element, this.notifications.element);
+      this.historyDialog.element, this.usageDialog.element, this.archive.element, this.requirements.element, this.graph.dialog.element, this.references.dialog.element, this.questions.dialog.element, this.help.element, this.notifications.element);
     this.notifications.reveal(); workspace.fit();
     this.manager = new ConnectionManager(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`, {
       status: stats => this.health.update(stats),

@@ -4,7 +4,8 @@ body { margin: 0; }
 #app { display: flex; flex-direction: column; height: 100dvh; }
 header { position: relative; z-index: 2; display: flex; flex-direction: column; flex: none; gap: 5px; padding: 6px 12px; background: #1c2630; border-bottom: 1px solid #435364; }
 .top-identity { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; min-width: 0; }
-.connection-indicator { margin-left: auto; }
+.top-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; min-width: 0; }
+.help-button { width: auto; flex: none; }
 .project-control { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 160px; max-width: 440px; }
 .project-control > label { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; }
 .project-control select { width: 100%; min-width: 0; }
@@ -248,3 +249,28 @@ tbody tr[aria-selected=true] { background: #243d4c; }
 .usage-fields dd { margin: 0; overflow-wrap: anywhere; }
 .usage-scope-actions { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; margin-bottom: 5px; }
 .usage-scope-actions button { overflow-wrap: anywhere; text-align: left; }
+
+/* Help dialog (web/src/help.ts): tabs above a master list and the chosen entry's detail inside the large dialog's scrolling body. */
+.help-tabs { display: flex; gap: 4px; border-bottom: 1px solid #435364; margin-bottom: 10px; }
+.help-tabs [role=tab] { width: auto; border-radius: 0; border-bottom: 0; }
+.help-tabs [role=tab][aria-selected=true] { background: #24323e; box-shadow: inset 0 -2px #68c7ec; }
+.help-layout { display: grid; grid-template-columns: minmax(180px, 260px) minmax(0, 1fr); gap: 16px; align-items: start; }
+.help-list { position: sticky; top: 0; display: flex; flex-direction: column; gap: 2px; }
+.help-list [aria-current=true] { background: #24323e; box-shadow: inset 2px 0 #68c7ec; }
+.help-detail { min-width: 0; overflow-wrap: anywhere; }
+.help-section { margin-top: 12px; }
+.help-block { margin: 6px 0; }
+.help-block summary { cursor: pointer; }
+.help-block pre { max-height: 60vh; }
+.help-table { width: auto; max-width: 100%; margin: 6px 0; }
+.help-table th, .help-table td { padding: 4px 10px 4px 0; text-align: left; vertical-align: top; overflow-wrap: break-word; }
+.help-facts { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 12px; margin: 0; }
+.help-facts dd { margin: 0; }
+.help-toggle { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 6px; }
+.help-toggle button { width: auto; }
+.help-toggle [aria-pressed=true] { background: #24323e; box-shadow: inset 0 -2px #68c7ec; }
+.help-harness-tools h4 { margin: 10px 0 4px; }
+@media (max-width: 700px) {
+  .help-layout { grid-template-columns: minmax(0, 1fr); }
+  .help-list { position: static; }
+}
