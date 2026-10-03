@@ -1,0 +1,7 @@
+{
+  "kind": "unchanged-data",
+  "schema": "f64a63cd716367f15d9f4425087442ee34ce75afd71279618e5d04233b2cd23c",
+  "modelBefore": "8b60b55c53cf1726dd840235645ab649f611f16e9e8e8b56bf7881c27baf6b67",
+  "modelAfter": "905b2d0da0241fb3c9d10ab51f08075bdbbf57b6e4799c6bbe6e53a0c7863366",
+  "reason": "Catalog is a new request/result and new help-only types; no stored type changes."
+}
