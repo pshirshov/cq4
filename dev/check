@@ -484,6 +484,7 @@ def main():
             checks.run(["node", "--test", "dev/pi-bridge-check.mjs"], "pi-bridge", STARTUP_TIMEOUT)
             checks.run(["node", "dev/pi-attached-check.mjs"], "pi-attached", STARTUP_TIMEOUT)
             checks.run(["node", "--test", "--test-force-exit", "dev/pi-driver-check.mjs"], "pi-driver", STARTUP_TIMEOUT)
+            checks.run(["python3", "dev/update-local-check.py"], "local-update", STARTUP_TIMEOUT)
             checks.run(["python3", "dev/consumer-evidence-check.py"], "consumer-evidence", STARTUP_TIMEOUT)
             checks.run(["python3", "dev/consumer-cohort-check.py"], "consumer-cohort", STARTUP_TIMEOUT)
             checks.run(["python3", "dev/process-evidence-check.py"], "process-evidence", STARTUP_TIMEOUT)

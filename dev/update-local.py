@@ -1,0 +1,283 @@
+#!/usr/bin/env python3
+"""Operator-run, verified local package replacement. Never runs from run-local.sh."""
+import datetime
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import runpy
+import signal
+import socket
+import subprocess
+import uuid
+from typing import Callable, Protocol
+
+
+SCHEMA_SOURCE = "server/src/main/resources/db/001-ledgers.sql"
+MODEL_SOURCE = "models/cq-api.baboon"
+GATES = ("fast", "ui", "postgres", "native")
+
+
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise RuntimeError(message)
+
+
+def digest(path: Path) -> str:
+    with path.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def sync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def write_json(path: Path, value: dict) -> None:
+    temporary = path.with_suffix(".tmp")
+    with temporary.open("w") as stream:
+        json.dump(value, stream, indent=2)
+        stream.write("\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(temporary, path)
+    sync_directory(path.parent)
+
+
+class PackageStore(Protocol):
+    def exists(self, path: Path) -> bool: ...
+    def identity(self, path: Path) -> str: ...
+    def rename(self, source: Path, destination: Path) -> None: ...
+
+
+class Directories:
+    def exists(self, path: Path) -> bool:
+        return os.path.lexists(path)
+
+    def identity(self, path: Path) -> str:
+        return digest(path / "manifest.json")
+
+    def rename(self, source: Path, destination: Path) -> None:
+        require(not self.exists(destination), f"Replacement destination exists: {destination}")
+        os.rename(source, destination)
+        sync_directory(destination.parent)
+
+
+def replace_packages(store: PackageStore, release: Path, candidate: Path, rollback: Path,
+                     old: str, new: str, installed: Callable[[], None]) -> None:
+    require(not store.exists(rollback), "Rollback destination already exists")
+    require(store.identity(release) == old and store.identity(candidate) == new, "Package changed before replacement")
+    try:
+        store.rename(release, rollback)
+        store.rename(candidate, release)
+        require(store.identity(release) == new and store.identity(rollback) == old, "Installed package identity differs")
+        installed()
+    except BaseException:
+        # Inspect actual directories: interruption can occur after rename but before its caller returns.
+        if not store.exists(candidate) and store.exists(rollback):
+            require(store.identity(release) == new, "Cannot recover an unrecognized installed package")
+            store.rename(release, candidate)
+        if store.exists(rollback) and not store.exists(release):
+            store.rename(rollback, release)
+        require(store.identity(release) == old and store.identity(candidate) == new, "Package recovery is incomplete")
+        raise
+
+
+def package(path: Path) -> dict:
+    require(not path.is_symlink(), f"Package must be a direct directory: {path}")
+    manifest = json.loads((path / "manifest.json").read_text())
+    require(manifest["modelVersion"] == "0.1.0" and manifest["platform"] == "x86_64-linux", "Unsupported package")
+    require({"bin/cq", "bin/cq-guardian", "runtime.nar", "runtime-paths.txt"} <= manifest["filesSha256"].keys(), "Incomplete package")
+    for name, expected in manifest["filesSha256"].items():
+        file = (path / name).resolve(strict=True)
+        require(file.is_relative_to(path) and digest(file) == expected, f"Package file differs: {name}")
+    for name in ("cq", "cq-guardian"):
+        require(os.access(path / "bin" / name, os.X_OK), f"Not executable: {name}")
+    return manifest
+
+
+def compatible(before: dict, after: dict, step: dict) -> str:
+    old, new = before["runtimeSourceSha256"], after["runtimeSourceSha256"]
+    require(old[SCHEMA_SOURCE] == new[SCHEMA_SOURCE], "Schema changes require a matching explicit local update step; replacement refused")
+    if old[MODEL_SOURCE] != new[MODEL_SOURCE]:
+        require(step["kind"] == "unchanged-data" and step["schema"] == old[SCHEMA_SOURCE]
+                and step["modelBefore"] == old[MODEL_SOURCE] and step["modelAfter"] == new[MODEL_SOURCE],
+                "Model changes require a matching explicit data update step; replacement refused")
+    return new[SCHEMA_SOURCE]
+
+
+class Commands:
+    def __init__(self, root: Path, evidence: Path, environment: dict[str, str]):
+        self.root = root
+        self.evidence = evidence
+        self.environment = environment
+
+    def run(self, arguments: list[str], label: str, timeout: int) -> str:
+        log = self.evidence / (label + ".log")
+        print(f"{label}: {log}", flush=True)
+        with log.open("w") as stream:
+            result = subprocess.run(arguments, cwd=self.root, env=self.environment, stdout=stream,
+                                    stderr=subprocess.STDOUT, timeout=timeout, close_fds=True)
+        require(result.returncode == 0, f"{label} failed ({result.returncode}); inspect {log}")
+        return log.read_text()
+
+
+def gate_result(root: Path, name: str, revision: str, status: str) -> Path:
+    matches = []
+    for path in root.glob("*/result.json"):
+        result = json.loads(path.read_text())
+        if result.get("check") == name:
+            require(result["status"] == status and result["baseline"] == revision, f"Invalid {name} evidence: {path}")
+            matches.append(path.parent)
+    require(len(matches) == 1, f"Expected one {name} result, found {len(matches)}")
+    return matches[0]
+
+
+def main() -> None:
+    os.umask(0o077)
+    root = Path(__file__).resolve().parent.parent
+    state_input = Path(os.environ.get("CQ_LOCAL_STATE", "/srv/nvme/tmp/cq4-playground"))
+    require(state_input.is_absolute() and not state_input.is_symlink(), "CQ_LOCAL_STATE must name a direct absolute directory")
+    state = state_input.resolve(strict=True)
+    require(state.stat().st_uid == os.getuid() and (state / ".cq-local").is_file(), "Not an owned CQ local state directory")
+    release = root / ".local/release"
+    before = package(release)
+    old = digest(release / "manifest.json")
+    descriptor = os.open(state / "launcher.lock", os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(descriptor, "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        require(not os.path.lexists(state / ".cq-update-recovery.json"), "Unresolved update recovery marker; inspect it before retrying")
+        data = state / "postgres"
+        require(not data.is_symlink(), "PostgreSQL data must be a direct directory")
+        require((data / "PG_VERSION").is_file() and not os.path.lexists(data / "postmaster.pid"), "Stop run-local and PostgreSQL before updating")
+        attempt = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S") + "-" + uuid.uuid4().hex[:8]
+        evidence = state / "updates" / attempt
+        evidence.mkdir(parents=True, mode=0o700)
+        revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+        checkout = evidence / "source"
+        candidate = release.with_name("release-candidate-" + attempt)
+        rollback = release.with_name("release-before-" + attempt)
+        receipt = {"status": "building", "sourceRevision": revision, "state": str(state), "release": str(release),
+                   "candidate": str(candidate), "rollbackPackage": str(rollback), "oldManifest": old}
+        write_json(evidence / "receipt.json", receipt)
+        commands = Commands(root, evidence, dict(os.environ))
+        commands.run(["git", "worktree", "add", "--detach", str(checkout), revision], "source-snapshot", 60)
+        try:
+            runtime_sources = runpy.run_path(str(root / "dev/package"))["runtime_sources"]
+            require(runtime_sources(root) == runtime_sources(checkout), "Uncommitted runtime inputs differ from HEAD; commit them before updating")
+            compatible(before, {"runtimeSourceSha256": runtime_sources(checkout)},
+                       json.loads((checkout / "dev/local-update-step.json").read_text()))
+            build = Commands(checkout, evidence, {**os.environ, "CQ_EVIDENCE_ROOT": str(evidence / "gates")})
+            for name in GATES:
+                build.run(["nix", "develop", "-c", "./dev/check", name], name, 14400)
+                gate_result(evidence / "gates", name, revision, "passed")
+            native = gate_result(evidence / "gates", "native", revision, "passed")
+            build.run(["nix", "develop", "-c", "./dev/package", "--native-evidence", str(native), "--output", str(candidate)], "package", 600)
+            build.run(["nix", "develop", "-c", "./dev/package-check", "--release", str(candidate),
+                       "--evidence-root", str(evidence / "installed")], "package-check", 14400)
+            results = list((evidence / "installed").glob("*/result.json"))
+            require(len(results) == 1 and json.loads(results[0].read_text())["status"] == "package-checked", "Installed package verification did not pass")
+            after = package(candidate)
+            require(after["runtimeSourceSha256"] == runtime_sources(checkout), "Candidate sources differ from the snapshot")
+            schema = compatible(before, after, json.loads((checkout / "dev/local-update-step.json").read_text()))
+            new = digest(candidate / "manifest.json")
+            receipt.update(status="candidate-verified", newManifest=new, schema=schema)
+            write_json(evidence / "receipt.json", receipt)
+            install(state, release, candidate, rollback, evidence, receipt, schema, commands)
+        except BaseException as error:
+            if receipt["status"] not in ("installed", "recovery-required", "rolled-back"):
+                receipt.update(status="failed-before-install", error=str(error))
+                write_json(evidence / "receipt.json", receipt)
+            raise
+        finally:
+            commands.run(["git", "worktree", "remove", "--force", str(checkout)], "source-cleanup", 60)
+        print(f"Installed source {revision}; manifest {receipt['newManifest']}. Receipt: {evidence / 'receipt.json'}")
+        print("Restart ./run-local.sh and reload the browser. Rollback needs the retained package AND database backup.")
+
+
+def install(state: Path, release: Path, candidate: Path, rollback: Path, evidence: Path,
+            receipt: dict, schema: str, commands: Commands) -> None:
+    data = state / "postgres"
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        port = listener.getsockname()[1]
+    environment = {key: value for key, value in os.environ.items() if not key.startswith("PG")}
+    environment.update(PGHOST="127.0.0.1", PGPORT=str(port), PGUSER="cq", PGDATABASE="postgres",
+                       PGPASSWORD=(state / "database-password").read_text().strip())
+    database = Commands(commands.root, evidence, environment)
+    marker = state / ".cq-update-recovery.json"
+    write_json(marker, {"receipt": str(evidence / "receipt.json"), "recovery": "Stop owned processes. Verify the receipt's oldManifest package and before.dump database pair before removing this marker."})
+    owned = False
+
+    def interrupted(number, frame):
+        raise KeyboardInterrupt(f"Interrupted by signal {number}")
+
+    previous = {number: signal.signal(number, interrupted) for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)}
+    try:
+        owned = True
+        database.run(["pg_ctl", "-D", str(data), "-l", str(evidence / "postgres.log"), "-o",
+                      f"-h 127.0.0.1 -p {port} -c unix_socket_directories=''", "-w", "-t", "30", "start"], "database-start", 40)
+        clients = database.run(["psql", "--no-psqlrc", "-v", "ON_ERROR_STOP=1", "-At", "-c",
+                               "SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND backend_type='client backend' AND pid<>pg_backend_pid()"], "other-clients", 30).strip()
+        require(clients == "0", "Another database client is connected; update refused")
+        actual = database.run(["psql", "--no-psqlrc", "-v", "ON_ERROR_STOP=1", "-At", "-c",
+                              "SELECT checksum FROM cq_schema_migrations WHERE version=1"], "schema-before", 30).strip()
+        require(actual == schema, "Database schema differs from package; update refused")
+        backup = evidence / "before.dump"
+        database.run(["pg_dump", "--format=custom", "--file", str(backup)], "database-backup", 600)
+        database.run(["pg_restore", "--list", str(backup)], "backup-inventory", 30)
+        with backup.open("rb") as stream:
+            os.fsync(stream.fileno())
+        sync_directory(evidence)
+        receipt.update(backup=str(backup), backupSha256=digest(backup))
+        write_json(evidence / "receipt.json", receipt)
+        database.run(["pg_ctl", "-D", str(data), "-m", "fast", "-w", "-t", "30", "stop"], "database-stop", 40)
+        owned = False
+        require(not os.path.lexists(data / "postmaster.pid"), "Database shutdown is incomplete")
+
+        def installed() -> None:
+            receipt.update(status="installed", databaseStopped=True)
+            write_json(evidence / "receipt.json", receipt)
+
+        package(release)
+        package(candidate)
+        for path in candidate.rglob("*"):
+            if path.is_file():
+                with path.open("rb") as stream:
+                    os.fsync(stream.fileno())
+        for directory in sorted((path for path in candidate.rglob("*") if path.is_dir()), reverse=True):
+            sync_directory(directory)
+        sync_directory(candidate)
+        replace_packages(Directories(), release, candidate, rollback, receipt["oldManifest"], receipt["newManifest"], installed)
+    except BaseException as error:
+        for number in previous:
+            signal.signal(number, signal.SIG_IGN)
+        receipt.update(status="recovery-required", error=str(error))
+        write_json(evidence / "receipt.json", receipt)
+        if owned:
+            database.run(["pg_ctl", "-D", str(data), "-m", "fast", "-w", "-t", "30", "stop"], "database-recovery-stop", 40)
+            owned = False
+        require(not os.path.lexists(data / "postmaster.pid"), "Database recovery is incomplete")
+        require(digest(release / "manifest.json") == receipt["oldManifest"], "Package recovery is incomplete")
+        receipt.update(status="rolled-back", databaseStopped=True)
+        write_json(evidence / "receipt.json", receipt)
+        marker.unlink()
+        sync_directory(state)
+        raise
+    else:
+        marker.unlink()
+        sync_directory(state)
+    finally:
+        for number, handler in previous.items():
+            signal.signal(number, handler)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except BlockingIOError:
+        raise SystemExit("The launcher owns the state. Stop ./run-local.sh with Ctrl-C and wait for CQ stopped.")
