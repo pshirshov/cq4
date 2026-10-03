@@ -24,7 +24,7 @@ export async function usageLiveChecks(browser, storageState, origin, evidence) {
   const context = await browser.newContext({ storageState });
   await context.tracing.start({ screenshots: true, snapshots: true, sources: true }); await trackProtocol(context);
   let armed = false; let heldId = null; let held = null; const connections = [];
-  let ignorePong = () => false;
+  let ignorePong = () => false; const heldPongs = new Map();
   await context.routeWebSocket(/\/ws$/, route => {
     const server = route.connectToServer(); const connection = { sent: [], received: [] }; connections.push(connection);
     route.onMessage(message => {
@@ -34,7 +34,7 @@ export async function usageLiveChecks(browser, storageState, origin, evidence) {
     });
     server.onMessage(message => {
       const frame = JSON.parse(String(message)); connection.received.push(frame);
-      if (frame.Pong && ignorePong(connection)) return;
+      if (frame.Pong && ignorePong(connection)) { heldPongs.set(connection, { route, message }); return; }
       if (frame.Reply && frame.Reply.id.value === heldId) { assert.ok(frame.Reply.result.UsageSummary); held = { route, message }; }
       else route.send(message);
     });
@@ -71,24 +71,30 @@ export async function usageLiveChecks(browser, storageState, origin, evidence) {
     const oldCount = connections.length; const old = connections[oldCount - 1];
     const watches = connection => connection.sent.filter(frame => frame.Watch && frame.Watch.scope.project !== null && frame.Watch.scope.project.value === project.value).length;
     const oldWatches = watches(old); assert.ok(oldWatches > 0);
-    ignorePong = connection => connection !== old;
+    ignorePong = () => true;
     await page.evaluate(() => window.dispatchEvent(new Event('online')));
     await until(() => connections.length > oldCount);
+    const candidate = connections[connections.length - 1];
+    await until(() => heldPongs.has(old) && heldPongs.has(candidate));
+    ignorePong = connection => connection !== old;
+    const oldPong = heldPongs.get(old); oldPong.route.send(oldPong.message); heldPongs.delete(old);
     await page.locator('header summary').hover();
-    await page.waitForFunction(() => document.querySelector('.connection-log').textContent.includes('Superseded'));
+    await page.waitForFunction(() => document.querySelector('.connection-active').textContent.includes('Heartbeats: 0 in flight'));
+    assert.equal(await page.locator('.connection-card').count(), 2, 'A healthy heartbeat must preserve the unverified replacement');
+    assert.match(await page.locator('.connection-card:not(.connection-active)').textContent(), /BACKGROUND · NEW/);
+    assert.equal((await page.locator('.connection-log').textContent()).includes('Superseded'), false);
     await upload(4, 3); await total(25).waitFor({ timeout: 5000 });
     assert.equal(watches(old), oldWatches);
-    assert.equal(connections[connections.length - 1].sent.filter(frame => frame.Watch).length, 0);
-    cases.push('old connection wins the heartbeat race and keeps its existing usage watch');
-    const beforeReplacement = connections.length;
-    ignorePong = connection => connection === old;
-    await page.evaluate(() => window.dispatchEvent(new Event('online')));
-    await until(() => connections.length > beforeReplacement && connections[connections.length - 1].received.some(frame => frame.Reply && frame.Reply.result.Failed && frame.Reply.result.Failed.fault.QuerySyntax));
+    assert.equal(candidate.sent.filter(frame => frame.Watch).length, 0);
+    cases.push('healthy old connection keeps its usage watch and preserves the unverified replacement');
     ignorePong = () => false;
+    assert.ok(heldPongs.has(candidate)); const candidatePong = heldPongs.get(candidate);
+    candidatePong.route.send(candidatePong.message); heldPongs.delete(candidate);
+    await until(() => candidate.received.some(frame => frame.Reply && frame.Reply.result.Failed && frame.Reply.result.Failed.fault.QuerySyntax));
     await upload(5, 4); await total(29).waitFor({ timeout: 5000 });
-    const current = connections[connections.length - 1];
-    assert.equal(watches(current), 1);
-    cases.push('replacement wins the heartbeat race, registers one watch and receives further usage-only updates');
+    assert.equal(watches(candidate), 1);
+    assert.equal(connections.length, oldCount + 1);
+    cases.push('the same replacement verifies, registers one watch and receives further usage-only updates');
     assert.equal(await page.getByText('Data: invalid query', { exact: true }).count(), 1); assert.deepEqual(errors, []);
   } finally {
     await page.locator('header summary').hover();

@@ -324,6 +324,7 @@ class Checks:
         self.generate()
         self.run(["npm", "run", "check"], "typescript-compile", COMMAND_TIMEOUT)
         self.environment["CQ_BROWSER_EVIDENCE"] = str(self.evidence)
+        self.run(["node", "dev/navigation-density-check.mjs"], "navigation-density", COMMAND_TIMEOUT)
         self.run(["node", "dev/ui-components-check.mjs", "--markdown", "--requirements"], "ui-components", COMMAND_TIMEOUT)
         self.run(["node", "dev/connection-model.mjs"], "connection-model", COMMAND_TIMEOUT)
         self.run(["node", "dev/connection-native.mjs"], "connection-native", COMMAND_TIMEOUT)
