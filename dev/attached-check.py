@@ -114,6 +114,12 @@ def main():
     wrapper.chmod(0o700)
     for harness in ["claude", "codex", "pi"]:
         cli(["configure", harness, "--settings", str(settings), "--executable", str(wrapper)])
+    def operator(value):
+        request = urllib.request.Request(os.environ["CQ_ORIGIN"] + "/api/call", data=json.dumps(value).encode(), method="POST",
+                                         headers={"Authorization": "Bearer " + os.environ["CQ_TOKEN"], "CQ-Session": os.environ["CQ_SESSION"],
+                                                  "CQ-Protocol-Version": "0.1.0", "Content-Type": "application/json"})
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return json.loads(response.read())
     with (root / "host.log").open("w") as log:
         peer = Peer(command + ["host", "codex"], repository, env, log)
         try:
@@ -123,12 +129,16 @@ def main():
             assert context["workflow"] is None and "thread metadata" in context["usageCoverage"]
             assert "Canonical argument schemas" in context["instructions"]
             project = context["project"]["project"]
+            standing = "Governor: preserve the operator's selected scope."
+            operator({"Requirements": {"input": {"project": project, "action": {"Replace": {"expected": {"value": "0"}, "text": standing}}}}})
+            assert standing in peer.tool("session", {"Context": {}})["Context"]["value"]["instructions"]
             peer.tool("initialize", {}, denied=True)
             peer.tool("workspace", {"Read": {"path": ".", "offset": 0, "limit": 20}}, denied=True)
             selection = {"request": identity(), "roots": [], "work": {"Explorer": {"mode": "Investigate"}}, "guidance": [], "artifacts": [], "previous": None, "limits": limits}
             peer.tool("dispatch", {"Select": {"request": selection}}, denied=True)
             first = {"Workflow": {"id": identity(), "request": {"Begin": {"roots": []}}, "operatorRequirements": "Attached fixture: operator requirements text", "token": None}}
             activated = peer.tool("session", first)
+            assert standing in activated["Workflow"]["value"]["context"]["instructions"]
             assert peer.tool("session", first) == activated
             peer.tool("session", {"Workflow": {"id": first["Workflow"]["id"], "request": {"Advance": {"roots": [], "through": "Explore"}}, "operatorRequirements": "Attached fixture: operator requirements text", "token": None}}, denied=True)
             draft = {"title": "Attached investigation", "body": "Investigate the fixture", "labels": ["proposal-fixture"], "archived": False,
@@ -171,12 +181,6 @@ def main():
 
     # A driven session: the hook entry points hold the operator credential; the attached session binds, activates the issued directive and
     # writes inside its cycle. Its first out-of-set write is rejected and stops the driver.
-    def operator(value):
-        request = urllib.request.Request(os.environ["CQ_ORIGIN"] + "/api/call", data=json.dumps(value).encode(), method="POST",
-                                         headers={"Authorization": "Bearer " + os.environ["CQ_TOKEN"], "CQ-Session": os.environ["CQ_SESSION"],
-                                                  "CQ-Protocol-Version": "0.1.0", "Content-Type": "application/json"})
-        with urllib.request.urlopen(request, timeout=30) as response:
-            return json.loads(response.read())
     key = {"harness": "Codex", "session": "attached-fixture-session"}
     def control(origin, action):
         return operator({"Driver": {"input": {"project": project, "request": {"Control": {"key": key, "origin": origin, "action": action}}}}})["Driver"]["reply"]

@@ -121,7 +121,7 @@ object LedgerService {
     override def termination(scope: Scope, roots: Set[ItemId], intent: TerminationIntent): F[Throwable, TerminationPreview] =
       repository.transact(scope.project)(tx => terminationPlanner.preview(tx, scope, roots, intent, clock.millis()))
 
-    // Scans the query in ID order and partitions unarchived terminal matches into archivable members and retained ones.
+    // Scans the query in ID order and partitions bulk-eligible matches into archivable members and retained ones.
     override def archivePreview(scope: Scope, query: String, limit: Int): F[Throwable, ArchivePlan] = {
       import izumi.functional.bio.{F, *}
       F.fromEither(queries.parse(query).left.map(error => DomainFailure(Fault.QuerySyntax(error)))).flatMap { expression =>
@@ -138,7 +138,7 @@ object LedgerService {
             val page = tx.scan(expression, after, MaxPage, clock.millis())
             page.entries.foreach { item =>
               scanned += 1
-              if (!item.archived && item.outcome.terminal) {
+              if (!item.archived && LedgerPolicy.bulkArchivable(tx, item.id, item.status)) {
                 if (selected >= limit) truncated = true
                 else {
                   val open = LedgerPolicy.openRelated(tx, item.id)

@@ -15,7 +15,7 @@ final class CohortPlanner(api: ServerApi, owner: Scope, bases: ExecutionBase, ch
   private val RequestBytes = 16 * 1024
   private final case class Context(guidance: List[ItemView], artifacts: List[ResolvedArtifact], operative: List[CohortArtifactFingerprint], results: List[AdmittedResult],
     operativeResults: List[CohortResultFingerprint], assessments: List[ExecutedResult], reviews: List[ExecutedResult], previous: Option[ChildResult], base: GitCommit,
-    standing: String) {
+    standing: String, revisions: Map[ItemId, Revision]) {
     def executionBase: GitCommit = previous.flatMap(_.candidate).getOrElse(base)
   }
 
@@ -73,7 +73,7 @@ final class CohortPlanner(api: ServerApi, owner: Scope, bases: ExecutionBase, ch
   }
 
   // The fresh base is resolved once per selection or verification so every choice of one decision shares the same observed target head.
-  private def context(call: Command => Result, request: CohortRequest, base: GitCommit): Context = {
+  private def context(call: Command => Result, request: CohortRequest, base: GitCommit, revisions: Map[ItemId, Revision]): Context = {
     val reader = new ArtifactReader(call, owner.project)
     val guidance = details(call, request.guidance)
     require(guidance.omitted.isEmpty, "Cohort guidance exceeds its content budget")
@@ -97,7 +97,7 @@ final class CohortPlanner(api: ServerApi, owner: Scope, bases: ExecutionBase, ch
     val operative = artifacts.map(value => CohortArtifacts(value, read))
     val operativeResults = sources.map(value => CohortArtifacts.result(value, read))
     Context(guidance.items, artifacts, operative, results, operativeResults, assessments, reviews, previous.map(_.value), base,
-      OperatorRequirements.standing(call, owner.project))
+      OperatorRequirements.standing(call, owner.project), revisions)
   }
 
   // A base the repository does not hold is no ancestor, so its assessment does not apply. A comparison Git cannot make fails the selection.
@@ -140,13 +140,16 @@ final class CohortPlanner(api: ServerApi, owner: Scope, bases: ExecutionBase, ch
     } else CohortExecutionFingerprint(semantic, members.map(member => member.item.id -> fingerprint(work, List(member), context)).toMap)
   }
 
-  // In precedence order, a group that shares a member with an earlier one is ignored: the newest assessment decides between two verdicts
+  // Exact revisions precede stale groups; within each class, precedence decides. A group that shares a member with an earlier one is ignored: the newest assessment decides between two verdicts
   // for one group and between two groups that name one Task, so the groups that remain are disjoint.
-  private def assessments(context: Context): List[CohortAssessment] =
-    context.assessments.flatMap(_.result.value.report.asInstanceOf[ChildReport.Plan].assessments).foldLeft(List.empty[CohortAssessment]) { (kept, next) =>
+  private def assessments(context: Context): List[CohortAssessment] = {
+    val groups = context.assessments.flatMap(_.result.value.report.asInstanceOf[ChildReport.Plan].assessments)
+    val (exact, stale) = groups.partition(_.members.forall(member => context.revisions.get(member.member.id).contains(member.member.revision)))
+    (exact ++ stale).foldLeft(List.empty[CohortAssessment]) { (kept, next) =>
       val ids = next.members.map(_.member.id).toSet
       if (kept.exists(_.members.exists(member => ids(member.member.id)))) kept else kept :+ next
     }
+  }
 
   private def compatibility(members: List[ItemView], context: Context): Option[CohortCompatibility] = {
     val refs = members.map(value => ItemRevision(value.item.id, value.item.revision)).toSet
@@ -205,11 +208,11 @@ final class CohortPlanner(api: ServerApi, owner: Scope, bases: ExecutionBase, ch
     val planner = original.work == DispatchWork.Planner()
     val order = progress.order(selected.map(_.item.id))
     val base = bases.fresh()
-    val originalContext = context(call, original, base)
+    val originalContext = context(call, original, base, byId.view.mapValues(_.item.revision).toMap)
     val partition = original.work == DispatchWork.Worker(WorkerMode.Implement) && originalContext.previous.exists(_.report.isInstanceOf[ChildReport.Plan])
     val request = if (partition) original.copy(artifacts = (original.artifacts ++ original.previous).distinct, previous = None) else original
     validate(request)
-    val ctx = if (partition) context(call, request, base) else originalContext
+    val ctx = if (partition) context(call, request, base, byId.view.mapValues(_.item.revision).toMap) else originalContext
     val exact = originalContext.previous.map(_.request.members)
     // A member revised only by reference or provenance changes since the previous result continues at its current revision (D80).
     val drafts = new HistoricalDrafts(call, owner.project)
@@ -255,7 +258,7 @@ final class CohortPlanner(api: ServerApi, owner: Scope, bases: ExecutionBase, ch
       val refs = group.map(value => ItemRevision(value.item.id, value.item.revision))
       val hash = executionFingerprint(work, group, content, reason)
       val deferred = group.filter(member => progress.deferred(hash.members(member.item.id)))
-      if (reason == CohortReason.AssessmentRequired && progress.deferred(hash.group)) {
+      if (reason == CohortReason.AssessmentRequired && progress.ended(hash.group)) {
         // This assessment already ran for these exact revisions and no applicable verdict followed: the Planner failed or abstained, or its
         // result was not admitted or forwarded. That is an Unknown verdict, so the members are worked alone instead of waiting for one.
         considered :+= CohortConsidered(refs, CohortReason.Deferred, Some(hash.group))
@@ -285,7 +288,7 @@ final class CohortPlanner(api: ServerApi, owner: Scope, bases: ExecutionBase, ch
       val (split, splitContext) = if (inputs.previous.isEmpty) (inputs, content) else {
         val split = inputs.copy(artifacts = (inputs.artifacts ++ inputs.previous).distinct, previous = None)
         validate(split)
-        (split, context(call, split, base))
+        (split, context(call, split, base, content.revisions))
       }
       group.foreach(member => if (offered < CohortBounds.Choices) offer(List(member), request.work, reason, None, split, splitContext))
     }
@@ -376,7 +379,7 @@ final class CohortPlanner(api: ServerApi, owner: Scope, bases: ExecutionBase, ch
     require(loaded.omitted.isEmpty, "Selected cohort no longer fits its content budget")
     MilestonePolicy.admit(choice.work, loaded.items, new MilestoneRecords(call, owner.project))
     val inputs = request.copy(work = choice.work, guidance = choice.guidance, artifacts = choice.artifacts, previous = choice.previous)
-    val ctx = context(call, inputs, bases.fresh())
+    val ctx = context(call, inputs, bases.fresh(), current.view.mapValues(_.item.revision).toMap)
     require(fits(inputs, choice.work, loaded.items, ctx) && executionFingerprint(choice.work, loaded.items, ctx, choice.reason) == expected,
       "Cohort operative input changed; select again")
     call(Command.Graph(GraphInput(owner.project, request.roots, None, Some(snapshot), 1)))

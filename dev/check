@@ -24,6 +24,9 @@ ROOT = Path(__file__).resolve().parent.parent
 COMMAND_TIMEOUT = 600
 # Suites per sbt session when each is selected by exact name, so that one session stays within COMMAND_TIMEOUT.
 CONTRACT_BATCH = 6
+FAILURE_CONTEXT_LINES = 12
+FAILURE_CONTEXT_CHARACTERS = 3072
+FAILURE_TAIL_CHARACTERS = 12000
 STARTUP_TIMEOUT = 60
 SHUTDOWN_TIMEOUT = 20
 DISPATCH_FIXTURE_TIMEOUT = 180
@@ -31,6 +34,16 @@ COMBINATION_FIXTURE_TIMEOUT = 240
 TRACE_FIXTURE_SCALE = 3
 # JVM CLI invocations start slowly; the CLI fixture alone takes about 66 s on an idle machine.
 JVM_FIXTURE_SCALE = 3
+
+
+def failure_excerpt(output: str):
+    lines = output.splitlines()
+    contexts = ["\n".join(lines[index:index + FAILURE_CONTEXT_LINES]) for index, line in enumerate(lines)
+                if "*** FAILED ***" in line or "*** ABORTED ***" in line]
+    detail = "\n\n".join(contexts)
+    if len(detail) > FAILURE_CONTEXT_CHARACTERS:
+        detail = detail[:FAILURE_CONTEXT_CHARACTERS] + "\n[additional assertion context omitted; inspect the retained full log]"
+    return detail + "\n" + output[-FAILURE_TAIL_CHARACTERS:]
 
 
 class Checks:
@@ -48,7 +61,7 @@ class Checks:
         self.results.append({"command": command, "exit": result.returncode, "log": str(path)})
         self.save()
         if result.returncode != 0:
-            print(path.read_text()[-12000:], file=sys.stderr)
+            print(failure_excerpt(path.read_text()), file=sys.stderr)
             raise RuntimeError(f"{name} failed with exit {result.returncode}; see {path}")
         return path.read_text()
 
@@ -58,7 +71,11 @@ class Checks:
     def sbt(self, commands: list[str], name: str):
         output = self.run(["sbt", "--server", "--batch", "--no-colors", ";" + ";".join(commands + ["exit"])], name, COMMAND_TIMEOUT)
         if any("testOnly" in command for command in commands):
-            verify_test_report(output)
+            try:
+                verify_test_report(output)
+            except RuntimeError:
+                print(failure_excerpt(output), file=sys.stderr)
+                raise
         return output
 
     def selected(self, suffix: str, name: str):
@@ -307,6 +324,7 @@ class Checks:
         self.generate()
         self.run(["npm", "run", "check"], "typescript-compile", COMMAND_TIMEOUT)
         self.environment["CQ_BROWSER_EVIDENCE"] = str(self.evidence)
+        self.run(["node", "dev/ui-components-check.mjs", "--markdown", "--requirements"], "ui-components", COMMAND_TIMEOUT)
         self.run(["node", "dev/connection-model.mjs"], "connection-model", COMMAND_TIMEOUT)
         self.run(["node", "dev/connection-native.mjs"], "connection-native", COMMAND_TIMEOUT)
         self.run(["node", "dev/money-check.mjs"], "money-check", COMMAND_TIMEOUT)
@@ -484,6 +502,7 @@ def main():
             checks.run(["node", "--test", "dev/pi-bridge-check.mjs"], "pi-bridge", STARTUP_TIMEOUT)
             checks.run(["node", "dev/pi-attached-check.mjs"], "pi-attached", STARTUP_TIMEOUT)
             checks.run(["node", "--test", "--test-force-exit", "dev/pi-driver-check.mjs"], "pi-driver", STARTUP_TIMEOUT)
+            checks.run(["python3", "dev/check-selection-check.py"], "suite-selection", STARTUP_TIMEOUT)
             checks.run(["python3", "dev/update-local-check.py"], "local-update", STARTUP_TIMEOUT)
             checks.run(["python3", "dev/consumer-evidence-check.py"], "consumer-evidence", STARTUP_TIMEOUT)
             checks.run(["python3", "dev/consumer-cohort-check.py"], "consumer-cohort", STARTUP_TIMEOUT)
@@ -504,9 +523,7 @@ def main():
             # Two JVM CLI starts against local listeners; covers the endpoint choice of dev/project-archive-check.py (D111).
             checks.run(["python3", "dev/project-archive-endpoint-check.py", "java", "-cp", checks.classpath(), "cq.server.Main"],
                        "project-archive-endpoint", STARTUP_TIMEOUT * 3)
-            # Selected by pattern on purpose: distage then also executes the other suites' bodies unreported (D116), but one test JVM
-            # for all suites is several times faster than one per suite, and this step holds no shared database.
-            checks.sbt(["server/testOnly *Dummy *Local"], "dummy-contract")
+            checks.contracts_of("Dummy|Local", "dummy-contract")
         else:
             getattr(checks, command)()
     except BaseException as failure:

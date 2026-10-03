@@ -148,6 +148,7 @@ object SupervisorProgram {
     "Pass worker candidates to Reviewer Candidate; prefer another configured harness. " +
     "With integrationTarget, PrepareIntegration using a fresh ID and accepted reviewer handle, poll IntegrationStatus, inspect its frozen preview, then Integrate that ID. Only Recorded establishes domain recording; reconcile Pending and inspect NotApplied. Without a target, report the retained reviewed candidate. " +
     "PrepareIntegration rebases onto a moved target itself; after NotApplied, prepare again with a fresh ID. If Ready carries a blocker, Integrate, then Combine a fresh ID, that integration ID and current full fence; poll CombinationStatus. Dispatch Worker ResolveConflict with Ready plan in artifacts, its worker as previous and exact preview members/fence. Obtain fresh validation and Reviewer from the new worker handle; omit the plan from reviewer artifacts. Integrate with a fresh ID. For PublicationPending, replay identical Combine or cq job upload. " +
+    "Before archiving scoped Decisions or their completed anchors, preserve important knowledge or rules that still apply as independently reviewed Memories or proposed standing requirements. Standing requirement edits need human authority: ask the operator to persist the proposed text before archival. Only Adopted Decisions with at least one outgoing DerivedFrom or PartOf anchor, all archived, are bulk eligible; keep active or unanchored Decisions. " +
     "Claim execution only with host evidence. Child completion/review acceptance does not establish final task acceptance."
   val Instructions = Guidance + " Return exactly {\"summary\":\"observed outcome and remaining work\"}."
 }
@@ -182,7 +183,8 @@ final class SupervisorProgram(config: SupervisorConfig, registry: HarnessRegistr
         HostFiles.immutable(config.directory.resolve("settings.json"), HostFiles.encode(SupervisorSettings_JsonCodec, config.settings), MaxRecordBytes)
         val collector = authority.collector
         val input = HostFiles.encode(GoverningInput_JsonCodec, GoverningInput(config.project,
-          config.settings.harnesses.map(value => HarnessRoute(value.harness, value.model, value.provider)), config.settings.checks.map(_.name), config.settings.limits, config.settings.integrationTarget, config.input,
+          config.settings.harnesses.map(value => HarnessRoute(value.harness, value.model, value.provider)), config.settings.checks.map(_.name), config.settings.limits, config.settings.integrationTarget,
+          OperatorRequirements.governing(config.input, OperatorRequirements.standing(authority.governor.call, project)),
           config.workflow.map(new WorkflowAssembly(authority.governor, project, workflows).assemble)))
         require(input.getBytes(java.nio.charset.StandardCharsets.UTF_8).length <= MaxInputBytes, "Complete governing input exceeds its byte bound")
         val invocation = schemas.nativeInvocation(attempt.harness,

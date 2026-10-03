@@ -28,7 +28,7 @@ final class JobSupervisorProcess extends SpecZIO with AssertZIO {
   private def acquire(at: Path, scope: Scope, service: WorkspaceService[IO], driver: ExecutionDriver) =
     JobSupervisor.acquire(scope, journal(at, scope), service, driver, at.resolve("payload"), Clock.systemUTC())
   private val SlowJournalMillis = 600L
-  /** A journal whose every write takes `SlowJournalMillis`: longer than any elapsed-time bound a test could set, shorter than the supervisor's acknowledgement deadline. */
+  /** A journal whose every write takes `SlowJournalMillis`: slow enough to exercise acknowledgement ordering without imposing a production deadline. */
   private def slowJournal(at: Path, scope: Scope): IO[Throwable, JobRepository] = journal(at, scope).map { delegate =>
     new JobRepository {
       override def records = delegate.records
@@ -175,7 +175,7 @@ final class JobSupervisorProcess extends SpecZIO with AssertZIO {
       } yield ()
     } }
 
-    "deliver cancellation and bound its acknowledgement while journal persistence is stalled" in { (local: LocalWorkspaceFixture, guardian: GuardianFixture) =>
+    "deliver cancellation while its durable acknowledgement waits for stalled journal persistence" in { (local: LocalWorkspaceFixture, guardian: GuardianFixture) =>
       val scope = owner
       val workspace = local.fixture.spec(scope)
       val armed = new AtomicBoolean(false)
@@ -218,10 +218,13 @@ final class JobSupervisorProcess extends SpecZIO with AssertZIO {
               _ <- ZIO.attemptBlocking(assert(entered.await(3, TimeUnit.SECONDS)))
               observed <- ZIO.attemptBlocking(process.get().get.await(Duration.ofSeconds(3)))
               _ <- assertIO(observed.phase == ProcessPhase.Settled && observed.result.exists(_.reason == StopReason.Cancelled))
-              acknowledgement <- cancellation.await
-              _ <- assertIO(acknowledgement.isFailure)
-              status <- supervisor.status(scope, workspace.attempt).either
-              _ <- assertIO(status.isLeft)
+              pending <- cancellation.poll
+              _ <- assertIO(pending.isEmpty)
+              _ <- ZIO.succeed(release.countDown())
+              acknowledgement <- cancellation.join
+              _ <- assertIO(acknowledgement.target == JobTarget.Stop)
+              status <- supervisor.status(scope, workspace.attempt)
+              _ <- assertIO(status.target == JobTarget.Stop)
             } yield ()).ensuring(ZIO.succeed(release.countDown()))
           } yield ()
         }

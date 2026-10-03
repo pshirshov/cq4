@@ -1703,7 +1703,7 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
         after <- cursor(service, w)
         kept <- status(service, w, key)
         _ <- assertIO(fault(flagged).contains(Fault.Invalid("Only terminal or settled items may be archived; unarchive an item before reopening it")) &&
-          fault(bulk).contains(Fault.Invalid("Only terminal items may be archived; unarchive an item before reopening it")) &&
+          fault(bulk).contains(Fault.Invalid("Only terminal items or adopted Decisions with fully archived scope may be bulk archived")) &&
           before == after && kept.exists(_.state == DriverState.On))
         retitled <- service.change(w.governor, request(List(Mutation.Replace(asked, open.revision, open.draft.copy(title = "Reworded question"))), Nil))
         current <- service.get(w.operator, asked).map(_.item)
@@ -1864,7 +1864,7 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
         bulk <- service.change(w.governor, request(List(Mutation.Archive(List(ItemRevision(asked, open.revision)))), Nil)).either
         after <- cursor(service, w)
         _ <- assertIO(fault(flagged).contains(Fault.Invalid("Only terminal or settled items may be archived; unarchive an item before reopening it")) &&
-          fault(bulk).contains(Fault.Invalid("Only terminal items may be archived; unarchive an item before reopening it")) && before == after)
+          fault(bulk).contains(Fault.Invalid("Only terminal items or adopted Decisions with fully archived scope may be bulk archived")) && before == after)
         retitled <- service.change(w.governor, request(List(Mutation.Replace(asked, open.revision, open.draft.copy(title = "Reworded action", body = "Reworded narrative"))), Nil))
         edited <- service.get(w.operator, asked).map(_.item)
         kept <- status(service, w, key)

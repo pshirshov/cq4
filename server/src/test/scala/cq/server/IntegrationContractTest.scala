@@ -43,6 +43,8 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
         case Command.Read(ReadInput(_, ReadSelection.ArtifactInfo(id))) => artifacts.metadata(scope, id).map(Result.ArtifactInfo.apply)
         case Command.Read(ReadInput(_, ReadSelection.ArtifactText(id, offset, limit))) => artifacts.page(scope, id, offset, limit).map(Result.ArtifactText.apply)
         case Command.Read(ReadInput(_, ReadSelection.Admission(attempt))) => admissions.get(scope, attempt).map(Result.Admission.apply)
+        case Command.Requirements(RequirementsInput(_, RequirementsAction.Read())) => ledger.requirements(scope).map(Result.Requirements.apply)
+        case Command.Read(ReadInput(_, ReadSelection.Claims(members))) => ledger.claimPreview(scope, members).map(Result.Claims.apply)
         case Command.ClaimWork(ClaimInput(_, ClaimAction.Renew(fence, millis))) => ledger.renew(scope, fence, millis).map(Result.Claimed.apply)
         case _ => ZIO.fail(new IllegalStateException("Unexpected integration preparation command"))
       }
@@ -337,6 +339,31 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
             f.intent.repository, f.intent.target, f.intent.checks, Clock.systemUTC(), recordedBases), IntegrationTicket(f.intent.id, f.intent.reviewer))).either
           _ <- ZIO.attempt(assert(host == Left(DomainFailure(fault)), s"host preparation, $name: $host"))
         } yield () }
+      } yield ()
+    }
+
+    "D114: review and integrate a retained candidate under a later session's fresh governing claim" in {
+      (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO]) => for {
+        runtime <- ZIO.runtime[Any]
+        f <- begin(ledger, usage, artifacts, admissions)
+        _ <- ledger.release(f.owner, f.claim.fence)
+        later = f.owner.copy(actor = f.owner.actor.copy(session = SessionId(uuid)))
+        collector = later.copy(actor = later.actor.copy(role = Role.Collector))
+        claim <- ledger.acquire(later, ClaimId(uuid), f.claim.members, 300000)
+        api = new ServiceApi(later, ledger, artifacts, admissions, runtime)
+        workflow <- ZIO.attemptBlocking(new WorkflowAssembly(api, later.project, new WorkflowAssets).assemble(WorkflowRequest.Review(f.intent.worker, ReviewerMode.Candidate)))
+        _ <- assertIO(workflow.subject.exists(_.result == f.intent.worker))
+        input <- ZIO.attemptBlocking(new InputAssembler(api, later, Clock.systemUTC(), "Continue retained candidate").assemble(
+          f.reviewer.request.copy(request = RequestId(uuid), fence = claim.fence)))
+        _ <- assertIO(input.previous.contains(f.worker))
+        preparation = new IntegrationPreparation(api, later,
+          f.intent.repository, f.intent.target, f.intent.checks, Clock.systemUTC(), recordedBases)
+        prepared <- ZIO.attemptBlocking(prepare(preparation, IntegrationTicket(f.intent.id, f.intent.reviewer)))
+        _ <- assertIO(prepared.owner == later.actor && prepared.fence == claim.fence && prepared.worker == f.intent.worker && prepared.reviewer == f.intent.reviewer)
+        _ <- integrations.reserve(collector, prepared)
+        _ <- integrations.observe(collector, prepared.id, IntegrationObservation.Incorporated(prepared.candidate))
+        completed <- ZIO.foreach(f.items)(item => ledger.get(later, item.id))
+        _ <- assertIO(completed.forall(_.item.draft.content.asInstanceOf[Content.Task].status == TaskStatus.Done))
       } yield ()
     }
 

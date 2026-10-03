@@ -171,6 +171,10 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
       List((DispatchWork.Planner(), members, CohortReason.AssessmentRequired, witness)), required.evidence.toString))
     group = required.fingerprints(required.evidence.decision.choices.head.id)
     _ <- ZIO.attempt(progress.started(group))
+    running <- ZIO.attemptBlocking(planner.plan(input.copy(request = RequestId(uuid)), ArtifactId(uuid)))
+    _ <- ZIO.attempt(assert(running.evidence.decision.choices.isEmpty && running.evidence.considered.exists(_.reason == CohortReason.Deferred),
+      "Running assessment must defer its group: " + running.evidence.toString.take(4000)))
+    _ <- ZIO.attempt(progress.finished(group))
     retry = input.copy(request = RequestId(uuid))
     again <- ZIO.attemptBlocking(planner.plan(retry, ArtifactId(uuid)))
     _ <- ZIO.attempt(assert(alone(again) == members.map(id => (Implement, Set(id), CohortReason.UnknownAssessment)) && again.evidence.decision.counts.excluded == 0 &&
@@ -684,6 +688,21 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
         regrouped <- f.decide(f.target, List(f.fixture.artifact, overlapping.id))
         _ <- ZIO.attempt(assert(regrouped == Set[(DispatchWork, Set[ItemRevision])]((Implement, Set(members.head, members(2))),
           (DispatchWork.Planner(), Set(members(1), members(3)))), regrouped.toString))
+      } yield ()
+    }
+
+    "D118: discard stale overlapping assessments before they displace an exact carried group" in {
+      (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO]) => for {
+        runtime <- ZIO.runtime[Any]
+        f <- carried(ledger, usage, artifacts, admissions, runtime)
+        members = f.fixture.members
+        overlapping <- publish(f.moved, DispatchWork.Planner(), assessing(members,
+          List(assessment(List(members.head, members(2)), CohortCompatibility.Compatible))), None, Nil, ledger, usage, artifacts, admissions)
+        current <- ledger.get(f.fixture.scope, members.head.id)
+        _ <- ledger.change(f.fixture.scope, ChangeRequest(RequestId(uuid), List(Mutation.Replace(current.item.id, current.item.revision,
+          current.item.draft.copy(body = "Revised assessment input"))), List(f.fixture.fence), "Revise one assessment member"))
+        selected <- f.decide(f.target, List(f.fixture.artifact, overlapping.id))
+        _ <- ZIO.attempt(assert(selected.contains((Implement, members.drop(2).toSet)), selected.toString))
       } yield ()
     }
 

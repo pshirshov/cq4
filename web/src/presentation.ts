@@ -48,7 +48,7 @@ export function renderValue(name: string, value: Json, renderText: TextRenderer)
       const row = element('li', ''); const data = jsonObject(entry);
       if (typeof entry === 'string') row.append(renderText(entry));
       else if ('description' in data) {
-        row.className = 'evidence-entry'; const description = element('p', ''); description.append(renderText(String(data.description)));
+        row.className = 'evidence-entry'; const description = element('div', ''); description.append(renderText(String(data.description)));
         row.append(description, element('span', fieldLabel(String(data.origin))));
         if (Array.isArray(data.citations) && data.citations.length > 0) row.append(renderValue('citations', data.citations, renderText));
       } else if (name === 'subjects') {
@@ -67,7 +67,7 @@ function markRecommendation(view: HTMLElement, recommendation: api.QuestionRecom
   if (row === undefined) throw new Error('Question recommendation is outside its alternatives');
   row.classList.add('recommended-alternative');
   const badge = element('span', 'Recommended'); badge.className = 'badge recommended-badge';
-  const reason = element('p', ''); reason.className = 'recommendation-reason'; reason.append(renderText(recommendation.reason));
+  const reason = element('div', ''); reason.className = 'recommendation-reason'; reason.append(renderText(recommendation.reason));
   row.append(badge, reason);
 }
 export function itemView(draft: api.ItemDraft, renderText: TextRenderer): HTMLElement {

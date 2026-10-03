@@ -95,12 +95,12 @@ final class WorkspaceEvidence(project: ProjectId, attempt: AttemptId, prefix: St
     }
   }
 
-  /** Collects the evidence directory first, then the worker-named paths, in that order; bounds apply across both. */
+  /** Collects explicitly named evidence first, then incidental directory files; shared bounds and omission reporting apply to both. */
   def collect(root: Path, named: List[String]): CollectedEvidence = {
     require(root.isAbsolute && Files.isDirectory(root, LinkOption.NOFOLLOW_LINKS), "Workspace root is not a verified directory")
     val collection = new Collection(root.toRealPath())
-    if (Files.isDirectory(root.resolve(EvidenceDirectory), LinkOption.NOFOLLOW_LINKS)) collection.add(EvidenceDirectory)
     named.foreach(collection.add)
+    if (Files.isDirectory(root.resolve(EvidenceDirectory), LinkOption.NOFOLLOW_LINKS)) collection.add(EvidenceDirectory)
     collection.result
   }
 }

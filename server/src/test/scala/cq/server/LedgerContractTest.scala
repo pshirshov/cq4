@@ -527,11 +527,60 @@ abstract class LedgerContractTest extends SpecZIO with AssertZIO {
       } yield ()
     }
 
+    "D128: archive adopted decisions only after every scope anchor is archived and recheck anchors atomically" in { (service: LedgerService[IO]) =>
+      val owner = scope()
+      val adopted = task("Scoped decision").copy(content = Content.Decision(DecisionStatus.Adopted, "Choice", "Rationale", Nil))
+      val done = task("Archived scope").copy(archived = true, content = Content.Task(TaskStatus.Done, List("Observable result"), Some("Result"), Nil))
+      def link(source: ItemRevision, target: ItemRevision, relation: Relation): IO[Throwable, Unit] = for {
+        a <- service.get(owner, source.id)
+        b <- service.get(owner, target.id)
+        _ <- service.change(owner, request(List(Mutation.Reference(source.id, a.item.revision, relation, target.id, b.item.revision, true)), Nil))
+      } yield ()
+      for {
+        _ <- service.initialize(owner, "Decision scope archival")
+        anchor <- create(service, owner, done)
+        milestone <- create(service, owner, done.copy(content = Content.Milestone(MilestoneStatus.Cancelled, "Archived milestone")))
+        active <- create(service, owner, task("Active scope"))
+        visible <- create(service, owner, done.copy(title = "Finished but unarchived scope", archived = false))
+        derived <- create(service, owner, adopted)
+        part <- create(service, owner, adopted.copy(title = "Milestone decision"))
+        mixed <- create(service, owner, adopted.copy(title = "Mixed scope"))
+        finished <- create(service, owner, adopted.copy(title = "Unarchived finished scope"))
+        context <- create(service, owner, adopted.copy(title = "Context link is not an anchor"))
+        unanchored <- create(service, owner, adopted.copy(title = "Standing decision"))
+        memory <- create(service, owner, adopted.copy(content = Content.Memory(MemoryStatus.Current, "Knowledge", "Applies here", Nil)))
+        _ <- link(derived, anchor, Relation.DerivedFrom)
+        _ <- link(part, milestone, Relation.PartOf)
+        _ <- link(mixed, anchor, Relation.DerivedFrom)
+        _ <- link(mixed, active, Relation.DerivedFrom)
+        _ <- link(finished, visible, Relation.DerivedFrom)
+        _ <- link(context, anchor, Relation.RelatesTo)
+        _ <- link(memory, anchor, Relation.DerivedFrom)
+        preview <- service.archivePreview(owner, "ledger:Decisions", 50)
+        _ <- assertIO(preview.members.map(_.id).toSet == Set(derived.id, part.id) && preview.retained.isEmpty)
+        _ <- assertIO(preview.members.forall(_.outcome == ItemOutcome(false, true)))
+        storedAnchor <- service.get(owner, anchor.id)
+        _ <- service.change(owner, request(List(Mutation.Replace(anchor.id, storedAnchor.item.revision, done.copy(archived = false))), Nil))
+        _ <- denied(service.change(owner, request(List(Mutation.Archive(preview.members.map(m => ItemRevision(m.id, m.revision)))), Nil)))(_.isInstanceOf[Fault.Invalid])
+        unchanged <- service.get(owner, part.id)
+        _ <- assertIO(!unchanged.item.draft.archived)
+        restoredAnchor <- service.get(owner, anchor.id)
+        _ <- service.change(owner, request(List(Mutation.Replace(anchor.id, restoredAnchor.item.revision, done)), Nil))
+        fresh <- service.archivePreview(owner, "ledger:Decisions", 50)
+        archived <- service.change(owner, request(List(Mutation.Archive(fresh.members.map(m => ItemRevision(m.id, m.revision)))), Nil))
+        _ <- assertIO(archived.items.map(_.id).toSet == Set(derived.id, part.id))
+        kept <- service.search(owner, "ledger:Decisions", None, 200)
+        _ <- assertIO(kept.items.map(_.id).toSet == Set(mixed.id, finished.id, context.id, unanchored.id))
+        memories <- service.archivePreview(owner, "ledger:Memories", 50)
+        _ <- assertIO(memories.members.isEmpty)
+      } yield ()
+    }
+
     "accept explicitly archived settled records while bulk archival keeps refusing them" in { (service: LedgerService[IO]) =>
       val owner = scope()
       val adopted = task("Adopted decision").copy(content = Content.Decision(DecisionStatus.Adopted, "Choice", "Rationale", Nil))
       val current = task("Current memory").copy(content = Content.Memory(MemoryStatus.Current, "Knowledge", "Applies here", Nil))
-      val refused = "Only terminal items may be archived; unarchive an item before reopening it"
+      val refused = "Only terminal items or adopted Decisions with fully archived scope may be bulk archived"
       for {
         _ <- service.initialize(owner, "Explicit settled archival")
         decision <- create(service, owner, adopted)
