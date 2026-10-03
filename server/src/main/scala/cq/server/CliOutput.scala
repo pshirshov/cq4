@@ -83,6 +83,18 @@ final class CliOutput(output: PrintStream, format: CliFormat, invocation: List[S
     case CliFormat.Human => line(value)
   }
   def configuration(value: Path): Unit = if (format == CliFormat.Human) line(s"Configuration: $value")
+  def doctor(report: CommandDoctorReport): Unit = format match {
+    case CliFormat.Json =>
+      output.println(io.circe.Json.obj("scope" -> io.circe.Json.fromString("commands"),
+        "harness" -> io.circe.Json.fromString(report.harness.toString.toLowerCase),
+        "directory" -> io.circe.Json.fromString(report.directory.toString), "current" -> io.circe.Json.fromBoolean(report.current),
+        "checks" -> io.circe.Json.fromValues(report.checks.map(check => io.circe.Json.obj(
+          "path" -> io.circe.Json.fromString(check.path.toString), "state" -> io.circe.Json.fromString(check.state.toString))))).noSpaces)
+    case CliFormat.Human =>
+      line(s"Command assets for ${report.harness.toString.toLowerCase}: ${report.directory}")
+      table(List("State", "Path"), report.checks.map(check => List(check.state.toString, check.path.toString)))
+      line("Server, credentials, MCP, hooks and harness trust are not checked.")
+  }
   def result(value: Result): Unit = format match {
     case CliFormat.Json => output.println(Wire.encode(Result_JsonCodec, value))
     case CliFormat.Human => human(value)

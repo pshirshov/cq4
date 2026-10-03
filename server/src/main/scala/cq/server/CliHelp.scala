@@ -23,6 +23,7 @@ Operator commands (readable output by default; add --json for automation):
   restore           Restore a project archive without overwriting an existing ID
   web               Print this project's browser URL
   configure         Install integration for a directly launched harness
+  doctor commands   Verify installed CQ command files without writing
   commands export   Write native CQ workflow commands/skills
 
 Service and automation entrypoints:
@@ -170,6 +171,22 @@ commands or skills. HARNESS is claude, codex or pi; DIR must already exist.
   --json      Emit the list of written paths
 
 Example: cq commands export codex --directory .
+"""
+      case Some("doctor") => """Usage: cq doctor commands HARNESS [--directory DIR] [--json]
+
+Perform a read-only check of the running package's CQ workflow and drive/park
+command files. HARNESS is claude, codex or pi. Declarative symlinks are accepted.
+  --directory DIR   Project directory; defaults to the current directory
+  --json            Emit one command-asset report on stdout
+
+Each asset is Current, Missing, Different, NotRegular or Unreadable. Any asset
+that is not Current makes the command fail after printing its report. File
+contents are never printed. No credentials, server or harness process are needed.
+Server, schema, credentials, MCP, hooks, status lines, trust and harness versions
+are not checked. This is not a complete installation health check.
+
+Example: cq doctor commands codex --directory . --json
+Keep cq configure for imperative installation; doctor never repairs files.
 """
       case Some("serve") => """Usage: cq serve
 

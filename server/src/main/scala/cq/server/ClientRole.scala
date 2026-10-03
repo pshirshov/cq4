@@ -11,10 +11,15 @@ import izumi.fundamentals.platform.cli.model.schema.{ParserDef, RoleParserSchema
 import java.nio.file.Path
 import zio.{Task, ZIO}
 
-final class ClientRole(cli: Cli) extends RoleTask[Task] {
+final case class ClientExit(exit: Int => Unit)
+
+final class ClientRole(cli: Cli, termination: ClientExit) extends RoleTask[Task] {
+  private val AttentionExit = 1
   override def start(parameters: EntrypointArgs): Task[Unit] = {
     val arguments = parameters.raw.toList
-    cli.run(if (arguments.headOption.contains("--")) arguments.tail else arguments)
+    cli.run(if (arguments.headOption.contains("--")) arguments.tail else arguments).catchSome {
+      case _: CommandAssetsNeedAttention => ZIO.attempt(termination.exit(AttentionExit))
+    }
   }
 }
 
@@ -29,6 +34,7 @@ object ClientPlugin extends PluginDef {
     include(new RoleModuleDef { makeRole[ClientRole] })
     include(BundledRolesModule[Task])
     make[Cli]
+    make[ClientExit].fromValue(ClientExit(System.exit))
     make[AttachedAssets]
     make[cq.host.WorkflowAssets]
     make[SessionUpload]

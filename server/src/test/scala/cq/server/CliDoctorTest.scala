@@ -1,0 +1,91 @@
+package cq.server
+
+import cq.api.Harness
+import cq.host.{DriverAssets, WorkflowAssets}
+import java.io.{ByteArrayInputStream, ByteArrayOutputStream, PrintStream}
+import java.nio.charset.StandardCharsets.UTF_8
+import java.nio.file.{Files, Path}
+import java.time.Clock
+import java.util.concurrent.TimeUnit
+import org.scalatest.wordspec.AnyWordSpec
+import scala.jdk.CollectionConverters.*
+import scala.util.Using
+import zio.{Runtime, Unsafe}
+
+final class CliDoctorLocal extends AnyWordSpec {
+  private def run(root: Path, args: List[String]): (Either[Throwable, Unit], String) = {
+    val bytes = new ByteArrayOutputStream
+    val context = CliContext(Map.empty, root, new PrintStream(bytes, true, UTF_8), new ByteArrayInputStream(Array.emptyByteArray))
+    val workflows = new WorkflowAssets
+    val cli = new Cli(context, new ProjectLocation(context), new SessionUpload(context, Clock.systemUTC()), workflows,
+      new AttachedAssets(new McpSchemas, workflows))
+    val result = Unsafe.unsafe { implicit unsafe => Runtime.default.unsafe.run(cli.run(args).either).getOrThrowFiberFailure() }
+    (result, bytes.toString(UTF_8))
+  }
+  private def fixture(operation: Path => Unit): Unit = {
+    val root = Files.createTempDirectory("cq-cli-doctor-").toAbsolutePath
+    try operation(root)
+    finally Using.resource(Files.walk(root))(_.iterator().asScala.toList.reverse.foreach(Files.delete))
+  }
+
+  "Command doctor CLI (Behavioral Active Blackbox Good Communication filesystem)" should {
+    "report missing commands as one JSON value and fail without writes or credentials" in fixture { root =>
+      val (result, output) = run(root, List("doctor", "commands", "codex", "--json"))
+      assert(result.left.toOption.exists(_.isInstanceOf[CommandAssetsNeedAttention]), result.toString)
+      val json = io.circe.parser.parse(output).fold(throw _, identity)
+      assert(json.hcursor.get[Boolean]("current") == Right(false))
+      val checks = json.hcursor.get[List[io.circe.Json]]("checks").toOption.get
+      assert(checks.size == 6 && checks.forall(_.hcursor.get[String]("state") == Right("Missing")))
+      assert(Using.resource(Files.list(root))(_.count()) == 0)
+    }
+    "verify an explicit directory and report changed contents without displaying them" in fixture { root =>
+      val project = Files.createDirectory(root.resolve("project"))
+      val assets = new WorkflowAssets().commands(Harness.Pi) ++ DriverAssets.commands(Harness.Pi)
+      assets.foreach { asset =>
+        val file = project.resolve(asset.path)
+        Files.createDirectories(file.getParent); Files.writeString(file, asset.body)
+      }
+      val args = List("doctor", "commands", "pi", "--directory", "project")
+      val (success, human) = run(root, args)
+      assert(success == Right(()) && human.contains("Current") && human.contains("cq:begin.md"))
+      assert(human.contains("Server, credentials, MCP, hooks and harness trust are not checked."))
+      val stale = project.resolve(assets.head.path)
+      Files.writeString(stale, "fixture secret must not print")
+      val before = Files.getLastModifiedTime(stale)
+      val (failure, changed) = run(root, args)
+      assert(failure.isLeft && changed.contains("Different") && !changed.contains("fixture secret"))
+      assert(Files.readString(stale) == "fixture secret must not print" && Files.getLastModifiedTime(stale) == before)
+      assert(!Files.exists(root.resolve(".cq")) && !Files.exists(project.resolve(".cq")))
+    }
+    "describe the command-assets scope in doctor help" in {
+      val help = CliHelp.render(List("doctor", "--help"))
+      assert(help.contains("doctor commands HARNESS") && help.contains("--directory") && help.contains("--json"))
+      assert(help.contains("read-only") && help.contains("not checked"))
+    }
+    "exit the actual JVM entrypoint quietly after a negative report" in fixture { root =>
+      val classpath = Option(System.getProperty("cq.test.classpath")).getOrElse(throw new IllegalStateException("CLI fixture classpath is required"))
+      val source = Option(System.getProperty("cq.test.sourceRoot")).getOrElse(throw new IllegalStateException("CLI fixture source root is required"))
+      val options = Files.readString(Path.of(source, ".jvmopts")).trim.split("\\s+").toList
+      val command = List(Path.of(System.getProperty("java.home"), "bin", "java").toString) ++ options ++
+        List("-cp", classpath, "cq.server.Main", "doctor", "commands", "codex", "--json")
+      val errorFile = Files.createTempFile("cq-doctor-stderr-", ".log")
+      val builder = new ProcessBuilder(command.asJava).directory(root.toFile).redirectError(errorFile.toFile)
+      builder.environment().keySet().asScala.toList.filter(_.startsWith("CQ_")).foreach(builder.environment().remove)
+      val process = builder.start()
+      try {
+        process.getOutputStream.close()
+        assert(process.waitFor(60, TimeUnit.SECONDS), "CLI doctor did not terminate")
+        val stdout = new String(process.getInputStream.readNBytes(65536), UTF_8)
+        val stderr = Files.readString(errorFile)
+        assert(process.exitValue() == 1 && stderr.isEmpty, stderr)
+        val report = io.circe.parser.parse(stdout).fold(throw _, identity)
+        assert(report.hcursor.get[Boolean]("current") == Right(false))
+        assert(report.hcursor.get[List[io.circe.Json]]("checks").toOption.get.size == 6)
+        assert(Using.resource(Files.list(root))(_.count()) == 0)
+      } finally {
+        if (process.isAlive) process.destroyForcibly()
+        Files.deleteIfExists(errorFile)
+      }
+    }
+  }
+}

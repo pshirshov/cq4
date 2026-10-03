@@ -30,6 +30,8 @@ final class Cli(context: CliContext, location: ProjectLocation, upload: SessionU
     require(pairs.map(_._1).distinct.size == pairs.size, "Repeated option")
     pairs.toMap
   }
+  private def nativeHarness(value: String, kind: String): Harness =
+    Harness.all.find(_.toString.toLowerCase == value).getOrElse(throw new IllegalArgumentException(s"Unknown $kind harness"))
   private def configDirectory: Path = location.directory
   private def validateEndpoint(value: String): String = {
     val uri = URI.create(value)
@@ -103,7 +105,7 @@ final class Cli(context: CliContext, location: ProjectLocation, upload: SessionU
       val opts = options(rest.dropRight(flags.size), Set("--settings", "--executable", "--directory"))
       val settings = opts.get("--settings").orElse(environment.get("CQ_SETTINGS"))
         .getOrElse(throw new IllegalArgumentException("configure requires --settings FILE or CQ_SETTINGS"))
-      val native = Harness.all.find(_.toString.toLowerCase == harness).getOrElse(throw new IllegalArgumentException("Unknown attached harness"))
+      val native = nativeHarness(harness, "attached")
       val executable = opts.get("--executable").getOrElse(ProcessHandle.current().info().command().orElseThrow())
       require(Path.of(executable).getFileName.toString != "java", "JVM configure requires --executable pointing to an installed CQ binary or exec wrapper")
       renderer.paths(attached.write(native, opts.get("--directory").fold(directory)(value => directory.resolve(value).normalize()),
@@ -121,8 +123,14 @@ final class Cli(context: CliContext, location: ProjectLocation, upload: SessionU
       val replace = rest.lastOption.contains("--replace")
       val opts = options(if (replace) rest.dropRight(1) else rest, Set("--directory"))
       require(opts.keySet == Set("--directory"), "Command export requires --directory DIR [--replace]")
-      val native = Harness.all.find(_.toString.toLowerCase == harness).getOrElse(throw new IllegalArgumentException("Unknown command harness"))
+      val native = nativeHarness(harness, "command")
       renderer.paths(workflows.writeCommands(native, directory.resolve(opts("--directory")).normalize(), replace))
+    case "doctor" :: "commands" :: harness :: rest =>
+      val opts = options(rest, Set("--directory"))
+      val root = opts.get("--directory").fold(directory)(value => directory.resolve(value).normalize())
+      val report = new CommandDoctor(new FileCommandAssetReader, workflows).inspect(nativeHarness(harness, "command"), root)
+      renderer.doctor(report)
+      if (!report.current) throw new CommandAssetsNeedAttention
     case "init" :: rest =>
       val opts = options(rest, Set("--endpoint", "--project-id", "--name"))
       val location = configDirectory
