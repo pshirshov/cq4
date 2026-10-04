@@ -158,6 +158,12 @@ object HarnessUsage {
     private var turn = 0L
     private var terminal = false
     private var failed = false
+    // Pi recovery is independent of usage completeness and of unrelated native failures.
+    private final case class PiRetry(attempt: Option[Long] = None, responseSeen: Boolean = false, endSeen: Boolean = false)
+    private var piRetry = Option.empty[PiRetry]
+    private def finishPiRetry(): Unit = {
+      if (piRetry.exists(retry => retry.responseSeen && retry.endSeen)) piRetry = None
+    }
 
     def gap(message: String): Unit = {
       if (problems.size < MaxGaps - 1) problems += message
@@ -273,6 +279,23 @@ object HarnessUsage {
       case "turn_start" => turn = Math.addExact(turn, 1); terminal = false
       case "agent_start" => terminal = false
       case "agent_settled" => terminal = true
+      case "auto_retry_start" =>
+        terminal = false
+        val attempt = json.hcursor.get[Long]("attempt").toOption.filter(_ > 0)
+        piRetry match {
+          case Some(retry) if retry.attempt.isEmpty && attempt.nonEmpty => piRetry = Some(retry.copy(attempt = attempt))
+          case _ => failed = true // An unmatched marker cannot forgive a native failure.
+        }
+      case "auto_retry_end" =>
+        terminal = false
+        val attempt = json.hcursor.get[Long]("attempt").toOption.filter(_ > 0)
+        piRetry match {
+          case Some(retry) if retry.attempt.nonEmpty && retry.attempt == attempt && !retry.endSeen &&
+              json.hcursor.get[Boolean]("success").contains(true) =>
+            piRetry = Some(retry.copy(endSeen = true))
+            finishPiRetry()
+          case _ => failed = true
+        }
       case "message_end" =>
         val message = Json.fromJsonObject(obj(json, "message"))
         if (message.hcursor.get[String]("role").contains("assistant")) {
@@ -285,6 +308,7 @@ object HarnessUsage {
             case Some(previous) => if (previous != message) gap("Conflicting repeated Pi response; retained the first sample and native evidence")
             case None if messages.size == MaxSamples => gap("Pi response identity bound exceeded; remaining usage is unavailable")
             case None =>
+              terminal = false
               val usage = Json.fromJsonObject(obj(message, "usage"))
               val rawInput = integer(usage, "input")
               val read = integer(usage, "cacheRead")
@@ -297,7 +321,18 @@ object HarnessUsage {
               val counts = TokenCounts(counter(inclusiveInput, true), counter(output, true), counter(read, true), counter(write, true), counter(integer(usage, "reasoning"), true))
               val money = usage.hcursor.downField("cost").focus.fold(UsageMath.unknownMoney)(value => cost(value, "total", true))
               val stop = message.hcursor.get[String]("stopReason").toOption
-              if (stop.exists(Set("error", "aborted"))) { failed = true; gap("Pi reported an interrupted or failed response; final usage may be missing") }
+              if (stop.exists(Set("error", "aborted"))) {
+                // Only this response can be recovered. Earlier unresolved failures stay sticky.
+                if (piRetry.nonEmpty || stop.contains("aborted")) failed = true
+                piRetry = if (stop.contains("error")) Some(PiRetry()) else None
+                gap("Pi reported an interrupted or failed response; final usage may be missing")
+              } else if (stop.exists(Set("stop", "toolUse", "length"))) {
+                piRetry.filter(_.attempt.nonEmpty).foreach { retry =>
+                  // Pi 0.99.1 emits the response before retry_end; also accept the reverse order.
+                  piRetry = Some(retry.copy(responseSeen = true))
+                  finishPiRetry()
+                }
+              }
               record(Sample("pi/" + hash(identity + "/" + provider + "/" + model), s"$source/$provider/$model", CounterScope.Increment,
                 counts, true, money, List("Pi zero counters/cost may be defaults and are retained as unknown; raw values remain in evidence",
                   "Pi model price estimate; pricing revision is not exposed") ++
@@ -313,7 +348,7 @@ object HarnessUsage {
       if (samples.isEmpty) gap("No authoritative native usage sample was collected")
       if (request.harness == Harness.Pi) gap("Pi collection covers assistant responses; auxiliary, compaction and tool-result usage require separate observations")
       CollectedUsage(samples.valuesIterator.map { case (meter, entries) => CollectedMeter(meter, entries.toList) }.toList,
-        terminal, failed, problems.toList)
+        terminal, failed || piRetry.nonEmpty, problems.toList)
     }
   }
 }
