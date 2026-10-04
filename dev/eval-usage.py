@@ -5,6 +5,7 @@ child         Usage summary and phase report of one evaluation {run, scenario}, 
 claude-outer  Token counts of a governing Claude Code session, summed from its local transcript.
 """
 import argparse
+from dataclasses import asdict, dataclass
 import json
 from pathlib import Path
 import subprocess
@@ -20,6 +21,35 @@ TRANSCRIPT_COUNTERS = {
     "cacheWrite": "cache_creation_input_tokens",
     "output": "output_tokens",
 }
+
+
+@dataclass(frozen=True)
+class CounterCoverage:
+    observedResponses: int
+    missingResponses: int
+    partialSubtotal: int | None
+
+
+@dataclass(frozen=True)
+class CounterMeasurement:
+    total: int | None
+    coverage: CounterCoverage
+
+
+@dataclass(frozen=True)
+class RequestInputCoverage:
+    completeRequests: int
+    incompleteRequests: int
+    largestCompleteRequestInput: int | None
+
+
+def measure_counter(usages: list[dict[str, int | None]], field: str) -> CounterMeasurement:
+    observed = [usage[field] for usage in usages if usage.get(field) is not None]
+    missing = len(usages) - len(observed)
+    subtotal = sum(observed) if observed else None
+    return CounterMeasurement(
+        total=subtotal if missing == 0 else None,
+        coverage=CounterCoverage(len(observed), missing, subtotal if missing else None))
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -74,12 +104,21 @@ def claude_outer(arguments):
                     unidentified += 1
                     continue
                 responses[message["id"]] = (message["usage"], bool(entry.get("isSidechain")))
-    totals = {name: sum(usage.get(field) or 0 for usage, _ in responses.values()) for name, field in TRANSCRIPT_COUNTERS.items()}
-    requests = [sum(usage.get(field) or 0 for name, field in TRANSCRIPT_COUNTERS.items() if name != "output") for usage, _ in responses.values()]
+    usages = [usage for usage, _ in responses.values()]
+    counters = {name: measure_counter(usages, field) for name, field in TRANSCRIPT_COUNTERS.items()}
+    input_fields = tuple(field for name, field in TRANSCRIPT_COUNTERS.items() if name != "output")
+    # Only requests with all three input constituents have a known size.
+    requests = [sum(usage[field] for field in input_fields) for usage in usages
+                if all(usage.get(field) is not None for field in input_fields)]
+    request_coverage = RequestInputCoverage(
+        len(requests), len(usages) - len(requests), max(requests) if requests else None)
     return {"source": str(arguments.transcript), "basis": "local transcript; tokens only",
             "responses": len(responses), "sidechainResponses": sum(1 for _, side in responses.values() if side),
-            "unreadableLines": unreadable, "entriesWithoutResponseId": unidentified, "tokens": totals,
-            "largestRequestInput": max(requests) if requests else None, "cost": "unknown"}
+            "unreadableLines": unreadable, "entriesWithoutResponseId": unidentified,
+            "tokens": {name: counter.total for name, counter in counters.items()},
+            "tokenCoverage": {name: asdict(counter.coverage) for name, counter in counters.items()},
+            "largestRequestInput": request_coverage.largestCompleteRequestInput if request_coverage.incompleteRequests == 0 else None,
+            "requestInputCoverage": asdict(request_coverage), "cost": "unknown"}
 
 
 def main():

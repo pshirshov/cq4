@@ -364,6 +364,12 @@ The summary reports direct, shared and unattributed totals, incomplete meters, a
 
 Child attempts: Claude and Pi children report client estimates in USD, Codex children report tokens and no cost ([usage collectors](design/usage-collectors.md)).
 
+`claude-outer` reports counter coverage over the identified responses with usage objects retained from the supplied transcript. Each `tokens` value is numeric only when that counter is observed on every retained response; explicit zero is an observation. An absent or null counter makes its total null (unknown/incomplete). `tokenCoverage` gives independent `observedResponses` and `missingResponses` counts per counter, and a `partialSubtotal` when some values were observed but the total is incomplete. No observations means a null total and null subtotal, including an empty transcript.
+
+A request's input size is known only when input, cache-read and cache-write counters are all observed; output coverage is independent. `requestInputCoverage` reports `completeRequests`, `incompleteRequests`, and `largestCompleteRequestInput` (null if none are complete). That last value covers only complete requests. `largestRequestInput` is numeric only for a nonempty transcript with every retained request complete, and otherwise null; a maximum over a subset must not be quoted as the complete transcript maximum.
+
+Response-ID deduplication retains the last usage object and sidechain flag for each ID, as before. Conflicting duplicates require separate empirical investigation. Source, sidechain counts, unreadable lines, entries without response IDs, and unknown cost remain reported. Coverage here describes retained transcript records only: it establishes neither real transcript completeness, agreement with `/cost`, nor billing coverage. The focused synthetic CLI regressions run with `python3 dev/eval-usage-check.py`.
+
 ### Unknown is never zero
 
 - A component without a measurement is written as `unknown` or `partial (lower bound N)`, with the reason.
