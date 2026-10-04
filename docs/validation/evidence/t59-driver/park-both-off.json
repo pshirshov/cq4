@@ -1,0 +1,69 @@
+{
+  "at": 1791147236469,
+  "drivers": {
+    "a": {
+      "key": {
+        "harness": "Claude",
+        "session": "025c7fb0-fc16-4fd9-8bcf-e404e392a6aa"
+      },
+      "state": "Off",
+      "attached": {
+        "value": "cb681df6-e2d7-413e-b91c-9be4fa48f748"
+      },
+      "workset": null,
+      "targets": [
+        {
+          "project": {
+            "value": "261e0d41-cf0c-4af3-80be-fe95fa7c96a8"
+          },
+          "ledger": "Questions",
+          "number": "2"
+        }
+      ],
+      "through": "Plan",
+      "cycle": null,
+      "activeChildren": 0,
+      "stopped": {
+        "reason": "Parked",
+        "detail": "Parked by the operator"
+      },
+      "touchedAt": "1791147232587",
+      "stoppedAt": "1791147232587",
+      "revision": {
+        "value": "112"
+      }
+    },
+    "b": {
+      "key": {
+        "harness": "Claude",
+        "session": "9f225874-cb5b-474e-a977-23133e416466"
+      },
+      "state": "Off",
+      "attached": {
+        "value": "e15d0f82-41ed-4817-bbc0-671327cc1fd2"
+      },
+      "workset": null,
+      "targets": [
+        {
+          "project": {
+            "value": "261e0d41-cf0c-4af3-80be-fe95fa7c96a8"
+          },
+          "ledger": "Questions",
+          "number": "3"
+        }
+      ],
+      "through": "Plan",
+      "cycle": null,
+      "activeChildren": 0,
+      "stopped": {
+        "reason": "Parked",
+        "detail": "Parked by the operator"
+      },
+      "touchedAt": "1791147235606",
+      "stoppedAt": "1791147235606",
+      "revision": {
+        "value": "113"
+      }
+    }
+  }
+}

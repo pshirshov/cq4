@@ -1,0 +1,41 @@
+{
+  "result": "Passed",
+  "allItemRevisionsAndSummariesUnchanged": true,
+  "driver": {
+    "key": {
+      "harness": "Claude",
+      "session": "9f225874-cb5b-474e-a977-23133e416466"
+    },
+    "state": "Off",
+    "attached": {
+      "value": "e15d0f82-41ed-4817-bbc0-671327cc1fd2"
+    },
+    "workset": null,
+    "targets": [
+      {
+        "project": {
+          "value": "261e0d41-cf0c-4af3-80be-fe95fa7c96a8"
+        },
+        "ledger": "Defects",
+        "number": "2"
+      }
+    ],
+    "through": "Explore",
+    "cycle": {
+      "value": "cc261e1f-bdfb-481c-af31-a1e5698eff92"
+    },
+    "activeChildren": 0,
+    "stopped": {
+      "reason": "Failure",
+      "detail": "directive not started: the start directive of cycle 1 was not submitted"
+    },
+    "touchedAt": "1791146046792",
+    "stoppedAt": "1791146046792",
+    "revision": {
+      "value": "96"
+    }
+  },
+  "before": "skipped-before.json",
+  "after": "skipped-after.json",
+  "snapshotScope": "Complete Browse page; unchanged revisions establish no recorded item mutations, not a raw database byte comparison."
+}

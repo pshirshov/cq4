@@ -1,0 +1,122 @@
+{
+  "source": "isolation-bound.json (full snapshot retained privately)",
+  "drivers": {
+    "Driver": {
+      "reply": {
+        "Listed": {
+          "drivers": [
+            {
+              "key": {
+                "harness": "Claude",
+                "session": "025c7fb0-fc16-4fd9-8bcf-e404e392a6aa"
+              },
+              "state": "On",
+              "attached": {
+                "value": "cb681df6-e2d7-413e-b91c-9be4fa48f748"
+              },
+              "workset": null,
+              "targets": [
+                {
+                  "project": {
+                    "value": "261e0d41-cf0c-4af3-80be-fe95fa7c96a8"
+                  },
+                  "ledger": "Defects",
+                  "number": "1"
+                }
+              ],
+              "through": "Explore",
+              "cycle": {
+                "value": "0e555dc4-8639-4e18-9e74-1c544ec78729"
+              },
+              "activeChildren": 1,
+              "stopped": null,
+              "touchedAt": "1791145545041",
+              "stoppedAt": null,
+              "revision": {
+                "value": "90"
+              }
+            },
+            {
+              "key": {
+                "harness": "Claude",
+                "session": "9f225874-cb5b-474e-a977-23133e416466"
+              },
+              "state": "Off",
+              "attached": {
+                "value": "e15d0f82-41ed-4817-bbc0-671327cc1fd2"
+              },
+              "workset": null,
+              "targets": [
+                {
+                  "project": {
+                    "value": "261e0d41-cf0c-4af3-80be-fe95fa7c96a8"
+                  },
+                  "ledger": "Questions",
+                  "number": "1"
+                }
+              ],
+              "through": "Plan",
+              "cycle": null,
+              "activeChildren": 0,
+              "stopped": {
+                "reason": "Quiescent",
+                "detail": "No item of the advanceable set is ready to advance"
+              },
+              "touchedAt": "1791145520072",
+              "stoppedAt": "1791145520072",
+              "revision": {
+                "value": "85"
+              }
+            },
+            {
+              "key": {
+                "harness": "Claude",
+                "session": "f741a4a9-6cd2-4fc3-bfaa-de67463f01c0"
+              },
+              "state": "Off",
+              "attached": {
+                "value": "8c93b60d-8d83-49c3-b748-72f2beac58d4"
+              },
+              "workset": null,
+              "targets": [
+                {
+                  "project": {
+                    "value": "261e0d41-cf0c-4af3-80be-fe95fa7c96a8"
+                  },
+                  "ledger": "Tasks",
+                  "number": "3"
+                },
+                {
+                  "project": {
+                    "value": "261e0d41-cf0c-4af3-80be-fe95fa7c96a8"
+                  },
+                  "ledger": "Tasks",
+                  "number": "4"
+                }
+              ],
+              "through": "Integrate",
+              "cycle": {
+                "value": "a6bc30c2-1ded-4954-a96c-5aafc59b8b9a"
+              },
+              "activeChildren": 0,
+              "stopped": {
+                "reason": "Quiescent",
+                "detail": "No item of the advanceable set is ready to advance"
+              },
+              "touchedAt": "1791142066756",
+              "stoppedAt": "1791142066756",
+              "revision": {
+                "value": "79"
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "unsettled": {
+    "activeClaims": "1",
+    "managedAttempts": "1",
+    "pendingIntegrations": "0"
+  }
+}

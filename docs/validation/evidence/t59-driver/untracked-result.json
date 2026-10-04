@@ -1,0 +1,41 @@
+{
+  "result": "Passed",
+  "allItemRevisionsAndSummariesUnchanged": true,
+  "driver": {
+    "key": {
+      "harness": "Claude",
+      "session": "9f225874-cb5b-474e-a977-23133e416466"
+    },
+    "state": "Off",
+    "attached": {
+      "value": "e15d0f82-41ed-4817-bbc0-671327cc1fd2"
+    },
+    "workset": null,
+    "targets": [
+      {
+        "project": {
+          "value": "261e0d41-cf0c-4af3-80be-fe95fa7c96a8"
+        },
+        "ledger": "Defects",
+        "number": "2"
+      }
+    ],
+    "through": "Explore",
+    "cycle": {
+      "value": "0f9e1aa7-3a74-4ea0-a981-9b5efc696226"
+    },
+    "activeChildren": 0,
+    "stopped": {
+      "reason": "Failure",
+      "detail": "untracked activation: the bound attached session activated a workflow without a start or resume token"
+    },
+    "touchedAt": "1791146416222",
+    "stoppedAt": "1791146416222",
+    "revision": {
+      "value": "101"
+    }
+  },
+  "before": "untracked-before.json",
+  "after": "untracked-after.json",
+  "snapshotScope": "Complete Browse page and unchanged revisions; not raw database bytes."
+}

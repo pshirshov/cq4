@@ -1,0 +1,158 @@
+{
+  "fixture": "t59 consecutive cycles and Resume, real Claude Code 2.1.285 against a private CQ server (release-e5dba67) and ledger",
+  "session": "ec0758d4-2c1f-4a61-8092-e80ba859d01a",
+  "castSha256": "b11ae728aff93ad660c746db894b5e1521e8d91118086d8be23139ca849bd469",
+  "castExit": 0,
+  "directiveTokensSeenOnScreen": [
+    {
+      "kind": "resume",
+      "token": "3c133b48-2dfd-497f-9937-4ab5690cffae"
+    },
+    {
+      "kind": "resume",
+      "token": "a20269c3-9272-40c0-bd5e-98f20d14536f"
+    },
+    {
+      "kind": "start",
+      "token": "12b5cc80-16b2-43bb-a06d-1f0775f0c32a"
+    },
+    {
+      "kind": "start",
+      "token": "f0880b3d-aacc-4f03-ba1e-c739ef5298c4"
+    },
+    {
+      "kind": "start",
+      "token": "fda41327-beef-4c19-bd84-370f265d8a10"
+    }
+  ],
+  "workflowRecords": [
+    {
+      "run": "6d8977a5-4e4b-4718-97c2-884c855ff127",
+      "workflow": "Begin",
+      "roots": [],
+      "through": null,
+      "recordedAt": 1791149268
+    },
+    {
+      "run": "0e25386a-686b-4ed5-8284-349770700cbc",
+      "workflow": "Advance",
+      "roots": [
+        "Ideas1"
+      ],
+      "through": "Plan",
+      "recordedAt": 1791149632
+    },
+    {
+      "run": "7c51e0f8-d6e7-401b-b9b7-08c9db76c4f4",
+      "workflow": "Advance",
+      "roots": [
+        "Ideas1"
+      ],
+      "through": "Plan",
+      "recordedAt": 1791149749
+    },
+    {
+      "run": "bd5f2c2a-e0f6-4b0f-8d15-2b27aab0279f",
+      "workflow": "Advance",
+      "roots": [
+        "Ideas1"
+      ],
+      "through": "Plan",
+      "recordedAt": 1791149916
+    },
+    {
+      "run": "e4bb5138-accc-49db-8bfd-7d7b63377970",
+      "workflow": "Advance",
+      "roots": [
+        "Ideas1"
+      ],
+      "through": "Plan",
+      "recordedAt": 1791150008
+    },
+    {
+      "run": "c6bb9381-75de-4b5a-bb9f-9218c85682da",
+      "workflow": "Advance",
+      "roots": [
+        "Ideas1"
+      ],
+      "through": "Plan",
+      "recordedAt": 1791150030
+    }
+  ],
+  "children": [
+    {
+      "attempt": "b9160221-f691-410c-9f32-078e584d0234",
+      "work": "Planner",
+      "mode": null,
+      "harness": "Claude",
+      "phase": "Completed",
+      "process": "Settled"
+    },
+    {
+      "attempt": "c8926802-c18e-4f61-9046-47d5d8a2d260",
+      "work": "Reviewer",
+      "mode": "Plan",
+      "harness": "Codex",
+      "phase": "Completed",
+      "process": "Settled"
+    },
+    {
+      "attempt": "7d5e51a9-2852-4f0f-b63e-2f9275d0a6f9",
+      "work": "Planner",
+      "mode": null,
+      "harness": "Claude",
+      "phase": "Completed",
+      "process": "Settled"
+    },
+    {
+      "attempt": "8c787fd0-41a6-45f1-a3fb-2a95306c85f6",
+      "work": "Reviewer",
+      "mode": "Plan",
+      "harness": "Codex",
+      "phase": "Completed",
+      "process": "Settled"
+    }
+  ],
+  "observations": [
+    "drive 1: start directive, Planner child started, turn ended with the child running; the Stop hook issued a resume directive; the session ran it and reported the same run (cycle 6f07c00b); no second run or child",
+    "drive 2: start directive, plan review started, resume directive admitted, same run (cycle b81fe47f); apply refused for a stale fence (claim released between drives); new Planner proposal",
+    "drive 3: start directive (cycle f7f63f61), independent review of the new proposal accepted; stop quiescent before apply",
+    "drive 4: start directive (cycle 05b31b9b), proposal applied (M1, G1, T1); Stop hook: \"the advanceable set changed to 3 items; added G1,T1\" and a second start directive in the same drive (cycle 2e14173a); one Planner selection; stop quiescent"
+  ],
+  "limits": [
+    "Resume (drives 1 and 2) and two consecutive cycles (drive 4) were observed in separate drives of one session on the same frozen targets I1 through plan, not within a single drive",
+    "every drive ended Quiescent because a bounded turn ended with nothing in flight and no ledger change; this is the instructed turn shape, not a defect observation",
+    "the session ran with transcript saving off (inherited child-session marker), so no outer usage was captured",
+    "host binary release-e5dba67 predates T70 and T71"
+  ],
+  "final": {
+    "items": [
+      [
+        "Goals",
+        "1",
+        "Open"
+      ],
+      [
+        "Ideas",
+        "1",
+        "Proposed"
+      ],
+      [
+        "Milestones",
+        "1",
+        "Open"
+      ],
+      [
+        "Tasks",
+        "1",
+        "Ready"
+      ]
+    ],
+    "unsettled": {
+      "activeClaims": "0",
+      "managedAttempts": "0",
+      "pendingIntegrations": "0"
+    }
+  },
+  "provenance": "Governor-observed private fixture (operator proxy Claude session, 2026-10-04); originals under /srv/nvme/tmp/cq4-final-wave-20261004/evaluations/claude-cycles"
+}

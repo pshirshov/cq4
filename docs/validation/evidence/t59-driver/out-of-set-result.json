@@ -1,0 +1,41 @@
+{
+  "result": "Passed",
+  "allItemRevisionsAndSummariesUnchanged": true,
+  "driver": {
+    "key": {
+      "harness": "Claude",
+      "session": "9f225874-cb5b-474e-a977-23133e416466"
+    },
+    "state": "Off",
+    "attached": {
+      "value": "e15d0f82-41ed-4817-bbc0-671327cc1fd2"
+    },
+    "workset": null,
+    "targets": [
+      {
+        "project": {
+          "value": "261e0d41-cf0c-4af3-80be-fe95fa7c96a8"
+        },
+        "ledger": "Defects",
+        "number": "2"
+      }
+    ],
+    "through": "Explore",
+    "cycle": {
+      "value": "9ac66998-ea86-4e59-9900-89d02fc68861"
+    },
+    "activeChildren": 0,
+    "stopped": {
+      "reason": "Failure",
+      "detail": "out-of-set change: I1 is outside the advanceable set stored for cycle 1"
+    },
+    "touchedAt": "1791146848945",
+    "stoppedAt": "1791146848945",
+    "revision": {
+      "value": "107"
+    }
+  },
+  "before": "out-of-set-before.json",
+  "after": "out-of-set-after.json",
+  "snapshotScope": "Complete Browse page and unchanged revisions; not raw database bytes."
+}

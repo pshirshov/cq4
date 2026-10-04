@@ -1,0 +1,9 @@
+{
+  "snapshot": "isolation-bound.json",
+  "sessionA": "cb681df6-e2d7-413e-b91c-9be4fa48f748",
+  "keyA": "025c7fb0-fc16-4fd9-8bcf-e404e392a6aa",
+  "sessionB": "e15d0f82-41ed-4817-bbc0-671327cc1fd2",
+  "keyB": "9f225874-cb5b-474e-a977-23133e416466",
+  "observation": "Two real Claude sessions with distinct keys. A remains On for D1 Explore with one managed child while B binds Q1 Plan and stops Quiescent. Park-B verification is pending.",
+  "setupRejectedInputs": "Uppercase through phases were explicitly rejected without driver changes; recorded setup errors do not establish failure-stop acceptance."
+}

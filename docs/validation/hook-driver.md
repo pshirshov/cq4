@@ -28,5 +28,5 @@ For each harness, two interactive sessions ran concurrently in a private tmux se
 
 ## Not covered
 
-- No recorded run of a real harness against a real CQ server and ledger: the "ledger unchanged" failure stops (skipped directive, untracked advance, direct out-of-set write) are shown only by `DriverHookTest` with a simulated model, not by a recorded harness session.
+- This 2026-10-01 record has no run of a real harness against a real CQ server and ledger. In this record, the "ledger unchanged" failure stops (skipped directive, untracked advance, direct out-of-set write) are shown only by `DriverHookTest` with a simulated model. The later record [Real-harness driver cases (T59)](t59-driver-cases-20261004.md) covers them on 2026-10-04 with real Claude Code 2.1.285 and Codex 0.159.2 against private real servers and ledgers (package `e5dba67`). That record also covers two concurrent sessions, park isolation, Resume and consecutive cycles. Its evidence was observed by the governing sessions in private fixtures and has not been independently reread. Its readable projection is in `evidence/t59-driver/`. Resume and consecutive cycles were observed in separate drives of one session, not within one drive.
 - The supervisor settings pins were not changed. `HarnessUsage` already lists Claude Code 2.1.285 and Codex 0.159.2 as supported versions.
