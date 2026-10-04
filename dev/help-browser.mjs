@@ -13,8 +13,9 @@ async function call(command) {
 }
 const project = {value: randomUUID()};
 await call({Initialize: {config: {project, endpoint: origin, name: 'Help catalog fixture'}}});
-// The oracle is the typed catalog read itself, so the scenario holds no command, alias, prompt, schema or tool facts of its own.
+// The typed catalog supplies aliases, prompts, schemas and tool facts; command coverage and invocation syntax are asserted separately.
 const catalog = (await call({Read: {input: {project, selection: {Catalog: {}}}}})).Catalog.value;
+assert.deepEqual(catalog.commands.map(command => command.command), ["begin", "advance", "review", "upstream", "drive", "park"]);
 assert.ok(catalog.commands.length > 0 && catalog.agents.length > 0, 'The fixture catalog must list commands and agents');
 const NAMES = {Claude: 'Claude Code', Codex: 'Codex', Pi: 'Pi'};
 const label = agent => agent.mode === undefined || agent.mode === null ? agent.role : `${agent.role} · ${agent.mode}`;
@@ -83,15 +84,18 @@ try {
         else {
           const rows = await detail.getByRole('table', {name: `Arguments of ${command.command}`, exact: true}).locator('tbody tr')
             .evaluateAll(rows => rows.map(row => [...row.cells].map(cell => cell.textContent)));
-          assert.deepEqual(rows, command.parameters.map(argument => [argument.field, `${argument.flag} ${argument.value}`, argument.required ? 'required' : 'optional',
+          const syntax = command.command === 'drive' ? ['IDS', 'through=PHASE', 'workset=UUID']
+            : command.parameters.map(argument => `${argument.flag} ${argument.value}`);
+          assert.deepEqual(rows, command.parameters.map((argument, index) => [argument.field, syntax[index], argument.required ? 'required' : 'optional',
             argument.summary, argument.choices.join(', '), argument.note ?? '']));
         }
         for (const prompt of [command.template, ...command.instructions])
           assert.equal(await detail.getByLabel(`Prompt ${prompt.resource}`, {exact: true}).first().textContent(), prompt.text);
       }
-      cases.push(`Commands lists ${catalog.commands.length} workflows with descriptions; ${commands.length} checked for harness aliases, alias files, arguments and prompts`);
+      cases.push(`Commands lists ${catalog.commands.length} commands with descriptions; ${commands.length} checked for harness aliases, alias files, arguments and prompts`);
 
       // Overflowing content scrolls inside the body while the header and Close stay in place.
+      await commandList.getByRole('button').first().click();
       const firstPrompt = dialog.getByRole('article').locator('details.help-block').last();
       await firstPrompt.locator('summary').click();
       const before = await dialog.evaluate(node => { const body = node.querySelector(':scope > .dialog-body'); body.scrollTop = 0;

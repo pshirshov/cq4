@@ -7,8 +7,14 @@ import scala.util.Try
 
 /** The drive command's argument text: `<target IDs> through=<phase>` or `workset=<id>`. */
 object DriverArguments {
-  private val Workset = "workset="
-  private val Through = "through="
+  val Targets: WorkflowOption = WorkflowOption("targets", "", "IDS", "Item IDs separated by spaces or commas", Nil)
+  val Through: WorkflowOption = WorkflowOption("through", "through=", "PHASE", "Last phase to advance through", WorkflowPhase.all.map(_.toString.toLowerCase))
+  val Workset: WorkflowOption = WorkflowOption("workset", "workset=", "UUID", "An existing stored workset", Nil)
+  val arguments: List[WorkflowArgument] = List(
+    WorkflowArgument(Targets, false, Some("Required with through; at least one item ID. Omit when using workset.")),
+    WorkflowArgument(Through, false, Some("Required with targets. Omit when using workset.")),
+    WorkflowArgument(Workset, false, Some("Alternative to targets and through; must stand alone.")),
+  )
   private val MaxText = 4096
 
   private def invalid(message: String): Nothing = throw DomainFailure(Fault.Invalid(message))
@@ -16,11 +22,11 @@ object DriverArguments {
   def parse(project: ProjectId, text: String): WorksetTarget = {
     if (text.length > MaxText) invalid(s"Drive arguments exceed $MaxText characters")
     val words = text.split("[\\s,]+").toList.filter(_.nonEmpty)
-    val (worksets, others) = words.partition(_.startsWith(Workset))
-    val (phases, references) = others.partition(_.startsWith(Through))
+    val (worksets, others) = words.partition(_.startsWith(Workset.flag))
+    val (phases, references) = others.partition(_.startsWith(Through.flag))
     if (worksets.nonEmpty) {
       if (worksets.size != 1 || others.nonEmpty) invalid("workset=<id> stands alone; park and drive again to change targets or phase")
-      val id = worksets.head.stripPrefix(Workset)
+      val id = worksets.head.stripPrefix(Workset.flag)
       WorksetTarget.Stored(WorksetId(Try(UUID.fromString(id)).filter(_.toString == id.toLowerCase).getOrElse(invalid(s"Unknown workset ID $id"))))
     } else {
       if (references.isEmpty) invalid("Drive targets are empty; name at least one item ID. Empty targets never mean the whole project")
@@ -32,7 +38,7 @@ object DriverArguments {
       }
       if (targets.distinct.size != targets.size) invalid("Drive targets repeat an item ID")
       if (phases.size != 1) invalid("Drive requires exactly one through=<phase>: explore, plan, work, review or integrate")
-      val name = phases.head.stripPrefix(Through)
+      val name = phases.head.stripPrefix(Through.flag)
       val phase = WorkflowPhase.all.find(_.toString.toLowerCase == name)
         .getOrElse(invalid(s"Unknown through phase $name; expected explore, plan, work, review or integrate"))
       WorksetTarget.Inline(targets.toSet, phase)

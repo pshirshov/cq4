@@ -1,15 +1,15 @@
 package cq.server
 
 import cq.api.*
-import cq.host.{ChildInstructions, HarnessTool, HarnessToolPolicy, McpTarget, ToolAccess, WorkflowArgument, WorkflowAssets, WorkflowCatalog, WorkflowCommand}
+import cq.host.{ChildInstructions, DriverAssets, DriverCommand, PiAssets, HarnessTool, HarnessToolPolicy, McpTarget, ToolAccess, WorkflowArgument, WorkflowAssets, WorkflowCatalog, WorkflowCommand}
 
-/** The typed `ReadSelection.Catalog` view. It only projects the workflow command catalog, the assets `WorkflowAssets` writes from it,
+/** The typed `ReadSelection.Catalog` view. It only projects the workflow and driver command catalogs, their installed assets,
   * and the dispatched agent catalog into the generated cq-api model; it holds no descriptions, aliases, argument docs, prompts, schemas,
   * examples or tool lists of its own. */
 final class CatalogRead(agents: AgentCatalog, workflows: WorkflowAssets) {
   def this(schemas: McpSchemas) = this(new AgentCatalog(schemas, new ChildInstructions()), new WorkflowAssets())
 
-  lazy val value: HelpCatalog = HelpCatalog(WorkflowCatalog.commands.map(command), agents.entries.map(agent))
+  lazy val value: HelpCatalog = HelpCatalog(WorkflowCatalog.commands.map(command) ++ DriverAssets.catalog.map(driver), agents.entries.map(agent))
 
   private def prompt(resource: String): CatalogPrompt = CatalogPrompt(resource, workflows.resource(resource))
 
@@ -24,6 +24,18 @@ final class CatalogRead(agents: AgentCatalog, workflows: WorkflowAssets) {
     }
     CatalogCommand(value.command, value.variant, value.description, value.arguments.map(argument), prompt(value.template),
       value.instructions.map(prompt), aliases)
+  }
+
+  private def driver(value: DriverCommand): CatalogCommand = {
+    val aliases = Harness.all.map { harness =>
+      val written = if (harness == Harness.Pi) PiAssets.extension else {
+        val index = DriverAssets.catalog.indexOf(value)
+        require(index >= 0, s"Driver ${value.command} is absent from its catalog")
+        DriverAssets.commands(harness)(index)
+      }
+      CatalogAlias(harness, DriverAssets.alias(harness, value.name), written.path.toString, written.body)
+    }
+    CatalogCommand(value.command, value.name.toString, value.description, value.arguments.map(argument), prompt(value.template), Nil, aliases)
   }
 
   private def tool(value: HarnessTool): CatalogTool = CatalogTool(value.name, value.access match {

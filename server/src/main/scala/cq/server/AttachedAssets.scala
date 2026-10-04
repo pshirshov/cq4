@@ -1,11 +1,9 @@
 package cq.server
 
 import cq.api.*
-import cq.host.{CommandAsset, DriverAssets, HostFiles, WorkflowAssets}
+import cq.host.{CommandAsset, DriverAssets, HostFiles, PiAssets, WorkflowAssets}
 import io.circe.{Json, parser}
-import java.nio.charset.StandardCharsets.UTF_8
 import java.nio.file.{Files, Path}
-import scala.util.Using
 
 final class AttachedAssets(schemas: McpSchemas, workflows: WorkflowAssets) {
   private val MaxConfigBytes = 1024 * 1024
@@ -13,12 +11,6 @@ final class AttachedAssets(schemas: McpSchemas, workflows: WorkflowAssets) {
   private val ClaudeSettings = Path.of(".claude/settings.local.json")
   private val CodexHooks = Path.of(".codex/hooks.json")
   private def quoted(value: String): String = Json.fromString(value).noSpaces
-  private def resource: String = Using.resource(Option(getClass.getResourceAsStream("/cq/pi-attached.mjs"))
-    .getOrElse(throw new IllegalStateException("Installed Pi attached extension is missing"))) { stream =>
-    val bytes = stream.readNBytes(MaxConfigBytes + 1)
-    require(bytes.length <= MaxConfigBytes, "Installed Pi extension exceeds its byte bound")
-    UTF_8.newDecoder().decode(java.nio.ByteBuffer.wrap(bytes)).toString
-  }
   def write(harness: Harness, root: Path, settingsPath: Path, executable: Path, replace: Boolean, replaceStatusLine: Boolean): List[Path] = {
     require(executable.isAbsolute && Files.isExecutable(executable) && Files.isRegularFile(executable), "CQ executable must be an absolute executable file")
     val settings = HostFiles.read(settingsPath, SupervisorSettings_JsonCodec, MaxConfigBytes)
@@ -64,7 +56,7 @@ final class AttachedAssets(schemas: McpSchemas, workflows: WorkflowAssets) {
         List(CommandAsset(Path.of(".codex/config.toml"), body),
           CommandAsset(CodexHooks, DriverAssets.hooks(hooks, executable, harness, CodexHooks.toString).spaces2 + "\n"))
       case Harness.Pi =>
-        List(CommandAsset(Path.of(".pi/extensions/cq-host.js"), resource),
+        List(PiAssets.extension,
           CommandAsset(Path.of(".pi/extensions/cq-host.json"), command.deepMerge(Json.obj("directory" -> Json.fromString(root.toString),
             "tools" -> Json.arr(schemas.attachedTools*))).spaces2 + "\n"))
     }
