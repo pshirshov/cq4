@@ -69,13 +69,13 @@ Nothing in `dev/` drove a full interactive planning, implementation and follow-u
 
 ### Where the harness runs
 
-The driver session runs inside the `yolo` sandbox. The recorded sessions were started from inside that sandbox, as children of the tmux server: `launch-codex.sh` says "Already inside the yolo sandbox". No second `yolo` is started; G4 records that a nested `yolo` fails on `/run/nscd`. A launch from a host shell uses `yolo --profile work --env CQ_TOKEN_FILE=… <harness>` as in [Run CQ inside your normal harness](interactive.md); the driver session cannot do that itself.
+The driver session runs inside the `yolo` sandbox. The recorded sessions were started from inside that sandbox, as children of the tmux server: `launch-codex.sh` says "Already inside the yolo sandbox". No second `yolo` is started; G4 records that a nested `yolo` fails on `/run/nscd`. A launch from a host shell uses `yolo --profile work --env CQ_TOKEN_FILE=… <harness>` with the harness tool name, as in [Run CQ inside your normal harness](interactive.md). To run an exact executable path instead, use `yolo … cmd <path> …`, as the host launcher below does. The driver session cannot launch from a host shell itself.
 
 There are two allowed launch methods. The report names the one used.
 
 | Method | How | Evidence |
 | --- | --- | --- |
-| Host launcher | The operator starts a launcher from a host shell, with `SMIND_SANDBOXED` unset. It owns a private tmux socket and asciinema v3 recordings. It runs each harness through the documented `yolo cmd` form with the exact pinned executable path, a private configuration and the token and settings files named by path. | RS2 revision 4, 2026-10-04. Claude Code 2.1.285, Codex 0.159.2 and Pi 0.99.1 each connected to the private real CQ server: Claude `/mcp` and Codex `/mcp` showed `cq` connected with nine tools, and Pi loaded its generated extension. Each performed CQ Context and a Begin activation and recorded I1 Proposed in its own private consumer. Each exited 0 (`x=0`), uploaded every retained session with exit 0, and returned `EvaluationOnly` usage. Afterwards there were 0 active claims, 0 managed attempts and 0 pending integrations. Codex folder trust and its two hooks were approved explicitly; Claude showed no new MCP dialog. An earlier launcher passed the executable paths as yolo tool names, and its launches were rejected. Those failed launches and their recordings are preserved. Evidence root: `/srv/nvme/tmp/cq4-final-wave-20261004/evaluations/host-launch-probes-v2` (private). The governing session observed it. |
+| Host launcher | The operator starts a launcher from a host shell, with `SMIND_SANDBOXED` unset. It owns a private tmux socket and asciinema v3 recordings. It runs each harness through the documented `yolo cmd` form with the exact pinned executable path, a private configuration and the token and settings files named by path. The recorded commands are in [Host-launcher commands](#host-launcher-commands-rs2-revision-4). | RS2 revision 4, 2026-10-04. Claude Code 2.1.285, Codex 0.159.2 and Pi 0.99.1 each connected to the private real CQ server: Claude `/mcp` and Codex `/mcp` showed `cq` connected with nine tools, and Pi loaded its generated extension. Each performed CQ Context and a Begin activation and recorded I1 Proposed in its own private consumer. Each exited 0 (`x=0`), uploaded every retained session with exit 0, and returned `EvaluationOnly` usage. Afterwards there were 0 active claims, 0 managed attempts and 0 pending integrations. Codex folder trust and its two hooks were approved explicitly; Claude showed no new MCP dialog. An earlier launcher passed the executable paths as yolo tool names, and its launches were rejected. Those failed launches and their recordings are preserved. Evidence root: `/srv/nvme/tmp/cq4-final-wave-20261004/evaluations/host-launch-probes-v2` (private). The governing session observed it. |
 | Existing yolo session | The driver session starts the harness inside its own yolo sandbox as a child of the private tmux server, as described above. | The T59/T60 preparatory Pi, Codex and Claude consumer runs of 2026-10-04 and the earlier governing sessions. |
 
 The host-launcher probes are Q43 short probes. They establish launch and connection, not full matrix qualification or complete usage.
@@ -117,6 +117,40 @@ A session counts as idle when the busy text has been absent for 60 seconds (`gov
 | Prompts at launch | With the approval written by `cq configure`, none ("the host loads with no dialog", [defect corrections](validation/defect-fixes-20260930.md)). `gov/start.sh` still handles `New MCP server found` with `Up`, `Up`, `Enter`. `Teach auto mode` was answered with `Down`, `Enter`. | Project trust, once per `CODEX_HOME`; then `/hooks`, which shows `2 hooks need review before they can run`, answered with `t` (trust all). Both are stored in the private `config.toml`, so later launches show neither. If Codex lists a personal and a project skill of one name, select the project one. | None seen with `--approve`. |
 | Check that `cq` is connected | `/mcp`, `Enter`; the screen must match `✔ cq +[0-9]+ tools` (`gov/start.sh`), then `Escape`. Nine tools were listed on the installed release. | `/mcp` must list `cq`. Not scripted so far: for the recorded Codex drive the only connection evidence is its `cq` tool calls (`Called cq.session` in `gov/drive4-final-screen.txt`). | The footer reads `CQ driver off` once `cq-host.js` is loaded ([Pi extension driver](validation/pi-driver.md), stub backend). That footer alone shows the extension, so also verify an actual CQ Context call. RS2 revision 4 records Pi 0.99.1 reaching CQ Context against a private real server from the host launcher. |
 | Workflow commands | `/cq:begin`, `/cq:advance`, `/cq:drive`, `/cq:park` | `$cq-begin`, `$cq-advance`, `$cq-drive`, `$cq-park` | As Claude Code |
+
+The commands in this table are the existing-yolo method: inside the driver's sandbox, the harness is found on `PATH`. The host launcher uses the exact pinned paths below.
+
+### Host-launcher commands (RS2 revision 4)
+
+These are the commands the RS2 revision 4 launcher wrote and ran. The launcher is the private script `/srv/nvme/tmp/cq4-final-wave-20261004/evaluations/host-launch-v2.py`. For each harness it wrote `host-launch-probes-v2/<harness>/launch.sh` and started that script under asciinema in the private tmux server. The paths are copied from those recorded files. `EVAL` stands for `/srv/nvme/tmp/cq4-final-wave-20261004/evaluations`, and `FIXTURE` stands for `EVAL/host-launch-probes-v2`.
+
+1. Run it from a host shell. It asserts that `SMIND_SANDBOXED` is unset.
+2. It builds the child environment without any variable that starts with `CQ_`, `CLAUDE`, `ANTHROPIC`, `OPENAI`, `CODEX` or `PI_`. It then sets the private configuration directories `CODEX_HOME=EVAL/codex-config`, `CLAUDE_CONFIG_DIR=EVAL/claude-config` and `PI_CODING_AGENT_DIR=EVAL/pi-config`, and `CQ_TOKEN_FILE=EVAL/claude-refreshed/token`. The token file is checked to be mode `0600` or stricter, and it is only ever named by its path.
+3. For each harness it creates `FIXTURE/<harness>/consumer`, a git repository on `main` with a `cq-result` branch. It writes `FIXTURE/<harness>/settings.json` with mode `0600`, using the evaluation tag `{"run": "eval-20261004-host-launch", "scenario": "<harness>-launch"}` and `"checks": []`. It then runs `<release>/bin/cq init --endpoint <origin> --name …` and `<release>/bin/cq configure <harness> --settings FIXTURE/<harness>/settings.json` in that repository. The release was `release-e5dba67` and the origin was `http://127.0.0.1:39393`.
+4. It starts each session with `/nix/store/499dwp4ljzzbx5i5fhlxm6lwzncgqz61-tmux-3.7c/bin/tmux -S FIXTURE/tmux.sock new-session -d -s rs2-<harness> -x 200 -y 55 -- asciinema rec -q FIXTURE/<harness>/session.cast -c FIXTURE/<harness>/launch.sh`.
+
+Each `launch.sh` does `cd -- FIXTURE/<harness>/consumer` and then `exec`s this command:
+
+```
+/etc/profiles/per-user/pavel/bin/yolo --profile work \
+  --env CQ_TOKEN_FILE=EVAL/claude-refreshed/token --rw FIXTURE \
+  --env CODEX_HOME=EVAL/codex-config --rw EVAL/codex-config \
+  --env CLAUDE_CONFIG_DIR=EVAL/claude-config --rw EVAL/claude-config \
+  --env PI_CODING_AGENT_DIR=EVAL/pi-config --rw EVAL/pi-config \
+  cmd <harness command>
+```
+
+| Harness | `<harness command>` as recorded |
+| --- | --- |
+| Claude Code 2.1.285 | `/nix/store/wa2y85js0ifyxbzvj56ki4gqknrkpi2x-claude-code-2.1.285/bin/claude --setting-sources project,local --model opus` |
+| Codex 0.159.2 | `/nix/store/x6d4jbnav6z3398y1fjs0yay3wf2j0p0-codex-0.159.2/bin/codex --no-daemon --dangerously-bypass-approvals-and-sandbox --model gpt-6.1-sol` |
+| Pi 0.99.1 | `/nix/store/6v3ax4h8wsnmn0nhz4c62hbahmmj39mf-pi-coding-agent-0.99.1/bin/pi --offline --approve --no-prompt-templates --prompt-template .pi/prompts --provider openai-codex --model gpt-6.1-sol` |
+
+The executable paths are the `executable` values of the harness routes in the settings file. All three sessions are passed all three configuration directories.
+
+The launches were checked as follows. The retained connection screens show `✔ cq 9 tools` for Claude and `CQ driver off` for Pi. The retained Codex screens do not contain the `/mcp` listing; its connection rests on the RS2 revision 4 record. `FIXTURE/probe-summary.json` records upload exit 0 for every session, and 0 active claims, 0 managed attempts and 0 pending integrations for each harness. RS2 revision 4 records CQ Context, a Begin and exit 0 for each harness. These are the observations of the governing session, not an independent rerun. The model names and the Pi provider are the ones used on 2026-10-04 and are not requirements.
+
+The first launcher, `host-launch.py`, differed only in two places. It wrote to `host-launch-probes`, and it appended the harness command without `cmd`, so yolo took the executable path as a tool name and rejected the launch. Those failed launches and their recordings stay preserved.
 
 If the connection check fails, the run ends in S0 as a launch failure. A missing token, an uninitialised project or a harness version outside the verified set makes `cq host` answer `initialize` with error `-32003` and one line naming the cause, and exit 78 ([interactive](interactive.md)).
 
