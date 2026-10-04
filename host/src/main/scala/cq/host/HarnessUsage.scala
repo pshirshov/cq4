@@ -159,7 +159,8 @@ object HarnessUsage {
     private var terminal = false
     private var failed = false
     // Pi recovery is independent of usage completeness and of unrelated native failures.
-    private final case class PiRetry(attempt: Option[Long] = None, responseSeen: Boolean = false, endSeen: Boolean = false)
+    private val FirstPiRetryAttempt = 1L
+    private final case class PiRetry(attempt: Option[Long], awaitingStart: Boolean, responseSeen: Boolean, endSeen: Boolean)
     private var piRetry = Option.empty[PiRetry]
     private def finishPiRetry(): Unit = {
       if (piRetry.exists(retry => retry.responseSeen && retry.endSeen)) piRetry = None
@@ -283,14 +284,17 @@ object HarnessUsage {
         terminal = false
         val attempt = json.hcursor.get[Long]("attempt").toOption.filter(_ > 0)
         piRetry match {
-          case Some(retry) if retry.attempt.isEmpty && attempt.nonEmpty => piRetry = Some(retry.copy(attempt = attempt))
+          case Some(retry) if retry.awaitingStart && attempt.exists(next => retry.attempt match {
+              case None => next == FirstPiRetryAttempt
+              case Some(previous) => previous < Long.MaxValue && next == previous + FirstPiRetryAttempt
+            }) => piRetry = Some(retry.copy(attempt = attempt, awaitingStart = false))
           case _ => failed = true // An unmatched marker cannot forgive a native failure.
         }
       case "auto_retry_end" =>
         terminal = false
         val attempt = json.hcursor.get[Long]("attempt").toOption.filter(_ > 0)
         piRetry match {
-          case Some(retry) if retry.attempt.nonEmpty && retry.attempt == attempt && !retry.endSeen &&
+          case Some(retry) if retry.attempt.nonEmpty && retry.attempt == attempt && !retry.awaitingStart && !retry.endSeen &&
               json.hcursor.get[Boolean]("success").contains(true) =>
             piRetry = Some(retry.copy(endSeen = true))
             finishPiRetry()
@@ -322,12 +326,19 @@ object HarnessUsage {
               val money = usage.hcursor.downField("cost").focus.fold(UsageMath.unknownMoney)(value => cost(value, "total", true))
               val stop = message.hcursor.get[String]("stopReason").toOption
               if (stop.exists(Set("error", "aborted"))) {
-                // Only this response can be recovered. Earlier unresolved failures stay sticky.
-                if (piRetry.nonEmpty || stop.contains("aborted")) failed = true
-                piRetry = if (stop.contains("error")) Some(PiRetry()) else None
+                piRetry match {
+                  // A failed active attempt can advance the same chain, but only after a new start.
+                  case Some(retry) if stop.contains("error") && retry.attempt.nonEmpty &&
+                      !retry.awaitingStart && !retry.responseSeen && !retry.endSeen =>
+                    piRetry = Some(retry.copy(awaitingStart = true))
+                  case _ =>
+                    // Failures outside an active attempt and all aborts remain sticky.
+                    if (piRetry.nonEmpty || stop.contains("aborted")) failed = true
+                    piRetry = if (stop.contains("error")) Some(PiRetry(None, true, false, false)) else None
+                }
                 gap("Pi reported an interrupted or failed response; final usage may be missing")
               } else if (stop.exists(Set("stop", "toolUse", "length"))) {
-                piRetry.filter(_.attempt.nonEmpty).foreach { retry =>
+                piRetry.filter(retry => retry.attempt.nonEmpty && !retry.awaitingStart).foreach { retry =>
                   // Pi 0.99.1 emits the response before retry_end; also accept the reverse order.
                   piRetry = Some(retry.copy(responseSeen = true))
                   finishPiRetry()

@@ -174,15 +174,23 @@ final class HarnessUsageLocal extends AnyWordSpec {
       val toolResponse = change(response, "message", change(change(response.hcursor.downField("message").focus.get,
         "stopReason", Json.fromString("toolUse")), "responseId", Json.fromString("synthetic-tool-response")))
       val nextTurn = Json.obj("type" -> Json.fromString("turn_start"))
-      List((List(response, end), 1), (List(end, response), 1),
-        (List(toolResponse, end, nextTurn, response), 2)).foreach { case (recovery, successfulResponses) =>
+      val intermediateError = change(error, "message", change(error.hcursor.downField("message").focus.get,
+        "responseId", Json.fromString("synthetic-intermediate-error")))
+      val secondStart = change(start, "attempt", Json.fromLong(2))
+      val secondEnd = change(end, "attempt", Json.fromLong(2))
+      List((List(response, end), 1, 1), (List(end, response), 1, 1),
+        (List(toolResponse, end, nextTurn, response), 2, 1),
+        (List(intermediateError, secondStart, response, secondEnd, intermediateError), 1, 2),
+        (List(intermediateError, secondStart, secondEnd, response), 1, 2))
+        .foreach { case (recovery, successfulResponses, failedResponses) =>
         val report = collect(stream(prefix ++ List(error, start) ++ recovery ++ List(response, error, settled)), request(Harness.Pi))
         assert(report.terminalSeen && !report.nativeFailure)
         assert(report.gaps.exists(_.contains("interrupted or failed response")))
-        assert(report.meters.size == 1 && report.meters.head.observations.size == 1 + successfulResponses)
+        assert(report.meters.size == 1 && report.meters.head.observations.size == failedResponses + successfulResponses)
         assert(total(report) == 78 * successfulResponses)
         val observations = report.meters.head.observations.map(_.observation)
-        assert(observations.head.counters == UsageMath.missingCounts && observations.head.cost == UsageMath.unknownMoney)
+        assert(observations.take(failedResponses).forall(observation =>
+          observation.counters == UsageMath.missingCounts && observation.cost == UsageMath.unknownMoney))
         assert(observations.last.counters.input.value.contains(69) && observations.last.counters.output.value.contains(9))
         assert(observations.last.counters.cacheRead.value.isEmpty && observations.last.counters.reasoning.value.isEmpty)
         assert(observations.last.cost.amount.contains(DecimalAmount("0.000615")))
@@ -192,11 +200,28 @@ final class HarnessUsageLocal extends AnyWordSpec {
 
     "reject Pi failures without complete retry recovery" in {
       val (prefix, error, start, end, response, settled) = syntheticPiRetry
-      val abort = change(error, "message", change(error.hcursor.downField("message").focus.get, "stopReason", Json.fromString("aborted")))
+      val abort = change(error, "message", change(change(error.hcursor.downField("message").focus.get,
+        "stopReason", Json.fromString("aborted")), "responseId", Json.fromString("synthetic-aborted-response")))
       val otherError = change(error, "message", change(error.hcursor.downField("message").focus.get, "responseId", Json.fromString("synthetic-unrelated-error")))
       val recovery = List(error, start, response, end, settled)
       val cases = List(
         "absent recovery" -> List(error, response, settled),
+        "skipped initial attempt" -> List(error, change(start, "attempt", Json.fromLong(2)), response,
+          change(end, "attempt", Json.fromLong(2)), settled),
+        "skipped chain attempt" -> List(error, start, otherError, change(start, "attempt", Json.fromLong(3)),
+          response, change(end, "attempt", Json.fromLong(3)), settled),
+        "regressed chain attempt" -> List(error, start, otherError, start, response, end, settled),
+        "advance without failed response" -> List(error, start, change(start, "attempt", Json.fromLong(2)),
+          response, change(end, "attempt", Json.fromLong(2)), settled),
+        "exhausted chain" -> List(error, start, otherError, change(start, "attempt", Json.fromLong(2)),
+          change(end, "attempt", Json.fromLong(2)).mapObject(_.add("success", Json.False)), settled),
+        "unfinished chain" -> List(error, start, otherError, change(start, "attempt", Json.fromLong(2)), settled),
+        "response before next start" -> List(error, start, otherError, response, change(start, "attempt", Json.fromLong(2)),
+          change(end, "attempt", Json.fromLong(2)), settled),
+        "abort in chain" -> List(error, start, abort, change(start, "attempt", Json.fromLong(2)),
+          response, change(end, "attempt", Json.fromLong(2)), settled),
+        "error after successful response before end" -> List(error, start, response, otherError,
+          change(start, "attempt", Json.fromLong(2)), response, change(end, "attempt", Json.fromLong(2)), settled),
         "unsuccessful end" -> List(error, start, response, change(end, "success", Json.False), settled),
         "missing end" -> List(error, start, response, settled),
         "missing start" -> List(error, end, response, settled),
