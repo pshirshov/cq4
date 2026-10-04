@@ -144,7 +144,7 @@ export class HelpDialog {
         command.aliases.map(alias => [harnessName(alias.harness), alias.alias, alias.path]));
       const arguments_ = command.parameters.length === 0 ? element('p', 'Takes no arguments.')
         : table(`Arguments of ${command.command}`, ['Field', 'Option', 'Required', 'Description', 'Choices', 'Note'],
-          command.parameters.map(argument => [argument.field, `${argument.flag} ${argument.value}`, argument.required ? 'required' : 'optional',
+          command.parameters.map(argument => [argument.field, `${argument.flag}${argument.flag === '' || argument.flag.endsWith('=') ? '' : ' '}${argument.value}`, argument.required ? 'required' : 'optional',
             argument.summary, argument.choices.join(', '), argument.note ?? '']));
       detail.append(
         element('h2', `${command.command} · ${command.variant}`), element('p', command.description),

@@ -34,7 +34,7 @@ final class CatalogReadLocal extends AnyWordSpec {
 
   "Typed catalog read (Behavioral Active Blackbox Group)" should {
     "return every aliased workflow command and every DispatchWork role-mode entry on every harness" in {
-      assert(catalog.commands.map(_.command) == List("begin", "advance", "review", "upstream"))
+      assert(catalog.commands.map(_.command) == List("begin", "advance", "review", "upstream", "drive", "park"))
       catalog.commands.foreach(command => assert(command.aliases.map(_.harness) == Harness.all, command.command))
       val works = ExplorerMode.all.map(DispatchWork.Explorer.apply) ++ List(DispatchWork.Planner()) ++
         WorkerMode.all.map(DispatchWork.Worker.apply) ++ ReviewerMode.all.map(DispatchWork.Reviewer.apply)
@@ -53,8 +53,9 @@ final class CatalogReadLocal extends AnyWordSpec {
     }
 
     "carry exactly the command catalog's descriptions, aliases, argument docs and prompts, and the assets WorkflowAssets writes" in {
-      assert(catalog.commands.size == WorkflowCatalog.commands.size)
-      catalog.commands.zip(WorkflowCatalog.commands).foreach { (view, source) =>
+      val workflows = catalog.commands.filter(view => WorkflowCatalog.named(view.command).nonEmpty)
+      assert(workflows.size == WorkflowCatalog.commands.size)
+      workflows.zip(WorkflowCatalog.commands).foreach { (view, source) =>
         withClue(s"${source.command}: ") {
           assert(view.command == source.command && view.variant == source.variant && view.description == source.description)
           assert(view.parameters == source.arguments.map(argument => CatalogArgument(argument.option.field, argument.option.flag,
@@ -63,11 +64,51 @@ final class CatalogReadLocal extends AnyWordSpec {
           assert(view.instructions == source.instructions.map(path => CatalogPrompt(path, resource(path))))
           Harness.all.foreach { harness =>
             val alias = source.alias(harness)
-            val written = workflows.commands(harness).filter(_.path == alias.path)
+            val written = this.workflows.commands(harness).filter(_.path == alias.path)
             assert(written.size == 1)
             assert(view.aliases.filter(_.harness == harness) == List(CatalogAlias(harness, alias.alias, alias.path.toString, written.head.body)))
           }
         }
+      }
+    }
+
+    "include drive and park with their actual hook assets and Pi extension aliases" in {
+      val drivers = catalog.commands.filter(view => Set("drive", "park").contains(view.command))
+      assert(drivers.map(_.command) == List("drive", "park"))
+      assert(drivers.size == DriverAssets.catalog.size)
+      drivers.zip(DriverAssets.catalog).foreach { (view, source) =>
+        assert(view.command == source.command && view.variant == source.name.toString && view.description == source.description)
+        assert(view.template == CatalogPrompt(source.template, resource(source.template)))
+        assert(view.parameters == source.arguments.map(argument => CatalogArgument(argument.option.field, argument.option.flag,
+          argument.option.value, argument.option.summary, argument.option.choices, argument.required, argument.note)))
+        assert(view.aliases.map(_.harness) == Harness.all)
+        assert(view.template.text.nonEmpty)
+        view.aliases.foreach { alias =>
+          if (alias.harness == Harness.Pi) {
+            assert(alias.alias == s"/cq:${view.command}" && alias.path == ".pi/extensions/cq-host.js")
+            assert(alias.body == resource("cq/pi-attached.mjs"))
+            assert(alias.body.contains(s"pi.registerCommand(\"cq:${view.command}\""))
+          } else {
+            val asset = DriverAssets.commands(alias.harness).find(_.path.toString == alias.path).get
+            assert(alias.body == asset.body)
+            assert(alias.alias == (if (alias.harness == Harness.Claude) s"/cq:${view.command}" else s"$$cq-${view.command}"))
+          }
+        }
+      }
+      val drive = drivers.head
+      assert(drive.parameters.map(_.field) == List("targets", "through", "workset"))
+      assert(drive.parameters.find(_.field == "through").get.choices == WorkflowPhase.all.map(_.toString.toLowerCase))
+      assert(drive.parameters.forall(_.note.nonEmpty))
+      assert(drivers.last.parameters.isEmpty)
+    }
+
+    "declare every driver template in native-image resource metadata" in {
+      val metadata = parsed(resource("META-INF/native-image/cq/workflows/reachability-metadata.json"))
+      val globs = metadata.hcursor.get[List[Json]]("resources").fold(throw _, identity)
+        .map(_.hcursor.get[String]("glob").fold(throw _, identity))
+      DriverAssets.catalog.foreach { command =>
+        assert(globs.exists(glob => java.nio.file.FileSystems.getDefault.getPathMatcher(s"glob:$glob")
+          .matches(java.nio.file.Path.of(command.template))), command.template)
       }
     }
 

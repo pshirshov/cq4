@@ -3,6 +3,7 @@ import { build } from 'esbuild';
 import { chromium } from 'playwright';
 import { readFile } from 'node:fs/promises';
 const bundle = await build({ stdin: { contents: `export * as api from './generated/typescript/cq/api/index.js';
+export { QuestionBatch } from './web/src/questions.js'; export { itemView } from './web/src/presentation.js';
 export { ReferencePopup } from './web/src/references.js'; export { RequirementsDialog } from './web/src/requirements.js';`,
   resolveDir: process.cwd() }, bundle: true, format: 'iife', globalName: 'CQComponents', write: false });
 const browser = await chromium.launch({ headless: true });
@@ -31,6 +32,60 @@ try {
       code: ['D70', 'D123'], references: ['D127'], guide: 'https://example.com/D1', script: 0, unsafe: 0 });
     if (process.env.CQ_BROWSER_EVIDENCE !== undefined) await page.screenshot({ path: process.env.CQ_BROWSER_EVIDENCE + '/markdown-components.png', fullPage: true });
     console.log('PASS: Markdown formatting, code/reference boundaries and inert unsafe content');
+  }
+  if (process.argv.includes('--question-options')) {
+    await page.evaluate(() => {
+      const { api, QuestionBatch, ReferencePopup, itemView } = CQComponents;
+      const uuid = '00000000-0000-4000-8000-000000000001';
+      const project = new api.ProjectId(uuid), id = new api.ItemId(project, api.Ledger.Questions, 1n), revision = new api.Revision(1n);
+      const alternatives = ['Relax planning and phase order; retain isolated Workers, independent review and host validation.',
+        '**First paragraph.**\n\nSecond paragraph.\n\n- Preserve this list'];
+      const draft = new api.ItemDraft('Choice layout', '', new Set(), false,
+        new api.Content_Question(api.QuestionStatus.Open, 'Choose a mode', '', alternatives,
+          new api.QuestionRecommendation(0, 'Keep the ledger current.'), undefined), []);
+      const item = new api.Item(id, revision, draft, 0n, 0n,
+        new api.Provenance(new api.Actor('fixture', new api.SessionId(uuid), api.Role.Governor), 0n, new api.RequestId(uuid)));
+      const summary = new api.ItemSummary(id, revision, draft.title, 'Open', false, new Set(), 0n, new api.ItemOutcome(false, false));
+      const call = async command => {
+        if (command instanceof api.Command_Search) return new api.Result_Found(new api.ItemPage([summary], new api.ChangeCursor(1n), undefined, false));
+        if (command instanceof api.Command_Read) return new api.Result_Detail(new api.ItemView(item, []));
+        throw new Error('Unexpected fixture command');
+      };
+      const popup = new ReferencePopup(call);
+      const storage = { length: 0, getItem: () => null, setItem: () => {}, key: () => null };
+      const questions = new QuestionBatch({ call, view: value => itemView(value.draft, text => popup.render(project, text)),
+        committed: async () => { throw new Error('Unexpected commit'); } }, storage);
+      document.body.append(questions.dialog.element); questions.open(project);
+    });
+    const choices = page.locator('.answer-alternative');
+    await choices.first().waitFor();
+    for (const width of [1366, 1280, 640]) {
+      await page.setViewportSize({ width, height: 768 });
+      const layout = await choices.first().evaluate(row => {
+        const pick = row.querySelector('button').getBoundingClientRect();
+        const paragraph = row.querySelector('p');
+        const range = document.createRange(); range.selectNodeContents(paragraph);
+        const lines = [...range.getClientRects()].filter(rect => rect.width > 0);
+        const badge = row.querySelector('.recommended-badge').getBoundingClientRect();
+        return { pick: {top: pick.top, bottom: pick.bottom}, lines: lines.map(rect => ({top: rect.top, bottom: rect.bottom})),
+          badge: {top: badge.top, bottom: badge.bottom}, text: row.innerText };
+      });
+      console.log(JSON.stringify({ width, layout }));
+      assert.ok(layout.pick.bottom > layout.lines[0].top && layout.lines[0].bottom > layout.pick.top,
+        'Pick must share the first text line instead of forcing a separate line');
+      if (width >= 1280) assert.ok(layout.badge.bottom > layout.lines.at(-1).top && layout.lines.at(-1).bottom > layout.badge.top,
+        'Recommended must share the last text line when there is room');
+    }
+    const blocks = await choices.nth(1).evaluate(row => {
+      const paragraphs = [...row.querySelectorAll(':scope > p')];
+      return { strong: row.querySelector('strong').textContent, paragraphs: paragraphs.map(p => p.textContent),
+        separated: paragraphs[1].getBoundingClientRect().top > paragraphs[0].getBoundingClientRect().bottom,
+        list: row.querySelector('ul li').textContent };
+    });
+    assert.deepEqual(blocks, { strong: 'First paragraph.', paragraphs: ['First paragraph.', 'Second paragraph.'], separated: true, list: 'Preserve this list' });
+    await choices.nth(1).getByRole('button').click();
+    assert.equal(await page.getByRole('textbox', {name: 'Answer', exact: true}).inputValue(), '**First paragraph.**\n\nSecond paragraph.\n\n- Preserve this list');
+    console.log('PASS: choice controls share text lines; intentional Markdown blocks and Pick behavior remain intact');
   }
   if (process.argv.includes('--requirements')) {
     await page.evaluate(() => {

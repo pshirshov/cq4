@@ -4,6 +4,11 @@ import cq.api.*
 import io.circe.Json
 import java.nio.file.Path
 
+enum DriverCommandName { case Drive, Park }
+final case class DriverCommand(name: DriverCommandName, description: String, arguments: List[WorkflowArgument], template: String) {
+  def command: String = name.toString.toLowerCase
+}
+
 /**
  * What `cq configure` installs for the hook-driven harnesses (Claude Code and Codex): the drive and park command or skill files, and the
  * CQ entries it merges into harness-owned hook configuration. A CQ entry is recognised by its whole command: one executable followed by
@@ -14,21 +19,22 @@ object DriverAssets {
   val Hooks: List[DriverOrigin] = List(DriverOrigin.UserPromptSubmit, DriverOrigin.Stop)
   val StatusLineFlag = "--replace-statusline"
 
-  private val Drive = """The CQ UserPromptSubmit hook handled this {{COMMAND}} for this session before you saw it. Its result is in this turn's context as a block that begins `{{DRIVE}}`. This {{KIND}} cannot start or park a driver, and neither can you: only the CQ hooks do.
+  val catalog: List[DriverCommand] = List(
+    DriverCommand(DriverCommandName.Drive, "Turn the CQ auto-driver on for <target IDs> through=<phase> or workset=<id>",
+      DriverArguments.arguments, "cq/driver/drive.md"),
+    DriverCommand(DriverCommandName.Park, "Turn the CQ auto-driver off for this session", Nil, "cq/driver/park.md"),
+  )
 
-1. Find that block. If it is absent, report that the CQ hooks are not active in this session ({{PRECONDITION}}) and stop.
-2. If the block reports a rejection, show it to the user verbatim and stop.
-3. Otherwise show the user the block's preview: the advanceable items, the context-only items and the readiness reasons.
-4. Call the CQ `session` tool exactly once with the Bind request printed in the block, using the bind token of this turn only. Show the status line of its reply, or the refusal if the bind is refused.
-5. End your turn without calling any other CQ tool. The CQ Stop hook then supplies each advance directive; run a directive only when the hook gives you one, exactly as given.
-"""
-
-  private val Park = """The CQ UserPromptSubmit hook handled this {{COMMAND}} for this session before you saw it. Its result is in this turn's context as a block that begins `{{PARK}}`. This {{KIND}} cannot start or park a driver, and neither can you: only the CQ hooks do.
-
-1. Find that block. If it is absent, report that the CQ hooks are not active in this session ({{PRECONDITION}}) and stop.
-2. Show the block to the user verbatim.
-3. Call the CQ `session` tool with `{"Driver":{}}` and show the status line of its reply, then end your turn.
-"""
+  def alias(harness: Harness, name: DriverCommandName): String = harness match {
+    case Harness.Pi => s"/cq:${name.toString.toLowerCase}"
+    case _ =>
+      val dialect = DriverHook.Dialects.find(_.harness == harness)
+        .getOrElse(throw new IllegalStateException(s"$harness has no CQ hook dialect"))
+      name match {
+        case DriverCommandName.Drive => dialect.drive
+        case DriverCommandName.Park => dialect.park
+      }
+  }
 
   private final case class Wording(kind: String, precondition: String, asset: (String, String, String) => CommandAsset)
 
@@ -43,11 +49,11 @@ object DriverAssets {
 
   /** The drive and park command files (Claude Code) or skills (Codex). */
   def commands(harness: Harness): List[CommandAsset] = wording(harness).toList.flatMap { wording =>
-    val dialect = DriverHook.Dialects.find(_.harness == harness).getOrElse(throw new IllegalStateException(s"$harness has no CQ hook dialect"))
-    List(("drive", dialect.drive, Drive, "Turn the CQ auto-driver on for <target IDs> through=<phase> or workset=<id>"),
-      ("park", dialect.park, Park, "Turn the CQ auto-driver off for this session")).map { (name, command, template, description) =>
-      wording.asset(name, description, template.replace("{{COMMAND}}", command).replace("{{KIND}}", wording.kind)
-        .replace("{{DRIVE}}", DriverHook.DriveLabel).replace("{{PARK}}", DriverHook.ParkLabel).replace("{{PRECONDITION}}", wording.precondition))
+    val resources = new WorkflowAssets()
+    catalog.map { entry =>
+      wording.asset(entry.command, entry.description, resources.resource(entry.template).replace("{{COMMAND}}", alias(harness, entry.name))
+        .replace("{{KIND}}", wording.kind).replace("{{DRIVE}}", DriverHook.DriveLabel).replace("{{PARK}}", DriverHook.ParkLabel)
+        .replace("{{PRECONDITION}}", wording.precondition))
     }
   }
 
