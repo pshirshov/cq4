@@ -1,0 +1,147 @@
+{
+  "fixture": "codex-recorded (real Codex 0.159.2, private server and ledger, 2026-10-04)",
+  "method": "As in claude-cycles-activation-crosswalk.json: issued directives from the terminal recordings, accepted activations from the workflow records of the attached host session directories; a start directive is paired with the next workflow record within one minute.",
+  "recordings": {
+    "main": {
+      "recording": "session-cq-only.cast",
+      "recordingSha256": "932576383257b03a60e6760463326f0939f542b2e31c290b350c435b4eb83bd5",
+      "activations": [
+        {
+          "issued": {
+            "kind": "start",
+            "token": "afd27262-805c-490a-a2ee-fc5901d439c6",
+            "shownAtEpochSeconds": 1791123407
+          },
+          "accepted": {
+            "attachedSession": "d965219b-2484-4562-9312-b11fc01576bd",
+            "run": "dd3fca96-97f5-4eec-a082-efc7a09234ca",
+            "workflow": "Advance",
+            "roots": [
+              "Ideas 1"
+            ],
+            "through": "Plan",
+            "cycle": "39a1b469-5913-4c38-a8ff-b1e292893c73",
+            "recordedAtEpochSeconds": 1791123419
+          }
+        },
+        {
+          "issued": {
+            "kind": "start",
+            "token": "499a8060-663c-423e-9d85-6f080d84fc2a",
+            "shownAtEpochSeconds": 1791123744
+          },
+          "accepted": {
+            "attachedSession": "d965219b-2484-4562-9312-b11fc01576bd",
+            "run": "5d8c438a-873f-4c1e-a5be-f2d8615f0231",
+            "workflow": "Advance",
+            "roots": [
+              "Ideas 1"
+            ],
+            "through": "Plan",
+            "cycle": "a26826e9-7924-4b21-9f93-10a5d733f2dd",
+            "recordedAtEpochSeconds": 1791123755
+          }
+        },
+        {
+          "issued": {
+            "kind": "start",
+            "token": "aafaa66b-e919-4ecc-9dfa-d964c4224c34",
+            "shownAtEpochSeconds": 1791124791
+          },
+          "accepted": {
+            "attachedSession": "d965219b-2484-4562-9312-b11fc01576bd",
+            "run": "3f0ce894-0b16-4abc-b15a-32ad93abad48",
+            "workflow": "Advance",
+            "roots": [
+              "Ideas 1"
+            ],
+            "through": "Integrate",
+            "cycle": "41fe1b6e-745d-448b-81d0-5e65b56ac27b",
+            "recordedAtEpochSeconds": 1791124799
+          }
+        },
+        {
+          "issued": {
+            "kind": "start",
+            "token": "00045a33-09bd-4638-a2f9-77bf0ff3751a",
+            "shownAtEpochSeconds": 1791126786
+          },
+          "accepted": {
+            "attachedSession": "d965219b-2484-4562-9312-b11fc01576bd",
+            "run": "36e96ca1-ecca-4550-8242-3321ef1be56f",
+            "workflow": "Advance",
+            "roots": [
+              "Ideas 2"
+            ],
+            "through": "Integrate",
+            "cycle": "9835fe40-f68e-4f90-a5ac-e70ea0ac71bd",
+            "recordedAtEpochSeconds": 1791126792
+          }
+        }
+      ]
+    },
+    "isolation": {
+      "recording": "session-isolation.cast",
+      "recordingSha256": "e12ade3993b9fc60eaa5ba188e1de8bf88687aad9cd391587b414b10a1263411",
+      "activations": [
+        {
+          "issued": {
+            "kind": "start",
+            "token": "dfabc0a6-83ff-4596-8738-98a91fa5c715",
+            "shownAtEpochSeconds": 1791123968
+          },
+          "accepted": null,
+          "note": "no workflow record within one minute: this directive was not submitted or its activation was refused (see the skipped, untracked and out-of-set results)"
+        },
+        {
+          "issued": {
+            "kind": "start",
+            "token": "e808eca5-f446-41b2-b395-8286715dec01",
+            "shownAtEpochSeconds": 1791124168
+          },
+          "accepted": null,
+          "note": "no workflow record within one minute: this directive was not submitted or its activation was refused (see the skipped, untracked and out-of-set results)"
+        },
+        {
+          "issued": {
+            "kind": "start",
+            "token": "8f635117-f477-4680-83b9-36c825ee7c62",
+            "shownAtEpochSeconds": 1791124382
+          },
+          "accepted": {
+            "attachedSession": "3aeaadf9-bcc7-402c-b8f7-e3422f1cc755",
+            "run": "c79f166e-889f-4ad1-bef1-1a15a69a7f96",
+            "workflow": "Advance",
+            "roots": [
+              "Defects 1"
+            ],
+            "through": "Explore",
+            "cycle": "5b015c3d-e546-4416-bbce-dd7f3cd901a0",
+            "recordedAtEpochSeconds": 1791124392
+          }
+        }
+      ]
+    }
+  },
+  "advanceRecordsNotPairedWithARecordedDirective": [],
+  "workflowRecordsWithoutCycle": [
+    {
+      "attachedSession": "d965219b-2484-4562-9312-b11fc01576bd",
+      "run": "d35a5023-bbd1-4ebf-a9f7-7c0b91a2ab52",
+      "workflow": "Begin",
+      "roots": [],
+      "through": null,
+      "cycle": null,
+      "recordedAtEpochSeconds": 1791121401
+    },
+    {
+      "attachedSession": "d965219b-2484-4562-9312-b11fc01576bd",
+      "run": "7e2a96cc-a10d-4685-a439-aee39e105017",
+      "workflow": "Begin",
+      "roots": [],
+      "through": null,
+      "cycle": null,
+      "recordedAtEpochSeconds": 1791125850
+    }
+  ]
+}

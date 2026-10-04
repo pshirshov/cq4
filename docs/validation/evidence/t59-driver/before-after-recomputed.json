@@ -1,0 +1,47 @@
+{
+  "method": "Recomputed by the Claude governing session on 2026-10-04 from the copied before/after item pages in this directory: the sorted list of (ledger, number, revision, status, title) of every item.",
+  "comparisons": [
+    {
+      "harness": "Codex",
+      "case": "skipped",
+      "items": 8,
+      "identicalIdRevisionStatusTitle": true,
+      "canonicalSha256": "8ebab4921762d4cea5cb18d24a1c37c70c6d5a76c3b3890aad0cfaacbe99a47d"
+    },
+    {
+      "harness": "Codex",
+      "case": "untracked",
+      "items": 8,
+      "identicalIdRevisionStatusTitle": true,
+      "canonicalSha256": "8ebab4921762d4cea5cb18d24a1c37c70c6d5a76c3b3890aad0cfaacbe99a47d"
+    },
+    {
+      "harness": "Codex",
+      "case": "out-of-set",
+      "items": 8,
+      "identicalIdRevisionStatusTitle": true,
+      "canonicalSha256": "8ebab4921762d4cea5cb18d24a1c37c70c6d5a76c3b3890aad0cfaacbe99a47d"
+    },
+    {
+      "harness": "Claude",
+      "case": "skipped",
+      "items": 15,
+      "identicalIdRevisionStatusTitle": true,
+      "canonicalSha256": "14fea255135f79a12675c9df0d880492811ab61bf6da47cc9c1b3f2574033361"
+    },
+    {
+      "harness": "Claude",
+      "case": "untracked",
+      "items": 15,
+      "identicalIdRevisionStatusTitle": true,
+      "canonicalSha256": "14fea255135f79a12675c9df0d880492811ab61bf6da47cc9c1b3f2574033361"
+    },
+    {
+      "harness": "Claude",
+      "case": "out-of-set",
+      "items": 15,
+      "identicalIdRevisionStatusTitle": true,
+      "canonicalSha256": "14fea255135f79a12675c9df0d880492811ab61bf6da47cc9c1b3f2574033361"
+    }
+  ]
+}

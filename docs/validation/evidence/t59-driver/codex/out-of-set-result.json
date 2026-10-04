@@ -1,0 +1,41 @@
+{
+  "result": "Passed",
+  "itemsAndRevisionsUnchanged": true,
+  "driver": {
+    "key": {
+      "harness": "Codex",
+      "session": "01a10745-d093-7fe2-ae94-d6dd71b2fdb3"
+    },
+    "state": "Off",
+    "attached": {
+      "value": "3aeaadf9-bcc7-402c-b8f7-e3422f1cc755"
+    },
+    "workset": null,
+    "targets": [
+      {
+        "project": {
+          "value": "d7328d62-2651-40ad-bdef-071687ac7b6e"
+        },
+        "ledger": "Defects",
+        "number": "1"
+      }
+    ],
+    "through": "Explore",
+    "cycle": {
+      "value": "5b015c3d-e546-4416-bbce-dd7f3cd901a0"
+    },
+    "activeChildren": 0,
+    "stopped": {
+      "reason": "Failure",
+      "detail": "out-of-set change: I1 is outside the advanceable set stored for cycle 1"
+    },
+    "touchedAt": "1791124400714",
+    "stoppedAt": "1791124400714",
+    "revision": {
+      "value": "43"
+    }
+  },
+  "before": "out-of-set-before.json",
+  "after": "out-of-set-after.json",
+  "recording": "session-isolation.cast"
+}

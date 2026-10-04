@@ -1,0 +1,24 @@
+{
+  "harness": "Codex 0.159.2",
+  "backend": "real native CQ host and private PostgreSQL ledger",
+  "sessionA": "d965219b-2484-4562-9312-b11fc01576bd",
+  "keyA": "01a10721-15b0-7d62-a925-28866177c7f6",
+  "sessionB": "3aeaadf9-bcc7-402c-b8f7-e3422f1cc755",
+  "keyB": "01a10745-d093-7fe2-ae94-d6dd71b2fdb3",
+  "isolation": "Session B Context/Driver initially returned null. Its own Q1 Plan bind stopped quiescent at 1791123542164; session A I1 Plan continued until its own later quiescence at 1791123765205. Native summaries retain distinct keys and exact worksets.",
+  "negativeResults": {
+    "skipped": "Passed",
+    "untracked": "Passed",
+    "out-of-set": "Passed"
+  },
+  "limits": "Claude equivalent cases remain unexecuted because authentication renewal is deferred. This fixture also contains controlled negative test turns and is preparatory evidence rather than the qualified formal I12 matrix.",
+  "evidence": [
+    "session-isolation.cast",
+    "isolation-first-response.txt",
+    "isolation-drive-progress.txt",
+    "drivers-after-isolation.json",
+    "skipped-result.json",
+    "untracked-result.json",
+    "out-of-set-result.json"
+  ]
+}

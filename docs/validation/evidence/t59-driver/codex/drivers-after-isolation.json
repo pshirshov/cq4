@@ -1,0 +1,76 @@
+{
+  "Driver": {
+    "reply": {
+      "Listed": {
+        "drivers": [
+          {
+            "key": {
+              "harness": "Codex",
+              "session": "01a10721-15b0-7d62-a925-28866177c7f6"
+            },
+            "state": "Off",
+            "attached": {
+              "value": "d965219b-2484-4562-9312-b11fc01576bd"
+            },
+            "workset": null,
+            "targets": [
+              {
+                "project": {
+                  "value": "d7328d62-2651-40ad-bdef-071687ac7b6e"
+                },
+                "ledger": "Ideas",
+                "number": "1"
+              }
+            ],
+            "through": "Plan",
+            "cycle": {
+              "value": "a26826e9-7924-4b21-9f93-10a5d733f2dd"
+            },
+            "activeChildren": 0,
+            "stopped": {
+              "reason": "Quiescent",
+              "detail": "The previous cycle changed nothing in the advanceable set, its context or its readiness"
+            },
+            "touchedAt": "1791123765205",
+            "stoppedAt": "1791123765205",
+            "revision": {
+              "value": "28"
+            }
+          },
+          {
+            "key": {
+              "harness": "Codex",
+              "session": "01a10745-d093-7fe2-ae94-d6dd71b2fdb3"
+            },
+            "state": "Off",
+            "attached": {
+              "value": "3aeaadf9-bcc7-402c-b8f7-e3422f1cc755"
+            },
+            "workset": null,
+            "targets": [
+              {
+                "project": {
+                  "value": "d7328d62-2651-40ad-bdef-071687ac7b6e"
+                },
+                "ledger": "Questions",
+                "number": "1"
+              }
+            ],
+            "through": "Plan",
+            "cycle": null,
+            "activeChildren": 0,
+            "stopped": {
+              "reason": "Quiescent",
+              "detail": "No item of the advanceable set is ready to advance"
+            },
+            "touchedAt": "1791123542164",
+            "stoppedAt": "1791123542164",
+            "revision": {
+              "value": "15"
+            }
+          }
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "result": "Passed",
+  "itemsAndRevisionsUnchanged": true,
+  "driver": {
+    "key": {
+      "harness": "Codex",
+      "session": "01a10745-d093-7fe2-ae94-d6dd71b2fdb3"
+    },
+    "state": "Off",
+    "attached": {
+      "value": "3aeaadf9-bcc7-402c-b8f7-e3422f1cc755"
+    },
+    "workset": null,
+    "targets": [
+      {
+        "project": {
+          "value": "d7328d62-2651-40ad-bdef-071687ac7b6e"
+        },
+        "ledger": "Defects",
+        "number": "1"
+      }
+    ],
+    "through": "Explore",
+    "cycle": {
+      "value": "b91acc44-4bc1-4a0d-b219-26b0109fd9d2"
+    },
+    "activeChildren": 0,
+    "stopped": {
+      "reason": "Failure",
+      "detail": "directive not started: the start directive of cycle 1 was not submitted"
+    },
+    "touchedAt": "1791123971952",
+    "stoppedAt": "1791123971952",
+    "revision": {
+      "value": "32"
+    }
+  },
+  "before": "skipped-before.json",
+  "after": "skipped-after.json",
+  "recording": "session-isolation.cast"
+}

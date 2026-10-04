@@ -1,0 +1,791 @@
+{
+  "at": 1791146563564,
+  "items": {
+    "Browsed": {
+      "page": {
+        "items": [
+          {
+            "summary": {
+              "id": {
+                "project": {
+                  "value": "261e0d41-cf0c-4af3-80be-fe95fa7c96a8"
+                },
+                "ledger": "Defects",
+                "number": "1"
+              },
+              "revision": {
+                "value": "1"
+              },
+              "title": "Run finding: T3+T4 cohort grouping assessment failed (Invalid mapping), workspace quarantined",
+              "status": "Open",
+              "archived": false,
+              "labels": [
+                "minesweeper",
+                "run-finding"
+              ],
+              "updatedAt": "1791142245838",
+              "outcome": {
+                "terminal": false,
+                "satisfiesDependency": false
+              }
+            },
+            "severity": "Low",
+            "milestone": null,
+            "work": null
+          },
+          {
+            "summary": {
+              "id": {
+                "project": {
+                  "value": "261e0d41-cf0c-4af3-80be-fe95fa7c96a8"
+                },
+                "ledger": "Defects",
+                "number": "2"
+              },
+              "revision": {
+                "value": "1"
+              },
+              "title": "cq-result tracks stale Python bytecode (__pycache__/*.pyc) committed by T1",
+              "status": "Open",
+              "archived": false,
+              "labels": [
+                "minesweeper",
+                "hygiene"
+              ],
+              "updatedAt": "1791142387251",
+              "outcome": {
+                "terminal": false,
+                "satisfiesDependency": false
+              }
+            },
+            "severity": "Low",
+            "milestone": null,
+            "work": null
+          },
+          {
+            "summary": {
+              "id": {
+                "project": {
+                  "value": "261e0d41-cf0c-4af3-80be-fe95fa7c96a8"
+                },
+                "ledger": "Goals",
+                "number": "1"
+              },
+              "revision": {
+                "value": "3"
+              },
+              "title": "Deliver terminal minesweeper (`python3 -m minesweeper`, stdlib + curses)",
+              "status": "Achieved",
+              "archived": false,
+              "labels": [
+                "minesweeper"
+              ],
+              "updatedAt": "1791142410680",
+              "outcome": {
+                "terminal": true,
+                "satisfiesDependency": true
+              }
+            },
+            "severity": null,
+            "milestone": null,
+            "work": null
+          },
+          {
+            "summary": {
+              "id": {
+                "project": {
+                  "value": "261e0d41-cf0c-4af3-80be-fe95fa7c96a8"
+                },
+                "ledger": "Goals",
+                "number": "2"
+              },
+              "revision": {
+                "value": "3"
+              },
+              "title": "Minesweeper --difficulty presets and elapsed-seconds clock",
+              "status": "Achieved",
+              "archived": false,
+              "labels": [
+                "minesweeper"
+              ],
+              "updatedAt": "1791142428377",
+              "outcome": {
+                "terminal": true,
+                "satisfiesDependency": true
+              }
+            },
+            "severity": null,
+            "milestone": null,
+            "work": null
+          },
+          {
+            "summary": {
+              "id": {
+                "project": {
+                  "value": "261e0d41-cf0c-4af3-80be-fe95fa7c96a8"
+                },
+                "ledger": "Ideas",
+                "number": "1"
+              },
+              "revision": {
+                "value": "4"
+              },
+              "title": "Terminal minesweeper in Python 3 (stdlib + curses)",
+              "status": "Implemented",
+              "archived": false,
+              "labels": [
+                "intake"
+              ],
+              "updatedAt": "1791142462233",
+              "outcome": {
+                "terminal": true,
+                "satisfiesDependency": true
+              }
+            },
+            "severity": null,
+            "milestone": null,
+            "work": null
+          },
+          {
+            "summary": {
+              "id": {
+                "project": {
+                  "value": "261e0d41-cf0c-4af3-80be-fe95fa7c96a8"
+                },
+                "ledger": "Ideas",
+                "number": "2"
+              },
+              "revision": {
+                "value": "4"
+              },
+              "title": "Minesweeper: --difficulty presets and elapsed-seconds clock",
+              "status": "Implemented",
+              "archived": false,
+              "labels": [
+                "intake",
+                "minesweeper"
+              ],
+              "updatedAt": "1791142462256",
+              "outcome": {
+                "terminal": true,
+                "satisfiesDependency": true
+              }
+            },
+            "severity": null,
+            "milestone": null,
+            "work": null
+          },
+          {
+            "summary": {
+              "id": {
+                "project": {
+                  "value": "261e0d41-cf0c-4af3-80be-fe95fa7c96a8"
+                },
+                "ledger": "Milestones",
+                "number": "1"
+              },
+              "revision": {
+                "value": "2"
+              },
+              "title": "Terminal minesweeper v1 implementation",
+              "status": "Complete",
+              "archived": false,
+              "labels": [
+                "minesweeper"
+              ],
+              "updatedAt": "1791142444228",
+              "outcome": {
+                "terminal": true,
+                "satisfiesDependency": true
+              }
+            },
+            "severity": null,
+            "milestone": null,
+            "work": null
+          },
+          {
+            "summary": {
+              "id": {
+                "project": {
+                  "value": "261e0d41-cf0c-4af3-80be-fe95fa7c96a8"
+                },
+                "ledger": "Milestones",
+                "number": "2"
+              },
+              "revision": {
+                "value": "2"
+              },
+              "title": "Minesweeper difficulty presets and game clock",
+              "status": "Complete",
+              "archived": false,
+              "labels": [
+                "minesweeper"
+              ],
+              "updatedAt": "1791142444254",
+              "outcome": {
+                "terminal": true,
+                "satisfiesDependency": true
+              }
+            },
+            "severity": null,
+            "milestone": null,
+            "work": null
+          },
+          {
+            "summary": {
+              "id": {
+                "project": {
+                  "value": "261e0d41-cf0c-4af3-80be-fe95fa7c96a8"
+                },
+                "ledger": "Questions",
+                "number": "1"
+              },
+              "revision": {
+                "value": "2"
+              },
+              "title": "Operator go-ahead: approve the minesweeper implementation plan?",
+              "status": "Answered",
+              "archived": false,
+              "labels": [
+                "minesweeper"
+              ],
+              "updatedAt": "1791138521967",
+              "outcome": {
+                "terminal": true,
+                "satisfiesDependency": true
+              }
+            },
+            "severity": null,
+            "milestone": null,
+            "work": null
+          },
+          {
+            "summary": {
+              "id": {
+                "project": {
+                  "value": "261e0d41-cf0c-4af3-80be-fe95fa7c96a8"
+                },
+                "ledger": "Questions",
+                "number": "2"
+              },
+              "revision": {
+                "value": "2"
+              },
+              "title": "How should the elapsed-seconds clock be laid out so its digits stay visible?",
+              "status": "Answered",
+              "archived": false,
+              "labels": [
+                "minesweeper"
+              ],
+              "updatedAt": "1791141688220",
+              "outcome": {
+                "terminal": true,
+                "satisfiesDependency": true
+              }
+            },
+            "severity": null,
+            "milestone": null,
+            "work": null
+          },
+          {
+            "summary": {
+              "id": {
+                "project": {
+                  "value": "261e0d41-cf0c-4af3-80be-fe95fa7c96a8"
+                },
+                "ledger": "Questions",
+                "number": "3"
+              },
+              "revision": {
+                "value": "2"
+              },
+              "title": "Approve the G2 plan (difficulty presets + clock) before implementation?",
+              "status": "Answered",
+              "archived": false,
+              "labels": [
+                "minesweeper"
+              ],
+              "updatedAt": "1791141688308",
+              "outcome": {
+                "terminal": true,
+                "satisfiesDependency": true
+              }
+            },
+            "severity": null,
+            "milestone": null,
+            "work": null
+          },
+          {
+            "summary": {
+              "id": {
+                "project": {
+                  "value": "261e0d41-cf0c-4af3-80be-fe95fa7c96a8"
+                },
+                "ledger": "Tasks",
+                "number": "1"
+              },
+              "revision": {
+                "value": "2"
+              },
+              "title": "Minesweeper rules module (no curses), argument parsing, --version/--help, unit tests",
+              "status": "Done",
+              "archived": false,
+              "labels": [
+                "minesweeper"
+              ],
+              "updatedAt": "1791139042387",
+              "outcome": {
+                "terminal": true,
+                "satisfiesDependency": true
+              }
+            },
+            "severity": null,
+            "milestone": {
+              "project": {
+                "value": "261e0d41-cf0c-4af3-80be-fe95fa7c96a8"
+              },
+              "ledger": "Milestones",
+              "number": "1"
+            },
+            "work": null
+          },
+          {
+            "summary": {
+              "id": {
+                "project": {
+                  "value": "261e0d41-cf0c-4af3-80be-fe95fa7c96a8"
+                },
+                "ledger": "Tasks",
+                "number": "2"
+              },
+              "revision": {
+                "value": "2"
+              },
+              "title": "Minesweeper curses screen, key bindings, terminal-size handling and README",
+              "status": "Done",
+              "archived": false,
+              "labels": [
+                "minesweeper"
+              ],
+              "updatedAt": "1791139314620",
+              "outcome": {
+                "terminal": true,
+                "satisfiesDependency": true
+              }
+            },
+            "severity": null,
+            "milestone": {
+              "project": {
+                "value": "261e0d41-cf0c-4af3-80be-fe95fa7c96a8"
+              },
+              "ledger": "Milestones",
+              "number": "1"
+            },
+            "work": null
+          },
+          {
+            "summary": {
+              "id": {
+                "project": {
+                  "value": "261e0d41-cf0c-4af3-80be-fe95fa7c96a8"
+                },
+                "ledger": "Tasks",
+                "number": "3"
+              },
+              "revision": {
+                "value": "2"
+              },
+              "title": "Add --difficulty presets with conflict detection against --width/--height/--mines",
+              "status": "Done",
+              "archived": false,
+              "labels": [
+                "minesweeper"
+              ],
+              "updatedAt": "1791142037556",
+              "outcome": {
+                "terminal": true,
+                "satisfiesDependency": true
+              }
+            },
+            "severity": null,
+            "milestone": {
+              "project": {
+                "value": "261e0d41-cf0c-4af3-80be-fe95fa7c96a8"
+              },
+              "ledger": "Milestones",
+              "number": "2"
+            },
+            "work": null
+          },
+          {
+            "summary": {
+              "id": {
+                "project": {
+                  "value": "261e0d41-cf0c-4af3-80be-fe95fa7c96a8"
+                },
+                "ledger": "Tasks",
+                "number": "4"
+              },
+              "revision": {
+                "value": "2"
+              },
+              "title": "Show elapsed whole seconds since first reveal; freeze clock on win or loss",
+              "status": "Done",
+              "archived": false,
+              "labels": [
+                "minesweeper"
+              ],
+              "updatedAt": "1791142052818",
+              "outcome": {
+                "terminal": true,
+                "satisfiesDependency": true
+              }
+            },
+            "severity": null,
+            "milestone": {
+              "project": {
+                "value": "261e0d41-cf0c-4af3-80be-fe95fa7c96a8"
+              },
+              "ledger": "Milestones",
+              "number": "2"
+            },
+            "work": null
+          }
+        ],
+        "cursor": {
+          "value": "22"
+        },
+        "after": {
+          "project": {
+            "value": "261e0d41-cf0c-4af3-80be-fe95fa7c96a8"
+          },
+          "ledger": "Tasks",
+          "number": "4"
+        },
+        "hasMore": false,
+        "work": "84"
+      }
+    }
+  },
+  "drivers": {
+    "Driver": {
+      "reply": {
+        "Listed": {
+          "drivers": [
+            {
+              "key": {
+                "harness": "Claude",
+                "session": "025c7fb0-fc16-4fd9-8bcf-e404e392a6aa"
+              },
+              "state": "Off",
+              "attached": {
+                "value": "cb681df6-e2d7-413e-b91c-9be4fa48f748"
+              },
+              "workset": null,
+              "targets": [
+                {
+                  "project": {
+                    "value": "261e0d41-cf0c-4af3-80be-fe95fa7c96a8"
+                  },
+                  "ledger": "Defects",
+                  "number": "1"
+                }
+              ],
+              "through": "Explore",
+              "cycle": {
+                "value": "0e555dc4-8639-4e18-9e74-1c544ec78729"
+              },
+              "activeChildren": 0,
+              "stopped": {
+                "reason": "Quiescent",
+                "detail": "The previous cycle changed nothing in the advanceable set, its context or its readiness"
+              },
+              "touchedAt": "1791145654265",
+              "stoppedAt": "1791145654265",
+              "revision": {
+                "value": "92"
+              }
+            },
+            {
+              "key": {
+                "harness": "Claude",
+                "session": "9f225874-cb5b-474e-a977-23133e416466"
+              },
+              "state": "Off",
+              "attached": {
+                "value": "e15d0f82-41ed-4817-bbc0-671327cc1fd2"
+              },
+              "workset": null,
+              "targets": [
+                {
+                  "project": {
+                    "value": "261e0d41-cf0c-4af3-80be-fe95fa7c96a8"
+                  },
+                  "ledger": "Defects",
+                  "number": "2"
+                }
+              ],
+              "through": "Explore",
+              "cycle": {
+                "value": "0f9e1aa7-3a74-4ea0-a981-9b5efc696226"
+              },
+              "activeChildren": 0,
+              "stopped": {
+                "reason": "Failure",
+                "detail": "untracked activation: the bound attached session activated a workflow without a start or resume token"
+              },
+              "touchedAt": "1791146416222",
+              "stoppedAt": "1791146416222",
+              "revision": {
+                "value": "101"
+              }
+            },
+            {
+              "key": {
+                "harness": "Claude",
+                "session": "f741a4a9-6cd2-4fc3-bfaa-de67463f01c0"
+              },
+              "state": "Off",
+              "attached": {
+                "value": "8c93b60d-8d83-49c3-b748-72f2beac58d4"
+              },
+              "workset": null,
+              "targets": [
+                {
+                  "project": {
+                    "value": "261e0d41-cf0c-4af3-80be-fe95fa7c96a8"
+                  },
+                  "ledger": "Tasks",
+                  "number": "3"
+                },
+                {
+                  "project": {
+                    "value": "261e0d41-cf0c-4af3-80be-fe95fa7c96a8"
+                  },
+                  "ledger": "Tasks",
+                  "number": "4"
+                }
+              ],
+              "through": "Integrate",
+              "cycle": {
+                "value": "a6bc30c2-1ded-4954-a96c-5aafc59b8b9a"
+              },
+              "activeChildren": 0,
+              "stopped": {
+                "reason": "Quiescent",
+                "detail": "No item of the advanceable set is ready to advance"
+              },
+              "touchedAt": "1791142066756",
+              "stoppedAt": "1791142066756",
+              "revision": {
+                "value": "79"
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "usage": {
+    "UsageSummary": {
+      "report": {
+        "direct": {
+          "input": {
+            "known": "5784407",
+            "unknown": "0",
+            "estimated": "0"
+          },
+          "output": {
+            "known": "129672",
+            "unknown": "0",
+            "estimated": "0"
+          },
+          "cacheRead": {
+            "known": "4926747",
+            "unknown": "0",
+            "estimated": "0"
+          },
+          "cacheWrite": {
+            "known": "301088",
+            "unknown": "14",
+            "estimated": "0"
+          },
+          "reasoning": {
+            "known": "17562",
+            "unknown": "0",
+            "estimated": "0"
+          },
+          "total": {
+            "known": "5914079",
+            "unknown": "0",
+            "estimated": "0"
+          },
+          "unknownCosts": "14"
+        },
+        "shared": {
+          "input": {
+            "known": "154389",
+            "unknown": "0",
+            "estimated": "0"
+          },
+          "output": {
+            "known": "4438",
+            "unknown": "0",
+            "estimated": "0"
+          },
+          "cacheRead": {
+            "known": "141617",
+            "unknown": "0",
+            "estimated": "0"
+          },
+          "cacheWrite": {
+            "known": "12762",
+            "unknown": "0",
+            "estimated": "0"
+          },
+          "reasoning": {
+            "known": "330",
+            "unknown": "0",
+            "estimated": "0"
+          },
+          "total": {
+            "known": "158827",
+            "unknown": "0",
+            "estimated": "0"
+          },
+          "unknownCosts": "0"
+        },
+        "unattributed": {
+          "input": {
+            "known": "0",
+            "unknown": "0",
+            "estimated": "0"
+          },
+          "output": {
+            "known": "0",
+            "unknown": "0",
+            "estimated": "0"
+          },
+          "cacheRead": {
+            "known": "0",
+            "unknown": "0",
+            "estimated": "0"
+          },
+          "cacheWrite": {
+            "known": "0",
+            "unknown": "0",
+            "estimated": "0"
+          },
+          "reasoning": {
+            "known": "0",
+            "unknown": "0",
+            "estimated": "0"
+          },
+          "total": {
+            "known": "0",
+            "unknown": "0",
+            "estimated": "0"
+          },
+          "unknownCosts": "0"
+        },
+        "sharedAssignments": [
+          {
+            "id": {
+              "value": "9e9b3210-9479-41b7-bff4-9f55131ec693"
+            },
+            "project": {
+              "value": "261e0d41-cf0c-4af3-80be-fe95fa7c96a8"
+            },
+            "members": [
+              {
+                "project": {
+                  "value": "261e0d41-cf0c-4af3-80be-fe95fa7c96a8"
+                },
+                "ledger": "Tasks",
+                "number": "3"
+              },
+              {
+                "project": {
+                  "value": "261e0d41-cf0c-4af3-80be-fe95fa7c96a8"
+                },
+                "ledger": "Tasks",
+                "number": "4"
+              }
+            ],
+            "attribution": "Shared",
+            "cohort": "ed653123-9bc1-444a-9a2d-3c3e1533f815",
+            "evaluation": {
+              "run": "eval-20261004-claude-refreshed",
+              "scenario": "claude-driver",
+              "assessor": false
+            }
+          }
+        ],
+        "sharedAssignmentsTruncated": false,
+        "cursor": "163",
+        "incompleteMeters": "28",
+        "attemptsWithoutMeters": "3",
+        "attempts": {
+          "running": "2",
+          "unknown": "1",
+          "withGaps": "3"
+        },
+        "costs": {
+          "entries": [
+            {
+              "group": {
+                "attribution": "Direct",
+                "currency": "USD",
+                "basis": "ProviderEstimate",
+                "pricingVersion": null
+              },
+              "amount": {
+                "value": "5.24799819999999999"
+              },
+              "measurements": "13"
+            },
+            {
+              "group": {
+                "attribution": "Shared",
+                "currency": "USD",
+                "basis": "ProviderEstimate",
+                "pricingVersion": null
+              },
+              "amount": {
+                "value": "0.2192194"
+              },
+              "measurements": "1"
+            }
+          ],
+          "after": {
+            "attribution": "Shared",
+            "currency": "USD",
+            "basis": "ProviderEstimate",
+            "pricingVersion": null
+          },
+          "hasMore": false,
+          "cursor": "163"
+        }
+      }
+    }
+  },
+  "installation": {
+    "version": "0.1.0",
+    "schemaSha256": "f0aaf1d080e961fdd09b6a098cbcaac3e108afca1af1df2a4515fa03ff924945",
+    "appliedSchemaSha256": "f0aaf1d080e961fdd09b6a098cbcaac3e108afca1af1df2a4515fa03ff924945",
+    "postgresMajor": 18,
+    "fsync": true,
+    "synchronousCommit": "on",
+    "fullPageWrites": true,
+    "source": {
+      "Clean": {
+        "revision": {
+          "value": "e5dba67f1e8f703f0f7ac681a7d35aa96eeba9c4"
+        }
+      }
+    },
+    "activeClaims": "0",
+    "managedAttempts": "0",
+    "pendingIntegrations": "0"
+  }
+}

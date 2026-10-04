@@ -1,0 +1,136 @@
+{
+  "fixture": "claude-cycles",
+  "recordingSha256": "b11ae728aff93ad660c746db894b5e1521e8d91118086d8be23139ca849bd469",
+  "method": "Issued directives are read from the terminal recording (every distinct token the hook printed, with the time it first appeared). Accepted activations are the workflow records of the attached host session directory, each carrying the driver cycle it was admitted under. A start directive is paired with the next workflow record in time; a resume directive is paired with the run and cycle current at that time, and no workflow record was written for it.",
+  "note": "Real Claude Code 2.1.285, private server and ledger; four drives of one session on targets Ideas 1 through plan.",
+  "directivesIssued": 7,
+  "advanceWorkflowRecords": 5,
+  "activations": [
+    {
+      "issued": {
+        "kind": "start",
+        "token": "12b5cc80-16b2-43bb-a06d-1f0775f0c32a",
+        "shownAtEpochSeconds": 1791149623
+      },
+      "accepted": {
+        "attachedSession": "ec0758d4-2c1f-4a61-8092-e80ba859d01a",
+        "run": "0e25386a-686b-4ed5-8284-349770700cbc",
+        "workflow": "Advance",
+        "roots": [
+          "Ideas 1"
+        ],
+        "through": "Plan",
+        "cycle": "6f07c00b-2a6a-4fdc-a976-c1d4e54615d4",
+        "recordedAtEpochSeconds": 1791149632
+      }
+    },
+    {
+      "issued": {
+        "kind": "resume",
+        "token": "a20269c3-9272-40c0-bd5e-98f20d14536f",
+        "shownAtEpochSeconds": 1791149675
+      },
+      "accepted": {
+        "resumedRun": "0e25386a-686b-4ed5-8284-349770700cbc",
+        "cycle": "6f07c00b-2a6a-4fdc-a976-c1d4e54615d4",
+        "newWorkflowRecord": false
+      }
+    },
+    {
+      "issued": {
+        "kind": "start",
+        "token": "95c0995f-45ca-4de1-bed2-a18008bc184c",
+        "shownAtEpochSeconds": 1791149741
+      },
+      "accepted": {
+        "attachedSession": "ec0758d4-2c1f-4a61-8092-e80ba859d01a",
+        "run": "7c51e0f8-d6e7-401b-b9b7-08c9db76c4f4",
+        "workflow": "Advance",
+        "roots": [
+          "Ideas 1"
+        ],
+        "through": "Plan",
+        "cycle": "b81fe47f-7a72-438b-aa70-ebb783384cfd",
+        "recordedAtEpochSeconds": 1791149749
+      }
+    },
+    {
+      "issued": {
+        "kind": "resume",
+        "token": "3c133b48-2dfd-497f-9937-4ab5690cffae",
+        "shownAtEpochSeconds": 1791149798
+      },
+      "accepted": {
+        "resumedRun": "7c51e0f8-d6e7-401b-b9b7-08c9db76c4f4",
+        "cycle": "b81fe47f-7a72-438b-aa70-ebb783384cfd",
+        "newWorkflowRecord": false
+      }
+    },
+    {
+      "issued": {
+        "kind": "start",
+        "token": "fda41327-beef-4c19-bd84-370f265d8a10",
+        "shownAtEpochSeconds": 1791149905
+      },
+      "accepted": {
+        "attachedSession": "ec0758d4-2c1f-4a61-8092-e80ba859d01a",
+        "run": "bd5f2c2a-e0f6-4b0f-8d15-2b27aab0279f",
+        "workflow": "Advance",
+        "roots": [
+          "Ideas 1"
+        ],
+        "through": "Plan",
+        "cycle": "f7f63f61-d2b2-49dc-8a2e-206d4ac915fa",
+        "recordedAtEpochSeconds": 1791149916
+      }
+    },
+    {
+      "issued": {
+        "kind": "start",
+        "token": "237d4d5c-9c45-4d4c-8ecc-36ea5c7f281d",
+        "shownAtEpochSeconds": 1791150001
+      },
+      "accepted": {
+        "attachedSession": "ec0758d4-2c1f-4a61-8092-e80ba859d01a",
+        "run": "e4bb5138-accc-49db-8bfd-7d7b63377970",
+        "workflow": "Advance",
+        "roots": [
+          "Ideas 1"
+        ],
+        "through": "Plan",
+        "cycle": "05b31b9b-6489-470e-bb42-b7971b6c6570",
+        "recordedAtEpochSeconds": 1791150008
+      }
+    },
+    {
+      "issued": {
+        "kind": "start",
+        "token": "f0880b3d-aacc-4f03-ba1e-c739ef5298c4",
+        "shownAtEpochSeconds": 1791150027
+      },
+      "accepted": {
+        "attachedSession": "ec0758d4-2c1f-4a61-8092-e80ba859d01a",
+        "run": "c6bb9381-75de-4b5a-bb9f-9218c85682da",
+        "workflow": "Advance",
+        "roots": [
+          "Ideas 1"
+        ],
+        "through": "Plan",
+        "cycle": "2e14173a-9922-45a5-9acf-c69b1a5949c8",
+        "recordedAtEpochSeconds": 1791150030
+      }
+    }
+  ],
+  "workflowRecordsWithoutCycle": [
+    {
+      "attachedSession": "ec0758d4-2c1f-4a61-8092-e80ba859d01a",
+      "run": "6d8977a5-4e4b-4718-97c2-884c855ff127",
+      "workflow": "Begin",
+      "roots": [],
+      "through": null,
+      "cycle": null,
+      "recordedAtEpochSeconds": 1791149268
+    }
+  ],
+  "unpairedAdvanceRecords": []
+}

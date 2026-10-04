@@ -1,0 +1,48 @@
+{
+  "atSourceVerification": "2026-10-04",
+  "origin": "Governor observed retained primary snapshots; no independent child reinspection implied",
+  "results": [
+    {
+      "case": "skipped",
+      "itemCount": 8,
+      "unchangedCompleteItemRevisionsAndSummaries": true,
+      "canonicalItemPageSha256": "9d232125c8ff80744c1531bd5ffcb08f81eb11e95d9104e9454becd2024a40bf",
+      "beforeFileSha256": "39d931c9cba2d2a1bc4b5c95ed7a3791747a40bd3b1f38b1a51c8d1f2b03a438",
+      "afterFileSha256": "154afdde1ee64c92130dc7de44c497f2b72cb97eed587d321fce0834d4124788",
+      "stopped": {
+        "reason": "Failure",
+        "detail": "directive not started: the start directive of cycle 1 was not submitted"
+      },
+      "activeChildren": 0,
+      "snapshotScope": "Complete Browse page; revisions and summaries, not raw database bytes."
+    },
+    {
+      "case": "untracked",
+      "itemCount": 8,
+      "unchangedCompleteItemRevisionsAndSummaries": true,
+      "canonicalItemPageSha256": "9d232125c8ff80744c1531bd5ffcb08f81eb11e95d9104e9454becd2024a40bf",
+      "beforeFileSha256": "154afdde1ee64c92130dc7de44c497f2b72cb97eed587d321fce0834d4124788",
+      "afterFileSha256": "f1159a0894685c034b8aaecde33faf5d3516d2c3dcfe57f512e7670cf6e27cbf",
+      "stopped": {
+        "reason": "Failure",
+        "detail": "untracked activation: the bound attached session activated a workflow without a start or resume token"
+      },
+      "activeChildren": 0,
+      "snapshotScope": "Complete Browse page; revisions and summaries, not raw database bytes."
+    },
+    {
+      "case": "out-of-set",
+      "itemCount": 8,
+      "unchangedCompleteItemRevisionsAndSummaries": true,
+      "canonicalItemPageSha256": "9d232125c8ff80744c1531bd5ffcb08f81eb11e95d9104e9454becd2024a40bf",
+      "beforeFileSha256": "f1159a0894685c034b8aaecde33faf5d3516d2c3dcfe57f512e7670cf6e27cbf",
+      "afterFileSha256": "a8bed95cf0f8ec3b57e7df2764ab79be3ac8a5b321ceaf1875529ff8ca42075a",
+      "stopped": {
+        "reason": "Failure",
+        "detail": "out-of-set change: I1 is outside the advanceable set stored for cycle 1"
+      },
+      "activeChildren": 0,
+      "snapshotScope": "Complete Browse page; revisions and summaries, not raw database bytes."
+    }
+  ]
+}

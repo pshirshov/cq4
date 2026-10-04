@@ -1,0 +1,346 @@
+{
+  "items": {
+    "items": [
+      {
+        "summary": {
+          "id": {
+            "project": {
+              "value": "d7328d62-2651-40ad-bdef-071687ac7b6e"
+            },
+            "ledger": "Defects",
+            "number": "1"
+          },
+          "revision": {
+            "value": "4"
+          },
+          "title": "Claude route unavailable: expired OAuth session without refresh token",
+          "status": "Open",
+          "archived": false,
+          "labels": [
+            "claude",
+            "authentication",
+            "plan-review"
+          ],
+          "updatedAt": "1791122037719",
+          "outcome": {
+            "terminal": false,
+            "satisfiesDependency": false
+          }
+        },
+        "severity": "High",
+        "milestone": null,
+        "work": null
+      },
+      {
+        "summary": {
+          "id": {
+            "project": {
+              "value": "d7328d62-2651-40ad-bdef-071687ac7b6e"
+            },
+            "ledger": "Goals",
+            "number": "1"
+          },
+          "revision": {
+            "value": "2"
+          },
+          "title": "Deliver specification version 1 terminal minesweeper",
+          "status": "Open",
+          "archived": false,
+          "labels": [
+            "minesweeper",
+            "python"
+          ],
+          "updatedAt": "1791123734533",
+          "outcome": {
+            "terminal": false,
+            "satisfiesDependency": false
+          }
+        },
+        "severity": null,
+        "milestone": null,
+        "work": null
+      },
+      {
+        "summary": {
+          "id": {
+            "project": {
+              "value": "d7328d62-2651-40ad-bdef-071687ac7b6e"
+            },
+            "ledger": "Ideas",
+            "number": "1"
+          },
+          "revision": {
+            "value": "5"
+          },
+          "title": "Python terminal minesweeper",
+          "status": "Proposed",
+          "archived": false,
+          "labels": [
+            "minesweeper",
+            "python",
+            "planning"
+          ],
+          "updatedAt": "1791122262360",
+          "outcome": {
+            "terminal": false,
+            "satisfiesDependency": false
+          }
+        },
+        "severity": null,
+        "milestone": null,
+        "work": null
+      },
+      {
+        "summary": {
+          "id": {
+            "project": {
+              "value": "d7328d62-2651-40ad-bdef-071687ac7b6e"
+            },
+            "ledger": "Milestones",
+            "number": "1"
+          },
+          "revision": {
+            "value": "1"
+          },
+          "title": "Implement and verify terminal minesweeper version 1",
+          "status": "Open",
+          "archived": false,
+          "labels": [
+            "minesweeper",
+            "implementation"
+          ],
+          "updatedAt": "1791123734533",
+          "outcome": {
+            "terminal": false,
+            "satisfiesDependency": false
+          }
+        },
+        "severity": null,
+        "milestone": null,
+        "work": null
+      },
+      {
+        "summary": {
+          "id": {
+            "project": {
+              "value": "d7328d62-2651-40ad-bdef-071687ac7b6e"
+            },
+            "ledger": "Memories",
+            "number": "1"
+          },
+          "revision": {
+            "value": "1"
+          },
+          "title": "Minesweeper repository specification identity",
+          "status": "Current",
+          "archived": false,
+          "labels": [
+            "minesweeper",
+            "repository"
+          ],
+          "updatedAt": "1791122262360",
+          "outcome": {
+            "terminal": false,
+            "satisfiesDependency": true
+          }
+        },
+        "severity": null,
+        "milestone": null,
+        "work": null
+      },
+      {
+        "summary": {
+          "id": {
+            "project": {
+              "value": "d7328d62-2651-40ad-bdef-071687ac7b6e"
+            },
+            "ledger": "Memories",
+            "number": "2"
+          },
+          "revision": {
+            "value": "1"
+          },
+          "title": "Minesweeper launch verifies version output only",
+          "status": "Current",
+          "archived": false,
+          "labels": [
+            "minesweeper",
+            "verification"
+          ],
+          "updatedAt": "1791123734533",
+          "outcome": {
+            "terminal": false,
+            "satisfiesDependency": true
+          }
+        },
+        "severity": null,
+        "milestone": null,
+        "work": null
+      },
+      {
+        "summary": {
+          "id": {
+            "project": {
+              "value": "d7328d62-2651-40ad-bdef-071687ac7b6e"
+            },
+            "ledger": "Questions",
+            "number": "1"
+          },
+          "revision": {
+            "value": "2"
+          },
+          "title": "Approve terminal minesweeper implementation plan",
+          "status": "Answered",
+          "archived": false,
+          "labels": [
+            "minesweeper",
+            "approval",
+            "operator-proxy"
+          ],
+          "updatedAt": "1791123272804",
+          "outcome": {
+            "terminal": true,
+            "satisfiesDependency": true
+          }
+        },
+        "severity": null,
+        "milestone": null,
+        "work": null
+      },
+      {
+        "summary": {
+          "id": {
+            "project": {
+              "value": "d7328d62-2651-40ad-bdef-071687ac7b6e"
+            },
+            "ledger": "Tasks",
+            "number": "1"
+          },
+          "revision": {
+            "value": "1"
+          },
+          "title": "Implement approved terminal minesweeper with focused verification",
+          "status": "Ready",
+          "archived": false,
+          "labels": [
+            "minesweeper",
+            "python"
+          ],
+          "updatedAt": "1791123734533",
+          "outcome": {
+            "terminal": false,
+            "satisfiesDependency": false
+          }
+        },
+        "severity": null,
+        "milestone": {
+          "project": {
+            "value": "d7328d62-2651-40ad-bdef-071687ac7b6e"
+          },
+          "ledger": "Milestones",
+          "number": "1"
+        },
+        "work": null
+      }
+    ],
+    "cursor": {
+      "value": "9"
+    },
+    "after": {
+      "project": {
+        "value": "d7328d62-2651-40ad-bdef-071687ac7b6e"
+      },
+      "ledger": "Tasks",
+      "number": "1"
+    },
+    "hasMore": false,
+    "work": "32"
+  },
+  "drivers": [
+    {
+      "key": {
+        "harness": "Codex",
+        "session": "01a10721-15b0-7d62-a925-28866177c7f6"
+      },
+      "state": "Off",
+      "attached": {
+        "value": "d965219b-2484-4562-9312-b11fc01576bd"
+      },
+      "workset": null,
+      "targets": [
+        {
+          "project": {
+            "value": "d7328d62-2651-40ad-bdef-071687ac7b6e"
+          },
+          "ledger": "Ideas",
+          "number": "1"
+        }
+      ],
+      "through": "Plan",
+      "cycle": {
+        "value": "a26826e9-7924-4b21-9f93-10a5d733f2dd"
+      },
+      "activeChildren": 0,
+      "stopped": {
+        "reason": "Quiescent",
+        "detail": "The previous cycle changed nothing in the advanceable set, its context or its readiness"
+      },
+      "touchedAt": "1791123765205",
+      "stoppedAt": "1791123765205",
+      "revision": {
+        "value": "28"
+      }
+    },
+    {
+      "key": {
+        "harness": "Codex",
+        "session": "01a10745-d093-7fe2-ae94-d6dd71b2fdb3"
+      },
+      "state": "Off",
+      "attached": {
+        "value": "3aeaadf9-bcc7-402c-b8f7-e3422f1cc755"
+      },
+      "workset": null,
+      "targets": [
+        {
+          "project": {
+            "value": "d7328d62-2651-40ad-bdef-071687ac7b6e"
+          },
+          "ledger": "Questions",
+          "number": "1"
+        }
+      ],
+      "through": "Plan",
+      "cycle": null,
+      "activeChildren": 0,
+      "stopped": {
+        "reason": "Quiescent",
+        "detail": "No item of the advanceable set is ready to advance"
+      },
+      "touchedAt": "1791123542164",
+      "stoppedAt": "1791123542164",
+      "revision": {
+        "value": "15"
+      }
+    }
+  ],
+  "installation": {
+    "version": "0.1.0",
+    "schemaSha256": "f0aaf1d080e961fdd09b6a098cbcaac3e108afca1af1df2a4515fa03ff924945",
+    "appliedSchemaSha256": "f0aaf1d080e961fdd09b6a098cbcaac3e108afca1af1df2a4515fa03ff924945",
+    "postgresMajor": 18,
+    "fsync": true,
+    "synchronousCommit": "on",
+    "fullPageWrites": true,
+    "source": {
+      "Clean": {
+        "revision": {
+          "value": "daf189a8fa422e4c7d14a50ae1253a5d4f6ce4df"
+        }
+      }
+    },
+    "activeClaims": "0",
+    "managedAttempts": "0",
+    "pendingIntegrations": "0"
+  }
+}
