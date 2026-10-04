@@ -12,8 +12,25 @@ final class AttachedAssets(schemas: McpSchemas, workflows: WorkflowAssets) {
   private val CodexHooks = Path.of(".codex/hooks.json")
   private def quoted(value: String): String = Json.fromString(value).noSpaces
   def write(harness: Harness, root: Path, settingsPath: Path, executable: Path, replace: Boolean, replaceStatusLine: Boolean): List[Path] = {
+    if (harness == Harness.Codex) {
+      val file = root.resolve(".codex/config.toml")
+      require(!Files.exists(file) || HostFiles.text(file, MaxConfigBytes).startsWith(CodexHeader),
+        "Existing .codex/config.toml is user-owned. Export into an empty directory and merge its mcp_servers.cq table into this file; CQ will not overwrite unrelated TOML settings")
+    }
+    val assets = plan(harness, root, root, settingsPath, executable, replace, replaceStatusLine)
+    // JSON configuration CQ merges into is rewritten in place; every other asset is a generated file guarded by --replace.
+    val merged = assets.map(_.path).filter(path => harness == Harness.Claude && Set(Path.of(".mcp.json"), ClaudeSettings)(path) || path == CodexHooks).toSet
+    workflows.writeAssets(assets, root, replace, merged)
+  }
+  def exportAssets(harness: Harness, destination: Path, project: Path, settingsPath: Path, executable: Path): List[Path] = {
+    require(project.isAbsolute && project.normalize() == project, "Integration project must be an absolute normalized directory")
+    workflows.writeAssets(plan(harness, destination, project, settingsPath, executable, false, false), destination, false, Set.empty)
+  }
+  def plan(harness: Harness, root: Path, project: Path, settingsPath: Path, executable: Path, replace: Boolean, replaceStatusLine: Boolean): List[CommandAsset] = {
     require(executable.isAbsolute && Files.isExecutable(executable) && Files.isRegularFile(executable), "CQ executable must be an absolute executable file")
-    val settings = HostFiles.read(settingsPath, SupervisorSettings_JsonCodec, MaxConfigBytes)
+    val settings = HostFiles.read(settingsPath.toRealPath(), SupervisorSettings_JsonCodec, MaxConfigBytes)
+    val profiles = settings.harnesses.map(SupervisorConfig.profile)
+    require(profiles.nonEmpty && profiles.map(_.harness).distinct.size == profiles.size, "Harness settings must have unique verified routes")
     require(settings.harnesses.exists(_.harness == harness), "Settings do not include this harness route")
     require(harness == Harness.Claude || !replaceStatusLine,
       s"${DriverAssets.StatusLineFlag} applies only to claude: cq configure installs no status line for ${harness.toString.toLowerCase}")
@@ -22,14 +39,14 @@ final class AttachedAssets(schemas: McpSchemas, workflows: WorkflowAssets) {
     val integration = harness match {
       case Harness.Claude =>
         val file = root.resolve(".mcp.json")
-        val current = if (Files.exists(file)) parser.parse(HostFiles.text(file, MaxConfigBytes)).fold(throw _, identity) else Json.obj()
+        val current = if (Files.exists(file)) parser.parse(HostFiles.text(file.toRealPath(), MaxConfigBytes)).fold(throw _, identity) else Json.obj()
         require(current.isObject, "Claude MCP configuration must be an object")
         val servers = current.hcursor.downField("mcpServers").focus.getOrElse(Json.obj())
         require(servers.isObject, "Claude mcpServers must be an object")
         val value = command.deepMerge(Json.obj("type" -> Json.fromString("stdio")))
         require(servers.hcursor.downField("cq").focus.forall(_ == value) || replace, "Claude cq entry differs; use --replace to replace that entry")
         val localFile = root.resolve(".claude/settings.local.json")
-        val local = if (Files.exists(localFile)) parser.parse(HostFiles.text(localFile, MaxConfigBytes)).fold(throw _, identity) else Json.obj()
+        val local = if (Files.exists(localFile)) parser.parse(HostFiles.text(localFile.toRealPath(), MaxConfigBytes)).fold(throw _, identity) else Json.obj()
         require(local.isObject, "Claude .claude/settings.local.json must be an object")
         val enabled = local.hcursor.downField("enabledMcpjsonServers").focus.getOrElse(Json.arr())
         require(enabled.isArray, "Claude enabledMcpjsonServers in .claude/settings.local.json must be an array")
@@ -44,24 +61,19 @@ final class AttachedAssets(schemas: McpSchemas, workflows: WorkflowAssets) {
         List(CommandAsset(Path.of(".mcp.json"), current.mapObject(_.add("mcpServers", servers.mapObject(_.add("cq", value)))).spaces2 + "\n"),
           CommandAsset(ClaudeSettings, driven.spaces2 + "\n"))
       case Harness.Codex =>
-        val file = root.resolve(".codex/config.toml")
         val forwarded = (Set("CQ_TOKEN", "CQ_TOKEN_FILE", "CQ_SETTINGS", "CODEX_HOME") ++ settings.harnesses.flatMap(_.providerEnvironment)).toList.sorted
         val body = CodexHeader + "[mcp_servers.cq]\ncommand = " + quoted(executable.toString) +
-          "\nargs = [" + args.map(quoted).mkString(", ") + "]\ncwd = " + quoted(root.toString) +
+          "\nargs = [" + args.map(quoted).mkString(", ") + "]\ncwd = " + quoted(project.toString) +
           "\nenv_vars = [" + forwarded.map(quoted).mkString(", ") + "]\nstartup_timeout_sec = 45\ntool_timeout_sec = 35\n"
-        require(!Files.exists(file) || HostFiles.text(file, MaxConfigBytes).startsWith(CodexHeader),
-          "Existing .codex/config.toml is user-owned. Export into an empty directory and merge its mcp_servers.cq table into this file; CQ will not overwrite unrelated TOML settings")
         val hooksFile = root.resolve(CodexHooks)
-        val hooks = if (Files.exists(hooksFile)) parser.parse(HostFiles.text(hooksFile, MaxConfigBytes)).fold(throw _, identity) else Json.obj()
+        val hooks = if (Files.exists(hooksFile)) parser.parse(HostFiles.text(hooksFile.toRealPath(), MaxConfigBytes)).fold(throw _, identity) else Json.obj()
         List(CommandAsset(Path.of(".codex/config.toml"), body),
           CommandAsset(CodexHooks, DriverAssets.hooks(hooks, executable, harness, CodexHooks.toString).spaces2 + "\n"))
       case Harness.Pi =>
         List(PiAssets.extension,
-          CommandAsset(Path.of(".pi/extensions/cq-host.json"), command.deepMerge(Json.obj("directory" -> Json.fromString(root.toString),
+          CommandAsset(Path.of(".pi/extensions/cq-host.json"), command.deepMerge(Json.obj("directory" -> Json.fromString(project.toString),
             "tools" -> Json.arr(schemas.attachedTools*))).spaces2 + "\n"))
     }
-    // JSON configuration CQ merges into is rewritten in place; every other asset is a generated file guarded by --replace.
-    val merged = integration.map(_.path).filter(path => harness == Harness.Claude || path == CodexHooks).toSet
-    workflows.writeAssets(integration ++ workflows.commands(harness) ++ DriverAssets.commands(harness), root, replace, merged)
+    integration ++ workflows.commands(harness) ++ DriverAssets.commands(harness)
   }
 }

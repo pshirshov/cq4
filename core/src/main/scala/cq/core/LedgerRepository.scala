@@ -74,6 +74,7 @@ trait LedgerTransaction {
   def resolveIntegration(value: IntegrationRecord): Unit
   def nextFence(): Long
   def workset(id: WorksetId): Option[StoredWorkset]
+  def storedWorksets(after: Option[WorksetId], limit: Int): ReadPage[StoredWorkset]
   def insertWorkset(value: StoredWorkset): Unit
   def setting(kind: ProjectSettingKind): Option[StoredSetting]
   // Replaces the project's document of the value's kind.

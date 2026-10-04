@@ -8,7 +8,7 @@ if [[ $# != 2 ]]; then
   echo "Optional browser address: CQ_ORIGIN=http://server-address:8080" >&2
   exit 2
 fi
-for command in realpath flock initdb pg_ctl python3 curl; do
+for command in realpath flock initdb pg_ctl psql python3 curl; do
   command -v "$command" >/dev/null || { echo "Missing command: $command (use nix develop)" >&2; exit 1; }
 done
 release=$(realpath -e -- "$1")
@@ -65,6 +65,27 @@ if pg_ctl -D "$data" status >/dev/null 2>&1; then
   echo "PostgreSQL is already running for this state; inspect it before relaunching: $data" >&2
   exit 1
 fi
+settings_helper="$(dirname -- "${BASH_SOURCE[0]}")/postgres-settings.py"
+settings_arguments=()
+if [[ -n ${CQ_LOCAL_DATABASE_MEMORY_MIB:-} ]]; then
+  settings_arguments=(--memory-mib "$CQ_LOCAL_DATABASE_MEMORY_MIB")
+fi
+[[ ! -L $data/cq-local.conf ]] || { echo "CQ PostgreSQL settings must be a direct file" >&2; exit 1; }
+settings_temporary=$(mktemp "$data/cq-local.conf.XXXXXXXX")
+if ! python3 "$settings_helper" "${settings_arguments[@]}" > "$settings_temporary"; then
+  rm -- "$settings_temporary"
+  exit 1
+fi
+mv -- "$settings_temporary" "$data/cq-local.conf"
+python3 - "$data/postgresql.conf" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+if path.is_symlink(): raise ValueError('Local PostgreSQL configuration must be a direct file')
+include = "include = 'cq-local.conf'"
+if include not in path.read_text().splitlines():
+    with path.open('a') as output: output.write('\n' + include + '\n')
+PY
 server_pid=
 database_owned=0
 readonly SERVER_GRACE_SECONDS=10 SERVER_KILL_SECONDS=5
@@ -113,7 +134,20 @@ trap 'exit 143' TERM
 # Disable Unix sockets so the only connection path uses loopback password authentication.
 database_owned=1
 pg_ctl -D "$data" -l "$state/logs/postgres.log" \
-  -o "-h 127.0.0.1 -p $db_port -c unix_socket_directories=''" -w -t 30 start >> "$state/logs/postgres-control.log" 2>&1 9>&-
+  -o "-h 127.0.0.1 -p $db_port -c unix_socket_directories='' -c fsync=on -c synchronous_commit=on -c full_page_writes=on" -w -t 30 start >> "$state/logs/postgres-control.log" 2>&1 9>&-
+PGPASSWORD="$CQ_DATABASE_PASSWORD" psql --no-psqlrc --set ON_ERROR_STOP=1 --host 127.0.0.1 --port "$db_port" --username cq --dbname postgres --tuples-only --no-align \
+  --command "SELECT json_object_agg(name, CASE WHEN unit='8kB' THEN (setting::bigint * 8192)::text ELSE setting END) FROM pg_settings WHERE name IN ('fsync','synchronous_commit','full_page_writes','max_connections','shared_buffers','effective_cache_size','random_page_cost','effective_io_concurrency')" \
+  > "$state/logs/postgres-settings.json"
+python3 - "$data/cq-local.conf" "$state/logs/postgres-settings.json" <<'PY'
+import json
+from pathlib import Path
+import sys
+expected = dict(line.split('=', 1) for line in Path(sys.argv[1]).read_text().splitlines())
+observed = json.loads(Path(sys.argv[2]).read_text())
+for key, value in expected.items():
+    if value.startswith("'") and value.endswith("MB'"): value = str(int(value[1:-3]) * 1024 * 1024)
+    if observed[key] != value: raise ValueError(f'Local PostgreSQL setting {key} differs from the declared profile; inspect postgresql.auto.conf and configuration overrides')
+PY
 "$CQ_BIN" serve >> "$state/logs/cq-server.log" 2>&1 9>&- &
 server_pid=$!
 ready=0

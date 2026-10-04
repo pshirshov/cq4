@@ -46,6 +46,30 @@ abstract class StoredWorksetContractTest extends SpecZIO with AssertZIO {
   private def measured(page: SubgraphPage, id: ItemId): SubgraphExtent = page.entries.find(_.root.id == id).get.extent
 
   "Stored worksets and subgraph discovery (Behavioral Active Blackbox; dummy Group / PostgreSQL Good Communication)" should {
+    "browse saved scopes in bounded ID order without leaking another project's worksets" in { (service: LedgerService[IO]) =>
+      val owner = scope(Role.Human)
+      val other = scope(Role.Human)
+      for {
+        _ <- service.initialize(owner, "saved scopes")
+        _ <- service.initialize(other, "other scopes")
+        empty <- service.storedWorksets(owner, None, 2)
+        _ <- assertIO(empty.entries.isEmpty && empty.after.isEmpty && !empty.hasMore)
+        root <- create(service, owner, task("Readable scope"))
+        foreign <- create(service, other, task("Foreign scope"))
+        saved <- ZIO.foreach(WorkflowPhase.all.take(3))(phase => service.createWorkset(owner, Set(root), phase))
+        hidden <- service.createWorkset(other, Set(foreign), WorkflowPhase.Work)
+        first <- service.storedWorksets(owner, None, 2)
+        last <- service.storedWorksets(owner, first.after, 2)
+        _ <- assertIO(first.hasMore && first.entries.size == 2 && !last.hasMore && last.entries.size == 1)
+        _ <- assertIO(first.entries ++ last.entries == saved.sortBy(_.id.value.toString))
+        _ <- assertIO(!(first.entries ++ last.entries).exists(_.id == hidden.id))
+        readByWorker <- service.storedWorksets(owner.copy(actor = owner.actor.copy(role = Role.Worker)), None, 10)
+        _ <- assertIO(readByWorker.entries.size == 3)
+        invalidPages <- ZIO.foreach(List(0, LedgerPolicy.MaxPage + 1))(limit => service.storedWorksets(owner, None, limit).either)
+        _ <- assertIO(invalidPages.forall(invalid))
+      } yield ()
+    }
+
     "list open candidate roots with summaries of their selected descendants and page them under a snapshot" in { (service: LedgerService[IO]) =>
       val owner = scope(Role.Human)
       for {

@@ -7,6 +7,7 @@ import { button, editItem, element, ItemEditor, Json } from './editor.js';
 import { QueryEditor } from './query.js';
 import { Workspace } from './workspace.js';
 import { GraphActions } from './graph.js';
+import { RelationshipGraph } from './relationship-graph.js';
 import { itemName } from './items.js';
 import { itemView } from './presentation.js';
 import { Dialog } from './dialog.js';
@@ -71,7 +72,7 @@ class App {
   }));
   private readonly drivers = new DriversDialog({
     call: command => this.connection().call(command),
-    filter: async workset => { this.worksetFilter = workset; this.worksetLabel.textContent = `Workset ${workset.id.value}`; this.clearWorkset.hidden = false; await this.search(); },
+    filter: async workset => { this.worksetFilter = workset; this.worksetLabel.textContent = `Workset: ${[...workset.targets].map(itemName).join(', ')} · through ${workset.through}`; this.clearWorkset.hidden = false; await this.search(); },
     view: id => this.references.show(id),
   });
   private mounted = false;
@@ -127,6 +128,7 @@ class App {
       if (this.project !== null && this.project.value === project.value) { this.after = undefined; this.snapshot = undefined; await this.refresh(); }
     },
   });
+  private readonly relationshipGraph = new RelationshipGraph({ call: command => this.connection().call(command), select: id => this.select(id, true) });
   private readonly archive = new ArchiveDialog({
     call: command => this.connection().call(command),
     committed: async (project, acknowledgement) => {
@@ -203,7 +205,7 @@ class App {
   }
   private choose(id: api.ItemId | null, outside: boolean): void {
     if (this.selection === null ? id === null : id !== null && this.selection.project.value === id.project.value && itemName(this.selection) === itemName(id)) return;
-    this.historyDialog.close(); this.usageDialog.close(); this.closeEditor();
+    this.historyDialog.close(); this.usageDialog.close(); this.relationshipGraph.dialog.close(); this.closeEditor();
     this.selection = id; this.outside = outside; this.selectionGeneration++; this.selected = null;
     this.graph.setScope(this.project, null);
     this.detail.replaceChildren(); this.historyPanel.replaceChildren(); this.usagePanel.replaceChildren(); this.auditPanel.replaceChildren();
@@ -355,7 +357,7 @@ class App {
     list.append(table);
     content.append(workspace.toggle, this.detail, this.editorPanel, this.graph.element, this.usagePanel, this.auditPanel);
     this.root.replaceChildren(header, workspace.element, status, this.projectDialog.element, this.createDialog.element, this.conflictDialog.element,
-      this.historyDialog.element, this.usageDialog.element, this.archive.element, this.requirements.element, this.graph.dialog.element, this.references.dialog.element, this.questions.dialog.element, this.drivers.element, this.help.element, this.notifications.element);
+      this.historyDialog.element, this.usageDialog.element, this.archive.element, this.requirements.element, this.graph.dialog.element, this.relationshipGraph.dialog.element, this.references.dialog.element, this.questions.dialog.element, this.drivers.element, this.help.element, this.notifications.element);
     this.notifications.reveal(); workspace.fit();
     this.manager = new ConnectionManager(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`, {
       status: stats => this.health.update(stats),
@@ -408,7 +410,7 @@ class App {
   private reset(): void {
     this.questions.reset(); this.references.reset(); this.drivers.reset(); this.drivers.element.close(); this.worksetFilter = null; this.worksetLabel.textContent = ''; this.clearWorkset.hidden = true;
     this.archive.invalidate();
-    this.createDialog.close(); this.historyDialog.close(); this.usageDialog.close(); this.closeEditor();
+    this.createDialog.close(); this.historyDialog.close(); this.usageDialog.close(); this.relationshipGraph.dialog.close(); this.closeEditor();
     this.queryEditor.cancelLive();
     this.queryEditor.invalidate(); this.queryEditor.showDiagnostic(undefined, this.query.value);
     this.epoch++; this.selectionGeneration++; this.selection = null; this.outside = false; this.selected = null; this.editor = null; this.after = undefined; this.snapshot = undefined;
@@ -520,7 +522,7 @@ class App {
         const listed = items.some(({ summary }) => summary.id.project.value === selected.project.value && itemName(summary.id) === itemName(selected));
         if (listed) this.outside = false;
         // An open editor or item dialog keeps its item: a live change must not discard what the operator is working on.
-        const engaged = this.editor !== null || this.historyDialog.element.open || this.usageDialog.element.open || this.graph.dialog.element.open;
+        const engaged = this.editor !== null || this.historyDialog.element.open || this.usageDialog.element.open || this.graph.dialog.element.open || this.relationshipGraph.dialog.element.open;
         if (!listed && !page.hasMore && !engaged && !this.outside) this.hideItem();
         else if (full) await this.select(selected, this.outside).catch(error => { this.fullDue = true; throw error; });
         else this.showWork(selected);
@@ -698,6 +700,7 @@ class App {
     const close = button('', () => this.closeItem()); close.className = 'close-detail'; close.append(icon('Close'));
     close.setAttribute('aria-label', 'Close item view'); close.title = 'Close item view (Esc from results)';
     actions.append(button('Edit current revision', () => this.openEditor(result.view)),
+      button('Relationship graph', () => this.relationshipGraph.open(item.id)),
       button('History', () => this.action(async () => { this.historyBefore = new api.Revision(9223372036854775807n);
         // Drop the previous item's or visit's revisions so stale rows cannot be activated while the fresh page loads.
         this.historyPanel.replaceChildren(element('p', 'Loading history…')); this.historyDialog.open(`History · ${itemName(item.id)}`); await this.loadHistory(); })));

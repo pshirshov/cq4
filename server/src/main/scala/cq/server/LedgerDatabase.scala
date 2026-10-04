@@ -3,8 +3,6 @@ package cq.server
 import baboon.runtime.shared.BaboonJsonCodec
 import cq.core.ReadPage
 import java.sql.{Connection, DriverManager, PreparedStatement, ResultSet}
-import java.nio.charset.StandardCharsets
-import java.security.MessageDigest
 import scala.util.Using
 import zio.{IO, ZIO}
 
@@ -28,16 +26,30 @@ final class LedgerDatabase(config: DatabaseConfig) {
     val sql = new Jdbc(connection)
     sql.query("SELECT pg_advisory_xact_lock(hashtextextended(current_schema() || ':cq:migrations', 0))")(_ => ())(_ => ())
     sql.execute("CREATE TABLE IF NOT EXISTS cq_schema_migrations (version integer PRIMARY KEY, checksum text NOT NULL)")(_ => ())
-    val resource = "/db/001-ledgers.sql"
-    val bytes = Using.resource(Option(getClass.getResourceAsStream(resource)).getOrElse(throw new IllegalStateException(s"Missing $resource")))(_.readAllBytes())
-    val checksum = MessageDigest.getInstance("SHA-256").digest(bytes).map(b => f"${b & 0xff}%02x").mkString
+    val schema = SchemaIdentity.current()
     sql.query("SELECT checksum FROM cq_schema_migrations WHERE version = 1")(_ => ())(_.getString(1)).headOption match {
-      case Some(previous) => require(previous == checksum, "Applied migration 1 checksum differs")
+      case Some(previous) => require(previous == schema.sha256, "Applied migration 1 checksum differs")
       case None =>
-        sql.execute(new String(bytes, StandardCharsets.UTF_8))(_ => ())
-        sql.execute("INSERT INTO cq_schema_migrations(version, checksum) VALUES (1, ?)")(_.setString(1, checksum))
+        sql.execute(schema.sql)(_ => ())
+        sql.execute("INSERT INTO cq_schema_migrations(version, checksum) VALUES (1, ?)")(_.setString(1, schema.sha256))
     }
     ()
+  }
+
+  def installation: IO[Throwable, cq.api.InstallationInfo] = transaction { connection =>
+    connection.setTransactionIsolation(Connection.TRANSACTION_REPEATABLE_READ)
+    val sql = new Jdbc(connection)
+    val attached = s"parent_id IS NULL AND body->>'role' = 'Governor' AND body->>'collector' = '${SupervisorConfig.AttachedGovernorCollector}'"
+    sql.query("SELECT (SELECT checksum FROM cq_schema_migrations WHERE version=1), " +
+      "current_setting('server_version_num')::integer / 10000, " +
+      "current_setting('fsync')::boolean, current_setting('synchronous_commit'), current_setting('full_page_writes')::boolean, " +
+      "(SELECT count(*) FROM cq_claims WHERE NOT released AND expires_at > (extract(epoch FROM statement_timestamp()) * 1000)::bigint), " +
+      s"(SELECT count(*) FROM cq_usage_attempts WHERE effective_outcome IS NULL AND NOT COALESCE(($attached), false)), " +
+      "(SELECT count(*) FROM cq_integrations WHERE jsonb_exists(body->'resolution','Pending'))")(_ => ()) { row =>
+      val applied = Option(row.getString(1)).getOrElse(throw new IllegalStateException("Applied schema identity is missing"))
+      cq.api.InstallationInfo(cq.api.Command.baboonDomainVersion, SchemaIdentity.current().sha256, applied, row.getInt(2),
+        row.getBoolean(3), row.getString(4), row.getBoolean(5), ProducingBuild.value, row.getLong(6), row.getLong(7), row.getLong(8))
+    }.head
   }
 }
 

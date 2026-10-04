@@ -188,7 +188,7 @@ def main():
         probe = "import pathlib,sys; assert all(pathlib.Path(p).is_dir() and not list(pathlib.Path(p).iterdir()) for p in sys.argv[1:])"
         checks.run(prefix + ["--chdir", str(evidence), sys.executable, "-c", probe, *map(str, hidden)], "source-isolation", 15)
         checks.run(["python3", "dev/guardian-check.py", "-v"], "installed-guardian", support["STARTUP_TIMEOUT"])
-        with checks.database([]):
+        with checks.database(support["DatabaseRole"].Durable, []):
             checks.transport(prefix + command, "installed", True, 1)
             checks.restart(prefix + command)
             backup_evidence = evidence / "backup"

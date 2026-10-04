@@ -29,6 +29,13 @@ final class CliDoctorLocal extends AnyWordSpec {
   }
 
   "Command doctor CLI (Behavioral Active Blackbox Good Communication filesystem)" should {
+    "accept the settlement flag before JSON and report missing server credentials without writes" in fixture { root =>
+      val (result, output) = run(root, List("doctor", "server", "--endpoint", "http://127.0.0.1:1", "--require-settled", "--json"))
+      assert(result.left.toOption.exists(_.isInstanceOf[InstallationNeedsAttention]), result.toString)
+      val report = io.circe.parser.parse(output).fold(throw _, identity)
+      assert(report.hcursor.get[String]("scope").contains("server") && report.hcursor.get[Boolean]("current").contains(false))
+      assert(Using.resource(Files.list(root))(_.count()) == 0)
+    }
     "report missing commands as one JSON value and fail without writes or credentials" in fixture { root =>
       val (result, output) = run(root, List("doctor", "commands", "codex", "--json"))
       assert(result.left.toOption.exists(_.isInstanceOf[CommandAssetsNeedAttention]), result.toString)

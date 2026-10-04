@@ -76,11 +76,10 @@ object CqPlugin extends PluginDef {
   make[RunningServer].fromResource[RunningServer.Resource]
   make[DatabaseSetup]
   make[DatabaseConfig].fromEffect(ZIO.attempt {
-    DatabaseConfig(required("CQ_DATABASE_URL"), required("CQ_DATABASE_USER"), required("CQ_DATABASE_PASSWORD"))
+    DatabaseConfig(required("CQ_DATABASE_URL"), required("CQ_DATABASE_USER"), ServerCredentials.password(sys.env))
   })
   make[AccessConfig].fromEffect(ZIO.attempt {
-    val token = required("CQ_TOKEN")
-    require(token.length >= 32, "CQ_TOKEN must contain at least 32 characters")
+    val token = ServerCredentials.token(sys.env)
     AccessConfig(token, required("CQ_ORIGIN"))
   })
   make[ListenConfig].fromEffect(ZIO.attempt {

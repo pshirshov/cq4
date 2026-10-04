@@ -22,6 +22,20 @@ root data ProtocolHello {
   supported: lst[str]
 }
 
+root data InstallationInfo {
+  version: str
+  schemaSha256: str
+  appliedSchemaSha256: str
+  postgresMajor: i32
+  fsync: bit
+  synchronousCommit: str
+  fullPageWrites: bit
+  source: SourceBuild
+  activeClaims: i64
+  managedAttempts: i64
+  pendingIntegrations: i64
+}
+
 enum Ledger { Milestones Ideas Defects Goals Tasks Researches Hypothesis Questions Decisions Reviews Handoffs OperatorActions Memories Upstream }
 root data ItemId { project: ProjectId ledger: Ledger number: i64 }
 root id SessionId { value: uid }
@@ -310,6 +324,7 @@ root data LedgerCounts { entries: lst[LedgerCount] cursor: ChangeCursor }
 root data GraphInput { project: ProjectId roots: set[ItemId] after: opt[ItemId] snapshot: opt[WorksetSnapshot] limit: i32 }
 root id WorksetId { value: uid }
 root data StoredWorkset { id: WorksetId targets: set[ItemId] through: WorkflowPhase actor: Actor createdAt: i64 }
+root data StoredWorksetPage { entries: lst[StoredWorkset] after: opt[WorksetId] hasMore: bit }
 root adt WorksetTarget {
   data Stored { id: WorksetId }
   data Inline { targets: set[ItemId] through: WorkflowPhase }
@@ -328,6 +343,7 @@ root adt SubgraphExtent {
 root data Subgraph { root: ItemSummary extent: SubgraphExtent }
 root data SubgraphPage { entries: lst[Subgraph] cursor: ChangeCursor after: opt[ItemId] hasMore: bit }
 root adt WorksetAction {
+  data BrowseSaved { after: opt[WorksetId] limit: i32 }
   data Discover { after: opt[ItemId] snapshot: opt[ChangeCursor] limit: i32 }
   data Create { targets: set[ItemId] through: WorkflowPhase }
   data Lookup { id: WorksetId }
@@ -500,6 +516,7 @@ root adt Result {
   data Workset { page: WorksetPage }
   data Subgraphs { page: SubgraphPage }
   data WorksetStored { workset: StoredWorkset }
+  data WorksetsListed { page: StoredWorksetPage }
   data WorksetPreviewed { preview: WorksetPreview }
   data Driver { reply: DriverReply }
   data QueryAnalyzed { analysis: QueryAnalysis }

@@ -26,6 +26,7 @@ trait LedgerService[F[_, _]] {
   def browseWorkset(scope: Scope, query: String, order: ItemOrder, after: Option[ItemId], snapshot: Option[ChangeCursor], limit: Int, workset: WorksetId): F[Throwable, BrowsePage]
   def createWorkset(scope: Scope, targets: Set[ItemId], through: WorkflowPhase): F[Throwable, StoredWorkset]
   def lookupWorkset(scope: Scope, id: WorksetId): F[Throwable, StoredWorkset]
+  def storedWorksets(scope: Scope, after: Option[WorksetId], limit: Int): F[Throwable, StoredWorksetPage]
   def previewWorkset(scope: Scope, target: WorksetTarget): F[Throwable, WorksetPreview]
   // Evaluates the workset on the ledger state after `change` inside one transaction that is always rolled back.
   def previewWorksetAfter(scope: Scope, target: WorksetTarget, change: ChangeRequest): F[Throwable, WorksetPreview]
@@ -210,6 +211,13 @@ object LedgerService {
 
     override def lookupWorkset(scope: Scope, id: WorksetId): F[Throwable, StoredWorkset] =
       repository.transact(scope.project)(tx => planner.stored(tx, id))
+
+    override def storedWorksets(scope: Scope, after: Option[WorksetId], limit: Int): F[Throwable, StoredWorksetPage] =
+      repository.transact(scope.project) { tx =>
+        page(limit)
+        val found = tx.storedWorksets(after, limit)
+        StoredWorksetPage(found.entries, found.entries.lastOption.map(_.id), found.hasMore)
+      }
 
     override def previewWorkset(scope: Scope, target: WorksetTarget): F[Throwable, WorksetPreview] =
       repository.transact(scope.project)(tx => planner.resolve(tx, target))

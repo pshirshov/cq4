@@ -125,12 +125,34 @@ final class Cli(context: CliContext, location: ProjectLocation, upload: SessionU
       require(opts.keySet == Set("--directory"), "Command export requires --directory DIR [--replace]")
       val native = nativeHarness(harness, "command")
       renderer.paths(workflows.writeCommands(native, directory.resolve(opts("--directory")).normalize(), replace))
+    case "assets" :: "export" :: harness :: rest =>
+      val opts = options(rest, Set("--directory", "--project-directory", "--settings", "--executable"))
+      require(opts.keySet == Set("--directory", "--project-directory", "--settings", "--executable"), "Asset export requires --directory, --project-directory, --settings and --executable")
+      renderer.paths(attached.exportAssets(nativeHarness(harness, "asset"), directory.resolve(opts("--directory")).normalize(),
+        directory.resolve(opts("--project-directory")).normalize(), directory.resolve(opts("--settings")).normalize(), directory.resolve(opts("--executable")).normalize()))
     case "doctor" :: "commands" :: harness :: rest =>
       val opts = options(rest, Set("--directory"))
       val root = opts.get("--directory").fold(directory)(value => directory.resolve(value).normalize())
       val report = new CommandDoctor(new FileCommandAssetReader, workflows).inspect(nativeHarness(harness, "command"), root)
       renderer.doctor(report)
       if (!report.current) throw new CommandAssetsNeedAttention
+    case "doctor" :: "server" :: rest =>
+      val settled = rest.lastOption.contains("--require-settled")
+      val opts = options(if (settled) rest.dropRight(1) else rest, Set("--endpoint"))
+      val endpoint = opts.get("--endpoint").orElse(environment.get("CQ_ORIGIN")).orElse(environment.get("CQ_ENDPOINT"))
+        .getOrElse(throw new IllegalArgumentException("Server doctor requires --endpoint URL or CQ_ORIGIN"))
+      val report = new InstallationDoctor(new HttpInstallationReader, SchemaIdentity.current(), ProducingBuild.value).server(URI.create(validateEndpoint(endpoint)), environment, settled)
+      renderer.installation(report)
+      if (!report.current) throw new InstallationNeedsAttention
+    case "doctor" :: "harness" :: harness :: rest =>
+      val opts = options(rest, Set("--directory", "--settings", "--executable", "--readonly-home", "--harness-config", "--trust-report"))
+      require(Set("--settings", "--executable", "--readonly-home").subsetOf(opts.keySet), "Harness doctor requires --settings, --executable and --readonly-home")
+      def path(key: String): Path = directory.resolve(opts(key)).normalize()
+      val report = new HarnessDoctor(attached, new FileCommandAssetReader).inspect(nativeHarness(harness, "doctor"),
+        opts.get("--directory").fold(directory)(value => directory.resolve(value).normalize()), path("--settings"), path("--executable"), path("--readonly-home"),
+        opts.get("--harness-config").map(value => directory.resolve(value).normalize()), opts.get("--trust-report").map(value => directory.resolve(value).normalize()), environment)
+      renderer.installation(report)
+      if (!report.current) throw new InstallationNeedsAttention
     case "init" :: rest =>
       val opts = options(rest, Set("--endpoint", "--project-id", "--name"))
       val location = configDirectory

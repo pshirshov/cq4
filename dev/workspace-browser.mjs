@@ -57,7 +57,7 @@ export async function workspaceChecks(browser, storageState, origin, evidence) {
       actions: await page.locator('.document-actions').getByRole('button').allTextContents(),
       top: closeBox.y - paneBox.y < 20, sameRow: Math.abs(closeBox.y - dockBox.y) < 4, besideDock: Math.abs(dockBox.x - (closeBox.x + closeBox.width)) <= 12,
       corner: paneBox.x + paneBox.width - (closeBox.x + closeBox.width) < 70, rightOfTitle: closeBox.x >= titleRight },
-    { icon: 1, text: '', title: 'Close item view (Esc from results)', actions: ['Edit current revision', 'History'],
+    { icon: 1, text: '', title: 'Close item view (Esc from results)', actions: ['Edit current revision', 'Relationship graph', 'History'],
       top: true, sameRow: true, besideDock: true, corner: true, rightOfTitle: true });
     await closeControl.click();
     await detail.waitFor({ state: 'hidden' }); await heading.waitFor({ state: 'detached' });

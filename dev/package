@@ -82,6 +82,7 @@ def assemble(output, binary, sources, provenance, config):
         subprocess.run(["nix-store", "--export", *closure], stdout=stream, check=True, timeout=300)
     examples = output / "examples"
     examples.mkdir()
+    shutil.copy2(ROOT / "dev/codex-hook-report.py", examples / "codex-hook-report.py")
     (examples / "server.env").write_text("""export CQ_DATABASE_URL=jdbc:postgresql://127.0.0.1:5432/cq
 export CQ_DATABASE_USER=cq
 export CQ_DATABASE_PASSWORD=replace-with-database-password

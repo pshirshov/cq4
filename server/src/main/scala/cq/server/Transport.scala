@@ -13,7 +13,7 @@ import zio.{Task, ZIO}
 import zio.interop.catz.*
 import java.nio.charset.StandardCharsets.UTF_8
 
-final class Transport(application: Application, authorization: Authorization, access: AccessConfig, schemas: McpSchemas, live: LiveSession, assets: StaticAssets, archives: ArchiveTransport)
+final class Transport(application: Application, authorization: Authorization, access: AccessConfig, schemas: McpSchemas, live: LiveSession, assets: StaticAssets, archives: ArchiveTransport, database: LedgerDatabase)
     extends Http4sDsl[Task] {
   private val context = BaboonCodecContext.Default
   private val protocolVersions = List("2025-03-26", "2025-06-18", "2025-11-25")
@@ -74,6 +74,12 @@ final class Transport(application: Application, authorization: Authorization, ac
           if (bearer(request).isEmpty && authority.root) response.putHeaders(cookie(authorization.renew(authority).value, authorization.SessionSeconds))
           else response
         }
+      }
+    }
+    case request @ GET -> Root / "api" / "installation" => guarded {
+      authenticate(request).flatMap { authority =>
+        if (!authority.root) ZIO.fail(DomainFailure(Fault.Denied("Installation diagnostics require operator authority")))
+        else database.installation.flatMap(value => encoded(Status.Ok, InstallationInfo_JsonCodec, value))
       }
     }
     case request @ POST -> Root / "api" / "grant" => guarded {

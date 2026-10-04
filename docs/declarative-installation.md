@@ -1,0 +1,169 @@
+# Declarative CQ installation
+
+The flake exports `lib.mkNativePackage`, `nixosModules.default` and
+`homeManagerModules.default`. The package constructor imports an existing native
+release; it checks its model version, platform and executable checksums before
+installing CQ and its guardian. It does not build Scala or perform release gates.
+The current native release targets x86-64 Linux and model 0.1.0.
+
+```nix
+let
+  cqPackage = inputs.cq.lib.mkNativePackage {
+    inherit pkgs;
+    release = /absolute/path/to/native-release;
+  };
+in {
+  imports = [ inputs.cq.nixosModules.default ];
+  services.cq = {
+    enable = true;
+    package = cqPackage;
+    origin = "http://127.0.0.1:8080";
+    tokenFile = "/run/secrets/cq-token";
+    database.passwordFile = "/run/secrets/cq-database-password";
+  };
+}
+```
+
+Credential options take **strings naming runtime files**, not Nix path literals
+or secret values. Systemd loads those files into the CQ service's credentials
+directory. Inline `CQ_TOKEN` and `CQ_DATABASE_PASSWORD` still take precedence
+over their `_FILE` alternatives outside this module. Password files contain one
+nonempty UTF-8 line, at most 8192 bytes; a final LF or CRLF is removed, while other
+spaces are preserved. The existing token-file validation remains in effect.
+
+Managed mode provisions a database and owner in the **shared NixOS PostgreSQL
+18 service**. Their names must match. A dependent oneshot sets the role password
+from its runtime credential, passing SQL through stdin and withholding SQL error
+contents. Authentication for that database/role on IPv4 loopback uses SCRAM.
+Durability settings must remain enabled. PostgreSQL belongs to its own service;
+restarting CQ retains its database.
+
+For an existing PostgreSQL server set `database.managed = false`, then specify
+`database.host`, `port`, `name`, `user` and `passwordFile`. CQ checks the current
+schema checksum on startup, initializes a fresh schema, and refuses an existing
+different checksum. There is no historical migration path during current
+development. `doctor server` checks PostgreSQL 18 and durability readback for
+both deployment modes.
+
+Before switching a running installation, stop attached consumer harnesses and
+reconcile active claims, managed attempts and pending integrations. Run
+`cq doctor server --endpoint URL --require-settled`. A systemd restart delivers
+SIGTERM with a 30-second stop bound; it does not drain externally owned harnesses.
+
+## Home-manager
+
+```nix
+{
+  imports = [ inputs.cq.homeManagerModules.default ];
+  programs.cq = {
+    enable = true;
+    package = cqPackage;
+    tokenFile = "/run/user/1000/secrets/cq-token";
+    projects.consumer = {
+      directory = "${config.home.homeDirectory}/work/consumer";
+      harnesses = [ "Codex" ];
+      settings = {
+        stateRoot = "${config.home.homeDirectory}/.local/state/cq/consumer";
+        harnesses = [ {
+          harness = "Codex";
+          executable = "${codexPackage}/bin/codex";
+          model = "gpt-6-sol";
+          provider = "openai";
+          version = "0.159.2";
+          providerEnvironment = [];
+        } ];
+        limits = {
+          startupMillis = 10000;
+          heartbeatMillis = 2000;
+          graceMillis = 1000;
+          killMillis = 3000;
+          retainedOutputBytes = 1048576;
+        };
+        checks = [];
+        integrationTarget = null;
+      };
+    };
+  };
+}
+```
+
+Projects must have distinct normalized absolute directories under the declared
+home directory. Settings declare harness executables, package-verified versions,
+models/providers, optional Pi extensions, provider **environment names**, limits,
+checks and integration target. CQ supplies the guardian from the native package.
+Asset generation rejects unverified or duplicate routes during the build.
+Provider authentication remains external to the module.
+
+The module exports assets into a derivation using `cq assets export`, with paths
+inside those assets pointing at the real project directory and store settings.
+Home-manager owns the generated files. Command/extension directories use
+recursive links so unrelated files can coexist; existing conflicting files are
+reported by home-manager's ordinary collision check, with `force = false`.
+To add other servers or settings to a generated JSON/TOML file, compose that file
+declaratively and override its `home.file` source. Initialize or attach the
+project once with `cq init --endpoint URL`; project identity and mutable session
+state remain in the Git common directory's `cq` directory.
+
+## Doctor
+
+```sh
+cq doctor server --endpoint http://127.0.0.1:8080 --require-settled --json
+cq doctor harness codex --directory /absolute/consumer \
+  --settings /nix/store/...-settings.json --executable /nix/store/...-cq/bin/cq \
+  --readonly-home /nix/store/...-cq/share/cq/doctor-home \
+  --harness-config /absolute/private/codex/config.toml \
+  --trust-report /absolute/private/codex-hook-report.json --json
+```
+
+`doctor commands` remains the small offline command-file check. `doctor server`
+reads authenticated installation diagnostics: model, producing source, package
+and applied schema checksums, PostgreSQL major/durability and unsettled counts.
+Modified or undetermined source reports `Unknown`; matching commit names alone
+do not establish equal modified inputs. Attached root Governors are excluded
+from managed-attempt counts and must be stopped separately.
+
+`doctor harness` compares all generated assets, accepts declarative symlinks,
+checks the declared verified version through the harness's public `--version`,
+and checks trust. Version probes use an existing immutable empty directory,
+without CQ/provider credentials. JSON comparison preserves unrelated entries;
+Codex comparison verifies the CQ MCP table while preserving unrelated TOML
+tables. Any `Failed` or `Unknown` check exits 1 after emitting its report. File
+contents and probe output are withheld. Doctor never creates configuration,
+session files or runtime directories.
+
+Claude requires `--harness-config` pointing at the global `.claude.json` with
+project trust accepted; disabled hooks fail.
+
+Pi requires `--harness-config /absolute/private/pi-agent/trust.json`. Both
+supported versions gate project extensions on trust. The nearest canonical
+project or parent-folder boolean decision applies; a child refusal overrides a
+parent approval, and null entries are skipped. The doctor requires persisted
+approval, even if an individual invocation uses `--approve` or global automatic
+trust. It neither writes approvals nor acquires Pi's writable trust-store lock.
+
+Codex requires project trust and approval of
+the **current hook hashes**, as described in [official OpenAI documentation](https://learn.chatgpt.com/docs/hooks).
+
+Codex's supported [`hooks/list` protocol](https://learn.chatgpt.com/docs/app-server)
+provides those hashes, but its app-server requires a writable SQLite runtime.
+Record metadata separately; this action is explicitly outside the read-only
+doctor:
+
+```sh
+cq-codex-hook-report --executable /absolute/codex --version 0.159.2 \
+  --project /absolute/consumer --output /absolute/private/codex-hook-report.json
+```
+
+The Nix package provides that helper. An archive also contains
+`examples/codex-hook-report.py`, runnable with Python 3. It uses a private
+temporary Codex runtime without loading authentication, queries metadata without
+running hooks, and writes only the requested inspection report. It does not
+approve hooks. Review/approve the installed hooks through Codex `/hooks`.
+Doctor binds the recorded hashes to exact current hook-file bytes, project,
+version and persisted approvals. Changed hook files require a new report and
+changed hook commands require renewed approval. Unrelated formatting changes
+also invalidate the byte binding. `cq configure` remains the imperative
+installation path.
+
+Home-manager collision and recursive-link behavior follows the
+[home.file options](https://home-manager.dev/manual/unstable/options/home-manager/home.html).

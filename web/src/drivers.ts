@@ -9,6 +9,8 @@ import { faultMessage } from './faults.js';
 const POLL_MS = 5000;
 const QUERY_PAGE_SIZE = 40;
 const MAX_TARGETS = 64;
+const SAVED_PAGE_SIZE = 8;
+const LABEL_TARGETS = 3;
 const CONTEXT = BaboonCodecContext.Default;
 interface DriverEffects {
   call(command: api.Command): Promise<api.Result>;
@@ -36,7 +38,14 @@ export class DriversDialog {
   private readonly mode = element('select', '');
   private readonly targets = element('textarea', '');
   private readonly phase = element('select', '');
-  private readonly storedId = element('input', '');
+  private readonly saved = element('section', '');
+  private readonly savedRows = element('div', '');
+  private savedAfter: api.WorksetId | undefined;
+  private savedGeneration = 0;
+  private readonly moreSaved = button('More saved worksets', () => this.action(() => this.loadSaved(false)));
+  private readonly search = element('input', '');
+  private readonly matches = element('div', '');
+  private searchGeneration = 0;
   private readonly previewPanel = element('section', '');
   private readonly store = button('Store previewed workset', () => this.action(() => this.save()));
   private readonly filter = button('Filter items to workset', () => this.action(async () => {
@@ -52,27 +61,45 @@ export class DriversDialog {
 
   constructor(private readonly effects: DriverEffects) {
     this.mode.setAttribute('aria-label', 'Workset target mode');
-    for (const [value, label] of [['ids', 'Explicit IDs'], ['query', 'Submitted query']]) {
+    for (const [value, label] of [['ids', 'Item IDs'], ['query', 'Search query']]) {
       const option = element('option', label); option.value = value; this.mode.append(option);
     }
     this.targets.setAttribute('aria-label', 'Workset targets'); this.targets.rows = 3; this.targets.maxLength = 4096;
     this.phase.setAttribute('aria-label', 'Workset through phase');
     for (const value of api.WorkflowPhase_values) { const option = element('option', value); option.value = value; this.phase.append(option); }
     this.phase.value = api.WorkflowPhase.Integrate;
-    this.storedId.setAttribute('aria-label', 'Stored workset ID'); this.storedId.placeholder = 'Workset UUID';
+    this.targets.placeholder = 'For example: D70 T56 G1';
+    this.search.setAttribute('aria-label', 'Find items for workset'); this.search.placeholder = 'Find an item by title or ID';
+    this.search.maxLength = 300;
+    this.matches.className = 'workset-matches';
+    this.search.addEventListener('input', () => { const generation = ++this.searchGeneration; this.action(() => this.findTargets(generation)); });
     const invalidate = () => this.invalidate();
     this.mode.addEventListener('change', invalidate); this.phase.addEventListener('change', invalidate); this.targets.addEventListener('input', invalidate);
+    this.mode.addEventListener('change', () => { this.search.hidden = this.mode.value === 'query'; this.matches.replaceChildren(); this.searchGeneration++; });
     this.store.disabled = true; this.filter.disabled = true;
-    this.dialog.body.append(this.freshness, this.drivers, element('h3', 'Define workset'),
-      element('p', 'Enter explicit IDs separated by spaces or commas, or submit a query. Preview resolves the targets before storing them.'),
-      this.mode, this.targets, this.phase, button('Preview targets', () => this.action(() => this.define())),
-      this.storedId, button('Open stored workset', () => this.action(() => this.lookup())),
-      this.previewPanel, this.store, this.filter);
+    const create = element('section', ''); create.className = 'workset-create';
+    const fields = element('div', ''); fields.className = 'workset-fields';
+    for (const [caption, control] of [['Select targets using', this.mode], ['Continue through', this.phase]] as const) {
+      const label = element('label', caption); label.append(control); fields.append(label);
+    }
+    create.append(element('h3', 'Create workset'),
+      element('p', 'A workset saves which items to advance and how far. Start its drive from your harness using cq drive.'),
+      fields, this.search, this.matches, element('p', 'Targets: item IDs separated by spaces or commas, or the query selected above.'), this.targets, button('Preview targets', () => this.action(() => this.define())));
+    this.saved.append(element('h3', 'Saved worksets'), element('p', 'Choose a saved scope to inspect it or filter the item list.'),
+      button('Refresh saved worksets', () => this.action(() => this.loadSaved(true))), this.savedRows, this.moreSaved);
+    this.moreSaved.hidden = true;
+    this.dialog.body.classList.add('drivers-layout');
+    const navigation = element('nav', ''); navigation.className = 'workset-navigation'; navigation.setAttribute('aria-label', 'Drivers and worksets sections');
+    for (const [label, section] of [['View drives', this.drivers], ['Choose saved scope', this.saved], ['Create workset', create]] as const)
+      navigation.append(button(label, () => { section.scrollIntoView({ block: 'start' }); section.tabIndex = -1; section.focus({ preventScroll: true }); }));
+    this.dialog.body.append(navigation, this.freshness, this.drivers, this.saved, create, this.previewPanel);
+    const actions = element('div', ''); actions.className = 'actions'; actions.append(this.store, this.filter); this.previewPanel.after(actions);
   }
   reset(): void {
     this.generation++; this.project = null;
     if (this.timer !== null) clearTimeout(this.timer);
     this.timer = null; this.invalidate(); this.rowsIdentity = ''; this.drivers.replaceChildren();
+    this.savedGeneration++; this.searchGeneration++; this.search.value = ''; this.matches.replaceChildren(); this.savedRows.replaceChildren(); this.savedAfter = undefined; this.moreSaved.hidden = true;
   }
   private invalidate(): void {
     this.previewGeneration++; this.preview = null; this.stored = null; this.store.disabled = true; this.filter.disabled = true;
@@ -80,9 +107,9 @@ export class DriversDialog {
   }
   open(project: api.ProjectId, selected: api.ItemId | null): void {
     this.reset(); this.project = project;
-    this.mode.value = 'ids'; this.targets.value = selected === null ? '' : itemName(selected); this.storedId.value = '';
+    this.mode.value = 'ids'; this.search.hidden = false; this.targets.value = selected === null ? '' : itemName(selected);
     this.dialog.open('Drivers and worksets'); this.freshness.textContent = 'Loading drivers…';
-    this.action(() => this.refresh());
+    this.action(() => this.refresh()); this.action(() => this.loadSaved(true));
   }
   private currentProject(): api.ProjectId { if (this.project === null) throw new Error('Driver dialog has no project'); return this.project; }
   private action(effect: () => Promise<void>): void {
@@ -115,19 +142,27 @@ export class DriversDialog {
       if (generation === this.generation && this.dialog.element.open) this.timer = setTimeout(() => this.action(() => this.refresh()), POLL_MS);
     }
   }
+  private scopeLabel(targets: Set<api.ItemId>): string { return [...targets].map(itemName).join(', '); }
+  private async titleScope(node: HTMLElement, targets: Set<api.ItemId>, generation: number): Promise<void> {
+    const names = [...targets].slice(0, LABEL_TARGETS).map(itemName);
+    const result = await this.call(new api.Command_Search(new api.SearchInput(this.currentProject(), `(${names.join(' OR ')}) archived:all`, undefined, undefined, LABEL_TARGETS)));
+    if (generation !== this.generation || !node.isConnected) return;
+    if (!(result instanceof api.Result_Found)) throw new Error('Unexpected scope titles');
+    const titles = new Map(result.page.items.map(value => [itemName(value.id), value.title]));
+    node.textContent = names.map(name => `${name} · ${titles.has(name) ? titles.get(name) : 'Item unavailable'}`).join('; ') +
+      (targets.size > LABEL_TARGETS ? `; and ${targets.size - LABEL_TARGETS} more` : '');
+  }
   private renderDrivers(values: api.DriverSummary[]): void {
-    const table = element('table', ''); table.className = 'drivers-table'; table.setAttribute('aria-label', 'Drivers');
-    const head = element('tr', '');
-    for (const label of ['Session', 'State', 'Targets / phase', 'Active children', 'Stop / times', 'Controls']) head.append(element('th', label));
-    table.append(head);
-    for (const value of values) {
-      const row = element('tr', ''); const controls = element('td', '');
-      const targetText = [...value.targets].map(itemName).join(', ');
-      controls.append(button('View targets', () => this.action(async () => {
-        await this.showTarget(new api.WorksetTarget_Inline(value.targets, value.through), 'Current workset evaluation', undefined);
-      })));
-      const workset = value.workset;
-      if (workset !== undefined) controls.append(button('Open workset', () => this.action(async () => { this.storedId.value = workset.value; await this.lookup(); })));
+    this.drivers.replaceChildren(element('h3', 'Running drives'),
+      element('p', 'Inspect the scope and current state of each harness. Hold Park to stop automatic continuation.'));
+    if (values.length === 0) this.drivers.append(element('p', 'No drives have been started in this project.'));
+    for (const value of [...values].sort((a, b) => Number(a.state === api.DriverState.Off) - Number(b.state === api.DriverState.Off))) {
+      const card = element('article', ''); card.className = 'drive-card'; card.setAttribute('aria-label', `${value.key.harness} drive ${value.key.session}`);
+      const title = element('h4', this.scopeLabel(value.targets)); const state = element('span', value.state); state.className = 'badge';
+      const status = element('p', `${value.key.harness} · through ${value.through} · ${value.activeChildren} active children `); status.append(state);
+      const controls = element('div', ''); controls.className = 'actions';
+      controls.append(button('Inspect scope', () => this.action(() => this.showTarget(new api.WorksetTarget_Inline(value.targets, value.through), 'Current workset evaluation', undefined))));
+      if (value.workset !== undefined) { const id = value.workset; controls.append(button('Open saved scope', () => this.action(() => this.lookup(id)))); }
       if (value.cycle !== undefined) controls.append(button('View cycle snapshot', () => this.action(async () => {
         const generation = this.generation; this.invalidate(); const previewGeneration = this.previewGeneration;
         const result = await this.call(new api.Command_Driver(new api.DriverInput(this.currentProject(), new api.DriverRequest_Snapshot(value.key, value.revision))));
@@ -139,18 +174,51 @@ export class DriversDialog {
         const generation = this.generation; park.disabled = true;
         try {
           await this.call(new api.Command_Driver(new api.DriverInput(this.currentProject(), new api.DriverRequest_Park(value.key, value.revision))));
-          if (generation === this.generation && this.dialog.element.open) { if (this.timer !== null) clearTimeout(this.timer); await this.refresh(); }
+          if (generation === this.generation && this.dialog.element.open) await this.refresh();
         } finally { park.disabled = value.state === api.DriverState.Off; }
       }));
-      park.textContent = 'Park';
-      park.disabled = value.state === api.DriverState.Off; controls.append(park);
-      const time = (value: bigint) => new Date(Number(value)).toLocaleString();
-      row.append(element('td', `${value.key.harness} ${value.key.session}${value.attached === undefined ? '' : ` · attached ${value.attached.value}`}`),
-        element('td', value.state), element('td', `${targetText} through ${value.through}`), element('td', String(value.activeChildren)),
-        element('td', `${value.stopped === undefined ? '' : `${value.stopped.reason}: ${value.stopped.detail} · `}Touched ${time(value.touchedAt)}${value.stoppedAt === undefined ? '' : ` · Stopped ${time(value.stoppedAt)}`}`), controls);
-      table.append(row);
+      park.textContent = 'Hold to park'; park.disabled = value.state === api.DriverState.Off; controls.append(park);
+      card.append(title, status);
+      if (value.state === api.DriverState.Binding) card.append(element('p', 'Waiting for the harness to connect and accept this scope.'));
+      if (value.state === api.DriverState.On) card.append(element('p', 'Automatic continuation is enabled.'));
+      if (value.stopped !== undefined) card.append(element('p', `Stopped: ${value.stopped.reason} · ${value.stopped.detail}`));
+      const details = element('details', ''); details.append(element('summary', 'Session details'),
+        element('p', `Session: ${value.key.session}`), element('p', `Last activity: ${new Date(Number(value.touchedAt)).toLocaleString()}`));
+      if (value.attached !== undefined) details.append(element('p', `Attached session: ${value.attached.value}`));
+      card.append(controls, details); this.drivers.append(card);
+      this.action(() => this.titleScope(title, value.targets, this.generation));
     }
-    this.drivers.replaceChildren(element('h3', 'Drivers'), values.length === 0 ? element('p', 'No stored drivers in this project.') : table);
+  }
+  private async loadSaved(reset: boolean): Promise<void> {
+    const generation = this.generation;
+    const savedGeneration = ++this.savedGeneration;
+    this.moreSaved.disabled = true;
+    const result = await this.call(new api.Command_Workset(new api.WorksetInput(this.currentProject(), new api.WorksetAction_BrowseSaved(reset ? undefined : this.savedAfter, SAVED_PAGE_SIZE))));
+    if (generation !== this.generation || savedGeneration !== this.savedGeneration) return;
+    if (!(result instanceof api.Result_WorksetsListed)) throw new Error('Unexpected saved worksets');
+    if (reset) this.savedRows.replaceChildren();
+    for (const value of result.page.entries) {
+      const card = element('article', ''); card.className = 'workset-card';
+      const open = button(this.scopeLabel(value.targets), () => this.action(() => this.lookup(value.id)));
+      card.append(open, element('p', `Through ${value.through} · saved ${new Date(Number(value.createdAt)).toLocaleString()}`));
+      this.savedRows.append(card); this.action(() => this.titleScope(open, value.targets, generation));
+    }
+    if (reset && result.page.entries.length === 0) this.savedRows.append(element('p', 'No saved worksets yet. Create one below.'));
+    this.savedAfter = result.page.after; this.moreSaved.hidden = !result.page.hasMore; this.moreSaved.disabled = false;
+    if (result.page.hasMore && this.savedAfter === undefined) throw new Error('Saved workset continuation is missing');
+  }
+  private async findTargets(generation: number): Promise<void> {
+    const project = this.currentProject(); const text = this.search.value.trim(); this.matches.replaceChildren();
+    if (text === '') return;
+    const query = /^[A-Z]+[1-9][0-9]*$/.test(text) ? text : JSON.stringify(text);
+    const result = await this.call(new api.Command_Search(new api.SearchInput(project, query, undefined, undefined, 20)));
+    if (generation !== this.searchGeneration || this.project !== project) return;
+    if (!(result instanceof api.Result_Found)) throw new Error('Unexpected item search');
+    for (const value of result.page.items) this.matches.append(button(`${itemName(value.id)} · ${value.title}`, () => {
+      this.mode.value = 'ids'; this.targets.value = `${this.targets.value} ${itemName(value.id)}`.trim(); this.invalidate();
+      this.search.value = ''; this.matches.replaceChildren(); this.search.focus();
+    }));
+    if (result.page.items.length === 0) this.matches.append(element('p', 'No matching items.'));
   }
   private async define(): Promise<void> {
     const generation = this.generation; const project = this.currentProject(); const phase = this.phase.value as api.WorkflowPhase;
@@ -206,6 +274,7 @@ export class DriversDialog {
         (item.id.ledger === api.Ledger.OperatorActions && item.status === api.OperatorActionStatus.Requested)));
     this.previewPanel.replaceChildren(element('h3', label), element('p', `${[...preview.targets].map(itemName).join(', ')} through ${preview.through} · Snapshot ${preview.snapshot.cursor.value}`),
       element('p', `Awaiting operator: ${awaiting.length === 0 ? 'none' : awaiting.map(item => itemName(item.id)).join(', ')}`), table);
+    this.previewPanel.scrollIntoView({ block: 'nearest' });
   }
   private async save(): Promise<void> {
     const preview = this.preview; const generation = this.generation; if (preview === null || this.busy) return;
@@ -214,13 +283,13 @@ export class DriversDialog {
       const result = await this.call(new api.Command_Workset(new api.WorksetInput(this.currentProject(), new api.WorksetAction_StorePreview(preview))));
       if (generation !== this.generation || this.preview !== preview) return;
       if (!(result instanceof api.Result_WorksetStored)) throw new Error('Unexpected stored workset');
-      this.stored = result.workset; this.storedId.value = result.workset.id.value; this.filter.disabled = false;
-      this.previewPanel.prepend(element('p', `Stored workset ${result.workset.id.value}`));
+      this.stored = result.workset; this.filter.disabled = false; this.action(() => this.loadSaved(true));
+      this.previewPanel.prepend(element('p', 'Workset saved. Choose it again under Saved worksets.'));
     } finally { this.busy = false; this.store.disabled = this.preview === null; }
   }
-  private async lookup(): Promise<void> {
+  private async lookup(id: api.WorksetId): Promise<void> {
     const generation = this.generation; this.invalidate(); const previewGeneration = this.previewGeneration;
-    const result = await this.call(new api.Command_Workset(new api.WorksetInput(this.currentProject(), new api.WorksetAction_Lookup(new api.WorksetId(this.storedId.value)))));
+    const result = await this.call(new api.Command_Workset(new api.WorksetInput(this.currentProject(), new api.WorksetAction_Lookup(id))));
     if (generation !== this.generation || previewGeneration !== this.previewGeneration) return;
     if (!(result instanceof api.Result_WorksetStored)) throw new Error('Unexpected stored workset');
     const loading = this.showTarget(new api.WorksetTarget_Stored(result.workset.id), 'Current stored workset evaluation', undefined);

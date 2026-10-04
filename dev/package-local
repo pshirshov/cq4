@@ -2,6 +2,7 @@
 """Build and smoke-check a native local package without release gates."""
 import argparse
 import json
+import hashlib
 import os
 from pathlib import Path
 import runpy
@@ -23,7 +24,38 @@ def smoke(checks, command: list[str], name: str, support: dict) -> None:
     report = checks.run(command + ["doctor", "commands", "pi", "--directory", str(commands), "--json"], name + "-doctor", 30)
     if json.loads(report)["current"] is not True:
         raise RuntimeError("Packaged command templates differ")
-    with checks.database([]):
+    project = checks.evidence / (name + "-harness")
+    project.mkdir()
+    readonly = checks.evidence / (name + "-readonly-home")
+    readonly.mkdir(mode=0o555)
+    fixture = checks.evidence / (name + "-version-fixture")
+    fixture.write_text("#!/bin/sh\necho 'codex-cli 0.159.2'\n")
+    fixture.chmod(0o700)
+    settings = checks.evidence / (name + "-settings.json")
+    settings.write_text(json.dumps({"stateRoot": str(checks.evidence / "state"), "guardian": str(fixture),
+        "harnesses": [{"harness": "Codex", "executable": str(fixture), "model": "fixture", "provider": "fixture", "version": "0.159.2", "providerExtensions": [], "providerEnvironment": []}],
+        "limits": {"startupMillis": "1000", "heartbeatMillis": "500", "graceMillis": "100", "killMillis": "1000", "retainedOutputBytes": 65536},
+        "checks": [], "evaluation": None, "integrationTarget": None}))
+    checks.run(command + ["assets", "export", "codex", "--directory", str(project), "--project-directory", str(project), "--settings", str(settings), "--executable", str(fixture), "--json"], name + "-assets", 30)
+    hooks = project / ".codex/hooks.json"
+    current_hash = "sha256:" + "a" * 64
+    metadata = [{"key": str(hooks) + ":" + key + ":0:0", "sourcePath": str(hooks), "command": str(fixture) + " hook codex " + event, "currentHash": current_hash}
+                for event, key in [("UserPromptSubmit", "user_prompt_submit"), ("Stop", "stop")]]
+    trust = checks.evidence / (name + "-trust.toml")
+    trust.write_text("[projects." + json.dumps(str(project)) + ']\ntrust_level = "trusted"\n' + "".join(
+        "[hooks.state." + json.dumps(value["key"]) + ']\ntrusted_hash = "' + current_hash + '"\n' for value in metadata))
+    inspection = checks.evidence / (name + "-hook-report.json")
+    inspection.write_text(json.dumps({"version": "0.159.2", "project": str(project), "sha256": hashlib.sha256(hooks.read_bytes()).hexdigest(),
+        "listing": {"data": [{"cwd": str(project), "errors": [], "hooks": metadata}]}}))
+    for path in [settings, hooks, trust, inspection]:
+        source = path.with_name(path.name + ".source")
+        path.rename(source)
+        path.symlink_to(source)
+    observed = checks.run(command + ["doctor", "harness", "codex", "--directory", str(project), "--settings", str(settings), "--executable", str(fixture), "--readonly-home", str(readonly),
+        "--harness-config", str(trust), "--trust-report", str(inspection), "--json"], name + "-harness-doctor", 30)
+    if not json.loads(observed)["current"] or list(readonly.iterdir()):
+        raise RuntimeError("Packaged harness doctor failed or changed its immutable version-probe home")
+    with checks.database(support["DatabaseRole"].Durable, []):
         port = support["free_port"]()
         origin = f"http://127.0.0.1:{port}"
         checks.environment.update(CQ_HOST="127.0.0.1", CQ_PORT=str(port), CQ_ORIGIN=origin, CQ_TOKEN=uuid.uuid4().hex, CQ_SESSION=str(uuid.uuid4()))
@@ -35,6 +67,12 @@ def smoke(checks, command: list[str], name: str, support: dict) -> None:
                     return response.read()
             if json.loads(get("/api/hello")) != {"version": "0.1.0", "supported": ["0.1.0"]}:
                 raise RuntimeError("Local package protocol mismatch")
+            installation = json.loads(get("/api/installation"))
+            if installation["postgresMajor"] != 18 or not installation["fsync"] or installation["synchronousCommit"] != "on" or not installation["fullPageWrites"]:
+                raise RuntimeError("Local smoke requires PostgreSQL 18 with durability enabled")
+            diagnostics = checks.run(command + ["doctor", "server", "--endpoint", origin, "--require-settled", "--json"], name + "-server-doctor", 30)
+            if not json.loads(diagnostics)["current"]:
+                raise RuntimeError("Local package server identity or settlement differs")
             for asset in ["index.html", "style.css", "app.js"]:
                 actual = get("/" if asset == "index.html" else "/" + asset)
                 if actual != (ROOT / "generated/resources/web" / asset).read_bytes():
@@ -51,7 +89,7 @@ def smoke(checks, command: list[str], name: str, support: dict) -> None:
             result = call({"Search": {"input": {"project": project, "query": "archived:all", "after": None, "snapshot": None, "limit": 1}}})
             if result["Found"]["page"]["items"] != []:
                 raise RuntimeError("Fresh smoke project is not empty")
-    (checks.evidence / (name + "-smoke.json")).write_text(json.dumps({"status": "passed", "cases": ["CLI", "command templates", "protocol", "embedded browser assets", "initialize/search"]}, indent=2) + "\n")
+    (checks.evidence / (name + "-smoke.json")).write_text(json.dumps({"status": "passed", "cases": ["CLI", "command templates", "asset export", "harness doctor with version/trust fixtures", "durable server doctor", "protocol", "embedded browser assets", "initialize/search"]}, indent=2) + "\n")
 
 
 def main() -> None:

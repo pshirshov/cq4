@@ -256,6 +256,27 @@ try {
   await batch().getByRole('button', {name: 'Close', exact: true}).click(); await search('');
   cases.push('D70 a Question answered through the batch dialog leaves a list of open Questions and closes its item view without a reload');
 
+  // A suspended page and a second browser tab must observe the same committed answer after resume.
+  const sixth = (await change([{Create: {draft: question(6)}}])).Changed.ack.items[0].id;
+  await page.getByRole('button', {name: 'Q6 · Question 6', exact: true}).click();
+  await page.locator('#detail-pane').getByRole('heading', {name: 'Q6 · Question 6', exact: true}).waitFor();
+  const second = await context.newPage();
+  await second.goto(origin); await second.getByText('Connection: ALIVE', {exact: true}).waitFor();
+  await second.getByLabel('Project', {exact: true}).selectOption(project.value);
+  await second.getByRole('button', {name: 'Q6 · Question 6', exact: true}).click();
+  await second.locator('#detail-pane').getByRole('heading', {name: 'Q6 · Question 6', exact: true}).waitFor();
+  await page.evaluate(() => document.dispatchEvent(new Event('freeze')));
+  const beforeResume = await detail(sixth);
+  await change([{Replace: {id: sixth, expected: beforeResume.revision, draft: {...beforeResume.draft,
+    content: {Question: {...beforeResume.draft.content.Question, status: 'Answered', answer: 'Answer while the first tab is suspended'}}}}}]);
+  await second.waitForFunction(() => document.querySelector('#detail-pane .item-metadata .badge:nth-child(2)').textContent === 'Answered');
+  await page.evaluate(() => document.dispatchEvent(new Event('resume')));
+  await page.getByText('Data: current', {exact: true}).waitFor(); await awaitStatus('Q6', 'Answered');
+  assert.equal((await detail(sixth)).revision.value, '2');
+  assert.equal(await page.locator('#detail-pane section[data-field="answer"] .field-value').textContent(), 'Answer while the first tab is suspended');
+  await second.close();
+  cases.push('D70 two tabs and freeze/resume converge on the committed Question revision and answer');
+
   await page.getByRole('button', {name: 'New item', exact: true}).click();
   const create = page.getByRole('dialog', {name: 'New item', exact: true});
   await create.getByLabel('content', {exact: true}).selectOption('Question');

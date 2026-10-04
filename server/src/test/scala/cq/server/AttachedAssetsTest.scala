@@ -1,7 +1,7 @@
 package cq.server
 
 import cq.api.*
-import cq.host.{DriverAssets, HostFiles, WorkflowAssets}
+import cq.host.{DriverAssets, HarnessUsage, HostFiles, WorkflowAssets}
 import io.circe.{Json, parser}
 import java.nio.file.Files
 import org.scalatest.wordspec.AnyWordSpec
@@ -15,7 +15,7 @@ final class AttachedAssetsLocal extends AnyWordSpec {
     Files.writeString(binary, "#!/bin/sh\nexit 0\n")
     assert(binary.toFile.setExecutable(true))
     val settings = root.resolve("settings.json")
-    val profiles = Harness.all.toList.map(harness => HarnessSetting(harness, binary.toString, "model", "provider", "version", Nil, Set.empty))
+    val profiles = Harness.all.toList.map(harness => HarnessSetting(harness, binary.toString, "model", "provider", HarnessUsage.version(harness), Nil, Set.empty))
     Files.writeString(settings, HostFiles.encode(SupervisorSettings_JsonCodec, SupervisorSettings(root.resolve("state").toString,
       binary.toString, profiles, HostLimits(1000, 500, 100, 1000, 65536), Nil, None, None)))
     (root, binary, settings)
@@ -27,7 +27,7 @@ final class AttachedAssetsLocal extends AnyWordSpec {
       val binary = root.resolve("cq")
       Files.writeString(binary, "#!/bin/sh\nexit 0\n")
       assert(binary.toFile.setExecutable(true))
-      val profiles = Harness.all.toList.map(harness => HarnessSetting(harness, binary.toString, "model", "provider", "version", Nil, Set("PROVIDER_API_KEY")))
+      val profiles = Harness.all.toList.map(harness => HarnessSetting(harness, binary.toString, "model", "provider", HarnessUsage.version(harness), Nil, Set("PROVIDER_API_KEY")))
       val settings = root.resolve("settings.json")
       val value = SupervisorSettings(root.resolve("state").toString, binary.toString, profiles, HostLimits(1000, 500, 100, 1000, 65536), Nil, None, None)
       Files.writeString(settings, HostFiles.encode(SupervisorSettings_JsonCodec, value))
@@ -62,7 +62,7 @@ final class AttachedAssetsLocal extends AnyWordSpec {
       Files.writeString(binary, "#!/bin/sh\nexit 0\n")
       assert(binary.toFile.setExecutable(true))
       val settings = root.resolve("settings.json")
-      val profiles = Harness.all.toList.map(harness => HarnessSetting(harness, binary.toString, "model", "provider", "version", Nil, Set.empty))
+      val profiles = Harness.all.toList.map(harness => HarnessSetting(harness, binary.toString, "model", "provider", HarnessUsage.version(harness), Nil, Set.empty))
       Files.writeString(settings, HostFiles.encode(SupervisorSettings_JsonCodec, SupervisorSettings(root.resolve("state").toString,
         binary.toString, profiles, HostLimits(1000, 500, 100, 1000, 65536), Nil, None, None)))
       val assets = new AttachedAssets(new McpSchemas, new WorkflowAssets)
@@ -93,7 +93,7 @@ final class AttachedAssetsLocal extends AnyWordSpec {
       Files.writeString(binary, "#!/bin/sh\nexit 0\n")
       assert(binary.toFile.setExecutable(true))
       val settings = root.resolve("settings.json")
-      val profiles = Harness.all.toList.map(harness => HarnessSetting(harness, binary.toString, "model", "provider", "version", Nil, Set.empty))
+      val profiles = Harness.all.toList.map(harness => HarnessSetting(harness, binary.toString, "model", "provider", HarnessUsage.version(harness), Nil, Set.empty))
       Files.writeString(settings, HostFiles.encode(SupervisorSettings_JsonCodec, SupervisorSettings(root.resolve("state").toString,
         binary.toString, profiles, HostLimits(1000, 500, 100, 1000, 65536), Nil, None, None)))
       val assets = new AttachedAssets(new McpSchemas, new WorkflowAssets)

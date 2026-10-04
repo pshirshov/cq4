@@ -7,6 +7,9 @@
       systems = [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ];
       forSystems = nixpkgs.lib.genAttrs systems;
     in {
+      lib.mkNativePackage = import ./nix/package.nix;
+      nixosModules.default = import ./nix/nixos.nix;
+      homeManagerModules.default = import ./nix/home-manager.nix;
       devShells = forSystems (system:
         let
           pkgs = import nixpkgs { inherit system; };

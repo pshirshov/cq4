@@ -38,6 +38,7 @@ lazy val server = project.in(file("server")).dependsOn(core, host).settings(
     "org.http4s" %% "http4s-ember-server" % http4sVersion,
     "org.http4s" %% "http4s-dsl" % http4sVersion,
     "org.postgresql" % "postgresql" % "42.7.13",
+    "org.tomlj" % "tomlj" % "2.2.0",
     "io.7mind.izumi" %% "distage-testkit-scalatest" % izumiVersion % Test,
     "org.scalatest" %% "scalatest" % "3.2.20" % Test,
   ),

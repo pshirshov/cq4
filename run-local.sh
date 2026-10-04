@@ -3,7 +3,7 @@ set -euo pipefail
 
 if [[ $# != 0 ]]; then
   echo "Usage: $0" >&2
-  echo "Optional environment: CQ_ORIGIN, CQ_LOCAL_STATE, CQ_LOCAL_PORT, CQ_LOCAL_DB_PORT" >&2
+  echo "Optional environment: CQ_ORIGIN, CQ_LOCAL_STATE, CQ_LOCAL_PORT, CQ_LOCAL_DB_PORT, CQ_LOCAL_DATABASE_MEMORY_MIB" >&2
   exit 2
 fi
 repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)

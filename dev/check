@@ -21,6 +21,8 @@ import uuid
 
 
 ROOT = Path(__file__).resolve().parent.parent
+POSTGRES_PRESETS = runpy.run_path(str(ROOT / 'docs/examples/postgres-settings.py'))
+DatabaseRole = POSTGRES_PRESETS['DatabaseRole']
 COMMAND_TIMEOUT = 600
 # Suites per sbt session when each is selected by exact name, so that one session stays within COMMAND_TIMEOUT.
 CONTRACT_BATCH = 6
@@ -129,11 +131,14 @@ class Checks:
         self.sbt([f"contracts/Test/runMain cq.contracts.ContractCheck verify {fixtures}"], "scala-contract-verify")
 
     @contextlib.contextmanager
-    def database(self, settings: list[str]):
+    def database(self, role: DatabaseRole, settings: list[str]):
+        POSTGRES_PRESETS['validate_additions'](settings)
+        preset = POSTGRES_PRESETS['cluster_settings'](role)
+        label = f'database-{role.value}'
         provided = self.environment.get("CQ_TEST_DATABASE_URL")
         if provided is not None:
-            if settings:
-                raise ValueError("This check requires an isolated local PostgreSQL cluster with measurement settings")
+            if role is DatabaseRole.Functional or settings:
+                raise ValueError("Disposable functional presets and extra settings require an owned local PostgreSQL cluster; unset CQ_TEST_DATABASE_URL")
             parsed = urllib.parse.urlsplit(provided.removeprefix("jdbc:"))
             if parsed.scheme != "postgresql" or parsed.username is not None or parsed.query:
                 raise ValueError("Provided database URL must be postgresql://host:port/database; supply credentials separately")
@@ -142,6 +147,11 @@ class Checks:
             command = ["psql", "--no-psqlrc", "--set", "ON_ERROR_STOP=1", "--host", parsed.hostname,
                        "--port", str(parsed.port or 5432), "--dbname", parsed.path[1:],
                        "--username", self.environment["CQ_TEST_DATABASE_USER"]]
+            observed = self.run(command + ["--tuples-only", "--no-align", "--command",
+                "SELECT current_setting('fsync') || ',' || current_setting('synchronous_commit') || ',' || current_setting('full_page_writes')"],
+                label + '-durability', STARTUP_TIMEOUT).strip()
+            if observed != 'on,on,on':
+                raise ValueError('Durable checks require fsync, synchronous_commit and full_page_writes on in the supplied database')
             self.run(command + ["--command", f'CREATE SCHEMA "{schema}"'], "database-create-schema", STARTUP_TIMEOUT)
             self.environment.update(CQ_DATABASE_URL=f"jdbc:{provided.removeprefix('jdbc:')}?currentSchema={schema}",
                                     CQ_DATABASE_USER=self.environment["CQ_TEST_DATABASE_USER"],
@@ -154,17 +164,24 @@ class Checks:
             with tempfile.TemporaryDirectory(prefix="pg-", dir=ROOT / ".work") as temporary:
                 data = Path(temporary) / "data"
                 port = free_port()
-                self.run(["initdb", "-D", str(data), "--auth=trust", "--encoding=UTF8", "--no-locale"], "database-init", STARTUP_TIMEOUT)
+                self.run(["initdb", "-D", str(data), "--auth=trust", "--encoding=UTF8", "--no-locale"], label + '-init', STARTUP_TIMEOUT)
                 with (data / "postgresql.conf").open("a") as configuration:
-                    configuration.write("\n" + "\n".join(settings) + "\n")
-                self.run(["pg_ctl", "-D", str(data), "-l", str(self.evidence / "postgres.log"),
-                          "-o", f"-h 127.0.0.1 -p {port} -c unix_socket_directories=''", "-w", "start"], "database-start", STARTUP_TIMEOUT)
+                    configuration.write("\n" + "\n".join(preset + settings) + "\n")
+                self.run(["pg_ctl", "-D", str(data), "-l", str(self.evidence / (label + '.log')),
+                          "-o", f"-h 127.0.0.1 -p {port} -c unix_socket_directories=''", "-w", "start"], label + '-start', STARTUP_TIMEOUT)
                 self.environment.update(CQ_DATABASE_URL=f"jdbc:postgresql://127.0.0.1:{port}/postgres",
                                         CQ_DATABASE_USER=getpass.getuser(), CQ_DATABASE_PASSWORD="")
                 try:
+                    observed = self.run(['psql', '--no-psqlrc', '--host', '127.0.0.1', '--port', str(port), '--dbname', 'postgres', '--username', self.environment['CQ_DATABASE_USER'],
+                        '--tuples-only', '--no-align', '--command', "SELECT json_object_agg(name,setting) FROM pg_settings WHERE name IN ('fsync','synchronous_commit','full_page_writes','max_connections')"],
+                        label + '-settings', STARTUP_TIMEOUT)
+                    expected = 'off' if role is DatabaseRole.Functional else 'on'
+                    values = json.loads(observed)
+                    if any(values[key] != expected for key in ('fsync', 'synchronous_commit', 'full_page_writes')) or values['max_connections'] != str(POSTGRES_PRESETS['MAX_CONNECTIONS']):
+                        raise RuntimeError('Owned PostgreSQL cluster did not apply its declared role')
                     yield
                 finally:
-                    self.run(["pg_ctl", "-D", str(data), "-m", "fast", "-w", "stop"], "database-stop", SHUTDOWN_TIMEOUT)
+                    self.run(["pg_ctl", "-D", str(data), "-m", "fast", "-w", "stop"], label + '-stop', SHUTDOWN_TIMEOUT)
 
     def classpath(self):
         output = self.sbt(["server/compile", "show server/runtimeClasspath"], "server-classpath")
@@ -251,7 +268,7 @@ class Checks:
         runpy.run_path(str(ROOT / "dev/project-archive-check.py"))["verify"](self, command, name)
 
     def browser_suite(self, name: str):
-        for scenario in ["browser", "polish-browser", "query-prefix-check", "archive-browser", "followup-browser", "question-browser", "question-live-check", "dialog-races-browser", "dialog-size-browser", "sizing-browser", "completion-browser", "query-local-check", "hold-browser", "wip-browser", "help-browser"]:
+        for scenario in ["browser", "polish-browser", "query-prefix-check", "archive-browser", "followup-browser", "question-browser", "question-live-check", "dialog-races-browser", "dialog-size-browser", "sizing-browser", "completion-browser", "query-local-check", "hold-browser", "wip-browser", "help-browser", "relationship-graph-browser"]:
             self.run(["node", f"dev/{scenario}.mjs"], f"{name}-{scenario}", COMMAND_TIMEOUT)
 
     def http_browser(self, command: list[str], name: str):
@@ -278,7 +295,7 @@ class Checks:
     def cohort(self):
         self.generate()
         classpath = self.classpath()
-        with self.database([]):
+        with self.database(DatabaseRole.Functional, []):
             # By exact name: a pattern makes distage-testkit execute every suite of the module (see `suites`), whose PostgreSQL fixtures
             # together exhaust the cluster's 100 connections.
             self.sbt(["server/testOnly cq.server.CohortSelectionPostgres"], "cohort-contract")
@@ -293,7 +310,7 @@ class Checks:
     def growth(self):
         self.generate()
         command = ["java", "-cp", self.classpath(), "cq.server.Main"]
-        with self.database([]):
+        with self.database(DatabaseRole.Functional, []):
             port = free_port()
             self.environment.update(CQ_HOST="127.0.0.1", CQ_PORT=str(port), CQ_ORIGIN=f"http://127.0.0.1:{port}",
                                     CQ_TOKEN=uuid.uuid4().hex, CQ_SESSION=str(uuid.uuid4()), CQ_GROWTH_EVIDENCE=str(self.evidence / "fixture"))
@@ -301,17 +318,19 @@ class Checks:
                 self.run(["python3", "dev/dispatch-growth-check.py", *command], "dispatch-growth", DISPATCH_FIXTURE_TIMEOUT)
 
     def postgres(self):
+        self.run(['python3', 'dev/postgres-presets-check.py', '--evidence', str(self.evidence / 'presets')], 'postgres-presets', COMMAND_TIMEOUT)
         self.generate()
         classpath = self.classpath()
-        with self.database([]):
+        with self.database(DatabaseRole.Functional, []):
             self.contracts_of("Postgres", "postgres-contract")
+        with self.database(DatabaseRole.Durable, []):
             self.transport(["java", "-cp", classpath, "cq.server.Main"], "jvm", False, JVM_FIXTURE_SCALE)
             self.restart(["java", "-cp", classpath, "cq.server.Main"])
 
     def browser(self):
         self.generate()
         classpath = self.classpath()
-        with self.database([]):
+        with self.database(DatabaseRole.Functional, []):
             self.transport(["java", "-cp", classpath, "cq.server.Main"], "browser", True, JVM_FIXTURE_SCALE)
 
     def ui(self):
@@ -330,7 +349,7 @@ class Checks:
         self.run(["node", "dev/connection-native.mjs"], "connection-native", COMMAND_TIMEOUT)
         self.run(["node", "dev/money-check.mjs"], "money-check", COMMAND_TIMEOUT)
         command = ["java", "-cp", self.classpath(), "cq.server.Main"]
-        with self.database(["shared_preload_libraries = 'pg_stat_statements'"] if usage else []):
+        with self.database(DatabaseRole.Functional, ["shared_preload_libraries = 'pg_stat_statements'"] if usage else []):
             if usage:
                 self.contracts_of("UsageContractDummy|UsageContractPostgres", "usage-contract")
             port = free_port()
@@ -374,7 +393,7 @@ class Checks:
                     "auto_explain.log_parameter_max_length = 0", "logging_collector = on",
                     "log_destination = 'jsonlog'", "log_filename = 'access.log'", "log_timezone = 'UTC'",
                     "log_directory = '" + str(self.evidence.resolve()).replace("'", "''") + "'"]
-        with self.database(settings):
+        with self.database(DatabaseRole.Functional, settings):
             port = free_port()
             self.environment.update(CQ_HOST="127.0.0.1", CQ_PORT=str(port), CQ_ORIGIN=f"http://127.0.0.1:{port}",
                                     CQ_TOKEN=uuid.uuid4().hex, CQ_SESSION=str(uuid.uuid4()))
@@ -389,7 +408,7 @@ class Checks:
         traces = self.evidence / "native-traces"
         traces.mkdir()
         binary = self.evidence / "cq"
-        with self.database([]):
+        with self.database(DatabaseRole.Durable, []):
             self.transport(["java", f"-agentlib:native-image-agent=config-output-dir={traces}/{{pid}}-{{datetime}},config-write-period-secs=1",
                             "-cp", classpath, "cq.server.Main"], "native-agent", False, TRACE_FIXTURE_SCALE)
             config = self.native_config(traces)

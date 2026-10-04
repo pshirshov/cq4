@@ -222,6 +222,9 @@ private final class DummyLedgerTransaction(initial: DummyLedgerState) extends Le
     state = state.copy(integrations = state.integrations.updated(value.intent.id, value), reserved = state.reserved -- value.intent.members.map(_.id))
   }
   override def workset(id: WorksetId): Option[StoredWorkset] = state.worksets.get(id)
+  override def storedWorksets(after: Option[WorksetId], limit: Int): ReadPage[StoredWorkset] =
+    ReadPage.select(state.worksets.valuesIterator.filter(value => after.forall(_.value.toString < value.id.value.toString))
+      .toList.sortBy(_.id.value.toString).iterator, limit, StoredWorkset_JsonCodec)
   override def insertWorkset(value: StoredWorkset): Unit = {
     require(!state.worksets.contains(value.id), "Workset identity already exists")
     state = state.copy(worksets = state.worksets.updated(value.id, value))

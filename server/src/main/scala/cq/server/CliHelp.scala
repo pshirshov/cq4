@@ -23,7 +23,8 @@ Operator commands (readable output by default; add --json for automation):
   restore           Restore a project archive without overwriting an existing ID
   web               Print this project's browser URL
   configure         Install integration for a directly launched harness
-  doctor commands   Verify installed CQ command files without writing
+  doctor            Verify commands, server or harness installation without writes
+  assets export     Generate integration assets for declarative installation
   commands export   Write native CQ workflow commands/skills
 
 Service and automation entrypoints:
@@ -172,29 +173,45 @@ commands or skills. HARNESS is claude, codex or pi; DIR must already exist.
 
 Example: cq commands export codex --directory .
 """
+      case Some("assets") => """Usage: cq assets export HARNESS --directory DIR --project-directory DIR --settings FILE --executable FILE [--json]
+
+Generate all project integration, workflow and driver assets into an existing
+empty build directory. Paths inside those assets target --project-directory.
+Settings must declare unique package-verified harness routes. No credentials
+are included. Use this for Nix/home-manager; keep configure for imperative use.
+"""
       case Some("doctor") => """Usage: cq doctor commands HARNESS [--directory DIR] [--json]
+       cq doctor server [--endpoint URL] [--require-settled] [--json]
+       cq doctor harness HARNESS --settings FILE --executable FILE --readonly-home DIR [OPTIONS] [--json]
 
-Perform a read-only check of the running package's CQ workflow and drive/park
-command files. HARNESS is claude, codex or pi. Declarative symlinks are accepted.
-  --directory DIR   Project directory; defaults to the current directory
-  --json            Emit one command-asset report on stdout
+HARNESS is claude, codex or pi. Doctor performs read-only checks.
+It never repairs or writes installations.
+commands checks only workflow and drive/park files, without credentials or processes.
+Server and harness trust are not checked by commands.
+server checks authenticated package/model/schema identity, PostgreSQL 18 and
+durability. --require-settled also refuses claims, managed attempts or pending
+integrations. Stop attached harnesses separately before replacing a server.
+Modified or undetermined build sources report Unknown, rather than equality.
+harness checks settings, installed version, integrations, commands and trust:
+  --directory DIR      Project directory; defaults to the current directory
+  --readonly-home DIR  Existing immutable empty directory for public version probes
+  --harness-config FILE  Claude .claude.json, Codex config.toml or Pi agent trust.json
+  --trust-report FILE  Codex hook report recorded by cq-codex-hook-report
 
-Each asset is Current, Missing, Different, NotRegular or Unreadable. Any asset
-that is not Current makes the command fail after printing its report. File
-contents are never printed. No credentials, server or harness process are needed.
-Server, schema, credentials, MCP, hooks, status lines, trust and harness versions
-are not checked. This is not a complete installation health check.
-
-Example: cq doctor commands codex --directory . --json
-Keep cq configure for imperative installation; doctor never repairs files.
+Record Codex hook metadata separately after installing assets. Doctor binds
+the report to current hook bytes, declared version and persisted approvals;
+changed assets require a fresh report. Pi requires persisted project trust;
+the nearest canonical project or parent-folder decision in trust.json applies.
+File contents and probe output are withheld. Declarative symlinks are accepted.
+Any Failed or Unknown check exits 1 after the report; --json emits one value.
 """
       case Some("serve") => """Usage: cq serve
 
 Run the durable HTTP/WebSocket server. Required environment:
   CQ_DATABASE_URL        JDBC PostgreSQL URL
   CQ_DATABASE_USER       Database user
-  CQ_DATABASE_PASSWORD   Database password
-  CQ_TOKEN               Operator secret (at least 32 characters)
+  CQ_DATABASE_PASSWORD / CQ_DATABASE_PASSWORD_FILE   Inline or runtime-file password
+  CQ_TOKEN / CQ_TOKEN_FILE   Inline or runtime-file operator secret (at least 32 characters)
   CQ_HOST / CQ_PORT      Listen address and port
   CQ_ORIGIN              Exact browser origin, including scheme and port
 

@@ -84,7 +84,7 @@ Return a concise summary with CQ session ID, task ID, child attempt ID, phase an
               "executables": executable_identity, "runtimeSources": "runtime-source-sha256.json"}
     (root / "result.json").write_text(json.dumps(result, indent=2))
     try:
-        with checks.database([]):
+        with checks.database(module["DatabaseRole"].Durable, []):
             with checks.server([str(binary)], "native"):
                 client(["init", "--endpoint", env["CQ_ORIGIN"]], "init")
                 with binary.open("rb") as executable_stream:

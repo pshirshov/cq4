@@ -10,6 +10,7 @@ enum CliFormat { case Human, Json }
 
 final case class CliArguments(values: List[String], format: CliFormat)
 object CliArguments {
+  private val Flags = Set("--replace", cq.host.DriverAssets.StatusLineFlag, "--require-settled")
   def parse(args: List[String]): CliArguments = {
     val values = List.newBuilder[String]
     var remaining = args
@@ -18,7 +19,7 @@ object CliArguments {
       case "--json" :: tail =>
         require(format != CliFormat.Json, "Repeated --json option")
         format = CliFormat.Json; remaining = tail
-      case option :: value :: tail if option.startsWith("--") && option != "--replace" && option != cq.host.DriverAssets.StatusLineFlag =>
+      case option :: value :: tail if option.startsWith("--") && !Flags(option) =>
         values += option; values += value; remaining = tail
       case head :: tail => values += head; remaining = tail
       case Nil => ()
@@ -98,6 +99,13 @@ final class CliOutput(output: PrintStream, format: CliFormat, invocation: List[S
   def result(value: Result): Unit = format match {
     case CliFormat.Json => output.println(Wire.encode(Result_JsonCodec, value))
     case CliFormat.Human => human(value)
+  }
+  def installation(report: InstallationReport): Unit = format match {
+    case CliFormat.Json => output.println(io.circe.Json.obj("scope" -> io.circe.Json.fromString(report.scope),
+      "current" -> io.circe.Json.fromBoolean(report.current), "checks" -> io.circe.Json.fromValues(report.checks.map(check => io.circe.Json.obj(
+        "name" -> io.circe.Json.fromString(check.name), "state" -> io.circe.Json.fromString(check.state.toString),
+        "detail" -> io.circe.Json.fromString(check.detail))))).noSpaces)
+    case CliFormat.Human => table(List("Check", "State", "Detail"), report.checks.map(check => List(check.name, check.state.toString, check.detail)))
   }
   private def costs(value: CostPage): Unit = {
     table(List("Attribution", "Amount", "Currency", "Basis", "Pricing", "Measurements"), value.entries.map { entry =>

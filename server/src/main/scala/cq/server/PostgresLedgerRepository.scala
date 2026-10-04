@@ -398,6 +398,13 @@ private final class PostgresLedgerTransaction(connection: Connection, override v
     ()
   }
 
+  override def storedWorksets(after: Option[WorksetId], limit: Int): ReadPage[StoredWorkset] = {
+    val found = sql.query("SELECT body::text FROM cq_worksets WHERE project_id = ? AND (?::uuid IS NULL OR workset_id > ?::uuid) ORDER BY workset_id LIMIT ?") { s =>
+      projectKey(s); s.setObject(2, after.map(_.value).orNull); s.setObject(3, after.map(_.value).orNull); s.setInt(4, limit + 1)
+    }(r => Wire.decode(StoredWorkset_JsonCodec, r.getString(1)))
+    ReadPage.select(found.iterator, limit, StoredWorkset_JsonCodec)
+  }
+
   override def setting(kind: ProjectSettingKind): Option[StoredSetting] =
     sql.query("SELECT revision, body::text, actor::text, updated_at FROM cq_project_settings WHERE project_id = ? AND kind = ?") { s =>
       projectKey(s); s.setString(2, kind.toString)
