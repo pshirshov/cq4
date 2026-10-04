@@ -27,3 +27,11 @@ Each Scala suite ran in its own invocation and its test report was checked:
 - Actual Help and Q&A browser fixtures passed against the source JVM and disposable PostgreSQL. Owned servers and databases shut down cleanly (`final/database-stop.log`, `help-final/database-stop.log`).
 
 No configured fast/UI gate, full release gate, native build or operator updater was run. After local redeployment, restart the server and reload the browser, then verify the installed choices and six-command Help list before resolving D134/D136 and finalizing the dependent Help items.
+
+## Installed verification
+
+The operator redeployed and restarted on 2026-10-04. The native manifest now identifies `d660ac09d08b2ceacbcb7fd435a7e89175c93e61` with local-smoke validation. The installed executable matches its manifest digest. Read-only checks of the live server show all six Help commands, real drive/park aliases, correctly joined argument syntax and nine agent entries. The served stylesheet exactly matches the D134 correction. Live page errors: **0**; live work-ledger test mutations: **0**.
+
+Evidence root: `/srv/nvme/tmp/cq4-d134-d136-installed-20261004`. The actual installed native binary and its embedded UI also pass the Help scenario at two viewport sizes (`fixtures/help-results.json`) and all **11** Q&A cases (`fixtures/question-results.json`) against disposable PostgreSQL. An additional installed-App fixture checks the operator's long choice at widths 1366, 1280 and 640, preserved multi-paragraph/list Markdown and complete-answer Pick (`layout-after/installed-layout.json`). Its initial draft was correctly rejected for an empty required Question context (`fixtures/installed-layout.log`); supplying valid context makes the fixture pass without a product change. Both owned databases and servers shut down cleanly. Installed choice and live drive Help screenshots were inspected.
+
+This evidence permits D134/D136 resolution and I10 implementation closeout. G3's explicit configured cq-ui acceptance criterion is not established by these focused checks; G3 and its parent M2 remain Open pending that gate. No configured UI gate was run in this closeout. The source-tested catalog/schema/example/tool-policy evidence remains recorded above and in the earlier Help delivery records.
