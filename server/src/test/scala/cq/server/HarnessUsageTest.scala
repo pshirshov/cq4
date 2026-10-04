@@ -34,6 +34,23 @@ final class HarnessUsageLocal extends AnyWordSpec {
     }.sum
   }.sum
 
+  // Synthetic sequences, shaped from D140's retained error/retry/toolUse/end/settled
+  // ordering and the retained installed Pi 0.99.1 response fixture; these are not live probes.
+  private def syntheticPiRetry = {
+    val native = events(fixture(Harness.Pi, "0.99.1"))
+    val response = native.find(e => e.hcursor.get[String]("type").contains("message_end") &&
+      e.hcursor.downField("message").get[String]("role").contains("assistant")).get
+    val message = response.hcursor.downField("message").focus.get
+    val emptyUsage = Json.obj("input" -> Json.fromLong(0), "output" -> Json.fromLong(0),
+      "cacheRead" -> Json.fromLong(0), "cacheWrite" -> Json.fromLong(0), "totalTokens" -> Json.fromLong(0))
+    val error = change(response, "message", change(change(change(message, "stopReason", Json.fromString("error")),
+      "responseId", Json.fromString("synthetic-failed-response")), "usage", emptyUsage))
+    val start = Json.obj("type" -> Json.fromString("auto_retry_start"), "attempt" -> Json.fromLong(1),
+      "maxAttempts" -> Json.fromLong(3), "delayMs" -> Json.fromLong(2000), "errorMessage" -> Json.fromString("WebSocket error"))
+    val end = Json.obj("type" -> Json.fromString("auto_retry_end"), "attempt" -> Json.fromLong(1), "success" -> Json.True)
+    (native.take(3), error, start, end, response, native.last)
+  }
+
   "Harness usage collectors (Behavioral Active Blackbox Group)" should {
     "accept the installed harness versions and collect their retained observations and final results" in {
       val installed = List(
@@ -149,6 +166,85 @@ final class HarnessUsageLocal extends AnyWordSpec {
       val report = collect(stream(native), request(Harness.Pi))
       assert(total(report) == 68)
       assert(report.meters.head.observations.head.observation.gaps.exists(_.contains("totalTokens")))
+    }
+
+    "admit Pi completion after an explicitly recovered automatic retry" in {
+      val (prefix, error, start, end, response, settled) = syntheticPiRetry
+      // Retained D140 order is toolUse response, retry_end, later turns, then settlement.
+      val toolResponse = change(response, "message", change(change(response.hcursor.downField("message").focus.get,
+        "stopReason", Json.fromString("toolUse")), "responseId", Json.fromString("synthetic-tool-response")))
+      val nextTurn = Json.obj("type" -> Json.fromString("turn_start"))
+      val intermediateError = change(error, "message", change(error.hcursor.downField("message").focus.get,
+        "responseId", Json.fromString("synthetic-intermediate-error")))
+      val secondStart = change(start, "attempt", Json.fromLong(2))
+      val secondEnd = change(end, "attempt", Json.fromLong(2))
+      List((List(response, end), 1, 1), (List(end, response), 1, 1),
+        (List(toolResponse, end, nextTurn, response), 2, 1),
+        (List(intermediateError, secondStart, response, secondEnd, intermediateError), 1, 2),
+        (List(intermediateError, secondStart, secondEnd, response), 1, 2))
+        .foreach { case (recovery, successfulResponses, failedResponses) =>
+        val report = collect(stream(prefix ++ List(error, start) ++ recovery ++ List(response, error, settled)), request(Harness.Pi))
+        assert(report.terminalSeen && !report.nativeFailure)
+        assert(report.gaps.exists(_.contains("interrupted or failed response")))
+        assert(report.meters.size == 1 && report.meters.head.observations.size == failedResponses + successfulResponses)
+        assert(total(report) == 78 * successfulResponses)
+        val observations = report.meters.head.observations.map(_.observation)
+        assert(observations.take(failedResponses).forall(observation =>
+          observation.counters == UsageMath.missingCounts && observation.cost == UsageMath.unknownMoney))
+        assert(observations.last.counters.input.value.contains(69) && observations.last.counters.output.value.contains(9))
+        assert(observations.last.counters.cacheRead.value.isEmpty && observations.last.counters.reasoning.value.isEmpty)
+        assert(observations.last.cost.amount.contains(DecimalAmount("0.000615")))
+        assert(report.meters.head.observations.forall(_.disposition == UsageDisposition.Contribution))
+      }
+    }
+
+    "reject Pi failures without complete retry recovery" in {
+      val (prefix, error, start, end, response, settled) = syntheticPiRetry
+      val abort = change(error, "message", change(change(error.hcursor.downField("message").focus.get,
+        "stopReason", Json.fromString("aborted")), "responseId", Json.fromString("synthetic-aborted-response")))
+      val otherError = change(error, "message", change(error.hcursor.downField("message").focus.get, "responseId", Json.fromString("synthetic-unrelated-error")))
+      val recovery = List(error, start, response, end, settled)
+      val cases = List(
+        "absent recovery" -> List(error, response, settled),
+        "skipped initial attempt" -> List(error, change(start, "attempt", Json.fromLong(2)), response,
+          change(end, "attempt", Json.fromLong(2)), settled),
+        "skipped chain attempt" -> List(error, start, otherError, change(start, "attempt", Json.fromLong(3)),
+          response, change(end, "attempt", Json.fromLong(3)), settled),
+        "regressed chain attempt" -> List(error, start, otherError, start, response, end, settled),
+        "advance without failed response" -> List(error, start, change(start, "attempt", Json.fromLong(2)),
+          response, change(end, "attempt", Json.fromLong(2)), settled),
+        "exhausted chain" -> List(error, start, otherError, change(start, "attempt", Json.fromLong(2)),
+          change(end, "attempt", Json.fromLong(2)).mapObject(_.add("success", Json.False)), settled),
+        "unfinished chain" -> List(error, start, otherError, change(start, "attempt", Json.fromLong(2)), settled),
+        "response before next start" -> List(error, start, otherError, response, change(start, "attempt", Json.fromLong(2)),
+          change(end, "attempt", Json.fromLong(2)), settled),
+        "abort in chain" -> List(error, start, abort, change(start, "attempt", Json.fromLong(2)),
+          response, change(end, "attempt", Json.fromLong(2)), settled),
+        "error after successful response before end" -> List(error, start, response, otherError,
+          change(start, "attempt", Json.fromLong(2)), response, change(end, "attempt", Json.fromLong(2)), settled),
+        "unsuccessful end" -> List(error, start, response, change(end, "success", Json.False), settled),
+        "missing end" -> List(error, start, response, settled),
+        "missing start" -> List(error, end, response, settled),
+        "mismatched attempt" -> List(error, start, response, change(end, "attempt", Json.fromLong(2)), settled),
+        "markers without failure" -> List(start, response, end, settled),
+        "duplicate start" -> List(error, start, start, response, end, settled),
+        "invalid start attempt" -> List(error, change(start, "attempt", Json.fromLong(0)), response, end, settled),
+        "invalid end attempt" -> List(error, start, response, change(end, "attempt", Json.fromString("invalid")), settled),
+        "missing end success" -> List(error, start, response, end.mapObject(_.remove("success")), settled),
+        "settlement before response" -> List(error, start, end, settled, response),
+        "settlement before end" -> List(error, start, response, settled, end),
+        "missing successful response" -> List(error, start, end, settled),
+        "unrecovered abort" -> List(abort, start, response, end, settled),
+        "unrelated failure" -> (List(otherError) ++ recovery),
+        "unrelated abort" -> (List(abort) ++ recovery),
+        "failure after recovery" -> (recovery ++ List(otherError, settled)),
+        "unfinished later turn" -> (recovery :+ Json.obj("type" -> Json.fromString("turn_start"))),
+        "unfinished later agent" -> (recovery :+ Json.obj("type" -> Json.fromString("agent_start"))),
+        "missing settlement" -> recovery.dropRight(1))
+      cases.foreach { case (name, sequence) =>
+        val report = collect(stream(prefix ++ sequence), request(Harness.Pi))
+        assert(!(report.terminalSeen && !report.nativeFailure), s"Synthetic $name must remain ineligible")
+      }
     }
 
     "require captured baselines for resumed cumulative meters and retain exact monetary deltas" in {
