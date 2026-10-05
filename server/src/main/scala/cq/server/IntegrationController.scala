@@ -46,6 +46,7 @@ final class IntegrationController(config: SupervisorConfig, authority: Superviso
   }
   private val rebase = new RebasePreparation(config, authority, candidates)
   private val spans = new SessionSpans(config, authority)
+  private val units = new SessionUnits(config.directory)
   private var entries = Map.empty[IntegrationId, IntegrationExecutionState]
   private var closing = false
   private var disabled = false
@@ -86,7 +87,7 @@ final class IntegrationController(config: SupervisorConfig, authority: Superviso
       case _ => ZIO.unit
     }
   private def background(entry: IntegrationExecutionState, done: Promise[Nothing, Unit], operation: Task[IntegrationStatus]): Task[Unit] =
-    (operation.flatMap(value => ZIO.succeed(update(entry, value))).catchAll {
+    ((ZIO.attemptBlocking(units.started(SessionUnits.integration(snapshot(entry)))) *> operation).flatMap(value => ZIO.succeed(update(entry, value))).catchAll {
       // No reservation exists and nothing was attempted: the integration is settled, and the server keeps no record of it.
       case refused: IntegrationRefused => ZIO.succeed(update(entry, snapshot(entry).copy(phase = IntegrationPhase.NotApplied,
         next = IntegrationNext.InspectEvidence, blocker = Some(refused.reason))))
@@ -96,7 +97,7 @@ final class IntegrationController(config: SupervisorConfig, authority: Superviso
           next = IntegrationNext.InspectEvidence, blocker = Some(DispatchProjection.concise("Integration failed: " +
             Option(error.getMessage).getOrElse(error.getClass.getSimpleName)))))
       } *> entry.ready.fail(error).unit
-    } *> resolved(entry)).ensuring(done.succeed(()).unit).forkDaemon.unit
+    } *> resolved(entry)).ensuring(done.succeed(()).unit *> ZIO.attemptBlocking(units.ended(SessionUnits.ended(snapshot(entry)))).orDie).forkDaemon.unit
 
   def prepare(ticket: IntegrationTicket): Task[IntegrationStatus] = ZIO.uninterruptibleMask { restore => for {
     ready <- Promise.make[Throwable, Unit]

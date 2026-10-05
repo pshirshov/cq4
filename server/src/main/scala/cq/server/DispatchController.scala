@@ -59,6 +59,7 @@ final case class SelectedDispatch(cohort: Option[UUID], evidence: ArtifactId, ad
 
 final class DispatchController(config: SupervisorConfig, runner: ChildRunner, jobs: JobSupervisor, clock: Clock) {
   private val MaxStatusWaitMillis = 20000
+  private val units = new SessionUnits(config.directory)
   private val disabled = new AtomicBoolean(false)
   private var closing = false
   private var entries = Map.empty[RequestId, DispatchExecution]
@@ -100,6 +101,7 @@ final class DispatchController(config: SupervisorConfig, runner: ChildRunner, jo
       val execute = (ZIO.attemptBlocking {
         HostFiles.directory(entry.directory)
         HostFiles.immutable(entry.directory.resolve("ticket.json"), HostFiles.encode(DispatchTicket_JsonCodec, entry.ticket), 65536)
+        units.started(SessionUnits.attempt(entry.status))
       } *> ready.succeed(()).unit *> runner.run(entry)).catchAll { failure =>
         ZIO.succeed {
           disabled.set(true)
@@ -110,7 +112,8 @@ final class DispatchController(config: SupervisorConfig, runner: ChildRunner, jo
       // before that would let the session select the same work and find it deferred.
       }.ensuring(ZIO.attemptBlocking(try entry.ending(selection.fold(CohortFailure.outcome(entry.status, None, None))(_.finished(entry.status)))
         finally entry.conclude()).orDie *>
-        done.succeed(()).unit)
+        // What a waiter outside the host reads; written after the end is visible to the session, whose status call may already wait on it.
+        done.succeed(()).unit *> ZIO.attemptBlocking(units.ended(SessionUnits.ended(entry.observed))).orDie)
       execute.forkDaemon.unit
     }
     _ <- entry.ready.await

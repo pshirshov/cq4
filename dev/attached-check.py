@@ -178,6 +178,12 @@ def main():
                 if status["phase"] not in ["Preparing", "Running", "Stopping", "Validating", "Publishing"]:
                     break
             assert status["phase"] == "Completed" and status["usageDelivered"] and status["result"], status
+            # `cq wait` reads the session directory alone and reports the same end, by name and after the fact.
+            waited = json.loads(cli(["wait", "--session", context["directory"], "--attempt", started["attempt"]["value"], "--json"]))["Ended"]
+            ended, = waited["units"]
+            assert ended == {"unit": {"kind": "Attempt", "id": started["attempt"]["value"], "members": [created["id"]]}, "phase": "Completed",
+                             "next": status["next"], "blocker": None} and waited["active"] == [], waited
+            assert cli(["wait", "--session", context["directory"]]) == "No child attempt, integration, combination or revalidation of this session is active\n"
             assert "CHILD_ONLY_NARRATIVE" not in json.dumps(peer.traffic)
             session = Path(context["directory"])
             assert not list((session / "payload").glob(context["attempt"]["value"] + "/*")), "Attached session launched a Governor"

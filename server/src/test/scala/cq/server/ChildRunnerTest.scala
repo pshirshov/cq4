@@ -119,6 +119,14 @@ sys.stderr.flush()
       started <- controller.start(request)
       settled <- controller.status(started.attempt, 20000).repeatUntil(status => DispatchController.terminal(status.phase))
         .timeoutFail(new IllegalStateException("Child did not finish"))(zio.Duration.fromSeconds(60))
+      // What `cq wait` reads: the host wrote that it started on the attempt and, once the end was visible to the session, how it ended.
+      unit = SessionUnit(SessionUnitKind.Attempt, started.attempt.value, request.members.map(_.id))
+      events <- ZIO.attemptBlocking(SessionUnits.read(config.directory).filter {
+        case SessionUnitEvent.Started(value) => value.id == unit.id
+        case SessionUnitEvent.Ended(value) => value.unit.id == unit.id
+      }).repeatUntil(_.size == 2).timeoutFail(new IllegalStateException("The child's end was not written for waiters"))(zio.Duration.fromSeconds(30))
+      _ <- ZIO.attempt(require(events == List(SessionUnitEvent.Started(unit),
+        SessionUnitEvent.Ended(UnitEnd(unit, settled.phase.toString, Some(settled.next.toString), settled.blocker))), s"Unexpected unit events: $events"))
     } yield settled
     def revalidations(controller: DispatchController): ZIO[zio.Scope, Throwable, RevalidationController] = for {
       requests <- Semaphore.make(1)

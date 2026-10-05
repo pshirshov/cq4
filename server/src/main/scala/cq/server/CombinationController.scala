@@ -22,6 +22,7 @@ final class CombinationController(config: SupervisorConfig, authority: Superviso
   private var closing = false
   private var disabled = false
   private val spans = new SessionSpans(config, authority)
+  private val units = new SessionUnits(config.directory)
   private def target: String = config.settings.integrationTarget.getOrElse(throw DomainFailure(Fault.Invalid("No integration target is configured")))
   private def publication = new CombinationPublication(config.directory.resolve("combinations"), config.owner, config.run.attempt.id, config.run.repository, target)
   private def found(id: RequestId): CombinationExecution = entries.getOrElse(id,
@@ -68,6 +69,7 @@ final class CombinationController(config: SupervisorConfig, authority: Superviso
     (entry, execute) = registered
     _ <- if (!execute) ZIO.unit else {
       val operation = for {
+        _ <- ZIO.attemptBlocking(units.started(SessionUnits.combination(snapshot(entry))))
         _ <- ZIO.attemptBlocking(publication.retain(ticket))
         _ <- entry.ready.succeed(())
         plan <- ZIO.attemptBlocking(publication.freeze(ticket) {
@@ -85,7 +87,7 @@ final class CombinationController(config: SupervisorConfig, authority: Superviso
           entry.view = CombinationStatus(ticket.id, if (entry.frozen) CombinationPhase.PublicationPending else CombinationPhase.Failed, None,
             Some(DispatchProjection.concise("Combination failed: " + Option(error.getMessage).getOrElse(error.getClass.getSimpleName))))
         }) *> entry.ready.fail(error).unit
-      } *> resolved(entry)).ensuring(done.succeed(()).unit).forkDaemon.unit
+      } *> resolved(entry)).ensuring(done.succeed(()).unit *> ZIO.attemptBlocking(units.ended(SessionUnits.ended(snapshot(entry)))).orDie).forkDaemon.unit
     }
     _ <- restore(entry.ready.await).timeoutFail(new IllegalStateException("Combination ticket acknowledgement deadline exceeded; admission disabled"))(
       zio.Duration.fromMillis(AcknowledgementMillis)).tapError(_ => ZIO.succeed(synchronized { disabled = true }))

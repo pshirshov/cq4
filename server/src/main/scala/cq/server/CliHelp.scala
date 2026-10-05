@@ -34,6 +34,7 @@ Service and automation entrypoints:
   hook              Harness hook entry point of the CQ auto-driver; protocol use only
   :checkout         Internal supervised Git executor; protocol use only
   job upload        Recover retained delivery batches (operator text output)
+  wait              Block until a child, integration, combination or revalidation of a session ends
 
 Examples:
   cq init --name "My project"          Uses CQ_ORIGIN for the first connection
@@ -245,6 +246,30 @@ prompt through. Stop blocks with the host's advance directive while work
 remains and otherwise allows the stop. StatusLine prints the driver status.
 It needs the operator credential, trusts the session_id on stdin, and exits 0
 even on a CQ error, which it reports in its output without blocking the harness.
+"""
+      case Some("wait") => """Usage: cq wait --session DIR [--attempt ID]... [--integration ID]... [--json]
+
+Blocks until work of one governing session ends, and says what ended. DIR is the
+session directory that the CQ host of a harness session maintains (session Context
+names it). The command reads that directory only: it needs no server and no token.
+
+With --attempt or --integration it waits for the first of the named child attempts
+or integrations to end, and returns at once when one has already ended. Without
+them it waits for the next end among the child attempts, integrations,
+combinations and check revalidations the host is working on when the command
+starts; when there are none it says so and returns at once.
+
+An integration ends each time the host stops working on it: prepared (Ready),
+applied (Recorded), not applied or failed. The command has no timeout of its own.
+
+Output: one line per ended unit (kind, ID, items, phase, next step, blocker) and one
+"still active" line per unit the host still works on; --json prints one
+WaitOutcome value instead.
+
+Exit codes:
+  0  something ended, or nothing was active
+  3  the CQ host of the session is not running
+  4  DIR is not a session directory
 """
       case Some("job") => """Usage: cq job upload --session DIR
 

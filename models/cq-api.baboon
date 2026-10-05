@@ -887,6 +887,20 @@ root data OfferedChoice {
 root data CohortOffer { id: RequestId artifact: ArtifactId counts: CohortCounts choices: lst[OfferedChoice] }
 root data CohortConsidered { members: lst[ItemRevision] reason: CohortReason fingerprint: opt[str] }
 root data CohortEvidence { request: CohortRequest decision: CohortDecision considered: lst[CohortConsidered] }
+// What `cq wait` reads: the governing host appends one event to `units.jsonl` of its session directory when it starts working on
+// a unit and when it stops, with how the unit stands then. Phase and next are the unit's own enumerations, as text.
+enum SessionUnitKind { Attempt Integration Combination Revalidation }
+root data SessionUnit { kind: SessionUnitKind id: uid members: lst[ItemId] }
+root data UnitEnd { unit: SessionUnit phase: str next: opt[str] blocker: opt[str] }
+root adt SessionUnitEvent {
+  data Started { unit: SessionUnit }
+  data Ended { end: UnitEnd }
+}
+root adt WaitOutcome {
+  data Ended { units: lst[UnitEnd] active: lst[SessionUnit] }
+  data Idle {}
+  data HostGone { active: lst[SessionUnit] }
+}
 root adt DispatchCommand {
   data Select { request: CohortRequest }
   data StartChoice { choice: RequestId harness: Harness fence: Fence }

@@ -2,7 +2,7 @@ package cq.server
 
 import cq.api.*
 import cq.core.LedgerPolicy
-import cq.host.{DriverAssets, DriverEntry, DriverHook, HttpServerApi, WorkflowAssets}
+import cq.host.{DriverAssets, DriverEntry, DriverHook, HttpServerApi, SessionWait, WorkflowAssets}
 import java.io.{InputStream, PrintStream}
 import java.net.URI
 import java.nio.channels.FileChannel
@@ -13,6 +13,9 @@ import scala.util.Using
 import zio.{Task, ZIO}
 
 final case class CliContext(environment: Map[String, String], directory: Path, output: PrintStream, input: InputStream)
+
+/** `cq wait` has said what it found and ends with a code other than success. */
+final class WaitFinished(val exit: Int) extends RuntimeException
 
 final class Cli(context: CliContext, location: ProjectLocation, upload: SessionUpload, workflows: WorkflowAssets, attached: AttachedAssets) {
   private val environment = context.environment
@@ -239,6 +242,19 @@ final class Cli(context: CliContext, location: ProjectLocation, upload: SessionU
         case "outcomes" => UsageSelection.Outcomes(AttemptId(UUID.fromString(opts.getOrElse("--attempt", throw new IllegalArgumentException("status outcomes requires --attempt UUID")))), opts.get("--after").map(_.toLong).getOrElse(0L), limit)
       }
       renderer.result(request(config, actorSession, Command.Usage(UsageInput(config.project, selection))))
+    // Reads the session directory only: no server, no credential and no project configuration.
+    case "wait" :: rest =>
+      require(rest.size % 2 == 0, "Options require values")
+      val pairs = rest.grouped(2).map(pair => pair.head -> pair(1)).toList
+      val kinds = Map("--attempt" -> SessionUnitKind.Attempt, "--integration" -> SessionUnitKind.Integration)
+      require(pairs.forall((option, _) => option == "--session" || kinds.contains(option)) && pairs.count(_._1 == "--session") == 1,
+        "wait requires --session DIR and accepts --attempt ID and --integration ID, each any number of times")
+      val session = directory.resolve(pairs.collectFirst { case ("--session", value) => value }.get).normalize()
+      val named = pairs.collect { case (option, value) if kinds.contains(option) => kinds(option) -> UUID.fromString(value) }
+      val outcome = try new SessionWait(session, () => Thread.sleep(SessionWait.PollMillis)).await(named)
+        catch { case error: SessionWait.NotASession => output.println(error.getMessage); throw new WaitFinished(SessionWait.NotASessionExit) }
+      renderer.waited(session, outcome)
+      if (outcome.isInstanceOf[WaitOutcome.HostGone]) throw new WaitFinished(SessionWait.HostGoneExit)
     case List("web") => renderer.endpoint(configuration(configDirectory).endpoint)
     case _ => throw new IllegalArgumentException("Unknown command; use cq --help")
   }
