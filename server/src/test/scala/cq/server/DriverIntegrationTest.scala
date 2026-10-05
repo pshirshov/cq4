@@ -38,7 +38,8 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
 
   private final class Receiver(application: Application, auth: Authorization, root: Authority, authority: Authority, runtime: Runtime[Any],
     collector: Collector) extends ServerApi {
-    private def execute[A](value: Task[A]): A = Unsafe.unsafe { implicit unsafe => runtime.unsafe.run(value).getOrThrowFiberFailure() }
+    // As the HTTP client does, a refusal is thrown as the DomainFailure itself.
+    private def execute[A](value: Task[A]): A = Unsafe.unsafe { implicit unsafe => runtime.unsafe.run(value).getOrThrow() }
     override def call(command: Command): Result = execute(application.execute(authority, command))
     override def artifact(value: ArtifactUpload): ArtifactMetadata = { collector.upload(value); execute(application.upload(authority, value)) }
     override def usage(value: HostUsageInput): HostUsageResult = execute(application.ingest(authority, value))
@@ -49,7 +50,7 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
 
   private final case class Fixture(local: LocalWorkspaceFixture, owner: Scope, authority: SupervisorAuthority, controller: IntegrationController,
     combinations: CombinationController, workflow: AttachedWorkflow, driver: AttachedDriver, registry: DriverInspector, collector: Collector,
-    task: ItemId, reviewer: ArtifactId, candidate: GitCommit, fence: Fence) {
+    task: ItemId, reviewer: ArtifactId, candidate: GitCommit, fence: Fence, session: java.nio.file.Path) {
     val key: DriverKey = DriverKey(Harness.Codex, "driver-integration-" + UUID.randomUUID())
     val advance: WorkflowRequest = WorkflowRequest.Advance(Set(task), WorkflowPhase.Integrate)
     def target: GitCommit = GitCommit(local.git(local.source, "show-ref", "--verify", "--hash", Target))
@@ -190,7 +191,7 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
       driver = new AttachedDriver(config, authority, children, controller, combinations, logstage.IzLogger.NullLogger)
       workflow = new AttachedWorkflow(config, authority, new WorkflowAssets, new WorkflowExecution(authority.governor, owner.project, owner.actor.session, None),
         new OperatorRequirements(""), children, controller, combinations, revalidations, driver)
-      empty = Fixture(local, owner, authority, controller, combinations, workflow, driver, registry, hook, created.head.id, ArtifactId(uuid), local.base, claim.fence)
+      empty = Fixture(local, owner, authority, controller, combinations, workflow, driver, registry, hook, created.head.id, ArtifactId(uuid), local.base, claim.fence, directory)
       candidate <- ZIO.attemptBlocking {
         local.git(local.source, "branch", "integration", local.base.value)
         empty.commit("candidate", Map("right.txt" -> "right\n"))
@@ -277,6 +278,60 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
           assert(after.state == DriverState.On && after.stopped.isEmpty && after.cycle.exists(_.state == CycleState.Pending), after.toString)
           assert(started.exists(_.cycle.contains(start.cycle)), started.toString)
           assert(running.state == DriverState.On && running.cycle.exists(cycle => cycle.state == CycleState.Active && cycle.run.nonEmpty), running.toString)
+        }
+      } yield () }
+    }
+
+    "D144: settle an integration whose reservation the server refuses as NotApplied, admit the next workflow and integrate the candidate under a new claim" in {
+      (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO], registry: DriverInspector) =>
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, registry) { f => for {
+        _ <- f.workflow.activate(RequestId(uuid), f.advance, "Integrate the task", None)
+        ready <- f.prepared
+        // The session releases the claim the integration was frozen with before it applies the integration.
+        _ <- ledger.release(f.owner, f.fence)
+        refused <- f.integrate(ready.id)
+        quiescent <- ZIO.succeed(f.controller.quiescent)
+        retained <- ZIO.attemptBlocking(HostFiles.read(f.session.resolve("integrations").resolve(ready.id.value.toString + ".json"), IntegrationLocal_JsonCodec,
+          IntegrationEntries.MaxRecordBytes))
+        server <- integrations.get(f.owner, ready.id).either
+        git <- ZIO.attemptBlocking(f.target)
+        next <- f.workflow.activate(RequestId(uuid), f.advance, "Integrate the task again", None).either
+        _ <- ZIO.attempt {
+          println(s"Refused reservation: integration phase ${refused.phase}, next ${refused.next}, blocker ${refused.blocker}; quiescent $quiescent; " +
+            s"journal attempted=${retained.attempted} observation=${retained.observation}; server ${refusal(server)}; next workflow '${refusal(next.map(_.id))}'")
+          assert(refused.phase == IntegrationPhase.NotApplied && refused.blocker.exists(_.contains("Integration reservation requires the current full claim")), refused.toString)
+          assert(quiescent && !retained.attempted && retained.observation.exists(_.isInstanceOf[IntegrationObservation.NotApplied]), retained.toString)
+          assert(server.left.exists { case DomainFailure(_: Fault.Missing) => true; case _ => false } && git == local.base, server.toString)
+          assert(next.isRight, next.toString)
+        }
+        _ <- ledger.acquire(f.owner, ClaimId(uuid), Set(f.task), 300000)
+        second <- f.prepared
+        recorded <- f.integrate(second.id)
+        task <- ledger.get(f.owner, f.task).map(_.item.draft.content.asInstanceOf[Content.Task])
+        _ <- ZIO.attemptBlocking(assert(second.phase == IntegrationPhase.Ready && recorded.phase == IntegrationPhase.Recorded && f.target == f.candidate &&
+          task.status == TaskStatus.Done && f.controller.quiescent, s"$second $recorded"))
+      } yield () }
+    }
+
+    "D144: settle a prepared integration as NotApplied once another integration of the session has recorded its members, and name unsettled work in a workflow refusal" in {
+      (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO], registry: DriverInspector) =>
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, registry) { f => for {
+        _ <- f.workflow.activate(RequestId(uuid), f.advance, "Integrate the task", None)
+        first <- f.prepared
+        second <- f.prepared
+        recorded <- f.integrate(second.id)
+        busy <- f.workflow.activate(RequestId(uuid), f.advance, "Next", None).either
+        superseded <- f.integrate(first.id)
+        next <- f.workflow.activate(RequestId(uuid), f.advance, "Next", None).either
+        _ <- ZIO.attempt {
+          println(s"Superseded integration: recorded ${recorded.phase}; workflow refused with '${refusal(busy)}'; first ${superseded.phase}, blocker ${superseded.blocker}; " +
+            s"next workflow '${refusal(next.map(_.id))}'")
+          assert(recorded.phase == IntegrationPhase.Recorded, recorded.toString)
+          assert(busy.left.exists(_.getMessage == "requirement failed: Settle active child/check/integration/combination work before changing workflow: " +
+            s"integration ${first.id.value} (Ready)"), busy.toString)
+          assert(superseded.phase == IntegrationPhase.NotApplied && f.controller.quiescent && next.isRight, s"$superseded $next")
         }
       } yield () }
     }

@@ -19,6 +19,8 @@ trait IntegrationJournal {
 
 object IntegrationEntries {
   val MaxRecordBytes = IntegrationPolicy.MaxIntentBytes + 8192
+  /** What a journal record may hold while the server has no reservation: no admitted execution, and no observation but the server's refusal. */
+  def unreserved(local: IntegrationLocal): Boolean = !local.attempted && local.observation.forall(_.isInstanceOf[IntegrationObservation.NotApplied])
   def validate(owner: Scope, id: IntegrationId, previous: Option[IntegrationLocal], next: IntegrationLocal): Unit = {
     require(next.intent.id == id && next.intent.project == owner.project && next.intent.owner == owner.actor && owner.actor.role == Role.Governor,
       "Integration journal identity differs from its governing owner")

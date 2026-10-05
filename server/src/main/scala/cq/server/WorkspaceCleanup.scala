@@ -138,8 +138,8 @@ object WorkspaceCleanup {
       val terminal = record.exists(_.resolution != IntegrationResolution.Pending())
       (local, record) match {
         case (Some(journal), Some(reserved)) => if (terminal && reserved.intent == journal.intent) Leftover.Resolved else Leftover.Reservation
-        // Prepared and never reserved: nothing was launched and nothing is held.
-        case (Some(journal), None) => if (journal.attempted || journal.observation.nonEmpty) Leftover.Reservation else Leftover.Resolved
+        // Prepared and never reserved, or refused by the server: nothing was launched and nothing is held.
+        case (Some(journal), None) => if (IntegrationEntries.unreserved(journal)) Leftover.Resolved else Leftover.Reservation
         case (None, Some(_)) => if (terminal) Leftover.Resolved else Leftover.Request
         case (None, None) => Leftover.Unfrozen
       }

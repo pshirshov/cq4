@@ -11,7 +11,7 @@ import java.io.IOException
 import java.nio.file.{Files, Path}
 import java.time.{Clock, Duration}
 import java.util.UUID
-import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger}
+import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger, AtomicReference}
 import java.util.concurrent.{CountDownLatch, TimeUnit}
 import zio.{Semaphore, Task, ZIO}
 
@@ -21,12 +21,14 @@ final class IntegrationReceiver extends ServerApi {
   val loseAcknowledgement = new AtomicBoolean(false)
   val failRecording = new AtomicBoolean(false)
   val loseReservation = new AtomicBoolean(false)
+  val refuseReservation = new AtomicReference(Option.empty[Fault])
   override def call(command: Command): Result = synchronized { command match {
     case Command.Read(ReadInput(_, ReadSelection.Integration(id))) => records.get(id).map(Result.Integration.apply).getOrElse(Result.Failed(Fault.Missing("No integration")))
     case _ => throw new IllegalStateException("Unexpected integration fixture command")
   } }
   override def integrate(input: HostIntegrationInput): IntegrationRecord = synchronized { input.operation match {
     case HostIntegration.Reserve(intent) =>
+      refuseReservation.get.foreach(fault => throw DomainFailure(fault))
       val record = records.getOrElse(intent.id, IntegrationRecord(intent, IntegrationResolution.Pending(), 1, None))
       require(record.intent == intent)
       records = records.updated(intent.id, record)
@@ -264,6 +266,45 @@ abstract class IntegrationCoordinatorTest extends SpecZIO with AssertZIO {
         recorded <- coordinator.run(intent.id)
         replay <- coordinator.run(intent.id)
         _ <- assertIO(recorded == replay && recorded.record.resolution.isInstanceOf[IntegrationResolution.Recorded] && f.executions.get() == 1)
+      } yield ()
+    } }
+
+    "D144: seal a reservation the server refused before any attempt as not applied, and never reserve or launch it afterwards" in { (harness: IntegrationHarness) => harness.use { f =>
+      val intent = f.intent(f.base, f.first)
+      val coordinator = f.coordinator(f.journal)
+      def absent: Boolean = f.server.call(Command.Read(ReadInput(f.owner.project, ReadSelection.Integration(intent.id)))).isInstanceOf[Result.Failed]
+      for {
+        _ <- coordinator.prepare(intent)
+        _ <- ZIO.succeed(f.server.refuseReservation.set(Some(Fault.StaleFence("Integration reservation requires the current full claim"))))
+        refused <- coordinator.run(intent.id).either
+        retained <- f.journal.locked(intent.id)(entry => ZIO.attempt(entry.read.get))
+        _ <- ZIO.attempt(assert(refused.isLeft && !retained.attempted && retained.observation.exists {
+          case IntegrationObservation.NotApplied(reason) => reason.contains("Integration reservation requires the current full claim")
+          case _ => false
+        } && absent && f.executions.get() == 0, s"$refused $retained"))
+        // A later reservation would be admitted; the sealed integration neither asks for it nor launches Git.
+        _ <- ZIO.succeed(f.server.refuseReservation.set(None))
+        replay <- coordinator.run(intent.id).either
+        recovered <- f.coordinator(f.journal).recover(intent.id)
+        _ <- ZIO.attempt(assert(replay.left.map(_.getMessage) == refused.left.map(_.getMessage) && recovered.isEmpty && absent && f.executions.get() == 0, s"$replay $recovered"))
+        _ <- f.isolation
+      } yield ()
+    } }
+
+    "D144: leave a refused reservation unresolved once execution was admitted or the server holds the reservation" in { (harness: IntegrationHarness) => harness.use { f =>
+      val attempted = f.intent(f.base, f.first)
+      val reserved = f.intent(f.base, f.second)
+      val coordinator = f.coordinator(f.journal)
+      for {
+        _ <- coordinator.prepare(attempted)
+        _ <- coordinator.prepare(reserved)
+        _ <- f.journal.locked(attempted.id)(entry => ZIO.attempt(entry.write(entry.read.get.copy(attempted = true))))
+        _ <- ZIO.attempt(f.server.integrate(HostIntegrationInput(f.owner.project, HostIntegration.Reserve(reserved))))
+        _ <- ZIO.succeed(f.server.refuseReservation.set(Some(Fault.Conflict("Refused"))))
+        results <- ZIO.foreach(List(attempted, reserved))(intent => coordinator.run(intent.id).either)
+        locals <- ZIO.foreach(List(attempted, reserved))(intent => f.journal.locked(intent.id)(entry => ZIO.attempt(entry.read.get)))
+        _ <- ZIO.attempt(assert(results.forall(_.left.exists { case DomainFailure(_: Fault.Conflict) => true; case _ => false }) &&
+          locals.forall(_.observation.isEmpty) && f.executions.get() == 0, s"$results $locals"))
       } yield ()
     } }
 

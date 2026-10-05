@@ -112,7 +112,10 @@ final class RevalidationController(config: SupervisorConfig, authority: Supervis
     _ <- restore(entry.done.await.timeout(zio.Duration.fromMillis(WaitMillis)))
   } yield synchronized(entry.view) }
 
-  def quiescent: Boolean = synchronized(entries.values.forall(_.view.phase != RevalidationPhase.Running))
+  def unsettled: List[String] = synchronized(entries.toList.collect {
+    case (id, entry) if entry.view.phase == RevalidationPhase.Running => s"check revalidation ${id.value} (${entry.view.phase})"
+  })
+  def quiescent: Boolean = unsettled.isEmpty
 
   def shutdown: Task[Unit] = for {
     pending <- ZIO.succeed(synchronized { closing = true; entries.values.map(_.done).toList })

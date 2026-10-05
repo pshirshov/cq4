@@ -15,7 +15,7 @@ final case class AttachedChannels(input: InputStream, output: OutputStream, owne
 final class AttachedProgram(config: SupervisorConfig, authority: SupervisorAuthority, gateway: AttachedGateway,
   dispatch: DispatchController, integrations: IntegrationController, combinations: CombinationController, revalidations: RevalidationController,
   watchdog: SupervisorWatchdog, channels: AttachedChannels, clock: Clock, local: LocalControlServer,
-  codex: AttachedCodexUsage, cleanup: WorkspaceCleanup, release: SessionRelease, logger: IzLogger) {
+  codex: AttachedCodexUsage, cleanup: WorkspaceCleanup, release: SessionRelease, claims: SessionClaims, logger: IzLogger) {
   private val MaxRecordBytes = 65536
   private val RequestSeconds = 30L
   private val limits = PeerLimits(Duration.ofSeconds(30), Duration.ofSeconds(10), Duration.ofSeconds(30), Duration.ofSeconds(RequestSeconds), 2 * 1024 * 1024, 32)
@@ -40,7 +40,8 @@ final class AttachedProgram(config: SupervisorConfig, authority: SupervisorAutho
   }}.uninterruptible
   private val monitor: Task[Nothing] = (observe(codex.poll(authority.collector)) *> ZIO.sleep(zio.Duration.fromSeconds(5))).forever
   private def finish(peer: StdioPeer): Task[Unit] =
-    (ZIO.succeed(peer.close()) *> shutdown *> observe(codex.finish(authority.collector)) *>
+    // The claims go once the work under them has settled or was cancelled; a host that dies leaves them to their leases.
+    (ZIO.succeed(peer.close()) *> shutdown *> claims.release *> observe(codex.finish(authority.collector)) *>
       ZIO.attemptBlocking {
         val outcome = AttemptOutcome(RequestId(NativeArtifacts.id(config.run.attempt.id, "outcome").value), config.run.attempt.id,
           AttemptState.Unknown, math.max(config.run.attempt.startedAt, clock.millis()),

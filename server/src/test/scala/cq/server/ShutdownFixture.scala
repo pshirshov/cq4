@@ -32,7 +32,11 @@ object ShutdownFixture extends RoleAppMain.LauncherBIO[IO] {
   /** The batch governor: a harness stand-in that marks its workspace and then runs until stopped. */
   val GovernorScript = "#!/usr/bin/env python3\nimport time\nfrom pathlib import Path\nPath('running').write_text('governor')\ntime.sleep(60)\n"
 
-  private final class Receiver extends ServerApi {
+  /** Every claim command the governing receiver answered, one line each, under the fixture root. */
+  val ClaimLog = "claims.log"
+
+  /** `claims` answers the claim commands of the attached session's Governor; the collector and root receivers get none. */
+  private final class Receiver(claims: Option[ClaimInput => Result]) extends ServerApi {
     override def usage(value: HostUsageInput): HostUsageResult = value.operation match {
       case HostUsage.Assign(assignment) => HostUsageResult.Assigned(assignment)
       case HostUsage.Start(attempt) => HostUsageResult.Started(attempt)
@@ -42,10 +46,25 @@ object ShutdownFixture extends RoleAppMain.LauncherBIO[IO] {
     override def artifact(value: ArtifactUpload): ArtifactMetadata =
       ArtifactMetadata(value.project, value.id, value.attempt, value.kind, value.mediaType, "fixture", value.body.getBytes(UTF_8).length,
         value.body.codePointCount(0, value.body.length), Actor("fixture", SessionId(UUID.randomUUID()), Role.Collector), 1)
-    override def call(value: Command): Result = throw new IllegalStateException("Fixture receiver does not execute commands")
+    override def call(value: Command): Result = (value, claims) match {
+      case (Command.ClaimWork(input), Some(answer)) => answer(input)
+      case _ => throw new IllegalStateException("Fixture receiver does not execute commands")
+    }
     override def admit(value: HostAdmissionInput): ResultAdmission = throw new IllegalStateException("Fixture receiver does not admit results")
     override def integrate(value: HostIntegrationInput): IntegrationRecord = throw new IllegalStateException("Fixture receiver does not integrate")
     override def grant(value: GrantRequest): AccessToken = throw new IllegalStateException("Fixture receiver does not grant authority")
+  }
+  /** Grants every acquisition to `owner`, accepts every release and appends each command to `log`. */
+  private def claims(owner: Actor, log: Path, clock: Clock): ClaimInput => Result = input => synchronized {
+    def record(action: String, fence: Fence): Unit =
+      Files.writeString(log, s"$action ${fence.claim.value}\n", java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.APPEND)
+    def claim(fence: Fence, released: Boolean): Result =
+      Result.Claimed(Claim(fence, owner, Set.empty, clock.millis() + Duration.ofMinutes(30).toMillis, released, ClaimOrigin.Acquire(1)))
+    input.action match {
+      case ClaimAction.Acquire(id, _, _) => record("Acquire", Fence(id, 1)); claim(Fence(id, 1), false)
+      case ClaimAction.Release(fence) => record("Release", fence); claim(fence, true)
+      case other => throw new IllegalStateException("Unexpected fixture claim action: " + other.getClass.getSimpleName)
+    }
   }
   private def property(name: String): Path = Path.of(Option(System.getProperty(name)).getOrElse(throw new IllegalArgumentException(s"-D$name is required")))
 
@@ -109,11 +128,12 @@ object ShutdownFixture extends RoleAppMain.LauncherBIO[IO] {
       make[SupervisorConfig].from { (arguments: RoleAppArgs, clock: Clock) =>
         load(if (arguments.roles.exists(_.role == BatchFixtureRole.id)) SupervisorRole.id else AttachedRole.id, clock)
       }
-      make[SupervisorAuthority].from { (clock: Clock) =>
+      make[SupervisorAuthority].from { (config: SupervisorConfig, clock: Clock) =>
         val expires = clock.millis() + Duration.ofHours(1).toMillis
-        SupervisorAuthority(new Receiver, new Receiver, new Receiver, AccessToken("governor", expires))
+        SupervisorAuthority(new Receiver(None), new Receiver(None),
+          new Receiver(Some(claims(config.owner.actor, property(RootProperty).resolve(ClaimLog), clock))), AccessToken("governor", expires))
       }
-      make[SessionCollectors].fromValue(new SessionCollectors { override def collector(run: SupervisorRun): ServerApi = new Receiver })
+      make[SessionCollectors].fromValue(new SessionCollectors { override def collector(run: SupervisorRun): ServerApi = new Receiver(None) })
       make[CliContext].from((config: SupervisorConfig) => CliContext(sys.env, config.directory, System.out, System.in))
       make[McpSchemas]
       make[WorkflowAssets]

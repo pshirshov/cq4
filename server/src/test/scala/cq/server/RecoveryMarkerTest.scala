@@ -341,6 +341,24 @@ final class RecoveryMarkerLocal extends SpecZIO with AssertZIO {
       } yield ()
     }
 
+    "D144: record the marker for an ended session whose integration the server refused to reserve, since nothing was reserved or launched" in { (local: LocalWorkspaceFixture) =>
+      val state = RecoveryState(local)
+      for {
+        ended <- state.session(1)
+        intent = ended.intent
+        _ <- ZIO.attemptBlocking { ended.finish(); ended.integrationRequest(intent.id) }
+        _ <- ended.integration(intent, false)
+        _ <- new FileIntegrationJournal(ended.directory.resolve("integrations"), ended.owner).locked(intent.id) { entry => ZIO.attemptBlocking(
+          entry.write(entry.read.get.copy(observation = Some(IntegrationObservation.NotApplied("Server refused the reservation, so no Git update was launched: StaleFence(Fixture)"))))) }
+        first <- state.recover
+        _ <- ZIO.attempt {
+          println(s"Refused integration at startup recovery: first=$first marker=${ended.recovery}")
+          assert(problem(first, ended).isEmpty && ended.outcome.contains(RecoveryOutcome.Recovered) && first.totals.recovered == 1, s"$first ${ended.recovery}")
+          assert(state.server.integrations.get() == 0 && state.server.resolution(intent.id).isEmpty)
+        }
+      } yield ()
+    }
+
     "int-02: withhold the marker after the host ended during an integration Git job, and record that job as flush records an unsettled job" in { (local: LocalWorkspaceFixture) =>
       val state = RecoveryState(local)
       for {
