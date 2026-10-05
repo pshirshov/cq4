@@ -7,6 +7,8 @@ export function runtime(id) {
   const footer = new Map();
   const notices = [];
   const sent = [];
+  // What the extension injected into the session with sendMessage: the message and its delivery options.
+  const injected = [];
   const state = { idle: true };
   const context = {
     ui: { setStatus: (key, text) => footer.set(key, text), notify: (message, type) => notices.push({ message, type }) },
@@ -16,10 +18,11 @@ export function runtime(id) {
     on: (name, handler) => handlers.set(name, handler), registerTool: tool => tools.set(tool.name, tool),
     registerCommand: (name, options) => commands.set(name, options), registerShortcut: (key, options) => shortcuts.set(key, options),
     sendUserMessage: (content, options) => sent.push({ content, options }),
+    sendMessage: (message, options) => injected.push({ message, options }),
   };
   const fire = (name, event) => handlers.get(name)(event, context);
   return {
-    id, pi, tools, commands, shortcuts, notices, sent, state, fire,
+    id, pi, tools, commands, shortcuts, notices, sent, injected, state, fire, context,
     footer: () => footer.get("cq-driver"),
     drive: input => commands.get("cq:drive").handler(input, context),
     park: () => commands.get("cq:park").handler("", context),

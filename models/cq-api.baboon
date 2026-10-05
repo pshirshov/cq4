@@ -406,7 +406,8 @@ root data DriverDirective { cycle: CycleId token: CycleToken text: str }
 root adt DriverControl {
   data Start { target: WorksetTarget attached: opt[SessionId] }
   data Park {}
-  data Continue {}
+  // `waiting`: the caller has checked that the session will be woken when work in flight ends, and accepts Waiting for it.
+  data Continue { waiting: bit }
   data Status {}
 }
 root adt DriverSession {
@@ -439,6 +440,8 @@ root adt DriverReply {
   data Parked { status: opt[DriverStatus] message: str }
   data Continue { directive: DriverDirective status: DriverStatus messages: lst[str] }
   data Stop { stopped: DriverStopped status: opt[DriverStatus] messages: lst[str] }
+  // The cycle's run is still active and the session is woken when its work ends: no directive is issued and the drive stays on.
+  data Waiting { status: DriverStatus message: str }
   data Status { value: opt[DriverStatus] }
   data Bound { status: DriverStatus message: str }
   data Activation { value: DriverActivation }
@@ -451,7 +454,7 @@ root adt DriverReply {
 root adt ExtensionDriver {
   data Start { session: str input: str }
   data Park { session: str }
-  data Continue { session: str }
+  data Continue { session: str waiting: bit }
   data Status { session: str }
 }
 root adt ReadSelection {
@@ -650,20 +653,30 @@ root data AttachedPiEvent {
 }
 root data AttachedPiSample { event: AttachedPiEvent receivedAt: i64 }
 root data WorkflowActivation { id: RequestId context: WorkflowContext operatorRequirements: str cycle: opt[CycleId] }
+// What a governing session is sent about an activation. The stored record is WorkflowActivation; these repeat no text the session holds.
+root data ActiveWorkflow { id: RequestId request: WorkflowRequest cycle: opt[CycleId] }
+root adt WorkflowInstructions {
+  data Text { value: str }
+  // The text is identical to the one the Workflow reply of activation `since` carried in this attached session.
+  data Unchanged { since: RequestId }
+}
+root data WorkflowReceipt { id: RequestId request: WorkflowRequest instructions: WorkflowInstructions subject: opt[WorkflowSubject] cycle: opt[CycleId] }
 root data AttachedContext {
   session: SessionId attempt: AttemptId directory: str project: ProjectConfig
   routes: lst[HarnessRoute] checks: lst[str] limits: HostLimits integrationTarget: opt[str]
-  instructions: str workflow: opt[WorkflowActivation] usageCoverage: str
+  instructions: str workflow: opt[ActiveWorkflow] usageCoverage: str
 }
 root adt SessionCommand {
   data Context {}
   data Workflow { id: RequestId request: WorkflowRequest operatorRequirements: str token: opt[CycleToken] }
+  data Instructions {}
   data Bind { token: DriverToken }
   data Driver {}
 }
 root adt SessionReply {
   data Context { value: AttachedContext }
-  data Workflow { value: WorkflowActivation }
+  data Workflow { value: WorkflowReceipt }
+  data Instructions { value: WorkflowActivation }
   data Driver { reply: DriverReply }
   data Failed { fault: Fault }
 }
@@ -868,8 +881,32 @@ root data CohortChoice {
 }
 root data CohortCounts { discovered: i32 selected: i32 inspected: i32 excluded: i32 unexamined: i32 notReady: i32 ineligible: i32 remaining: i32 }
 root data CohortDecision { id: RequestId artifact: ArtifactId counts: CohortCounts choices: lst[CohortChoice] }
+// What a governing session is sent about a selection: its choices without the limits its own request stated.
+// The retained record is CohortEvidence with CohortDecision and CohortChoice.
+root data OfferedChoice {
+  id: RequestId work: DispatchWork members: lst[ItemRevision] guidance: lst[ItemRevision] artifacts: lst[ArtifactId]
+  previous: opt[ArtifactId] cohort: opt[uid] reason: CohortReason witness: opt[ItemId]
+}
+root data CohortOffer { id: RequestId artifact: ArtifactId counts: CohortCounts choices: lst[OfferedChoice] }
 root data CohortConsidered { members: lst[ItemRevision] reason: CohortReason fingerprint: opt[str] }
 root data CohortEvidence { request: CohortRequest decision: CohortDecision considered: lst[CohortConsidered] }
+// What `cq wait` reads: the governing host appends one event to `units.jsonl` of its session directory when it starts working on
+// a unit and when it stops, with how the unit stands then. Phase and next are the unit's own enumerations, as text.
+enum SessionUnitKind { Attempt Integration Combination Revalidation }
+root data SessionUnit { kind: SessionUnitKind id: uid members: lst[ItemId] }
+root data UnitEnd { unit: SessionUnit phase: str next: opt[str] blocker: opt[str] }
+root adt SessionUnitEvent {
+  data Started { unit: SessionUnit }
+  data Ended { end: UnitEnd }
+}
+// What an attached host leaves in its checkout's CQ directory for the hooks and the `cq wait` of that checkout: where its session
+// directory is, and the command line its harness integration approved for waiting, when it approved one.
+root data AttachedHostRecord { directory: str waitCommand: opt[str] }
+root adt WaitOutcome {
+  data Ended { units: lst[UnitEnd] active: lst[SessionUnit] }
+  data Idle {}
+  data HostGone { active: lst[SessionUnit] }
+}
 root adt DispatchCommand {
   data Select { request: CohortRequest }
   data StartChoice { choice: RequestId harness: Harness fence: Fence }
@@ -885,7 +922,7 @@ root adt DispatchCommand {
   data DiscardIntegration { id: IntegrationId }
 }
 root adt DispatchReply {
-  data Selection { value: CohortDecision }
+  data Selection { value: CohortOffer }
   data Status { value: DispatchStatus }
   data Integration { value: IntegrationStatus }
   data Combination { value: CombinationStatus }

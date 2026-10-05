@@ -148,6 +148,9 @@ object ShutdownFixture extends RoleAppMain.LauncherBIO[IO] {
       make[CliContext].from((config: SupervisorConfig) => CliContext(sys.env, config.directory, System.out, System.in))
       make[McpSchemas]
       make[WorkflowAssets]
+      // Where the attached fixture host records its session for the hooks of its checkout.
+      make[ProjectLocation]
+      make[WaitCommand].fromValue(WaitCommand(Some("/fixture/cq")))
     }))
   }
 

@@ -119,6 +119,14 @@ sys.stderr.flush()
       started <- controller.start(request)
       settled <- controller.status(started.attempt, 20000).repeatUntil(status => DispatchController.terminal(status.phase))
         .timeoutFail(new IllegalStateException("Child did not finish"))(zio.Duration.fromSeconds(60))
+      // What `cq wait` reads: the host wrote that it started on the attempt and, once the end was visible to the session, how it ended.
+      unit = SessionUnit(SessionUnitKind.Attempt, started.attempt.value, request.members.map(_.id))
+      events <- ZIO.attemptBlocking(SessionUnits.read(config.directory).filter {
+        case SessionUnitEvent.Started(value) => value.id == unit.id
+        case SessionUnitEvent.Ended(value) => value.unit.id == unit.id
+      }).repeatUntil(_.size == 2).timeoutFail(new IllegalStateException("The child's end was not written for waiters"))(zio.Duration.fromSeconds(30))
+      _ <- ZIO.attempt(require(events == List(SessionUnitEvent.Started(unit),
+        SessionUnitEvent.Ended(UnitEnd(unit, settled.phase.toString, Some(settled.next.toString), settled.blocker))), s"Unexpected unit events: $events"))
     } yield settled
     def revalidations(controller: DispatchController): ZIO[zio.Scope, Throwable, RevalidationController] = for {
       requests <- Semaphore.make(1)
@@ -571,6 +579,12 @@ sys.stderr.flush()
         status <- revalidations.request(id, handle, f.fence).repeatUntil(_.phase != RevalidationPhase.Running)
           .timeoutFail(new IllegalStateException("Revalidation did not finish"))(zio.Duration.fromSeconds(60))
         replay <- revalidations.request(id, handle, f.fence)
+        // What `cq wait` reads about the round: its start and how it ended, once each, whatever was asked again.
+        rounds <- ZIO.attemptBlocking(SessionUnits.read(f.config.directory).collect {
+          case SessionUnitEvent.Started(unit) if unit.id == id.value => (unit.kind, "Started")
+          case SessionUnitEvent.Ended(end) if end.unit.id == id.value => (end.unit.kind, end.phase)
+        }).repeatUntil(_.size == 2).timeoutFail(new IllegalStateException("The round's end was not written for waiters"))(zio.Duration.fromSeconds(30))
+        _ <- ZIO.attempt(require(rounds == List((SessionUnitKind.Revalidation, "Started"), (SessionUnitKind.Revalidation, status.phase.toString)), rounds.toString))
         reused <- fault(revalidations.request(id, handle, Fence(ClaimId(uuid), 1)))
         again <- fault(revalidations.request(RequestId(uuid), handle, f.fence))
         after <- artifacts.metadata(f.owner, handle)
@@ -643,7 +657,7 @@ sys.stderr.flush()
           println(s"Bounded revalidation: first=$first second=$second third=$third runs=${Files.readString(counter).trim}")
           assert(foreign.contains(Fault.StaleFence("Revalidation requires the claim fence its result was admitted under")), foreign.toString)
           assert(missing.exists(_.isInstanceOf[Fault.Missing]), missing.toString)
-          assert(occupied.contains(Fault.Conflict("An active child covers T1; poll its status before revalidating")), occupied.toString)
+          assert(occupied.contains(Fault.Conflict("An active child covers T1; wait for it to end before revalidating")), occupied.toString)
           assert(stopped.phase == DispatchPhase.Cancelled && stopped.result.isEmpty, stopped.toString)
           assert(List(first, second).map(value => (value.phase, value.validation.map(_.state), value.blocker)) ==
             List.fill(2)((RevalidationPhase.Completed, List(ValidationState.Failed), Some("Host check always: Failed"))))

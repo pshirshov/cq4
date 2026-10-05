@@ -38,7 +38,7 @@ final class ProjectArchivesPostgres extends SpecZIO with AssertZIO {
         roots = created.items.map(_.id).toSet
         started <- service.drive(operator, DriverRequest.Control(key, DriverOrigin.UserPromptSubmit, DriverControl.Start(WorksetTarget.Inline(roots, WorkflowPhase.Work), None)))
         _ <- service.drive(governor, DriverRequest.Session(DriverSession.Bind(started.asInstanceOf[DriverReply.Started].bind.get)))
-        issued <- service.drive(operator, DriverRequest.Control(key, DriverOrigin.Stop, DriverControl.Continue()))
+        issued <- service.drive(operator, DriverRequest.Control(key, DriverOrigin.Stop, DriverControl.Continue(false)))
         directive = issued.asInstanceOf[DriverReply.Continue].directive
         run = RequestId(UUID.randomUUID())
         _ <- service.drive(governor, DriverRequest.Session(DriverSession.Activate(run, WorkflowRequest.Advance(roots, WorkflowPhase.Work), Some(directive.token))))

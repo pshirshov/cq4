@@ -27,6 +27,7 @@ object AttachedStartup {
     HostCredential.Required -> "start the harness with CQ_TOKEN_FILE set",
     HarnessProfile.Unverified -> "configure a harness version this CQ package verifies",
     SupervisorConfig.VersionMismatch -> "set the configured harness version to the installed one",
+    SupervisorConfig.StaleIntegration -> "run cq configure for this harness with --replace and restart the harness",
   )
   private val GeneralRemedy = "check the settings file, the harness environment and the CQ server"
   private val NotStarted = "CQ host failed to start: "

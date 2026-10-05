@@ -46,6 +46,7 @@ final class IntegrationController(config: SupervisorConfig, authority: Superviso
   }
   private val rebase = new RebasePreparation(config, authority, candidates)
   private val spans = new SessionSpans(config, authority)
+  private val units = new SessionUnits(config.directory)
   private var entries = Map.empty[IntegrationId, IntegrationExecutionState]
   private var closing = false
   private var disabled = false
@@ -54,7 +55,7 @@ final class IntegrationController(config: SupervisorConfig, authority: Superviso
     throw DomainFailure(Fault.Missing("Integration is not owned by this governing session")))
   private def idle(): Unit =
     require(!entries.values.exists(value => Set(IntegrationPhase.Preparing, IntegrationPhase.Running)(value.view.phase)),
-      "An integration operation is active; poll it before starting another")
+      "An integration operation is active; wait for it to end before starting another")
   private def admit(): Unit = {
     available
     require(!closing && !disabled, "Integration admission is closed")
@@ -86,7 +87,9 @@ final class IntegrationController(config: SupervisorConfig, authority: Superviso
       case _ => ZIO.unit
     }
   private def background(entry: IntegrationExecutionState, done: Promise[Nothing, Unit], operation: Task[IntegrationStatus]): Task[Unit] =
-    (operation.flatMap(value => ZIO.succeed(update(entry, value))).catchAll {
+    // Written before the call that started the operation returns: a waiter named this integration then waits for this operation's end
+    // and is not answered by the end before it. An event that cannot be written fails the operation as any other fault of it does.
+    ZIO.attemptBlocking(units.started(SessionUnits.integration(snapshot(entry)))).either.flatMap(written => ((ZIO.fromEither(written) *> operation).flatMap(value => ZIO.succeed(update(entry, value))).catchAll {
       // No reservation exists and nothing was attempted: the integration is settled, and the server keeps no record of it.
       case refused: IntegrationRefused => ZIO.succeed(update(entry, snapshot(entry).copy(phase = IntegrationPhase.NotApplied,
         next = IntegrationNext.InspectEvidence, blocker = Some(refused.reason))))
@@ -96,7 +99,7 @@ final class IntegrationController(config: SupervisorConfig, authority: Superviso
           next = IntegrationNext.InspectEvidence, blocker = Some(DispatchProjection.concise("Integration failed: " +
             Option(error.getMessage).getOrElse(error.getClass.getSimpleName)))))
       } *> entry.ready.fail(error).unit
-    } *> resolved(entry)).ensuring(done.succeed(()).unit).forkDaemon.unit
+    } *> resolved(entry)).ensuring(done.succeed(()).unit *> ZIO.attemptBlocking(units.ended(SessionUnits.ended(snapshot(entry)))).orDie).forkDaemon.unit)
 
   def prepare(ticket: IntegrationTicket): Task[IntegrationStatus] = ZIO.uninterruptibleMask { restore => for {
     ready <- Promise.make[Throwable, Unit]
@@ -187,7 +190,8 @@ final class IntegrationController(config: SupervisorConfig, authority: Superviso
         _ => ZIO.succeed(synchronized {
           entry.view = previous.copy(phase = IntegrationPhase.NotApplied, next = IntegrationNext.Complete, blocker = Some(IntegrationCoordinator.Discarded))
           entry.observedAt = clock.millis()
-        }) *> span(entry, AttemptState.Cancelled))
+        // A waiter that named the prepared integration learns that it will not be applied.
+        }) *> span(entry, AttemptState.Cancelled) *> ZIO.attemptBlocking(units.ended(SessionUnits.ended(snapshot(entry)))))
     }
   } yield snapshot(entry) }
 

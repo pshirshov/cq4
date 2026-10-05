@@ -543,6 +543,8 @@ def main():
             # Two JVM CLI starts against local listeners; covers the endpoint choice of dev/project-archive-check.py (D111).
             checks.run(["python3", "dev/project-archive-endpoint-check.py", "java", "-cp", checks.classpath(), "cq.server.Main"],
                        "project-archive-endpoint", STARTUP_TIMEOUT * 3)
+            # JVM CLI starts over a session directory, with waits of a few seconds each.
+            checks.run(["python3", "dev/wait-check.py", "java", "-cp", checks.classpath(), "cq.server.Main"], "session-wait", COMMAND_TIMEOUT)
             checks.contracts_of("Dummy|Local", "dummy-contract")
         else:
             getattr(checks, command)()

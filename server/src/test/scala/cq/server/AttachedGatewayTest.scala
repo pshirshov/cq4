@@ -1,7 +1,7 @@
 package cq.server
 
 import cq.api.*
-import cq.host.{OwnerLiveness, PeerLimits, ServerApi, StdioPeer}
+import cq.host.{AttachedCodexUsage, CodexRollout, OwnerLiveness, PeerLimits, ServerApi, StdioPeer}
 import io.circe.{Json, parser}
 import java.io.{BufferedReader, InputStreamReader, PipedInputStream, PipedOutputStream}
 import java.nio.charset.StandardCharsets.UTF_8
@@ -13,6 +13,7 @@ import zio.{Runtime, Task, Unsafe}
 
 final class AttachedGatewayLocal extends AnyWordSpec {
   private val LongInterval = Duration.ofSeconds(30)
+  private val InputSchemaBytes = 46000
   private val schemas = new McpSchemas()
   private val project = ProjectId(UUID.fromString("00000000-0000-4000-8000-000000000001"))
 
@@ -26,17 +27,19 @@ final class AttachedGatewayLocal extends AnyWordSpec {
   }
 
   /** An initialized gateway on a real peer. Only the governing API is live: the tools exercised here reach nothing else. */
-  private final class Session(frameBytes: Int, answer: Command => Result) extends AutoCloseable {
+  private final class Session(frameBytes: Int, harness: Harness, answer: Command => Result) extends AutoCloseable {
+    def this(frameBytes: Int, answer: Command => Result) = this(frameBytes, Harness.Claude, answer)
     private def uuid: UUID = UUID.randomUUID()
     private val assignment = Assignment(AssignmentId(uuid), project, Set.empty, Attribution.Unattributed, None, None)
-    private val attempt = Attempt(AttemptId(uuid), assignment.id, None, SessionId(uuid), Role.Governor, Harness.Claude,
+    private val attempt = Attempt(AttemptId(uuid), assignment.id, None, SessionId(uuid), Role.Governor, harness,
       "fixture-provider", "fixture-model", "fixture", 0, UsagePhase.Govern)
     private val settings = ProjectConfig(project, "http://localhost", "Attached gateway")
     private val config = SupervisorConfig(null, settings, null, null,
-      SupervisorRun(settings, assignment, attempt, "fixture", "/nonexistent", GitCommit("0" * 40), SessionOwnership.Attached), Path.of("/nonexistent"), "", None, Map.empty)
+      SupervisorRun(settings, assignment, attempt, "fixture", "/nonexistent", GitCommit("0" * 40), SessionOwnership.Attached), Path.of("/nonexistent"), "", None, Map("HOME" -> "/nonexistent"))
     private val api = new Api(answer)
-    private val gateway = new AttachedGateway(config, SupervisorAuthority(api, api, api, AccessToken("governor", 0)), schemas, null, null, null, null, null,
-      new SessionClaims(config.owner, api, logstage.IzLogger.NullLogger))
+    private val gateway = new AttachedGateway(config, SupervisorAuthority(api, api, api, AccessToken("governor", 0)), schemas, null, null, null,
+      new AttachedCodexUsage(Path.of("/nonexistent"), config.run, new CodexRollout, java.time.Clock.systemUTC()), null,
+      new SessionClaims(config.owner, api, logstage.IzLogger.NullLogger), WaitCommand(Some("/opt/cq/bin/cq")))
     private val input = new PipedInputStream(8192)
     private val client = new PipedOutputStream(input)
     private val response = new PipedInputStream(8192)
@@ -93,6 +96,68 @@ final class AttachedGatewayLocal extends AnyWordSpec {
       } finally session.close()
     }
 
+    "deliver each result to the governing model once: as text where the harness passes the text on, as structured content alone to Codex (I33)" in {
+      val counts = Result.Counts(LedgerCounts(Nil, ChangeCursor(7L)))
+      Harness.all.foreach { harness =>
+        val session = new Session(AttachedGateway.FrameBytes, harness, {
+          case Command.Read(ReadInput(_, _: ReadSelection.Counts)) => counts
+          case other => fail(s"Unexpected command $other")
+        })
+        try {
+          val payload = Result_JsonCodec.encode(baboon.runtime.shared.BaboonCodecContext.Default, counts)
+          val served = session.tool("read", read("""{"Counts":{}}"""))
+          val refused = session.tool("read", read("""{"Catalog":{}}"""))
+          List(served -> false, refused -> true).foreach { (result, failed) =>
+            val structured = result.hcursor.downField("structuredContent").focus.get
+            val text = result.hcursor.get[List[Json]]("content").fold(throw _, identity) match {
+              case List(part) if part.hcursor.get[String]("type") == Right("text") => part.hcursor.get[String]("text").fold(throw _, identity)
+              case other => fail(s"$harness: expected one text block, got $other")
+            }
+            assert(result.hcursor.get[Boolean]("isError") == Right(failed) && (failed || structured == payload), harness)
+            // The tools declare an output schema, so the structured result is always there; what differs is the text beside it.
+            if (harness == Harness.Codex) assert(text == "The result is in structuredContent.", s"$harness: $text")
+            else assert(text == structured.noSpaces, s"$harness: $text")
+          }
+        } finally session.close()
+      }
+      assert(schemas.attachedTools.forall(_.hcursor.downField("outputSchema").focus.exists(_.isObject)))
+    }
+
+    "advertise the governing session's input schemas in bounded bytes: definitions under short names, no bounds on 32-bit integers, the same contract (I33)" in {
+      def bytes(value: Json): Int = value.noSpaces.getBytes(UTF_8).length
+      def objects(value: Json): List[io.circe.JsonObject] = value.asObject.toList.flatMap(fields => fields :: fields.values.toList.flatMap(objects)) ++
+        value.asArray.toList.flatten.flatMap(objects)
+      val inputs = schemas.attachedTools.map(tool => tool.hcursor.get[String]("name").fold(throw _, identity) -> tool.hcursor.downField("inputSchema").focus.get)
+      val managed = new LocalControl(null, null, null, null, null, null, schemas, null, null).advertised(LocalCapability(AttemptId(UUID.randomUUID()), Role.Governor))
+      (inputs :+ ("managed dispatch" -> managed.hcursor.downField("inputSchema").focus.get)).foreach { (name, input) =>
+        val defined = input.hcursor.downField("$defs").keys.fold(Set.empty[String])(_.toSet)
+        assert(defined.forall(_.matches("d[0-9a-z]+")) && !input.noSpaces.contains("cq_api_"), s"$name: ${defined.take(5)}")
+        objects(input).foreach { fields =>
+          fields("$ref").foreach(reference => assert(defined(reference.asString.get.stripPrefix("#/$defs/")), s"$name: $reference"))
+          if (fields("type").contains(Json.fromString("integer"))) assert(!fields.contains("minimum") && !fields.contains("maximum"), s"$name: $fields")
+        }
+      }
+      // The same contract: with the generated names and the bounds of a 32-bit integer restored, each schema is the generated one.
+      List("session" -> "SessionCommand", "dispatch" -> "DispatchCommand").foreach { (tool, command) =>
+        val generated = schemas.schema(command)
+        val names = generated.hcursor.downField("$defs").keys.get.toVector
+        def name(alias: String): String = names(Integer.parseInt(alias.drop(1), Character.MAX_RADIX))
+        def restored(value: Json): Json = value.arrayOrObject(value, values => Json.fromValues(values.map(restored)), fields => {
+          val entries = fields.toList.map { (key, child) => key -> (if (key == "$ref") Json.fromString("#/$defs/" + name(child.asString.get.stripPrefix("#/$defs/"))) else restored(child)) }
+          Json.fromFields(if (!fields("type").contains(Json.fromString("integer"))) entries
+            else entries ++ List("minimum" -> Json.fromInt(Int.MinValue), "maximum" -> Json.fromInt(Int.MaxValue)))
+        })
+        val advertised = inputs.toMap.apply(tool)
+        val definitions = advertised.hcursor.downField("$defs").focus.get.asObject.get.toList.map((alias, value) => name(alias) -> restored(value))
+        assert(restored(advertised.mapObject(_.remove("$defs"))).mapObject(_.add("$defs", Json.fromFields(definitions))) == generated, tool)
+      }
+      val sizes = inputs.map((name, input) => name -> bytes(input))
+      println("I33 advertised input schema bytes: " + sizes.map((name, size) => s"$name $size").mkString(", ") + s"; all nine ${sizes.map(_._2).sum}")
+      // Measured 2026-10-05: 44,267 bytes; under the generated names and with the bounds, the nine schemas of the release before took 53,917.
+      // A deliberate addition to a command raises this bound.
+      assert(sizes.map(_._2).sum <= InputSchemaBytes, sizes.toString)
+    }
+
     "refuse a read of the Help catalog, which is served to the browser only, without reaching the server, and keep serving" in {
       val session = new Session(AttachedGateway.FrameBytes, {
         case Command.Read(ReadInput(_, _: ReadSelection.Counts)) => Result.Counts(LedgerCounts(Nil, ChangeCursor(0L)))
@@ -104,7 +169,7 @@ final class AttachedGatewayLocal extends AnyWordSpec {
         assert(session.tool("read", read("""{"Counts":{}}""")).hcursor.get[Boolean]("isError") == Right(false))
         val tool = schemas.attachedTools.find(_.hcursor.get[String]("name") == Right("read")).get
         assert(!tool.noSpaces.contains("Catalog") && !tool.hcursor.get[String]("description").exists(_.toLowerCase.contains("catalog")))
-        assert(!schemas.attachedInstructions(Harness.Codex).contains("Catalog"))
+        assert(!schemas.attachedInstructions(Harness.Codex, Some("/opt/cq/bin/cq wait")).contains("Catalog"))
       } finally session.close()
     }
 
@@ -118,7 +183,7 @@ final class AttachedGatewayLocal extends AnyWordSpec {
         // The shape a weaker model sent three times (D149): the alternative's value as a string holding JSON.
         val context = refused("session", """{"Context":"{}"}""")
         assert(context.contains("\"session\"") && context.contains("do not match its input schema") && context.contains("object expected"), context)
-        assert(tags("SessionCommand") == List("Context", "Workflow", "Bind", "Driver") && context.contains("Context, Workflow, Bind, Driver"), context)
+        assert(tags("SessionCommand") == List("Context", "Workflow", "Instructions", "Bind", "Driver") && context.contains("Context, Workflow, Instructions, Bind, Driver"), context)
         val dispatch = refused("dispatch", """{"Status":"{}"}""")
         assert(dispatch.contains("\"dispatch\"") && dispatch.contains(tags("DispatchCommand").mkString(", ")), dispatch)
         val domain = refused("read", """{"project":"p"}""")

@@ -12,6 +12,7 @@ object DriverDecision {
 }
 
 object DriverPolicy {
+
   val MaxSessionKey = 200
   val MaxDrivers = 64
   // Start and resume directives issued by one drive; each is one harness continuation.
@@ -48,7 +49,8 @@ object DriverPolicy {
         invalid(extension || origin == DriverOrigin.UserPromptSubmit, "Drive-start belongs to the UserPromptSubmit hook and the Pi extension")
         invalid(attached.nonEmpty == extension, "The Pi extension supplies its attached session at drive-start; hook sessions bind with the hook-minted token")
       case _: DriverControl.Park =>
-        invalid(extension || origin == DriverOrigin.UserPromptSubmit, "Park belongs to the UserPromptSubmit hook and the Pi extension")
+        // The Stop hook parks a drive whose attached host is gone while its work was in flight.
+        invalid(extension || origin == DriverOrigin.UserPromptSubmit || origin == DriverOrigin.Stop, "Park belongs to the UserPromptSubmit and Stop hooks and the Pi extension")
       case _: DriverControl.Continue =>
         invalid(extension || origin == DriverOrigin.Stop, "The continuation query belongs to the Stop hook and the Pi extension")
       case _: DriverControl.Status => ()

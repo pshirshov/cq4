@@ -2,7 +2,7 @@ package cq.server
 
 import cq.api.*
 import cq.core.LedgerPolicy
-import cq.host.{DriverAssets, DriverEntry, DriverHook, HttpServerApi, WorkflowAssets}
+import cq.host.{DriverAssets, DriverEntry, DriverHook, HttpServerApi, SessionWait, WorkflowAssets}
 import java.io.{InputStream, PrintStream}
 import java.net.URI
 import java.nio.channels.FileChannel
@@ -13,6 +13,9 @@ import scala.util.Using
 import zio.{Task, ZIO}
 
 final case class CliContext(environment: Map[String, String], directory: Path, output: PrintStream, input: InputStream)
+
+/** `cq wait` has said what it found and ends with a code other than success. */
+final class WaitFinished(val exit: Int) extends RuntimeException
 
 final class Cli(context: CliContext, location: ProjectLocation, upload: SessionUpload, workflows: WorkflowAssets, attached: AttachedAssets) {
   private val environment = context.environment
@@ -116,6 +119,12 @@ final class Cli(context: CliContext, location: ProjectLocation, upload: SessionU
         val location = configDirectory
         val (config, actorSession) = locked(location)((configuration(location), session(location)))
         new DriverEntry(new HttpServerApi(URI.create(validateEndpoint(config.endpoint)), cq.host.HostCredential.read(environment), actorSession, RequestTimeout), config.project)
+      }, new cq.host.SessionViews {
+        // Located only for a Stop of a driven session: the other hook events ask nothing about hosts.
+        private lazy val sessions = new cq.host.AttachedSessions(configDirectory)
+        override def view(session: SessionId): cq.host.HostView = sessions.view(session)
+        override def asked(session: SessionId): Option[String] = sessions.asked(session)
+        override def ask(session: SessionId, units: Option[String]): Unit = sessions.ask(session, units)
       })
       output.print(hook.run(harness, event, context.input.readNBytes(DriverHook.MaxInputBytes + 1)))
       output.flush()
@@ -239,6 +248,30 @@ final class Cli(context: CliContext, location: ProjectLocation, upload: SessionU
         case "outcomes" => UsageSelection.Outcomes(AttemptId(UUID.fromString(opts.getOrElse("--attempt", throw new IllegalArgumentException("status outcomes requires --attempt UUID")))), opts.get("--after").map(_.toLong).getOrElse(0L), limit)
       }
       renderer.result(request(config, actorSession, Command.Usage(UsageInput(config.project, selection))))
+    // Reads the session directory only: no server, no credential and no project configuration.
+    case "wait" :: rest =>
+      require(rest.size % 2 == 0, "Options require values")
+      val pairs = rest.grouped(2).map(pair => pair.head -> pair(1)).toList
+      val kinds = SessionUnitKind.all.map(kind => "--" + kind.toString.toLowerCase -> kind).toMap
+      require(pairs.forall((option, _) => option == "--session" || kinds.contains(option)) && pairs.count(_._1 == "--session") <= 1,
+        "wait accepts --session DIR once and --attempt, --integration, --combination and --revalidation ID, each any number of times")
+      // Without a directory, the session is that of the one CQ host of this checkout that runs.
+      val session = pairs.collectFirst { case ("--session", value) => directory.resolve(value).normalize() }.getOrElse {
+        new cq.host.AttachedSessions(configDirectory).running match {
+          case List(only) => Path.of(only.directory)
+          case Nil =>
+            output.println("No CQ host of this checkout is running. Restart the harness session; cq job upload --session DIR recovers what a host retained")
+            throw new WaitFinished(SessionWait.HostGoneExit)
+          case several =>
+            output.println(s"${several.size} CQ hosts of this checkout are running; name the session to wait on with --session DIR: " + several.map(_.directory).mkString(", "))
+            throw new WaitFinished(SessionWait.SeveralHostsExit)
+        }
+      }
+      val named = pairs.collect { case (option, value) if kinds.contains(option) => kinds(option) -> UUID.fromString(value) }
+      val outcome = try new SessionWait(session, () => Thread.sleep(SessionWait.PollMillis)).await(named)
+        catch { case error: SessionWait.NotASession => output.println(error.getMessage); throw new WaitFinished(SessionWait.NotASessionExit) }
+      renderer.waited(session, outcome)
+      if (outcome.isInstanceOf[WaitOutcome.HostGone]) throw new WaitFinished(SessionWait.HostGoneExit)
     case List("web") => renderer.endpoint(configuration(configDirectory).endpoint)
     case _ => throw new IllegalArgumentException("Unknown command; use cq --help")
   }

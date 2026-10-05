@@ -30,13 +30,12 @@ final class LocalControl(dispatch: DispatchController, cohorts: CohortController
     Json.obj("jsonrpc" -> Json.fromString("2.0"), "id" -> id, "result" -> result))
   private def failure(id: Json, code: Int, message: String): Task[Response[Task]] = response(Status.Ok,
     Json.obj("jsonrpc" -> Json.fromString("2.0"), "id" -> id, "error" -> Json.obj("code" -> Json.fromInt(code), "message" -> Json.fromString(message))))
-  private def tool(name: String, input: String, output: String, description: String, readOnly: Boolean): Json = Json.obj(
-    "name" -> Json.fromString(name), "description" -> Json.fromString(description), "inputSchema" -> schemas.schema(input), "outputSchema" -> schemas.schema(output),
+  private def tool(name: String, input: Json, output: String, description: String, readOnly: Boolean): Json = Json.obj(
+    "name" -> Json.fromString(name), "description" -> Json.fromString(description), "inputSchema" -> input, "outputSchema" -> schemas.schema(output),
     "annotations" -> Json.obj("readOnlyHint" -> Json.fromBoolean(readOnly), "openWorldHint" -> Json.False))
   private[server] def advertised(capability: LocalCapability): Json = if (capability.role == Role.Governor)
-    tool("dispatch", "DispatchCommand", "DispatchReply", "Select bounded cohorts, claim one complete choice, then StartChoice by ID, harness and fence. Workflow runs require choices; direct Start supports explicitly assigned non-workflow runs. Poll compact Status or cancel. Prepare/apply reviewed integration, or DiscardIntegration a prepared one that will not be applied; Combine a NotApplied integration and poll CombinationStatus. Forward handles directly; full prompts/results stay outside your context." + McpSchemas.Revalidation, false)
-  else tool("workspace", "WorkspaceCommand", "WorkspaceReply", "List or read bounded pages in your assigned workspace. A prepared resolver may read MergeReport. A candidate reviewer may request a configured Check by name and poll the same operation; wait for Completed evidence before returning. Relative paths only; Git metadata and symlink traversal are denied.", capability.role != Role.Reviewer)
-    .mapObject(_.add("inputSchema", schemas.workspace(capability.role)))
+    tool("dispatch", schemas.localInput("DispatchCommand"), "DispatchReply", "Select bounded cohorts, claim one complete choice, then StartChoice by ID, harness and fence. Workflow runs require choices; direct Start supports explicitly assigned non-workflow runs. Status reads the state or the result of an attempt and, with waitMillis up to 20000, first waits for the attempt to end; Cancel stops a child. Prepare/apply reviewed integration, or DiscardIntegration a prepared one that will not be applied; Combine a NotApplied integration; IntegrationStatus and CombinationStatus read and wait the same way. Forward handles directly; full prompts/results stay outside your context." + McpSchemas.Revalidation, false)
+  else tool("workspace", schemas.workspace(capability.role), "WorkspaceReply", "List or read bounded pages in your assigned workspace. A prepared resolver may read MergeReport. A candidate reviewer may request a configured Check by name and poll the same operation; wait for Completed evidence before returning. Relative paths only; Git metadata and symlink traversal are denied.", capability.role != Role.Reviewer)
   /** `input` is the tool's input schema, which is assembled only to describe a decode fault. */
   private def decode[A](name: String, input: => Json, codec: BaboonJsonCodec[A], json: Json): Task[A] = ZIO.attempt {
     val value = codec.decode(Context, json).fold(error =>
@@ -52,7 +51,7 @@ final class LocalControl(dispatch: DispatchController, cohorts: CohortController
   private[server] def call(capability: LocalCapability, name: String, arguments: Json): Task[(Json, Boolean)] = {
     if (capability.role == Role.Governor && name == "dispatch") {
       val operation = decode(name, schemas.schema("DispatchCommand"), DispatchCommand_JsonCodec, arguments).tap(command => ZIO.attemptBlocking(workflow.authorize(command))).flatMap {
-        case DispatchCommand.Select(request) => cohorts.select(request).map(DispatchReply.Selection.apply)
+        case DispatchCommand.Select(request) => cohorts.select(request).map(value => DispatchReply.Selection(DispatchProjection.offer(value)))
         case DispatchCommand.StartChoice(choice, harness, fence) => cohorts.start(choice, harness, fence).map(DispatchReply.Status.apply)
         case DispatchCommand.Start(request) => ZIO.attempt {
           require(config.run.ownership == SessionOwnership.Managed && config.workflow.isEmpty, "Workflow execution requires a retained cohort choice")

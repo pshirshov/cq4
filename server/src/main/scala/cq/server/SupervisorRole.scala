@@ -31,6 +31,7 @@ final case class SupervisorConfig(settings: SupervisorSettings, project: Project
 object SupervisorConfig {
   val AttachedGovernorCollector = cq.core.AttemptObservation.AttachedGovernorCollector
   private val MaxConfigBytes = 64 * 1024
+  val StaleIntegration = "This harness integration starts the CQ host without --executable, as an earlier CQ package generated it"
   private val MaxInputBytes = 192 * 1024
   private val MaxOutputBytes = 32 * 1024 * 1024
   val VersionMismatch = "Installed harness version differs from its configured verified route"
@@ -62,10 +63,13 @@ object SupervisorConfig {
     val harness = Harness.all.find(_.toString.equalsIgnoreCase(args.head)).getOrElse(throw new IllegalArgumentException("Unknown governing harness"))
     val pairs = args.tail.grouped(2).map(values => values.head -> values(1)).toList
     val required = if (attached) Set.empty[String] else Set("--settings", "--input")
-    val allowed = if (attached) Set("--settings") else required ++ WorkflowArguments.Options
+    val allowed = if (attached) Set("--settings", WaitCommand.Option) else required ++ WorkflowArguments.Options
     require(pairs.map(_._1).distinct.size == pairs.size && required.subsetOf(pairs.map(_._1).toSet) &&
       pairs.forall(pair => allowed(pair._1)), "Unsupported, repeated or missing execution options")
     val supplied = pairs.toMap
+    // A Claude Code or Codex session waits for its children with a command its integration approved; one that names none was
+    // generated before that and would leave the session without a way to wait. The Pi extension waits itself.
+    if (attached && harness != Harness.Pi && !supplied.contains(WaitCommand.Option)) throw new IllegalArgumentException(StaleIntegration)
     val options = if (supplied.contains("--settings")) supplied else supplied.updated("--settings",
       context.environment.getOrElse("CQ_SETTINGS", throw new IllegalArgumentException("--settings FILE or CQ_SETTINGS is required")))
     val settingsFile = context.directory.resolve(options("--settings")).normalize()
@@ -146,15 +150,38 @@ object SupervisorProgram {
     "Before you dispatch work that a Question gated, read its answer: an Answered Question releases the work only as far as the answer allows. When the answer refuses the work, do not dispatch it: cancel it or leave it blocked, and tell the operator. Carry a condition the answer sets into the requirements of the work, or ask it in a follow-up Question. A Withdrawn Question never releases the work: Produce a new Question and link the gated items BlockedBy it, or remove the link and record the reason. " +
     "Before a child, dispatch Select with explicit roots, desired work, guidance/artifact handles, optional previous and limits. Claim all members of one returned choice, then StartChoice with its ID, configured harness and current fence. Choices fix membership and work; selection itself acquires no claim. Workflow runs require choices. Read excluded/unexamined/ineligible counts. " +
     "An implementation selection may return Planner for compatibility assessment. Forward that result in artifacts to a fresh Worker Implement Select. Unknown/incompatible groups split; acquire each split's exact claim. Pass larger prior results as artifacts when selecting subgroups. Unchanged executed input is deferred; obtain substantive evidence or changed conditions. " +
-    "Dispatch sequentially using item revisions and handles. The host assembles prompts, captures candidates and runs checks. Never read/compose child prompts or copy full results. Poll Status with waitMillis 20000; use compact outcomes and bounded artifact reads only for necessary drill-down. " +
+    "Dispatch sequentially using item revisions and handles. The host assembles prompts, captures candidates and runs checks. Never read/compose child prompts or copy full results. Status reads the current state or the result of an attempt; use compact outcomes and bounded artifact reads only for necessary drill-down. " +
     "Status quietMillis is time since a running child's last output; long tool calls are silent. Report a long-quiet child to the operator; never cancel it yourself. " +
     "Use Explorer Investigate/Research for evidence, Worker Probe for experiments, Planner for typed proposals and Reviewer Plan/Audit for independent findings. Pass previous result handles with identical members and current fence. Preview read/Proposal, then apply by result handle; never reconstruct drafts. Children cannot mutate CQ or integrate. " +
     "Pass worker candidates to Reviewer Candidate; prefer another configured harness. " +
-    "With integrationTarget, PrepareIntegration using a fresh ID and accepted reviewer handle, poll IntegrationStatus, inspect its frozen preview, then Integrate that ID. Only Recorded establishes domain recording; reconcile Pending and inspect NotApplied. Discard a prepared integration that will not be applied with DiscardIntegration before releasing its claim or changing the workflow. Without a target, report the retained reviewed candidate. " +
-    "PrepareIntegration rebases onto a moved target itself; after NotApplied, prepare again with a fresh ID. If Ready carries a blocker, Integrate, then Combine a fresh ID, that integration ID and current full fence; poll CombinationStatus. Dispatch Worker ResolveConflict with Ready plan in artifacts, its worker as previous and exact preview members/fence. Obtain fresh validation and Reviewer from the new worker handle; omit the plan from reviewer artifacts. Integrate with a fresh ID. For PublicationPending, replay identical Combine or cq job upload. " +
+    "With integrationTarget, PrepareIntegration using a fresh ID and accepted reviewer handle, wait for the preparation to end, read IntegrationStatus, inspect its frozen preview, then Integrate that ID. Only Recorded establishes domain recording; reconcile Pending and inspect NotApplied. Discard a prepared integration that will not be applied with DiscardIntegration before releasing its claim or changing the workflow. Without a target, report the retained reviewed candidate. " +
+    "PrepareIntegration rebases onto a moved target itself; after NotApplied, prepare again with a fresh ID. If Ready carries a blocker, Integrate, then Combine a fresh ID, that integration ID and current full fence; wait for it to end and read CombinationStatus. Dispatch Worker ResolveConflict with Ready plan in artifacts, its worker as previous and exact preview members/fence. Obtain fresh validation and Reviewer from the new worker handle; omit the plan from reviewer artifacts. Integrate with a fresh ID. For PublicationPending, replay identical Combine or cq job upload. " +
     "Before archiving scoped Decisions or their completed anchors, preserve important knowledge or rules that still apply as independently reviewed Memories or proposed standing requirements. Standing requirement edits need human authority: ask the operator to persist the proposed text before archival. Only Adopted Decisions with at least one outgoing DerivedFrom or PartOf anchor, all archived, are bulk eligible; keep active or unanchored Decisions. " +
     "Claim execution only with host evidence. Child completion/review acceptance does not establish final task acceptance."
-  val Instructions = Guidance + " Return exactly {\"summary\":\"observed outcome and remaining work\"}."
+  /** What the host carries out without the session, in the words every form of waiting uses. */
+  private val Work = "work the host carries out (a child, an integration being prepared or applied, a combination, a revalidation)"
+  private val Unfound = "4 or 5: the command found no single session of this checkout, and its output says why"
+  /** The batch Governor of `cq run`: nothing tells it when work ends and it has no shell of its own, so it waits through its status calls. */
+  val WaitByStatus: String = s" Waiting for $Work: call the status of that work (Status, IntegrationStatus or CombinationStatus; repeat Revalidate) with waitMillis 20000. " +
+    "The call returns when the work ends or the wait has passed; call it again while the work continues."
+  /** Claude Code starts a turn when a background command exits; the notification carries the exit code and an output file. */
+  def waitInBackground(command: String): String = s" Waiting for $Work: do not call a status to wait. After starting such work, run exactly this command with the Bash tool " +
+    s"as a background command (run_in_background true, timeout 7200000): `$command`. Then continue with other ready work or end your turn. " +
+    "The command ends when the next unit ends, and you are notified with its exit code and an output file. " +
+    s"0: a unit ended, or nothing was active; the file has one line for each ended unit and for each still active. 3: the CQ host is not running. $Unfound. Report 3, 4 and 5 to the user. " +
+    "Any other exit, including the harness ending the command at its lifetime limit: run it again while work is active. " +
+    "After exit 0, read the outcome of each ended unit with one Status, IntegrationStatus or CombinationStatus call with waitMillis 0, and run the command again while other work is active."
+  /** Nothing wakes an idle Codex session when a background command exits (openai/codex#32188), so it waits inside its turn. */
+  def waitInTurn(command: String): String = s" Waiting for $Work: do not call a status to wait, and do not end your turn while such work is active: nothing wakes you when it ends. " +
+    s"After starting such work, run exactly this command as one blocking shell call (exec_command with yield_time_ms 300000): `$command`. " +
+    "If the call returns while the command still runs, wait for it with empty write_stdin calls (yield_time_ms 300000) until it exits. " +
+    s"It ends when the next unit ends. Exit 0: a unit ended, or nothing was active; its output has one line for each ended unit and for each still active. 3: the CQ host is not running. $Unfound. Report 3, 4 and 5 to the user. " +
+    "Any other exit: run it again while work is active. " +
+    "Read details of an ended unit with one status call with waitMillis 0 only if you need them, and run the command again while other work is active."
+  /** The CQ extension of Pi waits itself and injects a message. */
+  val WaitForMessage: String = s" Waiting for $Work: do not call a status to wait and start no waiter yourself. After starting such work, continue with other ready work or end your turn: " +
+    "CQ sends you a message that begins `CQ:` when a unit ends, naming it, its items, its phase and the next step. Read details with one status call with waitMillis 0 only if you need them."
+  val Instructions = Guidance + WaitByStatus + " Return exactly {\"summary\":\"observed outcome and remaining work\"}."
 }
 
 final class SupervisorProgram(config: SupervisorConfig, registry: HarnessRegistry, jobs: JobSupervisor, authority: SupervisorAuthority,
@@ -267,10 +294,25 @@ object SupervisorRole extends RoleDescriptor {
     Some("Own a local governing harness and its isolated jobs"), Some("cq run HARNESS --settings FILE --input FILE [--workflow NAME ...]"), freeArgsAllowed = true)
 }
 
+/** The executable an attached host was started with for `cq wait`: the one its harness integration approved for the session's shell.
+  * A Claude Code or Codex host does not start without it; the Pi extension runs the command itself and names none. */
+final case class WaitCommand(executable: Option[String]) {
+  /** The whole command line: without arguments, `cq wait` waits on the session of the one host of its checkout that runs. */
+  def line: Option[String] = executable.map(_ + " wait")
+}
+object WaitCommand {
+  val Option = "--executable"
+  def load(arguments: RoleAppArgs): WaitCommand = WaitCommand(arguments.roles.find(_.role == AttachedRole.id).flatMap { role =>
+    val raw = role.roleParameters.raw.toList
+    (if (raw.headOption.contains("--")) raw.tail else raw).drop(1).grouped(2).collectFirst { case List(Option, value) => value }
+  })
+}
+
 object SupervisorPlugin extends PluginDef {
   include(new ModuleDef {
     include(new RoleModuleDef { makeRole[SupervisorRole]; makeRole[AttachedRole] })
     make[SupervisorConfig].fromEffect(SupervisorConfig.load _)
+    make[WaitCommand].from(WaitCommand.load _)
     many[HarnessAdapter].add[ClaudeAdapter].add[CodexAdapter].add[PiAdapter]
     make[HarnessRegistry]
     make[HarnessOutput]

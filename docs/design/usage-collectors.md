@@ -5,10 +5,10 @@
 | Source | Counted records | Accounting scope |
 | --- | --- | --- |
 | Claude Code 2.1.280, 2.1.285 | Final `result.modelUsage`, separately per model | Session cumulative; main-loop `usage` and overall cost are not added again |
-| Codex 0.156.1, 0.159.2 | `turn.completed.usage` | Thread cumulative, including cached input and reasoning output |
+| Codex 0.156.1, 0.159.2, 0.160.0 | `turn.completed.usage` | Thread cumulative, including cached input and reasoning output |
 | Pi 0.87.1, 0.99.1 | Final assistant `message_end.message.usage` | Per-response increments; partial updates, turn/run aggregates are excluded |
 
-The attached Codex rollout reader additionally accepts the `0.157.1` and `0.159.2` native headers; the 0.159.2 `token_usage_record` carries the same `usage` fields plus ignored `session_id`/`root_turn_id`.
+The attached Codex rollout reader additionally accepts the `0.157.1` and `0.159.2` native headers; the 0.159.2 `token_usage_record` carries the same `usage` fields plus ignored `session_id`/`root_turn_id`. 0.160.0 is accepted on source evidence only (2026-10-05): `codex-rs/exec/src/exec_events.rs` is identical at the tags `rust-v0.159.2` and `rust-v0.160.0`, and both binaries name the same rollout items and usage fields. No `turn.completed` event and no rollout `token_usage_record` of a real 0.160.0 session has been compared with the fixtures, so its usage-record format is unverified until one is.
 
 Pi response IDs deduplicate repeated responses even across repeated turn wrappers. Where a provider omits response IDs, the collector reports that its fallback identity is limited to native turn/model/timestamp. A contradictory repetition retains the first observation and adds a coverage gap. Pi's default-zero `totalTokens` does not invalidate separately reported positive counts; a contradictory positive total is rejected.
 

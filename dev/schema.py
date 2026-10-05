@@ -25,6 +25,13 @@ def generate_schemas(root: Path):
             return [normalize(child) for child in value]
         if not isinstance(value, dict):
             return value
+        # Baboon's OpenAPI output describes a map whose key is not a string as an array of key/value pairs, while its Scala and
+        # TypeScript JSON codecs both write such a map as an object keyed by the key's text. The schema follows the codecs.
+        entry = value.get("items")
+        if value.get("type") == "array" and isinstance(entry, dict) and "$ref" not in entry and set(entry.get("properties", {})) == {"key", "value"}:
+            if set(value) != {"type", "items"} or set(entry) != {"type", "required", "properties"}:
+                raise RuntimeError("Baboon map schema patch no longer matches")
+            return {"type": "object", "additionalProperties": normalize(entry["properties"]["value"])}
         result = {key: normalize(child) for key, child in value.items()}
         if result.get("type") == "object" and ("properties" in result or set(result) == {"type"}):
             result["additionalProperties"] = False

@@ -49,12 +49,12 @@ Automatic reruns ([intermittent checks](local-dispatch.md#intermittent-checks)) 
 | the result is not an admitted result of this session, or is not a worker (Implement or ResolveConflict) result with a candidate | `Invalid`, or `Missing` for an unknown handle |
 | `fence` is not the fence the result was admitted under | `StaleFence: Revalidation requires the claim fence its result was admitted under` |
 | that claim is released, expired or no longer covers the members | the server's claim fault (`StaleFence: Claim released`), or `Invalid: Revalidation claim no longer covers this assignment` |
-| a child of this session is running on any of the members | `Conflict: An active child covers T1; poll its status before revalidating` |
+| a child of this session is running on any of the members | `Conflict: An active child covers T1; wait for it to end before revalidating` |
 | a later worker result for any of the members exists in this session | `Conflict: Result is superseded by a later result for the same members` |
 | an effective check is `Unknown` | `Conflict: Check NAME is Unknown; a check whose cleanup is unconfirmed is never rerun` |
 | no effective check is `Failed` | `Conflict: Result has no failed check to revalidate` |
 | a failed check has used its rounds | `Limit: Revalidation limit reached for check NAME: N rounds` |
-| another revalidation of this session is running | `Conflict: A revalidation is running; poll it before starting another` |
+| another revalidation of this session is running | `Conflict: A revalidation is running; wait for it to end before starting another` |
 
 The first call with an `id` admits and starts the round and waits up to 20 seconds; repeating the same `id`, `result` and `fence` observes the same round (`Running`, `Completed` with the amendment handle and the effective validation, or `Failed` with a blocker and no amendment). A round whose check fails again is `Completed`: it is recorded and counts. Shutdown cancels a running check and records no round. In a workflow, `Revalidate` requires `advance` through at least `work` and members inside the workflow scope.
 

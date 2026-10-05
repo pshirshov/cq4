@@ -79,6 +79,20 @@ final class HarnessDoctorLocal extends AnyWordSpec {
       assert(f.inspect(Harness.Claude, Some(config), None).current)
       Files.writeString(local, json.deepMerge(Json.obj("disableAllHooks" -> Json.True)).noSpaces)
       assert(!f.inspect(Harness.Claude, Some(config), None).current)
+      // An integration an earlier package generated starts the host without its executable, and such a host refuses to start.
+      val mcp = f.root.resolve(".mcp.json")
+      val current = parser.parse(Files.readString(mcp)).toOption.get
+      val args = current.hcursor.downField("mcpServers").downField("cq").get[List[String]]("args").toOption.get
+      assert(args.takeRight(2) == List("--executable", f.binary.toString))
+      Files.writeString(mcp, current.deepMerge(Json.obj("mcpServers" -> Json.obj("cq" -> Json.obj("args" -> Json.fromValues(args.dropRight(2).map(Json.fromString)))))).noSpaces)
+      val stale = f.inspect(Harness.Claude, Some(config), None)
+      assert(!stale.current && stale.checks.exists(check => check.name == ".mcp.json" && check.state == InstallationState.Failed))
+      Files.writeString(mcp, current.noSpaces)
+      // Without the permission for the waiter, a session would be asked before each background wait.
+      assert(json.hcursor.downField("permissions").get[List[String]]("allow") == Right(List(s"Bash(${f.binary} wait)")))
+      Files.writeString(local, json.mapObject(_.remove("permissions")).noSpaces)
+      val unapproved = f.inspect(Harness.Claude, Some(config), None)
+      assert(!unapproved.current && unapproved.checks.exists(check => check.name == ".claude/settings.local.json" && check.state == InstallationState.Failed))
     }
     "inspect declarative configuration and approval symlinks without changing them" in Using.resource(new Fixture) { f =>
       f.install(Harness.Claude)
@@ -122,6 +136,15 @@ final class HarnessDoctorLocal extends AnyWordSpec {
       assert(f.snapshot() == before)
       Files.writeString(config, trust + "\n[features]\nhooks = false\n")
       assert(!f.inspect(Harness.Codex, Some(config), Some(report)).current)
+      // Without the rule that allows the waiter, a session would be asked before each blocking wait.
+      Files.writeString(config, trust)
+      val rules = f.root.resolve(".codex/rules/cq.rules")
+      val allowed = Files.readString(rules)
+      Files.delete(rules)
+      val unapproved = f.inspect(Harness.Codex, Some(config), Some(report))
+      assert(!unapproved.current && unapproved.checks.exists(check => check.name == ".codex/rules/cq.rules" && check.state == InstallationState.Failed))
+      Files.writeString(rules, allowed)
+      assert(f.inspect(Harness.Codex, Some(config), Some(report)).current)
       Files.writeString(config, trust.replace("trusted_hash", "revoked_hash"))
       assert(!f.inspect(Harness.Codex, Some(config), Some(report)).current)
       Files.writeString(config, trust)

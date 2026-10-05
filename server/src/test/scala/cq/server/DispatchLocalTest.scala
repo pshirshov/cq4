@@ -114,6 +114,22 @@ final class DispatchLocal extends AnyWordSpec {
     }
   }
   "Compact dispatch projection (Behavioral Active Blackbox Atomic)" should {
+    "I33: reply to a selection with its choices as retained, without the limits the request stated" in {
+      val context = baboon.runtime.shared.BaboonCodecContext.Default
+      val project = ProjectId(UUID.randomUUID())
+      val member = ItemRevision(ItemId(project, Ledger.Tasks, 1), Revision(2))
+      val limits = HostLimits(3000, 1000, 300, 2000, 262144)
+      val choice = CohortChoice(RequestId(UUID.randomUUID()), DispatchWork.Worker(WorkerMode.Implement), List(member), List(member), List(ArtifactId(UUID.randomUUID())),
+        Some(ArtifactId(UUID.randomUUID())), limits, Some(UUID.randomUUID()), CohortReason.CompatibleAssessment, Some(member.id))
+      val decision = CohortDecision(RequestId(UUID.randomUUID()), ArtifactId(UUID.randomUUID()), CohortCounts(4, 1, 2, 1, 0, 0, 0, 3), List(choice, choice.copy(id = RequestId(UUID.randomUUID()))))
+      val retained = CohortDecision_JsonCodec.encode(context, decision)
+      val reply = DispatchReply_JsonCodec.encode(context, DispatchReply.Selection(DispatchProjection.offer(decision))).hcursor.downField("Selection").downField("value").focus.get
+      // Field for field the retained decision, less the limits of each choice.
+      val trimmed = retained.mapObject(_.add("choices", io.circe.Json.fromValues(
+        retained.hcursor.get[List[io.circe.Json]]("choices").fold(throw _, identity).map(_.mapObject(_.remove("limits"))))))
+      assert(reply == trimmed && !reply.noSpaces.contains("limits") && retained.noSpaces.contains("\"limits\":" + HostLimits_JsonCodec.encode(context, limits).noSpaces))
+      assert(reply.noSpaces.length == retained.noSpaces.length - 2 * (",\"limits\":".length + HostLimits_JsonCodec.encode(context, limits).noSpaces.length))
+    }
     "bound large cohort narratives and preserve validation and member outcomes" in {
       val project = ProjectId(UUID.randomUUID())
       val members = (1L to 16L).map(number => ItemRevision(ItemId(project, Ledger.Tasks, number), Revision(1))).toList

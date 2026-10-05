@@ -90,7 +90,7 @@ final class AttachedCodexUsage(directory: Path, run: SupervisorRun, source: Code
         val thread = UUID.fromString(cursor.get[String]("threadId").fold(throw _, identity))
         require(native.get[String]("thread_id") == Right(thread.toString), "Native Codex thread metadata disagrees")
         val version = native.get[String]("codex_version").fold(throw _, identity)
-        require(Set("0.156.1", "0.157.1", "0.159.2")(version), "Unverified native Codex rollout version")
+        require(Set("0.156.1", "0.157.1", "0.159.2", "0.160.0")(version), "Unverified native Codex rollout version")
         if (binding.isEmpty && !Files.exists(sessions)) {
           availability = "Native sessions directory unavailable (including ephemeral sessions); usage unavailable"
         } else {
