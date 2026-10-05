@@ -19,6 +19,7 @@ final class CatalogRead(agents: AgentCatalog, workflows: WorkflowAssets) {
       val selected = value.commands.filter(_.command == command)
       if (selected.isEmpty) throw DomainFailure(Fault.Missing(s"No catalog command $command; the commands are ${value.commands.map(_.command).mkString(", ")}"))
       HelpCatalog(selected, Nil)
+    // Every DispatchWork value has exactly one agent entry (`CatalogReadLocal`), so this selection is never empty.
     case CatalogSelection.OfAgent(work) => HelpCatalog(Nil, value.agents.filter(_.work == work))
   }
 

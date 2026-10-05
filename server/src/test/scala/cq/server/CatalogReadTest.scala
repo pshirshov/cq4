@@ -52,6 +52,15 @@ final class CatalogReadLocal extends AnyWordSpec {
       }
     }
 
+    "select exactly one agent for every DispatchWork value, so that an agent selection is never empty" in {
+      val works = ExplorerMode.all.map(DispatchWork.Explorer.apply) ++ List(DispatchWork.Planner()) ++
+        WorkerMode.all.map(DispatchWork.Worker.apply) ++ ReviewerMode.all.map(DispatchWork.Reviewer.apply)
+      works.foreach { work =>
+        val selected = read.select(CatalogSelection.OfAgent(work))
+        assert(selected.commands.isEmpty && selected.agents.map(_.work) == List(work), work.toString)
+      }
+    }
+
     "carry exactly the command catalog's descriptions, aliases, argument docs and prompts, and the assets WorkflowAssets writes" in {
       val workflows = catalog.commands.filter(view => WorkflowCatalog.named(view.command).nonEmpty)
       assert(workflows.size == WorkflowCatalog.commands.size)

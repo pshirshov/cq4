@@ -82,6 +82,8 @@ final class AttachedGatewayLocal extends AnyWordSpec {
       try {
         val message = fault(session.tool("read", read("""{"Catalog":{"part":{"All":{}}}}"""))).hcursor.downField("Limit").get[String]("message").fold(throw _, identity)
         assert(message.contains(s"$FrameBytes-byte") && message.contains("narrow"), message)
+        // The same answer follows a tool that changed something, so it must not say that nothing happened.
+        assert(message.contains("The operation itself was performed") && message.contains("read the state back") && !message.contains("Nothing was returned"), message)
         val actual = "is (\\d+) bytes".r.findFirstMatchIn(message).map(_.group(1).toInt)
         assert(actual.exists(_ > 4 * FrameBytes), message)
         description = "small"
