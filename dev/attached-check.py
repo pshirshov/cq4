@@ -211,7 +211,7 @@ def main():
     def members(value):
         return [(next(iter(entry["member"])), entry["settled"]) for entry in value["cycle"]["lineage"]]
     with (root / "driver-host.log").open("w") as log:
-        driven = Peer(command + ["host", "codex"], repository, env, log)
+        driven = Peer(command + ["host", "codex", "--executable", str(wrapper)], repository, env, log)
         try:
             driven_session = driven.tool("session", {"Context": {}})["Context"]["value"]["session"]
             assert driven.tool("session", {"Driver": {}}) == {"Driver": {"reply": {"Status": {"value": None}}}}
@@ -350,7 +350,7 @@ def main():
     append_native({"type": "turn_context", "payload": {"turn_id": turn, "model": "fixture-model"}})
     metadata = {"threadId": thread, "x-codex-turn-metadata": {"thread_id": thread, "codex_version": "0.156.1"}}
     with (root / "codex-usage-host.log").open("w") as log:
-        observer = Peer(command + ["host", "codex"], repository, {**env, "CODEX_HOME": str(codex_home)}, log)
+        observer = Peer(command + ["host", "codex", "--executable", str(wrapper)], repository, {**env, "CODEX_HOME": str(codex_home)}, log)
         try:
             response = observer.rpc("tools/call", {"name": "session", "arguments": {"Context": {}}, "_meta": metadata})
             assert not response["isError"], response
@@ -381,7 +381,7 @@ def main():
     print(json.dumps({"attachedCodexUsage": "native-metadata-correlated-deduplicated-replayed", "usage": after}))
 
     with (root / "codex-ephemeral-host.log").open("w") as log:
-        ephemeral = Peer(command + ["host", "codex"], repository, {**env, "CODEX_HOME": str(root / "missing-native-home")}, log)
+        ephemeral = Peer(command + ["host", "codex", "--executable", str(wrapper)], repository, {**env, "CODEX_HOME": str(root / "missing-native-home")}, log)
         try:
             response = ephemeral.rpc("tools/call", {"name": "session", "arguments": {"Context": {}}, "_meta": metadata})
             assert not response["isError"], response
@@ -391,7 +391,7 @@ def main():
     print(json.dumps({"ephemeralCodex": "CQ-available-usage-explicitly-unavailable"}))
 
     with (root / "closing-host.log").open("w") as log:
-        closing = Peer(command + ["host", "codex"], repository, env, log)
+        closing = Peer(command + ["host", "codex", "--executable", str(wrapper)], repository, env, log)
         try:
             closing_context = closing.tool("session", {"Context": {}})["Context"]["value"]
             closing.tool("session", {"Workflow": {"id": identity(), "request": {"Begin": {"roots": []}}, "operatorRequirements": "Attached fixture: operator requirements text", "token": None}})
@@ -418,7 +418,7 @@ def main():
     latch.mkdir()
     native_env = {**env, "LD_PRELOAD": str(preload), "CQ_FIXTURE_STALL_MODE": "attached-initial", "CQ_FIXTURE_STALL_ROOT": str(latch)}
     with (latch / "stderr").open("w") as log:
-        stalled = subprocess.Popen(command + ["host", "codex"], cwd=repository, env=native_env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log)
+        stalled = subprocess.Popen(command + ["host", "codex", "--executable", str(wrapper)], cwd=repository, env=native_env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log)
         try:
             deadline = time.monotonic() + 20
             while not (latch / "entered").exists() and time.monotonic() < deadline and stalled.poll() is None:
@@ -440,7 +440,7 @@ def main():
     latch.mkdir()
     native_env = {**env, "LD_PRELOAD": str(preload), "CQ_FIXTURE_STALL_MODE": "attached-selection", "CQ_FIXTURE_STALL_ROOT": str(latch)}
     with (latch / "stderr").open("w") as log:
-        stalled = Peer(command + ["host", "codex"], repository, native_env, log)
+        stalled = Peer(command + ["host", "codex", "--executable", str(wrapper)], repository, native_env, log)
         try:
             stalled.tool("session", next_scope)
             stalled.send({"jsonrpc": "2.0", "id": 99, "method": "tools/call", "params": {"name": "dispatch", "arguments": {"Select": {"request": {**selection, "request": identity()}}}}})

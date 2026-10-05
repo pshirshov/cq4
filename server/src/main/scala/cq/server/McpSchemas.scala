@@ -181,7 +181,7 @@ final class McpSchemas {
       case (Harness.Pi, _) => SupervisorProgram.WaitForMessage
       case (Harness.Claude, Some(command)) => SupervisorProgram.waitInBackground(command)
       case (Harness.Codex, Some(command)) => SupervisorProgram.waitInTurn(command)
-      case (_, None) => SupervisorProgram.WaitByStatus
+      case (_, None) => throw new IllegalStateException(s"An attached $harness host has no wait command to name to its session")
     }
     val instructions = SupervisorProgram.Guidance + waiting +
       " You are the already-running interactive Governor. Call session Context first and session Workflow before dispatch; follow the returned workflow instructions. " +

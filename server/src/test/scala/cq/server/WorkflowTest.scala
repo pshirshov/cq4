@@ -36,8 +36,8 @@ final class WorkflowLocal extends AnyWordSpec {
   }
 
   private val Wait = "/opt/cq/bin/cq wait --session /state/sessions/0199"
-  /** The governing instructions of an attached session of every harness, with and without an approved wait command. */
-  private def attached(schemas: McpSchemas): List[String] = Harness.all.toList.flatMap(harness => List(Some(Wait), None).map(schemas.attachedInstructions(harness, _)))
+  /** The governing instructions of an attached session of every harness; only the Pi extension's host names no wait command. */
+  private def attached(schemas: McpSchemas): List[String] = schemas.attachedInstructions(Harness.Pi, None) :: Harness.all.toList.map(schemas.attachedInstructions(_, Some(Wait)))
 
   "Waiting for the host's work in the governing instructions (Behavioral Active Blackbox Atomic)" should {
     val schemas = new McpSchemas()
@@ -64,12 +64,14 @@ final class WorkflowLocal extends AnyWordSpec {
         assert(!text.contains(Wait) && !text.contains("run_in_background") && !text.contains("exec_command"))
       }
     }
-    "tell a session that has no approved wait command, and a batch Governor, to wait through its status calls, which it can do" in {
+    "tell a batch Governor, which has no shell and is told nothing, to wait through its status calls, and no attached session" in {
       val byStatus = work + "call the status of that work (Status, IntegrationStatus or CombinationStatus; repeat Revalidate) with waitMillis 20000. " +
         "The call returns when the work ends or the wait has passed; call it again while the work continues."
-      (SupervisorProgram.Instructions :: List(Harness.Claude, Harness.Codex).map(schemas.attachedInstructions(_, None))).foreach { text =>
-        assert(text.contains(byStatus) && !text.contains(" wait --session ") && !text.contains("run_in_background") && !text.contains("exec_command"))
-      }
+      val batch = SupervisorProgram.Instructions
+      assert(batch.contains(byStatus) && !batch.contains(" wait --session ") && !batch.contains("run_in_background") && !batch.contains("exec_command"))
+      attached(schemas).foreach(text => assert(!text.contains("waitMillis 20000")))
+      // A Claude Code or Codex host is not started without its wait command, so no instructions exist for one.
+      List(Harness.Claude, Harness.Codex).foreach(harness => intercept[IllegalStateException](schemas.attachedInstructions(harness, None)))
     }
     "give every governing session exactly one way to wait and never tell it to poll" in {
       (SupervisorProgram.Instructions :: attached(schemas)).foreach { text =>

@@ -31,6 +31,7 @@ final case class SupervisorConfig(settings: SupervisorSettings, project: Project
 object SupervisorConfig {
   val AttachedGovernorCollector = cq.core.AttemptObservation.AttachedGovernorCollector
   private val MaxConfigBytes = 64 * 1024
+  val StaleIntegration = "This harness integration starts the CQ host without --executable, as an earlier CQ package generated it"
   private val MaxInputBytes = 192 * 1024
   private val MaxOutputBytes = 32 * 1024 * 1024
   val VersionMismatch = "Installed harness version differs from its configured verified route"
@@ -66,6 +67,9 @@ object SupervisorConfig {
     require(pairs.map(_._1).distinct.size == pairs.size && required.subsetOf(pairs.map(_._1).toSet) &&
       pairs.forall(pair => allowed(pair._1)), "Unsupported, repeated or missing execution options")
     val supplied = pairs.toMap
+    // A Claude Code or Codex session waits for its children with a command its integration approved; one that names none was
+    // generated before that and would leave the session without a way to wait. The Pi extension waits itself.
+    if (attached && harness != Harness.Pi && !supplied.contains(WaitCommand.Option)) throw new IllegalArgumentException(StaleIntegration)
     val options = if (supplied.contains("--settings")) supplied else supplied.updated("--settings",
       context.environment.getOrElse("CQ_SETTINGS", throw new IllegalArgumentException("--settings FILE or CQ_SETTINGS is required")))
     val settingsFile = context.directory.resolve(options("--settings")).normalize()
@@ -157,7 +161,7 @@ object SupervisorProgram {
   /** What the host carries out without the session, in the words every form of waiting uses. */
   private val Work = "work the host carries out (a child, an integration being prepared or applied, a combination, a revalidation)"
   private val Units = "adding --attempt ID for each running child and --integration ID, --combination ID or --revalidation ID for the others"
-  /** A Governor that nothing tells when work ends, and that has no shell of its own, waits through its status calls. */
+  /** The batch Governor of `cq run`: nothing tells it when work ends and it has no shell of its own, so it waits through its status calls. */
   val WaitByStatus: String = s" Waiting for $Work: call the status of that work (Status, IntegrationStatus or CombinationStatus; repeat Revalidate) with waitMillis 20000. " +
     "The call returns when the work ends or the wait has passed; call it again while the work continues."
   /** Claude Code starts a turn when a background command exits; the notification carries the exit code and an output file. */
@@ -289,7 +293,7 @@ object SupervisorRole extends RoleDescriptor {
 }
 
 /** The executable an attached host was started with for `cq wait`: the one its harness integration approved for the session's shell.
-  * Absent when the integration does not name it; the session is then told to wait through its status calls. */
+  * A Claude Code or Codex host does not start without it; the Pi extension runs the command itself and names none. */
 final case class WaitCommand(executable: Option[String]) {
   def line(session: Path): Option[String] = executable.map(value => s"$value wait --session $session")
 }

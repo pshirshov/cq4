@@ -150,6 +150,7 @@ object ShutdownFixture extends RoleAppMain.LauncherBIO[IO] {
       make[WorkflowAssets]
       // Where the attached fixture host records its session for the hooks of its checkout.
       make[ProjectLocation]
+      make[WaitCommand].fromValue(WaitCommand(Some("/fixture/cq")))
     }))
   }
 
