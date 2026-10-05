@@ -7,6 +7,7 @@ import io.circe.parser
 import java.nio.channels.FileChannel
 import java.nio.charset.StandardCharsets.UTF_8
 import java.nio.file.{Files, LinkOption, Path, StandardOpenOption}
+import scala.jdk.CollectionConverters.*
 import scala.util.Using
 
 /** The units of work of one governing session that end without the session: child attempts, integrations, combinations and check
@@ -97,8 +98,13 @@ final class SessionWait(directory: Path, pause: () => Unit) {
   if (!Files.isRegularFile(directory.resolve("run.json"), LinkOption.NOFOLLOW_LINKS))
     throw new SessionWait.NotASession(s"$directory is not a CQ session directory: it holds no run.json")
 
+  /** Waits as [[awaited]] does, holding the session's waiter lock meanwhile; a batch session, which nothing wakes, has none. */
+  def await(named: List[(SessionUnitKind, java.util.UUID)]): WaitOutcome =
+    if (!Files.exists(directory.resolve(SessionWaiters.File), LinkOption.NOFOLLOW_LINKS)) awaited(named)
+    else Using.resource(SessionWaiters.hold(directory))(_ => awaited(named))
+
   /** `named` are the units to wait for; when empty, the units the host works on at the first reading. */
-  def await(named: List[(SessionUnitKind, java.util.UUID)]): WaitOutcome = {
+  private def awaited(named: List[(SessionUnitKind, java.util.UUID)]): WaitOutcome = {
     // The event file only grows: it is read again when its size has changed.
     var seen = (-1L, SessionUnits.standing(Nil))
     def read = {
@@ -138,6 +144,7 @@ object SessionWait {
   val PollMillis = 250L
   val HostGoneExit = 3
   val NotASessionExit = 4
+  val SeveralHostsExit = 5
   def lines(directory: Path, outcome: WaitOutcome): List[String] = outcome match {
     case WaitOutcome.Ended(ended, active) => ended.map(SessionUnits.described) ++ active.map(unit => "still active: " + SessionUnits.described(unit))
     case _: WaitOutcome.Idle => List("No child attempt, integration, combination or revalidation of this session is active")
@@ -147,19 +154,62 @@ object SessionWait {
   }
 }
 
-/** Where the attached hosts of one checkout say which session directory each maintains. A hook of that checkout, which knows a drive's
-  * attached session only by its identity, asks here whether the session's host still runs. */
-object AttachedHosts {
-  private val MaxBytes = 8192
-  private def file(configuration: Path, session: SessionId): Path = configuration.resolve("hosts").resolve(session.value.toString)
-  def record(configuration: Path, session: SessionId, directory: Path): Unit = {
-    HostFiles.directory(configuration.resolve("hosts"))
-    HostFiles.immutable(file(configuration, session), directory.toString, MaxBytes)
+/** A `cq wait` holds a shared lock on `waiters.lock` of the session directory it waits on, for as long as it runs. Whoever must know
+  * that the session will be told when its work ends asks whether an exclusive lock is refused: no process identity is guessed. */
+object SessionWaiters {
+  val File = "waiters.lock"
+  /** The host creates the file with its session directory; a waiter only reads the directory. */
+  def create(directory: Path): Unit = HostFiles.immutable(directory.resolve(File), "", 0)
+  def hold(directory: Path): AutoCloseable = {
+    val channel = FileChannel.open(directory.resolve(File), StandardOpenOption.READ)
+    try { channel.lock(0L, Long.MaxValue, true); channel } catch { case error: Throwable => channel.close(); throw error }
   }
-  /** A host that ends in order withdraws its record; one that is killed leaves it, and its released lock says the same. */
-  def forget(configuration: Path, session: SessionId): Unit = { Files.deleteIfExists(file(configuration, session)); () }
-  def runs(configuration: Path, session: SessionId): Boolean = {
-    val record = file(configuration, session)
-    Files.isRegularFile(record, LinkOption.NOFOLLOW_LINKS) && SessionOwner.runs(Path.of(HostFiles.text(record, MaxBytes)))
+  def present(directory: Path): Boolean = Using.resource(FileChannel.open(directory.resolve(File), StandardOpenOption.WRITE)) { channel =>
+    (try Option(channel.tryLock()) catch { case _: java.nio.channels.OverlappingFileLockException => None }).fold(true) { held => held.release(); false }
+  }
+}
+
+/** How the attached host of a session stands, as a process of its checkout finds it. */
+sealed trait HostView
+object HostView {
+  /** No host of this checkout recorded the session: its host ended in order, or it is a host of a package before the record existed. */
+  case object Unrecorded extends HostView
+  /** The host recorded the session and no longer holds its lock. */
+  case object Gone extends HostView
+  /** `standing` are the units the host works on; `waited` says that a `cq wait` runs on the session. */
+  final case class Running(directory: Path, standing: List[SessionUnit], waited: Boolean, waitCommand: Option[String]) extends HostView
+}
+
+/** Where the attached hosts of one checkout say which session directory each maintains (`hosts/` of the checkout's CQ directory).
+  * A hook of that checkout knows a drive's attached session only by its identity, and a `cq wait` without a directory knows only its
+  * checkout: both ask here. */
+final class AttachedSessions(configuration: Path) {
+  private val MaxBytes = 16384
+  private val root = configuration.resolve("hosts")
+  private def file(session: SessionId): Path = root.resolve(session.value.toString + ".json")
+  private def read(path: Path): AttachedHostRecord = HostFiles.read(path, AttachedHostRecord_JsonCodec, MaxBytes)
+
+  /** Records the session of a starting host, and withdraws the records of hosts that were killed: their lock is free. */
+  def record(session: SessionId, value: AttachedHostRecord): Unit = {
+    HostFiles.directory(root)
+    recorded.foreach { (path, old) => if (!SessionOwner.runs(Path.of(old.directory))) Files.deleteIfExists(path) }
+    HostFiles.immutable(file(session), HostFiles.encode(AttachedHostRecord_JsonCodec, value), MaxBytes)
+  }
+  /** A host that ends in order withdraws its record. */
+  def forget(session: SessionId): Unit = { Files.deleteIfExists(file(session)); () }
+  private def recorded: List[(Path, AttachedHostRecord)] =
+    if (!Files.isDirectory(root, LinkOption.NOFOLLOW_LINKS)) Nil
+    else Using.resource(Files.list(root))(_.iterator().asScala.filter(_.getFileName.toString.endsWith(".json")).toList).sortBy(_.getFileName.toString).map(path => path -> read(path))
+  /** The session directories of the hosts of this checkout that run. */
+  def running: List[AttachedHostRecord] = recorded.map(_._2).filter(value => SessionOwner.runs(Path.of(value.directory)))
+  def view(session: SessionId): HostView = {
+    val path = file(session)
+    if (!Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)) HostView.Unrecorded
+    else {
+      val value = read(path)
+      val directory = Path.of(value.directory)
+      if (!SessionOwner.runs(directory)) HostView.Gone
+      else HostView.Running(directory, SessionUnits.standing(SessionUnits.read(directory))._1, SessionWaiters.present(directory), value.waitCommand)
+    }
   }
 }

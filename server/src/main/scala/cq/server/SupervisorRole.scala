@@ -160,22 +160,24 @@ object SupervisorProgram {
     "Claim execution only with host evidence. Child completion/review acceptance does not establish final task acceptance."
   /** What the host carries out without the session, in the words every form of waiting uses. */
   private val Work = "work the host carries out (a child, an integration being prepared or applied, a combination, a revalidation)"
-  private val Units = "adding --attempt ID for each running child and --integration ID, --combination ID or --revalidation ID for the others"
+  private val Unfound = "4 or 5: the command found no single session of this checkout, and its output says why"
   /** The batch Governor of `cq run`: nothing tells it when work ends and it has no shell of its own, so it waits through its status calls. */
   val WaitByStatus: String = s" Waiting for $Work: call the status of that work (Status, IntegrationStatus or CombinationStatus; repeat Revalidate) with waitMillis 20000. " +
     "The call returns when the work ends or the wait has passed; call it again while the work continues."
   /** Claude Code starts a turn when a background command exits; the notification carries the exit code and an output file. */
-  def waitInBackground(command: String): String = s" Waiting for $Work: do not call a status to wait. After starting such work, run this command with the Bash tool " +
-    s"as a background command (run_in_background true, timeout 7200000), $Units: `$command`. Then continue with other ready work or end your turn. " +
-    "You are notified when the command exits, with its exit code and an output file: 0 means a named unit ended, and the file has one line for each ended unit and for each still active; " +
-    "3 means the CQ host is not running, which you report to the user. Read the outcome of each ended unit with one Status, IntegrationStatus or CombinationStatus call with waitMillis 0, " +
-    "and start the command again for the units still active."
+  def waitInBackground(command: String): String = s" Waiting for $Work: do not call a status to wait. After starting such work, run exactly this command with the Bash tool " +
+    s"as a background command (run_in_background true, timeout 7200000): `$command`. Then continue with other ready work or end your turn. " +
+    "The command ends when the next unit ends, and you are notified with its exit code and an output file. " +
+    s"0: a unit ended, or nothing was active; the file has one line for each ended unit and for each still active. 3: the CQ host is not running. $Unfound. Report 3, 4 and 5 to the user. " +
+    "Any other exit, including the harness ending the command at its lifetime limit: run it again while work is active. " +
+    "After exit 0, read the outcome of each ended unit with one Status, IntegrationStatus or CombinationStatus call with waitMillis 0, and run the command again while other work is active."
   /** Nothing wakes an idle Codex session when a background command exits (openai/codex#32188), so it waits inside its turn. */
   def waitInTurn(command: String): String = s" Waiting for $Work: do not call a status to wait, and do not end your turn while such work is active: nothing wakes you when it ends. " +
-    s"After starting such work, run this command as one blocking shell call (exec_command with yield_time_ms 300000), $Units: `$command`. " +
+    s"After starting such work, run exactly this command as one blocking shell call (exec_command with yield_time_ms 300000): `$command`. " +
     "If the call returns while the command still runs, wait for it with empty write_stdin calls (yield_time_ms 300000) until it exits. " +
-    "Its output has one line for each ended unit and for each still active; exit code 3 means the CQ host is not running, which you report to the user. " +
-    "Read details of an ended unit with one status call with waitMillis 0 only if you need them, and run the command again for the units still active."
+    s"It ends when the next unit ends. Exit 0: a unit ended, or nothing was active; its output has one line for each ended unit and for each still active. 3: the CQ host is not running. $Unfound. Report 3, 4 and 5 to the user. " +
+    "Any other exit: run it again while work is active. " +
+    "Read details of an ended unit with one status call with waitMillis 0 only if you need them, and run the command again while other work is active."
   /** The CQ extension of Pi waits itself and injects a message. */
   val WaitForMessage: String = s" Waiting for $Work: do not call a status to wait and start no waiter yourself. After starting such work, continue with other ready work or end your turn: " +
     "CQ sends you a message that begins `CQ:` when a unit ends, naming it, its items, its phase and the next step. Read details with one status call with waitMillis 0 only if you need them."
@@ -295,7 +297,8 @@ object SupervisorRole extends RoleDescriptor {
 /** The executable an attached host was started with for `cq wait`: the one its harness integration approved for the session's shell.
   * A Claude Code or Codex host does not start without it; the Pi extension runs the command itself and names none. */
 final case class WaitCommand(executable: Option[String]) {
-  def line(session: Path): Option[String] = executable.map(value => s"$value wait --session $session")
+  /** The whole command line: without arguments, `cq wait` waits on the session of the one host of its checkout that runs. */
+  def line: Option[String] = executable.map(_ + " wait")
 }
 object WaitCommand {
   val Option = "--executable"

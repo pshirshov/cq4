@@ -11,13 +11,15 @@ final class AttachedAssets(schemas: McpSchemas, workflows: WorkflowAssets) {
   private val ClaudeSettings = Path.of(".claude/settings.local.json")
   private val CodexHooks = Path.of(".codex/hooks.json")
   private val CodexRules = Path.of(".codex/rules/cq.rules")
-  /** The Claude Code permission rule that allows the session to run `cq wait` without being asked: the executable and `wait`, then anything. */
-  def claudeWaitRule(executable: Path): String = s"Bash($executable wait *)"
-  /** The Codex exec-policy rule that allows the same; Codex loads the .rules files of the rules directory beside each configuration layer and checks the examples. */
+  /** The Claude Code permission rule that allows the session to run `cq wait` without being asked. It is the exact command line, with
+    * no wildcard: a prefix rule is a prefix match on the command string, and the session is given a command that needs no argument. */
+  def claudeWaitRule(executable: Path): String = s"Bash($executable wait)"
+  /** The Codex exec-policy rule that allows the same. Codex has prefix rules only, so the rule also allows `cq wait` with arguments,
+    * which reads a session directory and nothing else. Codex loads the .rules files of the rules directory beside each configuration layer and checks the examples. */
   def codexWaitRule(executable: Path): String = {
     def tokens(values: String*): String = values.map(quoted).mkString("[", ", ", "]")
     CodexHeader + s"""prefix_rule(pattern = ${tokens(executable.toString, "wait")}, decision = "allow", justification = "CQ waits for the work of its own session", """ +
-      s"""match = [${tokens(executable.toString, "wait", "--session", "/state/session")}], not_match = [${tokens(executable.toString, "init")}])\n"""
+      s"""match = [${tokens(executable.toString, "wait")}], not_match = [${tokens(executable.toString, "init")}])\n"""
   }
   private def quoted(value: String): String = Json.fromString(value).noSpaces
   def write(harness: Harness, root: Path, settingsPath: Path, executable: Path, replace: Boolean, replaceStatusLine: Boolean): List[Path] = {

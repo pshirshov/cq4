@@ -130,9 +130,9 @@ def main():
             assert context["workflow"] is None and "thread metadata" in context["usageCoverage"]
             assert "Canonical argument schemas" in context["instructions"]
             # The session is told the exact command that waits on its own session directory, and how its harness waits with it.
-            assert f"one blocking shell call (exec_command with yield_time_ms 300000), adding --attempt ID for each running child" in context["instructions"]
-            assert f"`{wrapper} wait --session {context['directory']}`" in context["instructions"], context["instructions"][-1500:]
+            assert f"run exactly this command as one blocking shell call (exec_command with yield_time_ms 300000): `{wrapper} wait`." in context["instructions"], context["instructions"][-1500:]
             assert f'prefix_rule(pattern = ["{wrapper}", "wait"], decision = "allow"' in (repository / ".codex/rules/cq.rules").read_text()
+            assert json.loads((repository / ".claude/settings.local.json").read_text())["permissions"]["allow"] == [f"Bash({wrapper} wait)"]
             project = context["project"]["project"]
             standing = "Governor: preserve the operator's selected scope."
             operator({"Requirements": {"input": {"project": project, "action": {"Replace": {"expected": {"value": "0"}, "text": standing}}}}})
@@ -188,6 +188,8 @@ def main():
             assert ended == {"unit": {"kind": "Attempt", "id": started["attempt"]["value"], "members": [created["id"]]}, "phase": "Completed",
                              "next": status["next"], "blocker": None} and waited["active"] == [], waited
             assert cli(["wait", "--session", context["directory"]]) == "No child attempt, integration, combination or revalidation of this session is active\n"
+            # The command the session is given names no directory: it finds the session of the one host of this checkout that runs.
+            assert cli(["wait"]) == "No child attempt, integration, combination or revalidation of this session is active\n"
             assert "CHILD_ONLY_NARRATIVE" not in json.dumps(peer.traffic)
             session = Path(context["directory"])
             assert not list((session / "payload").glob(context["attempt"]["value"] + "/*")), "Attached session launched a Governor"

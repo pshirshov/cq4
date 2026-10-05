@@ -35,27 +35,28 @@ final class WorkflowLocal extends AnyWordSpec {
     }
   }
 
-  private val Wait = "/opt/cq/bin/cq wait --session /state/sessions/0199"
+  private val Wait = "/opt/cq/bin/cq wait"
   /** The governing instructions of an attached session of every harness; only the Pi extension's host names no wait command. */
   private def attached(schemas: McpSchemas): List[String] = schemas.attachedInstructions(Harness.Pi, None) :: Harness.all.toList.map(schemas.attachedInstructions(_, Some(Wait)))
 
   "Waiting for the host's work in the governing instructions (Behavioral Active Blackbox Atomic)" should {
     val schemas = new McpSchemas()
     val work = "Waiting for work the host carries out (a child, an integration being prepared or applied, a combination, a revalidation): "
-    val named = "adding --attempt ID for each running child and --integration ID, --combination ID or --revalidation ID for the others: `" + Wait + "`"
-    "tell a Claude Code session to wait with a background command at the longest background lifetime and to read each end once" in {
+    "tell a Claude Code session to wait with one fixed background command at the longest background lifetime, and what each exit means" in {
       val text = schemas.attachedInstructions(Harness.Claude, Some(Wait))
-      assert(text.contains(work + "do not call a status to wait. After starting such work, run this command with the Bash tool as a background command " +
-        "(run_in_background true, timeout 7200000), " + named + ". Then continue with other ready work or end your turn."))
-      assert(text.contains("0 means a named unit ended") && text.contains("3 means the CQ host is not running, which you report to the user") &&
-        text.contains("Read the outcome of each ended unit with one Status, IntegrationStatus or CombinationStatus call with waitMillis 0, and start the command again for the units still active."))
+      assert(text.contains(work + "do not call a status to wait. After starting such work, run exactly this command with the Bash tool as a background command " +
+        "(run_in_background true, timeout 7200000): `" + Wait + "`. Then continue with other ready work or end your turn."))
+      assert(text.contains("0: a unit ended, or nothing was active") && text.contains("3: the CQ host is not running") &&
+        text.contains("4 or 5: the command found no single session of this checkout, and its output says why. Report 3, 4 and 5 to the user.") &&
+        text.contains("Any other exit, including the harness ending the command at its lifetime limit: run it again while work is active.") &&
+        text.contains("After exit 0, read the outcome of each ended unit with one Status, IntegrationStatus or CombinationStatus call with waitMillis 0, and run the command again while other work is active."))
     }
     "tell a Codex session to wait with one blocking call inside its turn, because nothing wakes it" in {
       val text = schemas.attachedInstructions(Harness.Codex, Some(Wait))
       assert(text.contains(work + "do not call a status to wait, and do not end your turn while such work is active: nothing wakes you when it ends. " +
-        "After starting such work, run this command as one blocking shell call (exec_command with yield_time_ms 300000), " + named + ". " +
+        "After starting such work, run exactly this command as one blocking shell call (exec_command with yield_time_ms 300000): `" + Wait + "`. " +
         "If the call returns while the command still runs, wait for it with empty write_stdin calls (yield_time_ms 300000) until it exits."))
-      assert(text.contains("exit code 3 means the CQ host is not running") && !text.contains("run_in_background"))
+      assert(text.contains("3: the CQ host is not running") && text.contains("Any other exit: run it again while work is active.") && !text.contains("run_in_background"))
     }
     "tell a Pi session that CQ sends it a message and that it starts no waiter" in {
       List(Some(Wait), None).map(schemas.attachedInstructions(Harness.Pi, _)).foreach { text =>
@@ -68,7 +69,7 @@ final class WorkflowLocal extends AnyWordSpec {
       val byStatus = work + "call the status of that work (Status, IntegrationStatus or CombinationStatus; repeat Revalidate) with waitMillis 20000. " +
         "The call returns when the work ends or the wait has passed; call it again while the work continues."
       val batch = SupervisorProgram.Instructions
-      assert(batch.contains(byStatus) && !batch.contains(" wait --session ") && !batch.contains("run_in_background") && !batch.contains("exec_command"))
+      assert(batch.contains(byStatus) && !batch.contains("cq wait") && !batch.contains("run_in_background") && !batch.contains("exec_command"))
       attached(schemas).foreach(text => assert(!text.contains("waitMillis 20000")))
       // A Claude Code or Codex host is not started without its wait command, so no instructions exist for one.
       List(Harness.Claude, Harness.Codex).foreach(harness => intercept[IllegalStateException](schemas.attachedInstructions(harness, None)))

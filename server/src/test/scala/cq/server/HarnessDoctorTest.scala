@@ -89,7 +89,7 @@ final class HarnessDoctorLocal extends AnyWordSpec {
       assert(!stale.current && stale.checks.exists(check => check.name == ".mcp.json" && check.state == InstallationState.Failed))
       Files.writeString(mcp, current.noSpaces)
       // Without the permission for the waiter, a session would be asked before each background wait.
-      assert(json.hcursor.downField("permissions").get[List[String]]("allow") == Right(List(s"Bash(${f.binary} wait *)")))
+      assert(json.hcursor.downField("permissions").get[List[String]]("allow") == Right(List(s"Bash(${f.binary} wait)")))
       Files.writeString(local, json.mapObject(_.remove("permissions")).noSpaces)
       val unapproved = f.inspect(Harness.Claude, Some(config), None)
       assert(!unapproved.current && unapproved.checks.exists(check => check.name == ".claude/settings.local.json" && check.state == InstallationState.Failed))

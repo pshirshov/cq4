@@ -44,7 +44,7 @@ final class AttachedGateway(config: SupervisorConfig, authority: SupervisorAutho
     "content" -> Json.arr(Json.obj("type" -> Json.fromString("text"), "text" -> Json.fromString(text(body)))), "structuredContent" -> body)
   private def context: AttachedContext = AttachedContext(config.run.attempt.session, config.run.attempt.id, config.directory.toString,
     config.project, config.settings.harnesses.map(value => HarnessRoute(value.harness, value.model, value.provider)), config.settings.checks.map(_.name),
-    config.settings.limits, config.settings.integrationTarget, OperatorRequirements.governing(schemas.attachedInstructions(config.run.attempt.harness, wait.line(config.directory)),
+    config.settings.limits, config.settings.integrationTarget, OperatorRequirements.governing(schemas.attachedInstructions(config.run.attempt.harness, wait.line),
       OperatorRequirements.standing(authority.governor.call, config.project.project)),
     workflow.current.map(value => ActiveWorkflow(value.id, value.context.request, value.cycle)),
     if (config.run.attempt.harness == Harness.Pi)

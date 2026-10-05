@@ -898,6 +898,9 @@ root adt SessionUnitEvent {
   data Started { unit: SessionUnit }
   data Ended { end: UnitEnd }
 }
+// What an attached host leaves in its checkout's CQ directory for the hooks and the `cq wait` of that checkout: where its session
+// directory is, and the command line its harness integration approved for waiting, when it approved one.
+root data AttachedHostRecord { directory: str waitCommand: opt[str] }
 root adt WaitOutcome {
   data Ended { units: lst[UnitEnd] active: lst[SessionUnit] }
   data Idle {}

@@ -1,7 +1,7 @@
 package cq.server
 
 import cq.api.*
-import cq.host.{SessionOwner, SessionUnits, SessionWait}
+import cq.host.{AttachedSessions, HostView, SessionOwner, SessionUnits, SessionWait, SessionWaiters}
 import java.nio.channels.{FileChannel, FileLock}
 import java.nio.file.{Files, Path, StandardOpenOption}
 import java.util.UUID
@@ -124,6 +124,36 @@ final class SessionWaitLocal extends AnyWordSpec {
         assert(SessionUnits.read(session.directory) == List(SessionUnitEvent.Started(unit), SessionUnitEvent.Ended(over(unit, "Completed"))))
         assert(session.await(unit) == WaitOutcome.Ended(List(over(unit, "Completed")), Nil))
       } finally session.close()
+    }
+    "tell a process of the checkout how an attached session's host stands: unrecorded, gone, or running with its standing units and its waiter" in {
+      val configuration = Files.createTempDirectory("cq-checkout-")
+      val sessions = new AttachedSessions(configuration)
+      val (id, other) = (SessionId(UUID.randomUUID()), SessionId(UUID.randomUUID()))
+      val session = new Session()
+      val killed = new Session()
+      try {
+        assert(sessions.view(id) == HostView.Unrecorded && sessions.running.isEmpty)
+        SessionWaiters.create(session.directory)
+        sessions.record(other, AttachedHostRecord(killed.directory.toString, None))
+        killed.hostEnds()
+        assert(sessions.view(other) == HostView.Gone)
+        // A starting host withdraws the records of hosts that were killed, and leaves its own.
+        sessions.record(id, AttachedHostRecord(session.directory.toString, Some("/opt/cq/bin/cq wait")))
+        assert(sessions.view(other) == HostView.Unrecorded && sessions.running == List(AttachedHostRecord(session.directory.toString, Some("/opt/cq/bin/cq wait"))))
+        val unit = attempt(1)
+        session.units.started(unit)
+        assert(sessions.view(id) == HostView.Running(session.directory, List(unit), false, Some("/opt/cq/bin/cq wait")))
+        // A `cq wait` on the session is seen for as long as it runs, by its lock and without knowing its process.
+        val waiter = SessionWaiters.hold(session.directory)
+        try assert(sessions.view(id) == HostView.Running(session.directory, List(unit), true, Some("/opt/cq/bin/cq wait")))
+        finally waiter.close()
+        session.units.ended(over(unit, "Completed"))
+        assert(sessions.view(id) == HostView.Running(session.directory, Nil, false, Some("/opt/cq/bin/cq wait")))
+        session.hostEnds()
+        assert(sessions.view(id) == HostView.Gone && sessions.running.isEmpty)
+        sessions.forget(id)
+        assert(sessions.view(id) == HostView.Unrecorded)
+      } finally { session.close(); killed.close() }
     }
     "not read an event whose line is still being written, and refuse a directory that is no session" in {
       val unit = attempt(1)

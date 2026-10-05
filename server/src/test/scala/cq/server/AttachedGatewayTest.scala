@@ -169,7 +169,7 @@ final class AttachedGatewayLocal extends AnyWordSpec {
         assert(session.tool("read", read("""{"Counts":{}}""")).hcursor.get[Boolean]("isError") == Right(false))
         val tool = schemas.attachedTools.find(_.hcursor.get[String]("name") == Right("read")).get
         assert(!tool.noSpaces.contains("Catalog") && !tool.hcursor.get[String]("description").exists(_.toLowerCase.contains("catalog")))
-        assert(!schemas.attachedInstructions(Harness.Codex, Some("/opt/cq/bin/cq wait --session /state/session")).contains("Catalog"))
+        assert(!schemas.attachedInstructions(Harness.Codex, Some("/opt/cq/bin/cq wait")).contains("Catalog"))
       } finally session.close()
     }
 

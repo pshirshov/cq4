@@ -247,12 +247,15 @@ remains and otherwise allows the stop. StatusLine prints the driver status.
 It needs the operator credential, trusts the session_id on stdin, and exits 0
 even on a CQ error, which it reports in its output without blocking the harness.
 """
-      case Some("wait") => """Usage: cq wait --session DIR [--attempt ID]... [--integration ID]... [--combination ID]...
+      case Some("wait") => """Usage: cq wait [--session DIR] [--attempt ID]... [--integration ID]... [--combination ID]...
                [--revalidation ID]... [--json]
 
 Blocks until work of one governing session ends, and says what ended. DIR is the
 session directory that the CQ host of a harness session maintains (session Context
-names it). The command reads that directory only: it needs no server and no token.
+names it). Without --session, run in a checkout, it waits on the session of the one
+CQ host of that checkout that runs; that is the command line a Claude Code or Codex
+session is given, and the only one `cq configure` approves for it. The command reads
+the session directory only: it needs no server and no token.
 
 With IDs it waits for the first of the named child attempts, integrations,
 combinations or check revalidations to end, and returns at once when one has
@@ -270,8 +273,10 @@ WaitOutcome value instead.
 
 Exit codes:
   0  something ended, or nothing was active
-  3  the CQ host of the session is not running
+  3  the CQ host of the session is not running (without --session: no host of
+     this checkout runs)
   4  DIR is not a session directory
+  5  without --session: several CQ hosts of this checkout run; name one
 """
       case Some("job") => """Usage: cq job upload --session DIR
 

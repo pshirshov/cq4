@@ -119,7 +119,7 @@ final class Cli(context: CliContext, location: ProjectLocation, upload: SessionU
         val location = configDirectory
         val (config, actorSession) = locked(location)((configuration(location), session(location)))
         new DriverEntry(new HttpServerApi(URI.create(validateEndpoint(config.endpoint)), cq.host.HostCredential.read(environment), actorSession, RequestTimeout), config.project)
-      }, session => cq.host.AttachedHosts.runs(configDirectory, session))
+      }, session => new cq.host.AttachedSessions(configDirectory).view(session).isInstanceOf[cq.host.HostView.Running])
       output.print(hook.run(harness, event, context.input.readNBytes(DriverHook.MaxInputBytes + 1)))
       output.flush()
     case "commands" :: "export" :: harness :: rest =>
@@ -247,9 +247,20 @@ final class Cli(context: CliContext, location: ProjectLocation, upload: SessionU
       require(rest.size % 2 == 0, "Options require values")
       val pairs = rest.grouped(2).map(pair => pair.head -> pair(1)).toList
       val kinds = SessionUnitKind.all.map(kind => "--" + kind.toString.toLowerCase -> kind).toMap
-      require(pairs.forall((option, _) => option == "--session" || kinds.contains(option)) && pairs.count(_._1 == "--session") == 1,
-        "wait requires --session DIR and accepts --attempt, --integration, --combination and --revalidation ID, each any number of times")
-      val session = directory.resolve(pairs.collectFirst { case ("--session", value) => value }.get).normalize()
+      require(pairs.forall((option, _) => option == "--session" || kinds.contains(option)) && pairs.count(_._1 == "--session") <= 1,
+        "wait accepts --session DIR once and --attempt, --integration, --combination and --revalidation ID, each any number of times")
+      // Without a directory, the session is that of the one CQ host of this checkout that runs.
+      val session = pairs.collectFirst { case ("--session", value) => directory.resolve(value).normalize() }.getOrElse {
+        new cq.host.AttachedSessions(configDirectory).running match {
+          case List(only) => Path.of(only.directory)
+          case Nil =>
+            output.println("No CQ host of this checkout is running. Restart the harness session; cq job upload --session DIR recovers what a host retained")
+            throw new WaitFinished(SessionWait.HostGoneExit)
+          case several =>
+            output.println(s"${several.size} CQ hosts of this checkout are running; name the session to wait on with --session DIR: " + several.map(_.directory).mkString(", "))
+            throw new WaitFinished(SessionWait.SeveralHostsExit)
+        }
+      }
       val named = pairs.collect { case (option, value) if kinds.contains(option) => kinds(option) -> UUID.fromString(value) }
       val outcome = try new SessionWait(session, () => Thread.sleep(SessionWait.PollMillis)).await(named)
         catch { case error: SessionWait.NotASession => output.println(error.getMessage); throw new WaitFinished(SessionWait.NotASessionExit) }

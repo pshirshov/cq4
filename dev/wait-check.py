@@ -10,7 +10,7 @@ import threading
 import time
 import uuid
 
-HOST_GONE, NOT_A_SESSION = 3, 4
+HOST_GONE, NOT_A_SESSION, SEVERAL_HOSTS = 3, 4, 5
 PROJECT = "00000000-0000-4000-8000-000000000001"
 
 
@@ -24,6 +24,7 @@ class Session:
         self.directory = Path(root) / str(uuid.uuid4())
         (self.directory / "journal").mkdir(parents=True)
         (self.directory / "run.json").write_text("{}")
+        (self.directory / "waiters.lock").write_text("")
         self.lock = (self.directory / "journal/owner.lock").open("w")
         fcntl.lockf(self.lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
@@ -40,13 +41,30 @@ class Session:
     def host_ends(self):
         self.lock.close()
 
+    def waited(self):
+        """Whether a `cq wait` runs on this session: it holds a shared lock for its lifetime, which refuses an exclusive one."""
+        with (self.directory / "waiters.lock").open("r+") as stream:
+            try:
+                fcntl.lockf(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                return True
+            fcntl.lockf(stream, fcntl.LOCK_UN)
+            return False
+
+    def record(self, checkout):
+        """What an attached host leaves in the CQ directory of its checkout."""
+        hosts = Path(checkout) / ".cq/hosts"
+        hosts.mkdir(parents=True, exist_ok=True)
+        (hosts / (self.directory.name + ".json")).write_text(json.dumps({"directory": str(self.directory), "waitCommand": None}))
+
 
 def main():
     command = sys.argv[1:]
 
-    def wait(session, *arguments, after=None):
-        """Runs `cq wait`; `after` runs once the command has been waiting for a while, on the side of the host."""
-        process = subprocess.Popen(command + ["wait", "--session", str(session), *arguments], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    def wait(session, *arguments, after=None, checkout=None):
+        """Runs `cq wait`; `after` runs once the command has been waiting for a while, on the side of the host. Without a session it runs in `checkout`."""
+        located = [] if session is None else ["--session", str(session)]
+        process = subprocess.Popen(command + ["wait", *located, *arguments], cwd=checkout, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         acted = None
         if after is not None:
             def act():
@@ -71,7 +89,14 @@ def main():
         session.started(first)
         session.started(second)
         # A receipt appears while the command waits: it returns then, names what ended and what the host still works on.
-        code, output, errors = wait(session.directory, after=lambda: session.ended(first, "Completed", "ConsiderAcceptance"))
+        # While it waits, the session's waiter lock says so; afterwards it does not.
+        observed = []
+        def end():
+            observed.append(session.waited())
+            session.ended(first, "Completed", "ConsiderAcceptance")
+        assert not session.waited()
+        code, output, errors = wait(session.directory, after=end)
+        assert observed == [True] and not session.waited(), observed
         assert code == 0 and output == (f"attempt {first['id']} on T1,T2 ended: Completed, next ConsiderAcceptance\n"
                                         f"still active: attempt {second['id']} on T3\n"), (code, output, errors)
         # A named attempt that has ended answers at once; the other one is waited for by name.
@@ -79,6 +104,24 @@ def main():
         assert code == 0 and json.loads(output) == {"Ended": {"units": [{"unit": first, "phase": "Completed", "next": "ConsiderAcceptance", "blocker": None}], "active": [second]}}, output
         code, output, _ = wait(session.directory, "--attempt", second["id"], "--attempt", first["id"])
         assert code == 0 and output.splitlines()[0].startswith(f"attempt {first['id']}"), output
+
+        # Without a directory the command waits on the session of the one host of its checkout that runs.
+        checkout = Path(root) / "checkout"
+        checkout.mkdir()
+        code, output, _ = wait(None, checkout=checkout)
+        assert code == HOST_GONE and output.startswith("No CQ host of this checkout is running"), (code, output)
+        session.record(checkout)
+        ended = Session(root)
+        ended.record(checkout)
+        ended.host_ends()
+        code, output, errors = wait(None, checkout=checkout, after=lambda: session.ended(second, "Failed", "Retry"))
+        assert code == 0 and output == f"attempt {second['id']} on T3 ended: Failed, next Retry\n", (code, output, errors)
+        other = Session(root)
+        other.record(checkout)
+        code, output, _ = wait(None, checkout=checkout)
+        assert code == SEVERAL_HOSTS and "2 CQ hosts of this checkout are running" in output and str(session.directory) in output and str(other.directory) in output, (code, output)
+        other.host_ends()
+        session.started(second)
 
         integration = unit("Integration")
         session.started(integration)
@@ -97,7 +140,7 @@ def main():
         assert code == NOT_A_SESSION and "is not a CQ session directory" in output, (code, output)
         code, _, errors = wait(session.directory, "--attempt", str(uuid.uuid4()))
         assert code not in (0, HOST_GONE, NOT_A_SESSION), (code, errors)
-    print(json.dumps({"idle": "passed", "ends": "passed", "named": "passed", "integration": "passed", "hostGone": "passed", "notASession": "passed"}))
+    print(json.dumps({"idle": "passed", "ends": "passed", "named": "passed", "integration": "passed", "hostGone": "passed", "notASession": "passed", "withoutDirectory": "passed", "waiterLock": "passed"}))
 
 
 if __name__ == "__main__":
