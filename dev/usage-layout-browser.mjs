@@ -56,7 +56,7 @@ export async function usageLayoutChecks(browser, storageState, origin, evidence)
   const NUMERIC = {
     'Usage totals': ['Known tokens', 'Unknown measurements', 'Estimated measurements', 'Unknown costs'],
     'Costs': ['Amount', 'Measurements'],
-    'Usage by phase': ['Attempts', 'Running', 'Busy wall time', 'Known tokens', 'Unknown measurements', 'Estimated measurements', 'Unknown costs', 'Cost'],
+    'Usage by phase': ['Attempts', 'Running', 'Open', 'Busy wall time', 'Known tokens', 'Unknown measurements', 'Estimated measurements', 'Unknown costs', 'Cost'],
     'Attempts': [], 'Outcome history': ['Sequence'], 'Usage audit': ['Input', 'Output', 'Cost'],
   };
   const HEADINGS = { 'Usage totals': 'Tokens by attribution', 'Costs': 'Cost by attribution', 'Usage by phase': 'By phase' };

@@ -213,15 +213,21 @@ private final class PostgresUsageTransaction(connection: Connection, project: Pr
         case Some(id) => s.setObject(index, id.value); s.setInt(index + 1, limit + 1)
         case None => s.setInt(index, limit + 1)
       }
-    } { r => AttemptView(Wire.decode(Assignment_JsonCodec, r.getString(1)), Wire.decode(Attempt_JsonCodec, r.getString(2)), Option(r.getString(3)).map(Wire.decode(RecordedOutcome_JsonCodec, _))) }
+    } { r =>
+      val attempt = Wire.decode(Attempt_JsonCodec, r.getString(2))
+      AttemptView(Wire.decode(Assignment_JsonCodec, r.getString(1)), attempt, Option(r.getString(3)).map(Wire.decode(RecordedOutcome_JsonCodec, _)), AttemptObservation.observed(attempt))
+    }
   }
 
+  // `AttemptObservation.observed` negated, over the stored attempt.
+  private val unobserved = s"t.parent_id IS NULL AND t.body->>'role' = 'Governor' AND t.body->>'collector' = '${AttemptObservation.AttachedGovernorCollector}'"
   override def coverage(filter: UsageFilter): AttemptCoverage =
-    sql.query("SELECT count(*) FILTER (WHERE t.effective_outcome IS NULL), " +
+    sql.query(s"SELECT count(*) FILTER (WHERE t.effective_outcome IS NULL AND NOT COALESCE(($unobserved), false)), " +
+      s"count(*) FILTER (WHERE t.effective_outcome IS NULL AND $unobserved), " +
       "count(*) FILTER (WHERE t.effective_outcome->'value'->>'state' = 'Unknown'), " +
       "count(*) FILTER (WHERE jsonb_array_length(t.effective_outcome->'value'->'gaps') > 0) " +
       "FROM cq_usage_attempts t JOIN cq_usage_assignments a USING(project_id, assignment_id) WHERE t.project_id = ?" + filterSql(filter))
-      (s => { bindFilter(s, filter); () })(r => AttemptCoverage(r.getLong(1), r.getLong(2), r.getLong(3))).head
+      (s => { bindFilter(s, filter); () })(r => AttemptCoverage(r.getLong(1), r.getLong(2), r.getLong(3), r.getLong(4))).head
 
   private def filterSql(filter: UsageFilter): String = filter match {
     case _: UsageFilter.ProjectAll => ""

@@ -255,8 +255,8 @@ root data UsageReceipt { id: ObservationId sequence: i64 }
 root data RecordedUsage { upload: UsageUpload normalized: TokenCounts actor: Actor sequence: i64 }
 root data AttemptOutcome { request: RequestId attempt: AttemptId state: AttemptState finishedAt: i64 gaps: lst[str] supersedes: opt[RequestId] }
 root data RecordedOutcome { value: AttemptOutcome actor: Actor receivedAt: i64 sequence: i64 }
-root data AttemptCoverage { running: i64 unknown: i64 withGaps: i64 }
-root data AttemptView { assignment: Assignment attempt: Attempt outcome: opt[RecordedOutcome] }
+root data AttemptCoverage { running: i64 open: i64 unknown: i64 withGaps: i64 }
+root data AttemptView { assignment: Assignment attempt: Attempt outcome: opt[RecordedOutcome] observed: bit }
 root data AttemptPage { entries: lst[AttemptView] after: opt[AttemptId] hasMore: bit cursor: i64 }
 root data OutcomePage { entries: lst[RecordedOutcome] after: i64 hasMore: bit cursor: i64 }
 root data MetricTotal { known: i64 unknown: i64 estimated: i64 }
@@ -295,7 +295,7 @@ root data UsageReport {
 }
 root data UsagePage { entries: lst[RecordedUsage] after: i64 hasMore: bit cursor: i64 }
 root data PhaseSpan { id: RequestId assignment: AssignmentId session: SessionId phase: UsagePhase startedAt: i64 finishedAt: i64 state: AttemptState }
-root data PhaseUsage { phase: UsagePhase attempts: i64 spans: i64 running: i64 wallMillis: i64 totals: UsageTotals costs: lst[CostTotal] }
+root data PhaseUsage { phase: UsagePhase attempts: i64 spans: i64 running: i64 open: i64 wallMillis: i64 totals: UsageTotals costs: lst[CostTotal] }
 root data PhaseReport { phases: lst[PhaseUsage] costsTruncated: bit cursor: i64 }
 
 root id CatalogueCursor { value: i64 }

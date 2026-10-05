@@ -29,7 +29,7 @@ final case class SupervisorConfig(settings: SupervisorSettings, project: Project
 }
 
 object SupervisorConfig {
-  val AttachedGovernorCollector = "CQ attached session; outer usage unavailable"
+  val AttachedGovernorCollector = cq.core.AttemptObservation.AttachedGovernorCollector
   private val MaxConfigBytes = 64 * 1024
   private val MaxInputBytes = 192 * 1024
   private val MaxOutputBytes = 32 * 1024 * 1024

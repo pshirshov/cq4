@@ -156,7 +156,7 @@ final class CliOutput(output: PrintStream, format: CliFormat, invocation: List[S
       })
     line("Shared work is counted once per assignment, not divided among members.")
     line(s"Incomplete meters: ${value.incompleteMeters}; attempts without meters: ${value.attemptsWithoutMeters}.")
-    line(s"Attempts: ${value.attempts.running} running; ${value.attempts.unknown} unknown outcomes; ${value.attempts.withGaps} with gaps.")
+    line(s"Attempts: ${value.attempts.running} running; ${value.attempts.open} open (attached governing attempts without a delivered outcome); ${value.attempts.unknown} unknown outcomes; ${value.attempts.withGaps} with gaps.")
     line("Costs — estimates and billing remain separate")
     costs(value.costs)
     if (value.sharedAssignmentsTruncated) line("Shared assignment list is truncated; use the paged audit for further records.")
@@ -166,14 +166,14 @@ final class CliOutput(output: PrintStream, format: CliFormat, invocation: List[S
     f"${seconds / 3600}%d:${seconds / 60 % 60}%02d:${seconds % 60}%02d"
   }
   private def phases(value: PhaseReport): Unit = {
-    table(List("Phase", "Attempts", "Running", "Spans", "Wall h:mm:ss", "Input", "Output", "Cache read", "Cache write", "Reasoning", "Total", "Unknown costs"),
+    table(List("Phase", "Attempts", "Running", "Open", "Spans", "Wall h:mm:ss", "Input", "Output", "Cache read", "Cache write", "Reasoning", "Total", "Unknown costs"),
       value.phases.map { entry =>
-        List(entry.phase.toString, entry.attempts.toString, entry.running.toString, entry.spans.toString, duration(entry.wallMillis),
+        List(entry.phase.toString, entry.attempts.toString, entry.running.toString, entry.open.toString, entry.spans.toString, duration(entry.wallMillis),
           metric(entry.totals.input), metric(entry.totals.output), metric(entry.totals.cacheRead), metric(entry.totals.cacheWrite),
           metric(entry.totals.reasoning), metric(entry.totals.total), entry.totals.unknownCosts.toString)
       })
     line("Wall time sums finished attempts and host spans (check, combination and integration time outside any attempt) " +
-      "from start to finish; running attempts are counted without wall time.")
+      "from start to finish; running and open attempts are counted without wall time.")
     line("Costs — estimates and billing remain separate")
     table(List("Phase", "Attribution", "Amount", "Currency", "Basis", "Pricing", "Measurements"), value.phases.flatMap { entry =>
       entry.costs.map { cost =>
@@ -233,7 +233,7 @@ final class CliOutput(output: PrintStream, format: CliFormat, invocation: List[S
     case Result.UsageAttempts(value) =>
       table(List("Attempt", "Role", "Harness", "Model", "State", "Started", "Items"), value.entries.map(entry =>
         List(entry.attempt.id.value.toString, entry.attempt.role.toString, entry.attempt.harness.toString, entry.attempt.model,
-          entry.outcome.fold("Running")(_.value.state.toString), instant(entry.attempt.startedAt), entry.assignment.members.toList.sortBy(LedgerPolicy.key).map(id).mkString(", "))))
+          entry.outcome.fold(if (entry.observed) "Running" else "Open")(_.value.state.toString), instant(entry.attempt.startedAt), entry.assignment.members.toList.sortBy(LedgerPolicy.key).map(id).mkString(", "))))
       value.entries.foreach(entry => entry.outcome.foreach(outcome => outcome.value.gaps.foreach(gap => line(s"${entry.attempt.id.value}: $gap"))))
       page(value.hasMore, value.after.fold("")(_.value.toString), Some(value.cursor.toString), invocation)
     case Result.UsageOutcomes(value) =>
