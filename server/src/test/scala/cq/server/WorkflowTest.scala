@@ -53,6 +53,14 @@ final class WorkflowLocal extends AnyWordSpec {
       assert(advance.contains("as Questions recorded before you stop, never as prose alone"))
       assert(advance.contains("Do not ask for a go-ahead that the invocation or an Answered Question already gives"))
     }
+
+    "give both rules to a governing session that has no workflow text: a run without a workflow and an attached host before activation (D147)" in {
+      val schemas = new McpSchemas()
+      (SupervisorProgram.Instructions :: Harness.all.map(schemas.attachedInstructions)).foreach { text =>
+        assert(text.contains("record it as a Question, with the items it gates BlockedBy it, before you stop; never ask it in prose alone"))
+        assert(text.contains("The request is the go-ahead for what it asks: do not ask whether to do it."))
+      }
+    }
   }
 
   "Driver token handling at activation (Behavioral Active Blackbox Atomic)" should {

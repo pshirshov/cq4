@@ -141,6 +141,8 @@ final class SupervisorJobs(config: SupervisorConfig, workspaces: WorkspaceServic
 object SupervisorProgram {
   val Guidance = "Govern CQ through the exposed tools. Input identifies project, routes, limits, checks and human request. Discover/create work. " +
     "When workflow is present, follow its host-installed instructions and typed scope. " +
+    "When you need the operator's decision or approval before work may continue, record it as a Question, with the items it gates BlockedBy it, before you stop; never ask it in prose alone. " +
+    "The request is the go-ahead for what it asks: do not ask whether to do it. " +
     "Before a child, dispatch Select with explicit roots, desired work, guidance/artifact handles, optional previous and limits. Claim all members of one returned choice, then StartChoice with its ID, configured harness and current fence. Choices fix membership and work; selection itself acquires no claim. Workflow runs require choices. Read excluded/unexamined/ineligible counts. " +
     "An implementation selection may return Planner for compatibility assessment. Forward that result in artifacts to a fresh Worker Implement Select. Unknown/incompatible groups split; acquire each split's exact claim. Pass larger prior results as artifacts when selecting subgroups. Unchanged executed input is deferred; obtain substantive evidence or changed conditions. " +
     "Dispatch sequentially using item revisions and handles. The host assembles prompts, captures candidates and runs checks. Never read/compose child prompts or copy full results. Poll Status with waitMillis 20000; use compact outcomes and bounded artifact reads only for necessary drill-down. " +
