@@ -135,7 +135,7 @@ def verify(checks, command, name):
             assert [(value["spans"], value["wallMillis"]) for value in phases["UsagePhases"]["report"]["phases"] if value["phase"] == "Check"] == [("1", "700")], phases
             assert len(before["cq_usage_spans"]) == 1 and before["cq_usage_spans"][0]["span_id"] == span["id"]["value"], before["cq_usage_spans"]
             manifest = json.loads(cli("backup", args + ["--json"]).stdout)
-            assert len(manifest["entries"]) == len(before) == 26 and len(before["cq_worksets"]) == 1
+            assert len(manifest["entries"]) == len(before) == 27 and len(before["cq_worksets"]) == 1
             assert [row["body"] for row in before["cq_project_settings"]] == [{"Requirements": {"text": "Archived standing requirement"}}], before["cq_project_settings"]
             assert archive.stat().st_mode & 0o077 == 0, "Archive must not expose operator data to other users"
             digest = hashlib.sha256(archive.read_bytes()).hexdigest()
@@ -287,7 +287,7 @@ def verify(checks, command, name):
                 write(out / "lost-commit-observation.json", {"commitAcknowledgementDropped": True, "projectCommitted": True, "stderr": uncertain.stderr})
                 assert "no restore was committed" not in uncertain.stderr, "Committed restore was falsely reported as rolled back"
                 assert "verify" in uncertain.stderr.lower() and "retry" in uncertain.stderr.lower(), uncertain.stderr
-        result = {"status": "passed", "tables": 26, "snapshotConsistent": True, "recordsEqual": True,
+        result = {"status": "passed", "tables": 27, "snapshotConsistent": True, "recordsEqual": True,
                   "collisionRefused": True, "counterContinued": True, "authorizationEnforced": True}
         write(out / "result.json", result)
         return result
