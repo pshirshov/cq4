@@ -35,6 +35,12 @@ signatures authenticating an archive's author. The file must match the current C
 schema and PostgreSQL major version. There is one development schema and no
 archive conversion or version upgrade mechanism.
 
+The schema hash does not cover the JSON stored in a row. When a release changes
+a stored type, an archive written before it can match the schema and still be
+refused. The release that added attempt outcomes to driver cycles refuses an
+earlier archive holding a driver with a cycle (`Archive holds an undecodable
+driver`); [the local update](local-update.md) converts the database, not archives.
+
 The compressed archive and expanded table payload are each limited to 512 MiB.
 Transfer has a five-minute deadline. The server streams through temporary files;
 validation and insertion run in one transaction, with database constraints and

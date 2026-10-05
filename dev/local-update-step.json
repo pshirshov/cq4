@@ -1,7 +1,8 @@
 {
-  "kind": "unchanged-data",
+  "kind": "driver-cycle-outcomes",
   "schema": "f0aaf1d080e961fdd09b6a098cbcaac3e108afca1af1df2a4515fa03ff924945",
-  "modelBefore": "b74cb9095b127cf383ccb46e79d42a3f70b4497cbcd59a7c9a036733b42f488a",
-  "modelAfter": "0bcb16ff2ee88769d6eae1f5829d1639b48c35051c54edf86be29861be6cd7d7",
-  "reason": "The database schema is unchanged. Since the installed release the model gained only request and reply types (InstallationInfo, StoredWorksetPage, WorksetAction.BrowseSaved, Result.WorksetsListed, CatalogSelection and its use in ReadSelection.Catalog); no type that is stored in the database changed, so existing data needs no transformation."
+  "modelBefore": "0bcb16ff2ee88769d6eae1f5829d1639b48c35051c54edf86be29861be6cd7d7",
+  "modelAfter": "58fba848bab33fa12df928b54102bb46c28b417861bb506aba7bffb2f524b6a5",
+  "sqlSha256": "21e21f9af848f1e16b2bc52e62030c3047284f17ab236bb5ba8c6f78505fe685",
+  "reason": "The database schema is unchanged. Since the installed release one stored type changed: CycleRecord, stored inside DriverRecord in cq_drivers.body at the key cycle, gained the required lists outcomes and retried (Q53), so a driver stored with a cycle no longer decodes. dev/local-update.sql adds both as empty lists to every stored cycle that lacks them; a driver without a cycle is left as it is. The other model changes are request and reply types (ChildOutcome and ChildEnd as such, DriverSession.Conclude, DriverReply.Snapshot.outcomes, DispatchCommand.DiscardIntegration, ReadSelection.Catalog without its selection, CatalogSelection removed), which are not stored."
 }
