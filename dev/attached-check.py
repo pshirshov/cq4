@@ -290,6 +290,10 @@ def main():
         pi = Peer(command + ["host", "pi"], repository, env, log)
         try:
             pi_context = pi.tool("session", {"Context": {}})["Context"]["value"]
+            # The Pi extension passes on the text block alone, so it carries the payload.
+            delivered = pi.rpc("tools/call", {"name": "session", "arguments": {"Driver": {}}})
+            text, = [part["text"] for part in delivered["content"]]
+            assert json.loads(text) == delivered["structuredContent"] == {"Driver": {"reply": {"Status": {"value": None}}}}, delivered
             sample = {"sequence": "1", "session": "fixture-native-pi", "turn": "1", "provider": "fixture-provider", "model": "fixture-model",
                       "timestamp": "1000", "responseId": "response-1", "stopReason": "stop", "input": "10", "output": "3", "cacheRead": "2",
                       "cacheWrite": "0", "reasoning": None, "totalTokens": "15", "costUSD": {"value": "0.001"}}
@@ -332,6 +336,8 @@ def main():
         try:
             response = observer.rpc("tools/call", {"name": "session", "arguments": {"Context": {}}, "_meta": metadata})
             assert not response["isError"], response
+            # Codex receives the payload once, as structured content; the text block only points to it.
+            assert response["content"] == [{"type": "text", "text": "The result is in structuredContent."}], response["content"]
             observed = response["structuredContent"]["Context"]["value"]
             assert thread in observed["usageCoverage"], observed["usageCoverage"]
             sample = {"type": "token_usage_record", "ordinal": 1, "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),

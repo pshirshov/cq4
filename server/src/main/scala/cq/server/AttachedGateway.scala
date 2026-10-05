@@ -9,6 +9,8 @@ import zio.{Task, ZIO}
 
 object AttachedGateway {
   val FrameBytes: Int = 2 * 1024 * 1024
+  /** The text block of a result whose payload is delivered as structured content alone. */
+  val StructuredOnly: String = "The result is in structuredContent."
 }
 
 final class AttachedGateway(config: SupervisorConfig, authority: SupervisorAuthority, schemas: McpSchemas,
@@ -29,8 +31,12 @@ final class AttachedGateway(config: SupervisorConfig, authority: SupervisorAutho
   private def success(id: Json, body: Json): Json = Json.obj("jsonrpc" -> Json.fromString("2.0"), "id" -> id, "result" -> body)
   private def failure(id: Json, code: Int, message: String): Json = Json.obj("jsonrpc" -> Json.fromString("2.0"), "id" -> id,
     "error" -> Json.obj("code" -> Json.fromInt(code), "message" -> Json.fromString(message)))
+  // Every tool declares an output schema, which obliges the structured result. Claude Code and the Pi extension pass the text block to the
+  // model, so it carries the same JSON. Codex passes the structured result when there is one, and its code mode hands the model's script
+  // the whole result, where a script that prints it puts both copies into the context: for Codex the text block only points to the other.
+  private val text: Json => String = if (config.run.attempt.harness == Harness.Codex) _ => AttachedGateway.StructuredOnly else _.noSpaces
   private def result(body: Json, failed: Boolean): Json = Json.obj("isError" -> Json.fromBoolean(failed),
-    "content" -> Json.arr(Json.obj("type" -> Json.fromString("text"), "text" -> Json.fromString(body.noSpaces))), "structuredContent" -> body)
+    "content" -> Json.arr(Json.obj("type" -> Json.fromString("text"), "text" -> Json.fromString(text(body)))), "structuredContent" -> body)
   private def context: AttachedContext = AttachedContext(config.run.attempt.session, config.run.attempt.id, config.directory.toString,
     config.project, config.settings.harnesses.map(value => HarnessRoute(value.harness, value.model, value.provider)), config.settings.checks.map(_.name),
     config.settings.limits, config.settings.integrationTarget, OperatorRequirements.governing(schemas.attachedInstructions(config.run.attempt.harness),

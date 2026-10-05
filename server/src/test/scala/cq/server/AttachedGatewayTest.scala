@@ -1,7 +1,7 @@
 package cq.server
 
 import cq.api.*
-import cq.host.{OwnerLiveness, PeerLimits, ServerApi, StdioPeer}
+import cq.host.{AttachedCodexUsage, CodexRollout, OwnerLiveness, PeerLimits, ServerApi, StdioPeer}
 import io.circe.{Json, parser}
 import java.io.{BufferedReader, InputStreamReader, PipedInputStream, PipedOutputStream}
 import java.nio.charset.StandardCharsets.UTF_8
@@ -26,16 +26,18 @@ final class AttachedGatewayLocal extends AnyWordSpec {
   }
 
   /** An initialized gateway on a real peer. Only the governing API is live: the tools exercised here reach nothing else. */
-  private final class Session(frameBytes: Int, answer: Command => Result) extends AutoCloseable {
+  private final class Session(frameBytes: Int, harness: Harness, answer: Command => Result) extends AutoCloseable {
+    def this(frameBytes: Int, answer: Command => Result) = this(frameBytes, Harness.Claude, answer)
     private def uuid: UUID = UUID.randomUUID()
     private val assignment = Assignment(AssignmentId(uuid), project, Set.empty, Attribution.Unattributed, None, None)
-    private val attempt = Attempt(AttemptId(uuid), assignment.id, None, SessionId(uuid), Role.Governor, Harness.Claude,
+    private val attempt = Attempt(AttemptId(uuid), assignment.id, None, SessionId(uuid), Role.Governor, harness,
       "fixture-provider", "fixture-model", "fixture", 0, UsagePhase.Govern)
     private val settings = ProjectConfig(project, "http://localhost", "Attached gateway")
     private val config = SupervisorConfig(null, settings, null, null,
-      SupervisorRun(settings, assignment, attempt, "fixture", "/nonexistent", GitCommit("0" * 40), SessionOwnership.Attached), Path.of("/nonexistent"), "", None, Map.empty)
+      SupervisorRun(settings, assignment, attempt, "fixture", "/nonexistent", GitCommit("0" * 40), SessionOwnership.Attached), Path.of("/nonexistent"), "", None, Map("HOME" -> "/nonexistent"))
     private val api = new Api(answer)
-    private val gateway = new AttachedGateway(config, SupervisorAuthority(api, api, api, AccessToken("governor", 0)), schemas, null, null, null, null, null,
+    private val gateway = new AttachedGateway(config, SupervisorAuthority(api, api, api, AccessToken("governor", 0)), schemas, null, null, null,
+      new AttachedCodexUsage(Path.of("/nonexistent"), config.run, new CodexRollout, java.time.Clock.systemUTC()), null,
       new SessionClaims(config.owner, api, logstage.IzLogger.NullLogger))
     private val input = new PipedInputStream(8192)
     private val client = new PipedOutputStream(input)
@@ -91,6 +93,33 @@ final class AttachedGatewayLocal extends AnyWordSpec {
         assert(served.hcursor.get[Boolean]("isError") == Right(false))
         assert(served.hcursor.downField("structuredContent").focus.exists(_.noSpaces.contains("small")))
       } finally session.close()
+    }
+
+    "deliver each result to the governing model once: as text where the harness passes the text on, as structured content alone to Codex (I33)" in {
+      val counts = Result.Counts(LedgerCounts(Nil, ChangeCursor(7L)))
+      Harness.all.foreach { harness =>
+        val session = new Session(AttachedGateway.FrameBytes, harness, {
+          case Command.Read(ReadInput(_, _: ReadSelection.Counts)) => counts
+          case other => fail(s"Unexpected command $other")
+        })
+        try {
+          val payload = Result_JsonCodec.encode(baboon.runtime.shared.BaboonCodecContext.Default, counts)
+          val served = session.tool("read", read("""{"Counts":{}}"""))
+          val refused = session.tool("read", read("""{"Catalog":{}}"""))
+          List(served -> false, refused -> true).foreach { (result, failed) =>
+            val structured = result.hcursor.downField("structuredContent").focus.get
+            val text = result.hcursor.get[List[Json]]("content").fold(throw _, identity) match {
+              case List(part) if part.hcursor.get[String]("type") == Right("text") => part.hcursor.get[String]("text").fold(throw _, identity)
+              case other => fail(s"$harness: expected one text block, got $other")
+            }
+            assert(result.hcursor.get[Boolean]("isError") == Right(failed) && (failed || structured == payload), harness)
+            // The tools declare an output schema, so the structured result is always there; what differs is the text beside it.
+            if (harness == Harness.Codex) assert(text == "The result is in structuredContent.", s"$harness: $text")
+            else assert(text == structured.noSpaces, s"$harness: $text")
+          }
+        } finally session.close()
+      }
+      assert(schemas.attachedTools.forall(_.hcursor.downField("outputSchema").focus.exists(_.isObject)))
     }
 
     "refuse a read of the Help catalog, which is served to the browser only, without reaching the server, and keep serving" in {
