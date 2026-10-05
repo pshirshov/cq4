@@ -466,7 +466,7 @@ root adt ReadSelection {
   data ItemDetails { members: lst[ItemRevision] bytes: i32 }
   data History { id: ItemId before: Revision limit: i32 }
   data Changes { after: ChangeCursor limit: i32 }
-  data Catalog { part: CatalogSelection }
+  data Catalog {}
   data WorksetBrowse { query: str order: ItemOrder after: opt[ItemId] snapshot: opt[ChangeCursor] limit: i32 workset: WorksetId }
 }
 root data ReadInput { project: ProjectId selection: ReadSelection }
@@ -878,6 +878,7 @@ root adt DispatchCommand {
   data Combine { id: RequestId source: IntegrationId fence: Fence }
   data CombinationStatus { id: RequestId waitMillis: i32 }
   data Revalidate { id: RequestId result: ArtifactId fence: Fence }
+  data DiscardIntegration { id: IntegrationId }
 }
 root adt DispatchReply {
   data Selection { value: CohortDecision }
@@ -923,8 +924,3 @@ root data CatalogAgent {
   harnesses: lst[CatalogAgentHarness] inputExample: ChildExecutionInput outputExample: ChildReport
 }
 root data HelpCatalog { commands: lst[CatalogCommand] agents: lst[CatalogAgent] }
-root adt CatalogSelection {
-  data All {}
-  data OfCommand { command: str }
-  data OfAgent { work: DispatchWork }
-}

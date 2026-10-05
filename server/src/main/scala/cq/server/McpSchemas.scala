@@ -2,6 +2,7 @@ package cq.server
 
 import baboon.runtime.shared.{BaboonCodecContext, BaboonJsonCodec}
 import cq.api.*
+import cq.core.DomainFailure
 import cq.host.{ChildContracts, DispatchProjection, HarnessInvocation, HarnessSchema, HarnessTools, McpTarget}
 import io.circe.{Json, JsonObject, parser}
 import java.nio.charset.StandardCharsets.UTF_8
@@ -10,6 +11,8 @@ final case class McpTool(name: String, description: String, inputType: String, r
   decode: Json => Either[Throwable, Command])
 
 object McpSchemas {
+  /** The Help catalog is larger than an MCP response frame and no agent needs it; the HTTP API serves it to the browser's Help dialog. */
+  val CatalogRefusal: String = "The Help catalog is served to the browser only; no MCP surface offers the Catalog selection of read."
   /** When to revalidate, given with the dispatch tool rather than in the governing instructions. */
   val Revalidation: String = " Revalidate reruns the failed configured checks of an admitted worker result on its exact candidate, within each check's configured rounds; repeat its ID to poll. " +
     "Use it when the retained output shows an intermittent failure rather than a candidate defect; otherwise send the result to a worker."
@@ -21,13 +24,24 @@ final class McpSchemas {
     try parser.parse(new String(stream.readAllBytes(), UTF_8)).fold(throw _, identity).asObject.get
     finally stream.close()
   }
+  /** The generated definitions with the selections that no MCP surface offers removed, so that no advertised schema names them. */
+  private val offered = {
+    val selection = "cq_api_ReadSelection"
+    val branches = definitions(selection).get.hcursor.get[Vector[Json]]("oneOf").fold(throw _, identity)
+    val kept = branches.filterNot(_.hcursor.get[List[String]]("required") == Right(List("Catalog")))
+    require(kept.size == branches.size - 1, "Expected one generated ReadSelection.Catalog schema")
+    definitions.add(selection, definitions(selection).get.mapObject(_.add("oneOf", Json.arr(kept*))))
+  }
   private def decoder[A](codec: BaboonJsonCodec[A])(wrap: A => Command): Json => Either[Throwable, Command] =
-    json => codec.decode(BaboonCodecContext.Default, json).map(wrap)
+    json => codec.decode(BaboonCodecContext.Default, json).map(wrap).flatMap {
+      case Command.Read(ReadInput(_, _: ReadSelection.Catalog)) => Left(DomainFailure(Fault.Denied(McpSchemas.CatalogRefusal)))
+      case command => Right(command)
+    }
 
   val tools: List[McpTool] = List(
     McpTool("search", "Read a bounded item page using text, quoted phrases, exact IDs (T42), ledger:, status:, tag:, project:, archived:true|false|all, wip:true|false (items covered by an active claim, that is work in progress), or kebab-case relation:T42. NOT/- binds before AND (also implicit), then OR; keywords in any case, quote them to search the words; parentheses group. Active items are implicit unless archived: occurs. Continue with its snapshot cursor; restart on Resync. QuerySyntax returns UTF-16 source spans.", "SearchInput", Set("Found"), false,
       decoder(SearchInput_JsonCodec)(Command.Search.apply)),
-    McpTool("read", "Preview a stored proposal by result handle; read integration reservations and durable result admission; inspect explicit claim membership and collateral overlap for reviewed human takeover; preview exact whole-subgraph termination with typed effects, exclusions and active claims; preview archival of a query's terminal items with the ones retained by open related items; read an item, bounded exact-revision batch, history or changes; complete query text at a UTF-16 cursor with bounded suggestions and syntax diagnostics; inspect artifact metadata or explicitly drill down into bounded text pages by Unicode code-point offset; read the typed help catalog of one workflow command (OfCommand, by its command name) or one dispatch agent (OfAgent); All is the whole catalog, which is larger than the response frame of an attached host.", "ReadInput", Set("Proposal", "Integration", "Admission", "Detail", "Details", "History", "Changes", "ArtifactInfo", "ArtifactText", "QueryAnalyzed", "Termination", "Claims", "Catalog"), false,
+    McpTool("read", "Preview a stored proposal by result handle; read integration reservations and durable result admission; inspect explicit claim membership and collateral overlap for reviewed human takeover; preview exact whole-subgraph termination with typed effects, exclusions and active claims; preview archival of a query's terminal items with the ones retained by open related items; read an item, bounded exact-revision batch, history or changes; complete query text at a UTF-16 cursor with bounded suggestions and syntax diagnostics; inspect artifact metadata or explicitly drill down into bounded text pages by Unicode code-point offset.", "ReadInput", Set("Proposal", "Integration", "Admission", "Detail", "Details", "History", "Changes", "ArtifactInfo", "ArtifactText", "QueryAnalyzed", "Termination", "Claims"), false,
       decoder(ReadInput_JsonCodec)(Command.Read.apply)),
     McpTool("graph", "Enumerate a transient workset from explicit roots: selected produced work and milestone members, separate one-hop context, and informational readiness reasons. Empty roots select nothing. Context does not expand siblings. Maximum 64 roots and 1024 visited items; Limit fails explicitly. Continue with the returned roots-bound snapshot; restart on Resync. Worksets do not acquire claims.", "GraphInput", Set("Workset"), false,
       decoder(GraphInput_JsonCodec)(Command.Graph.apply)),
@@ -51,8 +65,8 @@ final class McpSchemas {
 
   def advertised(tool: McpTool): Json = Json.obj(
     "name" -> Json.fromString(tool.name), "description" -> Json.fromString(tool.description),
-    "inputSchema" -> schema(tool.inputType),
-    "outputSchema" -> closure(Json.obj("type" -> Json.fromString("object"), "oneOf" -> Json.arr(
+    "inputSchema" -> input(tool),
+    "outputSchema" -> closure(definitions, Json.obj("type" -> Json.fromString("object"), "oneOf" -> Json.arr(
       (tool.results + "Failed").toList.sorted.map { tag => Json.obj(
         "type" -> Json.fromString("object"), "required" -> Json.arr(Json.fromString(tag)), "additionalProperties" -> Json.False,
         "properties" -> Json.obj(tag -> Json.obj("$ref" -> Json.fromString(s"#/$$defs/cq_api_Result_$tag"))),
@@ -61,7 +75,17 @@ final class McpSchemas {
     "annotations" -> Json.obj("readOnlyHint" -> Json.fromBoolean(!tool.writes), "openWorldHint" -> Json.False),
   )
 
-  def schema(name: String): Json = closure(definitions(s"cq_api_$name").get)
+  def schema(name: String): Json = closure(definitions, definitions(s"cq_api_$name").get)
+
+  /** The input schema an MCP surface advertises for a domain tool. */
+  def input(tool: McpTool): Json = closure(offered, offered(s"cq_api_${tool.inputType}").get)
+
+  /** The fault a caller of a domain tool receives when `tool.decode` rejects its arguments: the refusal of a selection that no MCP
+    * surface offers, or the mismatch with the advertised input schema. */
+  def rejected(tool: McpTool, error: Throwable): Fault = error match {
+    case DomainFailure(fault) => fault
+    case _ => Fault.Invalid(mismatch(tool.name, input(tool), String.valueOf(error.getMessage)))
+  }
 
   /** What the caller of `tool` is told when its codec rejects the arguments: the codec's `detail`, bounded, and the top level that
     * `input`, the tool's advertised input schema, declares. */
@@ -77,11 +101,11 @@ final class McpSchemas {
 
   def workspace(role: Role): Json = {
     val root = definitions("cq_api_WorkspaceCommand").get
-    if (HarnessTools.workspaceCheck(role)) closure(root)
+    if (HarnessTools.workspaceCheck(role)) closure(definitions, root)
     else {
       val branches = root.hcursor.get[Vector[Json]]("oneOf").fold(throw _, identity)
         .filterNot(_.hcursor.get[List[String]]("required") == Right(List("Check")))
-      closure(root.mapObject(_.add("oneOf", Json.arr(branches*))))
+      closure(definitions, root.mapObject(_.add("oneOf", Json.arr(branches*))))
     }
   }
 
@@ -90,7 +114,7 @@ final class McpSchemas {
     val branches = definitions("cq_api_ChildReport").get.hcursor.get[Vector[Json]]("oneOf").fold(throw _, identity)
       .filter(_.hcursor.get[List[String]]("required") == Right(List(tag)))
     require(branches.size == 1, s"Expected one generated ChildReport.$tag schema")
-    val result = closure(branches.head)
+    val result = closure(definitions, branches.head)
     if (tag != "Evidence") result
     else result.mapObject(_.add("$defs", result.hcursor.downField("$defs").focus.get.mapObject { values =>
       values.add("cq_api_EvidenceOrigin", values("cq_api_EvidenceOrigin").get.mapObject(
@@ -135,7 +159,7 @@ final class McpSchemas {
       "Do not invoke cq run for this interactive workflow. Report to the user normally; there is no governing JSON completion report. " +
       "Outer-session usage is explicitly unobserved unless a supported collector supplies it."
     if (harness != Harness.Codex) instructions
-    else instructions + argumentGuide(tools.map(tool => ("cq." + tool.name, schema(tool.inputType))) ++
+    else instructions + argumentGuide(tools.map(tool => ("cq." + tool.name, input(tool))) ++
       List("cq.dispatch" -> schema("DispatchCommand"), "cq.session" -> schema("SessionCommand")))
   }
 
@@ -146,7 +170,7 @@ final class McpSchemas {
     List(local("session", "SessionCommand", "SessionReply",
       "First call Context for project, routes, limits, governing instructions and complete argument guide. Then Workflow with a fresh id and typed scope before dispatch; token is null unless the invocation carries a CQ driver --start-token or --resume-token, which you pass unchanged. An identical retry returns its original receipt without reactivating a superseded workflow. Context identifies the active workflow. Bind presents the token a CQ drive command printed; Driver reads this session's driver status. Neither starts nor parks a driver."),
       local("dispatch", "DispatchCommand", "DispatchReply",
-        s"Select bounded cohorts, claim one complete choice, then StartChoice by ID, harness and fence. Up to ${DispatchController.MaxActiveChildren} children with disjoint members may run at once. Poll compact Status or Cancel; Status carries the child's workspace admission and retained directory, and quietMillis, the time since a running child's last output. Direct Start is unavailable. Prepare/apply reviewed integration; Combine a NotApplied integration and poll CombinationStatus. Forward handles; full child prompts/results stay outside your context." + McpSchemas.Revalidation)) ++ tools.map(advertised)
+        s"Select bounded cohorts, claim one complete choice, then StartChoice by ID, harness and fence. Up to ${DispatchController.MaxActiveChildren} children with disjoint members may run at once. Poll compact Status or Cancel; Status carries the child's workspace admission and retained directory, and quietMillis, the time since a running child's last output. Direct Start is unavailable. Prepare/apply reviewed integration, or DiscardIntegration a prepared one that will not be applied; Combine a NotApplied integration and poll CombinationStatus. Forward handles; full child prompts/results stay outside your context." + McpSchemas.Revalidation)) ++ tools.map(advertised)
   }
 
   private def argumentGuide(inputs: List[(String, Json)]): String = {
@@ -171,14 +195,14 @@ final class McpSchemas {
     }
   }
 
-  private def closure(root: Json): Json = {
+  private def closure(source: JsonObject, root: Json): Json = {
     val selected = scala.collection.mutable.LinkedHashMap.empty[String, Json]
     def visit(value: Json): Unit = {
       value.asObject.foreach { obj =>
         obj("$ref").flatMap(_.asString).foreach { reference =>
           val key = reference.stripPrefix("#/$defs/")
           if (!selected.contains(key)) {
-            val definition = definitions(key).getOrElse(throw new IllegalStateException(s"Missing schema $key"))
+            val definition = source(key).getOrElse(throw new IllegalStateException(s"Missing schema $key"))
             selected.update(key, definition)
             visit(definition)
           }

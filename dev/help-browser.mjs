@@ -14,7 +14,7 @@ async function call(command) {
 const project = {value: randomUUID()};
 await call({Initialize: {config: {project, endpoint: origin, name: 'Help catalog fixture'}}});
 // The typed catalog supplies aliases, prompts, schemas and tool facts; command coverage and invocation syntax are asserted separately.
-const catalog = (await call({Read: {input: {project, selection: {Catalog: {part: {All: {}}}}}}})).Catalog.value;
+const catalog = (await call({Read: {input: {project, selection: {Catalog: {}}}}})).Catalog.value;
 assert.deepEqual(catalog.commands.map(command => command.command), ["begin", "advance", "review", "upstream", "drive", "park"]);
 assert.ok(catalog.commands.length > 0 && catalog.agents.length > 0, 'The fixture catalog must list commands and agents');
 const NAMES = {Claude: 'Claude Code', Codex: 'Codex', Pi: 'Pi'};

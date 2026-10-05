@@ -327,6 +327,53 @@ abstract class IntegrationCoordinatorTest extends SpecZIO with AssertZIO {
       } yield ()
     } }
 
+    "Q52: seal a prepared integration its session discards as not applied without reserving or launching it, and prepare and integrate the candidate again" in { (harness: IntegrationHarness) => harness.use { f =>
+      val intent = f.intent(f.base, f.first)
+      val again = f.intent(f.base, f.first)
+      val coordinator = f.coordinator(f.journal)
+      def absent: Boolean = f.server.call(Command.Read(ReadInput(f.owner.project, ReadSelection.Integration(intent.id)))).isInstanceOf[Result.Failed]
+      for {
+        _ <- coordinator.prepare(intent)
+        _ <- coordinator.discard(intent.id)
+        retained <- f.journal.locked(intent.id)(entry => ZIO.attempt(entry.read.get))
+        _ <- ZIO.attempt(assert(retained == IntegrationLocal(intent, false, Some(IntegrationObservation.NotApplied(IntegrationCoordinator.Discarded))) &&
+          IntegrationCoordinator.Discarded == "Discarded by the governing session" && absent && f.executions.get() == 0, retained.toString))
+        // Repeating the discard changes nothing; the sealed integration is never reserved or launched, and recovery finds nothing to resolve.
+        _ <- coordinator.discard(intent.id)
+        applied <- coordinator.run(intent.id).either
+        recovered <- f.coordinator(f.journal).recover(intent.id)
+        _ <- ZIO.attempt(assert(applied.left.exists { case refused: IntegrationRefused => refused.reason == IntegrationCoordinator.Discarded; case _ => false } &&
+          recovered.isEmpty && absent && f.executions.get() == 0, s"$applied $recovered"))
+        _ <- f.isolation
+        _ <- coordinator.prepare(again)
+        recorded <- coordinator.run(again.id)
+        _ <- ZIO.attempt(assert(recorded.record.resolution.isInstanceOf[IntegrationResolution.Recorded] && f.executions.get() == 1, recorded.toString))
+      } yield ()
+    } }
+
+    "Q52: refuse to discard an integration whose execution was admitted, whose reservation the server holds or whose outcome is recorded" in { (harness: IntegrationHarness) => harness.use { f =>
+      val attempted = f.intent(f.base, f.first)
+      val reserved = f.intent(f.base, f.first)
+      val recorded = f.intent(f.base, f.first)
+      val coordinator = f.coordinator(f.journal)
+      for {
+        _ <- ZIO.foreachDiscard(List(attempted, reserved, recorded))(coordinator.prepare)
+        _ <- f.journal.locked(attempted.id)(entry => ZIO.attempt(entry.write(entry.read.get.copy(attempted = true))))
+        _ <- ZIO.attempt(f.server.integrate(HostIntegrationInput(f.owner.project, HostIntegration.Reserve(reserved))))
+        applied <- coordinator.run(recorded.id)
+        before <- ZIO.foreach(List(attempted, reserved, recorded))(intent => f.journal.locked(intent.id)(entry => ZIO.attempt(entry.read.get)))
+        results <- ZIO.foreach(List(attempted, reserved, recorded))(intent => coordinator.discard(intent.id).either)
+        after <- ZIO.foreach(List(attempted, reserved, recorded))(intent => f.journal.locked(intent.id)(entry => ZIO.attempt(entry.read.get)))
+        missing <- coordinator.discard(IntegrationId(UUID.randomUUID())).either
+        _ <- ZIO.attempt {
+          assert(applied.record.resolution.isInstanceOf[IntegrationResolution.Recorded], applied.toString)
+          assert(results.forall(_.left.exists { case DomainFailure(_: Fault.Conflict) => true; case _ => false }), results.toString)
+          assert(after == before && f.executions.get() == 1, s"$before $after")
+          assert(missing.left.exists { case DomainFailure(_: Fault.Missing) => true; case _ => false }, missing.toString)
+        }
+      } yield ()
+    } }
+
     "suppress launch after failed execution-admission persistence and never replay an already persisted marker" in { (harness: IntegrationHarness) => harness.use { f =>
       ZIO.foreachDiscard(List((false, f.base, f.first), (true, f.first, f.combined))) { case (after, expected, candidate) =>
         val intent = f.intent(expected, candidate)
