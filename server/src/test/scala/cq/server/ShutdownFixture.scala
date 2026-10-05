@@ -48,6 +48,9 @@ object ShutdownFixture extends RoleAppMain.LauncherBIO[IO] {
         value.body.codePointCount(0, value.body.length), Actor("fixture", SessionId(UUID.randomUUID()), Role.Collector), 1)
     override def call(value: Command): Result = (value, claims) match {
       case (Command.ClaimWork(input), Some(answer)) => answer(input)
+      // The batch program reads the project's standing requirements before it starts its governor; the fixture project has none.
+      case (Command.Requirements(RequirementsInput(project, _: RequirementsAction.Read)), _) =>
+        Result.Requirements(ProjectRequirements(project, Revision(0), "", None))
       case _ => throw new IllegalStateException("Fixture receiver does not execute commands")
     }
     override def admit(value: HostAdmissionInput): ResultAdmission = throw new IllegalStateException("Fixture receiver does not admit results")
