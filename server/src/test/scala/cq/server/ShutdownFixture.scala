@@ -54,10 +54,18 @@ object ShutdownFixture extends RoleAppMain.LauncherBIO[IO] {
     override def integrate(value: HostIntegrationInput): IntegrationRecord = throw new IllegalStateException("Fixture receiver does not integrate")
     override def grant(value: GrantRequest): AccessToken = throw new IllegalStateException("Fixture receiver does not grant authority")
   }
-  /** Grants every acquisition to `owner`, accepts every release and appends each command to `log`. */
-  private def claims(owner: Actor, log: Path, clock: Clock): ClaimInput => Result = input => synchronized {
+  /** Whether the session under `directory` has committed its Finish usage to its local delivery queue. */
+  private def finishCommitted(directory: Path): Boolean = {
+    val delivery = directory.resolve("delivery").resolve("final")
+    Files.isDirectory(delivery) && scala.util.Using.resource(Files.list(delivery))(_.iterator().asScala.toList)
+      .exists(path => path.toString.endsWith(".json") && Files.readString(path).contains("\"Finish\""))
+  }
+  /** Grants every acquisition to `owner`, accepts every release and appends each command to `log`; a release that precedes the
+    * session's local Finish commit is marked. */
+  private def claims(owner: Actor, session: Path, log: Path, clock: Clock): ClaimInput => Result = input => synchronized {
     def record(action: String, fence: Fence): Unit =
-      Files.writeString(log, s"$action ${fence.claim.value}\n", java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.APPEND)
+      Files.writeString(log, s"$action ${fence.claim.value}${if (action == "Release" && !finishCommitted(session)) " before Finish" else ""}\n",
+        java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.APPEND)
     def claim(fence: Fence, released: Boolean): Result =
       Result.Claimed(Claim(fence, owner, Set.empty, clock.millis() + Duration.ofMinutes(30).toMillis, released, ClaimOrigin.Acquire(1)))
     input.action match {
@@ -131,7 +139,7 @@ object ShutdownFixture extends RoleAppMain.LauncherBIO[IO] {
       make[SupervisorAuthority].from { (config: SupervisorConfig, clock: Clock) =>
         val expires = clock.millis() + Duration.ofHours(1).toMillis
         SupervisorAuthority(new Receiver(None), new Receiver(None),
-          new Receiver(Some(claims(config.owner.actor, property(RootProperty).resolve(ClaimLog), clock))), AccessToken("governor", expires))
+          new Receiver(Some(claims(config.owner.actor, config.directory, property(RootProperty).resolve(ClaimLog), clock))), AccessToken("governor", expires))
       }
       make[SessionCollectors].fromValue(new SessionCollectors { override def collector(run: SupervisorRun): ServerApi = new Receiver(None) })
       make[CliContext].from((config: SupervisorConfig) => CliContext(sys.env, config.directory, System.out, System.in))

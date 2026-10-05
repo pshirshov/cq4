@@ -149,6 +149,8 @@ final class DispatchController(config: SupervisorConfig, runner: ChildRunner, jo
   def unsettled: List[String] = synchronized(entries.values.toList.map(_.status).filterNot(value => DispatchController.terminal(value.phase))
     .map(value => s"child attempt ${value.attempt.value} (${value.phase})"))
   def quiescent: Boolean = unsettled.isEmpty
+  /** The claims under which a sealed publication of a child still awaits delivery: the server admits its result only under the active claim. */
+  def undelivered: Set[Fence] = synchronized(entries.values.filter(_.status.phase == DispatchPhase.PublicationPending).map(_.ticket.request.fence).toSet)
 
   /** A result's checks are rerun only while no child runs on its members and no later worker result for them exists. */
   def revalidatable(result: ChildResult): Unit = synchronized {

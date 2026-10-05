@@ -186,12 +186,14 @@ final class AttachedShutdownProcess extends SpecZIO with AssertZIO {
           val input = running.process.getOutputStream
           requests.foreach(request => input.write((request + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8)))
           input.flush()
-          val acquired = (held :+ returned).map("Acquire " + _.value) :+ s"Release ${returned.value}"
+          // The fixture marks a release that precedes the session's local Finish commit, as the Governor's own release does.
+          val acquired = (held :+ returned).map("Acquire " + _.value) :+ s"Release ${returned.value} before Finish"
           // The reply to the last request follows its log line; the host has then observed every claim reply.
           ShutdownFixture.awaitUntil(running.process, running.at, Duration.ofSeconds(60))(lines == acquired && running.log.contains("\"id\":5"))
           input.close()
           assert(running.process.waitFor(60, TimeUnit.SECONDS) && running.process.exitValue() == 0, running.log)
           println(s"Claims at orderly shutdown: ${lines.drop(acquired.size)}")
+          // The host releases only after it has committed the Finish, so that the release cannot use up the drain before it.
           assert(lines.drop(acquired.size).sorted == held.map("Release " + _.value).sorted, lines.toString + "\n" + running.log)
           assert(finishDelivered(running.session), running.log)
         }

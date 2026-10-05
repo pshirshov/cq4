@@ -759,6 +759,54 @@ sys.stderr.flush()
       }
     }
 
+    "D148: keep the claim of a child whose result still awaits admission when the session ends, so that the replayed admission is accepted" in {
+      (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None, Nil) { f =>
+        val unreachable = new java.util.concurrent.atomic.AtomicBoolean(true)
+        val delegate = f.authority.collector
+        // The server answers everything but the admission of the result, as when it becomes unreachable while the child finishes.
+        val collector = new ServerApi {
+          override def call(command: Command): Result = delegate.call(command)
+          override def artifact(value: ArtifactUpload): ArtifactMetadata = delegate.artifact(value)
+          override def usage(value: HostUsageInput): HostUsageResult = delegate.usage(value)
+          override def admit(value: HostAdmissionInput): ResultAdmission =
+            if (unreachable.get()) throw new ServerUnavailable("HTTP request failed: fixture", null) else delegate.admit(value)
+          override def integrate(value: HostIntegrationInput): IntegrationRecord = delegate.integrate(value)
+          override def grant(value: GrantRequest): AccessToken = delegate.grant(value)
+        }
+        val controller = new DispatchController(f.config, f.renewing(f.authority.copy(collector = collector), ClaimRenewal.Default), f.jobs, f.clock)
+        val claims = new SessionClaims(f.owner, f.authority.governor, logstage.IzLogger.NullLogger)
+        val members = f.members.map(_.id).toSet
+        for {
+          // The session holds the claim as its Governor's claim command established it.
+          held <- ZIO.attemptBlocking(claims.call(Command.ClaimWork(ClaimInput(f.owner.project, ClaimAction.Renew(f.fence, 300000)))))
+          pending <- f.child(controller, Completing, f.request(f.limits))
+          _ <- controller.shutdown
+          retained = controller.undelivered
+          _ <- claims.release(retained)
+          kept <- ledger.claimPreview(f.owner, members).map(_.claims.map(_.fence))
+          _ <- ZIO.succeed(unreachable.set(false))
+          receipt <- ZIO.attemptBlocking {
+            val directory = f.config.directory.resolve("children").resolve(pending.attempt.value.toString)
+            new ChildPublicationDelivery(directory, HostFiles.read(directory.resolve("ticket.json"), DispatchTicket_JsonCodec, 65536)).finish(collector)
+          }
+          admission <- admissions.get(f.owner, pending.attempt)
+          _ <- claims.release(Set.empty)
+          after <- ledger.claimPreview(f.owner, members).map(_.claims.map(_.fence))
+          _ <- ZIO.attempt {
+            println(s"Undelivered result at session end: pending=${pending.phase} retained=$retained kept=$kept decision=${admission.decision} replayed=${receipt.status.phase} after=$after")
+            assert(held.isInstanceOf[Result.Claimed], held.toString)
+            assert(pending.phase == DispatchPhase.PublicationPending && pending.result.isEmpty && retained == Set(f.fence), pending.toString)
+            assert(kept == List(f.fence), kept.toString)
+            assert(admission.decision == AdmissionDecision.Accepted() && receipt.status.phase == DispatchPhase.Completed && receipt.status.result.nonEmpty,
+              s"${admission.decision} ${receipt.status}")
+            assert(after.isEmpty, after.toString)
+          }
+        } yield ()
+      }
+    }
+
     "D108: admit and run a 33rd child of one governing session and attribute its result to its assignment" in {
       (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
         artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>

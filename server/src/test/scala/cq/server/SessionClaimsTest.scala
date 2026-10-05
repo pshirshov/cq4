@@ -74,10 +74,10 @@ final class SessionClaimsDummy extends SpecZIO with AssertZIO {
         foreign <- service.acquire(w.other, ClaimId(uuid), Set(w.items(3)), 1800000)
         blocked <- service.acquire(w.other, ClaimId(uuid), Set(w.items.head), 1800000).either
         before <- w.active
-        _ <- w.claims.release
+        _ <- w.claims.release(Set.empty)
         after <- w.active
         taken <- service.acquire(w.other, ClaimId(uuid), w.items.take(3).toSet, 1800000).either
-        _ <- w.claims.release
+        _ <- w.claims.release(Set.empty)
         _ <- ZIO.attempt {
           println(s"Session claims: before=${before.map(_.fence)} after=${after.map(_.fence)} releases=${w.governor.releases.get()}")
           assert(blocked.left.exists { case DomainFailure(_: Fault.Conflict) => true; case _ => false }, blocked.toString)
@@ -89,17 +89,33 @@ final class SessionClaimsDummy extends SpecZIO with AssertZIO {
       } yield ()
     }
 
+    "D148: keep a claim that undelivered work of the session depends on, and release it once nothing does" in { (service: LedgerService[IO]) =>
+      for {
+        w <- world(service, 2)
+        fences <- ZIO.attemptBlocking(w.items.map(w.acquire))
+        _ <- w.claims.release(Set(fences.head))
+        kept <- w.active
+        _ <- w.claims.release(Set.empty)
+        after <- w.active
+        _ <- ZIO.attempt {
+          println(s"Session claims with a retained fence: kept=${kept.map(_.fence)} after=${after.map(_.fence)} releases=${w.governor.releases.get()}")
+          assert(kept.map(_.fence) == List(fences.head) && after.isEmpty, s"$kept $after")
+          assert(w.governor.releases.get() == 2)
+        }
+      } yield ()
+    }
+
     "D148: end without failing when a claim was already released or the server does not answer, leaving the rest to lease expiry" in { (service: LedgerService[IO]) =>
       for {
         w <- world(service, 3)
         fences <- ZIO.attemptBlocking(w.items.map(w.acquire))
         // Released without the host seeing it, as the recording of an integration releases a claim.
         _ <- service.release(w.owner, fences.head)
-        _ <- w.claims.release
+        _ <- w.claims.release(Set.empty)
         stale <- w.active
         again <- ZIO.attemptBlocking(w.items.map(w.acquire))
         _ <- ZIO.succeed { w.governor.releases.set(0); w.governor.unavailable = true }
-        _ <- w.claims.release
+        _ <- w.claims.release(Set.empty)
         kept <- w.active
         _ <- ZIO.attempt {
           println(s"Session claims without an answer: stale=${stale.map(_.fence)} kept=${kept.map(_.fence)} releases=${w.governor.releases.get()}")

@@ -40,8 +40,7 @@ final class AttachedProgram(config: SupervisorConfig, authority: SupervisorAutho
   }}.uninterruptible
   private val monitor: Task[Nothing] = (observe(codex.poll(authority.collector)) *> ZIO.sleep(zio.Duration.fromSeconds(5))).forever
   private def finish(peer: StdioPeer): Task[Unit] =
-    // The claims go once the work under them has settled or was cancelled; a host that dies leaves them to their leases.
-    (ZIO.succeed(peer.close()) *> shutdown *> claims.release *> observe(codex.finish(authority.collector)) *>
+    (ZIO.succeed(peer.close()) *> shutdown *> observe(codex.finish(authority.collector)) *>
       ZIO.attemptBlocking {
         val outcome = AttemptOutcome(RequestId(NativeArtifacts.id(config.run.attempt.id, "outcome").value), config.run.attempt.id,
           AttemptState.Unknown, math.max(config.run.attempt.startedAt, clock.millis()),
@@ -51,7 +50,10 @@ final class AttachedProgram(config: SupervisorConfig, authority: SupervisorAutho
         queue.commit(List(HostDelivery.Usage(HostUsageInput(config.project.project, HostUsage.Finish(outcome)))))
         queue.flush(authority.collector)
         new SessionSpans(config, authority).flush()
-      }.unit *> release.finish).ensuring(ZIO.attemptBlocking(codex.close()).orDie)
+      }.unit *>
+      // The claims go once the work under them has settled or was cancelled and the Finish is committed locally; a claim under which a
+      // child's result still awaits admission stays, and a host that dies leaves them all to their leases.
+      claims.release(dispatch.undelivered) *> release.finish).ensuring(ZIO.attemptBlocking(codex.close()).orDie)
   private def loop(peer: StdioPeer): Task[Unit] = ZIO.attemptBlocking(peer.receive()).flatMap {
     case None => ZIO.unit
     case Some(request) => (ZIO.attempt(peer.beginOperation()) *> gateway.handle(peer, request))

@@ -23,10 +23,12 @@ final class SessionClaims(owner: Scope, governor: ServerApi, logger: IzLogger) {
     result
   }
 
-  /** Releases what the session still holds when its host ends in order, so that another session need not wait for the leases. It never
-    * fails: a claim the server refuses to release stays as it is, and after an unanswered request the rest is left to lease expiry. */
-  def release: UIO[Unit] = ZIO.attemptBlocking {
-    val fences = synchronized(held.values.toList)
+  /** Releases what the session still holds when its host ends in order, so that another session need not wait for the leases. A claim
+    * in `retained` stays: work of the session still has something to deliver under it, and the server admits a result only under its
+    * active claim. It never fails: a claim the server refuses to release stays as it is, and after an unanswered request the rest is
+    * left to lease expiry. */
+  def release(retained: Set[Fence]): UIO[Unit] = ZIO.attemptBlocking {
+    val fences = synchronized(held.values.toList).filterNot(retained)
     fences.takeWhile { fence =>
       try {
         governor.call(Command.ClaimWork(ClaimInput(owner.project, ClaimAction.Release(fence)))) match {
