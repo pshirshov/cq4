@@ -105,6 +105,7 @@ in {
         RestartSec = 5;
         TimeoutStopSec = 30;
         KillSignal = "SIGTERM";
+        SuccessExitStatus = 143;
         UMask = "0077";
         NoNewPrivileges = true;
         ProtectSystem = "strict";
