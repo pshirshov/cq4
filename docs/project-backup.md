@@ -14,7 +14,10 @@ Add `--json` to receive the typed archive manifest. `cq help backup` describes
 the limits and recovery behavior.
 
 Stop sessions working on the project and settle active claims, running attempts
-and pending integrations first. Backup rejects those states. It captures one
+and pending integrations first. Backup rejects those states. The governing attempt
+of an attached session that has no outcome is open, not running (see
+[usage audit](design/usage-audit.md)), and does not prevent a backup: no CQ host
+observes it, and a session that ended without its host leaves it open for good. It captures one
 consistent database snapshot; changes committed afterward are excluded.
 
 The archive preserves the project UUID and stored items, relationships, history,

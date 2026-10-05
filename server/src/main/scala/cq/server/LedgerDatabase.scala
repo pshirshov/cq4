@@ -39,7 +39,7 @@ final class LedgerDatabase(config: DatabaseConfig) {
   def installation: IO[Throwable, cq.api.InstallationInfo] = transaction { connection =>
     connection.setTransactionIsolation(Connection.TRANSACTION_REPEATABLE_READ)
     val sql = new Jdbc(connection)
-    val attached = s"parent_id IS NULL AND body->>'role' = 'Governor' AND body->>'collector' = '${SupervisorConfig.AttachedGovernorCollector}'"
+    val attached = PersistedAttempts.unobserved("")
     sql.query("SELECT (SELECT checksum FROM cq_schema_migrations WHERE version=1), " +
       "current_setting('server_version_num')::integer / 10000, " +
       "current_setting('fsync')::boolean, current_setting('synchronous_commit'), current_setting('full_page_writes')::boolean, " +

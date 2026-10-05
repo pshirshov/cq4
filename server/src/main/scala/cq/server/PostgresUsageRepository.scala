@@ -8,6 +8,12 @@ import java.sql.{Connection, PreparedStatement, Types}
 import java.util.UUID
 import zio.{IO, Task}
 
+private[server] object PersistedAttempts {
+  /** `AttemptObservation.observed` negated, over a stored `cq_usage_attempts` row; `prefix` qualifies its columns (`t.` or nothing). */
+  def unobserved(prefix: String): String =
+    s"${prefix}parent_id IS NULL AND ${prefix}body->>'role' = 'Governor' AND ${prefix}body->>'collector' = '${AttemptObservation.AttachedGovernorCollector}'"
+}
+
 final class PostgresUsageRepository(database: LedgerDatabase) extends UsageRepository[IO] {
   override def transact[A](project: ProjectId)(operation: UsageTransaction => A): IO[Throwable, A] = database.transaction { connection =>
     val sql = new Jdbc(connection)
@@ -219,8 +225,7 @@ private final class PostgresUsageTransaction(connection: Connection, project: Pr
     }
   }
 
-  // `AttemptObservation.observed` negated, over the stored attempt.
-  private val unobserved = s"t.parent_id IS NULL AND t.body->>'role' = 'Governor' AND t.body->>'collector' = '${AttemptObservation.AttachedGovernorCollector}'"
+  private val unobserved = PersistedAttempts.unobserved("t.")
   override def coverage(filter: UsageFilter): AttemptCoverage =
     sql.query(s"SELECT count(*) FILTER (WHERE t.effective_outcome IS NULL AND NOT COALESCE(($unobserved), false)), " +
       s"count(*) FILTER (WHERE t.effective_outcome IS NULL AND $unobserved), " +

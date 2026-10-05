@@ -138,6 +138,31 @@ final class ProjectArchivesPostgres extends SpecZIO with AssertZIO {
       } yield ()
     }
 
+    "D150: back up a project whose attached governing attempt has no outcome, and refuse one with a managed attempt that has none" in {
+      (service: LedgerService[IO], usage: UsageService[IO], archives: ProjectArchives) =>
+      def project(name: String, collector: String): IO[Throwable, ProjectId] = {
+        val owner = Scope(ProjectId(UUID.randomUUID()), Actor("operator", SessionId(UUID.randomUUID()), Role.Governor))
+        val host = owner.copy(actor = owner.actor.copy(role = Role.Collector))
+        val overhead = Assignment(AssignmentId(UUID.randomUUID()), owner.project, Set.empty, Attribution.Unattributed, None, None)
+        val governing = Attempt(AttemptId(UUID.randomUUID()), overhead.id, None, owner.actor.session, Role.Governor, Harness.Claude,
+          "provider", "model", collector, 1000, UsagePhase.Govern)
+        service.initialize(owner, name) *> usage.assign(host, overhead) *> usage.start(host, governing).as(owner.project)
+      }
+      def backup(id: ProjectId): IO[Throwable, Either[Throwable, BackupManifest]] = for {
+        file <- ZIO.attempt(Files.createTempFile("cq-archive-", ".zip"))
+        result <- archives.backup(id, file).either
+        _ <- ZIO.attempt(Files.deleteIfExists(file))
+      } yield result
+      for {
+        attached <- project("open attached governor", cq.core.AttemptObservation.AttachedGovernorCollector)
+        managed <- project("running managed governor", "CQ native collector 0.1.0")
+        open <- backup(attached)
+        running <- backup(managed)
+        _ <- assertIO(open.exists(_.entries.exists(entry => entry.table == BackupTable.UsageAttempts && entry.rows == 1)))
+        _ <- assertIO(running.left.exists(_.getMessage.contains("running attempts")))
+      } yield ()
+    }
+
     "Q32: round-trip the project's standing requirements with their revision and author" in {
       (service: LedgerService[IO], config: DatabaseConfig, archives: ProjectArchives) =>
       val operator = Scope(ProjectId(UUID.randomUUID()), Actor("operator", SessionId(UUID.randomUUID()), Role.Human))
