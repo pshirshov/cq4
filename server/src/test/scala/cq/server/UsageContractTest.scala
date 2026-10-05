@@ -369,6 +369,35 @@ abstract class UsageContractTest extends SpecZIO with AssertZIO {
       } yield ()
     }
 
+    "report an attached governing attempt without an outcome as open and never as running" in { (usage: UsageService[IO], ledger: LedgerService[IO]) =>
+      val owner = scope()
+      val host = collector(owner)
+      val session = UsageFilter.SessionOnly(owner.actor.session)
+      val overhead = Assignment(AssignmentId(UUID.randomUUID()), owner.project, Set.empty, Attribution.Unattributed, None, None)
+      val governing = Attempt(AttemptId(UUID.randomUUID()), overhead.id, None, owner.actor.session, Role.Governor, Harness.Claude,
+        "unobserved-interactive-provider", "unobserved-interactive-model", SupervisorConfig.AttachedGovernorCollector, 1000, UsagePhase.Govern)
+      for {
+        _ <- ledger.initialize(owner, "attached governing attempt")
+        item <- task(ledger, owner, "Managed task")
+        _ <- usage.assign(host, overhead)
+        _ <- usage.start(host, governing)
+        child <- phased(usage, owner, item, Role.Worker, UsagePhase.Work, 2000)
+        summary <- usage.summary(owner, session)
+        _ <- assertIO(summary.attempts.running == 1 && summary.attempts.open == 1)
+        report <- usage.phases(owner, session)
+        byPhase = report.phases.map(value => value.phase -> value).toMap
+        govern = byPhase(UsagePhase.Govern)
+        _ <- assertIO(govern.attempts == 1 && govern.running == 0 && govern.open == 1 && govern.wallMillis == 0)
+        _ <- assertIO(byPhase(UsagePhase.Work).running == 1 && byPhase(UsagePhase.Work).open == 0)
+        listed <- usage.attempts(owner, session, None, None, 2)
+        _ <- assertIO(listed.entries.map(entry => entry.attempt.id -> entry.observed).toMap == Map(governing.id -> false, child.id -> true))
+        _ <- usage.finish(host, finished(child, 2500, None))
+        _ <- usage.finish(host, AttemptOutcome(RequestId(UUID.randomUUID()), governing.id, AttemptState.Unknown, 9000, List("Attached session ended"), None))
+        closed <- usage.summary(owner, session)
+        _ <- assertIO(closed.attempts.running == 0 && closed.attempts.open == 0 && closed.attempts.unknown == 1)
+      } yield ()
+    }
+
     "report attempts, finished wall time, tokens and costs per phase with running attempts apart" in { (usage: UsageService[IO], ledger: LedgerService[IO]) =>
       val owner = scope()
       val other = owner.copy(actor = owner.actor.copy(session = SessionId(UUID.randomUUID())))

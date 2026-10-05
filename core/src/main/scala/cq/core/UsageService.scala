@@ -228,7 +228,7 @@ object UsageService {
       UsageReport(direct, shared, unattributed, sharedAssignments.values.toList.sortBy(_.id.value.toString), sharedAssignmentsTruncated, reader.cursor, incomplete, reader.attemptsWithoutMeters(value), reader.coverage(value), costPage(reader, value, None, ReadBatch))
     }
 
-    private final case class PhaseTally(attempts: Long, running: Long, wallMillis: Long)
+    private final case class PhaseTally(attempts: Long, running: Long, open: Long, wallMillis: Long)
 
     override def phases(scope: Scope, value: UsageFilter): F[Throwable, PhaseReport] = repository.read(scope.project) { reader =>
       filter(scope, value)
@@ -249,11 +249,12 @@ object UsageService {
       while (more) {
         val page = reader.attempts(value, attempt, ReadBatch)
         page.entries.foreach { entry =>
-          val tally = tallies.getOrElse(entry.attempt.phase, PhaseTally(0, 0, 0))
+          val tally = tallies.getOrElse(entry.attempt.phase, PhaseTally(0, 0, 0, 0))
           tallies = tallies.updated(entry.attempt.phase, entry.outcome match {
             case Some(outcome) => tally.copy(attempts = Math.addExact(tally.attempts, 1),
               wallMillis = Math.addExact(tally.wallMillis, Math.subtractExact(outcome.value.finishedAt, entry.attempt.startedAt)))
-            case None => tally.copy(attempts = Math.addExact(tally.attempts, 1), running = Math.addExact(tally.running, 1))
+            case None if entry.observed => tally.copy(attempts = Math.addExact(tally.attempts, 1), running = Math.addExact(tally.running, 1))
+            case None => tally.copy(attempts = Math.addExact(tally.attempts, 1), open = Math.addExact(tally.open, 1))
           })
         }
         attempt = page.entries.lastOption.map(_.attempt.id)
@@ -262,9 +263,9 @@ object UsageService {
       val costs = reader.phaseCosts(value, ReadBatch + 1)
       val spans = reader.spans(value).map(tally => tally.phase -> tally).toMap
       PhaseReport(UsagePhase.all.filter(phase => tallies.contains(phase) || spans.contains(phase)).map { phase =>
-        val tally = tallies.getOrElse(phase, PhaseTally(0, 0, 0))
+        val tally = tallies.getOrElse(phase, PhaseTally(0, 0, 0, 0))
         val span = spans.getOrElse(phase, SpanTally(phase, 0, 0))
-        PhaseUsage(phase, tally.attempts, span.spans, tally.running, Math.addExact(tally.wallMillis, span.wallMillis), totals.getOrElse(phase, UsageMath.zeroTotals),
+        PhaseUsage(phase, tally.attempts, span.spans, tally.running, tally.open, Math.addExact(tally.wallMillis, span.wallMillis), totals.getOrElse(phase, UsageMath.zeroTotals),
           costs.take(ReadBatch).filter(_.phase == phase).map(_.total))
       }, costs.size > ReadBatch, reader.cursor)
     }

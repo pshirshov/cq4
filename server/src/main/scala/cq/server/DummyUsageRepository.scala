@@ -111,12 +111,14 @@ private final class DummyUsageTransaction(initial: DummyUsageState) extends Usag
     ReadPage.select(state.outcomes.valuesIterator.filter(o => o.value.attempt == attempt && o.sequence > after).toList.sortBy(_.sequence).iterator, limit, RecordedOutcome_JsonCodec)
   override def attempts(filter: UsageFilter, after: Option[AttemptId], limit: Int): ReadPage[AttemptView] = {
     val values = state.attempts.valuesIterator.filter(a => matches(filter, a) && after.forall(p => a.id.value.toString > p.value.toString))
-      .toList.sortBy(_.id.value.toString).iterator.map(a => AttemptView(state.assignments(a.assignment), a, latestOutcome(a.id)))
+      .toList.sortBy(_.id.value.toString).iterator.map(a => AttemptView(state.assignments(a.assignment), a, latestOutcome(a.id), AttemptObservation.observed(a)))
     ReadPage.select(values, limit, AttemptView_JsonCodec)
   }
   override def coverage(filter: UsageFilter): AttemptCoverage = {
-    val outcomes = state.attempts.valuesIterator.filter(matches(filter, _)).map(a => latestOutcome(a.id)).toList
-    AttemptCoverage(outcomes.count(_.isEmpty).toLong, outcomes.count(_.exists(_.value.state == AttemptState.Unknown)).toLong, outcomes.count(_.exists(_.value.gaps.nonEmpty)).toLong)
+    val matching = state.attempts.valuesIterator.filter(matches(filter, _)).map(a => a -> latestOutcome(a.id)).toList
+    val outcomes = matching.map(_._2)
+    val (running, open) = matching.collect { case (attempt, None) => attempt }.partition(AttemptObservation.observed)
+    AttemptCoverage(running.size.toLong, open.size.toLong, outcomes.count(_.exists(_.value.state == AttemptState.Unknown)).toLong, outcomes.count(_.exists(_.value.gaps.nonEmpty)).toLong)
   }
   override def span(id: RequestId): Option[PhaseSpan] = state.spans.get(id)
   override def putSpan(value: PhaseSpan, actor: Actor, receivedAt: Long): Unit = { state = state.copy(spans = state.spans.updated(value.id, value)); tick(); () }
