@@ -32,7 +32,7 @@ final class AttachedGateway(config: SupervisorConfig, authority: SupervisorAutho
     else if (config.run.attempt.harness == Harness.Codex) codex.status
     else "Outer interactive model/provider and token usage are unobserved by this host. Managed child usage is collected independently; missing is not zero.")
   private def decoded[A](name: String, input: String, arguments: Json)(decode: Json => Either[Throwable, A]): A = decode(arguments).fold(error =>
-    throw DomainFailure(Fault.Invalid(schemas.mismatch(name, schemas.schema(input), DispatchProjection.concise(String.valueOf(error.getMessage))))), identity)
+    throw DomainFailure(Fault.Invalid(schemas.mismatch(name, schemas.schema(input), String.valueOf(error.getMessage)))), identity)
   private def tool(name: String, arguments: Json): Task[(Json, Boolean)] = name match {
     case "session" =>
       ZIO.attempt {

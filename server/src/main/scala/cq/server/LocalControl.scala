@@ -37,9 +37,10 @@ final class LocalControl(dispatch: DispatchController, cohorts: CohortController
     tool("dispatch", "DispatchCommand", "DispatchReply", "Select bounded cohorts, claim one complete choice, then StartChoice by ID, harness and fence. Workflow runs require choices; direct Start supports explicitly assigned non-workflow runs. Poll compact Status or cancel. Prepare/apply reviewed integration; Combine a NotApplied integration and poll CombinationStatus. Forward handles directly; full prompts/results stay outside your context." + McpSchemas.Revalidation, false)
   else tool("workspace", "WorkspaceCommand", "WorkspaceReply", "List or read bounded pages in your assigned workspace. A prepared resolver may read MergeReport. A candidate reviewer may request a configured Check by name and poll the same operation; wait for Completed evidence before returning. Relative paths only; Git metadata and symlink traversal are denied.", capability.role != Role.Reviewer)
     .mapObject(_.add("inputSchema", schemas.workspace(capability.role)))
-  private def decode[A](name: String, input: Json, codec: BaboonJsonCodec[A], json: Json): Task[A] = ZIO.attempt {
+  /** `input` is the tool's input schema, which is assembled only to describe a decode fault. */
+  private def decode[A](name: String, input: => Json, codec: BaboonJsonCodec[A], json: Json): Task[A] = ZIO.attempt {
     val value = codec.decode(Context, json).fold(error =>
-      throw DomainFailure(Fault.Invalid(schemas.mismatch(name, input, DispatchProjection.concise(String.valueOf(error.getMessage))))), identity)
+      throw DomainFailure(Fault.Invalid(schemas.mismatch(name, input, String.valueOf(error.getMessage)))), identity)
     require(JsonRoundtrip.lossless(json, codec.encode(Context, value)), "Local command contains undeclared or noncanonical fields")
     value
   }

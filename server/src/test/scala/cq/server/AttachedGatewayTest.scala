@@ -137,6 +137,9 @@ final class AttachedGatewayLocal extends AnyWordSpec {
           .call(LocalCapability(AttemptId(UUID.randomUUID()), Role.Worker), "workspace", parser.parse("""{"Read":"{}"}""").fold(throw _, identity)))
         val workspace = body.hcursor.downField("Failed").downField("fault").downField("Invalid").get[String]("message").fold(throw _, identity)
         assert(failed && workspace.contains("\"workspace\"") && workspace.contains("Entries, Read, MergeReport"), workspace)
+        // Every caller of the fault text, the HTTP transport included, gets the codec's detail bounded.
+        val long = schemas.mismatch("read", schemas.schema("ReadInput"), "#" * 1000)
+        assert(long.count(_ == '#') == 300 && long.contains("project, selection"), long)
       } finally session.close()
     }
   }
