@@ -35,6 +35,26 @@ final class WorkflowLocal extends AnyWordSpec {
     }
   }
 
+  "Operator decisions in the governing workflows (Behavioral Active Blackbox Atomic)" should {
+    "tell the session to record a Question before it stops, not to ask for a go-ahead it has, and to store a chat answer (D147)" in {
+      val assets = new WorkflowAssets
+      val begin = assets.instructions(WorkflowRequest.Begin(Set.empty))
+      val advance = assets.instructions(WorkflowRequest.Advance(Set.empty, WorkflowPhase.Work))
+      // The shared rules reach every workflow; begin and advance repeat the part that applies at their own stop.
+      List(begin, advance).foreach { text =>
+        assert(text.contains("record it before you stop") && text.contains("Name that Question's ID in your final message"))
+        assert(text.contains("never end a turn on a question that exists only in prose"))
+        assert(text.contains("stops a drive with user input required"))
+        assert(text.contains("do not ask whether to do what it already tells you to do"))
+        assert(text.contains("store the answer on the Question") && text.contains("while a driver is on that write is refused until the operator parks it"))
+      }
+      assert(begin.contains("when it says to capture and plan, capture and plan without asking whether to proceed"))
+      assert(begin.contains("the IDs of the Open Questions that hold the outstanding user choices") && begin.contains("never a prose question at the end of your message"))
+      assert(advance.contains("as Questions recorded before you stop, never as prose alone"))
+      assert(advance.contains("Do not ask for a go-ahead that the invocation or an Answered Question already gives"))
+    }
+  }
+
   "Driver token handling at activation (Behavioral Active Blackbox Atomic)" should {
     "keep the driver token out of the operator requirements delivered to children" in {
       val start = DriverToken(UUID.randomUUID())
