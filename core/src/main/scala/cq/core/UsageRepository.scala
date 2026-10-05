@@ -8,6 +8,14 @@ final case class SpanTally(phase: UsagePhase, spans: Long, wallMillis: Long)
 final case class UsageCursors(usage: Long, attempts: Long)
 final case class WorkAttempts(running: Map[ItemId, WorkAttempt], events: Long)
 
+/** The governing attempt of an attached session is the operator's own harness: CQ's host launches no process for it and nothing
+  * observes its end. Without an outcome it is open (started, no outcome delivered), which the host's final delivery or
+  * `cq job upload` closes; every other attempt is a process a host launched and observes, and without an outcome it is running. */
+object AttemptObservation {
+  val AttachedGovernorCollector = "CQ attached session; outer usage unavailable"
+  def observed(attempt: Attempt): Boolean = !(attempt.parent.isEmpty && attempt.role == Role.Governor && attempt.collector == AttachedGovernorCollector)
+}
+
 trait UsageRepository[F[_, _]] {
   def transact[A](project: ProjectId)(operation: UsageTransaction => A): F[Throwable, A]
   def read[A](project: ProjectId)(operation: UsageReader => A): F[Throwable, A]

@@ -9,6 +9,11 @@ final case class IntegrationRun(record: IntegrationRecord, blocker: Option[Strin
 /** The server refused the reservation and holds none, and no Git update was launched: the journal has sealed the integration as not applied. */
 final class IntegrationRefused(val reason: String) extends RuntimeException(reason)
 
+object IntegrationCoordinator {
+  /** The reason the journal seals for an integration its session discarded before applying it. */
+  val Discarded: String = "Discarded by the governing session"
+}
+
 final class IntegrationCoordinator(owner: Scope, journal: IntegrationJournal, git: GitIntegration, governor: ServerApi, collector: ServerApi) {
   private def server(id: IntegrationId): Option[IntegrationRecord] =
     governor.call(Command.Read(ReadInput(owner.project, ReadSelection.Integration(id)))) match {
@@ -57,10 +62,13 @@ final class IntegrationCoordinator(owner: Scope, journal: IntegrationJournal, gi
       })
   }
 
-  /** The reason a server refusal sealed in the journal, which only an unattempted integration without a server record carries. */
+  /** The reason a server refusal or a discard sealed in the journal, which only an unattempted integration without a server record carries. */
   private def refusal(local: IntegrationLocal): Option[String] = local.observation.collect {
     case IntegrationObservation.NotApplied(reason) if !local.attempted && server(local.intent.id).isEmpty => reason
   }
+
+  /** Nothing was applied and nothing is reserved: no execution was admitted, no outcome is retained and the server holds no record. */
+  private def unapplied(local: IntegrationLocal): Boolean = !local.attempted && local.observation.isEmpty && server(local.intent.id).isEmpty
 
   /** Whether a refusal of Reserve shows that this reservation can never be made. The intent, its evidence and its fence are immutable,
     * so a refusal that names one of them is final. */
@@ -84,11 +92,22 @@ final class IntegrationCoordinator(owner: Scope, journal: IntegrationJournal, gi
       value
     } catch {
       case failure @ DomainFailure(fault) =>
-        if (!conclusive(fault) || local.attempted || local.observation.nonEmpty || server(local.intent.id).nonEmpty) throw failure
+        if (!conclusive(fault) || !unapplied(local)) throw failure
         val reason = DispatchProjection.concise("Server refused the reservation, so no Git update was launched: " + fault)
         entry.write(local.copy(observation = Some(IntegrationObservation.NotApplied(reason))))
         throw new IntegrationRefused(reason)
     }
+
+  /** Seals an integration that its session will not apply as not applied. Only the journal is written: Git and the target are not
+    * touched and the server is asked for nothing but its record. An integration already sealed as not applied stays as it is. */
+  def discard(id: IntegrationId): Task[Unit] = journal.locked(id) { entry => ZIO.attemptBlocking {
+    val local = entry.read.getOrElse(throw DomainFailure(Fault.Missing("Integration journal is missing; there is nothing to discard")))
+    if (refusal(local).isEmpty) {
+      if (!unapplied(local)) throw DomainFailure(Fault.Conflict(
+        "its execution was admitted, its outcome is retained or the server holds its reservation; apply it with Integrate to settle it"))
+      entry.write(local.copy(observation = Some(IntegrationObservation.NotApplied(IntegrationCoordinator.Discarded))))
+    }
+  }}
 
   /** Fails with `IntegrationRefused` when the server refused the reservation before any attempt, now or in an earlier run. */
   def run(id: IntegrationId): Task[IntegrationRun] = journal.locked(id) { entry => for {

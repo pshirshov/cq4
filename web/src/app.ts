@@ -16,7 +16,7 @@ import { icon } from './icons.js';
 import { ArchiveDialog } from './archive.js';
 import { RequirementsDialog } from './requirements.js';
 import { faultMessage } from './faults.js';
-import { attemptsTable, outcomesTable, auditTable, costsTable, phasesTable, sharedAssignmentsList, totalsTable } from './usage-view.js';
+import { attemptsTable, openAttemptNote, outcomesTable, auditTable, costsTable, phasesTable, sharedAssignmentsList, totalsTable } from './usage-view.js';
 import { TableColumn, TableColumns } from './table-columns.js';
 import { ItemsView } from './items-view.js';
 import { Notifications } from './notifications.js';
@@ -914,7 +914,8 @@ class App {
     if (phases.phases.length > 0) this.usagePanel.append(phasesTable(phases.phases));
     if (phases.costsTruncated) this.usagePanel.append(element('p', 'Per-phase costs are truncated; the amounts shown are lower bounds. The cost breakdown lists every cost group.'));
     this.usagePanel.append(element('p', `Shared work is counted once and is not divided among members. Incomplete meters: ${report.incompleteMeters}; attempts without measurements: ${report.attemptsWithoutMeters}.`),
-      element('p', `Attempt coverage: ${report.attempts.running} running; ${report.attempts.unknown} unknown outcomes; ${report.attempts.withGaps} with reported gaps.`),
+      element('p', `Attempt coverage: ${report.attempts.running} running; ${report.attempts.open} open; ${report.attempts.unknown} unknown outcomes; ${report.attempts.withGaps} with reported gaps.`),
+      ...(report.attempts.open > 0n ? [element('p', `Open: governing attempts of attached sessions. ${openAttemptNote}`)] : []),
       button('Attempts', () => this.action(() => this.loadAttempts(undefined, undefined))), button('Usage audit', () => this.action(() => this.loadAudit(0n))));
     if (report.sharedAssignments.length > 0) this.usagePanel.append(sharedAssignmentsList(report.sharedAssignments, sharedOpen));
     if (report.sharedAssignmentsTruncated) this.usagePanel.append(element('p', 'The shared-assignment list is truncated. Browse attempts for further assignments and their frozen membership.'));

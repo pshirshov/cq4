@@ -230,7 +230,7 @@ def main():
                     assert (phases["Combine"]["attempts"], phases["Combine"]["spans"]) == ("1", "1") and int(phases["Combine"]["wallMillis"]) > 0, phases
                 table = run(["status", "phases", *scope])
                 rows = {line.split()[0]: line.split() for line in table[:table.index("Costs —")].splitlines() if line.split()[:1] in (["Check"], ["Integrate"])}
-                assert rows["Check"][1:4] == ["0", "0", phases["Check"]["spans"]] and rows["Integrate"][4] != "0:00:00", table
+                assert rows["Check"][1:5] == ["0", "0", "0", phases["Check"]["spans"]] and rows["Integrate"][5] != "0:00:00", table
             summary_request = {"Usage": {"input": {"project": manifest["project"]["project"], "selection": {"Summary": {
                 "filter": {"SessionOnly": {"id": manifest["attempt"]["session"]}}}}}}}
             usage_before = api(summary_request)

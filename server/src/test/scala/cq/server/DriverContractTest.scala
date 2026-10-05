@@ -111,6 +111,17 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
     cycle <- submit(service, w, w.governor, issued.directive.text)
   } yield cycle
 
+  // What the attached host reports for one child attempt of a driven run: the dispatch request, the attempt, and how the attempt ended.
+  private def concluded(service: LedgerService[IO], w: World, cycle: Driven, members: List[ItemId], end: ChildEnd, input: Option[String], fault: Option[String]): IO[Throwable, ChildOutcome] = {
+    val request = LineageMember.Request(RequestId(uuid))
+    val outcome = ChildOutcome(AttemptId(uuid), members, end, input, fault)
+    for {
+      _ <- act(service, w.governor, DriverSession.Inherit(cycle.cycle, LineageMember.Run(cycle.run), request))
+      _ <- act(service, w.governor, DriverSession.Settle(cycle.cycle, request))
+      _ <- act(service, w.governor, DriverSession.Inherit(cycle.cycle, request, LineageMember.Attempt(outcome.attempt)))
+      _ <- act(service, w.governor, DriverSession.Conclude(cycle.cycle, outcome))
+    } yield outcome
+  }
   private def fault[A](result: Either[Throwable, A]): Option[Fault] = result.left.toOption.collect { case DomainFailure(value) => value }
   private def invalid[A](result: Either[Throwable, A]): Boolean = fault(result).exists(_.isInstanceOf[Fault.Invalid])
   private def missing[A](result: Either[Throwable, A]): Boolean = fault(result).exists(_.isInstanceOf[Fault.Missing])
@@ -764,6 +775,116 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
       } yield ()
     }
 
+    "Q53: continue a drive whose cycle changed nothing but left a failed attempt retryable, and stop it when the next cycle fails on the same input" in {
+      (service: LedgerService[IO], repository: LedgerRepository[IO]) =>
+      val w = world
+      val key = claude("retried")
+      val retry = "CQ driver: cycle 1 changed nothing, and its work on G1 failed without a result; the same input is offered again with the fault"
+      for {
+        _ <- service.initialize(w.operator, "retried")
+        root <- create(service, w.operator, goal("Goal"))
+        one <- driven(service, w, key, workset(root))
+        first <- concluded(service, w, one, List(root), ChildEnd.Retryable, Some("input-a"), Some("Malformed report at line 3, column 14"))
+        running <- status(service, w, key)
+        _ <- assertIO(running.exists(_.activeChildren == 0) && lineage(running).contains(LineageEntry(LineageMember.Attempt(first.attempt), lineage(running).lift(1).map(_.member), true)))
+        second <- directive(service, w, key)
+        _ <- assertIO(second.messages == List(retry) && second.status.cycle.exists(_.number == 2) && second.status.directives == 2)
+        // The stored record carries the outcomes: a server that restarts between the two cycles decides the same.
+        stored <- repository.driverRecords(w.project).map(_.find(_.key == key).get)
+        _ <- assertIO(stored.cycle.exists(cycle => cycle.retried == List(first) && cycle.outcomes.isEmpty) &&
+          Wire.decode(DriverRecord_JsonCodec, Wire.encode(DriverRecord_JsonCodec, stored)) == stored)
+        restarted = FixedLedger.at(repository, System.currentTimeMillis())
+        two <- submit(restarted, w, w.governor, second.directive.text)
+        again <- concluded(restarted, w, two, List(root), ChildEnd.Retryable, Some("input-a"), Some("Malformed report at line 9, column 2"))
+        listed <- restarted.drive(w.operator, DriverRequest.Summaries()).map { case DriverReply.Listed(values) => values.find(_.key == key).get; case other => throw new IllegalStateException(other.toString) }
+        snapshot <- restarted.drive(w.operator, DriverRequest.Snapshot(key, listed.revision))
+        _ <- assertIO(snapshot match { case DriverReply.Snapshot(_, outcomes) => outcomes == List(again); case _ => false })
+        stop <- query(restarted, w, key)
+        detail = s"G1 failed without a result twice on the same input while no cycle in between changed anything: " +
+          s"attempt ${first.attempt.value}: Malformed report at line 3, column 14; attempt ${again.attempt.value} of cycle 2: Malformed report at line 9, column 2"
+        _ <- assertIO(stop match {
+          case DriverReply.Stop(DriverStopped(DriverStop.Failure, found), Some(value), List(message)) =>
+            found == detail && stopped(Some(value), DriverStop.Failure) && value.directives == 2 && message == "CQ driver stopped (failure): " + detail
+          case _ => false
+        })
+        after <- repository.driverRecords(w.project).map(_.find(_.key == key).get)
+        _ <- assertIO(after.cycle.exists(cycle => cycle.state == CycleState.Ended && cycle.outcomes == List(again) && cycle.retried == List(first)) &&
+          Wire.decode(DriverRecord_JsonCodec, Wire.encode(DriverRecord_JsonCodec, after)) == after)
+      } yield ()
+    }
+    "Q53: retry a failed input once per unchanged cycle, and stay quiescent after a cycle whose failed input is not offered again" in { (service: LedgerService[IO]) =>
+      val w = world
+      val unchanged = "The previous cycle changed nothing in the advanceable set, its context or its readiness"
+      // One driven cycle that changes nothing in the ledger and ends with `attempts`, then the next continuation query.
+      def after(name: String, attempts: List[(ChildEnd, Option[String], Option[String])]): IO[Throwable, DriverReply] = {
+        val session = w.copy(governor = w.other(Role.Governor))
+        for {
+          root <- create(service, w.operator, goal(name))
+          one <- driven(service, session, claude(name), workset(root))
+          _ <- ZIO.foreachDiscard(attempts)((end, input, fault) => concluded(service, session, one, List(root), end, input, fault))
+          reply <- query(service, session, claude(name))
+        } yield reply
+      }
+      def quiescent(reply: DriverReply): Boolean = reply match { case DriverReply.Stop(DriverStopped(DriverStop.Quiescent, detail), _, _) => detail == unchanged; case _ => false }
+      val fault = Some("Process exited with status 1")
+      for {
+        _ <- service.initialize(w.operator, "retry-classes")
+        none <- after("no-attempt", Nil)
+        admitted <- after("admitted", List((ChildEnd.Admitted, Some("input"), None)))
+        cancelled <- after("cancelled", List((ChildEnd.Cancelled, Some("input"), None)))
+        unknown <- after("unknown", List((ChildEnd.Unknown, Some("input"), None)))
+        deferred <- after("deferred", List((ChildEnd.Failed, Some("input"), fault)))
+        unselected <- after("unselected", List((ChildEnd.Failed, None, fault)))
+        // The input failed and was then attempted again in the same cycle with an admitted result or a cancellation: the host keeps it deferred.
+        resolved <- after("resolved", List((ChildEnd.Retryable, Some("input"), fault), (ChildEnd.Admitted, Some("input"), None)))
+        abandoned <- after("abandoned", List((ChildEnd.Retryable, Some("input"), fault), (ChildEnd.Cancelled, Some("input"), None)))
+        _ <- assertIO(List(none, admitted, cancelled, unknown, deferred, unselected, resolved, abandoned).forall(quiescent))
+        // One retryable input among others continues the drive, naming it.
+        mixed <- after("mixed", List((ChildEnd.Admitted, Some("other"), None), (ChildEnd.Retryable, Some("input"), fault)))
+        _ <- assertIO(mixed match { case DriverReply.Continue(_, value, List(message)) => value.cycle.exists(_.number == 2) && message.contains("its work on G"); case _ => false })
+        // A failure on another input in the next cycle is a first failure of that input: the drive continues, and stops quiescent after a cycle without attempts.
+        session = w.copy(governor = w.other(Role.Governor))
+        key = claude("other-input")
+        root <- create(service, w.operator, goal("other-input"))
+        one <- driven(service, session, key, workset(root))
+        _ <- concluded(service, session, one, List(root), ChildEnd.Retryable, Some("input-a"), fault)
+        second <- directive(service, session, key)
+        two <- submit(service, session, session.governor, second.directive.text)
+        _ <- concluded(service, session, two, List(root), ChildEnd.Retryable, Some("input-b"), fault)
+        third <- directive(service, session, key)
+        _ <- assertIO(third.status.cycle.exists(_.number == 3) && third.messages.exists(_.startsWith("CQ driver: cycle 2 changed nothing")))
+        // The first input fails again in the third cycle: alternating inputs do not keep the drive going, since no cycle between changed anything.
+        three <- submit(service, session, session.governor, third.directive.text)
+        _ <- concluded(service, session, three, List(root), ChildEnd.Retryable, Some("input-a"), fault)
+        alternated <- query(service, session, key)
+        _ <- assertIO(alternated match {
+          case DriverReply.Stop(DriverStopped(DriverStop.Failure, detail), _, _) =>
+            detail.startsWith(s"${DriverPolicy.references(List(root))} failed without a result twice on the same input while no cycle in between changed anything: attempt ") &&
+              detail.contains(" of cycle 3: Process exited with status 1")
+          case _ => false
+        })
+        // The host reports a repeated fault with the attempt's outcome: the drive stops at once, and a repeated report changes nothing.
+        repeating = w.copy(governor = w.other(Role.Governor))
+        repeatKey = claude("repeated-fault")
+        target <- create(service, w.operator, goal("repeated-fault"))
+        cycle <- driven(service, repeating, repeatKey, workset(target))
+        request = LineageMember.Request(RequestId(uuid))
+        attempt = AttemptId(uuid)
+        _ <- act(service, repeating.governor, DriverSession.Inherit(cycle.cycle, LineageMember.Run(cycle.run), request))
+        _ <- act(service, repeating.governor, DriverSession.Inherit(cycle.cycle, request, LineageMember.Attempt(attempt)))
+        partial <- act(service, repeating.governor, DriverSession.Conclude(cycle.cycle, ChildOutcome(attempt, List(target), ChildEnd.Retryable, None, fault))).either
+        unnamed <- act(service, repeating.governor, DriverSession.Conclude(cycle.cycle, ChildOutcome(attempt, Nil, ChildEnd.Admitted, None, None))).either
+        foreign <- act(service, repeating.governor, DriverSession.Conclude(cycle.cycle, ChildOutcome(AttemptId(uuid), List(target), ChildEnd.Admitted, None, None))).either
+        _ <- assertIO(invalid(partial) && invalid(unnamed) && missing(foreign))
+        outcome = ChildOutcome(attempt, List(target), ChildEnd.Repeated, Some("input"), fault)
+        reported <- act(service, repeating.governor, DriverSession.Conclude(cycle.cycle, outcome))
+        expected = DriverStopped(DriverStop.Failure, s"attempt ${attempt.value} of cycle 1 failed on ${DriverPolicy.reference(target)} with the same fault as the attempt before it on the same input: Process exited with status 1")
+        _ <- assertIO(reported match { case DriverReply.Stop(value, Some(found), Nil) => value == expected && stopped(Some(found), DriverStop.Failure); case _ => false })
+        late <- act(service, repeating.governor, DriverSession.Conclude(cycle.cycle, outcome))
+        off <- status(service, repeating, repeatKey)
+        _ <- assertIO(late.isInstanceOf[DriverReply.Lineage] && off.flatMap(_.stopped).contains(expected))
+      } yield ()
+    }
     "reattach a running cycle with a resume directive, keep exactly one run and reject swapped start and resume tokens" in { (service: LedgerService[IO]) =>
       val w = world
       val key = claude("resume")
@@ -1453,6 +1574,67 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
           case DriverReply.Stop(DriverStopped(DriverStop.Quiescent, detail), _, _) => detail == unchanged + named + "; and 1 more"
           case _ => false
         }, many.toString))
+      } yield ()
+    }
+
+    // Defect 147: the workflows tell a governing session to gate work on the Question that already holds the operator's decision.
+    "admit a BlockedBy link from an in-set item to a Question outside the drive, Open or Answered, and stop for the user on the Open one" in { (service: LedgerService[IO]) =>
+      val w = world
+      val key = claude("outside-question")
+      def begun(name: String, targets: ItemId*): IO[Throwable, (World, DriverKey, Driven)] = {
+        val bound = w.copy(governor = w.other(Role.Governor))
+        driven(service, bound, claude(name), workset(targets*)).map(cycle => (bound, claude(name), cycle))
+      }
+      def settled(status: QuestionStatus, answer: Option[String]): ItemDraft =
+        question("Settled decision").copy(content = Content.Question(status, "Prompt", "Context", Nil, None, answer))
+      for {
+        _ <- service.initialize(w.operator, "outside-question")
+        first <- create(service, w.operator, task("Gated by the Open Question"))
+        second <- create(service, w.operator, task("Gated by the Answered Question"))
+        asked <- create(service, w.operator, question("Decision the operator still owes"))
+        answered <- create(service, w.operator, settled(QuestionStatus.Answered, Some("Proceed")))
+        withdrawn <- create(service, w.operator, settled(QuestionStatus.Withdrawn, None))
+        spare <- create(service, w.operator, task("Stays ready for the refused writes"))
+        _ <- driven(service, w, key, workset(first, second))
+        before <- service.get(w.operator, asked)
+        linked <- reference(service, w.governor, first, Relation.BlockedBy, asked, true).flatMap(service.change(w.governor, _))
+        after <- service.get(w.operator, asked)
+        _ <- assertIO(linked.items.map(_.id).toSet == Set(first, asked) && after.item.draft == before.item.draft && after.item.revision == Revision(2))
+        // The Answered Question is linked from its own side; it satisfies the dependency, so the item stays ready.
+        inverse <- reference(service, w.governor, answered, Relation.Blocks, second, true).flatMap(service.change(w.governor, _))
+        running <- status(service, w, key)
+        preview <- service.previewWorkset(w.operator, workset(first, second))
+        _ <- assertIO(inverse.items.map(_.id).toSet == Set(second, answered) && running.exists(_.state == DriverState.On) &&
+          preview.readiness.map(entry => entry.item -> entry.ready).toMap == Map(first -> false, second -> true))
+        next <- directive(service, w, key)
+        _ <- submit(service, w, w.governor, next.directive.text)
+        _ <- reference(service, w.governor, second, Relation.BlockedBy, asked, true).flatMap(service.change(w.governor, _))
+        // Nothing is ready any more, and what blocks it waits for the operator: the stop names the Question outside the set.
+        stop <- query(service, w, key)
+        _ <- assertIO(stop match {
+          case DriverReply.Stop(DriverStopped(DriverStop.UserInputRequired, "Awaiting the user on Q1; the driver never answers questions or infers approval"), Some(value), _) =>
+            stopped(Some(value), DriverStop.UserInputRequired)
+          case _ => false
+        })
+        // Only the added link is admitted: a Withdrawn Question, another relation, the removal of the link and any edit stay out-of-set changes.
+        edit <- replace(service, w.operator, asked, "Edited by a drive")
+        refusals = List[(String, String, Scope => IO[Throwable, ChangeRequest])](
+          ("question-withdrawn", "out-of-set change: Q3 is outside", reference(service, _, spare, Relation.BlockedBy, withdrawn, true)),
+          ("question-related", "out-of-set change: Q2 is outside", reference(service, _, spare, Relation.RelatesTo, answered, true)),
+          ("question-unlinked", "out-of-set change: Q1 is outside", reference(service, _, first, Relation.BlockedBy, asked, false)),
+          ("question-blocked", "out-of-set change: Q2 is outside", reference(service, _, answered, Relation.BlockedBy, spare, true)),
+          ("question-edited", "out-of-set change: Q1 is outside", _ => ZIO.succeed(edit)))
+        _ <- ZIO.foreachDiscard(refusals) { case (name, detail, change) =>
+          begun(name, first, spare).flatMap { case (session, sessionKey, _) =>
+            change(session.governor).flatMap(value => rejects(service, session, sessionKey, detail)(service.change(session.governor, value)))
+          }
+        }
+        // The exemption is the bound session's, as it is for a Defect.
+        (linking, linkingKey, link) <- begun("question-delegated", first, spare)
+        child = w.other(Role.Governor)
+        _ <- act(service, linking.governor, DriverSession.Inherit(link.cycle, LineageMember.Run(link.run), LineageMember.Session(child.actor.session)))
+        blocking <- reference(service, child, spare, Relation.BlockedBy, answered, true)
+        _ <- rejects(service, linking, linkingKey, "out-of-set change: Q2 is outside")(act(service, child, DriverSession.Change(link.cycle, blocking)))
       } yield ()
     }
 
@@ -2343,10 +2525,13 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
           _ <- assertIO(problems.size == 1 && problems.head.startsWith("Driver lineage registration failed for attempt ") && problems.head.contains("the driver was not stopped"))
           // D145: an attempt that repeated the fault of the attempt before it on the same input stops the drive, naming the work and the fault.
           again = LineageMember.Attempt(AttemptId(uuid))
-          _ <- tracker.track(one.cycle, dispatch, again, ZIO.some(LineageOutcome.Failed("failed on G1 with the same fault as the attempt before it on the same input: refused report")))
+          repeated = ChildOutcome(again.id, List(target), ChildEnd.Repeated, Some("input"), Some("refused report"))
+          _ <- tracker.track(one.cycle, dispatch, again, ZIO.some(LineageOutcome.Concluded(repeated)))
           stopped <- (ZIO.sleep(zio.Duration.fromMillis(50)) *> status(ledger, session, key)).repeatUntil(_.exists(_.state == DriverState.Off)).timeoutFail(new IllegalStateException("The driver was not stopped"))(zio.Duration.fromSeconds(20))
           _ <- assertIO(stopped.flatMap(_.stopped).contains(DriverStopped(DriverStop.Failure,
             s"attempt ${again.id.value} of cycle ${stopped.get.cycle.get.number} failed on G1 with the same fault as the attempt before it on the same input: refused report")))
+          recorded <- repository.driverRecords(w.project)
+          _ <- assertIO(recorded.find(_.key == key).flatMap(_.cycle).exists(cycle => cycle.outcomes == List(repeated) && cycle.lineage.contains(LineageEntry(again, Some(dispatch), true))))
         } yield ()
     }
   }

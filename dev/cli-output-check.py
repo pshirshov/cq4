@@ -92,7 +92,7 @@ def main():
         summary = run("human-status-measured", ["status", "--task", "T1"], 0, False).stdout
         assert all(value in summary for value in ["101", "108", "unknown", "0.125", "ProviderEstimate"]), summary
         phases = run("human-phases-measured", ["status", "phases", "--session", attempt["session"]["value"]], 0, False).stdout
-        assert [line.split()[:5] for line in phases.splitlines() if line.startswith("Work ")][0] == ["Work", "1", "0", "0", "0:00:02"], phases
+        assert [line.split()[:6] for line in phases.splitlines() if line.startswith("Work ")][0] == ["Work", "1", "0", "0", "0", "0:00:02"], phases
         measured = json.loads(run("json-phases-measured", ["status", "phases", "--task", "T1", "--json"], 0, False).stdout)["UsagePhases"]["report"]["phases"]
         assert [(entry["phase"], entry["attempts"], entry["wallMillis"], entry["totals"]["total"]["known"]) for entry in measured] == [("Work", "1", "2000", "108")], measured
         # Host spans on the task's assignment appear as their own phases; a replayed span is recorded once.
@@ -104,8 +104,8 @@ def main():
         for scope in [["--task", "T1"], ["--session", attempt["session"]["value"]]]:
             spanned = run("human-phases-spans" + scope[0], ["status", "phases", *scope], 0, False).stdout
             usage_table = spanned[:spanned.index("Costs —")]
-            rows = {line.split()[0]: line.split()[1:5] for line in usage_table.splitlines() if line.split()[:1] in (["Work"], ["Check"], ["Integrate"])}
-            assert rows == {"Work": ["1", "0", "0", "0:00:02"], "Check": ["0", "0", "1", "0:01:05"], "Integrate": ["0", "0", "1", "0:00:04"]}, spanned
+            rows = {line.split()[0]: line.split()[1:6] for line in usage_table.splitlines() if line.split()[:1] in (["Work"], ["Check"], ["Integrate"])}
+            assert rows == {"Work": ["1", "0", "0", "0", "0:00:02"], "Check": ["0", "0", "0", "1", "0:01:05"], "Integrate": ["0", "0", "0", "1", "0:00:04"]}, spanned
             assert "host spans" in spanned, spanned
         audit = run("human-audit-measured", ["status", "audit"], 0, False).stdout
         assert all(value in audit for value in ["cli-fixture", "101", "Partial", "Deliberate fixture gap"]), audit

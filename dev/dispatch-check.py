@@ -111,7 +111,7 @@ def main():
         assert len(check_jobs) == 2 and all(int(job["createdAt"]) >= int(native["updatedAt"]) for job in check_jobs), check_jobs
         assert int(checked[0]["wallMillis"]) == sum(int(job["updatedAt"]) - int(job["createdAt"]) for job in check_jobs), (checked, check_jobs)
         table = run(["status", "phases", "--session", receipt["session"]["value"]])
-        assert [line.split()[:4] for line in table.splitlines() if line.startswith("Check ")] == [["Check", "0", "0", "2"]], table
+        assert [line.split()[:5] for line in table.splitlines() if line.startswith("Check ")] == [["Check", "0", "0", "0", "2"]], table
         assert all(value["assignment"]["evaluation"] == {"run": "deterministic-dispatch", "scenario": "worker-reviewer", "assessor": False} for value in attempts)
         assert api({"Summary": {"filter": {"EvaluationOnly": {"run": "deterministic-dispatch", "scenario": "worker-reviewer"}}}}) == before
         assert before["UsageSummary"]["report"]["attempts"]["running"] == "0"

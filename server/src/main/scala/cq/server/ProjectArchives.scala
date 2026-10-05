@@ -54,7 +54,8 @@ final class PostgresProjectArchives(database: LedgerDatabase, clock: Clock) exte
   }
   private def settled(sql: Jdbc, project: ProjectId, prefix: String): Unit = {
     val active = sql.query(s"SELECT EXISTS (SELECT 1 FROM ${prefix}cq_claims WHERE project_id = ? AND NOT released AND expires_at > ?) OR " +
-      s"EXISTS (SELECT 1 FROM ${prefix}cq_usage_attempts WHERE project_id = ? AND effective_outcome IS NULL) OR " +
+      // An attached governing attempt without an outcome is open, not running: no CQ host observes it, and it may never get one.
+      s"EXISTS (SELECT 1 FROM ${prefix}cq_usage_attempts WHERE project_id = ? AND effective_outcome IS NULL AND NOT COALESCE((${PersistedAttempts.unobserved("")}), false)) OR " +
       s"EXISTS (SELECT 1 FROM ${prefix}cq_integrations WHERE project_id = ? AND jsonb_exists(body->'resolution', 'Pending'))") { s =>
       s.setObject(1, project.value); s.setLong(2, clock.millis()); s.setObject(3, project.value); s.setObject(4, project.value)
     }(_.getBoolean(1)).head

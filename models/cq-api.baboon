@@ -255,8 +255,8 @@ root data UsageReceipt { id: ObservationId sequence: i64 }
 root data RecordedUsage { upload: UsageUpload normalized: TokenCounts actor: Actor sequence: i64 }
 root data AttemptOutcome { request: RequestId attempt: AttemptId state: AttemptState finishedAt: i64 gaps: lst[str] supersedes: opt[RequestId] }
 root data RecordedOutcome { value: AttemptOutcome actor: Actor receivedAt: i64 sequence: i64 }
-root data AttemptCoverage { running: i64 unknown: i64 withGaps: i64 }
-root data AttemptView { assignment: Assignment attempt: Attempt outcome: opt[RecordedOutcome] }
+root data AttemptCoverage { running: i64 open: i64 unknown: i64 withGaps: i64 }
+root data AttemptView { assignment: Assignment attempt: Attempt outcome: opt[RecordedOutcome] observed: bit }
 root data AttemptPage { entries: lst[AttemptView] after: opt[AttemptId] hasMore: bit cursor: i64 }
 root data OutcomePage { entries: lst[RecordedOutcome] after: i64 hasMore: bit cursor: i64 }
 root data MetricTotal { known: i64 unknown: i64 estimated: i64 }
@@ -295,7 +295,7 @@ root data UsageReport {
 }
 root data UsagePage { entries: lst[RecordedUsage] after: i64 hasMore: bit cursor: i64 }
 root data PhaseSpan { id: RequestId assignment: AssignmentId session: SessionId phase: UsagePhase startedAt: i64 finishedAt: i64 state: AttemptState }
-root data PhaseUsage { phase: UsagePhase attempts: i64 spans: i64 running: i64 wallMillis: i64 totals: UsageTotals costs: lst[CostTotal] }
+root data PhaseUsage { phase: UsagePhase attempts: i64 spans: i64 running: i64 open: i64 wallMillis: i64 totals: UsageTotals costs: lst[CostTotal] }
 root data PhaseReport { phases: lst[PhaseUsage] costsTruncated: bit cursor: i64 }
 
 root id CatalogueCursor { value: i64 }
@@ -375,6 +375,8 @@ root adt LineageMember {
   data Combination { id: RequestId }
 }
 root data LineageEntry { member: LineageMember parent: opt[LineageMember] settled: bit }
+enum ChildEnd { Admitted Retryable Repeated Failed Cancelled Unknown }
+root data ChildOutcome { attempt: AttemptId members: lst[ItemId] end: ChildEnd input: opt[str] fault: opt[str] }
 root data DriverCycle {
   id: CycleId number: i32 state: CycleState roots: set[ItemId] through: WorkflowPhase snapshot: WorksetSnapshot
   advanceable: lst[ItemRevision] run: opt[RequestId] created: lst[ItemId] lineage: lst[LineageEntry]
@@ -388,6 +390,7 @@ root data CycleRecord {
   id: CycleId number: i32 roots: set[ItemId] through: WorkflowPhase snapshot: WorksetPreview state: CycleState
   startToken: opt[DriverToken] resumeToken: opt[DriverToken] resumed: map[DriverToken, RequestId] run: opt[RequestId]
   created: lst[ItemId] lineage: lst[LineageEntry] resting: set[LineageMember] prompted: set[LineageMember]
+  outcomes: lst[ChildOutcome] retried: lst[ChildOutcome]
 }
 root data DriverRecord {
   project: ProjectId key: DriverKey state: DriverState attached: opt[SessionId] workset: opt[WorksetId]
@@ -413,6 +416,7 @@ root adt DriverSession {
   data Activate { run: RequestId request: WorkflowRequest token: opt[CycleToken] }
   data Inherit { cycle: CycleId parent: LineageMember member: LineageMember }
   data Settle { cycle: CycleId member: LineageMember }
+  data Conclude { cycle: CycleId outcome: ChildOutcome }
   data Rest { cycle: CycleId member: LineageMember }
   data Fail { cycle: CycleId member: LineageMember detail: str }
   data Change { cycle: CycleId request: ChangeRequest }
@@ -442,7 +446,7 @@ root adt DriverReply {
   data Changed { cycle: CycleId ack: ChangeAck }
   data Settleable { pending: bit integrations: set[IntegrationId] }
   data Listed { drivers: lst[DriverSummary] }
-  data Snapshot { preview: WorksetPreview }
+  data Snapshot { preview: WorksetPreview outcomes: lst[ChildOutcome] }
 }
 root adt ExtensionDriver {
   data Start { session: str input: str }
@@ -466,7 +470,7 @@ root adt ReadSelection {
   data ItemDetails { members: lst[ItemRevision] bytes: i32 }
   data History { id: ItemId before: Revision limit: i32 }
   data Changes { after: ChangeCursor limit: i32 }
-  data Catalog { part: CatalogSelection }
+  data Catalog {}
   data WorksetBrowse { query: str order: ItemOrder after: opt[ItemId] snapshot: opt[ChangeCursor] limit: i32 workset: WorksetId }
 }
 root data ReadInput { project: ProjectId selection: ReadSelection }
@@ -878,6 +882,7 @@ root adt DispatchCommand {
   data Combine { id: RequestId source: IntegrationId fence: Fence }
   data CombinationStatus { id: RequestId waitMillis: i32 }
   data Revalidate { id: RequestId result: ArtifactId fence: Fence }
+  data DiscardIntegration { id: IntegrationId }
 }
 root adt DispatchReply {
   data Selection { value: CohortDecision }
@@ -923,8 +928,3 @@ root data CatalogAgent {
   harnesses: lst[CatalogAgentHarness] inputExample: ChildExecutionInput outputExample: ChildReport
 }
 root data HelpCatalog { commands: lst[CatalogCommand] agents: lst[CatalogAgent] }
-root adt CatalogSelection {
-  data All {}
-  data OfCommand { command: str }
-  data OfAgent { work: DispatchWork }
-}

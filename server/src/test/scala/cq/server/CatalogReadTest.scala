@@ -52,15 +52,6 @@ final class CatalogReadLocal extends AnyWordSpec {
       }
     }
 
-    "select exactly one agent for every DispatchWork value, so that an agent selection is never empty" in {
-      val works = ExplorerMode.all.map(DispatchWork.Explorer.apply) ++ List(DispatchWork.Planner()) ++
-        WorkerMode.all.map(DispatchWork.Worker.apply) ++ ReviewerMode.all.map(DispatchWork.Reviewer.apply)
-      works.foreach { work =>
-        val selected = read.select(CatalogSelection.OfAgent(work))
-        assert(selected.commands.isEmpty && selected.agents.map(_.work) == List(work), work.toString)
-      }
-    }
-
     "carry exactly the command catalog's descriptions, aliases, argument docs and prompts, and the assets WorkflowAssets writes" in {
       val workflows = catalog.commands.filter(view => WorkflowCatalog.named(view.command).nonEmpty)
       assert(workflows.size == WorkflowCatalog.commands.size)
@@ -150,25 +141,23 @@ final class CatalogReadLocal extends AnyWordSpec {
     }
 
     "round-trip the catalog request and result through the generated JSON and UEBA codecs and match the generated schemas" in {
-      val input = ReadInput(ProjectId(UUID.fromString("00000000-0000-4000-8000-000000000001")), ReadSelection.Catalog(CatalogSelection.All()))
+      val input = ReadInput(ProjectId(UUID.fromString("00000000-0000-4000-8000-000000000001")), ReadSelection.Catalog())
       val result: Result = Result.Catalog(catalog)
       assert(json(ReadInput_JsonCodec, input) == input && binary(ReadInput_UEBACodec, input) == input)
       assert(json(Result_JsonCodec, result) == result && binary(Result_UEBACodec, result) == result)
       assert(json(HelpCatalog_JsonCodec, catalog) == catalog && binary(HelpCatalog_UEBACodec, catalog) == catalog)
       assert(JsonSchemaCheck.errors(generatedSchema("ReadInput"), ReadInput_JsonCodec.encode(Context, input)) == Nil)
       assert(JsonSchemaCheck.errors(generatedSchema("Result"), Result_JsonCodec.encode(Context, result)) == Nil)
-      val decoded = schemas.tools.find(_.name == "read").get.decode(parsed(s"""{"project":{"value":"${input.project.value}"},"selection":{"Catalog":{"part":{"All":{}}}}}"""))
-      assert(decoded == Right(Command.Read(input)))
     }
 
-    "be accepted by the read tool's advertised MCP output schema" in {
+    "be withheld from the read tool that MCP surfaces advertise: no input or output schema names it and its decoder refuses it" in {
       val read = schemas.tools.find(_.name == "read").get
-      assert(read.results.contains("Catalog"))
-      val output = schemas.advertised(read).hcursor.downField("outputSchema").focus.get
-      val body = Result_JsonCodec.encode(Context, Result.Catalog(catalog))
-      assert(JsonSchemaCheck.errors(output, body) == Nil)
-      val tags = output.hcursor.get[Vector[Json]]("oneOf").fold(throw _, identity).flatMap(_.hcursor.get[List[String]]("required").toOption).flatten
-      assert(tags.contains("Catalog"))
+      assert(!read.results.contains("Catalog") && !read.description.toLowerCase.contains("catalog"))
+      assert(!schemas.advertised(read).noSpaces.contains("Catalog"))
+      val project = "00000000-0000-4000-8000-000000000001"
+      assert(read.decode(parsed(s"""{"project":{"value":"$project"},"selection":{"Catalog":{}}}""")) == Left(cq.core.DomainFailure(Fault.Denied(McpSchemas.CatalogRefusal))))
+      assert(JsonSchemaCheck.errors(schemas.input(read), parsed(s"""{"project":{"value":"$project"},"selection":{"Catalog":{}}}""")).nonEmpty)
+      assert(JsonSchemaCheck.errors(schemas.input(read), parsed(s"""{"project":{"value":"$project"},"selection":{"Counts":{}}}""")) == Nil)
     }
   }
 }

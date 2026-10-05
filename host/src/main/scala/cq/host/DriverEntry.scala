@@ -64,6 +64,8 @@ final class DriverSessionClient(api: ServerApi, project: ProjectId) {
   }
   def inherit(cycle: CycleId, parent: LineageMember, member: LineageMember): Unit = { call(DriverSession.Inherit(cycle, parent, member)); () }
   def settle(cycle: CycleId, member: LineageMember): Unit = { call(DriverSession.Settle(cycle, member)); () }
+  /** Settles a child attempt with how it ended. The server stops the driver when the attempt repeated the fault before it on the same input. */
+  def conclude(cycle: CycleId, outcome: ChildOutcome): Unit = { call(DriverSession.Conclude(cycle, outcome)); () }
   def rest(cycle: CycleId, member: LineageMember): Unit = { call(DriverSession.Rest(cycle, member)); () }
   /** Stops the driver of `cycle` with reason failure; the detail continues the sentence that names the member. */
   def fail(cycle: CycleId, member: LineageMember, detail: String): DriverStopped = call(DriverSession.Fail(cycle, member, detail)) match {

@@ -14,7 +14,10 @@ Add `--json` to receive the typed archive manifest. `cq help backup` describes
 the limits and recovery behavior.
 
 Stop sessions working on the project and settle active claims, running attempts
-and pending integrations first. Backup rejects those states. It captures one
+and pending integrations first. Backup rejects those states. The governing attempt
+of an attached session that has no outcome is open, not running (see
+[usage audit](design/usage-audit.md)), and does not prevent a backup: no CQ host
+observes it, and a session that ended without its host leaves it open for good. It captures one
 consistent database snapshot; changes committed afterward are excluded.
 
 The archive preserves the project UUID and stored items, relationships, history,
@@ -34,6 +37,12 @@ Restore only trusted CQ archives. Entry hashes detect corruption; they are not
 signatures authenticating an archive's author. The file must match the current CQ
 schema and PostgreSQL major version. There is one development schema and no
 archive conversion or version upgrade mechanism.
+
+The schema hash does not cover the JSON stored in a row. When a release changes
+a stored type, an archive written before it can match the schema and still be
+refused. The release that added attempt outcomes to driver cycles refuses an
+earlier archive holding a driver with a cycle (`Archive holds an undecodable
+driver`); [the local update](local-update.md) converts the database, not archives.
 
 The compressed archive and expanded table payload are each limited to 512 MiB.
 Transfer has a five-minute deadline. The server streams through temporary files;

@@ -136,6 +136,19 @@ CQ_TOKEN_FILE=/srv/nvme/tmp/cq4-playground/token \
 
 Recovery never launches/adopts a process. Repeated completed recovery acknowledges zero batches. An incomplete retained record is reported explicitly after valid records are replayed; it is not silently discarded.
 
+### Closing open governing attempts
+
+The usage view and `cq status` count a governing attempt of an attached session that has no outcome as **open**, apart from running attempts: the attempt started and no outcome was delivered. CQ does not observe the operator's harness, so the server cannot tell a live session from one whose host was killed before its final delivery. A host that starts later for the same project and repository delivers the missing outcome for every ended session whose directory is still under its session root. A directory that was moved elsewhere (for example aside into an archive directory at an update) is never visited, and its attempt stays open until it is uploaded.
+
+To close them, with no harness open on the project:
+
+1. List the open attempts: *Project usage* → *Attempts*, state `Open`; *Attempt details* names the session UUID. `cq status attempts` lists the same state and the session with `--json`.
+2. For each one, find the directory named by that session UUID, in the session root or wherever it was moved. It must still hold `run.json`, `journal/` and `delivery/`.
+3. Run `cq job upload --session DIR` for it with the operator credential, as above. The upload needs the server named in the directory's `run.json` to be the one that holds the attempt, and a `run.json` that the installed package can still read.
+4. Reload the usage view. The attempt now has outcome `Unknown` with the gap `Attached owner observation interrupted; …`, and the open count has dropped.
+
+The outcome's finish time is the time of the upload, not the time the session ended, which nothing recorded. The Govern phase's busy wall time therefore includes the interval between the session's end and the upload. An attempt whose session directory no longer exists, or cannot be read by the installed package, stays open: nothing can deliver its outcome, and the report says no more of it than that none was delivered.
+
 Managed children retain their task/cohort token and cost accounting. With the
 updated package, observed Codex 0.156.1/0.157.1/0.159.2 native response records contribute
 to the outer session's unattributed usage, deduplicated across host restarts.

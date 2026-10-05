@@ -134,6 +134,29 @@ final class AgentCatalogLocal extends AnyWordSpec {
       assert(catalog.entries.groupBy(_.report).view.mapValues(_.size).toMap == Map("Evidence" -> 3, "Plan" -> 1, "Work" -> 2, "Review" -> 3))
     }
 
+    "state one operator-requirement rule in the Planner, the Plan and Candidate reviewers and the governing workflows (D146)" in {
+      val result = "about the result (what the change must do or how it must be verified)"
+      val process = "about the process (when to ask the operator, what to wait for, who approves, in what order, what not to start yet)"
+      val planner = instructions(DispatchWork.Planner())
+      val plan = instructions(DispatchWork.Reviewer(ReviewerMode.Plan))
+      val candidate = instructions(DispatchWork.Reviewer(ReviewerMode.Candidate))
+      val assets = new WorkflowAssets
+      val governing = List(WorkflowRequest.Begin(Set.empty), WorkflowRequest.Advance(Set.empty, WorkflowPhase.Plan)).map(assets.instructions)
+      (List(planner, plan, candidate) ++ governing).foreach(text => assert(text.contains(result) && text.contains(process)))
+      // The Planner keeps a process requirement out of the criteria and the Plan reviewer neither demands it there nor accepts it there.
+      assert(planner.contains("is not an acceptance criterion of any Goal or Task") && planner.contains("propose no second one"))
+      assert(plan.contains("do not ask for it as an acceptance criterion and do not reject a Task because its criteria omit it") &&
+        plan.contains("when a criterion restates a requirement about the process") &&
+        plan.contains("when a proposed Question asks for a decision that an existing Question already holds"))
+      assert(candidate.contains("it is never a finding"))
+      // All of them place the requirement in the same record: a Question that the gated work is BlockedBy.
+      (List(planner, plan) ++ governing).foreach(text => assert(text.contains("Question") && text.contains("BlockedBy")))
+      // The unqualified rule that every requirement is a criterion contradicted the rule that a criterion names a test or an inspection.
+      assert(!planner.contains("Carry each requirement it states into the acceptance criteria of every Task you propose"))
+      assert(!plan.contains("a proposal that leaves an applicable requirement out of a Task's acceptance criteria is incomplete") &&
+        !plan.contains("or when a stated operator requirement is missing from a Task it applies to"))
+    }
+
     "provide each harness's effective prompt, output schema and tool permissions from the launch functions" in {
       assert(pairs.size == 27)
       pairs.foreach { (work, harness) =>

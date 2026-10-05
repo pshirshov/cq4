@@ -228,6 +228,27 @@ final class CohortProgressLocal extends AnyWordSpec {
       assert(CohortFailure.fault(receipt(DispatchPhase.Completed, ChildNext.Retry, Some("worker reported failure"), Some(ArtifactId(UUID.randomUUID())))).isEmpty)
       assert(CohortFailure.fault(receipt(DispatchPhase.Unknown, ChildNext.InspectEvidence, Some("cleanup unconfirmed"), None)).isEmpty)
       assert(CohortFailure.fault(receipt(DispatchPhase.PublicationPending, ChildNext.RetryDelivery, Some("publication pending"), None)).isEmpty)
+      // Q53: what a drive is told about the same receipts. A fault is offered again, repeated, or left deferred when it was not published.
+      val failed = receipt(DispatchPhase.Failed, ChildNext.Retry, Some("refused report"), None)
+      def end(status: DispatchStatus, offered: Option[Boolean]): (ChildEnd, Option[String], Option[String]) = {
+        val outcome = CohortFailure.outcome(status, Some("input"), offered)
+        assert(outcome.attempt == status.attempt && outcome.members == status.members)
+        (outcome.end, outcome.input, outcome.fault)
+      }
+      assert(end(failed, Some(true)) == (ChildEnd.Retryable, Some("input"), Some("refused report")))
+      assert(end(failed, Some(false)) == (ChildEnd.Repeated, Some("input"), Some("refused report")))
+      assert(end(failed, None) == (ChildEnd.Failed, Some("input"), Some("refused report")))
+      assert(CohortFailure.outcome(failed, None, None).input.isEmpty)
+      // A failure whose text is blank, as an exception with an empty message leaves it, still yields an outcome the server admits.
+      for (blank <- List("", " \n\t"); offered <- List(Some(true), Some(false), None)) {
+        val outcome = CohortFailure.outcome(receipt(DispatchPhase.Failed, ChildNext.Retry, Some(blank), None), Some("input"), offered)
+        cq.core.DriverPolicy.outcome(outcome)
+        assert(outcome.fault.contains(CohortFailure.Unstated))
+      }
+      assert(end(receipt(DispatchPhase.Cancelled, ChildNext.Retry, Some("Cancelled by the governing session"), None), None) == (ChildEnd.Cancelled, Some("input"), None))
+      assert(end(receipt(DispatchPhase.Completed, ChildNext.Retry, Some("worker reported failure"), Some(ArtifactId(UUID.randomUUID()))), None) == (ChildEnd.Admitted, Some("input"), None))
+      assert(end(receipt(DispatchPhase.Unknown, ChildNext.InspectEvidence, Some("cleanup unconfirmed"), None), None) == (ChildEnd.Unknown, Some("input"), None))
+      assert(end(receipt(DispatchPhase.PublicationPending, ChildNext.RetryDelivery, Some("publication pending"), None), None) == (ChildEnd.Unknown, Some("input"), None))
     }
   }
 }

@@ -17,6 +17,12 @@ from typing import Callable, Protocol
 SCHEMA_SOURCE = "server/src/main/resources/db/001-ledgers.sql"
 MODEL_SOURCE = "models/cq-api.baboon"
 ATTACHED_GOVERNOR_COLLECTOR = "CQ attached session; outer usage unavailable"
+UNCHANGED_DATA = "unchanged-data"
+DRIVER_CYCLE_OUTCOMES = "driver-cycle-outcomes"
+STEP_SQL = "dev/local-update.sql"
+CYCLE_OUTCOME_FIELDS = ("outcomes", "retried")
+CYCLES_LACKING_OUTCOMES = ("SELECT count(*) FROM cq_drivers WHERE jsonb_typeof(body->'cycle') = 'object' AND NOT (" +
+                           " AND ".join(f"jsonb_exists(body->'cycle', '{name}')" for name in CYCLE_OUTCOME_FIELDS) + ")")
 
 
 def require(condition: bool, message: str) -> None:
@@ -104,10 +110,27 @@ def compatible(before: dict, after: dict, step: dict) -> str:
     old, new = before["runtimeSourceSha256"], after["runtimeSourceSha256"]
     require(old[SCHEMA_SOURCE] == new[SCHEMA_SOURCE], "Schema changes require a matching explicit local update step; replacement refused")
     if old[MODEL_SOURCE] != new[MODEL_SOURCE]:
-        require(step["kind"] == "unchanged-data" and step["schema"] == old[SCHEMA_SOURCE]
+        require(step["kind"] in (UNCHANGED_DATA, DRIVER_CYCLE_OUTCOMES) and step["schema"] == old[SCHEMA_SOURCE]
                 and step["modelBefore"] == old[MODEL_SOURCE] and step["modelAfter"] == new[MODEL_SOURCE],
                 "Model changes require a matching explicit data update step; replacement refused")
     return new[SCHEMA_SOURCE]
+
+
+def transformation(before: dict, after: dict, step: dict, source: Path) -> str | None:
+    """The pinned SQL that the accepted transition applies to stored data; none when the stored data stays as it is."""
+    compatible(before, after, step)
+    if before["runtimeSourceSha256"][MODEL_SOURCE] == after["runtimeSourceSha256"][MODEL_SOURCE] or step["kind"] == UNCHANGED_DATA:
+        return None
+    require(digest(source / STEP_SQL) == step["sqlSha256"], "Local update SQL differs from its pinned step")
+    return (source / STEP_SQL).read_text()
+
+
+def with_cycle_outcomes(driver: dict) -> dict:
+    """A cq_drivers row as the driver-cycle-outcomes step leaves it: a stored cycle gains each field it lacks, empty."""
+    cycle = driver["body"]["cycle"]
+    if cycle is None:
+        return driver
+    return {**driver, "body": {**driver["body"], "cycle": {**{name: [] for name in CYCLE_OUTCOME_FIELDS}, **cycle}}}
 
 
 class Commands:
@@ -180,11 +203,13 @@ def main() -> None:
             after = package(candidate)
             verify_local_candidate(after, revision, evidence / "local-build" / "native-smoke.json")
             require(after["runtimeSourceSha256"] == runtime_sources(checkout), "Candidate sources differ from the snapshot")
-            schema = compatible(before, after, json.loads((checkout / "dev/local-update-step.json").read_text()))
+            step = json.loads((checkout / "dev/local-update-step.json").read_text())
+            schema = compatible(before, after, step)
+            sql = transformation(before, after, step, checkout)
             new = digest(candidate / "manifest.json")
             receipt.update(status="candidate-verified", newManifest=new, schema=schema)
             write_json(evidence / "receipt.json", receipt)
-            install(state, release, candidate, rollback, evidence, receipt, schema, commands)
+            install(state, release, candidate, rollback, evidence, receipt, schema, commands, sql)
         except BaseException as error:
             if receipt["status"] not in ("installed", "recovery-required", "rolled-back"):
                 receipt.update(status="failed-before-install", error=str(error))
@@ -197,7 +222,7 @@ def main() -> None:
 
 
 def install(state: Path, release: Path, candidate: Path, rollback: Path, evidence: Path,
-            receipt: dict, schema: str, commands: Commands) -> None:
+            receipt: dict, schema: str, commands: Commands, sql: str | None) -> None:
     data = state / "postgres"
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
@@ -209,9 +234,26 @@ def install(state: Path, release: Path, candidate: Path, rollback: Path, evidenc
     marker = state / ".cq-update-recovery.json"
     write_json(marker, {"receipt": str(evidence / "receipt.json"), "recovery": "Stop owned processes. Verify the receipt's oldManifest package and before.dump database pair before removing this marker."})
     owned = False
+    transformation_attempted = False
+    before_data = None
+    backup = None
 
     def query(statement: str, label: str) -> str:
         return database.run(["psql", "--no-psqlrc", "-v", "ON_ERROR_STOP=1", "-At", "-c", statement], label, 120).strip()
+
+    def fingerprints(label: str) -> dict[str, str]:
+        tables = query("SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename", label + "-tables").splitlines()
+        values = {}
+        for table in tables:
+            require(table.startswith("cq_") and all(character.isalnum() or character == '_' for character in table), "Unexpected database table identity")
+            rows = query(f'SELECT to_jsonb(t) FROM "{table}" t ORDER BY (to_jsonb(t))::text', label + "-" + table)
+            values[table] = hashlib.sha256(rows.encode()).hexdigest()
+        write_json(evidence / (label + ".json"), values)
+        return values
+
+    def drivers(label: str) -> list[dict]:
+        rows = query("SELECT to_jsonb(t) FROM cq_drivers t ORDER BY project_id, harness, session_key", label)
+        return [json.loads(row) for row in rows.splitlines()]
 
     def interrupted(number, frame):
         raise KeyboardInterrupt(f"Interrupted by signal {number}")
@@ -244,6 +286,22 @@ def install(state: Path, release: Path, candidate: Path, rollback: Path, evidenc
         sync_directory(evidence)
         receipt.update(backup=str(backup), backupSha256=digest(backup))
         write_json(evidence / "receipt.json", receipt)
+        if sql is not None:
+            before_data = fingerprints("data-before")
+            drivers_before = drivers("drivers-before")
+            transformation_attempted = True
+            query(sql, "data-update")
+            require(query(CYCLES_LACKING_OUTCOMES, "cycles-lacking-outcomes") == "0", "Data step left a stored cycle without its outcome fields")
+            after_data = fingerprints("data-after")
+            require(set(after_data) == set(before_data) and
+                    all(after_data[table] == value for table, value in before_data.items() if table != "cq_drivers"),
+                    "Data step changed a table other than cq_drivers")
+            drivers_after = drivers("drivers-after")
+            require(drivers_after == [with_cycle_outcomes(driver) for driver in drivers_before],
+                    "Data step changed driver rows beyond adding empty outcome fields to stored cycles")
+            receipt.update(dataStep=DRIVER_CYCLE_OUTCOMES, drivers=len(drivers_after),
+                           driversTransformed=sum(1 for old, new in zip(drivers_before, drivers_after) if old != new), otherDataUnchanged=True)
+            write_json(evidence / "receipt.json", receipt)
         database.run(["pg_ctl", "-D", str(data), "-m", "fast", "-w", "-t", "30", "stop"], "database-stop", 40)
         owned = False
         require(not os.path.lexists(data / "postmaster.pid"), "Database shutdown is incomplete")
@@ -267,9 +325,22 @@ def install(state: Path, release: Path, candidate: Path, rollback: Path, evidenc
             signal.signal(number, signal.SIG_IGN)
         receipt.update(status="recovery-required", error=str(error))
         write_json(evidence / "receipt.json", receipt)
-        if owned:
-            database.run(["pg_ctl", "-D", str(data), "-m", "fast", "-w", "-t", "30", "stop"], "database-recovery-stop", 40)
-            owned = False
+        try:
+            if transformation_attempted:
+                if not owned:
+                    owned = True
+                    database.run(["pg_ctl", "-D", str(data), "-l", str(evidence / "postgres-recovery.log"), "-o",
+                                  f"-h 127.0.0.1 -p {port} -c unix_socket_directories=''", "-w", "-t", "30", "start"], "database-recovery-start", 40)
+                # One transaction: a restore that fails leaves the database as the failed step left it, never partly dropped.
+                database.run(["pg_restore", "--clean", "--if-exists", "--single-transaction", "--exit-on-error", "--no-owner", "--no-privileges",
+                              "--dbname", "postgres", str(backup)], "database-rollback", 600)
+                require(fingerprints("data-restored") == before_data, "Restored database differs from backup state")
+                require(query("SELECT checksum FROM cq_schema_migrations WHERE version=1", "schema-restored") == schema, "Restored schema differs")
+                receipt.update(databaseRestored=True)
+        finally:
+            if owned:
+                database.run(["pg_ctl", "-D", str(data), "-m", "fast", "-w", "-t", "30", "stop"], "database-recovery-stop", 40)
+                owned = False
         require(not os.path.lexists(data / "postmaster.pid"), "Database recovery is incomplete")
         require(digest(release / "manifest.json") == receipt["oldManifest"], "Package recovery is incomplete")
         receipt.update(status="rolled-back", databaseStopped=True)

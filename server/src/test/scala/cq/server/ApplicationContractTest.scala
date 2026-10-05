@@ -98,15 +98,35 @@ abstract class ApplicationContractTest extends SpecZIO with AssertZIO {
         val application = new Application(ledger, repository, usage, artifacts, admissions, integrations, proposals, auth, catalog)
         val project = ProjectId(UUID.randomUUID())
         val other = ProjectId(UUID.randomUUID())
-        val worker = auth.authenticate(auth.grant(root, GrantRequest(project, Actor("worker", SessionId(UUID.randomUUID()), Role.Worker), Now + 10000)).value, None)
+        val grant = auth.grant(root, GrantRequest(project, Actor("worker", SessionId(UUID.randomUUID()), Role.Worker), Now + 10000)).value
+        val worker = auth.authenticate(grant, None)
+        // The MCP endpoint a child or a managed Governor reaches; the routes exercised here use none of the omitted collaborators.
+        val transport = new Transport(application, auth, AccessConfig(Token, "http://localhost"), new McpSchemas(), null, null, null, null)
+        def mcp(method: String, params: String): zio.Task[io.circe.Json] = {
+          import org.http4s.{Header, Method, Request, Uri}
+          import zio.interop.catz.*
+          val body = s"""{"jsonrpc":"2.0","id":1,"method":"$method","params":$params}"""
+          transport.routes(null).orNotFound.run(Request[zio.Task](Method.POST, Uri.unsafeFromString("/mcp")).withEntity(body)
+            .putHeaders(Header.Raw(org.typelevel.ci.CIString("Authorization"), "Bearer " + grant))).flatMap(_.as[String])
+            .map(io.circe.parser.parse(_).fold(throw _, identity))
+        }
+        def selection(value: String): String = s"""{"name":"read","arguments":{"project":{"value":"${project.value}"},"selection":$value}}"""
         for {
           _ <- application.execute(root, Command.Initialize(ProjectConfig(project, "http://localhost", "catalog")))
-          served <- application.execute(root, Command.Read(ReadInput(project, ReadSelection.Catalog(CatalogSelection.All()))))
+          refused <- mcp("tools/call", selection("""{"Catalog":{}}"""))
+          _ <- assertIO(refused.hcursor.downField("result").get[Boolean]("isError") == Right(true))
+          _ <- assertIO(refused.hcursor.downField("result").downField("structuredContent").downField("Failed").downField("fault").downField("Denied")
+            .get[String]("message") == Right(McpSchemas.CatalogRefusal))
+          offered <- mcp("tools/call", selection("""{"Counts":{}}"""))
+          _ <- assertIO(offered.hcursor.downField("result").get[Boolean]("isError") == Right(false))
+          listed <- mcp("tools/list", "{}")
+          _ <- assertIO(listed.hcursor.downField("result").downField("tools").focus.exists(tools => tools.noSpaces.contains("ReadSelection") && !tools.noSpaces.contains("Catalog")))
+          served <- application.execute(root, Command.Read(ReadInput(project, ReadSelection.Catalog())))
           _ <- assertIO(served == Result.Catalog(catalog.value))
           _ <- assertIO(catalog.value.commands.nonEmpty && catalog.value.agents.size == 9)
-          scoped <- application.execute(worker, Command.Read(ReadInput(project, ReadSelection.Catalog(CatalogSelection.All()))))
+          scoped <- application.execute(worker, Command.Read(ReadInput(project, ReadSelection.Catalog())))
           _ <- assertIO(scoped == served)
-          denied <- application.execute(worker, Command.Read(ReadInput(other, ReadSelection.Catalog(CatalogSelection.All()))))
+          denied <- application.execute(worker, Command.Read(ReadInput(other, ReadSelection.Catalog())))
           _ <- assertIO(denied match { case Result.Failed(_: Fault.Denied) => true; case _ => false })
         } yield ()
     }

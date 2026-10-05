@@ -40,7 +40,7 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
       }
     }
   }
-  /** `obtained` is when the claim was last renewed for this child (`System.nanoTime`). */
+  /** `obtained` is when the claim was last renewed for this child (the ZIO clock's `nanoTime`, which `ClaimRenewal` reads). */
   private def maintain(entry: DispatchExecution, obtained: Long): Task[Unit] = renewal.maintain(obtained, ZIO.attemptBlocking(claim(entry, false))).catchAll { failure =>
     ZIO.succeed(entry.requestStop("Work claim refresh failed: " + Option(failure.getMessage).getOrElse(failure.getClass.getSimpleName))) *>
       ZIO.foreachDiscard(entry.ownedJobs)(id => jobs.cancel(config.owner, id).unit.catchSome { case DomainFailure(_: Fault.Missing) => ZIO.unit })
@@ -90,7 +90,7 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
           entry.check()
         }
         // Input assembly renews the claim; the renewals that follow count their lease from before it.
-        began <- ZIO.succeed(System.nanoTime())
+        began <- zio.Clock.nanoTime
         input <- ZIO.attemptBlocking(new InputAssembler(authority.governor, config.owner, clock, requirements.current).assemble(entry.ticket.request))
         _ <- maintain(entry, began).forkScoped
         prepared <- ZIO.attemptBlocking {

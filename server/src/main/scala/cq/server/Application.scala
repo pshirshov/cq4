@@ -48,7 +48,7 @@ final class Application(ledger: LedgerService[IO], repository: LedgerRepository[
         case ReadSelection.History(id, before, limit) => ledger.history(scope, id, before, limit).map(Result.History.apply)
         case ReadSelection.Changes(after, limit) => ledger.changes(scope, after, limit).map(Result.Changes.apply)
         case ReadSelection.WorksetBrowse(query, order, after, snapshot, limit, workset) => ledger.browseWorkset(scope, query, order, after, snapshot, limit, workset).flatMap(working(scope, _)).map(Result.Browsed.apply)
-        case ReadSelection.Catalog(part) => ZIO.attempt(Result.Catalog(catalog.select(part)))
+        case ReadSelection.Catalog() => ZIO.attempt(Result.Catalog(catalog.value))
       }}
       case Command.Graph(input) => scoped(authority, input.project) { scope =>
         ledger.workset(scope, input.roots, input.after, input.snapshot, input.limit).map(Result.Workset.apply)

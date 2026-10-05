@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ $# != 2 ]]; then
+  cat >&2 <<'USAGE'
+Usage: dev/home-manager-module-check RELEASE_DIRECTORY LOG_FILE
+
+Builds a Home Manager generation that uses homeManagerModules.default with the
+given native release and Claude, Codex and Pi integrations of one project, and
+checks its links with the release's own cq doctor commands
+(nix/tests/home-manager-module.nix). Nothing is activated and no harness runs.
+
+Evaluation is impure: the release is imported by its path, and the flake is
+read from this checkout. Home Manager is the source of the home-manager package
+in the nixpkgs the flake pins. Not part of dev/check or test-local.sh.
+USAGE
+  exit 2
+fi
+root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+release=$(realpath -e -- "$1")
+log=$(realpath -m -- "$2")
+[[ -f $release/manifest.json ]] || { echo "Not a native release: $release" >&2; exit 1; }
+if ! output=$(nix build --impure --no-link --print-out-paths -L --file "$root/nix/tests/home-manager-module.nix" --argstr release "$release" 2> "$log"); then
+  echo "FAIL: Home Manager module check; see $log" >&2
+  exit 1
+fi
+echo "PASS: Home Manager generation with three harness integrations; command doctor reports in $output; log $log"

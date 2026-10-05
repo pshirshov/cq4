@@ -34,6 +34,7 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
   private final class Collector {
     @volatile var before: HostIntegrationInput => Unit = _ => ()
     @volatile var upload: ArtifactUpload => Unit = _ => ()
+    val spans = new java.util.concurrent.CopyOnWriteArrayList[PhaseSpan]()
   }
 
   private final class Receiver(application: Application, auth: Authorization, root: Authority, authority: Authority, runtime: Runtime[Any],
@@ -42,7 +43,10 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
     private def execute[A](value: Task[A]): A = Unsafe.unsafe { implicit unsafe => runtime.unsafe.run(value).getOrThrow() }
     override def call(command: Command): Result = execute(application.execute(authority, command))
     override def artifact(value: ArtifactUpload): ArtifactMetadata = { collector.upload(value); execute(application.upload(authority, value)) }
-    override def usage(value: HostUsageInput): HostUsageResult = execute(application.ingest(authority, value))
+    override def usage(value: HostUsageInput): HostUsageResult = {
+      value.operation match { case HostUsage.Span(span) => collector.spans.add(span); case _ => () }
+      execute(application.ingest(authority, value))
+    }
     override def admit(value: HostAdmissionInput): ResultAdmission = execute(application.admit(authority, value))
     override def integrate(value: HostIntegrationInput): IntegrationRecord = { collector.before(value); execute(application.integrate(authority, value)) }
     override def grant(value: GrantRequest): AccessToken = auth.grant(root, value)
@@ -97,6 +101,7 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
       reply <- command match {
         case DispatchCommand.PrepareIntegration(id, result) => controller.prepare(IntegrationTicket(id, result)).map(DispatchReply.Integration.apply)
         case DispatchCommand.Integrate(id) => controller(id).map(DispatchReply.Integration.apply)
+        case DispatchCommand.DiscardIntegration(id) => controller.discard(id).map(DispatchReply.Integration.apply)
         case DispatchCommand.Combine(id, source, held) => combinations.prepare(CombinationTicket(id, source, held)).map(DispatchReply.Combination.apply)
         case other => ZIO.fail(new IllegalStateException("Unexpected dispatch command " + other))
       }
@@ -332,6 +337,87 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
           assert(busy.left.exists(_.getMessage == "requirement failed: Settle active child/check/integration/combination work before changing workflow: " +
             s"integration ${first.id.value} (Ready)"), busy.toString)
           assert(superseded.phase == IntegrationPhase.NotApplied && f.controller.quiescent && next.isRight, s"$superseded $next")
+        }
+      } yield () }
+    }
+
+    "Q52: discard a prepared integration as NotApplied, admit the next workflow and integrate the same candidate under a fresh identity" in {
+      (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO], registry: DriverInspector) =>
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, registry) { f => for {
+        _ <- f.workflow.activate(RequestId(uuid), f.advance, "Integrate the task", None)
+        ready <- f.prepared
+        busy <- f.workflow.activate(RequestId(uuid), f.advance, "Next", None).either
+        discarded <- f.dispatch(DispatchCommand.DiscardIntegration(ready.id))
+        repeated <- f.dispatch(DispatchCommand.DiscardIntegration(ready.id))
+        quiescent <- ZIO.succeed(f.controller.quiescent)
+        retained <- ZIO.attemptBlocking(HostFiles.read(f.session.resolve("integrations").resolve(ready.id.value.toString + ".json"), IntegrationLocal_JsonCodec,
+          IntegrationEntries.MaxRecordBytes))
+        server <- integrations.get(f.owner, ready.id).either
+        git <- ZIO.attemptBlocking(f.target)
+        spans <- ZIO.succeed(f.collector.spans.toArray(Array.empty[PhaseSpan]).toList.filter(_.phase == UsagePhase.Integrate))
+        applied <- f.integrate(ready.id)
+        next <- f.workflow.activate(RequestId(uuid), f.advance, "Integrate the task again", None).either
+        _ <- ZIO.attempt {
+          println(s"Discarded integration: workflow before '${refusal(busy)}'; reply $discarded; quiescent $quiescent; journal attempted=${retained.attempted} " +
+            s"observation=${retained.observation}; server ${refusal(server)}; Integrate afterwards ${applied.phase}; spans ${spans.map(_.state)}; next workflow '${refusal(next.map(_.id))}'")
+          assert(busy.left.exists(_.getMessage.contains(s"integration ${ready.id.value} (Ready)")), busy.toString)
+          val status = discarded match { case DispatchReply.Integration(value) => value; case other => fail(other.toString) }
+          assert(status.phase == IntegrationPhase.NotApplied && status.blocker.contains("Discarded by the governing session") && repeated == discarded, s"$discarded $repeated")
+          assert(quiescent && retained == IntegrationLocal(retained.intent, false, Some(IntegrationObservation.NotApplied("Discarded by the governing session"))), retained.toString)
+          assert(server.left.exists { case DomainFailure(_: Fault.Missing) => true; case _ => false } && git == local.base, server.toString)
+          assert(spans.map(_.state) == List(AttemptState.Cancelled), spans.toString)
+          assert(applied.phase == IntegrationPhase.NotApplied && next.isRight, s"$applied $next")
+        }
+        second <- f.prepared
+        recorded <- f.integrate(second.id)
+        late <- f.dispatch(DispatchCommand.DiscardIntegration(second.id)).either
+        task <- ledger.get(f.owner, f.task).map(_.item.draft.content.asInstanceOf[Content.Task])
+        _ <- ZIO.attemptBlocking {
+          println(s"Discard of a recorded integration: '${refusal(late)}'")
+          assert(second.phase == IntegrationPhase.Ready && recorded.phase == IntegrationPhase.Recorded && f.target == f.candidate &&
+            task.status == TaskStatus.Done && f.controller.quiescent, s"$second $recorded")
+          assert(late.left.exists { case DomainFailure(Fault.Conflict(message)) => message.contains("Recorded"); case _ => false }, late.toString)
+          assert(f.target == f.candidate)
+        }
+      } yield () }
+    }
+
+    "Q52: refuse to discard an integration that is being applied, and count a discarded one as settled for its drive's cycle" in {
+      (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO], registry: DriverInspector) =>
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, registry) { f => for {
+        (ready, start) <- f.carried
+        member = LineageMember.Integration(ready.id)
+        refused <- f.activate(start).either
+        discarded <- f.dispatch(DispatchCommand.DiscardIntegration(ready.id))
+        after <- f.status
+        git <- ZIO.attemptBlocking(f.target)
+        started <- f.activate(start).either
+        running <- f.status
+        // In the cycle that started, a prepared integration rests on the session until it is discarded and is then settled in the cycle.
+        resting <- f.prepared
+        _ <- f.eventually("the prepared integration rests on the session")(f.cycle.exists(_.held == Set(LineageMember.Integration(resting.id))))
+        _ <- f.dispatch(DispatchCommand.DiscardIntegration(resting.id))
+        _ <- f.eventually("the discarded integration is settled in its cycle")(f.cycle.exists(value => value.held.isEmpty &&
+          value.lineage.exists(entry => entry.member == LineageMember.Integration(resting.id) && entry.settled)))
+        driving <- f.status
+        second <- f.prepared
+        _ <- f.dispatch(DispatchCommand.Integrate(second.id))
+        active <- f.dispatch(DispatchCommand.DiscardIntegration(second.id)).either
+        recorded <- f.settled(second.id)
+        _ <- ZIO.attempt {
+          assert(driving.state == DriverState.On && driving.stopped.isEmpty, driving.toString)
+          println(s"Carried integration, discarded: start directive refused with '${refusal(refused)}'; reply $discarded; after it ${f.describe(after)}; " +
+            s"start directive then '${refusal(started.map(_.cycle))}'; finally ${f.describe(running)}; discard while applying '${refusal(active)}'; then ${recorded.phase}")
+          assert(refused.left.exists(_.getMessage.contains("Settle active child/check/integration/combination work before changing workflow")), refused.toString)
+          assert(discarded == DispatchReply.Integration(ready.copy(phase = IntegrationPhase.NotApplied, next = IntegrationNext.Complete,
+            blocker = Some("Discarded by the governing session"))) && git == local.base, discarded.toString)
+          assert(after.state == DriverState.On && after.stopped.isEmpty && after.cycle.exists(_.state == CycleState.Pending), after.toString)
+          assert(started.exists(_.cycle.contains(start.cycle)) && running.state == DriverState.On && running.cycle.exists(_.state == CycleState.Active), s"$started $running")
+          // The Git job normally still runs here; had it finished, the integration would be Recorded and refused as well.
+          assert(active.left.exists { case DomainFailure(Fault.Conflict(message)) => message.contains("is Running") || message.contains("is Recorded"); case _ => false }, active.toString)
+          assert(recorded.phase == IntegrationPhase.Recorded, recorded.toString)
         }
       } yield () }
     }

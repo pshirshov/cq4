@@ -13,3 +13,9 @@ Focused source validation used the actual App, JVM server, Chromium and private 
 - 640-pixel layout, opening a related main-pane item and unchanged ledger revisions/references after navigation.
 
 TypeScript checking and web compilation passed. Desktop and narrow screenshots and the browser trace are retained; the desktop screenshot was inspected. Configured host checks and combined native/installed acceptance remain pending. This is source completion, not deployed delivery.
+
+## I32: layout, keyboard and default view (2026-10-05)
+
+The description above is I31 as delivered. I32 changed the default view to all relationships, replaced the three stacked columns by the ring layout described in the [browser workspace design](../design/browser-workspace.md#relationship-graph), added arrow-key movement between nodes and a hint for a view without edges, and raised the results table's minimum title width to 200 px.
+
+`dev/relationship-graph-browser.mjs` now also asserts, at 1440×900 and 1280×720 with 12 neighbours whose titles wrap: the centre's box within the middle third of the graph both ways, no two node boxes intersecting, every node inside the graph and at least 180 px wide, and a dialog body that does not scroll; every arrow key from every node reaching the nearest node within 45° of its direction, a focus ring of at least 2 px, and full accessible names on clamped buttons; the graph opening on all relationships, and the hint and its switch for an item whose only relationship is not a dependency; a title column of at least 200 px beside the open item pane at both sizes. Against the I31 code the new cases failed on the 80 px title column, the dependency default, a graph of 1325 px in a 759 px (597 px) body, an arrow key that moved nothing, and the missing hint.

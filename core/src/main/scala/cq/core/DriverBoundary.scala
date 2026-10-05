@@ -58,21 +58,25 @@ final class DriverBoundary(registry: DriverRegistry, planner: WorksetPlanner) {
   // milestone, so a drive that does not select such a milestone reassigns the Task: this removal, then an assignment.
   private def released(mutation: Mutation): Option[ItemId] = membership(mutation, false).map((_, milestone) => milestone)
 
-  // The item and the Defect of a BlockedBy edge a Reference adds, in either direction the edge may be written. A drive that meets a
-  // defect it does not work records it and links the items it blocks, which leave the ready set until someone else resolves the Defect.
+  // The item and the Defect or Question of a BlockedBy edge a Reference adds, in either direction the edge may be written. A drive that
+  // meets a defect it does not work records it and links the items it blocks, which leave the ready set until someone else resolves the
+  // Defect. A drive whose work needs the operator's decision links it to the Question that holds that decision, which may predate the drive.
   private def blocking(mutation: Mutation): Option[(ItemId, ItemId)] = (mutation match {
     case Mutation.Reference(source, _, Relation.BlockedBy, target, _, true) => Some(source -> target)
     case Mutation.Reference(source, _, Relation.Blocks, target, _, true) => Some(target -> source)
     case _ => None
-  }).filter((_, prerequisite) => prerequisite.ledger == Ledger.Defects)
-  private def blocker(mutation: Mutation): Option[ItemId] = blocking(mutation).map((_, defect) => defect)
-  private def openDefect(tx: LedgerTransaction, id: ItemId): Boolean = tx.get(id).map(_.draft.content).exists {
+  }).filter((_, prerequisite) => Set(Ledger.Defects, Ledger.Questions)(prerequisite.ledger))
+  private def blocker(mutation: Mutation): Option[ItemId] = blocking(mutation).map((_, prerequisite) => prerequisite)
+  // A Defect blocks while it is Open. A Question gates while it is Open and records the decision once Answered; a Withdrawn one does neither.
+  private def gating(tx: LedgerTransaction, id: ItemId): Boolean = tx.get(id).map(_.draft.content).exists {
     case value: Content.Defect => value.status == DefectStatus.Open
+    case value: Content.Question => value.status != QuestionStatus.Withdrawn
     case _ => false
   }
 
   // A membership change names its Task, and a blocking link the item it blocks. The other endpoint is judged in `check`: a milestone by
-  // status, Open to gain a member and not Open to lose one; a blocking Defect by being Open and linked by the bound session.
+  // status, Open to gain a member and not Open to lose one; a blocking Defect by being Open, a blocking Question by being Open or Answered, and
+  // both by being linked by the bound session.
   private def existing(mutation: Mutation): List[ItemId] = mutation match {
     case Mutation.Archive(members) => members.map(_.id)
     case Mutation.Produce(producer, _, _, _) => List(producer)
@@ -119,15 +123,15 @@ final class DriverBoundary(registry: DriverRegistry, planner: WorksetPlanner) {
 
   // Admission, before the write is applied: every existing item the request names is in the cycle's stored snapshot or was created by the cycle.
   // The exceptions are the milestone of an assignment, which may be any Open milestone, the milestone a Reference takes an in-set
-  // Task out of, which may be any Complete or Cancelled milestone, and the Defect the bound session links an in-set item BlockedBy, which
-  // may be any Open Defect. None admits another change of that item: its Replace, Restore, Archive or Terminate names it, and so does the
+  // Task out of, which may be any Complete or Cancelled milestone, and the Defect or Question the bound session links an in-set item
+  // BlockedBy, which may be any Open Defect and any Open or Answered Question. None admits another change of that item: its Replace, Restore, Archive or Terminate names it, and so does the
   // removal of a membership in an Open milestone or of a blocking link.
   def check(tx: LedgerTransaction, attribution: WriteAttribution, request: ChangeRequest, now: Long): Unit = {
     given LedgerTransaction = tx
     val (record, cycle) = current(tx.project.id, attribution)
     val named = request.mutations.flatMap(existing) ++ request.mutations.flatMap(assigned).filterNot(openMilestone(tx, _)) ++
       request.mutations.flatMap(released).filterNot(closedMilestone(tx, _)) ++
-      request.mutations.flatMap(blocker).filterNot(defect => attribution.bound && openDefect(tx, defect))
+      request.mutations.flatMap(blocker).filterNot(prerequisite => attribution.bound && gating(tx, prerequisite))
     val outside = named.filterNot(cycle.boundary).distinct
     if (outside.nonEmpty)
       registry.fail(record, s"out-of-set change: ${references(outside)} is outside the advanceable set stored for cycle ${cycle.number}", now)
@@ -140,7 +144,7 @@ final class DriverBoundary(registry: DriverRegistry, planner: WorksetPlanner) {
     val (record, cycle) = current(tx.project.id, attribution)
     val (created, changed) = acknowledgement.items.partition(_.revision == Revision(1))
     // A batch changes an item once, so a milestone that passed `check` only as an assignment or as a removal was revised for that one
-    // membership alone, with its draft unchanged, and a Defect that passed it only as a blocker for that one link alone.
+    // membership alone, with its draft unchanged, and a Defect or Question that passed it only as a blocker for that one link alone.
     val linked = request.mutations.flatMap(mutation => assigned(mutation) ++ released(mutation) ++ blocker(mutation)).toSet
     val outside = changed.map(_.id).filterNot(id => cycle.boundary(id) || linked(id))
     if (outside.nonEmpty)

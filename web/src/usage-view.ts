@@ -130,13 +130,16 @@ export function phasesTable(phases: readonly api.PhaseUsage[]): HTMLElement {
   const total = (value: (entry: api.PhaseUsage) => bigint) => sum(phases.map(value));
   return section('By phase', basisNote(bases), table({ label: 'Usage by phase',
     columns: [rowLabel('Phase'), number('Known tokens'), number('Unknown measurements'), number('Estimated measurements'), number('Unknown costs'),
-      number('Cost'), tally('Attempts'), tally('Running'), number('Busy wall time')],
+      number('Cost'), tally('Attempts'), tally('Running'), tally('Open'), number('Busy wall time')],
     rows: phases.map(entry => [entry.phase, ...values(entry).map(count), costSum(entry.costs, entry.totals.unknownCosts, bases),
-      count(entry.attempts), count(entry.running), duration(entry.wallMillis)]),
+      count(entry.attempts), count(entry.running), count(entry.open), duration(entry.wallMillis)]),
     total: phases.length > 1 ? ['Total', ...[0, 1, 2, 3].map(index => count(total(entry => values(entry)[index] as bigint))),
       costSum(costs, total(entry => entry.totals.unknownCosts), bases), count(total(entry => entry.attempts)), count(total(entry => entry.running)),
+      count(total(entry => entry.open)),
       duration(total(entry => entry.wallMillis))] : undefined }));
 }
+export const openAttemptNote = 'No outcome delivered. CQ does not observe an attached session\'s own harness, so the session may have ended; ' +
+  'cq job upload --session DIR over its retained session directory delivers the outcome.';
 interface AttemptActions {
   scope(filter: api.UsageFilter_ProjectAll | api.UsageFilter_TaskOnly | api.UsageFilter_CohortOnly | api.UsageFilter_SessionOnly): void;
   outcomes(attempt: api.AttemptId): void;
@@ -152,12 +155,12 @@ export function attemptsTable(entries: api.AttemptView[], actions: AttemptAction
     for (const member of assignment.members) scopes.append(button(`Task usage · ${itemName(member)}`, () => actions.scope(new api.UsageFilter_TaskOnly(member))));
     const metadata = fields([['Attempt', attempt.id.value], ['Assignment', assignment.id.value], ['Session', attempt.session.value],
       ['Parent attempt', attempt.parent === undefined ? 'None' : attempt.parent.value], ['Collector', attempt.collector],
-      ['Finished', outcome === undefined ? 'No outcome recorded' : time(outcome.value.finishedAt)],
+      ['Finished', outcome === undefined ? entry.observed ? 'No outcome recorded' : openAttemptNote : time(outcome.value.finishedAt)],
       ['Gaps', outcome === undefined ? 'No outcome recorded' : outcome.value.gaps.join('; ') || 'None recorded']]);
     const evaluation = assignment.evaluation;
     if (evaluation !== undefined) metadata.append(element('dt', 'Evaluation'), element('dd', `${evaluation.run} · ${evaluation.scenario} · ${evaluation.assessor ? 'Assessor' : 'Consumer'}`));
     return [time(attempt.startedAt), `${attempt.harness} · ${attempt.role}`, `${attempt.provider} / ${attempt.model}`,
-      outcome === undefined ? 'Running' : outcome.value.state,
+      outcome === undefined ? entry.observed ? 'Running' : 'Open' : outcome.value.state,
       `${assignment.attribution} · ${[...assignment.members].map(itemName).join(', ') || 'No assigned items'}`,
       details('Attempt details', metadata, scopes, button('Outcome history', () => actions.outcomes(attempt.id)))];
   }) }));

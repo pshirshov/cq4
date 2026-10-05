@@ -42,7 +42,13 @@ final class ProjectArchivesPostgres extends SpecZIO with AssertZIO {
         directive = issued.asInstanceOf[DriverReply.Continue].directive
         run = RequestId(UUID.randomUUID())
         _ <- service.drive(governor, DriverRequest.Session(DriverSession.Activate(run, WorkflowRequest.Advance(roots, WorkflowPhase.Work), Some(directive.token))))
+        dispatch = LineageMember.Request(RequestId(UUID.randomUUID()))
+        outcome = ChildOutcome(AttemptId(UUID.randomUUID()), roots.toList, ChildEnd.Retryable, Some("operative-input"), Some("Malformed report at line 3"))
+        _ <- service.drive(governor, DriverRequest.Session(DriverSession.Inherit(directive.cycle, LineageMember.Run(run), dispatch)))
+        _ <- service.drive(governor, DriverRequest.Session(DriverSession.Inherit(directive.cycle, dispatch, LineageMember.Attempt(outcome.attempt))))
+        _ <- service.drive(governor, DriverRequest.Session(DriverSession.Conclude(directive.cycle, outcome)))
         before <- repository.driverRecords(operator.project)
+        _ <- assertIO(before.head.cycle.exists(_.outcomes == List(outcome)))
         file <- ZIO.attempt(Files.createTempFile("cq-driver-archive-", ".zip"))
         manifest <- archives.backup(operator.project, file)
         _ <- assertIO(manifest.entries.exists(entry => entry.table == BackupTable.Drivers && entry.rows == 1))
@@ -55,7 +61,8 @@ final class ProjectArchivesPostgres extends SpecZIO with AssertZIO {
         record = restored.head
         _ <- assertIO(record.state == DriverState.Off && record.stopped.exists(_.reason == DriverStop.RestoredArchive) && record.bind.isEmpty &&
           record.cycle.exists(cycle => cycle.state == CycleState.Ended && cycle.startToken.isEmpty && cycle.resumeToken.isEmpty && cycle.resumed.isEmpty &&
-            cycle.lineage.map(_.member) == before.head.cycle.get.lineage.map(_.member)) && record.revision.value == before.head.revision.value + 1)
+            cycle.lineage.map(_.member) == before.head.cycle.get.lineage.map(_.member) && cycle.outcomes == List(outcome) && cycle.retried.isEmpty) &&
+          record.revision.value == before.head.revision.value + 1)
         serviceAfter = FixedLedger.at(new PostgresLedgerRepository(target), System.currentTimeMillis())
         replay <- serviceAfter.drive(governor, DriverRequest.Session(DriverSession.Activate(run, WorkflowRequest.Advance(roots, WorkflowPhase.Work), Some(directive.token)))).either
         _ <- assertIO(replay.left.exists { case DomainFailure(_: Fault.Denied) => true; case _ => false })
@@ -128,6 +135,31 @@ final class ProjectArchivesPostgres extends SpecZIO with AssertZIO {
         _ <- assertIO(restored.map(_.entries) == Right(manifest.entries))
         copy <- new PostgresUsageRepository(target).read(owner.project)(reader => (reader.span(span.id), reader.spans(filter), reader.cursor))
         _ <- assertIO(copy == (Some(span), List(SpanTally(UsagePhase.Check, 1, 700)), before.cursor))
+      } yield ()
+    }
+
+    "D150: back up a project whose attached governing attempt has no outcome, and refuse one with a managed attempt that has none" in {
+      (service: LedgerService[IO], usage: UsageService[IO], archives: ProjectArchives) =>
+      def project(name: String, collector: String): IO[Throwable, ProjectId] = {
+        val owner = Scope(ProjectId(UUID.randomUUID()), Actor("operator", SessionId(UUID.randomUUID()), Role.Governor))
+        val host = owner.copy(actor = owner.actor.copy(role = Role.Collector))
+        val overhead = Assignment(AssignmentId(UUID.randomUUID()), owner.project, Set.empty, Attribution.Unattributed, None, None)
+        val governing = Attempt(AttemptId(UUID.randomUUID()), overhead.id, None, owner.actor.session, Role.Governor, Harness.Claude,
+          "provider", "model", collector, 1000, UsagePhase.Govern)
+        service.initialize(owner, name) *> usage.assign(host, overhead) *> usage.start(host, governing).as(owner.project)
+      }
+      def backup(id: ProjectId): IO[Throwable, Either[Throwable, BackupManifest]] = for {
+        file <- ZIO.attempt(Files.createTempFile("cq-archive-", ".zip"))
+        result <- archives.backup(id, file).either
+        _ <- ZIO.attempt(Files.deleteIfExists(file))
+      } yield result
+      for {
+        attached <- project("open attached governor", cq.core.AttemptObservation.AttachedGovernorCollector)
+        managed <- project("running managed governor", "CQ native collector 0.1.0")
+        open <- backup(attached)
+        running <- backup(managed)
+        _ <- assertIO(open.exists(_.entries.exists(entry => entry.table == BackupTable.UsageAttempts && entry.rows == 1)))
+        _ <- assertIO(running.left.exists(_.getMessage.contains("running attempts")))
       } yield ()
     }
 

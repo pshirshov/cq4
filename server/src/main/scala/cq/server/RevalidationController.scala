@@ -21,7 +21,7 @@ final class RevalidationController(config: SupervisorConfig, authority: Supervis
   private val spans = new SessionSpans(config, authority)
   private var entries = Map.empty[RequestId, RevalidationExecution]
   private var closing = false
-  /** `obtained` is when admission renewed the claim (`System.nanoTime`). */
+  /** `obtained` is when the admission that renewed the claim began (the ZIO clock's `nanoTime`, which `ClaimRenewal` reads). */
   private final case class Round(result: ChildResult, number: Int, failing: List[EffectiveCheck], effective: EffectiveValidation, obtained: Long)
 
   private def bounded[A](operation: (Command => Result) => A): A = {
@@ -41,7 +41,7 @@ final class RevalidationController(config: SupervisorConfig, authority: Supervis
       case _ => throw new IllegalStateException("Revalidation claim renewal returned an unexpected result")
     }
 
-  private def admit(result: ArtifactId, fence: Fence): Round = bounded { call =>
+  private def admit(result: ArtifactId, fence: Fence, obtained: Long): Round = bounded { call =>
     val reader = new ArtifactReader(call, config.owner.project)
     val admitted = reader.result(result)
     val value = admitted.value
@@ -50,14 +50,13 @@ final class RevalidationController(config: SupervisorConfig, authority: Supervis
     require(value.request.work.isInstanceOf[DispatchWork.Worker] && value.request.work != DispatchWork.Worker(WorkerMode.Probe) && value.candidate.nonEmpty,
       "Revalidation requires an admitted worker result with a candidate")
     if (fence != value.request.fence) throw DomainFailure(Fault.StaleFence("Revalidation requires the claim fence its result was admitted under"))
-    val obtained = System.nanoTime()
     renew(call, value.request)
     dispatch.revalidatable(value)
     val effective = IntegrationValidation.effective(config.owner.project, config.owner.actor.session, result, value, config.settings.checks, reader.amendments(result))
     Round(value, effective.amendments.size + 1, IntegrationValidation.revalidated(effective), effective, obtained)
   }
 
-  private def register(id: RequestId, result: ArtifactId, fence: Fence, done: Promise[Nothing, Unit]): (RevalidationExecution, Option[Round]) =
+  private def register(id: RequestId, result: ArtifactId, fence: Fence, done: Promise[Nothing, Unit], began: Long): (RevalidationExecution, Option[Round]) =
     synchronized(entries.get(id)) match {
       case Some(entry) =>
         if (entry.result != result || entry.fence != fence) throw DomainFailure(Fault.Conflict("Revalidation request identity changed"))
@@ -68,7 +67,7 @@ final class RevalidationController(config: SupervisorConfig, authority: Supervis
           if (entries.values.exists(_.view.phase == RevalidationPhase.Running))
             throw DomainFailure(Fault.Conflict("A revalidation is running; poll it before starting another"))
         }
-        val round = admit(result, fence)
+        val round = admit(result, fence, began)
         val entry = new RevalidationExecution(result, fence, done,
           RevalidationStatus(id, result, RevalidationPhase.Running, None, round.effective.current, None))
         synchronized { entries = entries.updated(id, entry) }
@@ -103,7 +102,7 @@ final class RevalidationController(config: SupervisorConfig, authority: Supervis
     * Each call waits for the round at most as long as a status poll may. */
   def request(id: RequestId, result: ArtifactId, fence: Fence): Task[RevalidationStatus] = ZIO.uninterruptibleMask { restore => for {
     done <- Promise.make[Nothing, Unit]
-    registered <- requests.withPermit(ZIO.attemptBlocking(register(id, result, fence, done)))
+    registered <- requests.withPermit(zio.Clock.nanoTime.flatMap(began => ZIO.attemptBlocking(register(id, result, fence, done, began))))
     (entry, fresh) = registered
     _ <- fresh.fold(ZIO.unit)(round => run(id, result, round).catchAll { error =>
       ZIO.succeed(synchronized(entry.view).copy(phase = RevalidationPhase.Failed, blocker = Some(DispatchProjection.concise("Revalidation failed: " +

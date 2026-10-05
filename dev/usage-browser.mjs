@@ -25,7 +25,7 @@ export async function usageChecks(page, origin, projectId) {
     assert.equal(await phases.count(), 1, 'Usage refresh keeps one phase table');
   }
   await page.getByRole('button', { name: 'Project usage', exact: true }).click();
-  await page.getByText('Attempt coverage: 0 running; 0 unknown outcomes; 0 with reported gaps.', { exact: true }).waitFor();
+  await page.getByText('Attempt coverage: 0 running; 0 open; 0 unknown outcomes; 0 with reported gaps.', { exact: true }).waitFor();
   assert.equal(await phases.count(), 0, 'An empty phase report renders no table');
   await page.getByRole('dialog').getByRole('button', { name: 'Close', exact: true }).click();
   const assignment = { id: id(), project, members: [member], attribution: 'Direct', cohort: null, evaluation: null };
@@ -33,8 +33,8 @@ export async function usageChecks(page, origin, projectId) {
     provider: 'controlled-browser-fixture', model: 'no-model-call', collector: 'fixture', startedAt: '1000', phase: 'Work' };
   await host({ Assign: { value: assignment } }); await host({ Start: { value: attempt } });
   await page.getByRole('button', { name: 'Project usage', exact: true }).click();
-  await page.getByText('Attempt coverage: 1 running; 0 unknown outcomes; 0 with reported gaps.', { exact: true }).waitFor();
-  await phaseRows([['Work', '0', '0', '0', '0', '—', '1', '1', '0 s']]);
+  await page.getByText('Attempt coverage: 1 running; 0 open; 0 unknown outcomes; 0 with reported gaps.', { exact: true }).waitFor();
+  await phaseRows([['Work', '0', '0', '0', '0', '—', '1', '1', '0', '0 s']]);
   await page.getByRole('button', { name: 'Attempts', exact: true }).click();
   await page.getByRole('table', {name: 'Attempts', exact: true}).getByRole('cell', {name: 'Running', exact: true}).waitFor();
   await page.getByText('Attempt details', {exact: true}).click();
@@ -54,8 +54,8 @@ export async function usageChecks(page, origin, projectId) {
     completeness: 'Complete', gaps: [], evidence: null, supersedes: null }, meter: 'fixture', disposition: 'Contribution', detailReason: null } } });
   const outcome = { request: id(), attempt: attempt.id, state: 'Cancelled', finishedAt: '3000', gaps: ['Final request usage unavailable'], supersedes: null };
   await host({ Finish: { value: outcome } });
-  await page.getByText('Attempt coverage: 0 running; 0 unknown outcomes; 1 with reported gaps.', { exact: true }).waitFor();
-  await phaseRows([['Work', '100', '0', '0', '1', 'Unknown', '1', '0', '2 s']]);
+  await page.getByText('Attempt coverage: 0 running; 0 open; 0 unknown outcomes; 1 with reported gaps.', { exact: true }).waitFor();
+  await phaseRows([['Work', '100', '0', '0', '1', 'Unknown', '1', '0', '0', '2 s']]);
   await phases.getByTitle('2000 ms', { exact: true }).waitFor();
   assert.equal(await phaseTruncation.count(), 0);
   await page.getByRole('button', { name: 'Attempts', exact: true }).click();
@@ -63,7 +63,7 @@ export async function usageChecks(page, origin, projectId) {
   await page.getByText('Final request usage unavailable', { exact: true }).waitFor();
   const completed = { ...outcome, request: id(), state: 'Completed', finishedAt: '2500', gaps: [], supersedes: outcome.request };
   await host({ Finish: { value: completed } });
-  await page.getByText('Attempt coverage: 0 running; 0 unknown outcomes; 0 with reported gaps.', { exact: true }).waitFor();
+  await page.getByText('Attempt coverage: 0 running; 0 open; 0 unknown outcomes; 0 with reported gaps.', { exact: true }).waitFor();
   await page.getByRole('table', {name: 'Attempts', exact: true}).getByRole('cell', {name: 'Completed', exact: true}).waitFor();
   await page.getByText('Attempt details', {exact: true}).click();
   await page.getByRole('button', { name: 'Outcome history', exact: true }).click();
@@ -89,7 +89,7 @@ export async function usageChecks(page, origin, projectId) {
     cost: { amount: { value: '0.02' }, currency: 'USD', basis: 'ProviderEstimate', pricingVersion: 'price-200' },
     completeness: 'Complete', gaps: [], evidence: null, supersedes: null }, meter: 'fixture', disposition: 'Contribution', detailReason: null } } });
   await page.getByRole('table', { name: 'Costs' }).getByRole('row').filter({ has: page.getByRole('cell', { name: 'price-200', exact: true }) }).getByRole('cell', { name: '0.0300 USD', exact: true }).waitFor();
-  await phaseRows([['Work', '302', '0', '0', '1', '2.0000 USD', '1', '0', '1 s']]);
+  await phaseRows([['Work', '302', '0', '0', '1', '2.0000 USD', '1', '0', '0', '1 s']]);
   await phases.getByTitle('1600 ms', { exact: true }).waitFor();
   assert.equal(await phases.getByTitle('2', { exact: true }).textContent(), '2.0000 USD');
   await phases.locator('..').locator('..').getByText('Cost basis: ProviderEstimate.', { exact: true }).waitFor();
@@ -101,14 +101,23 @@ export async function usageChecks(page, origin, projectId) {
     await host({ Finish: { value: { request: id(), attempt: entry.attempt.id, state: 'Completed', finishedAt: String(entry.finishedAt), gaps: [], supersedes: null } } });
   }
   await host({ Start: { value: { ...attempt, id: id(), session: id(), phase: 'Review' } } });
-  await phaseRows([['Probe', '0', '0', '0', '0', '—', '1', '0', '45 s'], ['Plan', '0', '0', '0', '0', '—', '1', '0', '3 min 20 s'],
-    ['Work', '302', '0', '0', '1', '2.0000 USD', '1', '0', '1 s'], ['Review', '0', '0', '0', '0', '—', '2', '1', '1 h 02 min']]);
+  await phaseRows([['Probe', '0', '0', '0', '0', '—', '1', '0', '0', '45 s'], ['Plan', '0', '0', '0', '0', '—', '1', '0', '0', '3 min 20 s'],
+    ['Work', '302', '0', '0', '1', '2.0000 USD', '1', '0', '0', '1 s'], ['Review', '0', '0', '0', '0', '—', '2', '1', '0', '1 h 02 min']]);
   await phases.getByTitle('3720000 ms', { exact: true }).waitFor();
+  // D150: an attached session's governing attempt without an outcome is open, not running.
+  const overhead = { id: id(), project, members: [], attribution: 'Unattributed', cohort: null, evaluation: null };
+  const governing = { ...attempt, id: id(), assignment: overhead.id, session: id(), role: 'Governor', collector: 'CQ attached session; outer usage unavailable', model: 'phase-govern', phase: 'Govern' };
+  await host({ Assign: { value: overhead } }); await host({ Start: { value: governing } });
+  await page.getByText('Attempt coverage: 1 running; 1 open; 0 unknown outcomes; 0 with reported gaps.', { exact: true }).waitFor();
+  await page.getByText('Open: governing attempts of attached sessions. No outcome delivered.', { exact: false }).waitFor();
+  await phaseRows([['Govern', '0', '0', '0', '0', '—', '1', '0', '1', '0 s'], ['Probe', '0', '0', '0', '0', '—', '1', '0', '0', '45 s'], ['Plan', '0', '0', '0', '0', '—', '1', '0', '0', '3 min 20 s'],
+    ['Work', '302', '0', '0', '1', '2.0000 USD', '1', '0', '0', '1 s'], ['Review', '0', '0', '0', '0', '—', '2', '1', '0', '1 h 02 min']]);
   await page.getByRole('button', { name: 'Attempts', exact: true }).click();
+  await page.getByRole('table', { name: 'Attempts', exact: true }).getByRole('row').filter({ has: page.getByRole('cell', { name: 'controlled-browser-fixture / phase-govern', exact: true }) }).getByRole('cell', { name: 'Open', exact: true }).waitFor();
   await page.getByRole('table', { name: 'Attempts', exact: true }).getByRole('row').filter({ has: page.getByRole('cell', { name: 'controlled-browser-fixture / phase-probe', exact: true }) }).getByText('Attempt details', { exact: true }).click();
   await page.getByRole('button', { name: `Session usage · ${timed[2].attempt.session.value}`, exact: true }).click();
   await page.getByRole('heading', { name: `Usage · session ${timed[2].attempt.session.value}`, exact: true }).waitFor();
-  await phaseRows([['Probe', '0', '0', '0', '0', '—', '1', '0', '45 s']]);
+  await phaseRows([['Probe', '0', '0', '0', '0', '—', '1', '0', '0', '45 s']]);
   assert.equal(await phaseTruncation.count(), 0);
   assert.deepEqual(await detail(), before, 'Usage lifecycle writes must not revise the item');
   await page.getByRole('dialog').getByRole('button', { name: 'Close', exact: true }).click();

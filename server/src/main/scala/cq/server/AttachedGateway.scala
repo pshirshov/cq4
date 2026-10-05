@@ -59,7 +59,7 @@ final class AttachedGateway(config: SupervisorConfig, authority: SupervisorAutho
       }}
     case _ => ZIO.attemptBlocking {
       val definition = schemas.tools.find(_.name == name).getOrElse(throw DomainFailure(Fault.Denied("Unavailable attached tool")))
-      val command = decoded(name, definition.inputType, arguments)(definition.decode)
+      val command = definition.decode(arguments).fold(error => throw DomainFailure(schemas.rejected(definition, error)), identity)
       val canonical = Command_JsonCodec.encode(CodecContext, command).asObject.get.values.head.hcursor.downField("input").focus.get
       require(JsonRoundtrip.lossless(arguments, canonical), "Noncanonical domain request")
       val value = claims.call(command)
