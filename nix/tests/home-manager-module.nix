@@ -7,11 +7,17 @@ let
   inherit (pkgs) lib;
   cq = flake.lib.mkNativePackage { inherit pkgs; release = /. + release; };
   homeManager = import (pkgs.home-manager.src + "/lib") { inherit lib; };
-  # One version per harness that the package verifies; asset export refuses any other.
+  # One version per harness that the package verifies; asset export refuses any other. The product lists them in one place, oldest
+  # first, and this check reads the newest of each from there. A release built from another revision may verify other versions.
+  verified = builtins.readFile ../../host/src/main/scala/cq/host/HarnessUsage.scala;
+  version = harness:
+    let listed = builtins.match ".*case Harness\\.${harness} => List\\(([^)]*)\\).*" verified;
+    in assert lib.assertMsg (listed != null) "No verified versions of ${harness} in HarnessUsage.scala";
+      lib.last (builtins.filter (value: builtins.isString value && value != "") (builtins.split "[\", ]+" (builtins.head listed)));
   routes = [
-    { harness = "Claude"; provider = "anthropic"; version = "2.1.285"; }
-    { harness = "Codex"; provider = "openai"; version = "0.159.2"; }
-    { harness = "Pi"; provider = "openai-codex"; version = "0.99.1"; }
+    { harness = "Claude"; provider = "anthropic"; version = version "Claude"; }
+    { harness = "Codex"; provider = "openai"; version = version "Codex"; }
+    { harness = "Pi"; provider = "openai-codex"; version = version "Pi"; }
   ];
   directory = "/home/cq-fixture";
   tokenFile = "/run/user/1000/secrets/cq-token";

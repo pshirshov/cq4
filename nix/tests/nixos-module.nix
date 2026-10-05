@@ -128,5 +128,12 @@ in pkgs.testers.runNixOSTest {
     stopped = machine.succeed("systemctl show cq.service --property=ActiveState,Result").split()
     assert sorted(stopped) == ["ActiveState=inactive", "Result=success"], stopped
     machine.succeed("systemctl is-active postgresql.service")
+
+    # The server does not outlive the database it requires: stopping PostgreSQL stops it, in order.
+    machine.succeed("systemctl start cq.service")
+    ready()
+    machine.succeed("systemctl stop postgresql.service")
+    machine.wait_until_succeeds("test \"$(systemctl show cq.service --property=ActiveState --value)\" = inactive", timeout=60)
+    assert machine.succeed("systemctl show cq.service --property=Result --value").strip() == "success"
   '';
 }

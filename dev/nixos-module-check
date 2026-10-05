@@ -19,7 +19,9 @@ root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 release=$(realpath -e -- "$1")
 log=$(realpath -m -- "$2")
 [[ -f $release/manifest.json ]] || { echo "Not a native release: $release" >&2; exit 1; }
-# A result already in the store produces no run; --rebuild then forces one (it refuses a first build).
+# The check must show a run of the virtual machine. A result already in the store is not built again and logs nothing, so the first
+# build is followed by --rebuild when its log has no run. --rebuild is not used at once because it refuses a derivation that has no
+# result yet. It also compares the new result with the stored one and fails when they differ, which is reported as a failed check.
 if ! nix build --impure --no-link -L --file "$root/nix/tests/nixos-module.nix" --argstr release "$release" > "$log" 2>&1; then
   echo "FAIL: NixOS module check; see $log" >&2
   exit 1

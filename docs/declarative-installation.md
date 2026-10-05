@@ -44,7 +44,8 @@ restarting CQ retains its database.
 The password unit and CQ start after `postgresql.target`, which the NixOS
 PostgreSQL module reaches once it has created the role; a nixpkgs without that
 target is not supported. CQ exits with status 143 on SIGTERM, which the unit
-counts as a successful stop.
+counts as a successful stop. CQ requires that target, so stopping the managed
+PostgreSQL stops CQ first; it does not keep running without its database.
 
 For an existing PostgreSQL server set `database.managed = false`, then specify
 `database.host`, `port`, `name`, `user` and `passwordFile`. CQ checks the current
@@ -193,7 +194,8 @@ managed PostgreSQL and two credential files that a unit of the test generates
 inside the guest. It waits for `cq.service`, requires every check of
 `cq doctor server --require-settled` to be Current, creates a project with
 `cq init` and one Task through the API, and reads both back after a restart of
-the service and after a shutdown and boot of the machine. It also checks that
+the service and after a shutdown and boot of the machine, and that stopping
+PostgreSQL stops the server with a successful result. It also checks that
 the server process runs as `cq`, that the credential files are mode 600 and
 unreadable by that user, that neither value occurs in the unit text, the unit
 properties, the process environment or any store path the units name, and that
