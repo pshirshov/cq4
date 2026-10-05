@@ -131,7 +131,12 @@ final class DriverService(registry: DriverRegistry, planner: WorksetPlanner) {
     record.cycle match {
     case Some(cycle) if cycle.state == CycleState.Pending =>
       stop(record, DriverStopped(DriverStop.Failure, s"directive not started: the start directive of cycle ${cycle.number} was not submitted"), Nil, now)
-    case Some(cycle) if cycle.active && cycle.inFlight.nonEmpty => resume(record, cycle, now)
+    // Work the host carries out ends without the session. A session that is woken when it ends may stop meanwhile: nothing is issued
+    // and nothing changes. One that is not woken is kept in its turn by a resume directive, as it would otherwise never continue.
+    case Some(cycle) if cycle.active && cycle.inFlight.nonEmpty =>
+      if (DriverPolicy.woken(record.key.harness)) DriverReply.Waiting(status(record),
+        s"CQ driver waiting: cycle ${cycle.number} has ${cycle.inFlight.map(entry => member(entry.member)).sorted.mkString(", ")} in flight; the session continues when it ends")
+      else resume(record, cycle, now)
     // Work that waits for the session gets one resume directive; a second stop on the same work ends the drive instead of resuming forever.
     case Some(cycle) if cycle.active && cycle.held.nonEmpty =>
       if (cycle.held != cycle.prompted) resume(record, cycle.copy(prompted = cycle.held), now)

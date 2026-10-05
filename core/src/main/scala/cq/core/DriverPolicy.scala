@@ -12,6 +12,11 @@ object DriverDecision {
 }
 
 object DriverPolicy {
+  /** Whether a session of `harness` that has stopped is started again when work of its host ends: Claude Code by the exit of its
+    * background `cq wait`, Pi by its CQ extension. Nothing wakes an idle Codex session when a background command exits
+    * (openai/codex#32188), so a Codex session waits inside its turn. */
+  def woken(harness: Harness): Boolean = harness != Harness.Codex
+
   val MaxSessionKey = 200
   val MaxDrivers = 64
   // Start and resume directives issued by one drive; each is one harness continuation.
@@ -48,7 +53,8 @@ object DriverPolicy {
         invalid(extension || origin == DriverOrigin.UserPromptSubmit, "Drive-start belongs to the UserPromptSubmit hook and the Pi extension")
         invalid(attached.nonEmpty == extension, "The Pi extension supplies its attached session at drive-start; hook sessions bind with the hook-minted token")
       case _: DriverControl.Park =>
-        invalid(extension || origin == DriverOrigin.UserPromptSubmit, "Park belongs to the UserPromptSubmit hook and the Pi extension")
+        // The Stop hook parks a drive whose attached host is gone while its work was in flight.
+        invalid(extension || origin == DriverOrigin.UserPromptSubmit || origin == DriverOrigin.Stop, "Park belongs to the UserPromptSubmit and Stop hooks and the Pi extension")
       case _: DriverControl.Continue =>
         invalid(extension || origin == DriverOrigin.Stop, "The continuation query belongs to the Stop hook and the Pi extension")
       case _: DriverControl.Status => ()

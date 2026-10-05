@@ -138,13 +138,17 @@ const selection = { request: identity(), roots: [target.id], work: { Worker: { m
 const [choice] = (await first.tool("dispatch", { Select: { request: selection } })).Selection.value.choices;
 const claim = (await first.tool("claim", { project, action: { Acquire: { id: identity(), members: [target.id], durationMillis: "180000" } } })).Claimed.claim;
 const child = (await first.tool("dispatch", { StartChoice: { choice: choice.id, harness: "Codex", fence: claim.fence } })).Status.value;
+// The turn ends while the child runs: the driver waits. Nothing is submitted, the drive stays on and the cycle keeps its one run.
+const submittedBefore = first.sent.length;
+await first.settle("completed");
 await first.settle("completed");
 assert.equal(first.footer(), `${line}; 1 active child`);
-assert.match(first.sent.at(-1).content, new RegExp(`^/cq:advance --roots ${reference(target.id)} --through explore --resume-token [0-9a-f-]{36}$`));
-const resumed = await activate(first);
-assert.deepEqual(resumed.cycle.id, one.cycle.id);
-assert.deepEqual(resumed.cycle.run, run, "a resume reattaches to the cycle's run");
-assert.equal(resumed.cycle.lineage.filter(entry => entry.member.Run !== undefined).length, 1, "no duplicate run");
+assert.equal(first.sent.length, submittedBefore, "a stop with a child in flight submits no directive");
+const waiting = await status(first);
+assert.equal(waiting.state, "On");
+assert.equal(waiting.directives, 1);
+assert.deepEqual(waiting.cycle.id, one.cycle.id);
+assert.equal(waiting.cycle.lineage.filter(entry => entry.member.Run !== undefined).length, 1, "no duplicate run");
 assert.deepEqual((await first.tool("session", { Context: {} })).Context.value.workflow.id, run);
 const current = await detail(target.id);
 // Planning inside the drive: the produced Task is assigned to an Open milestone that the workset does not select.
@@ -165,13 +169,13 @@ assert.notEqual(first.sent.at(-1).content, first.sent[0].content);
 const two = await activate(first);
 assert.notDeepEqual(two.cycle.id, one.cycle.id);
 assert.equal(two.cycle.number, 2);
-assert.equal(first.sent.length, 3);
+assert.equal(first.sent.length, 2);
 await first.settle("completed");
 assert.match(first.notices.at(-1).message, /^CQ driver stopped \(quiescent\): The previous cycle changed nothing/);
 assert.match(first.footer(), new RegExp(`^CQ driver off: ${reference(target.id)} through explore; stopped \\(quiescent\\): `));
-assert.equal(first.sent.length, 3);
+assert.equal(first.sent.length, 2);
 await first.settle("completed");
-assert.equal(first.sent.length, 3, "driver off: a finished turn submits nothing");
+assert.equal(first.sent.length, 2, "driver off: a finished turn submits nothing");
 
 // A stored workset in a second concurrent session; the toggle key restarts the first session's last workset. Each key has its own driver.
 const stored = (await operator({ Workset: { input: { project, action: { Create: { targets: [other.id], through: "Plan" } } } } })).WorksetStored.workset;

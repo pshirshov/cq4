@@ -16,7 +16,8 @@ final case class HookDialect(harness: Harness, drive: String, park: String, adva
  * It holds no driver state and never builds or edits a directive; `DriverEntry` carries every decision. A CQ error never blocks the
  * harness: it is reported in the message the harness shows and the prompt or stop proceeds.
  */
-final class DriverHook(entry: () => DriverEntry) {
+/** `hostRuns` says whether the attached host of a session of this checkout still runs. */
+final class DriverHook(entry: () => DriverEntry, hostRuns: SessionId => Boolean) {
   import DriverHook.*
 
   def run(harness: String, event: String, stdin: Array[Byte]): String =
@@ -83,6 +84,15 @@ final class DriverHook(entry: () => DriverEntry) {
       val posted = if (messages.isEmpty) JsonObject.empty else JsonObject("systemMessage" -> Json.fromString(messages.mkString("\n")))
       render(posted.add("decision", Json.fromString("block")).add("reason", Json.fromString((messages ++ List(dialect.advance, directive.text)).mkString("\n"))))
     case DriverReply.Stop(_, _, messages) => if (messages.isEmpty) "" else render(JsonObject("systemMessage" -> Json.fromString(messages.mkString("\n"))))
+    // The session may stop: the host's work ends without it, and its waiter starts the next turn. That holds only while the host
+    // runs. A host that is gone finishes nothing and wakes nobody, so the drive is parked here, where it can still be said.
+    case DriverReply.Waiting(status, message) =>
+      if (status.attached.exists(hostRuns)) render(JsonObject("systemMessage" -> Json.fromString(message)))
+      else entry().park(call) match {
+        case DriverReply.Parked(_, parked) => render(JsonObject("systemMessage" -> Json.fromString(
+          s"${DriverHook.HostGone} $parked. Restart the harness session and drive again; cq job upload --session DIR recovers what the host retained.")))
+        case other => unexpected(other)
+      }
     case other => unexpected(other)
   }
 }
@@ -92,6 +102,7 @@ object DriverHook {
   val DriveLabel = "CQ driver drive-start"
   val ParkLabel = "CQ driver park"
   val NoDriver = "CQ driver off"
+  val HostGone = "CQ driver stopped: the CQ host of this session is not running while its work was in flight, so nothing would continue the drive."
   private val Unchanged = "Nothing changed for this session's driver and no bind token was issued."
   private def unknown(dialect: HookDialect): String = "The CQ server's reply was not received, so this session's driver may have changed and a bind token may have been issued. " +
     s"""Read the driver status with the CQ session tool ({"Driver":{}}) or run ${dialect.park} before driving again."""

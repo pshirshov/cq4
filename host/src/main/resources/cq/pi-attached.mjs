@@ -208,6 +208,9 @@ export default async function (pi) {
       show(context, body.status);
       for (const message of body.messages) context.ui.notify(message, "info");
       pi.sendUserMessage(body.directive.text, { deliverAs: "followUp", expandPromptTemplates: true });
+    } else if (name === "Waiting") {
+      // Work of the host is in flight: nothing is sent, and the waiter's message starts the turn that continues the cycle.
+      show(context, body.status);
     } else if (name === "Stop") {
       driving = false;
       show(context, body.status);

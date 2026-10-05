@@ -63,7 +63,9 @@ abstract class DriverHookTest extends SpecZIO with AssertZIO {
     val operator: Scope = root.scope(project)
     val words: Spelling = spelling(harness)
     val server = new ApplicationApi(application, root, runtime)
-    val hook = new DriverHook(() => new DriverEntry(server, project))
+    /** Whether the attached host of a session runs, as the hook finds it in its checkout. */
+    var hosts: SessionId => Boolean = _ => true
+    val hook = new DriverHook(() => new DriverEntry(server, project), session => hosts(session))
     def await[A](effect: IO[Throwable, A]): A = Unsafe.unsafe { implicit unsafe => runtime.unsafe.run(effect).getOrThrowFiberFailure() }
     await(ledger.initialize(operator, "hook driver"))
 
@@ -192,6 +194,24 @@ abstract class DriverHookTest extends SpecZIO with AssertZIO {
   }
 
   "The shared CQ hook driver of Claude Code and Codex (Behavioral Active Blackbox; dummy Group / PostgreSQL Good Communication)" should {
+    "park the drive of a session that stops with work in flight when its CQ host no longer runs, and say so" in scenarios { world =>
+      import world.*
+      goal("Goal")
+      val s = session("host-gone")
+      s.on("G1 through=work")
+      val run = RequestId(uuid)
+      val one = s.advance(s.directive(s.stop()), run) match { case DriverActivation.Started(cycle) => cycle; case other => fail(other.toString) }
+      s.attached.inherit(one, LineageMember.Run(run), LineageMember.Attempt(AttemptId(uuid)))
+      if (harness == Harness.Claude) {
+        // With the host gone nothing finishes the child and nothing wakes the session: the drive must not stay on in silence.
+        hosts = _ => false
+        val message = allowed(s.stop()).getOrElse(fail("The stop said nothing"))
+        assert(message.startsWith(DriverHook.HostGone + " CQ driver parked: G1 through work") && message.contains("cq job upload --session"), message)
+        assert(status(s.id).exists(value => value.state == DriverState.Off && value.stopped.exists(_.reason == DriverStop.Parked)))
+        assert(allowed(s.stop()).isEmpty)
+      }
+    }
+
     "start and park a driver from the typed command, pass other prompts through and bind through the command body" in scenarios { world =>
       import world.*
       val root = goal("Goal")
@@ -260,7 +280,7 @@ abstract class DriverHookTest extends SpecZIO with AssertZIO {
         override def integrate(value: HostIntegrationInput): IntegrationRecord = server.integrate(value)
         override def grant(value: GrantRequest): AccessToken = server.grant(value)
       }
-      val unanswered = new DriverHook(() => new DriverEntry(lossy, project))
+      val unanswered = new DriverHook(() => new DriverEntry(lossy, project), _ => true)
       def prompt(hook: DriverHook, text: String): String = {
         val reply = parse(hook.run(harness.toString.toLowerCase, "UserPromptSubmit", payload("UserPromptSubmit", "lost-reply", "prompt" -> Json.fromString(text)).noSpaces.getBytes(UTF_8))).fold(throw _, identity)
         reply.hcursor.downField("hookSpecificOutput").get[String]("additionalContext").fold(throw _, identity)
@@ -349,7 +369,7 @@ abstract class DriverHookTest extends SpecZIO with AssertZIO {
       assert(status("errors-ghost").isEmpty && (status(a.id), cursor) == (before._1, before._2))
       assert(server.driverReplies.size == before._3)
       // An unreachable or unauthorized backend is an explicit error too; the stop is allowed and an unrelated prompt needs no backend at all.
-      val offline = new DriverHook(() => throw new IllegalArgumentException(HostCredential.Required))
+      val offline = new DriverHook(() => throw new IllegalArgumentException(HostCredential.Required), _ => true)
       def offlineRun(origin: DriverOrigin, fields: (String, Json)*): String = offline.run(name, origin.toString, payload(origin.toString, a.id, fields*).noSpaces.getBytes(UTF_8))
       assert(error("Stop", offlineRun(DriverOrigin.Stop)) == HostCredential.Required)
       assert(offlineRun(DriverOrigin.UserPromptSubmit, "prompt" -> Json.fromString("Reply with exactly: HELLO")) == "")
@@ -372,11 +392,20 @@ abstract class DriverHookTest extends SpecZIO with AssertZIO {
       val attempt = LineageMember.Attempt(AttemptId(uuid))
       s.attached.inherit(one, LineageMember.Run(run), attempt)
       val child = produce(s.scope, root, "Descendant created by cycle 1")
-      val resumed = s.directive(s.stop())
-      val resumeToken = server.driverReplies.head.asInstanceOf[DriverReply.Continue].directive.token.asInstanceOf[CycleToken.Resume].token
-      assert(resumed == s"${words.advance} --roots G1 --through work --resume-token ${resumeToken.value}" && resumeToken != startToken)
+      if (harness == Harness.Codex) {
+        // Nothing wakes an idle Codex session, so its stop is blocked with a resume directive.
+        val resumed = s.directive(s.stop())
+        val resumeToken = server.driverReplies.head.asInstanceOf[DriverReply.Continue].directive.token.asInstanceOf[CycleToken.Resume].token
+        assert(resumed == s"${words.advance} --roots G1 --through work --resume-token ${resumeToken.value}" && resumeToken != startToken)
+        assert(s.advance(resumed, RequestId(uuid)) == DriverActivation.Resumed(one, run))
+      } else {
+        // The waiter of a Claude Code session starts its next turn when the child ends: the stop is allowed, no directive is issued
+        // and the drive stays on, however often the session stops meanwhile.
+        val waiting = List.fill(2)(allowed(s.stop()))
+        assert(waiting.forall(_.contains(s"CQ driver waiting: cycle 1 has attempt ${attempt.id.value} in flight; the session continues when it ends")))
+        assert(server.driverReplies.head.isInstanceOf[DriverReply.Waiting] && status(s.id).exists(value => value.state == DriverState.On && value.directives == 1))
+      }
       assert(s.line == "CQ driver on: G1 through work; 1 active child\n")
-      assert(s.advance(resumed, RequestId(uuid)) == DriverActivation.Resumed(one, run))
       assert(status(s.id).exists(_.cycle.exists(cycle => cycle.id == one && cycle.run.contains(run) && cycle.lineage.count(_.member.isInstanceOf[LineageMember.Run]) == 1)))
       s.attached.settle(one, attempt)
       // Cycle 2: a new start directive; the descendant cycle 1 created is advanceable now and the change is posted to the transcript.
@@ -387,7 +416,7 @@ abstract class DriverHookTest extends SpecZIO with AssertZIO {
       val two = s.advance(second, RequestId(uuid)) match { case DriverActivation.Started(cycle) => cycle; case other => fail(other.toString) }
       assert(two == issued.directive.cycle && change(s.scope, retitle(child, "Advanced in cycle 2")).items.map(_.id) == List(child))
       val third = s.directive(s.stop())
-      assert(s.advance(third, RequestId(uuid)).isInstanceOf[DriverActivation.Started] && status(s.id).exists(_.directives == 4))
+      assert(s.advance(third, RequestId(uuid)).isInstanceOf[DriverActivation.Started] && status(s.id).exists(_.directives == (if (harness == Harness.Codex) 4 else 3)))
       // Nothing changed in cycle 3: the stop is allowed and its reason is posted.
       val quiet = allowed(s.stop())
       assert(quiet.exists(_.startsWith("CQ driver stopped (quiescent): The previous cycle changed nothing")))

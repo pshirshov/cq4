@@ -119,7 +119,7 @@ final class Cli(context: CliContext, location: ProjectLocation, upload: SessionU
         val location = configDirectory
         val (config, actorSession) = locked(location)((configuration(location), session(location)))
         new DriverEntry(new HttpServerApi(URI.create(validateEndpoint(config.endpoint)), cq.host.HostCredential.read(environment), actorSession, RequestTimeout), config.project)
-      })
+      }, session => cq.host.AttachedHosts.runs(configDirectory, session))
       output.print(hook.run(harness, event, context.input.readNBytes(DriverHook.MaxInputBytes + 1)))
       output.flush()
     case "commands" :: "export" :: harness :: rest =>

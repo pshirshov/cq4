@@ -439,6 +439,8 @@ root adt DriverReply {
   data Parked { status: opt[DriverStatus] message: str }
   data Continue { directive: DriverDirective status: DriverStatus messages: lst[str] }
   data Stop { stopped: DriverStopped status: opt[DriverStatus] messages: lst[str] }
+  // The cycle's run is still active and the session is woken when its work ends: no directive is issued and the drive stays on.
+  data Waiting { status: DriverStatus message: str }
   data Status { value: opt[DriverStatus] }
   data Bound { status: DriverStatus message: str }
   data Activation { value: DriverActivation }

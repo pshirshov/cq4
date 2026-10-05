@@ -134,3 +134,20 @@ object SessionWait {
       ". Restart the harness session; retained deliveries are recovered with cq job upload --session " + directory)
   }
 }
+
+/** Where the attached hosts of one checkout say which session directory each maintains. A hook of that checkout, which knows a drive's
+  * attached session only by its identity, asks here whether the session's host still runs. */
+object AttachedHosts {
+  private val MaxBytes = 8192
+  private def file(configuration: Path, session: SessionId): Path = configuration.resolve("hosts").resolve(session.value.toString)
+  def record(configuration: Path, session: SessionId, directory: Path): Unit = {
+    HostFiles.directory(configuration.resolve("hosts"))
+    HostFiles.immutable(file(configuration, session), directory.toString, MaxBytes)
+  }
+  /** A host that ends in order withdraws its record; one that is killed leaves it, and its released lock says the same. */
+  def forget(configuration: Path, session: SessionId): Unit = { Files.deleteIfExists(file(configuration, session)); () }
+  def runs(configuration: Path, session: SessionId): Boolean = {
+    val record = file(configuration, session)
+    Files.isRegularFile(record, LinkOption.NOFOLLOW_LINKS) && SessionOwner.runs(Path.of(HostFiles.text(record, MaxBytes)))
+  }
+}

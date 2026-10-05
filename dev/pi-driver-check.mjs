@@ -39,6 +39,7 @@ const parked = session => {
   return { Parked: { status: status(session, "Off", "CQ driver off: G1,T4 through work; stopped (parked): Parked by the operator", stopped),
     message: "CQ driver parked: G1,T4 through work" } };
 };
+const status_ = (session, line) => ({ Status: { value: status(session, "On", line, null) } });
 const failed = (variant, message) => ({ Failed: { fault: { [variant]: { message } } } });
 
 // One extension instance connected to its own scripted host: each `cq/driver` call consumes the next scripted reply and is logged.
@@ -112,6 +113,28 @@ test("drive with target IDs and a through phase shows the host preview, the foot
   assert.match(shown, /Readiness \(3\):\n {2}G1: ready\n {2}T4: ready\n {2}T9: not ready — blocked by Q3/);
   assert.equal(pi.footer(), ON);
   assert.deepEqual(pi.sent, [{ content: "/cq:advance --roots G1,T4 --through work --start-token 11111111-1111-4111-8111-111111111111", options: followUp }]);
+  await pi.script([parked(pi.id)]);
+  await pi.stop();
+});
+
+test("a turn that ends while the host's work is in flight submits nothing and keeps the drive on; the turn after it is decided as usual", async () => {
+  const pi = await session("pi-session-a");
+  await pi.start();
+  await pi.script([started(pi.id), proceed(pi.id, "--start-token", "11111111-1111-4111-8111-111111111111", ON, [])]);
+  await pi.drive("G1 T4 through=work");
+  const busy = "CQ driver on: G1,T4 through work; 1 active child";
+  const waiting = { Waiting: { status: { ...status(pi.id, "On", busy, null), activeChildren: 1 }, message: "CQ driver waiting: cycle 1 has attempt a in flight; the session continues when it ends" } };
+  await pi.script([status_(pi.id, busy), waiting, status_(pi.id, busy), waiting, status_(pi.id, ON), proceed(pi.id, "--start-token", "22222222-2222-4222-8222-222222222222", ON, [])]);
+  await pi.settle("completed");
+  await pi.settle("completed");
+  assert.equal(pi.sent.length, 1, "no directive while the host works");
+  assert.equal(pi.footer(), busy);
+  assert.equal(pi.notices.filter(notice => notice.type === "error").length, 0);
+  // The waiter's message started a turn; when it ends with nothing in flight the driver decides the cycle and continues.
+  await pi.settle("completed");
+  assert.equal(pi.sent.length, 2);
+  assert.match(pi.sent.at(-1).content, /--start-token 22222222-2222-4222-8222-222222222222$/);
+  assert.deepEqual(await pi.unconsumed(), []);
   await pi.script([parked(pi.id)]);
   await pi.stop();
 });

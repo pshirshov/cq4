@@ -15,7 +15,7 @@ final case class AttachedChannels(input: InputStream, output: OutputStream, owne
 final class AttachedProgram(config: SupervisorConfig, authority: SupervisorAuthority, gateway: AttachedGateway,
   dispatch: DispatchController, integrations: IntegrationController, combinations: CombinationController, revalidations: RevalidationController,
   watchdog: SupervisorWatchdog, channels: AttachedChannels, clock: Clock, local: LocalControlServer,
-  codex: AttachedCodexUsage, cleanup: WorkspaceCleanup, release: SessionRelease, claims: SessionClaims, logger: IzLogger) {
+  codex: AttachedCodexUsage, cleanup: WorkspaceCleanup, release: SessionRelease, claims: SessionClaims, location: ProjectLocation, logger: IzLogger) {
   private val MaxRecordBytes = 65536
   private val RequestSeconds = 30L
   private val limits = PeerLimits(Duration.ofSeconds(30), Duration.ofSeconds(10), Duration.ofSeconds(30), Duration.ofSeconds(RequestSeconds), AttachedGateway.FrameBytes, 32)
@@ -27,6 +27,7 @@ final class AttachedProgram(config: SupervisorConfig, authority: SupervisorAutho
     HostFiles.immutable(config.directory.resolve("settings.json"), HostFiles.encode(SupervisorSettings_JsonCodec, config.settings), MaxRecordBytes)
     HostFiles.immutable(config.directory.resolve("owner.json"), io.circe.Json.obj("pid" -> io.circe.Json.fromLong(channels.owner.pid),
       "startMillis" -> io.circe.Json.fromLong(channels.owner.startMillis)).noSpaces, 1024)
+    AttachedHosts.record(location.directory, config.run.attempt.session, config.directory)
     queue.enqueue(0, DeliveryBatch(List(
       HostDelivery.Usage(HostUsageInput(config.project.project, HostUsage.Assign(config.run.assignment))),
       HostDelivery.Usage(HostUsageInput(config.project.project, HostUsage.Start(config.run.attempt))))))
@@ -53,7 +54,10 @@ final class AttachedProgram(config: SupervisorConfig, authority: SupervisorAutho
       }.unit *>
       // The claims go once the work under them has settled or was cancelled and the Finish is committed locally; a claim under which a
       // child's result still awaits admission stays, and a host that dies leaves them all to their leases.
-      claims.release(dispatch.undelivered) *> release.finish).ensuring(ZIO.attemptBlocking(codex.close()).orDie)
+      claims.release(dispatch.undelivered) *> release.finish).ensuring(ZIO.attemptBlocking {
+        AttachedHosts.forget(location.directory, config.run.attempt.session)
+        codex.close()
+      }.orDie)
   private def loop(peer: StdioPeer): Task[Unit] = ZIO.attemptBlocking(peer.receive()).flatMap {
     case None => ZIO.unit
     case Some(request) => (ZIO.attempt(peer.beginOperation()) *> gateway.handle(peer, request))
