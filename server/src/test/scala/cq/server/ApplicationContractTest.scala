@@ -120,7 +120,7 @@ abstract class ApplicationContractTest extends SpecZIO with AssertZIO {
           offered <- mcp("tools/call", selection("""{"Counts":{}}"""))
           _ <- assertIO(offered.hcursor.downField("result").get[Boolean]("isError") == Right(false))
           listed <- mcp("tools/list", "{}")
-          _ <- assertIO(listed.hcursor.downField("result").downField("tools").focus.exists(tools => tools.noSpaces.contains("ReadSelection") && !tools.noSpaces.contains("Catalog")))
+          _ <- assertIO(listed.hcursor.downField("result").downField("tools").focus.exists(tools => tools.noSpaces.contains("\"ItemDetail\"") && !tools.noSpaces.contains("Catalog")))
           served <- application.execute(root, Command.Read(ReadInput(project, ReadSelection.Catalog())))
           _ <- assertIO(served == Result.Catalog(catalog.value))
           _ <- assertIO(catalog.value.commands.nonEmpty && catalog.value.agents.size == 9)
