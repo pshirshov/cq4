@@ -51,7 +51,7 @@ final class LocalControl(dispatch: DispatchController, cohorts: CohortController
   private[server] def call(capability: LocalCapability, name: String, arguments: Json): Task[(Json, Boolean)] = {
     if (capability.role == Role.Governor && name == "dispatch") {
       val operation = decode(name, schemas.schema("DispatchCommand"), DispatchCommand_JsonCodec, arguments).tap(command => ZIO.attemptBlocking(workflow.authorize(command))).flatMap {
-        case DispatchCommand.Select(request) => cohorts.select(request).map(DispatchReply.Selection.apply)
+        case DispatchCommand.Select(request) => cohorts.select(request).map(value => DispatchReply.Selection(DispatchProjection.offer(value)))
         case DispatchCommand.StartChoice(choice, harness, fence) => cohorts.start(choice, harness, fence).map(DispatchReply.Status.apply)
         case DispatchCommand.Start(request) => ZIO.attempt {
           require(config.run.ownership == SessionOwnership.Managed && config.workflow.isEmpty, "Workflow execution requires a retained cohort choice")

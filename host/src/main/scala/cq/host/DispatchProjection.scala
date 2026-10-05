@@ -8,6 +8,9 @@ object DispatchProjection {
   private val MaxBytes = 12 * 1024
   private val MaxBlockerCodePoints = 300
   def concise(value: String): String = value.substring(0, value.offsetByCodePoints(0, value.codePointCount(0, value.length).min(MaxBlockerCodePoints)))
+  /** A selection as its reply carries it. Every choice has the limits of the request, which the session wrote itself. */
+  def offer(decision: CohortDecision): CohortOffer = CohortOffer(decision.id, decision.artifact, decision.counts, decision.choices.map(choice =>
+    OfferedChoice(choice.id, choice.work, choice.members, choice.guidance, choice.artifacts, choice.previous, choice.cohort, choice.reason, choice.witness)))
   def pending(ticket: DispatchTicket): DispatchStatus = DispatchStatus(ticket.request.request, ticket.attempt.id,
     DispatchPhase.Preparing, None, ticket.request.members.map(_.id), EmptyCounts, ChildNext.Wait, None, None, None, false, false, None, None)
   def completed(previous: DispatchStatus, result: ChildResult, handle: ArtifactId): DispatchStatus = {

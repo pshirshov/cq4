@@ -878,6 +878,13 @@ root data CohortChoice {
 }
 root data CohortCounts { discovered: i32 selected: i32 inspected: i32 excluded: i32 unexamined: i32 notReady: i32 ineligible: i32 remaining: i32 }
 root data CohortDecision { id: RequestId artifact: ArtifactId counts: CohortCounts choices: lst[CohortChoice] }
+// What a governing session is sent about a selection: its choices without the limits its own request stated.
+// The retained record is CohortEvidence with CohortDecision and CohortChoice.
+root data OfferedChoice {
+  id: RequestId work: DispatchWork members: lst[ItemRevision] guidance: lst[ItemRevision] artifacts: lst[ArtifactId]
+  previous: opt[ArtifactId] cohort: opt[uid] reason: CohortReason witness: opt[ItemId]
+}
+root data CohortOffer { id: RequestId artifact: ArtifactId counts: CohortCounts choices: lst[OfferedChoice] }
 root data CohortConsidered { members: lst[ItemRevision] reason: CohortReason fingerprint: opt[str] }
 root data CohortEvidence { request: CohortRequest decision: CohortDecision considered: lst[CohortConsidered] }
 root adt DispatchCommand {
@@ -895,7 +902,7 @@ root adt DispatchCommand {
   data DiscardIntegration { id: IntegrationId }
 }
 root adt DispatchReply {
-  data Selection { value: CohortDecision }
+  data Selection { value: CohortOffer }
   data Status { value: DispatchStatus }
   data Integration { value: IntegrationStatus }
   data Combination { value: CombinationStatus }

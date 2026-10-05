@@ -164,6 +164,11 @@ def main():
             assert peer.tool("session", {"Context": {}})["Context"]["value"]["workflow"]["id"] == next_scope["Workflow"]["id"]
             selection["request"] = identity()
             choice, = peer.tool("dispatch", {"Select": {"request": selection}})["Selection"]["value"]["choices"]
+            # A choice does not send back the limits its request stated; the retained selection evidence keeps them.
+            assert set(choice) == {"id", "work", "members", "guidance", "artifacts", "previous", "cohort", "reason", "witness"}, choice
+            retained = json.loads((Path(context["directory"]) / "selections" / (selection["request"]["value"] + ".json")).read_text())
+            kept, = retained["decision"]["choices"]
+            assert kept == {**choice, "limits": limits} and retained["request"] == selection, retained
             started = peer.tool("dispatch", {"StartChoice": {"choice": choice["id"], "harness": "Codex", "fence": claim["fence"]}})["Status"]["value"]
             # The asynchronous child must finish before a different workflow is admitted.
             if started["phase"] in ["Preparing", "Running"]:
