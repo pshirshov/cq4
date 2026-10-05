@@ -51,7 +51,7 @@ final class WorkflowLocal extends AnyWordSpec {
       assert(begin.contains("when it says to capture and plan, capture and plan without asking whether to proceed"))
       assert(begin.contains("the IDs of the Open Questions that hold the outstanding user choices") && begin.contains("never a prose question at the end of your message"))
       assert(advance.contains("as Questions recorded before you stop, never as prose alone"))
-      assert(advance.contains("Do not ask for a go-ahead that the invocation or an Answered Question already gives"))
+      assert(advance.contains("Do not ask for a go-ahead that the invocation already gives"))
     }
 
     "give both rules to a governing session that has no workflow text: a run without a workflow and an attached host before activation (D147)" in {
@@ -59,6 +59,50 @@ final class WorkflowLocal extends AnyWordSpec {
       (SupervisorProgram.Instructions :: Harness.all.map(schemas.attachedInstructions)).foreach { text =>
         assert(text.contains("record it as a Question, with the items it gates BlockedBy it, before you stop; never ask it in prose alone"))
         assert(text.contains("The request is the go-ahead for what it asks: do not ask whether to do it."))
+      }
+    }
+  }
+
+  "Gates held by Questions in the governing and child instructions (Behavioral Active Blackbox Atomic)" should {
+    def resource(path: String): String = new String(getClass.getResourceAsStream("/cq/" + path).readAllBytes(), java.nio.charset.StandardCharsets.UTF_8)
+    val instructions = new cq.host.ChildInstructions
+
+    "tell the Governor to read the answer of a Question before dispatching the work it gated, in the shared rules, advance and the base instructions (D147)" in {
+      val answer = "Before you dispatch work that a Question gated, read its answer: an Answered Question releases the work only as far as the answer allows. " +
+        "When the answer refuses the work, do not dispatch it: cancel it or leave it blocked, and tell the operator. " +
+        "Carry a condition the answer sets into the requirements of the work, or ask it in a follow-up Question. " +
+        "A Withdrawn Question never releases the work: Produce a new Question and link the gated items BlockedBy it, or remove the link and record the reason."
+      val schemas = new McpSchemas()
+      (List(resource("workflows/common.md"), resource("workflows/advance.md"), SupervisorProgram.Guidance) ++ Harness.all.map(schemas.attachedInstructions))
+        .foreach(text => assert(text.contains(answer)))
+      assert(!resource("workflows/advance.md").contains("Do not ask for a go-ahead that the invocation or an Answered Question already gives"))
+      assert(resource("workflows/common.md").contains("While a driver is on, the removal of a link to a Question outside the drive is refused as an out-of-set change"))
+    }
+
+    "extend the gate of a producer to the items produced from it, in the Planner, the Plan reviewer and the shared rules (D146)" in {
+      assert(instructions(DispatchWork.Planner()).contains("When an assigned producer is BlockedBy an Open Question, every item you produce from it is gated by that Question as well: " +
+        "name each of them in the member summary as gated by it"))
+      assert(instructions(DispatchWork.Reviewer(ReviewerMode.Plan)).contains(
+        "when items are produced from a producer that is BlockedBy an Open Question and the member summary does not name them as gated by that Question"))
+      val common = resource("workflows/common.md")
+      assert(common.contains("When you apply a proposal that produces items from a producer that is BlockedBy an Open Question, link every produced item BlockedBy the same Question"))
+      assert(common.contains("The compact outcome of a Planner does not carry its member summaries"))
+    }
+
+    "ask the Plan reviewer for a Question only where the Planner produces one (D146)" in {
+      val needed = "when it needs the operator's decision or approval"
+      val plan = instructions(DispatchWork.Reviewer(ReviewerMode.Plan))
+      assert(instructions(DispatchWork.Planner()).contains(needed + ", produce one Question that asks for it"))
+      assert(plan.contains(needed + ", check that a Question asking for it is proposed or already exists") &&
+        plan.contains("a requirement that only fixes an order or forbids starting something needs no Question"))
+    }
+
+    "tell a Worker that the workflow which dispatched it meets a requirement about the process (D146)" in {
+      val result = "about the result (what the change must do or how it must be verified)"
+      val process = "about the process (when to ask the operator, what to wait for, who approves, in what order, what not to start yet)"
+      List(DispatchWork.Worker(WorkerMode.Implement), DispatchWork.Worker(WorkerMode.ResolveConflict)).map(instructions(_)).foreach { text =>
+        assert(text.contains(result) && text.contains(process))
+        assert(text.contains("is met by the workflow that dispatched you: it is no reason to block, fail or abstain"))
       }
     }
   }
