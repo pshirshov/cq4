@@ -2,10 +2,19 @@ import json
 from fixture_runtime import guardian_binary
 import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
 import tempfile
 import time
+
+
+def ancestry(pid):
+    chain = []
+    while pid > 0:
+        chain.append(pid)
+        pid = int(Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[1])
+    return chain
 
 
 def main():
@@ -54,7 +63,10 @@ def main():
                         print(json.dumps({"mode": mode, "stalledFile": (latch / "entered").read_text()}), flush=True)
                         if mode == "ticket":
                             # Durable dispatch acknowledgement holds the governor's Start reply; request shutdown while it waits.
-                            process.terminate()
+                            # The launcher may be a wrapper that forwards no signals; the stalled process is the supervisor.
+                            supervisor = int((latch / "pid").read_text())
+                            assert process.pid in ancestry(supervisor), (mode, "Stalled process is not the launched supervisor", supervisor)
+                            os.kill(supervisor, signal.SIGTERM)
                     try:
                         code = process.wait(timeout=25)
                     except subprocess.TimeoutExpired:

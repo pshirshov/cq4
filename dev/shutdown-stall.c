@@ -67,7 +67,11 @@ int fsync(int fd) {
                 }
             }
             if (match) {
-                char marker[4096], release[4096];
+                char marker[4096], release[4096], owner[4096];
+                // The fixture signals this process itself; a launch wrapper such as Bubblewrap does not forward signals.
+                snprintf(owner, sizeof(owner), "%s/pid", root);
+                FILE *identity = fopen(owner, "w");
+                if (identity == NULL || fprintf(identity, "%d", (int)getpid()) < 0 || fclose(identity) != 0) abort();
                 snprintf(marker, sizeof(marker), "%s/entered", root);
                 snprintf(release, sizeof(release), "%s/release", root);
                 int entered = open(marker, O_WRONLY | O_CREAT, 0600);
