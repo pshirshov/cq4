@@ -67,9 +67,11 @@ final class CombinationController(config: SupervisorConfig, authority: Superviso
       }
     })
     (entry, execute) = registered
-    _ <- if (!execute) ZIO.unit else {
+    // The start is written before the call returns, also when a pending publication is repeated: a waiter named this combination then
+    // waits for this operation's end. An event that cannot be written fails the operation as any other fault of it does.
+    _ <- if (!execute) ZIO.unit else ZIO.attemptBlocking(units.started(SessionUnits.combination(snapshot(entry)))).either.flatMap { written =>
       val operation = for {
-        _ <- ZIO.attemptBlocking(units.started(SessionUnits.combination(snapshot(entry))))
+        _ <- ZIO.fromEither(written)
         _ <- ZIO.attemptBlocking(publication.retain(ticket))
         _ <- entry.ready.succeed(())
         plan <- ZIO.attemptBlocking(publication.freeze(ticket) {

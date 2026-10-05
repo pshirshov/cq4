@@ -11,14 +11,23 @@ import scala.util.Using
 
 /** The units of work of one governing session that end without the session: child attempts, integrations, combinations and check
   * revalidations. The host appends an event when it starts working on one and when it stops; `cq wait` reads them. Several writers of
-  * one host append to the same file: an event is one line written by one append, which the operating system does not interleave. */
+  * one host append to the same file, one at a time: an event is one whole line, or the file is cut back to what it held before. */
 final class SessionUnits(directory: Path) {
   private def append(event: SessionUnitEvent): Unit = {
-    val line = (SessionUnitEvent_JsonCodec.encode(BaboonCodecContext.Default, event).noSpaces + "\n").getBytes(UTF_8)
-    Using.resource(FileChannel.open(directory.resolve(SessionUnits.File), StandardOpenOption.CREATE, StandardOpenOption.WRITE, StandardOpenOption.APPEND)) { channel =>
-      val written = channel.write(java.nio.ByteBuffer.wrap(line))
-      require(written == line.length, "Session unit event was written incompletely")
-      channel.force(true)
+    val line = java.nio.ByteBuffer.wrap((SessionUnitEvent_JsonCodec.encode(BaboonCodecContext.Default, event).noSpaces + "\n").getBytes(UTF_8))
+    // One host process holds one session directory, and its controllers each have a writer: the appends of the process are serialized.
+    SessionUnits.synchronized {
+      Using.resource(FileChannel.open(directory.resolve(SessionUnits.File), StandardOpenOption.CREATE, StandardOpenOption.WRITE)) { channel =>
+        val before = channel.size()
+        try {
+          channel.position(before)
+          while (line.hasRemaining) channel.write(line)
+          channel.force(true)
+        } catch {
+          // No fragment stays for the next event to be joined to.
+          case error: Throwable => channel.truncate(before); channel.force(true); throw error
+        }
+      }
     }
   }
   def started(unit: SessionUnit): Unit = append(SessionUnitEvent.Started(unit))
@@ -44,8 +53,10 @@ object SessionUnits {
     val file = directory.resolve(File)
     if (!Files.exists(file, LinkOption.NOFOLLOW_LINKS)) Nil
     else {
-      val text = UTF_8.newDecoder().decode(java.nio.ByteBuffer.wrap(Files.readAllBytes(file))).toString
-      text.substring(0, text.lastIndexOf('\n') + 1).linesIterator.map { line =>
+      // Cut at the last line end before decoding: an append in progress may end inside a character.
+      val bytes = Files.readAllBytes(file)
+      val text = UTF_8.newDecoder().decode(java.nio.ByteBuffer.wrap(bytes, 0, bytes.lastIndexOf('\n'.toByte) + 1)).toString
+      text.linesIterator.map { line =>
         SessionUnitEvent_JsonCodec.decode(BaboonCodecContext.Default, parser.parse(line).fold(throw _, identity)).fold(throw _, identity)
       }.toList
     }
@@ -105,7 +116,8 @@ final class SessionWait(directory: Path, pause: () => Unit) {
       val over = targets.flatMap(ended.get)
       Option.when(over.nonEmpty)(WaitOutcome.Ended(over, active))
     }
-    if (targets.isEmpty) WaitOutcome.Idle()
+    // Nothing to wait for is said only of a host that runs: a host that is gone is reported as such, whatever it left.
+    if (targets.isEmpty) (if (SessionOwner.runs(directory)) WaitOutcome.Idle() else WaitOutcome.HostGone(initial))
     else {
       var result = outcome(initial, known)
       while (result.isEmpty) {

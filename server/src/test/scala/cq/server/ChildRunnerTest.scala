@@ -579,6 +579,12 @@ sys.stderr.flush()
         status <- revalidations.request(id, handle, f.fence).repeatUntil(_.phase != RevalidationPhase.Running)
           .timeoutFail(new IllegalStateException("Revalidation did not finish"))(zio.Duration.fromSeconds(60))
         replay <- revalidations.request(id, handle, f.fence)
+        // What `cq wait` reads about the round: its start and how it ended, once each, whatever was asked again.
+        rounds <- ZIO.attemptBlocking(SessionUnits.read(f.config.directory).collect {
+          case SessionUnitEvent.Started(unit) if unit.id == id.value => (unit.kind, "Started")
+          case SessionUnitEvent.Ended(end) if end.unit.id == id.value => (end.unit.kind, end.phase)
+        }).repeatUntil(_.size == 2).timeoutFail(new IllegalStateException("The round's end was not written for waiters"))(zio.Duration.fromSeconds(30))
+        _ <- ZIO.attempt(require(rounds == List((SessionUnitKind.Revalidation, "Started"), (SessionUnitKind.Revalidation, status.phase.toString)), rounds.toString))
         reused <- fault(revalidations.request(id, handle, Fence(ClaimId(uuid), 1)))
         again <- fault(revalidations.request(RequestId(uuid), handle, f.fence))
         after <- artifacts.metadata(f.owner, handle)

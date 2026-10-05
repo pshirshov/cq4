@@ -105,11 +105,12 @@ final class RevalidationController(config: SupervisorConfig, authority: Supervis
     done <- Promise.make[Nothing, Unit]
     registered <- requests.withPermit(zio.Clock.nanoTime.flatMap(began => ZIO.attemptBlocking(register(id, result, fence, done, began))))
     (entry, fresh) = registered
-    _ <- fresh.fold(ZIO.unit)(round => ZIO.attemptBlocking(units.started(SessionUnits.revalidation(synchronized(entry.view)))).orDie *> run(id, result, round).catchAll { error =>
+    // The start is written before the call returns; an event that cannot be written fails the round as any other fault of it does.
+    _ <- fresh.fold(ZIO.unit)(round => ZIO.attemptBlocking(units.started(SessionUnits.revalidation(synchronized(entry.view)))).either.flatMap(written => (ZIO.fromEither(written) *> run(id, result, round)).catchAll { error =>
       ZIO.succeed(synchronized(entry.view).copy(phase = RevalidationPhase.Failed, blocker = Some(DispatchProjection.concise("Revalidation failed: " +
         Option(error.getMessage).getOrElse(error.getClass.getSimpleName)))))
     }.flatMap(value => ZIO.succeed(synchronized { entry.view = value }))
-      .ensuring(done.succeed(()).unit *> ZIO.attemptBlocking(units.ended(SessionUnits.ended(synchronized(entry.view)))).orDie).forkDaemon.unit)
+      .ensuring(done.succeed(()).unit *> ZIO.attemptBlocking(units.ended(SessionUnits.ended(synchronized(entry.view)))).orDie).forkDaemon.unit))
     _ <- restore(entry.done.await.timeout(zio.Duration.fromMillis(WaitMillis)))
   } yield synchronized(entry.view) }
 

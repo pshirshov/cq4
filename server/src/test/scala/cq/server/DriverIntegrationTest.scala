@@ -56,6 +56,11 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
   private final case class Fixture(local: LocalWorkspaceFixture, owner: Scope, authority: SupervisorAuthority, controller: IntegrationController,
     combinations: CombinationController, workflow: AttachedWorkflow, driver: AttachedDriver, registry: DriverInspector, collector: Collector,
     task: ItemId, reviewer: ArtifactId, candidate: GitCommit, fence: Fence, session: java.nio.file.Path, gateway: Json => Task[Json]) {
+    /** What the host wrote for waiters about one unit, in order: its starts and the phases it ended in. */
+    def unitEvents(id: UUID): List[String] = SessionUnits.read(session).collect {
+      case SessionUnitEvent.Started(unit) if unit.id == id => "Started"
+      case SessionUnitEvent.Ended(end) if end.unit.id == id => end.phase
+    }
     /** One `session` tool call through the attached gateway: the reply its owner receives. */
     def sessionTool(arguments: String): Task[Json] = gateway(Json.obj("jsonrpc" -> Json.fromString("2.0"), "id" -> Json.fromInt(1), "method" -> Json.fromString("tools/call"),
       "params" -> Json.obj("name" -> Json.fromString("session"), "arguments" -> parser.parse(arguments).fold(throw _, identity))))
@@ -437,6 +442,8 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
           assert(server.left.exists { case DomainFailure(_: Fault.Missing) => true; case _ => false } && git == local.base, server.toString)
           assert(spans.map(_.state) == List(AttemptState.Cancelled), spans.toString)
           assert(applied.phase == IntegrationPhase.NotApplied && next.isRight, s"$applied $next")
+          // A waiter that named the integration is told when it is prepared and again when it is discarded.
+          assert(f.unitEvents(ready.id.value) == List("Started", "Ready", "NotApplied"), f.unitEvents(ready.id.value).toString)
         }
         second <- f.prepared
         recorded <- f.integrate(second.id)
@@ -660,6 +667,9 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
           command = DispatchCommand.Combine(combination, ready.id, f.fence)
           _ <- f.dispatch(command)
           left <- f.combined(combination)
+          // The integration ended twice for a waiter, once prepared and once refused by Git; each end follows its own start.
+          _ <- f.eventually("the unit events of the integration and the combination")(f.unitEvents(ready.id.value) == List("Started", "Ready", "Started", "NotApplied") &&
+            f.unitEvents(combination.value) == List("Started", "PublicationPending"))
           _ <- f.eventually("the unpublished combination rests on the session")(f.cycle.exists(_.held == Set(LineageMember.Combination(combination))))
           _ <- f.park
           _ <- f.drive
@@ -686,7 +696,11 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
           // The turn ends with the directive unused, which stops the drive; the session then publishes the combination as an undriven session does.
           stopped <- f.continuation
           _ <- f.dispatch(command)
+          // The repeated Combine has written its start when it returns: a waiter named the combination is not answered by the end before it.
+          restarted <- ZIO.attemptBlocking(f.unitEvents(combination.value))
+          _ <- ZIO.attempt(assert(restarted.take(3) == List("Started", "PublicationPending", "Started"), restarted.toString))
           published <- f.combined(combination)
+          _ <- f.eventually("the end of the repeated combination")(f.unitEvents(combination.value) == List("Started", "PublicationPending", "Started", "Ready"))
           _ <- ZIO.attempt {
             println(s"Publication-pending combination after the drive: continuation query ${brief(stopped)}; repeated Combine then ${published.phase}; " +
               s"publication attempts ${uploads.get}")

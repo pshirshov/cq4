@@ -102,6 +102,29 @@ final class SessionWaitLocal extends AnyWordSpec {
         assert(line.contains("is not running") && line.contains(s"attempt ${second.id} on T2") && line.contains("cq job upload --session " + lost.directory))
       } finally lost.close()
     }
+    "say that the host is gone, not that nothing is active, when a host that left nothing unfinished no longer runs" in {
+      val session = new Session()
+      try {
+        val done = attempt(1)
+        session.units.started(done); session.units.ended(over(done, "Completed"))
+        session.hostEnds()
+        assert(session.await() == WaitOutcome.HostGone(Nil) && session.pauses == 0)
+      } finally session.close()
+    }
+    "read the events before an append that so far ends inside a character" in {
+      val unit = attempt(1)
+      val session = new Session()
+      try {
+        session.units.started(unit); session.units.ended(over(unit, "Completed"))
+        val next = SessionUnitEvent_JsonCodec.encode(baboon.runtime.shared.BaboonCodecContext.Default,
+          SessionUnitEvent.Ended(UnitEnd(unit, "Failed", None, Some("Prüfung")))).noSpaces.getBytes(java.nio.charset.StandardCharsets.UTF_8)
+        val cut = next.indexWhere(_ < 0) + 1
+        assert(cut > 0 && next(cut) < 0, "The fragment must end inside a multi-byte character")
+        Files.write(session.directory.resolve(SessionUnits.File), next.take(cut), StandardOpenOption.APPEND)
+        assert(SessionUnits.read(session.directory) == List(SessionUnitEvent.Started(unit), SessionUnitEvent.Ended(over(unit, "Completed"))))
+        assert(session.await(unit) == WaitOutcome.Ended(List(over(unit, "Completed")), Nil))
+      } finally session.close()
+    }
     "not read an event whose line is still being written, and refuse a directory that is no session" in {
       val unit = attempt(1)
       val session = new Session(session => Files.writeString(session.directory.resolve(SessionUnits.File), "\n", StandardOpenOption.APPEND))
