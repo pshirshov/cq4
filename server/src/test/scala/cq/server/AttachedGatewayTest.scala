@@ -38,7 +38,8 @@ final class AttachedGatewayLocal extends AnyWordSpec {
     private val config = SupervisorConfig(null, settings, null, null,
       SupervisorRun(settings, assignment, attempt, "fixture", "/nonexistent", GitCommit("0" * 40), SessionOwnership.Attached), Path.of("/nonexistent"), "", None, Map.empty)
     private val api = new Api(answer)
-    private val gateway = new AttachedGateway(config, SupervisorAuthority(api, api, api, AccessToken("governor", 0)), schemas, null, null, null, null, null)
+    private val gateway = new AttachedGateway(config, SupervisorAuthority(api, api, api, AccessToken("governor", 0)), schemas, null, null, null, null, null,
+      new SessionClaims(config.owner, api, logstage.IzLogger.NullLogger))
     private val input = new PipedInputStream(8192)
     private val client = new PipedOutputStream(input)
     private val response = new PipedInputStream(8192)
