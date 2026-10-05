@@ -17,7 +17,7 @@ object LineageOutcome {
 
 // Registers the work an attached session dispatches from a driven advance run under that run's cycle and keeps the server's view of each
 // member current: in flight, resting or settled. A member the host cannot account for ends the drive.
-final class LineageTracker(client: DriverSessionClient, report: String => Unit, pause: zio.Duration, backoff: zio.Duration) {
+final class LineageTracker(client: DriverSessionClient, report: String => Unit, pause: zio.Duration, backoff: zio.Duration, ceiling: zio.Duration) {
   private val Attempts = 6
   // A followed member and how often the session has resumed it.
   private var tracked = Map.empty[(CycleId, LineageMember), Long]
@@ -44,9 +44,18 @@ final class LineageTracker(client: DriverSessionClient, report: String => Unit, 
     attempt(Attempts, backoff)
   }
 
+  // How a member ended is reported until the server has it or this host ends: a host that gave up would leave the member in flight on
+  // the server for ever, and its drive waiting for it. The pause doubles up to `ceiling`. A fault the server returned is its answer.
+  private def persistently[A](operation: => A): Task[A] = {
+    def attempt(wait: zio.Duration): Task[A] = ZIO.attemptBlocking(operation).catchSome {
+      case error if !error.isInstanceOf[DomainFailure] => ZIO.sleep(wait) *> attempt(if (wait.multipliedBy(2).compareTo(ceiling) > 0) ceiling else wait.multipliedBy(2))
+    }
+    attempt(backoff)
+  }
+
   private def abandon(cycle: CycleId, member: LineageMember, stage: String, outcome: String, error: Throwable): UIO[Unit] = {
     val cause = DispatchProjection.concise(Option(error.getMessage).getOrElse(error.getClass.getSimpleName))
-    reliably(client.fail(cycle, member, s"$outcome: $cause".take(DriverPolicy.MaxDetail))).foldZIO(
+    persistently(client.fail(cycle, member, s"$outcome: $cause".take(DriverPolicy.MaxDetail))).foldZIO(
       unrecorded => ZIO.succeed(report(s"Driver lineage $stage failed for ${DriverPolicy.member(member)}: $cause; the driver was not stopped: ${unrecorded.getMessage}")),
       _ => ZIO.succeed(report(s"Driver lineage $stage failed for ${DriverPolicy.member(member)}: $cause; the driver stopped")))
   }
@@ -56,8 +65,8 @@ final class LineageTracker(client: DriverSessionClient, report: String => Unit, 
     ZIO.succeed(resumes(cycle, member)).flatMap { seen =>
       val known = if (seen == at) last else None
       observed.flatMap {
-        case Some(LineageOutcome.Settled) => reliably(client.settle(cycle, member))
-        case Some(LineageOutcome.Concluded(outcome)) => reliably(client.conclude(cycle, outcome))
+        case Some(LineageOutcome.Settled) => persistently(client.settle(cycle, member))
+        case Some(LineageOutcome.Concluded(outcome)) => persistently(client.conclude(cycle, outcome))
         case current if current == known => ZIO.sleep(pause) *> follow(cycle, parent, member, observed, known, seen)
         // A reading taken before the session resumed the member is stale: it is not reported, and the member is read again.
         case current @ Some(LineageOutcome.Resting) => reports.withPermit(ZIO.suspend {
@@ -92,9 +101,11 @@ final class AttachedDriver(config: SupervisorConfig, authority: SupervisorAuthor
   private val WaitMillis = 20000
   private val PollMillis = 1000L
   private val BackoffMillis = 250L
+  // The longest pause between two reports of an end the server has not acknowledged: a retry interval, not a deadline.
+  private val MaxBackoffMillis = 30000L
   private val project = config.project.project
   val session = new DriverSessionClient(authority.governor, project)
-  private val tracker = new LineageTracker(session, message => logger.warn(s"$message"), zio.Duration.fromMillis(PollMillis), zio.Duration.fromMillis(BackoffMillis))
+  private val tracker = new LineageTracker(session, message => logger.warn(s"$message"), zio.Duration.fromMillis(PollMillis), zio.Duration.fromMillis(BackoffMillis), zio.Duration.fromMillis(MaxBackoffMillis))
   private val entry = new DriverEntry(authority.root, project)
 
   // The Pi extension's private channel: state-changing driver entry points keyed by its session, bound to this attached session.
@@ -104,7 +115,7 @@ final class AttachedDriver(config: SupervisorConfig, authority: SupervisorAuthor
     command match {
       case ExtensionDriver.Start(key, input) => entry.start(call(key), input, Some(config.run.attempt.session))
       case ExtensionDriver.Park(key) => entry.park(call(key))
-      case ExtensionDriver.Continue(key) => entry.continuation(call(key))
+      case ExtensionDriver.Continue(key, waiting) => entry.continuation(call(key), waiting)
       case ExtensionDriver.Status(key) => entry.status(call(key))
     }
   }

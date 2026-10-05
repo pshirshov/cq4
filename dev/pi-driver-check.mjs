@@ -142,7 +142,7 @@ test("drive with target IDs and a through phase shows the host preview, the foot
   await pi.start();
   await pi.script([started(pi.id), proceed(pi.id, "--start-token", "11111111-1111-4111-8111-111111111111", ON, [])]);
   await pi.drive("G1 T4 through=work");
-  assert.deepEqual(await pi.requests(), [{ Start: { session: "pi-session-a", input: "G1 T4 through=work" } }, { Continue: { session: "pi-session-a" } }]);
+  assert.deepEqual(await pi.requests(), [{ Start: { session: "pi-session-a", input: "G1 T4 through=work" } }, { Continue: { session: "pi-session-a", waiting: false } }]);
   const shown = texts(pi).join("\n");
   assert.match(shown, /CQ driver on: G1,T4 through work/);
   assert.match(shown, /Advanceable \(3\):\n {2}G1 \(target\) Open: Auto-driver\n {2}T4 \(target\) Ready: Host core\n {2}T9 Draft: Produced descendant/);
@@ -154,23 +154,42 @@ test("drive with target IDs and a through phase shows the host preview, the foot
   await pi.stop();
 });
 
-test("a turn that ends while the host's work is in flight submits nothing and keeps the drive on; the turn after it is decided as usual", async () => {
+test("a turn that ends while the host works is left waiting only while the extension's waiter runs; a waiter that fails twice falls back to resume directives", async () => {
   const pi = await session("pi-session-a");
   await pi.start();
+  const until = async (what, holds) => { for (let i = 0; i < 400; i++) { if (await holds()) return; await new Promise(resolve => setTimeout(resolve, 25)); } assert.fail("Not reached: " + what); };
   await pi.script([started(pi.id), proceed(pi.id, "--start-token", "11111111-1111-4111-8111-111111111111", ON, [])]);
   await pi.drive("G1 T4 through=work");
   const busy = "CQ driver on: G1,T4 through work; 1 active child";
   const waiting = { Waiting: { status: { ...status(pi.id, "On", busy, null), activeChildren: 1 }, message: "CQ driver waiting: cycle 1 has attempt a in flight; the session continues when it ends" } };
-  await pi.script([status_(pi.id, busy), waiting, status_(pi.id, busy), waiting, status_(pi.id, ON), proceed(pi.id, "--start-token", "22222222-2222-4222-8222-222222222222", ON, [])]);
+  const continued = async () => (await pi.requests()).filter(request => request.Continue !== undefined).map(request => request.Continue.waiting);
+  // The model starts a child: the extension's waiter runs, so the continuation query accepts Waiting and nothing is submitted.
+  await pi.dispatch({ StartChoice: {} }, { Status: { value: { attempt: { value: "00000000-0000-4000-8000-00000000000a" }, phase: "Running", next: "Wait" } } });
+  await until("the waiter", async () => (await pi.waits()).length === 1);
+  await pi.script([status_(pi.id, busy), waiting, status_(pi.id, busy), waiting]);
   await pi.settle("completed");
   await pi.settle("completed");
-  assert.equal(pi.sent.length, 1, "no directive while the host works");
+  assert.deepEqual(await continued(), [false, true, true]);
+  assert.equal(pi.sent.length, 1, "no directive while the host works and the waiter runs");
   assert.equal(pi.footer(), busy);
   assert.equal(pi.notices.filter(notice => notice.type === "error").length, 0);
-  // The waiter's message started a turn; when it ends with nothing in flight the driver decides the cycle and continues.
+  // The waiter fails: it is started again once. When that one fails too, the session would never be told: the extension says so and
+  // asks for the continuation without accepting Waiting, which the host answers with a resume directive for the work in flight.
+  await pi.finish(1, { unexpected: true });
+  await until("the restarted waiter", async () => (await pi.waits()).length === 2);
+  assert.deepEqual((await pi.waits())[1].args, (await pi.waits())[0].args);
+  assert.equal(pi.notices.filter(notice => notice.type === "error").length, 0);
+  await pi.script([proceed(pi.id, "--resume-token", "33333333-3333-4333-8333-333333333333", busy, [])]);
+  await pi.finish(1, { unexpected: true });
+  await until("the fallback", async () => pi.sent.length === 2);
+  assert.match(pi.notices.at(-1).message, /^CQ waiter failed twice: it exited with code 1; this session is not told when its running work ends\./);
+  assert.match(pi.sent.at(-1).content, /--resume-token 33333333-3333-4333-8333-333333333333$/);
+  assert.deepEqual(await continued(), [false, true, true, false]);
+  assert.equal((await pi.waits()).length, 2, "a waiter that failed twice is not started a third time by itself");
+  // Without a waiter the next stops do not accept Waiting either.
+  await pi.script([status_(pi.id, ON), proceed(pi.id, "--start-token", "22222222-2222-4222-8222-222222222222", ON, [])]);
   await pi.settle("completed");
-  assert.equal(pi.sent.length, 2);
-  assert.match(pi.sent.at(-1).content, /--start-token 22222222-2222-4222-8222-222222222222$/);
+  assert.deepEqual(await continued(), [false, true, true, false, false]);
   assert.deepEqual(await pi.unconsumed(), []);
   await pi.script([parked(pi.id)]);
   await pi.stop();
@@ -312,7 +331,7 @@ test("the toggle key parks a driver that is on and restarts the last workset of 
   assert.equal((await pi.requests()).length, 3, "parked: the next turn end asks the host nothing");
   await pi.script([started(pi.id), proceed(pi.id, "--start-token", "77777777-7777-4777-8777-777777777777", ON, [])]);
   await pi.toggle();
-  assert.deepEqual((await pi.requests()).slice(3), [{ Start: { session: "pi-session-a", input: "G1 T4 through=work" } }, { Continue: { session: "pi-session-a" } }]);
+  assert.deepEqual((await pi.requests()).slice(3), [{ Start: { session: "pi-session-a", input: "G1 T4 through=work" } }, { Continue: { session: "pi-session-a", waiting: false } }]);
   assert.equal(pi.footer(), ON);
   assert.equal(pi.sent.length, 2);
   await pi.script([parked(pi.id)]);

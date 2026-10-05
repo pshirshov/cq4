@@ -119,7 +119,13 @@ final class Cli(context: CliContext, location: ProjectLocation, upload: SessionU
         val location = configDirectory
         val (config, actorSession) = locked(location)((configuration(location), session(location)))
         new DriverEntry(new HttpServerApi(URI.create(validateEndpoint(config.endpoint)), cq.host.HostCredential.read(environment), actorSession, RequestTimeout), config.project)
-      }, session => new cq.host.AttachedSessions(configDirectory).view(session).isInstanceOf[cq.host.HostView.Running])
+      }, new cq.host.SessionViews {
+        // Located only for a Stop of a driven session: the other hook events ask nothing about hosts.
+        private lazy val sessions = new cq.host.AttachedSessions(configDirectory)
+        override def view(session: SessionId): cq.host.HostView = sessions.view(session)
+        override def asked(session: SessionId): Option[String] = sessions.asked(session)
+        override def ask(session: SessionId, units: Option[String]): Unit = sessions.ask(session, units)
+      })
       output.print(hook.run(harness, event, context.input.readNBytes(DriverHook.MaxInputBytes + 1)))
       output.flush()
     case "commands" :: "export" :: harness :: rest =>

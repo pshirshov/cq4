@@ -68,7 +68,7 @@ final class DriverService(registry: DriverRegistry, planner: WorksetPlanner) {
         case other => DriverReply.Parked(other.map(status), "CQ driver is already off")
       }
       case _: DriverControl.Status => read(scope, key, source, tx.drivers)
-      case _: DriverControl.Continue => registry.get(project, key) match {
+      case DriverControl.Continue(waiting) => registry.get(project, key) match {
         case None => DriverReply.Stop(DriverStopped(DriverStop.Off, "No CQ driver is on for this session"), None, Nil)
         case Some(record) => record.state match {
           case DriverState.Off if record.announced => DriverReply.Stop(DriverStopped(DriverStop.Off, "The CQ driver is off"), Some(status(record)), Nil)
@@ -77,7 +77,7 @@ final class DriverService(registry: DriverRegistry, planner: WorksetPlanner) {
             DriverReply.Stop(record.stopped.get, Some(status(record)), List(stopMessage(record.stopped.get)))
           case DriverState.Binding => stop(record, DriverStopped(DriverStop.NotBound,
             "failure: no attached CQ session presented the bind token, so the driver never turned on"), Nil, now)
-          case DriverState.On => continuation(tx, record, now)
+          case DriverState.On => continuation(tx, record, waiting, now)
         }
       }
     }
@@ -126,15 +126,16 @@ final class DriverService(registry: DriverRegistry, planner: WorksetPlanner) {
 
   private def limit: DriverStopped = DriverStopped(DriverStop.LimitReached, s"This drive issued its $MaxDirectives directives; drive again to continue")
 
-  private def continuation(tx: LedgerTransaction, record: DriverRecord, now: Long): DriverReply = {
+  private def continuation(tx: LedgerTransaction, record: DriverRecord, waiting: Boolean, now: Long): DriverReply = {
     given LedgerTransaction = tx
     record.cycle match {
     case Some(cycle) if cycle.state == CycleState.Pending =>
       stop(record, DriverStopped(DriverStop.Failure, s"directive not started: the start directive of cycle ${cycle.number} was not submitted"), Nil, now)
-    // Work the host carries out ends without the session. A session that is woken when it ends may stop meanwhile: nothing is issued
-    // and nothing changes. One that is not woken is kept in its turn by a resume directive, as it would otherwise never continue.
+    // Work the host carries out ends without the session. Whether the session is started again when it ends is known only where the
+    // session runs: the caller that has checked it accepts Waiting, and then nothing is issued and nothing changes. Any other caller
+    // gets a resume directive, which keeps the session in its turn.
     case Some(cycle) if cycle.active && cycle.inFlight.nonEmpty =>
-      if (DriverPolicy.woken(record.key.harness)) DriverReply.Waiting(status(record),
+      if (waiting) DriverReply.Waiting(status(record),
         s"CQ driver waiting: cycle ${cycle.number} has ${cycle.inFlight.map(entry => member(entry.member)).sorted.mkString(", ")} in flight; the session continues when it ends")
       else resume(record, cycle, now)
     // Work that waits for the session gets one resume directive; a second stop on the same work ends the drive instead of resuming forever.

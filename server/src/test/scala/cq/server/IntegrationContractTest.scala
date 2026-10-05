@@ -945,7 +945,7 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
             case DriverReply.Started(_, _, Some(token), _) => session(DriverSession.Bind(token))
             case other => ZIO.fail(new IllegalStateException("Expected a binding driver: " + other))
           }
-          directive = control(DriverOrigin.Stop, DriverControl.Continue()).flatMap {
+          directive = control(DriverOrigin.Stop, DriverControl.Continue(false)).flatMap {
             case DriverReply.Continue(value, _, _) => ZIO.succeed(value)
             case other => ZIO.fail(new IllegalStateException("Expected a directive: " + other))
           }

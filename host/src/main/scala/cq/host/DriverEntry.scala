@@ -27,7 +27,7 @@ final class DriverEntry(api: ServerApi, project: ProjectId) {
     control(call, DriverControl.Start(DriverArguments.parse(project, arguments), attached))
   }
   def park(call: DriverCall): DriverReply = control(call, DriverControl.Park())
-  def continuation(call: DriverCall): DriverReply = control(call, DriverControl.Continue())
+  def continuation(call: DriverCall, waiting: Boolean): DriverReply = control(call, DriverControl.Continue(waiting))
   def status(call: DriverCall): DriverReply = control(call, DriverControl.Status())
 }
 

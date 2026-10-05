@@ -73,7 +73,8 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
   private def park(service: LedgerService[IO], w: World, key: DriverKey): IO[Throwable, DriverReply] =
     control(service, w, key, DriverOrigin.UserPromptSubmit, DriverControl.Park())
   private def query(service: LedgerService[IO], w: World, key: DriverKey): IO[Throwable, DriverReply] =
-    control(service, w, key, DriverOrigin.Stop, DriverControl.Continue())
+    // As the callers of the query do: a session of a harness that is woken, with its waiter running, accepts Waiting; a Codex session never does.
+    control(service, w, key, DriverOrigin.Stop, DriverControl.Continue(key.harness != Harness.Codex))
   private def status(service: LedgerService[IO], w: World, key: DriverKey): IO[Throwable, Option[DriverStatus]] =
     control(service, w, key, DriverOrigin.StatusLine, DriverControl.Status()).map { case DriverReply.Status(value) => value; case other => throw new IllegalStateException(other.toString) }
   private def act(service: LedgerService[IO], scope: Scope, action: DriverSession): IO[Throwable, DriverReply] = service.drive(scope, DriverRequest.Session(action))
@@ -577,7 +578,7 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
             control(service, w, claude("claude-attached"), DriverOrigin.UserPromptSubmit, DriverControl.Start(workset(root), Some(attached.actor.session))),
             control(service, w, claude("claude-extension"), DriverOrigin.Extension, DriverControl.Start(workset(root), Some(attached.actor.session))),
             control(service, w, claude("claude-stop-start"), DriverOrigin.Stop, DriverControl.Start(workset(root), None)),
-            control(service, w, key, DriverOrigin.UserPromptSubmit, DriverControl.Continue()),
+            control(service, w, key, DriverOrigin.UserPromptSubmit, DriverControl.Continue(false)),
             control(service, w, key, DriverOrigin.StatusLine, DriverControl.Park()),
           ))(_.either)
           kept <- status(service, w, key)
@@ -651,7 +652,7 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
           beforeB <- statusOf(b)
           _ <- assertIO(beforeA.exists(value => value.key == DriverKey(Harness.Claude, "session-a") && value.state == DriverState.On && value.targets == Set(first) && value.through == WorkflowPhase.Plan) &&
             beforeB.exists(value => value.key == DriverKey(Harness.Claude, "session-b") && value.state == DriverState.On && value.targets == Set(second) && value.through == WorkflowPhase.Work))
-          continued <- ZIO.attemptBlocking(entry.continuation(stop(a)))
+          continued <- ZIO.attemptBlocking(entry.continuation(stop(a), false))
           afterDirective <- statusOf(b)
           _ <- assertIO(continued.isInstanceOf[DriverReply.Continue] && afterDirective == beforeB)
           _ <- ZIO.attemptBlocking(entry.park(a))
@@ -660,7 +661,7 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
           _ <- assertIO(stopped(parkedA, DriverStop.Parked) && afterPark == beforeB)
           _ <- bound(a, "G1 through=plan", sessionA)
           runningA <- statusOf(a)
-          directive <- ZIO.attemptBlocking(entry.continuation(stop(b)))
+          directive <- ZIO.attemptBlocking(entry.continuation(stop(b), false))
           afterB <- statusOf(a)
           _ <- assertIO(directive.isInstanceOf[DriverReply.Continue] && afterB == runningA && runningA.exists(_.state == DriverState.On))
           // Decision 2 limitation: the key is trusted, not authenticated. B's hook supplying A's key changes A's driver, and not B's.
@@ -676,7 +677,7 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
             () => entry.park(b.copy(event = "PreToolUse")),
             () => entry.park(b.copy(event = "")),
             () => entry.park(b.copy(harness = "emacs")),
-            () => entry.continuation(b.copy(event = "SessionStart")),
+            () => entry.continuation(b.copy(event = "SessionStart"), false),
             () => entry.start(b.copy(session = None), "G1 through=plan", None),
             () => entry.start(DriverCall("claude", "Notification", Some("session-c")), "G1 through=plan", None),
             () => entry.start(DriverCall("claude", "UserPromptSubmit", Some("session-c")), "through=plan", None),
@@ -692,7 +693,7 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
           // Attached sessions hold a governor credential: it reaches the bind and the status only, never a state-changing entry point.
           modelFacing = new DriverEntry(new ApplicationApi(application, authorityA, runtime), project)
           refused <- ZIO.foreach(List[() => DriverReply](() => modelFacing.start(a, "G1 through=plan", None), () => modelFacing.park(b),
-            () => modelFacing.continuation(stop(b)), () => modelFacing.status(b.copy(event = "StatusLine"))))(operation => ZIO.attemptBlocking(operation()).either)
+            () => modelFacing.continuation(stop(b), false), () => modelFacing.status(b.copy(event = "StatusLine"))))(operation => ZIO.attemptBlocking(operation()).either)
           stillA <- statusOf(a)
           stillB <- statusOf(b)
           _ <- assertIO(refused.forall(denied) && stillA == forgedA && stillB == runningB)
@@ -764,7 +765,7 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
         pi = DriverKey(Harness.Pi, "pi-cycles")
         attached = w.other(Role.Governor)
         _ <- control(service, w, pi, DriverOrigin.Extension, DriverControl.Start(workset(root), Some(attached.actor.session)))
-        extension <- control(service, w, pi, DriverOrigin.Extension, DriverControl.Continue())
+        extension <- control(service, w, pi, DriverOrigin.Extension, DriverControl.Continue(false))
         _ <- assertIO(extension match { case DriverReply.Continue(value, _, _) => value.text.startsWith("/cq:advance --roots G1 --through work --start-token "); case _ => false })
         codex = DriverKey(Harness.Codex, "codex-cycles")
         codexSession = w.copy(governor = w.other(Role.Governor))
@@ -888,41 +889,34 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
         _ <- assertIO(late.isInstanceOf[DriverReply.Lineage] && off.flatMap(_.stopped).contains(expected))
       } yield ()
     }
-    "let a session that is woken stop while its cycle has work in flight, issuing nothing, and decide the cycle at the stop after it" in { (service: LedgerService[IO]) =>
+    "answer Waiting for work in flight only to a caller that accepts it, issuing nothing, and decide the cycle at the stop after it" in { (service: LedgerService[IO]) =>
       val w = world
+      val key = claude("waiting")
+      val attempt = LineageMember.Attempt(AttemptId(uuid))
+      def continuation(waiting: Boolean) = control(service, w, key, DriverOrigin.Stop, DriverControl.Continue(waiting))
       for {
         _ <- service.initialize(w.operator, "waiting")
         root <- create(service, w.operator, goal("Goal"))
-        _ <- assertIO(DriverPolicy.woken(Harness.Claude) && DriverPolicy.woken(Harness.Pi) && !DriverPolicy.woken(Harness.Codex))
-        _ <- ZIO.foreachDiscard(List(claude("waiting"))) { key =>
-          val session = w.copy(governor = w.other(Role.Governor))
-          val attempt = LineageMember.Attempt(AttemptId(uuid))
-          for {
-            one <- driven(service, session, key, workset(root))
-            _ <- act(service, session.governor, DriverSession.Inherit(one.cycle, LineageMember.Run(one.run), attempt))
-            before <- status(service, session, key)
-            stops <- ZIO.foreach(List.fill(3)(()))(_ => query(service, session, key))
-            after <- status(service, session, key)
-            _ <- assertIO(stops.forall {
-              case DriverReply.Waiting(value, message) => value.state == DriverState.On && value.directives == 1 && value.activeChildren == 1 &&
-                message == s"CQ driver waiting: cycle 1 has attempt ${attempt.id.value} in flight; the session continues when it ends"
-              case _ => false
-            } && before == after && after.exists(value => value.cycle.exists(cycle => cycle.id == one.cycle && cycle.state == CycleState.Active)))
-            // The woken turn works inside the same cycle; with nothing in flight, its stop is decided as any other.
-            _ <- act(service, session.governor, DriverSession.Settle(one.cycle, attempt))
-            decided <- query(service, session, key)
-            _ <- assertIO(decided match {
-              case DriverReply.Stop(DriverStopped(DriverStop.Quiescent, _), Some(value), _) => value.directives == 1 && value.cycle.exists(_.state == CycleState.Ended)
-              case _ => false
-            })
-          } yield ()
-        }
-        // Nothing wakes an idle Codex session, so it is kept in its turn by a resume directive.
-        blocking = w.copy(governor = w.other(Role.Governor))
-        one <- driven(service, blocking, codex("blocking"), workset(root))
-        _ <- act(service, blocking.governor, DriverSession.Inherit(one.cycle, LineageMember.Run(one.run), LineageMember.Attempt(AttemptId(uuid))))
-        kept <- directive(service, blocking, codex("blocking"))
-        _ <- assertIO(kept.directive.token.isInstanceOf[CycleToken.Resume] && kept.status.directives == 2)
+        one <- driven(service, w, key, workset(root))
+        _ <- act(service, w.governor, DriverSession.Inherit(one.cycle, LineageMember.Run(one.run), attempt))
+        before <- status(service, w, key)
+        stops <- ZIO.foreach(List.fill(3)(()))(_ => continuation(true))
+        after <- status(service, w, key)
+        _ <- assertIO(stops.forall {
+          case DriverReply.Waiting(value, message) => value.state == DriverState.On && value.directives == 1 && value.activeChildren == 1 &&
+            message == s"CQ driver waiting: cycle 1 has attempt ${attempt.id.value} in flight; the session continues when it ends"
+          case _ => false
+        } && before == after && after.exists(value => value.cycle.exists(cycle => cycle.id == one.cycle && cycle.state == CycleState.Active)))
+        // A caller that cannot vouch for a wake-up is not left waiting: the same session, whatever its harness, gets a resume directive.
+        kept <- continuation(false)
+        _ <- assertIO(kept match { case DriverReply.Continue(value, status, _) => value.token.isInstanceOf[CycleToken.Resume] && status.directives == 2; case _ => false })
+        // The woken turn works inside the same cycle; with nothing in flight, its stop is decided as any other, whatever the caller accepts.
+        _ <- act(service, w.governor, DriverSession.Settle(one.cycle, attempt))
+        decided <- continuation(true)
+        _ <- assertIO(decided match {
+          case DriverReply.Stop(DriverStopped(DriverStop.Quiescent, _), Some(value), _) => value.directives == 2 && value.cycle.exists(_.state == CycleState.Ended)
+          case _ => false
+        })
       } yield ()
     }
     "reattach a running cycle with a resume directive, keep exactly one run and reject swapped start and resume tokens" in { (service: LedgerService[IO]) =>
@@ -2243,7 +2237,7 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
           one <- driven(service, session, key, workset(root))
           reports <- zio.Ref.make(List.empty[String])
           tracker = new LineageTracker(new DriverSessionClient(new SessionApi(service, session.governor, runtime, action => dropped(action, calls.incrementAndGet())), w.project),
-            message => Unsafe.unsafe { implicit unsafe => runtime.unsafe.run(reports.update(message :: _)).getOrThrowFiberFailure() }, Pause, Pause)
+            message => Unsafe.unsafe { implicit unsafe => runtime.unsafe.run(reports.update(message :: _)).getOrThrowFiberFailure() }, Pause, Pause, Pause.multipliedBy(4))
           _ <- tracker.track(one.cycle, LineageMember.Run(one.run), attempt, observed)
           _ <- verify(session, key, attempt)
         } yield ()
@@ -2260,9 +2254,10 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
         _ <- scenario("tracker-unregistered", settled, (action, _) => action.isInstanceOf[DriverSession.Inherit]) { (session, key, attempt) =>
           failed(service, session, key, s"attempt ${attempt.id.value} of cycle 1 could not be registered: Connection reset")
         }
-        _ <- scenario("tracker-unsettled", settled, (action, _) => action.isInstanceOf[DriverSession.Settle]) { (session, key, attempt) =>
-          eventually(service, session, key)(value => stopped(value, DriverStop.Failure) &&
-            value.get.stopped.get.detail == s"attempt ${attempt.id.value} of cycle 1 could not be settled: Connection reset")
+        // How a member ended is reported until the server has it, however long the server stays out of reach: more calls are lost
+        // here than a registration is tried, and the drive is neither stopped nor left with the member in flight.
+        _ <- scenario("tracker-unsettled", settled, (action, call) => action.isInstanceOf[DriverSession.Settle] && call <= 16) { (session, key, attempt) =>
+          eventually(service, session, key)(value => value.exists(_.state == DriverState.On) && lineage(value).contains(LineageEntry(attempt, lineage(value).headOption.map(_.member), true)))
         }
         _ <- scenario("tracker-unreadable", ZIO.fail(DomainFailure(Fault.Missing("Attempt is not owned by this governing session"))), (_, _) => false) { (session, key, attempt) =>
           eventually(service, session, key)(value => stopped(value, DriverStop.Failure) && value.get.stopped.get.detail.startsWith(s"attempt ${attempt.id.value} of cycle 1 could not be settled: "))
@@ -2420,7 +2415,7 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
           root <- create(service, w.operator, goal(name))
           one <- driven(service, session, key, workset(root))
           phase <- zio.Ref.make[Option[LineageOutcome]](Some(LineageOutcome.Resting))
-          tracker = new LineageTracker(new DriverSessionClient(new SessionApi(service, session.governor, runtime, action => { transit(action); false }), w.project), _ => (), pause, Pause)
+          tracker = new LineageTracker(new DriverSessionClient(new SessionApi(service, session.governor, runtime, action => { transit(action); false }), w.project), _ => (), pause, Pause, Pause.multipliedBy(4))
           reading = observed(phase)
           _ <- tracker.track(one.cycle, LineageMember.Run(one.run), member, reading)
           cycle = ZIO.succeed(registry.get(w.project, key).flatMap(_.cycle))
@@ -2548,7 +2543,7 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
           one <- driven(ledger, session, key, workset(target))
           reports <- zio.Ref.make(List.empty[String])
           tracker = new LineageTracker(new DriverSessionClient(new ApplicationApi(application, authority, runtime), w.project),
-            message => Unsafe.unsafe { implicit unsafe => runtime.unsafe.run(reports.update(message :: _)).getOrThrowFiberFailure() }, Pause, Pause)
+            message => Unsafe.unsafe { implicit unsafe => runtime.unsafe.run(reports.update(message :: _)).getOrThrowFiberFailure() }, Pause, Pause, Pause.multipliedBy(4))
           finished <- Promise.make[Nothing, Unit]
           run = LineageMember.Run(one.run)
           _ <- tracker.record(one.cycle, run, dispatch)

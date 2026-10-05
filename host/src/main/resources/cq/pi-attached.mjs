@@ -194,6 +194,9 @@ export default async function (pi) {
   // The model starts no waiter: the extension tells the session when a unit ends.
   let directory;
   let waiter;
+  // Whether the waiter was already started again after a failure. A waiter that fails twice is not started a third time: the driver then
+  // asks for a resume directive, which keeps the session in its turn, instead of waiting for a message that would not come.
+  let restarted = false;
   const working = new Map();
   function watch(context) {
     if (waiter !== undefined) { const stale = waiter; waiter = undefined; stale.kill("SIGTERM"); }
@@ -205,7 +208,13 @@ export default async function (pi) {
     const chunks = [];
     let size = 0;
     child.stdout.on("data", chunk => { size += chunk.length; if (size <= MAX_WAIT_OUTPUT_BYTES) chunks.push(chunk); });
-    child.once("error", error => { if (waiter === child) { waiter = undefined; context.ui.notify("CQ waiter could not start: " + error.message, "error"); } });
+    const failed = cause => {
+      if (!restarted) { restarted = true; watch(context); return; }
+      context.ui.notify("CQ waiter failed twice: " + cause + "; this session is not told when its running work ends. " +
+        "Read its state with cq_dispatch Status; a drive continues with resume directives", "error");
+      if (driving && context.isIdle()) void proceed(context);
+    };
+    child.once("error", error => { if (waiter === child) { waiter = undefined; failed("it could not start: " + error.message); } });
     child.once("close", code => {
       // A waiter that was replaced or stopped reports nothing: its successor names the same units.
       if (waiter !== child) return;
@@ -217,7 +226,10 @@ export default async function (pi) {
         if (name === "HostGone") {
           working.clear();
           context.ui.notify("CQ host is not running: its children are not followed any more; restart the session; retained deliveries can be recovered", "error");
+          // A drive must not stay on in silence: the continuation query fails on the lost host and says so.
+          if (driving && context.isIdle()) void proceed(context);
         } else if (name === "Ended") {
+          restarted = false;
           for (const end of body.units) working.delete(end.unit.kind + " " + end.unit.id);
           const lines = body.units.map(ended);
           if (working.size > 0) lines.push(`CQ still works on ${working.size} more; you are told when they end.`);
@@ -226,10 +238,7 @@ export default async function (pi) {
           pi.sendMessage({ customType: "cq-wait", content: lines.join("\n"), display: true, details: {} }, { triggerTurn: true });
           watch(context);
         } else throw new Error("unexpected outcome " + name);
-      } catch (error) {
-        working.clear();
-        context.ui.notify("CQ waiter failed: " + error.message + "; read the state of running work with cq_dispatch Status", "error");
-      }
+      } catch (error) { failed(error.message); }
     });
   }
   // A dispatch reply that shows the host working on a unit puts it under the waiter; one that the waiter already names changes nothing.
@@ -262,7 +271,8 @@ export default async function (pi) {
   // The continuation decision is the host's: a directive is submitted unchanged, a stop is shown and nothing is sent.
   async function proceed(context) {
     let reply;
-    try { reply = await driver(context, "Continue", {}); }
+    // Waiting is accepted only while the waiter runs: it is what starts the next turn.
+    try { reply = await driver(context, "Continue", { waiting: waiter !== undefined }); }
     catch (error) {
       driving = false;
       context.ui.setStatus(DRIVER_FOOTER, DRIVER_OFF + ": continuation query failed");
@@ -275,7 +285,7 @@ export default async function (pi) {
       for (const message of body.messages) context.ui.notify(message, "info");
       pi.sendUserMessage(body.directive.text, { deliverAs: "followUp", expandPromptTemplates: true });
     } else if (name === "Waiting") {
-      // Work of the host is in flight: nothing is sent, and the waiter's message starts the turn that continues the cycle.
+      // Work of the host is in flight and the waiter runs: nothing is sent, and its message starts the turn that continues the cycle.
       show(context, body.status);
     } else if (name === "Stop") {
       driving = false;

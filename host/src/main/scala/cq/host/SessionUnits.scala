@@ -183,7 +183,14 @@ object HostView {
 /** Where the attached hosts of one checkout say which session directory each maintains (`hosts/` of the checkout's CQ directory).
   * A hook of that checkout knows a drive's attached session only by its identity, and a `cq wait` without a directory knows only its
   * checkout: both ask here. */
-final class AttachedSessions(configuration: Path) {
+trait SessionViews {
+  def view(session: SessionId): HostView
+  /** The standing units the session's last stop was answered for with the order to start its waiter; none when it was answered otherwise. */
+  def asked(session: SessionId): Option[String]
+  def ask(session: SessionId, units: Option[String]): Unit
+}
+
+final class AttachedSessions(configuration: Path) extends SessionViews {
   private val MaxBytes = 16384
   private val root = configuration.resolve("hosts")
   private def file(session: SessionId): Path = root.resolve(session.value.toString + ".json")
@@ -196,13 +203,19 @@ final class AttachedSessions(configuration: Path) {
     HostFiles.immutable(file(session), HostFiles.encode(AttachedHostRecord_JsonCodec, value), MaxBytes)
   }
   /** A host that ends in order withdraws its record. */
-  def forget(session: SessionId): Unit = { Files.deleteIfExists(file(session)); () }
+  def forget(session: SessionId): Unit = { Files.deleteIfExists(file(session)); Files.deleteIfExists(prompt(session)); () }
+  private def prompt(session: SessionId): Path = root.resolve(session.value.toString + ".asked")
+  override def asked(session: SessionId): Option[String] = Option.when(Files.isRegularFile(prompt(session), LinkOption.NOFOLLOW_LINKS))(HostFiles.text(prompt(session), MaxBytes))
+  override def ask(session: SessionId, units: Option[String]): Unit = units match {
+    case Some(value) => HostFiles.directory(root); Files.writeString(prompt(session), value)
+    case None => Files.deleteIfExists(prompt(session)); ()
+  }
   private def recorded: List[(Path, AttachedHostRecord)] =
     if (!Files.isDirectory(root, LinkOption.NOFOLLOW_LINKS)) Nil
     else Using.resource(Files.list(root))(_.iterator().asScala.filter(_.getFileName.toString.endsWith(".json")).toList).sortBy(_.getFileName.toString).map(path => path -> read(path))
   /** The session directories of the hosts of this checkout that run. */
   def running: List[AttachedHostRecord] = recorded.map(_._2).filter(value => SessionOwner.runs(Path.of(value.directory)))
-  def view(session: SessionId): HostView = {
+  override def view(session: SessionId): HostView = {
     val path = file(session)
     if (!Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)) HostView.Unrecorded
     else {

@@ -228,7 +228,7 @@ def main():
             driven.tool("session", {"Bind": {"token": identity()}}, denied=True)
             bound = driven.tool("session", {"Bind": {"token": started["bind"]}})["Driver"]["reply"]["Bound"]["status"]
             assert bound["state"] == "On" and bound["attached"] == driven_session, bound
-            issued = control("Stop", {"Continue": {}})["Continue"]["directive"]
+            issued = control("Stop", {"Continue": {"waiting": False}})["Continue"]["directive"]
             reference = "T" + target["id"]["number"]
             words = issued["text"].split(" ")
             assert words[:6] == ["$cq-advance", "--roots", reference, "--through", "explore", "--start-token"] and len(words) == 7, issued
@@ -263,12 +263,12 @@ def main():
             assert "out-of-set change" in rejected["Failed"]["fault"]["Denied"]["message"], rejected
             unchanged = driven.tool("read", {"project": project, "selection": {"ItemDetail": {"id": outsider["id"]}}})["Detail"]["view"]["item"]
             assert unchanged["revision"] == outsider["revision"] and unchanged["draft"]["title"] == draft["title"], unchanged
-            stop = control("Stop", {"Continue": {}})["Stop"]
+            stop = control("Stop", {"Continue": {"waiting": False}})["Stop"]
             assert stop["stopped"]["reason"] == "Failure" and "out-of-set change" in stop["stopped"]["detail"] and stop["status"]["state"] == "Off", stop
             own = driven.tool("session", {"Driver": {}})["Driver"]["reply"]["Status"]["value"]
             assert own["state"] == "Off" and own["stopped"] == stop["stopped"], own
             driven.refused("cq/driver", {"Status": {"session": "attached-fixture-session"}})
-            assert control("Stop", {"Continue": {}})["Stop"]["stopped"]["reason"] == "Off"
+            assert control("Stop", {"Continue": {"waiting": False}})["Stop"]["stopped"]["reason"] == "Off"
             change([{"Replace": {"id": outsider["id"], "expected": outsider["revision"], "draft": {**draft, "title": "Driver off: written as before"}}}], [])
             # The hook entry points as Codex runs them: the commands `cq configure` generated, the hook payload on stdin, the hook output on stdout.
             generated = json.loads((repository / ".codex/hooks.json").read_text())["hooks"]
@@ -285,6 +285,8 @@ def main():
             assert hook("UserPromptSubmit", hooked, prompt="Reply with exactly: HELLO") is None
             assert hook("Stop", hooked, stop_hook_active=False, last_assistant_message="HELLO") is None
             assert "rejected: Drive targets are empty" in hook("UserPromptSubmit", hooked, prompt="$cq-drive through=explore")["systemMessage"]
+            # Without its fixture label the task's Probe child keeps running until it is cancelled.
+            change([{"Replace": {"id": target["id"], "expected": revised["Changed"]["ack"]["items"][0]["revision"], "draft": {**draft, "labels": [], "title": "Probed while driven"}}}], [driven_claim["fence"]])
             driving = hook("UserPromptSubmit", hooked, prompt=f"$cq-drive {reference} through=explore")
             offered = driving["hookSpecificOutput"]["additionalContext"]
             assert driving["hookSpecificOutput"]["hookEventName"] == "UserPromptSubmit" and offered.startswith(f"CQ driver drive-start: CQ driver binding: {reference} through explore"), driving
@@ -293,6 +295,22 @@ def main():
             assert hook_bound["state"] == "On" and hook_bound["key"] == {"harness": "Codex", "session": hooked} and hook_bound["attached"] == driven_session, hook_bound
             blocked = hook("Stop", hooked, stop_hook_active=False, last_assistant_message="Bound.")
             assert blocked["decision"] == "block" and blocked["reason"].splitlines()[-1].startswith(f"$cq-advance --roots {reference} --through explore --start-token "), blocked
+            # The hook, as installed, finds this session's host through the checkout: a stop while a child runs is blocked with the order
+            # to wait, and the command it names waits on this session without being told its directory.
+            started_token = blocked["reason"].splitlines()[-1].split(" ")[-1]
+            driven.tool("session", {"Workflow": {"id": identity(), "request": advance, "operatorRequirements": "", "token": {"Start": {"token": {"value": started_token}}}}})
+            probing, = driven.tool("dispatch", {"Select": {"request": {**selection, "request": identity(), "roots": [target["id"]], "work": {"Worker": {"mode": "Probe"}}}}})["Selection"]["value"]["choices"]
+            probe = driven.tool("dispatch", {"StartChoice": {"choice": probing["id"], "harness": "Codex", "fence": driven_claim["fence"]}})["Status"]["value"]
+            ordered = hook("Stop", hooked, stop_hook_active=False, last_assistant_message="Started.")
+            assert ordered is not None and ordered.get("decision") == "block" and ordered["reason"].startswith(
+                f"CQ driver: work of this session still runs (attempt {probe['attempt']['value']} on {reference}). Do not end your turn"), ordered
+            assert ordered["reason"].endswith(f"`{wrapper} wait`"), ordered
+            waiter = subprocess.Popen([str(wrapper), "wait"], cwd=repository, env=env, stdout=subprocess.PIPE, text=True)
+            time.sleep(3)
+            assert waiter.poll() is None, "The wait command ended while the child ran"
+            driven.tool("dispatch", {"Cancel": {"attempt": probe["attempt"]}})
+            reported, _ = waiter.communicate(timeout=60)
+            assert waiter.returncode == 0 and reported.startswith(f"attempt {probe['attempt']['value']} on {reference} ended: "), (waiter.returncode, reported)
             assert hook("UserPromptSubmit", hooked, prompt="$cq-park")["systemMessage"] == f"CQ driver park: CQ driver parked: {reference} through explore"
             assert hook("Stop", hooked, stop_hook_active=True, last_assistant_message="Parked.") is None
             assert hook("Stop", None, stop_hook_active=False) == {"systemMessage": "CQ Stop hook error: Driver session key is missing; no default session is used"}
@@ -326,12 +344,12 @@ def main():
             assert "Invalid" in pi.rpc("cq/driver", {"Start": {"session": "", "input": reference + " through=explore"}})["Failed"]["fault"]
             pi_started = pi.rpc("cq/driver", {"Start": {"session": pi_key, "input": reference + " through=explore"}})["Started"]
             assert pi_started["bind"] is None and pi_started["status"]["state"] == "On" and pi_started["status"]["attached"] == pi_context["session"], pi_started
-            pi_directive = pi.rpc("cq/driver", {"Continue": {"session": pi_key}})["Continue"]["directive"]
+            pi_directive = pi.rpc("cq/driver", {"Continue": {"session": pi_key, "waiting": False}})["Continue"]["directive"]
             assert pi_directive["text"].startswith("/cq:advance --roots " + reference + " --through explore --start-token "), pi_directive
             assert pi.tool("session", {"Driver": {}})["Driver"]["reply"]["Status"]["value"]["cycle"]["id"] == pi_directive["cycle"]
             pi_parked = pi.rpc("cq/driver", {"Park": {"session": pi_key}})["Parked"]
             assert pi_parked["status"]["state"] == "Off" and pi_parked["status"]["stopped"]["reason"] == "Parked", pi_parked
-            assert pi.rpc("cq/driver", {"Continue": {"session": pi_key}})["Stop"]["stopped"]["reason"] == "Off"
+            assert pi.rpc("cq/driver", {"Continue": {"session": pi_key, "waiting": False}})["Stop"]["stopped"]["reason"] == "Off"
         finally:
             pi.close()
     pi_totals = json.loads(cli(["status", "--session", pi_context["session"]["value"], "--json"]))["UsageSummary"]["report"]

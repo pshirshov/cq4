@@ -12,10 +12,6 @@ object DriverDecision {
 }
 
 object DriverPolicy {
-  /** Whether a session of `harness` that has stopped is started again when work of its host ends: Claude Code by the exit of its
-    * background `cq wait`, Pi by its CQ extension. Nothing wakes an idle Codex session when a background command exits
-    * (openai/codex#32188), so a Codex session waits inside its turn. */
-  def woken(harness: Harness): Boolean = harness != Harness.Codex
 
   val MaxSessionKey = 200
   val MaxDrivers = 64

@@ -406,7 +406,8 @@ root data DriverDirective { cycle: CycleId token: CycleToken text: str }
 root adt DriverControl {
   data Start { target: WorksetTarget attached: opt[SessionId] }
   data Park {}
-  data Continue {}
+  // `waiting`: the caller has checked that the session will be woken when work in flight ends, and accepts Waiting for it.
+  data Continue { waiting: bit }
   data Status {}
 }
 root adt DriverSession {
@@ -453,7 +454,7 @@ root adt DriverReply {
 root adt ExtensionDriver {
   data Start { session: str input: str }
   data Park { session: str }
-  data Continue { session: str }
+  data Continue { session: str waiting: bit }
   data Status { session: str }
 }
 root adt ReadSelection {

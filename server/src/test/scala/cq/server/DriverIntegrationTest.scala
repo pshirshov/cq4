@@ -91,7 +91,7 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
     }
     def park: Task[DriverReply] = control(DriverOrigin.UserPromptSubmit, DriverControl.Park())
     /** The continuation query the Stop hook makes when a turn ends. */
-    def continuation: Task[DriverReply] = control(DriverOrigin.Stop, DriverControl.Continue())
+    def continuation: Task[DriverReply] = control(DriverOrigin.Stop, DriverControl.Continue(false))
     def directive: Task[DriverDirective] = continuation.flatMap {
       case DriverReply.Continue(value, _, _) => ZIO.succeed(value)
       case other => ZIO.fail(new IllegalStateException("Expected a directive: " + other))
