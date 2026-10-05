@@ -77,8 +77,30 @@ final class McpSchemas {
 
   def schema(name: String): Json = closure(definitions, definitions(s"cq_api_$name").get)
 
+  /** The input schema of a domain tool under the generated definition names. */
+  private def expanded(tool: McpTool): Json = closure(offered, offered(s"cq_api_${tool.inputType}").get)
+
   /** The input schema an MCP surface advertises for a domain tool. */
-  def input(tool: McpTool): Json = closure(offered, offered(s"cq_api_${tool.inputType}").get)
+  def input(tool: McpTool): Json = compact(expanded(tool))
+
+  /** The input schema an MCP surface advertises for the governing session's local tool whose command type is `name`. */
+  def localInput(name: String): Json = compact(schema(name))
+
+  /** The same contract in fewer bytes, for a schema that every response of a governing model re-reads: definitions are named by their
+    * position, and 32-bit integers lose the bounds that restate their range, which the codec enforces when it decodes the arguments. */
+  private def compact(schema: Json): Json = {
+    val definitions = schema.hcursor.downField("$defs").focus.flatMap(_.asObject).getOrElse(JsonObject.empty)
+    val aliases = definitions.keys.zipWithIndex.map((name, index) => name -> ("d" + Integer.toString(index, Character.MAX_RADIX))).toMap
+    def ranged(fields: JsonObject): Boolean = fields("type").contains(Json.fromString("integer")) &&
+      fields("minimum").contains(Json.fromInt(Int.MinValue)) && fields("maximum").contains(Json.fromInt(Int.MaxValue))
+    def rewritten(value: Json): Json = value.arrayOrObject(value,
+      values => Json.fromValues(values.map(rewritten)),
+      fields => Json.fromJsonObject(JsonObject.fromIterable((if (ranged(fields)) fields.remove("minimum").remove("maximum") else fields).toList.map { case (key, child) =>
+        key -> (if (key == "$ref") Json.fromString("#/$defs/" + aliases(child.asString.get.stripPrefix("#/$defs/"))) else rewritten(child))
+      })))
+    rewritten(schema.mapObject(_.remove("$defs"))).mapObject(_.add("$defs",
+      Json.fromJsonObject(JsonObject.fromIterable(definitions.toList.map((name, value) => aliases(name) -> rewritten(value))))))
+  }
 
   /** The fault a caller of a domain tool receives when `tool.decode` rejects its arguments: the refusal of a selection that no MCP
     * surface offers, or the mismatch with the advertised input schema. */
@@ -136,7 +158,7 @@ final class McpSchemas {
       val inputs = targets.flatMap { target =>
         HarnessTools.mcp(role, target).map { name =>
           val input = target match {
-            case McpTarget.Domain => advertised(tools.find(_.name == name).get).hcursor.downField("inputSchema").focus.get
+            case McpTarget.Domain => expanded(tools.find(_.name == name).get)
             case McpTarget.Local => name match {
               case "dispatch" => schema("DispatchCommand")
               case "workspace" => workspace(role)
@@ -160,14 +182,14 @@ final class McpSchemas {
       "Do not invoke cq run for this interactive workflow. Report to the user normally; there is no governing JSON completion report. " +
       "Outer-session usage is explicitly unobserved unless a supported collector supplies it."
     if (harness != Harness.Codex) instructions
-    else instructions + argumentGuide(tools.map(tool => ("cq." + tool.name, input(tool))) ++
+    else instructions + argumentGuide(tools.map(tool => ("cq." + tool.name, expanded(tool))) ++
       List("cq.dispatch" -> schema("DispatchCommand"), "cq.session" -> schema("SessionCommand")))
   }
 
   def attachedTools: List[Json] = {
     def local(name: String, input: String, output: String, description: String): Json = Json.obj(
       "name" -> Json.fromString(name), "description" -> Json.fromString(description),
-      "inputSchema" -> schema(input), "outputSchema" -> schema(output))
+      "inputSchema" -> localInput(input), "outputSchema" -> schema(output))
     List(local("session", "SessionCommand", "SessionReply",
       "First call Context for project, routes, limits, governing instructions and complete argument guide. Then Workflow with a fresh id and typed scope before dispatch; token is null unless the invocation carries a CQ driver --start-token or --resume-token, which you pass unchanged. Workflow returns the workflow's instructions once: when their text is identical to one an earlier Workflow reply of this session carried, instructions is Unchanged with that activation's id, and you follow the text you hold. Instructions returns the active workflow complete, with its instruction text, operator requirements and subject: call it when you no longer hold them, for example after your context was compacted. An identical retry returns the same activation without reactivating a superseded workflow. Context identifies the active workflow by id, request and cycle. Bind presents the token a CQ drive command printed; Driver reads this session's driver status. Neither starts nor parks a driver."),
       local("dispatch", "DispatchCommand", "DispatchReply",

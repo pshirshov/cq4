@@ -13,6 +13,7 @@ import zio.{Runtime, Task, Unsafe}
 
 final class AttachedGatewayLocal extends AnyWordSpec {
   private val LongInterval = Duration.ofSeconds(30)
+  private val InputSchemaBytes = 46000
   private val schemas = new McpSchemas()
   private val project = ProjectId(UUID.fromString("00000000-0000-4000-8000-000000000001"))
 
@@ -120,6 +121,41 @@ final class AttachedGatewayLocal extends AnyWordSpec {
         } finally session.close()
       }
       assert(schemas.attachedTools.forall(_.hcursor.downField("outputSchema").focus.exists(_.isObject)))
+    }
+
+    "advertise the governing session's input schemas in bounded bytes: definitions under short names, no bounds on 32-bit integers, the same contract (I33)" in {
+      def bytes(value: Json): Int = value.noSpaces.getBytes(UTF_8).length
+      def objects(value: Json): List[io.circe.JsonObject] = value.asObject.toList.flatMap(fields => fields :: fields.values.toList.flatMap(objects)) ++
+        value.asArray.toList.flatten.flatMap(objects)
+      val inputs = schemas.attachedTools.map(tool => tool.hcursor.get[String]("name").fold(throw _, identity) -> tool.hcursor.downField("inputSchema").focus.get)
+      val managed = new LocalControl(null, null, null, null, null, null, schemas, null, null).advertised(LocalCapability(AttemptId(UUID.randomUUID()), Role.Governor))
+      (inputs :+ ("managed dispatch" -> managed.hcursor.downField("inputSchema").focus.get)).foreach { (name, input) =>
+        val defined = input.hcursor.downField("$defs").keys.fold(Set.empty[String])(_.toSet)
+        assert(defined.forall(_.matches("d[0-9a-z]+")) && !input.noSpaces.contains("cq_api_"), s"$name: ${defined.take(5)}")
+        objects(input).foreach { fields =>
+          fields("$ref").foreach(reference => assert(defined(reference.asString.get.stripPrefix("#/$defs/")), s"$name: $reference"))
+          if (fields("type").contains(Json.fromString("integer"))) assert(!fields.contains("minimum") && !fields.contains("maximum"), s"$name: $fields")
+        }
+      }
+      // The same contract: with the generated names and the bounds of a 32-bit integer restored, each schema is the generated one.
+      List("session" -> "SessionCommand", "dispatch" -> "DispatchCommand").foreach { (tool, command) =>
+        val generated = schemas.schema(command)
+        val names = generated.hcursor.downField("$defs").keys.get.toVector
+        def name(alias: String): String = names(Integer.parseInt(alias.drop(1), Character.MAX_RADIX))
+        def restored(value: Json): Json = value.arrayOrObject(value, values => Json.fromValues(values.map(restored)), fields => {
+          val entries = fields.toList.map { (key, child) => key -> (if (key == "$ref") Json.fromString("#/$defs/" + name(child.asString.get.stripPrefix("#/$defs/"))) else restored(child)) }
+          Json.fromFields(if (!fields("type").contains(Json.fromString("integer"))) entries
+            else entries ++ List("minimum" -> Json.fromInt(Int.MinValue), "maximum" -> Json.fromInt(Int.MaxValue)))
+        })
+        val advertised = inputs.toMap.apply(tool)
+        val definitions = advertised.hcursor.downField("$defs").focus.get.asObject.get.toList.map((alias, value) => name(alias) -> restored(value))
+        assert(restored(advertised.mapObject(_.remove("$defs"))).mapObject(_.add("$defs", Json.fromFields(definitions))) == generated, tool)
+      }
+      val sizes = inputs.map((name, input) => name -> bytes(input))
+      println("I33 advertised input schema bytes: " + sizes.map((name, size) => s"$name $size").mkString(", ") + s"; all nine ${sizes.map(_._2).sum}")
+      // Measured 2026-10-05: 44,267 bytes; under the generated names and with the bounds, the nine schemas of the release before took 53,917.
+      // A deliberate addition to a command raises this bound.
+      assert(sizes.map(_._2).sum <= InputSchemaBytes, sizes.toString)
     }
 
     "refuse a read of the Help catalog, which is served to the browser only, without reaching the server, and keep serving" in {
