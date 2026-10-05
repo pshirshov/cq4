@@ -100,7 +100,7 @@ export class HelpDialog {
     });
   }
   private async read(project: api.ProjectId): Promise<void> {
-    const result = await this.effects.call(new api.Command_Read(new api.ReadInput(project, new api.ReadSelection_Catalog())));
+    const result = await this.effects.call(new api.Command_Read(new api.ReadInput(project, new api.ReadSelection_Catalog(new api.CatalogSelection_All()))));
     if (result instanceof api.Result_Failed) throw new Error(faultMessage(result.fault));
     if (!(result instanceof api.Result_Catalog)) throw new Error('Unexpected help catalog response');
     this.catalog = result.value;

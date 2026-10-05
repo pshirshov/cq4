@@ -37,8 +37,9 @@ final class LocalControl(dispatch: DispatchController, cohorts: CohortController
     tool("dispatch", "DispatchCommand", "DispatchReply", "Select bounded cohorts, claim one complete choice, then StartChoice by ID, harness and fence. Workflow runs require choices; direct Start supports explicitly assigned non-workflow runs. Poll compact Status or cancel. Prepare/apply reviewed integration; Combine a NotApplied integration and poll CombinationStatus. Forward handles directly; full prompts/results stay outside your context." + McpSchemas.Revalidation, false)
   else tool("workspace", "WorkspaceCommand", "WorkspaceReply", "List or read bounded pages in your assigned workspace. A prepared resolver may read MergeReport. A candidate reviewer may request a configured Check by name and poll the same operation; wait for Completed evidence before returning. Relative paths only; Git metadata and symlink traversal are denied.", capability.role != Role.Reviewer)
     .mapObject(_.add("inputSchema", schemas.workspace(capability.role)))
-  private def decode[A](codec: BaboonJsonCodec[A], json: Json): Task[A] = ZIO.attempt {
-    val value = codec.decode(Context, json).fold(throw _, identity)
+  private def decode[A](name: String, input: Json, codec: BaboonJsonCodec[A], json: Json): Task[A] = ZIO.attempt {
+    val value = codec.decode(Context, json).fold(error =>
+      throw DomainFailure(Fault.Invalid(schemas.mismatch(name, input, DispatchProjection.concise(String.valueOf(error.getMessage))))), identity)
     require(JsonRoundtrip.lossless(json, codec.encode(Context, value)), "Local command contains undeclared or noncanonical fields")
     value
   }
@@ -49,7 +50,7 @@ final class LocalControl(dispatch: DispatchController, cohorts: CohortController
   }
   private[server] def call(capability: LocalCapability, name: String, arguments: Json): Task[(Json, Boolean)] = {
     if (capability.role == Role.Governor && name == "dispatch") {
-      val operation = decode(DispatchCommand_JsonCodec, arguments).tap(command => ZIO.attemptBlocking(workflow.authorize(command))).flatMap {
+      val operation = decode(name, schemas.schema("DispatchCommand"), DispatchCommand_JsonCodec, arguments).tap(command => ZIO.attemptBlocking(workflow.authorize(command))).flatMap {
         case DispatchCommand.Select(request) => cohorts.select(request).map(DispatchReply.Selection.apply)
         case DispatchCommand.StartChoice(choice, harness, fence) => cohorts.start(choice, harness, fence).map(DispatchReply.Status.apply)
         case DispatchCommand.Start(request) => ZIO.attempt {
@@ -68,7 +69,7 @@ final class LocalControl(dispatch: DispatchController, cohorts: CohortController
       operation.map(value => (DispatchReply_JsonCodec.encode(Context, value), false))
         .catchAll(error => ZIO.succeed((DispatchReply_JsonCodec.encode(Context, DispatchReply.Failed(fault(error))), true)))
     } else if (Set(Role.Explorer, Role.Planner, Role.Worker, Role.Reviewer)(capability.role) && name == "workspace") {
-      decode(WorkspaceCommand_JsonCodec, arguments).flatMap(dispatch.workspace(capability.attempt, _))
+      decode(name, schemas.workspace(capability.role), WorkspaceCommand_JsonCodec, arguments).flatMap(dispatch.workspace(capability.attempt, _))
         .map(value => (WorkspaceReply_JsonCodec.encode(Context, value), false))
         .catchAll(error => ZIO.succeed((WorkspaceReply_JsonCodec.encode(Context, WorkspaceReply.Failed(fault(error))), true)))
     } else ZIO.fail(DomainFailure(Fault.Denied("Local capability does not authorize this tool")))

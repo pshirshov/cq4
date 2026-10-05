@@ -141,14 +141,14 @@ final class CatalogReadLocal extends AnyWordSpec {
     }
 
     "round-trip the catalog request and result through the generated JSON and UEBA codecs and match the generated schemas" in {
-      val input = ReadInput(ProjectId(UUID.fromString("00000000-0000-4000-8000-000000000001")), ReadSelection.Catalog())
+      val input = ReadInput(ProjectId(UUID.fromString("00000000-0000-4000-8000-000000000001")), ReadSelection.Catalog(CatalogSelection.All()))
       val result: Result = Result.Catalog(catalog)
       assert(json(ReadInput_JsonCodec, input) == input && binary(ReadInput_UEBACodec, input) == input)
       assert(json(Result_JsonCodec, result) == result && binary(Result_UEBACodec, result) == result)
       assert(json(HelpCatalog_JsonCodec, catalog) == catalog && binary(HelpCatalog_UEBACodec, catalog) == catalog)
       assert(JsonSchemaCheck.errors(generatedSchema("ReadInput"), ReadInput_JsonCodec.encode(Context, input)) == Nil)
       assert(JsonSchemaCheck.errors(generatedSchema("Result"), Result_JsonCodec.encode(Context, result)) == Nil)
-      val decoded = schemas.tools.find(_.name == "read").get.decode(parsed(s"""{"project":{"value":"${input.project.value}"},"selection":{"Catalog":{}}}"""))
+      val decoded = schemas.tools.find(_.name == "read").get.decode(parsed(s"""{"project":{"value":"${input.project.value}"},"selection":{"Catalog":{"part":{"All":{}}}}}"""))
       assert(decoded == Right(Command.Read(input)))
     }
 

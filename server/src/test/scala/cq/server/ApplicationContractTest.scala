@@ -101,12 +101,12 @@ abstract class ApplicationContractTest extends SpecZIO with AssertZIO {
         val worker = auth.authenticate(auth.grant(root, GrantRequest(project, Actor("worker", SessionId(UUID.randomUUID()), Role.Worker), Now + 10000)).value, None)
         for {
           _ <- application.execute(root, Command.Initialize(ProjectConfig(project, "http://localhost", "catalog")))
-          served <- application.execute(root, Command.Read(ReadInput(project, ReadSelection.Catalog())))
+          served <- application.execute(root, Command.Read(ReadInput(project, ReadSelection.Catalog(CatalogSelection.All()))))
           _ <- assertIO(served == Result.Catalog(catalog.value))
           _ <- assertIO(catalog.value.commands.nonEmpty && catalog.value.agents.size == 9)
-          scoped <- application.execute(worker, Command.Read(ReadInput(project, ReadSelection.Catalog())))
+          scoped <- application.execute(worker, Command.Read(ReadInput(project, ReadSelection.Catalog(CatalogSelection.All()))))
           _ <- assertIO(scoped == served)
-          denied <- application.execute(worker, Command.Read(ReadInput(other, ReadSelection.Catalog())))
+          denied <- application.execute(worker, Command.Read(ReadInput(other, ReadSelection.Catalog(CatalogSelection.All()))))
           _ <- assertIO(denied match { case Result.Failed(_: Fault.Denied) => true; case _ => false })
         } yield ()
     }

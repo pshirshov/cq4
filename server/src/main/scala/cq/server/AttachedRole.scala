@@ -18,7 +18,7 @@ final class AttachedProgram(config: SupervisorConfig, authority: SupervisorAutho
   codex: AttachedCodexUsage, cleanup: WorkspaceCleanup, release: SessionRelease, claims: SessionClaims, logger: IzLogger) {
   private val MaxRecordBytes = 65536
   private val RequestSeconds = 30L
-  private val limits = PeerLimits(Duration.ofSeconds(30), Duration.ofSeconds(10), Duration.ofSeconds(30), Duration.ofSeconds(RequestSeconds), 2 * 1024 * 1024, 32)
+  private val limits = PeerLimits(Duration.ofSeconds(30), Duration.ofSeconds(10), Duration.ofSeconds(30), Duration.ofSeconds(RequestSeconds), AttachedGateway.FrameBytes, 32)
   private val queue = new DeliveryQueue(config.directory.resolve("delivery"))
   private def initial: Task[Unit] = ZIO.attemptBlocking {
     require(config.run.ownership == SessionOwnership.Attached, "Attached host requires attached ownership")

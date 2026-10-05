@@ -1,6 +1,7 @@
 package cq.server
 
 import cq.api.*
+import cq.core.DomainFailure
 import cq.host.{ChildInstructions, DriverAssets, DriverCommand, PiAssets, HarnessTool, HarnessToolPolicy, McpTarget, ToolAccess, WorkflowArgument, WorkflowAssets, WorkflowCatalog, WorkflowCommand}
 
 /** The typed `ReadSelection.Catalog` view. It only projects the workflow and driver command catalogs, their installed assets,
@@ -10,6 +11,16 @@ final class CatalogRead(agents: AgentCatalog, workflows: WorkflowAssets) {
   def this(schemas: McpSchemas) = this(new AgentCatalog(schemas, new ChildInstructions()), new WorkflowAssets())
 
   lazy val value: HelpCatalog = HelpCatalog(WorkflowCatalog.commands.map(command) ++ DriverAssets.catalog.map(driver), agents.entries.map(agent))
+
+  /** One command or one agent is the unit a bounded MCP response frame can carry; the whole catalog serves the browser. */
+  def select(part: CatalogSelection): HelpCatalog = part match {
+    case _: CatalogSelection.All => value
+    case CatalogSelection.OfCommand(command) =>
+      val selected = value.commands.filter(_.command == command)
+      if (selected.isEmpty) throw DomainFailure(Fault.Missing(s"No catalog command $command; the commands are ${value.commands.map(_.command).mkString(", ")}"))
+      HelpCatalog(selected, Nil)
+    case CatalogSelection.OfAgent(work) => HelpCatalog(Nil, value.agents.filter(_.work == work))
+  }
 
   private def prompt(resource: String): CatalogPrompt = CatalogPrompt(resource, workflows.resource(resource))
 

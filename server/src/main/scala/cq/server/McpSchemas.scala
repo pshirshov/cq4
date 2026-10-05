@@ -27,7 +27,7 @@ final class McpSchemas {
   val tools: List[McpTool] = List(
     McpTool("search", "Read a bounded item page using text, quoted phrases, exact IDs (T42), ledger:, status:, tag:, project:, archived:true|false|all, wip:true|false (items covered by an active claim, that is work in progress), or kebab-case relation:T42. NOT/- binds before AND (also implicit), then OR; keywords in any case, quote them to search the words; parentheses group. Active items are implicit unless archived: occurs. Continue with its snapshot cursor; restart on Resync. QuerySyntax returns UTF-16 source spans.", "SearchInput", Set("Found"), false,
       decoder(SearchInput_JsonCodec)(Command.Search.apply)),
-    McpTool("read", "Preview a stored proposal by result handle; read integration reservations and durable result admission; inspect explicit claim membership and collateral overlap for reviewed human takeover; preview exact whole-subgraph termination with typed effects, exclusions and active claims; preview archival of a query's terminal items with the ones retained by open related items; read an item, bounded exact-revision batch, history or changes; complete query text at a UTF-16 cursor with bounded suggestions and syntax diagnostics; inspect artifact metadata or explicitly drill down into bounded text pages by Unicode code-point offset; read the typed help catalog of workflow commands and dispatch agents.", "ReadInput", Set("Proposal", "Integration", "Admission", "Detail", "Details", "History", "Changes", "ArtifactInfo", "ArtifactText", "QueryAnalyzed", "Termination", "Claims", "Catalog"), false,
+    McpTool("read", "Preview a stored proposal by result handle; read integration reservations and durable result admission; inspect explicit claim membership and collateral overlap for reviewed human takeover; preview exact whole-subgraph termination with typed effects, exclusions and active claims; preview archival of a query's terminal items with the ones retained by open related items; read an item, bounded exact-revision batch, history or changes; complete query text at a UTF-16 cursor with bounded suggestions and syntax diagnostics; inspect artifact metadata or explicitly drill down into bounded text pages by Unicode code-point offset; read the typed help catalog of one workflow command (OfCommand, by its command name) or one dispatch agent (OfAgent); All is the whole catalog, which is larger than the response frame of an attached host.", "ReadInput", Set("Proposal", "Integration", "Admission", "Detail", "Details", "History", "Changes", "ArtifactInfo", "ArtifactText", "QueryAnalyzed", "Termination", "Claims", "Catalog"), false,
       decoder(ReadInput_JsonCodec)(Command.Read.apply)),
     McpTool("graph", "Enumerate a transient workset from explicit roots: selected produced work and milestone members, separate one-hop context, and informational readiness reasons. Empty roots select nothing. Context does not expand siblings. Maximum 64 roots and 1024 visited items; Limit fails explicitly. Continue with the returned roots-bound snapshot; restart on Resync. Worksets do not acquire claims.", "GraphInput", Set("Workset"), false,
       decoder(GraphInput_JsonCodec)(Command.Graph.apply)),
@@ -62,6 +62,18 @@ final class McpSchemas {
   )
 
   def schema(name: String): Json = closure(definitions(s"cq_api_$name").get)
+
+  /** What the caller of `tool` is told when its codec rejects the arguments: the codec's `detail` and the top level that `input`,
+    * the tool's advertised input schema, declares. */
+  def mismatch(tool: String, input: Json, detail: String): String = {
+    def required(value: Json): List[String] = value.hcursor.get[List[String]]("required").fold(throw _, identity)
+    val expected = input.hcursor.get[List[Json]]("oneOf") match {
+      case Right(branches) => s"a JSON object with exactly one of the keys ${branches.flatMap(required).mkString(", ")}, " +
+        "whose value is that alternative's JSON object, not a string holding JSON"
+      case Left(_) => s"a JSON object with the fields ${required(input).mkString(", ")}"
+    }
+    s"""The arguments of the CQ tool "$tool" do not match its input schema: $detail. Expected $expected. The tool's inputSchema declares the complete shape."""
+  }
 
   def workspace(role: Role): Json = {
     val root = definitions("cq_api_WorkspaceCommand").get

@@ -7,6 +7,10 @@ import cq.host.{AttachedCodexUsage, AttachedUsage, DispatchProjection, OperatorR
 import io.circe.Json
 import zio.{Task, ZIO}
 
+object AttachedGateway {
+  val FrameBytes: Int = 2 * 1024 * 1024
+}
+
 final class AttachedGateway(config: SupervisorConfig, authority: SupervisorAuthority, schemas: McpSchemas,
   local: LocalControl, workflow: AttachedWorkflow, accounting: AttachedUsage, codex: AttachedCodexUsage, driver: AttachedDriver, claims: SessionClaims) {
   private val Versions = List("2025-03-26", "2025-06-18", "2025-11-25")
@@ -27,11 +31,13 @@ final class AttachedGateway(config: SupervisorConfig, authority: SupervisorAutho
       "Interactive Pi finalized assistant usage is collected by the extension; compaction, auxiliary calls and unreported/interrupted responses remain unobserved. Managed child usage is collected independently."
     else if (config.run.attempt.harness == Harness.Codex) codex.status
     else "Outer interactive model/provider and token usage are unobserved by this host. Managed child usage is collected independently; missing is not zero.")
+  private def decoded[A](name: String, input: String, arguments: Json)(decode: Json => Either[Throwable, A]): A = decode(arguments).fold(error =>
+    throw DomainFailure(Fault.Invalid(schemas.mismatch(name, schemas.schema(input), DispatchProjection.concise(String.valueOf(error.getMessage))))), identity)
   private def tool(name: String, arguments: Json): Task[(Json, Boolean)] = name match {
     case "session" =>
       ZIO.attempt {
         require(arguments.noSpaces.getBytes(java.nio.charset.StandardCharsets.UTF_8).length <= MaxLocalBytes, "Session request exceeds its bound")
-        val command = SessionCommand_JsonCodec.decode(CodecContext, arguments).fold(throw _, identity)
+        val command = decoded(name, "SessionCommand", arguments)(SessionCommand_JsonCodec.decode(CodecContext, _))
         require(JsonRoundtrip.lossless(arguments, SessionCommand_JsonCodec.encode(CodecContext, command)), "Noncanonical session request")
         command
       }.flatMap {
@@ -44,7 +50,7 @@ final class AttachedGateway(config: SupervisorConfig, authority: SupervisorAutho
     case "dispatch" =>
       ZIO.attempt {
         require(arguments.noSpaces.getBytes(java.nio.charset.StandardCharsets.UTF_8).length <= MaxLocalBytes, "Dispatch request exceeds its bound")
-        val command = DispatchCommand_JsonCodec.decode(CodecContext, arguments).fold(throw _, identity)
+        val command = decoded(name, "DispatchCommand", arguments)(DispatchCommand_JsonCodec.decode(CodecContext, _))
         require(JsonRoundtrip.lossless(arguments, DispatchCommand_JsonCodec.encode(CodecContext, command)), "Noncanonical dispatch request")
         workflow.authorize(command)
         command
@@ -53,14 +59,26 @@ final class AttachedGateway(config: SupervisorConfig, authority: SupervisorAutho
       }}
     case _ => ZIO.attemptBlocking {
       val definition = schemas.tools.find(_.name == name).getOrElse(throw DomainFailure(Fault.Denied("Unavailable attached tool")))
-      val command = definition.decode(arguments).fold(throw _, identity)
+      val command = decoded(name, definition.inputType, arguments)(definition.decode)
       val canonical = Command_JsonCodec.encode(CodecContext, command).asObject.get.values.head.hcursor.downField("input").focus.get
       require(JsonRoundtrip.lossless(arguments, canonical), "Noncanonical domain request")
       val value = claims.call(command)
       Result_JsonCodec.encode(CodecContext, value) -> value.isInstanceOf[Result.Failed]
     }
   }
-  def handle(peer: StdioPeer, json: Json): Task[Option[Json]] = {
+  /** A response the peer cannot frame fails its own request only; sending it would end the host for every later request. */
+  def handle(peer: StdioPeer, json: Json): Task[Option[Json]] = respond(peer, json).map(_.map { response =>
+    val size = StdioPeer.frame(response).length
+    if (size <= peer.frameBytes) response
+    else {
+      val id = json.hcursor.downField("id").focus.getOrElse(Json.Null)
+      val message = s"The response is $size bytes and exceeds the ${peer.frameBytes}-byte MCP frame bound of this host. " +
+        "Nothing was returned; narrow the request (a smaller limit or page, or a narrower selection) and retry."
+      if (json.hcursor.get[String]("method") != Right("tools/call")) failure(id, -32603, message)
+      else success(id, result(SessionReply_JsonCodec.encode(CodecContext, SessionReply.Failed(Fault.Limit(message))), true))
+    }
+  })
+  private def respond(peer: StdioPeer, json: Json): Task[Option[Json]] = {
     val cursor = json.hcursor
     val id = cursor.downField("id").focus.getOrElse(Json.Null)
     val method = cursor.get[String]("method").getOrElse("")

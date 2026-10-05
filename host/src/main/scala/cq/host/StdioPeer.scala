@@ -17,6 +17,10 @@ final class ProcessOwner(handle: ProcessHandle) extends OwnerLiveness {
 
 final case class PeerLimits(startup: Duration, heartbeat: Duration, reply: Duration, operation: Duration, frameBytes: Int, queued: Int)
 
+object StdioPeer {
+  def frame(value: Json): Array[Byte] = (value.noSpaces + "\n").getBytes(UTF_8)
+}
+
 final class StdioPeer(input: InputStream, output: OutputStream, owner: OwnerLiveness, limits: PeerLimits,
   onClosing: () => Unit) extends AutoCloseable {
   private val PollMillis = 100L
@@ -37,9 +41,10 @@ final class StdioPeer(input: InputStream, output: OutputStream, owner: OwnerLive
     operation = Some(System.nanoTime())
   }
   def endOperation(): Unit = synchronized { operation = None }
+  val frameBytes: Int = limits.frameBytes
   def send(value: Json): Unit = {
-    val bytes = (value.noSpaces + "\n").getBytes(UTF_8)
-    require(bytes.length <= limits.frameBytes, "MCP response exceeds its frame bound")
+    val bytes = StdioPeer.frame(value)
+    require(bytes.length <= frameBytes, "MCP response exceeds its frame bound")
     if (reason.nonEmpty || !outgoing.offer(bytes)) {
       stop("MCP output queue is full or closed")
       throw new IllegalStateException("MCP output queue is full or closed")
