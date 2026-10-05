@@ -2,7 +2,8 @@ import { element } from './editor.js';
 
 const TITLE = 1;
 const TITLE_NEIGHBOR = 2;
-const MIN_TITLE = 80;
+// Wide enough for about five words a line beside an open item pane; the other columns keep their minima and the pane scrolls to them.
+const MIN_TITLE = 200;
 const MAX_WIDTH = 1200;
 const STEP = 16;
 

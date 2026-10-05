@@ -294,14 +294,30 @@ tbody tr[aria-selected=true] { background: #243d4c; }
 .field-value p:last-child { margin-bottom: 0; }
 .field-value table { width: auto; }
 .field-value a { color: #80cef0; }
-.relationship-graph { position: relative; display: grid; grid-template-columns: 1fr .9fr 1fr; gap: 3rem; margin: 1rem 0; isolation: isolate; }
-.graph-neighbors, .graph-center { min-width: 0; }
-.graph-center { align-self: center; }
-.graph-node { position: relative; background: #1c2630; border: 1px solid currentColor; border-radius: .5rem; padding: .7rem; margin: 1rem 0; overflow-wrap: anywhere; }
+/* Relationship graph (web/src/relationship-graph.ts): the centre item holds the middle 2×2 block of a 4×4 grid and its neighbours the
+   perimeter cells that the script assigns, so the graph fills the dialog body and every edge is a clear line from the centre. */
+.graph-body { display: flex; flex-direction: column; gap: 6px; }
+.graph-body p { margin: 0; }
+.graph-controls { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; }
+.graph-controls p { flex: 1 1 320px; color: #a9b8c6; }
+.graph-hint button { margin-left: 6px; }
+.graph-body nav { display: flex; align-items: center; gap: 10px; }
+.graph-body nav button { width: auto; margin: 0; }
+.relationship-graph { position: relative; flex: 1 0 auto; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); grid-template-rows: repeat(4, minmax(min-content, 1fr)); gap: 12px 40px; isolation: isolate; }
+.graph-node { grid-column: var(--graph-column); grid-row: var(--graph-row); align-self: center; min-width: 0; background: #1c2630; border: 1px solid currentColor; border-radius: .5rem; padding: 6px 8px; overflow-wrap: anywhere; }
 .graph-node button { width: 100%; white-space: normal; text-align: left; }
-.graph-node p, .graph-node h3 { margin: .4rem 0; }
-.graph-root { border-width: 2px; }
+.graph-node[data-direction=incoming] { box-shadow: inset 4px 0 #d9a441; padding-left: 11px; }
+.graph-node[data-direction=outgoing] { box-shadow: inset -4px 0 #68c7ec; padding-right: 11px; }
+.graph-relation { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0 8px; margin-bottom: 4px; font-size: 12px; }
+.graph-title, .graph-root h3 { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.graph-root { grid-column: 2 / 4; grid-row: 2 / 4; place-self: center; max-width: 64%; max-height: 64%; overflow: hidden; border-width: 2px; padding: 10px 12px; }
+.graph-root h3 { margin: 0; -webkit-line-clamp: 4; }
+.graph-root:focus, .graph-node button:focus-visible { outline: 2px solid #68c7ec; outline-offset: 2px; }
+.graph-node button:focus-visible { outline-offset: 0; }
 .graph-arrows { position: absolute; inset: 0; width: 100%; height: 100%; z-index: -1; pointer-events: none; overflow: visible; }
 .graph-arrows line { stroke: currentColor; stroke-width: 1.5; }
 .graph-arrows path { fill: currentColor; }
-@media (max-width: 700px) { .relationship-graph { grid-template-columns: 1fr; gap: 1rem; } }
+@media (max-width: 700px) {
+  .relationship-graph { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; gap: 1rem; }
+  .graph-node, .graph-root { grid-column: auto; grid-row: auto; place-self: stretch; max-width: none; max-height: none; }
+}
