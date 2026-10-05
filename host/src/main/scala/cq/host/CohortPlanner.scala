@@ -140,6 +140,15 @@ final class CohortPlanner(api: ServerApi, owner: Scope, bases: ExecutionBase, ch
     } else CohortExecutionFingerprint(semantic, members.map(member => member.item.id -> fingerprint(work, List(member), context)).toMap)
   }
 
+  // The last attempt on this input left no result: the retry receives its fault among its artifacts. That artifact is context for the
+  // child, not operative input, so progress keeps comparing the input that failed.
+  private def failure(hash: CohortExecutionFingerprint): Option[ArtifactId] =
+    (hash.group :: hash.members.toList.sortBy((id, _) => LedgerPolicy.key(id)).map(_._2)).flatMap(progress.failure).headOption.map(_.artifact)
+  private def operative(context: Context, failure: Option[ArtifactId]): Context = failure.fold(context) { id =>
+    val kept = context.artifacts.zip(context.operative).filterNot((artifact, _) => artifact.metadata.id == id)
+    context.copy(artifacts = kept.map(_._1), operative = kept.map(_._2))
+  }
+
   // Exact revisions precede stale groups; within each class, precedence decides. A group that shares a member with an earlier one is ignored: the newest assessment decides between two verdicts
   // for one group and between two groups that name one Task, so the groups that remain are disjoint.
   private def assessments(context: Context): List[CohortAssessment] = {
@@ -268,14 +277,17 @@ final class CohortPlanner(api: ServerApi, owner: Scope, bases: ExecutionBase, ch
         group.filterNot(deferred.contains).take(CohortBounds.Choices - offered).foreach(member =>
           offer(List(member), work, if (reason == CohortReason.AssessmentRequired) reason else CohortReason.Single, None, inputs, content))
       } else {
-        val excluded = if (!fits(inputs, work, group, content)) Some(CohortReason.InputBound)
+        val supplied = failure(hash).fold(inputs)(id => inputs.copy(artifacts = inputs.artifacts :+ id))
+        val bounded = supplied.artifacts.size <= CohortBounds.References
+        lazy val suppliedContent = if (supplied == inputs) content else { validate(supplied); context(call, supplied, base, content.revisions) }
+        val excluded = if (!bounded || !fits(supplied, work, group, suppliedContent)) Some(CohortReason.InputBound)
           else if (progress.deferred(hash.group) || deferred.nonEmpty) Some(CohortReason.Deferred) else None
         considered :+= CohortConsidered(refs, excluded.getOrElse(reason), Some(hash.group))
         if (excluded.isEmpty) {
           val id = RequestId(UUID.randomUUID())
           val choiceReason = if (work == DispatchWork.Worker(WorkerMode.Implement) && inputs.previous.isEmpty && content.results.exists(_.value.candidate.nonEmpty))
             CohortReason.FreshFromBase else reason
-          choices += CohortChoice(id, work, refs, inputs.guidance, inputs.artifacts, inputs.previous, inputs.limits,
+          choices += CohortChoice(id, work, refs, supplied.guidance, supplied.artifacts, supplied.previous, supplied.limits,
             if (refs.size > 1) Some(UUID.randomUUID()) else None, choiceReason, witness)
           fingerprints += id -> hash
           offered += 1
@@ -380,7 +392,7 @@ final class CohortPlanner(api: ServerApi, owner: Scope, bases: ExecutionBase, ch
     MilestonePolicy.admit(choice.work, loaded.items, new MilestoneRecords(call, owner.project))
     val inputs = request.copy(work = choice.work, guidance = choice.guidance, artifacts = choice.artifacts, previous = choice.previous)
     val ctx = context(call, inputs, bases.fresh(), current.view.mapValues(_.item.revision).toMap)
-    require(fits(inputs, choice.work, loaded.items, ctx) && executionFingerprint(choice.work, loaded.items, ctx, choice.reason) == expected,
+    require(fits(inputs, choice.work, loaded.items, ctx) && executionFingerprint(choice.work, loaded.items, operative(ctx, failure(expected)), choice.reason) == expected,
       "Cohort operative input changed; select again")
     call(Command.Graph(GraphInput(owner.project, request.roots, None, Some(snapshot), 1)))
   }

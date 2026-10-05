@@ -1,7 +1,7 @@
 package cq.server
 
 import cq.api.*
-import cq.host.{CohortArtifactFingerprint, CohortArtifacts, CohortExecutionFingerprint, CohortFingerprint, CohortProgress, CohortResultFingerprint}
+import cq.host.{CohortArtifactFingerprint, CohortArtifacts, CohortExecutionFingerprint, CohortFailure, CohortFingerprint, CohortProgress, CohortResultFingerprint}
 import java.util.UUID
 import org.scalatest.wordspec.AnyWordSpec
 
@@ -191,6 +191,42 @@ final class CohortProgressLocal extends AnyWordSpec {
       intercept[IllegalArgumentException](progress.started(execution))
       val changed = hash(List(item(1)), Nil, checks.map(_.copy(command = List("new-check"))))
       assert(!progress.deferred(changed))
+    }
+
+    "D145: release an input whose attempt left no result, until the same fault follows twice in a row" in {
+      val progress = new CohortProgress
+      val group = hash(List(item(1), item(2)), Nil, checks)
+      val members = Map(id(1) -> hash(List(item(1)), Nil, checks), id(2) -> hash(List(item(2)), Nil, checks))
+      val execution = CohortExecutionFingerprint(group, members)
+      val inputs = group :: members.values.toList
+      progress.order(List(id(1), id(2)))
+      def failure(fault: String): CohortFailure = CohortFailure(ArtifactId(UUID.randomUUID()), fault)
+      val malformed = failure("malformed output")
+      progress.started(execution)
+      assert(inputs.forall(progress.deferred) && inputs.forall(progress.failure(_).isEmpty))
+      assert(!progress.finished(execution, Some(malformed)))
+      assert(!inputs.exists(progress.deferred) && inputs.forall(progress.failure(_).contains(malformed)) && progress.ended(group))
+      val refused = failure("refused report")
+      progress.started(execution)
+      assert(!progress.finished(execution, Some(refused)) && !inputs.exists(progress.deferred) && inputs.forall(progress.failure(_).contains(refused)))
+      progress.started(execution)
+      assert(progress.finished(execution, Some(failure("refused report"))))
+      assert(inputs.forall(progress.deferred) && inputs.forall(progress.failure(_).isEmpty))
+      val admitted = new CohortProgress
+      admitted.order(List(id(1), id(2)))
+      admitted.started(execution)
+      assert(!admitted.finished(execution, None) && inputs.forall(admitted.deferred) && inputs.forall(admitted.failure(_).isEmpty))
+    }
+
+    "D145: read the fault of a child only from a receipt that has no result and advises Retry" in {
+      def receipt(phase: DispatchPhase, next: ChildNext, blocker: Option[String], result: Option[ArtifactId]): DispatchStatus =
+        DispatchStatus(RequestId(UUID.randomUUID()), AttemptId(UUID.randomUUID()), phase, None, List(id(1)), cq.host.DispatchProjection.EmptyCounts, next,
+          blocker, result, None, true, true, None, None)
+      assert(CohortFailure.fault(receipt(DispatchPhase.Failed, ChildNext.Retry, Some("refused report"), None)).contains("refused report"))
+      assert(CohortFailure.fault(receipt(DispatchPhase.Cancelled, ChildNext.Retry, Some("cancelled"), None)).contains("cancelled"))
+      assert(CohortFailure.fault(receipt(DispatchPhase.Completed, ChildNext.Retry, Some("worker reported failure"), Some(ArtifactId(UUID.randomUUID())))).isEmpty)
+      assert(CohortFailure.fault(receipt(DispatchPhase.Unknown, ChildNext.InspectEvidence, Some("cleanup unconfirmed"), None)).isEmpty)
+      assert(CohortFailure.fault(receipt(DispatchPhase.PublicationPending, ChildNext.RetryDelivery, Some("publication pending"), None)).isEmpty)
     }
   }
 }

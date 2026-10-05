@@ -174,7 +174,7 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
     running <- ZIO.attemptBlocking(planner.plan(input.copy(request = RequestId(uuid)), ArtifactId(uuid)))
     _ <- ZIO.attempt(assert(running.evidence.decision.choices.isEmpty && running.evidence.considered.exists(_.reason == CohortReason.Deferred),
       "Running assessment must defer its group: " + running.evidence.toString.take(4000)))
-    _ <- ZIO.attempt(progress.finished(group))
+    _ <- ZIO.attempt(progress.finished(group, None))
     retry = input.copy(request = RequestId(uuid))
     again <- ZIO.attemptBlocking(planner.plan(retry, ArtifactId(uuid)))
     _ <- ZIO.attempt(assert(alone(again) == members.map(id => (Implement, Set(id), CohortReason.UnknownAssessment)) && again.evidence.decision.counts.excluded == 0 &&
@@ -323,6 +323,58 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
         revised <- ZIO.attemptBlocking(nested.plan(input.copy(request = RequestId(uuid), artifacts = List(reviews(2).id)), ArtifactId(uuid)))
         _ <- assertIO(repeated.evidence.decision.choices.isEmpty)
         _ <- assertIO(revised.evidence.decision.choices.size == 1)
+      } yield ()
+    }
+
+    "D145: offer an input again after its attempt left no result, with the fault as context, and keep the deferral after an admitted result" in {
+      (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO]) => for {
+        runtime <- ZIO.runtime[Any]
+        fixture <- assessed(ledger, usage, artifacts, admissions, 2, CohortCompatibility.Compatible)
+        reads = new EvidenceApi(api(ledger, fixture.scope, runtime), artifacts, admissions, fixture.scope, runtime)
+        progress = new CohortProgress
+        planner = new CohortPlanner(reads, fixture.scope, fixed(fixture.base), fixture.checks, progress, new OperatorRequirements(""))
+        member = fixture.members.head
+        input = request(Set(member.id), DispatchWork.Planner())
+        selecting = () => { val fresh = input.copy(request = RequestId(uuid)); ZIO.attemptBlocking(planner.plan(fresh, ArtifactId(uuid))).map(fresh -> _) }
+        deferred = (plan: CohortPlan) => plan.evidence.decision.choices.isEmpty &&
+          plan.evidence.considered.map(value => value.members -> value.reason) == List(List(member) -> CohortReason.Deferred)
+        // The receipt of a child whose report violates a shape rule: Failed, no result, and the host's own advice to retry.
+        failed = (fault: String) => DispatchStatus(RequestId(uuid), AttemptId(uuid), DispatchPhase.Failed, None, List(member.id), DispatchProjection.EmptyCounts,
+          ChildNext.Retry, Some(fault), None, None, true, true, None, None)
+        conclude = (execution: CohortExecutionFingerprint, fault: String) => for {
+          found <- ZIO.attempt(CohortFailure.fault(failed(fault)).get)
+          note <- artifacts.upload(fixture.collector, ArtifactUpload(fixture.scope.project, ArtifactId(uuid), fixture.parent, ArtifactKind.Evidence, "text/plain", found))
+          repeated <- ZIO.attempt(progress.finished(execution, Some(CohortFailure(note.id, found))))
+        } yield note.id -> repeated
+        first <- selecting()
+        _ <- assertIO(first._2.evidence.decision.choices.map(choice => choice.members -> choice.artifacts) == List(List(member) -> Nil))
+        execution = first._2.fingerprints(first._2.evidence.decision.choices.head.id)
+        _ <- ZIO.attempt(progress.started(execution))
+        running <- selecting()
+        _ <- assertIO(deferred(running._2))
+        shape <- conclude(execution, "Invalid(The report violates a shape rule)")
+        again <- selecting()
+        retry = again._2.evidence.decision.choices
+        _ <- ZIO.attempt(assert(retry.map(choice => choice.members -> choice.artifacts) == List(List(member) -> List(shape._1)) && !shape._2 &&
+          again._2.fingerprints(retry.head.id) == execution, "An attempt without a result must not defer its input: " + again._2.evidence.considered))
+        _ <- ZIO.attemptBlocking(planner.verify(again._1, retry.head, execution))
+        _ <- ZIO.attempt(progress.started(execution))
+        malformed <- conclude(execution, "expected ] or , got '}' (line 1, column 12)")
+        third <- selecting()
+        _ <- assertIO(third._2.evidence.decision.choices.map(_.artifacts) == List(List(malformed._1)) && !malformed._2)
+        _ <- ZIO.attemptBlocking(planner.verify(third._1, third._2.evidence.decision.choices.head, execution))
+        _ <- ZIO.attempt(progress.started(execution))
+        same <- conclude(execution, "expected ] or , got '}' (line 1, column 12)")
+        unchanged <- selecting()
+        _ <- ZIO.attempt(assert(same._2 && deferred(unchanged._2), "The same fault twice in a row must stay deferred: " + unchanged._2.evidence))
+        admitted = new CohortProgress
+        other = new CohortPlanner(reads, fixture.scope, fixed(fixture.base), fixture.checks, admitted, new OperatorRequirements(""))
+        offered <- ZIO.attemptBlocking(other.plan(input.copy(request = RequestId(uuid)), ArtifactId(uuid)))
+        result = offered.fingerprints(offered.evidence.decision.choices.head.id)
+        _ <- ZIO.attempt(admitted.started(result))
+        _ <- assertIO(!admitted.finished(result, None))
+        settled <- ZIO.attemptBlocking(other.plan(input.copy(request = RequestId(uuid)), ArtifactId(uuid)))
+        _ <- assertIO(deferred(settled))
       } yield ()
     }
 

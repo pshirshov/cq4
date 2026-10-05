@@ -2340,6 +2340,12 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
           _ <- tracker.track(CycleId(uuid), run, LineageMember.Attempt(AttemptId(uuid)), ZIO.some(LineageOutcome.Settled))
           problems <- reports.get
           _ <- assertIO(problems.size == 1 && problems.head.startsWith("Driver lineage registration failed for attempt ") && problems.head.contains("the driver was not stopped"))
+          // D145: an attempt that repeated the fault of the attempt before it on the same input stops the drive, naming the work and the fault.
+          again = LineageMember.Attempt(AttemptId(uuid))
+          _ <- tracker.track(one.cycle, dispatch, again, ZIO.some(LineageOutcome.Failed("failed on G1 with the same fault as the attempt before it on the same input: refused report")))
+          stopped <- (ZIO.sleep(zio.Duration.fromMillis(50)) *> status(ledger, session, key)).repeatUntil(_.exists(_.state == DriverState.Off)).timeoutFail(new IllegalStateException("The driver was not stopped"))(zio.Duration.fromSeconds(20))
+          _ <- assertIO(stopped.flatMap(_.stopped).contains(DriverStopped(DriverStop.Failure,
+            s"attempt ${again.id.value} of cycle ${stopped.get.cycle.get.number} failed on G1 with the same fault as the attempt before it on the same input: refused report")))
         } yield ()
     }
   }

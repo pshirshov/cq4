@@ -1,13 +1,15 @@
 package cq.server
 
 import cq.api.*
-import cq.core.{ArtifactService, DomainFailure}
+import cq.core.{ArtifactService, DomainFailure, DriverPolicy}
 import cq.host.*
 import java.time.Clock
+import logstage.IzLogger
+import scala.util.{Failure, Success, Try}
 import zio.{Task, ZIO}
 
 final class CohortController(config: SupervisorConfig, authority: SupervisorAuthority, workflow: WorkflowExecution,
-  dispatch: DispatchController, candidates: CandidateWorkspace, requirements: OperatorRequirements, clock: Clock) {
+  dispatch: DispatchController, candidates: CandidateWorkspace, requirements: OperatorRequirements, clock: Clock, logger: IzLogger) {
   private val progress = new CohortProgress
   private val planner = new CohortPlanner(authority.governor, config.owner, candidates, config.settings.checks, progress, requirements)
   private var decisions = Map.empty[RequestId, CohortPlan]
@@ -67,8 +69,27 @@ final class CohortController(config: SupervisorConfig, authority: SupervisorAuth
           !claim.released && claim.expiresAt > clock.millis()), "Cohort start requires its exact current governing claim")
         progress.started(plan.fingerprints(id))
       }
-      request -> SelectedDispatch(choice.cohort, plan.evidence.decision.artifact, admission, () => progress.finished(plan.fingerprints(id)))
+      request -> SelectedDispatch(choice.cohort, plan.evidence.decision.artifact, admission, concluded(plan.fingerprints(id), choice, _))
     })
     resolved.flatMap((request, selected) => dispatch.startSelected(request, selected))
+  }
+
+  // A child whose receipt advises Retry left no result: its fault is published for the next attempt and its input is offered again.
+  // The reply is defined when the attempt before it on the same input ended in the same fault; that input stays deferred, as it does
+  // when the fault cannot be published.
+  private def concluded(fingerprint: CohortExecutionFingerprint, choice: CohortChoice, status: DispatchStatus): Option[String] = {
+    val failure = CohortFailure.fault(status).flatMap { fault =>
+      val upload = ArtifactUpload(config.project.project, NativeArtifacts.id(config.run.attempt.id, "failure-" + status.attempt.value), config.run.attempt.id,
+        ArtifactKind.Evidence, "text/plain", s"The previous attempt on this assignment (${status.attempt.value}) left no admitted result. Its fault: $fault")
+      Try(authority.collector.artifact(upload)) match {
+        case Success(metadata) => Some(CohortFailure(metadata.id, fault))
+        case Failure(error) =>
+          val message = s"The fault of attempt ${status.attempt.value} was not published, so its input stays deferred: ${error.getMessage}"
+          logger.warn(s"$message")
+          None
+      }
+    }
+    Option.when(progress.finished(fingerprint, failure))(
+      s"failed on ${DriverPolicy.references(choice.members.map(_.id))} with the same fault as the attempt before it on the same input: ${failure.get.fault}")
   }
 }
