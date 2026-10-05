@@ -239,6 +239,12 @@ final class CohortProgressLocal extends AnyWordSpec {
       assert(end(failed, Some(false)) == (ChildEnd.Repeated, Some("input"), Some("refused report")))
       assert(end(failed, None) == (ChildEnd.Failed, Some("input"), Some("refused report")))
       assert(CohortFailure.outcome(failed, None, None).input.isEmpty)
+      // A failure whose text is blank, as an exception with an empty message leaves it, still yields an outcome the server admits.
+      for (blank <- List("", " \n\t"); offered <- List(Some(true), Some(false), None)) {
+        val outcome = CohortFailure.outcome(receipt(DispatchPhase.Failed, ChildNext.Retry, Some(blank), None), Some("input"), offered)
+        cq.core.DriverPolicy.outcome(outcome)
+        assert(outcome.fault.contains(CohortFailure.Unstated))
+      }
       assert(end(receipt(DispatchPhase.Cancelled, ChildNext.Retry, Some("Cancelled by the governing session"), None), None) == (ChildEnd.Cancelled, Some("input"), None))
       assert(end(receipt(DispatchPhase.Completed, ChildNext.Retry, Some("worker reported failure"), Some(ArtifactId(UUID.randomUUID()))), None) == (ChildEnd.Admitted, Some("input"), None))
       assert(end(receipt(DispatchPhase.Unknown, ChildNext.InspectEvidence, Some("cleanup unconfirmed"), None), None) == (ChildEnd.Unknown, Some("input"), None))

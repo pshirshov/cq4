@@ -5,8 +5,9 @@ import DriverRecords.*
 
 sealed trait DriverDecision
 object DriverDecision {
-  // `retried` holds the failed attempts of the previous cycle when they alone are why the drive continues.
-  final case class Continue(retried: List[ChildOutcome]) extends DriverDecision
+  // `offered` holds the failed attempts of the previous cycle when they alone are why the drive continues, and `retried` those and the
+  // ones of the unchanged cycles before it, the latest for each input.
+  final case class Continue(retried: List[ChildOutcome], offered: List[ChildOutcome]) extends DriverDecision
   final case class Stop(value: DriverStopped) extends DriverDecision
 }
 
@@ -130,16 +131,19 @@ object DriverPolicy {
       .flatMap(items.get).filter(awaitsUser)
     val user = (waiting ++ blockers).map(_.id).distinct
     val unchanged = previous.exists(_.snapshot.copy(snapshot = snapshot.snapshot) == snapshot)
-    // A cycle that changed nothing but left failed inputs for the host to offer again is not quiescent. `retried` holds what the cycle
-    // before it left in the same way, so an input that failed in both, whatever the fault texts, ends the drive.
-    val retried = if (unchanged) previous.toList.flatMap(retryable) else Nil
-    val again = for { now <- retried; before <- previous.toList.flatMap(_.retried) if before.input == now.input } yield before -> now
-    if (work.nonEmpty && !unchanged) DriverDecision.Continue(Nil)
+    // A cycle that changed nothing but left failed inputs for the host to offer again is not quiescent. Its `retried` holds what the
+    // unchanged cycles before it left in the same way, so an input that fails a second time before any cycle changes something ends the
+    // drive, whatever the fault texts and whichever other inputs failed in between.
+    val offered = if (unchanged) previous.toList.flatMap(retryable) else Nil
+    val earlier = previous.toList.flatMap(_.retried)
+    val again = for { now <- offered; before <- earlier if before.input == now.input } yield before -> now
+    if (work.nonEmpty && !unchanged) DriverDecision.Continue(Nil, Nil)
     else if (work.nonEmpty && again.nonEmpty) DriverDecision.Stop(DriverStopped(DriverStop.Failure, again.map { (before, now) =>
-      s"${references(now.members)} failed without a result in two consecutive cycles on the same input while nothing else changed: " +
-        s"attempt ${before.attempt.value} of cycle ${previous.get.number - 1}: ${before.fault.get}; attempt ${now.attempt.value} of cycle ${previous.get.number}: ${now.fault.get}"
+      s"${references(now.members)} failed without a result twice on the same input while no cycle in between changed anything: " +
+        s"attempt ${before.attempt.value}: ${before.fault.get}; attempt ${now.attempt.value} of cycle ${previous.get.number}: ${now.fault.get}"
     }.mkString("; ")))
-    else if (work.nonEmpty && retried.nonEmpty) DriverDecision.Continue(retried)
+    else if (work.nonEmpty && offered.nonEmpty)
+      DriverDecision.Continue(earlier.filterNot(before => offered.exists(_.input == before.input)) ++ offered, offered)
     else if (user.nonEmpty) DriverDecision.Stop(DriverStopped(DriverStop.UserInputRequired,
       s"Awaiting the user on ${references(user)}; the driver never answers questions or infers approval"))
     else if (work.nonEmpty) DriverDecision.Stop(DriverStopped(DriverStop.Quiescent,

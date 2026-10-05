@@ -156,11 +156,11 @@ final class DriverService(registry: DriverRegistry, planner: WorksetPlanner) {
           else decide(snapshot, finished) match {
             case DriverDecision.Stop(value) => stop(settled, value, messages, now)
             case _: DriverDecision.Continue if record.directives >= MaxDirectives => stop(settled, limit, messages, now)
-            case DriverDecision.Continue(retried) =>
+            case DriverDecision.Continue(retried, offered) =>
               val start = token()
               val cycle = CycleRecord(CycleId(UUID.randomUUID()), finished.fold(1)(_.number + 1), record.targets, record.through, snapshot,
                 CycleState.Pending, Some(start), None, Map.empty, None, Nil, Nil, Set.empty, Set.empty, Nil, retried)
-              directed(record, cycle, CycleToken.Start(start), messages ++ finished.flatMap(retrying(_, retried)), now)
+              directed(record, cycle, CycleToken.Start(start), messages ++ finished.flatMap(retrying(_, offered)), now)
           }
       }
   }

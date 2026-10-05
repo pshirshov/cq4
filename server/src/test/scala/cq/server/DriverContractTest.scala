@@ -800,8 +800,8 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
         snapshot <- restarted.drive(w.operator, DriverRequest.Snapshot(key, listed.revision))
         _ <- assertIO(snapshot match { case DriverReply.Snapshot(_, outcomes) => outcomes == List(again); case _ => false })
         stop <- query(restarted, w, key)
-        detail = s"G1 failed without a result in two consecutive cycles on the same input while nothing else changed: " +
-          s"attempt ${first.attempt.value} of cycle 1: Malformed report at line 3, column 14; attempt ${again.attempt.value} of cycle 2: Malformed report at line 9, column 2"
+        detail = s"G1 failed without a result twice on the same input while no cycle in between changed anything: " +
+          s"attempt ${first.attempt.value}: Malformed report at line 3, column 14; attempt ${again.attempt.value} of cycle 2: Malformed report at line 9, column 2"
         _ <- assertIO(stop match {
           case DriverReply.Stop(DriverStopped(DriverStop.Failure, found), Some(value), List(message)) =>
             found == detail && stopped(Some(value), DriverStop.Failure) && value.directives == 2 && message == "CQ driver stopped (failure): " + detail
@@ -853,9 +853,16 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
         _ <- concluded(service, session, two, List(root), ChildEnd.Retryable, Some("input-b"), fault)
         third <- directive(service, session, key)
         _ <- assertIO(third.status.cycle.exists(_.number == 3) && third.messages.exists(_.startsWith("CQ driver: cycle 2 changed nothing")))
-        _ <- submit(service, session, session.governor, third.directive.text)
-        quiet <- query(service, session, key)
-        _ <- assertIO(quiescent(quiet))
+        // The first input fails again in the third cycle: alternating inputs do not keep the drive going, since no cycle between changed anything.
+        three <- submit(service, session, session.governor, third.directive.text)
+        _ <- concluded(service, session, three, List(root), ChildEnd.Retryable, Some("input-a"), fault)
+        alternated <- query(service, session, key)
+        _ <- assertIO(alternated match {
+          case DriverReply.Stop(DriverStopped(DriverStop.Failure, detail), _, _) =>
+            detail.startsWith(s"${DriverPolicy.references(List(root))} failed without a result twice on the same input while no cycle in between changed anything: attempt ") &&
+              detail.contains(" of cycle 3: Process exited with status 1")
+          case _ => false
+        })
         // The host reports a repeated fault with the attempt's outcome: the drive stops at once, and a repeated report changes nothing.
         repeating = w.copy(governor = w.other(Role.Governor))
         repeatKey = claude("repeated-fault")

@@ -12,6 +12,7 @@ final case class CohortExecutionFingerprint(group: String, members: Map[ItemId, 
 final case class CohortFailure(artifact: ArtifactId, fault: String)
 
 object CohortFailure {
+  val Unstated = "The attempt failed without stating a fault"
   /** The fault of a child that failed without a result and that its receipt advises retrying. A cancellation is no fault of the child. */
   def fault(status: DispatchStatus): Option[String] =
     status.blocker.filter(_ => status.phase == DispatchPhase.Failed && status.result.isEmpty && status.next == ChildNext.Retry)
@@ -28,7 +29,8 @@ object CohortFailure {
       case _ => ChildEnd.Unknown
     }
     ChildOutcome(status.attempt, status.members, end, input,
-      status.blocker.filter(_ => Set(ChildEnd.Retryable, ChildEnd.Repeated, ChildEnd.Failed)(end)).map(_.take(DriverPolicy.MaxDetail)))
+      status.blocker.filter(_ => Set(ChildEnd.Retryable, ChildEnd.Repeated, ChildEnd.Failed)(end))
+        .map(text => if (text.trim.isEmpty) Unstated else text.take(DriverPolicy.MaxDetail)))
   }
 }
 
