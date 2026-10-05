@@ -2,14 +2,23 @@
 
 This is the protocol and the environment for an evaluation the operator requests from their own Claude session: that session, outside CQ, drives a fresh Claude Code, Codex or Pi session in a real terminal through the definition of a new consumer project, its full planning, its implementation and a follow-up. It answers as the operator's proxy within stated limits, watches for failures, unwarranted stops and inefficient token use, and records what it finds as CQ Defects or Ideas with evidence and measured cost.
 
-The page defines protocol and environment only (Goal G4, Idea I12, Question Q10). It specifies no individual run and no run was executed for it. The operator's answers to Q10–Q16 are binding and are quoted where they decide a rule. Q37–Q45 additionally settle the default specification, routes, driver mode, proxy permissions, monitoring and report location; their recorded answers are listed below.
+The page defines protocol and environment only (Goal G4, Idea I12, Question Q10). It specifies no individual run. The first formal runs under it, the T61 matrix of 2026-10-04 and 2026-10-05, are recorded in the [matrix record](validation/t61-evaluation-matrix-20261005.md) and are cited here where they corrected a rule, measured a value or left a gap. The operator's answers to Q10–Q16 are binding and are quoted where they decide a rule. Q37–Q45 additionally settle the default specification, routes, driver mode, proxy permissions, monitoring and report location; their recorded answers are listed below.
 
-**Status: draft, awaiting independent review; not ready.** Independent Audit d3fe8373-5802-36ab-997f-9cdfc73f60f4 confirmed all nine preference answers and requested the operational corrections applied here. Both research items have since concluded, on 2026-10-04:
+**Status: revised after the first formal matrix; awaiting independent review of this revision.** Independent Audit d3fe8373-5802-36ab-997f-9cdfc73f60f4 confirmed all nine preference answers and requested operational corrections, which T69 applied. Both research items concluded on 2026-10-04:
 
 - **RS2 (revision 4).** All three pinned harnesses launched from a host-level private tmux launcher and connected to a private real CQ server. Each recorded a small Begin, exited 0, uploaded, and returned tagged usage.
 - **RS3 (revision 7) and RS15 (revision 4).** These concluded that the Claude transcript and `/cost` are separate, partial sources. The counter discrepancies are unexplained, and the original-source and auxiliary/subagent/compaction coverage gaps remain explicit.
 
-The `claude-outer` missing-counter correction (D142, T71) is integrated: T71 is Done through integration `bd9e2c6b-711b-4417-a2c2-cf9e5c53259b` at `e4ae1e0`, and D142 is Resolved. Independent acceptance of this corrected protocol is still required. Concluded research and preparatory probes do not establish formal I12 qualification, full matrix qualification, complete billing or G4 readiness. See [Readiness](#8-readiness-and-what-is-not-verified).
+What followed, in order:
+
+- **T71**, the `claude-outer` missing-counter correction (D142), is Done through integration `bd9e2c6b-711b-4417-a2c2-cf9e5c53259b` at `e4ae1e0`, and D142 is Resolved.
+- **T60**, the conclusion of the launch and usage research and of the reviewed protocol text, is integrated at `c3959c4`. **T72**, the second T59 driver evidence projection, is integrated at `764e907`; it changed no text of this page.
+- **T61**, the formal matrix, was executed on 2026-10-04 and 2026-10-05 on the exact-source native package of `c3959c4`: six runs, of which one per governing harness reached S5. The run reports name this page at `764e907` as the protocol they followed.
+- The corrections the matrix caused (answer first and instructions after; measure before the server stops) were committed with the matrix record at `378b6fa`.
+- The release installed on 2026-10-05 is reported as the clean build of `6850f2b`. No formal run was made on it, and this revision did not inspect the installation.
+- This revision reconciles the page with the matrix, recalibrates the efficiency flags as Q42 requires, and states the gaps that remain.
+
+The matrix is one run per harness of one small scenario. The driver session observed it in private evaluation roots, and nobody has independently reread those roots, their recordings or their ledgers. That session is also the operator proxy, the author of the protocol's helper scripts and the author of several of the changes under test. The matrix therefore does not establish formal I12 qualification, the qualification of any harness, any rate, complete billing or G4 readiness. Independent review of this revision is still required. See [Readiness](#8-readiness-and-what-is-not-verified).
 
 ## Acceptance criteria of G4
 
@@ -57,15 +66,17 @@ A run has six stages. The request for a run may restrict them.
 | Start, connection check and submission of a request | Existing practice, Claude Code only, private paths hard-coded | `gov/start.sh` |
 | Waiting for idle, a dialog or new narration | Existing practice, Claude Code screen texts | `gov/watch.sh`, `gov/watch2.sh`, `gov/wait.sh` |
 | Launchers | Existing practice for Claude Code and Codex in the CQ checkout | `/srv/nvme/tmp/cq4-auto-driver-planning/launch.sh`, `launch-codex.sh`; for Pi only the stub probe launcher of [Pi extension driver](validation/pi-driver.md) |
-| `dev/eval-session` | **New**, parameterised form of `gov/t`, of the session start in `gov/start.sh` and of `gov/watch.sh`. The connection check and the submission stay steps of the driver session, made of `type`, `keys` and `screen`. | This change. Syntax-checked, not run. |
-| `dev/eval-launch` | **New**, parameterised form of the two launchers plus Pi | This change. Syntax-checked, not run. |
-| `dev/eval-usage.py` | **New**: usage by `EvaluationOnly`, and token sums of a Claude transcript | This change. Compiled, not run. |
-| `dev/eval-minesweeper-spec.md` | **New**: the default consumer specification, version 1 | This change. |
+| `dev/eval-session` | **New**, parameterised form of `gov/t`, of the session start in `gov/start.sh` and of `gov/watch.sh`. The connection check and the submission stay steps of the driver session, made of `type`, `keys` and `screen`. | This change. Syntax-checked. On 2026-10-02 `type`, `keys`, `screen`, `wait` and `stop` were run once against a `cat` session; `start` has not been run. Not used in the T61 matrix, which drove tmux through run-local helpers (below). |
+| `dev/eval-launch` | **New**, parameterised form of the two launchers plus Pi | This change. Syntax-checked, not run. Not used in the T61 matrix: each evaluation root had its own `launch.sh`. |
+| `dev/eval-usage.py` | **New**: usage by `EvaluationOnly`, and token sums of a Claude transcript | This change. Run in the T61 matrix: `child` once for each of the three completed runs, `claude-outer` once for the Claude run. `child` was not run for the three early-ended runs. |
+| `dev/eval-minesweeper-spec.md` | **New**: the default consumer specification, version 1 | This change. Given unchanged to all six T61 runs (SHA-256 `d688c381…`). |
 | `dev/attached_tui.py` | Existing, not used here | A pty fixture for `dev/attached-native-eval --lifecycle`. It answers terminal capability queries, passes the trust dialogs ("Yes, I trust this folder", "Trust and continue") and the bypass-permissions dialog, records the stream, and then freezes or kills the harness to check that the CQ host exits. It submits no request to a model. |
 | `dev/attached-native-eval` | Existing, not used here | Fresh consumer repository, private server and token, settings with an `evaluation` tag, one Begin task with `"checks": []` and `"integrationTarget": None`, harnesses in print mode. It pins Claude 2.1.280, Codex 0.156.1 and Pi 0.87.1, not the installed versions. |
 | `dev/process-eval`, `dev/process-evidence.py` | Existing, not used here | Staged `cq run` evaluations with predicates, for example "A historical answer was fabricated before user input". They are a model for later automated checks of a driven run. |
 
-Nothing in `dev/` drove a full interactive planning, implementation and follow-up flow before this change, and the new scripts have not done so either.
+Nothing in `dev/` drove a full interactive planning, implementation and follow-up flow before this change. The T61 matrix drove such flows, and of the scripts added here it used `dev/eval-usage.py` only.
+
+**Run-local helpers of the T61 matrix.** The matrix was driven with five scripts under `/srv/nvme/tmp/cq4-final-wave-20261004/evaluations/formal/`. They are private tools of those runs with hard-coded paths; they are not part of the repository and were not reviewed. `t` is the tmux wrapper for the matrix socket. `monitor.sh` polls the named sessions every 15 seconds and returns when one has shown no busy text for three polls (about 45 seconds) or is gone, and saves a 400-line screen. `snap.py` writes a read-only ledger snapshot (items, driver summaries, a project-wide usage summary and the installation counters) into `snapshots/`. `s5.sh` carries out S5: final screen, quit, `cq job upload` for every session directory, `dev/eval-usage.py child`, a final snapshot, and the declared checks and behaviour probes on an export of `cq-result` into `acceptance/`. `report-data.py` prints the mechanical tables of a run report from the tickets, receipts, usage reads, proxy log, acceptance output and final snapshot. The private servers and consumers were created by `serve-formal*.py` in the directory above.
 
 ### Where the harness runs
 
@@ -76,9 +87,9 @@ There are two allowed launch methods. The report names the one used.
 | Method | How | Evidence |
 | --- | --- | --- |
 | Host launcher | The operator starts a launcher from a host shell, with `SMIND_SANDBOXED` unset. It owns a private tmux socket and asciinema v3 recordings. It runs each harness through the documented `yolo cmd` form with the exact pinned executable path, a private configuration and the token and settings files named by path. The recorded commands are in [Host-launcher commands](#host-launcher-commands-rs2-revision-4). | RS2 revision 4, 2026-10-04. Claude Code 2.1.285, Codex 0.159.2 and Pi 0.99.1 each connected to the private real CQ server: Claude `/mcp` and Codex `/mcp` showed `cq` connected with nine tools, and Pi loaded its generated extension. Each performed CQ Context and a Begin activation and recorded I1 Proposed in its own private consumer. Each exited 0 (`x=0`), uploaded every retained session with exit 0, and returned `EvaluationOnly` usage. Afterwards there were 0 active claims, 0 managed attempts and 0 pending integrations. Codex folder trust and its two hooks were approved explicitly; Claude showed no new MCP dialog. An earlier launcher passed the executable paths as yolo tool names, and its launches were rejected. Those failed launches and their recordings are preserved. Evidence root: `/srv/nvme/tmp/cq4-final-wave-20261004/evaluations/host-launch-probes-v2` (private). The governing session observed it. |
-| Existing yolo session | The driver session starts the harness inside its own yolo sandbox as a child of the private tmux server, as described above. | The T59/T60 preparatory Pi, Codex and Claude consumer runs of 2026-10-04 and the earlier governing sessions. |
+| Existing yolo session | The driver session starts the harness inside its own yolo sandbox as a child of the private tmux server, as described above. | The T59/T60 preparatory Pi, Codex and Claude consumer runs of 2026-10-04, the earlier governing sessions, and all six runs of the T61 matrix. |
 
-The host-launcher probes are Q43 short probes. They establish launch and connection, not full matrix qualification or complete usage.
+The host-launcher probes are Q43 short probes. They establish launch and connection, not full matrix qualification or complete usage. The T61 matrix did not use the host launcher, so no full run has been launched this way.
 
 Inside the sandbox the consumer repository, the evaluation state root, the CQ package and the token file must be readable, and the first two writable. `/srv/nvme/tmp` is writable there.
 
@@ -100,9 +111,11 @@ Screen texts the recorded drives relied on:
 | --- | --- | --- | --- |
 | Claude Code 2.1.285 | `esc to interrupt` | `Enter to (select\|confirm)`, `Do you want` | `gov/watch.sh`, `gov/wait.sh` |
 | Codex 0.159.2 | `Working \(` or `esc to interrupt` | Not scripted | `/srv/nvme/tmp/cq4-cross-cut/t9-probe/drive.sh` |
-| Pi 0.99.1 | A `Working` spinner line was seen once (`t10-probe/screens/a-05-drive-started.txt`) | Not scripted | Not used as a wait condition so far |
+| Pi 0.99.1 | A `Working` spinner line was seen once (`t10-probe/screens/a-05-drive-started.txt`) | Not scripted | In no repository script. The run-local monitor of the T61 matrix used `Working` as the Pi busy text |
 
 A session counts as idle when the busy text has been absent for 60 seconds (`gov/watch.sh`: four polls of 15 seconds). A request pasted as one block makes Claude Code show `Pasted text` and wait for a second `Enter`; `gov/start.sh` sends it.
+
+The T61 matrix did not use these exact conditions. Its run-local `monitor.sh` matched the elapsed-time text `… \((…)?[0-9]+s` for Claude Code, `Working \(` or `esc to interrupt` for Codex and `Working` for Pi; it treated three polls of 15 seconds without busy text as idle, and it scripted no dialog text for any harness.
 
 ### Launch per harness
 
@@ -115,7 +128,7 @@ A session counts as idle when the busy text has been absent for 60 seconds (`gov
 | Files `cq configure` writes | `.mcp.json` (`cq` server), `.claude/settings.local.json` (`enabledMcpjsonServers`, hooks, `statusLine`), `.claude/commands/cq/` | `.codex/config.toml`, `.codex/hooks.json`, `.agents/skills/cq-*` | `.pi/extensions/cq-host.js`, `.pi/prompts/` |
 | Extra state | None | A private `CODEX_HOME`: `dev/eval-launch prepare-codex-home DIR` copies `~/.codex/config.toml` and links `~/.codex/auth.json`. The personal configuration is read-only in the sandbox, so Codex could not persist project trust without it. It must not be ephemeral: CQ reads outer usage from its rollout. | None |
 | Prompts at launch | With the approval written by `cq configure`, none ("the host loads with no dialog", [defect corrections](validation/defect-fixes-20260930.md)). `gov/start.sh` still handles `New MCP server found` with `Up`, `Up`, `Enter`. `Teach auto mode` was answered with `Down`, `Enter`. | Project trust, once per `CODEX_HOME`; then `/hooks`, which shows `2 hooks need review before they can run`, answered with `t` (trust all). Both are stored in the private `config.toml`, so later launches show neither. If Codex lists a personal and a project skill of one name, select the project one. | None seen with `--approve`. |
-| Check that `cq` is connected | `/mcp`, `Enter`; the screen must match `✔ cq +[0-9]+ tools` (`gov/start.sh`), then `Escape`. Nine tools were listed on the installed release. | `/mcp` must list `cq`. Not scripted so far: for the recorded Codex drive the only connection evidence is its `cq` tool calls (`Called cq.session` in `gov/drive4-final-screen.txt`). | The footer reads `CQ driver off` once `cq-host.js` is loaded ([Pi extension driver](validation/pi-driver.md), stub backend). That footer alone shows the extension, so also verify an actual CQ Context call. RS2 revision 4 records Pi 0.99.1 reaching CQ Context against a private real server from the host launcher. |
+| Check that `cq` is connected | `/mcp`, `Enter`; the screen must match `✔ cq +[0-9]+ tools` (`gov/start.sh`), then `Escape`. Nine tools were listed on the installed release. The retained S0 screen of the T61 Claude run shows the status line `CQ driver off` and not this `/mcp` match. | `/mcp` must list `cq`. Not scripted: no script tests the listing. For the recorded Codex drive the only connection evidence is its `cq` tool calls (`Called cq.session` in `gov/drive4-final-screen.txt`). In the T61 matrix the retained `screens/s0-connection.txt` of all four Codex roots shows `/mcp` with `cq: connected (9 tools)`. | The footer reads `CQ driver off` once `cq-host.js` is loaded ([Pi extension driver](validation/pi-driver.md), stub backend). That footer alone shows the extension, so also verify an actual CQ Context call. RS2 revision 4 records Pi 0.99.1 reaching CQ Context against a private real server from the host launcher. The S0 screen of the T61 Pi run shows `cq-host.js` under Extensions and the footer `CQ driver off`. |
 | Workflow commands | `/cq:begin`, `/cq:advance`, `/cq:drive`, `/cq:park` | `$cq-begin`, `$cq-advance`, `$cq-drive`, `$cq-park` | As Claude Code |
 
 The commands in this table are the existing-yolo method: inside the driver's sandbox, the harness is found on `PATH`. The host launcher uses the exact pinned paths below.
@@ -156,7 +169,7 @@ If the connection check fails, the run ends in S0 as a launch failure. A missing
 
 Record `claude --version`, `codex --version` and `pi --version` and the `cq` package manifest before the launch.
 
-Pi was first launched with a real model against a real CQ server on 2026-10-04: in the T59/T60 preparatory consumer run inside the existing yolo session, and in the RS2 host-launcher probe. Both were observed by the governing sessions in private fixtures. The Pi busy and dialog screen texts are still not scripted.
+Pi was first launched with a real model against a real CQ server on 2026-10-04: in the T59/T60 preparatory consumer run inside the existing yolo session, and in the RS2 host-launcher probe. Both were observed by the governing sessions in private fixtures. The first formal Pi-governed run is `eval-20261004-01/pi-driver` of the T61 matrix. No repository script encodes a Pi busy or dialog text.
 
 ## 2. Consumer-project definition
 
@@ -172,9 +185,11 @@ Everything of one run lives under one evaluation root outside any source checkou
 | `casts/`, `screens/` | Recordings and screen excerpts |
 | `report.md`, `usage/` | The run report and the usage reads |
 
+This layout was written before any run. The T61 evaluation roots hold the same kinds of evidence under partly different names; the differences are listed in [section 8](#8-readiness-and-what-is-not-verified).
+
 Steps, in this order. All use existing commands.
 
-1. **Isolated server and token.** Start a second server with its own state and ports from a host terminal: `CQ_LOCAL_STATE=<root>/server CQ_LOCAL_PORT=<port> CQ_LOCAL_DB_PORT=<port> CQ_ORIGIN=<origin> ./run-local.sh`. The origin must be one the sandbox of the driver session can reach; whether the host's loopback address is reachable from it was not checked. The launcher creates `<root>/server/token` on first use and refuses a state directory that another launcher owns ([quickstart](quickstart.md)). The operator's working server and its token are not used. Starting a server is a host action the driver session requests; it does not start one during a release gate.
+1. **Isolated server and token.** Start a second server with its own state and ports from a host terminal: `CQ_LOCAL_STATE=<root>/server CQ_LOCAL_PORT=<port> CQ_LOCAL_DB_PORT=<port> CQ_ORIGIN=<origin> ./run-local.sh`. The origin must be one the sandbox of the driver session can reach; whether the host's loopback address is reachable from it has still not been checked, and the T61 matrix did not start its servers by this step ([section 8](#8-readiness-and-what-is-not-verified)). The launcher creates `<root>/server/token` on first use and refuses a state directory that another launcher owns ([quickstart](quickstart.md)). The operator's working server and its token are not used. Starting a server is a host action the driver session requests; it does not start one during a release gate.
 2. **Fresh repository with a committed base.** `git init -b main <root>/consumer`, a README naming the specification version, one commit. CQ requires a committed base.
 3. **Integration branch.** `git branch cq-result`. It is not checked out, so reviewed integration never touches working files ([quickstart](quickstart.md)).
 4. **Settings.** Copy the `guardian`, `harnesses` and `limits` of the operator's current supervisor settings, so that the run uses the installed, verified harness pins, and set:
@@ -198,7 +213,7 @@ Steps, in this order. All use existing commands.
 6. **Harness integration.** `cq configure <harness> --settings <root>/settings.json`, for the harness under evaluation only.
 7. **Launch and check** as in section 1, recorded from the first keystroke.
 
-**Naming (proposed).** `run` is `eval-<YYYYMMDD>-<NN>`, shared by the harness runs of one request. `scenario` is `<harness>-driver` or `<harness>-baseline` (see [Dependency handling](#7-dependency-handling)). A repetition gets a new `run`.
+**Naming.** `run` is `eval-<YYYYMMDD>-<NN>`, shared by the harness runs of one request. `scenario` is `<harness>-driver` or `<harness>-baseline` (see [Dependency handling](#7-dependency-handling)). A repetition gets a new `run`. The T61 matrix used these names: runs `eval-20261004-01`, `eval-20261004-02`, `eval-20261005-01` and `eval-20261005-02`, scenarios `claude-driver`, `pi-driver` and `codex-driver`.
 
 ### The specification
 
@@ -300,7 +315,7 @@ Thresholds: every unwarranted stop is reported with its screen excerpt. One is e
 
 ### Inefficient token use
 
-Token use is judged on measured figures only (section 6). Q42 adopts the initial flags below, with recalibration after the first run of each harness. They are derived from the governing sessions recorded on the CQ repository, whose Tasks are far larger than a minesweeper; recalibrate them after the first run of each harness. A flag is a reason to look at the attempt and, if a CQ cause is found, to record an Idea or a Defect; it is not a verdict.
+Token use is judged on measured figures only (section 6). Q42 adopts the initial flags below, "recalibrated after the first run of each harness". The initial thresholds are derived from the governing sessions recorded on the CQ repository, whose Tasks are far larger than a minesweeper. Each harness has now completed one run; the recalibration follows the initial table, and its fourth column is the threshold in force. A flag is a reason to look at the attempt and, if a CQ cause is found, to record an Idea or a Defect; it is not a verdict.
 
 | Flag | Initial threshold | Basis in the recorded sessions |
 | --- | --- | --- |
@@ -314,7 +329,35 @@ Token use is judged on measured figures only (section 6). Q42 adopts the initial
 | Governor share | Outer input tokens exceed the sum of the children's input tokens | Four Claude governing sessions: ratios 4.4, 3.3, 0.7 and 3.1 (table below). |
 | Governor context | A single governor request above 200,000 input tokens | Largest requests of the four sessions: 156,820, 468,659, 349,108 and 622,642 tokens; no compaction entry was found in their transcripts. |
 
-Input tokens here include cache reads and cache writes; in every recorded attempt most input was cache reads. Three of the four recorded Claude governing sessions exceed the governor-share flag, so a first run is likely to raise it: check for an existing item before recording another.
+Input tokens here include cache reads and cache writes; in every recorded attempt most input was cache reads. Three of the four recorded Claude governing sessions exceed the initial governor-share flag, and so did all three completed runs of the matrix: check for an existing item before recording another.
+
+#### Recalibration after the first run of each harness (T61)
+
+The observed values are those of the three completed runs of the matrix — `eval-20261004-01/claude-driver`, `eval-20261004-01/pi-driver` and `eval-20261005-02/codex-driver` — taken from the Cost and Efficiency sections and the data tables of their reports. **n = 1 per harness**: one run of one scenario with one model each. One run gives a value and no spread, so no threshold below is a tolerance and no figure is a rate. The three early-ended Codex runs have no usage and are not used.
+
+| Flag | Initial threshold | Observed: Claude / Pi / Codex | Recalibrated threshold | Rationale |
+| --- | --- | --- | --- | --- |
+| Worker rework | More than two Worker attempts on one Task | Largest per Task: 2 (T1) / 2 (T1, after a failed host validation) / 1 | More than two (unchanged) | Two attempts occurred in two of three runs as ordinary revision and nothing above two was seen; there is no ground to move the value in either direction. |
+| Planning rework | More than two Planner rounds for one root | Largest per planned item: 3 (G2) / 3 and one failed attempt (G1) / 2 (I2). Raised in the Claude and Pi runs | More than two (unchanged), counted per planned item, Idea or Goal, with failed attempts stated beside the count as the reports did | Both raises had a recorded CQ cause (D146; D145). A higher value would have hidden them. |
+| Redone accepted work | Any | 0 / 0 / 0. The Codex run reviewed T1 a second time after D144, with no new Worker attempt | Any (unchanged) | No occurrence; "any" has nothing to calibrate. |
+| Worker attempt size | More than 3,000,000 input tokens or more than USD 3 | Work phase totals: 1,685,421 tokens and USD 1.96 over 3 attempts / 769,779 and USD 0.54 over 5 / 542,921 and unknown cost over 2 | 3,000,000 input tokens or USD 3 — not recalibrated: the reports give phase totals and no per-attempt sizes | No attempt can exceed its phase total, so no Worker attempt reached the token threshold in any run. That shows the initial value is high for this scenario; it does not give a new one. |
+| Planner attempt size | More than 1,000,000 input tokens or more than USD 1.50 | Plan phase totals: 827,765 tokens and USD 1.60 over 8 attempts / 582,387 and USD 0.63 over 10 / 762,189 and unknown cost over 5 | 1,000,000 input tokens or USD 1.50 — not recalibrated: no per-attempt sizes in the reports | No Planner attempt reached the token threshold in any run. |
+| Plan review size | More than 600,000 input tokens or more than USD 0.75 | Review phase totals, plan and candidate reviews together: 1,449,212 tokens and unknown cost over 10 attempts / 2,283,835 and unknown cost over 12 / 1,076,811 and USD 1.77 over 8 | 600,000 input tokens or USD 0.75 — not recalibrated: the reports do not separate plan reviews from candidate reviews and give no per-attempt sizes | Mean per review attempt of either kind: about 145,000 / 190,000 / 135,000 tokens. |
+| Candidate review size | More than 3,000,000 input tokens or more than USD 2 | The same Review phase totals | 3,000,000 input tokens or USD 2 — not recalibrated: as for plan reviews | No review attempt reached the token threshold: the largest phase total is 2,283,835. |
+| Governor share | Outer input tokens exceed the sum of the children's input tokens | Outer cache-read tokens against the children's cache-read tokens, the basis all three reports used: about 7× (24.9 M against 3.45 M) / about 11× (32.5 M against 2.9 M) / about 6× (12.1 M against 2.0 M). Raised in all three | The cache-read ratio exceeds 11×, the largest first-run value. The ratio itself is reported in every run | Every run and three of the four earlier sessions exceeded the initial threshold, so it selects nothing. The first-run values are the only baseline. With one run per harness a per-harness value cannot be told from a per-run value, so the three are pooled. |
+| Governor context | A single governor request above 200,000 input tokens | 230,316 (raised) / unknown: the Pi source gives no request size, and the footer showed the context at 74 % of 272k at the end / unknown: available from neither the CQ records nor the exit lines | 200,000 input tokens — not recalibrated: one value from three runs | For Pi and Codex the flag cannot be evaluated from the present sources ([section 8](#8-readiness-and-what-is-not-verified)). |
+
+In the Pi run CQ marks 14 child cache-read counters unknown, so the children's sum is a lower bound and the ratio of 11× an upper bound.
+
+The reports also give run-level values for which no flag is defined. They are kept as first reference values without a threshold, because one run per harness cannot support one.
+
+| Value | Claude | Pi | Codex |
+| --- | --- | --- | --- |
+| Child attempts (failed) | 21 (0) | 27 (1) | 15 (0) |
+| Wall time, begin request to last integration | about 43 min | about 80 min | about 39 min |
+| Harness sessions | 1 | 1 | 2 |
+| Measured cost, client estimates | USD 3.56 for the Claude children; Codex reviewers and the outer session unknown | USD 1.17 for the Pi children and USD 4.17 for the outer session, USD 5.34 together; Codex reviewers unknown | USD 1.77 for the Claude reviewers; Codex children and the outer session unknown |
+| Cross-item cohorts | one formed (T2 and T3) | assessed, not formed | none |
 
 ### Budget and stop rules
 
@@ -335,7 +378,7 @@ Operational definitions:
 | Pause | With the auto-driver: park (in Claude Code press `Escape` first, then `/cq:park`). Without it: stop typing follow-ups. Running children are not cancelled; the auto-driver has no such operation. |
 | No progress | For 30 consecutive minutes: no file under the session directory is modified, no ref of the consumer repository changes and no item revision changes. |
 
-The cap is not known to be sufficient. Measured child cost of the recorded governing sessions on the CQ repository was USD 2.91, 23.14, 40.31 and 50.00, each without the cost of its Codex children, which report none. No figure exists for a consumer of minesweeper size.
+The cap is not known to be sufficient in general. Measured child cost of the recorded governing sessions on the CQ repository was USD 2.91, 23.14, 40.31 and 50.00, each without the cost of its Codex children, which report none. For the minesweeper consumer, the three completed runs of the matrix measured USD 3.56, 5.34 and 1.77 in about 43, 80 and 39 minutes. Each figure lacks components (the table above), so each is a lower bound. No budget rule ended a run. The operator had allowed the matrix to exceed the budget; by the measured figures no run came near it.
 
 ### Observations from the recorded drives
 
@@ -375,6 +418,8 @@ What the same sessions showed about stops and failures ([cross-cut](validation/c
 | Session directory | `<root>/sessions/<session>/` is kept whole. |
 | Usage reads | Each `dev/eval-usage.py` output is kept under `usage/` with its time. |
 | Versions | Harness versions, the `cq` package manifest, the specification path, version and SHA-256, `settings.json`. |
+
+These names were written before any run. The T61 roots use other names for the casts, the screens and the usage reads ([section 8](#8-readiness-and-what-is-not-verified)).
 
 A citation names the cast and the wall-clock time of the event (asciinema v3 events carry intervals, and the header carries the start time), or an excerpt file and its lines. Recordings may show prompt text and paths; they never show the token, because it is passed by file path. Do not type or `cat` a credential in a recorded terminal.
 
@@ -449,18 +494,18 @@ One `report.md` per run, with these parts in this order.
 
 ## 7. Dependency handling
 
-D67 and D73 below repeat the 2026-10-02 source-validation record; they are not new verification. G1 and the research limitations are updated from supplied T59 revision 10 and T60 revision 18 evidence on 2026-10-04. The governing sessions observed the preparatory observations themselves; they are not independently verified qualification.
+D67 and D73 below repeat the 2026-10-02 source-validation record; they are not new verification. G1 and the research limitations are updated from supplied T59 revision 10 and T60 revision 18 evidence on 2026-10-04. The governing sessions observed the preparatory observations themselves; they are not independently verified qualification. What the T61 matrix adds is marked as such.
 
 | Dependency | State | Rule | Recorded in the run report as |
 | --- | --- | --- | --- |
 | **D67**, the documented Claude launch never loaded the CQ host | Resolved. Fixed at `c51aa7a` and `6b2ce4a`: `cq configure claude` writes the approval into `.claude/settings.local.json`, and the launch is `--setting-sources project,local` ([defect corrections](validation/defect-fixes-20260930.md)). | Q12: "Use the logged workaround and record it in each run report". The workaround, `enabledMcpjsonServers ["cq"]`, is now what `cq configure claude` writes, so runs do not wait and add nothing by hand. If the `New MCP server found` dialog appears anyway, accept the server, and cite the dialog as a D67 observation, not as a new Defect. | `D67: fixed in package <manifest>; approval written by cq configure; MCP dialog at launch: yes/no`. |
 | **D73**, the host rejected the installed harness versions | Resolved. Fixed at `008fc0b`: Claude Code 2.1.285, Codex 0.159.2 and Pi 0.99.1 joined the verified set, and the settings pins moved at installation. | Q13: "Wait for D73; allow old pinned versions only as a labelled fallback on request". Runs use the installed versions. If an installed harness is newer than the verified set, the host refuses it (exit 78); the run then waits for the version to be verified. The older pins (2.1.280, 0.156.1, 0.87.1) are used only when the operator asks for it, while their store paths exist, and the scenario name gains `-pinned`. Codex 0.159.2 keeps `--no-daemon`. | `D73: installed <versions>, all in the verified set` or `fallback to <versions> on operator request`. |
-| **G1**, the auto-driver | Installed; G1 remains Open until independent review accepts its validation record. The historical Claude and Codex work is kept in the [cross-cut record](validation/crosscut-20261002.md). The T59 driver cases are in [Real-harness driver cases (T59)](validation/t59-driver-cases-20261004.md), with the readable projection in `validation/evidence/t59-driver/`. Against private real ledgers, on Claude Code 2.1.285 and on Codex 0.159.2, T59 records two concurrent sessions with distinct keys and frozen targets, and skipped-directive, untracked-activation and out-of-set `Failure` stops with an unchanged item revision and summary page. On Claude Code it also records independent park, Resume without a duplicate child, and two consecutive start cycles after a changed advanceable set. Resume and consecutive cycles were observed in separate drives of one session, not within one drive. T59/T60 also record preparatory Pi, Codex and Claude initial and follow-up consumer integrations; Claude's four integrations are Recorded, with `cq-result` head `7b336080`. The governing sessions observed all of this in private fixtures on package `e5dba67`; nobody has independently reread the originals. | Q11: "Both: allow a labelled pre-G1 baseline now, and rerun with the driver after G1". Scenario `<harness>-driver` uses `/cq:drive` (Codex: `$cq-drive`) in S2–S4; scenario `<harness>-baseline` uses the plain advance command and proxy follow-ups. The request says which; Q39 default: `driver`, with a baseline only when the operator requests the comparison. Record G1's state at the time of the run. Check auto-driver failures against G1's open items and the T59 limits before recording a Defect. A future run is not labelled the first live Pi drive on the basis of the outdated stub-only record. | `G1: auto-driver used / not used (baseline)`, the stop classes that depend on it, and `G1 state <Open/Achieved> at run time`. |
+| **G1**, the auto-driver | Installed. This page last recorded G1 as Open until independent review accepts its validation record. The six T61 run reports say "Achieved with stated limits before the run". This revision could not read the ledger and does not assert the current state. The historical Claude and Codex work is kept in the [cross-cut record](validation/crosscut-20261002.md). The T59 driver cases are in [Real-harness driver cases (T59)](validation/t59-driver-cases-20261004.md), with the readable projection in `validation/evidence/t59-driver/`. Against private real ledgers, on Claude Code 2.1.285 and on Codex 0.159.2, T59 records two concurrent sessions with distinct keys and frozen targets, and skipped-directive, untracked-activation and out-of-set `Failure` stops with an unchanged item revision and summary page. On Claude Code it also records independent park, Resume without a duplicate child, and two consecutive start cycles after a changed advanceable set. Resume and consecutive cycles were observed in separate drives of one session, not within one drive. T59/T60 also record preparatory Pi, Codex and Claude initial and follow-up consumer integrations; Claude's four integrations are Recorded, with `cq-result` head `7b336080`. The governing sessions observed all of this in private fixtures on package `e5dba67`; nobody has independently reread the originals. In the T61 matrix, on package `c3959c4`, the auto-driver made every advance in all six runs, and run `eval-20261005-02/codex-driver` found a driver failure after a stranded integration (D144). | Q11: "Both: allow a labelled pre-G1 baseline now, and rerun with the driver after G1". Scenario `<harness>-driver` uses `/cq:drive` (Codex: `$cq-drive`) in S2–S4; scenario `<harness>-baseline` uses the plain advance command and proxy follow-ups. The request says which; Q39 default: `driver`, with a baseline only when the operator requests the comparison. Record G1's state at the time of the run. Check auto-driver failures against G1's open items and the T59 limits before recording a Defect. A future run is not labelled the first live Pi drive on the basis of the outdated stub-only record. | `G1: auto-driver used / not used (baseline)`, the stop classes that depend on it, and `G1 state <Open/Achieved> at run time`. |
 
 Two constraints in G4's text no longer hold or need a qualifier:
 
 - "Sessions have an 8-hour lifetime": removed. A session runs as long as its harness ([process guardian](design/process-guardian.md), [interactive](interactive.md)). The 3-hour budget is this protocol's own.
-- "Launch the harnesses at host level": shown by RS2 revision 4 with the host launcher of section 1. The existing-yolo launch remains a separate allowed method. The earlier T60 launches inside the existing yolo session, and the first failed host-launcher attempt, are historical and stay recorded.
+- "Launch the harnesses at host level": shown by RS2 revision 4 with the host launcher of section 1. The existing-yolo launch remains a separate allowed method, and it is the one all six T61 runs used. The earlier T60 launches inside the existing yolo session, and the first failed host-launcher attempt, are historical and stay recorded.
 
 [Drive CQ work automatically](auto-driver.md) lists the cross-cut record of 2026-10-02 and the T59 driver cases as its real-server evidence.
 
@@ -489,23 +534,95 @@ Q37–Q45 resolve the remaining preference choices in the final section. Empiric
 
 ### Review
 
-The independent Audit confirmed the nine exact answers and requested operational corrections. T69 applied them: it is Done through a Recorded integration, and T70 is Done as well, both on `main` at `e8ef9a8`. RS2 and RS3 are now concluded. G4 readiness still requires independent acceptance of this corrected protocol. Historical source checks, concluded research and preparatory probes do not establish formal I12 qualification, full matrix qualification or complete billing.
+The independent Audit d3fe8373-5802-36ab-997f-9cdfc73f60f4 confirmed the nine exact answers and requested operational corrections. T69 applied them: it is Done through a Recorded integration, and T70 is Done as well, both on `main` at `e8ef9a8`. T71 followed at `e4ae1e0`, T60 at `c3959c4` and T72 at `764e907`. The T61 matrix then ran on the exact-source package of `c3959c4`, and the corrections it caused were committed at `378b6fa`. An independent Goal audit of G4 then requested this revision: the reconciliation with the matrix, the Q42 recalibration and the statement of the current gaps.
+
+<!-- REVIEW CITATION: the one place for the independent review of this revision. Replace the next paragraph with the citation, then update the status line at the top of the page. -->
+
+**Independent review of this revision: not yet recorded.** The citation goes here and nowhere else: reviewer, identifier, date, the commit reviewed and the outcome. Until it is recorded, the status line stays as it is and nothing on this page states that G4 is ready.
+
+Historical source checks, concluded research, preparatory probes and the matrix do not establish formal I12 qualification, full matrix qualification or complete billing.
+
+### Current coverage gaps after the T61 matrix
+
+These are gaps of the protocol and of its evidence as they stand after the matrix. Sources: the [matrix record](validation/t61-evaluation-matrix-20261005.md), the six run reports and the files of the six evaluation roots under `/srv/nvme/tmp/cq4-final-wave-20261004/evaluations/`.
+
+Provenance:
+
+- Everything known about the matrix was read by the driver session from private evaluation roots. Nobody has independently reread the roots, the recordings or the ledgers.
+- The operator proxy, the author of the protocol's helper scripts and the author of several of the changes under test are the same session.
+- One run per harness and no repetition: nothing is a rate, and no harness is qualified.
+- No formal run has been made on a package later than `c3959c4`. Commits on `main` after `378b6fa` name D143, D144, D145, D148 and D149; no driven run has observed their effect.
+
+Launch and environment:
+
+- The host-level launcher was not used. All six runs used the in-sandbox launch with a `launch.sh` per root. The host launcher's evidence is still only the RS2 short probes.
+- Reachability of the host loopback from the sandbox is still unchecked. Step 1 of section 2 was not followed: each server was started by the run-local `serve-formal*.py` from the `release-c3959c4` binary on a `127.0.0.1` origin (`ready.json`), not by `run-local.sh` from a host terminal. The reports do not say where that script ran.
+- `dev/eval-session` and `dev/eval-launch` were not used. The `start` action of `dev/eval-session` and the whole of `dev/eval-launch` remain not run. The run-local helpers that replaced them are outside the repository and unreviewed.
+
+Names. The run and scenario naming of section 2 was used as written and is no longer marked proposed. The file layout differs, and sections 2 and 5 still show the layout written before the runs; which of the two becomes the rule is not decided here.
+
+| Sections 2 and 5 | T61 evaluation roots |
+| --- | --- |
+| `casts/<scenario>-<n>.cast` | `session.cast`, `session-2.cast`, `session-3.cast` in the root |
+| `screens/<scenario>-<n>-final.txt`, 400 lines | `screens/final-screen.txt`, 3,000 lines of history |
+| `screens/<UTC time>-<label>.txt` | `screens/s<stage>-<label>.txt` and `screens/stop-<epoch>.txt`; further idle screens in the shared `formal/stops/` |
+| `server/` with `token` and `client.env` | No `server/`: `token`, the database logs and `evaluation-server.log` lie in the root |
+| `codex-home/` per run | One `codex-config`, with `claude-config` and `pi-config`, shared by all runs outside the roots; the Codex rollouts and the Claude transcript are there |
+| `usage/` reads kept with their time | `usage/child.json`, `usage/outer.json` (Claude) and the upload outputs, without a time in the name; the three early-ended roots have no `usage/`, and their upload outputs lie in the root |
+| Not named | `snapshots/`, `acceptance/`, `ready.json`, `commands.json`, `begin-request.txt`, `followup-request.txt` |
+| `consumer/`, `settings.json`, `sessions/`, `screens/`, `proxy-log.jsonl`, `report.md` | The same |
+
+Monitoring:
+
+- The Codex `/mcp` connection check is not scripted; the matrix retains its screen only. The Pi busy and dialog texts and the Codex dialog texts are in no repository script. The retained S0 screen of the Claude run does not show the `/mcp` match section 1 requires.
+- The matrix monitor counted 45 seconds without busy text as idle, not the 60 seconds of section 1, and used other busy texts.
+- The reports do not state that Q44 polling was kept. Ledger snapshots exist at intervals of at most about 11 minutes in the completed runs (computed for this revision from their `at` fields); they hold a project-wide usage summary and not the `EvaluationOnly` read, which was taken once per completed run in S5. No activity poll of modification times is evidenced.
+- The 30-minute stall rule, the cost cap, the wall-clock budget and the pause were not reached. The three-identical rule ended two runs (`eval-20261004-01/codex-driver`, `eval-20261005-01/codex-driver`) on the driver session's reading; that the comparison of section 4 was applied is not recorded.
+- The baseline scenario was not run: every run was `driver`.
+
+Operator proxy:
+
+- **One operator-side intervention outside the proxy role, in the Pi run.** At the stop "blocked from outside the set: D1 blocks G1" the driver session, acting for the operator and not as the run proxy, removed the BlockedBy link from G1 to D1 through the operator API of the private server and reissued the drive. The operator was not asked. This protocol expects otherwise: the stop is not a Question the specification decides, and the proxy uses no CQ tools of its own to move work forward (section 3), so it escalates, leaves the session idle and waits, with the wait excluded from the wall-clock budget. By the Pi report the run would otherwise have ended in S2, so its S3–S5 results depend on the intervention.
+- No escalation reached the operator in any run.
+- The first proxy texts of the Claude and Pi runs had the form that was stored whole in the first Codex run, with the instruction to wait in the same text as the answer. What was stored there was not compared with what was typed.
+- No Operator Action and no permission dialog for a tool call is recorded in the reports.
+
+Child harness mix:
+
+- Q38's three routes were configured in every run. No completed run exercised all three child harnesses: Claude Planners and Workers with Codex Reviewers; Pi Planners and Workers with Codex Reviewers; Codex Planners and Workers with Claude Reviewers. The two early-ended Codex runs of 2026-10-04 did start children of all three harnesses, in planning only (Codex Planners, Claude and Pi plan reviewers), and neither passed S2.
+- The runs on `gpt-6-luna` and `mimo-v2.6-pro` ended in S2 and S1. They say nothing about the default models.
+
+Usage:
+
+- `/cost` was not captured in the Claude run, so the two partial outer sources of section 6 were not compared there.
+- Outer cost is unknown for Claude Code and Codex. The cost of every Codex child and reviewer is unknown.
+- The largest single request is unknown for Pi and Codex.
+- The usage of the three early-ended Codex runs is lost: it was not read before their servers were stopped, the databases went with the servers, and the Codex exit lines were not captured.
+- CQ marks 21, 28 and 17 meters incomplete in the three completed runs, and 1, 0 and 2 attempts without meters.
+- After the measurement, the reproduction of D143 added two session directories to the Claude root. A later read with the same filter would count their two Govern attempts.
+
+Not exercised:
+
+- Goal and Milestone closure: every Goal and Milestone stayed Open.
+- The curses UI: the checks and the driver session's probes cover unit tests, `--version` and command-line arguments.
+- The recovered-Pi-retry case of RS16/D140 did not occur.
+- The ledger state of G1 at run time: the reports and this page differ (section 7).
 
 ### Historical validation and remaining gaps
 
-- No formal run was executed under this protocol. T59/T60 record preparatory terminal consumer flows for Pi 0.99.1, Codex 0.159.2 and, after the operator refreshed the login, Claude Code 2.1.285. Each went through initial implementation and the identical follow-up, with uploads and settled-state snapshots. Claude's four integrations are Recorded; its final export passed 71 tests and launch, and two private findings remain Open there. The governing sessions observed these in private fixtures; they are not independently verified empirical qualification. Strict 15-minute polling compliance is not claimed. Usage estimates have incomplete meters and unknown costs, including unknown outer Codex cost. Historical source checks below record what was actually run at the time; they are not new checks of this corrected revision.
+- Before the T61 matrix, no formal run had been executed under this protocol. T59/T60 record preparatory terminal consumer flows for Pi 0.99.1, Codex 0.159.2 and, after the operator refreshed the login, Claude Code 2.1.285. Each went through initial implementation and the identical follow-up, with uploads and settled-state snapshots. Claude's four integrations are Recorded; its final export passed 71 tests and launch, and two private findings remain Open there. The governing sessions observed these in private fixtures; they are not independently verified empirical qualification. Strict 15-minute polling compliance is not claimed. Usage estimates have incomplete meters and unknown costs, including unknown outer Codex cost. Historical source checks below record what was actually run at the time; they are not new checks of this corrected revision.
 - Before the refresh, Claude's stored login was expired without a refresh token: pinned 2.1.285 and current 2.1.288 failed the authentication preflight (`evaluations/claude-recorded/startup-result.json`). That observation is historical.
-- `dev/eval-session`, `dev/eval-launch` and `dev/eval-usage.py` were checked with `bash -n` and `python3 -m py_compile` only. They were not run: a release gate occupied the machine. Later, on 2026-10-02, the `type`, `keys`, `screen`, `wait` and `stop` actions of `dev/eval-session` were run once against a `cat` session on a private tmux 3.7c socket to check the exact-name targets, and `dev/eval-usage.py` once against a local stub endpoint and a three-entry transcript to check the refused redirect, the ignored proxy and the entry without a response identity. `start`, `dev/eval-launch` and a read from a CQ server remain not run.
-- At original drafting, `dev/eval-minesweeper-spec.md` had not been implemented and its checks had not been run. T60 later supplied preparatory version-1 and follow-up integrations; this page does not independently verify their checks or establish that formal runs fit the 3-hour and USD 25 defaults.
-- At original drafting, the isolated server, `cq init` and `cq configure` in a scratch consumer were not carried out for this page. The steps came from the quickstart and `dev/attached-native-eval`. T60 later supplied private-consumer observations, and RS2 revision 4 carried out the host-level launch in three private scratch consumers (section 1).
-- Pi: the original stub-only evidence did not establish real-server launch, outer usage or a real-model driver. T59/T60 later supplied preparatory evidence for these, with usage gaps; busy/dialog monitoring and formal launch qualification remain unverified.
-- Codex: the `/mcp` check as a scripted condition. The trust and `/hooks` dialogs were seen in the stub probe (`t9-probe/codex-run0-notbound/codex-hooks-review-screen.txt`); the recorded Codex drive ran on a `CODEX_HOME` that already held both decisions.
-- Claude Code: the recorded sessions showed `auto mode on` in the footer. The project's settings files do not set a permission mode and its source was not identified, so the permission dialogs of a fresh consumer are unknown.
-- Proxy marker and label retention were unverified at original drafting. T60 supplies Pi and Codex proxy-labelled Q1/Q2 readback observations, and T59 records delegated Q1–Q3 answers in the Claude consumer run. The governing sessions observed these in private fixtures; they have not been independently verified.
-- At original drafting, the attached-session `EvaluationOnly` read was unverified: tagging came from code and existing fixtures. T60 supplies later tagged Pi and Codex post-upload usage observations with incomplete meters and unknown attempts, and RS2 revision 4 returned tagged usage for all three short probes. In those probes only Pi reported a cost group, and every governing attempt has unknown usage. These are estimates with coverage gaps, not complete billing totals.
-- The stall rule's file-modification test and the "same failure" comparison were never exercised.
+- `dev/eval-session`, `dev/eval-launch` and `dev/eval-usage.py` were checked with `bash -n` and `python3 -m py_compile` only. They were not run: a release gate occupied the machine. Later, on 2026-10-02, the `type`, `keys`, `screen`, `wait` and `stop` actions of `dev/eval-session` were run once against a `cat` session on a private tmux 3.7c socket to check the exact-name targets, and `dev/eval-usage.py` once against a local stub endpoint and a three-entry transcript to check the refused redirect, the ignored proxy and the entry without a response identity. `start` and `dev/eval-launch` remain not run. The first read from a CQ server was `child` in the T61 matrix.
+- At original drafting, `dev/eval-minesweeper-spec.md` had not been implemented and its checks had not been run. T60 later supplied preparatory version-1 and follow-up integrations; this page does not independently verify their checks. In the T61 matrix three runs implemented version 1 and the follow-up and passed both checks as run by the driver session, in about 39 to 80 minutes and with USD 1.77 to 5.34 of measured cost, each a lower bound.
+- At original drafting, the isolated server, `cq init` and `cq configure` in a scratch consumer were not carried out for this page. The steps came from the quickstart and `dev/attached-native-eval`. T60 later supplied private-consumer observations, and RS2 revision 4 carried out the host-level launch in three private scratch consumers (section 1). The T61 matrix carried them out six times through its run-local script, not through the commands of section 2.
+- Pi: the original stub-only evidence did not establish real-server launch, outer usage or a real-model driver. T59/T60 later supplied preparatory evidence for these, with usage gaps; busy/dialog monitoring and formal launch qualification remain unverified. The T61 matrix adds one formal Pi-governed run, which is not launch qualification.
+- Codex: the `/mcp` check as a scripted condition. The trust and `/hooks` dialogs were seen in the stub probe (`t9-probe/codex-run0-notbound/codex-hooks-review-screen.txt`); the recorded Codex drive ran on a `CODEX_HOME` that already held both decisions. The T61 proxy logs record "folder trust and hooks trusted at launch" for two Codex runs.
+- Claude Code: the recorded sessions showed `auto mode on` in the footer. The project's settings files do not set a permission mode and its source was not identified, so the permission dialogs of a fresh consumer are unknown. The S0 screen of the T61 Claude run also shows `auto mode on`; its report records one harness dialog, the typed confirmation of a pasted request.
+- Proxy marker and label retention were unverified at original drafting. T60 supplies Pi and Codex proxy-labelled Q1/Q2 readback observations, and T59 records delegated Q1–Q3 answers in the Claude consumer run. The governing sessions observed these in private fixtures; they have not been independently verified. In the T61 matrix each answered Question carried the label and status Answered in the snapshots; the stored text was not compared with the typed one (section 3).
+- At original drafting, the attached-session `EvaluationOnly` read was unverified: tagging came from code and existing fixtures. T60 supplies later tagged Pi and Codex post-upload usage observations with incomplete meters and unknown attempts, and RS2 revision 4 returned tagged usage for all three short probes. In those probes only Pi reported a cost group, and every governing attempt has unknown usage. These are estimates with coverage gaps, not complete billing totals. The T61 matrix read tagged usage for its three completed runs, with incomplete meters in each.
+- The stall rule's file-modification test has not been exercised. The "same failure" rule ended two T61 runs; whether the comparison of section 4 was applied is not recorded.
 - The figures of section 4 come from a one-off script over session files and transcripts. Attempt durations were not derived: the receipt files carry no finish time.
-- The ledger states of D67, D73 and G1 (section 7).
+- The ledger states of D67, D73 and G1 (section 7). The T61 reports record D67 and D73 as Resolved before the runs.
 
 ## Recorded preference answers
 
@@ -524,3 +641,5 @@ All nine preference Questions are Answered in the ledger. These answers govern f
 | Q45 | `report.md` in the evaluation root, with a short page under `docs/validation/` when the operator asks for one. |
 
 Q43 requires one short connected probe per harness before the full matrix. Each uses an isolated consumer and private server, records a small begin, then exits, uploads and reads usage. Claude additionally compares transcript token totals with `/cost`. Any remaining coverage gap is reported explicitly.
+
+Q42's recalibration after the first run of each harness is in [section 4](#recalibration-after-the-first-run-of-each-harness-t61).
