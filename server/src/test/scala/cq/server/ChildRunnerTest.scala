@@ -819,7 +819,7 @@ sys.stderr.flush()
           concluding.set(Some(status))
           entered.countDown()
           proceed.await(60, java.util.concurrent.TimeUnit.SECONDS)
-          None
+          CohortFailure.outcome(status, None, None)
         })
         val controller = new DispatchController(f.config, f.runner, f.jobs, f.clock)
         (for {

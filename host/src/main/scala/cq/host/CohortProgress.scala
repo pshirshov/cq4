@@ -1,7 +1,7 @@
 package cq.host
 
 import cq.api.*
-import cq.core.LedgerPolicy
+import cq.core.{DriverPolicy, LedgerPolicy}
 import io.circe.Json
 import java.nio.charset.StandardCharsets.UTF_8
 import java.security.MessageDigest
@@ -15,6 +15,21 @@ object CohortFailure {
   /** The fault of a child that failed without a result and that its receipt advises retrying. A cancellation is no fault of the child. */
   def fault(status: DispatchStatus): Option[String] =
     status.blocker.filter(_ => status.phase == DispatchPhase.Failed && status.result.isEmpty && status.next == ChildNext.Retry)
+
+  /**
+   * How a child attempt ended, as a drive reads it. `input` is the group fingerprint of a selected attempt. `offered` is defined when the
+   * attempt left a published fault: whether its input is offered again, or stays deferred because it repeated the fault before it.
+   */
+  def outcome(status: DispatchStatus, input: Option[String], offered: Option[Boolean]): ChildOutcome = {
+    val end = status.phase match {
+      case DispatchPhase.Cancelled => ChildEnd.Cancelled
+      case DispatchPhase.Completed | DispatchPhase.Failed if status.result.nonEmpty => ChildEnd.Admitted
+      case DispatchPhase.Failed => offered.fold(ChildEnd.Failed)(again => if (again) ChildEnd.Retryable else ChildEnd.Repeated)
+      case _ => ChildEnd.Unknown
+    }
+    ChildOutcome(status.attempt, status.members, end, input,
+      status.blocker.filter(_ => Set(ChildEnd.Retryable, ChildEnd.Repeated, ChildEnd.Failed)(end)).map(_.take(DriverPolicy.MaxDetail)))
+  }
 }
 
 final class CohortProgress {

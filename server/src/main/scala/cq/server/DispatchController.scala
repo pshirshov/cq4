@@ -18,11 +18,11 @@ private[server] final class DispatchExecution(val ticket: DispatchTicket, val di
   private var job = Option.empty[AttemptId]
   private var owned = Set.empty[AttemptId]
   private var reviewer = Option.empty[ReviewerChecks]
-  private var repeat = Option.empty[String]
+  private var ended = Option.empty[ChildOutcome]
   private var withheld = Option.empty[DispatchStatus]
   private var concluded = false
-  def repeated: Option[String] = synchronized(repeat)
-  def repeating(value: String): Unit = synchronized { repeat = Some(value) }
+  def outcome: Option[ChildOutcome] = synchronized(ended)
+  def ending(value: ChildOutcome): Unit = synchronized { ended = Some(value) }
   def status: DispatchStatus = synchronized(view)
   /** What a reader outside the run sees: a terminal status only once `conclude` has run, and the child as publishing until then. */
   def observed: DispatchStatus = synchronized(withheld.getOrElse(view))
@@ -52,9 +52,10 @@ private[server] final class DispatchExecution(val ticket: DispatchTicket, val di
   }
 }
 
-/** `finished` receives the child's final status and replies with the fault it repeated, when the attempt before it on the same input ended in it.
+/** `finished` receives the child's final status and replies with how the attempt ended: whether its input is offered again, or stays
+  * deferred because the attempt before it on the same input ended in the same fault.
   * It runs before that status becomes visible to the session, on no lock of the dispatch. */
-final case class SelectedDispatch(cohort: Option[UUID], evidence: ArtifactId, admit: () => Unit, finished: DispatchStatus => Option[String])
+final case class SelectedDispatch(cohort: Option[UUID], evidence: ArtifactId, admit: () => Unit, finished: DispatchStatus => ChildOutcome)
 
 final class DispatchController(config: SupervisorConfig, runner: ChildRunner, jobs: JobSupervisor, clock: Clock) {
   private val MaxStatusWaitMillis = 20000
@@ -107,7 +108,8 @@ final class DispatchController(config: SupervisorConfig, runner: ChildRunner, jo
         } *> ready.fail(failure).unit
       // The input is released, and its fault published, while the child still reads as publishing: a status that showed it failed
       // before that would let the session select the same work and find it deferred.
-      }.ensuring(ZIO.attemptBlocking(try selection.flatMap(_.finished(entry.status)).foreach(entry.repeating) finally entry.conclude()).orDie *>
+      }.ensuring(ZIO.attemptBlocking(try entry.ending(selection.fold(CohortFailure.outcome(entry.status, None, None))(_.finished(entry.status)))
+        finally entry.conclude()).orDie *>
         done.succeed(()).unit)
       execute.forkDaemon.unit
     }
@@ -136,11 +138,11 @@ final class DispatchController(config: SupervisorConfig, runner: ChildRunner, jo
     _ <- if (waitMillis == 0) ZIO.unit else entry.done.await.timeout(zio.Duration.fromMillis(waitMillis)).unit
     result <- snapshot(entry)
   } yield result
-  /** Empty while the attempt runs; then the fault it repeated, when the attempt before it on the same input ended in the same fault. */
-  def concluded(attempt: AttemptId, waitMillis: Int): Task[Option[Option[String]]] = for {
+  /** Empty while the attempt runs; then how it ended. */
+  def concluded(attempt: AttemptId, waitMillis: Int): Task[Option[ChildOutcome]] = for {
     entry <- ZIO.attempt { require(waitMillis >= 0 && waitMillis <= MaxStatusWaitMillis, "Status wait must be 0–20000 ms"); found(attempt) }
     over <- entry.done.await.timeout(zio.Duration.fromMillis(waitMillis))
-  } yield over.map(_ => entry.repeated)
+  } yield over.map(_ => entry.outcome.getOrElse(throw new IllegalStateException("A finished child attempt has no outcome")))
   def cancel(attempt: AttemptId): Task[DispatchStatus] = for {
     entry <- ZIO.attempt(found(attempt))
     _ <- stop(entry, "Cancelled by the governing session")
