@@ -24,6 +24,10 @@ in {
 }
 ```
 
+The server listens on `listenAddress` (default `127.0.0.1`) and `port` (default
+8080) and keeps its working directory in `/var/lib/<stateDirectory>` (default
+`cq`), owned by the `cq` system user.
+
 Credential options take **strings naming runtime files**, not Nix path literals
 or secret values. Systemd loads those files into the CQ service's credentials
 directory. Inline `CQ_TOKEN` and `CQ_DATABASE_PASSWORD` still take precedence
