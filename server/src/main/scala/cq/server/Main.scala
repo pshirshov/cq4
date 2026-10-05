@@ -9,6 +9,7 @@ import izumi.distage.roles.RoleAppMain
 import izumi.distage.roles.launcher.{AppFailureHandler, EarlyLoggerFactory, RouterFactory}
 import izumi.distage.roles.model.{RoleDescriptor, RoleService}
 import izumi.distage.roles.model.definition.RoleModuleDef
+import izumi.functional.bio.UnsafeRun2.FailureHandler
 import izumi.fundamentals.platform.cli.{CLIParser, CLIParserImpl}
 import izumi.fundamentals.platform.cli.model.EntrypointArgs
 import org.http4s.ember.server.EmberServerBuilder
@@ -74,6 +75,7 @@ object CqPlugin extends PluginDef {
   make[McpSchemas]
   make[CatalogRead].from((schemas: McpSchemas) => new CatalogRead(schemas))
   make[RunningServer].fromResource[RunningServer.Resource]
+  modify[FailureHandler].by(_.map(ConnectionReports.reporting))
   make[DatabaseSetup]
   make[DatabaseConfig].fromEffect(ZIO.attempt {
     DatabaseConfig(required("CQ_DATABASE_URL"), required("CQ_DATABASE_USER"), ServerCredentials.password(sys.env))
