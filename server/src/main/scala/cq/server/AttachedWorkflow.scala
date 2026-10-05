@@ -6,11 +6,13 @@ import cq.host.{DriverSessionClient, HostFiles, OperatorRequirements, WorkflowAs
 import zio.{Task, ZIO}
 
 // The workflow activations of one attached session. `begin` makes an accepted activation the session's current workflow.
-final class WorkflowActivations(session: DriverSessionClient, quiescent: () => Boolean,
+// `unsettled` names the session's child, check, integration and combination work that has not settled.
+final class WorkflowActivations(session: DriverSessionClient, unsettled: () => List[String],
   begin: (RequestId, WorkflowRequest, String, Option[CycleId]) => WorkflowActivation) {
   private final case class Accepted(id: RequestId, value: WorkflowActivation, token: Option[CycleToken])
   // Kept only to answer a repeated request: an attached session is not limited in how many workflows it activates.
   private val MaxRetained = 64
+  private val MaxNamed = 8
   private var retained = Vector.empty[Accepted]
   private var active = Option.empty[WorkflowActivation]
   def current: Option[WorkflowActivation] = synchronized(active)
@@ -34,7 +36,9 @@ final class WorkflowActivations(session: DriverSessionClient, quiescent: () => B
       }
       case _ =>
         // The host's own preconditions come first: a refusal leaves the directive's token unused, so the session can settle its work and activate again.
-        require(quiescent(), "Settle active child/check/integration/combination work before changing workflow")
+        val open = unsettled()
+        require(open.isEmpty, "Settle active child/check/integration/combination work before changing workflow: " +
+          open.take(MaxNamed).mkString(", ") + (if (open.size > MaxNamed) s" and ${open.size - MaxNamed} more" else ""))
         val cycle = session.activate(id, request, token) match {
           case DriverActivation.Started(value) => Some(value)
           case _: DriverActivation.Undriven => None
@@ -54,7 +58,7 @@ final class AttachedWorkflow(config: SupervisorConfig, authority: SupervisorAuth
   // Instructions plus a session request of up to 64 KiB (the gateway bound) no longer fit the former 64 KiB record.
   private val MaxActivationBytes = 131072
   private val activations = new WorkflowActivations(driver.session,
-    () => dispatch.quiescent && integrations.quiescent && combinations.quiescent && revalidations.quiescent, begin)
+    () => dispatch.unsettled ++ revalidations.unsettled ++ integrations.unsettled ++ combinations.unsettled, begin)
   private var integrationsByEpoch = Map.empty[IntegrationId, Long]
   private var combinationsByEpoch = Map.empty[RequestId, Long]
   def current: Option[WorkflowActivation] = activations.current

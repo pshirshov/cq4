@@ -305,7 +305,8 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
     override def grant(value: GrantRequest): AccessToken = throw new IllegalStateException("The driver issues no credentials")
   }
   private def host(service: LedgerService[IO], w: World, runtime: Runtime[Any], quiescent: () => Boolean): WorkflowActivations =
-    new WorkflowActivations(new DriverSessionClient(new SessionApi(service, w.governor, runtime, _ => false), w.project), quiescent,
+    new WorkflowActivations(new DriverSessionClient(new SessionApi(service, w.governor, runtime, _ => false), w.project),
+      () => if (quiescent()) Nil else List("child attempt fixture (Running)"),
       (id, request, requirements, cycle) => WorkflowActivation(id, WorkflowContext(request, "Fixture instructions", None), requirements, cycle))
   private def activation(text: String, project: ProjectId): (RequestId, WorkflowRequest, Option[CycleToken]) = {
     val (workflow, token) = submitted(project, text, "/cq:advance")

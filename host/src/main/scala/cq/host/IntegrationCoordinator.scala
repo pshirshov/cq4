@@ -6,6 +6,9 @@ import zio.{Task, ZIO}
 
 final case class IntegrationRun(record: IntegrationRecord, blocker: Option[String])
 
+/** The server refused the reservation and holds none, and no Git update was launched: the journal has sealed the integration as not applied. */
+final class IntegrationRefused(val reason: String) extends RuntimeException(reason)
+
 final class IntegrationCoordinator(owner: Scope, journal: IntegrationJournal, git: GitIntegration, governor: ServerApi, collector: ServerApi) {
   private def server(id: IntegrationId): Option[IntegrationRecord] =
     governor.call(Command.Read(ReadInput(owner.project, ReadSelection.Integration(id)))) match {
@@ -54,12 +57,32 @@ final class IntegrationCoordinator(owner: Scope, journal: IntegrationJournal, gi
       })
   }
 
-  def run(id: IntegrationId): Task[IntegrationRun] = journal.locked(id) { entry => for {
-    local <- ZIO.attemptBlocking(entry.read.getOrElse(throw DomainFailure(Fault.Missing("Integration journal is missing; no effect may be retried"))))
-    record <- ZIO.attemptBlocking {
+  /** The reason a server refusal sealed in the journal, which only an unattempted integration without a server record carries. */
+  private def refusal(local: IntegrationLocal): Option[String] = local.observation.collect {
+    case IntegrationObservation.NotApplied(reason) if !local.attempted && server(local.intent.id).isEmpty => reason
+  }
+
+  // A refusal is the server's answer, so nothing was reserved; with no execution admitted either, the integration can be sealed.
+  // An unanswered reservation proves neither and stays pending.
+  private def reserve(entry: IntegrationEntry, local: IntegrationLocal): IntegrationRecord =
+    try {
       val value = collector.integrate(HostIntegrationInput(owner.project, HostIntegration.Reserve(local.intent)))
       require(value.intent == local.intent, "Server reservation differs from local intent")
       value
+    } catch {
+      case failure @ DomainFailure(fault) =>
+        if (local.attempted || local.observation.nonEmpty || server(local.intent.id).nonEmpty) throw failure
+        val reason = DispatchProjection.concise("Server refused the reservation, so no Git update was launched: " + fault)
+        entry.write(local.copy(observation = Some(IntegrationObservation.NotApplied(reason))))
+        throw new IntegrationRefused(reason)
+    }
+
+  /** Fails with `IntegrationRefused` when the server refused the reservation before any attempt, now or in an earlier run. */
+  def run(id: IntegrationId): Task[IntegrationRun] = journal.locked(id) { entry => for {
+    local <- ZIO.attemptBlocking(entry.read.getOrElse(throw DomainFailure(Fault.Missing("Integration journal is missing; no effect may be retried"))))
+    record <- ZIO.attemptBlocking {
+      refusal(local).foreach(reason => throw new IntegrationRefused(reason))
+      reserve(entry, local)
     }
     result <- deliver(local, record, observe(entry, local))
   } yield result }
@@ -82,7 +105,7 @@ final class IntegrationCoordinator(owner: Scope, journal: IntegrationJournal, gi
     previous <- ZIO.attemptBlocking(server(id))
     result <- previous match {
       case None => ZIO.attempt {
-        require(!local.attempted && local.observation.isEmpty, "Server reservation is missing after local execution or observation; outcome is unresolved")
+        require(IntegrationEntries.unreserved(local), "Server reservation is missing after local execution or observation; outcome is unresolved")
         None
       }
       case Some(record) =>

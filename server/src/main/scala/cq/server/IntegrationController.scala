@@ -84,8 +84,11 @@ final class IntegrationController(config: SupervisorConfig, authority: Superviso
       case _ => ZIO.unit
     }
   private def background(entry: IntegrationExecutionState, done: Promise[Nothing, Unit], operation: Task[IntegrationStatus]): Task[Unit] =
-    (operation.flatMap(value => ZIO.succeed(update(entry, value))).catchAll { error =>
-      ZIO.succeed {
+    (operation.flatMap(value => ZIO.succeed(update(entry, value))).catchAll {
+      // No reservation exists and nothing was attempted: the integration is settled, and the server keeps no record of it.
+      case refused: IntegrationRefused => ZIO.succeed(update(entry, snapshot(entry).copy(phase = IntegrationPhase.NotApplied,
+        next = IntegrationNext.InspectEvidence, blocker = Some(refused.reason))))
+      case error => ZIO.succeed {
         val value = snapshot(entry)
         update(entry, value.copy(phase = if (value.phase == IntegrationPhase.Preparing) IntegrationPhase.Failed else IntegrationPhase.Pending,
           next = IntegrationNext.InspectEvidence, blocker = Some(DispatchProjection.concise("Integration failed: " +
@@ -164,7 +167,10 @@ final class IntegrationController(config: SupervisorConfig, authority: Superviso
     _ <- if (waitMillis == 0) ZIO.unit else done.await.timeout(zio.Duration.fromMillis(waitMillis)).unit
   } yield snapshot(entry)
 
-  def quiescent: Boolean = synchronized(entries.values.forall(value => IntegrationController.terminal(value.view.phase)))
+  /** What keeps the session from changing its workflow: every integration that is not settled, by identity and phase. */
+  def unsettled: List[String] = synchronized(entries.values.toList.filterNot(value => IntegrationController.terminal(value.view.phase))
+    .sortBy(_.startedAt).map(value => s"integration ${value.ticket.id.value} (${value.view.phase})"))
+  def quiescent: Boolean = unsettled.isEmpty
 
   def shutdown: Task[Unit] = for {
     pending <- ZIO.succeed(synchronized { closing = true; entries.values.map(_.done).toList })

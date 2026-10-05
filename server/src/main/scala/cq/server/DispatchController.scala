@@ -137,7 +137,9 @@ final class DispatchController(config: SupervisorConfig, runner: ChildRunner, jo
   def workspace(attempt: AttemptId, command: WorkspaceCommand): Task[WorkspaceReply] = ZIO.attempt(found(attempt)).flatMap { entry =>
     ZIO.attempt { entry.check(); require(!DispatchController.terminal(entry.status.phase), "Child workspace capability has ended") } *> runner.workspace(entry, command)
   }
-  def quiescent: Boolean = synchronized(entries.values.forall(value => DispatchController.terminal(value.status.phase)))
+  def unsettled: List[String] = synchronized(entries.values.toList.map(_.status).filterNot(value => DispatchController.terminal(value.phase))
+    .map(value => s"child attempt ${value.attempt.value} (${value.phase})"))
+  def quiescent: Boolean = unsettled.isEmpty
 
   /** A result's checks are rerun only while no child runs on its members and no later worker result for them exists. */
   def revalidatable(result: ChildResult): Unit = synchronized {
