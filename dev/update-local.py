@@ -325,18 +325,22 @@ def install(state: Path, release: Path, candidate: Path, rollback: Path, evidenc
             signal.signal(number, signal.SIG_IGN)
         receipt.update(status="recovery-required", error=str(error))
         write_json(evidence / "receipt.json", receipt)
-        if transformation_attempted:
-            if not owned:
-                owned = True
-                database.run(["pg_ctl", "-D", str(data), "-l", str(evidence / "postgres-recovery.log"), "-o",
-                              f"-h 127.0.0.1 -p {port} -c unix_socket_directories=''", "-w", "-t", "30", "start"], "database-recovery-start", 40)
-            database.run(["pg_restore", "--clean", "--if-exists", "--exit-on-error", "--no-owner", "--no-privileges", "--dbname", "postgres", str(backup)], "database-rollback", 600)
-            require(fingerprints("data-restored") == before_data, "Restored database differs from backup state")
-            require(query("SELECT checksum FROM cq_schema_migrations WHERE version=1", "schema-restored") == schema, "Restored schema differs")
-            receipt.update(databaseRestored=True)
-        if owned:
-            database.run(["pg_ctl", "-D", str(data), "-m", "fast", "-w", "-t", "30", "stop"], "database-recovery-stop", 40)
-            owned = False
+        try:
+            if transformation_attempted:
+                if not owned:
+                    owned = True
+                    database.run(["pg_ctl", "-D", str(data), "-l", str(evidence / "postgres-recovery.log"), "-o",
+                                  f"-h 127.0.0.1 -p {port} -c unix_socket_directories=''", "-w", "-t", "30", "start"], "database-recovery-start", 40)
+                # One transaction: a restore that fails leaves the database as the failed step left it, never partly dropped.
+                database.run(["pg_restore", "--clean", "--if-exists", "--single-transaction", "--exit-on-error", "--no-owner", "--no-privileges",
+                              "--dbname", "postgres", str(backup)], "database-rollback", 600)
+                require(fingerprints("data-restored") == before_data, "Restored database differs from backup state")
+                require(query("SELECT checksum FROM cq_schema_migrations WHERE version=1", "schema-restored") == schema, "Restored schema differs")
+                receipt.update(databaseRestored=True)
+        finally:
+            if owned:
+                database.run(["pg_ctl", "-D", str(data), "-m", "fast", "-w", "-t", "30", "stop"], "database-recovery-stop", 40)
+                owned = False
         require(not os.path.lexists(data / "postmaster.pid"), "Database recovery is incomplete")
         require(digest(release / "manifest.json") == receipt["oldManifest"], "Package recovery is incomplete")
         receipt.update(status="rolled-back", databaseStopped=True)

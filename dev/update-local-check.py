@@ -463,6 +463,27 @@ class PostgreSQLInstall(unittest.TestCase):
             self.assertIsNone(by_session["without-cycle"])
             self.assertEqual((by_session["recorded"]["outcomes"], by_session["recorded"]["retried"]), ([STORED_OUTCOME], [STORED_OUTCOME]))
 
+            # A restore that fails leaves the recovery marker and the previous package, and still stops the database. The step adds a
+            # view, which the restore cannot drop a table under, and changes that table, which the verification refuses.
+            unrestorable = root / "unrestorable-candidate"
+            fixture(unrestorable, "unrestorable")
+            stranded = {"oldManifest": update.digest(release / "manifest.json"), "newManifest": update.digest(unrestorable / "manifest.json"), "status": "candidate-verified"}
+            try:
+                with self.assertRaisesRegex(RuntimeError, "database-rollback failed"):
+                    update.install(root, release, unrestorable, root / "unrestorable-rollback", evidence, stranded, "schema", update.Commands(root, evidence, dict(os.environ)),
+                                   "BEGIN; CREATE VIEW cq_dependent AS SELECT value FROM cq_fixture; UPDATE cq_fixture SET value = 'changed'; COMMIT;")
+                self.assertFalse((data / "postmaster.pid").exists(), "A failed restore must not leave the database running")
+            finally:
+                if (data / "postmaster.pid").exists():
+                    subprocess.run(["pg_ctl", "-D", str(data), "-m", "immediate", "-w", "stop"], check=True, stdout=subprocess.DEVNULL)
+            self.assertEqual(stranded["status"], "recovery-required")
+            self.assertNotIn("databaseRestored", stranded)
+            self.assertTrue((root / ".cq-update-recovery.json").exists())
+            self.assertEqual(update.digest(release / "manifest.json"), stranded["oldManifest"])
+            self.assertEqual(update.digest(unrestorable / "manifest.json"), stranded["newManifest"])
+            # The restore ran in one transaction: the database is as the failed step left it, not partly dropped.
+            self.assertEqual(stored(), {"drivers": expected, "fixture": ["changed"]})
+
 
 
 if __name__ == "__main__":
