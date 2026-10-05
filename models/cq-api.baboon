@@ -375,6 +375,8 @@ root adt LineageMember {
   data Combination { id: RequestId }
 }
 root data LineageEntry { member: LineageMember parent: opt[LineageMember] settled: bit }
+enum ChildEnd { Admitted Retryable Repeated Failed Cancelled Unknown }
+root data ChildOutcome { attempt: AttemptId members: lst[ItemId] end: ChildEnd input: opt[str] fault: opt[str] }
 root data DriverCycle {
   id: CycleId number: i32 state: CycleState roots: set[ItemId] through: WorkflowPhase snapshot: WorksetSnapshot
   advanceable: lst[ItemRevision] run: opt[RequestId] created: lst[ItemId] lineage: lst[LineageEntry]
@@ -388,6 +390,7 @@ root data CycleRecord {
   id: CycleId number: i32 roots: set[ItemId] through: WorkflowPhase snapshot: WorksetPreview state: CycleState
   startToken: opt[DriverToken] resumeToken: opt[DriverToken] resumed: map[DriverToken, RequestId] run: opt[RequestId]
   created: lst[ItemId] lineage: lst[LineageEntry] resting: set[LineageMember] prompted: set[LineageMember]
+  outcomes: lst[ChildOutcome] retried: lst[ChildOutcome]
 }
 root data DriverRecord {
   project: ProjectId key: DriverKey state: DriverState attached: opt[SessionId] workset: opt[WorksetId]
@@ -413,6 +416,7 @@ root adt DriverSession {
   data Activate { run: RequestId request: WorkflowRequest token: opt[CycleToken] }
   data Inherit { cycle: CycleId parent: LineageMember member: LineageMember }
   data Settle { cycle: CycleId member: LineageMember }
+  data Conclude { cycle: CycleId outcome: ChildOutcome }
   data Rest { cycle: CycleId member: LineageMember }
   data Fail { cycle: CycleId member: LineageMember detail: str }
   data Change { cycle: CycleId request: ChangeRequest }
@@ -442,7 +446,7 @@ root adt DriverReply {
   data Changed { cycle: CycleId ack: ChangeAck }
   data Settleable { pending: bit integrations: set[IntegrationId] }
   data Listed { drivers: lst[DriverSummary] }
-  data Snapshot { preview: WorksetPreview }
+  data Snapshot { preview: WorksetPreview outcomes: lst[ChildOutcome] }
 }
 root adt ExtensionDriver {
   data Start { session: str input: str }

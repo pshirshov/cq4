@@ -11,8 +11,8 @@ sealed trait LineageOutcome
 object LineageOutcome {
   case object Settled extends LineageOutcome
   case object Resting extends LineageOutcome
-  // The member ended in a failure the drive cannot get past: `detail` completes "<member> of cycle N ...".
-  final case class Failed(detail: String) extends LineageOutcome
+  // A child attempt ended: the server settles it with its outcome and decides what that means for the drive.
+  final case class Concluded(outcome: ChildOutcome) extends LineageOutcome
 }
 
 // Registers the work an attached session dispatches from a driven advance run under that run's cycle and keeps the server's view of each
@@ -57,9 +57,7 @@ final class LineageTracker(client: DriverSessionClient, report: String => Unit, 
       val known = if (seen == at) last else None
       observed.flatMap {
         case Some(LineageOutcome.Settled) => reliably(client.settle(cycle, member))
-        // A fault the server returns means the cycle is already over: there is no drive left to stop.
-        case Some(LineageOutcome.Failed(detail)) => reliably(client.fail(cycle, member, detail.take(DriverPolicy.MaxDetail))).unit
-          .catchSome { case _: DomainFailure => ZIO.unit }
+        case Some(LineageOutcome.Concluded(outcome)) => reliably(client.conclude(cycle, outcome))
         case current if current == known => ZIO.sleep(pause) *> follow(cycle, parent, member, observed, known, seen)
         // A reading taken before the session resumed the member is stale: it is not reported, and the member is read again.
         case current @ Some(LineageOutcome.Resting) => reports.withPermit(ZIO.suspend {
@@ -122,7 +120,7 @@ final class AttachedDriver(config: SupervisorConfig, authority: SupervisorAuthor
       case (_: DispatchCommand.StartChoice | _: DispatchCommand.Start, DispatchReply.Status(status)) =>
         val request = LineageMember.Request(status.request)
         tracker.record(cycle, run, request) *> tracker.track(cycle, request, LineageMember.Attempt(status.attempt),
-          dispatch.concluded(status.attempt, WaitMillis).map(_.map(_.fold[LineageOutcome](LineageOutcome.Settled)(LineageOutcome.Failed.apply))))
+          dispatch.concluded(status.attempt, WaitMillis).map(_.map(LineageOutcome.Concluded.apply)))
       case (DispatchCommand.PrepareIntegration(id, _), _: DispatchReply.Integration) =>
         tracker.track(cycle, run, LineageMember.Integration(id), integrations.status(id, WaitMillis).map(value => AttachedDriver.integration(value.phase)))
       // Integrate returns once the host applies the integration; the tracker's next poll may be a status wait away.

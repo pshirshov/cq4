@@ -155,12 +155,12 @@ final class DriverService(registry: DriverRegistry, planner: WorksetPlanner) {
             s"${references(unselected)} created by cycle ${finished.get.number} is not in the recomputed advanceable set"), messages, now)
           else decide(snapshot, finished) match {
             case DriverDecision.Stop(value) => stop(settled, value, messages, now)
-            case DriverDecision.Continue if record.directives >= MaxDirectives => stop(settled, limit, messages, now)
-            case DriverDecision.Continue =>
+            case _: DriverDecision.Continue if record.directives >= MaxDirectives => stop(settled, limit, messages, now)
+            case DriverDecision.Continue(retried) =>
               val start = token()
               val cycle = CycleRecord(CycleId(UUID.randomUUID()), finished.fold(1)(_.number + 1), record.targets, record.through, snapshot,
-                CycleState.Pending, Some(start), None, Map.empty, None, Nil, Nil, Set.empty, Set.empty)
-              directed(record, cycle, CycleToken.Start(start), messages, now)
+                CycleState.Pending, Some(start), None, Map.empty, None, Nil, Nil, Set.empty, Set.empty, Nil, retried)
+              directed(record, cycle, CycleToken.Start(start), messages ++ finished.flatMap(retrying(_, retried)), now)
           }
       }
   }
@@ -208,6 +208,24 @@ final class DriverService(registry: DriverRegistry, planner: WorksetPlanner) {
         val settled = entry.copy(settled = true)
         registry.put(record.copy(cycle = Some(cycle.copy(lineage = cycle.lineage.map(value => if (value.member == member) settled else value))), touchedAt = now))
         DriverReply.Lineage(id, settled)
+      // The attached host reports how a child attempt ended: the attempt settles and its outcome joins the cycle. A repeated report
+      // replaces the earlier one. An attempt that repeated the fault of the attempt before it on the same input ends the drive.
+      case DriverSession.Conclude(id, outcome) =>
+        DriverPolicy.outcome(outcome)
+        val member = LineageMember.Attempt(outcome.attempt)
+        val (record, cycle, entry) = registered(scope, id, member)
+        val settled = entry.copy(settled = true)
+        val concluded = record.copy(cycle = Some(cycle.copy(lineage = cycle.lineage.map(value => if (value.member == member) settled else value),
+          outcomes = cycle.outcomes.filterNot(_.attempt == outcome.attempt) :+ outcome)), touchedAt = now)
+        if (outcome.end == ChildEnd.Repeated && record.on && cycle.active) {
+          val value = repeated(member, cycle, outcome)
+          val next = stopped(concluded, value, false, now)
+          registry.put(next)
+          DriverReply.Stop(value, Some(status(next)), Nil)
+        } else {
+          registry.put(concluded)
+          DriverReply.Lineage(id, settled)
+        }
       case DriverSession.Rest(id, member) =>
         val (record, cycle, entry) = registered(scope, id, member)
         registry.put(record.copy(cycle = Some(cycle.copy(resting = cycle.resting + member)), touchedAt = now))

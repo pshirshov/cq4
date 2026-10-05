@@ -316,7 +316,8 @@ object LedgerService {
           F.fromEither(scala.util.Try {
             val record = records.find(_.key == key).getOrElse(throw DomainFailure(Fault.Missing("Driver does not exist")))
             if (record.revision != expected) throw DomainFailure(Fault.Conflict("Driver changed; refresh its snapshot"))
-            DriverReply.Snapshot(record.cycle.getOrElse(throw DomainFailure(Fault.Missing("Driver has no cycle snapshot"))).snapshot)
+            val cycle = record.cycle.getOrElse(throw DomainFailure(Fault.Missing("Driver has no cycle snapshot")))
+            DriverReply.Snapshot(cycle.snapshot, cycle.outcomes)
           }.toEither)
         }
         case _: DriverRequest.Summaries => repository.driverSummaries(scope.project).map(DriverReply.Listed.apply)

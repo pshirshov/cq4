@@ -169,6 +169,8 @@ export class DriversDialog {
         if (generation !== this.generation || previewGeneration !== this.previewGeneration) return;
         if (!(result instanceof api.Result_Driver) || !(result.reply instanceof api.DriverReply_Snapshot)) throw new Error('Unexpected cycle snapshot');
         this.showPreview(result.reply.preview, 'Frozen cycle snapshot');
+        for (const outcome of result.reply.outcomes) if (outcome.fault !== undefined)
+          this.previewPanel.append(element('p', `Attempt on ${outcome.members.map(itemName).join(', ')} left no result (${outcome.end}): ${outcome.fault}`));
       })));
       const park = holdButton(`Park ${value.key.harness} ${value.key.session}`, () => this.action(async () => {
         const generation = this.generation; park.disabled = true;

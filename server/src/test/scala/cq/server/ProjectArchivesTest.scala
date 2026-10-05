@@ -42,7 +42,13 @@ final class ProjectArchivesPostgres extends SpecZIO with AssertZIO {
         directive = issued.asInstanceOf[DriverReply.Continue].directive
         run = RequestId(UUID.randomUUID())
         _ <- service.drive(governor, DriverRequest.Session(DriverSession.Activate(run, WorkflowRequest.Advance(roots, WorkflowPhase.Work), Some(directive.token))))
+        dispatch = LineageMember.Request(RequestId(UUID.randomUUID()))
+        outcome = ChildOutcome(AttemptId(UUID.randomUUID()), roots.toList, ChildEnd.Retryable, Some("operative-input"), Some("Malformed report at line 3"))
+        _ <- service.drive(governor, DriverRequest.Session(DriverSession.Inherit(directive.cycle, LineageMember.Run(run), dispatch)))
+        _ <- service.drive(governor, DriverRequest.Session(DriverSession.Inherit(directive.cycle, dispatch, LineageMember.Attempt(outcome.attempt))))
+        _ <- service.drive(governor, DriverRequest.Session(DriverSession.Conclude(directive.cycle, outcome)))
         before <- repository.driverRecords(operator.project)
+        _ <- assertIO(before.head.cycle.exists(_.outcomes == List(outcome)))
         file <- ZIO.attempt(Files.createTempFile("cq-driver-archive-", ".zip"))
         manifest <- archives.backup(operator.project, file)
         _ <- assertIO(manifest.entries.exists(entry => entry.table == BackupTable.Drivers && entry.rows == 1))
@@ -55,7 +61,8 @@ final class ProjectArchivesPostgres extends SpecZIO with AssertZIO {
         record = restored.head
         _ <- assertIO(record.state == DriverState.Off && record.stopped.exists(_.reason == DriverStop.RestoredArchive) && record.bind.isEmpty &&
           record.cycle.exists(cycle => cycle.state == CycleState.Ended && cycle.startToken.isEmpty && cycle.resumeToken.isEmpty && cycle.resumed.isEmpty &&
-            cycle.lineage.map(_.member) == before.head.cycle.get.lineage.map(_.member)) && record.revision.value == before.head.revision.value + 1)
+            cycle.lineage.map(_.member) == before.head.cycle.get.lineage.map(_.member) && cycle.outcomes == List(outcome) && cycle.retried.isEmpty) &&
+          record.revision.value == before.head.revision.value + 1)
         serviceAfter = FixedLedger.at(new PostgresLedgerRepository(target), System.currentTimeMillis())
         replay <- serviceAfter.drive(governor, DriverRequest.Session(DriverSession.Activate(run, WorkflowRequest.Advance(roots, WorkflowPhase.Work), Some(directive.token)))).either
         _ <- assertIO(replay.left.exists { case DomainFailure(_: Fault.Denied) => true; case _ => false })
