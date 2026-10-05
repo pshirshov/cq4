@@ -1570,6 +1570,67 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
       } yield ()
     }
 
+    // Defect 147: the workflows tell a governing session to gate work on the Question that already holds the operator's decision.
+    "admit a BlockedBy link from an in-set item to a Question outside the drive, Open or Answered, and stop for the user on the Open one" in { (service: LedgerService[IO]) =>
+      val w = world
+      val key = claude("outside-question")
+      def begun(name: String, targets: ItemId*): IO[Throwable, (World, DriverKey, Driven)] = {
+        val bound = w.copy(governor = w.other(Role.Governor))
+        driven(service, bound, claude(name), workset(targets*)).map(cycle => (bound, claude(name), cycle))
+      }
+      def settled(status: QuestionStatus, answer: Option[String]): ItemDraft =
+        question("Settled decision").copy(content = Content.Question(status, "Prompt", "Context", Nil, None, answer))
+      for {
+        _ <- service.initialize(w.operator, "outside-question")
+        first <- create(service, w.operator, task("Gated by the Open Question"))
+        second <- create(service, w.operator, task("Gated by the Answered Question"))
+        asked <- create(service, w.operator, question("Decision the operator still owes"))
+        answered <- create(service, w.operator, settled(QuestionStatus.Answered, Some("Proceed")))
+        withdrawn <- create(service, w.operator, settled(QuestionStatus.Withdrawn, None))
+        spare <- create(service, w.operator, task("Stays ready for the refused writes"))
+        _ <- driven(service, w, key, workset(first, second))
+        before <- service.get(w.operator, asked)
+        linked <- reference(service, w.governor, first, Relation.BlockedBy, asked, true).flatMap(service.change(w.governor, _))
+        after <- service.get(w.operator, asked)
+        _ <- assertIO(linked.items.map(_.id).toSet == Set(first, asked) && after.item.draft == before.item.draft && after.item.revision == Revision(2))
+        // The Answered Question is linked from its own side; it satisfies the dependency, so the item stays ready.
+        inverse <- reference(service, w.governor, answered, Relation.Blocks, second, true).flatMap(service.change(w.governor, _))
+        running <- status(service, w, key)
+        preview <- service.previewWorkset(w.operator, workset(first, second))
+        _ <- assertIO(inverse.items.map(_.id).toSet == Set(second, answered) && running.exists(_.state == DriverState.On) &&
+          preview.readiness.map(entry => entry.item -> entry.ready).toMap == Map(first -> false, second -> true))
+        next <- directive(service, w, key)
+        _ <- submit(service, w, w.governor, next.directive.text)
+        _ <- reference(service, w.governor, second, Relation.BlockedBy, asked, true).flatMap(service.change(w.governor, _))
+        // Nothing is ready any more, and what blocks it waits for the operator: the stop names the Question outside the set.
+        stop <- query(service, w, key)
+        _ <- assertIO(stop match {
+          case DriverReply.Stop(DriverStopped(DriverStop.UserInputRequired, "Awaiting the user on Q1; the driver never answers questions or infers approval"), Some(value), _) =>
+            stopped(Some(value), DriverStop.UserInputRequired)
+          case _ => false
+        })
+        // Only the added link is admitted: a Withdrawn Question, another relation, the removal of the link and any edit stay out-of-set changes.
+        edit <- replace(service, w.operator, asked, "Edited by a drive")
+        refusals = List[(String, String, Scope => IO[Throwable, ChangeRequest])](
+          ("question-withdrawn", "out-of-set change: Q3 is outside", reference(service, _, spare, Relation.BlockedBy, withdrawn, true)),
+          ("question-related", "out-of-set change: Q2 is outside", reference(service, _, spare, Relation.RelatesTo, answered, true)),
+          ("question-unlinked", "out-of-set change: Q1 is outside", reference(service, _, first, Relation.BlockedBy, asked, false)),
+          ("question-blocked", "out-of-set change: Q2 is outside", reference(service, _, answered, Relation.BlockedBy, spare, true)),
+          ("question-edited", "out-of-set change: Q1 is outside", _ => ZIO.succeed(edit)))
+        _ <- ZIO.foreachDiscard(refusals) { case (name, detail, change) =>
+          begun(name, first, spare).flatMap { case (session, sessionKey, _) =>
+            change(session.governor).flatMap(value => rejects(service, session, sessionKey, detail)(service.change(session.governor, value)))
+          }
+        }
+        // The exemption is the bound session's, as it is for a Defect.
+        (linking, linkingKey, link) <- begun("question-delegated", first, spare)
+        child = w.other(Role.Governor)
+        _ <- act(service, linking.governor, DriverSession.Inherit(link.cycle, LineageMember.Run(link.run), LineageMember.Session(child.actor.session)))
+        blocking <- reference(service, child, spare, Relation.BlockedBy, answered, true)
+        _ <- rejects(service, linking, linkingKey, "out-of-set change: Q2 is outside")(act(service, child, DriverSession.Change(link.cycle, blocking)))
+      } yield ()
+    }
+
     "keep every other driven write that names a recorded Defect, and every other blocking link, an out-of-set change that stops the drive" in { (service: LedgerService[IO]) =>
       val w = world
       def begun(name: String, targets: ItemId*): IO[Throwable, (World, DriverKey, Driven)] = {
