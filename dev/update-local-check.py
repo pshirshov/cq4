@@ -214,6 +214,15 @@ class Compatibility(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "Schema changes"):
             update.compatible(self.manifest("old-schema", "old"), self.manifest("schema", "new"), step)
 
+    def test_pinned_step_describes_this_tree(self):
+        root = Path(__file__).resolve().parent.parent
+        step = json.loads((root / "dev/local-update-step.json").read_text())
+        self.assertEqual(step["kind"], "unchanged-data")
+        self.assertEqual(step["schema"], update.digest(root / update.SCHEMA_SOURCE))
+        self.assertEqual(step["modelAfter"], update.digest(root / update.MODEL_SOURCE))
+        self.assertEqual(update.compatible(self.manifest(step["schema"], step["modelBefore"]),
+                                           self.manifest(step["schema"], step["modelAfter"]), step), step["schema"])
+
 
 class PostgreSQLInstall(unittest.TestCase):
     def test_backup_and_install_preserve_database(self):
@@ -252,7 +261,7 @@ class PostgreSQLInstall(unittest.TestCase):
             for path, content in ((release, "old"), (candidate, "new")):
                 fixture(path, content)
             receipt = {"oldManifest": update.digest(release / "manifest.json"), "newManifest": update.digest(candidate / "manifest.json"), "status": "candidate-verified"}
-            update.install(root, release, candidate, rollback, evidence, receipt, "schema", update.Commands(root, evidence, dict(os.environ)), "schema", None)
+            update.install(root, release, candidate, rollback, evidence, receipt, "schema", update.Commands(root, evidence, dict(os.environ)))
             self.assertEqual(receipt["status"], "installed")
             self.assertFalse((data / "postmaster.pid").exists())
             self.assertFalse((root / ".cq-update-recovery.json").exists())
@@ -285,7 +294,7 @@ class PostgreSQLInstall(unittest.TestCase):
                     blocked = {"oldManifest": update.digest(release / "manifest.json"), "newManifest": update.digest(blocked_candidate / "manifest.json"), "status": "candidate-verified"}
                     with self.assertRaisesRegex(RuntimeError, "Reconcile active claims"):
                         update.install(root, release, blocked_candidate, root / "blocked-rollback", evidence,
-                                       blocked, "schema", update.Commands(root, evidence, dict(os.environ)), "schema", None)
+                                       blocked, "schema", update.Commands(root, evidence, dict(os.environ)))
                     self.assertEqual(blocked["unsettledWork"][category], 1)
                     self.assertEqual(blocked["status"], "rolled-back")
                     self.assertEqual(update.digest(release / "manifest.json"), receipt["newManifest"])
@@ -299,22 +308,20 @@ class PostgreSQLInstall(unittest.TestCase):
             (candidate / "manifest.json").write_text("third")
             next_receipt = {"oldManifest": update.digest(release / "manifest.json"), "newManifest": update.digest(candidate / "manifest.json"), "status": "candidate-verified"}
             with self.assertRaisesRegex(RuntimeError, "Database schema differs"):
-                update.install(root, release, candidate, root / "next-rollback", evidence, next_receipt, "different", update.Commands(root, evidence, dict(os.environ)), "different", None)
+                update.install(root, release, candidate, root / "next-rollback", evidence, next_receipt, "different", update.Commands(root, evidence, dict(os.environ)))
             self.assertEqual(next_receipt["status"], "rolled-back")
             self.assertFalse((root / ".cq-update-recovery.json").exists())
             self.assertEqual(update.digest(release / "manifest.json"), receipt["newManifest"])
             shutil.rmtree(candidate)
             fixture(candidate, "third")
-            transformed = {"oldManifest": update.digest(release / "manifest.json"), "newManifest": update.digest(candidate / "manifest.json"), "status": "candidate-verified"}
+            changed = {"oldManifest": update.digest(release / "manifest.json"), "newManifest": update.digest(candidate / "manifest.json"), "status": "candidate-verified"}
             (candidate / "bin/cq").write_text("modified after candidate verification")
-            sql = "BEGIN; CREATE TABLE cq_drivers(value text); UPDATE cq_schema_migrations SET checksum='next'; COMMIT;"
             with self.assertRaisesRegex(RuntimeError, "Package file differs"):
-                update.install(root, release, candidate, root / "transform-rollback", evidence, transformed, "next",
-                               update.Commands(root, evidence, dict(os.environ)), "schema", sql)
-            self.assertEqual(transformed["status"], "rolled-back")
+                update.install(root, release, candidate, root / "changed-rollback", evidence, changed, "schema",
+                               update.Commands(root, evidence, dict(os.environ)))
+            self.assertEqual(changed["status"], "rolled-back")
             self.assertFalse((root / ".cq-update-recovery.json").exists())
             self.assertEqual(update.digest(release / "manifest.json"), receipt["newManifest"])
-            self.assertEqual(json.loads((evidence / "data-before.json").read_text()), json.loads((evidence / "data-restored.json").read_text()))
 
 
 
