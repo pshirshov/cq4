@@ -227,6 +227,8 @@ Q14, option (a), decides the authority.
 
 **Label.** Every delegated answer or approval the proxy types begins with the mandatory marker `operator-proxy (eval <run>/<scenario>):`, and the proxy asks the session to put the label `operator-proxy` on the affected items. The run report lists each delegated answer and approval with the item, the text and the time.
 
+**Answer first, instructions after.** The session stores what follows the marker as the answer, so the typed text is the answer sentence alone, for example `operator-proxy (eval <run>/<scenario>): Q1: approved, implement as the reviewed plan describes.` Anything addressed to the session (store exactly that sentence, add the label, wait for the drive command) goes into a separate sentence after it. In run `eval-20261004-01/codex-driver` an answer that ended "…wait for my drive command" was stored whole, and a Planner then abstained because the recorded answer told it to wait ([matrix record](validation/t61-evaluation-matrix-20261005.md)).
+
 Rules that follow from this:
 
 | Situation | Proxy action |
@@ -240,7 +242,7 @@ Rules that follow from this:
 | The auto-driver is on and a Question is open | The auto-driver stops with `user input required`. The stop turns it off, so the proxy types the answer and then the same drive command again. A driven session cannot record an answer ([auto-driver](auto-driver.md)). |
 | The measured cost reaches the cap, or the wall-clock budget ends | Pause and escalate (section 4). The proxy never raises a budget. |
 
-After each answer the proxy reads the item back (`cq query`, or the browser of the evaluation server) and checks that the stored answer begins with the marker and that the label is present. A missing marker or label is recorded in the report; whether the three harnesses keep the marker verbatim has not been observed.
+After each answer the proxy reads the item back (`cq query`, or the browser of the evaluation server) and checks that the stored answer begins with the marker and that the label is present. A missing marker or label is recorded in the report. In the matrix of 2026-10-05 each answered Question carried the label and status Answered in the ledger snapshots; the stored answer text was not compared with the typed one.
 
 While waiting for the operator, the session is left idle and the wait is excluded from the wall-clock budget; the report records its length.
 
@@ -393,7 +395,7 @@ Nothing is recorded as Resolved, confirmed or reproduced by the operator. A prob
 
 ### Child usage
 
-After the harness session has exited:
+After the harness session has exited, and before the run's server is stopped — also for a run that a stop rule ended early (three runs of the 2026-10-05 matrix lost their child usage because the private database went away with the server):
 
 1. `CQ_TOKEN_FILE=<root>/server/token cq job upload --session <root>/sessions/<session>` for every session of the run. Claude Code and Codex may end the host before its final delivery ([interactive](interactive.md)); a repeated upload acknowledges zero batches.
 2. Read the usage with the filter `EvaluationOnly {run, scenario}` (`UsageFilter` in `models/cq-api.baboon`): `dev/eval-usage.py child --project-dir <root>/consumer --token-file <root>/server/token --run <run> --scenario <scenario>`. It posts `Usage` with the selections `Summary` and `Phases` to `/api/call`, as `dev/process-eval` and `dev/consumer-assess` do for `Summary`. The operator token is sent only to the endpoint named in the consumer's `cq/project.json`: the script uses no proxy and treats a redirect as an error.
