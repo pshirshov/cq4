@@ -40,6 +40,8 @@ const MIN_TITLE_WIDTH = 200;
 // I32: a neighbour narrower than this cannot show an identity and a title legibly.
 const MIN_NODE_WIDTH = 180;
 const VIEWPORTS = [{ width: 1440, height: 900 }, { width: 1280, height: 720 }];
+// Wider than the phone layout and narrower than a ring of four columns of MIN_NODE_WIDTH needs.
+const NARROW = { width: 800, height: 900 };
 const browser = await chromium.launch({ headless: true });
 const errors = []; const cases = []; const failures = [];
 const check = async (name, body) => { try { await body(); cases.push(name); } catch (error) { failures.push(`${name}: ${String(error.message ?? error)}`); } };
@@ -113,6 +115,17 @@ try {
     const body = await dialog.locator('.dialog-body').evaluate(node => ({ client: node.clientHeight, scroll: node.scrollHeight }));
     assert.ok(body.scroll <= body.client + 1, `the graph needs ${body.scroll}px of ${body.client}px and scrolls`);
   });
+  await check(`neighbours keep ${MIN_NODE_WIDTH}px without overlap where the ring no longer fits, at ${NARROW.width}×${NARROW.height}`, async () => {
+    await page.setViewportSize(NARROW); await page.waitForTimeout(200);
+    const { nodes } = await boxes();
+    await page.screenshot({ path: `${evidence}/relationship-graph-${NARROW.width}x${NARROW.height}.png` });
+    assert.equal(nodes.length, 13);
+    for (const [index, a] of nodes.entries()) {
+      if (!a.centre) assert.ok(a.right - a.left >= MIN_NODE_WIDTH, `${a.name} is ${a.right - a.left}px wide`);
+      for (const b of nodes.slice(index + 1))
+        assert.ok(a.right <= b.left || b.right <= a.left || a.bottom <= b.top || b.bottom <= a.top, `${a.name} overlaps ${b.name}`);
+    }
+  });
   await page.setViewportSize(VIEWPORTS[0]); await page.waitForTimeout(200);
   // The focus stops are the centre and each neighbour's button; an arrow key moves to the nearest stop, by the distance between node
   // centres, among those within 45° of the key's direction.
@@ -124,6 +137,19 @@ try {
   });
   const DIRECTIONS = { ArrowRight: [1, 0], ArrowLeft: [-1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
   const focusStop = index => dialog.locator('.relationship-graph').evaluate((canvas, at) => canvas.querySelectorAll('.graph-root, .graph-node button')[at].focus(), index);
+  await check('an arrow key is consumed only when it moves focus', async () => {
+    const outcomes = await dialog.locator('.relationship-graph').evaluate(canvas => {
+      const found = Array.from(canvas.querySelectorAll('.graph-root, .graph-node button'));
+      return found.flatMap(stop => ['ArrowRight', 'ArrowLeft', 'ArrowUp', 'ArrowDown'].map(key => {
+        stop.focus();
+        const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true });
+        stop.dispatchEvent(event);
+        return { moved: document.activeElement !== stop, consumed: event.defaultPrevented };
+      }));
+    });
+    assert.ok(outcomes.some(outcome => !outcome.moved) && outcomes.some(outcome => outcome.moved), 'both a key with and a key without a node in its direction were pressed');
+    assert.deepEqual(outcomes.filter(outcome => outcome.moved !== outcome.consumed), []);
+  });
   await check('arrow keys move focus to the nearest node in their direction', async () => {
     await dialog.locator('.graph-root').focus();
     const initial = await stops(); const root = initial.focused;
@@ -206,7 +232,11 @@ try {
   await page.getByRole('button', { name: 'Relationship graph', exact: true }).click();
   await dialog.getByText('Edges 1–12 of 17', { exact: true }).waitFor();
   held();
-  await page.waitForTimeout(100);
+  // The socket delivers in order: once the reply to a refresh requested after the late reply has redrawn the graph, the late one was handled.
+  await dialog.locator('.graph-root').evaluate(node => { node.dataset.beforeRefresh = ''; });
+  await dialog.getByRole('button', { name: 'Refresh graph', exact: true }).click();
+  await dialog.locator('[data-before-refresh]').waitFor({ state: 'detached' });
+  await dialog.getByText('Edges 1–12 of 17', { exact: true }).waitFor();
   assert.equal(await dialog.getByText('Edges 1–12 of 17', { exact: true }).count(), 1);
   assert.equal(await dialog.locator('[role=alert]').isVisible(), false);
   cases.push('a late reply from a closed graph cannot overwrite a newly centered graph');

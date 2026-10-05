@@ -176,7 +176,6 @@ export class RelationshipGraph {
     if (direction === undefined || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
     const stops = [...this.canvas.querySelectorAll<HTMLElement>('.graph-root, .graph-node button')];
     const current = stops.find(stop => stop === document.activeElement); if (current === undefined) return;
-    event.preventDefault();
     const centre = (stop: HTMLElement): [number, number] => {
       const bounds = (stop.closest('.graph-node') as HTMLElement).getBoundingClientRect(); return [bounds.left + bounds.width / 2, bounds.top + bounds.height / 2];
     };
@@ -188,7 +187,7 @@ export class RelationshipGraph {
       const distance = Math.hypot(dx, dy);
       if (along > 0 && across <= along && distance < least) { nearest = stop; least = distance; }
     }
-    if (nearest !== null) nearest.focus();
+    if (nearest !== null) { event.preventDefault(); nearest.focus(); }
   }
   private draw(): void {
     const root = this.root; const svg = this.svg;
