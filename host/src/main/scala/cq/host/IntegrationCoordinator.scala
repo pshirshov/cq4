@@ -62,8 +62,21 @@ final class IntegrationCoordinator(owner: Scope, journal: IntegrationJournal, gi
     case IntegrationObservation.NotApplied(reason) if !local.attempted && server(local.intent.id).isEmpty => reason
   }
 
-  // A refusal is the server's answer, so nothing was reserved; with no execution admitted either, the integration can be sealed.
-  // An unanswered reservation proves neither and stays pending.
+  /** Whether a refusal of Reserve shows that this reservation can never be made. The intent, its evidence and its fence are immutable,
+    * so a refusal that names one of them is final. */
+  private def conclusive(fault: Fault): Boolean = fault match {
+    // The claim was released, expired or replaced; the intent or its evidence is invalid, absent or too large; a member was revised
+    // or the completion request was used.
+    case _: Fault.StaleFence | _: Fault.Invalid | _: Fault.Missing | _: Fault.Conflict | _: Fault.Limit => true
+    // A credential that expired or was not accepted says nothing about the reservation, and a sibling integration that holds a
+    // reservation on a member may itself resolve as not applied.
+    case _: Fault.Denied | _: Fault.IntegrationPending => false
+    // Not answers of the reservation.
+    case _: Fault.Resync | _: Fault.QuerySyntax => false
+  }
+
+  // A conclusive refusal is the server's answer, so nothing was reserved; with no execution admitted either, the integration can be
+  // sealed. Any other refusal, and an unanswered reservation, prove neither and leave it pending.
   private def reserve(entry: IntegrationEntry, local: IntegrationLocal): IntegrationRecord =
     try {
       val value = collector.integrate(HostIntegrationInput(owner.project, HostIntegration.Reserve(local.intent)))
@@ -71,7 +84,7 @@ final class IntegrationCoordinator(owner: Scope, journal: IntegrationJournal, gi
       value
     } catch {
       case failure @ DomainFailure(fault) =>
-        if (local.attempted || local.observation.nonEmpty || server(local.intent.id).nonEmpty) throw failure
+        if (!conclusive(fault) || local.attempted || local.observation.nonEmpty || server(local.intent.id).nonEmpty) throw failure
         val reason = DispatchProjection.concise("Server refused the reservation, so no Git update was launched: " + fault)
         entry.write(local.copy(observation = Some(IntegrationObservation.NotApplied(reason))))
         throw new IntegrationRefused(reason)

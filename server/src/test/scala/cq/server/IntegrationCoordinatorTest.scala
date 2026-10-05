@@ -291,6 +291,25 @@ abstract class IntegrationCoordinatorTest extends SpecZIO with AssertZIO {
       } yield ()
     } }
 
+    "D144: leave a reservation unresolved and retryable when its refusal says nothing about the reservation itself" in { (harness: IntegrationHarness) => harness.use { f =>
+      val intent = f.intent(f.base, f.first)
+      val coordinator = f.coordinator(f.journal)
+      // An expired credential, and a sibling integration whose reservation may itself resolve as not applied.
+      val inconclusive = List(Fault.Denied("Credential expired"), Fault.IntegrationPending(IntegrationId(UUID.randomUUID())))
+      for {
+        _ <- coordinator.prepare(intent)
+        refused <- ZIO.foreach(inconclusive) { fault =>
+          ZIO.succeed(f.server.refuseReservation.set(Some(fault))) *> coordinator.run(intent.id).either
+        }
+        retained <- f.journal.locked(intent.id)(entry => ZIO.attempt(entry.read.get))
+        _ <- ZIO.attempt(assert(refused.map(_.left.toOption) == inconclusive.map(fault => Some(DomainFailure(fault))) &&
+          !retained.attempted && retained.observation.isEmpty && f.executions.get() == 0, s"$refused $retained"))
+        _ <- ZIO.succeed(f.server.refuseReservation.set(None))
+        applied <- coordinator.run(intent.id)
+        _ <- ZIO.attempt(assert(applied.record.resolution.isInstanceOf[IntegrationResolution.Recorded] && f.executions.get() == 1, applied.toString))
+      } yield ()
+    } }
+
     "D144: leave a refused reservation unresolved once execution was admitted or the server holds the reservation" in { (harness: IntegrationHarness) => harness.use { f =>
       val attempted = f.intent(f.base, f.first)
       val reserved = f.intent(f.base, f.second)
