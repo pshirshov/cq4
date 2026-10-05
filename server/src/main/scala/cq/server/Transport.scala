@@ -176,6 +176,12 @@ final class Transport(application: Application, authorization: Authorization, ac
     jsonResponse(Status.Ok, Json.obj("jsonrpc" -> Json.fromString("2.0"), "id" -> id,
       "error" -> Json.obj("code" -> Json.fromInt(code), "message" -> Json.fromString(message))))
 
+  private def toolResult(id: Json, result: Result): Task[Response[Task]] = {
+    val body = Result_JsonCodec.encode(context, result)
+    rpcResult(id, Json.obj("isError" -> Json.fromBoolean(result.isInstanceOf[Result.Failed]),
+      "content" -> Json.arr(Json.obj("type" -> Json.fromString("text"), "text" -> Json.fromString(body.noSpaces))), "structuredContent" -> body))
+  }
+
   private def mcp(authority: Authority, json: Json): Task[Response[Task]] = {
     val cursor = json.hcursor
     val id = cursor.get[Json]("id").getOrElse(Json.Null)
@@ -197,12 +203,11 @@ final class Transport(application: Application, authorization: Authorization, ac
         val tool = schemas.visible(authority).find(t => name.contains(t.name))
         (tool, cursor.downField("params").get[Json]("arguments")) match {
           case (Some(selected), Right(arguments)) => selected.decode(arguments) match {
-            case Left(error) => rpcError(id, -32602, schemas.mismatch(selected.name, schemas.schema(selected.inputType), String.valueOf(error.getMessage)))
-            case Right(command) => application.execute(authority, command).flatMap { result =>
-              val body = Result_JsonCodec.encode(context, result)
-              rpcResult(id, Json.obj("isError" -> Json.fromBoolean(result.isInstanceOf[Result.Failed]),
-                "content" -> Json.arr(Json.obj("type" -> Json.fromString("text"), "text" -> Json.fromString(body.noSpaces))), "structuredContent" -> body))
+            case Left(error) => schemas.rejected(selected, error) match {
+              case Fault.Invalid(message) => rpcError(id, -32602, message)
+              case fault => toolResult(id, Result.Failed(fault))
             }
+            case Right(command) => application.execute(authority, command).flatMap(toolResult(id, _))
           }
           case _ => rpcError(id, -32602, "Unavailable tool or missing arguments")
         }

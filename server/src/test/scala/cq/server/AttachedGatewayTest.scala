@@ -1,8 +1,6 @@
 package cq.server
 
-import baboon.runtime.shared.BaboonCodecContext
 import cq.api.*
-import cq.core.DomainFailure
 import cq.host.{OwnerLiveness, PeerLimits, ServerApi, StdioPeer}
 import io.circe.{Json, parser}
 import java.io.{BufferedReader, InputStreamReader, PipedInputStream, PipedOutputStream}
@@ -15,7 +13,6 @@ import zio.{Runtime, Task, Unsafe}
 
 final class AttachedGatewayLocal extends AnyWordSpec {
   private val LongInterval = Duration.ofSeconds(30)
-  private val Context = BaboonCodecContext.Default
   private val schemas = new McpSchemas()
   private val project = ProjectId(UUID.fromString("00000000-0000-4000-8000-000000000001"))
 
@@ -76,47 +73,38 @@ final class AttachedGatewayLocal extends AnyWordSpec {
   "Attached gateway (Behavioral Active Blackbox Group)" should {
     "answer a response above the frame bound with one tool error and keep serving" in {
       val FrameBytes = 16384
-      var description = "x" * (2 * FrameBytes)
-      def catalog = HelpCatalog(List(CatalogCommand("fixture", "Fixture", description, Nil, CatalogPrompt("fixture.md", "text"), Nil, Nil)), Nil)
-      val session = new Session(FrameBytes, _ => Result.Catalog(catalog))
+      var text = "x" * (2 * FrameBytes)
+      val artifact = ArtifactId(UUID.fromString("00000000-0000-4000-8000-000000000002"))
+      def page = ArtifactPage(ArtifactMetadata(project, artifact, AttemptId(UUID.fromString("00000000-0000-4000-8000-000000000003")), ArtifactKind.Result,
+        "text/plain", "fixture", text.length, text.length, Actor("fixture", SessionId(UUID.fromString("00000000-0000-4000-8000-000000000004")), Role.Worker), 0L), 0, text.length, false, text)
+      val session = new Session(FrameBytes, _ => Result.ArtifactText(page))
+      val request = read(s"""{"ArtifactText":{"id":{"value":"${artifact.value}"},"offset":0,"limit":65536}}""")
       try {
-        val message = fault(session.tool("read", read("""{"Catalog":{"part":{"All":{}}}}"""))).hcursor.downField("Limit").get[String]("message").fold(throw _, identity)
+        val message = fault(session.tool("read", request)).hcursor.downField("Limit").get[String]("message").fold(throw _, identity)
         assert(message.contains(s"$FrameBytes-byte") && message.contains("narrow"), message)
         // The same answer follows a tool that changed something, so it must not say that nothing happened.
         assert(message.contains("The operation itself was performed") && message.contains("read the state back") && !message.contains("Nothing was returned"), message)
         val actual = "is (\\d+) bytes".r.findFirstMatchIn(message).map(_.group(1).toInt)
         assert(actual.exists(_ > 4 * FrameBytes), message)
-        description = "small"
-        val served = session.tool("read", read("""{"Catalog":{"part":{"All":{}}}}"""))
+        text = "small"
+        val served = session.tool("read", request)
         assert(served.hcursor.get[Boolean]("isError") == Right(false))
         assert(served.hcursor.downField("structuredContent").focus.exists(_.noSpaces.contains("small")))
       } finally session.close()
     }
 
-    "serve every help catalog command and agent within the production frame bound and refuse the whole catalog with the way to narrow it" in {
-      val catalog = new CatalogRead(schemas)
+    "refuse a read of the Help catalog, which is served to the browser only, without reaching the server, and keep serving" in {
       val session = new Session(AttachedGateway.FrameBytes, {
-        case Command.Read(ReadInput(_, ReadSelection.Catalog(part))) =>
-          try Result.Catalog(catalog.select(part)) catch { case DomainFailure(fault) => Result.Failed(fault) }
+        case Command.Read(ReadInput(_, _: ReadSelection.Counts)) => Result.Counts(LedgerCounts(Nil, ChangeCursor(0L)))
         case other => fail(s"Unexpected command $other")
       })
-      def selected(part: CatalogSelection): Json =
-        session.tool("read", read(s"""{"Catalog":{"part":${CatalogSelection_JsonCodec.encode(Context, part).noSpaces}}}"""))
-      def served(part: CatalogSelection): HelpCatalog = {
-        val result = selected(part)
-        assert(result.hcursor.get[Boolean]("isError") == Right(false), part.toString)
-        Result_JsonCodec.decode(Context, result.hcursor.downField("structuredContent").focus.get) match {
-          case Right(Result.Catalog(value)) => value
-          case other => fail(s"Unexpected catalog result $other")
-        }
-      }
       try {
-        catalog.value.commands.foreach(command => assert(served(CatalogSelection.OfCommand(command.command)) == HelpCatalog(List(command), Nil)))
-        catalog.value.agents.foreach(agent => assert(served(CatalogSelection.OfAgent(agent.work)) == HelpCatalog(Nil, List(agent))))
-        val whole = fault(selected(CatalogSelection.All())).hcursor.downField("Limit").get[String]("message").fold(throw _, identity)
-        assert(whole.contains(s"${AttachedGateway.FrameBytes}-byte") && whole.contains("narrow"), whole)
-        val missing = fault(selected(CatalogSelection.OfCommand("absent"))).hcursor.downField("Missing").get[String]("message").fold(throw _, identity)
-        assert(catalog.value.commands.forall(command => missing.contains(command.command)), missing)
+        val refused = fault(session.tool("read", read("""{"Catalog":{}}"""))).hcursor.downField("Denied").get[String]("message").fold(throw _, identity)
+        assert(refused == McpSchemas.CatalogRefusal && refused.contains("served to the browser only"), refused)
+        assert(session.tool("read", read("""{"Counts":{}}""")).hcursor.get[Boolean]("isError") == Right(false))
+        val tool = schemas.attachedTools.find(_.hcursor.get[String]("name") == Right("read")).get
+        assert(!tool.noSpaces.contains("Catalog") && !tool.hcursor.get[String]("description").exists(_.toLowerCase.contains("catalog")))
+        assert(!schemas.attachedInstructions(Harness.Codex).contains("Catalog"))
       } finally session.close()
     }
 
