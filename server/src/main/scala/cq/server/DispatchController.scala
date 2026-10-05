@@ -18,6 +18,9 @@ private[server] final class DispatchExecution(val ticket: DispatchTicket, val di
   private var job = Option.empty[AttemptId]
   private var owned = Set.empty[AttemptId]
   private var reviewer = Option.empty[ReviewerChecks]
+  private var repeat = Option.empty[String]
+  def repeated: Option[String] = synchronized(repeat)
+  def repeating(value: String): Unit = synchronized { repeat = Some(value) }
   def status: DispatchStatus = synchronized(view)
   def activeJob: Option[AttemptId] = synchronized(job)
   def ownedJobs: Set[AttemptId] = synchronized(owned)
@@ -40,7 +43,8 @@ private[server] final class DispatchExecution(val ticket: DispatchTicket, val di
   def finish(value: DispatchStatus): Unit = synchronized { view = DispatchProjection.bounded(value); publishing = true }
 }
 
-final case class SelectedDispatch(cohort: Option[UUID], evidence: ArtifactId, admit: () => Unit, finished: () => Unit)
+/** `finished` receives the child's final status and replies with the fault it repeated, when the attempt before it on the same input ended in it. */
+final case class SelectedDispatch(cohort: Option[UUID], evidence: ArtifactId, admit: () => Unit, finished: DispatchStatus => Option[String])
 
 final class DispatchController(config: SupervisorConfig, runner: ChildRunner, jobs: JobSupervisor, clock: Clock) {
   private val MaxStatusWaitMillis = 20000
@@ -91,7 +95,7 @@ final class DispatchController(config: SupervisorConfig, runner: ChildRunner, jo
           entry.finish(entry.status.copy(phase = DispatchPhase.Unknown, next = ChildNext.InspectEvidence,
             blocker = Some(DispatchProjection.concise("Dispatch storage/publication failed: " + Option(failure.getMessage).getOrElse(failure.getClass.getSimpleName))), detailsOmitted = true))
         } *> ready.fail(failure).unit
-      }.ensuring(ZIO.succeed(selection.foreach(_.finished())) *> done.succeed(()).unit)
+      }.ensuring(ZIO.attemptBlocking(selection.flatMap(_.finished(entry.status)).foreach(entry.repeating)).orDie *> done.succeed(()).unit)
       execute.forkDaemon.unit
     }
     _ <- entry.ready.await
@@ -119,6 +123,11 @@ final class DispatchController(config: SupervisorConfig, runner: ChildRunner, jo
     _ <- if (waitMillis == 0) ZIO.unit else entry.done.await.timeout(zio.Duration.fromMillis(waitMillis)).unit
     result <- snapshot(entry)
   } yield result
+  /** Empty while the attempt runs; then the fault it repeated, when the attempt before it on the same input ended in the same fault. */
+  def concluded(attempt: AttemptId, waitMillis: Int): Task[Option[Option[String]]] = for {
+    entry <- ZIO.attempt { require(waitMillis >= 0 && waitMillis <= MaxStatusWaitMillis, "Status wait must be 0–20000 ms"); found(attempt) }
+    over <- entry.done.await.timeout(zio.Duration.fromMillis(waitMillis))
+  } yield over.map(_ => entry.repeated)
   def cancel(attempt: AttemptId): Task[DispatchStatus] = for {
     entry <- ZIO.attempt(found(attempt))
     _ <- stop(entry, "Cancelled by the governing session")

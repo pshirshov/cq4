@@ -8,12 +8,20 @@ import java.security.MessageDigest
 import java.util.HexFormat
 
 final case class CohortExecutionFingerprint(group: String, members: Map[ItemId, String])
+/** The fault of an attempt that left no result, and the artifact that carries it to the next attempt on the same input. */
+final case class CohortFailure(artifact: ArtifactId, fault: String)
+
+object CohortFailure {
+  /** The fault of a child that left no result and that its receipt advises retrying. */
+  def fault(status: DispatchStatus): Option[String] = status.blocker.filter(_ => status.result.isEmpty && status.next == ChildNext.Retry)
+}
 
 final class CohortProgress {
   private final case class Seen(attempts: Int, offered: Int, sequence: Int)
   private var members = Map.empty[ItemId, Seen]
   private var completed = Set.empty[String]
   private var executed = Set.empty[String]
+  private var failures = Map.empty[String, CohortFailure]
   private var inspectedAfter = Option.empty[ItemId]
 
   def order(ids: List[ItemId]): List[ItemId] = synchronized {
@@ -37,10 +45,23 @@ final class CohortProgress {
     executed ++= fingerprint.members.values.toSet + fingerprint.group
     fingerprint.members.keys.foreach(id => members = members.updated(id, members(id).copy(attempts = members(id).attempts + 1)))
   }
-  def finished(fingerprint: CohortExecutionFingerprint): Unit = synchronized {
+  /**
+   * An attempt that left no result has not executed its input, which is offered again with the fault. The same fault twice in a row on
+   * one input is an unchanged failure: the input stays deferred, and the reply is true.
+   */
+  def finished(fingerprint: CohortExecutionFingerprint, failure: Option[CohortFailure]): Boolean = synchronized {
     require(executed(fingerprint.group), "Unstarted cohort cannot finish")
     completed += fingerprint.group
+    val inputs = fingerprint.members.values.toSet + fingerprint.group
+    val repeated = failure.exists(value => failures.get(fingerprint.group).exists(_.fault == value.fault))
+    failures --= inputs
+    failure.filterNot(_ => repeated).foreach { value =>
+      executed --= inputs
+      failures ++= inputs.map(_ -> value)
+    }
+    repeated
   }
+  def failure(fingerprint: String): Option[CohortFailure] = synchronized(failures.get(fingerprint))
   def ended(fingerprint: String): Boolean = synchronized(completed(fingerprint))
   def deferred(fingerprint: String): Boolean = synchronized(executed(fingerprint))
 }
