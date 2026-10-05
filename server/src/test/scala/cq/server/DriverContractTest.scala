@@ -698,7 +698,7 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
           schemas = new McpSchemas()
           sessionTool = schemas.attachedTools.find(_.hcursor.get[String]("name").contains("session")).get
           variants = sessionTool.hcursor.downField("inputSchema").get[List[io.circe.Json]]("oneOf").toOption.get.flatMap(_.hcursor.get[List[String]]("required").toOption.get)
-          _ <- assertIO(variants.toSet == Set("Context", "Workflow", "Bind", "Driver"))
+          _ <- assertIO(variants.toSet == Set("Context", "Workflow", "Instructions", "Bind", "Driver"))
           _ <- assertIO(!schemas.tools.exists(_.inputType.startsWith("Driver")) && schemas.attachedTools.size == schemas.tools.size + 2)
           wire = s"""{"Driver":{"input":{"project":{"value":"${project.value}"},"request":{"Control":{"key":{"harness":"Claude","session":"s"},"origin":"%s","action":{"Start":{"target":{"Inline":{"targets":[],"through":"%s"}},"attached":null}}}}}}}"""
           decode = (origin: String, phase: String) => Command_JsonCodec.decode(BaboonCodecContext.Default, parse(wire.format(origin, phase)).toOption.get)
