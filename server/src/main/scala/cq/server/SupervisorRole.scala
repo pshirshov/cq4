@@ -62,7 +62,7 @@ object SupervisorConfig {
     val harness = Harness.all.find(_.toString.equalsIgnoreCase(args.head)).getOrElse(throw new IllegalArgumentException("Unknown governing harness"))
     val pairs = args.tail.grouped(2).map(values => values.head -> values(1)).toList
     val required = if (attached) Set.empty[String] else Set("--settings", "--input")
-    val allowed = if (attached) Set("--settings") else required ++ WorkflowArguments.Options
+    val allowed = if (attached) Set("--settings", WaitCommand.Option) else required ++ WorkflowArguments.Options
     require(pairs.map(_._1).distinct.size == pairs.size && required.subsetOf(pairs.map(_._1).toSet) &&
       pairs.forall(pair => allowed(pair._1)), "Unsupported, repeated or missing execution options")
     val supplied = pairs.toMap
@@ -267,10 +267,24 @@ object SupervisorRole extends RoleDescriptor {
     Some("Own a local governing harness and its isolated jobs"), Some("cq run HARNESS --settings FILE --input FILE [--workflow NAME ...]"), freeArgsAllowed = true)
 }
 
+/** The executable an attached host was started with for `cq wait`: the one its harness integration approved for the session's shell.
+  * Absent when the integration does not name it; the session is then told to wait through its status calls. */
+final case class WaitCommand(executable: Option[String]) {
+  def line(session: Path): Option[String] = executable.map(value => s"$value wait --session $session")
+}
+object WaitCommand {
+  val Option = "--executable"
+  def load(arguments: RoleAppArgs): WaitCommand = WaitCommand(arguments.roles.find(_.role == AttachedRole.id).flatMap { role =>
+    val raw = role.roleParameters.raw.toList
+    (if (raw.headOption.contains("--")) raw.tail else raw).drop(1).grouped(2).collectFirst { case List(Option, value) => value }
+  })
+}
+
 object SupervisorPlugin extends PluginDef {
   include(new ModuleDef {
     include(new RoleModuleDef { makeRole[SupervisorRole]; makeRole[AttachedRole] })
     make[SupervisorConfig].fromEffect(SupervisorConfig.load _)
+    make[WaitCommand].from(WaitCommand.load _)
     many[HarnessAdapter].add[ClaudeAdapter].add[CodexAdapter].add[PiAdapter]
     make[HarnessRegistry]
     make[HarnessOutput]

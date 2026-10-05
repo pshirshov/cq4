@@ -79,6 +79,11 @@ final class HarnessDoctorLocal extends AnyWordSpec {
       assert(f.inspect(Harness.Claude, Some(config), None).current)
       Files.writeString(local, json.deepMerge(Json.obj("disableAllHooks" -> Json.True)).noSpaces)
       assert(!f.inspect(Harness.Claude, Some(config), None).current)
+      // Without the permission for the waiter, a session would be asked before each background wait.
+      assert(json.hcursor.downField("permissions").get[List[String]]("allow") == Right(List(s"Bash(${f.binary} wait *)")))
+      Files.writeString(local, json.mapObject(_.remove("permissions")).noSpaces)
+      val unapproved = f.inspect(Harness.Claude, Some(config), None)
+      assert(!unapproved.current && unapproved.checks.exists(check => check.name == ".claude/settings.local.json" && check.state == InstallationState.Failed))
     }
     "inspect declarative configuration and approval symlinks without changing them" in Using.resource(new Fixture) { f =>
       f.install(Harness.Claude)
@@ -122,6 +127,15 @@ final class HarnessDoctorLocal extends AnyWordSpec {
       assert(f.snapshot() == before)
       Files.writeString(config, trust + "\n[features]\nhooks = false\n")
       assert(!f.inspect(Harness.Codex, Some(config), Some(report)).current)
+      // Without the rule that allows the waiter, a session would be asked before each blocking wait.
+      Files.writeString(config, trust)
+      val rules = f.root.resolve(".codex/rules/cq.rules")
+      val allowed = Files.readString(rules)
+      Files.delete(rules)
+      val unapproved = f.inspect(Harness.Codex, Some(config), Some(report))
+      assert(!unapproved.current && unapproved.checks.exists(check => check.name == ".codex/rules/cq.rules" && check.state == InstallationState.Failed))
+      Files.writeString(rules, allowed)
+      assert(f.inspect(Harness.Codex, Some(config), Some(report)).current)
       Files.writeString(config, trust.replace("trusted_hash", "revoked_hash"))
       assert(!f.inspect(Harness.Codex, Some(config), Some(report)).current)
       Files.writeString(config, trust)
