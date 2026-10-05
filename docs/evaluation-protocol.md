@@ -4,7 +4,7 @@ This is the protocol and the environment for an evaluation the operator requests
 
 The page defines protocol and environment only (Goal G4, Idea I12, Question Q10). It specifies no individual run. The first formal runs under it, the T61 matrix of 2026-10-04/05, are recorded in the [matrix record](validation/t61-evaluation-matrix-20261005.md) and are cited here where they corrected a rule, measured a value or left a gap. The operator's answers to Q10–Q16 are binding and are quoted where they decide a rule. Q37–Q45 additionally settle the default specification, routes, driver mode, proxy permissions, monitoring and report location; their recorded answers are listed below.
 
-**Status: revised after the first formal matrix; awaiting independent review of this revision.** Independent Audit d3fe8373-5802-36ab-997f-9cdfc73f60f4 confirmed all nine preference answers and requested operational corrections, which T69 applied. Both research items concluded on 2026-10-04:
+**Status: ready.** Revised after the first formal matrix (T61) and accepted by independent review on 2026-10-05 ([review record](validation/evaluation-protocol-review-20261005.md)); the limits of that review and the current gaps are in [section 8](#8-readiness-and-what-is-not-verified). Independent Audit d3fe8373-5802-36ab-997f-9cdfc73f60f4 confirmed all nine preference answers and requested operational corrections, which T69 applied. Both research items concluded on 2026-10-04:
 
 - **RS2 (revision 4).** All three pinned harnesses launched from a host-level private tmux launcher and connected to a private real CQ server. Each recorded a small Begin, exited 0, uploaded, and returned tagged usage.
 - **RS3 (revision 7) and RS15 (revision 4).** These concluded that the Claude transcript and `/cost` are separate, partial sources. The counter discrepancies are unexplained, and the original-source and auxiliary/subagent/compaction coverage gaps remain explicit.
@@ -18,7 +18,7 @@ What followed, in order:
 - The release installed on 2026-10-05 is reported as the clean build of `6850f2b`. No formal run was made on it, and this revision did not inspect the installation.
 - This revision reconciles the page with the matrix, recalibrates the efficiency flags as Q42 requires, and states the gaps that remain.
 
-The matrix is one run per harness of one small scenario. The driver session observed it in private evaluation roots, and nobody has independently reread those roots, their recordings or their ledgers. That session is also the operator proxy, the author of the protocol's helper scripts and the author of several of the changes under test. The matrix therefore does not establish formal I12 qualification, the qualification of any harness, any rate, complete billing or G4 readiness. Independent review of this revision is still required. See [Readiness](#8-readiness-and-what-is-not-verified).
+The matrix is one run per harness of one small scenario. The driver session observed it in private evaluation roots, and nobody has independently reread those roots, their recordings or their ledgers. That session is also the operator proxy, the author of the protocol's helper scripts and the author of several of the changes under test. The matrix therefore does not establish formal I12 qualification, the qualification of any harness, any rate or complete billing. "Ready" above is the status of this page after its review; whether G4 is achieved is decided by the Goal's own audit, which is separate. See [Readiness](#8-readiness-and-what-is-not-verified).
 
 ## Acceptance criteria of G4
 
@@ -141,7 +141,7 @@ The commands in this table name each harness as found on `PATH`. The in-sandbox 
 | Codex 0.159.2 | `/nix/store/x6d4jbnav6z3398y1fjs0yay3wf2j0p0-codex-0.159.2/bin/codex --no-daemon --dangerously-bypass-approvals-and-sandbox --model gpt-6.1-sol` |
 | Pi 0.99.1 | `/nix/store/6v3ax4h8wsnmn0nhz4c62hbahmmj39mf-pi-coding-agent-0.99.1/bin/pi --offline --approve --no-prompt-templates --prompt-template .pi/prompts --provider openai-codex --model gpt-6.1-sol` |
 
-The rows are copied from `formal-claude/launch.sh`, `formal4-codex/launch.sh` and `formal-pi/launch.sh`. The store paths, the model names and the Pi provider are those of 2026-10-04/05; the rule is the form, with the paths of the routes in force. Credentials are never written into `launch.sh`: the token is named by path and the logins live in the private configuration directories. With `CLAUDE_CONFIG_DIR` set, the Claude transcript lies under `<CLAUDE_CONFIG_DIR>/projects/<project path with dashes>/<session>.jsonl` and not under `~/.claude/projects`; `claude-outer` of the Claude run read it there.
+The rows are copied from `formal-claude/launch.sh`, `formal4-codex/launch.sh` and `formal-pi/launch.sh`. The store paths, the model names and the Pi provider are those of 2026-10-04/05; the rule is the form, with the paths of the routes in force. No credential value is written into `launch.sh`: the token is named by path, and the logins of these three launches live in the private configuration directories. One run differed: `formal3-codex` used a custom provider whose definition, passed on the Codex command line in that root's `launch.sh`, names an environment variable (`env_key`) from which Codex takes the provider credential; that credential came from the environment and not from a login file. A launch of that kind must let that one variable through the unsetting above, and must record its name only, never its value. With `CLAUDE_CONFIG_DIR` set, the Claude transcript lies under `<CLAUDE_CONFIG_DIR>/projects/<project path with dashes>/<session>.jsonl` and not under `~/.claude/projects`; `claude-outer` of the Claude run read it there.
 
 ### Host-launcher commands (RS2 revision 4)
 
@@ -196,7 +196,7 @@ Everything of one run lives under one evaluation root outside any source checkou
 | `session.cast`, `session-<n>.cast` | One recording per harness session; later sessions are numbered from 2 |
 | `screens/` | Screen excerpts and the final screen (section 5) |
 | `proxy-log.jsonl` | The proxy log (section 5) |
-| `snapshots/` | Read-only ledger snapshots: `s<n>.json` and `final.json` |
+| `snapshots/` | Read-only ledger snapshots: `s<n>.json`, taken at a stop also `s<n>-stop.json`, and `final.json`. A run that ends before its first snapshot has no such directory (`formal3-codex`). |
 | `usage/` | Upload outputs `upload-<session>.stdout` and `.stderr`, `child.json`, and `outer.json` for Claude Code |
 | `acceptance/` | An export of `cq-result` under `tree/`, `commit.txt` and the outputs of the checks and probes |
 | `report.md` | The run report |
@@ -445,11 +445,11 @@ What the same sessions showed about stops and failures ([cross-cut](validation/c
 | --- | --- |
 | Cast | One asciinema v3 file per harness session, from launch to exit: `session.cast`, then `session-2.cast` and so on, in the root. Never overwritten, never edited. |
 | Final screen | Before the quit: the screen with 3,000 lines of history requested, into `screens/final-screen.txt`. In the T61 matrix the Claude Code and Codex files hold 55 lines, the visible screen, and the Pi file 1,891; for the first two the cast is the record of earlier output. |
-| Excerpts | At every stop, dialog, proxy answer and detected problem: the screen into `screens/s<stage>-<label>.txt`; the idle screen the monitor saves, into `screens/stop-<epoch>.txt`. |
+| Excerpts | At every stop, dialog, proxy answer and detected problem: the screen into `screens/s<stage>-<label>.txt`; the idle screen the monitor saves, into `screens/stop-<epoch>.txt` inside the run's root. The matrix differed: its monitor saved idle screens into `formal/stops/<harness>-<epoch>.txt` of the matrix tool directory; `formal-claude`, `formal-pi` and `formal-codex` also hold `screens/stop-<epoch>.txt` files, and `formal4-codex`, `formal2-codex` and `formal3-codex` hold none. |
 | Proxy log | `proxy-log.jsonl`: time, what was typed, the stop class, the item concerned. |
 | Session directory | `<root>/sessions/<session>/` is kept whole. |
 | Usage reads | `usage/child.json` and, for Claude Code, `usage/outer.json`, with their standard-error files; the upload outputs beside them. A repeated read gets a new name and does not overwrite. |
-| Snapshots and acceptance | `snapshots/s<n>.json` at each stop and `final.json` in S5; `acceptance/` with the commit, the outputs of the declared checks and of the probes. |
+| Snapshots and acceptance | `snapshots/s<n>.json` or `s<n>-stop.json` at each stop and `final.json` in S5; `acceptance/` with the commit, the outputs of the declared checks and of the probes. |
 | Versions | Harness versions, the `cq` package manifest, the specification path, version and SHA-256, `settings.json`. |
 
 These are the names the T61 matrix used; they replaced the names written before the runs ([section 8](#8-readiness-and-what-is-not-verified)).
@@ -577,9 +577,9 @@ Q37–Q45 resolve the remaining preference choices in the final section. Empiric
 
 The independent Audit d3fe8373-5802-36ab-997f-9cdfc73f60f4 confirmed the nine exact answers and requested operational corrections. T69 applied them: it is Done through a Recorded integration, and T70 is Done as well, both on `main` at `e8ef9a8`. T71 followed at `e4ae1e0`, T60 at `c3959c4` and T72 at `764e907`. The T61 matrix then ran on the exact-source package of `c3959c4`, and the corrections it caused were committed at `378b6fa`. An independent Goal audit of G4 then requested this revision: the reconciliation with the matrix, the Q42 recalibration and the statement of the current gaps.
 
-<!-- REVIEW CITATION: the one place for the independent review of this revision. Replace the next paragraph with the citation, then update the status line at the top of the page. -->
+**Independent review of this revision.** Two read-only reviews by separate reviewer sessions, neither of them the author, dispatched by the operator's governing Claude session on 2026-10-05; recorded in the [review record](validation/evaluation-protocol-review-20261005.md). Review 1, of commit `7d078c5`: "Accepted with required edits", nine required edits, applied in `e468547`. Review 2, of commit `e468547`: "Accepted: may be marked ready", the nine satisfied and four minor inaccuracies found; those four were corrected in the commit that set this status, and no reviewer has reread that commit. The reviewers are model sessions, the evidence they read is private fixtures, and they could not reach the ledger. This is the only place where the review is cited in full; the status line points here.
 
-**Independent review of this revision: not yet recorded.** The citation goes here and nowhere else: reviewer, identifier, date, the commit reviewed and the outcome. Until it is recorded, the status line stays as it is and nothing on this page states that G4 is ready.
+The review accepts this page. It does not decide G4: the Goal's audit is separate and decides whether G4 is achieved.
 
 Historical source checks, concluded research, preparatory probes and the matrix do not establish formal I12 qualification, full matrix qualification or complete billing.
 
@@ -606,7 +606,7 @@ Names. The run and scenario naming of section 2 was used as written and is no lo
 | --- | --- |
 | `casts/<scenario>-<n>.cast` | `session.cast`, `session-2.cast`, `session-3.cast` in the root |
 | `screens/<scenario>-<n>-final.txt`, 400 lines | `screens/final-screen.txt`, 3,000 lines of history requested; the Claude and Codex files hold 55 lines |
-| `screens/<UTC time>-<label>.txt` | `screens/s<stage>-<label>.txt` and `screens/stop-<epoch>.txt`; further idle screens in the shared `formal/stops/` |
+| `screens/<UTC time>-<label>.txt` | `screens/s<stage>-<label>.txt`; idle screens in the shared `formal/stops/<harness>-<epoch>.txt`, and in three roots also `screens/stop-<epoch>.txt`. The rule from now on is `screens/stop-<epoch>.txt` in the root |
 | `server/` with `token` and `client.env` | No `server/`: `token`, the database logs and `evaluation-server.log` lie in the root |
 | `codex-home/` per run | One `codex-config`, with `claude-config` and `pi-config`, shared by all runs outside the roots; the Codex rollouts and the Claude transcript are there |
 | `usage/` reads kept with their time | `usage/child.json`, `usage/outer.json` (Claude) and the upload outputs, without a time in the name; the three early-ended roots have no `usage/`, and their upload outputs lie in the root |
@@ -624,7 +624,7 @@ Monitoring:
 Operator proxy:
 
 - **One operator-side intervention outside the proxy role, in the Pi run.** At the stop "blocked from outside the set: D1 blocks G1" the driver session, acting for the operator and not as the run proxy, removed the BlockedBy link from G1 to D1 through the operator API of the private server and reissued the drive. The operator was not asked. This protocol expects otherwise: the stop is not a Question the specification decides, and the proxy uses no CQ tools of its own to move work forward (section 3), so it escalates, leaves the session idle and waits, with the wait excluded from the wall-clock budget. By the Pi report the run would otherwise have ended in S2, so its S3–S5 results depend on the intervention.
-- No proxy escalation is recorded in any run. The operator did give instructions to the driver session during the matrix, outside the harness sessions: the budget might be exceeded, and cheaper models were to be used for test runs. The model change during `eval-20261004-01/codex-driver` and the models of `eval-20261004-02` and `eval-20261005-01` follow from those instructions. The reports quote them; how they were given is not recorded there.
+- No proxy escalation is recorded in any run. The operator did give instructions to the driver session during the matrix, outside the harness sessions. The model instructions are quoted in the run reports: cheaper models for test runs, which explains the model change during `eval-20261004-01/codex-driver` and the models of `eval-20261004-02` and `eval-20261005-01`. The budget allowance was given in the operator's chat with the driver session and is recorded in the Setup section of the matrix record ("The operator allowed exceeding it"), not in any `report.md`.
 - The first proxy texts of the Claude and Pi runs had the form that was stored whole in the first Codex run, with the instruction to wait in the same text as the answer. What was stored there was not compared with what was typed.
 - No Operator Action and no permission dialog for a tool call is recorded in the reports.
 
