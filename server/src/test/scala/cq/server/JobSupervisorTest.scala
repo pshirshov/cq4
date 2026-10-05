@@ -113,7 +113,7 @@ final class JobSupervisorProcess extends SpecZIO with AssertZIO {
       } yield ()
     }
 
-    "stop active jobs with or without explicit cancellation when an unrelated reservation stalls, and suppress late launch" in { (local: LocalWorkspaceFixture, guardian: GuardianFixture) => ZIO.foreachDiscard(List(true, false)) { explicitCancellation =>
+    "stop active jobs with or without explicit cancellation when an unrelated reservation stalls and then loses its acknowledgement, and suppress late launch" in { (local: LocalWorkspaceFixture, guardian: GuardianFixture) => ZIO.foreachDiscard(List(true, false)) { explicitCancellation =>
       val scope = owner
       val first = local.fixture.spec(scope)
       val second = local.fixture.spec(scope)
@@ -139,6 +139,7 @@ final class JobSupervisorProcess extends SpecZIO with AssertZIO {
                 if (spec.attempt == second.attempt) {
                   entered.countDown()
                   require(release.await(10, TimeUnit.SECONDS), "Reservation fixture was not released")
+                  throw new java.io.IOException("Injected lost reservation acknowledgement after a stall")
                 }
                 record
               }
@@ -155,12 +156,15 @@ final class JobSupervisorProcess extends SpecZIO with AssertZIO {
               starting <- supervisor.start(scope, second, command(guardian, "print('must not launch')")).fork
               _ <- ZIO.attemptBlocking(assert(entered.await(3, TimeUnit.SECONDS)))
               cancellation <- if (explicitCancellation) supervisor.cancel(scope, first.attempt).fork.map(Some(_)) else ZIO.succeed(None)
+              // D115: the stall alone fails nothing; the lost acknowledgement that follows it is the storage fault that stops active jobs.
+              stalled <- starting.poll
+              _ <- assertIO(stalled.isEmpty)
+              _ <- ZIO.succeed(release.countDown())
               startAck <- starting.await
               cancelAck <- ZIO.foreach(cancellation)(_.await)
-              _ <- assertIO(startAck.isFailure && cancelAck.forall(_.isFailure))
+              _ <- assertIO(startAck.isFailure && cancelAck.forall(_.foldExit(_ => false, _.target == JobTarget.Stop)))
               observed <- ZIO.attemptBlocking(process.get().get.await(Duration.ofSeconds(3)))
               _ <- assertIO(observed.phase == ProcessPhase.Settled && observed.result.exists(_.reason == StopReason.Cancelled))
-              _ <- ZIO.succeed(release.countDown())
             } yield ()).ensuring(ZIO.succeed(release.countDown()))
           } yield ()
         }
