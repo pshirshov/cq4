@@ -263,6 +263,12 @@ tbody tr[aria-selected=true] { background: #243d4c; }
 .help-block { margin: 6px 0; }
 .help-block summary { cursor: pointer; }
 .help-block pre { max-height: 60vh; }
+.json-key { color: #e1e8ef; font-weight: 600; }
+.json-string { color: #8be0b2; }
+.json-number { color: #ffbd86; }
+.json-boolean { color: #68c7ec; }
+.json-null { color: #e0a341; font-style: italic; }
+.json-punctuation { color: #8698a6; }
 .help-table { width: auto; max-width: 100%; margin: 6px 0; }
 .help-table th, .help-table td { padding: 4px 10px 4px 0; text-align: left; vertical-align: top; overflow-wrap: break-word; }
 .help-facts { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 12px; margin: 0; }
