@@ -68,8 +68,8 @@ in {
     };
     systemd.services.cq-database-password = mkIf cfg.database.managed {
       description = "Set CQ database credential from a runtime systemd credential";
-      requires = [ "postgresql.service" ];
-      after = [ "postgresql.service" ];
+      requires = [ "postgresql.target" ];
+      after = [ "postgresql.target" ];
       before = [ "cq.service" ];
       serviceConfig = {
         Type = "oneshot";
@@ -82,8 +82,8 @@ in {
     systemd.services.cq = {
       description = "CQ ledger server";
       wantedBy = [ "multi-user.target" ];
-      requires = lib.optionals cfg.database.managed [ "postgresql.service" "cq-database-password.service" ];
-      after = [ "network.target" ] ++ lib.optionals cfg.database.managed [ "postgresql.service" "cq-database-password.service" ];
+      requires = lib.optionals cfg.database.managed [ "postgresql.target" "cq-database-password.service" ];
+      after = [ "network.target" ] ++ lib.optionals cfg.database.managed [ "postgresql.target" "cq-database-password.service" ];
       environment = {
         CQ_ORIGIN = cfg.origin;
         CQ_HOST = cfg.listenAddress;
