@@ -18,11 +18,6 @@ SCHEMA_SOURCE = "server/src/main/resources/db/001-ledgers.sql"
 MODEL_SOURCE = "models/cq-api.baboon"
 ATTACHED_GOVERNOR_COLLECTOR = "CQ attached session; outer usage unavailable"
 UNCHANGED_DATA = "unchanged-data"
-DRIVER_CYCLE_OUTCOMES = "driver-cycle-outcomes"
-STEP_SQL = "dev/local-update.sql"
-CYCLE_OUTCOME_FIELDS = ("outcomes", "retried")
-CYCLES_LACKING_OUTCOMES = ("SELECT count(*) FROM cq_drivers WHERE jsonb_typeof(body->'cycle') = 'object' AND NOT (" +
-                           " AND ".join(f"jsonb_exists(body->'cycle', '{name}')" for name in CYCLE_OUTCOME_FIELDS) + ")")
 
 
 def require(condition: bool, message: str) -> None:
@@ -110,27 +105,10 @@ def compatible(before: dict, after: dict, step: dict) -> str:
     old, new = before["runtimeSourceSha256"], after["runtimeSourceSha256"]
     require(old[SCHEMA_SOURCE] == new[SCHEMA_SOURCE], "Schema changes require a matching explicit local update step; replacement refused")
     if old[MODEL_SOURCE] != new[MODEL_SOURCE]:
-        require(step["kind"] in (UNCHANGED_DATA, DRIVER_CYCLE_OUTCOMES) and step["schema"] == old[SCHEMA_SOURCE]
+        require(step["kind"] == UNCHANGED_DATA and step["schema"] == old[SCHEMA_SOURCE]
                 and step["modelBefore"] == old[MODEL_SOURCE] and step["modelAfter"] == new[MODEL_SOURCE],
                 "Model changes require a matching explicit data update step; replacement refused")
     return new[SCHEMA_SOURCE]
-
-
-def transformation(before: dict, after: dict, step: dict, source: Path) -> str | None:
-    """The pinned SQL that the accepted transition applies to stored data; none when the stored data stays as it is."""
-    compatible(before, after, step)
-    if before["runtimeSourceSha256"][MODEL_SOURCE] == after["runtimeSourceSha256"][MODEL_SOURCE] or step["kind"] == UNCHANGED_DATA:
-        return None
-    require(digest(source / STEP_SQL) == step["sqlSha256"], "Local update SQL differs from its pinned step")
-    return (source / STEP_SQL).read_text()
-
-
-def with_cycle_outcomes(driver: dict) -> dict:
-    """A cq_drivers row as the driver-cycle-outcomes step leaves it: a stored cycle gains each field it lacks, empty."""
-    cycle = driver["body"]["cycle"]
-    if cycle is None:
-        return driver
-    return {**driver, "body": {**driver["body"], "cycle": {**{name: [] for name in CYCLE_OUTCOME_FIELDS}, **cycle}}}
 
 
 class Commands:
@@ -205,11 +183,11 @@ def main() -> None:
             require(after["runtimeSourceSha256"] == runtime_sources(checkout), "Candidate sources differ from the snapshot")
             step = json.loads((checkout / "dev/local-update-step.json").read_text())
             schema = compatible(before, after, step)
-            sql = transformation(before, after, step, checkout)
             new = digest(candidate / "manifest.json")
             receipt.update(status="candidate-verified", newManifest=new, schema=schema)
             write_json(evidence / "receipt.json", receipt)
-            install(state, release, candidate, rollback, evidence, receipt, schema, commands, sql)
+            # The only step kind accepted leaves the stored data as it is: no SQL is applied.
+            install(state, release, candidate, rollback, evidence, receipt, schema, commands, None)
         except BaseException as error:
             if receipt["status"] not in ("installed", "recovery-required", "rolled-back"):
                 receipt.update(status="failed-before-install", error=str(error))
@@ -251,10 +229,6 @@ def install(state: Path, release: Path, candidate: Path, rollback: Path, evidenc
         write_json(evidence / (label + ".json"), values)
         return values
 
-    def drivers(label: str) -> list[dict]:
-        rows = query("SELECT to_jsonb(t) FROM cq_drivers t ORDER BY project_id, harness, session_key", label)
-        return [json.loads(row) for row in rows.splitlines()]
-
     def interrupted(number, frame):
         raise KeyboardInterrupt(f"Interrupted by signal {number}")
 
@@ -288,19 +262,10 @@ def install(state: Path, release: Path, candidate: Path, rollback: Path, evidenc
         write_json(evidence / "receipt.json", receipt)
         if sql is not None:
             before_data = fingerprints("data-before")
-            drivers_before = drivers("drivers-before")
             transformation_attempted = True
             query(sql, "data-update")
-            require(query(CYCLES_LACKING_OUTCOMES, "cycles-lacking-outcomes") == "0", "Data step left a stored cycle without its outcome fields")
             after_data = fingerprints("data-after")
-            require(set(after_data) == set(before_data) and
-                    all(after_data[table] == value for table, value in before_data.items() if table != "cq_drivers"),
-                    "Data step changed a table other than cq_drivers")
-            drivers_after = drivers("drivers-after")
-            require(drivers_after == [with_cycle_outcomes(driver) for driver in drivers_before],
-                    "Data step changed driver rows beyond adding empty outcome fields to stored cycles")
-            receipt.update(dataStep=DRIVER_CYCLE_OUTCOMES, drivers=len(drivers_after),
-                           driversTransformed=sum(1 for old, new in zip(drivers_before, drivers_after) if old != new), otherDataUnchanged=True)
+            receipt.update(dataChanged=sorted(table for table in set(before_data) | set(after_data) if before_data.get(table) != after_data.get(table)))
             write_json(evidence / "receipt.json", receipt)
         database.run(["pg_ctl", "-D", str(data), "-m", "fast", "-w", "-t", "30", "stop"], "database-stop", 40)
         owned = False
