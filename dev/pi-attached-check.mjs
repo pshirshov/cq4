@@ -26,6 +26,7 @@ lines.on('line', line => {
     if (!value.params.arguments.hold) send({id:value.id,result:{isError:false,content:[{type:'text',text:'bounded reply'}]}});
   }
   else if (value.method === 'cq/piUsage') send({id:value.id,result:{}});
+  else if (value.method === 'cq/session') send({id:value.id,result:{directory:'/fixture/session'}});
 });
 lines.on('close', () => writeFileSync(new URL('./observed.json', import.meta.url), JSON.stringify(seen)));
 `);

@@ -58,6 +58,13 @@ createInterface({ input: process.stdin }).on('line', line => {
   const value = JSON.parse(line);
   if (value.method === 'initialize') send({ id: value.id, result: { protocolVersion: '2025-03-26' } });
   else if (value.method === 'tools/list') send({ id: value.id, result: { tools: config.tools } });
+  else if (value.method === 'cq/session') send({ id: value.id, result: { directory: config.directory } });
+  else if (value.method === 'tools/call') {
+    // The next scripted dispatch reply, as the attached host returns it to the extension: the JSON as one text block.
+    const replies = JSON.parse(readFileSync(file('tool-replies.json'), 'utf8'));
+    writeFileSync(file('tool-replies.json'), JSON.stringify(replies.slice(1)));
+    send({ id: value.id, result: { isError: false, content: [{ type: 'text', text: JSON.stringify(replies[0]) }] } });
+  }
   else if (value.method === 'cq/driver') {
     appendFileSync(file('requests.jsonl'), JSON.stringify(value.params) + '\\n');
     const replies = JSON.parse(readFileSync(file('replies.json'), 'utf8'));
@@ -71,7 +78,25 @@ createInterface({ input: process.stdin }).on('line', line => {
   }
 });
 `);
-  await writeFile(join(root, "cq-host.json"), JSON.stringify({ command: process.execPath, args: [host], directory: root, tools }));
+  // The installed executable: `cq wait ...` is the scripted waiter, anything else starts the scripted host.
+  const waiter = join(root, "waiter.mjs");
+  await writeFile(waiter, `
+import { appendFileSync, existsSync, readFileSync } from 'node:fs';
+const file = name => new URL('./' + name, import.meta.url);
+appendFileSync(file('waits.jsonl'), JSON.stringify({ pid: process.pid, args: process.argv.slice(2) }) + '\\n');
+const number = readFileSync(file('waits.jsonl'), 'utf8').split('\\n').length - 1;
+const poll = setInterval(() => {
+  if (!existsSync(file('wait-' + number + '.json'))) return;
+  clearInterval(poll);
+  const { exit, output } = JSON.parse(readFileSync(file('wait-' + number + '.json'), 'utf8'));
+  process.stdout.write(JSON.stringify(output) + '\\n', () => process.exit(exit));
+}, 20);
+`);
+  const executable = join(root, "cq");
+  await writeFile(executable, `#!/bin/sh\nif [ "$1" = wait ]; then exec ${JSON.stringify(process.execPath)} ${JSON.stringify(waiter)} "$@"; fi\nexec ${JSON.stringify(process.execPath)} "$@"\n`, { mode: 0o700 });
+  await writeFile(join(root, "waits.jsonl"), "");
+  await writeFile(join(root, "tool-replies.json"), "[]");
+  await writeFile(join(root, "cq-host.json"), JSON.stringify({ command: executable, args: [host], directory: root, tools }));
   await writeFile(join(root, "requests.jsonl"), "");
   await writeFile(join(root, "replies.json"), "[]");
   const pi = runtime(id);
@@ -81,6 +106,18 @@ createInterface({ input: process.stdin }).on('line', line => {
     script: replies => writeFile(join(root, "replies.json"), JSON.stringify(replies)),
     requests: async () => (await readFile(join(root, "requests.jsonl"), "utf8")).split("\n").filter(line => line !== "").map(line => JSON.parse(line)),
     unconsumed: async () => JSON.parse(await readFile(join(root, "replies.json"), "utf8")),
+    root,
+    // One dispatch tool call of the model, answered with `reply`.
+    async dispatch(command, reply) {
+      await writeFile(join(root, "tool-replies.json"), JSON.stringify([reply]));
+      return pi.tools.get("cq_dispatch").execute("call", command, undefined, undefined, pi.context);
+    },
+    // The `cq wait` processes the extension has started so far, oldest first; `finish` ends the latest with an exit code and its JSON output.
+    waits: async () => (await readFile(join(root, "waits.jsonl"), "utf8")).split("\n").filter(line => line !== "").map(line => JSON.parse(line)),
+    async finish(exit, output) {
+      const number = (await readFile(join(root, "waits.jsonl"), "utf8")).split("\n").length - 1;
+      await writeFile(join(root, `wait-${number}.json`), JSON.stringify({ exit, output }));
+    },
   };
 }
 
@@ -137,6 +174,63 @@ test("a turn that ends while the host's work is in flight submits nothing and ke
   assert.deepEqual(await pi.unconsumed(), []);
   await pi.script([parked(pi.id)]);
   await pi.stop();
+});
+
+test("the extension waits for the host's work itself and tells the session when a unit ends; the model starts no waiter", async () => {
+  const pi = await session("pi-session-a");
+  await pi.start();
+  const until = async (what, holds) => { for (let i = 0; i < 400; i++) { if (await holds()) return; await new Promise(resolve => setTimeout(resolve, 25)); } assert.fail("Not reached: " + what); };
+  const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  const [a, b, c] = ["00000000-0000-4000-8000-00000000000a", "00000000-0000-4000-8000-00000000000b", "00000000-0000-4000-8000-00000000000c"];
+  const running = (attempt, phase) => ({ Status: { value: { attempt: { value: attempt }, phase, next: "Wait" } } });
+  const unit = (id, kind) => ({ kind, id, members: [item("Tasks", 4)] });
+  const named = (...units) => ["wait", "--session", pi.root, ...units.flat(), "--json"];
+  // A start that shows a running child puts it under one waiter; a reply about a unit already followed starts nothing.
+  await pi.dispatch({ StartChoice: {} }, running(a, "Preparing"));
+  await until("the first waiter", async () => (await pi.waits()).length === 1);
+  await pi.dispatch({ Status: {} }, running(a, "Running"));
+  // A second child while the first is waited for: one waiter names both, and the replaced one reports nothing.
+  await pi.dispatch({ StartChoice: {} }, running(b, "Running"));
+  await until("the waiter for both", async () => (await pi.waits()).length === 2);
+  const [first, second] = await pi.waits();
+  assert.deepEqual([first.args, second.args], [named(["--attempt", a]), named(["--attempt", a], ["--attempt", b])]);
+  await until("the replaced waiter to end", async () => !alive(first.pid));
+  assert.deepEqual(pi.injected, []);
+  // One child ends: the session is told in one compact message that starts a turn, and the other child is waited for again by name.
+  await pi.finish(0, { Ended: { units: [{ unit: unit(a, "Attempt"), phase: "Completed", next: "ConsiderAcceptance", blocker: null }], active: [unit(b, "Attempt")] } });
+  await until("the message", async () => pi.injected.length === 1);
+  assert.deepEqual(pi.injected[0], { message: { customType: "cq-wait", display: true, details: {},
+    content: `CQ: attempt ${a} on T4 ended: Completed, next ConsiderAcceptance\nCQ still works on 1 more; you are told when they end.\n` +
+      "Read details with cq_dispatch Status (waitMillis 0) only if you need them." }, options: { triggerTurn: true } });
+  await until("the waiter for the other child", async () => (await pi.waits()).length === 3);
+  assert.deepEqual((await pi.waits())[2].args, named(["--attempt", b]));
+  // A terminal reply, a failed start and an integration that rests on the session start no waiter; an integration the host prepares does.
+  await pi.dispatch({ Status: {} }, running(a, "Completed"));
+  await pi.dispatch({ Integrate: {} }, { Integration: { value: { id: { value: c }, phase: "Ready" } } });
+  assert.equal((await pi.waits()).length, 3);
+  await pi.dispatch({ PrepareIntegration: {} }, { Integration: { value: { id: { value: c }, phase: "Preparing" } } });
+  await until("the waiter with the integration", async () => (await pi.waits()).length === 4);
+  assert.deepEqual((await pi.waits())[3].args, named(["--attempt", b], ["--integration", c]));
+  await pi.finish(0, { Ended: { units: [{ unit: unit(b, "Attempt"), phase: "Failed", next: "Retry", blocker: "Harness exited\nwith code 1" },
+    { unit: { ...unit(c, "Integration"), members: [] }, phase: "Ready", next: "Confirm", blocker: null }], active: [] } });
+  await until("the second message", async () => pi.injected.length === 2);
+  assert.equal(pi.injected[1].message.content, `CQ: attempt ${b} on T4 ended: Failed, next Retry, blocker: Harness exited with code 1\n` +
+    `CQ: integration ${c} ended: Ready, next Confirm\nRead details with cq_dispatch Status (waitMillis 0) only if you need them.`);
+  await new Promise(resolve => setTimeout(resolve, 200));
+  assert.equal((await pi.waits()).length, 4, "nothing is left to wait for");
+  // A host that is gone ends the following; a session that ends stops its waiter.
+  await pi.dispatch({ StartChoice: {} }, running(a, "Running"));
+  await until("the waiter after the pause", async () => (await pi.waits()).length === 5);
+  await pi.finish(3, { HostGone: { active: [unit(a, "Attempt")] } });
+  await until("the host-gone notice", async () => pi.notices.some(notice => notice.type === "error" && /CQ host is not running/.test(notice.message)));
+  assert.equal(pi.injected.length, 2);
+  await pi.dispatch({ StartChoice: {} }, running(b, "Running"));
+  await until("the last waiter", async () => (await pi.waits()).length === 6);
+  const last = (await pi.waits())[5];
+  assert(alive(last.pid));
+  await pi.stop();
+  await until("the waiter to stop with its session", async () => !alive(last.pid));
+  assert.equal(pi.injected.length, 2);
 });
 
 test("drive with a stored workset passes the input unchanged; a busy session waits for the turn to settle", async () => {

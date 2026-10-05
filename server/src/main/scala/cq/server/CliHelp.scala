@@ -247,15 +247,17 @@ remains and otherwise allows the stop. StatusLine prints the driver status.
 It needs the operator credential, trusts the session_id on stdin, and exits 0
 even on a CQ error, which it reports in its output without blocking the harness.
 """
-      case Some("wait") => """Usage: cq wait --session DIR [--attempt ID]... [--integration ID]... [--json]
+      case Some("wait") => """Usage: cq wait --session DIR [--attempt ID]... [--integration ID]... [--combination ID]...
+               [--revalidation ID]... [--json]
 
 Blocks until work of one governing session ends, and says what ended. DIR is the
 session directory that the CQ host of a harness session maintains (session Context
 names it). The command reads that directory only: it needs no server and no token.
 
-With --attempt or --integration it waits for the first of the named child attempts
-or integrations to end, and returns at once when one has already ended. Without
-them it waits for the next end among the child attempts, integrations,
+With IDs it waits for the first of the named child attempts, integrations,
+combinations or check revalidations to end, and returns at once when one has
+already ended, so nothing is missed between starting work and waiting for it.
+Without IDs it waits for the next end among the child attempts, integrations,
 combinations and check revalidations the host is working on when the command
 starts; when there are none it says so and returns at once.
 

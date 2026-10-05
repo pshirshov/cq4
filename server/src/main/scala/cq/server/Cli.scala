@@ -246,9 +246,9 @@ final class Cli(context: CliContext, location: ProjectLocation, upload: SessionU
     case "wait" :: rest =>
       require(rest.size % 2 == 0, "Options require values")
       val pairs = rest.grouped(2).map(pair => pair.head -> pair(1)).toList
-      val kinds = Map("--attempt" -> SessionUnitKind.Attempt, "--integration" -> SessionUnitKind.Integration)
+      val kinds = SessionUnitKind.all.map(kind => "--" + kind.toString.toLowerCase -> kind).toMap
       require(pairs.forall((option, _) => option == "--session" || kinds.contains(option)) && pairs.count(_._1 == "--session") == 1,
-        "wait requires --session DIR and accepts --attempt ID and --integration ID, each any number of times")
+        "wait requires --session DIR and accepts --attempt, --integration, --combination and --revalidation ID, each any number of times")
       val session = directory.resolve(pairs.collectFirst { case ("--session", value) => value }.get).normalize()
       val named = pairs.collect { case (option, value) if kinds.contains(option) => kinds(option) -> UUID.fromString(value) }
       val outcome = try new SessionWait(session, () => Thread.sleep(SessionWait.PollMillis)).await(named)

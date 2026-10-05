@@ -105,7 +105,7 @@ final class RevalidationController(config: SupervisorConfig, authority: Supervis
     done <- Promise.make[Nothing, Unit]
     registered <- requests.withPermit(zio.Clock.nanoTime.flatMap(began => ZIO.attemptBlocking(register(id, result, fence, done, began))))
     (entry, fresh) = registered
-    _ <- fresh.fold(ZIO.unit)(round => (ZIO.attemptBlocking(units.started(SessionUnits.revalidation(synchronized(entry.view)))) *> run(id, result, round)).catchAll { error =>
+    _ <- fresh.fold(ZIO.unit)(round => ZIO.attemptBlocking(units.started(SessionUnits.revalidation(synchronized(entry.view)))).orDie *> run(id, result, round).catchAll { error =>
       ZIO.succeed(synchronized(entry.view).copy(phase = RevalidationPhase.Failed, blocker = Some(DispatchProjection.concise("Revalidation failed: " +
         Option(error.getMessage).getOrElse(error.getClass.getSimpleName)))))
     }.flatMap(value => ZIO.succeed(synchronized { entry.view = value }))

@@ -65,7 +65,7 @@ async function session(id) {
   const pi = runtime(id);
   await extension(pi.pi);
   await pi.start();
-  const tool = async (name, value) => JSON.parse((await pi.tools.get("cq_" + name).execute(randomUUID(), value, undefined)).content[0].text);
+  const tool = async (name, value) => JSON.parse((await pi.tools.get("cq_" + name).execute(randomUUID(), value, undefined, undefined, pi.context)).content[0].text);
   return { ...pi, tool, refused: (name, value, pattern) => assert.rejects(() => tool(name, value), pattern),
     driver: async () => (await tool("session", { Driver: {} })).Driver.reply.Status.value };
 }
@@ -160,6 +160,10 @@ assert.equal((await status(first)).state, "On", "assigning a produced Task to an
 await first.tool("dispatch", { Cancel: { attempt: child.attempt } });
 const deadline = Date.now() + 60000;
 while ((await first.driver()).activeChildren !== 0) { assert(Date.now() < deadline, "The cancelled child did not settle"); await sleep(200); }
+// The extension's own `cq wait` on the real session directory told the session, in a message that starts a turn; the model started no waiter.
+while (first.injected.length === 0) { assert(Date.now() < deadline, "The session was not told that its child ended"); await sleep(200); }
+assert.deepEqual(first.injected.map(entry => entry.options), [{ triggerTurn: true }]);
+assert.match(first.injected[0].message.content, new RegExp(`^CQ: attempt ${child.attempt.value} on ${reference(target.id)} ended: Cancelled, next Retry.*\\nRead details with cq_dispatch Status \\(waitMillis 0\\) only if you need them\\.$`));
 
 // Cycle 2: the recomputed set gains the descendant, a new start directive is issued and accepted; an unchanged cycle then ends quiescent.
 await first.settle("completed");

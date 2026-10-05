@@ -18,6 +18,13 @@ const TITLE_CODE_POINTS = 80;
 const LEDGER_PREFIX = { Milestones: "M", Ideas: "I", Defects: "D", Goals: "G", Tasks: "T", Researches: "RS", Hypothesis: "H", Questions: "Q",
   Decisions: "K", Reviews: "R", Handoffs: "HO", OperatorActions: "OA", Memories: "MEM", Upstream: "U" };
 const FAILURE_STOPS = new Set(["Failure", "NotBound"]);
+// `cq wait` exit code for a session whose host no longer runs.
+const WAIT_HOST_GONE = 3;
+const MAX_WAIT_OUTPUT_BYTES = 1048576;
+// The phases in which the host works on a unit without the session, by the variant of the dispatch reply that reports them.
+const WORKING = { Status: ["Preparing", "Running", "Stopping", "Validating", "Publishing"], Integration: ["Preparing", "Running"],
+  Combination: ["Preparing"], Revalidation: ["Running"] };
+const UNIT_KIND = { Status: "Attempt", Integration: "Integration", Combination: "Combination", Revalidation: "Revalidation" };
 
 function reference(id) {
   const prefix = LEDGER_PREFIX[id.ledger];
@@ -37,6 +44,12 @@ function reason(value) {
     case "Context": return body.relation + " " + reference(body.source);
     default: return name.toLowerCase();
   }
+}
+// One line per unit `cq wait` reported: what ended and how.
+function ended(end) {
+  const items = end.unit.members.length === 0 ? "" : " on " + end.unit.members.map(reference).join(",");
+  return `CQ: ${end.unit.kind.toLowerCase()} ${end.unit.id}${items} ended: ${end.phase}` + (end.next === null ? "" : `, next ${end.next}`) +
+    (end.blocker === null ? "" : `, blocker: ${end.blocker.replace(/\s+/g, " ")}`);
 }
 // An item title is user text: it is shown on one line, without control characters and bounded in length.
 function shown(title) {
@@ -177,6 +190,59 @@ export default async function (pi) {
   let driving = false;
   let workset;
   let outcome = "completed";
+  // The session directory of the attached host and the units the host works on, each with the `cq wait` child that waits for them.
+  // The model starts no waiter: the extension tells the session when a unit ends.
+  let directory;
+  let waiter;
+  const working = new Map();
+  function watch(context) {
+    if (waiter !== undefined) { const stale = waiter; waiter = undefined; stale.kill("SIGTERM"); }
+    if (working.size === 0 || connection === undefined) return;
+    const named = [...working.values()].flatMap(unit => ["--" + unit.kind.toLowerCase(), unit.id]);
+    const child = spawn(configuration.command, ["wait", "--session", directory, ...named, "--json"],
+      { cwd: configuration.directory, env: process.env, stdio: ["ignore", "pipe", "inherit"], detached: false });
+    waiter = child;
+    const chunks = [];
+    let size = 0;
+    child.stdout.on("data", chunk => { size += chunk.length; if (size <= MAX_WAIT_OUTPUT_BYTES) chunks.push(chunk); });
+    child.once("error", error => { if (waiter === child) { waiter = undefined; context.ui.notify("CQ waiter could not start: " + error.message, "error"); } });
+    child.once("close", code => {
+      // A waiter that was replaced or stopped reports nothing: its successor names the same units.
+      if (waiter !== child) return;
+      waiter = undefined;
+      try {
+        if (size > MAX_WAIT_OUTPUT_BYTES) throw new Error("its output exceeds its byte bound");
+        if (code !== 0 && code !== WAIT_HOST_GONE) throw new Error(`it exited with code ${code}`);
+        const [name, body] = variant(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+        if (name === "HostGone") {
+          working.clear();
+          context.ui.notify("CQ host is not running: its children are not followed any more; restart the session; retained deliveries can be recovered", "error");
+        } else if (name === "Ended") {
+          for (const end of body.units) working.delete(end.unit.kind + " " + end.unit.id);
+          const lines = body.units.map(ended);
+          if (working.size > 0) lines.push(`CQ still works on ${working.size} more; you are told when they end.`);
+          lines.push("Read details with cq_dispatch Status (waitMillis 0) only if you need them.");
+          // Reaches the model at its next tool-call boundary when it is busy, and starts a turn when it is idle.
+          pi.sendMessage({ customType: "cq-wait", content: lines.join("\n"), display: true, details: {} }, { triggerTurn: true });
+          watch(context);
+        } else throw new Error("unexpected outcome " + name);
+      } catch (error) {
+        working.clear();
+        context.ui.notify("CQ waiter failed: " + error.message + "; read the state of running work with cq_dispatch Status", "error");
+      }
+    });
+  }
+  // A dispatch reply that shows the host working on a unit puts it under the waiter; one that the waiter already names changes nothing.
+  function follow(context, text) {
+    if (directory === undefined) return;
+    const [name, body] = variant(JSON.parse(text));
+    if (WORKING[name] === undefined || !WORKING[name].includes(body.value.phase)) return;
+    const id = (name === "Status" ? body.value.attempt : body.value.id).value;
+    const key = UNIT_KIND[name] + " " + id;
+    if (working.has(key)) return;
+    working.set(key, { kind: UNIT_KIND[name], id });
+    watch(context);
+  }
   const show = (context, status) => context.ui.setStatus(DRIVER_FOOTER, status === null ? DRIVER_OFF : status.line);
   // The session key is Pi's own session identifier; the attached host adds its attached session.
   async function driver(context, action, fields) {
@@ -260,6 +326,10 @@ export default async function (pi) {
       started.send({ jsonrpc: "2.0", method: "notifications/initialized" });
       const inventory = await started.rpc("tools/list", {}, undefined);
       if (!isDeepStrictEqual(inventory.tools, configuration.tools)) throw new Error("CQ tool contracts changed; rerun cq configure pi and restart");
+      const located = await started.rpc("cq/session", {}, undefined);
+      if (typeof located.directory !== "string") throw new Error("CQ host did not name its session directory");
+      directory = located.directory;
+      working.clear();
     } catch (error) {
       started.fail(error);
       await started.close();
@@ -275,6 +345,9 @@ export default async function (pi) {
     finally {
       driving = false;
       connection = undefined;
+      directory = undefined;
+      working.clear();
+      watch(context);
       await active.close();
     }
   });
@@ -318,12 +391,13 @@ export default async function (pi) {
       name: "cq_" + tool.name, label: "CQ " + tool.name, description: tool.description,
       parameters: tool.inputSchema, executionMode: "sequential",
       promptGuidelines: tool.name === "session" ? ["Before CQ work, call cq_session Context and follow its instructions; activate a typed workflow before dispatch. This interactive session is the Governor. Do not run cq run."] : [],
-      async execute(_id, parameters, signal) {
+      async execute(_id, parameters, signal, _onUpdate, context) {
         if (connection === undefined) throw new Error("CQ attached host is unavailable; restart the session");
         const result = await connection.rpc("tools/call", { name: tool.name, arguments: parameters }, signal);
         if (!Array.isArray(result.content) || result.content.length > 16 || !result.content.every(part => part.type === "text" && typeof part.text === "string"))
           throw new Error("CQ returned unsupported tool content");
         if (result.isError === true) throw new Error(result.content.map(part => part.text).join("\n").slice(0, 2000));
+        if (tool.name === "dispatch") follow(context, result.content.map(part => part.text).join(""));
         return { content: result.content, details: {} };
       },
     });

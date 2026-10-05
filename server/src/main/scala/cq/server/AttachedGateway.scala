@@ -125,6 +125,8 @@ final class AttachedGateway(config: SupervisorConfig, authority: SupervisorAutho
         accounting.accept(event, authority.collector)
         Some(success(id, Json.obj()))
       }
+      // The Pi extension runs `cq wait` on this directory itself; its model starts no waiter.
+      case "cq/session" if config.run.attempt.harness == Harness.Pi => ZIO.some(success(id, Json.obj("directory" -> Json.fromString(config.directory.toString))))
       case "cq/driver" if config.run.attempt.harness == Harness.Pi => ZIO.attemptBlocking {
         val body = cursor.downField("params").focus.getOrElse(throw new IllegalArgumentException("Missing driver request"))
         require(body.noSpaces.getBytes(java.nio.charset.StandardCharsets.UTF_8).length <= MaxLocalBytes, "Driver request exceeds its bound")

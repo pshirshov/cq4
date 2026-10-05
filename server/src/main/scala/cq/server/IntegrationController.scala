@@ -87,7 +87,9 @@ final class IntegrationController(config: SupervisorConfig, authority: Superviso
       case _ => ZIO.unit
     }
   private def background(entry: IntegrationExecutionState, done: Promise[Nothing, Unit], operation: Task[IntegrationStatus]): Task[Unit] =
-    ((ZIO.attemptBlocking(units.started(SessionUnits.integration(snapshot(entry)))) *> operation).flatMap(value => ZIO.succeed(update(entry, value))).catchAll {
+    // Written before the call that started the operation returns: a waiter named this integration then waits for this operation's end
+    // and is not answered by the end before it.
+    ZIO.attemptBlocking(units.started(SessionUnits.integration(snapshot(entry)))).orDie *> (operation.flatMap(value => ZIO.succeed(update(entry, value))).catchAll {
       // No reservation exists and nothing was attempted: the integration is settled, and the server keeps no record of it.
       case refused: IntegrationRefused => ZIO.succeed(update(entry, snapshot(entry).copy(phase = IntegrationPhase.NotApplied,
         next = IntegrationNext.InspectEvidence, blocker = Some(refused.reason))))
