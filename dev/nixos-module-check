@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ $# != 2 ]]; then
+  cat >&2 <<'USAGE'
+Usage: dev/nixos-module-check RELEASE_DIRECTORY LOG_FILE
+
+Boots a NixOS virtual machine that runs nixosModules.default with the given
+native release and the module-managed PostgreSQL, and checks the server there
+(nix/tests/nixos-module.nix). The log of the run is written to LOG_FILE.
+
+Evaluation is impure: the release is imported by its path, and the flake is
+read from this checkout. Requires Nix with the kvm system feature. Not part of
+dev/check or test-local.sh.
+USAGE
+  exit 2
+fi
+root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+release=$(realpath -e -- "$1")
+log=$(realpath -m -- "$2")
+[[ -f $release/manifest.json ]] || { echo "Not a native release: $release" >&2; exit 1; }
+# A result already in the store produces no run; --rebuild then forces one (it refuses a first build).
+if ! nix build --impure --no-link -L --file "$root/nix/tests/nixos-module.nix" --argstr release "$release" > "$log" 2>&1; then
+  echo "FAIL: NixOS module check; see $log" >&2
+  exit 1
+fi
+if ! grep -q 'test script finished' "$log"; then
+  nix build --impure --no-link -L --rebuild --file "$root/nix/tests/nixos-module.nix" --argstr release "$release" > "$log" 2>&1 \
+    || { echo "FAIL: NixOS module check; see $log" >&2; exit 1; }
+fi
+grep -q 'test script finished' "$log" || { echo "FAIL: the virtual machine test did not run; see $log" >&2; exit 1; }
+echo "PASS: NixOS module boot, doctor, restart and reboot retention, service identity and secret confinement; log $log"

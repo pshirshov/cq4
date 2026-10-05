@@ -297,7 +297,7 @@ class Checks:
         classpath = self.classpath()
         with self.database(DatabaseRole.Functional, []):
             # By exact name: a pattern makes distage-testkit execute every suite of the module (see `suites`), whose PostgreSQL fixtures
-            # together exhaust the cluster's 100 connections.
+            # together exhaust the cluster's connection limit.
             self.sbt(["server/testOnly cq.server.CohortSelectionPostgres"], "cohort-contract")
             port = free_port()
             self.environment.update(CQ_HOST="127.0.0.1", CQ_PORT=str(port), CQ_ORIGIN=f"http://127.0.0.1:{port}",

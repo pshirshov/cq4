@@ -24,6 +24,10 @@ in {
 }
 ```
 
+The server listens on `listenAddress` (default `127.0.0.1`) and `port` (default
+8080) and keeps its working directory in `/var/lib/<stateDirectory>` (default
+`cq`), owned by the `cq` system user.
+
 Credential options take **strings naming runtime files**, not Nix path literals
 or secret values. Systemd loads those files into the CQ service's credentials
 directory. Inline `CQ_TOKEN` and `CQ_DATABASE_PASSWORD` still take precedence
@@ -37,6 +41,10 @@ from its runtime credential, passing SQL through stdin and withholding SQL error
 contents. Authentication for that database/role on IPv4 loopback uses SCRAM.
 Durability settings must remain enabled. PostgreSQL belongs to its own service;
 restarting CQ retains its database.
+The password unit and CQ start after `postgresql.target`, which the NixOS
+PostgreSQL module reaches once it has created the role; a nixpkgs without that
+target is not supported. CQ exits with status 143 on SIGTERM, which the unit
+counts as a successful stop.
 
 For an existing PostgreSQL server set `database.managed = false`, then specify
 `database.host`, `port`, `name`, `user` and `passwordFile`. CQ checks the current
@@ -164,6 +172,46 @@ version and persisted approvals. Changed hook files require a new report and
 changed hook commands require renewed approval. Unrelated formatting changes
 also invalidate the byte binding. `cq configure` remains the imperative
 installation path.
+
+## Checking the modules
+
+Two checks build the modules against a native release directory. Neither is
+part of `dev/check`, `test-local.sh` or the updater; run them after changing
+`nix/` or before relying on a release declaratively.
+
+```sh
+dev/nixos-module-check /absolute/native-release /absolute/boot.log
+dev/home-manager-module-check /absolute/native-release /absolute/build.log
+```
+
+Both evaluate impurely: the release is imported by its path and the flake is
+read from the checkout. They use the nixpkgs the flake pins and add no input.
+
+`nixos-module-check` needs Nix with the `kvm` system feature. It boots a NixOS
+virtual machine ([test](../nix/tests/nixos-module.nix)) with `services.cq`, the
+managed PostgreSQL and two credential files that a unit of the test generates
+inside the guest. It waits for `cq.service`, requires every check of
+`cq doctor server --require-settled` to be Current, creates a project with
+`cq init` and one Task through the API, and reads both back after a restart of
+the service and after a shutdown and boot of the machine. It also checks that
+the server process runs as `cq`, that the credential files are mode 600 and
+unreadable by that user, that neither value occurs in the unit text, the unit
+properties, the process environment or any store path the units name, and that
+stopping the service leaves it inactive with a successful result.
+
+It does not cover an existing database (`database.managed = false`), a
+replacement of one release by another, a non-loopback origin, a browser or a
+harness.
+
+`home-manager-module-check` builds a Home Manager generation
+([test](../nix/tests/home-manager-module.nix)) with Claude, Codex and Pi
+integrations of one project. Home Manager itself is the source of the
+`home-manager` package of the pinned nixpkgs. The check requires the package on
+the profile path, the `CQ_TOKEN_FILE` session variable, recursive links that do
+not overwrite, refusal of a token file in the store, and Current from
+`cq doctor commands` for each harness over the generated links. It activates
+nothing and starts no harness, so `cq doctor harness` (versions and trust) is
+outside it.
 
 Home-manager collision and recursive-link behavior follows the
 [home.file options](https://home-manager.dev/manual/unstable/options/home-manager/home.html).
