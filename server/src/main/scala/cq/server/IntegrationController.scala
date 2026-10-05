@@ -52,11 +52,13 @@ final class IntegrationController(config: SupervisorConfig, authority: Superviso
   private def available: IntegrationCoordinator = coordinator.getOrElse(throw DomainFailure(Fault.Invalid("No integration target is configured")))
   private def found(id: IntegrationId): IntegrationExecutionState = entries.getOrElse(id,
     throw DomainFailure(Fault.Missing("Integration is not owned by this governing session")))
+  private def idle(): Unit =
+    require(!entries.values.exists(value => Set(IntegrationPhase.Preparing, IntegrationPhase.Running)(value.view.phase)),
+      "An integration operation is active; poll it before starting another")
   private def admit(): Unit = {
     available
     require(!closing && !disabled, "Integration admission is closed")
-    require(!entries.values.exists(value => Set(IntegrationPhase.Preparing, IntegrationPhase.Running)(value.view.phase)),
-      "An integration operation is active; poll it before starting another")
+    idle()
   }
   private def snapshot(entry: IntegrationExecutionState): IntegrationStatus = synchronized(entry.view)
   private def update(entry: IntegrationExecutionState, value: IntegrationStatus): Unit = synchronized { entry.view = value }
@@ -76,7 +78,7 @@ final class IntegrationController(config: SupervisorConfig, authority: Superviso
     entry.spanned = entry.spanned || open.nonEmpty
     open.map(PhaseSpans.integration(entry.ticket.id, _, config.owner.actor.session, entry.startedAt, entry.observedAt, state))
   }).flatMap(ZIO.foreachDiscard(_)(spans.record))
-  /** A resolved integration or a failed preparation ends its span; one that is Ready or Pending stays open for its Integrate. */
+  /** A resolved integration or a failed preparation ends its span; one that is Ready or Pending stays open for its Integrate or its discard. */
   private def resolved(entry: IntegrationExecutionState): Task[Unit] =
     ZIO.succeed(synchronized { entry.observedAt = clock.millis(); entry.view.phase }).flatMap {
       case IntegrationPhase.Recorded => span(entry, AttemptState.Completed)
@@ -155,6 +157,38 @@ final class IntegrationController(config: SupervisorConfig, authority: Superviso
     })
     (entry, fresh) = registered
     _ <- if (!fresh) ZIO.unit else background(entry, done, available.run(id).map(projected(entry, _)))
+  } yield snapshot(entry) }
+
+  /** Settles an integration its session will not apply: sealed as not applied in the journal, its span ended as cancelled. One that is
+    * already settled without having been applied is returned as it is. While the journal is written the integration reads as Running,
+    * which keeps another operation from starting on it. */
+  def discard(id: IntegrationId): Task[IntegrationStatus] = ZIO.uninterruptibleMask { _ => for {
+    registered <- ZIO.attempt(synchronized {
+      val entry = found(id)
+      entry.view.phase match {
+        case IntegrationPhase.Ready | IntegrationPhase.Pending =>
+          require(!closing, "Integration admission is closed")
+          idle()
+          val previous = entry.view
+          entry.view = previous.copy(phase = IntegrationPhase.Running, next = IntegrationNext.Wait, blocker = None)
+          (entry, Some(previous))
+        case IntegrationPhase.NotApplied | IntegrationPhase.Failed => (entry, None)
+        case phase => throw DomainFailure(Fault.Conflict(s"Integration ${id.value} is $phase and cannot be discarded: " +
+          "only a prepared integration that was not applied can be"))
+      }
+    })
+    (entry, claimed) = registered
+    _ <- ZIO.foreachDiscard(claimed) { previous =>
+      available.discard(id).foldZIO(
+        error => ZIO.succeed(update(entry, previous)) *> ZIO.fail(error match {
+          case DomainFailure(Fault.Conflict(detail)) => DomainFailure(Fault.Conflict(s"Integration ${id.value} is ${previous.phase} and cannot be discarded: $detail"))
+          case other => other
+        }),
+        _ => ZIO.succeed(synchronized {
+          entry.view = previous.copy(phase = IntegrationPhase.NotApplied, next = IntegrationNext.Complete, blocker = Some(IntegrationCoordinator.Discarded))
+          entry.observedAt = clock.millis()
+        }) *> span(entry, AttemptState.Cancelled))
+    }
   } yield snapshot(entry) }
 
   def status(id: IntegrationId, waitMillis: Int): Task[IntegrationStatus] = for {

@@ -878,6 +878,7 @@ root adt DispatchCommand {
   data Combine { id: RequestId source: IntegrationId fence: Fence }
   data CombinationStatus { id: RequestId waitMillis: i32 }
   data Revalidate { id: RequestId result: ArtifactId fence: Fence }
+  data DiscardIntegration { id: IntegrationId }
 }
 root adt DispatchReply {
   data Selection { value: CohortDecision }

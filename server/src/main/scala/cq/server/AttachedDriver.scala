@@ -128,6 +128,9 @@ final class AttachedDriver(config: SupervisorConfig, authority: SupervisorAuthor
       // Integrate returns once the host applies the integration; the tracker's next poll may be a status wait away.
       case (DispatchCommand.Integrate(id), _: DispatchReply.Integration) =>
         tracker.resume(cycle, run, LineageMember.Integration(id), integrations.status(id, WaitMillis).map(value => AttachedDriver.integration(value.phase)))
+      // A discarded integration no longer rests on the session: it is in flight until the tracker reads it as settled.
+      case (DispatchCommand.DiscardIntegration(id), _: DispatchReply.Integration) =>
+        tracker.resume(cycle, run, LineageMember.Integration(id), integrations.status(id, WaitMillis).map(value => AttachedDriver.integration(value.phase)))
       case (DispatchCommand.Combine(id, _, _), _: DispatchReply.Combination) =>
         tracker.track(cycle, run, LineageMember.Combination(id), combinations.status(id, WaitMillis).map(value => AttachedDriver.combination(value.phase)))
       case _ => ZIO.unit

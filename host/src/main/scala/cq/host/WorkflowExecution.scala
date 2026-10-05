@@ -126,7 +126,8 @@ final class WorkflowExecution(api: ServerApi, project: ProjectId, session: Sessi
           case _ => false
         }, "revalidation requires advance through work")
         members(new ArtifactReader(call, project).result(result).value.request.members)
-      case _: DispatchCommand.Status | _: DispatchCommand.Cancel | _: DispatchCommand.IntegrationStatus | _: DispatchCommand.CombinationStatus => ()
+      case _: DispatchCommand.Status | _: DispatchCommand.Cancel | _: DispatchCommand.IntegrationStatus | _: DispatchCommand.CombinationStatus |
+        _: DispatchCommand.DiscardIntegration => ()
     }
   }}
 }
