@@ -25,7 +25,12 @@ final class AttachedGateway(config: SupervisorConfig, authority: SupervisorAutho
   /** The activation as its Workflow reply carries it: the instruction text once per attached session, afterwards the activation that carried it. */
   private def receipt(value: WorkflowActivation): WorkflowReceipt = synchronized {
     val text = value.context.instructions
-    val instructions = delivered.get(text).fold[WorkflowInstructions] { delivered += text -> value.id; WorkflowInstructions.Text(text) }(WorkflowInstructions.Unchanged.apply)
+    // The activation whose reply first carried a text gets the text again when its call is repeated: the session that repeats it may
+    // not have received that reply, and cannot hold what it would be referred to.
+    val instructions = delivered.get(text).filter(_ != value.id).fold[WorkflowInstructions] {
+      delivered = delivered.updatedWith(text)(_.orElse(Some(value.id)))
+      WorkflowInstructions.Text(text)
+    }(WorkflowInstructions.Unchanged.apply)
     WorkflowReceipt(value.id, value.context.request, instructions, value.context.subject, value.cycle)
   }
   private def success(id: Json, body: Json): Json = Json.obj("jsonrpc" -> Json.fromString("2.0"), "id" -> id, "result" -> body)

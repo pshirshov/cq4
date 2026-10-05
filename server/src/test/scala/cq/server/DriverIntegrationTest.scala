@@ -311,9 +311,10 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
           retried <- f.sessionTool(activation(first, advance)).map(_.hcursor.downField("Workflow").downField("value"))
           _ <- ZIO.attempt {
             val marker = parser.parse(s"""{"Unchanged":{"since":{"value":"$first"}}}""").fold(throw _, identity)
-            // The same text again is named by the activation whose reply carried it, also when that activation's call is repeated.
+            // The same text again is named by the activation whose reply carried it. That activation's own call, repeated, gets the text:
+            // a session that repeats it may not have received the first reply, and cannot hold what it would be referred to.
             assert(again.downField("instructions").focus.contains(marker) && again.downField("id").get[UUID]("value") == Right(second), again.focus.get.noSpaces.take(300))
-            assert(retried.downField("instructions").focus.contains(marker) && retried.downField("id").get[UUID]("value") == Right(first))
+            assert(retried.focus == one.focus && retried.downField("instructions").downField("Text").get[String]("value") == Right(text))
             assert(size(again.focus.get) < 1000 && stored(second).hcursor.downField("context").get[String]("instructions") == Right(text))
           }
           whole <- f.sessionTool("""{"Instructions":{}}""")

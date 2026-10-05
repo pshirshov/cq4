@@ -149,9 +149,8 @@ def main():
             active = peer.tool("session", {"Context": {}})["Context"]["value"]
             assert active["workflow"] == {"id": activated["id"], "request": activated["request"], "cycle": None}, active["workflow"]
             assert begin_text not in json.dumps(peer.traffic[-1]["result"]) and "operator requirements text" not in json.dumps([activated, active])
-            # A text the session was sent already is named, not sent again: here by repeating the activation.
-            unchanged = {**activated, "instructions": {"Unchanged": {"since": activated["id"]}}}
-            assert peer.tool("session", first)["Workflow"]["value"] == unchanged
+            # The activation repeated returns its receipt as it was: the session may not have received the first reply.
+            assert peer.tool("session", first)["Workflow"]["value"] == activated
             whole = peer.tool("session", {"Instructions": {}})["Instructions"]["value"]
             assert whole["context"]["instructions"] == begin_text and whole["operatorRequirements"] == first["Workflow"]["operatorRequirements"], whole
             peer.tool("session", {"Workflow": {"id": first["Workflow"]["id"], "request": {"Advance": {"roots": [], "through": "Explore"}}, "operatorRequirements": "Attached fixture: operator requirements text", "token": None}}, denied=True)
@@ -165,7 +164,7 @@ def main():
             peer.tool("session", next_scope)
             peer.tool("dispatch", {"Select": {"request": selection}}, denied=True)
             peer.tool("dispatch", {"StartChoice": {"choice": choice["id"], "harness": "Codex", "fence": claim["fence"]}}, denied=True)
-            assert peer.tool("session", first)["Workflow"]["value"] == unchanged
+            assert peer.tool("session", first)["Workflow"]["value"] == activated
             assert peer.tool("session", {"Context": {}})["Context"]["value"]["workflow"]["id"] == next_scope["Workflow"]["id"]
             selection["request"] = identity()
             choice, = peer.tool("dispatch", {"Select": {"request": selection}})["Selection"]["value"]["choices"]
@@ -238,7 +237,7 @@ def main():
             directed = {"Workflow": {"id": identity(), "request": advance, "operatorRequirements": f"Driven fixture: advance {reference} through explore", "token": {"Start": {"token": {"value": words[6]}}}}}
             run = driven.tool("session", directed)["Workflow"]["value"]
             assert run["cycle"] == issued["cycle"] and "Text" in run["instructions"], run
-            assert driven.tool("session", directed)["Workflow"]["value"] == {**run, "instructions": {"Unchanged": {"since": run["id"]}}}, run
+            assert driven.tool("session", directed)["Workflow"]["value"] == run, run
             assert driven.tool("session", {"Context": {}})["Context"]["value"]["workflow"]["cycle"] == issued["cycle"]
             driven_choice, = driven.tool("dispatch", {"Select": {"request": {**selection, "request": identity(), "roots": [target["id"]]}}})["Selection"]["value"]["choices"]
             driven_claim = driven.tool("claim", {"project": project, "action": {"Acquire": {"id": identity(), "members": [target["id"]], "durationMillis": "180000"}}})["Claimed"]["claim"]
