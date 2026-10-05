@@ -160,7 +160,7 @@ To close them, with no harness open on the project:
 The outcome's finish time is the time of the upload, not the time the session ended, which nothing recorded. The Govern phase's busy wall time therefore includes the interval between the session's end and the upload. An attempt whose session directory no longer exists, or cannot be read by the installed package, stays open: nothing can deliver its outcome, and the report says no more of it than that none was delivered.
 
 Managed children retain their task/cohort token and cost accounting. With the
-updated package, observed Codex 0.156.1/0.157.1/0.159.2 native response records contribute
+updated package, observed Codex 0.156.1/0.157.1/0.159.2 native response records (0.160.0 is accepted, its records not yet observed) contribute
 to the outer session's unattributed usage, deduplicated across host restarts.
 Outer task/model grouping and cost remain unknown. Claude outer usage remains
 unavailable; Pi observes finalized assistant usage. Auxiliary, compaction,
