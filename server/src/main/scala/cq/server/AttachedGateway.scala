@@ -31,11 +31,13 @@ final class AttachedGateway(config: SupervisorConfig, authority: SupervisorAutho
       "Interactive Pi finalized assistant usage is collected by the extension; compaction, auxiliary calls and unreported/interrupted responses remain unobserved. Managed child usage is collected independently."
     else if (config.run.attempt.harness == Harness.Codex) codex.status
     else "Outer interactive model/provider and token usage are unobserved by this host. Managed child usage is collected independently; missing is not zero.")
+  private def decoded[A](name: String, input: String, arguments: Json)(decode: Json => Either[Throwable, A]): A = decode(arguments).fold(error =>
+    throw DomainFailure(Fault.Invalid(schemas.mismatch(name, schemas.schema(input), DispatchProjection.concise(String.valueOf(error.getMessage))))), identity)
   private def tool(name: String, arguments: Json): Task[(Json, Boolean)] = name match {
     case "session" =>
       ZIO.attempt {
         require(arguments.noSpaces.getBytes(java.nio.charset.StandardCharsets.UTF_8).length <= MaxLocalBytes, "Session request exceeds its bound")
-        val command = SessionCommand_JsonCodec.decode(CodecContext, arguments).fold(throw _, identity)
+        val command = decoded(name, "SessionCommand", arguments)(SessionCommand_JsonCodec.decode(CodecContext, _))
         require(JsonRoundtrip.lossless(arguments, SessionCommand_JsonCodec.encode(CodecContext, command)), "Noncanonical session request")
         command
       }.flatMap {
@@ -48,7 +50,7 @@ final class AttachedGateway(config: SupervisorConfig, authority: SupervisorAutho
     case "dispatch" =>
       ZIO.attempt {
         require(arguments.noSpaces.getBytes(java.nio.charset.StandardCharsets.UTF_8).length <= MaxLocalBytes, "Dispatch request exceeds its bound")
-        val command = DispatchCommand_JsonCodec.decode(CodecContext, arguments).fold(throw _, identity)
+        val command = decoded(name, "DispatchCommand", arguments)(DispatchCommand_JsonCodec.decode(CodecContext, _))
         require(JsonRoundtrip.lossless(arguments, DispatchCommand_JsonCodec.encode(CodecContext, command)), "Noncanonical dispatch request")
         workflow.authorize(command)
         command
@@ -57,7 +59,7 @@ final class AttachedGateway(config: SupervisorConfig, authority: SupervisorAutho
       }}
     case _ => ZIO.attemptBlocking {
       val definition = schemas.tools.find(_.name == name).getOrElse(throw DomainFailure(Fault.Denied("Unavailable attached tool")))
-      val command = definition.decode(arguments).fold(throw _, identity)
+      val command = decoded(name, definition.inputType, arguments)(definition.decode)
       val canonical = Command_JsonCodec.encode(CodecContext, command).asObject.get.values.head.hcursor.downField("input").focus.get
       require(JsonRoundtrip.lossless(arguments, canonical), "Noncanonical domain request")
       val value = authority.governor.call(command)

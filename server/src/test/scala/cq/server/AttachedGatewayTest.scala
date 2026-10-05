@@ -47,7 +47,7 @@ final class AttachedGatewayLocal extends AnyWordSpec {
     val peer = new StdioPeer(input, output, new OwnerLiveness { override def alive: Boolean = true },
       PeerLimits(LongInterval, LongInterval, LongInterval, LongInterval, frameBytes, 8), () => ())
     private var sequence = 0
-    private def run[A](task: Task[A]): A = Unsafe.unsafe { implicit unsafe => Runtime.default.unsafe.run(task).getOrThrowFiberFailure() }
+    def run[A](task: Task[A]): A = Unsafe.unsafe { implicit unsafe => Runtime.default.unsafe.run(task).getOrThrowFiberFailure() }
     /** What the host loop does with one request: handle it, send the answer, and return the frame the owner received. */
     def exchange(method: String, params: Json): Json = {
       sequence += 1
@@ -114,6 +114,28 @@ final class AttachedGatewayLocal extends AnyWordSpec {
         assert(whole.contains(s"${AttachedGateway.FrameBytes}-byte") && whole.contains("narrow"), whole)
         val missing = fault(selected(CatalogSelection.OfCommand("absent"))).hcursor.downField("Missing").get[String]("message").fold(throw _, identity)
         assert(catalog.value.commands.forall(command => missing.contains(command.command)), missing)
+      } finally session.close()
+    }
+
+    "tell the caller of a tool whose arguments cannot be decoded which tool it was and what its input schema expects" in {
+      val session = new Session(AttachedGateway.FrameBytes, other => fail(s"Unexpected command $other"))
+      def refused(tool: String, arguments: String): String =
+        fault(session.tool(tool, parser.parse(arguments).fold(throw _, identity))).hcursor.downField("Invalid").get[String]("message").fold(throw _, identity)
+      def tags(input: String): List[String] = schemas.schema(input).hcursor.get[List[Json]]("oneOf").fold(throw _, identity)
+        .flatMap(_.hcursor.get[List[String]]("required").fold(throw _, identity))
+      try {
+        // The shape a weaker model sent three times (D149): the alternative's value as a string holding JSON.
+        val context = refused("session", """{"Context":"{}"}""")
+        assert(context.contains("\"session\"") && context.contains("do not match its input schema") && context.contains("object expected"), context)
+        assert(tags("SessionCommand") == List("Context", "Workflow", "Bind", "Driver") && context.contains("Context, Workflow, Bind, Driver"), context)
+        val dispatch = refused("dispatch", """{"Status":"{}"}""")
+        assert(dispatch.contains("\"dispatch\"") && dispatch.contains(tags("DispatchCommand").mkString(", ")), dispatch)
+        val domain = refused("read", """{"project":"p"}""")
+        assert(domain.contains("\"read\"") && domain.contains("do not match its input schema") && domain.contains("project, selection"), domain)
+        val (body, failed) = session.run(new LocalControl(null, null, null, null, null, null, schemas, null, null)
+          .call(LocalCapability(AttemptId(UUID.randomUUID()), Role.Worker), "workspace", parser.parse("""{"Read":"{}"}""").fold(throw _, identity)))
+        val workspace = body.hcursor.downField("Failed").downField("fault").downField("Invalid").get[String]("message").fold(throw _, identity)
+        assert(failed && workspace.contains("\"workspace\"") && workspace.contains("Entries, Read, MergeReport"), workspace)
       } finally session.close()
     }
   }

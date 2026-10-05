@@ -197,7 +197,7 @@ final class Transport(application: Application, authorization: Authorization, ac
         val tool = schemas.visible(authority).find(t => name.contains(t.name))
         (tool, cursor.downField("params").get[Json]("arguments")) match {
           case (Some(selected), Right(arguments)) => selected.decode(arguments) match {
-            case Left(_) => rpcError(id, -32602, "Arguments do not match tool schema")
+            case Left(error) => rpcError(id, -32602, schemas.mismatch(selected.name, schemas.schema(selected.inputType), String.valueOf(error.getMessage)))
             case Right(command) => application.execute(authority, command).flatMap { result =>
               val body = Result_JsonCodec.encode(context, result)
               rpcResult(id, Json.obj("isError" -> Json.fromBoolean(result.isInstanceOf[Result.Failed]),

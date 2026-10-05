@@ -63,6 +63,18 @@ final class McpSchemas {
 
   def schema(name: String): Json = closure(definitions(s"cq_api_$name").get)
 
+  /** What the caller of `tool` is told when its codec rejects the arguments: the codec's `detail` and the top level that `input`,
+    * the tool's advertised input schema, declares. */
+  def mismatch(tool: String, input: Json, detail: String): String = {
+    def required(value: Json): List[String] = value.hcursor.get[List[String]]("required").fold(throw _, identity)
+    val expected = input.hcursor.get[List[Json]]("oneOf") match {
+      case Right(branches) => s"a JSON object with exactly one of the keys ${branches.flatMap(required).mkString(", ")}, " +
+        "whose value is that alternative's JSON object, not a string holding JSON"
+      case Left(_) => s"a JSON object with the fields ${required(input).mkString(", ")}"
+    }
+    s"""The arguments of the CQ tool "$tool" do not match its input schema: $detail. Expected $expected. The tool's inputSchema declares the complete shape."""
+  }
+
   def workspace(role: Role): Json = {
     val root = definitions("cq_api_WorkspaceCommand").get
     if (HarnessTools.workspaceCheck(role)) closure(root)
