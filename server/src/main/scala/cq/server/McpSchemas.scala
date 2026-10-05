@@ -14,7 +14,7 @@ object McpSchemas {
   /** The Help catalog is larger than an MCP response frame and no agent needs it; the HTTP API serves it to the browser's Help dialog. */
   val CatalogRefusal: String = "The Help catalog is served to the browser only; no MCP surface offers the Catalog selection of read."
   /** When to revalidate, given with the dispatch tool rather than in the governing instructions. */
-  val Revalidation: String = " Revalidate reruns the failed configured checks of an admitted worker result on its exact candidate, within each check's configured rounds; repeat its ID to poll. " +
+  val Revalidation: String = " Revalidate reruns the failed configured checks of an admitted worker result on its exact candidate, within each check's configured rounds; repeating its ID reads the same round. " +
     "Use it when the retained output shows an intermittent failure rather than a candidate defect; otherwise send the result to a worker."
 }
 
@@ -175,8 +175,15 @@ final class McpSchemas {
   def nativeInvocation(harness: Harness, invocation: HarnessInvocation): HarnessInvocation = invocation.copy(
     system = nativeSystem(harness, invocation.role, invocation.system, invocation.resultSchema, invocation.endpoints.map(_.target)))
 
-  def attachedInstructions(harness: Harness): String = {
-    val instructions = SupervisorProgram.Guidance +
+  /** `wait` is the command line that waits on this session's work, when the harness integration approved one for the session's shell. */
+  def attachedInstructions(harness: Harness, wait: Option[String]): String = {
+    val waiting = (harness, wait) match {
+      case (Harness.Pi, _) => SupervisorProgram.WaitForMessage
+      case (Harness.Claude, Some(command)) => SupervisorProgram.waitInBackground(command)
+      case (Harness.Codex, Some(command)) => SupervisorProgram.waitInTurn(command)
+      case (_, None) => SupervisorProgram.WaitByStatus
+    }
+    val instructions = SupervisorProgram.Guidance + waiting +
       " You are the already-running interactive Governor. Call session Context first and session Workflow before dispatch; follow the returned workflow instructions. " +
       "Context names the active workflow without repeating its instructions; when you no longer hold them, session Instructions returns them. " +
       "Do not invoke cq run for this interactive workflow. Report to the user normally; there is no governing JSON completion report. " +
@@ -193,7 +200,7 @@ final class McpSchemas {
     List(local("session", "SessionCommand", "SessionReply",
       "First call Context for project, routes, limits, governing instructions and complete argument guide. Then Workflow with a fresh id and typed scope before dispatch; token is null unless the invocation carries a CQ driver --start-token or --resume-token, which you pass unchanged. Workflow returns the workflow's instructions once: when their text is identical to one an earlier Workflow reply of this session carried, instructions is Unchanged with that activation's id, and you follow the text you hold. Instructions returns the active workflow complete, with its instruction text, operator requirements and subject: call it when you no longer hold them, for example after your context was compacted. An identical retry returns the same activation without reactivating a superseded workflow. Context identifies the active workflow by id, request and cycle. Bind presents the token a CQ drive command printed; Driver reads this session's driver status. Neither starts nor parks a driver."),
       local("dispatch", "DispatchCommand", "DispatchReply",
-        s"Select bounded cohorts, claim one complete choice, then StartChoice by ID, harness and fence. Up to ${DispatchController.MaxActiveChildren} children with disjoint members may run at once. Poll compact Status or Cancel; Status carries the child's workspace admission and retained directory, and quietMillis, the time since a running child's last output. Direct Start is unavailable. Prepare/apply reviewed integration, or DiscardIntegration a prepared one that will not be applied; Combine a NotApplied integration and poll CombinationStatus. Forward handles; full child prompts/results stay outside your context." + McpSchemas.Revalidation)) ++ tools.map(advertised)
+        s"Select bounded cohorts, claim one complete choice, then StartChoice by ID, harness and fence. Up to ${DispatchController.MaxActiveChildren} children with disjoint members may run at once. StartChoice returns at once. Status reads the current state or the result of an attempt and is not called to wait: the governing instructions of session Context say how this session learns that work has ended. Cancel stops a child. Status carries the child's workspace admission and retained directory, and quietMillis, the time since a running child's last output. Direct Start is unavailable. Prepare/apply reviewed integration, or DiscardIntegration a prepared one that will not be applied; Combine a NotApplied integration; IntegrationStatus and CombinationStatus read the state of those. Forward handles; full child prompts/results stay outside your context." + McpSchemas.Revalidation)) ++ tools.map(advertised)
   }
 
   private def argumentGuide(inputs: List[(String, Json)]): String = {

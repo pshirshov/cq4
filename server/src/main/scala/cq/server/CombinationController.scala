@@ -30,7 +30,7 @@ final class CombinationController(config: SupervisorConfig, authority: Superviso
   private def available(): Unit = {
     target
     require(!closing && !disabled, "Combination admission is closed")
-    require(!entries.values.exists(_.view.phase == CombinationPhase.Preparing), "A combination is active; poll it before starting another")
+    require(!entries.values.exists(_.view.phase == CombinationPhase.Preparing), "A combination is active; wait for it to end before starting another")
   }
   private def snapshot(entry: CombinationExecution): CombinationStatus = synchronized(entry.view)
   /** One Combine span per preparation whose members are known, from its first request to where the host last worked on it. */

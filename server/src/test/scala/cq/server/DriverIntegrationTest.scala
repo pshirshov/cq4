@@ -203,7 +203,8 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
         new OperatorRequirements(""), children, controller, combinations, revalidations, driver)
       // The gateway of a Claude Code session: its Context reads no native Codex usage.
       attached = config.copy(run = run.copy(attempt = governor.copy(harness = Harness.Claude)))
-      served = new AttachedGateway(attached, authority, new McpSchemas, null, workflow, null, null, driver, new SessionClaims(config.owner, authority.governor, logstage.IzLogger.NullLogger))
+      served = new AttachedGateway(attached, authority, new McpSchemas, null, workflow, null, null, driver, new SessionClaims(config.owner, authority.governor, logstage.IzLogger.NullLogger),
+        WaitCommand(Some("/opt/cq/bin/cq")))
       idle = java.time.Duration.ofMinutes(10)
       peer <- ZIO.acquireRelease(ZIO.attempt(new StdioPeer(new java.io.PipedInputStream(new java.io.PipedOutputStream()), java.io.OutputStream.nullOutputStream(),
         new OwnerLiveness { override def alive: Boolean = true }, PeerLimits(idle, idle, idle, idle, AttachedGateway.FrameBytes, 8), () => ())))(peer => ZIO.succeed(peer.close()))

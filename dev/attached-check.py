@@ -121,13 +121,18 @@ def main():
         with urllib.request.urlopen(request, timeout=30) as response:
             return json.loads(response.read())
     with (root / "host.log").open("w") as log:
-        peer = Peer(command + ["host", "codex"], repository, env, log)
+        # As the generated integration starts it: with the executable `cq configure` approved for the session's wait command.
+        peer = Peer(command + ["host", "codex", "--executable", str(wrapper)], repository, env, log)
         try:
             inventory = peer.rpc("tools/list", {})["tools"]
             assert {tool["name"] for tool in inventory} == {"session", "dispatch", "search", "read", "graph", "change", "apply", "claim", "usage"}
             context = peer.tool("session", {"Context": {}})["Context"]["value"]
             assert context["workflow"] is None and "thread metadata" in context["usageCoverage"]
             assert "Canonical argument schemas" in context["instructions"]
+            # The session is told the exact command that waits on its own session directory, and how its harness waits with it.
+            assert f"one blocking shell call (exec_command with yield_time_ms 300000), adding --attempt ID for each running child" in context["instructions"]
+            assert f"`{wrapper} wait --session {context['directory']}`" in context["instructions"], context["instructions"][-1500:]
+            assert f'prefix_rule(pattern = ["{wrapper}", "wait"], decision = "allow"' in (repository / ".codex/rules/cq.rules").read_text()
             project = context["project"]["project"]
             standing = "Governor: preserve the operator's selected scope."
             operator({"Requirements": {"input": {"project": project, "action": {"Replace": {"expected": {"value": "0"}, "text": standing}}}}})
@@ -301,6 +306,9 @@ def main():
         pi = Peer(command + ["host", "pi"], repository, env, log)
         try:
             pi_context = pi.tool("session", {"Context": {}})["Context"]["value"]
+            # A Pi session starts no waiter: its extension asks the host for the session directory and waits itself.
+            assert "CQ sends you a message that begins `CQ:` when a unit ends" in pi_context["instructions"] and " wait --session " not in pi_context["instructions"]
+            assert pi.rpc("cq/session", {}) == {"directory": pi_context["directory"]}
             # The Pi extension passes on the text block alone, so it carries the payload.
             delivered = pi.rpc("tools/call", {"name": "session", "arguments": {"Driver": {}}})
             text, = [part["text"] for part in delivered["content"]]

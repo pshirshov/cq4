@@ -177,7 +177,7 @@ final class DispatchController(config: SupervisorConfig, runner: ChildRunner, jo
     val active = sharing.filter(entry => !DispatchController.terminal(entry.observed.phase)).flatMap(_.ticket.request.members.map(_.id)).filter(members)
       .distinct.sortBy(LedgerPolicy.key)
     if (active.nonEmpty)
-      throw DomainFailure(Fault.Conflict(s"An active child covers ${active.map(id => LedgerPolicy.prefix(id.ledger) + id.number).mkString(", ")}; poll its status before revalidating"))
+      throw DomainFailure(Fault.Conflict(s"An active child covers ${active.map(id => LedgerPolicy.prefix(id.ledger) + id.number).mkString(", ")}; wait for it to end before revalidating"))
     val own = sharing.find(_.ticket.attempt.id == result.attempt)
       .getOrElse(throw DomainFailure(Fault.Missing("Result was not produced by a child of this governing session")))
     if (sharing.exists(entry => (entry ne own) && entry.ticket.attempt.startedAt >= own.ticket.attempt.startedAt && entry.observed.result.nonEmpty &&
@@ -201,9 +201,9 @@ object DispatchController {
     val members = request.members.map(_.id).toSet
     val overlapping = active.flatMap(_.members.map(_.id)).filter(members).distinct.sortBy(LedgerPolicy.key)
     if (overlapping.nonEmpty)
-      throw DomainFailure(Fault.Conflict(s"An active child already covers ${overlapping.map(id => LedgerPolicy.prefix(id.ledger) + id.number).mkString(", ")}; poll its status before starting another child on the same members"))
+      throw DomainFailure(Fault.Conflict(s"An active child already covers ${overlapping.map(id => LedgerPolicy.prefix(id.ledger) + id.number).mkString(", ")}; wait for it to end before starting another child on the same members"))
     if (active.size >= MaxActiveChildren)
-      throw DomainFailure(Fault.Conflict(s"This session permits at most $MaxActiveChildren active children; poll or cancel one before starting another"))
+      throw DomainFailure(Fault.Conflict(s"This session permits at most $MaxActiveChildren active children; wait for one to end or cancel it before starting another"))
   }
   final class Resource(config: SupervisorConfig, runner: ChildRunner, jobs: JobSupervisor, clock: Clock, watchdog: SupervisorWatchdog) extends Lifecycle.Of[Task, DispatchController](
     Lifecycle.make(ZIO.succeed(new DispatchController(config, runner, jobs, clock)))(value => ZIO.succeed(watchdog.beginShutdown()) *> value.shutdown)

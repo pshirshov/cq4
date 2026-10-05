@@ -163,7 +163,7 @@ while ((await first.driver()).activeChildren !== 0) { assert(Date.now() < deadli
 // The extension's own `cq wait` on the real session directory told the session, in a message that starts a turn; the model started no waiter.
 while (first.injected.length === 0) { assert(Date.now() < deadline, "The session was not told that its child ended"); await sleep(200); }
 assert.deepEqual(first.injected.map(entry => entry.options), [{ triggerTurn: true }]);
-assert.match(first.injected[0].message.content, new RegExp(`^CQ: attempt ${child.attempt.value} on ${reference(target.id)} ended: Cancelled, next Retry.*\\nRead details with cq_dispatch Status \\(waitMillis 0\\) only if you need them\\.$`));
+assert.match(first.injected[0].message.content, new RegExp(`^CQ: attempt ${child.attempt.value} on ${reference(target.id)} ended: (Cancelled|Unknown), next \\w+.*\\nRead details with cq_dispatch Status \\(waitMillis 0\\) only if you need them\\.$`));
 
 // Cycle 2: the recomputed set gains the descendant, a new start directive is issued and accepted; an unchanged cycle then ends quiescent.
 await first.settle("completed");

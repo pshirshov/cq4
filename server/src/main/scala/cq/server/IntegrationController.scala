@@ -55,7 +55,7 @@ final class IntegrationController(config: SupervisorConfig, authority: Superviso
     throw DomainFailure(Fault.Missing("Integration is not owned by this governing session")))
   private def idle(): Unit =
     require(!entries.values.exists(value => Set(IntegrationPhase.Preparing, IntegrationPhase.Running)(value.view.phase)),
-      "An integration operation is active; poll it before starting another")
+      "An integration operation is active; wait for it to end before starting another")
   private def admit(): Unit = {
     available
     require(!closing && !disabled, "Integration admission is closed")

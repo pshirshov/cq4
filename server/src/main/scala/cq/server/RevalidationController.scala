@@ -66,7 +66,7 @@ final class RevalidationController(config: SupervisorConfig, authority: Supervis
         synchronized {
           require(!closing, "Revalidation admission is closed")
           if (entries.values.exists(_.view.phase == RevalidationPhase.Running))
-            throw DomainFailure(Fault.Conflict("A revalidation is running; poll it before starting another"))
+            throw DomainFailure(Fault.Conflict("A revalidation is running; wait for it to end before starting another"))
         }
         val round = admit(result, fence, began)
         val entry = new RevalidationExecution(result, fence, done,
@@ -100,7 +100,7 @@ final class RevalidationController(config: SupervisorConfig, authority: Supervis
   }
 
   /** The first call with an identity admits and starts the round; later calls with it observe the same round.
-    * Each call waits for the round at most as long as a status poll may. */
+    * Each call waits for the round at most as long as a status call may. */
   def request(id: RequestId, result: ArtifactId, fence: Fence): Task[RevalidationStatus] = ZIO.uninterruptibleMask { restore => for {
     done <- Promise.make[Nothing, Unit]
     registered <- requests.withPermit(zio.Clock.nanoTime.flatMap(began => ZIO.attemptBlocking(register(id, result, fence, done, began))))

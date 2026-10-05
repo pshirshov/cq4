@@ -651,7 +651,7 @@ sys.stderr.flush()
           println(s"Bounded revalidation: first=$first second=$second third=$third runs=${Files.readString(counter).trim}")
           assert(foreign.contains(Fault.StaleFence("Revalidation requires the claim fence its result was admitted under")), foreign.toString)
           assert(missing.exists(_.isInstanceOf[Fault.Missing]), missing.toString)
-          assert(occupied.contains(Fault.Conflict("An active child covers T1; poll its status before revalidating")), occupied.toString)
+          assert(occupied.contains(Fault.Conflict("An active child covers T1; wait for it to end before revalidating")), occupied.toString)
           assert(stopped.phase == DispatchPhase.Cancelled && stopped.result.isEmpty, stopped.toString)
           assert(List(first, second).map(value => (value.phase, value.validation.map(_.state), value.blocker)) ==
             List.fill(2)((RevalidationPhase.Completed, List(ValidationState.Failed), Some("Host check always: Failed"))))

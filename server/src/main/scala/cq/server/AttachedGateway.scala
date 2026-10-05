@@ -14,7 +14,7 @@ object AttachedGateway {
 }
 
 final class AttachedGateway(config: SupervisorConfig, authority: SupervisorAuthority, schemas: McpSchemas,
-  local: LocalControl, workflow: AttachedWorkflow, accounting: AttachedUsage, codex: AttachedCodexUsage, driver: AttachedDriver, claims: SessionClaims) {
+  local: LocalControl, workflow: AttachedWorkflow, accounting: AttachedUsage, codex: AttachedCodexUsage, driver: AttachedDriver, claims: SessionClaims, wait: WaitCommand) {
   private val Versions = List("2025-03-26", "2025-06-18", "2025-11-25")
   private val CodecContext = BaboonCodecContext.Default
   private val MaxLocalBytes = 65536
@@ -39,7 +39,7 @@ final class AttachedGateway(config: SupervisorConfig, authority: SupervisorAutho
     "content" -> Json.arr(Json.obj("type" -> Json.fromString("text"), "text" -> Json.fromString(text(body)))), "structuredContent" -> body)
   private def context: AttachedContext = AttachedContext(config.run.attempt.session, config.run.attempt.id, config.directory.toString,
     config.project, config.settings.harnesses.map(value => HarnessRoute(value.harness, value.model, value.provider)), config.settings.checks.map(_.name),
-    config.settings.limits, config.settings.integrationTarget, OperatorRequirements.governing(schemas.attachedInstructions(config.run.attempt.harness),
+    config.settings.limits, config.settings.integrationTarget, OperatorRequirements.governing(schemas.attachedInstructions(config.run.attempt.harness, wait.line(config.directory)),
       OperatorRequirements.standing(authority.governor.call, config.project.project)),
     workflow.current.map(value => ActiveWorkflow(value.id, value.context.request, value.cycle)),
     if (config.run.attempt.harness == Harness.Pi)

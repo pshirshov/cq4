@@ -39,7 +39,7 @@ final class AttachedGatewayLocal extends AnyWordSpec {
     private val api = new Api(answer)
     private val gateway = new AttachedGateway(config, SupervisorAuthority(api, api, api, AccessToken("governor", 0)), schemas, null, null, null,
       new AttachedCodexUsage(Path.of("/nonexistent"), config.run, new CodexRollout, java.time.Clock.systemUTC()), null,
-      new SessionClaims(config.owner, api, logstage.IzLogger.NullLogger))
+      new SessionClaims(config.owner, api, logstage.IzLogger.NullLogger), WaitCommand(Some("/opt/cq/bin/cq")))
     private val input = new PipedInputStream(8192)
     private val client = new PipedOutputStream(input)
     private val response = new PipedInputStream(8192)
@@ -169,7 +169,7 @@ final class AttachedGatewayLocal extends AnyWordSpec {
         assert(session.tool("read", read("""{"Counts":{}}""")).hcursor.get[Boolean]("isError") == Right(false))
         val tool = schemas.attachedTools.find(_.hcursor.get[String]("name") == Right("read")).get
         assert(!tool.noSpaces.contains("Catalog") && !tool.hcursor.get[String]("description").exists(_.toLowerCase.contains("catalog")))
-        assert(!schemas.attachedInstructions(Harness.Codex).contains("Catalog"))
+        assert(!schemas.attachedInstructions(Harness.Codex, Some("/opt/cq/bin/cq wait --session /state/session")).contains("Catalog"))
       } finally session.close()
     }
 
