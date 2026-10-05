@@ -123,7 +123,7 @@ final class IntegrationController(config: SupervisorConfig, authority: Superviso
       preparation = new IntegrationPreparation(authority.governor, config.owner, config.run.repository,
         config.settings.integrationTarget.get, config.settings.checks, clock, candidates)
       // The review renews the claim; the renewals that follow count their lease from before it.
-      began <- ZIO.succeed(System.nanoTime())
+      began <- zio.Clock.nanoTime
       reviewed <- ZIO.attemptBlocking(preparation.review(ticket))
       assignment <- ZIO.attemptBlocking(PhaseSpans.producer(config.directory, reviewed.workerId))
       _ <- ZIO.succeed(synchronized { entry.assignment = Some(assignment) })

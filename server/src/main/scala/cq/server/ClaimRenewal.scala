@@ -16,7 +16,7 @@ object ClaimRenewal {
 final class ClaimRenewal(policy: ClaimRenewal.Policy, logger: IzLogger) {
   /**
    * Renews every tick and ends only by failing. `obtained` is when the lease the caller holds was requested, on the ZIO clock
-   * the loop reads and sleeps by (`System.nanoTime` outside tests).
+   * the loop reads and sleeps by; callers read it with `zio.Clock.nanoTime` (the live clock returns `System.nanoTime`).
    * A refusal — any failure other than `ServerUnavailable` — fails at once. An unanswered renewal (connection refused, timeout,
    * server error) is retried at the next tick for as long as that tick leaves more than the margin of the lease last obtained.
    */
