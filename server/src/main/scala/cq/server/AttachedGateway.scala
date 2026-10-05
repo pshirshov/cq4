@@ -7,6 +7,10 @@ import cq.host.{AttachedCodexUsage, AttachedUsage, DispatchProjection, OperatorR
 import io.circe.Json
 import zio.{Task, ZIO}
 
+object AttachedGateway {
+  val FrameBytes: Int = 2 * 1024 * 1024
+}
+
 final class AttachedGateway(config: SupervisorConfig, authority: SupervisorAuthority, schemas: McpSchemas,
   local: LocalControl, workflow: AttachedWorkflow, accounting: AttachedUsage, codex: AttachedCodexUsage, driver: AttachedDriver) {
   private val Versions = List("2025-03-26", "2025-06-18", "2025-11-25")
@@ -60,7 +64,19 @@ final class AttachedGateway(config: SupervisorConfig, authority: SupervisorAutho
       Result_JsonCodec.encode(CodecContext, value) -> value.isInstanceOf[Result.Failed]
     }
   }
-  def handle(peer: StdioPeer, json: Json): Task[Option[Json]] = {
+  /** A response the peer cannot frame fails its own request only; sending it would end the host for every later request. */
+  def handle(peer: StdioPeer, json: Json): Task[Option[Json]] = respond(peer, json).map(_.map { response =>
+    val size = StdioPeer.frame(response).length
+    if (size <= peer.frameBytes) response
+    else {
+      val id = json.hcursor.downField("id").focus.getOrElse(Json.Null)
+      val message = s"The response is $size bytes and exceeds the ${peer.frameBytes}-byte MCP frame bound of this host. " +
+        "Nothing was returned; narrow the request (a smaller limit or page, or a narrower selection) and retry."
+      if (json.hcursor.get[String]("method") != Right("tools/call")) failure(id, -32603, message)
+      else success(id, result(SessionReply_JsonCodec.encode(CodecContext, SessionReply.Failed(Fault.Limit(message))), true))
+    }
+  })
+  private def respond(peer: StdioPeer, json: Json): Task[Option[Json]] = {
     val cursor = json.hcursor
     val id = cursor.downField("id").focus.getOrElse(Json.Null)
     val method = cursor.get[String]("method").getOrElse("")
