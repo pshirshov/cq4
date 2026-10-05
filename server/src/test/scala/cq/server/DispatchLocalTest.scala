@@ -5,10 +5,12 @@ import cq.core.DomainFailure
 import cq.host.{DispatchProjection, HostFiles, ServerUnavailable, WorkspaceReader}
 import java.nio.charset.StandardCharsets.UTF_8
 import java.nio.file.{Files, Path}
-import java.time.Duration
+import java.time.{Duration, Instant, LocalDateTime, OffsetDateTime}
+import java.time.temporal.ChronoUnit
 import java.util.UUID
-import java.util.concurrent.atomic.AtomicInteger
-import zio.{Runtime, Unsafe, ZIO}
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.{AtomicInteger, AtomicLong}
+import zio.{Runtime, Scheduler, Trace, UIO, Unsafe, ZIO}
 import org.scalatest.wordspec.AnyWordSpec
 import scala.jdk.CollectionConverters.*
 import scala.util.Using
@@ -50,34 +52,46 @@ final class DispatchLocal extends AnyWordSpec {
       intercept[IllegalArgumentException](reader(root, WorkspaceCommand.Read("binary", -1, 10)))
     }
   }
-  "Claim renewal (Behavioral Active Blackbox; scripted server Communication)" should {
+  "Claim renewal (Behavioral Active Blackbox; scripted server and clock Communication)" should {
     val policy = ClaimRenewal.Policy(Duration.ofMillis(1500), Duration.ofMillis(100), Duration.ofMillis(400))
+    // D124: time moves only by the loop's own sleeps, so the renewal at call n happens n ticks after the start whatever the machine does.
+    final class TickClock extends zio.Clock {
+      val nanos = new AtomicLong(0)
+      override def nanoTime(implicit trace: Trace): UIO[Long] = ZIO.succeed(nanos.get())
+      override def sleep(duration: => zio.Duration)(implicit trace: Trace): UIO[Unit] = ZIO.succeed(nanos.addAndGet(duration.toNanos)).unit
+      override def currentTime(unit: => TimeUnit)(implicit trace: Trace): UIO[Long] = zio.Clock.ClockLive.currentTime(unit)
+      override def currentTime(unit: => ChronoUnit)(implicit trace: Trace, d: DummyImplicit): UIO[Long] = zio.Clock.ClockLive.currentTime(unit)
+      override def currentDateTime(implicit trace: Trace): UIO[OffsetDateTime] = zio.Clock.ClockLive.currentDateTime
+      override def instant(implicit trace: Trace): UIO[Instant] = zio.Clock.ClockLive.instant
+      override def javaClock(implicit trace: Trace): UIO[java.time.Clock] = zio.Clock.ClockLive.javaClock
+      override def localDateTime(implicit trace: Trace): UIO[LocalDateTime] = zio.Clock.ClockLive.localDateTime
+      override def scheduler(implicit trace: Trace): UIO[Scheduler] = zio.Clock.ClockLive.scheduler
+    }
     def maintained(renew: Int => Unit): (Throwable, Duration, Int) = {
       val calls = new AtomicInteger(0)
-      val began = System.nanoTime()
+      val clock = new TickClock
       val failure = Unsafe.unsafe { implicit unsafe =>
-        Runtime.default.unsafe.run(new ClaimRenewal(policy, logstage.IzLogger.NullLogger).maintain(began, ZIO.attemptBlocking(renew(calls.incrementAndGet())))
-          .timeoutFail(new IllegalStateException("Renewal still running"))(zio.Duration.fromSeconds(3)).flip).getOrThrowFiberFailure()
+        Runtime.default.unsafe.run(ZIO.withClock(clock)(new ClaimRenewal(policy, logstage.IzLogger.NullLogger).maintain(0L, ZIO.attemptBlocking(renew(calls.incrementAndGet()))).flip)
+          .timeoutFail(new IllegalStateException("Renewal still running"))(zio.Duration.fromSeconds(30))).getOrThrowFiberFailure()
       }
-      (failure, Duration.ofNanos(System.nanoTime() - began), calls.get())
+      (failure, Duration.ofNanos(clock.nanos.get()), calls.get())
     }
     def unanswered: Nothing = throw new ServerUnavailable("HTTP response deadline exceeded", new java.util.concurrent.TimeoutException)
     "retry renewals the server left unanswered at the tick and keep renewing once it answers again" in {
-      val (failure, _, calls) = maintained(call => if ((2 to 9).contains(call)) unanswered)
-      println(s"Recovered renewals: $calls calls, ended by ${failure.getMessage}")
-      // Eight unanswered renewals in a row fit the lease; the loop outlives them and is ended only by this test's bound.
-      assert(failure.getMessage == "Renewal still running" && calls > 12, s"${failure.getMessage} after $calls calls")
+      val end = DomainFailure(Fault.StaleFence("Scripted end"))
+      val (failure, elapsed, calls) = maintained(call => if ((2 to 9).contains(call)) unanswered else if (call == 13) throw end)
+      // Eight unanswered renewals in a row fit the lease; the loop renews on after them and is ended only by the scripted refusal.
+      assert(failure == end && calls == 13 && elapsed.toMillis == 1300, s"$failure after $calls calls and $elapsed")
     }
     "stop at once when the server refuses a renewal" in {
       val (failure, elapsed, calls) = maintained(call => if (call == 2) throw DomainFailure(Fault.StaleFence("Claim released")))
-      assert(failure == DomainFailure(Fault.StaleFence("Claim released")) && calls == 2 && elapsed.toMillis < 1000, s"$failure after $calls calls and $elapsed")
+      assert(failure == DomainFailure(Fault.StaleFence("Claim released")) && calls == 2 && elapsed.toMillis == 200, s"$failure after $calls calls and $elapsed")
     }
     "stop with the reason when renewals stay unanswered until the lease last obtained is about to expire" in {
       val (failure, elapsed, calls) = maintained(call => if (call > 3) unanswered)
-      println(s"Unanswered renewals: ${failure.getMessage} after $calls calls and $elapsed")
-      // The third renewal obtained the last lease at about 300 ms; retries end while more than the margin is left of it.
-      assert(failure.getMessage.matches("Claim renewal unanswered \\d+ times over \\d+ ms; its lease is about to expire: HTTP response deadline exceeded") &&
-        calls >= 8 && elapsed.toMillis >= 1000 && elapsed.toMillis <= 300 + 1500 - 400 + 300, s"${failure.getMessage} after $calls calls and $elapsed")
+      // The third renewal obtained the last lease at 300 ms; the renewal at 1300 ms is the first whose next tick leaves no more than the margin of it.
+      assert(failure.getMessage == "Claim renewal unanswered 10 times over 900 ms; its lease is about to expire: HTTP response deadline exceeded" &&
+        calls == 13 && elapsed.toMillis == 1300, s"${failure.getMessage} after $calls calls and $elapsed")
     }
   }
   "Concurrent child admission (Behavioral Active Blackbox Atomic)" should {
