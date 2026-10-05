@@ -218,12 +218,13 @@ final class CohortProgressLocal extends AnyWordSpec {
       assert(!admitted.finished(execution, None) && inputs.forall(admitted.deferred) && inputs.forall(admitted.failure(_).isEmpty))
     }
 
-    "D145: read the fault of a child only from a receipt that has no result and advises Retry" in {
+    "D145: read the fault of a child only from the receipt of a failed attempt that has no result and advises Retry" in {
       def receipt(phase: DispatchPhase, next: ChildNext, blocker: Option[String], result: Option[ArtifactId]): DispatchStatus =
         DispatchStatus(RequestId(UUID.randomUUID()), AttemptId(UUID.randomUUID()), phase, None, List(id(1)), cq.host.DispatchProjection.EmptyCounts, next,
           blocker, result, None, true, true, None, None)
       assert(CohortFailure.fault(receipt(DispatchPhase.Failed, ChildNext.Retry, Some("refused report"), None)).contains("refused report"))
-      assert(CohortFailure.fault(receipt(DispatchPhase.Cancelled, ChildNext.Retry, Some("cancelled"), None)).contains("cancelled"))
+      // A cancellation is not a fault of the child: its input stays deferred, and cancelling twice does not read as a repeated fault.
+      assert(CohortFailure.fault(receipt(DispatchPhase.Cancelled, ChildNext.Retry, Some("Cancelled by the governing session"), None)).isEmpty)
       assert(CohortFailure.fault(receipt(DispatchPhase.Completed, ChildNext.Retry, Some("worker reported failure"), Some(ArtifactId(UUID.randomUUID())))).isEmpty)
       assert(CohortFailure.fault(receipt(DispatchPhase.Unknown, ChildNext.InspectEvidence, Some("cleanup unconfirmed"), None)).isEmpty)
       assert(CohortFailure.fault(receipt(DispatchPhase.PublicationPending, ChildNext.RetryDelivery, Some("publication pending"), None)).isEmpty)

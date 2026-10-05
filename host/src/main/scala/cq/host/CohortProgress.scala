@@ -12,8 +12,9 @@ final case class CohortExecutionFingerprint(group: String, members: Map[ItemId, 
 final case class CohortFailure(artifact: ArtifactId, fault: String)
 
 object CohortFailure {
-  /** The fault of a child that left no result and that its receipt advises retrying. */
-  def fault(status: DispatchStatus): Option[String] = status.blocker.filter(_ => status.result.isEmpty && status.next == ChildNext.Retry)
+  /** The fault of a child that failed without a result and that its receipt advises retrying. A cancellation is no fault of the child. */
+  def fault(status: DispatchStatus): Option[String] =
+    status.blocker.filter(_ => status.phase == DispatchPhase.Failed && status.result.isEmpty && status.next == ChildNext.Retry)
 }
 
 final class CohortProgress {

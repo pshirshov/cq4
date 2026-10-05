@@ -19,9 +19,14 @@ private[server] final class DispatchExecution(val ticket: DispatchTicket, val di
   private var owned = Set.empty[AttemptId]
   private var reviewer = Option.empty[ReviewerChecks]
   private var repeat = Option.empty[String]
+  private var withheld = Option.empty[DispatchStatus]
+  private var concluded = false
   def repeated: Option[String] = synchronized(repeat)
   def repeating(value: String): Unit = synchronized { repeat = Some(value) }
   def status: DispatchStatus = synchronized(view)
+  /** What a reader outside the run sees: a terminal status only once `conclude` has run, and the child as publishing until then. */
+  def observed: DispatchStatus = synchronized(withheld.getOrElse(view))
+  def conclude(): Unit = synchronized { concluded = true; withheld = None }
   def activeJob: Option[AttemptId] = synchronized(job)
   def ownedJobs: Set[AttemptId] = synchronized(owned)
   def reviewerChecks: Option[ReviewerChecks] = synchronized(reviewer)
@@ -40,10 +45,15 @@ private[server] final class DispatchExecution(val ticket: DispatchTicket, val di
   def own(value: AttemptId): Unit = synchronized { check(); owned += value }
   def active(value: AttemptId): Unit = synchronized { own(value); job = Some(value) }
   def freeze(): Option[String] = synchronized { publishing = true; view = view.copy(phase = DispatchPhase.Publishing); stop }
-  def finish(value: DispatchStatus): Unit = synchronized { view = DispatchProjection.bounded(value); publishing = true }
+  def finish(value: DispatchStatus): Unit = synchronized {
+    if (!concluded && withheld.isEmpty) withheld = Some(view.copy(phase = DispatchPhase.Publishing))
+    view = DispatchProjection.bounded(value)
+    publishing = true
+  }
 }
 
-/** `finished` receives the child's final status and replies with the fault it repeated, when the attempt before it on the same input ended in it. */
+/** `finished` receives the child's final status and replies with the fault it repeated, when the attempt before it on the same input ended in it.
+  * It runs before that status becomes visible to the session, on no lock of the dispatch. */
 final case class SelectedDispatch(cohort: Option[UUID], evidence: ArtifactId, admit: () => Unit, finished: DispatchStatus => Option[String])
 
 final class DispatchController(config: SupervisorConfig, runner: ChildRunner, jobs: JobSupervisor, clock: Clock) {
@@ -62,7 +72,7 @@ final class DispatchController(config: SupervisorConfig, runner: ChildRunner, jo
       case None =>
         require(!closing && !disabled.get(), "Dispatch admission is closed")
         ChildContracts.request(config.project.project, request)
-        DispatchController.admissible(entries.values.filter(entry => !DispatchController.terminal(entry.status.phase)).map(_.ticket.request).toList, request)
+        DispatchController.admissible(entries.values.filter(entry => !DispatchController.terminal(entry.observed.phase)).map(_.ticket.request).toList, request)
         SupervisorConfig.within(request.limits, config.settings.limits)
         val profile = config.settings.harnesses.find(_.harness == request.harness).getOrElse(throw new IllegalArgumentException("Requested harness route is not configured"))
         val id = AttemptId(UUID.randomUUID())
@@ -95,7 +105,10 @@ final class DispatchController(config: SupervisorConfig, runner: ChildRunner, jo
           entry.finish(entry.status.copy(phase = DispatchPhase.Unknown, next = ChildNext.InspectEvidence,
             blocker = Some(DispatchProjection.concise("Dispatch storage/publication failed: " + Option(failure.getMessage).getOrElse(failure.getClass.getSimpleName))), detailsOmitted = true))
         } *> ready.fail(failure).unit
-      }.ensuring(ZIO.attemptBlocking(selection.flatMap(_.finished(entry.status)).foreach(entry.repeating)).orDie *> done.succeed(()).unit)
+      // The input is released, and its fault published, while the child still reads as publishing: a status that showed it failed
+      // before that would let the session select the same work and find it deferred.
+      }.ensuring(ZIO.attemptBlocking(try selection.flatMap(_.finished(entry.status)).foreach(entry.repeating) finally entry.conclude()).orDie *>
+        done.succeed(()).unit)
       execute.forkDaemon.unit
     }
     _ <- entry.ready.await
@@ -112,10 +125,10 @@ final class DispatchController(config: SupervisorConfig, runner: ChildRunner, jo
     math.max(0L, clock.millis() - written)
   }
   private def snapshot(entry: DispatchExecution): Task[DispatchStatus] = entry.activeJob match {
-    case None => ZIO.succeed(entry.status)
+    case None => ZIO.succeed(entry.observed)
     case Some(id) => jobs.status(config.owner, id).flatMap(record => ZIO.attemptBlocking(
-      DispatchProjection.bounded(entry.status.copy(process = Some(record.phase), quietMillis = quiet(id, record))))).catchSome {
-      case DomainFailure(_: Fault.Missing) => ZIO.succeed(entry.status)
+      DispatchProjection.bounded(entry.observed.copy(process = Some(record.phase), quietMillis = quiet(id, record))))).catchSome {
+      case DomainFailure(_: Fault.Missing) => ZIO.succeed(entry.observed)
     }
   }
   def status(attempt: AttemptId, waitMillis: Int): Task[DispatchStatus] = for {
@@ -144,9 +157,9 @@ final class DispatchController(config: SupervisorConfig, runner: ChildRunner, jo
     }
   }
   def workspace(attempt: AttemptId, command: WorkspaceCommand): Task[WorkspaceReply] = ZIO.attempt(found(attempt)).flatMap { entry =>
-    ZIO.attempt { entry.check(); require(!DispatchController.terminal(entry.status.phase), "Child workspace capability has ended") } *> runner.workspace(entry, command)
+    ZIO.attempt { entry.check(); require(!DispatchController.terminal(entry.observed.phase), "Child workspace capability has ended") } *> runner.workspace(entry, command)
   }
-  def unsettled: List[String] = synchronized(entries.values.toList.map(_.status).filterNot(value => DispatchController.terminal(value.phase))
+  def unsettled: List[String] = synchronized(entries.values.toList.map(_.observed).filterNot(value => DispatchController.terminal(value.phase))
     .map(value => s"child attempt ${value.attempt.value} (${value.phase})"))
   def quiescent: Boolean = unsettled.isEmpty
   /** The claims under which a sealed publication of a child still awaits delivery: the server admits its result only under the active claim. */
@@ -156,13 +169,13 @@ final class DispatchController(config: SupervisorConfig, runner: ChildRunner, jo
   def revalidatable(result: ChildResult): Unit = synchronized {
     val members = result.request.members.map(_.id).toSet
     val sharing = entries.values.filter(_.ticket.request.members.exists(reference => members(reference.id))).toList
-    val active = sharing.filter(entry => !DispatchController.terminal(entry.status.phase)).flatMap(_.ticket.request.members.map(_.id)).filter(members)
+    val active = sharing.filter(entry => !DispatchController.terminal(entry.observed.phase)).flatMap(_.ticket.request.members.map(_.id)).filter(members)
       .distinct.sortBy(LedgerPolicy.key)
     if (active.nonEmpty)
       throw DomainFailure(Fault.Conflict(s"An active child covers ${active.map(id => LedgerPolicy.prefix(id.ledger) + id.number).mkString(", ")}; poll its status before revalidating"))
     val own = sharing.find(_.ticket.attempt.id == result.attempt)
       .getOrElse(throw DomainFailure(Fault.Missing("Result was not produced by a child of this governing session")))
-    if (sharing.exists(entry => (entry ne own) && entry.ticket.attempt.startedAt >= own.ticket.attempt.startedAt && entry.status.result.nonEmpty &&
+    if (sharing.exists(entry => (entry ne own) && entry.ticket.attempt.startedAt >= own.ticket.attempt.startedAt && entry.observed.result.nonEmpty &&
       entry.ticket.attempt.role == Role.Worker && entry.ticket.request.work != DispatchWork.Worker(WorkerMode.Probe)))
       throw DomainFailure(Fault.Conflict("Result is superseded by a later result for the same members"))
   }

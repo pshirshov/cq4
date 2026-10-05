@@ -807,6 +807,39 @@ sys.stderr.flush()
       }
     }
 
+    "D145: show a selected child as still publishing until the release of its input has run, and as terminal from then on" in {
+      (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None, Nil) { f =>
+        val entered = new java.util.concurrent.CountDownLatch(1)
+        val proceed = new java.util.concurrent.CountDownLatch(1)
+        val concluding = new java.util.concurrent.atomic.AtomicReference(Option.empty[DispatchStatus])
+        // The conclusion of a selected child stands for the release of its input, which publishes the fault over HTTP.
+        val selection = SelectedDispatch(None, ArtifactId(uuid), () => (), { status =>
+          concluding.set(Some(status))
+          entered.countDown()
+          proceed.await(60, java.util.concurrent.TimeUnit.SECONDS)
+          None
+        })
+        val controller = new DispatchController(f.config, f.runner, f.jobs, f.clock)
+        (for {
+          _ <- ZIO.attemptBlocking(f.install(Failing))
+          started <- controller.startSelected(f.request(f.limits), selection)
+          _ <- ZIO.attemptBlocking(assert(entered.await(60, java.util.concurrent.TimeUnit.SECONDS), "The child's conclusion never began"))
+          during <- controller.status(started.attempt, 0)
+          unsettled = controller.unsettled
+          _ <- ZIO.succeed(proceed.countDown())
+          after <- controller.status(started.attempt, 20000)
+          _ <- ZIO.attempt {
+            println(s"Selected child while its input is released: concluding=${concluding.get.map(value => (value.phase, value.next))} during=${during.phase} unsettled=$unsettled after=${(after.phase, after.next)}")
+            assert(concluding.get.exists(value => value.phase == DispatchPhase.Failed && value.next == ChildNext.Retry && value.result.isEmpty), concluding.get.toString)
+            assert(during.phase == DispatchPhase.Publishing && during.next != ChildNext.Retry && unsettled.size == 1, s"$during $unsettled")
+            assert(after == concluding.get.get && controller.quiescent, after.toString)
+          }
+        } yield ()).ensuring(ZIO.succeed(proceed.countDown()))
+      }
+    }
+
     "D108: admit and run a 33rd child of one governing session and attribute its result to its assignment" in {
       (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
         artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
