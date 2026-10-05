@@ -104,8 +104,8 @@ def main():
         for scope in [["--task", "T1"], ["--session", attempt["session"]["value"]]]:
             spanned = run("human-phases-spans" + scope[0], ["status", "phases", *scope], 0, False).stdout
             usage_table = spanned[:spanned.index("Costs —")]
-            rows = {line.split()[0]: line.split()[1:5] for line in usage_table.splitlines() if line.split()[:1] in (["Work"], ["Check"], ["Integrate"])}
-            assert rows == {"Work": ["1", "0", "0", "0:00:02"], "Check": ["0", "0", "1", "0:01:05"], "Integrate": ["0", "0", "1", "0:00:04"]}, spanned
+            rows = {line.split()[0]: line.split()[1:6] for line in usage_table.splitlines() if line.split()[:1] in (["Work"], ["Check"], ["Integrate"])}
+            assert rows == {"Work": ["1", "0", "0", "0", "0:00:02"], "Check": ["0", "0", "0", "1", "0:01:05"], "Integrate": ["0", "0", "0", "1", "0:00:04"]}, spanned
             assert "host spans" in spanned, spanned
         audit = run("human-audit-measured", ["status", "audit"], 0, False).stdout
         assert all(value in audit for value in ["cli-fixture", "101", "Partial", "Deliberate fixture gap"]), audit
