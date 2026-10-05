@@ -18,6 +18,14 @@ final class AttachedGateway(config: SupervisorConfig, authority: SupervisorAutho
   private val MaxLocalBytes = 65536
   private val capability = LocalCapability(config.run.attempt.id, Role.Governor)
   private var initialized = false
+  // Each distinct workflow instruction text this session was sent, by the activation whose reply first carried it.
+  private var delivered = Map.empty[String, RequestId]
+  /** The activation as its Workflow reply carries it: the instruction text once per attached session, afterwards the activation that carried it. */
+  private def receipt(value: WorkflowActivation): WorkflowReceipt = synchronized {
+    val text = value.context.instructions
+    val instructions = delivered.get(text).fold[WorkflowInstructions] { delivered += text -> value.id; WorkflowInstructions.Text(text) }(WorkflowInstructions.Unchanged.apply)
+    WorkflowReceipt(value.id, value.context.request, instructions, value.context.subject, value.cycle)
+  }
   private def success(id: Json, body: Json): Json = Json.obj("jsonrpc" -> Json.fromString("2.0"), "id" -> id, "result" -> body)
   private def failure(id: Json, code: Int, message: String): Json = Json.obj("jsonrpc" -> Json.fromString("2.0"), "id" -> id,
     "error" -> Json.obj("code" -> Json.fromInt(code), "message" -> Json.fromString(message)))
@@ -26,7 +34,8 @@ final class AttachedGateway(config: SupervisorConfig, authority: SupervisorAutho
   private def context: AttachedContext = AttachedContext(config.run.attempt.session, config.run.attempt.id, config.directory.toString,
     config.project, config.settings.harnesses.map(value => HarnessRoute(value.harness, value.model, value.provider)), config.settings.checks.map(_.name),
     config.settings.limits, config.settings.integrationTarget, OperatorRequirements.governing(schemas.attachedInstructions(config.run.attempt.harness),
-      OperatorRequirements.standing(authority.governor.call, config.project.project)), workflow.current,
+      OperatorRequirements.standing(authority.governor.call, config.project.project)),
+    workflow.current.map(value => ActiveWorkflow(value.id, value.context.request, value.cycle)),
     if (config.run.attempt.harness == Harness.Pi)
       "Interactive Pi finalized assistant usage is collected by the extension; compaction, auxiliary calls and unreported/interrupted responses remain unobserved. Managed child usage is collected independently."
     else if (config.run.attempt.harness == Harness.Codex) codex.status
@@ -42,7 +51,9 @@ final class AttachedGateway(config: SupervisorConfig, authority: SupervisorAutho
         command
       }.flatMap {
         case _: SessionCommand.Context => ZIO.attemptBlocking(SessionReply.Context(context))
-        case SessionCommand.Workflow(id, request, operatorRequirements, token) => workflow.activate(id, request, operatorRequirements, token).map(SessionReply.Workflow.apply)
+        case SessionCommand.Workflow(id, request, operatorRequirements, token) => workflow.activate(id, request, operatorRequirements, token).map(value => SessionReply.Workflow(receipt(value)))
+        case _: SessionCommand.Instructions => ZIO.attempt(SessionReply.Instructions(workflow.current.getOrElse(
+          throw DomainFailure(Fault.Missing("No workflow is active in this session: activate one with session Workflow")))))
         // The model-facing driver surface: a bind gated by the hook-minted token and a read-only status. Neither starts nor parks a driver.
         case SessionCommand.Bind(token) => ZIO.attemptBlocking(SessionReply.Driver(driver.session.bind(token)))
         case _: SessionCommand.Driver => ZIO.attemptBlocking(SessionReply.Driver(driver.session.status))

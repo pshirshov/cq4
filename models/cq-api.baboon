@@ -650,20 +650,30 @@ root data AttachedPiEvent {
 }
 root data AttachedPiSample { event: AttachedPiEvent receivedAt: i64 }
 root data WorkflowActivation { id: RequestId context: WorkflowContext operatorRequirements: str cycle: opt[CycleId] }
+// What a governing session is sent about an activation. The stored record is WorkflowActivation; these repeat no text the session holds.
+root data ActiveWorkflow { id: RequestId request: WorkflowRequest cycle: opt[CycleId] }
+root adt WorkflowInstructions {
+  data Text { value: str }
+  // The text is identical to the one the Workflow reply of activation `since` carried in this attached session.
+  data Unchanged { since: RequestId }
+}
+root data WorkflowReceipt { id: RequestId request: WorkflowRequest instructions: WorkflowInstructions subject: opt[WorkflowSubject] cycle: opt[CycleId] }
 root data AttachedContext {
   session: SessionId attempt: AttemptId directory: str project: ProjectConfig
   routes: lst[HarnessRoute] checks: lst[str] limits: HostLimits integrationTarget: opt[str]
-  instructions: str workflow: opt[WorkflowActivation] usageCoverage: str
+  instructions: str workflow: opt[ActiveWorkflow] usageCoverage: str
 }
 root adt SessionCommand {
   data Context {}
   data Workflow { id: RequestId request: WorkflowRequest operatorRequirements: str token: opt[CycleToken] }
+  data Instructions {}
   data Bind { token: DriverToken }
   data Driver {}
 }
 root adt SessionReply {
   data Context { value: AttachedContext }
-  data Workflow { value: WorkflowActivation }
+  data Workflow { value: WorkflowReceipt }
+  data Instructions { value: WorkflowActivation }
   data Driver { reply: DriverReply }
   data Failed { fault: Fault }
 }

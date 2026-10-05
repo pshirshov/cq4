@@ -156,6 +156,7 @@ final class McpSchemas {
   def attachedInstructions(harness: Harness): String = {
     val instructions = SupervisorProgram.Guidance +
       " You are the already-running interactive Governor. Call session Context first and session Workflow before dispatch; follow the returned workflow instructions. " +
+      "Context names the active workflow without repeating its instructions; when you no longer hold them, session Instructions returns them. " +
       "Do not invoke cq run for this interactive workflow. Report to the user normally; there is no governing JSON completion report. " +
       "Outer-session usage is explicitly unobserved unless a supported collector supplies it."
     if (harness != Harness.Codex) instructions
@@ -168,7 +169,7 @@ final class McpSchemas {
       "name" -> Json.fromString(name), "description" -> Json.fromString(description),
       "inputSchema" -> schema(input), "outputSchema" -> schema(output))
     List(local("session", "SessionCommand", "SessionReply",
-      "First call Context for project, routes, limits, governing instructions and complete argument guide. Then Workflow with a fresh id and typed scope before dispatch; token is null unless the invocation carries a CQ driver --start-token or --resume-token, which you pass unchanged. An identical retry returns its original receipt without reactivating a superseded workflow. Context identifies the active workflow. Bind presents the token a CQ drive command printed; Driver reads this session's driver status. Neither starts nor parks a driver."),
+      "First call Context for project, routes, limits, governing instructions and complete argument guide. Then Workflow with a fresh id and typed scope before dispatch; token is null unless the invocation carries a CQ driver --start-token or --resume-token, which you pass unchanged. Workflow returns the workflow's instructions once: when their text is identical to one an earlier Workflow reply of this session carried, instructions is Unchanged with that activation's id, and you follow the text you hold. Instructions returns the active workflow complete, with its instruction text, operator requirements and subject: call it when you no longer hold them, for example after your context was compacted. An identical retry returns the same activation without reactivating a superseded workflow. Context identifies the active workflow by id, request and cycle. Bind presents the token a CQ drive command printed; Driver reads this session's driver status. Neither starts nor parks a driver."),
       local("dispatch", "DispatchCommand", "DispatchReply",
         s"Select bounded cohorts, claim one complete choice, then StartChoice by ID, harness and fence. Up to ${DispatchController.MaxActiveChildren} children with disjoint members may run at once. Poll compact Status or Cancel; Status carries the child's workspace admission and retained directory, and quietMillis, the time since a running child's last output. Direct Start is unavailable. Prepare/apply reviewed integration, or DiscardIntegration a prepared one that will not be applied; Combine a NotApplied integration and poll CombinationStatus. Forward handles; full child prompts/results stay outside your context." + McpSchemas.Revalidation)) ++ tools.map(advertised)
   }

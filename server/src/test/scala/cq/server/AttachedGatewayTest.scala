@@ -118,7 +118,7 @@ final class AttachedGatewayLocal extends AnyWordSpec {
         // The shape a weaker model sent three times (D149): the alternative's value as a string holding JSON.
         val context = refused("session", """{"Context":"{}"}""")
         assert(context.contains("\"session\"") && context.contains("do not match its input schema") && context.contains("object expected"), context)
-        assert(tags("SessionCommand") == List("Context", "Workflow", "Bind", "Driver") && context.contains("Context, Workflow, Bind, Driver"), context)
+        assert(tags("SessionCommand") == List("Context", "Workflow", "Instructions", "Bind", "Driver") && context.contains("Context, Workflow, Instructions, Bind, Driver"), context)
         val dispatch = refused("dispatch", """{"Status":"{}"}""")
         assert(dispatch.contains("\"dispatch\"") && dispatch.contains(tags("DispatchCommand").mkString(", ")), dispatch)
         val domain = refused("read", """{"project":"p"}""")
