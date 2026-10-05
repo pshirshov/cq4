@@ -299,6 +299,7 @@ object SupervisorPlugin extends PluginDef {
       new ProcessOwner(ProcessHandle.current().parent().orElseThrow(() => new IllegalArgumentException("Owning harness process is unavailable"))))))
     make[AttachedProgram]
     make[AttachedGateway]
+    make[SessionClaims].from((config: SupervisorConfig, authority: SupervisorAuthority, logger: logstage.IzLogger) => new SessionClaims(config.owner, authority.governor, logger))
     make[AttachedWorkflow]
     make[AttachedDriver]
     make[AttachedUsage].from { (config: SupervisorConfig, clock: Clock) => new AttachedUsage(config.directory, config.run, clock) }

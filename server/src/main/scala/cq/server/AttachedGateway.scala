@@ -8,7 +8,7 @@ import io.circe.Json
 import zio.{Task, ZIO}
 
 final class AttachedGateway(config: SupervisorConfig, authority: SupervisorAuthority, schemas: McpSchemas,
-  local: LocalControl, workflow: AttachedWorkflow, accounting: AttachedUsage, codex: AttachedCodexUsage, driver: AttachedDriver) {
+  local: LocalControl, workflow: AttachedWorkflow, accounting: AttachedUsage, codex: AttachedCodexUsage, driver: AttachedDriver, claims: SessionClaims) {
   private val Versions = List("2025-03-26", "2025-06-18", "2025-11-25")
   private val CodecContext = BaboonCodecContext.Default
   private val MaxLocalBytes = 65536
@@ -56,7 +56,7 @@ final class AttachedGateway(config: SupervisorConfig, authority: SupervisorAutho
       val command = definition.decode(arguments).fold(throw _, identity)
       val canonical = Command_JsonCodec.encode(CodecContext, command).asObject.get.values.head.hcursor.downField("input").focus.get
       require(JsonRoundtrip.lossless(arguments, canonical), "Noncanonical domain request")
-      val value = authority.governor.call(command)
+      val value = claims.call(command)
       Result_JsonCodec.encode(CodecContext, value) -> value.isInstanceOf[Result.Failed]
     }
   }

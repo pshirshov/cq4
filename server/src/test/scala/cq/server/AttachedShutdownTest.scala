@@ -166,6 +166,37 @@ final class AttachedShutdownProcess extends SpecZIO with AssertZIO {
     "end in order and deliver the Finish usage when the owning harness closes the MCP input" in { (local: LocalWorkspaceFixture, guardian: GuardianFixture) =>
       scenario(local, guardian, 0)(process => process.getOutputStream.close())
     }
+    "D148: release the claims the session still holds, and no claim it released itself, when the owning harness closes the MCP input" in { (local: LocalWorkspaceFixture, guardian: GuardianFixture) =>
+      val scope = owner
+      val held = List.fill(2)(ClaimId(UUID.randomUUID()))
+      val returned = ClaimId(UUID.randomUUID())
+      def call(id: Int, action: ClaimAction): String = io.circe.Json.obj("jsonrpc" -> io.circe.Json.fromString("2.0"), "id" -> io.circe.Json.fromInt(id),
+        "method" -> io.circe.Json.fromString("tools/call"), "params" -> io.circe.Json.obj("name" -> io.circe.Json.fromString("claim"),
+          "arguments" -> ClaimInput_JsonCodec.encode(BaboonCodecContext.Default, ClaimInput(scope.project, action)))).noSpaces
+      val member = Set(ItemId(scope.project, Ledger.Tasks, 1))
+      val requests = List("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}""") ++
+        (held :+ returned).zipWithIndex.map((id, index) => call(index + 2, ClaimAction.Acquire(id, member, 60000))) ++
+        List(call(5, ClaimAction.Release(Fence(returned, 1))))
+      ZIO.scoped { for {
+        state <- ZIO.attemptBlocking(Files.createTempDirectory(local.directory, "state-"))
+        running <- host(local, guardian, scope, state, Map.empty)
+        _ <- ZIO.attemptBlocking {
+          val log = running.at.resolve(ShutdownFixture.ClaimLog)
+          def lines: List[String] = if (Files.exists(log)) Files.readString(log).linesIterator.toList else Nil
+          val input = running.process.getOutputStream
+          requests.foreach(request => input.write((request + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8)))
+          input.flush()
+          val acquired = (held :+ returned).map("Acquire " + _.value) :+ s"Release ${returned.value}"
+          // The reply to the last request follows its log line; the host has then observed every claim reply.
+          ShutdownFixture.awaitUntil(running.process, running.at, Duration.ofSeconds(60))(lines == acquired && running.log.contains("\"id\":5"))
+          input.close()
+          assert(running.process.waitFor(60, TimeUnit.SECONDS) && running.process.exitValue() == 0, running.log)
+          println(s"Claims at orderly shutdown: ${lines.drop(acquired.size)}")
+          assert(lines.drop(acquired.size).sorted == held.map("Release " + _.value).sorted, lines.toString + "\n" + running.log)
+          assert(finishDelivered(running.session), running.log)
+        }
+      } yield () }
+    }
     "halt with the unresolved exit at the base drain deadline when EOF finds the initial record fsync stalled" in { (local: LocalWorkspaceFixture, guardian: GuardianFixture) =>
       val scope = owner
       for {

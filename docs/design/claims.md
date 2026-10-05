@@ -35,6 +35,7 @@ I24. An item is in progress exactly while an active claim covers it. Activity is
 - A governor that holds a claim while no child runs keeps its items in progress; the mark names the owner.
 - A running attempt without an active claim marks nothing, so an attempt that a crashed host left Running leaves no permanent mark.
 - The mark means "claimed": a governor that holds a long lease and does not release it keeps the mark until the lease expires.
+- An attached host (`cq host`) that ends in order releases the claims its session still holds (D148): after its children, integrations and combinations have settled or were cancelled, it releases every claim that a reply to its Governor's `claim` commands granted and none showed released (`SessionClaims`). The release is best-effort: a claim under a pending integration reservation stays, a refusal is logged, an unanswered request ends the attempt, and none of them fails the shutdown. A host that is killed, and a managed `cq run` session, whose Governor talks to the server directly, leave their claims to lease expiry. Who may take over a claim is unchanged.
 
 Three read surfaces carry it:
 
