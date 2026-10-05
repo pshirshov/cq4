@@ -4,13 +4,13 @@ This record covers T61: one recorded run of the consumer scenario of the [evalua
 
 **Provenance.** Everything here was read by the driver session from private evaluation roots under `/srv/nvme/tmp/cq4-final-wave-20261004/evaluations/`. Each root has its own `report.md` in the form the protocol prescribes, with the child table, usage, proxy log and acceptance output. Nobody has independently reread the roots or the recordings. The driver session is also the author of the protocol's helper scripts and of several of the changes under test.
 
-**What this record does not do.** It is one run per harness of one small scenario. It does not qualify any harness, compare models, or establish rates. Thresholds of the protocol's efficiency table were not recalibrated.
+**What this record does not do.** It is one run per harness of one small scenario. It does not qualify any harness, compare models, or establish rates. Thresholds of the protocol's efficiency table were not recalibrated in this record; section 4 of the protocol recalibrates them from these runs.
 
 ## Setup
 
 - **Package:** exact-source native package of `c3959c4` (manifest SHA-256 `3049f4638574852ad069ed6f8af699ccf12e2e8e4975c6d6124c790304e870cc`), one private server, database and consumer repository per run.
 - **Harnesses:** Claude Code 2.1.285 (`opus`), Codex CLI 0.159.2, Pi coding agent 0.99.1 (`gpt-6.1-sol` through `openai-codex`). Child routes: all three, as Q38 requires.
-- **Scenario:** `dev/eval-minesweeper-spec.md` version 1 (SHA-256 `d688c381…`), checks `tests` and `launch`, one follow-up (difficulty presets and an elapsed-seconds clock). Mode `driver` (Q39): every advance through the auto-driver.
+- **Scenario:** `dev/eval-minesweeper-spec.md` version 1 (SHA-256 `d688c381…`), checks `tests` and `launch`, one follow-up (difficulty presets and an elapsed-seconds clock). Mode `driver` (Q39). By the proxy logs, drive commands were typed in four of the six runs: plan and integrate drives in the Pi run and the completed Codex run, integrate drives only in the Claude run (planning ran under the begin workflow), plan drives only in the first Codex run, and none in the two runs that ended in S2 and S1.
 - **Launch:** inside the existing sandbox session, pinned executables, private configuration directories, token by file path; tmux and asciinema per session.
 - **Budget:** 3 h and USD 25 per run. The operator allowed exceeding it; no run came near it.
 
@@ -37,7 +37,7 @@ The first Codex run is not a clean observation: the proxy's first answer was wor
 | Pi | 27 | Pi 15 (Planner, Worker), Codex 12 (Reviewer) | 1 Planner (malformed JSON) | G1 +2, I2 +1, G2 +1 | T1 +1 (host validation failed) |
 | Codex (run 02 of 10-05) | 15 | Codex 7 (Planner, Worker), Claude 8 (Reviewer) | 0 | I2 +1 | none (+1 repeated review after the stranded integration) |
 
-Every Governor planned and implemented with children of its own harness and reviewed with another one. No run used all three child routes, so the mix required by Q38 was configured and not exercised.
+Every Governor planned and implemented with children of its own harness and reviewed with another one. None of these three runs used all three child routes. The two early-ended Codex runs of 10-04 did start children of all three harnesses, in planning only (run 01: Codex 4, Claude 1, Pi 1; run 02: Codex 4, Claude 1, Pi 2). The mix required by Q38 was therefore configured in every run and exercised in no completed one.
 
 One cross-item cohort formed (Claude run: T2 and T3, one shared candidate, one review). The Pi run assessed T1–T3 for a cohort and then ran them singly.
 
@@ -86,7 +86,7 @@ Not recorded as items: the Claude Code confirmation dialog for a pasted request 
 
 - One run per harness; no repetition, so nothing here is a rate.
 - The operator proxy and the author of the software under test are the same session.
-- Pi children ran only under the Pi Governor and Claude children only under Claude and as reviewers under Codex; no run had all three child harnesses.
+- In the completed runs Pi children ran only under the Pi Governor, and Claude children only under the Claude Governor and as reviewers under Codex; no completed run had all three child harnesses. Pi plan reviewers ran under a Codex Governor only in the two early-ended runs of 10-04.
 - The recovered Pi retry of RS16/D140 did not occur.
 - The host-level launcher of the protocol was not used; all runs used the in-sandbox launch.
 - Outer cost is unknown for Claude Code and Codex.
