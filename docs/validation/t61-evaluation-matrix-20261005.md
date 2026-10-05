@@ -10,7 +10,7 @@ This record covers T61: one recorded run of the consumer scenario of the [evalua
 
 - **Package:** exact-source native package of `c3959c4` (manifest SHA-256 `3049f4638574852ad069ed6f8af699ccf12e2e8e4975c6d6124c790304e870cc`), one private server, database and consumer repository per run.
 - **Harnesses:** Claude Code 2.1.285 (`opus`), Codex CLI 0.159.2, Pi coding agent 0.99.1 (`gpt-6.1-sol` through `openai-codex`). Child routes: all three, as Q38 requires.
-- **Scenario:** `dev/eval-minesweeper-spec.md` version 1 (SHA-256 `d688c381…`), checks `tests` and `launch`, one follow-up (difficulty presets and an elapsed-seconds clock). Mode `driver` (Q39): every advance through the auto-driver.
+- **Scenario:** `dev/eval-minesweeper-spec.md` version 1 (SHA-256 `d688c381…`), checks `tests` and `launch`, one follow-up (difficulty presets and an elapsed-seconds clock). Mode `driver` (Q39). By the proxy logs, drive commands were typed in four of the six runs: plan and integrate drives in the Pi run and the completed Codex run, integrate drives only in the Claude run (planning ran under the begin workflow), plan drives only in the first Codex run, and none in the two runs that ended in S2 and S1.
 - **Launch:** inside the existing sandbox session, pinned executables, private configuration directories, token by file path; tmux and asciinema per session.
 - **Budget:** 3 h and USD 25 per run. The operator allowed exceeding it; no run came near it.
 
