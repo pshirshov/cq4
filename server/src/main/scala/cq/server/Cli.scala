@@ -162,6 +162,15 @@ final class Cli(context: CliContext, location: ProjectLocation, upload: SessionU
         opts.get("--harness-config").map(value => directory.resolve(value).normalize()), opts.get("--trust-report").map(value => directory.resolve(value).normalize()), environment)
       renderer.installation(report)
       if (!report.current) throw new InstallationNeedsAttention
+    // Reads the project file, the operator credential, the server's agent configuration and the settings file; writes nothing.
+    case "doctor" :: "agents" :: harness :: rest =>
+      val opts = options(rest, Set("--directory", "--settings"))
+      require(opts.contains("--settings"), "Agents doctor requires --settings FILE")
+      val checkout = opts.get("--directory").fold(location)(value => new ProjectLocation(context.copy(directory = directory.resolve(value).normalize())))
+      val report = new AgentsDoctor(new HttpAgentsReader).inspect(nativeHarness(harness, "doctor"), checkout.directory.resolve("project.json"),
+        directory.resolve(opts("--settings")).normalize(), environment)
+      renderer.agents(report)
+      if (!report.current) throw new InstallationNeedsAttention
     case "init" :: rest =>
       val opts = options(rest, Set("--endpoint", "--project-id", "--name"))
       val location = configDirectory

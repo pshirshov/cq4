@@ -111,6 +111,19 @@ final class CliOutput(output: PrintStream, format: CliFormat, invocation: List[S
         "detail" -> io.circe.Json.fromString(check.detail))))).noSpaces)
     case CliFormat.Human => table(List("Check", "State", "Detail"), report.checks.map(check => List(check.name, check.state.toString, check.detail)))
   }
+  // A detail of this report says what the operator sets, so the last column is printed whole, not cut at the cell limit.
+  def agents(report: InstallationReport): Unit = format match {
+    case CliFormat.Json => installation(report)
+    case CliFormat.Human =>
+      val headers = List("Check", "State")
+      val rows = report.checks.map(check => List(check.name, check.state.toString))
+      val widths = headers.indices.map(index => (headers :: rows).map(_(index).length).max)
+      def row(values: List[String], detail: String): String = values.zip(widths).map((value, width) => value.padTo(width, ' ')).mkString("  ") + "  " + detail
+      line(row(headers, "Detail"))
+      line(row(widths.map("─" * _).toList, "──────"))
+      report.checks.foreach(check => line(row(List(check.name, check.state.toString), check.detail)))
+      line(AgentsDoctor.Scope)
+  }
   private def costs(value: CostPage): Unit = {
     table(List("Attribution", "Amount", "Currency", "Basis", "Pricing", "Measurements"), value.entries.map { entry =>
       List(entry.group.attribution.toString, entry.amount.value, entry.group.currency, entry.group.basis.toString,

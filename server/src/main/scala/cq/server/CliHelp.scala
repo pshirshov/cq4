@@ -23,7 +23,7 @@ Operator commands (readable output by default; add --json for automation):
   restore           Restore a project archive without overwriting an existing ID
   web               Print this project's browser URL
   configure         Install integration for a directly launched harness
-  doctor            Verify commands, server or harness installation without writes
+  doctor            Verify commands, server, harness or agent models without writes
   assets export     Generate integration assets for declarative installation
   commands export   Write native CQ workflow commands/skills
 
@@ -184,6 +184,7 @@ are included. Use this for Nix/home-manager; keep configure for imperative use.
       case Some("doctor") => """Usage: cq doctor commands HARNESS [--directory DIR] [--json]
        cq doctor server [--endpoint URL] [--require-settled] [--json]
        cq doctor harness HARNESS --settings FILE --executable FILE --readonly-home DIR [OPTIONS] [--json]
+       cq doctor agents HARNESS --settings FILE [--directory DIR] [--json]
 
 HARNESS is claude, codex or pi. Doctor performs read-only checks.
 It never repairs or writes installations.
@@ -207,6 +208,17 @@ the nearest canonical project or parent-folder decision in trust.json applies.
 Trust the project once with /trust in Pi and launch without --approve, which saves no decision.
 Without --harness-config (and --trust-report for Codex) Hook trust is Failed.
 File contents and probe output are withheld. Declarative symlinks are accepted.
+agents checks the agent model configuration of this checkout's project when
+HARNESS governs: the server defaults and the project override have no problems
+(a problem is printed with its line:column), each of the planner, worker,
+explorer and reviewer roles resolves, every harness a resolved model runs on
+has a valid entry in the session settings (--settings), and a model written
+without a provider can take the entry's. A reviewer seat that can run a model
+of HARNESS is reported as self-review in the detail, not as a failure.
+It reads the project file (of --directory, default the current directory) for
+the endpoint and project, and the operator credential as doctor server does.
+Model names are not verified against providers; doctor harness verifies
+executables and trust.
 Any Failed or Unknown check exits 1 after the report; --json emits one value.
 """
       case Some("serve") => """Usage: cq serve
