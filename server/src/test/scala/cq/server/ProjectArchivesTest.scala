@@ -287,6 +287,47 @@ final class ProjectArchivesPostgres extends SpecZIO with AssertZIO {
       } yield ()
     }
 
+    "I17: refuse the archive of a release whose stored attempts carry no effort, by its schema identity, before any row is restored" in {
+      (service: LedgerService[IO], config: DatabaseConfig, archives: ProjectArchives) =>
+      // The schema identity of the release 63db1c2, the last one whose stored Attempt has no `effort`. Restore copies usage rows
+      // undecoded, so the schema identity of the manifest is what keeps such rows out of a database whose readers require the field.
+      val earlier = "f0aaf1d080e961fdd09b6a098cbcaac3e108afca1af1df2a4515fa03ff924945"
+      val operator = Scope(ProjectId(UUID.randomUUID()), Actor("operator", SessionId(UUID.randomUUID()), Role.Human))
+      val schema = "cq_restore_" + UUID.randomUUID().toString.replace("-", "")
+      val separator = if (config.url.contains("?")) "&" else "?"
+      val target = new LedgerDatabase(config.copy(url = config.url + separator + "currentSchema=" + schema))
+      def restated(source: java.nio.file.Path, destination: java.nio.file.Path): Unit =
+        Using.resources(new java.util.zip.ZipInputStream(Files.newInputStream(source)), new java.util.zip.ZipOutputStream(Files.newOutputStream(destination))) { (input, output) =>
+          Iterator.continually(input.getNextEntry).takeWhile(_ != null).foreach { entry =>
+            val bytes = input.readAllBytes()
+            output.putNextEntry(new java.util.zip.ZipEntry(entry.getName))
+            output.write(if (entry.getName != "manifest.json") bytes else {
+              val manifest = Wire.decode(BackupManifest_JsonCodec, new String(bytes, java.nio.charset.StandardCharsets.UTF_8))
+              Wire.encode(BackupManifest_JsonCodec, manifest.copy(schemaSha256 = earlier)).getBytes(java.nio.charset.StandardCharsets.UTF_8)
+            })
+            output.closeEntry()
+          }
+        }
+      for {
+        _ <- assertIO(SchemaIdentity.current().sha256 != earlier)
+        _ <- service.initialize(operator, "earlier release")
+        file <- ZIO.attempt(Files.createTempFile("cq-archive-", ".zip"))
+        old <- ZIO.attempt(Files.createTempFile("cq-archive-earlier-", ".zip"))
+        _ <- archives.backup(operator.project, file)
+        _ <- ZIO.attempt(restated(file, old))
+        _ <- ZIO.attemptBlocking(Using.resource(DriverManager.getConnection(config.url, config.user, config.password)) { connection =>
+          Using.resource(connection.createStatement())(_.execute(s"CREATE SCHEMA $schema")); ()
+        })
+        _ <- target.initialize
+        restorer = new PostgresProjectArchives(target, Clock.systemUTC())
+        refused <- restorer.restore(old).either
+        accepted <- restorer.restore(file).either
+        _ <- ZIO.attempt { Files.deleteIfExists(file); Files.deleteIfExists(old) }
+        _ <- ZIO.attempt(assert(refused.left.toOption.contains(DomainFailure(Fault.Invalid("Archive does not match the current CQ schema"))), refused.map(_.project).toString))
+        _ <- ZIO.attempt(assert(accepted.isRight, accepted.toString))
+      } yield ()
+    }
+
     "Q32: refuse an archive whose settings row breaks the bounds of the write path or misstates its kind" in {
       (service: LedgerService[IO], database: LedgerDatabase, config: DatabaseConfig, archives: ProjectArchives) =>
       val schema = "cq_restore_" + UUID.randomUUID().toString.replace("-", "")

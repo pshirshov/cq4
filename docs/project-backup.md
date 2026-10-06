@@ -50,6 +50,10 @@ a stored type, an archive written before it can match the schema and still be
 refused. The release that added attempt outcomes to driver cycles refuses an
 earlier archive holding a driver with a cycle (`Archive holds an undecodable
 driver`); [the local update](local-update.md) converts the database, not archives.
+The release that added the installation's agent configuration and the reasoning
+effort of a stored attempt changed the schema, so it refuses every earlier archive
+by its schema hash (`Archive does not match the current CQ schema`) before a row
+is restored.
 
 The compressed archive and expanded table payload are each limited to 512 MiB.
 Transfer has a five-minute deadline. The server streams through temporary files;
