@@ -104,6 +104,47 @@ final class WorkflowLocal extends AnyWordSpec {
   }
 
   "The models of a child (Behavioral Active Blackbox Atomic)" should {
+    "I17: tell every governing session that the host starts the models the configuration assigns, name no harness to choose, and say what Abstained, Arbitrate and Seats mean" in {
+      val schemas = new McpSchemas()
+      (SupervisorProgram.Instructions :: attached(schemas)).foreach { text =>
+        assert(text.contains("Claim all members of one returned choice, then StartChoice with its ID and current fence; " +
+          "the host starts the models the project's agent configuration assigns to the role."))
+        assert(text.contains("One StartChoice is one unit of work.") && text.contains("Its reply names the unit by one attempt ID, which Status, Cancel and Seats take; Cancel stops the whole unit."))
+        assert(text.contains("Seats lists every model the host tried and how each seat ended, with the result handle of each seat that delivered."))
+        assert(text.contains("Phase Abstained means that no assigned model could run the work") &&
+          text.contains("do not select it again at once, continue other work and report it."))
+        assert(text.contains("Next Arbitrate means that the reviewers of one unit disagree; the status carries the dissenting review. Read Seats. " +
+          "By default correct: Select Worker Implement with the dissenting review as previous and the other non-accepting reviews as artifacts. " +
+          "You decide: you may instead integrate with the review of an accepting seat when the dissent is unfounded, and then say so in your report."))
+        assert(text.contains("Pass worker candidates to Reviewer Candidate. "))
+        assert(!text.contains("configured harness") && !text.contains("harness and fence"), text.take(200))
+      }
+      assert(!SupervisorProgram.Guidance.contains("routes"))
+      val tools = schemas.attachedTools.map(tool => tool.hcursor.get[String]("name").fold(throw _, identity) -> tool.hcursor.get[String]("description").fold(throw _, identity)).toMap
+      val managed = new LocalControl(null, null, null, null, null, null, schemas, null, null)
+        .advertised(LocalCapability(AttemptId(UUID.randomUUID()), Role.Governor)).hcursor.get[String]("description").fold(throw _, identity)
+      List(tools("dispatch"), managed).foreach { description =>
+        assert(description.contains("then StartChoice by ID and fence: the host starts the models the project's agent configuration assigns to the role, as one unit named by one attempt ID."))
+        assert(description.contains("Cancel stops the whole unit of an attempt") && description.contains("Seats lists the models the host tried"), description)
+        assert(!description.contains("harness and fence"), description)
+      }
+      assert(tools("dispatch").contains(s"Up to ${DispatchController.MaxActiveChildren} child attempts may run at once, and the members of running units are disjoint."))
+      assert(tools("session").contains("First call Context for project, limits, governing instructions and complete argument guide.") && !tools("session").contains("routes"))
+      // The workflow texts of every mode name no harness to choose either.
+      val assets = new WorkflowAssets
+      ProcessMode.all.foreach { mode =>
+        List(assets.instructions(WorkflowRequest.Begin(Set.empty), mode), assets.instructions(WorkflowRequest.Advance(Set.empty, WorkflowPhase.Integrate), mode)).foreach { text =>
+          assert(text.contains("then StartChoice with its ID and current fence; the host starts the models the project's agent configuration assigns to the role."))
+          assert(text.contains("A child whose phase is Abstained ran on no model: no assigned model could run the work. Its input is not used up, " +
+            "but do not select it again at once: continue other work and report it with its blocker."))
+          assert(text.contains("When a review ends with next Arbitrate, its reviewers disagree: read Seats, then by default Select Worker Implement with the dissenting review, " +
+            "which the status carries, as previous and the other non-accepting reviews as artifacts."))
+          assert(!text.contains("configured harness") && !text.contains("routes"), mode.toString)
+        }
+      }
+      val entrypoint = new String(getClass.getResourceAsStream("/cq/workflows/entrypoint.md").readAllBytes(), java.nio.charset.StandardCharsets.UTF_8)
+      assert(entrypoint.contains("Read its governing instructions, complete argument guide and project identity.") && !entrypoint.contains("routes"))
+    }
     "I17: take the choice and the fence in StartChoice, and the work without a harness in Start" in {
       val context = baboon.runtime.shared.BaboonCodecContext.Default
       def decoded(text: String): Either[Throwable, DispatchCommand] = {

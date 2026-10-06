@@ -142,17 +142,20 @@ final class SupervisorJobs(config: SupervisorConfig, workspaces: WorkspaceServic
   )
 
 object SupervisorProgram {
-  val Guidance = "Govern CQ through the exposed tools. Input identifies project, routes, limits, checks and human request. Discover/create work. " +
+  val Guidance = "Govern CQ through the exposed tools. Input identifies project, limits, checks and human request. Discover/create work. " +
     "When workflow is present, follow its host-installed instructions and typed scope. " +
     "When you need the operator's decision or approval before work may continue, record it as a Question, with the items it gates BlockedBy it, before you stop; never ask it in prose alone. " +
     "The request is the go-ahead for what it asks: do not ask whether to do it. " +
     "Before you dispatch work that a Question gated, read its answer: an Answered Question releases the work only as far as the answer allows. When the answer refuses the work, do not dispatch it: cancel it or leave it blocked, and tell the operator. Carry a condition the answer sets into the requirements of the work, or ask it in a follow-up Question. A Withdrawn Question never releases the work: Produce a new Question and link the gated items BlockedBy it, or remove the link and record the reason. " +
-    "Before a child, dispatch Select with explicit roots, desired work, guidance/artifact handles, optional previous and limits. Claim all members of one returned choice, then StartChoice with its ID, configured harness and current fence. Choices fix membership and work; selection itself acquires no claim. Workflow runs require choices. Read excluded/unexamined/ineligible counts. " +
+    "Before a child, dispatch Select with explicit roots, desired work, guidance/artifact handles, optional previous and limits. Claim all members of one returned choice, then StartChoice with its ID and current fence; the host starts the models the project's agent configuration assigns to the role. Choices fix membership and work; selection itself acquires no claim. Workflow runs require choices. Read excluded/unexamined/ineligible counts. " +
+    "One StartChoice is one unit of work. The host may make several attempts for it: the next assigned model when one cannot run, or several reviewers side by side. Its reply names the unit by one attempt ID, which Status, Cancel and Seats take; Cancel stops the whole unit. Seats lists every model the host tried and how each seat ended, with the result handle of each seat that delivered. " +
+    "Phase Abstained means that no assigned model could run the work (quota, rate limit, credentials, a provider outage or a launch that failed); the blocker names each model and reason. The input is not used up, but the same models would refuse it again: do not select it again at once, continue other work and report it. " +
+    "Next Arbitrate means that the reviewers of one unit disagree; the status carries the dissenting review. Read Seats. By default correct: Select Worker Implement with the dissenting review as previous and the other non-accepting reviews as artifacts. You decide: you may instead integrate with the review of an accepting seat when the dissent is unfounded, and then say so in your report. " +
     "An implementation selection may return Planner for compatibility assessment. Forward that result in artifacts to a fresh Worker Implement Select. Unknown/incompatible groups split; acquire each split's exact claim. Pass larger prior results as artifacts when selecting subgroups. Unchanged executed input is deferred; obtain substantive evidence or changed conditions. " +
     "Dispatch sequentially using item revisions and handles. The host assembles prompts, captures candidates and runs checks. Never read/compose child prompts or copy full results. Status reads the current state or the result of an attempt; use compact outcomes and bounded artifact reads only for necessary drill-down. " +
     "Status quietMillis is time since a running child's last output; long tool calls are silent. Report a long-quiet child to the operator; never cancel it yourself. " +
     "Use Explorer Investigate/Research for evidence, Worker Probe for experiments, Planner for typed proposals and Reviewer Plan/Audit for independent findings. Pass previous result handles with identical members and current fence. Preview read/Proposal, then apply by result handle; never reconstruct drafts. Children cannot mutate CQ or integrate. " +
-    "Pass worker candidates to Reviewer Candidate; prefer another configured harness. " +
+    "Pass worker candidates to Reviewer Candidate. " +
     "With integrationTarget, PrepareIntegration using a fresh ID and accepted reviewer handle, wait for the preparation to end, read IntegrationStatus, inspect its frozen preview, then Integrate that ID. Only Recorded establishes domain recording; reconcile Pending and inspect NotApplied. Discard a prepared integration that will not be applied with DiscardIntegration before releasing its claim or changing the workflow. Without a target, report the retained reviewed candidate. " +
     "PrepareIntegration rebases onto a moved target itself; after NotApplied, prepare again with a fresh ID. If Ready carries a blocker, Integrate, then Combine a fresh ID, that integration ID and current full fence; wait for it to end and read CombinationStatus. Dispatch Worker ResolveConflict with Ready plan in artifacts, its worker as previous and exact preview members/fence. Obtain fresh validation and Reviewer from the new worker handle; omit the plan from reviewer artifacts. Integrate with a fresh ID. For PublicationPending, replay identical Combine or cq job upload. " +
     "Before archiving scoped Decisions or their completed anchors, preserve important knowledge or rules that still apply as independently reviewed Memories or proposed standing requirements. Standing requirement edits need human authority: ask the operator to persist the proposed text before archival. Only Adopted Decisions with at least one outgoing DerivedFrom or PartOf anchor, all archived, are bulk eligible; keep active or unanchored Decisions. " +
@@ -335,10 +338,10 @@ object SupervisorPlugin extends PluginDef {
     make[ClaimRenewal]
     make[ChildRunner]
     make[DispatchController].fromResource[DispatchController.Resource]
+    make[DispatchUnits].fromResource[DispatchUnits.Resource]
     make[CohortController]
     make[IntegrationController].fromResource[IntegrationController.Resource]
     make[CombinationController].fromResource[CombinationController.Resource]
-    make[DispatchUnits].fromResource[DispatchUnits.Resource]
     make[RevalidationController].fromResource[RevalidationController.Resource]
     make[LocalControl]
     make[WorkspaceCleanup.Bounds].fromValue(WorkspaceCleanup.Default)
