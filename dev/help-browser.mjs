@@ -270,7 +270,8 @@ try {
         assert.ok(mode.instructions.text.startsWith(`Process mode of this project: ${mode.label}.`), mode.label);
         assert.ok(await instructions.isVisible(), `${viewport}: the instructions of ${mode.label} are collapsed`);
       }
-      assert.deepEqual(catalog.modes.filter(mode => mode.unavailable !== null && mode.unavailable !== undefined).map(mode => mode.mode), ['Yolo']);
+      // A release either withholds the YOLO mode, with a note, or delivers it; no other mode is ever withheld.
+      assert.ok(catalog.modes.filter(mode => mode.unavailable !== null && mode.unavailable !== undefined).every(mode => mode.mode === 'Yolo'));
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
       await modeList.getByRole('button').nth(1).click(); await dialog.getByRole('article', {name: `Mode ${catalog.modes[1].label}`, exact: true}).waitFor();
       await dialog.screenshot({path: `${evidence}/help-modes-${viewport}.png`});
