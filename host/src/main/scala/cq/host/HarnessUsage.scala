@@ -90,11 +90,14 @@ object HarnessUsage {
   private final case class Malformed(message: String) extends RuntimeException(message)
   /** Native output formats verified against retained fixtures, oldest first; the last entry is the installed version live probes target.
     * Codex 0.160.0 is accepted without a retained fixture of its own: its exec event source (`exec/src/exec_events.rs`) is identical to
-    * that of 0.159.2 and its launch flags are the same, but no usage record of a real 0.160.0 session has been compared yet. */
+    * that of 0.159.2 and its launch flags are the same, but no usage record of a real 0.160.0 session has been compared yet.
+    * Pi 1.0.0 is accepted on transcripts of real 1.0.0 processes answered by a local stub provider (a completed turn, a recovered
+    * retry and the refusals under `abstention`), event for event those of 0.99.1; no record of a 1.0.0 session with a real model has
+    * been compared yet. */
   def versions(harness: Harness): List[String] = harness match {
     case Harness.Claude => List("2.1.280", "2.1.285")
     case Harness.Codex => List("0.156.1", "0.159.2", "0.160.0")
-    case Harness.Pi => List("0.87.1", "0.99.1")
+    case Harness.Pi => List("0.87.1", "0.99.1", "1.0.0")
   }
   def version(harness: Harness): String = versions(harness).last
   /** The settings entry an attempt can have been launched from: one of a verified version. Without it the attempt abstained unlaunched. */
@@ -348,7 +351,7 @@ object HarnessUsage {
                 gap("Pi reported an interrupted or failed response; final usage may be missing")
               } else if (stop.exists(Set("stop", "toolUse", "length"))) {
                 piRetry.filter(retry => retry.attempt.nonEmpty && !retry.awaitingStart).foreach { retry =>
-                  // Pi 0.99.1 emits the response before retry_end; also accept the reverse order.
+                  // Pi 0.99.1 and 1.0.0 emit the response before retry_end; also accept the reverse order.
                   piRetry = Some(retry.copy(responseSeen = true))
                   finishPiRetry()
                 }

@@ -247,6 +247,39 @@ final class HarnessUsageLocal extends AnyWordSpec {
       }
     }
 
+    // Real Pi processes against a local stub provider (see the fixture README): the provider's replies are imitated, Pi's events are not.
+    "collect a completed turn of Pi 1.0.0 and admit the retry it recovered from, as it does that of Pi 0.99.1" in {
+      val completed = collect(resource("pi-1.0.0-stub"), request(Harness.Pi).copy(version = "1.0.0"))
+      assert(completed.terminalSeen && !completed.nativeFailure && completed.meters.size == 1 && total(completed) == 29, completed.gaps)
+      val only = completed.meters.head.observations.map(_.observation)
+      assert(only.size == 1 && only.head.source == "Pi/1.0.0/openai/gpt-5.5" && only.head.cost.amount.contains(DecimalAmount("0.000302")))
+      assert(only.head.counters.input.value.contains(22) && only.head.counters.output.value.contains(7) &&
+        only.head.counters.cacheRead.value.contains(4) && only.head.counters.reasoning.value.contains(2))
+      assert(!only.head.gaps.exists(gap => gap.contains("totalTokens") || gap.contains("response ID")))
+      List("0.99.1", "1.0.0").foreach { version =>
+        val native = resource(s"pi-$version-stub-recovered-retry")
+        // The order both versions emit: failed response, agent_end, retry start, the answer, retry end, settlement.
+        val order = events(native).flatMap { event =>
+          val kind = event.hcursor.get[String]("type").toOption.get
+          val message = event.hcursor.downField("message")
+          if (kind.startsWith("auto_retry") || kind == "agent_settled") Some(kind)
+          else if (kind == "message_end" && message.get[String]("role").contains("assistant")) message.get[String]("stopReason").toOption
+          else None
+        }
+        assert(order == List("error", "auto_retry_start", "stop", "auto_retry_end", "agent_settled"), version)
+        val report = collect(native, request(Harness.Pi).copy(version = version))
+        assert(report.terminalSeen && !report.nativeFailure, s"$version: ${report.gaps}")
+        assert(report.gaps.exists(_.contains("interrupted or failed response")) && total(report) == 30, version)
+        val observations = report.meters.head.observations.map(_.observation)
+        assert(report.meters.size == 1 && observations.size == 2 && observations.head.counters == UsageMath.missingCounts, version)
+        assert(observations.last.source == s"Pi/$version/openai/gpt-5.5" && observations.last.cost.amount.contains(DecimalAmount("0.000307")), version)
+        // Without the retry's end the same transcript stays a failure.
+        val unfinished = events(native).filterNot(_.hcursor.get[String]("type").contains("auto_retry_end"))
+        assert(collect(stream(unfinished), request(Harness.Pi).copy(version = version)).nativeFailure, version)
+      }
+      assert(HarnessUsage.versions(Harness.Pi) == List("0.87.1", "0.99.1", "1.0.0") && HarnessUsage.version(Harness.Pi) == "1.0.0")
+    }
+
     "require captured baselines for resumed cumulative meters and retain exact monetary deltas" in {
       val input = request(Harness.Claude)
       val fresh = collect(fixture(Harness.Claude), input)

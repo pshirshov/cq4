@@ -5,7 +5,7 @@ import cq.api.*
 /** Which models run a subagent role under a governing harness, from the installation's layer and the project's. */
 object AgentResolution {
   /**
-   * The effort values each harness takes. Claude 2.1.285 lists them for `--effort` and Pi 0.99.1 for `--thinking`. Codex 0.160.0
+   * The effort values each harness takes. Claude 2.1.285 lists them for `--effort` and Pi 0.99.1 and 1.0.0 for `--thinking`. Codex 0.160.0
    * takes any text for `model_reasoning_effort`; its set here is the levels of this model that the release names, which leaves
    * out `off`, for which that release has no name. `ultra` is a level of that release alone.
    */
@@ -19,7 +19,7 @@ object AgentResolution {
   def effortName(value: Effort): String = AgentReferenceText.text(AgentReferenceText.Efforts, value)
 
   /**
-   * Pi 0.99.1 reads the text after the last colon of `--model` as a thinking level when it is one of its levels, unless its catalogue
+   * Pi (0.99.1 and 1.0.0) reads the text after the last colon of `--model` as a thinking level when it is one of its levels, unless its catalogue
    * holds the whole name: `x:high` runs as `x` when Pi knows `x`, or when no `--thinking` is passed. Such a name has no one meaning.
    */
   def piThinkingSuffix(model: String): Boolean = model.lastIndexOf(':') match {

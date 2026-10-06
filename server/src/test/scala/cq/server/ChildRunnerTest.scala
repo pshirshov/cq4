@@ -24,7 +24,7 @@ final class ChildRunnerProcess extends SpecZIO with AssertZIO {
   )
   private def uuid: UUID = UUID.randomUUID()
   // The version whose provider refusals the host classifies; its native usage format is that of the earlier verified versions.
-  private val Version = AbstentionClassifier.captured(Harness.Codex)
+  private val Version = AbstentionClassifier.captured(Harness.Codex).last
   private val Probe = s"""#!/usr/bin/env python3
 import json, os, sys, time
 from pathlib import Path
