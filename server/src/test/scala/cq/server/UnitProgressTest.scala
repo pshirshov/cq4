@@ -1,0 +1,451 @@
+package cq.server
+
+import cq.api.*
+import cq.host.{DeliveredSeat, DispatchProjection, FailedSeat, ReviewAggregate, ReviewSeat, SeatCandidate, SeatRotation, UnitEvent, UnitOutcome, UnitProgress, UnitStep}
+import java.util.UUID
+import java.util.concurrent.{CountDownLatch, Executors, TimeUnit}
+import org.scalatest.wordspec.AnyWordSpec
+
+final class UnitProgressLocal extends AnyWordSpec {
+  private val request = RequestId(UUID.randomUUID())
+  private val project = ProjectId(UUID.randomUUID())
+  private val origin = RoleOrigin(AgentLayer.Project, RoleSource.DefaultRoles)
+  private def route(seat: Int, candidate: Int): ModelRoute = ModelRoute(Harness.Pi, Some(s"provider$seat"), s"model$candidate", None)
+  private def seat(index: Int, strategy: SeatStrategy, candidates: Int): ResolvedSeat =
+    ResolvedSeat(strategy, (0 until candidates).toList.map(route(index, _)))
+  private def role(mode: PanelMode, min: Int, seats: (SeatStrategy, Int)*): ResolvedRole =
+    ResolvedRole(mode, min, seats.toList.zipWithIndex.map { case ((strategy, candidates), index) => seat(index, strategy, candidates) }, origin, Nil)
+  private def single(strategy: SeatStrategy, candidates: Int): ResolvedRole = role(PanelMode.All, 1, strategy -> candidates)
+  private val Fallback = SeatStrategy.Fallback
+  private val First = SeatStrategy.First
+  private val Rr = SeatStrategy.RoundRobin
+  private def attempt(seat: Int, candidate: Int): AttemptId = AttemptId(new UUID(seat.toLong, candidate.toLong))
+  private def result(seat: Int): ArtifactId = ArtifactId(new UUID(7L, seat.toLong))
+  private def launch(candidates: (Int, Int)*): UnitStep = UnitStep.Launch(candidates.toList.map(SeatCandidate(_, _)))
+  private def ended(outcome: UnitOutcome): UnitStep = UnitStep.Ended(outcome)
+  private def delivered(seats: Int*)(using play: Play): List[DeliveredSeat] =
+    seats.toList.map(seat => DeliveredSeat(seat, play.last(seat), result(seat), ChildNext.ConsiderAcceptance))
+
+  /** One unit under test. An end reports the candidate's attempt first when the test has not, as the unit layer does at launch. */
+  private final class Play(val role: ResolvedRole, start: Int => Int) {
+    var drawn = List.empty[Int]
+    private val begun = UnitProgress.begin(request, role, seat => { drawn :+= seat; start(seat) })
+    var state: UnitProgress = begun._1
+    val first: UnitStep = begun._2
+    private var known = Set.empty[SeatCandidate]
+    private var latest = Map.empty[Int, AttemptId]
+    def last(seat: Int): AttemptId = latest(seat)
+    private def send(event: UnitEvent): UnitStep = {
+      val (next, step) = state(event)
+      state = next
+      step
+    }
+    def started(seat: Int, candidate: Int): UnitStep = {
+      known += SeatCandidate(seat, candidate)
+      latest += seat -> attempt(seat, candidate)
+      send(UnitEvent.Started(SeatCandidate(seat, candidate), attempt(seat, candidate)))
+    }
+    private def end(seat: Int, candidate: Int, event: UnitEvent): UnitStep = {
+      if (!known(SeatCandidate(seat, candidate))) assert(started(seat, candidate) == UnitStep.Wait)
+      send(event)
+    }
+    def deliver(seat: Int, candidate: Int): UnitStep = end(seat, candidate, UnitEvent.Delivered(SeatCandidate(seat, candidate), result(seat), ChildNext.ConsiderAcceptance))
+    def abstain(seat: Int, candidate: Int, reason: AbstentionReason): UnitStep = end(seat, candidate, UnitEvent.Abstained(SeatCandidate(seat, candidate), reason, s"detail $seat.$candidate"))
+    def abstain(seat: Int, candidate: Int): UnitStep = abstain(seat, candidate, AbstentionReason.Quota)
+    def fail(seat: Int, candidate: Int): UnitStep = end(seat, candidate, UnitEvent.Failed(SeatCandidate(seat, candidate), s"fault $seat.$candidate"))
+    def cancelled(seat: Int, candidate: Int): UnitStep = send(UnitEvent.Cancelled(SeatCandidate(seat, candidate)))
+    def cancel(): UnitStep = {
+      val (next, step) = state.cancel
+      state = next
+      step
+    }
+    def raw(event: UnitEvent): UnitStep = send(event)
+    def ends: List[SeatEnd] = state.snapshot.seats.map(_.end)
+    def tried(seat: Int): List[(Int, Option[AbstentionReason])] = state.snapshot.seats(seat).attempts.map(value =>
+      role.seats(seat).candidates.indexOf(value.route) -> value.abstained)
+    def failed(seats: Int*): List[FailedSeat] = seats.toList.map(seat => FailedSeat(seat, last(seat), s"fault $seat.${role.seats(seat).candidates.indexWhere(_ == state.snapshot.seats(seat).attempts.last.route)}"))
+    def abstentions(seats: Int*): List[SeatAttempt] = seats.toList.flatMap(seat => state.snapshot.seats(seat).attempts)
+  }
+  private def play(role: ResolvedRole): Play = new Play(role, _ => 0)
+  private val Pending = SeatEnd.Pending()
+  private val Abstained = SeatEnd.Abstained()
+  private val Cancelled = SeatEnd.Cancelled()
+  private def Delivered(seat: Int): SeatEnd = SeatEnd.Delivered(result(seat), ChildNext.ConsiderAcceptance)
+  private def Failed(seat: Int, candidate: Int): SeatEnd = SeatEnd.Failed(s"fault $seat.$candidate")
+  private val quota = Some(AbstentionReason.Quota)
+
+  "A unit with one seat (Behavioral Active Blackbox Atomic)" should {
+    "end as a single attempt does today: a result decides it, a failure fails it with the fault, a cancellation cancels it" in {
+      given delivering: Play = play(single(Fallback, 1))
+      assert(delivering.first == launch(0 -> 0) && delivering.state.outcome.isEmpty && delivering.ends == List(Pending))
+      assert(delivering.started(0, 0) == UnitStep.Wait && delivering.tried(0) == List(0 -> None))
+      assert(delivering.deliver(0, 0) == ended(UnitOutcome.Decided(delivered(0), Nil)))
+      assert(delivering.state.snapshot == UnitSeats(request, PanelMode.All, 1, List(SeatStatus(0, List(SeatAttempt(attempt(0, 0), route(0, 0), None, None)), Delivered(0)))))
+      val failing = play(single(Fallback, 2))
+      assert(failing.fail(0, 0) == ended(UnitOutcome.Failed(failing.failed(0), Nil)) && failing.ends == List(Failed(0, 0)) && failing.tried(0) == List(0 -> None))
+      val cancelling = play(single(Fallback, 2))
+      assert(cancelling.cancelled(0, 0) == ended(UnitOutcome.Cancelled) && cancelling.ends == List(Cancelled) && cancelling.tried(0) == Nil)
+    }
+    "go to the next candidate only when one abstains, and deliver with the candidate that ran" in {
+      given unit: Play = play(single(Fallback, 3))
+      assert(unit.abstain(0, 0) == launch(0 -> 1) && unit.ends == List(Pending) && unit.state.outcome.isEmpty)
+      assert(unit.abstain(0, 1, AbstentionReason.Launch) == launch(0 -> 2))
+      assert(unit.deliver(0, 2) == ended(UnitOutcome.Decided(delivered(0), Nil)))
+      assert(unit.tried(0) == List(0 -> quota, 1 -> Some(AbstentionReason.Launch), 2 -> None))
+      assert(unit.state.snapshot.seats.head.attempts.map(_.detail) == List(Some("detail 0.0"), Some("detail 0.1"), None))
+      // A failure of a later candidate ends the seat Failed: the candidates after it are not tried.
+      val failing = play(single(Fallback, 3))
+      assert(failing.abstain(0, 0) == launch(0 -> 1) && failing.fail(0, 1) == ended(UnitOutcome.Failed(failing.failed(0), Nil)))
+      assert(failing.ends == List(Failed(0, 1)) && failing.tried(0) == List(0 -> quota, 1 -> None))
+    }
+    "abstain, naming every candidate and reason, when its strategy is exhausted" in {
+      val unit = play(single(Fallback, 2))
+      assert(unit.abstain(0, 0, AbstentionReason.Credential) == launch(0 -> 1))
+      val reasons = unit.abstain(0, 1, AbstentionReason.Unavailable)
+      val named = List(SeatAttempt(attempt(0, 0), route(0, 0), Some(AbstentionReason.Credential), Some("detail 0.0")),
+        SeatAttempt(attempt(0, 1), route(0, 1), Some(AbstentionReason.Unavailable), Some("detail 0.1")))
+      assert(reasons == ended(UnitOutcome.Abstained(named, Nil)) && unit.ends == List(Abstained))
+      assert(UnitProgress.abstention(named) ==
+        "No configured model could run this work: pi:provider0/model0 Credential (detail 0.0); pi:provider0/model1 Unavailable (detail 0.1)")
+    }
+    "try candidate 0 only under `first`" in {
+      val abstaining = play(single(First, 3))
+      assert(abstaining.first == launch(0 -> 0) && abstaining.abstain(0, 0) == ended(UnitOutcome.Abstained(abstaining.abstentions(0), Nil)))
+      assert(abstaining.ends == List(Abstained) && abstaining.tried(0) == List(0 -> quota))
+      given delivering: Play = play(single(First, 3))
+      assert(delivering.deliver(0, 0) == ended(UnitOutcome.Decided(delivered(0), Nil)))
+    }
+    "rotate the fallback order of `rr` by the supplied start, wrap, and abstain after one full turn" in {
+      for (start <- 0 until 3) {
+        val unit = new Play(single(Rr, 3), _ => start)
+        val order = List(start, (start + 1) % 3, (start + 2) % 3)
+        assert(unit.first == launch(0 -> order.head), s"start $start")
+        assert(unit.abstain(0, order(0)) == launch(0 -> order(1)) && unit.abstain(0, order(1)) == launch(0 -> order(2)), s"start $start")
+        assert(unit.abstain(0, order(2)) == ended(UnitOutcome.Abstained(unit.abstentions(0), Nil)), s"start $start")
+        assert(unit.tried(0) == order.map(_ -> quota) && unit.drawn == List(0), s"start $start")
+      }
+      given unit: Play = new Play(single(Rr, 3), _ => 2)
+      assert(unit.abstain(0, 2) == launch(0 -> 0) && unit.deliver(0, 0) == ended(UnitOutcome.Decided(delivered(0), Nil)))
+      // A failure ends an rr seat as it ends a fallback seat.
+      val failing = new Play(single(Rr, 3), _ => 1)
+      assert(failing.fail(0, 1) == ended(UnitOutcome.Failed(failing.failed(0), Nil)))
+      assert(intercept[IllegalArgumentException](new Play(single(Rr, 3), _ => 3)).getMessage.contains("Round-robin start 3"))
+      // Only an rr seat draws a start.
+      assert(play(single(Fallback, 3)).drawn == Nil && play(single(First, 3)).drawn == Nil)
+    }
+  }
+
+  "An `all` panel (Behavioral Active Blackbox Atomic)" should {
+    "start every seat at once and end when each has ended, deciding with min delivered although seats abstained" in {
+      given unit: Play = play(role(PanelMode.All, 2, Fallback -> 1, Fallback -> 2, First -> 2))
+      assert(unit.first == launch(0 -> 0, 1 -> 0, 2 -> 0))
+      assert(unit.deliver(2, 0) == UnitStep.Wait && unit.abstain(1, 0) == launch(1 -> 1) && unit.abstain(0, 0) == UnitStep.Wait)
+      assert(unit.state.outcome.isEmpty && unit.ends == List(Abstained, Pending, Delivered(2)))
+      // Delivered seats are listed in the order they delivered.
+      assert(unit.deliver(1, 1) == ended(UnitOutcome.Decided(delivered(2, 1), Nil)))
+      assert(unit.ends == List(Abstained, Delivered(1), Delivered(2)))
+    }
+    "wait for the seats still in flight after min is met" in {
+      given unit: Play = play(role(PanelMode.All, 1, Fallback -> 1, Fallback -> 1))
+      assert(unit.deliver(0, 0) == UnitStep.Wait && unit.state.outcome.isEmpty)
+      assert(unit.deliver(1, 0) == ended(UnitOutcome.Decided(delivered(0, 1), Nil)))
+    }
+    "abstain when abstentions alone leave it below min, naming the candidates of the seats that abstained" in {
+      val unit = play(role(PanelMode.All, 2, Fallback -> 2, Fallback -> 2, First -> 2))
+      assert(unit.abstain(0, 0) == launch(0 -> 1) && unit.deliver(0, 1) == UnitStep.Wait && unit.abstain(2, 0) == UnitStep.Wait)
+      assert(unit.abstain(1, 0) == launch(1 -> 1))
+      val last = unit.abstain(1, 1, AbstentionReason.RateLimit)
+      // Seat 0 delivered after its first candidate abstained: that abstention is not why the unit has no result.
+      val kept = List(DeliveredSeat(0, attempt(0, 1), result(0), ChildNext.ConsiderAcceptance))
+      assert(last == ended(UnitOutcome.Abstained(unit.abstentions(1, 2), kept)))
+      assert(unit.abstentions(1, 2).map(value => value.attempt -> value.abstained) ==
+        List(attempt(1, 0) -> quota, attempt(1, 1) -> Some(AbstentionReason.RateLimit), attempt(2, 0) -> quota))
+    }
+    "tolerate a failed seat while min is met, listing it, and fail with the first failed seat's fault when min is not met" in {
+      given met: Play = play(role(PanelMode.All, 2, Fallback -> 2, Fallback -> 1, Fallback -> 1))
+      assert(met.fail(1, 0) == UnitStep.Wait && met.deliver(2, 0) == UnitStep.Wait)
+      assert(met.deliver(0, 0) == ended(UnitOutcome.Decided(delivered(2, 0), met.failed(1))) && met.ends == List(Delivered(0), Failed(1, 0), Delivered(2)))
+      val unmet = play(role(PanelMode.All, 2, Fallback -> 1, Fallback -> 1, Fallback -> 1))
+      assert(unmet.fail(2, 0) == UnitStep.Wait && unmet.abstain(0, 0) == UnitStep.Wait)
+      // Seat 2 failed before seat 1: its fault is the unit's.
+      val end = unmet.fail(1, 0)
+      assert(end == ended(UnitOutcome.Failed(unmet.failed(2, 1), Nil)))
+      assert(end match { case UnitStep.Ended(UnitOutcome.Failed(first :: _, _)) => first.fault == "fault 2.0" && first.attempt == attempt(2, 0); case _ => false })
+      // A failure outranks abstentions below min, and the seat that delivered is kept with the outcome.
+      val both = play(role(PanelMode.All, 3, Fallback -> 1, Fallback -> 1, Fallback -> 1))
+      assert(both.abstain(0, 0) == UnitStep.Wait && both.deliver(1, 0) == UnitStep.Wait)
+      assert(both.fail(2, 0) == ended(UnitOutcome.Failed(both.failed(2), List(DeliveredSeat(1, attempt(1, 0), result(1), ChildNext.ConsiderAcceptance)))))
+    }
+  }
+
+  "An `any` panel (Behavioral Active Blackbox Atomic)" should {
+    "start only the seats min needs, in listed order, and never a later seat once min verdicts are in" in {
+      given one: Play = play(role(PanelMode.Any, 1, Fallback -> 1, Fallback -> 1, Fallback -> 1))
+      assert(one.first == launch(0 -> 0) && one.deliver(0, 0) == ended(UnitOutcome.Decided(delivered(0), Nil)))
+      assert(one.ends == List(Delivered(0), Pending, Pending) && one.tried(1) == Nil && one.tried(2) == Nil)
+      val two = play(role(PanelMode.Any, 2, Fallback -> 1, Fallback -> 1, Fallback -> 1, Fallback -> 1))
+      assert(two.first == launch(0 -> 0, 1 -> 0))
+      assert(two.deliver(1, 0) == UnitStep.Wait && two.ends == List(Pending, Delivered(1), Pending, Pending))
+      assert(two.deliver(0, 0).isInstanceOf[UnitStep.Ended] && two.ends == List(Delivered(0), Delivered(1), Pending, Pending))
+    }
+    "start the next listed seat when one abstains or fails, after the seat's own candidates" in {
+      given unit: Play = play(role(PanelMode.Any, 2, Fallback -> 2, Fallback -> 1, Fallback -> 1, Fallback -> 1, Fallback -> 1))
+      assert(unit.first == launch(0 -> 0, 1 -> 0))
+      // The seat's own next candidate comes before another seat.
+      assert(unit.abstain(0, 0) == launch(0 -> 1) && unit.abstain(0, 1) == launch(2 -> 0))
+      assert(unit.fail(1, 0) == launch(3 -> 0))
+      assert(unit.deliver(3, 0) == UnitStep.Wait && unit.deliver(2, 0) == ended(UnitOutcome.Decided(delivered(3, 2), unit.failed(1))))
+      assert(unit.ends == List(Abstained, Failed(1, 0), Delivered(2), Delivered(3), Pending) && unit.tried(4) == Nil)
+    }
+    "end below min when its seats are used up: failed when one failed, abstained when all that did not deliver abstained" in {
+      val failed = play(role(PanelMode.Any, 2, Fallback -> 1, Fallback -> 1, Fallback -> 1))
+      assert(failed.abstain(0, 0) == launch(2 -> 0) && failed.fail(2, 0) == UnitStep.Wait)
+      assert(failed.deliver(1, 0) == ended(UnitOutcome.Failed(failed.failed(2), List(DeliveredSeat(1, attempt(1, 0), result(1), ChildNext.ConsiderAcceptance)))))
+      val abstained = play(role(PanelMode.Any, 1, First -> 2, Fallback -> 2))
+      assert(abstained.abstain(0, 0) == launch(1 -> 0) && abstained.abstain(1, 0) == launch(1 -> 1))
+      assert(abstained.abstain(1, 1) == ended(UnitOutcome.Abstained(abstained.abstentions(0, 1), Nil)))
+    }
+    "draw the start of an rr seat when the seat is started, and none for a seat it never starts" in {
+      val idle = new Play(role(PanelMode.Any, 1, Fallback -> 1, Rr -> 3), _ => 1)
+      assert(idle.drawn == Nil && idle.deliver(0, 0).isInstanceOf[UnitStep.Ended] && idle.drawn == Nil)
+      val used = new Play(role(PanelMode.Any, 1, Fallback -> 1, Rr -> 3), _ => 1)
+      assert(used.abstain(0, 0) == launch(1 -> 1) && used.drawn == List(1))
+      assert(used.abstain(1, 1) == launch(1 -> 2) && used.abstain(1, 2) == launch(1 -> 0) && used.drawn == List(1))
+      val every = new Play(role(PanelMode.All, 1, Rr -> 2, Fallback -> 1, Rr -> 2), seat => seat / 2)
+      assert(every.first == launch(0 -> 0, 1 -> 0, 2 -> 1) && every.drawn == List(0, 2))
+    }
+  }
+
+  "A cancelled unit (Behavioral Active Blackbox Atomic)" should {
+    "never count a cancellation as an abstention, nor go on to another candidate or seat" in {
+      val seat = play(single(Fallback, 3))
+      assert(seat.abstain(0, 0) == launch(0 -> 1) && seat.cancelled(0, 1) == ended(UnitOutcome.Cancelled))
+      assert(seat.ends == List(Cancelled) && seat.tried(0) == List(0 -> quota))
+      val panel = play(role(PanelMode.Any, 1, Fallback -> 2, Fallback -> 1))
+      assert(panel.started(0, 0) == UnitStep.Wait && panel.cancelled(0, 0) == ended(UnitOutcome.Cancelled))
+      assert(panel.ends == List(Cancelled, Pending) && panel.tried(0) == List(0 -> None) && panel.tried(1) == Nil)
+    }
+    "launch nothing after the unit's cancellation began, and end Cancelled once its candidates in flight ended, however they ended" in {
+      val unit = play(role(PanelMode.All, 1, Fallback -> 2, Fallback -> 1, Fallback -> 2))
+      assert(unit.cancel() == UnitStep.Wait && unit.state.outcome.isEmpty)
+      // A candidate that abstains while the unit is cancelled ends its seat Cancelled; the abstention stays on the attempt.
+      assert(unit.abstain(0, 0) == UnitStep.Wait && unit.deliver(1, 0) == UnitStep.Wait)
+      assert(unit.cancelled(2, 0) == ended(UnitOutcome.Cancelled))
+      assert(unit.ends == List(Cancelled, Delivered(1), Cancelled) && unit.tried(0) == List(0 -> quota))
+      val topped = play(role(PanelMode.Any, 1, Fallback -> 1, Fallback -> 1))
+      assert(topped.cancel() == UnitStep.Wait && topped.fail(0, 0) == ended(UnitOutcome.Cancelled) && topped.ends == List(Failed(0, 0), Pending))
+    }
+    "be Cancelled although a seat delivered, and keep the end of a unit that had ended" in {
+      val late = play(role(PanelMode.All, 1, Fallback -> 1, Fallback -> 1))
+      assert(late.deliver(0, 0) == UnitStep.Wait && late.cancelled(1, 0) == ended(UnitOutcome.Cancelled))
+      given done: Play = play(single(Fallback, 1))
+      val end = ended(UnitOutcome.Decided({ done.deliver(0, 0); delivered(0) }, Nil))
+      assert(done.cancel() == end && done.state.outcome.contains(UnitOutcome.Decided(delivered(0), Nil)))
+    }
+  }
+
+  "A unit (Behavioral Active Blackbox Atomic)" should {
+    "refuse an event that does not belong to a candidate in flight, and a role that cannot be run" in {
+      val unit = play(role(PanelMode.Any, 1, Fallback -> 2, Fallback -> 1))
+      def refused(event: UnitEvent, fragment: String): Unit =
+        assert(intercept[IllegalStateException](unit.raw(event)).getMessage.contains(fragment), event.toString)
+      refused(UnitEvent.Failed(SeatCandidate(0, 0), "fault"), "ended before its attempt was reported")
+      refused(UnitEvent.Delivered(SeatCandidate(0, 0), result(0), ChildNext.Review), "ended before its attempt was reported")
+      refused(UnitEvent.Abstained(SeatCandidate(0, 0), AbstentionReason.Quota, "detail"), "ended before its attempt was reported")
+      refused(UnitEvent.Started(SeatCandidate(0, 1), attempt(0, 1)), "Candidate 1 of seat 0")
+      refused(UnitEvent.Started(SeatCandidate(1, 0), attempt(1, 0)), "Candidate 0 of seat 1")
+      refused(UnitEvent.Started(SeatCandidate(2, 0), attempt(2, 0)), "is not in flight")
+      refused(UnitEvent.Started(SeatCandidate(-1, 0), attempt(0, 0)), "is not in flight")
+      assert(unit.started(0, 0) == UnitStep.Wait)
+      refused(UnitEvent.Started(SeatCandidate(0, 0), attempt(0, 0)), "already has its attempt")
+      assert(unit.deliver(0, 0).isInstanceOf[UnitStep.Ended])
+      refused(UnitEvent.Failed(SeatCandidate(0, 0), "fault"), "is not in flight")
+      refused(UnitEvent.Started(SeatCandidate(1, 0), attempt(1, 0)), "is not in flight")
+      for (invalid <- List(role(PanelMode.All, 0, Fallback -> 1), role(PanelMode.Any, 3, Fallback -> 1, Fallback -> 1), role(PanelMode.All, 1),
+          role(PanelMode.All, 1, Fallback -> 0)))
+        assert(intercept[IllegalArgumentException](play(invalid)).getMessage.contains("resolved role"), invalid.toString)
+    }
+
+    // Every role of up to three seats with up to two candidates each, and every order and kind of end of its candidates.
+    "keep its rules in every run of every small role" in {
+      val strategies = List(Fallback, First, Rr)
+      val shapes = for { strategy <- strategies; candidates <- 1 to 2 } yield strategy -> candidates
+      def lists(size: Int): List[List[(SeatStrategy, Int)]] = if (size == 0) List(Nil) else for { head <- shapes; tail <- lists(size - 1) } yield head :: tail
+      var runs = 0
+      var outcomes = Set.empty[String]
+      for { size <- 1 to 3; seats <- lists(size); mode <- List(PanelMode.All, PanelMode.Any); min <- 1 to size } {
+        val plan = role(mode, min, seats*)
+        def start(seat: Int): Int = seat % plan.seats(seat).candidates.size
+        def expected(seat: Int): List[Int] = plan.seats(seat).strategy match {
+          case SeatStrategy.Fallback => plan.seats(seat).candidates.indices.toList
+          case SeatStrategy.First => List(0)
+          case SeatStrategy.RoundRobin => plan.seats(seat).candidates.indices.toList.map(offset => (start(seat) + offset) % plan.seats(seat).candidates.size)
+        }
+        // `flying` are the candidates in flight; `began` the seats started, in the order they were.
+        def check(state: UnitProgress, flying: Set[SeatCandidate], began: List[Int], context: String): Unit = {
+          val seen = state.snapshot.seats
+          val done = seen.count(_.end.isInstanceOf[SeatEnd.Delivered])
+          val lost = seen.count(value => value.end == SeatEnd.Abstained() || value.end.isInstanceOf[SeatEnd.Failed])
+          assert(began == began.sorted && began == (0 until began.size).toList, context)
+          mode match {
+            case PanelMode.All => assert(began.size == size, context)
+            case PanelMode.Any =>
+              assert(flying.size + done <= min && began.size <= min + lost, context)
+              if (began.size < size) assert(flying.size + done == min, context)
+          }
+          seen.foreach { value =>
+            val order = value.attempts.map(attempt => plan.seats(value.seat).candidates.indexOf(attempt.route))
+            assert(order == expected(value.seat).take(order.size), context)
+            assert(value.attempts.dropRight(1).forall(_.abstained.nonEmpty), context)
+            value.end match {
+              case SeatEnd.Abstained() => assert(order == expected(value.seat) && value.attempts.forall(_.abstained.nonEmpty), context)
+              case _: SeatEnd.Delivered | _: SeatEnd.Failed => assert(value.attempts.last.abstained.isEmpty, context)
+              case _ => assert(flying.exists(_.seat == value.seat) || !began.contains(value.seat), context)
+            }
+          }
+          val outcome = state.outcome
+          assert(outcome.isEmpty == flying.nonEmpty, context)
+          outcome.foreach {
+            case UnitOutcome.Decided(delivered, failed) =>
+              assert(done >= min && delivered.size == done && failed.size == seen.count(_.end.isInstanceOf[SeatEnd.Failed]), context)
+              if (mode == PanelMode.Any) assert(done == min, context)
+            case UnitOutcome.Failed(failed, delivered) => assert(done < min && failed.nonEmpty && delivered.size == done, context)
+            case UnitOutcome.Abstained(candidates, delivered) =>
+              assert(done < min && delivered.size == done && seen.forall(!_.end.isInstanceOf[SeatEnd.Failed]), context)
+              assert(candidates == seen.filter(_.end == SeatEnd.Abstained()).flatMap(_.attempts) && candidates.forall(_.abstained.nonEmpty), context)
+            case UnitOutcome.Cancelled => fail(context)
+          }
+          outcome.foreach(value => outcomes += value.getClass.getSimpleName)
+        }
+        def step(state: UnitProgress, taken: UnitStep, flying: Set[SeatCandidate], began: List[Int], context: String): Unit = {
+          val launched = taken match { case UnitStep.Launch(candidates) => candidates; case _ => Nil }
+          val known = launched.foldLeft(state)((current, candidate) => current(UnitEvent.Started(candidate, attempt(candidate.seat, candidate.candidate)))._1)
+          val now = flying ++ launched
+          val seats = began ++ launched.map(_.seat).filterNot(began.contains)
+          check(known, now, seats, context)
+          assert(taken.isInstanceOf[UnitStep.Ended] == now.isEmpty && (taken match { case UnitStep.Ended(outcome) => known.outcome.contains(outcome); case _ => true }), context)
+          if (now.isEmpty) runs += 1
+          for { candidate <- now; end <- 0 until 3 } {
+            val event = end match {
+              case 0 => UnitEvent.Delivered(candidate, result(candidate.seat), ChildNext.ConsiderAcceptance)
+              case 1 => UnitEvent.Abstained(candidate, AbstentionReason.Quota, "detail")
+              case _ => UnitEvent.Failed(candidate, "fault")
+            }
+            val (next, following) = known(event)
+            step(next, following, now - candidate, seats, s"$context; $event")
+          }
+        }
+        val (state, first) = UnitProgress.begin(request, plan, start)
+        step(state, first, Set.empty, Nil, cq.core.AgentConfigText.render(plan))
+      }
+      assert(outcomes == Set("Decided", "Failed", "Abstained") && runs > 10000, s"$runs runs ended as $outcomes")
+    }
+  }
+
+  "A seat rotation (Behavioral Active Blackbox Atomic)" should {
+    val candidates = (0 until 3).toList.map(route(0, _))
+    def session(low: Long): SessionId = SessionId(new UUID(99L, low))
+    "start at a position derived from the session and advance by one for each unit that draws the seat, wrapping" in {
+      for (low <- List(0L, 1L, 2L, 3L, 4L, -1L, -2L, Long.MaxValue, Long.MinValue)) {
+        val rotation = new SeatRotation(session(low))
+        val first = Math.floorMod(low, 3L).toInt
+        assert(List.fill(7)(rotation.next(AgentRole.Reviewer, 0, candidates)) == (0 until 7).toList.map(draw => (first + draw) % 3), s"session $low")
+      }
+      // Sessions differ in where they start.
+      assert(List(0L, 1L, 2L).map(low => new SeatRotation(session(low)).next(AgentRole.Worker, 0, candidates)) == List(0, 1, 2))
+      assert(SeatRotation.offset(session(5L)) == 5L)
+    }
+    "keep one position for each role, seat index and candidate list" in {
+      val rotation = new SeatRotation(session(0L))
+      assert(List.fill(2)(rotation.next(AgentRole.Reviewer, 0, candidates)) == List(0, 1))
+      assert(rotation.next(AgentRole.Worker, 0, candidates) == 0 && rotation.next(AgentRole.Reviewer, 1, candidates) == 0)
+      assert(rotation.next(AgentRole.Reviewer, 0, candidates.reverse) == 0 && rotation.next(AgentRole.Reviewer, 0, candidates.take(2)) == 0)
+      assert(rotation.next(AgentRole.Reviewer, 0, candidates) == 2 && rotation.next(AgentRole.Reviewer, 0, candidates) == 0)
+      assert(new SeatRotation(session(0L)).next(AgentRole.Reviewer, 0, candidates) == 0)
+      assert(intercept[IllegalArgumentException](rotation.next(AgentRole.Reviewer, 0, Nil)).getMessage.contains("A seat has candidates"))
+    }
+    "give every draw of concurrent units its own position" in {
+      val rotation = new SeatRotation(session(1L))
+      val threads = 8
+      val each = 300
+      val pool = Executors.newFixedThreadPool(threads)
+      val ready = new CountDownLatch(1)
+      val drawn = new java.util.concurrent.ConcurrentLinkedQueue[Int]()
+      try {
+        val tasks = (0 until threads).map(_ => pool.submit(new Runnable {
+          def run(): Unit = { ready.await(); (0 until each).foreach(_ => drawn.add(rotation.next(AgentRole.Reviewer, 0, candidates))) }
+        }))
+        ready.countDown()
+        tasks.foreach(_.get(60, TimeUnit.SECONDS))
+      } finally pool.shutdown()
+      val counts = scala.jdk.CollectionConverters.IterableHasAsScala(drawn).asScala.toList.groupBy(identity).view.mapValues(_.size).toMap
+      assert(counts == Map(0 -> 800, 1 -> 800, 2 -> 800), counts.toString)
+      assert(rotation.next(AgentRole.Reviewer, 0, candidates) == 1)
+    }
+  }
+
+  "A review aggregate (Behavioral Active Blackbox Atomic)" should {
+    val A = ReviewVerdict.Accepted
+    val C = ReviewVerdict.ChangesRequested
+    val B = ReviewVerdict.Blocked
+    def item(number: Int): ItemId = ItemId(project, Ledger.Tasks, number.toLong)
+    // As DispatchProjection.completed derives a review's counts and next from its report.
+    def review(seat: Int, verdicts: ReviewVerdict*): ReviewSeat = {
+      val members = verdicts.toList.zipWithIndex.map((verdict, index) => ReviewMember(item(index + 1), verdict, if (verdict == A) Nil else List(s"finding of seat $seat")))
+      val counts = DispatchProjection.EmptyCounts.copy(accepted = verdicts.count(_ == A), changesRequested = verdicts.count(_ == C), blocked = verdicts.count(_ == B),
+        validationIntermittent = seat)
+      val next = if (verdicts.contains(C)) ChildNext.Revise else if (verdicts.contains(B)) ChildNext.ResolveBlocker else ChildNext.ConsiderAcceptance
+      ReviewSeat(seat, DispatchStatus(request, attempt(seat, 0), DispatchPhase.Completed, None, members.map(_.item), counts, next,
+        members.find(_.verdict != A).flatMap(_.findings.headOption), Some(result(seat)), None, true, false, None, None), members)
+    }
+    val handle = AttemptId(UUID.randomUUID())
+    "take the worst verdict: Blocked over ChangesRequested over Accepted" in {
+      val all = List(A, C, B)
+      val rank = Map(A -> 0, C -> 1, B -> 2)
+      for { first <- all; second <- all; third <- all } {
+        val expected = List(first, second, third).maxBy(rank)
+        assert(ReviewAggregate.worst(List(first, second, third)).contains(expected) && ReviewAggregate.worst(List(first, second)).contains(List(first, second).maxBy(rank)))
+      }
+      assert(all.forall(verdict => ReviewAggregate.worst(List(verdict)).contains(verdict)) && ReviewAggregate.worst(Nil).isEmpty)
+      assert(ReviewAggregate.worst(List(A, B)).contains(B) && ReviewAggregate.worst(List(C, B)).contains(B) && ReviewAggregate.worst(List(C, A)).contains(C))
+    }
+    // seats in delivery order, then: aggregate verdicts, disputed members, representative seat, next
+    val table = List(
+      ("one accepting seat", List(review(0, A, A)), List(A, A), Nil, 0, ChildNext.ConsiderAcceptance),
+      ("unanimous acceptance", List(review(1, A, A), review(0, A, A)), List(A, A), Nil, 1, ChildNext.ConsiderAcceptance),
+      ("unanimous over three seats", List(review(2, A, A, A), review(0, A, A, A), review(1, A, A, A)), List(A, A, A), Nil, 2, ChildNext.ConsiderAcceptance),
+      ("unanimous with different verdicts for different members", List(review(0, C, A, B), review(1, C, A, B)), List(C, A, B), Nil, 0, ChildNext.Revise),
+      ("unanimous blocked", List(review(1, B), review(0, B)), List(B), Nil, 1, ChildNext.ResolveBlocker),
+      ("the second seat dissents", List(review(0, A, A), review(1, C, A)), List(C, A), List(1), 1, ChildNext.Arbitrate),
+      ("the first seat dissents", List(review(1, A, C), review(0, A, A)), List(A, C), List(2), 1, ChildNext.Arbitrate),
+      ("each seat is the worse on one member", List(review(0, A, C), review(1, C, A)), List(C, C), List(1, 2), 0, ChildNext.Arbitrate),
+      ("three verdicts for one member", List(review(0, A, A), review(1, C, A), review(2, B, A)), List(B, A), List(1), 2, ChildNext.Arbitrate),
+      ("the worst of a disputed member, not of an agreed one, picks the seat", List(review(0, A, B), review(1, A, B), review(2, C, B)), List(C, B), List(1), 2, ChildNext.Arbitrate),
+      ("blocked against changes requested", List(review(0, C, C), review(1, C, B), review(2, C, B)), List(C, B), List(2), 1, ChildNext.Arbitrate),
+      ("two members disputed by different seats", List(review(0, A, A, A), review(1, A, C, A), review(2, B, A, A)), List(B, C, A), List(1, 2), 1, ChildNext.Arbitrate))
+    "give each member its worst verdict, say whether the seats disagree and which seat stands for the unit" in {
+      for ((name, seats, verdicts, disputed, representative, next) <- table) {
+        val aggregate = ReviewAggregate(seats)
+        assert(aggregate.verdicts == verdicts.zipWithIndex.map((verdict, index) => item(index + 1) -> verdict), name)
+        assert(aggregate.disputed == disputed.map(item) && aggregate.mixed == disputed.nonEmpty, name)
+        assert(aggregate.representative.seat == representative && aggregate.next == next, name)
+        val standing = seats.find(_.seat == representative).get.status
+        assert(aggregate.counts == standing.counts.copy(accepted = verdicts.count(_ == A), changesRequested = verdicts.count(_ == C), blocked = verdicts.count(_ == B)), name)
+        // The checks of the host are counted for the representative's own run.
+        assert(aggregate.counts.validationIntermittent == representative, name)
+        val status = aggregate.status(handle)
+        assert(status.attempt == handle && status.result.contains(result(representative)) && status.next == next && status.counts == aggregate.counts, name)
+        assert(status.copy(attempt = standing.attempt, counts = standing.counts, next = standing.next, blocker = standing.blocker) == standing, name)
+        if (disputed.isEmpty) assert(status == standing.copy(attempt = handle), name)
+        else assert(status.blocker.contains(s"Reviewers disagree on ${disputed.map(number => s"T$number").mkString(",")}: read Seats"), name)
+      }
+    }
+    "refuse seats that do not cover the same members, and no seat at all" in {
+      assert(intercept[IllegalArgumentException](ReviewAggregate(Nil)).getMessage.contains("needs a delivered seat"))
+      assert(intercept[IllegalArgumentException](ReviewAggregate(List(review(0, A, A), review(1, A)))).getMessage.contains("cover the same members"))
+      // The order in which a report lists its members does not matter.
+      val reversed = review(1, C, A)
+      assert(ReviewAggregate(List(review(0, A, A), reversed.copy(members = reversed.members.reverse))).disputed == List(item(1)))
+    }
+  }
+}
