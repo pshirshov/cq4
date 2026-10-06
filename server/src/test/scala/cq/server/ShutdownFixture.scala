@@ -94,7 +94,7 @@ object ShutdownFixture extends RoleAppMain.LauncherBIO[IO] {
     val settings = SupervisorSettings(state.getOrElse(root).toString, guardian.toString, List(profile), Limits, Nil, None, None)
     val assignment = Assignment(AssignmentId(UUID.randomUUID()), project.project, Set.empty, Attribution.Unattributed, None, None)
     val attempt = Attempt(AttemptId(UUID.randomUUID()), assignment.id, None, workspace.owner, Role.Governor, harness,
-      if (attached) "unobserved-interactive-provider" else profile.provider, if (attached) "unobserved-interactive-model" else profile.model, "fixture", clock.millis(), UsagePhase.Govern)
+      if (attached) "unobserved-interactive-provider" else profile.provider, if (attached) "unobserved-interactive-model" else profile.model, "fixture", clock.millis(), UsagePhase.Govern, None)
     Files.writeString(root.resolve("governor-attempt"), attempt.id.value.toString)
     SupervisorConfig(settings, project, SupervisorConfig.profile(profile), SupervisorConfig.limits(Limits),
       SupervisorRun(project, assignment, attempt, profile.version, workspace.repository, workspace.base, if (attached) SessionOwnership.Attached else SessionOwnership.Managed),

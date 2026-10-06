@@ -202,7 +202,7 @@ object AgentConfigText {
         case scalar: YamlNode.Scalar => AgentReferenceText.tierEntry(scalar.text) match {
           case Left(message) => syntax(scalar.at, message); None
           case Right(entry) =>
-            problems ++= AgentResolution.routeProblems(scalar.at, harness, entry.model.provider, entry.effort)
+            problems ++= AgentResolution.routeProblems(scalar.at, harness, entry.model, entry.effort)
             Some(entry)
         }
         case other => syntax(other.at, "expected a model name"); None
@@ -229,7 +229,7 @@ object AgentConfigText {
           }
           harness.foreach { known =>
             problems ++= (value.target match {
-              case ModelTarget.Exact(model) => AgentResolution.routeProblems(scalar.at, known, model.provider, value.effort)
+              case ModelTarget.Exact(model) => AgentResolution.routeProblems(scalar.at, known, model, value.effort)
               case _: ModelTarget.Tier => AgentResolution.effortProblems(scalar.at, known, value.effort)
             })
           }
@@ -359,6 +359,8 @@ object AgentConfigText {
     case AgentProblem.ProviderNotAllowed(position, value) => s"${at(position)}: a ${harness(value)} model is written without a provider"
     case AgentProblem.EffortUnsupported(position, value, effort) =>
       s"${at(position)}: ${harness(value)} does not take effort ${AgentReferenceText.text(Efforts, effort)}; it takes ${listed(Efforts, Effort.all.filter(AgentResolution.efforts(value)))}"
+    case AgentProblem.ModelAmbiguous(position, value, model) =>
+      s"${at(position)}: ${harness(value)} reads the ending of the model name '$model' as a thinking level, so the name selects no one model; a level is written ?effort=…"
     case AgentProblem.RoleUnassigned(value, unassigned) => s"no layer assigns the ${role(unassigned)} role when ${harness(value)} governs"
     case AgentProblem.TierUndefined(value, tier, assigned) =>
       s"the ${role(assigned)} role refers to the ${AgentReferenceText.text(Tiers, tier)} tier of ${harness(value)}, which no layer defines"

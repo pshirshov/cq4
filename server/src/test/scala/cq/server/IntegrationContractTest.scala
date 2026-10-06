@@ -90,7 +90,7 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
       items <- ZIO.foreach(members)(ref => ledger.get(owner, ref.id).map(_.item))
       claim <- ledger.acquire(owner, ClaimId(uuid), members.map(_.id).toSet, 300000)
       parentAssignment <- usage.assign(collector, Assignment(AssignmentId(uuid), owner.project, Set.empty, Attribution.Unattributed, None, None))
-      parent <- usage.start(collector, Attempt(AttemptId(uuid), parentAssignment.id, None, owner.actor.session, Role.Governor, Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Govern))
+      parent <- usage.start(collector, Attempt(AttemptId(uuid), parentAssignment.id, None, owner.actor.session, Role.Governor, Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Govern, None))
       workerAssignment <- usage.assign(collector, Assignment(AssignmentId(uuid), owner.project, claim.members, Attribution.Shared, Some(uuid), None))
       workerAttempt <- usage.start(collector, parent.copy(id = AttemptId(uuid), assignment = workerAssignment.id, parent = Some(parent.id), role = Role.Worker))
       job = JobRecord(WorkspaceSpec(owner.project, owner.actor.session, AttemptId(uuid), "/consumer", candidate), "fixture", JobTarget.Run,
@@ -127,7 +127,7 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
     alter: ReviewValidation => ReviewValidation): Task[Fixture] = for {
     assignment <- usage.assign(f.collector, Assignment(AssignmentId(uuid), f.owner.project, f.claim.members, Attribution.Shared, Some(uuid), None))
     attempt <- usage.start(f.collector, Attempt(AttemptId(uuid), assignment.id, Some(f.governor), f.owner.actor.session, Role.Reviewer,
-      Harness.Pi, "fixture", "fixture", "fixture", 1000, UsagePhase.Review))
+      Harness.Pi, "fixture", "fixture", "fixture", 1000, UsagePhase.Review, None))
     artifact = ArtifactId(uuid)
     job = JobRecord(WorkspaceSpec(f.owner.project, f.owner.actor.session, AttemptId(uuid), f.intent.repository, f.intent.candidate),
       "reviewer-check", JobTarget.Run, JobPhase.Settled, Some(JobExit(Some(0), None, StopReason.Exited, 0, 0, true, false)), None, 1, 1000, 1001)
@@ -179,7 +179,7 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
     for {
       assignment <- usage.assign(original.collector, Assignment(AssignmentId(uuid), original.owner.project, original.claim.members, Attribution.Shared, Some(uuid), None))
       workerAttempt <- usage.start(original.collector, Attempt(AttemptId(uuid), assignment.id, Some(original.governor), original.owner.actor.session, Role.Worker,
-        Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Work))
+        Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Work, None))
       failed <- observe(workerAttempt.id, ValidationObservation(check, candidate, job(1), ArtifactId(uuid), ArtifactId(uuid)))
       worker = original.worker.copy(attempt = workerAttempt.id, validation = List(ValidationEvidence(check.name, ValidationState.Failed, failed, Nil)),
         request = original.worker.request.copy(request = RequestId(uuid)))
@@ -199,7 +199,7 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
         } yield PublishedAmendment(ResolvedArtifact(metadata, body), amendment)
       }
       reviewAttempt <- usage.start(original.collector, Attempt(AttemptId(uuid), assignment.id, Some(original.governor), original.owner.actor.session, Role.Reviewer,
-        Harness.Codex, "fixture", "fixture", "fixture", 1001, UsagePhase.Review))
+        Harness.Codex, "fixture", "fixture", "fixture", 1001, UsagePhase.Review, None))
       reviewer = original.reviewer.copy(attempt = reviewAttempt.id,
         validation = if (inheritLatest) published.last.value.validation else worker.validation,
         request = original.reviewer.request.copy(request = RequestId(uuid), previous = Some(workerArtifact)))
@@ -377,7 +377,7 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
           members = current.map(item => ItemRevision(item.id, item.revision))
           assignment <- usage.assign(f.collector, Assignment(AssignmentId(uuid), f.owner.project, f.claim.members, Attribution.Shared, Some(uuid), None))
           attempt <- usage.start(f.collector, Attempt(AttemptId(uuid), assignment.id, Some(f.governor), f.owner.actor.session, Role.Reviewer,
-            Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Review))
+            Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Review, None))
           review = f.reviewer.copy(attempt = attempt.id, request = f.reviewer.request.copy(request = RequestId(uuid), members = members))
           handle <- publish(f.collector, review, artifacts, admissions)
           id = IntegrationId(uuid)
@@ -501,11 +501,11 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
         // Without configured checks nothing verifies the rebased commit: the reviewed candidate integrates, a host rebase of it does not.
         assignment <- usage.assign(original.collector, Assignment(AssignmentId(uuid), original.owner.project, original.claim.members, Attribution.Shared, Some(uuid), None))
         workerAttempt <- usage.start(original.collector, Attempt(AttemptId(uuid), assignment.id, Some(original.governor), original.owner.actor.session, Role.Worker,
-          Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Work))
+          Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Work, None))
         worker = original.worker.copy(attempt = workerAttempt.id, validation = Nil, request = original.worker.request.copy(request = RequestId(uuid)))
         workerArtifact <- publish(original.collector, worker, artifacts, admissions)
         reviewAttempt <- usage.start(original.collector, Attempt(AttemptId(uuid), assignment.id, Some(original.governor), original.owner.actor.session, Role.Reviewer,
-          Harness.Codex, "fixture", "fixture", "fixture", 1001, UsagePhase.Review))
+          Harness.Codex, "fixture", "fixture", "fixture", 1001, UsagePhase.Review, None))
         reviewer = original.reviewer.copy(attempt = reviewAttempt.id, validation = Nil,
           request = original.reviewer.request.copy(request = RequestId(uuid), previous = Some(workerArtifact)))
         reviewArtifact <- publish(original.collector, reviewer, artifacts, admissions)
@@ -593,12 +593,12 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
         continuation = GitCommit("d" * 40)
         assignment <- usage.assign(f.collector, Assignment(AssignmentId(uuid), f.owner.project, f.claim.members, Attribution.Shared, Some(uuid), None))
         workerAttempt <- usage.start(f.collector, Attempt(AttemptId(uuid), assignment.id, Some(f.governor), f.owner.actor.session, Role.Worker,
-          Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Work))
+          Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Work, None))
         worker = f.worker.copy(attempt = workerAttempt.id, base = f.intent.candidate, candidate = Some(continuation), validation = Nil,
           request = f.worker.request.copy(request = RequestId(uuid), previous = Some(f.intent.reviewer)))
         workerArtifact <- publish(f.collector, worker, artifacts, admissions)
         reviewAttempt <- usage.start(f.collector, Attempt(AttemptId(uuid), assignment.id, Some(f.governor), f.owner.actor.session, Role.Reviewer,
-          Harness.Codex, "fixture", "fixture", "fixture", 1001, UsagePhase.Review))
+          Harness.Codex, "fixture", "fixture", "fixture", 1001, UsagePhase.Review, None))
         reviewer = f.reviewer.copy(attempt = reviewAttempt.id, base = continuation, candidate = Some(continuation), validation = Nil,
           request = f.reviewer.request.copy(request = RequestId(uuid), previous = Some(workerArtifact)))
         reviewArtifact <- publish(f.collector, reviewer, artifacts, admissions)
@@ -638,7 +638,7 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
         f <- begin(ledger, usage, artifacts, admissions)
         assignment <- usage.assign(f.collector, Assignment(AssignmentId(uuid), f.owner.project, f.claim.members, Attribution.Shared, Some(uuid), None))
         attempt <- usage.start(f.collector, Attempt(AttemptId(uuid), assignment.id, Some(f.governor), f.owner.actor.session, Role.Planner,
-          Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Plan))
+          Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Plan, None))
         report = ChildReport.Plan(f.intent.members.map(ref => PlanMember(ref.id, PlanDisposition.Proposed, "Follow-up")),
           Some(LedgerProposal(List(ProposedMutation.Create(task.copy(content = Content.Research(ResearchStatus.Open, "What remains?", Nil, None, None)))),
             "Create after integration settles")), Nil)

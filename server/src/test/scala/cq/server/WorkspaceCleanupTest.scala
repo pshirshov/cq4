@@ -50,7 +50,7 @@ final class WorkspaceCleanupLocal extends SpecZIO with AssertZIO {
     def run(owner: ProjectConfig, repository: String): SupervisorRun = {
       val assignment = Assignment(AssignmentId(uuid), owner.project, Set.empty, Attribution.Unattributed, None, None)
       val attempt = Attempt(AttemptId(uuid), assignment.id, None, SessionId(uuid), Role.Governor, Harness.Claude,
-        "unobserved-interactive-provider", "unobserved-interactive-model", "fixture", 1000, UsagePhase.Govern)
+        "unobserved-interactive-provider", "unobserved-interactive-model", "fixture", 1000, UsagePhase.Govern, None)
       SupervisorRun(owner, assignment, attempt, profile.version, repository, local.base, SessionOwnership.Attached)
     }
     def settings(run: SupervisorRun): SupervisorConfig = SupervisorConfig(
@@ -106,11 +106,11 @@ final class WorkspaceCleanupLocal extends SpecZIO with AssertZIO {
       val members = List(ItemRevision(ItemId(run.project.project, Ledger.Tasks, 1), Revision(1)))
       val assignment = Assignment(AssignmentId(uuid), run.project.project, members.map(_.id).toSet, Attribution.Direct, None, None)
       val profile = HarnessSetting(Harness.Codex, "/fixture", "fixture", "fixture", "0.156.1", Nil, Set.empty)
-      val child = Attempt(attempt, assignment.id, Some(run.attempt.id), run.attempt.session, Role.Worker, Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Work)
+      val child = Attempt(attempt, assignment.id, Some(run.attempt.id), run.attempt.session, Role.Worker, Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Work, None)
       val request = DispatchRequest(RequestId(uuid), DispatchWork.Worker(WorkerMode.Implement), Harness.Codex, members, Nil, Nil, None, Fence(ClaimId(uuid), 1), limits)
       val at = directory.resolve("children").resolve(attempt.value.toString)
       HostFiles.directory(at)
-      HostFiles.immutable(at.resolve("ticket.json"), HostFiles.encode(DispatchTicket_JsonCodec, DispatchTicket(request, assignment, child, profile, None)), 65536)
+      HostFiles.immutable(at.resolve("ticket.json"), HostFiles.encode(DispatchTicket_JsonCodec, DispatchTicket(request, assignment, child, Some(profile), None)), 65536)
     }
     def held[A](use: => Task[A]): Task[A] = ZIO.acquireReleaseWith(
       ZIO.attemptBlocking(FileJobRepository.open(directory.resolve("journal"), run.project.project, run.attempt.session)))(journal => ZIO.succeed(journal.close()))(_ => use)
@@ -127,8 +127,9 @@ final class WorkspaceCleanupLocal extends SpecZIO with AssertZIO {
       val completed = fixture.spec(owner)
       val unpublished = fixture.spec(owner)
       val failed = fixture.spec(owner)
+      val abstained = fixture.spec(owner)
       val unprepared = fixture.spec(owner)
-      val prepared = List(check, quarantined, running, completed, unpublished, failed)
+      val prepared = List(check, quarantined, running, completed, unpublished, failed, abstained)
       def record(spec: WorkspaceSpec, phase: JobPhase): JobRecord = JobRecord(spec, "0" * 64, JobTarget.Run, phase, None, None, 1, 1, 1)
       val records = (unprepared :: prepared).map(spec => record(spec, if (spec == running) JobPhase.Running else JobPhase.Settled))
       def listed: Set[String] = local.git(local.source, "worktree", "list", "--porcelain").linesIterator.filter(_.startsWith("worktree ")).map(_.stripPrefix("worktree ")).toSet
@@ -145,6 +146,8 @@ final class WorkspaceCleanupLocal extends SpecZIO with AssertZIO {
           child(session, completed, Some(DispatchPhase.Completed))
           child(session, unpublished, None)
           child(session, failed, Some(DispatchPhase.Failed))
+          // An abstained worker may have changed files before its provider refused it: its tree is kept as a failed one's is.
+          child(session, abstained, Some(DispatchPhase.Abstained))
           session
         }
         _ <- ZIO.foreachDiscard(prepared)(spec => service.prepare(owner, spec))
@@ -154,13 +157,13 @@ final class WorkspaceCleanupLocal extends SpecZIO with AssertZIO {
         again <- WorkspaceCleanup.sweep(owner, session, records, service, () => false)
         states <- ZIO.foreach(prepared)(spec => service.get(owner, spec.attempt))
         _ <- ZIO.attemptBlocking {
-          val kept = List(unpublished, failed).map(spec => RetainedWorkspace(spec.attempt, WorkspaceCleanup.Unpublished)).sortBy(_.attempt.value.toString)
+          val kept = List(unpublished, failed, abstained).map(spec => RetainedWorkspace(spec.attempt, WorkspaceCleanup.Unpublished)).sortBy(_.attempt.value.toString)
           assert(expired == SessionCleanup(owner.actor.session, Nil, Nil, Nil, 0, None))
           assert(report.session == owner.actor.session && report.removed.toSet == Set(check.attempt, completed.attempt), report.toString)
           assert(report.quarantined == List(RetainedWorkspace(running.attempt, WorkspaceCleanup.Unsettled)) && report.retained == kept, report.toString)
           assert(again == SessionCleanup(owner.actor.session, Nil, Nil, kept, 0, None), again.toString)
           assert(states.map(_.admission) == List(WorkspaceAdmission.Removed, WorkspaceAdmission.Quarantined, WorkspaceAdmission.Quarantined,
-            WorkspaceAdmission.Removed, WorkspaceAdmission.Open, WorkspaceAdmission.Open))
+            WorkspaceAdmission.Removed, WorkspaceAdmission.Open, WorkspaceAdmission.Open, WorkspaceAdmission.Open))
           assert(states(1).quarantineReason.contains("Termination unconfirmed") && states(2).quarantineReason.contains(WorkspaceCleanup.Unsettled))
           val remaining = states.filter(_.admission != WorkspaceAdmission.Removed)
           assert(states.filter(_.admission == WorkspaceAdmission.Removed).forall(value => !Files.exists(Path.of(value.directory))) &&

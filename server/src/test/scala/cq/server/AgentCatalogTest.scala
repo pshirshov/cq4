@@ -48,7 +48,7 @@ final class AgentCatalogLocal extends AnyWordSpec {
     case McpTarget.Local => HarnessMcp(McpTarget.Local, URI.create("http://127.0.0.1:1235/mcp"), AccessToken("scoped-local-token", 2000))
   }
   private def profile(harness: Harness): HarnessProfile = HarnessProfile(harness, Path.of("/test/harness"), "selected-model",
-    if (harness == Harness.Claude) "anthropic" else "selected-provider", HarnessUsage.version(harness), Nil, Set.empty)
+    if (harness == Harness.Claude) "anthropic" else "selected-provider", None, HarnessUsage.version(harness), Nil, Set.empty)
   private def option(arguments: List[String], name: String): String = {
     require(arguments.count(_ == name) == 1, s"Expected one $name")
     arguments(arguments.indexOf(name) + 1)

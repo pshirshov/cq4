@@ -159,7 +159,7 @@ export function attemptsTable(entries: api.AttemptView[], actions: AttemptAction
       ['Gaps', outcome === undefined ? 'No outcome recorded' : outcome.value.gaps.join('; ') || 'None recorded']]);
     const evaluation = assignment.evaluation;
     if (evaluation !== undefined) metadata.append(element('dt', 'Evaluation'), element('dd', `${evaluation.run} · ${evaluation.scenario} · ${evaluation.assessor ? 'Assessor' : 'Consumer'}`));
-    return [time(attempt.startedAt), `${attempt.harness} · ${attempt.role}`, `${attempt.provider} / ${attempt.model}`,
+    return [time(attempt.startedAt), `${attempt.harness} · ${attempt.role}`, `${attempt.provider} / ${attempt.model}${attempt.effort === undefined ? '' : ` · effort ${attempt.effort.toLowerCase()}`}`,
       outcome === undefined ? entry.observed ? 'Running' : 'Open' : outcome.value.state,
       `${assignment.attribution} · ${[...assignment.members].map(itemName).join(', ') || 'No assigned items'}`,
       details('Attempt details', metadata, scopes, button('Outcome history', () => actions.outcomes(attempt.id)))];

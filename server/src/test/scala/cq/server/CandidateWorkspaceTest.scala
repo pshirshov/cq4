@@ -17,7 +17,7 @@ final class CandidateWorkspaceLocal extends SpecZIO with AssertZIO {
   private def configuration(local: LocalWorkspaceFixture): SupervisorConfig = {
     val project = ProjectConfig(ProjectId(uuid), "http://localhost", "Candidate capture")
     val assignment = Assignment(AssignmentId(uuid), project.project, Set.empty, Attribution.Unattributed, None, None)
-    val attempt = Attempt(AttemptId(uuid), assignment.id, None, SessionId(uuid), Role.Governor, Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Govern)
+    val attempt = Attempt(AttemptId(uuid), assignment.id, None, SessionId(uuid), Role.Governor, Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Govern, None)
     val profile = HarnessSetting(Harness.Codex, "/unused/codex", "fixture", "fixture", "0.156.1", Nil, Set.empty)
     val limits = HostLimits(3000, 1000, 300, 2000, 262144)
     val settings = SupervisorSettings(local.directory.toString, "/unused/guardian", List(profile), limits, Nil, None, Some("refs/heads/integration"))

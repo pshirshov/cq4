@@ -1,0 +1,14 @@
+{"type":"thread.started","thread_id":"01a110bb-81d0-7e31-be5e-a8c605269842"}
+{"type":"turn.started"}
+{"type":"error","message":"Reconnecting... 2/5 (unexpected status 504 Gateway Timeout: Gateway timeout, url: ws://127.0.0.1:1/v1/responses)"}
+{"type":"error","message":"Reconnecting... 3/5 (unexpected status 504 Gateway Timeout: Gateway timeout, url: ws://127.0.0.1:1/v1/responses)"}
+{"type":"error","message":"Reconnecting... 4/5 (unexpected status 504 Gateway Timeout: Unknown error, url: ws://127.0.0.1:1/v1/responses)"}
+{"type":"error","message":"Reconnecting... 5/5 (unexpected status 504 Gateway Timeout: Gateway timeout, url: ws://127.0.0.1:1/v1/responses)"}
+{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Falling back from WebSockets to HTTPS transport. unexpected status 504 Gateway Timeout: Gateway timeout, url: ws://127.0.0.1:1/v1/responses"}}
+{"type":"error","message":"Reconnecting... 1/5 (unexpected status 504 Gateway Timeout: Gateway timeout, url: http://127.0.0.1:1/v1/responses)"}
+{"type":"error","message":"Reconnecting... 2/5 (unexpected status 504 Gateway Timeout: Gateway timeout, url: http://127.0.0.1:1/v1/responses)"}
+{"type":"error","message":"Reconnecting... 3/5 (unexpected status 504 Gateway Timeout: Gateway timeout, url: http://127.0.0.1:1/v1/responses)"}
+{"type":"error","message":"Reconnecting... 4/5 (unexpected status 504 Gateway Timeout: Gateway timeout, url: http://127.0.0.1:1/v1/responses)"}
+{"type":"error","message":"Reconnecting... 5/5 (unexpected status 504 Gateway Timeout: Gateway timeout, url: http://127.0.0.1:1/v1/responses)"}
+{"type":"error","message":"unexpected status 504 Gateway Timeout: Gateway timeout, url: http://127.0.0.1:1/v1/responses"}
+{"type":"turn.failed","error":{"message":"unexpected status 504 Gateway Timeout: Gateway timeout, url: http://127.0.0.1:1/v1/responses"}}

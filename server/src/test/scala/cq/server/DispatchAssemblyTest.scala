@@ -58,9 +58,9 @@ abstract class DispatchAssemblyTest extends SpecZIO with AssertZIO {
           assignment <- usage.assign(collector, Assignment(AssignmentId(UUID.randomUUID()), scope.project, Set(member.id), Attribution.Direct, None, None))
           governing <- usage.assign(collector, Assignment(AssignmentId(UUID.randomUUID()), scope.project, Set.empty, Attribution.Unattributed, None, None))
           parent <- usage.start(collector, Attempt(AttemptId(UUID.randomUUID()), governing.id, None, scope.actor.session, Role.Governor,
-            Harness.Codex, "fixture", "fixture", "fixture", clock.millis(), UsagePhase.Govern))
+            Harness.Codex, "fixture", "fixture", "fixture", clock.millis(), UsagePhase.Govern, None))
           attempt <- usage.start(collector, Attempt(AttemptId(UUID.randomUUID()), assignment.id, Some(parent.id), scope.actor.session, Role.Worker,
-            Harness.Codex, "fixture", "fixture", "fixture", clock.millis(), UsagePhase.Work))
+            Harness.Codex, "fixture", "fixture", "fixture", clock.millis(), UsagePhase.Work, None))
           small <- artifacts.upload(collector, ArtifactUpload(scope.project, ArtifactId(UUID.randomUUID()), attempt.id, ArtifactKind.Input, "text/plain", "short"))
           large <- artifacts.upload(collector, ArtifactUpload(scope.project, ArtifactId(UUID.randomUUID()), attempt.id, ArtifactKind.Input, "text/plain", largeBody))
           limits = HostLimits(3000, 1000, 300, 2000, 262144)

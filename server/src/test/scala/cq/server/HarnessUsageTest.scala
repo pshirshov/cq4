@@ -62,7 +62,7 @@ final class HarnessUsageLocal extends AnyWordSpec {
         Files.writeString(assets.resolve("last-message.json"), "{\"reply\":\"OK\"}")
         installed.foreach { case (harness, version, tokens, amount, source) =>
           val profile = HarnessProfile(harness, Path.of("/test/harness"), "selected-model",
-            if (harness == Harness.Claude) "anthropic" else "selected-provider", version, Nil, Set.empty)
+            if (harness == Harness.Claude) "anthropic" else "selected-provider", None, version, Nil, Set.empty)
           assert(profile.version == version)
           val input = request(harness).copy(version = version)
           val native = fixture(harness, version)

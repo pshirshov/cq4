@@ -43,7 +43,7 @@ object HarnessAdapterProbe extends ZIOAppDefault {
     }
     val key = harness.toString.toUpperCase
     val profile = HarnessProfile(harness, Path.of(environment("CQ_" + key + "_BIN")), environment("CQ_" + key + "_MODEL"),
-      environment("CQ_" + key + "_PROVIDER"), HarnessUsage.version(harness), Nil, Set.empty)
+      environment("CQ_" + key + "_PROVIDER"), None, HarnessUsage.version(harness), Nil, Set.empty)
     val attempt = Attempt(AttemptId(UUID.randomUUID()), AssignmentId(UUID.randomUUID()), None, session, role, harness,
       profile.provider, profile.model, "CQ native collector 0.1.0", clock.millis(), role match {
         case Role.Explorer => UsagePhase.Explore
@@ -51,7 +51,7 @@ object HarnessAdapterProbe extends ZIOAppDefault {
         case Role.Worker => UsagePhase.Work
         case Role.Reviewer => UsagePhase.Review
         case other => throw new IllegalArgumentException(s"No dispatched phase for $other")
-      })
+      }, None)
     val assignment = Assignment(attempt.assignment, project, Set.empty, Attribution.Unattributed, None,
       Some(EvaluationScope("adapter-capabilities", harness.toString + "-" + role.toString, false)))
     val marker = "read-from-cq-" + UUID.randomUUID()

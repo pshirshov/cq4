@@ -102,9 +102,9 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
       members <- MilestoneFixture.assigned(ledger, scope, List.fill(count)(task))
       claim <- ledger.acquire(scope, ClaimId(uuid), members.map(_.id).toSet, 300000)
       governing <- usage.assign(collector, Assignment(AssignmentId(uuid), scope.project, Set.empty, Attribution.Unattributed, None, None))
-      parent <- usage.start(collector, Attempt(AttemptId(uuid), governing.id, None, scope.actor.session, Role.Governor, Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Govern))
+      parent <- usage.start(collector, Attempt(AttemptId(uuid), governing.id, None, scope.actor.session, Role.Governor, Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Govern, None))
       assignment <- usage.assign(collector, Assignment(AssignmentId(uuid), scope.project, claim.members, Attribution.Shared, Some(uuid), None))
-      attempt <- usage.start(collector, Attempt(AttemptId(uuid), assignment.id, Some(parent.id), scope.actor.session, Role.Planner, Harness.Codex, "fixture", "fixture", "fixture", 1001, UsagePhase.Plan))
+      attempt <- usage.start(collector, Attempt(AttemptId(uuid), assignment.id, Some(parent.id), scope.actor.session, Role.Planner, Harness.Codex, "fixture", "fixture", "fixture", 1001, UsagePhase.Plan, None))
       dispatch = DispatchRequest(RequestId(uuid), DispatchWork.Planner(), Harness.Codex, members, Nil, Nil, None, claim.fence,
         HostLimits(3000, 1000, 300, 2000, 262144))
       views <- ZIO.foreach(members)(ref => ledger.get(scope, ref.id))
@@ -146,7 +146,7 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
     ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO]): IO[Throwable, Published] = for {
     assignment <- usage.assign(f.collector, Assignment(AssignmentId(uuid), f.scope.project, f.members.map(_.id).toSet,
       if (f.members.size == 1) Attribution.Direct else Attribution.Shared, if (f.members.size == 1) None else Some(uuid), None))
-    attempt <- usage.start(f.collector, Attempt(AttemptId(uuid), assignment.id, Some(f.parent), f.scope.actor.session, ChildContracts.role(work), Harness.Codex, "fixture", "fixture", "fixture", 1002, ChildContracts.phase(work)))
+    attempt <- usage.start(f.collector, Attempt(AttemptId(uuid), assignment.id, Some(f.parent), f.scope.actor.session, ChildContracts.role(work), Harness.Codex, "fixture", "fixture", "fixture", 1002, ChildContracts.phase(work), None))
     dispatch = DispatchRequest(RequestId(uuid), work, Harness.Codex, f.members, Nil, Nil, previous.map(_.id), f.fence,
       HostLimits(3000, 1000, 300, 2000, 262144))
     base = previous.flatMap(_.result.candidate).getOrElse(f.base)
@@ -530,7 +530,7 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
         producer = members.head
         claim <- ledger.acquire(scope, ClaimId(uuid), Set(producer.id), 300000)
         governing <- usage.assign(collector, Assignment(AssignmentId(uuid), scope.project, Set.empty, Attribution.Unattributed, None, None))
-        parent <- usage.start(collector, Attempt(AttemptId(uuid), governing.id, None, scope.actor.session, Role.Governor, Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Govern))
+        parent <- usage.start(collector, Attempt(AttemptId(uuid), governing.id, None, scope.actor.session, Role.Governor, Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Govern, None))
         fixture = Assessed(scope, members, ArtifactId(uuid), Nil, GitCommit("a" * 40), collector, parent.id, claim.fence)
         worker <- publish(fixture, DispatchWork.Worker(WorkerMode.Implement), ChildReport.Work(fixture.members.map(ref =>
           WorkMember(ref.id, WorkDisposition.CandidateReady, "Candidate", Nil))), None, Nil, ledger, usage, artifacts, admissions)
@@ -1106,9 +1106,9 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
         collector = f.scope.copy(actor = f.scope.actor.copy(subject = "host", role = Role.Collector))
         claim <- ledger.acquire(f.scope, ClaimId(uuid), choice.members.map(_.id).toSet, 300000)
         governing <- usage.assign(collector, Assignment(AssignmentId(uuid), f.scope.project, Set.empty, Attribution.Unattributed, None, None))
-        parent <- usage.start(collector, Attempt(AttemptId(uuid), governing.id, None, f.scope.actor.session, Role.Governor, Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Govern))
+        parent <- usage.start(collector, Attempt(AttemptId(uuid), governing.id, None, f.scope.actor.session, Role.Governor, Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Govern, None))
         assignment <- usage.assign(collector, Assignment(AssignmentId(uuid), f.scope.project, claim.members, Attribution.Shared, Some(uuid), None))
-        attempt <- usage.start(collector, Attempt(AttemptId(uuid), assignment.id, Some(parent.id), f.scope.actor.session, Role.Planner, Harness.Codex, "fixture", "fixture", "fixture", 1001, UsagePhase.Plan))
+        attempt <- usage.start(collector, Attempt(AttemptId(uuid), assignment.id, Some(parent.id), f.scope.actor.session, Role.Planner, Harness.Codex, "fixture", "fixture", "fixture", 1001, UsagePhase.Plan, None))
         dispatch = DispatchRequest(choice.id, choice.work, Harness.Codex, choice.members, Nil, Nil, None, claim.fence, choice.limits)
         // The ledger changes each item at most once per batch, so one proposal links one Task to the milestone.
         mutations = List(ProposedMutation.Reference(f.tasks.head, Relation.PartOf, f.milestone, true),
@@ -1132,7 +1132,7 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
         _ <- ZIO.attemptBlocking(new WorkflowExecution(reads, f.scope.project, f.scope.actor.session, Some(WorkflowRequest.Review(stored.id, ReviewerMode.Plan)))
           .authorize(DispatchCommand.Start(reviewDispatch)))
         reviewAssignment <- usage.assign(collector, Assignment(AssignmentId(uuid), f.scope.project, claim.members, Attribution.Shared, Some(uuid), None))
-        reviewAttempt <- usage.start(collector, Attempt(AttemptId(uuid), reviewAssignment.id, Some(parent.id), f.scope.actor.session, Role.Reviewer, Harness.Codex, "fixture", "fixture", "fixture", 1002, UsagePhase.Review))
+        reviewAttempt <- usage.start(collector, Attempt(AttemptId(uuid), reviewAssignment.id, Some(parent.id), f.scope.actor.session, Role.Reviewer, Harness.Codex, "fixture", "fixture", "fixture", 1002, UsagePhase.Review, None))
         review = ChildResult(reviewAttempt.id, reviewDispatch, GitCommit("a" * 40), None,
           ChildReport.Review(choice.members.map(ref => ReviewMember(ref.id, ReviewVerdict.Accepted, Nil)), None), Nil, RetainedEvidence(Nil, Nil))
         reviewed <- artifacts.upload(collector, ArtifactUpload(f.scope.project, ArtifactId(uuid), reviewAttempt.id, ArtifactKind.Result, "application/json",

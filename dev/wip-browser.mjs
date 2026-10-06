@@ -127,7 +127,7 @@ try {
     const host = operation => post('/api/usage', {project, operation});
     const assignment = {id: id(), project, attribution: 'Direct', members: [created[0]], cohort: null, evaluation: null};
     const attempt = {id: id(), assignment: assignment.id, parent: null, session: {value: session}, role: 'Worker', harness: 'Codex',
-      provider: 'controlled-browser-fixture', model: 'no-model-call', collector: 'fixture', startedAt: String(Date.now()), phase: 'Work'};
+      provider: 'controlled-browser-fixture', model: 'no-model-call', collector: 'fixture', startedAt: String(Date.now()), phase: 'Work', effort: null};
     const state = name => row(name).locator('td.item-work').getAttribute('data-work');
     assert.equal(await state('T1 · Held'), 'claimed');
     const lock = await mark('T1 · Held').locator('path').getAttribute('d');

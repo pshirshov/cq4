@@ -50,7 +50,7 @@ final class ReviewerChecksProcess extends SpecZIO with AssertZIO {
     (test: Fixture => Task[Unit]): Task[Unit] = ZIO.scoped {
     val project = ProjectConfig(ProjectId(uuid), "http://localhost", "Reviewer checks")
     val assignment = Assignment(AssignmentId(uuid), project.project, Set.empty, Attribution.Unattributed, None, None)
-    val governor = Attempt(AttemptId(uuid), assignment.id, None, SessionId(uuid), Role.Governor, Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Govern)
+    val governor = Attempt(AttemptId(uuid), assignment.id, None, SessionId(uuid), Role.Governor, Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Govern, None)
     val limits = HostLimits(3000, 900, 100, 1000, 65536)
     val profile = HarnessSetting(Harness.Codex, "/fixture", "fixture", "fixture", "0.156.1", Nil, Set.empty)
     for {
@@ -80,7 +80,7 @@ final class ReviewerChecksProcess extends SpecZIO with AssertZIO {
       attempt = governor.copy(id = AttemptId(uuid), assignment = childAssignment.id, parent = Some(governor.id), role = Role.Reviewer)
       request = DispatchRequest(RequestId(uuid), DispatchWork.Reviewer(ReviewerMode.Candidate), Harness.Codex, List(item), Nil, Nil,
         Some(ArtifactId(uuid)), Fence(ClaimId(uuid), 1), limits)
-      ticket = DispatchTicket(request, childAssignment, attempt, profile, None)
+      ticket = DispatchTicket(request, childAssignment, attempt, Some(profile), None)
       entry = new DispatchExecution(ticket, directory.resolve("children").resolve(attempt.id.value.toString), ready, done)
       receiver = new Receiver(governor.session, hook)
       checks = new ReviewerChecks(entry, local.base, config, receiver, jobs)

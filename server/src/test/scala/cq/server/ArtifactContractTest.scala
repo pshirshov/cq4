@@ -21,7 +21,7 @@ abstract class ArtifactContractTest extends SpecZIO with AssertZIO {
     _ <- ledger.initialize(scope.copy(actor = scope.actor.copy(role = Role.Governor)), "artifact fixture")
     assignment <- usage.assign(scope, Assignment(AssignmentId(UUID.randomUUID()), scope.project, Set.empty, Attribution.Unattributed, None, None))
     attempt <- usage.start(scope, Attempt(AttemptId(UUID.randomUUID()), assignment.id, None, scope.actor.session, Role.Worker,
-      Harness.Pi, "fixture", "fixture", "fixture", 1000, UsagePhase.Work))
+      Harness.Pi, "fixture", "fixture", "fixture", 1000, UsagePhase.Work, None))
   } yield attempt.id
   private def value(scope: Scope, attempt: AttemptId, body: String): ArtifactUpload =
     ArtifactUpload(scope.project, ArtifactId(UUID.randomUUID()), attempt, ArtifactKind.Result, "text/plain", body)

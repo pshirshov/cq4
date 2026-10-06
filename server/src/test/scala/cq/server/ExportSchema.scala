@@ -20,7 +20,7 @@ object ExportSchema {
     )
     Files.writeString(Path.of(args(0)).resolveSibling("child-report-schemas.json"), reports.noSpaces)
     val codexReports = reports.asObject.get.toList.map { case (tag, schema) =>
-      val profile = HarnessProfile(Harness.Codex, Path.of("/fixture/codex"), "fixture", "openai", HarnessUsage.version(Harness.Codex), Nil, Set.empty)
+      val profile = HarnessProfile(Harness.Codex, Path.of("/fixture/codex"), "fixture", "openai", None, HarnessUsage.version(Harness.Codex), Nil, Set.empty)
       val invocation = HarnessInvocation(Role.Planner, AttemptId(UUID.randomUUID()), "Fixture", schema, Nil, Path.of("/fixture/assets"))
       val launch = new CodexAdapter().launch(profile, invocation, Map("HOME" -> "/fixture/home", "PATH" -> "/fixture/bin"))
       tag -> parser.parse(launch.assets.find(_.name == "result-schema.json").get.body).fold(throw _, identity)

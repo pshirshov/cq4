@@ -21,6 +21,10 @@ private[server] final class DispatchExecution(val ticket: DispatchTicket, val di
   private var ended = Option.empty[ChildOutcome]
   private var withheld = Option.empty[DispatchStatus]
   private var concluded = false
+  private var refused = Option.empty[Abstention]
+  /** Why the attempt abstained, once it has. */
+  def abstention: Option[Abstention] = synchronized(refused)
+  def abstained(value: Abstention): Unit = synchronized { refused = Some(value) }
   def outcome: Option[ChildOutcome] = synchronized(ended)
   def ending(value: ChildOutcome): Unit = synchronized { ended = Some(value) }
   def status: DispatchStatus = synchronized(view)
@@ -65,7 +69,7 @@ final class DispatchController(config: SupervisorConfig, runner: ChildRunner, jo
   private def found(attempt: AttemptId): DispatchExecution = synchronized {
     entries.values.find(_.ticket.attempt.id == attempt).getOrElse(throw DomainFailure(Fault.Missing("Child attempt is not owned by this governing session")))
   }
-  private def register(request: DispatchRequest, selection: Option[SelectedDispatch], ready: Promise[Throwable, Unit], done: Promise[Nothing, Unit]): (DispatchExecution, Boolean) = synchronized {
+  private def register(request: DispatchRequest, route: Option[ModelRoute], selection: Option[SelectedDispatch], ready: Promise[Throwable, Unit], done: Promise[Nothing, Unit]): (DispatchExecution, Boolean) = synchronized {
     entries.get(request.request) match {
       case Some(existing) =>
         if (existing.ticket.request != request) throw DomainFailure(Fault.Conflict("Dispatch request identity changed"))
@@ -75,26 +79,33 @@ final class DispatchController(config: SupervisorConfig, runner: ChildRunner, jo
         ChildContracts.request(config.project.project, request)
         DispatchController.admissible(entries.values.filter(entry => !DispatchController.terminal(entry.observed.phase)).map(_.ticket.request).toList, request)
         SupervisorConfig.within(request.limits, config.settings.limits)
-        val profile = config.settings.harnesses.find(_.harness == request.harness).getOrElse(throw new IllegalArgumentException("Requested harness route is not configured"))
+        val profile = config.settings.harnesses.find(_.harness == request.harness)
+        val assigned = route.getOrElse(HarnessProfile.route(profile.getOrElse(throw new IllegalArgumentException("Requested harness route is not configured"))))
+        require(assigned.harness == request.harness, "Model route and dispatch request name different harnesses")
+        // The attempt is recorded even when its harness has no settings entry; then only the route or the harness can name the provider.
+        val provider = assigned.provider.orElse(profile.map(_.provider)).orElse(Option.when(request.harness == Harness.Claude)(ClaudeAdapter.Provider))
+          .getOrElse(throw new IllegalArgumentException("Model route names no provider and its harness has no settings entry to take one from"))
         val id = AttemptId(UUID.randomUUID())
         val members = request.members.map(_.id).toSet
         val assignment = Assignment(AssignmentId(UUID.randomUUID()), config.project.project, members,
           if (members.size == 1) Attribution.Direct else Attribution.Shared,
           selection.fold(if (members.size == 1) None else Some(UUID.randomUUID()))(_.cohort), config.run.assignment.evaluation)
         val attempt = Attempt(id, assignment.id, Some(config.run.attempt.id), config.run.attempt.session, ChildContracts.role(request.work),
-          profile.harness, profile.provider, profile.model, "CQ native collector 0.1.0", clock.millis(), ChildContracts.phase(request.work))
+          request.harness, provider, assigned.model, "CQ native collector 0.1.0", clock.millis(), ChildContracts.phase(request.work), assigned.effort)
         selection.foreach(_.admit())
         val entry = new DispatchExecution(DispatchTicket(request, assignment, attempt, profile, selection.map(_.evidence)), config.directory.resolve("children").resolve(id.value.toString), ready, done)
         entries = entries.updated(request.request, entry)
         (entry, true)
     }
   }
-  def start(request: DispatchRequest): Task[DispatchStatus] = execute(request, None)
-  def startSelected(request: DispatchRequest, selection: SelectedDispatch): Task[DispatchStatus] = execute(request, Some(selection))
-  private def execute(request: DispatchRequest, selection: Option[SelectedDispatch]): Task[DispatchStatus] = for {
+  def start(request: DispatchRequest): Task[DispatchStatus] = execute(request, None, None)
+  def startSelected(request: DispatchRequest, selection: SelectedDispatch): Task[DispatchStatus] = execute(request, None, Some(selection))
+  /** Starts the attempt on the model, provider and effort of `route` instead of those the settings entry of its harness states. */
+  def startRoute(request: DispatchRequest, route: ModelRoute, selection: Option[SelectedDispatch]): Task[DispatchStatus] = execute(request, Some(route), selection)
+  private def execute(request: DispatchRequest, route: Option[ModelRoute], selection: Option[SelectedDispatch]): Task[DispatchStatus] = for {
     ready <- Promise.make[Throwable, Unit]
     done <- Promise.make[Nothing, Unit]
-    registered <- ZIO.attemptBlocking(register(request, selection, ready, done))
+    registered <- ZIO.attemptBlocking(register(request, route, selection, ready, done))
     (entry, fresh) = registered
     _ <- if (!fresh) ZIO.unit else {
       val execute = (ZIO.attemptBlocking {

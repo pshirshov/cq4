@@ -43,7 +43,7 @@ if (phase === 'seed') {
   const renamed = await call({ RenameProject: { project, expected: { value: '1' }, name: 'Renamed before crash' } });
   const assignment = { id: id(), project, members: [source.id], attribution: 'Direct', cohort: null, evaluation: null };
   const attempt = { id: id(), assignment: assignment.id, parent: null, session: { value: process.env.CQ_SESSION },
-    role: 'Worker', harness: 'Codex', provider: 'controlled-fixture', model: 'no-model-call', collector: 'restart-check', startedAt: '1000', phase: 'Work' };
+    role: 'Worker', harness: 'Codex', provider: 'controlled-fixture', model: 'no-model-call', collector: 'restart-check', startedAt: '1000', phase: 'Work', effort: null };
   const meter = { key: 'restart', attempt: attempt.id, scope: 'Increment', baseline: counts(0), baselineCost: unknownCost };
   const upload = { observation: { id: id(), attempt: attempt.id, source: 'restart', position: '1', occurredAt: '2000', receivedAt: '0',
     scope: 'Increment', counters: counts(250), inputIncludesCache: true, outputIncludesReasoning: true, cost: unknownCost,

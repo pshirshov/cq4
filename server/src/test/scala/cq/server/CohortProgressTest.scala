@@ -218,6 +218,32 @@ final class CohortProgressLocal extends AnyWordSpec {
       assert(!admitted.finished(execution, None) && inputs.forall(admitted.deferred) && inputs.forall(admitted.failure(_).isEmpty))
     }
 
+    "release the input of an abstained attempt as it was, with no fault and without touching the fault of a failure before it" in {
+      val progress = new CohortProgress
+      val group = hash(List(item(1), item(2)), Nil, checks)
+      val members = Map(id(1) -> hash(List(item(1)), Nil, checks), id(2) -> hash(List(item(2)), Nil, checks))
+      val execution = CohortExecutionFingerprint(group, members)
+      val inputs = group :: members.values.toList
+      progress.order(List(id(1), id(2)))
+      intercept[IllegalArgumentException](progress.abstained(execution))
+      progress.started(execution)
+      progress.abstained(execution)
+      assert(!inputs.exists(progress.deferred) && inputs.forall(progress.failure(_).isEmpty) && progress.ended(group))
+      // Any number of abstentions in a row leaves the input offered: none of them is a repeated fault.
+      progress.started(execution)
+      progress.abstained(execution)
+      assert(!inputs.exists(progress.deferred))
+      val refused = CohortFailure(ArtifactId(UUID.randomUUID()), "refused report")
+      progress.started(execution)
+      assert(!progress.finished(execution, Some(refused)))
+      progress.started(execution)
+      progress.abstained(execution)
+      assert(!inputs.exists(progress.deferred) && inputs.forall(progress.failure(_).contains(refused)))
+      // The failure after the abstention is compared with the one before it.
+      progress.started(execution)
+      assert(progress.finished(execution, Some(CohortFailure(ArtifactId(UUID.randomUUID()), "refused report"))) && inputs.forall(progress.deferred))
+    }
+
     "D145: read the fault of a child only from the receipt of a failed attempt that has no result and advises Retry" in {
       def receipt(phase: DispatchPhase, next: ChildNext, blocker: Option[String], result: Option[ArtifactId]): DispatchStatus =
         DispatchStatus(RequestId(UUID.randomUUID()), AttemptId(UUID.randomUUID()), phase, None, List(id(1)), cq.host.DispatchProjection.EmptyCounts, next,
@@ -246,6 +272,11 @@ final class CohortProgressLocal extends AnyWordSpec {
         assert(outcome.fault.contains(CohortFailure.Unstated))
       }
       assert(end(receipt(DispatchPhase.Cancelled, ChildNext.Retry, Some("Cancelled by the governing session"), None), None) == (ChildEnd.Cancelled, Some("input"), None))
+      // An abstention is no fault to retry with: it has its own end, which names the reason, whatever was or was not published.
+      val abstained = receipt(DispatchPhase.Abstained, ChildNext.ResolveBlocker, Some("Abstained (RateLimit): 429"), None)
+      assert(CohortFailure.fault(abstained).isEmpty)
+      List(None, Some(true), Some(false)).foreach(offered => assert(end(abstained, offered) == (ChildEnd.Abstained, Some("input"), Some("Abstained (RateLimit): 429"))))
+      cq.core.DriverPolicy.outcome(CohortFailure.outcome(abstained, Some("input"), None))
       assert(end(receipt(DispatchPhase.Completed, ChildNext.Retry, Some("worker reported failure"), Some(ArtifactId(UUID.randomUUID()))), None) == (ChildEnd.Admitted, Some("input"), None))
       assert(end(receipt(DispatchPhase.Unknown, ChildNext.InspectEvidence, Some("cleanup unconfirmed"), None), None) == (ChildEnd.Unknown, Some("input"), None))
       assert(end(receipt(DispatchPhase.PublicationPending, ChildNext.RetryDelivery, Some("publication pending"), None), None) == (ChildEnd.Unknown, Some("input"), None))

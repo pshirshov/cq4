@@ -32,7 +32,7 @@ final class AttachedGatewayLocal extends AnyWordSpec {
     private def uuid: UUID = UUID.randomUUID()
     private val assignment = Assignment(AssignmentId(uuid), project, Set.empty, Attribution.Unattributed, None, None)
     private val attempt = Attempt(AttemptId(uuid), assignment.id, None, SessionId(uuid), Role.Governor, harness,
-      "fixture-provider", "fixture-model", "fixture", 0, UsagePhase.Govern)
+      "fixture-provider", "fixture-model", "fixture", 0, UsagePhase.Govern, None)
     private val settings = ProjectConfig(project, "http://localhost", "Attached gateway")
     private val config = SupervisorConfig(null, settings, null, null,
       SupervisorRun(settings, assignment, attempt, "fixture", "/nonexistent", GitCommit("0" * 40), SessionOwnership.Attached), Path.of("/nonexistent"), "", None, Map("HOME" -> "/nonexistent"))

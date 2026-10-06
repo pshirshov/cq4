@@ -35,8 +35,7 @@ object SupervisorConfig {
   private val MaxInputBytes = 192 * 1024
   private val MaxOutputBytes = 32 * 1024 * 1024
   val VersionMismatch = "Installed harness version differs from its configured verified route"
-  def profile(value: HarnessSetting): HarnessProfile = HarnessProfile(value.harness, Path.of(value.executable), value.model, value.provider, value.version,
-    value.providerExtensions.map(Path.of(_)), value.providerEnvironment)
+  def profile(value: HarnessSetting): HarnessProfile = HarnessProfile(value, HarnessProfile.route(value))
   def limits(value: HostLimits): ExecutionLimits = ExecutionLimits(Duration.ofMillis(value.startupMillis), None,
     Duration.ofMillis(value.heartbeatMillis), Duration.ofMillis(value.graceMillis), Duration.ofMillis(value.killMillis), value.retainedOutputBytes)
   def within(value: HostLimits, ceiling: HostLimits): Unit = {
@@ -121,7 +120,7 @@ object SupervisorConfig {
     val attempt = Attempt(AttemptId(UUID.randomUUID()), assignment.id, None, session, Role.Governor, harness,
       if (attached) "unobserved-interactive-provider" else profile.provider,
       if (attached) "unobserved-interactive-model" else profile.model,
-      if (attached) SupervisorConfig.AttachedGovernorCollector else "CQ native collector 0.1.0", clock.millis(), UsagePhase.Govern)
+      if (attached) SupervisorConfig.AttachedGovernorCollector else "CQ native collector 0.1.0", clock.millis(), UsagePhase.Govern, None)
     val run = SupervisorRun(project, assignment, attempt, profile.version, repository.toString, base,
       if (attached) SessionOwnership.Attached else SessionOwnership.Managed)
     val input = if (attached) "" else HostFiles.text(context.directory.resolve(options("--input")).normalize(), MaxInputBytes)

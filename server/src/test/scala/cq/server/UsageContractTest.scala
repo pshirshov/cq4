@@ -28,13 +28,13 @@ abstract class UsageContractTest extends SpecZIO with AssertZIO {
   }
   private def start(usage: UsageService[IO], owner: Scope, assignment: Assignment, counterScope: CounterScope, baseline: TokenCounts, baselineCost: Money): IO[Throwable, Attempt] = for {
     _ <- usage.assign(collector(owner), assignment)
-    attempt = Attempt(AttemptId(UUID.randomUUID()), assignment.id, None, owner.actor.session, Role.Worker, Harness.Codex, "test-provider", "test-model", "fixture-v1", 1000, UsagePhase.Work)
+    attempt = Attempt(AttemptId(UUID.randomUUID()), assignment.id, None, owner.actor.session, Role.Worker, Harness.Codex, "test-provider", "test-model", "fixture-v1", 1000, UsagePhase.Work, None)
     _ <- usage.start(collector(owner), attempt)
     _ <- usage.meter(collector(owner), UsageMeter("provider", attempt.id, counterScope, baseline, baselineCost))
   } yield attempt
   private def phased(usage: UsageService[IO], owner: Scope, member: ItemId, role: Role, phase: UsagePhase, startedAt: Long): IO[Throwable, Attempt] = {
     val work = assignment(owner, Set(member), Attribution.Direct, None)
-    val attempt = Attempt(AttemptId(UUID.randomUUID()), work.id, None, owner.actor.session, role, Harness.Codex, "test-provider", "test-model", "fixture-v1", startedAt, phase)
+    val attempt = Attempt(AttemptId(UUID.randomUUID()), work.id, None, owner.actor.session, role, Harness.Codex, "test-provider", "test-model", "fixture-v1", startedAt, phase, None)
     for {
       _ <- usage.assign(collector(owner), work)
       _ <- usage.start(collector(owner), attempt)
@@ -192,7 +192,7 @@ abstract class UsageContractTest extends SpecZIO with AssertZIO {
         next <- usage.outcomes(owner, attempt.id, historical.after, 1)
         _ <- assertIO(historical.hasMore && historical.entries.head == recorded && !next.hasMore && next.entries.head.value == corrected)
         _ <- denied(usage.finish(collector(owner), corrected.copy(request = RequestId(UUID.randomUUID()))))(_.isInstanceOf[Fault.Invalid])
-        pending = Attempt(AttemptId(UUID.randomUUID()), attempt.assignment, None, owner.actor.session, Role.Worker, Harness.Claude, "fixture", "fixture", "fixture", 1000, UsagePhase.Work)
+        pending = Attempt(AttemptId(UUID.randomUUID()), attempt.assignment, None, owner.actor.session, Role.Worker, Harness.Claude, "fixture", "fixture", "fixture", 1000, UsagePhase.Work, None)
         _ <- usage.start(collector(owner), pending)
         page <- usage.attempts(owner, UsageFilter.TaskOnly(member), None, None, 1)
         last <- usage.attempts(owner, UsageFilter.TaskOnly(member), page.after, Some(page.cursor), 1)
@@ -201,6 +201,36 @@ abstract class UsageContractTest extends SpecZIO with AssertZIO {
         _ <- assertIO(running.attempts.running == 1 && running.attemptsWithoutMeters == 1)
         _ <- usage.meter(collector(owner), UsageMeter("new", pending.id, CounterScope.Increment, UsageMath.zeroCounts, UsageMath.unknownMoney))
         _ <- denied(usage.attempts(owner, UsageFilter.TaskOnly(member), page.after, Some(page.cursor), 1))(_.isInstanceOf[Fault.Resync])
+      } yield ()
+    }
+
+    "keep the effort an attempt was launched with, and an abstained outcome with its reason, apart from failed and unknown ones" in { (usage: UsageService[IO], ledger: LedgerService[IO]) =>
+      val owner = scope()
+      val reason = "Abstained (Quota): Quota exceeded. Check your plan and billing details."
+      for {
+        _ <- ledger.initialize(owner, "abstention")
+        member <- task(ledger, owner, "Refused task")
+        work = assignment(owner, Set(member), Attribution.Direct, None)
+        _ <- usage.assign(collector(owner), work)
+        attempts = List(Some(Effort.Ultra), Some(Effort.Off), None).zipWithIndex.map { (effort, index) =>
+          Attempt(AttemptId(UUID.randomUUID()), work.id, None, owner.actor.session, Role.Worker, Harness.Codex, "test-provider", s"model-$index", "fixture-v1", 1000 + index, UsagePhase.Work, effort)
+        }
+        started <- ZIO.foreach(attempts)(usage.start(collector(owner), _))
+        // The same attempt replays; the effort is part of what it is.
+        _ <- usage.start(collector(owner), attempts.head)
+        abstained = AttemptOutcome(RequestId(UUID.randomUUID()), attempts.head.id, AttemptState.Abstained, 3000, List(reason), None)
+        recorded <- usage.finish(collector(owner), abstained)
+        _ <- usage.finish(collector(owner), abstained)
+        page <- usage.attempts(owner, UsageFilter.TaskOnly(member), None, None, 20)
+        report <- usage.summary(owner, UsageFilter.TaskOnly(member))
+        phases <- usage.phases(owner, UsageFilter.TaskOnly(member))
+        outcomes <- usage.outcomes(owner, attempts.head.id, 0, 20)
+        _ <- assertIO(started == attempts && recorded == abstained)
+        _ <- assertIO(page.entries.map(_.attempt).sortBy(_.startedAt) == attempts && page.entries.map(_.attempt.effort).toSet == Set(Some(Effort.Ultra), Some(Effort.Off), None))
+        _ <- assertIO(page.entries.find(_.attempt.id == attempts.head.id).flatMap(_.outcome).map(_.value).contains(abstained) && outcomes.entries.map(_.value) == List(abstained))
+        // An abstention is a finished attempt with a stated gap; it is neither running nor of unknown outcome.
+        _ <- assertIO(report.attempts.running == 2 && report.attempts.unknown == 0 && report.attempts.withGaps == 1)
+        _ <- assertIO(phases.phases.map(entry => (entry.phase, entry.attempts)) == List((UsagePhase.Work, 3L)))
       } yield ()
     }
 
@@ -319,7 +349,7 @@ abstract class UsageContractTest extends SpecZIO with AssertZIO {
       val owner = scope()
       val host = collector(owner)
       val work = assignment(owner, Set.empty, Attribution.Unattributed, None)
-      val attempt = Attempt(AttemptId(UUID.randomUUID()), work.id, None, owner.actor.session, Role.Governor, Harness.Pi, "provider", "model", "fixture-v1", 1000, UsagePhase.Govern)
+      val attempt = Attempt(AttemptId(UUID.randomUUID()), work.id, None, owner.actor.session, Role.Governor, Harness.Pi, "provider", "model", "fixture-v1", 1000, UsagePhase.Govern, None)
       for {
         _ <- ledger.initialize(owner, "coverage")
         _ <- usage.assign(host, work)
@@ -375,7 +405,7 @@ abstract class UsageContractTest extends SpecZIO with AssertZIO {
       val session = UsageFilter.SessionOnly(owner.actor.session)
       val overhead = Assignment(AssignmentId(UUID.randomUUID()), owner.project, Set.empty, Attribution.Unattributed, None, None)
       val governing = Attempt(AttemptId(UUID.randomUUID()), overhead.id, None, owner.actor.session, Role.Governor, Harness.Claude,
-        "unobserved-interactive-provider", "unobserved-interactive-model", SupervisorConfig.AttachedGovernorCollector, 1000, UsagePhase.Govern)
+        "unobserved-interactive-provider", "unobserved-interactive-model", SupervisorConfig.AttachedGovernorCollector, 1000, UsagePhase.Govern, None)
       for {
         _ <- ledger.initialize(owner, "attached governing attempt")
         item <- task(ledger, owner, "Managed task")

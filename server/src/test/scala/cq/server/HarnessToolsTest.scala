@@ -19,7 +19,7 @@ final class HarnessToolsLocal extends AnyWordSpec {
     HarnessMcp(McpTarget.Domain, URI.create("http://127.0.0.1:1234/mcp"), AccessToken("scoped-domain-token", 2000)),
     HarnessMcp(McpTarget.Local, URI.create("http://127.0.0.1:1235/mcp"), AccessToken("scoped-local-token", 2000)))
   private def profile(harness: Harness): HarnessProfile = HarnessProfile(harness, Path.of("/test/harness"), "selected-model",
-    if (harness == Harness.Claude) "anthropic" else "selected-provider", HarnessUsage.version(harness), Nil, Set.empty)
+    if (harness == Harness.Claude) "anthropic" else "selected-provider", None, HarnessUsage.version(harness), Nil, Set.empty)
   private def invocation(harness: Harness, role: Role): HarnessInvocation = schemas.nativeInvocation(harness,
     HarnessInvocation(role, AttemptId(UUID.randomUUID()), "Role instructions", Json.obj("type" -> Json.fromString("object")),
       endpoints, Path.of("/test/assets")))

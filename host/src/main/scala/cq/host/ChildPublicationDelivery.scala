@@ -73,9 +73,14 @@ final class ChildPublicationDelivery(directory: Path, ticket: DispatchTicket) {
       case None => base.copy(phase = outcome.state match {
         case AttemptState.Cancelled => DispatchPhase.Cancelled
         case AttemptState.Unknown => DispatchPhase.Unknown
-        case AttemptState.Abstained => throw new IllegalStateException("Publishing an abstained attempt is not implemented in this build")
+        case AttemptState.Abstained => DispatchPhase.Abstained
         case _ => DispatchPhase.Failed
-      }, next = if (outcome.state == AttemptState.Unknown) ChildNext.InspectEvidence else ChildNext.Retry)
+      // An abstention is no fault of the work: the same input on the same model would abstain again, so it is not advised to retry.
+      }, next = outcome.state match {
+        case AttemptState.Unknown => ChildNext.InspectEvidence
+        case AttemptState.Abstained => ChildNext.ResolveBlocker
+        case _ => ChildNext.Retry
+      })
     }
     HostFiles.immutable(directory.resolve("receipt.json"), HostFiles.encode(DispatchStatus_JsonCodec, status), 16384)
     ChildPublicationReceipt(status, initial + uploaded + finalized)

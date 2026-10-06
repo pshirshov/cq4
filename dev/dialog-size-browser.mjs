@@ -35,7 +35,7 @@ async function fixture(name) {
   const host = operation => post('/api/usage', {project, operation});
   const assignment = {id: id(), project, attribution: 'Direct', members: [item.id], cohort: randomUUID(), evaluation: null};
   const attempt = {id: id(), assignment: assignment.id, parent: null, session: id(), role: 'Worker', harness: 'Codex',
-    provider: 'controlled-browser-fixture', model: 'no-model-call', collector: 'fixture', startedAt: '1000', phase: 'Work'};
+    provider: 'controlled-browser-fixture', model: 'no-model-call', collector: 'fixture', startedAt: '1000', phase: 'Work', effort: null};
   await host({Assign: {value: assignment}}); await host({Start: {value: attempt}});
   await host({Meter: {value: {key: 'size', attempt: attempt.id, scope: 'Increment', baseline: counts(0), baselineCost: money}}});
   await host({Ingest: {value: {observation: {id: id(), attempt: attempt.id, source: 'Direct fixture', position: '1', occurredAt: '2000', receivedAt: '0',

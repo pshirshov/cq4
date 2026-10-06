@@ -43,7 +43,7 @@ export async function usageLayoutChecks(browser, storageState, origin, evidence)
   ];
   for (const [assignment, phase, role, model, busy, tokens, cost] of runs) {
     const attempt = { id: id(), assignment: assignment.id, parent: null, session: id(), role, harness: model.startsWith('claude') ? 'Claude' : 'Codex',
-      provider: model.startsWith('claude') ? 'anthropic' : 'openai', model, collector: 'fixture', startedAt: '1000', phase };
+      provider: model.startsWith('claude') ? 'anthropic' : 'openai', model, collector: 'fixture', startedAt: '1000', phase, effort: null };
     await host({ Start: { value: attempt } });
     if (tokens !== null) {
       await host({ Meter: { value: { key: 'layout', attempt: attempt.id, scope: 'Increment', baseline: counts(0), baselineCost: unknownCost } } });

@@ -19,9 +19,10 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
   private final case class Trace(native: Option[JobRecord], extra: List[ArtifactUpload], spans: List[PhaseSpan], uncertain: Boolean, unrun: List[String])
   private def directory(attempt: AttemptId): Path = config.directory.resolve("payload").resolve(attempt.value.toString)
   private def transcript(attempt: AttemptId, name: String, bound: Int): Array[Byte] = NativeTranscript.retained(directory(attempt).resolve(name), bound)
-  private def collect(attempt: Attempt, version: String, collectedAt: Long): CollectedUsage =
-    Using.resource(NativeTranscript.stream(directory(attempt.id).resolve("stdout")))(new HarnessUsage().collect(_, UsageCollectionRequest(attempt.id,
-      attempt.harness, version, UsageOrigin.Fresh, collectedAt, NativeArtifacts.id(attempt.id, "stdout"))))
+  private def collect(ticket: DispatchTicket, collectedAt: Long): CollectedUsage = HarnessUsage.launchable(ticket.profile).fold(HarnessUsage.Unlaunched) { setting =>
+    Using.resource(NativeTranscript.stream(directory(ticket.attempt.id).resolve("stdout")))(new HarnessUsage().collect(_, UsageCollectionRequest(ticket.attempt.id,
+      ticket.attempt.harness, setting.version, UsageOrigin.Fresh, collectedAt, NativeArtifacts.id(ticket.attempt.id, "stdout"))))
+  }
   /** A failed removal leaves the record open; the next host startup retries it and reports the outcome in its cleanup receipt. */
   private def release(attempt: AttemptId): Task[Option[WorkspaceRecord]] = jobs.release(config.owner, attempt)
   private def claim(entry: DispatchExecution, revisions: Boolean): Unit = {
@@ -96,7 +97,10 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
         prepared <- ZIO.attemptBlocking {
           entry.check()
           val ticket = entry.ticket
-          val profile = SupervisorConfig.profile(ticket.profile)
+          // The attempt carries its route. What refuses the route before a process exists is an abstention: another model may run the input.
+          val setting = ticket.profile.getOrElse(throw Abstention(AbstentionReason.Unconfigured, s"The session settings have no entry for ${ticket.attempt.harness}"))
+          val profile = Abstention.unless(AbstentionReason.Unconfigured)(HarnessProfile(setting,
+            ModelRoute(ticket.attempt.harness, Some(ticket.attempt.provider), ticket.attempt.model, ticket.attempt.effort)))
           // A candidate reviewer inherits the worker's validation as its revalidation rounds left it; the worker result itself is unchanged.
           val inherited = if (ticket.request.work != DispatchWork.Reviewer(ReviewerMode.Candidate)) Nil else {
             ReviewerValidation.inventory(input.previous.toList.flatMap(_.validation), config.settings.checks)
@@ -108,7 +112,7 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
             IntegrationValidation.effective(config.project.project, config.owner.actor.session, subject, input.previous.get, config.settings.checks,
               reader.amendments(subject)).current
           }
-          SupervisorConfig.verifyProfile(config, profile)
+          Abstention.unless(AbstentionReason.Launch)(SupervisorConfig.verifyProfile(config, profile))
           val combination = if (input.artifacts.exists(_.metadata.kind == ArtifactKind.Combination)) {
             val target = config.settings.integrationTarget.getOrElse(throw new IllegalArgumentException("No integration target configured"))
             new CombinationPreparation(authority.governor, config.owner, config.run.attempt.id, config.run.repository, target, clock).consume(input)
@@ -124,7 +128,7 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
             case McpTarget.Domain => HarnessMcp(McpTarget.Domain, config.endpoint.resolve("/mcp"), domain)
             case McpTarget.Local => HarnessMcp(McpTarget.Local, access.endpoint, local)
           }, assets)
-          val native = registry(profile.harness).launch(profile, invocation, config.environment)
+          val native = Abstention.unless(AbstentionReason.Launch)(registry(profile.harness).launch(profile, invocation, config.environment))
           val launched = combination match {
             case None => native
             case Some(plan) =>
@@ -153,8 +157,11 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
         report <- ZIO.attemptBlocking {
           entry.check()
           val observed = JobOutcome.observed(native)
+          Abstention.launch(native).foreach(throw _)
+          val usage = collect(entry.ticket, clock.millis())
+          // A provider's refusal counts only when the harness ended by itself: a stopped or uncertain job is judged by how it was stopped.
+          if (observed.state != AttemptState.Unknown && native.exit.exists(_.reason == StopReason.Exited)) usage.abstention.foreach(throw _)
           require(observed.succeeded, observed.problem.getOrElse("Child process did not complete successfully"))
-          val usage = collect(entry.ticket.attempt, entry.ticket.profile.version, clock.millis())
           require(usage.terminalSeen && !usage.nativeFailure, "Child native output did not complete successfully")
           val report = ChildContracts.report(entry.ticket.request.work, entry.ticket.request.members,
             Using.resource(NativeTranscript.stream(directory(entry.ticket.attempt.id).resolve("stdout")))(output.result(entry.ticket.attempt.harness, _, entry.directory.resolve("assets"))))
@@ -245,16 +252,19 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
         val (_, outParts) = NativeArtifacts.binary(project, attempt.id, "stdout", "application/x-ndjson", stdout)
         val (_, errParts) = NativeArtifacts.binary(project, attempt.id, "stderr", "application/octet-stream", stderr)
         val collectedAt = math.max(attempt.startedAt, clock.millis())
-        val usage = collect(attempt, entry.ticket.profile.version, collectedAt)
+        val usage = collect(entry.ticket, collectedAt)
         val problem = cancelled.orElse(result.left.toOption.map(error => Option(error.getMessage).getOrElse(error.getClass.getSimpleName)))
           .orElse(trace.unrun.headOption).map(DispatchProjection.concise)
         val valid = if (cancelled.nonEmpty) None else result.toOption
         val observed = job.map(JobOutcome.observed)
+        val abstention = result.left.toOption.collect { case value: Abstention => value }
         val state = if (trace.uncertain || observed.exists(_.state == AttemptState.Unknown)) AttemptState.Unknown
           else if (cancelled.nonEmpty) AttemptState.Cancelled
+          else if (abstention.nonEmpty) AttemptState.Abstained
           else observed.map(_.withResult(valid.nonEmpty)).getOrElse(AttemptState.Failed)
-        // A worker that failed or was cancelled leaves no result; its workspace state is retained so a following attempt can continue from it.
-        val partial = workspace.filter(_ => attempt.role == Role.Worker && Set(AttemptState.Failed, AttemptState.Cancelled)(state))
+        if (state == AttemptState.Abstained) abstention.foreach(entry.abstained)
+        // A worker that failed, abstained or was cancelled leaves no result; its workspace state is retained so a following attempt can continue from it.
+        val partial = workspace.filter(_ => attempt.role == Role.Worker && Set(AttemptState.Failed, AttemptState.Cancelled, AttemptState.Abstained)(state))
           .map(record => Try(partials.capture(attempt.id, state, Path.of(record.directory), stdout, stderr)).toEither)
         val partialGap = partial.flatMap(_.left.toOption).map(error => "Partial work collection failed: " + Option(error.getMessage).getOrElse(error.getClass.getSimpleName))
         val allArtifacts = outParts ++ errParts ++ trace.extra ++ partial.flatMap(_.toOption).toList.flatMap(_._2)

@@ -43,7 +43,7 @@ final class CodexUsageFixture(val root: Path) extends AutoCloseable {
     val project = ProjectConfig(ProjectId(UUID.randomUUID()), "http://localhost", "Usage fixture")
     val assignment = Assignment(AssignmentId(UUID.randomUUID()), project.project, Set.empty, Attribution.Unattributed, None, None)
     val attempt = Attempt(AttemptId(UUID.randomUUID()), assignment.id, None, SessionId(UUID.randomUUID()), Role.Governor, Harness.Codex,
-      "unobserved-interactive-provider", "unobserved-interactive-model", "fixture", start, UsagePhase.Govern)
+      "unobserved-interactive-provider", "unobserved-interactive-model", "fixture", start, UsagePhase.Govern, None)
     SupervisorRun(project, assignment, attempt, binding.version, root.toString, GitCommit("a" * 40), SessionOwnership.Attached)
   }
   override def close(): Unit = Using.resource(Files.walk(root))(_.iterator().asScala.toList.reverse.foreach(Files.delete))

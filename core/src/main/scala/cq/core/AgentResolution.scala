@@ -7,24 +7,37 @@ object AgentResolution {
   /**
    * The effort values each harness takes. Claude 2.1.285 lists them for `--effort` and Pi 0.99.1 for `--thinking`. Codex 0.160.0
    * takes any text for `model_reasoning_effort`; its set here is the levels of this model that the release names, which leaves
-   * out `off`, for which that release has no name.
+   * out `off`, for which that release has no name. `ultra` is a level of that release alone.
    */
   def efforts(harness: Harness): Set[Effort] = harness match {
     case Harness.Claude => Set(Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max)
-    case Harness.Codex => Set(Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max)
+    case Harness.Codex => Set(Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max, Effort.Ultra)
     case Harness.Pi => Set(Effort.Off, Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max)
+  }
+
+  /** The value as a configuration and each harness's command line spell it. */
+  def effortName(value: Effort): String = AgentReferenceText.text(AgentReferenceText.Efforts, value)
+
+  /**
+   * Pi 0.99.1 reads the text after the last colon of `--model` as a thinking level when it is one of its levels, unless its catalogue
+   * holds the whole name: `x:high` runs as `x` when Pi knows `x`, or when no `--thinking` is passed. Such a name has no one meaning.
+   */
+  def piThinkingSuffix(model: String): Boolean = model.lastIndexOf(':') match {
+    case -1 => false
+    case at => efforts(Harness.Pi).map(effortName)(model.substring(at + 1))
   }
 
   def effortProblems(at: TextPosition, harness: Harness, effort: Option[Effort]): List[AgentProblem] =
     effort.filterNot(efforts(harness)).map(AgentProblem.EffortUnsupported(at, harness, _)).toList
 
   /** What makes one model of `harness` unusable whatever else is configured; `at` is where its reference or tier entry is written. */
-  def routeProblems(at: TextPosition, harness: Harness, provider: Option[String], effort: Option[Effort]): List[AgentProblem] =
+  def routeProblems(at: TextPosition, harness: Harness, model: ModelName, effort: Option[Effort]): List[AgentProblem] =
     (harness match {
-      case Harness.Pi if provider.isEmpty => List(AgentProblem.ProviderRequired(at, harness))
-      case Harness.Claude if provider.nonEmpty => List(AgentProblem.ProviderNotAllowed(at, harness))
+      case Harness.Pi if model.provider.isEmpty => List(AgentProblem.ProviderRequired(at, harness))
+      case Harness.Claude if model.provider.nonEmpty => List(AgentProblem.ProviderNotAllowed(at, harness))
       case _ => Nil
-    }) ++ effortProblems(at, harness, effort)
+    }) ++ Option.when(harness == Harness.Pi && piThinkingSuffix(model.model))(AgentProblem.ModelAmbiguous(at, harness, model.model)) ++
+      effortProblems(at, harness, effort)
 
   /**
    * The first layer and part that assigns the role decides it whole: the project's roles for the governing harness, the project's
@@ -54,7 +67,7 @@ object AgentResolution {
             .map(_.map(entry => ModelRoute(harness, entry.model.provider, entry.model.model, reference.effort.orElse(entry.effort))))
         }
         routes.flatMap { values =>
-          val problems = values.flatMap(route => routeProblems(at, route.harness, route.provider, route.effort)).distinct
+          val problems = values.flatMap(route => routeProblems(at, route.harness, ModelName(route.provider, route.model), route.effort)).distinct
           if (problems.isEmpty) Right(values) else Left(problems)
         }
       }
