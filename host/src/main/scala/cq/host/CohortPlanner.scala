@@ -183,9 +183,9 @@ final class CohortPlanner(api: ServerApi, owner: Scope, bases: ExecutionBase, ch
       val candidates = context.previous.flatMap(_.candidate).fold(context.results.flatMap(_.value.candidate).distinct)(List(_))
       val reviews = context.reviews.filter(value => value.input.checks.sortBy(_.name) == checks.sortBy(_.name) &&
         candidates.size == 1 && value.result.value.candidate.contains(candidates.head)).map(_.result.value).filter(_.request.members.contains(ref))
-      val verdicts = reviews.flatMap(_.report.asInstanceOf[ChildReport.Review].members.filter(_.item == ref.id).map(_.verdict)).distinct
-      require(verdicts.size <= 1, "Conflicting per-member review feedback requires an explicit narrower context")
-      verdicts.headOption.flatMap {
+      // Several reviews of one candidate, such as the seats of a review panel, may disagree on a member: its worst verdict decides.
+      val verdicts = reviews.flatMap(_.report.asInstanceOf[ChildReport.Review].members.filter(_.item == ref.id).map(_.verdict))
+      ReviewAggregate.worst(verdicts).flatMap {
         case ReviewVerdict.Accepted if reviews.forall(value => value.validation.map(_.check).toSet == checks.map(_.name).toSet &&
           value.validation.forall(_.state == ValidationState.Passed)) => Some(CohortReason.ReviewAccepted)
         case ReviewVerdict.Blocked => Some(CohortReason.ReviewBlocked)
