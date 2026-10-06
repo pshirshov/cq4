@@ -1,5 +1,6 @@
 """Behavioral Effectual Good Communication: attached MCP, real server/Git/processes."""
 import datetime
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -225,7 +226,9 @@ def main():
     with (root / "driver-host.log").open("w") as log:
         driven = Peer(command + ["host", "codex", "--executable", str(wrapper)], repository, env, log)
         try:
-            driven_session = driven.tool("session", {"Context": {}})["Context"]["value"]["session"]
+            driven_context = driven.tool("session", {"Context": {}})["Context"]["value"]
+            driven_session = driven_context["session"]
+            driven_directory = Path(driven_context["directory"])
             assert driven.tool("session", {"Driver": {}}) == {"Driver": {"reply": {"Status": {"value": None}}}}
             def change(mutations, fences, denied=False):
                 return driven.tool("change", {"project": project, "change": {"request": identity(), "mutations": mutations, "fences": fences, "reason": "Driven fixture"}}, denied=denied)
@@ -309,16 +312,33 @@ def main():
             # to wait in a status call.
             started_token = blocked["reason"].splitlines()[-1].split(" ")[-1]
             driven.tool("session", {"Workflow": {"id": identity(), "request": advance, "operatorRequirements": "", "token": {"Start": {"token": {"value": started_token}}}}})
-            probing, = driven.tool("dispatch", {"Select": {"request": {**selection, "request": identity(), "roots": [target["id"]], "work": {"Worker": {"mode": "Probe"}}}}})["Selection"]["value"]["choices"]
-            probe = driven.tool("dispatch", {"StartChoice": {"choice": probing["id"], "fence": driven_claim["fence"]}})["Status"]["value"]
+            def probed():
+                choice, = driven.tool("dispatch", {"Select": {"request": {**selection, "request": identity(), "roots": [target["id"]], "work": {"Worker": {"mode": "Probe"}}}}})["Selection"]["value"]["choices"]
+                started = driven.tool("dispatch", {"StartChoice": {"choice": choice["id"], "fence": driven_claim["fence"]}})["Status"]["value"]
+                # The unit's start is in the session's event file when the starting call has returned: a waiter started from then on finds it.
+                events = [json.loads(line) for line in (driven_directory / "units.jsonl").read_text().splitlines()]
+                assert events[-1] == {"Started": {"unit": {"kind": "Attempt", "id": started["attempt"]["value"], "members": [target["id"]]}}}, events
+                return started
+            def watched(arguments):
+                """Starts a `cq wait` and returns it once it watches the driven session: it holds a shared lock on the session's
+                `waiters.lock` for as long as it runs, which refuses an exclusive one, and reads the session's units right after taking it."""
+                process = subprocess.Popen([str(wrapper), "wait"] + arguments, cwd=repository, env=env, stdout=subprocess.PIPE, text=True)
+                with (driven_directory / "waiters.lock").open("r+") as stream:
+                    while True:
+                        assert process.poll() is None, ("The wait command ended while the child ran", process.communicate()[0])
+                        try:
+                            fcntl.lockf(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        except OSError:
+                            return process
+                        fcntl.lockf(stream, fcntl.LOCK_UN)
+                        time.sleep(0.05)
+            probe = probed()
             ordered = hook("Stop", hooked, stop_hook_active=False, last_assistant_message="Started.")
             assert ordered is not None and ordered.get("decision") == "block" and ordered["reason"].startswith(
                 f"CQ driver: work of this session still runs (attempt {probe['attempt']['value']} on {reference}). Do not end your turn"), ordered
             assert "with the CQ dispatch tool (Status, IntegrationStatus or CombinationStatus) with waitMillis 120000" in ordered["reason"] and f"{wrapper} wait" not in ordered["reason"], ordered
             # The checkout's wait command still waits on this session without being told its directory, for a harness that uses it.
-            waiter = subprocess.Popen([str(wrapper), "wait"], cwd=repository, env=env, stdout=subprocess.PIPE, text=True)
-            time.sleep(3)
-            assert waiter.poll() is None, "The wait command ended while the child ran"
+            waiter = watched([])
             driven.tool("dispatch", {"Cancel": {"attempt": probe["attempt"]}})
             reported, _ = waiter.communicate(timeout=60)
             assert waiter.returncode == 0 and reported.startswith(f"attempt {probe['attempt']['value']} on {reference} ended: "), (waiter.returncode, reported)
