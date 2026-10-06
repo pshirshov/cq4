@@ -50,7 +50,8 @@ final class AgentsDoctor(reader: AgentsReader) {
   /** What the operator sets to remove a problem that depends on the governing harness or on the other layer. */
   private def remedy(problem: AgentProblem, origin: Option[RoleOrigin]): String = problem match {
     case AgentProblem.RoleUnassigned(harness, role) =>
-      s"${AgentConfigText.describe(problem)}; set defaults.roles.${lower(role)} or harnesses.${lower(harness)}.roles.${lower(role)} in $Editing"
+      s"${AgentConfigText.describe(problem)}; set defaults.roles.${lower(role)} or harnesses.${lower(harness)}.roles.${lower(role)} in $Editing, " +
+        "or write a starting configuration with cq agents init --settings FILE"
     case AgentProblem.TierUndefined(harness, tier, _) =>
       s"${AgentConfigText.describe(problem)}; set harnesses.${lower(harness)}.tiers.${lower(tier)} in $Editing"
     case positioned => origin.fold("")(value => layer(value.layer) + " ") + AgentConfigText.describe(positioned)

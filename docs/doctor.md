@@ -41,7 +41,7 @@ It reads the project file of the checkout (of `--directory`, by default the curr
 | Credential | The operator credential is readable; the server's acceptance shows in the next check. |
 | Configuration | The server returned the configuration of the project. |
 | Server defaults, Project override | The text of the layer has no problems. A failure lists each problem with its `line:column` in that text. |
-| Role planner, Role worker, Role explorer, Role reviewer | The role resolves for HARNESS. The detail shows the resolved models in the configuration's own syntax and where the role was found. A failure names the problem and what to set, for example a role that no layer assigns or a tier that no layer defines. |
+| Role planner, Role worker, Role explorer, Role reviewer | The role resolves for HARNESS. The detail shows the resolved models in the configuration's own syntax and where the role was found. A failure names the problem and what to set, for example a role that no layer assigns or a tier that no layer defines; for an unassigned role it also names `cq agents init --settings FILE`, which writes a starting configuration. |
 | Session settings | The settings file is readable and names each harness once. |
 | Settings entry H | Harness H, which a resolved role runs a model on, has an entry in the settings file with an executable that exists and a package-verified version. A failure reads "H is referenced by ROLE but not in the session settings". |
 | Providers | Every resolved model that is written without a provider can take the provider of its harness's settings entry. |

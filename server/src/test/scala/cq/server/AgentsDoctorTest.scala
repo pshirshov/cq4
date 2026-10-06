@@ -117,7 +117,8 @@ harnesses:
       assert(!report.current && f.found(report, "Role planner").state == InstallationState.Current && f.found(report, "Role reviewer").state == InstallationState.Current)
       assert(f.found(report, "Role explorer") == InstallationCheck("Role explorer", InstallationState.Failed,
         "no layer assigns the explorer role when codex governs; set defaults.roles.explorer or harnesses.codex.roles.explorer in " +
-          "the server defaults or the project override (Agent models in the web UI; see `cq help`)"))
+          "the server defaults or the project override (Agent models in the web UI; see `cq help`), " +
+          "or write a starting configuration with cq agents init --settings FILE"))
       assert(f.found(report, "Role worker") == InstallationCheck("Role worker", InstallationState.Failed,
         "the worker role refers to the standard tier of codex, which no layer defines; set harnesses.codex.tiers.standard in " +
           "the server defaults or the project override (Agent models in the web UI; see `cq help`)"))
