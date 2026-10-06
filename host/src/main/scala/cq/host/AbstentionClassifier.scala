@@ -26,7 +26,7 @@ object Abstention {
  */
 final class AbstentionClassifier(harness: Harness, version: String) {
   import AbstentionClassifier.*
-  private val known = captured(harness) == version
+  private val known = captured(harness).contains(version)
   private var verdict = Option.empty[Abstention]
   // Claude: the class of the last synthetic assistant message that reports an API error, and whether a plan window was rejected.
   private var claudeError = Option.empty[String]
@@ -71,11 +71,12 @@ final class AbstentionClassifier(harness: Harness, version: String) {
 
 object AbstentionClassifier {
   private val MaxDetailCodePoints = 240
-  /** The version of each harness whose refusals were captured. */
-  def captured(harness: Harness): String = harness match {
-    case Harness.Claude => "2.1.285"
-    case Harness.Codex => "0.160.0"
-    case Harness.Pi => "0.99.1"
+  /** The versions of each harness whose refusals were captured, oldest first. One set of patterns reads all versions of a harness:
+    * the transcripts of Pi 1.0.0 state every captured refusal as those of Pi 0.99.1 do. */
+  def captured(harness: Harness): List[String] = harness match {
+    case Harness.Claude => List("2.1.285")
+    case Harness.Codex => List("0.160.0")
+    case Harness.Pi => List("0.99.1", "1.0.0")
   }
   private def detail(text: String): String = {
     val line = text.filterNot(_.isControl).trim

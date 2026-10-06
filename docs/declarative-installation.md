@@ -143,8 +143,9 @@ session files or runtime directories.
 Claude requires `--harness-config` pointing at the global `.claude.json` with
 project trust accepted; disabled hooks fail.
 
-Pi requires `--harness-config /absolute/private/pi-agent/trust.json`. Both
-supported versions gate project extensions on trust. The nearest canonical
+Pi requires `--harness-config /absolute/private/pi-agent/trust.json`. Every
+supported version gates project extensions on trust and reads that file the
+same way (0.99.1 and 1.0.0 were observed). The nearest canonical
 project or parent-folder boolean decision applies; a child refusal overrides a
 parent approval, and null entries are skipped. The doctor requires persisted
 approval, even if an individual invocation uses `--approve` or global automatic
