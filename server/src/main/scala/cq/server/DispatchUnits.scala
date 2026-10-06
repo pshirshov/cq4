@@ -100,12 +100,14 @@ final class DispatchUnits(config: SupervisorConfig, authority: SupervisorAuthori
           require(!closing, DispatchController.Closed)
           val active = units.filter(_.terminal.isEmpty)
           DispatchController.disjoint(active.map(unit => template(unit.work)).toList, template(work))
-          DispatchController.capacity(active.map(_.open).sum, if (plan.mode == PanelMode.All) plan.seats.size else plan.min)
+          // The seats a unit starts together fit together or the unit is not started: every seat of an `all` panel, `min` seats of an `any` one.
+          val together = if (plan.mode == PanelMode.All) plan.seats.size else plan.min
+          DispatchController.capacity(active.map(_.open).sum, together)
           val role = DispatchUnits.role(work.work)
           val (progress, step) = UnitProgress.begin(work.request, plan, seat => rotation.next(role, seat, plan.seats(seat).candidates))
           val initial = step match {
-            case UnitStep.Launch(candidates) => candidates
-            case other => throw new IllegalStateException(s"A unit began with $other")
+            case UnitStep.Launch(candidates) if candidates.size == together => candidates
+            case other => throw new IllegalStateException(s"A unit of $together first seats began with $other")
           }
           val members = work.members.map(_.id).toSet
           val unit = new DispatchUnit(work, plan, selection, selection.fold(Option.when(members.size > 1)(UUID.randomUUID()))(_.cohort), progress, done)
