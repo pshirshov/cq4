@@ -8,6 +8,7 @@ import distage.{Activation, DIKey, ModuleDef}
 import distage.StandardAxis.Repo
 import izumi.distage.plugins.PluginConfig
 import izumi.distage.testkit.scalatest.{AssertZIO, SpecZIO}
+import io.circe.{Json, parser}
 import java.io.IOException
 import java.net.URI
 import java.nio.file.Files
@@ -54,7 +55,26 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
 
   private final case class Fixture(local: LocalWorkspaceFixture, owner: Scope, authority: SupervisorAuthority, controller: IntegrationController,
     combinations: CombinationController, workflow: AttachedWorkflow, driver: AttachedDriver, registry: DriverInspector, collector: Collector,
-    task: ItemId, reviewer: ArtifactId, candidate: GitCommit, fence: Fence, session: java.nio.file.Path) {
+    task: ItemId, reviewer: ArtifactId, candidate: GitCommit, fence: Fence, session: java.nio.file.Path, gateway: Json => Task[Json], jobs: JobSupervisor) {
+    /** What the host retains about the Git job of an integration: its record with the reason it stopped, the evidence its executor left, its diagnostics and the target. */
+    def gitJob(id: IntegrationId): Task[String] = jobs.status(owner, AttemptId(id.value)).either.flatMap(record => ZIO.attemptBlocking {
+      import scala.jdk.CollectionConverters.*
+      val evidence = session.resolve("checkouts").resolve(id.value.toString)
+      val files = if (Files.isDirectory(evidence)) scala.util.Using.resource(Files.list(evidence))(_.iterator().asScala.map(_.getFileName.toString).toList.sorted) else Nil
+      val stderr = session.resolve("payload").resolve(id.value.toString).resolve("stderr")
+      val diagnostics = if (Files.isRegularFile(stderr)) Files.readString(stderr).takeRight(2000) else "none"
+      val described = record.fold(_.toString, value => s"${value.phase}, target ${value.target}, exit ${value.exit}, problem ${value.problem}")
+      s"Git job $described; checkout evidence $files; stderr '$diagnostics'; target ${target.value}"
+    })
+    /** What the host wrote for waiters about one unit, in order: its starts and the phases it ended in. */
+    def unitEvents(id: UUID): List[String] = SessionUnits.read(session).collect {
+      case SessionUnitEvent.Started(unit) if unit.id == id => "Started"
+      case SessionUnitEvent.Ended(end) if end.unit.id == id => end.phase
+    }
+    /** One `session` tool call through the attached gateway: the reply its owner receives. */
+    def sessionTool(arguments: String): Task[Json] = gateway(Json.obj("jsonrpc" -> Json.fromString("2.0"), "id" -> Json.fromInt(1), "method" -> Json.fromString("tools/call"),
+      "params" -> Json.obj("name" -> Json.fromString("session"), "arguments" -> parser.parse(arguments).fold(throw _, identity))))
+      .map(_.hcursor.downField("result").downField("structuredContent").focus.get)
     val key: DriverKey = DriverKey(Harness.Codex, "driver-integration-" + UUID.randomUUID())
     val advance: WorkflowRequest = WorkflowRequest.Advance(Set(task), WorkflowPhase.Integrate)
     def target: GitCommit = GitCommit(local.git(local.source, "show-ref", "--verify", "--hash", Target))
@@ -81,7 +101,7 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
     }
     def park: Task[DriverReply] = control(DriverOrigin.UserPromptSubmit, DriverControl.Park())
     /** The continuation query the Stop hook makes when a turn ends. */
-    def continuation: Task[DriverReply] = control(DriverOrigin.Stop, DriverControl.Continue())
+    def continuation: Task[DriverReply] = control(DriverOrigin.Stop, DriverControl.Continue(false))
     def directive: Task[DriverDirective] = continuation.flatMap {
       case DriverReply.Continue(value, _, _) => ZIO.succeed(value)
       case other => ZIO.fail(new IllegalStateException("Expected a directive: " + other))
@@ -107,7 +127,7 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
       }
       _ <- driver.observe(workflow.current, command, reply)
     } yield reply
-    def settled(id: IntegrationId): Task[IntegrationStatus] = controller.status(id, 20000)
+    def settled(id: IntegrationId): Task[IntegrationStatus] = controller.status(id, 120000)
       .repeatUntil(status => !Set(IntegrationPhase.Preparing, IntegrationPhase.Running)(status.phase))
       .timeoutFail(new IllegalStateException("Integration did not settle"))(zio.Duration.fromSeconds(90))
     def prepared: Task[IntegrationStatus] = {
@@ -115,7 +135,7 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
       dispatch(DispatchCommand.PrepareIntegration(id, reviewer)) *> settled(id)
     }
     def integrate(id: IntegrationId): Task[IntegrationStatus] = dispatch(DispatchCommand.Integrate(id)) *> settled(id)
-    def combined(id: RequestId): Task[CombinationStatus] = combinations.status(id, 20000).repeatUntil(_.phase != CombinationPhase.Preparing)
+    def combined(id: RequestId): Task[CombinationStatus] = combinations.status(id, 120000).repeatUntil(_.phase != CombinationPhase.Preparing)
       .timeoutFail(new IllegalStateException("Combination did not settle"))(zio.Duration.fromSeconds(90))
 
     /** The server's record of the latest cycle, which holds what the status does not show: the members resting on the session. */
@@ -196,7 +216,16 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
       driver = new AttachedDriver(config, authority, children, controller, combinations, logstage.IzLogger.NullLogger)
       workflow = new AttachedWorkflow(config, authority, new WorkflowAssets, new WorkflowExecution(authority.governor, owner.project, owner.actor.session, None),
         new OperatorRequirements(""), children, controller, combinations, revalidations, driver)
-      empty = Fixture(local, owner, authority, controller, combinations, workflow, driver, registry, hook, created.head.id, ArtifactId(uuid), local.base, claim.fence, directory)
+      // The gateway of a Claude Code session: its Context reads no native Codex usage.
+      attached = config.copy(run = run.copy(attempt = governor.copy(harness = Harness.Claude)))
+      served = new AttachedGateway(attached, authority, new McpSchemas, null, workflow, null, null, driver, new SessionClaims(config.owner, authority.governor, logstage.IzLogger.NullLogger),
+        WaitCommand(Some("/opt/cq/bin/cq")))
+      idle = java.time.Duration.ofMinutes(10)
+      peer <- ZIO.acquireRelease(ZIO.attempt(new StdioPeer(new java.io.PipedInputStream(new java.io.PipedOutputStream()), java.io.OutputStream.nullOutputStream(),
+        new OwnerLiveness { override def alive: Boolean = true }, PeerLimits(idle, idle, idle, AttachedGateway.FrameBytes, 8), () => ())))(peer => ZIO.succeed(peer.close()))
+      gateway = (request: Json) => served.handle(peer, request).map(_.get)
+      _ <- gateway(parser.parse("""{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}""").fold(throw _, identity))
+      empty = Fixture(local, owner, authority, controller, combinations, workflow, driver, registry, hook, created.head.id, ArtifactId(uuid), local.base, claim.fence, directory, gateway, jobs)
       candidate <- ZIO.attemptBlocking {
         local.git(local.source, "branch", "integration", local.base.value)
         empty.commit("candidate", Map("right.txt" -> "right\n"))
@@ -253,6 +282,62 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
       assert(recorded.phase == IntegrationPhase.Recorded && !held(last), s"$recorded $last")
     }
   } yield ()
+
+  "An attached session's workflow replies (Behavioral Active Blackbox; in-process server Communication)" should {
+    "I33: name the active workflow in Context, send each instruction text once, echo no requirements and return the whole activation on request" in {
+      (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO], registry: DriverInspector) =>
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, registry) { f =>
+        val Requirements = "Operator requirements of the fixture: keep every change inside the selected scope."
+        val item = s"""{"project":{"value":"${f.owner.project.value}"},"ledger":"${f.task.ledger}","number":"${f.task.number}"}"""
+        def activation(id: UUID, request: String): String =
+          s"""{"Workflow":{"id":{"value":"$id"},"request":$request,"operatorRequirements":${Json.fromString(Requirements).noSpaces},"token":null}}"""
+        val advance = s"""{"Advance":{"roots":[$item],"through":"Integrate"}}"""
+        val (first, second, third) = (uuid, uuid, uuid)
+        def stored(id: UUID): Json = parser.parse(Files.readString(f.session.resolve("workflows").resolve(s"$id.json"))).fold(throw _, identity)
+        def size(value: Json): Int = value.noSpaces.getBytes(java.nio.charset.StandardCharsets.UTF_8).length
+        for {
+          before <- f.sessionTool("""{"Context":{}}""")
+          _ <- assertIO(before.hcursor.downField("Context").downField("value").downField("workflow").focus.contains(Json.Null))
+          missing <- f.sessionTool("""{"Instructions":{}}""")
+          _ <- assertIO(missing.hcursor.downField("Failed").downField("fault").downField("Missing").get[String]("message").exists(_.contains("No workflow is active")))
+          one <- f.sessionTool(activation(first, advance)).map(_.hcursor.downField("Workflow").downField("value"))
+          text = one.downField("instructions").downField("Text").get[String]("value").fold(throw _, identity)
+          _ <- ZIO.attempt {
+            // The receipt names the activation and carries its text; what the session wrote in the call is not sent back.
+            assert(text == stored(first).hcursor.downField("context").get[String]("instructions").fold(throw _, identity) && text.length > 8000, text.take(200))
+            assert(one.keys.map(_.toSet).contains(Set("id", "request", "instructions", "subject", "cycle")), one.focus.get.noSpaces.take(300))
+            assert(!one.focus.get.noSpaces.contains(Requirements) && one.downField("id").get[UUID]("value") == Right(first))
+          }
+          context <- f.sessionTool("""{"Context":{}}""")
+          active = context.hcursor.downField("Context").downField("value").downField("workflow").focus.get
+          _ <- ZIO.attempt {
+            assert(active == parser.parse(s"""{"id":{"value":"$first"},"request":$advance,"cycle":null}""").fold(throw _, identity), active.noSpaces)
+            // The base governing instructions stay in every Context; the workflow's text and the requirements do not come with it.
+            assert(context.hcursor.downField("Context").downField("value").get[String]("instructions").exists(_.contains(SupervisorProgram.Guidance)))
+            assert(!context.noSpaces.contains(Requirements) && size(context) < text.length, s"${size(context)} bytes")
+          }
+          again <- f.sessionTool(activation(second, advance)).map(_.hcursor.downField("Workflow").downField("value"))
+          retried <- f.sessionTool(activation(first, advance)).map(_.hcursor.downField("Workflow").downField("value"))
+          _ <- ZIO.attempt {
+            val marker = parser.parse(s"""{"Unchanged":{"since":{"value":"$first"}}}""").fold(throw _, identity)
+            // The same text again is named by the activation whose reply carried it. That activation's own call, repeated, gets the text:
+            // a session that repeats it may not have received the first reply, and cannot hold what it would be referred to.
+            assert(again.downField("instructions").focus.contains(marker) && again.downField("id").get[UUID]("value") == Right(second), again.focus.get.noSpaces.take(300))
+            assert(retried.focus == one.focus && retried.downField("instructions").downField("Text").get[String]("value") == Right(text))
+            assert(size(again.focus.get) < 1000 && stored(second).hcursor.downField("context").get[String]("instructions") == Right(text))
+          }
+          whole <- f.sessionTool("""{"Instructions":{}}""")
+          // A session that no longer holds the text gets the stored activation as it is, requirements included.
+          _ <- assertIO(whole.hcursor.downField("Instructions").downField("value").focus.contains(stored(second)) && whole.noSpaces.contains(Requirements))
+          other <- f.sessionTool(activation(third, s"""{"Begin":{"roots":[$item]}}""")).map(_.hcursor.downField("Workflow").downField("value"))
+          // A different text is sent in full.
+          _ <- assertIO(other.downField("instructions").downField("Text").get[String]("value").exists(value => value != text && value.length > 8000))
+          _ <- ZIO.attempt(println(s"I33 session replies: first Workflow ${size(one.focus.get)} bytes, identical-text Workflow ${size(again.focus.get)} bytes, Context with an active workflow ${size(context)} bytes"))
+        } yield ()
+      }
+    }
+  }
 
   "A driven session's integrations (Behavioral Active Blackbox; real Git, supervised processes and in-process server Communication)" should {
     "D101: settle the integration an earlier drive left Ready while the next drive's start directive is pending, then start that directive" in {
@@ -368,6 +453,8 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
           assert(server.left.exists { case DomainFailure(_: Fault.Missing) => true; case _ => false } && git == local.base, server.toString)
           assert(spans.map(_.state) == List(AttemptState.Cancelled), spans.toString)
           assert(applied.phase == IntegrationPhase.NotApplied && next.isRight, s"$applied $next")
+          // A waiter that named the integration is told when it is prepared and again when it is discarded.
+          assert(f.unitEvents(ready.id.value) == List("Started", "Ready", "NotApplied"), f.unitEvents(ready.id.value).toString)
         }
         second <- f.prepared
         recorded <- f.integrate(second.id)
@@ -406,6 +493,7 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
         _ <- f.dispatch(DispatchCommand.Integrate(second.id))
         active <- f.dispatch(DispatchCommand.DiscardIntegration(second.id)).either
         recorded <- f.settled(second.id)
+        job <- f.gitJob(second.id)
         _ <- ZIO.attempt {
           assert(driving.state == DriverState.On && driving.stopped.isEmpty, driving.toString)
           println(s"Carried integration, discarded: start directive refused with '${refusal(refused)}'; reply $discarded; after it ${f.describe(after)}; " +
@@ -417,7 +505,7 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
           assert(started.exists(_.cycle.contains(start.cycle)) && running.state == DriverState.On && running.cycle.exists(_.state == CycleState.Active), s"$started $running")
           // The Git job normally still runs here; had it finished, the integration would be Recorded and refused as well.
           assert(active.left.exists { case DomainFailure(Fault.Conflict(message)) => message.contains("is Running") || message.contains("is Recorded"); case _ => false }, active.toString)
-          assert(recorded.phase == IntegrationPhase.Recorded, recorded.toString)
+          assert(recorded.phase == IntegrationPhase.Recorded, s"$recorded; $job")
         }
       } yield () }
     }
@@ -591,6 +679,9 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
           command = DispatchCommand.Combine(combination, ready.id, f.fence)
           _ <- f.dispatch(command)
           left <- f.combined(combination)
+          // The integration ended twice for a waiter, once prepared and once refused by Git; each end follows its own start.
+          _ <- f.eventually("the unit events of the integration and the combination")(f.unitEvents(ready.id.value) == List("Started", "Ready", "Started", "NotApplied") &&
+            f.unitEvents(combination.value) == List("Started", "PublicationPending"))
           _ <- f.eventually("the unpublished combination rests on the session")(f.cycle.exists(_.held == Set(LineageMember.Combination(combination))))
           _ <- f.park
           _ <- f.drive
@@ -617,7 +708,11 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
           // The turn ends with the directive unused, which stops the drive; the session then publishes the combination as an undriven session does.
           stopped <- f.continuation
           _ <- f.dispatch(command)
+          // The repeated Combine has written its start when it returns: a waiter named the combination is not answered by the end before it.
+          restarted <- ZIO.attemptBlocking(f.unitEvents(combination.value))
+          _ <- ZIO.attempt(assert(restarted.take(3) == List("Started", "PublicationPending", "Started"), restarted.toString))
           published <- f.combined(combination)
+          _ <- f.eventually("the end of the repeated combination")(f.unitEvents(combination.value) == List("Started", "PublicationPending", "Started", "Ready"))
           _ <- ZIO.attempt {
             println(s"Publication-pending combination after the drive: continuation query ${brief(stopped)}; repeated Combine then ${published.phase}; " +
               s"publication attempts ${uploads.get}")

@@ -11,7 +11,7 @@ import io.circe.parser.parse
 import izumi.distage.plugins.PluginConfig
 import izumi.distage.testkit.scalatest.{AssertZIO, SpecZIO}
 import java.nio.charset.StandardCharsets.UTF_8
-import java.nio.file.Path
+import java.nio.file.{Files, Path}
 import java.time.Clock
 import java.util.UUID
 import zio.{IO, Runtime, Unsafe, ZIO}
@@ -63,7 +63,9 @@ abstract class DriverHookTest extends SpecZIO with AssertZIO {
     val operator: Scope = root.scope(project)
     val words: Spelling = spelling(harness)
     val server = new ApplicationApi(application, root, runtime)
-    val hook = new DriverHook(() => new DriverEntry(server, project))
+    /** The CQ directory of the checkout the hook runs in: what its attached hosts left there. */
+    val sessions = new AttachedSessions(Files.createTempDirectory("cq-hook-checkout-"))
+    val hook = new DriverHook(() => new DriverEntry(server, project), sessions)
     def await[A](effect: IO[Throwable, A]): A = Unsafe.unsafe { implicit unsafe => runtime.unsafe.run(effect).getOrThrowFiberFailure() }
     await(ledger.initialize(operator, "hook driver"))
 
@@ -117,6 +119,24 @@ abstract class DriverHookTest extends SpecZIO with AssertZIO {
       val authority = authorization.authenticate(authorization.grant(root, GrantRequest(project, actor, clock.millis() + 600000)).value, None)
       new Session(this, name, authority.scope(project), new ApplicationApi(application, authority, runtime))
     }
+  }
+
+  private val WaitLine = "/opt/cq/bin/cq wait"
+  /** The attached host of a session, as it leaves itself in its checkout and in its session directory. */
+  private final class Host(world: World, session: SessionId) extends AutoCloseable {
+    val directory: Path = Files.createTempDirectory("cq-hook-host-")
+    Files.createDirectories(directory.resolve("journal"))
+    private val channel = java.nio.channels.FileChannel.open(directory.resolve("journal/owner.lock"), java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.WRITE)
+    private var lock = Option(channel.lock())
+    SessionWaiters.create(directory)
+    val units = new SessionUnits(directory)
+    world.sessions.record(session, AttachedHostRecord(directory.toString, Some(WaitLine)))
+    def works(attempt: AttemptId): SessionUnit = { val unit = SessionUnit(SessionUnitKind.Attempt, attempt.value, Nil); units.started(unit); unit }
+    def finishes(unit: SessionUnit): Unit = units.ended(UnitEnd(unit, "Completed", Some("ConsiderAcceptance"), None))
+    /** A `cq wait` of the session, for as long as the result is open. */
+    def waiter(): AutoCloseable = SessionWaiters.hold(directory)
+    def ends(): Unit = { lock.foreach(_.release()); lock = None }
+    override def close(): Unit = { ends(); channel.close() }
   }
 
   // One harness session: its hooks receive its session_id, and its model reaches CQ only through its attached session.
@@ -192,6 +212,66 @@ abstract class DriverHookTest extends SpecZIO with AssertZIO {
   }
 
   "The shared CQ hook driver of Claude Code and Codex (Behavioral Active Blackbox; dummy Group / PostgreSQL Good Communication)" should {
+    "let a stop with work in flight pass only when a wake-up is certain, order the waiter once when it is missing, and park a drive that nothing would continue" in scenarios { world =>
+      import world.*
+      goal("Goal")
+      // One driven session per case, each with a child of its first cycle that the server holds in flight.
+      def flying(name: String): (Session, AttemptId) = {
+        val s = session(name)
+        s.on("G1 through=work")
+        val run = RequestId(uuid)
+        val one = s.advance(s.directive(s.stop()), run) match { case DriverActivation.Started(cycle) => cycle; case other => fail(other.toString) }
+        val attempt = AttemptId(uuid)
+        s.attached.inherit(one, LineageMember.Run(run), LineageMember.Attempt(attempt))
+        (s, attempt)
+      }
+      def on(s: Session, directives: Int): Boolean = status(s.id).exists(value => value.state == DriverState.On && value.directives == directives)
+      def parked(s: Session): Boolean = status(s.id).exists(value => value.state == DriverState.Off && value.stopped.exists(_.reason == DriverStop.Parked))
+
+      // Work standing on the host and no waiter: the stop is blocked with the exact command, which is no directive. A session that
+      // stops again on the same work without a waiter is not asked twice.
+      val (unwaited, first) = flying("unwaited")
+      val host = new Host(world, unwaited.scope.actor.session)
+      val unit = host.works(first)
+      val ordered = unwaited.stop()
+      assert(ordered.asObject.get.keys.toList == List("decision", "reason") && ordered.hcursor.get[String]("decision") == Right("block"))
+      val reason = ordered.hcursor.get[String]("reason").toOption.get
+      assert(reason.contains(s"attempt ${first.value}") && on(unwaited, 1), reason)
+      // A Claude Code session is woken by its background command; a Codex session by nothing, so it waits in a status call of the host.
+      if (harness == Harness.Claude) assert(reason.endsWith(s"as a background command (run_in_background true, timeout 7200000), then end your turn: `$WaitLine`"), reason)
+      else assert(reason.endsWith("Do not end your turn: nothing wakes you when it ends. Call the status of that work now with the CQ dispatch tool " +
+        "(Status, IntegrationStatus or CombinationStatus) with waitMillis 120000, and again while the work continues. " + cq.host.DispatchWaits.CodexScript) && reason.contains("`// @exec: {\"yield_time_ms\": 150000}`") && !reason.contains(WaitLine) && !reason.contains("shell"), reason)
+      if (harness == Harness.Claude) {
+        // The session starts its waiter: the stop passes. Once the waiter is gone while the work stands, the order is given anew.
+        val waiter = host.waiter()
+        try assert(allowed(unwaited.stop()).exists(_.startsWith("CQ driver waiting: cycle 1")) && on(unwaited, 1)) finally waiter.close()
+        assert(unwaited.stop().hcursor.get[String]("decision") == Right("block") && on(unwaited, 1))
+      }
+      val ended = allowed(unwaited.stop()).getOrElse(fail("The stop said nothing"))
+      assert(ended.startsWith(s"${DriverHook.Unwaited} attempt ${first.value}. CQ driver parked: G1 through work") && parked(unwaited), ended)
+      host.finishes(unit)
+
+      // The host works on nothing although the server holds a member in flight: Waiting is not accepted, and the cycle is settled
+      // by the server's own rule, a resume directive.
+      val (stale, _) = flying("stale")
+      val idle = new Host(world, stale.scope.actor.session)
+      assert(stale.directive(stale.stop()).contains(DriverPolicy.ResumeFlag) && on(stale, 2))
+
+      // The host is gone: nothing finishes the child and nothing wakes the session.
+      val (lost, _) = flying("lost")
+      val gone = new Host(world, lost.scope.actor.session)
+      gone.works(AttemptId(uuid))
+      gone.ends()
+      val said = allowed(lost.stop()).getOrElse(fail("The stop said nothing"))
+      assert(said.startsWith(DriverHook.HostGone + " CQ driver parked: G1 through work") && said.contains("cq job upload --session") && parked(lost), said)
+      assert(allowed(lost.stop()).isEmpty)
+
+      // No host of this checkout recorded the session: it ended in order, or a package without the waiter started it. The message says that, not more.
+      val (unrecorded, _) = flying("unrecorded")
+      val unknown = allowed(unrecorded.stop()).getOrElse(fail("The stop said nothing"))
+      assert(unknown.startsWith(DriverHook.HostUnrecorded + " CQ driver parked: G1 through work") && !unknown.contains("is not running") && parked(unrecorded), unknown)
+      List(host, idle, gone).foreach(_.close())
+    }
     "start and park a driver from the typed command, pass other prompts through and bind through the command body" in scenarios { world =>
       import world.*
       val root = goal("Goal")
@@ -260,7 +340,7 @@ abstract class DriverHookTest extends SpecZIO with AssertZIO {
         override def integrate(value: HostIntegrationInput): IntegrationRecord = server.integrate(value)
         override def grant(value: GrantRequest): AccessToken = server.grant(value)
       }
-      val unanswered = new DriverHook(() => new DriverEntry(lossy, project))
+      val unanswered = new DriverHook(() => new DriverEntry(lossy, project), sessions)
       def prompt(hook: DriverHook, text: String): String = {
         val reply = parse(hook.run(harness.toString.toLowerCase, "UserPromptSubmit", payload("UserPromptSubmit", "lost-reply", "prompt" -> Json.fromString(text)).noSpaces.getBytes(UTF_8))).fold(throw _, identity)
         reply.hcursor.downField("hookSpecificOutput").get[String]("additionalContext").fold(throw _, identity)
@@ -349,7 +429,7 @@ abstract class DriverHookTest extends SpecZIO with AssertZIO {
       assert(status("errors-ghost").isEmpty && (status(a.id), cursor) == (before._1, before._2))
       assert(server.driverReplies.size == before._3)
       // An unreachable or unauthorized backend is an explicit error too; the stop is allowed and an unrelated prompt needs no backend at all.
-      val offline = new DriverHook(() => throw new IllegalArgumentException(HostCredential.Required))
+      val offline = new DriverHook(() => throw new IllegalArgumentException(HostCredential.Required), sessions)
       def offlineRun(origin: DriverOrigin, fields: (String, Json)*): String = offline.run(name, origin.toString, payload(origin.toString, a.id, fields*).noSpaces.getBytes(UTF_8))
       assert(error("Stop", offlineRun(DriverOrigin.Stop)) == HostCredential.Required)
       assert(offlineRun(DriverOrigin.UserPromptSubmit, "prompt" -> Json.fromString("Reply with exactly: HELLO")) == "")
@@ -372,13 +452,28 @@ abstract class DriverHookTest extends SpecZIO with AssertZIO {
       val attempt = LineageMember.Attempt(AttemptId(uuid))
       s.attached.inherit(one, LineageMember.Run(run), attempt)
       val child = produce(s.scope, root, "Descendant created by cycle 1")
-      val resumed = s.directive(s.stop())
-      val resumeToken = server.driverReplies.head.asInstanceOf[DriverReply.Continue].directive.token.asInstanceOf[CycleToken.Resume].token
-      assert(resumed == s"${words.advance} --roots G1 --through work --resume-token ${resumeToken.value}" && resumeToken != startToken)
+      val host = new Host(world, s.scope.actor.session)
+      val unit = host.works(attempt.id)
+      if (harness == Harness.Codex) {
+        // Nothing wakes an idle Codex session: its stop is blocked with the order to wait inside the turn, which is no directive.
+        val blocked = s.stop()
+        assert(blocked.hcursor.get[String]("decision") == Right("block") && blocked.hcursor.get[String]("reason").exists(reason =>
+          reason.startsWith(s"CQ driver: work of this session still runs (attempt ${attempt.id.value}). Do not end your turn") && reason.endsWith(cq.host.DispatchWaits.CodexScript)), blocked.noSpaces)
+      } else {
+        // The waiter of a Claude Code session starts its next turn when the child ends: with it running, the stop is allowed, no
+        // directive is issued and the drive stays on, however often the session stops meanwhile.
+        val waiter = host.waiter()
+        try {
+          val waiting = List.fill(2)(allowed(s.stop()))
+          assert(waiting.forall(_.contains(s"CQ driver waiting: cycle 1 has attempt ${attempt.id.value} in flight; the session continues when it ends")))
+          assert(server.driverReplies.head.isInstanceOf[DriverReply.Waiting])
+        } finally waiter.close()
+      }
+      assert(status(s.id).exists(value => value.state == DriverState.On && value.directives == 1))
       assert(s.line == "CQ driver on: G1 through work; 1 active child\n")
-      assert(s.advance(resumed, RequestId(uuid)) == DriverActivation.Resumed(one, run))
       assert(status(s.id).exists(_.cycle.exists(cycle => cycle.id == one && cycle.run.contains(run) && cycle.lineage.count(_.member.isInstanceOf[LineageMember.Run]) == 1)))
       s.attached.settle(one, attempt)
+      host.finishes(unit)
       // Cycle 2: a new start directive; the descendant cycle 1 created is advanceable now and the change is posted to the transcript.
       val second = s.directive(s.stop())
       val issued = server.driverReplies.head.asInstanceOf[DriverReply.Continue]
@@ -387,7 +482,7 @@ abstract class DriverHookTest extends SpecZIO with AssertZIO {
       val two = s.advance(second, RequestId(uuid)) match { case DriverActivation.Started(cycle) => cycle; case other => fail(other.toString) }
       assert(two == issued.directive.cycle && change(s.scope, retitle(child, "Advanced in cycle 2")).items.map(_.id) == List(child))
       val third = s.directive(s.stop())
-      assert(s.advance(third, RequestId(uuid)).isInstanceOf[DriverActivation.Started] && status(s.id).exists(_.directives == 4))
+      assert(s.advance(third, RequestId(uuid)).isInstanceOf[DriverActivation.Started] && status(s.id).exists(_.directives == 3))
       // Nothing changed in cycle 3: the stop is allowed and its reason is posted.
       val quiet = allowed(s.stop())
       assert(quiet.exists(_.startsWith("CQ driver stopped (quiescent): The previous cycle changed nothing")))

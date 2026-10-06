@@ -3,6 +3,7 @@
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {writeFile} from 'node:fs/promises';
+import {build} from 'esbuild';
 import {chromium} from 'playwright';
 
 const origin = process.env.CQ_ORIGIN, evidence = process.env.CQ_BROWSER_EVIDENCE;
@@ -24,6 +25,38 @@ const access = value => value === 'Enabled' ? 'Enabled' : value === 'Denied' ? '
 // The browser codec omits absent optional fields where the server writes null; both decode to the same typed value.
 const normal = value => Array.isArray(value) ? value.map(normal) : value !== null && typeof value === 'object'
   ? Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== null && entry !== undefined).map(([key, entry]) => [key, normal(entry)])) : value;
+// The token spans of a pretty-printed JSON value in document order; indentation and line breaks are text between them.
+function tokens(value) {
+  const punctuation = text => ['json-punctuation', text], separated = (parts, index, all) => index < all.length - 1 ? [...parts, punctuation(',')] : parts;
+  if (Array.isArray(value)) return value.length === 0 ? [punctuation('[]')] : [punctuation('['), ...value.map(tokens).flatMap(separated), punctuation(']')];
+  if (value !== null && typeof value === 'object') {
+    const entries = Object.entries(value).map(([key, entry]) => [['json-key', JSON.stringify(key)], punctuation(':'), ...tokens(entry)]);
+    return entries.length === 0 ? [punctuation('{}')] : [punctuation('{'), ...entries.flatMap(separated), punctuation('}')];
+  }
+  return [[value === null ? 'json-null' : `json-${typeof value}`, JSON.stringify(value)]];
+}
+/** A JSON block of the dialog: coloured token spans whose text is exactly the two-space pretty-printed value; returns that value. */
+async function coloured(block, context) {
+  const shown = await block.evaluate(node => ({view: node.classList.contains('json-view'), text: node.textContent,
+    stray: [...node.childNodes].filter(child => child.nodeType === Node.TEXT_NODE ? /\S/.test(child.data) : child.nodeName !== 'SPAN' || child.childElementCount > 0).length,
+    tokens: [...node.querySelectorAll('span')].map(span => [span.className, span.textContent])}));
+  assert.ok(shown.view, `${context}: JSON is not syntax-coloured`);
+  const value = parse(shown.text);
+  assert.equal(shown.text, JSON.stringify(value, null, 2), `${context}: not pretty-printed with two-space indentation`);
+  assert.ok(shown.text.includes('\n  '), `${context}: no indentation`);
+  assert.equal(shown.stray, 0, `${context}: text other than indentation outside the token spans`);
+  assert.deepEqual(shown.tokens, tokens(value), `${context}: token spans`);
+  return value;
+}
+const WCAG_AA_TEXT_CONTRAST = 4.5;
+function luminance(colour) {
+  const [red, green, blue] = colour.match(/\d+(\.\d+)?/g).slice(0, 3).map(Number).map(channel => channel / 255)
+    .map(channel => channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4);
+  return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+}
+function contrast(first, second) { const [light, dark] = [luminance(first), luminance(second)].sort((a, b) => b - a); return (light + 0.05) / (dark + 0.05); }
+const SAMPLE = {key: 'text', number: -1.5, flag: true, none: null, empty: [], nested: {deep: [1, 'two', false, {}]}};
+const NOT_JSON = '{"unterminated": <b>markup</b>';
 
 const browser = await chromium.launch({headless: true});
 const results = [];
@@ -133,13 +166,17 @@ try {
         assert.deepEqual(parse(await detail.getByLabel('Workspace tool schema', {exact: true}).textContent()), parse(agent.workspaceSchema));
         assert.deepEqual(normal(parse(await detail.getByLabel('Input example', {exact: true}).textContent())), normal(agent.inputExample));
         assert.deepEqual(normal(parse(await detail.getByLabel('Output example', {exact: true}).textContent())), normal(agent.outputExample));
+        for (const [name, expected] of [['Canonical input schema', agent.inputSchema], ['Canonical output schema', agent.outputSchema], ['Workspace tool schema', agent.workspaceSchema]])
+          assert.deepEqual(await coloured(detail.getByLabel(name, {exact: true}), `${viewport} ${label(agent)} ${name}`), parse(expected));
+        for (const [name, expected] of [['Input example', agent.inputExample], ['Output example', agent.outputExample]])
+          assert.deepEqual(normal(await coloured(detail.getByLabel(name, {exact: true}), `${viewport} ${label(agent)} ${name}`)), normal(expected));
         assert.deepEqual(await view.getByRole('button').allTextContents(), ['Canonical', ...agent.harnesses.map(harness => NAMES[harness.harness])]);
         for (const harness of agent.harnesses) {
           const name = NAMES[harness.harness];
           await view.getByRole('button', {name, exact: true}).click();
           assert.equal(await view.getByRole('button', {name, exact: true}).getAttribute('aria-pressed'), 'true');
           assert.equal(await detail.getByLabel(`${name} effective prompt`, {exact: true}).textContent(), harness.prompt);
-          assert.deepEqual(parse(await detail.getByLabel(`${name} effective output schema`, {exact: true}).textContent()), parse(harness.outputSchema));
+          assert.deepEqual(await coloured(detail.getByLabel(`${name} effective output schema`, {exact: true}), `${viewport} ${label(agent)} ${name} effective output schema`), parse(harness.outputSchema));
           assert.equal(await detail.getByLabel('Canonical prompt', {exact: true}).count(), 0);
           // Tools are shown for every harness whatever the prompt view.
           for (const target of agent.harnesses) {
@@ -158,6 +195,56 @@ try {
       }
       cases.push(`Agents lists ${catalog.agents.length} flat role-mode entries; ${agents.length} checked for canonical prompt, schemas and typed examples, per-harness effective prompt and schema, and enabled/disabled MCP and built-in tools of every harness`);
       await dialog.screenshot({path: `${evidence}/help-agents-${viewport}.png`});
+
+      // D152: a long JSON document scrolls inside its block, copies as the JSON it shows, and its token colours are distinct and legible.
+      const shownAgent = agents.at(-1), shown = dialog.getByRole('article', {name: `Agent ${label(shownAgent)}`, exact: true});
+      await shown.getByRole('group', {name: 'Prompt and schema view', exact: true}).getByRole('button', {name: 'Canonical', exact: true}).click();
+      await shown.getByText(`Prompt template · ${shownAgent.prompt.resource}`, {exact: true}).click();
+      await shown.getByText(`Output schema · ${shownAgent.report}`, {exact: true}).click();
+      const schema = shown.getByLabel('Canonical output schema', {exact: true});
+      const contained = await schema.evaluate(node => {
+        const range = document.createRange(); range.selectNodeContents(node);
+        const selection = getSelection(); selection.removeAllRanges(); selection.addRange(range);
+        const selected = selection.toString(); selection.removeAllRanges();
+        const style = getComputedStyle(node), dialog = node.closest('dialog').getBoundingClientRect();
+        return {selected, height: node.getBoundingClientRect().height, limit: 0.6 * innerHeight, overflow: node.scrollHeight - node.clientHeight, overflowY: style.overflowY,
+          userSelect: style.userSelect, dialog: {width: dialog.width, height: dialog.height}};
+      });
+      assert.deepEqual(parse(contained.selected), parse(shownAgent.outputSchema), `${viewport}: the selected schema text is not the catalog's JSON`);
+      assert.notEqual(contained.userSelect, 'none');
+      assert.ok(contained.overflow > 0 && contained.overflowY === 'auto' && contained.height <= contained.limit + 1, `${viewport}: a long schema must scroll inside its block: ${JSON.stringify({...contained, selected: undefined})}`);
+      assert.ok(Math.abs(contained.dialog.width - rect.width) <= 0.5 && Math.abs(contained.dialog.height - rect.height) <= 0.5, `${viewport}: Help resized with a JSON block`);
+      await shown.getByText(`Output schema · ${shownAgent.report}`, {exact: true}).click();
+      await shown.getByText(`Input schema · ${shownAgent.inputType}`, {exact: true}).click();
+      await shown.getByText(`Input example · ${shownAgent.inputType}`, {exact: true}).click();
+      await shown.getByLabel('Canonical input schema', {exact: true}).scrollIntoViewIfNeeded();
+      await dialog.screenshot({path: `${evidence}/help-json-schema-${viewport}.png`});
+      await shown.getByLabel('Input example', {exact: true}).scrollIntoViewIfNeeded();
+      await dialog.screenshot({path: `${evidence}/help-json-example-${viewport}.png`});
+
+      // The shared formatter on values the catalog does not contain: every token kind, structured and textual input, and text that is not JSON.
+      const formatter = await build({stdin: {contents: `export * from './web/src/json-view.js';`, resolveDir: process.cwd()}, bundle: true, format: 'iife', globalName: 'CQJson', write: false});
+      // The page's content security policy admits no inline script element; the bundle is evaluated through the debugging protocol.
+      await page.evaluate(formatter.outputFiles[0].text);
+      const samples = await shown.evaluate((node, [sample, invalid]) => {
+        const structured = CQJson.jsonView(sample), textual = CQJson.jsonTextView(JSON.stringify(sample)), plain = CQJson.jsonTextView(invalid);
+        const holder = document.createElement('details'); holder.className = 'help-block'; holder.open = true; holder.id = 'json-samples';
+        holder.append(document.createElement('summary'), structured, textual, plain); node.append(holder);
+        let backdrop = structured; while (getComputedStyle(backdrop).backgroundColor === 'rgba(0, 0, 0, 0)') backdrop = backdrop.parentElement;
+        const colour = kind => getComputedStyle(structured.querySelector(`.json-${kind}`)).color;
+        return {background: getComputedStyle(backdrop).backgroundColor, plainColour: getComputedStyle(plain).color,
+          colours: Object.fromEntries(['key', 'string', 'number', 'boolean', 'null', 'punctuation'].map(kind => [kind, colour(kind)])),
+          plain: {text: plain.textContent, elements: plain.childElementCount, view: plain.classList.contains('json-view'), tag: plain.tagName}};
+      }, [SAMPLE, NOT_JSON]);
+      for (const index of [0, 1]) assert.deepEqual(await coloured(shown.locator('#json-samples pre').nth(index), `${viewport} sample ${index}`), SAMPLE);
+      assert.deepEqual(samples.plain, {text: NOT_JSON, elements: 0, view: false, tag: 'PRE'}, 'Text that is not JSON is shown as it is, uncoloured');
+      assert.equal(new Set(Object.values(samples.colours)).size, 6, `${viewport}: token colours are not distinct: ${JSON.stringify(samples.colours)}`);
+      for (const [kind, colour] of Object.entries(samples.colours))
+        assert.ok(contrast(colour, samples.background) >= WCAG_AA_TEXT_CONTRAST, `${viewport}: ${kind} ${colour} on ${samples.background} has contrast ${contrast(colour, samples.background).toFixed(2)}`);
+      assert.ok(contrast(samples.colours.punctuation, samples.background) < contrast(samples.plainColour, samples.background), `${viewport}: punctuation is not subdued`);
+      await shown.locator('#json-samples').screenshot({path: `${evidence}/help-json-tokens-${viewport}.png`});
+      await shown.locator('#json-samples').evaluate(node => node.remove());
+      cases.push('JSON schemas and examples are pretty-printed and syntax-coloured, copy as valid JSON, scroll inside their block; text that is not JSON stays plain');
 
       await page.keyboard.press('Escape'); await dialog.waitFor({state: 'hidden'});
       assert.equal(await page.evaluate(() => document.activeElement.textContent), 'Help', 'Closing returns focus to the Help button');

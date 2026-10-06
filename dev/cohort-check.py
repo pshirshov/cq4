@@ -134,7 +134,10 @@ def main():
             events = [json.loads(line) for line in (session / "payload" / receipt["attempt"]["value"] / "stdout").read_text().splitlines()]
             decision = next(event["value"] for event in events if event.get("type") == "fixture.selection")
             assert len(publications) == 2 and publications[0] == publications[1]
-            assert decision == json.loads(publications[0]["upload"]["body"])["decision"]
+            retained = json.loads(publications[0]["upload"]["body"])["decision"]
+            # The reply is the retained decision without the limits of each choice, which the request stated.
+            assert all("limits" in choice for choice in retained["choices"])
+            assert decision == {**retained, "choices": [{key: value for key, value in choice.items() if key != "limits"} for choice in retained["choices"]]}
             assert not list((session / "children").glob("*")), "Unused choice created a child attempt"
             assert receipt["processSucceeded"] and receipt["usageDelivered"]
             print(json.dumps({"scenario": "lost-selection-ack", "decision": decision, "session": receipt["session"]}))

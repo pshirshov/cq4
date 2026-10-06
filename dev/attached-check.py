@@ -14,6 +14,12 @@ import uuid
 from fixture_runtime import guardian_binary
 
 
+# Above the longest dispatch wait (120 s) and what the host allows a request besides it (30 s).
+REPLY_SECONDS = 160
+# Longer than the host allows a request that does not wait.
+LONG_WAIT_MILLIS = 35000
+
+
 def identity():
     return {"value": str(uuid.uuid4())}
 
@@ -54,7 +60,7 @@ class Peer:
     def rpc(self, method, params):
         self.sequence += 1
         self.send({"jsonrpc": "2.0", "id": self.sequence, "method": method, "params": params})
-        value = self.responses.get(timeout=40)
+        value = self.responses.get(timeout=REPLY_SECONDS)
         if isinstance(value, Exception):
             raise value
         assert value["id"] == self.sequence and "error" not in value, value
@@ -63,7 +69,7 @@ class Peer:
     def refused(self, method, params):
         self.sequence += 1
         self.send({"jsonrpc": "2.0", "id": self.sequence, "method": method, "params": params})
-        value = self.responses.get(timeout=40)
+        value = self.responses.get(timeout=REPLY_SECONDS)
         assert not isinstance(value, Exception) and value["id"] == self.sequence and value["error"]["code"] == -32601, value
 
     def tool(self, name, arguments, denied=False):
@@ -121,13 +127,19 @@ def main():
         with urllib.request.urlopen(request, timeout=30) as response:
             return json.loads(response.read())
     with (root / "host.log").open("w") as log:
-        peer = Peer(command + ["host", "codex"], repository, env, log)
+        # As the generated integration starts it: with the executable `cq configure` approved for the session's wait command.
+        peer = Peer(command + ["host", "codex", "--executable", str(wrapper)], repository, env, log)
         try:
             inventory = peer.rpc("tools/list", {})["tools"]
             assert {tool["name"] for tool in inventory} == {"session", "dispatch", "search", "read", "graph", "change", "apply", "claim", "usage"}
             context = peer.tool("session", {"Context": {}})["Context"]["value"]
             assert context["workflow"] is None and "thread metadata" in context["usageCoverage"]
             assert "Canonical argument schemas" in context["instructions"]
+            # A Codex session is told to wait in a status call of the host with the longest wait, and no command of its shell is approved for it.
+            assert ("call its status (Status, IntegrationStatus or CombinationStatus; repeat Revalidate) with waitMillis 120000." in context["instructions"]
+                    and '`// @exec: {"yield_time_ms": 150000}`' in context["instructions"] and f"{wrapper} wait" not in context["instructions"]), context["instructions"][-1500:]
+            assert not (repository / ".codex/rules").exists()
+            assert json.loads((repository / ".claude/settings.local.json").read_text())["permissions"]["allow"] == [f"Bash({wrapper} wait)"]
             project = context["project"]["project"]
             standing = "Governor: preserve the operator's selected scope."
             operator({"Requirements": {"input": {"project": project, "action": {"Replace": {"expected": {"value": "0"}, "text": standing}}}}})
@@ -137,9 +149,17 @@ def main():
             selection = {"request": identity(), "roots": [], "work": {"Explorer": {"mode": "Investigate"}}, "guidance": [], "artifacts": [], "previous": None, "limits": limits}
             peer.tool("dispatch", {"Select": {"request": selection}}, denied=True)
             first = {"Workflow": {"id": identity(), "request": {"Begin": {"roots": []}}, "operatorRequirements": "Attached fixture: operator requirements text", "token": None}}
-            activated = peer.tool("session", first)
-            assert standing in activated["Workflow"]["value"]["context"]["instructions"]
-            assert peer.tool("session", first) == activated
+            activated = peer.tool("session", first)["Workflow"]["value"]
+            begin_text = activated["instructions"]["Text"]["value"]
+            assert standing in begin_text and activated["id"] == first["Workflow"]["id"] and set(activated) == {"id", "request", "instructions", "subject", "cycle"}, activated
+            # The reply sends back nothing the session wrote in the call, and Context names the active workflow without its text.
+            active = peer.tool("session", {"Context": {}})["Context"]["value"]
+            assert active["workflow"] == {"id": activated["id"], "request": activated["request"], "cycle": None}, active["workflow"]
+            assert begin_text not in json.dumps(peer.traffic[-1]["result"]) and "operator requirements text" not in json.dumps([activated, active])
+            # The activation repeated returns its receipt as it was: the session may not have received the first reply.
+            assert peer.tool("session", first)["Workflow"]["value"] == activated
+            whole = peer.tool("session", {"Instructions": {}})["Instructions"]["value"]
+            assert whole["context"]["instructions"] == begin_text and whole["operatorRequirements"] == first["Workflow"]["operatorRequirements"], whole
             peer.tool("session", {"Workflow": {"id": first["Workflow"]["id"], "request": {"Advance": {"roots": [], "through": "Explore"}}, "operatorRequirements": "Attached fixture: operator requirements text", "token": None}}, denied=True)
             draft = {"title": "Attached investigation", "body": "Investigate the fixture", "labels": ["proposal-fixture"], "archived": False,
                      "content": {"Task": {"status": "Ready", "acceptance": ["Report findings"], "result": None, "validation": []}}, "citations": []}
@@ -151,19 +171,32 @@ def main():
             peer.tool("session", next_scope)
             peer.tool("dispatch", {"Select": {"request": selection}}, denied=True)
             peer.tool("dispatch", {"StartChoice": {"choice": choice["id"], "harness": "Codex", "fence": claim["fence"]}}, denied=True)
-            assert peer.tool("session", first) == activated
+            assert peer.tool("session", first)["Workflow"]["value"] == activated
             assert peer.tool("session", {"Context": {}})["Context"]["value"]["workflow"]["id"] == next_scope["Workflow"]["id"]
             selection["request"] = identity()
             choice, = peer.tool("dispatch", {"Select": {"request": selection}})["Selection"]["value"]["choices"]
+            # A choice does not send back the limits its request stated; the retained selection evidence keeps them.
+            assert set(choice) == {"id", "work", "members", "guidance", "artifacts", "previous", "cohort", "reason", "witness"}, choice
+            retained = json.loads((Path(context["directory"]) / "selections" / (selection["request"]["value"] + ".json")).read_text())
+            kept, = retained["decision"]["choices"]
+            assert kept == {**choice, "limits": limits} and retained["request"] == selection, retained
             started = peer.tool("dispatch", {"StartChoice": {"choice": choice["id"], "harness": "Codex", "fence": claim["fence"]}})["Status"]["value"]
             # The asynchronous child must finish before a different workflow is admitted.
             if started["phase"] in ["Preparing", "Running"]:
                 peer.tool("session", {"Workflow": {"id": identity(), "request": {"Begin": {"roots": []}}, "operatorRequirements": "Attached fixture: operator requirements text", "token": None}}, denied=True)
             for _ in range(6):
-                status = peer.tool("dispatch", {"Status": {"attempt": started["attempt"], "waitMillis": 20000}})["Status"]["value"]
+                status = peer.tool("dispatch", {"Status": {"attempt": started["attempt"], "waitMillis": 120000}})["Status"]["value"]
                 if status["phase"] not in ["Preparing", "Running", "Stopping", "Validating", "Publishing"]:
                     break
             assert status["phase"] == "Completed" and status["usageDelivered"] and status["result"], status
+            # `cq wait` reads the session directory alone and reports the same end, by name and after the fact.
+            waited = json.loads(cli(["wait", "--session", context["directory"], "--attempt", started["attempt"]["value"], "--json"]))["Ended"]
+            ended, = waited["units"]
+            assert ended == {"unit": {"kind": "Attempt", "id": started["attempt"]["value"], "members": [created["id"]]}, "phase": "Completed",
+                             "next": status["next"], "blocker": None} and waited["active"] == [], waited
+            assert cli(["wait", "--session", context["directory"]]) == "No child attempt, integration, combination or revalidation of this session is active\n"
+            # The command the session is given names no directory: it finds the session of the one host of this checkout that runs.
+            assert cli(["wait"]) == "No child attempt, integration, combination or revalidation of this session is active\n"
             assert "CHILD_ONLY_NARRATIVE" not in json.dumps(peer.traffic)
             session = Path(context["directory"])
             assert not list((session / "payload").glob(context["attempt"]["value"] + "/*")), "Attached session launched a Governor"
@@ -187,7 +220,7 @@ def main():
     def members(value):
         return [(next(iter(entry["member"])), entry["settled"]) for entry in value["cycle"]["lineage"]]
     with (root / "driver-host.log").open("w") as log:
-        driven = Peer(command + ["host", "codex"], repository, env, log)
+        driven = Peer(command + ["host", "codex", "--executable", str(wrapper)], repository, env, log)
         try:
             driven_session = driven.tool("session", {"Context": {}})["Context"]["value"]["session"]
             assert driven.tool("session", {"Driver": {}}) == {"Driver": {"reply": {"Status": {"value": None}}}}
@@ -202,7 +235,7 @@ def main():
             driven.tool("session", {"Bind": {"token": identity()}}, denied=True)
             bound = driven.tool("session", {"Bind": {"token": started["bind"]}})["Driver"]["reply"]["Bound"]["status"]
             assert bound["state"] == "On" and bound["attached"] == driven_session, bound
-            issued = control("Stop", {"Continue": {}})["Continue"]["directive"]
+            issued = control("Stop", {"Continue": {"waiting": False}})["Continue"]["directive"]
             reference = "T" + target["id"]["number"]
             words = issued["text"].split(" ")
             assert words[:6] == ["$cq-advance", "--roots", reference, "--through", "explore", "--start-token"] and len(words) == 7, issued
@@ -212,7 +245,8 @@ def main():
             assert "pass the token only in Workflow.token" in json.dumps(driven.tool("session", leaking, denied=True))
             directed = {"Workflow": {"id": identity(), "request": advance, "operatorRequirements": f"Driven fixture: advance {reference} through explore", "token": {"Start": {"token": {"value": words[6]}}}}}
             run = driven.tool("session", directed)["Workflow"]["value"]
-            assert run["cycle"] == issued["cycle"] and driven.tool("session", directed)["Workflow"]["value"] == run, run
+            assert run["cycle"] == issued["cycle"] and "Text" in run["instructions"], run
+            assert driven.tool("session", directed)["Workflow"]["value"] == run, run
             assert driven.tool("session", {"Context": {}})["Context"]["value"]["workflow"]["cycle"] == issued["cycle"]
             driven_choice, = driven.tool("dispatch", {"Select": {"request": {**selection, "request": identity(), "roots": [target["id"]]}}})["Selection"]["value"]["choices"]
             driven_claim = driven.tool("claim", {"project": project, "action": {"Acquire": {"id": identity(), "members": [target["id"]], "durationMillis": "180000"}}})["Claimed"]["claim"]
@@ -220,7 +254,7 @@ def main():
             registered = control("StatusLine", {"Status": {}})["Status"]["value"]
             assert [name for name, _ in members(registered)] == ["Run", "Claim", "Request", "Attempt"] and registered["cycle"]["run"] == directed["Workflow"]["id"], registered
             for _ in range(6):
-                child = driven.tool("dispatch", {"Status": {"attempt": child["attempt"], "waitMillis": 20000}})["Status"]["value"]
+                child = driven.tool("dispatch", {"Status": {"attempt": child["attempt"], "waitMillis": 120000}})["Status"]["value"]
                 if child["phase"] not in ["Preparing", "Running", "Stopping", "Validating", "Publishing"]:
                     break
             assert child["phase"] == "Completed", child
@@ -236,12 +270,12 @@ def main():
             assert "out-of-set change" in rejected["Failed"]["fault"]["Denied"]["message"], rejected
             unchanged = driven.tool("read", {"project": project, "selection": {"ItemDetail": {"id": outsider["id"]}}})["Detail"]["view"]["item"]
             assert unchanged["revision"] == outsider["revision"] and unchanged["draft"]["title"] == draft["title"], unchanged
-            stop = control("Stop", {"Continue": {}})["Stop"]
+            stop = control("Stop", {"Continue": {"waiting": False}})["Stop"]
             assert stop["stopped"]["reason"] == "Failure" and "out-of-set change" in stop["stopped"]["detail"] and stop["status"]["state"] == "Off", stop
             own = driven.tool("session", {"Driver": {}})["Driver"]["reply"]["Status"]["value"]
             assert own["state"] == "Off" and own["stopped"] == stop["stopped"], own
             driven.refused("cq/driver", {"Status": {"session": "attached-fixture-session"}})
-            assert control("Stop", {"Continue": {}})["Stop"]["stopped"]["reason"] == "Off"
+            assert control("Stop", {"Continue": {"waiting": False}})["Stop"]["stopped"]["reason"] == "Off"
             change([{"Replace": {"id": outsider["id"], "expected": outsider["revision"], "draft": {**draft, "title": "Driver off: written as before"}}}], [])
             # The hook entry points as Codex runs them: the commands `cq configure` generated, the hook payload on stdin, the hook output on stdout.
             generated = json.loads((repository / ".codex/hooks.json").read_text())["hooks"]
@@ -258,6 +292,8 @@ def main():
             assert hook("UserPromptSubmit", hooked, prompt="Reply with exactly: HELLO") is None
             assert hook("Stop", hooked, stop_hook_active=False, last_assistant_message="HELLO") is None
             assert "rejected: Drive targets are empty" in hook("UserPromptSubmit", hooked, prompt="$cq-drive through=explore")["systemMessage"]
+            # Without its fixture label the task's Probe child keeps running until it is cancelled.
+            change([{"Replace": {"id": target["id"], "expected": revised["Changed"]["ack"]["items"][0]["revision"], "draft": {**draft, "labels": [], "title": "Probed while driven"}}}], [driven_claim["fence"]])
             driving = hook("UserPromptSubmit", hooked, prompt=f"$cq-drive {reference} through=explore")
             offered = driving["hookSpecificOutput"]["additionalContext"]
             assert driving["hookSpecificOutput"]["hookEventName"] == "UserPromptSubmit" and offered.startswith(f"CQ driver drive-start: CQ driver binding: {reference} through explore"), driving
@@ -266,6 +302,23 @@ def main():
             assert hook_bound["state"] == "On" and hook_bound["key"] == {"harness": "Codex", "session": hooked} and hook_bound["attached"] == driven_session, hook_bound
             blocked = hook("Stop", hooked, stop_hook_active=False, last_assistant_message="Bound.")
             assert blocked["decision"] == "block" and blocked["reason"].splitlines()[-1].startswith(f"$cq-advance --roots {reference} --through explore --start-token "), blocked
+            # The hook, as installed, finds this session's host through the checkout: a stop while a child runs is blocked with the order
+            # to wait in a status call.
+            started_token = blocked["reason"].splitlines()[-1].split(" ")[-1]
+            driven.tool("session", {"Workflow": {"id": identity(), "request": advance, "operatorRequirements": "", "token": {"Start": {"token": {"value": started_token}}}}})
+            probing, = driven.tool("dispatch", {"Select": {"request": {**selection, "request": identity(), "roots": [target["id"]], "work": {"Worker": {"mode": "Probe"}}}}})["Selection"]["value"]["choices"]
+            probe = driven.tool("dispatch", {"StartChoice": {"choice": probing["id"], "harness": "Codex", "fence": driven_claim["fence"]}})["Status"]["value"]
+            ordered = hook("Stop", hooked, stop_hook_active=False, last_assistant_message="Started.")
+            assert ordered is not None and ordered.get("decision") == "block" and ordered["reason"].startswith(
+                f"CQ driver: work of this session still runs (attempt {probe['attempt']['value']} on {reference}). Do not end your turn"), ordered
+            assert "with the CQ dispatch tool (Status, IntegrationStatus or CombinationStatus) with waitMillis 120000" in ordered["reason"] and f"{wrapper} wait" not in ordered["reason"], ordered
+            # The checkout's wait command still waits on this session without being told its directory, for a harness that uses it.
+            waiter = subprocess.Popen([str(wrapper), "wait"], cwd=repository, env=env, stdout=subprocess.PIPE, text=True)
+            time.sleep(3)
+            assert waiter.poll() is None, "The wait command ended while the child ran"
+            driven.tool("dispatch", {"Cancel": {"attempt": probe["attempt"]}})
+            reported, _ = waiter.communicate(timeout=60)
+            assert waiter.returncode == 0 and reported.startswith(f"attempt {probe['attempt']['value']} on {reference} ended: "), (waiter.returncode, reported)
             assert hook("UserPromptSubmit", hooked, prompt="$cq-park")["systemMessage"] == f"CQ driver park: CQ driver parked: {reference} through explore"
             assert hook("Stop", hooked, stop_hook_active=True, last_assistant_message="Parked.") is None
             assert hook("Stop", None, stop_hook_active=False) == {"systemMessage": "CQ Stop hook error: Driver session key is missing; no default session is used"}
@@ -280,6 +333,13 @@ def main():
         pi = Peer(command + ["host", "pi"], repository, env, log)
         try:
             pi_context = pi.tool("session", {"Context": {}})["Context"]["value"]
+            # A Pi session starts no waiter: its extension asks the host for the session directory and waits itself.
+            assert "CQ sends you a message that begins `CQ:` when a unit ends" in pi_context["instructions"] and " wait --session " not in pi_context["instructions"]
+            assert pi.rpc("cq/session", {}) == {"directory": pi_context["directory"]}
+            # The Pi extension passes on the text block alone, so it carries the payload.
+            delivered = pi.rpc("tools/call", {"name": "session", "arguments": {"Driver": {}}})
+            text, = [part["text"] for part in delivered["content"]]
+            assert json.loads(text) == delivered["structuredContent"] == {"Driver": {"reply": {"Status": {"value": None}}}}, delivered
             sample = {"sequence": "1", "session": "fixture-native-pi", "turn": "1", "provider": "fixture-provider", "model": "fixture-model",
                       "timestamp": "1000", "responseId": "response-1", "stopReason": "stop", "input": "10", "output": "3", "cacheRead": "2",
                       "cacheWrite": "0", "reasoning": None, "totalTokens": "15", "costUSD": {"value": "0.001"}}
@@ -292,12 +352,12 @@ def main():
             assert "Invalid" in pi.rpc("cq/driver", {"Start": {"session": "", "input": reference + " through=explore"}})["Failed"]["fault"]
             pi_started = pi.rpc("cq/driver", {"Start": {"session": pi_key, "input": reference + " through=explore"}})["Started"]
             assert pi_started["bind"] is None and pi_started["status"]["state"] == "On" and pi_started["status"]["attached"] == pi_context["session"], pi_started
-            pi_directive = pi.rpc("cq/driver", {"Continue": {"session": pi_key}})["Continue"]["directive"]
+            pi_directive = pi.rpc("cq/driver", {"Continue": {"session": pi_key, "waiting": False}})["Continue"]["directive"]
             assert pi_directive["text"].startswith("/cq:advance --roots " + reference + " --through explore --start-token "), pi_directive
             assert pi.tool("session", {"Driver": {}})["Driver"]["reply"]["Status"]["value"]["cycle"]["id"] == pi_directive["cycle"]
             pi_parked = pi.rpc("cq/driver", {"Park": {"session": pi_key}})["Parked"]
             assert pi_parked["status"]["state"] == "Off" and pi_parked["status"]["stopped"]["reason"] == "Parked", pi_parked
-            assert pi.rpc("cq/driver", {"Continue": {"session": pi_key}})["Stop"]["stopped"]["reason"] == "Off"
+            assert pi.rpc("cq/driver", {"Continue": {"session": pi_key, "waiting": False}})["Stop"]["stopped"]["reason"] == "Off"
         finally:
             pi.close()
     pi_totals = json.loads(cli(["status", "--session", pi_context["session"]["value"], "--json"]))["UsageSummary"]["report"]
@@ -318,10 +378,12 @@ def main():
     append_native({"type": "turn_context", "payload": {"turn_id": turn, "model": "fixture-model"}})
     metadata = {"threadId": thread, "x-codex-turn-metadata": {"thread_id": thread, "codex_version": "0.156.1"}}
     with (root / "codex-usage-host.log").open("w") as log:
-        observer = Peer(command + ["host", "codex"], repository, {**env, "CODEX_HOME": str(codex_home)}, log)
+        observer = Peer(command + ["host", "codex", "--executable", str(wrapper)], repository, {**env, "CODEX_HOME": str(codex_home)}, log)
         try:
             response = observer.rpc("tools/call", {"name": "session", "arguments": {"Context": {}}, "_meta": metadata})
             assert not response["isError"], response
+            # Codex receives the payload once, as structured content; the text block only points to it.
+            assert response["content"] == [{"type": "text", "text": "The result is in structuredContent."}], response["content"]
             observed = response["structuredContent"]["Context"]["value"]
             assert thread in observed["usageCoverage"], observed["usageCoverage"]
             sample = {"type": "token_usage_record", "ordinal": 1, "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -347,7 +409,7 @@ def main():
     print(json.dumps({"attachedCodexUsage": "native-metadata-correlated-deduplicated-replayed", "usage": after}))
 
     with (root / "codex-ephemeral-host.log").open("w") as log:
-        ephemeral = Peer(command + ["host", "codex"], repository, {**env, "CODEX_HOME": str(root / "missing-native-home")}, log)
+        ephemeral = Peer(command + ["host", "codex", "--executable", str(wrapper)], repository, {**env, "CODEX_HOME": str(root / "missing-native-home")}, log)
         try:
             response = ephemeral.rpc("tools/call", {"name": "session", "arguments": {"Context": {}}, "_meta": metadata})
             assert not response["isError"], response
@@ -357,7 +419,7 @@ def main():
     print(json.dumps({"ephemeralCodex": "CQ-available-usage-explicitly-unavailable"}))
 
     with (root / "closing-host.log").open("w") as log:
-        closing = Peer(command + ["host", "codex"], repository, env, log)
+        closing = Peer(command + ["host", "codex", "--executable", str(wrapper)], repository, env, log)
         try:
             closing_context = closing.tool("session", {"Context": {}})["Context"]["value"]
             closing.tool("session", {"Workflow": {"id": identity(), "request": {"Begin": {"roots": []}}, "operatorRequirements": "Attached fixture: operator requirements text", "token": None}})
@@ -369,6 +431,12 @@ def main():
             while running["process"] != "Running" and time.monotonic() < deadline:
                 running = closing.tool("dispatch", {"Status": {"attempt": running["attempt"], "waitMillis": 100}})["Status"]["value"]
             assert running["process"] == "Running" and int(running["quietMillis"]) >= 0, running
+            # A wait longer than the deadline of a request that does not wait is served in full: the child runs on, and the host with it.
+            began = time.monotonic()
+            waited = closing.tool("dispatch", {"Status": {"attempt": running["attempt"], "waitMillis": LONG_WAIT_MILLIS}})["Status"]["value"]
+            assert time.monotonic() - began >= LONG_WAIT_MILLIS / 1000 and waited["process"] == "Running" and waited["next"] == "Wait", waited
+            closing.tool("dispatch", {"Status": {"attempt": running["attempt"], "waitMillis": 120001}}, denied=True)
+            assert closing.process.poll() is None, "Attached host ended during a status wait"
         finally:
             closing.close()
     child_directory = Path(closing_context["directory"]) / "children" / running["attempt"]["value"]
@@ -384,7 +452,7 @@ def main():
     latch.mkdir()
     native_env = {**env, "LD_PRELOAD": str(preload), "CQ_FIXTURE_STALL_MODE": "attached-initial", "CQ_FIXTURE_STALL_ROOT": str(latch)}
     with (latch / "stderr").open("w") as log:
-        stalled = subprocess.Popen(command + ["host", "codex"], cwd=repository, env=native_env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log)
+        stalled = subprocess.Popen(command + ["host", "codex", "--executable", str(wrapper)], cwd=repository, env=native_env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log)
         try:
             deadline = time.monotonic() + 20
             while not (latch / "entered").exists() and time.monotonic() < deadline and stalled.poll() is None:
@@ -406,7 +474,7 @@ def main():
     latch.mkdir()
     native_env = {**env, "LD_PRELOAD": str(preload), "CQ_FIXTURE_STALL_MODE": "attached-selection", "CQ_FIXTURE_STALL_ROOT": str(latch)}
     with (latch / "stderr").open("w") as log:
-        stalled = Peer(command + ["host", "codex"], repository, native_env, log)
+        stalled = Peer(command + ["host", "codex", "--executable", str(wrapper)], repository, native_env, log)
         try:
             stalled.tool("session", next_scope)
             stalled.send({"jsonrpc": "2.0", "id": 99, "method": "tools/call", "params": {"name": "dispatch", "arguments": {"Select": {"request": {**selection, "request": identity()}}}}})

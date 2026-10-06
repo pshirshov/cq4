@@ -15,10 +15,10 @@ final case class AttachedChannels(input: InputStream, output: OutputStream, owne
 final class AttachedProgram(config: SupervisorConfig, authority: SupervisorAuthority, gateway: AttachedGateway,
   dispatch: DispatchController, integrations: IntegrationController, combinations: CombinationController, revalidations: RevalidationController,
   watchdog: SupervisorWatchdog, channels: AttachedChannels, clock: Clock, local: LocalControlServer,
-  codex: AttachedCodexUsage, cleanup: WorkspaceCleanup, release: SessionRelease, claims: SessionClaims, logger: IzLogger) {
+  codex: AttachedCodexUsage, cleanup: WorkspaceCleanup, release: SessionRelease, claims: SessionClaims, location: ProjectLocation, wait: WaitCommand, logger: IzLogger) {
+  private val sessions = new AttachedSessions(location.directory)
   private val MaxRecordBytes = 65536
-  private val RequestSeconds = 30L
-  private val limits = PeerLimits(Duration.ofSeconds(30), Duration.ofSeconds(10), Duration.ofSeconds(30), Duration.ofSeconds(RequestSeconds), AttachedGateway.FrameBytes, 32)
+  private val limits = PeerLimits(Duration.ofSeconds(30), Duration.ofSeconds(10), Duration.ofSeconds(30), AttachedGateway.FrameBytes, 32)
   private val queue = new DeliveryQueue(config.directory.resolve("delivery"))
   private def initial: Task[Unit] = ZIO.attemptBlocking {
     require(config.run.ownership == SessionOwnership.Attached, "Attached host requires attached ownership")
@@ -27,6 +27,8 @@ final class AttachedProgram(config: SupervisorConfig, authority: SupervisorAutho
     HostFiles.immutable(config.directory.resolve("settings.json"), HostFiles.encode(SupervisorSettings_JsonCodec, config.settings), MaxRecordBytes)
     HostFiles.immutable(config.directory.resolve("owner.json"), io.circe.Json.obj("pid" -> io.circe.Json.fromLong(channels.owner.pid),
       "startMillis" -> io.circe.Json.fromLong(channels.owner.startMillis)).noSpaces, 1024)
+    SessionWaiters.create(config.directory)
+    sessions.record(config.run.attempt.session, AttachedHostRecord(config.directory.toString, wait.line))
     queue.enqueue(0, DeliveryBatch(List(
       HostDelivery.Usage(HostUsageInput(config.project.project, HostUsage.Assign(config.run.assignment))),
       HostDelivery.Usage(HostUsageInput(config.project.project, HostUsage.Start(config.run.attempt))))))
@@ -53,11 +55,18 @@ final class AttachedProgram(config: SupervisorConfig, authority: SupervisorAutho
       }.unit *>
       // The claims go once the work under them has settled or was cancelled and the Finish is committed locally; a claim under which a
       // child's result still awaits admission stays, and a host that dies leaves them all to their leases.
-      claims.release(dispatch.undelivered) *> release.finish).ensuring(ZIO.attemptBlocking(codex.close()).orDie)
+      claims.release(dispatch.undelivered) *> release.finish).ensuring(ZIO.attemptBlocking {
+        sessions.forget(config.run.attempt.session)
+        codex.close()
+      }.orDie)
   private def loop(peer: StdioPeer): Task[Unit] = ZIO.attemptBlocking(peer.receive()).flatMap {
     case None => ZIO.unit
-    case Some(request) => (ZIO.attempt(peer.beginOperation()) *> gateway.handle(peer, request))
-      .timeoutFail(new IllegalStateException("Attached MCP operation exceeded 30 seconds"))(zio.Duration.fromSeconds(RequestSeconds))
+    case Some(request) =>
+      // A request that waits for work is allowed that wait on top of the deadline every other request keeps, so a host that hangs is
+      // still noticed as early as before.
+      val deadline = AttachedGateway.deadline(request)
+      (ZIO.attempt(peer.beginOperation(deadline)) *> gateway.handle(peer, request))
+      .timeoutFail(new IllegalStateException(s"Attached MCP operation exceeded ${deadline.toSeconds} seconds"))(zio.Duration.fromJava(deadline))
       .ensuring(ZIO.succeed(peer.endOperation()))
       .flatMap(value => ZIO.attempt(value.foreach(peer.send))) *> ZIO.suspendSucceed(loop(peer))
   }

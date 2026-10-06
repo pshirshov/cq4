@@ -10,6 +10,10 @@ import urllib.request
 import uuid
 
 
+# Above the longest dispatch wait (120 s) and what a managed Governor's endpoint allows a request besides it (30 s).
+REPLY_SECONDS = 155
+
+
 def identity():
     return {"value": str(uuid.uuid4())}
 
@@ -38,7 +42,7 @@ def main():
             "Authorization": "Bearer " + os.environ[f"CQ_MCP_{name.upper()}_TOKEN"],
             "Content-Type": "application/json", "MCP-Protocol-Version": "2025-03-26",
         })
-        with urllib.request.urlopen(request, timeout=25) as response:
+        with urllib.request.urlopen(request, timeout=REPLY_SECONDS) as response:
             return json.load(response)
 
     def tool(name, tool_name, value, denied=False):
@@ -59,7 +63,7 @@ def main():
 
     def poll(attempt):
         for _ in range(8):
-            value = tool("cq_host", "dispatch", {"Status": {"attempt": attempt, "waitMillis": 20000}})["Status"]["value"]
+            value = tool("cq_host", "dispatch", {"Status": {"attempt": attempt, "waitMillis": 120000}})["Status"]["value"]
             if value["phase"] not in ["Preparing", "Running", "Stopping", "Validating", "Publishing"]:
                 return value
         raise AssertionError("Fixture child did not finish")
@@ -626,7 +630,7 @@ def main():
 
         def integration():
             for _ in range(8):
-                value = tool("cq_host", "dispatch", {"IntegrationStatus": {"id": operation, "waitMillis": 20000}})["Integration"]["value"]
+                value = tool("cq_host", "dispatch", {"IntegrationStatus": {"id": operation, "waitMillis": 120000}})["Integration"]["value"]
                 if value["phase"] not in ["Preparing", "Running"]:
                     return value
             raise AssertionError("Integration did not finish")

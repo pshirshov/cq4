@@ -1,7 +1,7 @@
 package cq.server
 
 import cq.api.*
-import cq.host.{DriverAssets, HarnessUsage, HostFiles, WorkflowAssets}
+import cq.host.{DispatchWaits, DriverAssets, HarnessUsage, HostFiles, WorkflowAssets}
 import io.circe.{Json, parser}
 import java.nio.file.Files
 import org.scalatest.wordspec.AnyWordSpec
@@ -45,6 +45,23 @@ final class AttachedAssetsLocal extends AnyWordSpec {
       assert(claude.hcursor.get[Boolean]("other") == Right(true))
       val codex = Files.readString(root.resolve(".codex/config.toml"))
       assert(codex.contains("CQ_TOKEN_FILE") && codex.contains("PROVIDER_API_KEY") && codex.contains("\"host\", \"codex\""))
+      // Every integration starts the host with the executable it approved for `cq wait`, so the host can name that command to the session.
+      val launched = List("host", "--settings", settings.toString, "--executable", binary.toString)
+      assert(claude.hcursor.downField("mcpServers").downField("cq").get[List[String]]("args") == Right(launched.patch(1, List("claude"), 0)))
+      assert(codex.contains("args = " + launched.patch(1, List("codex"), 0).map(value => "\"" + value + "\"").mkString("[", ", ", "]")))
+      // A Codex session waits in a status call of the host and runs no command for it, so nothing is approved for its shell.
+      assert(!Files.exists(root.resolve(".codex/rules")))
+      assert(parser.parse(Files.readString(root.resolve(".claude/settings.local.json"))).fold(throw _, identity)
+        .hcursor.downField("permissions").get[List[String]]("allow") == Right(List(s"Bash($binary wait)")))
+      // Every harness allows a tool call the longest dispatch wait, the host's own 30 s for the request and a margin for the host to answer first.
+      assert(codex.contains("\ntool_timeout_sec = 155\n") && claude.hcursor.downField("mcpServers").downField("cq").get[Long]("timeout") == Right(155000L))
+      assert(DispatchWaits.AttachedHarnessSeconds * 1000 == DispatchWaits.MaxMillis + (DispatchWaits.RequestSeconds + DispatchWaits.HarnessMarginSeconds) * 1000)
+      val bridges = List("pi-attached.mjs" -> (DispatchWaits.RequestSeconds + DispatchWaits.HarnessMarginSeconds), "pi-bridge.mjs" -> DispatchWaits.RequestSeconds).map { (name, seconds) =>
+        val source = new String(getClass.getResourceAsStream("/cq/" + name).readAllBytes(), java.nio.charset.StandardCharsets.UTF_8)
+        assert(source.contains(s"const MAX_WAIT_MILLIS = ${DispatchWaits.MaxMillis};") && source.contains(s"const REQUEST_MILLIS = ${seconds * 1000};"), name)
+        assert(source.contains("REQUEST_MILLIS + waitMillis("), name)
+      }
+      assert(bridges.size == 2)
       val pi = parser.parse(Files.readString(root.resolve(".pi/extensions/cq-host.json"))).fold(throw _, identity)
       assert(pi.hcursor.get[List[io.circe.Json]]("tools").toOption.get.size == 9)
       // Drive and park are commands of the Pi extension, with one toggle key; the prompt templates stay the four workflow prompts.
@@ -75,7 +92,8 @@ final class AttachedAssetsLocal extends AnyWordSpec {
       assets.write(Harness.Claude, root, settings, binary, false, false)
       assets.write(Harness.Claude, root, settings, binary, false, false)
       assert(approved.hcursor.get[List[String]]("enabledMcpjsonServers") == Right(List("other", "cq")))
-      assert(approved.hcursor.downField("permissions").get[List[String]]("allow") == Right(List("Bash(ls)")))
+      // The waiter is allowed as exactly one command line, with no wildcard; what the operator allowed stays, and nothing is added twice.
+      assert(approved.hcursor.downField("permissions").get[List[String]]("allow") == Right(List("Bash(ls)", s"Bash($binary wait)")))
       // Claude Code records a declined server in disabledMcpjsonServers, which overrides the approval.
       Files.writeString(local, "{\"enabledMcpjsonServers\":[\"cq\"],\"disabledMcpjsonServers\":[\"other\",\"cq\"]}")
       assets.write(Harness.Claude, root, settings, binary, false, false)
@@ -123,6 +141,7 @@ final class AttachedAssetsLocal extends AnyWordSpec {
       assert(Files.readString(drive).contains("/cq:drive") && Files.readString(drive).contains("--setting-sources project,local") && Files.readString(park).contains("/cq:park"))
       assert(List(drive, park).forall(file => Files.readString(file).contains("cannot start or park a driver") && !Files.readString(file).contains("{{")))
       assert(installed == Json.obj("enabledMcpjsonServers" -> Json.arr(Json.fromString("cq")),
+        "permissions" -> Json.obj("allow" -> Json.arr(Json.fromString(s"Bash($binary wait)"))),
         "hooks" -> Json.obj("UserPromptSubmit" -> Json.arr(group(cq("UserPromptSubmit"))), "Stop" -> Json.arr(group(cq("Stop")))),
         "statusLine" -> cq("StatusLine")))
       // User-owned hook entries and events stay; an earlier CQ entry, even one for another executable, is replaced and not duplicated.
@@ -135,7 +154,7 @@ final class AttachedAssetsLocal extends AnyWordSpec {
       assets.write(Harness.Claude, root, settings, binary, false, false)
       val merged = installed
       assets.write(Harness.Claude, root, settings, binary, false, false)
-      assert(installed == merged && merged.hcursor.downField("permissions").get[List[String]]("allow") == Right(List("Bash(ls)")))
+      assert(installed == merged && merged.hcursor.downField("permissions").get[List[String]]("allow") == Right(List("Bash(ls)", s"Bash($binary wait)")))
       assert(merged.hcursor.downField("hooks").focus.contains(Json.obj("Stop" -> Json.arr(notify, group(cq("Stop"))), "PreToolUse" -> audit,
         "UserPromptSubmit" -> Json.arr(group(handler("echo mine")), group(cq("UserPromptSubmit"))))))
       assert(merged.hcursor.downField("statusLine").focus.contains(cq("StatusLine")))

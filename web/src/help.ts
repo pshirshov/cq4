@@ -3,6 +3,7 @@ import { BaboonCodecContext } from '../../generated/typescript/BaboonSharedRunti
 import { button, element } from './editor.js';
 import { Dialog } from './dialog.js';
 import { faultMessage } from './faults.js';
+import { jsonTextView, jsonView } from './json-view.js';
 
 const CONTEXT = BaboonCodecContext.Default;
 
@@ -18,12 +19,10 @@ export function harnessName(harness: api.Harness): string { return HARNESS_NAMES
 /** Flat role-mode label of a dispatch agent (Q7), for example "Worker · Implement" or "Planner". */
 export function agentLabel(agent: api.CatalogAgent): string { return agent.mode === undefined ? agent.role : `${agent.role} · ${agent.mode}`; }
 
-function pretty(text: string): string {
-  try { return JSON.stringify(JSON.parse(text), null, 2); } catch { return text; }
-}
-function block(title: string, text: string, label: string, open = false): HTMLDetailsElement {
+/** A collapsible block of preformatted text, or of the JSON view of a schema or an example. */
+function block(title: string, text: string | HTMLPreElement, label: string, open = false): HTMLDetailsElement {
   const details = element('details', ''); details.className = 'help-block'; details.open = open;
-  const summary = element('summary', title); const content = element('pre', text); content.setAttribute('aria-label', label); content.tabIndex = 0;
+  const summary = element('summary', title); const content = typeof text === 'string' ? element('pre', text) : text; content.setAttribute('aria-label', label); content.tabIndex = 0;
   details.append(summary, content); return details;
 }
 function table(label: string, headings: string[], rows: (string | Node)[][]): HTMLTableElement {
@@ -190,20 +189,20 @@ export class HelpDialog {
     const name = harness === undefined ? 'canonical' : harnessName(harness.harness);
     const content: Node[] = harness === undefined ? [
       block(`Prompt template · ${agent.prompt.resource}`, agent.prompt.text, 'Canonical prompt', true),
-      block(`Input schema · ${agent.inputType}`, pretty(agent.inputSchema), 'Canonical input schema'),
-      block(`Output schema · ${agent.report}`, pretty(agent.outputSchema), 'Canonical output schema'),
-      block('Workspace tool schema', pretty(agent.workspaceSchema), 'Workspace tool schema'),
+      block(`Input schema · ${agent.inputType}`, jsonTextView(agent.inputSchema), 'Canonical input schema'),
+      block(`Output schema · ${agent.report}`, jsonTextView(agent.outputSchema), 'Canonical output schema'),
+      block('Workspace tool schema', jsonTextView(agent.workspaceSchema), 'Workspace tool schema'),
     ] : [
       element('p', `${name} receives this system prompt and output schema; its input is the canonical ${agent.inputType}.`),
       block(`Effective prompt · ${name}`, harness.prompt, `${name} effective prompt`, true),
-      block(`Effective output schema · ${name}`, pretty(harness.outputSchema), `${name} effective output schema`),
-      block(`Input schema · ${agent.inputType}`, pretty(agent.inputSchema), 'Canonical input schema'),
+      block(`Effective output schema · ${name}`, jsonTextView(harness.outputSchema), `${name} effective output schema`),
+      block(`Input schema · ${agent.inputType}`, jsonTextView(agent.inputSchema), 'Canonical input schema'),
     ];
     return section('Prompts and schemas', toggle, ...content);
   }
   private examples(agent: api.CatalogAgent): HTMLElement {
-    const input = JSON.stringify(api.ChildExecutionInput_JsonCodec.instance.encode(CONTEXT, agent.inputExample), null, 2);
-    const output = JSON.stringify(api.ChildReport_JsonCodec.instance.encode(CONTEXT, agent.outputExample), null, 2);
+    const input = jsonView(api.ChildExecutionInput_JsonCodec.instance.encode(CONTEXT, agent.inputExample));
+    const output = jsonView(api.ChildReport_JsonCodec.instance.encode(CONTEXT, agent.outputExample));
     return section('Examples', block(`Input example · ${agent.inputType}`, input, 'Input example'), block(`Output example · ${agent.report}`, output, 'Output example'));
   }
   /** Effective tools of every harness: MCP tools by server and built-in tools, each enabled or disabled (unselected or denied). */

@@ -136,6 +136,10 @@ for (const [tag, schema] of Object.entries(reports)) {
   assert.deepEqual(contracts.ChildReport_JsonCodec.instance.encode(context, contracts.ChildReport_JsonCodec.instance.decode(context, sample)), sample);
 }
 const guides = JSON.parse(await readFile(`${directory}/native-guides.json`, 'utf8'));
+// No MCP surface offers the Catalog selection of read (Q51), so a guide describes ReadSelection without it.
+const offered = { ...definitions, cq_api_ReadSelection: { ...definitions.cq_api_ReadSelection,
+  oneOf: definitions.cq_api_ReadSelection.oneOf.filter(branch => branch.required[0] !== 'Catalog') } };
+assert.equal(offered.cq_api_ReadSelection.oneOf.length, definitions.cq_api_ReadSelection.oneOf.length - 1);
 for (const [role, guide] of Object.entries(guides)) {
   const references = new Map();
   function equivalent(expected, actual) {
@@ -150,12 +154,12 @@ for (const [role, guide] of Object.entries(guides)) {
         else {
           const source = value.replace('#/$defs/', '');
           const alias = actual[key].replace('#/$defs/', '');
-          assert(definitions[source] && guide.$defs[alias]);
+          assert(offered[source] && guide.$defs[alias]);
           if (references.has(alias)) assert.equal(references.get(alias), source);
           else {
             assert(!Array.from(references.values()).includes(source));
             references.set(alias, source);
-            equivalent(definitions[source], guide.$defs[alias]);
+            equivalent(offered[source], guide.$defs[alias]);
           }
         }
       }
@@ -164,7 +168,7 @@ for (const [role, guide] of Object.entries(guides)) {
   assert.deepEqual(Object.keys(guide.tools).sort(), role === 'Governor' ? ['cq.change', 'cq.read', 'cq.usage', 'cq_host.dispatch'] : ['cq.read', 'cq.usage']);
   for (const [name, schema] of Object.entries(guide.tools)) {
     const type = { 'cq.read': 'ReadInput', 'cq.change': 'ChangeInput', 'cq.usage': 'UsageInput', 'cq_host.dispatch': 'DispatchCommand' }[name];
-    equivalent(definitions[`cq_api_${type}`], schema);
+    equivalent(offered[`cq_api_${type}`], schema);
     const sample = fixture(schema, guide.$defs);
     const codec = contracts[`${type}_JsonCodec`].instance;
     assert.deepEqual(codec.encode(context, codec.decode(context, sample)), sample);

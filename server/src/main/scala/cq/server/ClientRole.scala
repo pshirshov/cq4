@@ -20,6 +20,7 @@ final class ClientRole(cli: Cli, termination: ClientExit) extends RoleTask[Task]
     cli.run(if (arguments.headOption.contains("--")) arguments.tail else arguments).catchSome {
       case _: CommandAssetsNeedAttention => ZIO.attempt(termination.exit(AttentionExit))
       case _: InstallationNeedsAttention => ZIO.attempt(termination.exit(AttentionExit))
+      case finished: WaitFinished => ZIO.attempt(termination.exit(finished.exit))
     }
   }
 }

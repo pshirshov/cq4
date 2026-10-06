@@ -15,7 +15,7 @@ final class ProcessOwner(handle: ProcessHandle) extends OwnerLiveness {
   val startMillis: Long = started.toEpochMilli
 }
 
-final case class PeerLimits(startup: Duration, heartbeat: Duration, reply: Duration, operation: Duration, frameBytes: Int, queued: Int)
+final case class PeerLimits(startup: Duration, heartbeat: Duration, reply: Duration, frameBytes: Int, queued: Int)
 
 object StdioPeer {
   def frame(value: Json): Array[Byte] = (value.noSpaces + "\n").getBytes(UTF_8)
@@ -32,13 +32,14 @@ final class StdioPeer(input: InputStream, output: OutputStream, owner: OwnerLive
   private var lastPing = began
   private var sequence = 0L
   private var awaiting = Option.empty[(String, Long)]
-  private var operation = Option.empty[Long]
+  // The request being served: when it began and the deadline it was admitted with.
+  private var operation = Option.empty[(Long, Duration)]
   def reason: Option[String] = stopped.get()
   private def stop(message: String): Unit = if (stopped.compareAndSet(None, Some(message))) onClosing()
   def initialize(): Unit = synchronized { require(!initialized, "MCP connection is already initialized"); initialized = true }
-  def beginOperation(): Unit = synchronized {
+  def beginOperation(deadline: Duration): Unit = synchronized {
     require(reason.isEmpty && operation.isEmpty, "Attached MCP admission is closed or busy")
-    operation = Some(System.nanoTime())
+    operation = Some(System.nanoTime() -> deadline)
   }
   def endOperation(): Unit = synchronized { operation = None }
   val frameBytes: Int = limits.frameBytes
@@ -98,7 +99,7 @@ final class StdioPeer(input: InputStream, output: OutputStream, owner: OwnerLive
       synchronized {
         val now = System.nanoTime()
         if (!initialized && now - began >= limits.startup.toNanos) stop("MCP initialization deadline exceeded")
-        else if (operation.exists(started => now - started >= limits.operation.toNanos)) stop("Attached MCP operation deadline exceeded")
+        else if (operation.exists((started, deadline) => now - started >= deadline.toNanos)) stop("Attached MCP operation deadline exceeded")
         else if (awaiting.exists(pair => now - pair._2 >= limits.reply.toNanos)) stop("Owning harness heartbeat expired")
         else if (initialized && awaiting.isEmpty && now - lastPing >= limits.heartbeat.toNanos) {
           sequence += 1

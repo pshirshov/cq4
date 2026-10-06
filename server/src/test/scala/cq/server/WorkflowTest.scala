@@ -35,6 +35,69 @@ final class WorkflowLocal extends AnyWordSpec {
     }
   }
 
+  private val Wait = "/opt/cq/bin/cq wait"
+  /** The governing instructions of an attached session of every harness; only the Pi extension's host names no wait command. */
+  private def attached(schemas: McpSchemas): List[String] = schemas.attachedInstructions(Harness.Pi, None) :: Harness.all.toList.map(schemas.attachedInstructions(_, Some(Wait)))
+
+  "Waiting for the host's work in the governing instructions (Behavioral Active Blackbox Atomic)" should {
+    val schemas = new McpSchemas()
+    val work = "Waiting for work the host carries out (a child, an integration being prepared or applied, a combination, a revalidation): "
+    "tell a Claude Code session to await a child with one fixed background command and anything quicker with one status call inside its turn" in {
+      val text = schemas.attachedInstructions(Harness.Claude, Some(Wait))
+      assert(text.contains(work + "a child is awaited in the background, anything else inside your turn. Do not call a status to wait for a child: after starting one, " +
+        "run exactly this command with the Bash tool as a background command (run_in_background true, timeout 7200000): `" + Wait + "`. Then continue with other ready work or end your turn."))
+      assert(text.contains("0: a unit ended, or nothing was active") && text.contains("3: the CQ host is not running") &&
+        text.contains("4 or 5: the command found no single session of this checkout, and its output says why. Report 3, 4 and 5 to the user.") &&
+        text.contains("Any other exit, including the harness ending the command at its lifetime limit: run it again while work is active.") &&
+        text.contains("After exit 0, read the outcome of each ended unit with one Status, IntegrationStatus or CombinationStatus call with waitMillis 0, and run the command again while other work is active."))
+      // What ends within seconds would end before the session's turn does, and a stop that finds nothing running costs a resume directive.
+      assert(text.contains("An integration being prepared or applied, a combination and a revalidation usually end within seconds: after starting one, start no command for it and do not end your turn. " +
+        "Call its status once (IntegrationStatus or CombinationStatus; repeat Revalidate) with waitMillis 120000, which returns when the work ends. " +
+        "Only if that call returns while the work continues, run the command above."))
+    }
+    "tell a Codex session to wait with status calls of the longest wait inside its turn, because nothing wakes it, and with no shell command" in {
+      val text = schemas.attachedInstructions(Harness.Codex, Some(Wait))
+      assert(text.contains(work + "do not end your turn while such work is active: nothing wakes you when it ends. " +
+        "After starting such work, call its status (Status, IntegrationStatus or CombinationStatus; repeat Revalidate) with waitMillis 120000. " +
+        "The call returns when the work ends or the wait has passed; call it again while the work continues. Run no shell command to wait. " +
+        // Codex hands a script back unfinished after 30 s by default, and the model would then ask again every 10 s.
+        "A script of the exec tool is handed back unfinished after 30 s unless it asks for longer: begin a script that makes this call with the line " +
+        "`// @exec: {\"yield_time_ms\": 150000}`, and continue a script that is handed back as still running with the wait tool and yield_time_ms 150000."))
+      assert(!text.contains(Wait) && !text.contains("exec_command") && !text.contains("write_stdin") && !text.contains("run_in_background") && !text.contains("do not call a status to wait"))
+    }
+    "tell a Pi session that CQ sends it a message and that it starts no waiter" in {
+      List(Some(Wait), None).map(schemas.attachedInstructions(Harness.Pi, _)).foreach { text =>
+        assert(text.contains(work + "do not call a status to wait and start no waiter yourself. After starting such work, continue with other ready work or end your turn: " +
+          "CQ sends you a message that begins `CQ:` when a unit ends, naming it, its items, its phase and the next step."))
+        assert(!text.contains(Wait) && !text.contains("run_in_background") && !text.contains("exec_command"))
+      }
+    }
+    "tell a batch Governor, which has no shell and is told nothing, to wait through its status calls, and no attached session" in {
+      val byStatus = work + "call the status of that work (Status, IntegrationStatus or CombinationStatus; repeat Revalidate) with waitMillis 120000. " +
+        "The call returns when the work ends or the wait has passed; call it again while the work continues."
+      val batch = SupervisorProgram.Instructions
+      assert(batch.contains(byStatus) && !batch.contains("cq wait") && !batch.contains("run_in_background") && !batch.contains("exec_command"))
+      attached(schemas).foreach(text => assert(!text.contains("waitMillis 20000")))
+      // A Claude Code or Codex host is not started without its wait command, so no instructions exist for one.
+      List(Harness.Claude, Harness.Codex).foreach(harness => intercept[IllegalStateException](schemas.attachedInstructions(harness, None)))
+    }
+    "give every governing session exactly one way to wait and never tell it to poll" in {
+      (SupervisorProgram.Instructions :: attached(schemas)).foreach { text =>
+        assert(text.sliding(work.length).count(_ == work) == 1 && !text.toLowerCase.contains("poll"), text.take(200))
+        assert(text.contains("Status reads the current state or the result of an attempt"))
+      }
+      assert(!SupervisorProgram.Guidance.contains("waitMillis") && !SupervisorProgram.Guidance.contains(work))
+      val dispatch = schemas.attachedTools.find(_.hcursor.get[String]("name") == Right("dispatch")).get.hcursor.get[String]("description").fold(throw _, identity)
+      assert(dispatch.contains("StartChoice returns at once. Status reads the current state or the result of an attempt, after waiting up to waitMillis (at most 120000) for the attempt to end: " +
+        "the governing instructions of session Context say how this session waits for work") &&
+        !dispatch.toLowerCase.contains("poll"), dispatch)
+      List("workflows/common.md", "workflows/advance.md", "workflows/begin.md", "workflows/entrypoint.md").foreach { name =>
+        val text = new String(getClass.getResourceAsStream("/cq/" + name).readAllBytes(), java.nio.charset.StandardCharsets.UTF_8)
+        assert(!text.toLowerCase.contains("poll"), name)
+      }
+    }
+  }
+
   "Operator decisions in the governing workflows (Behavioral Active Blackbox Atomic)" should {
     "tell the session to record a Question before it stops, not to ask for a go-ahead it has, and to store a chat answer (D147)" in {
       val assets = new WorkflowAssets
@@ -56,7 +119,7 @@ final class WorkflowLocal extends AnyWordSpec {
 
     "give both rules to a governing session that has no workflow text: a run without a workflow and an attached host before activation (D147)" in {
       val schemas = new McpSchemas()
-      (SupervisorProgram.Instructions :: Harness.all.map(schemas.attachedInstructions)).foreach { text =>
+      (SupervisorProgram.Instructions :: attached(schemas)).foreach { text =>
         assert(text.contains("record it as a Question, with the items it gates BlockedBy it, before you stop; never ask it in prose alone"))
         assert(text.contains("The request is the go-ahead for what it asks: do not ask whether to do it."))
       }
@@ -73,7 +136,7 @@ final class WorkflowLocal extends AnyWordSpec {
         "Carry a condition the answer sets into the requirements of the work, or ask it in a follow-up Question. " +
         "A Withdrawn Question never releases the work: Produce a new Question and link the gated items BlockedBy it, or remove the link and record the reason."
       val schemas = new McpSchemas()
-      (List(resource("workflows/common.md"), resource("workflows/advance.md"), SupervisorProgram.Guidance) ++ Harness.all.map(schemas.attachedInstructions))
+      (List(resource("workflows/common.md"), resource("workflows/advance.md"), SupervisorProgram.Guidance) ++ attached(schemas))
         .foreach(text => assert(text.contains(answer)))
       assert(!resource("workflows/advance.md").contains("Do not ask for a go-ahead that the invocation or an Answered Question already gives"))
       assert(resource("workflows/common.md").contains("While a driver is on, the removal of a link to a Question outside the drive is refused as an out-of-set change"))

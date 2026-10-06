@@ -31,7 +31,7 @@ def main():
         request = urllib.request.Request(endpoint, data=json.dumps({"jsonrpc": "2.0", "id": str(uuid.uuid4()),
             "method": method, "params": params}).encode(), headers={"Authorization": "Bearer " + os.environ[f"CQ_MCP_{name.upper()}_TOKEN"],
             "Content-Type": "application/json", "MCP-Protocol-Version": "2025-03-26"})
-        with urllib.request.urlopen(request, timeout=25) as response:
+        with urllib.request.urlopen(request, timeout=155) as response:
             return json.load(response)
 
     def tool(name, operation, value, denied=False):
@@ -116,7 +116,7 @@ def main():
 
     def poll(tag, key, value, result_tag, active):
         for _ in range(10):
-            state = dispatch({tag: {key: value, "waitMillis": 20000}})[result_tag]["value"]
+            state = dispatch({tag: {key: value, "waitMillis": 120000}})[result_tag]["value"]
             if state["phase"] not in active:
                 return state
         raise AssertionError(f"{tag} did not settle")

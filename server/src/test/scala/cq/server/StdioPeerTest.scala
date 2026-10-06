@@ -18,7 +18,7 @@ final class StdioPeerLocal extends AnyWordSpec {
     val response = new PipedInputStream(8192)
     val output = new PipedOutputStream(response)
     val peer = new StdioPeer(input, output, new OwnerLiveness { override def alive: Boolean = Connection.this.alive.get() },
-      PeerLimits(Duration.ofSeconds(3), heartbeat, reply, Duration.ofMillis(200), frameBytes, 8), () => closed.countDown())
+      PeerLimits(Duration.ofSeconds(3), heartbeat, reply, frameBytes, 8), () => closed.countDown())
     def send(value: Json): Unit = { client.write((value.noSpaces + "\n").getBytes(UTF_8)); client.flush() }
     def stopped(part: String): Unit = {
       assert(closed.await(4, TimeUnit.SECONDS), "Peer did not terminate within its deadline")
@@ -72,7 +72,18 @@ final class StdioPeerLocal extends AnyWordSpec {
     }
     "bound an in-flight operation independently of the operation's thread" in {
       val c = connection
-      try { c.peer.initialize(); c.peer.beginOperation(); c.stopped("operation deadline") } finally c.close()
+      try { c.peer.initialize(); c.peer.beginOperation(Duration.ofMillis(200)); c.stopped("operation deadline") } finally c.close()
+    }
+    "bound each operation by the deadline it was admitted with, so a request that waits is not ended by the deadline of one that does not" in {
+      val c = connection
+      try {
+        c.peer.initialize()
+        c.peer.beginOperation(Duration.ofSeconds(2))
+        assert(!c.closed.await(700, TimeUnit.MILLISECONDS) && c.peer.reason.isEmpty, "A waiting operation was ended before its own deadline")
+        c.peer.endOperation()
+        c.peer.beginOperation(Duration.ofMillis(200))
+        c.stopped("operation deadline")
+      } finally c.close()
     }
   }
 }

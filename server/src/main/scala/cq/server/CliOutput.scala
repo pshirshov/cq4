@@ -79,6 +79,10 @@ final class CliOutput(output: PrintStream, format: CliFormat, invocation: List[S
     case CliFormat.Json => output.println(io.circe.Json.arr(values.map(value => io.circe.Json.fromString(value.toString))*).noSpaces)
     case CliFormat.Human => values.foreach(value => line(value.toString))
   }
+  def waited(session: Path, outcome: WaitOutcome): Unit = format match {
+    case CliFormat.Json => output.println(Wire.encode(WaitOutcome_JsonCodec, outcome))
+    case CliFormat.Human => cq.host.SessionWait.lines(session, outcome).foreach(line)
+  }
   def endpoint(value: String): Unit = format match {
     case CliFormat.Json => output.println(io.circe.Json.obj("endpoint" -> io.circe.Json.fromString(value)).noSpaces)
     case CliFormat.Human => line(value)

@@ -84,6 +84,7 @@ test("Pi governor registers the complete domain inventory and local dispatch", a
     assert.equal(request.headers.authorization, "Bearer fixture-" + request.url.slice(1));
     if (call.method === "notifications/initialized") { response.writeHead(202).end(); return; }
     const result = call.method === "initialize" ? { protocolVersion: "2025-03-26" } :
+      call.method === "tools/call" ? { isError: false, content: [{ type: "text", text: "fixture" }] } :
       { tools: tools.map(name => ({ name, description: "Fixture " + name, inputSchema: { type: "object", properties: {} } })) };
     response.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ jsonrpc: "2.0", id: call.id, result }));
   });
@@ -101,8 +102,22 @@ test("Pi governor registers the complete domain inventory and local dispatch", a
     await writeFile(configuration, JSON.stringify({ endpoints }));
     const bridge = (await import(pathToFileURL(asset))).default;
     const registered = [];
-    await bridge({ registerTool(tool) { registered.push(tool.name); } });
+    const tools = new Map();
+    await bridge({ registerTool(tool) { registered.push(tool.name); tools.set(tool.name, tool); } });
     assert.deepEqual(registered, [...domain.map(name => "cq_" + name), "cq_host_dispatch"]);
+    // A dispatch command that waits is allowed its wait on top of the deadline every other request keeps.
+    const armed = [];
+    const arm = AbortSignal.timeout;
+    AbortSignal.timeout = millis => { armed.push(millis); return arm.call(AbortSignal, millis); };
+    try {
+      const attempt = { value: "00000000-0000-4000-8000-000000000001" };
+      for (const [tool, parameters] of [
+        ["cq_host_dispatch", { Status: { attempt, waitMillis: 120000 } }], ["cq_host_dispatch", { Status: { attempt, waitMillis: 0 } }],
+        ["cq_host_dispatch", { Status: { attempt, waitMillis: 120001 } }], ["cq_host_dispatch", { Cancel: { attempt } }],
+        ["cq_host_dispatch", { Revalidate: { id: attempt, result: attempt, fence: {} } }], ["cq_read", { Status: { attempt, waitMillis: 120000 } }]])
+        await tools.get(tool).execute("deadline", parameters, undefined, undefined, {});
+      assert.deepEqual(armed, [150000, 30000, 30000, 30000, 150000, 30000]);
+    } finally { AbortSignal.timeout = arm; }
     for (const invalid of [[...domain, "read"], Array.from({ length: 11 }, (_, index) => "tool_" + String.fromCharCode(97 + index))]) {
       await writeFile(configuration, JSON.stringify({ endpoints: [{ ...endpoints[0], tools: invalid }] }));
       await assert.rejects(() => bridge({ registerTool() { assert.fail("Invalid inventory registered a tool"); } }), /Invalid scoped CQ Pi connection/);

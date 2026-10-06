@@ -294,6 +294,9 @@ final class HarnessUsageLocal extends AnyWordSpec {
       val mixed = collect(stream(native ++ List(change(native.head, "thread_id", Json.fromString("different")), native.last)), request(Harness.Codex))
       assert(total(mixed) == 18237 && mixed.gaps.exists(_.contains("identity changed")))
       intercept[IllegalArgumentException](collect(fixture(Harness.Codex), request(Harness.Codex).copy(version = "unverified")))
+      // The operator's installed Codex is accepted beside the versions before it; its records read as those of 0.159.2 do.
+      assert(HarnessUsage.versions(Harness.Codex) == List("0.156.1", "0.159.2", "0.160.0") && HarnessUsage.version(Harness.Codex) == "0.160.0")
+      assert(total(collect(fixture(Harness.Codex), request(Harness.Codex).copy(version = "0.160.0"))) == total(collect(fixture(Harness.Codex), request(Harness.Codex).copy(version = "0.159.2"))))
     }
 
     "reject exponential monetary expansion before allocating its decimal representation" in {

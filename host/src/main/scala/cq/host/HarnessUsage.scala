@@ -87,10 +87,12 @@ object HarnessUsage {
   private val MaxLabel = 100
   private val DoubleSignificantDigits = 17
   private final case class Malformed(message: String) extends RuntimeException(message)
-  /** Native output formats verified against retained fixtures, oldest first; the last entry is the installed version live probes target. */
+  /** Native output formats verified against retained fixtures, oldest first; the last entry is the installed version live probes target.
+    * Codex 0.160.0 is accepted without a retained fixture of its own: its exec event source (`exec/src/exec_events.rs`) is identical to
+    * that of 0.159.2 and its launch flags are the same, but no usage record of a real 0.160.0 session has been compared yet. */
   def versions(harness: Harness): List[String] = harness match {
     case Harness.Claude => List("2.1.280", "2.1.285")
-    case Harness.Codex => List("0.156.1", "0.159.2")
+    case Harness.Codex => List("0.156.1", "0.159.2", "0.160.0")
     case Harness.Pi => List("0.87.1", "0.99.1")
   }
   def version(harness: Harness): String = versions(harness).last

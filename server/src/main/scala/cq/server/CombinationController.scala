@@ -16,12 +16,12 @@ private[server] final class CombinationExecution(val ticket: CombinationTicket, 
 }
 
 final class CombinationController(config: SupervisorConfig, authority: SupervisorAuthority, candidates: CandidateWorkspace, clock: Clock) {
-  private val MaxWaitMillis = 20000
   private val AcknowledgementMillis = 1000L
   private var entries = Map.empty[RequestId, CombinationExecution]
   private var closing = false
   private var disabled = false
   private val spans = new SessionSpans(config, authority)
+  private val units = new SessionUnits(config.directory)
   private def target: String = config.settings.integrationTarget.getOrElse(throw DomainFailure(Fault.Invalid("No integration target is configured")))
   private def publication = new CombinationPublication(config.directory.resolve("combinations"), config.owner, config.run.attempt.id, config.run.repository, target)
   private def found(id: RequestId): CombinationExecution = entries.getOrElse(id,
@@ -29,7 +29,7 @@ final class CombinationController(config: SupervisorConfig, authority: Superviso
   private def available(): Unit = {
     target
     require(!closing && !disabled, "Combination admission is closed")
-    require(!entries.values.exists(_.view.phase == CombinationPhase.Preparing), "A combination is active; poll it before starting another")
+    require(!entries.values.exists(_.view.phase == CombinationPhase.Preparing), "A combination is active; wait for it to end before starting another")
   }
   private def snapshot(entry: CombinationExecution): CombinationStatus = synchronized(entry.view)
   /** One Combine span per preparation whose members are known, from its first request to where the host last worked on it. */
@@ -66,8 +66,11 @@ final class CombinationController(config: SupervisorConfig, authority: Superviso
       }
     })
     (entry, execute) = registered
-    _ <- if (!execute) ZIO.unit else {
+    // The start is written before the call returns, also when a pending publication is repeated: a waiter named this combination then
+    // waits for this operation's end. An event that cannot be written fails the operation as any other fault of it does.
+    _ <- if (!execute) ZIO.unit else ZIO.attemptBlocking(units.started(SessionUnits.combination(snapshot(entry)))).either.flatMap { written =>
       val operation = for {
+        _ <- ZIO.fromEither(written)
         _ <- ZIO.attemptBlocking(publication.retain(ticket))
         _ <- entry.ready.succeed(())
         plan <- ZIO.attemptBlocking(publication.freeze(ticket) {
@@ -85,7 +88,7 @@ final class CombinationController(config: SupervisorConfig, authority: Superviso
           entry.view = CombinationStatus(ticket.id, if (entry.frozen) CombinationPhase.PublicationPending else CombinationPhase.Failed, None,
             Some(DispatchProjection.concise("Combination failed: " + Option(error.getMessage).getOrElse(error.getClass.getSimpleName))))
         }) *> entry.ready.fail(error).unit
-      } *> resolved(entry)).ensuring(done.succeed(()).unit).forkDaemon.unit
+      } *> resolved(entry)).ensuring(done.succeed(()).unit *> ZIO.attemptBlocking(units.ended(SessionUnits.ended(snapshot(entry)))).orDie).forkDaemon.unit
     }
     _ <- restore(entry.ready.await).timeoutFail(new IllegalStateException("Combination ticket acknowledgement deadline exceeded; admission disabled"))(
       zio.Duration.fromMillis(AcknowledgementMillis)).tapError(_ => ZIO.succeed(synchronized { disabled = true }))
@@ -93,7 +96,7 @@ final class CombinationController(config: SupervisorConfig, authority: Superviso
 
   def status(id: RequestId, waitMillis: Int): Task[CombinationStatus] = for {
     current <- ZIO.attempt(synchronized {
-      require(waitMillis >= 0 && waitMillis <= MaxWaitMillis, "Combination wait must be 0–20000 ms")
+      DispatchWaits.admitted(waitMillis, "Combination")
       val entry = found(id)
       (entry, entry.done)
     })

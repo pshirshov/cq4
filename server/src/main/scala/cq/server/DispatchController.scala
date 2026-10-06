@@ -58,7 +58,7 @@ private[server] final class DispatchExecution(val ticket: DispatchTicket, val di
 final case class SelectedDispatch(cohort: Option[UUID], evidence: ArtifactId, admit: () => Unit, finished: DispatchStatus => ChildOutcome)
 
 final class DispatchController(config: SupervisorConfig, runner: ChildRunner, jobs: JobSupervisor, clock: Clock) {
-  private val MaxStatusWaitMillis = 20000
+  private val units = new SessionUnits(config.directory)
   private val disabled = new AtomicBoolean(false)
   private var closing = false
   private var entries = Map.empty[RequestId, DispatchExecution]
@@ -100,6 +100,7 @@ final class DispatchController(config: SupervisorConfig, runner: ChildRunner, jo
       val execute = (ZIO.attemptBlocking {
         HostFiles.directory(entry.directory)
         HostFiles.immutable(entry.directory.resolve("ticket.json"), HostFiles.encode(DispatchTicket_JsonCodec, entry.ticket), 65536)
+        units.started(SessionUnits.attempt(entry.status))
       } *> ready.succeed(()).unit *> runner.run(entry)).catchAll { failure =>
         ZIO.succeed {
           disabled.set(true)
@@ -110,7 +111,8 @@ final class DispatchController(config: SupervisorConfig, runner: ChildRunner, jo
       // before that would let the session select the same work and find it deferred.
       }.ensuring(ZIO.attemptBlocking(try entry.ending(selection.fold(CohortFailure.outcome(entry.status, None, None))(_.finished(entry.status)))
         finally entry.conclude()).orDie *>
-        done.succeed(()).unit)
+        // What a waiter outside the host reads; written after the end is visible to the session, whose status call may already wait on it.
+        done.succeed(()).unit *> ZIO.attemptBlocking(units.ended(SessionUnits.ended(entry.observed))).orDie)
       execute.forkDaemon.unit
     }
     _ <- entry.ready.await
@@ -134,13 +136,13 @@ final class DispatchController(config: SupervisorConfig, runner: ChildRunner, jo
     }
   }
   def status(attempt: AttemptId, waitMillis: Int): Task[DispatchStatus] = for {
-    entry <- ZIO.attempt { require(waitMillis >= 0 && waitMillis <= MaxStatusWaitMillis, "Status wait must be 0–20000 ms"); found(attempt) }
+    entry <- ZIO.attempt { DispatchWaits.admitted(waitMillis, "Status"); found(attempt) }
     _ <- if (waitMillis == 0) ZIO.unit else entry.done.await.timeout(zio.Duration.fromMillis(waitMillis)).unit
     result <- snapshot(entry)
   } yield result
   /** Empty while the attempt runs; then how it ended. */
   def concluded(attempt: AttemptId, waitMillis: Int): Task[Option[ChildOutcome]] = for {
-    entry <- ZIO.attempt { require(waitMillis >= 0 && waitMillis <= MaxStatusWaitMillis, "Status wait must be 0–20000 ms"); found(attempt) }
+    entry <- ZIO.attempt { DispatchWaits.admitted(waitMillis, "Status"); found(attempt) }
     over <- entry.done.await.timeout(zio.Duration.fromMillis(waitMillis))
   } yield over.map(_ => entry.outcome.getOrElse(throw new IllegalStateException("A finished child attempt has no outcome")))
   def cancel(attempt: AttemptId): Task[DispatchStatus] = for {
@@ -174,7 +176,7 @@ final class DispatchController(config: SupervisorConfig, runner: ChildRunner, jo
     val active = sharing.filter(entry => !DispatchController.terminal(entry.observed.phase)).flatMap(_.ticket.request.members.map(_.id)).filter(members)
       .distinct.sortBy(LedgerPolicy.key)
     if (active.nonEmpty)
-      throw DomainFailure(Fault.Conflict(s"An active child covers ${active.map(id => LedgerPolicy.prefix(id.ledger) + id.number).mkString(", ")}; poll its status before revalidating"))
+      throw DomainFailure(Fault.Conflict(s"An active child covers ${active.map(id => LedgerPolicy.prefix(id.ledger) + id.number).mkString(", ")}; wait for it to end before revalidating"))
     val own = sharing.find(_.ticket.attempt.id == result.attempt)
       .getOrElse(throw DomainFailure(Fault.Missing("Result was not produced by a child of this governing session")))
     if (sharing.exists(entry => (entry ne own) && entry.ticket.attempt.startedAt >= own.ticket.attempt.startedAt && entry.observed.result.nonEmpty &&
@@ -198,9 +200,9 @@ object DispatchController {
     val members = request.members.map(_.id).toSet
     val overlapping = active.flatMap(_.members.map(_.id)).filter(members).distinct.sortBy(LedgerPolicy.key)
     if (overlapping.nonEmpty)
-      throw DomainFailure(Fault.Conflict(s"An active child already covers ${overlapping.map(id => LedgerPolicy.prefix(id.ledger) + id.number).mkString(", ")}; poll its status before starting another child on the same members"))
+      throw DomainFailure(Fault.Conflict(s"An active child already covers ${overlapping.map(id => LedgerPolicy.prefix(id.ledger) + id.number).mkString(", ")}; wait for it to end before starting another child on the same members"))
     if (active.size >= MaxActiveChildren)
-      throw DomainFailure(Fault.Conflict(s"This session permits at most $MaxActiveChildren active children; poll or cancel one before starting another"))
+      throw DomainFailure(Fault.Conflict(s"This session permits at most $MaxActiveChildren active children; wait for one to end or cancel it before starting another"))
   }
   final class Resource(config: SupervisorConfig, runner: ChildRunner, jobs: JobSupervisor, clock: Clock, watchdog: SupervisorWatchdog) extends Lifecycle.Of[Task, DispatchController](
     Lifecycle.make(ZIO.succeed(new DispatchController(config, runner, jobs, clock)))(value => ZIO.succeed(watchdog.beginShutdown()) *> value.shutdown)

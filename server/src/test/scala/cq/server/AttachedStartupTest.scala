@@ -25,8 +25,10 @@ final class AttachedStartupProcess extends AnyWordSpec {
   }
 
   /** The production `cq host claude` in an initialized checkout without operator credentials; its harness sends `initialize` and keeps the input open. */
-  private def host(configured: String): Outcome = host(configured, Initialize)
-  private def host(configured: String, first: String): Outcome = {
+  private val Approved = List("--executable", "/opt/cq/bin/cq")
+  private def host(configured: String): Outcome = host(configured, Initialize, Approved)
+  private def host(configured: String, first: String): Outcome = host(configured, first, Approved)
+  private def host(configured: String, first: String, options: List[String]): Outcome = {
     val local = new LocalWorkspaceFixture(Files.createTempDirectory(Files.createDirectories(Path.of(".work").toAbsolutePath.normalize()), "attached-startup-"),
       new BoundedHostCommand(GitEnvironment.isolated(sys.env), Duration.ofSeconds(10), 65536))
     try {
@@ -39,8 +41,8 @@ final class AttachedStartupProcess extends AnyWordSpec {
       val project = Files.createDirectory(local.source.resolve(".git").resolve("cq")).resolve("project.json")
       Files.writeString(project, HostFiles.encode(ProjectConfig_JsonCodec, ProjectConfig(ProjectId(UUID.randomUUID()), "http://localhost", "Startup fixture")))
       val classpath = Option(System.getProperty("cq.test.classpath")).getOrElse(throw new IllegalStateException("Fork fixture classpath is required"))
-      val builder = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString, "-cp", classpath, "cq.server.Main",
-        "host", "claude", "--settings", at.resolve("settings.json").toString).directory(local.source.toFile).redirectError(at.resolve("stderr").toFile)
+      val builder = new ProcessBuilder((List(Path.of(System.getProperty("java.home"), "bin", "java").toString, "-cp", classpath, "cq.server.Main",
+        "host", "claude", "--settings", at.resolve("settings.json").toString) ++ options)*).directory(local.source.toFile).redirectError(at.resolve("stderr").toFile)
       List("CQ_TOKEN", "CQ_TOKEN_FILE", "CQ_SETTINGS").foreach(builder.environment().remove)
       val process = builder.start()
       try {
@@ -65,6 +67,14 @@ final class AttachedStartupProcess extends AnyWordSpec {
   "Attached host startup (Behavioral Active Blackbox; JVM/Git/process Communication)" should {
     "answer initialize with the cause and remedy when the operator credential is missing" in {
       rejected(HarnessUsage.version(Harness.Claude), "CQ_TOKEN or CQ_TOKEN_FILE is required; start the harness with CQ_TOKEN_FILE set, see docs/interactive.md")
+    }
+    "refuse to start for an integration an earlier package generated, which names no executable for the session's wait command" in {
+      val problem = "This harness integration starts the CQ host without --executable, as an earlier CQ package generated it; " +
+        "run cq configure for this harness with --replace and restart the harness, see docs/interactive.md"
+      val outcome = host(HarnessUsage.version(Harness.Claude), Initialize, Nil)
+      assert(outcome.diagnostics == List(problem) && outcome.exit == StartupExit, outcome.toString)
+      assert(outcome.replies.map(parser.parse(_).fold(throw _, identity)) == List(Json.obj("jsonrpc" -> Json.fromString("2.0"), "id" -> Json.fromInt(RequestId),
+        "error" -> Json.obj("code" -> Json.fromInt(StartupCode), "message" -> Json.fromString(problem)))), outcome.toString)
     }
     "answer initialize with the cause and remedy when the configured harness version is unverified" in {
       rejected("0.0.1", "Unverified harness version; configure a harness version this CQ package verifies, see docs/interactive.md")

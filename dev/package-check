@@ -195,6 +195,8 @@ def main():
             backup_evidence.mkdir()
             backup_checks = installed_checks(support, backup_evidence, dict(checks.environment))
             result["backup"] = runpy.run_path(str(ROOT / "dev/backup-check.py"))["verify"](backup_checks, prefix + command)
+        # `cq wait` is the command the harnesses execute: its exits for an idle, ended and absent host, by the installed executable.
+        checks.run(["python3", "dev/wait-check.py", *prefix, *command], "installed-session-wait", support["COMMAND_TIMEOUT"])
         checks.run(["python3", "dev/launcher-profile-check.py", "--release", str(installed), "--evidence", str(evidence / "launcher-profile")],
                    "launcher-profile", support["COMMAND_TIMEOUT"])
         _, _, verified = package["load_release"](installed)

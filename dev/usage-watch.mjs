@@ -59,13 +59,14 @@ try {
   await new Promise(resolve => setTimeout(resolve, 1200));
   assert.equal(root.frames.filter(frame => frame.Updated).length, stableCount, 'Stable/replayed usage must not emit repeated notifications');
   queries = JSON.parse(sql("SELECT coalesce(json_agg(row_to_json(s)), '[]'::json) FROM (SELECT query, calls, rows FROM pg_stat_statements WHERE query LIKE '%cq_%' AND query NOT LIKE '%pg_stat_statements%') s"));
-  assert.equal(queries.length, 4, 'Unified watch polling reads indexed catalogue, project item and usage clocks plus project existence');
-  assert.ok(queries.some(row => /^SELECT change_cursor FROM cq_projects WHERE project_id = \$1$/.test(row.query)));
+  assert.equal(queries.length, 5, 'Unified watch polling reads the catalogue clock, the project item and work cursors, the usage clock and attempt events, plus project existence');
+  assert.ok(queries.some(row => /^SELECT p\.change_cursor, p\.fence_counter \+ \(SELECT count\(\*\) FROM cq_claims c WHERE c\.project_id = p\.project_id AND \(c\.released OR c\.expires_at <= \$1\)\) FROM cq_projects p WHERE p\.project_id = \$2$/.test(row.query)));
+  assert.ok(queries.some(row => /^SELECT count\(\*\) \+ count\(effective_outcome\) FROM cq_usage_attempts WHERE project_id = \$1$/.test(row.query)));
   assert.ok(queries.some(row => /^SELECT cursor FROM cq_catalogue_clock WHERE singleton$/.test(row.query)));
   assert.ok(queries.some(row => /^SELECT cursor FROM cq_usage_clock WHERE project_id = \$1$/.test(row.query)));
   assert.ok(queries.some(row => /^SELECT \$\d+ FROM cq_projects WHERE project_id = \$1$/.test(row.query)));
   assert.ok(queries.every(row => Number(row.calls) >= 1 && Number(row.rows) <= Number(row.calls)), JSON.stringify(queries));
-  cases.push('initial and changed cursor only; idempotent replay and stable polls emit nothing; actual SQL reads at most one row per indexed query');
+  cases.push('initial and changed cursor only; idempotent replay and stable polls emit nothing; each SQL read returns at most one row');
   const replacement = id(); root.socket.send(JSON.stringify({ Watch: { id: replacement, scope: { catalogue: true, project: second } } }));
   await root.wait(frame => frame.Updated && frame.Updated.subscription.value === replacement.value);
   const boundary = root.frames.length; await host(first, assignment(first)); await host(second, assignment(second));
