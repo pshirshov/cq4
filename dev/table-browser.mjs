@@ -21,9 +21,13 @@ export async function tableChecks(browser, storageState, origin, evidence) {
   await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
   const page = await context.newPage(); page.setDefaultTimeout(5000);
   const browses = []; const errors = []; page.on('pageerror', error => errors.push(String(error)));
-  page.on('websocket', socket => socket.on('framesent', frame => {
-    const browse = JSON.parse(String(frame.payload)).Call?.command.Read?.input.selection.Browse; if (browse) browses.push(browse);
-  }));
+  // The browses of the current document: a reload opens a new socket, and what the previous document sent last is not counted for it.
+  page.on('websocket', socket => {
+    browses.length = 0;
+    socket.on('framesent', frame => {
+      const browse = JSON.parse(String(frame.payload)).Call?.command.Read?.input.selection.Browse; if (browse) browses.push(browse);
+    });
+  });
   const reopen = async () => {
     browses.length = 0; await page.reload(); await page.getByText('Connection: ALIVE', { exact: true }).waitFor();
     await page.getByLabel('Project', { exact: true }).selectOption(project.value); await page.getByText('Data: current', { exact: true }).waitFor();
@@ -162,7 +166,11 @@ export async function tableChecks(browser, storageState, origin, evidence) {
     await check('I15 grouping reissues the browse and inserts one unfocusable header per group', async () => {
       assert.equal(await grouping.isChecked(), false); browses.length = 0;
       await grouping.check(); await shows(['#M1', 'T2', 'T4', '#M2', 'T1', '#—', 'T3']);
-      assert.deepEqual(browses[0].order, { field: 'Id', direction: 'Ascending', grouped: true });
+      // The page also reloads its rows for a live update, 500 ms or more after the change that caused it, and after a load that such an
+      // update interrupted. Such a browse can be sent between the line above and the click, in the order of that moment, so the first
+      // recorded browse is not necessarily the one the click caused. Every browse sent after the click carries the new order, and the
+      // grouped rows are shown from one of them, so the last one recorded here does.
+      assert.deepEqual(browses.at(-1).order, { field: 'Id', direction: 'Ascending', grouped: true });
       assert.deepEqual(await savedView(), { field: 'Id', direction: 'Ascending', grouped: true });
       const headings = table.locator('tbody tr.item-group');
       assert.equal(await headings.locator('button, a, input, [tabindex]').count(), 0);
@@ -191,7 +199,7 @@ export async function tableChecks(browser, storageState, origin, evidence) {
       assert.equal(await grouping.isChecked(), true); assert.equal(browses[0].order.grouped, true);
       await search('ledger:Tasks'); await shows(['#M1', 'T2', 'T4', '#M2', 'T1', '#—', 'T3', 'T5']);
       browses.length = 0; await grouping.uncheck(); await shows(['T1', 'T2', 'T3', 'T4', 'T5']);
-      assert.equal(browses[0].order.grouped, false); assert.equal((await savedView()).grouped, false);
+      assert.equal(browses.at(-1).order.grouped, false); assert.equal((await savedView()).grouped, false);
       assert.deepEqual(errors, []);
     });
     await page.screenshot({ path: `${evidence}/table.png`, fullPage: true });

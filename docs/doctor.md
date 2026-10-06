@@ -23,3 +23,31 @@ Symlinks to readable regular files are accepted, including declaratively managed
 This verifies **command assets only**. It does not verify server/schema compatibility, credentials, MCP configuration, hook configuration, status lines, hook trust, harness versions or whether a running harness has reloaded the files. A Current report must not be interpreted as a complete installation health check: `cq doctor server` checks the server, its schema and PostgreSQL, and `cq doctor harness` checks settings, generated configuration, hook trust and the harness version ([declarative installation](declarative-installation.md#doctor)).
 
 Keep `cq configure` for imperative installation. For a missing or changed command, either update its declarative source to the running package's template or review the appropriate `cq configure`/`cq commands export` command and its replacement options. Doctor itself makes no changes.
+
+# Verify the agent model configuration
+
+`cq doctor agents HARNESS --settings FILE` checks that the agent model configuration of this checkout's project can run the planner, worker, explorer and reviewer roles when HARNESS (claude, codex or pi) governs, with the harness entries of a session's settings file. It reads and changes nothing: it starts no harness, asks no provider and writes no file.
+
+```sh
+cq doctor agents codex --settings ./cq-settings.json
+cq doctor agents pi --settings ./cq-settings.json --directory /path/to/checkout --json
+```
+
+It reads the project file of the checkout (of `--directory`, by default the current directory) for the endpoint and the project, and the operator credential (`CQ_TOKEN` or `CQ_TOKEN_FILE`) as `cq doctor server` does. The server holds the configuration: the server defaults and the project's override, edited under *Agent models* in the browser.
+
+| Check | Current when |
+| --- | --- |
+| Project | The project file is readable. |
+| Credential | The operator credential is readable; the server's acceptance shows in the next check. |
+| Configuration | The server returned the configuration of the project. |
+| Server defaults, Project override | The text of the layer has no problems. A failure lists each problem with its `line:column` in that text. |
+| Role planner, Role worker, Role explorer, Role reviewer | The role resolves for HARNESS. The detail shows the resolved models in the configuration's own syntax and where the role was found. A failure names the problem and what to set, for example a role that no layer assigns or a tier that no layer defines. |
+| Session settings | The settings file is readable and names each harness once. |
+| Settings entry H | Harness H, which a resolved role runs a model on, has an entry in the settings file with an executable that exists and a package-verified version. A failure reads "H is referenced by ROLE but not in the session settings". |
+| Providers | Every resolved model that is written without a provider can take the provider of its harness's settings entry. |
+
+No role is resolved while a layer has problems, so the four role checks fail with it. A reviewer seat that can run a model of HARNESS means the governing harness may review its own work: that is allowed, and the Role reviewer check reports it as self-review in its detail while staying Current.
+
+Exit status is zero only when every check is Current; the report is printed before the command fails. With `--json`, stdout contains one JSON object with `scope` (`agents`), `current` and `checks` (`name`, `state`, `detail`), as for `cq doctor server` and `cq doctor harness`.
+
+Model names are **not verified against providers**: a misspelt model resolves here and fails when a child starts. `cq doctor harness` verifies a harness's executable by its version probe, its generated assets and its trust; this command checks only that the settings file has a usable entry.
