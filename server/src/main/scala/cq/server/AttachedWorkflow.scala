@@ -105,8 +105,8 @@ final class AttachedWorkflow(config: SupervisorConfig, authority: SupervisorAuth
   def authorize(command: DispatchCommand): Unit = synchronized {
     command match {
       // A discard withdraws work as a cancellation does: it starts nothing and writes nothing to the server or to Git.
-      case _: DispatchCommand.Status | _: DispatchCommand.Cancel | _: DispatchCommand.IntegrationStatus | _: DispatchCommand.CombinationStatus |
-        _: DispatchCommand.DiscardIntegration => ()
+      case _: DispatchCommand.Status | _: DispatchCommand.Seats | _: DispatchCommand.Cancel | _: DispatchCommand.IntegrationStatus |
+        _: DispatchCommand.CombinationStatus | _: DispatchCommand.DiscardIntegration => ()
       case _ =>
         if (current.isEmpty) throw DomainFailure(Fault.Denied("Activate a CQ workflow with session/Workflow before dispatch"))
         execution.authorize(command)

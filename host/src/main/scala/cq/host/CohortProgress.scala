@@ -24,6 +24,7 @@ object CohortFailure {
   def outcome(status: DispatchStatus, input: Option[String], offered: Option[Boolean]): ChildOutcome = {
     val end = status.phase match {
       case DispatchPhase.Cancelled => ChildEnd.Cancelled
+      case DispatchPhase.Abstained => throw new IllegalStateException("Concluding an abstained unit is not implemented in this build")
       case DispatchPhase.Completed | DispatchPhase.Failed if status.result.nonEmpty => ChildEnd.Admitted
       case DispatchPhase.Failed => offered.fold(ChildEnd.Failed)(again => if (again) ChildEnd.Retryable else ChildEnd.Repeated)
       case _ => ChildEnd.Unknown

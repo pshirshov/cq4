@@ -216,7 +216,7 @@ root adt Fault {
 }
 
 enum Harness { Claude Codex Pi }
-enum AttemptState { Running Completed Failed Cancelled Unknown }
+enum AttemptState { Running Completed Failed Cancelled Unknown Abstained }
 enum Attribution { Direct Shared Unattributed }
 root data EvaluationScope { run: str scenario: str assessor: bit }
 root data Assignment { id: AssignmentId project: ProjectId members: set[ItemId] attribution: Attribution cohort: opt[uid] evaluation: opt[EvaluationScope] }
@@ -303,6 +303,7 @@ root data ProjectPage { projects: lst[Project] after: opt[ProjectId] hasMore: bi
 root data ProjectConfig { project: ProjectId endpoint: str name: str }
 root adt ProjectSetting {
   data Requirements { text: str }
+  data Agents { text: str }
 }
 root data RequirementsChange { actor: Actor at: i64 }
 root data ProjectRequirements { project: ProjectId revision: Revision text: str change: opt[RequirementsChange] }
@@ -375,7 +376,7 @@ root adt LineageMember {
   data Combination { id: RequestId }
 }
 root data LineageEntry { member: LineageMember parent: opt[LineageMember] settled: bit }
-enum ChildEnd { Admitted Retryable Repeated Failed Cancelled Unknown }
+enum ChildEnd { Admitted Retryable Repeated Failed Cancelled Unknown Abstained }
 root data ChildOutcome { attempt: AttemptId members: lst[ItemId] end: ChildEnd input: opt[str] fault: opt[str] }
 root data DriverCycle {
   id: CycleId number: i32 state: CycleState roots: set[ItemId] through: WorkflowPhase snapshot: WorksetSnapshot
@@ -500,6 +501,7 @@ root adt Command {
   data Initialize { config: ProjectConfig }
   data RenameProject { project: ProjectId expected: Revision name: str }
   data Requirements { input: RequirementsInput }
+  data Agents { input: AgentsInput }
   data Search { input: SearchInput }
   data Graph { input: GraphInput }
   data Workset { input: WorksetInput }
@@ -532,6 +534,8 @@ root adt Result {
   data Projects { page: ProjectPage }
   data Initialized { project: Project }
   data Requirements { value: ProjectRequirements }
+  data Agents { value: AgentsView }
+  data AgentRoute { value: ResolvedAssignment }
   data Found { page: ItemPage }
   data Detail { view: ItemView }
   data History { page: HistoryPage }
@@ -612,7 +616,93 @@ adt SourceBuild {
 }
 root data SessionRecovery { outcome: RecoveryOutcome reason: str recordedAt: i64 host: str build: SourceBuild }
 
-enum ArtifactKind { Prompt Input Result Transcript Validation Combination Selection Evidence Amendment }
+// Agent model configuration (I17). The stored form of a layer is the text its operator wrote (ProjectSetting.Agents,
+// InstallationSetting.Agents); AgentConfig is what that text parses to and is never stored.
+enum AgentRole { Planner Worker Explorer Reviewer }
+enum ModelTier { Frontier Standard Fast }
+enum Effort { Off Minimal Low Medium High XHigh Max }
+root data ModelName { provider: opt[str] model: str }
+root data TierEntry { model: ModelName effort: opt[Effort] }
+root adt HarnessSelector {
+  data Governing {}
+  data Named { harness: Harness }
+}
+root adt ModelTarget {
+  data Exact { model: ModelName }
+  data Tier { value: ModelTier }
+}
+root data ModelReference { harness: HarnessSelector target: ModelTarget effort: opt[Effort] }
+enum SeatStrategy { Fallback RoundRobin First }
+root adt SeatChoice {
+  data Single { reference: ModelReference }
+  data Strategy { kind: SeatStrategy entries: lst[ModelReference] }
+}
+enum PanelMode { All Any }
+root adt RoleChoice {
+  data Seat { choice: SeatChoice }
+  data Panel { mode: PanelMode seats: lst[SeatChoice] min: i32 }
+}
+root data HarnessAgents { tiers: map[ModelTier, lst[TierEntry]] roles: map[AgentRole, RoleChoice] }
+root data AgentConfig { defaults: map[AgentRole, RoleChoice] harnesses: map[Harness, HarnessAgents] }
+root data ModelRoute { harness: Harness provider: opt[str] model: str effort: opt[Effort] }
+root data ResolvedSeat { strategy: SeatStrategy candidates: lst[ModelRoute] }
+enum AgentLayer { Project Installation }
+enum RoleSource { HarnessRoles DefaultRoles }
+// Where the lookup found a role: the layer and the part of its document.
+root data RoleOrigin { layer: AgentLayer source: RoleSource }
+// selfReview: the indices of the seats of a Reviewer role that hold a candidate of the governing harness.
+root data ResolvedRole { mode: PanelMode min: i32 seats: lst[ResolvedSeat] origin: RoleOrigin selfReview: lst[i32] }
+// Line and column are 1-based; a column counts UTF-16 code units.
+root data TextPosition { line: i32 column: i32 }
+root adt AgentProblem {
+  data Syntax { at: TextPosition message: str }
+  data UnknownKey { at: TextPosition key: str }
+  data EmptyList { at: TextPosition }
+  data InvalidMinimum { at: TextPosition min: i32 seats: i32 }
+  data PanelNotAllowed { at: TextPosition role: AgentRole }
+  data ProviderRequired { at: TextPosition harness: Harness }
+  data ProviderNotAllowed { at: TextPosition harness: Harness }
+  data EffortUnsupported { at: TextPosition harness: Harness effort: Effort }
+  data RoleUnassigned { harness: Harness role: AgentRole }
+  data TierUndefined { harness: Harness tier: ModelTier role: AgentRole }
+}
+root adt RoleResolution {
+  data Resolved { plan: ResolvedRole }
+  // The positions in the problems are those of the text of the origin's layer; a role that no layer assigns has no origin.
+  data Unresolved { origin: opt[RoleOrigin] problems: lst[AgentProblem] }
+}
+root data ResolvedAssignment { harness: Harness role: AgentRole resolution: RoleResolution }
+root adt InstallationSetting {
+  data Agents { text: str }
+}
+root adt AgentsScope {
+  data Installation {}
+  data Project {}
+}
+root adt AgentsAction {
+  data Read {}
+  data Replace { scope: AgentsScope expected: Revision text: str }
+  // The unsaved text of one layer against the other layer as stored.
+  data Preview { scope: AgentsScope text: str }
+  data Resolve { harness: Harness role: AgentRole }
+}
+root data AgentsInput { project: ProjectId action: AgentsAction }
+root data AgentsDocument { revision: Revision text: str change: opt[RequirementsChange] problems: lst[AgentProblem] }
+root data AgentsView { installation: AgentsDocument project: AgentsDocument assignments: lst[ResolvedAssignment] }
+// A unit is one started choice; it owns the attempts of its seats and their candidates.
+root adt SeatEnd {
+  data Pending {}
+  data Delivered { result: ArtifactId next: ChildNext }
+  data Abstained {}
+  data Failed { fault: str }
+  data Cancelled {}
+}
+enum AbstentionReason { Unconfigured Launch Credential Quota RateLimit Unavailable }
+root data SeatAttempt { attempt: AttemptId route: ModelRoute abstained: opt[AbstentionReason] detail: opt[str] }
+root data SeatStatus { seat: i32 attempts: lst[SeatAttempt] end: SeatEnd }
+root data UnitSeats { request: RequestId mode: PanelMode min: i32 seats: lst[SeatStatus] }
+
+enum ArtifactKind { Prompt Input Result Transcript Validation Combination Selection Evidence Amendment Panel }
 root data ArtifactUpload { project: ProjectId id: ArtifactId attempt: AttemptId kind: ArtifactKind mediaType: str body: str }
 root data ArtifactMetadata { project: ProjectId id: ArtifactId attempt: AttemptId kind: ArtifactKind mediaType: str sha256: str bytes: i32 codePoints: i32 actor: Actor receivedAt: i64 }
 root data ArtifactPage { metadata: ArtifactMetadata offset: i32 next: i32 hasMore: bit text: str }
@@ -853,8 +943,8 @@ root data RevalidationStatus {
 enum DeclaredCheckPhase { Starting Running Publishing Completed Failed Unknown }
 root data DeclaredCheckTicket { parent: AttemptId check: ValidationCheck workspace: WorkspaceSpec fingerprint: str failures: lst[ArtifactId] }
 root data DeclaredCheckStatus { name: str job: AttemptId phase: DeclaredCheckPhase evidence: opt[ValidationEvidence] blocker: opt[str] }
-enum DispatchPhase { Preparing Running Stopping Validating Publishing Completed Failed Cancelled Unknown PublicationPending }
-enum ChildNext { Wait Plan Review Revise ResolveBlocker Retry ConsiderAcceptance ConsiderProposal ConsiderGrouping InspectEvidence RetryDelivery }
+enum DispatchPhase { Preparing Running Stopping Validating Publishing Completed Failed Cancelled Unknown PublicationPending Abstained }
+enum ChildNext { Wait Plan Review Revise ResolveBlocker Retry ConsiderAcceptance ConsiderProposal ConsiderGrouping InspectEvidence RetryDelivery Arbitrate }
 root data ChildCounts {
   ready: i32 accepted: i32 changesRequested: i32 blocked: i32 failed: i32 validationFailed: i32 validationUnknown: i32
   proposed: i32 evidence: i32 abstained: i32 assessed: i32 validationIntermittent: i32
@@ -913,6 +1003,7 @@ root adt DispatchCommand {
   data Start { request: DispatchRequest }
   data Status { attempt: AttemptId waitMillis: i32 }
   data Cancel { attempt: AttemptId }
+  data Seats { attempt: AttemptId }
   data PrepareIntegration { id: IntegrationId reviewer: ArtifactId }
   data Integrate { id: IntegrationId }
   data IntegrationStatus { id: IntegrationId waitMillis: i32 }
@@ -924,6 +1015,7 @@ root adt DispatchCommand {
 root adt DispatchReply {
   data Selection { value: CohortOffer }
   data Status { value: DispatchStatus }
+  data Seats { value: UnitSeats }
   data Integration { value: IntegrationStatus }
   data Combination { value: CombinationStatus }
   data Revalidation { value: RevalidationStatus }

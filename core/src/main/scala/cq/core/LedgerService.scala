@@ -73,6 +73,7 @@ object LedgerService {
       case Some(StoredSetting(revision, ProjectSetting.Requirements(text), actor, updatedAt)) =>
         ProjectRequirements(tx.project.id, revision, text, Some(RequirementsChange(actor, updatedAt)))
       case None => ProjectRequirements(tx.project.id, Revision(0), "", None)
+      case Some(other) => throw new IllegalStateException(s"The requirements setting holds a document of another kind: ${other.value.getClass.getSimpleName}")
     }
 
     override def requirements(scope: Scope): F[Throwable, ProjectRequirements] = repository.transact(scope.project)(standing)

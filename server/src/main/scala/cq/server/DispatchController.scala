@@ -194,7 +194,7 @@ final class DispatchController(config: SupervisorConfig, runner: ChildRunner, jo
 object DispatchController {
   val MaxActiveChildren = 4
   def terminal(phase: DispatchPhase): Boolean = Set(DispatchPhase.Completed, DispatchPhase.Failed, DispatchPhase.Cancelled,
-    DispatchPhase.Unknown, DispatchPhase.PublicationPending)(phase)
+    DispatchPhase.Unknown, DispatchPhase.PublicationPending, DispatchPhase.Abstained)(phase)
   // Active children hold disjoint claims: a member belongs to at most one running child (D83).
   def admissible(active: List[DispatchRequest], request: DispatchRequest): Unit = {
     val members = request.members.map(_.id).toSet

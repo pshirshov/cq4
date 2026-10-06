@@ -169,7 +169,10 @@ final class PostgresProjectArchives(database: LedgerDatabase, clock: Clock) exte
       sql.query("SELECT kind, body::text FROM restore_cq_project_settings")(_ => ())(row => (row.getString(1), row.getString(2))).foreach { case (kind, body) =>
         val setting = scala.util.Try(Wire.decode(ProjectSetting_JsonCodec, body)).getOrElse(invalid("Archive holds a project setting that cannot be decoded"))
         check(ProjectSettingKind.of(setting).toString == kind, "Archive project setting kind disagrees with its content")
-        setting match { case ProjectSetting.Requirements(text) => LedgerPolicy.validateRequirements(text) }
+        setting match {
+          case ProjectSetting.Requirements(text) => LedgerPolicy.validateRequirements(text)
+          case _: ProjectSetting.Agents => throw new IllegalStateException("Restoring an agent configuration is not implemented in this build")
+        }
       }
       sql.query("SELECT body::text, summary::text, harness, session_key, revision FROM restore_cq_drivers")(_ => ()) { row =>
         val record = scala.util.Try(Wire.decode(DriverRecord_JsonCodec, row.getString(1))).getOrElse(invalid("Archive holds an undecodable driver"))
