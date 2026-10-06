@@ -1,11 +1,13 @@
 package cq.host
 
 import cq.api.*
-import cq.core.{DomainFailure, IntegrationPolicy, Scope}
+import cq.core.{CandidateAuthorship, DomainFailure, GoverningWorkPolicy, IntegrationPolicy, Scope}
 import java.time.{Clock, Duration}
+import scala.annotation.tailrec
 
 /** Worker and reviewer results whose evidence establishes an independently reviewed candidate. */
-final case class ReviewedCandidate(ticket: IntegrationTicket, workerId: ArtifactId, worker: ChildResult, validation: ValidationCitations, fence: Fence) {
+final case class ReviewedCandidate(ticket: IntegrationTicket, workerId: ArtifactId, worker: ChildResult, authorship: CandidateAuthorship,
+  validation: ValidationCitations, fence: Fence) {
   def candidate: GitCommit = worker.candidate.get
 }
 
@@ -16,6 +18,7 @@ final class IntegrationPreparation(api: ServerApi, owner: Scope, repository: Str
   checks: List[ValidationCheck], clock: Clock, bases: ExecutionBase) {
   private val PreparationNanos = Duration.ofSeconds(60).toNanos
   private val ClaimMillis = Duration.ofMinutes(3).toMillis
+  private val AttemptPageSize = 200
 
   /** The deadline bounds the server calls of one operation; host checks of a rebased commit run between operations. */
   private def bounded[A](operation: (Command => Result) => A): A = {
@@ -45,6 +48,31 @@ final class IntegrationPreparation(api: ServerApi, owner: Scope, repository: Str
     matches.head.fence
   }
 
+  /** The roles of the attempts that made and reviewed the candidate, as the server registered them. Both attempts are assigned the
+    * candidate's members, so they are among the attempts of any one member. */
+  private def authorship(call: Command => Result, worker: ChildResult, reviewer: ChildResult): CandidateAuthorship = {
+    val filter = UsageFilter.TaskOnly(worker.request.members.head.id)
+    def page(after: Option[AttemptId], snapshot: Option[Long]): AttemptPage =
+      call(Command.Usage(UsageInput(owner.project, UsageSelection.Attempts(filter, after, snapshot, AttemptPageSize)))) match {
+        case Result.UsageAttempts(value) => value
+        case _ => throw new IllegalStateException("Attempt read returned an unexpected result")
+      }
+    @tailrec def listed(found: Map[AttemptId, Role], current: AttemptPage): Map[AttemptId, Role] = {
+      val known = found ++ current.entries.map(_.attempt).filter(attempt => attempt.id == worker.attempt || attempt.id == reviewer.attempt)
+        .map(attempt => attempt.id -> attempt.role)
+      if (known.size == 2 || !current.hasMore) known else listed(known, page(current.after, Some(current.cursor)))
+    }
+    // A later page is read against the first one's usage cursor; usage recorded in between restarts the listing.
+    @tailrec def roles(): Map[AttemptId, Role] =
+      (try Some(listed(Map.empty, page(None, None))) catch { case DomainFailure(_: Fault.Resync) => None }) match {
+        case Some(value) => value
+        case None => roles()
+      }
+    val known = roles()
+    def role(attempt: AttemptId): Role = known.getOrElse(attempt, throw new IllegalStateException("Integration result attempt is not registered"))
+    CandidateAuthorship(role(worker.attempt), role(reviewer.attempt))
+  }
+
   def review(ticket: IntegrationTicket): ReviewedCandidate = bounded { call =>
     val reader = new ArtifactReader(call, owner.project)
     val drafts = new HistoricalDrafts(call, owner.project)
@@ -66,6 +94,9 @@ final class IntegrationPreparation(api: ServerApi, owner: Scope, repository: Str
       "Integration requires every worker member to be ready")
     require(reviewer.report match { case ChildReport.Review(members, _) => members.forall(_.verdict == ReviewVerdict.Accepted); case _ => false },
       "Integration requires every reviewer member to be accepted")
+    // The server applies the same rule to the same roles when it reserves; the mode is read now, not taken from the activation.
+    val authorship = this.authorship(call, worker, reviewer)
+    if (authorship.governing) GoverningWorkPolicy.integrate(ProcessModes.setting(call, owner.project), authorship, checks.size)
     val evidence = IntegrationValidation.applicable(IntegrationValidation.effective(owner.project, work.metadata.actor.session, workerId, worker, checks,
       reader.amendments(workerId)), reviewer)
     def publisher(author: AttemptId): SessionId = if (author == reviewer.attempt) review.metadata.actor.session else work.metadata.actor.session
@@ -81,7 +112,7 @@ final class IntegrationPreparation(api: ServerApi, owner: Scope, repository: Str
     }
     val fence = claimed(call, worker)
     renew(call, fence, worker.request.members.map(_.id).toSet)
-    ReviewedCandidate(ticket, workerId, worker, evidence.citations, fence)
+    ReviewedCandidate(ticket, workerId, worker, authorship, evidence.citations, fence)
   }
 
   def renew(reviewed: ReviewedCandidate): Unit = bounded(renew(_, reviewed.fence, reviewed.worker.request.members.map(_.id).toSet))
@@ -101,7 +132,7 @@ final class IntegrationPreparation(api: ServerApi, owner: Scope, repository: Str
     }
     val candidate = rebase.fold(reviewed.candidate)(_.commit)
     val change = IntegrationPolicy.completion(ticket.id, repository, target, candidate, rebase.map(_.evidence), reviewed.workerId, ticket.reviewer,
-      reviewed.validation.established, reviewed.validation.failed, reviewed.validation.rounds, reviewed.fence, items)
+      reviewed.authorship, reviewed.validation.established, reviewed.validation.failed, reviewed.validation.rounds, reviewed.fence, items)
     renew(call, reviewed.fence, worker.request.members.map(_.id).toSet)
     IntegrationIntent(ticket.id, owner.project, owner.actor, repository, target,
       rebase.fold(bases.expected(worker.base, reviewed.candidate))(_.head), candidate,

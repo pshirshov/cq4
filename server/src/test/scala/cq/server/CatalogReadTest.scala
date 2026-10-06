@@ -2,6 +2,7 @@ package cq.server
 
 import baboon.runtime.shared.{BaboonBinCodec, BaboonCodecContext, BaboonJsonCodec, LEDataInputStream, LEDataOutputStream}
 import cq.api.*
+import cq.core.{DomainFailure, ProcessModePolicy}
 import cq.host.*
 import io.circe.{Json, JsonObject, parser}
 import java.io.{ByteArrayInputStream, ByteArrayOutputStream}
@@ -14,7 +15,7 @@ final class CatalogReadLocal extends AnyWordSpec {
   private val schemas = new McpSchemas()
   private val agents = new AgentCatalog(schemas, new ChildInstructions())
   private val workflows = new WorkflowAssets()
-  private val read = new CatalogRead(agents, workflows)
+  private val read = new CatalogRead(agents, workflows, new ProcessModePolicy(false))
   private val catalog = read.value
   private def resource(path: String): String = new String(getClass.getResourceAsStream("/" + path).readAllBytes(), UTF_8)
   private def parsed(text: String): Json = parser.parse(text).fold(throw _, identity)
@@ -76,12 +77,18 @@ final class CatalogReadLocal extends AnyWordSpec {
       assert(catalog.modes.map(_.mode) == ProcessMode.all && ProcessModes.all.map(_.mode) == ProcessMode.all)
       catalog.modes.zip(ProcessModes.all).foreach { (view, source) =>
         withClue(s"${source.mode}: ") {
-          assert(view == CatalogMode(source.mode, source.label, source.hint, source.description, CatalogPrompt(source.instructions, resource(source.instructions)), source.unavailable))
+          assert(view == CatalogMode(source.mode, source.label, source.hint, source.description, CatalogPrompt(source.instructions, resource(source.instructions)), view.unavailable))
           assert(view.label.trim.nonEmpty && view.hint.trim.nonEmpty && !view.hint.contains("\n") && view.description.trim.nonEmpty)
           // The same text opens the instructions of a session in that mode.
           assert(workflows.instructions(WorkflowRequest.Begin(Set.empty), source.mode).startsWith(view.instructions.text))
-          assert(view.unavailable == cq.core.ProcessModePolicy.unavailable(source.mode))
-          assert(view.unavailable.isEmpty == scala.util.Try(cq.core.ProcessModePolicy.validate(ProjectSetting.Mode(source.mode, false))).isSuccess)
+          // The note is the write path's refusal: a release that withholds a mode says so in the catalog, one that delivers it says nothing.
+          List(false, true).foreach { yoloAvailable =>
+            val policy = new ProcessModePolicy(yoloAvailable)
+            val note = new CatalogRead(agents, workflows, policy).value.modes.find(_.mode == source.mode).get.unavailable
+            assert(note == policy.unavailable(source.mode) && note.isEmpty == (yoloAvailable || source.mode != ProcessMode.Yolo))
+            assert(scala.util.Try(policy.validate(ProjectSetting.Mode(source.mode, false))).toEither.left.map(_.getMessage) ==
+              note.map(reason => DomainFailure(Fault.Invalid(reason)).getMessage).toLeft(()))
+          }
         }
       }
       assert(catalog.modes.map(_.label) == List("Rigorous", "Cross-cutting", "YOLO cross-cutting") && catalog.modes.map(_.label).distinct.size == 3)

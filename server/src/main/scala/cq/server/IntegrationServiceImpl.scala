@@ -11,7 +11,7 @@ import java.time.Clock
 import scala.util.Try
 
 final class IntegrationServiceImpl[F[+_, +_]: Error2](ledger: LedgerRepository[F], artifacts: ArtifactRepository[F],
-  mutations: LedgerMutation, clock: Clock) extends IntegrationService[F] {
+  usage: UsageRepository[F], mutations: LedgerMutation, clock: Clock) extends IntegrationService[F] {
   import LedgerPolicy.invalid
 
   private def collector(scope: Scope, project: ProjectId, owner: Actor): Unit =
@@ -91,6 +91,11 @@ final class IntegrationServiceImpl[F[+_, +_]: Error2](ledger: LedgerRepository[F
       invalid(work.report match { case ChildReport.Work(members) => members.forall(_.disposition == WorkDisposition.CandidateReady); case _ => false }, "Every integration member must be candidate-ready")
       invalid(review.report match { case ChildReport.Review(members, _) => members.forall(_.verdict == ReviewVerdict.Accepted); case _ => false }, "Every integration member must be independently accepted")
     }.toEither)
+    authorship <- usage.read(scope.project) { reader =>
+      def role(result: ChildResult): Role = reader.attempt(result.attempt).map(_.role)
+        .getOrElse(throw DomainFailure(Fault.Missing("Integration result attempt is not registered")))
+      CandidateAuthorship(role(worker._2), role(reviewer._2))
+    }
     workerScope = scope.copy(actor = scope.actor.copy(session = worker._1.actor.session))
     publisher = (author: AttemptId) => if (author == reviewer._2.attempt) reviewer._1.actor.session else worker._1.actor.session
     rounds <- amendments(workerScope, intent.worker, 1)
@@ -117,6 +122,8 @@ final class IntegrationServiceImpl[F[+_, +_]: Error2](ledger: LedgerRepository[F
           if (previous.intent != intent) throw DomainFailure(Fault.Conflict("Integration identity reused with different intent"))
           previous
         case None =>
+          // The mode and its exemption are read where the reservation is written, before any check whose refusal would hide them.
+          GoverningWorkPolicy.integrate(ProcessModePolicy.current(tx), authorship, intent.checks.size)
           val now = clock.millis()
           List(worker, reviewer).foreach { case (metadata, body) =>
             invalid(tx.admission(body.attempt).exists(value => value.artifact == metadata && value.owner.role == Role.Governor && value.owner.session == metadata.actor.session && value.fence == body.request.fence &&
@@ -138,7 +145,7 @@ final class IntegrationServiceImpl[F[+_, +_]: Error2](ledger: LedgerRepository[F
           }
           val cited = evidence.citations
           val change = IntegrationPolicy.completion(intent.id, intent.repository, intent.target, intent.candidate, intent.rebase, intent.worker, intent.reviewer,
-            cited.established, cited.failed, cited.rounds, intent.fence, items)
+            authorship, cited.established, cited.failed, cited.rounds, intent.fence, items)
           invalid(intent.change == change, "Integration may only apply the exact narrative-preserving task completion request")
           if (tx.request(intent.owner, change.request).nonEmpty) throw DomainFailure(Fault.Conflict("Integration domain request was already used"))
           val value = IntegrationRecord(intent, IntegrationResolution.Pending(), now, None)

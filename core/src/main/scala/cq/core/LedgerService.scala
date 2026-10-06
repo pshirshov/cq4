@@ -51,7 +51,7 @@ trait LedgerService[F[_, _]] {
 object LedgerService {
   private final case class Hypothetical(preview: WorksetPreview) extends RuntimeException("Hypothetical workset evaluation", null, false, false)
 
-  final class Impl[F[+_, +_]: Error2](repository: LedgerRepository[F], clock: Clock, queries: QueryParser, completions: QueryCompleter, worksets: WorksetTraversal, terminationPlanner: TerminationPlanner, claimPlanner: ClaimPlanner, mutations: LedgerMutation, drivers: DriverService, boundary: DriverBoundary) extends LedgerService[F] {
+  final class Impl[F[+_, +_]: Error2](repository: LedgerRepository[F], clock: Clock, queries: QueryParser, completions: QueryCompleter, worksets: WorksetTraversal, terminationPlanner: TerminationPlanner, claimPlanner: ClaimPlanner, mutations: LedgerMutation, drivers: DriverService, boundary: DriverBoundary, modes: ProcessModePolicy) extends LedgerService[F] {
     import LedgerPolicy.*
     import LedgerAccess.*
 
@@ -110,7 +110,7 @@ object LedgerService {
 
     override def replaceMode(scope: Scope, expected: Revision, value: ProjectSetting.Mode): F[Throwable, ProjectMode] = repository.transact(scope.project) { tx =>
       if (scope.actor.role != Role.Human) throw DomainFailure(Fault.Denied("Process mode change requires human authority"))
-      ProcessModePolicy.validate(value)
+      modes.validate(value)
       val current = processMode(tx)
       if (current.revision != expected)
         throw DomainFailure(Fault.Conflict(s"Process mode changed: expected revision ${expected.value}, actual ${current.revision.value}; reload before saving"))

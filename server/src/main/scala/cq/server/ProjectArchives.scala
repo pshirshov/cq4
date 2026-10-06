@@ -27,7 +27,7 @@ private[server] object ArchiveLimits {
   def bounded(size: Long): Unit = if (size > MaxBytes) throw DomainFailure(Fault.Limit("Project archive exceeds 512 MiB"))
 }
 
-final class PostgresProjectArchives(database: LedgerDatabase, clock: Clock) extends ProjectArchives {
+final class PostgresProjectArchives(database: LedgerDatabase, clock: Clock, modes: ProcessModePolicy) extends ProjectArchives {
   import ArchiveLimits.*
   private val ValidationFetchRows = 32
   private val tables = List(
@@ -171,7 +171,7 @@ final class PostgresProjectArchives(database: LedgerDatabase, clock: Clock) exte
         check(ProjectSettingKind.of(setting).toString == kind, "Archive project setting kind disagrees with its content")
         setting match {
           case ProjectSetting.Requirements(text) => LedgerPolicy.validateRequirements(text)
-          case mode: ProjectSetting.Mode => ProcessModePolicy.validate(mode)
+          case mode: ProjectSetting.Mode => modes.validate(mode)
           case ProjectSetting.Agents(text) => LedgerPolicy.validateAgents(text)
         }
       }
