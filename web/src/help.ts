@@ -176,7 +176,7 @@ export class HelpDialog {
     if (mode !== undefined) {
       detail.setAttribute('aria-label', `Mode ${mode.label}`);
       const hint = element('p', mode.hint); hint.className = 'help-lead';
-      detail.append(element('h2', mode.label), hint, element('p', mode.description));
+      detail.append(element('h2', mode.label), hint, ...mode.description.split('\n\n').map(text => element('p', text)));
       if (mode.unavailable !== undefined) { const note = element('p', mode.unavailable); note.className = 'mode-note'; detail.append(note); }
       detail.append(section('Changing the mode', element('p', catalog.modeEffect)),
         section('Governor instructions', block(`Instructions · ${mode.instructions.resource}`, mode.instructions.text, `Prompt ${mode.instructions.resource}`, true)));

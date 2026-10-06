@@ -15,6 +15,13 @@ object ProcessModes {
     "Every piece of work has an item with acceptance criteria under an Open milestone, the configured checks run on every candidate, " +
     "only the host integrates, and a Task becomes Done only by recorded integration."
 
+  /** The operator's exemption of a YOLO project from the check a self-reviewed integration needs. The catalog has no field for it:
+    * it is the last paragraph of the YOLO description, which Help shows as such and the mode dialog shows beside the control. */
+  val Exemption: String = "A self-reviewed integration is refused while the project configures no check. " +
+    "When the operator allows self-review without checks for the project, that refusal is lifted: " +
+    "a change the governing session reviewed itself can be integrated although no check examined it. " +
+    "Nothing but the governing session's own reading then stands between its change and the integration target."
+
   private def entry(mode: ProcessMode, name: String, hint: String, description: String): ProcessModeEntry =
     ProcessModeEntry(mode, ProcessModePolicy.label(mode), hint, description, s"$Resources/mode-$name.md")
 
@@ -37,7 +44,7 @@ object ProcessModes {
         "and may review any candidate itself, its own or a Worker's, instead of dispatching an independent Reviewer. " +
         "The ledger records each such integration as self-reviewed. No second agent has then read the change: the configured checks are the only independent gate, " +
         "so a self-reviewed integration requires at least one configured check unless the operator exempts the project. " +
-        "A batch run in such a project works as in Cross-cutting. " + Shared),
+        "A batch run in such a project works as in Cross-cutting. " + Shared + "\n\n" + Exemption),
   )
 
   /** When a change of a project's mode reaches its sessions. */

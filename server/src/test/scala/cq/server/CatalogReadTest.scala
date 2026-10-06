@@ -91,6 +91,10 @@ final class CatalogReadLocal extends AnyWordSpec {
           }
         }
       }
+      // The catalog has no field for the exemption of a YOLO project from configured checks: the mode dialog shows the last paragraph of
+      // that mode's description beside its control, and no other description has a second paragraph.
+      assert(catalog.modes.map(view => view.description.split("\n\n").toList.drop(1)) == List(Nil, Nil, List(ProcessModes.Exemption)))
+      assert(ProcessModes.Exemption.contains("a change the governing session reviewed itself can be integrated although no check examined it"))
       assert(catalog.modes.map(_.label) == List("Rigorous", "Cross-cutting", "YOLO cross-cutting") && catalog.modes.map(_.label).distinct.size == 3)
       assert(catalog.modes.filter(_.unavailable.nonEmpty).map(_.mode) == List(ProcessMode.Yolo))
       assert(catalog.modeEffect == ProcessModes.Effect && catalog.modeEffect.contains("next workflow activation") && catalog.modeEffect.contains("next cycle"))

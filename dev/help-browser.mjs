@@ -261,7 +261,7 @@ try {
         assert.equal(await entry.getAttribute('aria-current'), 'true');
         const detail = dialog.getByRole('article', {name: `Mode ${mode.label}`, exact: true}); await detail.waitFor();
         await detail.getByRole('heading', {name: mode.label, exact: true}).waitFor();
-        await detail.getByText(mode.hint, {exact: true}).waitFor(); await detail.getByText(mode.description, {exact: true}).waitFor();
+        await detail.getByText(mode.hint, {exact: true}).waitFor(); for (const paragraph of mode.description.split('\n\n')) await detail.getByText(paragraph, {exact: true}).waitFor();
         await detail.getByText(catalog.modeEffect, {exact: true}).waitFor();
         assert.equal(await detail.locator('.mode-note').count(), mode.unavailable === null || mode.unavailable === undefined ? 0 : 1, mode.label);
         if (mode.unavailable !== null && mode.unavailable !== undefined) assert.equal(await detail.locator('.mode-note').textContent(), mode.unavailable);
