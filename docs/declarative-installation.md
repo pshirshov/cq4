@@ -150,10 +150,10 @@ parent approval, and null entries are skipped. The doctor requires persisted
 approval, even if an individual invocation uses `--approve` or global automatic
 trust. It neither writes approvals nor acquires Pi's writable trust-store lock.
 `--approve` decides for one Pi process and saves nothing, so a project that is
-only launched that way, as [interactive.md](interactive.md) launches it, keeps
-`Hook trust` Failed. Type `/trust` in Pi once: it saves the decision in
+only launched that way keeps `Hook trust` Failed. Type `/trust` in Pi once, as
+[interactive.md](interactive.md) describes: it saves the decision in
 `trust.json` of the agent directory (`~/.pi/agent/trust.json` by default). Then
-pass that file.
+launch Pi without `--approve` and pass that file.
 
 Without `--harness-config`, and for Codex without `--trust-report`, `Hook trust`
 is Failed whatever the harness has approved; the detail of the check then ends

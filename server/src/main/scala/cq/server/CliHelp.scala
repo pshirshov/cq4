@@ -204,7 +204,7 @@ Record Codex hook metadata separately after installing assets. Doctor binds
 the report to current hook bytes, declared version and persisted approvals;
 changed assets require a fresh report. Pi requires persisted project trust;
 the nearest canonical project or parent-folder decision in trust.json applies.
-A Pi launch with --approve saves no decision; /trust in Pi saves one.
+Trust the project once with /trust in Pi and launch without --approve, which saves no decision.
 Without --harness-config (and --trust-report for Codex) Hook trust is Failed.
 File contents and probe output are withheld. Declarative symlinks are accepted.
 Any Failed or Unknown check exits 1 after the report; --json emits one value.
