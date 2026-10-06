@@ -117,8 +117,11 @@ sys.stderr.flush()
     def child(controller: DispatchController, script: String, request: DispatchRequest): Task[DispatchStatus] = for {
       _ <- ZIO.attemptBlocking(install(script))
       started <- controller.start(request)
-      settled <- controller.status(started.attempt, 20000).repeatUntil(status => DispatchController.terminal(status.phase))
+      // One status call waits for the child: the longest wait is accepted and ends when the child does, not when the wait has passed.
+      settled <- controller.status(started.attempt, 120000).repeatUntil(status => DispatchController.terminal(status.phase))
         .timeoutFail(new IllegalStateException("Child did not finish"))(zio.Duration.fromSeconds(60))
+      refused <- controller.status(started.attempt, 120001).either
+      _ <- ZIO.attempt(require(refused.left.exists(_.getMessage == "requirement failed: Status wait must be 0–120000 ms"), s"Unbounded status wait: $refused"))
       // What `cq wait` reads: the host wrote that it started on the attempt and, once the end was visible to the session, how it ended.
       unit = SessionUnit(SessionUnitKind.Attempt, started.attempt.value, request.members.map(_.id))
       events <- ZIO.attemptBlocking(SessionUnits.read(config.directory).filter {
@@ -648,7 +651,7 @@ sys.stderr.flush()
         running <- controller.start(f.request(f.limits))
         occupied <- fault(revalidations.request(RequestId(uuid), handle, f.fence))
         _ <- controller.cancel(running.attempt)
-        stopped <- controller.status(running.attempt, 20000).repeatUntil(status => DispatchController.terminal(status.phase))
+        stopped <- controller.status(running.attempt, 120000).repeatUntil(status => DispatchController.terminal(status.phase))
           .timeoutFail(new IllegalStateException("Cancelled child did not settle"))(zio.Duration.fromSeconds(60))
         first <- settled(revalidations, handle, f.fence)
         second <- settled(revalidations, handle, f.fence)
@@ -843,7 +846,7 @@ sys.stderr.flush()
           during <- controller.status(started.attempt, 0)
           unsettled = controller.unsettled
           _ <- ZIO.succeed(proceed.countDown())
-          after <- controller.status(started.attempt, 20000)
+          after <- controller.status(started.attempt, 120000)
           _ <- ZIO.attempt {
             println(s"Selected child while its input is released: concluding=${concluding.get.map(value => (value.phase, value.next))} during=${during.phase} unsettled=$unsettled after=${(after.phase, after.next)}")
             assert(concluding.get.exists(value => value.phase == DispatchPhase.Failed && value.next == ChildNext.Retry && value.result.isEmpty), concluding.get.toString)
@@ -890,7 +893,7 @@ sys.stderr.flush()
           Files.writeString(local.source.resolve("untracked.log"), "operator notes\n")
         }
         started <- controller.start(f.request(limits))
-        settled <- controller.status(started.attempt, 20000).repeatUntil(status => DispatchController.terminal(status.phase))
+        settled <- controller.status(started.attempt, 120000).repeatUntil(status => DispatchController.terminal(status.phase))
           .timeoutFail(new IllegalStateException("Worker did not finish"))(zio.Duration.fromSeconds(60))
         _ <- ZIO.attempt {
           assert(settled.phase == DispatchPhase.Completed && settled.result.nonEmpty, settled.toString)

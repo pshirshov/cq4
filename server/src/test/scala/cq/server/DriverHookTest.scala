@@ -236,8 +236,11 @@ abstract class DriverHookTest extends SpecZIO with AssertZIO {
       val ordered = unwaited.stop()
       assert(ordered.asObject.get.keys.toList == List("decision", "reason") && ordered.hcursor.get[String]("decision") == Right("block"))
       val reason = ordered.hcursor.get[String]("reason").toOption.get
-      assert(reason.contains(s"attempt ${first.value}") && reason.endsWith(s"`$WaitLine`") && on(unwaited, 1), reason)
-      assert(reason.contains(if (harness == Harness.Claude) "as a background command (run_in_background true, timeout 7200000), then end your turn" else "as one blocking shell call and wait until it exits"))
+      assert(reason.contains(s"attempt ${first.value}") && on(unwaited, 1), reason)
+      // A Claude Code session is woken by its background command; a Codex session by nothing, so it waits in a status call of the host.
+      if (harness == Harness.Claude) assert(reason.endsWith(s"as a background command (run_in_background true, timeout 7200000), then end your turn: `$WaitLine`"), reason)
+      else assert(reason.endsWith("Do not end your turn: nothing wakes you when it ends. Call the status of that work now with the CQ dispatch tool " +
+        "(Status, IntegrationStatus or CombinationStatus) with waitMillis 120000, and again while the work continues. " + cq.host.DispatchWaits.CodexScript) && reason.contains("`// @exec: {\"yield_time_ms\": 150000}`") && !reason.contains(WaitLine) && !reason.contains("shell"), reason)
       if (harness == Harness.Claude) {
         // The session starts its waiter: the stop passes. Once the waiter is gone while the work stands, the order is given anew.
         val waiter = host.waiter()
@@ -455,7 +458,7 @@ abstract class DriverHookTest extends SpecZIO with AssertZIO {
         // Nothing wakes an idle Codex session: its stop is blocked with the order to wait inside the turn, which is no directive.
         val blocked = s.stop()
         assert(blocked.hcursor.get[String]("decision") == Right("block") && blocked.hcursor.get[String]("reason").exists(reason =>
-          reason.startsWith(s"CQ driver: work of this session still runs (attempt ${attempt.id.value}). Do not end your turn") && reason.endsWith(s"`$WaitLine`")), blocked.noSpaces)
+          reason.startsWith(s"CQ driver: work of this session still runs (attempt ${attempt.id.value}). Do not end your turn") && reason.endsWith(cq.host.DispatchWaits.CodexScript)), blocked.noSpaces)
       } else {
         // The waiter of a Claude Code session starts its next turn when the child ends: with it running, the stop is allowed, no
         // directive is issued and the drive stays on, however often the session stops meanwhile.

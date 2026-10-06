@@ -13,7 +13,6 @@ private[server] final class RevalidationExecution(val result: ArtifactId, val fe
   * `ValidationAmendment` under the governing attempt. The admitted result is never changed. */
 final class RevalidationController(config: SupervisorConfig, authority: SupervisorAuthority, jobs: JobSupervisor, dispatch: DispatchController,
   renewal: ClaimRenewal, clock: Clock, requests: Semaphore, admission: Semaphore) {
-  private val WaitMillis = 20000L
   private val units = new SessionUnits(config.directory)
   private val ClaimMillis = Duration.ofMinutes(3).toMillis
   private val AdmissionNanos = Duration.ofSeconds(60).toNanos
@@ -111,7 +110,7 @@ final class RevalidationController(config: SupervisorConfig, authority: Supervis
         Option(error.getMessage).getOrElse(error.getClass.getSimpleName)))))
     }.flatMap(value => ZIO.succeed(synchronized { entry.view = value }))
       .ensuring(done.succeed(()).unit *> ZIO.attemptBlocking(units.ended(SessionUnits.ended(synchronized(entry.view)))).orDie).forkDaemon.unit))
-    _ <- restore(entry.done.await.timeout(zio.Duration.fromMillis(WaitMillis)))
+    _ <- restore(entry.done.await.timeout(zio.Duration.fromMillis(DispatchWaits.MaxMillis)))
   } yield synchronized(entry.view) }
 
   def unsettled: List[String] = synchronized(entries.toList.collect {

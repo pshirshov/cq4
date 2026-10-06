@@ -161,8 +161,9 @@ object SupervisorProgram {
   /** What the host carries out without the session, in the words every form of waiting uses. */
   private val Work = "work the host carries out (a child, an integration being prepared or applied, a combination, a revalidation)"
   private val Unfound = "4 or 5: the command found no single session of this checkout, and its output says why"
+  private val ByStatus = "(Status, IntegrationStatus or CombinationStatus; repeat Revalidate)"
   /** The batch Governor of `cq run`: nothing tells it when work ends and it has no shell of its own, so it waits through its status calls. */
-  val WaitByStatus: String = s" Waiting for $Work: call the status of that work (Status, IntegrationStatus or CombinationStatus; repeat Revalidate) with waitMillis 20000. " +
+  val WaitByStatus: String = s" Waiting for $Work: call the status of that work $ByStatus with waitMillis ${DispatchWaits.MaxMillis}. " +
     "The call returns when the work ends or the wait has passed; call it again while the work continues."
   /** Claude Code starts a turn when a background command exits; the notification carries the exit code and an output file. */
   def waitInBackground(command: String): String = s" Waiting for $Work: do not call a status to wait. After starting such work, run exactly this command with the Bash tool " +
@@ -171,13 +172,12 @@ object SupervisorProgram {
     s"0: a unit ended, or nothing was active; the file has one line for each ended unit and for each still active. 3: the CQ host is not running. $Unfound. Report 3, 4 and 5 to the user. " +
     "Any other exit, including the harness ending the command at its lifetime limit: run it again while work is active. " +
     "After exit 0, read the outcome of each ended unit with one Status, IntegrationStatus or CombinationStatus call with waitMillis 0, and run the command again while other work is active."
-  /** Nothing wakes an idle Codex session when a background command exits (openai/codex#32188), so it waits inside its turn. */
-  def waitInTurn(command: String): String = s" Waiting for $Work: do not call a status to wait, and do not end your turn while such work is active: nothing wakes you when it ends. " +
-    s"After starting such work, run exactly this command as one blocking shell call (exec_command with yield_time_ms 300000): `$command`. " +
-    "If the call returns while the command still runs, wait for it with empty write_stdin calls (yield_time_ms 300000) until it exits. " +
-    s"It ends when the next unit ends. Exit 0: a unit ended, or nothing was active; its output has one line for each ended unit and for each still active. 3: the CQ host is not running. $Unfound. Report 3, 4 and 5 to the user. " +
-    "Any other exit: run it again while work is active. " +
-    "Read details of an ended unit with one status call with waitMillis 0 only if you need them, and run the command again while other work is active."
+  /** Nothing wakes an idle Codex session when a background command exits (openai/codex#32188), and its shell call returns to the model
+    * after at most 30 s whatever it is asked to yield (`MAX_YIELD_TIME_MS` of its unified exec), so it waits in a tool call of the host,
+    * which Codex allows `tool_timeout_sec`. */
+  val WaitInTurn: String = s" Waiting for $Work: do not end your turn while such work is active: nothing wakes you when it ends. " +
+    s"After starting such work, call its status $ByStatus with waitMillis ${DispatchWaits.MaxMillis}. " +
+    "The call returns when the work ends or the wait has passed; call it again while the work continues. Run no shell command to wait. " + DispatchWaits.CodexScript
   /** The CQ extension of Pi waits itself and injects a message. */
   val WaitForMessage: String = s" Waiting for $Work: do not call a status to wait and start no waiter yourself. After starting such work, continue with other ready work or end your turn: " +
     "CQ sends you a message that begins `CQ:` when a unit ends, naming it, its items, its phase and the next step. Read details with one status call with waitMillis 0 only if you need them."

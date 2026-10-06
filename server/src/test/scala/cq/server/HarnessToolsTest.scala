@@ -141,7 +141,8 @@ final class HarnessToolsLocal extends AnyWordSpec {
             config(prefix + "bearer_token_env_var", Json.fromString(endpoint.environmentKey)) ++
             config(prefix + "enabled_tools", Json.arr(tools(endpoint.target).map(Json.fromString)*)) ++
             config(prefix + "required", Json.True) ++ config(prefix + "startup_timeout_sec", Json.fromInt(10)) ++
-            config(prefix + "tool_timeout_sec", Json.fromInt(30)) ++ config(prefix + "default_tools_approval_mode", Json.fromString("approve"))
+            // A Governor's dispatch call may wait 120 s for a child, on top of the 30 s every call is allowed.
+            config(prefix + "tool_timeout_sec", Json.fromInt(if (governor && endpoint.target == McpTarget.Local) 150 else 30)) ++ config(prefix + "default_tools_approval_mode", Json.fromString("approve"))
         }
         List(profile.executable.toString, "exec", "--json", "--ephemeral", "--ignore-user-config", "--ignore-rules", "--strict-config",
           "--model", profile.model, "--sandbox", "danger-full-access",

@@ -14,6 +14,12 @@ import uuid
 from fixture_runtime import guardian_binary
 
 
+# Above the longest dispatch wait (120 s) and what the host allows a request besides it (30 s).
+REPLY_SECONDS = 160
+# Longer than the host allows a request that does not wait.
+LONG_WAIT_MILLIS = 35000
+
+
 def identity():
     return {"value": str(uuid.uuid4())}
 
@@ -54,7 +60,7 @@ class Peer:
     def rpc(self, method, params):
         self.sequence += 1
         self.send({"jsonrpc": "2.0", "id": self.sequence, "method": method, "params": params})
-        value = self.responses.get(timeout=40)
+        value = self.responses.get(timeout=REPLY_SECONDS)
         if isinstance(value, Exception):
             raise value
         assert value["id"] == self.sequence and "error" not in value, value
@@ -63,7 +69,7 @@ class Peer:
     def refused(self, method, params):
         self.sequence += 1
         self.send({"jsonrpc": "2.0", "id": self.sequence, "method": method, "params": params})
-        value = self.responses.get(timeout=40)
+        value = self.responses.get(timeout=REPLY_SECONDS)
         assert not isinstance(value, Exception) and value["id"] == self.sequence and value["error"]["code"] == -32601, value
 
     def tool(self, name, arguments, denied=False):
@@ -129,9 +135,10 @@ def main():
             context = peer.tool("session", {"Context": {}})["Context"]["value"]
             assert context["workflow"] is None and "thread metadata" in context["usageCoverage"]
             assert "Canonical argument schemas" in context["instructions"]
-            # The session is told the exact command that waits on its own session directory, and how its harness waits with it.
-            assert f"run exactly this command as one blocking shell call (exec_command with yield_time_ms 300000): `{wrapper} wait`." in context["instructions"], context["instructions"][-1500:]
-            assert f'prefix_rule(pattern = ["{wrapper}", "wait"], decision = "allow"' in (repository / ".codex/rules/cq.rules").read_text()
+            # A Codex session is told to wait in a status call of the host with the longest wait, and no command of its shell is approved for it.
+            assert ("call its status (Status, IntegrationStatus or CombinationStatus; repeat Revalidate) with waitMillis 120000." in context["instructions"]
+                    and '`// @exec: {"yield_time_ms": 150000}`' in context["instructions"] and f"{wrapper} wait" not in context["instructions"]), context["instructions"][-1500:]
+            assert not (repository / ".codex/rules").exists()
             assert json.loads((repository / ".claude/settings.local.json").read_text())["permissions"]["allow"] == [f"Bash({wrapper} wait)"]
             project = context["project"]["project"]
             standing = "Governor: preserve the operator's selected scope."
@@ -178,7 +185,7 @@ def main():
             if started["phase"] in ["Preparing", "Running"]:
                 peer.tool("session", {"Workflow": {"id": identity(), "request": {"Begin": {"roots": []}}, "operatorRequirements": "Attached fixture: operator requirements text", "token": None}}, denied=True)
             for _ in range(6):
-                status = peer.tool("dispatch", {"Status": {"attempt": started["attempt"], "waitMillis": 20000}})["Status"]["value"]
+                status = peer.tool("dispatch", {"Status": {"attempt": started["attempt"], "waitMillis": 120000}})["Status"]["value"]
                 if status["phase"] not in ["Preparing", "Running", "Stopping", "Validating", "Publishing"]:
                     break
             assert status["phase"] == "Completed" and status["usageDelivered"] and status["result"], status
@@ -247,7 +254,7 @@ def main():
             registered = control("StatusLine", {"Status": {}})["Status"]["value"]
             assert [name for name, _ in members(registered)] == ["Run", "Claim", "Request", "Attempt"] and registered["cycle"]["run"] == directed["Workflow"]["id"], registered
             for _ in range(6):
-                child = driven.tool("dispatch", {"Status": {"attempt": child["attempt"], "waitMillis": 20000}})["Status"]["value"]
+                child = driven.tool("dispatch", {"Status": {"attempt": child["attempt"], "waitMillis": 120000}})["Status"]["value"]
                 if child["phase"] not in ["Preparing", "Running", "Stopping", "Validating", "Publishing"]:
                     break
             assert child["phase"] == "Completed", child
@@ -296,7 +303,7 @@ def main():
             blocked = hook("Stop", hooked, stop_hook_active=False, last_assistant_message="Bound.")
             assert blocked["decision"] == "block" and blocked["reason"].splitlines()[-1].startswith(f"$cq-advance --roots {reference} --through explore --start-token "), blocked
             # The hook, as installed, finds this session's host through the checkout: a stop while a child runs is blocked with the order
-            # to wait, and the command it names waits on this session without being told its directory.
+            # to wait in a status call.
             started_token = blocked["reason"].splitlines()[-1].split(" ")[-1]
             driven.tool("session", {"Workflow": {"id": identity(), "request": advance, "operatorRequirements": "", "token": {"Start": {"token": {"value": started_token}}}}})
             probing, = driven.tool("dispatch", {"Select": {"request": {**selection, "request": identity(), "roots": [target["id"]], "work": {"Worker": {"mode": "Probe"}}}}})["Selection"]["value"]["choices"]
@@ -304,7 +311,8 @@ def main():
             ordered = hook("Stop", hooked, stop_hook_active=False, last_assistant_message="Started.")
             assert ordered is not None and ordered.get("decision") == "block" and ordered["reason"].startswith(
                 f"CQ driver: work of this session still runs (attempt {probe['attempt']['value']} on {reference}). Do not end your turn"), ordered
-            assert ordered["reason"].endswith(f"`{wrapper} wait`"), ordered
+            assert "with the CQ dispatch tool (Status, IntegrationStatus or CombinationStatus) with waitMillis 120000" in ordered["reason"] and f"{wrapper} wait" not in ordered["reason"], ordered
+            # The checkout's wait command still waits on this session without being told its directory, for a harness that uses it.
             waiter = subprocess.Popen([str(wrapper), "wait"], cwd=repository, env=env, stdout=subprocess.PIPE, text=True)
             time.sleep(3)
             assert waiter.poll() is None, "The wait command ended while the child ran"
@@ -423,6 +431,12 @@ def main():
             while running["process"] != "Running" and time.monotonic() < deadline:
                 running = closing.tool("dispatch", {"Status": {"attempt": running["attempt"], "waitMillis": 100}})["Status"]["value"]
             assert running["process"] == "Running" and int(running["quietMillis"]) >= 0, running
+            # A wait longer than the deadline of a request that does not wait is served in full: the child runs on, and the host with it.
+            began = time.monotonic()
+            waited = closing.tool("dispatch", {"Status": {"attempt": running["attempt"], "waitMillis": LONG_WAIT_MILLIS}})["Status"]["value"]
+            assert time.monotonic() - began >= LONG_WAIT_MILLIS / 1000 and waited["process"] == "Running" and waited["next"] == "Wait", waited
+            closing.tool("dispatch", {"Status": {"attempt": running["attempt"], "waitMillis": 120001}}, denied=True)
+            assert closing.process.poll() is None, "Attached host ended during a status wait"
         finally:
             closing.close()
     child_directory = Path(closing_context["directory"]) / "children" / running["attempt"]["value"]

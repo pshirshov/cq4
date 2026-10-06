@@ -136,15 +136,10 @@ final class HarnessDoctorLocal extends AnyWordSpec {
       assert(f.snapshot() == before)
       Files.writeString(config, trust + "\n[features]\nhooks = false\n")
       assert(!f.inspect(Harness.Codex, Some(config), Some(report)).current)
-      // Without the rule that allows the waiter, a session would be asked before each blocking wait.
+      // A Codex session runs no command to wait, so no rule of its shell is expected.
       Files.writeString(config, trust)
-      val rules = f.root.resolve(".codex/rules/cq.rules")
-      val allowed = Files.readString(rules)
-      Files.delete(rules)
-      val unapproved = f.inspect(Harness.Codex, Some(config), Some(report))
-      assert(!unapproved.current && unapproved.checks.exists(check => check.name == ".codex/rules/cq.rules" && check.state == InstallationState.Failed))
-      Files.writeString(rules, allowed)
-      assert(f.inspect(Harness.Codex, Some(config), Some(report)).current)
+      val unruled = f.inspect(Harness.Codex, Some(config), Some(report))
+      assert(unruled.current && !unruled.checks.exists(_.name.contains("rules")) && !Files.exists(f.root.resolve(".codex/rules")))
       Files.writeString(config, trust.replace("trusted_hash", "revoked_hash"))
       assert(!f.inspect(Harness.Codex, Some(config), Some(report)).current)
       Files.writeString(config, trust)

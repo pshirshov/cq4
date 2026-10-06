@@ -51,12 +51,15 @@ final class WorkflowLocal extends AnyWordSpec {
         text.contains("Any other exit, including the harness ending the command at its lifetime limit: run it again while work is active.") &&
         text.contains("After exit 0, read the outcome of each ended unit with one Status, IntegrationStatus or CombinationStatus call with waitMillis 0, and run the command again while other work is active."))
     }
-    "tell a Codex session to wait with one blocking call inside its turn, because nothing wakes it" in {
+    "tell a Codex session to wait with status calls of the longest wait inside its turn, because nothing wakes it, and with no shell command" in {
       val text = schemas.attachedInstructions(Harness.Codex, Some(Wait))
-      assert(text.contains(work + "do not call a status to wait, and do not end your turn while such work is active: nothing wakes you when it ends. " +
-        "After starting such work, run exactly this command as one blocking shell call (exec_command with yield_time_ms 300000): `" + Wait + "`. " +
-        "If the call returns while the command still runs, wait for it with empty write_stdin calls (yield_time_ms 300000) until it exits."))
-      assert(text.contains("3: the CQ host is not running") && text.contains("Any other exit: run it again while work is active.") && !text.contains("run_in_background"))
+      assert(text.contains(work + "do not end your turn while such work is active: nothing wakes you when it ends. " +
+        "After starting such work, call its status (Status, IntegrationStatus or CombinationStatus; repeat Revalidate) with waitMillis 120000. " +
+        "The call returns when the work ends or the wait has passed; call it again while the work continues. Run no shell command to wait. " +
+        // Codex hands a script back unfinished after 30 s by default, and the model would then ask again every 10 s.
+        "A script of the exec tool is handed back unfinished after 30 s unless it asks for longer: begin a script that makes this call with the line " +
+        "`// @exec: {\"yield_time_ms\": 150000}`, and continue a script that is handed back as still running with the wait tool and yield_time_ms 150000."))
+      assert(!text.contains(Wait) && !text.contains("exec_command") && !text.contains("write_stdin") && !text.contains("run_in_background") && !text.contains("do not call a status to wait"))
     }
     "tell a Pi session that CQ sends it a message and that it starts no waiter" in {
       List(Some(Wait), None).map(schemas.attachedInstructions(Harness.Pi, _)).foreach { text =>
@@ -66,7 +69,7 @@ final class WorkflowLocal extends AnyWordSpec {
       }
     }
     "tell a batch Governor, which has no shell and is told nothing, to wait through its status calls, and no attached session" in {
-      val byStatus = work + "call the status of that work (Status, IntegrationStatus or CombinationStatus; repeat Revalidate) with waitMillis 20000. " +
+      val byStatus = work + "call the status of that work (Status, IntegrationStatus or CombinationStatus; repeat Revalidate) with waitMillis 120000. " +
         "The call returns when the work ends or the wait has passed; call it again while the work continues."
       val batch = SupervisorProgram.Instructions
       assert(batch.contains(byStatus) && !batch.contains("cq wait") && !batch.contains("run_in_background") && !batch.contains("exec_command"))
@@ -81,7 +84,8 @@ final class WorkflowLocal extends AnyWordSpec {
       }
       assert(!SupervisorProgram.Guidance.contains("waitMillis") && !SupervisorProgram.Guidance.contains(work))
       val dispatch = schemas.attachedTools.find(_.hcursor.get[String]("name") == Right("dispatch")).get.hcursor.get[String]("description").fold(throw _, identity)
-      assert(dispatch.contains("StartChoice returns at once. Status reads the current state or the result of an attempt and is not called to wait") &&
+      assert(dispatch.contains("StartChoice returns at once. Status reads the current state or the result of an attempt, after waiting up to waitMillis (at most 120000) for the attempt to end: " +
+        "the governing instructions of session Context say how this session waits for work") &&
         !dispatch.toLowerCase.contains("poll"), dispatch)
       List("workflows/common.md", "workflows/advance.md", "workflows/begin.md", "workflows/entrypoint.md").foreach { name =>
         val text = new String(getClass.getResourceAsStream("/cq/" + name).readAllBytes(), java.nio.charset.StandardCharsets.UTF_8)

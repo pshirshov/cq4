@@ -37,6 +37,9 @@ final case class HarnessMcp(target: McpTarget, endpoint: URI, token: AccessToken
 }
 
 object HarnessInvocation {
+  /** Whether the calls of `target` made by `role` may wait for dispatched work: only a Governor's dispatch does. */
+  def waits(role: Role, target: McpTarget): Boolean = role == Role.Governor && target == McpTarget.Local
+
   // The Codex Governor's instructions carry the generated argument guide for its tools (about 33 KB with the current model).
   // Claude and Pi receive them as one argument unchanged. Codex receives them JSON-encoded in one `developer_instructions=`
   // argument, where a quote, backslash or newline occupies two bytes (at most 96 KiB) and any other control character six
@@ -112,9 +115,12 @@ final class ClaudeAdapter extends HarnessAdapter {
     val policy = HarnessTools.policy(invocation.role, harness)
     val builtin = policy.enabledBuiltin
     val mcp = invocation.endpoints.flatMap(endpoint => policy.enabledMcp(endpoint.target).map(tool => s"mcp__${endpoint.name}__$tool"))
-    val servers = Json.obj(invocation.endpoints.map { endpoint => endpoint.name -> Json.obj(
+    // Claude Code gives an HTTP MCP request 60 s for its first byte and reads a longer bound from the server's `timeout` (milliseconds),
+    // which is also its tool-call limit; without one its defaults apply, as they did before a dispatch call could wait longer.
+    val servers = Json.obj(invocation.endpoints.map { endpoint => endpoint.name -> Json.fromFields(List(
       "type" -> Json.fromString("http"), "url" -> Json.fromString(endpoint.endpoint.toString),
-      "headers" -> Json.obj("Authorization" -> Json.fromString("Bearer " + endpoint.token.value)),
+      "headers" -> Json.obj("Authorization" -> Json.fromString("Bearer " + endpoint.token.value))) ++
+      Option.when(HarnessInvocation.waits(invocation.role, endpoint.target))("timeout" -> Json.fromLong(DispatchWaits.ManagedGovernorSeconds * 1000))
     ) }*)
     val arguments = List(profile.executable.toString, "--print", "--output-format", "stream-json", "--verbose", "--restricted",
       "--no-session-persistence", "--session-id", invocation.attempt.value.toString, "--model", profile.model,
@@ -152,7 +158,8 @@ final class CodexAdapter extends HarnessAdapter {
         config(prefix + "bearer_token_env_var", Json.fromString(endpoint.environmentKey)) ++
         config(prefix + "enabled_tools", Json.arr(policy.enabledMcp(endpoint.target).map(Json.fromString)*)) ++
         config(prefix + "required", Json.True) ++ config(prefix + "startup_timeout_sec", Json.fromInt(10)) ++
-        config(prefix + "tool_timeout_sec", Json.fromInt(30)) ++ config(prefix + "default_tools_approval_mode", Json.fromString("approve"))
+        config(prefix + "tool_timeout_sec", Json.fromLong(
+          if (HarnessInvocation.waits(invocation.role, endpoint.target)) DispatchWaits.ManagedGovernorSeconds else DispatchWaits.RequestSeconds)) ++ config(prefix + "default_tools_approval_mode", Json.fromString("approve"))
     }
     // Every role runs without the Codex sandbox (operator decision, Question 26): Codex's Linux sandbox refuses the Nix daemon
     // socket in both of its restricted modes, so no child could run `nix develop` (Defect 104). Three things stay separate:

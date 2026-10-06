@@ -34,7 +34,7 @@ A fixed execution deadline killed legitimate work and could not be tuned per tas
 | Termination `graceMillis`, `killMillis`, the driver's 2 s drain | `guardian.c`, `GuardianDriver` | stays |
 | Output disk-safety ceiling, 1 GiB per stream | `ExecutionLimits.OutputCeilingBytes` | stays |
 | Shutdown drain grace + kill + 10 s, then exit 75 | `SupervisorWatchdog`, armed by `beginShutdown` | stays |
-| Host operation bounds: 1 s journal/ticket acknowledgements, 10 s HTTP and Git inspection, 30 s per attached MCP operation, 60 s integration preparation (server calls) | `JobSupervisor`, `HttpServerApi`, `BoundedHostCommand`, `AttachedProgram`, `IntegrationPreparation` | stays |
+| Host operation bounds: 1 s journal/ticket acknowledgements, 10 s HTTP and Git inspection, 30 s per attached MCP operation plus the wait a dispatch command asks for (at most 120 s), 60 s integration preparation (server calls) | `JobSupervisor`, `HttpServerApi`, `BoundedHostCommand`, `AttachedProgram`, `IntegrationPreparation` | stays |
 | Claim lease, 3 min renewed every 20 s; an unanswered renewal is retried until 30 s before the lease last obtained expires | `ClaimRenewal` (`ChildRunner`, `IntegrationController`, `RevalidationController`) | stays |
 | Configured check `ValidationCheck.executionMillis` (at most 24 h) | `HostValidation`, `ReviewerChecks` → guardian `ExecutionDeadline` | stays, per check |
 | Git job, 30 min (above the sum of the checkout executor's own 30 s command deadlines) | `SupervisedGitIntegration.Execution` | stays, fixed |

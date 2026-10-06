@@ -53,7 +53,7 @@ final class IntegrationRebaseProcess extends SpecZIO with AssertZIO {
       local.git(directory, "-c", "user.name=CQ fixture", "-c", "user.email=cq@localhost", "commit", "--quiet", "-m", name)
       GitCommit(local.git(directory, "rev-parse", "HEAD"))
     }
-    def settled(id: IntegrationId): Task[IntegrationStatus] = controller.status(id, 20000)
+    def settled(id: IntegrationId): Task[IntegrationStatus] = controller.status(id, 120000)
       .repeatUntil(status => !Set(IntegrationPhase.Preparing, IntegrationPhase.Running)(status.phase))
       .timeoutFail(new IllegalStateException("Integration did not settle"))(zio.Duration.fromSeconds(90))
     def prepare: Task[IntegrationStatus] = {

@@ -18,8 +18,7 @@ final class AttachedProgram(config: SupervisorConfig, authority: SupervisorAutho
   codex: AttachedCodexUsage, cleanup: WorkspaceCleanup, release: SessionRelease, claims: SessionClaims, location: ProjectLocation, wait: WaitCommand, logger: IzLogger) {
   private val sessions = new AttachedSessions(location.directory)
   private val MaxRecordBytes = 65536
-  private val RequestSeconds = 30L
-  private val limits = PeerLimits(Duration.ofSeconds(30), Duration.ofSeconds(10), Duration.ofSeconds(30), Duration.ofSeconds(RequestSeconds), AttachedGateway.FrameBytes, 32)
+  private val limits = PeerLimits(Duration.ofSeconds(30), Duration.ofSeconds(10), Duration.ofSeconds(30), AttachedGateway.FrameBytes, 32)
   private val queue = new DeliveryQueue(config.directory.resolve("delivery"))
   private def initial: Task[Unit] = ZIO.attemptBlocking {
     require(config.run.ownership == SessionOwnership.Attached, "Attached host requires attached ownership")
@@ -62,8 +61,12 @@ final class AttachedProgram(config: SupervisorConfig, authority: SupervisorAutho
       }.orDie)
   private def loop(peer: StdioPeer): Task[Unit] = ZIO.attemptBlocking(peer.receive()).flatMap {
     case None => ZIO.unit
-    case Some(request) => (ZIO.attempt(peer.beginOperation()) *> gateway.handle(peer, request))
-      .timeoutFail(new IllegalStateException("Attached MCP operation exceeded 30 seconds"))(zio.Duration.fromSeconds(RequestSeconds))
+    case Some(request) =>
+      // A request that waits for work is allowed that wait on top of the deadline every other request keeps, so a host that hangs is
+      // still noticed as early as before.
+      val deadline = AttachedGateway.deadline(request)
+      (ZIO.attempt(peer.beginOperation(deadline)) *> gateway.handle(peer, request))
+      .timeoutFail(new IllegalStateException(s"Attached MCP operation exceeded ${deadline.toSeconds} seconds"))(zio.Duration.fromJava(deadline))
       .ensuring(ZIO.succeed(peer.endOperation()))
       .flatMap(value => ZIO.attempt(value.foreach(peer.send))) *> ZIO.suspendSucceed(loop(peer))
   }

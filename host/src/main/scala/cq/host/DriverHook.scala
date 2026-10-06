@@ -11,7 +11,7 @@ import scala.util.control.NonFatal
 /** How one hook-driven harness spells the drive and park commands and is told to run an advance directive. */
 /** `woken` says whether an idle session of the harness is started again when a background command of it exits; `waiter` is the order
   * to start the wait command for the standing units, in the way the harness can wait. */
-final case class HookDialect(harness: Harness, drive: String, park: String, advance: String, woken: Boolean, waiter: (String, String) => String)
+final case class HookDialect(harness: Harness, drive: String, park: String, advance: String, woken: Boolean, waiter: (String, Option[String]) => String)
 
 /**
  * The shared CQ hook program of Claude Code and Codex: one hook invocation (harness, event, the hook's stdin) becomes the hook's stdout.
@@ -122,8 +122,7 @@ final class DriverHook(entry: () => DriverEntry, sessions: SessionViews) {
             if (sessions.asked(session).contains(key)) { sessions.ask(session, None); parked(call, s"$Unwaited $units.") }
             else {
               sessions.ask(session, Some(key))
-              render(JsonObject("decision" -> Json.fromString("block"), "reason" -> Json.fromString(dialect.waiter(units,
-                command.getOrElse(throw new IllegalStateException("The CQ host of this session named no wait command"))))))
+              render(JsonObject("decision" -> Json.fromString("block"), "reason" -> Json.fromString(dialect.waiter(units, command))))
             }
           }
         // The host works on nothing: what the server still holds in flight is settled by its own rules, with a resume directive.
@@ -142,7 +141,7 @@ object DriverHook {
   val HostGone = "CQ driver stopped: the CQ host of this session is not running while its work was in flight, so nothing would continue the drive."
   val HostUnrecorded = "CQ driver stopped: this checkout holds no record of the CQ host of this session while its work was in flight: the host has ended, " +
     "or a CQ package without the waiter started it. Nothing would continue the drive."
-  val Unwaited = "CQ driver stopped: this session was told to start its waiter and stopped again without one, so nothing would continue the drive. Still running:"
+  val Unwaited = "CQ driver stopped: this session was told how to wait for its running work and stopped again without waiting, so nothing would continue the drive. Still running:"
   private val Restart = "Restart the harness session and drive again; cq job upload --session DIR recovers what a host retained."
   private val Unchanged = "Nothing changed for this session's driver and no bind token was issued."
   private def unknown(dialect: HookDialect): String = "The CQ server's reply was not received, so this session's driver may have changed and a bind token may have been issued. " +
@@ -156,11 +155,13 @@ object DriverHook {
   val Dialects: List[HookDialect] = List(
     HookDialect(Harness.Claude, "/cq:drive", "/cq:park", s"$Instruction Invoke it as the cq:advance command through the Skill tool with exactly these arguments:", true,
       (units, command) => s"CQ driver: work of this session still runs ($units) and no cq wait runs for it, so nothing would start your next turn. " +
-        s"Run exactly this command now with the Bash tool as a background command (run_in_background true, timeout 7200000), then end your turn: `$command`"),
-    // Nothing wakes an idle Codex session when a background command exits (openai/codex#32188): it waits inside its turn.
+        "Run exactly this command now with the Bash tool as a background command (run_in_background true, timeout 7200000), then end your turn: " +
+        s"`${command.getOrElse(throw new IllegalStateException("The CQ host of this session named no wait command"))}`"),
+    // Nothing wakes an idle Codex session when a background command exits (openai/codex#32188): it waits inside its turn, in a
+    // status call of the host.
     HookDialect(Harness.Codex, "$cq-drive", "$cq-park", s"$Instruction Follow the cq-advance skill with exactly these arguments:", false,
-      (units, command) => s"CQ driver: work of this session still runs ($units). Do not end your turn: nothing wakes you when it ends. " +
-        s"Run exactly this command now as one blocking shell call and wait until it exits (exec_command with yield_time_ms 300000, then empty write_stdin calls): `$command`"),
+      (units, _) => s"CQ driver: work of this session still runs ($units). Do not end your turn: nothing wakes you when it ends. " +
+        s"Call the status of that work now with the CQ dispatch tool (Status, IntegrationStatus or CombinationStatus) with waitMillis ${DispatchWaits.MaxMillis}, and again while the work continues. " + DispatchWaits.CodexScript),
   )
 
   private def invalid(message: String): Nothing = throw DomainFailure(Fault.Invalid(message))

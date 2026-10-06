@@ -117,7 +117,7 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
       }
       _ <- driver.observe(workflow.current, command, reply)
     } yield reply
-    def settled(id: IntegrationId): Task[IntegrationStatus] = controller.status(id, 20000)
+    def settled(id: IntegrationId): Task[IntegrationStatus] = controller.status(id, 120000)
       .repeatUntil(status => !Set(IntegrationPhase.Preparing, IntegrationPhase.Running)(status.phase))
       .timeoutFail(new IllegalStateException("Integration did not settle"))(zio.Duration.fromSeconds(90))
     def prepared: Task[IntegrationStatus] = {
@@ -125,7 +125,7 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
       dispatch(DispatchCommand.PrepareIntegration(id, reviewer)) *> settled(id)
     }
     def integrate(id: IntegrationId): Task[IntegrationStatus] = dispatch(DispatchCommand.Integrate(id)) *> settled(id)
-    def combined(id: RequestId): Task[CombinationStatus] = combinations.status(id, 20000).repeatUntil(_.phase != CombinationPhase.Preparing)
+    def combined(id: RequestId): Task[CombinationStatus] = combinations.status(id, 120000).repeatUntil(_.phase != CombinationPhase.Preparing)
       .timeoutFail(new IllegalStateException("Combination did not settle"))(zio.Duration.fromSeconds(90))
 
     /** The server's record of the latest cycle, which holds what the status does not show: the members resting on the session. */
@@ -212,7 +212,7 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
         WaitCommand(Some("/opt/cq/bin/cq")))
       idle = java.time.Duration.ofMinutes(10)
       peer <- ZIO.acquireRelease(ZIO.attempt(new StdioPeer(new java.io.PipedInputStream(new java.io.PipedOutputStream()), java.io.OutputStream.nullOutputStream(),
-        new OwnerLiveness { override def alive: Boolean = true }, PeerLimits(idle, idle, idle, idle, AttachedGateway.FrameBytes, 8), () => ())))(peer => ZIO.succeed(peer.close()))
+        new OwnerLiveness { override def alive: Boolean = true }, PeerLimits(idle, idle, idle, AttachedGateway.FrameBytes, 8), () => ())))(peer => ZIO.succeed(peer.close()))
       gateway = (request: Json) => served.handle(peer, request).map(_.get)
       _ <- gateway(parser.parse("""{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}""").fold(throw _, identity))
       empty = Fixture(local, owner, authority, controller, combinations, workflow, driver, registry, hook, created.head.id, ArtifactId(uuid), local.base, claim.fence, directory, gateway)

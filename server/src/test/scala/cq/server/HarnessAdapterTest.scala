@@ -116,6 +116,20 @@ final class HarnessAdapterLocal extends AnyWordSpec {
         invocation(Role.Worker, Path.of("/test/assets")), environment))
     }
 
+    "allow only a Governor's dispatch endpoint a tool call that outlasts the longest dispatch wait" in {
+      val root = Path.of("/test/assets")
+      HarnessTools.Roles.foreach { role =>
+        val waits = if (role == Role.Governor) Some(150L) else None
+        val codex = new CodexAdapter().launch(profile(Harness.Codex), invocation(role, root), environment).arguments
+        assert(codex.contains("mcp_servers.cq.tool_timeout_sec=30") && codex.contains(s"mcp_servers.cq_host.tool_timeout_sec=${waits.getOrElse(30L)}"), role)
+        val claude = new ClaudeAdapter().launch(profile(Harness.Claude), invocation(role, root), environment).assets.find(_.name == "claude-mcp.json").get
+        val servers = io.circe.parser.parse(claude.body).fold(throw _, identity).hcursor.downField("mcpServers")
+        assert(servers.downField("cq").downField("timeout").focus.isEmpty, role)
+        assert(servers.downField("cq_host").get[Option[Long]]("timeout") == Right(waits.map(_ * 1000)), role)
+      }
+      assert(DispatchWaits.ManagedGovernorSeconds == 150 && DispatchWaits.ManagedGovernorSeconds * 1000 > DispatchWaits.MaxMillis)
+    }
+
     "give ledger mutation and dispatch only to governing profiles and native edits only to workers" in {
       val root = Path.of("/test/assets")
       val governor = invocation(Role.Governor, root)

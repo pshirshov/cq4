@@ -5,7 +5,10 @@ import { isDeepStrictEqual } from "node:util";
 const MAX_CONFIG_BYTES = 2097152;
 const MAX_FRAME_BYTES = 2097152;
 const MAX_PENDING = 32;
+// What the bridge allows a request that does not wait: the host's own deadline for it and a margin, so the host answers or fails first.
 const REQUEST_MILLIS = 35000;
+// The longest wait a dispatch command may ask the host for (the host's DispatchWaits.MaxMillis).
+const MAX_WAIT_MILLIS = 120000;
 // A status refresh only repaints the footer: it is given up early and alone, without closing the connection.
 const STATUS_MILLIS = 5000;
 const PROTOCOL = "2025-03-26";
@@ -25,6 +28,17 @@ const MAX_WAIT_OUTPUT_BYTES = 1048576;
 const WORKING = { Status: ["Preparing", "Running", "Stopping", "Validating", "Publishing"], Integration: ["Preparing", "Running"],
   Combination: ["Preparing"], Revalidation: ["Running"] };
 const UNIT_KIND = { Status: "Attempt", Integration: "Integration", Combination: "Combination", Revalidation: "Revalidation" };
+// A dispatch command that waits for work is allowed that wait on top of the deadline every other request keeps; Revalidate waits
+// for its round as long as a status call may. A wait the host refuses is answered at once and gets no allowance.
+function waitMillis(tool, parameters) {
+  if (tool !== "dispatch" || parameters === null || typeof parameters !== "object") return 0;
+  const commands = Object.entries(parameters);
+  if (commands.length !== 1) return 0;
+  const [command, body] = commands[0];
+  if (command === "Revalidate") return MAX_WAIT_MILLIS;
+  const wait = body === null || typeof body !== "object" ? undefined : body.waitMillis;
+  return Number.isInteger(wait) && wait >= 0 && wait <= MAX_WAIT_MILLIS ? wait : 0;
+}
 
 function reference(id) {
   const prefix = LEDGER_PREFIX[id.ledger];
@@ -124,7 +138,8 @@ class Connection {
     else if (value.result === undefined) request.reject(new Error("CQ response result is missing"));
     else request.resolve(value.result);
   }
-  async rpc(method, params, signal) {
+  // `millis` is the deadline of this request; exceeding it fails the connection.
+  async rpc(method, params, signal, millis) {
     if (this.pending.size + this.abandoned.size >= MAX_PENDING) throw new Error("CQ request queue is full");
     const id = ++this.sequence;
     let timer;
@@ -132,7 +147,7 @@ class Connection {
     try {
       return await new Promise((resolve, reject) => {
         this.pending.set(id, { resolve, reject });
-        timer = setTimeout(abort, REQUEST_MILLIS);
+        timer = setTimeout(abort, millis);
         if (signal !== undefined) {
           signal.addEventListener("abort", abort, { once: true });
           if (signal.aborted) { abort(); return; }
@@ -257,7 +272,7 @@ export default async function (pi) {
   async function driver(context, action, fields) {
     if (connection === undefined) throw new Error("CQ attached host is unavailable; restart the session");
     const request = { [action]: { session: context.sessionManager.getSessionId(), ...fields } };
-    const reply = await (action === "Status" ? connection.poll("cq/driver", request, STATUS_MILLIS) : connection.rpc("cq/driver", request, undefined));
+    const reply = await (action === "Status" ? connection.poll("cq/driver", request, STATUS_MILLIS) : connection.rpc("cq/driver", request, undefined, REQUEST_MILLIS));
     const [name, body] = variant(reply);
     if (name !== "Failed") return reply;
     const [fault, detail] = variant(body.fault);
@@ -331,10 +346,10 @@ export default async function (pi) {
     const started = new Connection(configuration);
     connection = started;
     try {
-      const initialized = await started.rpc("initialize", { protocolVersion: PROTOCOL, capabilities: {}, clientInfo: { name: "cq-pi-attached", version: "0.1.0" } }, undefined);
+      const initialized = await started.rpc("initialize", { protocolVersion: PROTOCOL, capabilities: {}, clientInfo: { name: "cq-pi-attached", version: "0.1.0" } }, undefined, REQUEST_MILLIS);
       if (initialized.protocolVersion !== PROTOCOL) throw new Error("CQ protocol version mismatch");
       started.send({ jsonrpc: "2.0", method: "notifications/initialized" });
-      const inventory = await started.rpc("tools/list", {}, undefined);
+      const inventory = await started.rpc("tools/list", {}, undefined, REQUEST_MILLIS);
       if (!isDeepStrictEqual(inventory.tools, configuration.tools)) throw new Error("CQ tool contracts changed; rerun cq configure pi and restart");
       const located = await started.rpc("cq/session", {}, undefined);
       if (typeof located.directory !== "string") throw new Error("CQ host did not name its session directory");
@@ -393,7 +408,7 @@ export default async function (pi) {
       reasoning: count(usage.reasoning), totalTokens: count(usage.totalTokens),
       costUSD: typeof cost === "number" && Number.isFinite(cost) && cost >= 0 ? { value: String(cost) } : null,
     };
-    try { await connection.rpc("cq/piUsage", record, undefined); }
+    try { await connection.rpc("cq/piUsage", record, undefined, REQUEST_MILLIS); }
     catch (error) { connection.fail(error); connection.process.stdin.destroy(); throw error; }
   });
   for (const tool of configuration.tools) {
@@ -403,7 +418,7 @@ export default async function (pi) {
       promptGuidelines: tool.name === "session" ? ["Before CQ work, call cq_session Context and follow its instructions; activate a typed workflow before dispatch. This interactive session is the Governor. Do not run cq run."] : [],
       async execute(_id, parameters, signal, _onUpdate, context) {
         if (connection === undefined) throw new Error("CQ attached host is unavailable; restart the session");
-        const result = await connection.rpc("tools/call", { name: tool.name, arguments: parameters }, signal);
+        const result = await connection.rpc("tools/call", { name: tool.name, arguments: parameters }, signal, REQUEST_MILLIS + waitMillis(tool.name, parameters));
         if (!Array.isArray(result.content) || result.content.length > 16 || !result.content.every(part => part.type === "text" && typeof part.text === "string"))
           throw new Error("CQ returned unsupported tool content");
         if (result.isError === true) throw new Error(result.content.map(part => part.text).join("\n").slice(0, 2000));

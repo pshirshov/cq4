@@ -58,7 +58,6 @@ private[server] final class DispatchExecution(val ticket: DispatchTicket, val di
 final case class SelectedDispatch(cohort: Option[UUID], evidence: ArtifactId, admit: () => Unit, finished: DispatchStatus => ChildOutcome)
 
 final class DispatchController(config: SupervisorConfig, runner: ChildRunner, jobs: JobSupervisor, clock: Clock) {
-  private val MaxStatusWaitMillis = 20000
   private val units = new SessionUnits(config.directory)
   private val disabled = new AtomicBoolean(false)
   private var closing = false
@@ -137,13 +136,13 @@ final class DispatchController(config: SupervisorConfig, runner: ChildRunner, jo
     }
   }
   def status(attempt: AttemptId, waitMillis: Int): Task[DispatchStatus] = for {
-    entry <- ZIO.attempt { require(waitMillis >= 0 && waitMillis <= MaxStatusWaitMillis, "Status wait must be 0–20000 ms"); found(attempt) }
+    entry <- ZIO.attempt { DispatchWaits.admitted(waitMillis, "Status"); found(attempt) }
     _ <- if (waitMillis == 0) ZIO.unit else entry.done.await.timeout(zio.Duration.fromMillis(waitMillis)).unit
     result <- snapshot(entry)
   } yield result
   /** Empty while the attempt runs; then how it ended. */
   def concluded(attempt: AttemptId, waitMillis: Int): Task[Option[ChildOutcome]] = for {
-    entry <- ZIO.attempt { require(waitMillis >= 0 && waitMillis <= MaxStatusWaitMillis, "Status wait must be 0–20000 ms"); found(attempt) }
+    entry <- ZIO.attempt { DispatchWaits.admitted(waitMillis, "Status"); found(attempt) }
     over <- entry.done.await.timeout(zio.Duration.fromMillis(waitMillis))
   } yield over.map(_ => entry.outcome.getOrElse(throw new IllegalStateException("A finished child attempt has no outcome")))
   def cancel(attempt: AttemptId): Task[DispatchStatus] = for {
