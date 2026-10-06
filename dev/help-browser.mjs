@@ -1,5 +1,5 @@
 // Behavioral-Active Blackbox Good-Communication; T6 catalog-driven Help dialog: a Help button at the right end of the top header opens
-// the large (90% × 90%) dialog whose Commands and Agents tabs render exactly the typed ReadSelection.Catalog response.
+// the large (90% × 90%) dialog whose Commands, Agents and Modes tabs render exactly the typed ReadSelection.Catalog response.
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {writeFile} from 'node:fs/promises';
@@ -246,6 +246,37 @@ try {
       await shown.locator('#json-samples').evaluate(node => node.remove());
       cases.push('JSON schemas and examples are pretty-printed and syntax-coloured, copy as valid JSON, scroll inside their block; text that is not JSON stays plain');
 
+      // I30: the Modes tab shows each process mode as the catalog describes it, with the section a governing session receives for it.
+      const modesTab = tabs.getByRole('tab', {name: 'Modes', exact: true});
+      assert.deepEqual(await tabs.getByRole('tab').allTextContents(), ['Commands', 'Agents', 'Modes']);
+      await agentsTab.focus(); await page.keyboard.press('ArrowRight');
+      assert.equal(await modesTab.getAttribute('aria-selected'), 'true'); assert.equal(await page.evaluate(() => document.activeElement.textContent), 'Modes');
+      await page.keyboard.press('ArrowRight'); assert.equal(await commandsTab.getAttribute('aria-selected'), 'true');
+      await page.keyboard.press('End'); assert.equal(await modesTab.getAttribute('aria-selected'), 'true');
+      const modeList = dialog.getByRole('navigation', {name: 'Modes', exact: true});
+      assert.deepEqual(catalog.modes.map(mode => mode.mode), ['Rigorous', 'CrossCutting', 'Yolo']);
+      assert.deepEqual(await modeList.getByRole('button').allTextContents(), catalog.modes.map(mode => mode.label));
+      for (const [index, mode] of catalog.modes.entries()) {
+        const entry = modeList.getByRole('button').nth(index); await entry.click();
+        assert.equal(await entry.getAttribute('aria-current'), 'true');
+        const detail = dialog.getByRole('article', {name: `Mode ${mode.label}`, exact: true}); await detail.waitFor();
+        await detail.getByRole('heading', {name: mode.label, exact: true}).waitFor();
+        await detail.getByText(mode.hint, {exact: true}).waitFor(); await detail.getByText(mode.description, {exact: true}).waitFor();
+        await detail.getByText(catalog.modeEffect, {exact: true}).waitFor();
+        assert.equal(await detail.locator('.mode-note').count(), mode.unavailable === null || mode.unavailable === undefined ? 0 : 1, mode.label);
+        if (mode.unavailable !== null && mode.unavailable !== undefined) assert.equal(await detail.locator('.mode-note').textContent(), mode.unavailable);
+        const instructions = detail.getByLabel(`Prompt ${mode.instructions.resource}`, {exact: true});
+        assert.equal(await instructions.textContent(), mode.instructions.text);
+        assert.ok(mode.instructions.text.startsWith(`Process mode of this project: ${mode.label}.`), mode.label);
+        assert.ok(await instructions.isVisible(), `${viewport}: the instructions of ${mode.label} are collapsed`);
+      }
+      assert.deepEqual(catalog.modes.filter(mode => mode.unavailable !== null && mode.unavailable !== undefined).map(mode => mode.mode), ['Yolo']);
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+      await modeList.getByRole('button').nth(1).click(); await dialog.getByRole('article', {name: `Mode ${catalog.modes[1].label}`, exact: true}).waitFor();
+      await dialog.screenshot({path: `${evidence}/help-modes-${viewport}.png`});
+      cases.push('the Modes tab lists the three process modes with the catalog hint, description, availability note and governing instructions of each');
+      await agentsTab.click(); await dialog.getByRole('article', {name: `Agent ${label(agents.at(-1))}`, exact: true}).waitFor();
+
       await page.keyboard.press('Escape'); await dialog.waitFor({state: 'hidden'});
       assert.equal(await page.evaluate(() => document.activeElement.textContent), 'Help', 'Closing returns focus to the Help button');
       await page.getByLabel('Project', {exact: true}).selectOption(project.value); await page.getByText('Data: current', {exact: true}).waitFor();
@@ -265,4 +296,4 @@ try {
   await writeFile(`${evidence}/help-results.json`, JSON.stringify(results, null, 2) + '\n');
   await browser.close();
 }
-console.log('Chromium Help: catalog-driven Commands and Agents tabs in the large dialog');
+console.log('Chromium Help: catalog-driven Commands, Agents and Modes tabs in the large dialog');

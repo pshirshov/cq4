@@ -9,6 +9,21 @@ header { position: relative; z-index: 2; display: flex; flex-direction: column; 
 .project-control { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 160px; max-width: 440px; }
 .project-control > label { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; }
 .project-control select { width: 100%; min-width: 0; }
+/* The project's process mode (web/src/mode.ts). The default mode is plain; a mode that relaxes the process is marked, more strongly the more it relaxes. */
+.mode-indicator { width: auto; flex: none; white-space: nowrap; }
+.mode-indicator[data-mode=CrossCutting] { border-color: #e0a341; color: #ffd591; box-shadow: inset 3px 0 #e0a341; }
+.mode-indicator[data-mode=Yolo] { border-color: #ff8a80; background: #5c1f1f; color: #ffdad6; font-weight: 600; }
+.mode-options { margin: 8px 0; padding: 4px 10px 8px; border: 1px solid #435364; }
+.mode-option { margin-top: 8px; }
+.mode-option > label { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+.mode-option input { min-height: 0; padding: 0; }
+.mode-option input:disabled + span { color: #a4c1d3; }
+.mode-hint, .mode-note { margin: 2px 0 0 24px; }
+.mode-hint { color: #c5d6e2; }
+.mode-note { color: #ffd591; }
+.help-detail > .mode-note { margin-left: 0; }
+.help-lead { font-weight: 600; }
+.mode-actions { margin-top: 8px; }
 .status-bar { flex: none; padding: 4px 12px; border-top: 1px solid #435364; background: #1c2630; font-size: 11px; color: #a4c1d3; }
 .keyboard-guidance { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 4px; }
 .keyboard-guidance > span { white-space: nowrap; }
@@ -23,6 +38,8 @@ h3 { margin: 10px 0 6px; font-size: 13px; }
 .workspace { display: grid; flex: 1; min-height: 0; grid-template-columns: var(--navigation-width) var(--results-width) 8px minmax(0, 1fr); }
 .workspace[data-detail=closed] { grid-template-columns: var(--navigation-width) minmax(0, 1fr); }
 #navigation-pane { border-right: 1px solid #435364; }
+/* The navigation's entries fit a 1280×720 window without scrolling (dev/density-browser.mjs); its one heading therefore sits close to them. */
+#navigation-pane h3 { margin: 2px 0; }
 .pane { min-width: 0; min-height: 0; padding: 10px; overflow: auto; overflow-wrap: anywhere; overscroll-behavior: contain; }
 .pane-separator { position: relative; cursor: col-resize; touch-action: none; background: #1c2630; }
 .pane-separator::after { content: ''; position: absolute; top: 0; bottom: 0; left: 3px; width: 2px; background: #435364; }

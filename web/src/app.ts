@@ -24,6 +24,8 @@ import { ReferencePopup } from './references.js';
 import { QuestionBatch } from './questions.js';
 import { DriversDialog } from './drivers.js';
 import { HelpDialog } from './help.js';
+import { CatalogSource } from './catalog.js';
+import { ModeDialog, ModeIndicator } from './mode.js';
 
 const CONTEXT = BaboonCodecContext.Default;
 const PAGE_SIZE = 40;
@@ -142,7 +144,21 @@ class App {
     saved: (value, changed) => this.notifications.show(changed ? `Standing requirements saved at revision ${value.revision.value}.`
       : 'Standing requirements unchanged: the text equals the saved one.', changed ? 'success' : 'info'),
   });
-  private readonly help = new HelpDialog({ call: command => this.connection().call(command) });
+  private readonly catalog = new CatalogSource(command => this.connection().call(command));
+  private readonly help = new HelpDialog({ catalog: project => this.catalog.read(project) });
+  private readonly modeEffects = {
+    call: (command: api.Command) => this.connection().call(command),
+    catalog: (project: api.ProjectId) => this.catalog.read(project),
+    saved: (value: api.ProjectMode, changed: boolean) => {
+      this.action(async () => {
+        const catalog = await this.catalog.read(value.project);
+        if (this.project !== null && this.project.value === value.project.value) this.modeIndicator.show(value, catalog);
+      });
+      this.notifications.show(changed ? `Process mode saved at revision ${value.revision.value}.` : 'Process mode unchanged: it equals the saved one.', changed ? 'success' : 'info');
+    },
+  };
+  private readonly mode = new ModeDialog(this.modeEffects);
+  private readonly modeIndicator = new ModeIndicator(this.modeEffects, () => this.action(async () => this.mode.open(this.currentProject())));
   private readonly historyPanel = element('section', '');
   private readonly projectDialog = new Dialog('standard', () => {});
   private readonly createDialog = new Dialog('large', () => this.closeEditor());
@@ -243,7 +259,7 @@ class App {
     const projectControl = element('div', ''); projectControl.className = 'project-control';
     const projectLabel = element('label', 'Project'); projectLabel.append(this.projects); projectControl.append(projectLabel);
     const createProject = button('+', () => { this.projectDialog.open('New project'); }); createProject.setAttribute('aria-label', 'New project'); createProject.title = 'New project';
-    projectControl.append(createProject);
+    projectControl.append(createProject, this.modeIndicator.element);
     // The catalog read is project-scoped on the wire only; the operator's root session reads it for any project, so Help works before one is selected.
     const help = button('Help', () => this.help.open(this.project ?? new api.ProjectId('00000000-0000-4000-8000-000000000000')));
     help.className = 'help-button'; help.setAttribute('aria-haspopup', 'dialog');
@@ -268,7 +284,7 @@ class App {
     list.addEventListener('scroll', () => this.loadMore());
     window.addEventListener('resize', () => this.loadMore());
     this.projects.setAttribute('aria-label', 'Project'); this.query.setAttribute('aria-label', 'Search query');
-    this.projects.addEventListener('change', () => this.action(async () => { this.project = new api.ProjectId(this.projects.value); this.reset(); await this.refresh(); }));
+    this.projects.addEventListener('change', () => this.action(async () => { this.project = new api.ProjectId(this.projects.value); this.reset(); this.loadMode(); await this.refresh(); }));
     this.query.addEventListener('input', () => this.archive.invalidate());
     this.query.placeholder = 'ledger:Tasks status:Ready'; this.query.maxLength = MAX_QUERY_CHARACTERS;
     const newProject = element('form', ''); const name = element('input', ''); name.placeholder = 'New project name'; name.setAttribute('aria-label', 'New project name'); name.required = true;
@@ -276,7 +292,7 @@ class App {
     newProject.addEventListener('submit', event => { event.preventDefault(); this.action(async () => {
       const project = new api.ProjectId(uuidV4(crypto));
       await this.call(new api.Command_Initialize(new api.ProjectConfig(project, location.origin, name.value)));
-      this.project = project; this.reset(); await this.loadProjects(); await this.refresh(); name.value = ''; this.projectDialog.close();
+      this.project = project; this.reset(); this.loadMode(); await this.loadProjects(); await this.refresh(); name.value = ''; this.projectDialog.close();
     }); });
     this.projectDialog.body.append(newProject); this.historyDialog.body.append(this.historyPanel);
     this.conflictDialog.body.append(this.conflictPanel);
@@ -302,9 +318,10 @@ class App {
     const archive = button('Archive terminal items', () => this.action(async () => this.archive.open(this.currentProject(), this.activeQuery, this.order))); archive.className = 'navigation-entry';
     const questions = button('Answer questions', () => this.action(async () => this.questions.open(this.currentProject()))); questions.className = 'navigation-entry'; questions.prepend(icon(api.Ledger.Questions));
     const requirements = button('Standing requirements', () => this.action(async () => this.requirements.open(this.currentProject()))); requirements.className = 'navigation-entry';
+    const mode = button('Process mode', () => this.action(async () => this.mode.open(this.currentProject()))); mode.className = 'navigation-entry';
     const drivers = button('Drivers and worksets', () => this.drivers.open(this.currentProject(), this.selection)); drivers.className = 'navigation-entry';
     this.clearWorkset.hidden = this.worksetFilter === null;
-    side.append(create, questions, usage, archive, requirements, drivers, this.worksetLabel, this.clearWorkset, element('h3', 'Browse'), shortcuts);
+    side.append(create, questions, usage, archive, requirements, mode, drivers, this.worksetLabel, this.clearWorkset, element('h3', 'Browse'), shortcuts);
     const table = element('table', ''); table.className = 'items-table'; table.setAttribute('aria-label', 'Items');
     const head = element('thead', ''); const headings = element('tr', '');
     const columns: TableColumn[] = [];
@@ -357,7 +374,7 @@ class App {
     list.append(table);
     content.append(workspace.toggle, this.detail, this.editorPanel, this.graph.element, this.usagePanel, this.auditPanel);
     this.root.replaceChildren(header, workspace.element, status, this.projectDialog.element, this.createDialog.element, this.conflictDialog.element,
-      this.historyDialog.element, this.usageDialog.element, this.archive.element, this.requirements.element, this.graph.dialog.element, this.relationshipGraph.dialog.element, this.references.dialog.element, this.questions.dialog.element, this.drivers.element, this.help.element, this.notifications.element);
+      this.historyDialog.element, this.usageDialog.element, this.archive.element, this.requirements.element, this.mode.element, this.graph.dialog.element, this.relationshipGraph.dialog.element, this.references.dialog.element, this.questions.dialog.element, this.drivers.element, this.help.element, this.notifications.element);
     this.notifications.reveal(); workspace.fit();
     this.manager = new ConnectionManager(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`, {
       status: stats => this.health.update(stats),
@@ -407,6 +424,7 @@ class App {
     if (this.resultsPane !== null) this.resultsPane.scrollTop = 0;
     this.queryEditor.showDiagnostic(undefined, this.query.value); await this.refresh();
   }
+  private loadMode(): void { this.action(() => this.modeIndicator.load(this.project)); }
   private reset(): void {
     this.questions.reset(); this.references.reset(); this.drivers.reset(); this.drivers.element.close(); this.worksetFilter = null; this.worksetLabel.textContent = ''; this.clearWorkset.hidden = true;
     this.archive.invalidate();
@@ -453,7 +471,7 @@ class App {
         this.projects.replaceChildren();
         for (const project of projects) { const option = element('option', project.name); option.value = project.id.value; this.projects.append(option); }
         if (this.project === null && projects.length > 0) {
-          this.project = projects[0].id; this.watch(); this.action(() => this.refresh());
+          this.project = projects[0].id; this.watch(); this.loadMode(); this.action(() => this.refresh());
         }
         if (this.project !== null) this.projects.value = this.project.value;
         this.graph.setScope(this.project, this.selected);
