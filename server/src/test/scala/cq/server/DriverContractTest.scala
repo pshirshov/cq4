@@ -889,6 +889,73 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
         _ <- assertIO(late.isInstanceOf[DriverReply.Lineage] && off.flatMap(_.stopped).contains(expected))
       } yield ()
     }
+    "I17: stop a drive with Failure when an unchanged cycle left an input no configured model could run, and count no abstention as a failure" in { (service: LedgerService[IO]) =>
+      val w = world
+      val unchanged = "The previous cycle changed nothing in the advanceable set, its context or its readiness"
+      // One driven cycle that changes nothing in the ledger and ends with `attempts`, then the next continuation query.
+      def after(name: String, attempts: List[(ChildEnd, Option[String], Option[String])]): IO[Throwable, (ItemId, DriverReply)] = {
+        val session = w.copy(governor = w.other(Role.Governor))
+        for {
+          root <- create(service, w.operator, goal(name))
+          one <- driven(service, session, claude(name), workset(root))
+          _ <- ZIO.foreachDiscard(attempts)((end, input, fault) => concluded(service, session, one, List(root), end, input, fault))
+          reply <- query(service, session, claude(name))
+        } yield root -> reply
+      }
+      def quiescent(reply: DriverReply): Boolean = reply match { case DriverReply.Stop(DriverStopped(DriverStop.Quiescent, detail), _, _) => detail == unchanged; case _ => false }
+      def failure(reply: DriverReply): Option[String] = reply match { case DriverReply.Stop(DriverStopped(DriverStop.Failure, detail), _, List(message)) if message == "CQ driver stopped (failure): " + detail => Some(detail); case _ => None }
+      def continued(reply: DriverReply): Boolean = reply match { case DriverReply.Continue(_, value, List(message)) => value.cycle.exists(_.number == 2) && message.contains("failed without a result"); case _ => false }
+      val quota = Some("claude sonnet: Quota (usage limit reached); pi zai/glm-5.3: Unavailable (HTTP 529)")
+      val launch = Some("codex gpt-6.1-sol: Launch (version mismatch)")
+      val fault = Some("Process exited with status 1")
+      for {
+        _ <- service.initialize(w.operator, "abstentions")
+        // An abstention followed by an admitted result, a cancellation or an unknown end on the same input is no failure of that input.
+        resolved <- after("abstained-admitted", List((ChildEnd.Abstained, Some("input"), quota), (ChildEnd.Admitted, Some("input"), None)))
+        cancelled <- after("abstained-cancelled", List((ChildEnd.Abstained, Some("input"), quota), (ChildEnd.Cancelled, Some("input"), None)))
+        deferred <- after("abstained-failed", List((ChildEnd.Abstained, Some("input"), quota), (ChildEnd.Failed, Some("input"), fault)))
+        _ <- assertIO(List(resolved, cancelled, deferred).map(_._2).forall(quiescent))
+        // Every attempt on the input abstained: the stop names the items and why no model ran, the last report for the input.
+        alone <- after("abstained", List((ChildEnd.Abstained, Some("input"), quota)))
+        _ <- assertIO(failure(alone._2).contains(s"No configured model could run ${DriverPolicy.reference(alone._1)}: ${quota.get}"))
+        twice <- after("abstained-twice", List((ChildEnd.Abstained, Some("input"), quota), (ChildEnd.Abstained, Some("input"), launch)))
+        _ <- assertIO(failure(twice._2).contains(s"No configured model could run ${DriverPolicy.reference(twice._1)}: ${launch.get}"))
+        several <- after("abstained-inputs", List((ChildEnd.Abstained, Some("input-a"), quota), (ChildEnd.Admitted, Some("other"), None), (ChildEnd.Abstained, Some("input-b"), launch)))
+        _ <- assertIO(failure(several._2).contains(s"No configured model could run ${DriverPolicy.reference(several._1)}: ${quota.get}; ${DriverPolicy.reference(several._1)}: ${launch.get}"))
+        // Abstentions are ignored when an input is judged retryable (Q53), in either order, and a retryable input continues the drive
+        // although another input found no model.
+        before <- after("abstained-retryable", List((ChildEnd.Abstained, Some("input"), quota), (ChildEnd.Retryable, Some("input"), fault)))
+        behind <- after("retryable-abstained", List((ChildEnd.Retryable, Some("input"), fault), (ChildEnd.Abstained, Some("input"), quota)))
+        beside <- after("retryable-beside", List((ChildEnd.Abstained, Some("input-a"), quota), (ChildEnd.Retryable, Some("input-b"), fault)))
+        _ <- assertIO(List(before, behind, beside).map(_._2).forall(continued))
+        // The input that failed once and then found no model is not counted as failing a second time: the stop says no model could run it.
+        session = w.copy(governor = w.other(Role.Governor))
+        key = claude("retried-abstained")
+        root <- create(service, w.operator, goal("retried-abstained"))
+        one <- driven(service, session, key, workset(root))
+        _ <- concluded(service, session, one, List(root), ChildEnd.Retryable, Some("input"), fault)
+        second <- directive(service, session, key)
+        two <- submit(service, session, session.governor, second.directive.text)
+        _ <- concluded(service, session, two, List(root), ChildEnd.Abstained, Some("input"), quota)
+        ended <- query(service, session, key)
+        _ <- assertIO(failure(ended).contains(s"No configured model could run ${DriverPolicy.reference(root)}: ${quota.get}"))
+        // An abstained outcome carries its input fingerprint and the abstention text.
+        other = w.copy(governor = w.other(Role.Governor))
+        target <- create(service, w.operator, goal("abstained-shape"))
+        cycle <- driven(service, other, claude("abstained-shape"), workset(target))
+        request = LineageMember.Request(RequestId(uuid))
+        attempt = AttemptId(uuid)
+        _ <- act(service, other.governor, DriverSession.Inherit(cycle.cycle, LineageMember.Run(cycle.run), request))
+        _ <- act(service, other.governor, DriverSession.Inherit(cycle.cycle, request, LineageMember.Attempt(attempt)))
+        unnamed <- act(service, other.governor, DriverSession.Conclude(cycle.cycle, ChildOutcome(attempt, List(target), ChildEnd.Abstained, None, quota))).either
+        silent <- act(service, other.governor, DriverSession.Conclude(cycle.cycle, ChildOutcome(attempt, List(target), ChildEnd.Abstained, Some("input"), None))).either
+        _ <- assertIO(invalid(unnamed) && invalid(silent))
+        // Unlike a repeated fault, an abstention reported for the active cycle does not stop the drive when it is reported.
+        reported <- act(service, other.governor, DriverSession.Conclude(cycle.cycle, ChildOutcome(attempt, List(target), ChildEnd.Abstained, Some("input"), quota)))
+        running <- status(service, other, claude("abstained-shape"))
+        _ <- assertIO(reported.isInstanceOf[DriverReply.Lineage] && running.exists(_.stopped.isEmpty))
+      } yield ()
+    }
     "answer Waiting for work in flight only to a caller that accepts it, issuing nothing, and decide the cycle at the stop after it" in { (service: LedgerService[IO]) =>
       val w = world
       val key = claude("waiting")
