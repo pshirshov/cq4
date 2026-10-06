@@ -44,6 +44,7 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
         case Command.Read(ReadInput(_, ReadSelection.ArtifactText(id, offset, limit))) => artifacts.page(scope, id, offset, limit).map(Result.ArtifactText.apply)
         case Command.Read(ReadInput(_, ReadSelection.Admission(attempt))) => admissions.get(scope, attempt).map(Result.Admission.apply)
         case Command.Requirements(RequirementsInput(_, RequirementsAction.Read())) => ledger.requirements(scope).map(Result.Requirements.apply)
+        case Command.Mode(ModeInput(_, ModeAction.Read())) => ledger.mode(scope).map(Result.Mode.apply)
         case Command.Read(ReadInput(_, ReadSelection.Claims(members))) => ledger.claimPreview(scope, members).map(Result.Claims.apply)
         case Command.ClaimWork(ClaimInput(_, ClaimAction.Renew(fence, millis))) => ledger.renew(scope, fence, millis).map(Result.Claimed.apply)
         case _ => ZIO.fail(new IllegalStateException("Unexpected integration preparation command"))
@@ -351,7 +352,7 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
         collector = later.copy(actor = later.actor.copy(role = Role.Collector))
         claim <- ledger.acquire(later, ClaimId(uuid), f.claim.members, 300000)
         api = new ServiceApi(later, ledger, artifacts, admissions, runtime)
-        workflow <- ZIO.attemptBlocking(new WorkflowAssembly(api, later.project, new WorkflowAssets).assemble(WorkflowRequest.Review(f.intent.worker, ReviewerMode.Candidate)))
+        workflow <- ZIO.attemptBlocking(new WorkflowAssembly(api, later.project, new WorkflowAssets, SessionOwnership.Attached).assemble(WorkflowRequest.Review(f.intent.worker, ReviewerMode.Candidate)))
         _ <- assertIO(workflow.subject.exists(_.result == f.intent.worker))
         input <- ZIO.attemptBlocking(new InputAssembler(api, later, Clock.systemUTC(), "Continue retained candidate").assemble(
           f.reviewer.request.copy(request = RequestId(uuid), fence = claim.fence)))

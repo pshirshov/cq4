@@ -55,7 +55,7 @@ case $harness in
     ;;
   pi)
     [[ $# -eq 3 ]] || usage
-    exec pi --approve --no-prompt-templates --prompt-template .pi/prompts
+    exec pi --no-prompt-templates --prompt-template .pi/prompts
     ;;
   *) usage ;;
 esac

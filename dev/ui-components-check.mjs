@@ -2,9 +2,11 @@ import assert from 'node:assert/strict';
 import { build } from 'esbuild';
 import { chromium } from 'playwright';
 import { readFile } from 'node:fs/promises';
+import { hold, HOLD_SETTLE_MS } from './hold.mjs';
 const bundle = await build({ stdin: { contents: `export * as api from './generated/typescript/cq/api/index.js';
 export { QuestionBatch } from './web/src/questions.js'; export { itemView } from './web/src/presentation.js';
-export { ReferencePopup } from './web/src/references.js'; export { RequirementsDialog } from './web/src/requirements.js';`,
+export { ReferencePopup } from './web/src/references.js'; export { RequirementsDialog } from './web/src/requirements.js';
+export { ModeDialog } from './web/src/mode.js';`,
   resolveDir: process.cwd() }, bundle: true, format: 'iife', globalName: 'CQComponents', write: false });
 const browser = await chromium.launch({ headless: true });
 try {
@@ -121,5 +123,51 @@ try {
     assert.equal(await page.getByRole('heading', { name: 'Edit conflict', exact: true }).count(), 0);
     assert.equal(await page.evaluate(() => fixture.values.get(fixture.a.value).revision.value.toString()), '3');
     console.log('PASS: requirements save completion updates its project draft across a project switch');
+  }
+  if (process.argv.includes('--mode')) {
+    // I30: the catalog decides which modes can be chosen. With a catalog in which the YOLO mode is available, choosing it replaces the
+    // ordinary save by the hold-to-confirm control; a release that makes the mode available needs no change of the dialog.
+    await page.evaluate(() => {
+      const { api, ModeDialog } = CQComponents;
+      const project = new api.ProjectId('00000000-0000-0000-0000-000000000001');
+      const prompt = new api.CatalogPrompt('fixture.md', 'Fixture instructions');
+      const catalog = new api.HelpCatalog([], [], [
+        new api.CatalogMode(api.ProcessMode.Rigorous, 'Rigorous', 'Rigorous hint', 'Rigorous description', prompt, undefined),
+        new api.CatalogMode(api.ProcessMode.CrossCutting, 'Cross-cutting', 'Cross-cutting hint', 'Cross-cutting description', prompt, undefined),
+        new api.CatalogMode(api.ProcessMode.Yolo, 'YOLO cross-cutting', 'YOLO hint', 'YOLO description', prompt, undefined)], 'Fixture effect.');
+      const state = { value: new api.ProjectMode(project, new api.Revision(0n), api.ProcessMode.Rigorous, false, undefined), replaced: [], saved: [] };
+      const dialog = new ModeDialog({ catalog: async () => catalog, saved: (value, changed) => { state.saved.push([value.mode, changed]); }, call: async command => {
+        if (command.input.action instanceof api.ModeAction_Replace) {
+          state.replaced.push(command.input.action.mode);
+          state.value = new api.ProjectMode(project, new api.Revision(command.input.action.expected.value + 1n), command.input.action.mode, command.input.action.selfReviewWithoutChecks, undefined);
+        }
+        return new api.Result_Mode(state.value);
+      }});
+      document.body.append(dialog.element);
+      window.fixture = { dialog, project, state };
+      dialog.open(project);
+    });
+    const save = page.getByRole('button', { name: 'Save mode', exact: true });
+    const confirm = page.getByRole('button', { name: 'Switch to YOLO cross-cutting', exact: true });
+    const radio = name => page.getByRole('radio', { name, exact: true });
+    await radio('Rigorous').waitFor();
+    assert.deepEqual([await radio('Rigorous').isChecked(), await radio('YOLO cross-cutting').isDisabled(), await save.isVisible(), await confirm.isVisible()], [true, false, true, false]);
+    await radio('Cross-cutting').check();
+    assert.deepEqual([await save.isVisible(), await confirm.isVisible()], [true, false]);
+    await radio('YOLO cross-cutting').check();
+    assert.deepEqual([await save.isVisible(), await confirm.isVisible(), await confirm.getAttribute('data-hold')], [false, true, 'idle']);
+    // A click is not a hold: nothing is sent.
+    await confirm.click(); await page.waitForTimeout(HOLD_SETTLE_MS);
+    assert.deepEqual(await page.evaluate(() => fixture.state.replaced), []);
+    await hold(page, confirm);
+    await page.waitForFunction(() => fixture.state.saved.length === 1);
+    assert.deepEqual(await page.evaluate(() => [fixture.state.replaced, fixture.state.saved]), [['Yolo'], [['Yolo', true]]]);
+    // In the YOLO mode the choice of another mode, and a save of the same one, is an ordinary save.
+    await save.waitFor();
+    assert.deepEqual([await radio('YOLO cross-cutting').isChecked(), await confirm.isVisible()], [true, false]);
+    await radio('Rigorous').check(); await save.click();
+    await page.waitForFunction(() => fixture.state.saved.length === 2);
+    assert.deepEqual(await page.evaluate(() => fixture.state.replaced), ['Yolo', 'Rigorous']);
+    console.log('PASS: a mode the catalog makes available is chosen with the ordinary save, except the YOLO mode, which is saved by holding');
   }
 } finally { await browser.close(); }

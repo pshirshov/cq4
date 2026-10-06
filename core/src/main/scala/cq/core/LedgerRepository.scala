@@ -9,10 +9,11 @@ final case class StoredRequest(fingerprint: String, acknowledgement: ChangeAck)
 final case class LedgerCursors(items: ChangeCursor, work: Long)
 
 /** The kinds of per-project configuration document; a project holds at most one document of each kind. */
-enum ProjectSettingKind { case Requirements }
+enum ProjectSettingKind { case Requirements, Mode }
 object ProjectSettingKind {
   def of(value: ProjectSetting): ProjectSettingKind = value match {
     case _: ProjectSetting.Requirements => ProjectSettingKind.Requirements
+    case _: ProjectSetting.Mode => ProjectSettingKind.Mode
   }
 }
 final case class StoredSetting(revision: Revision, value: ProjectSetting, actor: Actor, updatedAt: Long)

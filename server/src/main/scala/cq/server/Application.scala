@@ -24,6 +24,11 @@ final class Application(ledger: LedgerService[IO], repository: LedgerRepository[
         case RequirementsAction.Read() => ledger.requirements(scope).map(Result.Requirements.apply)
         case RequirementsAction.Replace(expected, text) => ledger.replaceRequirements(scope, expected, text).map(Result.Requirements.apply)
       }}
+      case Command.Mode(input) => scoped(authority, input.project) { scope => input.action match {
+        case ModeAction.Read() => ledger.mode(scope).map(Result.Mode.apply)
+        case ModeAction.Replace(expected, mode, selfReviewWithoutChecks) =>
+          ledger.replaceMode(scope, expected, ProjectSetting.Mode(mode, selfReviewWithoutChecks)).map(Result.Mode.apply)
+      }}
       case Command.Search(input) => scoped(authority, input.project) { scope =>
         ledger.search(scope, input.query, input.after, input.limit).flatMap { page =>
           if (input.snapshot.exists(_ != page.cursor)) ZIO.fail(DomainFailure(Fault.Resync("Snapshot changed; restart search")))

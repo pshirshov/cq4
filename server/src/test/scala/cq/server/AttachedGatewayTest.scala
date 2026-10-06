@@ -1,7 +1,7 @@
 package cq.server
 
 import cq.api.*
-import cq.host.{AttachedCodexUsage, CodexRollout, DispatchWaits, OwnerLiveness, PeerLimits, ServerApi, StdioPeer}
+import cq.host.{AttachedCodexUsage, CodexRollout, DispatchWaits, OwnerLiveness, PeerLimits, ServerApi, StdioPeer, WorkflowAssets}
 import io.circe.{Json, parser}
 import java.io.{BufferedReader, InputStreamReader, PipedInputStream, PipedOutputStream}
 import java.nio.charset.StandardCharsets.UTF_8
@@ -92,6 +92,30 @@ final class AttachedGatewayLocal extends AnyWordSpec {
       // A wait is honoured only where the host waits: the same field in another tool's arguments changes nothing.
       assert(AttachedGateway.deadline(call("session", s"""{"Status":{"attempt":$id,"waitMillis":120000}}""")) == short)
       assert(AttachedGateway.deadline(Json.obj("jsonrpc" -> Json.fromString("2.0"), "id" -> Json.fromInt(1), "method" -> Json.fromString("ping"))) == short)
+    }
+  }
+
+  "Workflow replies of an attached session (Behavioral Active Blackbox Atomic)" should {
+    "I30: send the instructions again when the process mode changed between two activations, and name the earlier activation on a return to its mode" in {
+      val assets = new WorkflowAssets
+      val request = WorkflowRequest.Advance(Set(ItemId(project, Ledger.Tasks, 1)), WorkflowPhase.Integrate)
+      def activation(mode: ProcessMode): WorkflowActivation =
+        WorkflowActivation(RequestId(UUID.randomUUID()), WorkflowContext(request, assets.instructions(request, mode), None, mode), "", None)
+      val receipts = new WorkflowReceipts
+      val List(rigorous, same, crossCutting, repeated, back) =
+        List(ProcessMode.Rigorous, ProcessMode.Rigorous, ProcessMode.CrossCutting, ProcessMode.CrossCutting, ProcessMode.Rigorous).map(activation)
+      def text(value: WorkflowActivation) = WorkflowInstructions.Text(value.context.instructions)
+      assert(receipts(rigorous) == WorkflowReceipt(rigorous.id, request, text(rigorous), None, None, ProcessMode.Rigorous))
+      // The same mode again: the text is the one the session holds.
+      assert(receipts(same) == WorkflowReceipt(same.id, request, WorkflowInstructions.Unchanged(rigorous.id), None, None, ProcessMode.Rigorous))
+      // The mode changed: the session holds no text for it, so it is sent whole.
+      assert(crossCutting.context.instructions != rigorous.context.instructions)
+      assert(receipts(crossCutting) == WorkflowReceipt(crossCutting.id, request, text(crossCutting), None, None, ProcessMode.CrossCutting))
+      assert(receipts(repeated).instructions == WorkflowInstructions.Unchanged(crossCutting.id) && receipts(repeated).mode == ProcessMode.CrossCutting)
+      // Back to the first mode: its text was sent by the first activation, and the receipt's mode says which of the texts it holds applies.
+      assert(receipts(back) == WorkflowReceipt(back.id, request, WorkflowInstructions.Unchanged(rigorous.id), None, None, ProcessMode.Rigorous))
+      // The activation whose reply first carried a text gets the text again when its call is repeated.
+      assert(receipts(rigorous).instructions == text(rigorous) && receipts(crossCutting).instructions == text(crossCutting))
     }
   }
 

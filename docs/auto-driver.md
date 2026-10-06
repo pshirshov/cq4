@@ -47,7 +47,7 @@ cq configure pi     --settings /absolute/settings.json --replace
 | --- | --- | --- |
 | Claude Code | `.claude/commands/cq/drive.md` and `park.md`; in `.claude/settings.local.json` one hook group for `UserPromptSubmit`, one for `Stop`, and a `statusLine`. | If the file already has a `statusLine` that is not CQ's, configuration stops with `Claude statusLine in .claude/settings.local.json differs; use --replace-statusline …`. Add `--replace-statusline` to replace it; `--replace` alone does not. Launch with `claude --setting-sources project,local`, because the hooks and the status line are in the local settings source. |
 | Codex | The skills `.agents/skills/cq-drive` and `cq-park`; the two hook groups in `.codex/hooks.json`. | Codex runs project hooks only in a trusted project after a review. In the Hooks dialog (`/hooks`) Codex 0.159.2 showed `2 hooks need review before they can run`; `t` trusts all, Enter reviews one. It ran the hooks after that. |
-| Pi | Nothing beyond the generated extension `.pi/extensions/cq-host.js`, which contains the commands, the toggle key and the footer. | None. `pi --approve` loads the extension. |
+| Pi | Nothing beyond the generated extension `.pi/extensions/cq-host.js`, which contains the commands, the toggle key and the footer. | The project must be trusted: type `/trust` in Pi once ([interactive](interactive.md)). Pi then loads the extension at every launch, without `--approve`. |
 
 In both hook files an entry is CQ's when its whole command is the one CQ generates: a single executable followed by `hook <harness> <event>` (extra whitespace is ignored). Such entries are replaced, including one left by a CQ installed elsewhere; every other hook group, handler and event is kept. A command that wraps the CQ hook, for example `timeout 5 /path/cq hook claude Stop`, is yours: CQ keeps it and adds its own group, so the hook then runs twice. Remove or edit wrapped copies yourself. Existing files are replaced by a rename, so a running harness never reads a half-written file.
 
@@ -98,6 +98,8 @@ call '{"Workset":{"input":{"project":{"value":"'$project'"},"action":{"Preview":
 | Codex | `$cq-drive G1,T4 through=work` or `$cq-drive workset=<UUID>` |
 
 IDs are separated by spaces or commas. Inline targets need exactly one `through=<phase>`, in lower case. `workset=<UUID>` stands alone. In Claude Code and Codex the command must be the first word of the prompt; any other prompt passes through untouched.
+
+The project's [process mode](interactive.md#process-mode-of-a-project) may be changed while a drive is on: each cycle is a new workflow activation and takes the mode the project has then.
 
 A drive command carries targets and a phase and no request text. Rules that the driven work must follow, such as the project's testing policy, are therefore set beforehand as the project's standing requirements (*Standing requirements* in the browser): the host delivers them to the Governor through session Context and workflow activation, and to every Planner, Worker and plan or candidate reviewer the drive dispatches. See [Standing requirements of a project](interactive.md#standing-requirements-of-a-project).
 

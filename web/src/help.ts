@@ -2,14 +2,14 @@ import * as api from '../../generated/typescript/cq/api/index.js';
 import { BaboonCodecContext } from '../../generated/typescript/BaboonSharedRuntime.js';
 import { button, element } from './editor.js';
 import { Dialog } from './dialog.js';
-import { faultMessage } from './faults.js';
 import { jsonTextView, jsonView } from './json-view.js';
 
 const CONTEXT = BaboonCodecContext.Default;
 
-interface HelpEffects { call(command: api.Command): Promise<api.Result> }
+interface HelpEffects { catalog(project: api.ProjectId): Promise<api.HelpCatalog> }
 
-type Tab = 'commands' | 'agents';
+type Tab = 'commands' | 'agents' | 'modes';
+const TABS: readonly (readonly [Tab, string])[] = [['commands', 'Commands'], ['agents', 'Agents'], ['modes', 'Modes']];
 /** The prompt and schema view of an agent: the canonical form or the effective form one harness receives (Q8). */
 type View = 'canonical' | api.Harness;
 
@@ -47,8 +47,8 @@ function section(title: string, ...content: (string | Node)[]): HTMLElement {
 }
 
 /**
- * The Help dialog: the large dialog variant with a Commands and an Agents tab, rendered only from the typed `ReadSelection.Catalog`
- * response. The web client holds no command, alias, argument, prompt, schema, example or tool facts of its own.
+ * The Help dialog: the large dialog variant with a Commands, an Agents and a Modes tab, rendered only from the typed `ReadSelection.Catalog`
+ * response. The web client holds no command, alias, argument, prompt, schema, example, tool or process mode facts of its own.
  */
 export class HelpDialog {
   readonly dialog = new Dialog('large', () => { this.generation++; });
@@ -59,6 +59,7 @@ export class HelpDialog {
   private tab: Tab = 'commands';
   private command = 0;
   private agent = 0;
+  private mode = 0;
   private view: View = 'canonical';
   private readonly tabs = new Map<Tab, HTMLButtonElement>();
   private readonly panels = new Map<Tab, HTMLElement>();
@@ -66,7 +67,7 @@ export class HelpDialog {
 
   constructor(private readonly effects: HelpEffects) {
     const list = element('div', ''); list.className = 'help-tabs'; list.setAttribute('role', 'tablist'); list.setAttribute('aria-label', 'Help sections');
-    for (const [tab, title] of [['commands', 'Commands'], ['agents', 'Agents']] as const) {
+    for (const [tab, title] of TABS) {
       const control = button(title, () => this.select(tab, false)); control.id = `help-tab-${tab}`;
       control.setAttribute('role', 'tab'); control.setAttribute('aria-controls', `help-panel-${tab}`);
       const panel = element('div', ''); panel.id = `help-panel-${tab}`; panel.className = 'help-panel';
@@ -74,7 +75,7 @@ export class HelpDialog {
       this.tabs.set(tab, control); this.panels.set(tab, panel); list.append(control);
     }
     list.addEventListener('keydown', event => {
-      const order: Tab[] = ['commands', 'agents']; const index = order.indexOf(this.tab);
+      const order = TABS.map(([tab]) => tab); const index = order.indexOf(this.tab);
       const next = event.key === 'ArrowRight' ? order[(index + 1) % order.length] : event.key === 'ArrowLeft' ? order[(index + order.length - 1) % order.length]
         : event.key === 'Home' ? order[0] : event.key === 'End' ? order[order.length - 1] : null;
       if (next !== null) { event.preventDefault(); this.select(next, true); }
@@ -98,12 +99,7 @@ export class HelpDialog {
       this.status.textContent = 'The catalog could not be read.'; this.dialog.error.textContent = String(error); this.dialog.error.hidden = false;
     });
   }
-  private async read(project: api.ProjectId): Promise<void> {
-    const result = await this.effects.call(new api.Command_Read(new api.ReadInput(project, new api.ReadSelection_Catalog())));
-    if (result instanceof api.Result_Failed) throw new Error(faultMessage(result.fault));
-    if (!(result instanceof api.Result_Catalog)) throw new Error('Unexpected help catalog response');
-    this.catalog = result.value;
-  }
+  private async read(project: api.ProjectId): Promise<void> { this.catalog = await this.effects.catalog(project); }
   private select(tab: Tab, focus: boolean): void {
     this.tab = tab;
     for (const [key, control] of this.tabs) {
@@ -115,7 +111,7 @@ export class HelpDialog {
   private render(): void {
     const catalog = this.catalog; if (catalog === null) return;
     this.status.textContent = ''; this.status.hidden = true;
-    this.renderCommands(catalog); this.renderAgents(catalog);
+    this.renderCommands(catalog); this.renderAgents(catalog); this.renderModes(catalog);
   }
   /** A master list of entries beside the detail of the chosen one; the list keeps its place while the detail scrolls with the body. */
   private layout(tab: Tab, label: string, names: string[], current: number, choose: (index: number) => void, detail: HTMLElement): void {
@@ -171,6 +167,22 @@ export class HelpDialog {
     } else detail.append(element('p', 'The catalog lists no agents.'));
     this.layout('agents', 'Agents', catalog.agents.map(agentLabel), this.agent, index => {
       this.agent = index; this.renderAgents(catalog); this.refocus('agents', 'Agents');
+    }, detail);
+  }
+  /** The process modes a project can work in: what each relaxes, and the section that opens a governing session's workflow instructions in it. */
+  private renderModes(catalog: api.HelpCatalog): void {
+    const mode = catalog.modes[Math.min(this.mode, catalog.modes.length - 1)];
+    const detail = element('article', '');
+    if (mode !== undefined) {
+      detail.setAttribute('aria-label', `Mode ${mode.label}`);
+      const hint = element('p', mode.hint); hint.className = 'help-lead';
+      detail.append(element('h2', mode.label), hint, element('p', mode.description));
+      if (mode.unavailable !== undefined) { const note = element('p', mode.unavailable); note.className = 'mode-note'; detail.append(note); }
+      detail.append(section('Changing the mode', element('p', catalog.modeEffect)),
+        section('Governor instructions', block(`Instructions · ${mode.instructions.resource}`, mode.instructions.text, `Prompt ${mode.instructions.resource}`, true)));
+    } else detail.append(element('p', 'The catalog lists no process modes.'));
+    this.layout('modes', 'Modes', catalog.modes.map(entry => entry.label), this.mode, index => {
+      this.mode = index; this.renderModes(catalog); this.refocus('modes', 'Modes');
     }, detail);
   }
   /** Canonical prompt template and schemas, or the effective prompt and output schema of the chosen harness (Q8). */

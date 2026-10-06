@@ -64,7 +64,7 @@ final class AttachedWorkflow(config: SupervisorConfig, authority: SupervisorAuth
   def current: Option[WorkflowActivation] = activations.current
 
   private def begin(id: RequestId, request: WorkflowRequest, operatorRequirements: String, cycle: Option[CycleId]): WorkflowActivation = {
-    val value = WorkflowActivation(id, new WorkflowAssembly(authority.governor, config.project.project, assets).assemble(request), operatorRequirements, cycle)
+    val value = WorkflowActivation(id, new WorkflowAssembly(authority.governor, config.project.project, assets, config.run.ownership).assemble(request), operatorRequirements, cycle)
     val directory = config.directory.resolve("workflows")
     HostFiles.directory(directory)
     HostFiles.immutable(directory.resolve(id.value.toString + ".json"), HostFiles.encode(WorkflowActivation_JsonCodec, value), MaxActivationBytes)

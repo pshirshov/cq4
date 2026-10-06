@@ -102,7 +102,8 @@ def main():
         resources = Path("host/src/main/resources/cq/workflows")
         subject, failures = None, []
         for name in ["begin", "advance", "review", "upstream"]:
-            instructions = (resources / "common.md").read_text() + "\n" + (resources / (name + ".md")).read_text()
+            # The fixture project keeps the mode a project has until its operator changes it; that mode's section opens the instructions.
+            instructions = "\n".join((resources / (part + ".md")).read_text() for part in ["mode-rigorous", "common", name])
             scenario = {"name": name, "member": member, "subject": subject,
                         "instructionsSha256": hashlib.sha256(instructions.encode()).hexdigest()}
             source.write_text("workflow-assets:" + json.dumps(scenario))

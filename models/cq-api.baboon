@@ -303,6 +303,8 @@ root data ProjectPage { projects: lst[Project] after: opt[ProjectId] hasMore: bi
 root data ProjectConfig { project: ProjectId endpoint: str name: str }
 root adt ProjectSetting {
   data Requirements { text: str }
+  // The process mode of the project. `selfReviewWithoutChecks` lets a self-reviewed integration proceed in a project that configures no check.
+  data Mode { value: ProcessMode selfReviewWithoutChecks: bit }
 }
 root data RequirementsChange { actor: Actor at: i64 }
 root data ProjectRequirements { project: ProjectId revision: Revision text: str change: opt[RequirementsChange] }
@@ -311,6 +313,18 @@ root adt RequirementsAction {
   data Replace { expected: Revision text: str }
 }
 root data RequirementsInput { project: ProjectId action: RequirementsAction }
+// How strictly a project's work follows the process: the prescribed order with a Planner and plan review, the same safeguards with the
+// Governor planning itself, or additionally the Governor implementing and reviewing itself.
+enum ProcessMode { Rigorous CrossCutting Yolo }
+root data ModeChange { actor: Actor at: i64 }
+root data ProjectMode { project: ProjectId revision: Revision mode: ProcessMode selfReviewWithoutChecks: bit change: opt[ModeChange] }
+root adt ModeAction {
+  data Read {}
+  data Replace { expected: Revision mode: ProcessMode selfReviewWithoutChecks: bit }
+}
+root data ModeInput { project: ProjectId action: ModeAction }
+// What Help and the mode dialog show of one mode. `unavailable` says why the mode cannot be selected in this release.
+root data CatalogMode { mode: ProcessMode label: str hint: str description: str instructions: CatalogPrompt unavailable: opt[str] }
 root data SearchInput { project: ProjectId query: str after: opt[ItemId] snapshot: opt[ChangeCursor] limit: i32 }
 enum ItemOrderField { Id Type Title Status Severity Modified }
 enum SortDirection { Ascending Descending }
@@ -500,6 +514,7 @@ root adt Command {
   data Initialize { config: ProjectConfig }
   data RenameProject { project: ProjectId expected: Revision name: str }
   data Requirements { input: RequirementsInput }
+  data Mode { input: ModeInput }
   data Search { input: SearchInput }
   data Graph { input: GraphInput }
   data Workset { input: WorksetInput }
@@ -532,6 +547,7 @@ root adt Result {
   data Projects { page: ProjectPage }
   data Initialized { project: Project }
   data Requirements { value: ProjectRequirements }
+  data Mode { value: ProjectMode }
   data Found { page: ItemPage }
   data Detail { view: ItemView }
   data History { page: HistoryPage }
@@ -644,7 +660,8 @@ root adt WorkflowRequest {
   data Upstream { roots: set[ItemId] action: UpstreamAction }
 }
 root data WorkflowSubject { result: ArtifactId work: DispatchWork members: lst[ItemRevision] candidate: opt[GitCommit] }
-root data WorkflowContext { request: WorkflowRequest instructions: str subject: opt[WorkflowSubject] }
+// `mode` is the process mode whose section opens `instructions`: the project's mode when the workflow was activated, as a session of this ownership works it.
+root data WorkflowContext { request: WorkflowRequest instructions: str subject: opt[WorkflowSubject] mode: ProcessMode }
 root data GoverningInput { project: ProjectConfig routes: lst[HarnessRoute] checks: lst[str] limits: HostLimits integrationTarget: opt[str] request: str workflow: opt[WorkflowContext] }
 enum SessionOwnership { Managed Attached }
 root data AttachedPiEvent {
@@ -654,17 +671,19 @@ root data AttachedPiEvent {
 root data AttachedPiSample { event: AttachedPiEvent receivedAt: i64 }
 root data WorkflowActivation { id: RequestId context: WorkflowContext operatorRequirements: str cycle: opt[CycleId] }
 // What a governing session is sent about an activation. The stored record is WorkflowActivation; these repeat no text the session holds.
-root data ActiveWorkflow { id: RequestId request: WorkflowRequest cycle: opt[CycleId] }
+root data ActiveWorkflow { id: RequestId request: WorkflowRequest cycle: opt[CycleId] mode: ProcessMode }
 root adt WorkflowInstructions {
   data Text { value: str }
   // The text is identical to the one the Workflow reply of activation `since` carried in this attached session.
   data Unchanged { since: RequestId }
 }
-root data WorkflowReceipt { id: RequestId request: WorkflowRequest instructions: WorkflowInstructions subject: opt[WorkflowSubject] cycle: opt[CycleId] }
+root data WorkflowReceipt { id: RequestId request: WorkflowRequest instructions: WorkflowInstructions subject: opt[WorkflowSubject] cycle: opt[CycleId] mode: ProcessMode }
 root data AttachedContext {
   session: SessionId attempt: AttemptId directory: str project: ProjectConfig
   routes: lst[HarnessRoute] checks: lst[str] limits: HostLimits integrationTarget: opt[str]
   instructions: str workflow: opt[ActiveWorkflow] usageCoverage: str
+  // The project's process mode now; the next workflow activation takes it.
+  mode: ProcessMode
 }
 root adt SessionCommand {
   data Context {}
@@ -964,4 +983,5 @@ root data CatalogAgent {
   inputType: str inputSchema: str report: str outputSchema: str workspaceSchema: str
   harnesses: lst[CatalogAgentHarness] inputExample: ChildExecutionInput outputExample: ChildReport
 }
-root data HelpCatalog { commands: lst[CatalogCommand] agents: lst[CatalogAgent] }
+// `modeEffect` says when a change of the process mode takes effect.
+root data HelpCatalog { commands: lst[CatalogCommand] agents: lst[CatalogAgent] modes: lst[CatalogMode] modeEffect: str }

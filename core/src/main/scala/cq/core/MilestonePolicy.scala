@@ -17,7 +17,7 @@ object MilestonePolicy {
       val task = LedgerPolicy.name(member.item.id)
       member.refs.collect { case ItemRef(Relation.PartOf, id) => milestone(id) } match {
         case Nil => Some(MilestoneRefusal(CohortReason.NoMilestone, s"Work refused: $task has no milestone. " +
-          "A Planner must assign each Task to a milestone under plan review before work starts"))
+          "Assign each Task to an Open milestone before work starts"))
         case assigned => assigned.find(_.draft.content match {
           case Content.Milestone(MilestoneStatus.Open, _) => false
           case _ => true

@@ -141,7 +141,10 @@ final class AgentCatalogLocal extends AnyWordSpec {
       val plan = instructions(DispatchWork.Reviewer(ReviewerMode.Plan))
       val candidate = instructions(DispatchWork.Reviewer(ReviewerMode.Candidate))
       val assets = new WorkflowAssets
-      val governing = List(WorkflowRequest.Begin(Set.empty), WorkflowRequest.Advance(Set.empty, WorkflowPhase.Plan)).map(assets.instructions)
+      val governing = for {
+        request <- List(WorkflowRequest.Begin(Set.empty), WorkflowRequest.Advance(Set.empty, WorkflowPhase.Plan))
+        mode <- ProcessMode.all
+      } yield assets.instructions(request, mode)
       (List(planner, plan, candidate) ++ governing).foreach(text => assert(text.contains(result) && text.contains(process)))
       // The Planner keeps a process requirement out of the criteria and the Plan reviewer neither demands it there nor accepts it there.
       assert(planner.contains("is not an acceptance criterion of any Goal or Task") && planner.contains("propose no second one"))

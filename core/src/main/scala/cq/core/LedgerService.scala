@@ -10,6 +10,8 @@ trait LedgerService[F[_, _]] {
   def rename(scope: Scope, expected: Revision, name: String): F[Throwable, Project]
   def requirements(scope: Scope): F[Throwable, ProjectRequirements]
   def replaceRequirements(scope: Scope, expected: Revision, text: String): F[Throwable, ProjectRequirements]
+  def mode(scope: Scope): F[Throwable, ProjectMode]
+  def replaceMode(scope: Scope, expected: Revision, value: ProjectSetting.Mode): F[Throwable, ProjectMode]
   def change(scope: Scope, request: ChangeRequest): F[Throwable, ChangeAck]
   def get(scope: Scope, id: ItemId): F[Throwable, ItemView]
   def details(scope: Scope, members: List[ItemRevision], bytes: Int): F[Throwable, ItemViews]
@@ -72,6 +74,7 @@ object LedgerService {
     private def standing(tx: LedgerTransaction): ProjectRequirements = tx.setting(ProjectSettingKind.Requirements) match {
       case Some(StoredSetting(revision, ProjectSetting.Requirements(text), actor, updatedAt)) =>
         ProjectRequirements(tx.project.id, revision, text, Some(RequirementsChange(actor, updatedAt)))
+      case Some(other) => throw new IllegalStateException(s"The standing requirements row holds a ${ProjectSettingKind.of(other.value)} document")
       case None => ProjectRequirements(tx.project.id, Revision(0), "", None)
     }
 
@@ -87,6 +90,29 @@ object LedgerService {
       else {
         tx.putSetting(StoredSetting(Revision(Math.addExact(expected.value, 1L)), ProjectSetting.Requirements(text), scope.actor, clock.millis()))
         standing(tx)
+      }
+    }
+
+    // A project without a stored document is Rigorous at revision 0.
+    private def processMode(tx: LedgerTransaction): ProjectMode = tx.setting(ProjectSettingKind.Mode) match {
+      case Some(StoredSetting(revision, ProjectSetting.Mode(value, selfReviewWithoutChecks), actor, updatedAt)) =>
+        ProjectMode(tx.project.id, revision, value, selfReviewWithoutChecks, Some(ModeChange(actor, updatedAt)))
+      case Some(other) => throw new IllegalStateException(s"The process mode row holds a ${ProjectSettingKind.of(other.value)} document")
+      case None => ProjectMode(tx.project.id, Revision(0), ProcessModePolicy.Default.value, ProcessModePolicy.Default.selfReviewWithoutChecks, None)
+    }
+
+    override def mode(scope: Scope): F[Throwable, ProjectMode] = repository.transact(scope.project)(processMode)
+
+    override def replaceMode(scope: Scope, expected: Revision, value: ProjectSetting.Mode): F[Throwable, ProjectMode] = repository.transact(scope.project) { tx =>
+      if (scope.actor.role != Role.Human) throw DomainFailure(Fault.Denied("Process mode change requires human authority"))
+      ProcessModePolicy.validate(value)
+      val current = processMode(tx)
+      if (current.revision != expected)
+        throw DomainFailure(Fault.Conflict(s"Process mode changed: expected revision ${expected.value}, actual ${current.revision.value}; reload before saving"))
+      if (ProjectSetting.Mode(current.mode, current.selfReviewWithoutChecks) == value) current
+      else {
+        tx.putSetting(StoredSetting(Revision(Math.addExact(expected.value, 1L)), value, scope.actor, clock.millis()))
+        processMode(tx)
       }
     }
 

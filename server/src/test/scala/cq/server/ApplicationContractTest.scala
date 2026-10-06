@@ -337,6 +337,61 @@ abstract class ApplicationContractTest extends SpecZIO with AssertZIO {
         } yield ()
     }
 
+    "I30: keep a project's process mode under revision comparison, Rigorous until the operator changes it and writable by the operator only" in {
+      (ledger: LedgerService[IO], repository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
+        val auth = authorization(Now)
+        val session = SessionId(UUID.randomUUID())
+        val root = auth.authenticate(Token, Some(session.value.toString))
+        val application = new Application(ledger, repository, usage, artifacts, admissions, integrations, proposals, auth, new CatalogRead(new McpSchemas()))
+        val project = ProjectId(UUID.randomUUID())
+        val other = ProjectId(UUID.randomUUID())
+        def granted(role: Role) = auth.authenticate(auth.grant(root, GrantRequest(project, Actor(role.toString, SessionId(UUID.randomUUID()), role), Now + 10000)).value, None)
+        def read(authority: Authority, target: ProjectId) = application.execute(authority, Command.Mode(ModeInput(target, ModeAction.Read())))
+        def replace(authority: Authority, expected: Long, mode: ProcessMode, selfReviewWithoutChecks: Boolean) =
+          application.execute(authority, Command.Mode(ModeInput(project, ModeAction.Replace(Revision(expected), mode, selfReviewWithoutChecks))))
+        val operator = Actor("operator", session, Role.Human)
+        for {
+          _ <- application.execute(root, Command.Initialize(ProjectConfig(project, "http://localhost", "Moded")))
+          _ <- application.execute(root, Command.Initialize(ProjectConfig(other, "http://localhost", "Other")))
+          initial <- read(root, project)
+          _ <- assertIO(initial == Result.Mode(ProjectMode(project, Revision(0), ProcessMode.Rigorous, false, None)))
+          deniedGovernor <- replace(granted(Role.Governor), 0, ProcessMode.CrossCutting, false)
+          deniedWorker <- replace(granted(Role.Worker), 0, ProcessMode.CrossCutting, false)
+          _ <- assertIO(List(deniedGovernor, deniedWorker) == List.fill(2)(Result.Failed(Fault.Denied("Process mode change requires human authority"))))
+          // Saving the value a project has without a stored document writes nothing.
+          default <- replace(root, 0, ProcessMode.Rigorous, false)
+          _ <- assertIO(default == initial)
+          written <- replace(root, 0, ProcessMode.CrossCutting, false)
+          _ <- assertIO(written match {
+            case Result.Mode(ProjectMode(`project`, Revision(1), ProcessMode.CrossCutting, false, Some(ModeChange(`operator`, at)))) => at > 0
+            case _ => false
+          })
+          readers <- ZIO.foreach(List(root, granted(Role.Governor), granted(Role.Planner), granted(Role.Worker), granted(Role.Reviewer)))(read(_, project))
+          _ <- assertIO(readers.forall(_ == written))
+          stale <- replace(root, 0, ProcessMode.Rigorous, false)
+          _ <- assertIO(stale == Result.Failed(Fault.Conflict("Process mode changed: expected revision 0, actual 1; reload before saving")))
+          same <- replace(root, 1, ProcessMode.CrossCutting, false)
+          _ <- assertIO(same == written)
+          // This release holds the YOLO mode in its model only: neither the mode nor its exemption from configured checks can be stored.
+          yolo <- replace(root, 1, ProcessMode.Yolo, false)
+          _ <- assertIO(yolo == Result.Failed(Fault.Invalid("The YOLO cross-cutting mode is not available in this release")))
+          optOut <- ZIO.foreach(List(ProcessMode.Rigorous, ProcessMode.CrossCutting))(replace(root, 1, _, true))
+          _ <- assertIO(optOut.forall(_ == Result.Failed(Fault.Invalid(
+            "A self-review without configured checks belongs to the YOLO cross-cutting mode. The YOLO cross-cutting mode is not available in this release"))))
+          unchanged <- read(root, project)
+          _ <- assertIO(unchanged == written)
+          back <- replace(root, 1, ProcessMode.Rigorous, false)
+          _ <- assertIO(back match { case Result.Mode(value) => value.revision == Revision(2) && value.mode == ProcessMode.Rigorous && value.change.nonEmpty; case _ => false })
+          // The mode and the standing requirements are separate documents of the project, each with its own revision.
+          requirements <- application.execute(root, Command.Requirements(RequirementsInput(project, RequirementsAction.Read())))
+          _ <- assertIO(requirements == Result.Requirements(ProjectRequirements(project, Revision(0), "", None)))
+          foreign <- read(granted(Role.Worker), other)
+          _ <- assertIO(foreign match { case Result.Failed(_: Fault.Denied) => true; case _ => false })
+          separate <- read(root, other)
+          _ <- assertIO(separate == Result.Mode(ProjectMode(other, Revision(0), ProcessMode.Rigorous, false, None)))
+        } yield ()
+    }
+
     "preserve mutation acknowledgements across service re-creation and reject mixed snapshot pages" in {
       (ledger: LedgerService[IO], repository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
         val auth = authorization(Now)
