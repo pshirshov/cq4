@@ -1,6 +1,6 @@
 import contextlib
 import json
-from fixture_runtime import guardian_binary
+from fixture_runtime import AGENTS_INIT, guardian_binary
 import os
 from pathlib import Path
 import subprocess
@@ -57,6 +57,7 @@ def main():
             return result.stdout
 
         run(["init", "--endpoint", endpoint])
+        run(AGENTS_INIT + [str(settings)])
         receipt = json.loads(run(["run", "codex", "--settings", str(settings), "--input", str(source)]))
         session = Path(receipt["directory"])
         children = sorted((session / "children").iterdir())

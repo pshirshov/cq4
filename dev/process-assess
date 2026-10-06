@@ -136,7 +136,11 @@ def main():
                 restored = usage()
                 write(evidence / "baseline-usage-summary.json", restored)
                 reconcile(restored_usage, restored["UsageSummary"]["report"])
-                def execute(directory, stage_result, request_text, workflow):
+                # `roles` names the harness of each role of the stage: the host starts the models the project's agent configuration assigns.
+                def execute(directory, stage_result, request_text, workflow, roles):
+                    agents = evaluation["role_agents"](settings["harnesses"], roles)
+                    (directory / "agents.yaml").write_text(agents)
+                    evaluation["save_agents"](lambda body: call(checks.environment, body), project, agents)
                     stage_checks = support["Checks"](directory, dict(checks.environment))
                     settings["stateRoot"] = str(directory / "sessions")
                     write(directory / "settings.json", settings)
@@ -198,14 +202,14 @@ def main():
                     member = {"id": task["item"]["id"], "revision": task["item"]["revision"]}
                     guidance = [{"id": value["item"]["id"], "revision": value["item"]["revision"]} for value in current["views"] if value != task]
                     request_text = ("Correct the genuine missing-empty-input-test finding by ordinary reopening of Task 1 only. Claim its current Done revision. "
-                        "Obtain a new Codex Planner proposal replacing it with Ready and correction context, preserving all acceptance criteria, title, references and history. "
+                        "Obtain a new Planner proposal replacing it with Ready and correction context, preserving all acceptance criteria, title, references and history. "
                         "Pass the rejected Audit as context, not previous: its full assignment differs and becomes stale after reopening. "
-                        "Obtain an independent Pi Reviewer Plan on that exact NEW proposal, then preview/apply only after its Accepted verdict, using the stored handle. "
-                        "Read current Task 1 after acknowledgement. Select and run a Pi Worker Implement on its NEW Ready revision with the Audit finding and planning evidence as artifacts. "
+                        "Obtain an independent Reviewer Plan on that exact NEW proposal, then preview/apply only after its Accepted verdict, using the stored handle. "
+                        "Read current Task 1 after acknowledgement. Select and run a Worker Implement on its NEW Ready revision with the Audit finding and planning evidence as artifacts. "
                         "Only main_test.go and wordfreq_test.go may change. Add a true zero-length-input case with successful exit and empty output streams. "
                         "The production behavior is already correct; preserve all production files, README, module and original answer bytes. "
                         "The empty-input-sensitivity check runs the tests on an isolated empty-input-only mutant and requires that they detect it; never integrate that mutant. "
-                        "Obtain an independent Codex Candidate Reviewer on the new Worker result and exact Ready revision. It must request BOTH fresh declared checks, "
+                        "Obtain an independent Candidate Reviewer on the new Worker result and exact Ready revision. It must request BOTH fresh declared checks, "
                         "empty-input-sensitivity and the unchanged consumer-oracle. Correct through handles if necessary. "
                         "Integrate only Task 1 through the normal host prepare/status/preview/apply flow against refs/heads/integration; only Recorded establishes its new Done revision. "
                         "Do not change Task 2, Handoff or other records. Do not add tasks or manually mark Done. Release all claims. "
@@ -214,10 +218,15 @@ def main():
                     settings["integrationTarget"] = "refs/heads/integration"
                     settings["evaluation"]["assessor"] = False
                     settings["checks"].append({"name": "empty-input-sensitivity", "command": [sys.executable, str(root / "dev/consumer-empty-check.py")], "executionMillis": "180000", "retainedOutputBytes": 262144, "attempts": 1, "revalidations": 0})
-                    values = execute(directory, stage_result, request_text, ["--workflow", "advance", "--roots", "T1", "--through", "integrate"])
+                    # One model is assigned to the reviewer role, whatever the mode: the reviewer of the Pi worker's candidate also reviews the plan.
+                    reopening_routes = [({"Planner": {}}, "Planner", "Codex"), ({"Reviewer": {"mode": "Plan"}}, "Reviewer", "Codex"),
+                                        ({"Worker": {"mode": "Implement"}}, "Worker", "Pi"), ({"Reviewer": {"mode": "Candidate"}}, "Reviewer", "Codex")]
+                    values = execute(directory, stage_result, request_text, ["--workflow", "advance", "--roots", "T1", "--through", "integrate"],
+                                     {"planner": "Codex", "worker": "Pi", "reviewer": "Codex"})
                     integrations = json.loads((directory / "integrations.json").read_text())
                     reopened = reopening["reopening_stage"](current, values, settings, integrations, prior["result"])
-                    predicates["correction_routes"](values, settings)
+                    write(directory / "routes.json", reopening_routes)
+                    predicates["correction_routes"](values, settings, reopening_routes)
                     transcript = values["session"] / "payload" / values["run"]["attempt"]["id"]["value"] / "stdout"
                     acknowledgement = predicates["correction_ack"]([json.loads(line) for line in transcript.read_text().splitlines() if line.strip()], reopened)
                     git_proof = reopening["test_only_candidate"](consumer, candidate, reopened["candidate"])
@@ -243,20 +252,23 @@ def main():
                     member = {"id": handoff["item"]["id"], "revision": handoff["item"]["revision"]}
                     guidance = [{"id": value["item"]["id"], "revision": value["item"]["revision"]} for value in current["views"] if value != handoff]
                     request_text = ("Correct only this Handoff through an ordinary new-session reviewed plan. Claim its exact current revision for at most 300000 ms. "
-                        "Ask a Codex Planner to propose one Replace of this Handoff; give it ALL guidance and result artifacts below, with previous:null. "
+                        "Ask a Planner to propose one Replace of this Handoff; give it ALL guidance and result artifacts below, with previous:null. "
                         "The independent Audit finding is contextual evidence assigned to other items; it is not this Planner's same-members previous or mutation authority. "
                         "Refresh the title/body/outcome/remaining work using the observed Recorded integration and Candidate Review validation. The task links already exist. "
                         "Retain original history, relationships, actual Go answer and historical planning deviations; do not claim human or M4 acceptance. "
-                        "Obtain an independent Pi Reviewer Plan of the NEW proposal using its exact result handle. Correct and review again if needed; "
+                        "Obtain an independent Reviewer Plan of the NEW proposal using its exact result handle. Correct and review again if needed; "
                         "only preview/apply a proposal with an Accepted exact Plan review. Apply by stored handle, never reconstruct drafts or edit directly. "
                         "Do not alter other records, add tasks, implement, execute checks or integrate. Release claims and return a compact outcome. "
                         "Do not compose child prompts or read/copy full result bodies.\n" + json.dumps({"members": [member], "guidance": guidance,
                         "artifacts": [prior["result"], *retained_context],
                         "integration": retained_integrations, "candidate": candidate}))
                     settings["evaluation"]["assessor"] = False
-                    values = execute(directory, stage_result, request_text, ["--workflow", "advance", "--roots", "HO" + member["id"]["number"], "--through", "plan"])
+                    values = execute(directory, stage_result, request_text, ["--workflow", "advance", "--roots", "HO" + member["id"]["number"], "--through", "plan"],
+                                     {"planner": "Codex", "reviewer": "Pi"})
                     correction = predicates["correction_stage"](current, values["snapshot"], values["statuses"], values["artifacts"], values["run"], values["governing_input"], prior["result"])
-                    predicates["correction_routes"](values, settings)
+                    correction_routes = [({"Planner": {}}, "Planner", "Codex"), ({"Reviewer": {"mode": "Plan"}}, "Reviewer", "Pi")]
+                    write(directory / "routes.json", correction_routes)
+                    predicates["correction_routes"](values, settings, correction_routes)
                     transcript = values["session"] / "payload" / values["run"]["attempt"]["id"]["value"] / "stdout"
                     acknowledgement = predicates["correction_ack"]([json.loads(line) for line in transcript.read_text().splitlines() if line.strip()], correction)
                     account(directory, values)
@@ -332,14 +344,14 @@ def main():
                     upper_bound = body_bytes + request_bound + len(',"request":'.encode())
                     write(directory / "input-bound.json", {"bodyBytes": body_bytes, "requestByteBound": request_bound, "upperBound": upper_bound, "hostInputByteBound": input_bound})
                     assert upper_bound <= input_bound, "Fully encoded child input may exceed host bound"
-                    request_text = (f"Obtain one {harness} Reviewer Audit on the exact current members and workspace below. Acquire their exact claim for at most 300000 ms. "
+                    request_text = ("Obtain one Reviewer Audit on the exact current members and workspace below. Acquire their exact claim for at most 300000 ms. "
                         "Include ALL guidance and artifacts explicitly, especially the runner-generated rubric/evidence bundle. Pass the exact previous handle when supplied. "
                         "The reviewer must inspect the rubric, actual process history, planning/application deviations and incorporated deliverable. "
                         "Audit cannot run checks: use original Candidate Review observations as contextual evidence. Do not mutate records, apply proposals, implement or integrate. "
                         "Do not compose a child prompt or read/copy full result bodies. Release the claim after this single review, including if ChangesRequested or Blocked, "
                         "and return a truthful bounded outcome. This is not human acceptance.\n" + json.dumps({"members": members, "guidance": guidance, "artifacts": context, "previous": previous}))
                     workflow = [] if previous is None else ["--workflow", "review", "--mode", "audit", "--result", previous["value"]]
-                    values = execute(directory, stage_result, request_text, workflow)
+                    values = execute(directory, stage_result, request_text, workflow, {"reviewer": harness})
                     session = values["session"]
                     ticket_path, = (session / "children").glob("*/ticket.json")
                     ticket = json.loads(ticket_path.read_text())

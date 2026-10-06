@@ -64,7 +64,7 @@ def traffic(events, harness):
             dispatch.append({"call": identity, "operation": next(iter(args)), "argumentBytes": encoded(args), "replyBytes": None if body is None else len(body.encode())})
             for operation in ["Select", "Start", "StartChoice"]:
                 if operation in args:
-                    identity = args[operation]["choice"] if operation == "StartChoice" else args[operation]["request"]["request"]
+                    identity = args[operation]["choice"] if operation == "StartChoice" else args[operation]["work" if operation == "Start" else "request"]["request"]
                     requests.append(json.dumps([operation, identity], sort_keys=True))
     return {"calls": dict(Counter(value["name"] for value in calls.values())), "observedToolErrors": errors,
             "missingReplies": sorted(calls.keys() - replies.keys()), "orphanReplies": sorted(replies.keys() - calls.keys()),

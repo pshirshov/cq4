@@ -1,7 +1,7 @@
 import contextlib
 import http.server
 import json
-from fixture_runtime import guardian_binary
+from fixture_runtime import AGENTS_INIT, guardian_binary
 import os
 from pathlib import Path
 import subprocess
@@ -123,7 +123,7 @@ def main():
         thread.start()
         try:
             endpoint = f"http://127.0.0.1:{proxy.server_port}"
-            for name, arguments in [("init", ["init", "--endpoint", endpoint]),
+            for name, arguments in [("init", ["init", "--endpoint", endpoint]), ("agents", AGENTS_INIT + [str(settings)]),
                                     ("run", ["run", "codex", "--settings", str(settings), "--input", str(source)])]:
                 result = subprocess.run(command + arguments, cwd=repository, env=environment, capture_output=True, text=True, timeout=110)
                 (root / (name + ".stdout")).write_text(result.stdout)

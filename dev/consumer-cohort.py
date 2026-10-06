@@ -49,14 +49,14 @@ def seed(call, project, language, specification):
     return {"goal": goal, "members": members, "drafts": drafts, "operations": operations}
 
 
-def request(seed, planner, worker, reviewer):
+def request(seed):
     return ("Advance the two existing related tasks under the supplied goal through independent candidate review. "
         "Keep their exact revisions for deferred independent assessment; do not create replacement tasks or edit their acceptance. "
         "Use the goal revision as guidance in every selection: it contains the complete consumer specification and review obligations. "
         "Ask dispatch Select for Worker Implement over the two task roots. The host may first offer a compatibility Planner; "
-        f"claim the complete offered group and start it on {planner}. "
+        "claim the complete offered group and start it. "
         "Forward its result handle as artifact context in a fresh selection; do not read the full assessment. "
-        f"Start a compatible shared Worker on {worker}; after host checks pass, select Candidate Reviewer using the exact Worker result handle and start it on {reviewer}. "
+        "Start a compatible shared Worker; after host checks pass, select Candidate Reviewer using the exact Worker result handle and start it. "
         "Use StartChoice, configured limits, compact Status and exact complete-group claims throughout. "
         "The reviewer must execute a fresh consumer-oracle check and independently accept each member. "
         "Continue correction through handles if needed; do not force a compatibility verdict or claim success after a blocker. "

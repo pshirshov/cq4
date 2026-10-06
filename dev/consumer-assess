@@ -112,25 +112,28 @@ def main():
                 route["model"] = "gpt-6-astra"
         write(evidence / "settings.json", settings)
         result["routes"] = settings["harnesses"]
-        request = ("Obtain an independent assessment of this existing consumer candidate with the configured Codex/Astra reviewer. "
+        request = ("Obtain an independent assessment of this existing consumer candidate with the configured reviewer. "
                    "Do not create or change tasks, launch workers, or integrate. Acquire the exact member set below for at most 300000 ms. "
-                   "Dispatch one Codex Reviewer with these member revisions and previous worker result handle; use compact status only, "
+                   "Dispatch one Reviewer with these member revisions and previous worker result handle; use compact status only, "
                    "without reading full result bodies or composing a child prompt. After the review finishes, release the claim and report its outcome. "
                    "This assessment is separate from final human acceptance.\n" + json.dumps({"members": chain["members"], "previous": chain["workerResult"]}))
         if cohort_mode:
             context = list({proof[field]["value"]: proof[field] for field in ["plannerResult", "workerResult", "reviewResult", "finalWorkerResult", "finalReviewResult"]}.values())
-            request = ("Obtain an independent whole-scope assessment on this repository's exact current base, using one Codex/Astra Reviewer in Audit mode. "
+            request = ("Obtain an independent whole-scope assessment on this repository's exact current base, using one Reviewer in Audit mode. "
                        "Acquire BOTH exact original task revisions below for at most 300000 ms; include the exact goal guidance and ALL supplied result artifacts. "
                        "Set previous:null: the final Worker may cover only a corrected subset. Audit must inspect both complete task scopes on the current workspace, "
                        "including tests and README, using final Candidate Review oracle observations as executable evidence. Earlier acceptance belongs to earlier candidates. "
                        "Audit is inspection-only and cannot execute named checks. Do not create or change tasks, launch workers, or integrate. "
                        "Use compact status and handles; do not read full results or compose child prompts. Release the whole claim after the single Audit finishes. "
                        "This is separate from human acceptance.\n" + json.dumps({"members": members, "guidance": [seed["goal"]], "artifacts": context, "previous": None}))
+        # The host starts the models the project's agent configuration assigns: the assessor is Codex/Astra, and a correction runs the
+        # producer's worker and reviewer.
+        roles = {"reviewer": "Codex"}
         if correcting:
-            worker, reviewer = evaluation["PROFILES"][baseline["worker"]][0], evaluation["PROFILES"][baseline["reviewer"]][0]
+            roles = {"worker": evaluation["PROFILES"][baseline["worker"]][0], "reviewer": evaluation["PROFILES"][baseline["reviewer"]][0]}
             request = (f"Correct this retained candidate after independent assessment requested changes. Acquire the exact member set below for at most 300000 ms. "
-                       f"Dispatch {worker} Worker Implement with the supplied previous REVIEW result handle: the host materializes its findings and candidate. "
-                       f"After configured host checks pass, dispatch {reviewer} Reviewer using the NEW worker result handle. "
+                       "Dispatch Worker Implement with the supplied previous REVIEW result handle: the host materializes its findings and candidate. "
+                       "After configured host checks pass, dispatch Reviewer using the NEW worker result handle. "
                        "Use compact status and handles only; do not read full results or compose child prompts. Do not create or edit tasks or integrate. "
                        "Release the claim after an accepted review, preserving member revisions for a separate independent assessment.\n" +
                        json.dumps({"members": chain["members"], "previous": previous}))
@@ -148,6 +151,9 @@ def main():
                 with (evidence / "cq-init.log").open("w") as log:
                     subprocess.run(command + ["init", "--endpoint", checks.environment["CQ_ORIGIN"], "--project-id", project["project"]["value"], "--name", project["name"]],
                                    cwd=consumer, env=environment, stdout=log, stderr=subprocess.STDOUT, timeout=30, check=True)
+                agents = evaluation["role_agents"](settings["harnesses"], roles)
+                (evidence / "agents.yaml").write_text(agents)
+                evaluation["save_agents"](lambda body: call(checks.environment, body), project["project"], agents)
                 def handoff(name):
                     value = call(checks.environment, {"Read": {"input": {"project": project["project"], "selection": {
                         "Claims": {"members": [member["id"] for member in members]}}}}})

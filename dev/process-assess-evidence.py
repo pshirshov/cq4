@@ -219,7 +219,8 @@ def correction_ack(events, correction):
     return acknowledgements[0]
 
 
-def correction_routes(values, settings):
+# `routes` lists the work, role and harness of every child the stage may run, as its agent configuration assigns them.
+def correction_routes(values, settings, routes):
     run, session = values["run"], values["session"]
     by_attempt = {value["attempt"]["id"]["value"]: value for value in values["attempts"]}
     assert len(by_attempt) == len(values["attempts"]) == len(values["statuses"]) + 1
@@ -230,8 +231,6 @@ def correction_routes(values, settings):
         child = ticket["attempt"]
         result = values["artifacts"][status["result"]["value"]]["body"]
         work = result["request"]["work"]
-        routes = [({"Planner": {}}, "Planner", "Codex"), ({"Reviewer": {"mode": "Plan"}}, "Reviewer", "Pi"),
-                  ({"Worker": {"mode": "Implement"}}, "Worker", "Pi"), ({"Reviewer": {"mode": "Candidate"}}, "Reviewer", "Codex")]
         role, harness = next((role, harness) for allowed, role, harness in routes if work == allowed)
         assert child["id"] == status["attempt"] and child["role"] == role and child["harness"] == result["request"]["harness"] == harness
         assert child["model"] == next(value["model"] for value in settings["harnesses"] if value["harness"] == harness)
@@ -374,7 +373,7 @@ def retained_assessment(directory, baseline, origin, depth):
             added = read(stage_dir / "integrations.json")
             reopened = reopening["reopening_stage"](current, values, settings, added, prior["result"])
             assert reopened == saved["reopening"]
-            correction_routes(values, settings)
+            correction_routes(values, settings, read(stage_dir / "routes.json"))
             transcript = values["session"] / "payload" / values["run"]["attempt"]["id"]["value"] / "stdout"
             consumed[str(transcript)] = hashlib.sha256(transcript.read_bytes()).hexdigest()
             assert correction_ack([json.loads(line) for line in transcript.read_text().splitlines() if line.strip()], reopened) == saved["acknowledgement"]
@@ -388,7 +387,7 @@ def retained_assessment(directory, baseline, origin, depth):
             assert prior is not None and correction is None and previous is None
             correction = correction_stage(current, values["snapshot"], values["statuses"], values["artifacts"], values["run"], values["governing_input"], prior["result"])
             assert saved["correction"] == correction
-            correction_routes(values, settings)
+            correction_routes(values, settings, read(stage_dir / "routes.json"))
             transcript = values["session"] / "payload" / values["run"]["attempt"]["id"]["value"] / "stdout"
             consumed[str(transcript)] = hashlib.sha256(transcript.read_bytes()).hexdigest()
             assert correction_ack([json.loads(line) for line in transcript.read_text().splitlines() if line.strip()], correction) == saved["acknowledgement"]
