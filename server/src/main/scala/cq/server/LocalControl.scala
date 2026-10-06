@@ -59,6 +59,7 @@ final class LocalControl(dispatch: DispatchController, cohorts: CohortController
         } *> dispatch.start(request).map(DispatchReply.Status.apply)
         case DispatchCommand.Status(attempt, wait) => dispatch.status(attempt, wait).map(DispatchReply.Status.apply)
         case DispatchCommand.Cancel(attempt) => dispatch.cancel(attempt).map(DispatchReply.Status.apply)
+        case _: DispatchCommand.Seats => ZIO.fail(new IllegalStateException("The Seats command is not implemented in this build"))
         case DispatchCommand.PrepareIntegration(id, reviewer) => integrations.prepare(IntegrationTicket(id, reviewer)).map(DispatchReply.Integration.apply)
         case DispatchCommand.Integrate(id) => integrations(id).map(DispatchReply.Integration.apply)
         case DispatchCommand.IntegrationStatus(id, wait) => integrations.status(id, wait).map(DispatchReply.Integration.apply)

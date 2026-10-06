@@ -103,6 +103,7 @@ object DriverPolicy {
   def awaitsUser(item: ItemSummary): Boolean = awaitsUser(item.id.ledger, item.status, item.archived)
 
   def outcome(value: ChildOutcome): Unit = {
+    if (value.end == ChildEnd.Abstained) throw new IllegalStateException("Recording an abstained attempt outcome is not implemented in this build")
     invalid(value.members.nonEmpty, "An attempt outcome names the items of its attempt")
     invalid(value.input.forall(input => input.nonEmpty && input.length <= MaxDetail), s"An attempt outcome's input fingerprint has 1–$MaxDetail characters")
     invalid(value.fault.forall(fault => fault.trim.nonEmpty && fault.length <= MaxDetail), s"An attempt outcome's fault has 1–$MaxDetail characters")

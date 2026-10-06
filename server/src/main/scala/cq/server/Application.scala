@@ -29,6 +29,7 @@ final class Application(ledger: LedgerService[IO], repository: LedgerRepository[
         case ModeAction.Replace(expected, mode, selfReviewWithoutChecks) =>
           ledger.replaceMode(scope, expected, ProjectSetting.Mode(mode, selfReviewWithoutChecks)).map(Result.Mode.apply)
       }}
+      case _: Command.Agents => ZIO.fail(new IllegalStateException("The Agents command is not implemented in this build"))
       case Command.Search(input) => scoped(authority, input.project) { scope =>
         ledger.search(scope, input.query, input.after, input.limit).flatMap { page =>
           if (input.snapshot.exists(_ != page.cursor)) ZIO.fail(DomainFailure(Fault.Resync("Snapshot changed; restart search")))

@@ -14,6 +14,7 @@ object ProjectSettingKind {
   def of(value: ProjectSetting): ProjectSettingKind = value match {
     case _: ProjectSetting.Requirements => ProjectSettingKind.Requirements
     case _: ProjectSetting.Mode => ProjectSettingKind.Mode
+    case _: ProjectSetting.Agents => throw new IllegalStateException("Storing an agent configuration is not implemented in this build")
   }
 }
 final case class StoredSetting(revision: Revision, value: ProjectSetting, actor: Actor, updatedAt: Long)

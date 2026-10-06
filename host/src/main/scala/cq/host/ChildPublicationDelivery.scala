@@ -73,6 +73,7 @@ final class ChildPublicationDelivery(directory: Path, ticket: DispatchTicket) {
       case None => base.copy(phase = outcome.state match {
         case AttemptState.Cancelled => DispatchPhase.Cancelled
         case AttemptState.Unknown => DispatchPhase.Unknown
+        case AttemptState.Abstained => throw new IllegalStateException("Publishing an abstained attempt is not implemented in this build")
         case _ => DispatchPhase.Failed
       }, next = if (outcome.state == AttemptState.Unknown) ChildNext.InspectEvidence else ChildNext.Retry)
     }
