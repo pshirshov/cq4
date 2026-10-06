@@ -176,8 +176,8 @@ final class Cli(context: CliContext, location: ProjectLocation, upload: SessionU
       val opts = options(rest, Set("--settings", "--save"))
       val settings = opts.get("--settings").orElse(environment.get("CQ_SETTINGS"))
         .getOrElse(throw new IllegalArgumentException("agents init requires --settings FILE or CQ_SETTINGS"))
-      val text = AgentsInit.text(directory.resolve(settings).normalize())
-      renderer.starter(text, opts.get("--save").map { layer =>
+      val (text, note) = AgentsInit.starting(directory.resolve(settings).normalize())
+      renderer.starter(text, note, opts.get("--save").map { layer =>
         val location = configDirectory
         val (config, actorSession) = locked(location)((configuration(location), session(location)))
         layer -> AgentsInit.save(request(config, actorSession, _), config.project, layer, text)

@@ -13,7 +13,11 @@ import java.nio.file.Path
 object AgentsInit {
   val Layers: Map[String, AgentsScope] = Map("installation" -> AgentsScope.Installation(), "project" -> AgentsScope.Project())
 
-  def text(settings: Path): String = AgentStarter.text(HostFiles.read(settings, SupervisorSettings_JsonCodec, LedgerPolicy.MaxConfigBytes).harnesses)
+  /** The starting configuration of a settings file and what the operator should know about it beyond what it assigns. */
+  def starting(settings: Path): (String, Option[String]) = {
+    val harnesses = HostFiles.read(settings, SupervisorSettings_JsonCodec, LedgerPolicy.MaxConfigBytes).harnesses
+    AgentStarter.text(harnesses) -> AgentStarter.note(harnesses)
+  }
 
   /** Saves `text` as the configuration of the layer when the layer holds none; a layer that holds this text already is left as it is. */
   def save(call: Command => Result, project: ProjectId, layer: String, text: String): AgentsDocument = {

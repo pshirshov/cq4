@@ -740,13 +740,26 @@ final class AgentConfigLocal extends AnyWordSpec {
         HarnessSetting(Harness.Pi, "/bin/pi", "glm 5,max", "z ai", "1", Nil, Set.empty))
       val text = cq.core.AgentStarter.text(settings)
       val parsed = cq.core.AgentConfigText.parse(text).fold(problems => fail(problems.toString), identity)
-      assert(text.contains("    reviewer: $harness:@standard\n") && text.contains("  codex:\n    tiers:\n      frontier: [gpt-6.1]\n      standard: [gpt-6.1]\n      fast: [gpt-6.1]\n"))
+      assert(text.contains("  codex:\n    tiers:\n      frontier: [gpt-6.1]\n      standard: [gpt-6.1]\n      fast: [gpt-6.1]\n"))
+      // A review goes to another harness of the settings, in their order, and to the governing one only when the others abstain.
+      assert(!text.contains("    reviewer: $harness") && cq.core.AgentStarter.note(settings).isEmpty &&
+        text.contains("    roles:\n      reviewer: { fallback: [codex:@standard, pi:@standard, claude:@standard] }\n") &&
+        text.contains("    roles:\n      reviewer: { fallback: [claude:@standard, pi:@standard, codex:@standard] }\n") &&
+        text.contains("    roles:\n      reviewer: { fallback: [claude:@standard, codex:@standard, pi:@standard] }\n"))
+      def own(setting: HarnessSetting): ModelRoute = ModelRoute(setting.harness, Option.when(setting.harness == Harness.Pi)("z ai"), setting.model, None)
       for (setting <- settings; role <- AgentRole.all) {
-        val expected = ModelRoute(setting.harness, Option.when(setting.harness == Harness.Pi)("z ai"), setting.model, None)
-        assert(cq.core.AgentResolution.resolve(parsed, cq.core.ParsedAgents.empty, setting.harness, role) == RoleResolution.Resolved(ResolvedRole(PanelMode.All, 1,
-          List(ResolvedSeat(SeatStrategy.Fallback, List(expected))), RoleOrigin(AgentLayer.Installation, RoleSource.DefaultRoles),
-          if (role == AgentRole.Reviewer) List(0) else Nil)), s"${setting.harness} $role")
+        val expected = if (role == AgentRole.Reviewer)
+          ResolvedRole(PanelMode.All, 1, List(ResolvedSeat(SeatStrategy.Fallback, settings.filterNot(_ == setting).map(own) :+ own(setting))),
+            RoleOrigin(AgentLayer.Installation, RoleSource.HarnessRoles), List(0))
+        else ResolvedRole(PanelMode.All, 1, List(ResolvedSeat(SeatStrategy.Fallback, List(own(setting)))), RoleOrigin(AgentLayer.Installation, RoleSource.DefaultRoles), Nil)
+        assert(cq.core.AgentResolution.resolve(parsed, cq.core.ParsedAgents.empty, setting.harness, role) == RoleResolution.Resolved(expected), s"${setting.harness} $role")
       }
+      // With one harness there is no other to review: every role runs it, and the operator is told that reviews are self-reviews.
+      val single = cq.core.AgentStarter.text(settings.take(1))
+      assert(single.contains("    reviewer: $harness:@standard\n") && !single.contains("fallback") &&
+        cq.core.AgentStarter.note(settings.take(1)).contains("The settings file holds one harness, so every review is a self-review by the governing harness until another harness is configured"))
+      assert(cq.core.AgentResolution.resolve(cq.core.AgentConfigText.parse(single).toOption.get, cq.core.ParsedAgents.empty, Harness.Claude, AgentRole.Reviewer) ==
+        RoleResolution.Resolved(ResolvedRole(PanelMode.All, 1, List(ResolvedSeat(SeatStrategy.Fallback, List(own(settings.head)))), RoleOrigin(AgentLayer.Installation, RoleSource.DefaultRoles), List(0))))
       // A harness the settings do not hold has no tier: its roles are unassigned in effect, and the refusal names the tier.
       assert(cq.core.AgentResolution.resolve(cq.core.AgentConfigText.parse(cq.core.AgentStarter.text(settings.take(1))).toOption.get, cq.core.ParsedAgents.empty, Harness.Pi, AgentRole.Worker) ==
         RoleResolution.Unresolved(Some(RoleOrigin(AgentLayer.Installation, RoleSource.DefaultRoles)), List(AgentProblem.TierUndefined(Harness.Pi, ModelTier.Standard, AgentRole.Worker))))

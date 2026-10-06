@@ -139,9 +139,13 @@ Examples: cq status --task T1
       case Some("agents") => """Usage: cq agents init [--settings FILE] [--save installation|project] [--json]
 
 Write an agent model configuration to start from. Every harness of the settings
-file runs its settings model in the frontier, standard and fast tiers, and every
-role (planner, worker, explorer, reviewer) runs the standard tier of the
-governing harness. Without --save the text is printed and nothing is changed.
+file runs its settings model in the frontier, standard and fast tiers. The
+planner, worker and explorer roles run the standard tier of the governing
+harness. The reviewer role of each harness goes to the other harnesses of the
+settings file first, in its order, and to the governing harness only when they
+abstain. With one harness in the settings file every review is a self-review,
+and the command says so. Without --save the text is printed and nothing is
+changed.
   --settings FILE   Harness settings; otherwise CQ_SETTINGS
   --save LAYER      Save the text as the configuration of the installation (the
                     server's default for every project; operator credentials)

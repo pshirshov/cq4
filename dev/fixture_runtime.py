@@ -19,7 +19,7 @@ def guardian_binary(directory: Path, provided: str | None) -> Path:
 
 # A session starts a child only on the models its project's agent configuration assigns to the child's role. The fixtures whose
 # children run the governing harness save, as the configuration of their project, what `cq agents init` derives from their settings
-# file: every role runs the settings model of the governing harness.
+# file of one harness: every role runs the settings model of the governing harness.
 AGENTS_INIT = ["agents", "init", "--save", "project", "--settings"]
 ROLES = ["planner", "worker", "explorer", "reviewer"]
 _RESERVED = "%?#,[]{} "
