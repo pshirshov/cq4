@@ -161,31 +161,70 @@ object WorkspaceCleanup {
 
   /**
    * Disposes of what a session whose host is gone left under `session`: an open workspace of an unsettled job is quarantined,
-   * a child's is kept until its result is published as Completed, every other settled job's is removed. `expired` ends the sweep early.
+   * a child's is kept until its result is published as Completed, every other settled job's is removed. A workspace the governing
+   * session opened for its own work has no job: it is removed once its result is published as Completed and quarantined otherwise,
+   * with what the session wrote in it, and reported. `expired` ends the sweep early.
    */
   def sweep(owner: Scope, session: Path, records: List[JobRecord], workspaces: WorkspaceService[IO], expired: () => Boolean): Task[SessionCleanup] =
     ZIO.attemptBlocking(childDirectories(session).map(child => child.getFileName.toString -> child).toMap).flatMap { children =>
-      ZIO.foldLeft(records.sortBy(_.workspace.attempt.value.toString))(SessionCleanup(owner.actor.session, Nil, Nil, Nil, 0, None)) { (report, record) =>
-        val attempt = record.workspace.attempt
-        def retain(reason: String): SessionCleanup = report.copy(retained = report.retained :+ RetainedWorkspace(attempt, reason))
-        def quarantined(reason: String): SessionCleanup = report.copy(quarantined = report.quarantined :+ RetainedWorkspace(attempt, reason))
-        if (expired()) ZIO.succeed(report)
-        else workspaces.get(owner, attempt).either.flatMap {
+      jobs(owner, records, children, workspaces, expired).flatMap(own(owner, _, children -- records.map(_.workspace.attempt.value.toString), workspaces, expired))
+    }
+
+  // Only the governing session's own work prepares a workspace without a job, so only the tickets no job names are read.
+  private def own(owner: Scope, swept: SessionCleanup, jobless: Map[String, Path], workspaces: WorkspaceService[IO], expired: () => Boolean): Task[SessionCleanup] =
+    ZIO.foldLeft(jobless.toList.sortBy(_._1))(swept) { case (report, (name, child)) =>
+      val attempt = AttemptId(UUID.fromString(name))
+      def retain(reason: String): SessionCleanup = report.copy(retained = report.retained :+ RetainedWorkspace(attempt, reason))
+      def quarantined(reason: String): SessionCleanup = report.copy(quarantined = report.quarantined :+ RetainedWorkspace(attempt, reason))
+      if (expired()) ZIO.succeed(report)
+      else ZIO.attemptBlocking(GoverningTickets.workspace(HostFiles.read(child.resolve("ticket.json"), DispatchTicket_JsonCodec, MaxRecordBytes))).either.flatMap {
+        case Left(error) => ZIO.succeed(retain(problem("Child ticket unreadable", error)))
+        case Right(false) => ZIO.succeed(report)
+        case Right(true) => workspaces.get(owner, attempt).either.flatMap {
           case Left(DomainFailure(_: Fault.Missing)) => ZIO.succeed(report)
           case Left(error) => ZIO.succeed(retain(problem("Workspace record unreadable", error)))
+          // Kept by this recovery or by the delivery it ran before the sweep; one the session's own host kept is its operator's already.
+          case Right(workspace) if workspace.admission == WorkspaceAdmission.Quarantined =>
+            ZIO.succeed(if (workspace.quarantineReason.contains(GoverningTickets.Abandoned)) quarantined(GoverningTickets.Abandoned) else report)
           case Right(workspace) if workspace.admission != WorkspaceAdmission.Open => ZIO.succeed(report)
-          case Right(_) if record.phase != JobPhase.Settled => workspaces.quarantine(owner, attempt, Unsettled).either.map {
-            case Right(_) => quarantined(Unsettled)
-            case Left(error) => retain(problem("Quarantine failed", error))
-          }
-          case Right(_) => ZIO.attemptBlocking(children.get(attempt.value.toString).forall(completed)).either.flatMap {
+          case Right(_) => ZIO.attemptBlocking(completed(child)).either.flatMap {
             case Left(error) => ZIO.succeed(retain(problem("Child receipt unreadable", error)))
-            case Right(false) => ZIO.succeed(retain(Unpublished))
+            // The candidate is a commit and its result is admitted: the host ended between the receipt and the removal.
             case Right(true) => workspaces.remove(owner, attempt).either.map {
               case Right(removed) if removed.admission == WorkspaceAdmission.Removed => report.copy(removed = report.removed :+ attempt)
               case Right(refused) => quarantined(refused.quarantineReason.getOrElse("Removal refused"))
               case Left(error) => retain(problem("Removal failed", error))
             }
+            case Right(false) => workspaces.quarantine(owner, attempt, GoverningTickets.Abandoned).either.map {
+              case Right(_) => quarantined(GoverningTickets.Abandoned)
+              case Left(error) => retain(problem("Quarantine failed", error))
+            }
+          }
+        }
+      }
+    }
+
+  private def jobs(owner: Scope, records: List[JobRecord], children: Map[String, Path], workspaces: WorkspaceService[IO], expired: () => Boolean): Task[SessionCleanup] =
+    ZIO.foldLeft(records.sortBy(_.workspace.attempt.value.toString))(SessionCleanup(owner.actor.session, Nil, Nil, Nil, 0, None)) { (report, record) =>
+      val attempt = record.workspace.attempt
+      def retain(reason: String): SessionCleanup = report.copy(retained = report.retained :+ RetainedWorkspace(attempt, reason))
+      def quarantined(reason: String): SessionCleanup = report.copy(quarantined = report.quarantined :+ RetainedWorkspace(attempt, reason))
+      if (expired()) ZIO.succeed(report)
+      else workspaces.get(owner, attempt).either.flatMap {
+        case Left(DomainFailure(_: Fault.Missing)) => ZIO.succeed(report)
+        case Left(error) => ZIO.succeed(retain(problem("Workspace record unreadable", error)))
+        case Right(workspace) if workspace.admission != WorkspaceAdmission.Open => ZIO.succeed(report)
+        case Right(_) if record.phase != JobPhase.Settled => workspaces.quarantine(owner, attempt, Unsettled).either.map {
+          case Right(_) => quarantined(Unsettled)
+          case Left(error) => retain(problem("Quarantine failed", error))
+        }
+        case Right(_) => ZIO.attemptBlocking(children.get(attempt.value.toString).forall(completed)).either.flatMap {
+          case Left(error) => ZIO.succeed(retain(problem("Child receipt unreadable", error)))
+          case Right(false) => ZIO.succeed(retain(Unpublished))
+          case Right(true) => workspaces.remove(owner, attempt).either.map {
+            case Right(removed) if removed.admission == WorkspaceAdmission.Removed => report.copy(removed = report.removed :+ attempt)
+            case Right(refused) => quarantined(refused.quarantineReason.getOrElse("Removal refused"))
+            case Left(error) => retain(problem("Removal failed", error))
           }
         }
       }

@@ -14,6 +14,7 @@ import java.time.{Clock, Duration}
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
 import logstage.IzLogger
+import scala.jdk.CollectionConverters.*
 import scala.util.Using
 import zio.{Task, ZIO}
 
@@ -112,6 +113,27 @@ final class WorkspaceCleanupLocal extends SpecZIO with AssertZIO {
       HostFiles.directory(at)
       HostFiles.immutable(at.resolve("ticket.json"), HostFiles.encode(DispatchTicket_JsonCodec, DispatchTicket(request, assignment, child, Some(profile), None)), 65536)
     }
+    /** Work of the governing session itself as its host recorded it: a ticket of the Governor role under the governing attempt and,
+      * once the attempt was published, its receipt. No job of the journal names it. */
+    def ownWork(attempt: AttemptId, work: DispatchWork, receipt: Option[DispatchPhase]): Unit = {
+      val limits = HostLimits(3000, 1000, 300, 2000, 65536)
+      val members = List(ItemRevision(ItemId(run.project.project, Ledger.Tasks, 1), Revision(1)))
+      val assignment = Assignment(AssignmentId(uuid), run.project.project, members.map(_.id).toSet, Attribution.Direct, None, None)
+      val own = Attempt(attempt, assignment.id, Some(run.attempt.id), run.attempt.session, Role.Governor, run.attempt.harness, run.attempt.provider, run.attempt.model,
+        DispatchController.OwnWorkCollector, 1000, ChildContracts.phase(work), None)
+      val request = DispatchRequest(RequestId(uuid), work, run.attempt.harness, members, Nil, Nil,
+        Option.when(work.isInstanceOf[DispatchWork.Reviewer])(ArtifactId(uuid)), Fence(ClaimId(uuid), 1), limits)
+      val at = directory.resolve("children").resolve(attempt.value.toString)
+      HostFiles.directory(at)
+      HostFiles.immutable(at.resolve("ticket.json"), HostFiles.encode(DispatchTicket_JsonCodec, DispatchTicket(request, assignment, own, None, None)), 65536)
+      receipt.foreach { phase =>
+        HostFiles.immutable(at.resolve("receipt.json"), HostFiles.encode(DispatchStatus_JsonCodec, DispatchStatus(request.request, attempt, phase, None, members.map(_.id),
+          DispatchProjection.EmptyCounts, ChildNext.Wait, None, None, None, true, true, None, None)), 16384)
+      }
+    }
+    /** The workspace of such an attempt, with a file the session wrote in it. */
+    def ownWorkspace(attempt: AttemptId, base: GitCommit): Task[Path] = service.prepare(owner, WorkspaceSpec(run.project.project, run.attempt.session, attempt, run.repository, base))
+      .flatMap(record => ZIO.attemptBlocking(Files.writeString(Path.of(record.directory).resolve("edited.txt"), "uncaptured edit\n")))
     def held[A](use: => Task[A]): Task[A] = ZIO.acquireReleaseWith(
       ZIO.attemptBlocking(FileJobRepository.open(directory.resolve("journal"), run.project.project, run.attempt.session)))(journal => ZIO.succeed(journal.close()))(_ => use)
   }
@@ -169,6 +191,65 @@ final class WorkspaceCleanupLocal extends SpecZIO with AssertZIO {
           assert(states.filter(_.admission == WorkspaceAdmission.Removed).forall(value => !Files.exists(Path.of(value.directory))) &&
             remaining.forall(value => Files.exists(Path.of(value.directory).resolve("tracked.txt"))))
           assert(listed == (local.source :: remaining.map(value => Path.of(value.directory))).map(_.toRealPath().toString).toSet)
+        }
+      } yield ()
+    }
+
+    "I30: keep the workspace a dead session's Governor had open with what it wrote there, remove one whose result is published, and report both" in { (local: LocalWorkspaceFixture) =>
+      val state = new State(local)
+      val (open, submitting, published, cancelled, review) = (AttemptId(uuid), AttemptId(uuid), AttemptId(uuid), AttemptId(uuid), AttemptId(uuid))
+      val Kept = "The governing session's workspace was not captured and its edits are retained here: Cancelled by the governing session"
+      for {
+        ended <- state.session(0)
+        _ <- ZIO.attemptBlocking {
+          ended.finish()
+          // The host died while the session edited, while a submission was captured, after a result was published, and after a cancellation.
+          ended.ownWork(open, DispatchWork.Worker(WorkerMode.Implement), None)
+          ended.ownWork(submitting, DispatchWork.Worker(WorkerMode.Implement), None)
+          ended.ownWork(published, DispatchWork.Worker(WorkerMode.Implement), Some(DispatchPhase.Completed))
+          ended.ownWork(cancelled, DispatchWork.Worker(WorkerMode.Implement), Some(DispatchPhase.Cancelled))
+          ended.ownWork(review, DispatchWork.Reviewer(ReviewerMode.Candidate), Some(DispatchPhase.Completed))
+        }
+        files <- ZIO.foreach(List(open, submitting, published, cancelled))(ended.ownWorkspace(_, local.base))
+        _ <- ended.service.quarantine(ended.owner, cancelled, Kept)
+        // Without a server no delivery is reconciled: the sweep alone disposes of the workspaces, and only of those.
+        swept <- WorkspaceCleanup.sweep(ended.owner, ended.directory, Nil, ended.service, () => false)
+        states <- ZIO.foreach(List(open, submitting, published, cancelled))(ended.service.get(ended.owner, _))
+        again <- WorkspaceCleanup.sweep(ended.owner, ended.directory, Nil, ended.service, () => false)
+        // What `cq job upload --session` lists for the operator: every workspace of the session's own work that still exists.
+        listed <- ZIO.scoped(ZIO.acquireRelease(ZIO.attemptBlocking(FileJobRepository.open(ended.directory.resolve("journal"), ended.run.project.project, ended.run.attempt.session)))(
+          journal => ZIO.succeed(journal.close())).flatMap(journal => new SessionDelivery(journal, ended.service, Clock.systemUTC()).ownWorkspaces(ended.directory, ended.owner)))
+        _ <- ZIO.attemptBlocking {
+          assert(listed.map(record => (record.spec.attempt, record.admission, record.quarantineReason)).toSet == Set(
+            (open, WorkspaceAdmission.Quarantined, Some(GoverningTickets.Abandoned)), (submitting, WorkspaceAdmission.Quarantined, Some(GoverningTickets.Abandoned)),
+            (cancelled, WorkspaceAdmission.Quarantined, Some(Kept))) && listed.map(_.spec.attempt.value.toString) == listed.map(_.spec.attempt.value.toString).sorted, listed.toString)
+          val kept = List(open, submitting).map(RetainedWorkspace(_, GoverningTickets.Abandoned)).sortBy(_.attempt.value.toString)
+          assert(swept == SessionCleanup(ended.owner.actor.session, List(published), kept, Nil, 0, None), swept.toString)
+          assert(states.map(_.admission) == List(WorkspaceAdmission.Quarantined, WorkspaceAdmission.Quarantined, WorkspaceAdmission.Removed, WorkspaceAdmission.Quarantined), states.toString)
+          assert(states.map(_.quarantineReason) == List(Some(GoverningTickets.Abandoned), Some(GoverningTickets.Abandoned), None, Some(Kept)), states.toString)
+          // What the session wrote is never removed with a workspace that was not captured.
+          assert(List(files(0), files(1), files(3)).forall(file => Files.readString(file) == "uncaptured edit\n") && !Files.exists(files(2)))
+          // A later examination reports again what this recovery kept, and not what the session's own host kept.
+          assert(again == SessionCleanup(ended.owner.actor.session, Nil, kept, Nil, 0, None), again.toString)
+        }
+        // The startup recovery of the next host reconciles the deliveries first, which keeps a workspace it finds open; the outcome of
+        // each unpublished attempt is delivered, and the session is settled.
+        left = AttemptId(uuid)
+        _ <- ZIO.attemptBlocking(ended.ownWork(left, DispatchWork.Worker(WorkerMode.Implement), None))
+        last <- ended.ownWorkspace(left, local.base)
+        receipt <- state.recover(WorkspaceCleanup.Default)
+        found <- ended.service.get(ended.owner, left)
+        _ <- ZIO.attemptBlocking {
+          val report = receipt.sessions.find(_.session == ended.run.attempt.session).getOrElse(fail(s"The ended session was not examined: $receipt"))
+          assert(report.quarantined.map(_.attempt).toSet == Set(open, submitting, left) && report.quarantined.forall(_.reason == GoverningTickets.Abandoned) &&
+            report.retained.isEmpty && report.problem.isEmpty && report.acknowledged > 0, report.toString)
+          assert(found.admission == WorkspaceAdmission.Quarantined && found.quarantineReason.contains(GoverningTickets.Abandoned) && Files.readString(last) == "uncaptured edit\n", found.toString)
+          assert(receipt.totals.quarantined == 3 && ended.recovery.exists(_.outcome == RecoveryOutcome.Recovered), s"$receipt ${ended.recovery}")
+          List(open, submitting, left).foreach { attempt =>
+            val queue = ended.directory.resolve("children").resolve(attempt.value.toString).resolve("delivery").resolve("final")
+            val text = Using.resource(Files.list(queue))(_.iterator().asScala.filter(_.getFileName.toString.endsWith(".json")).map(Files.readString(_)).mkString)
+            assert(text.contains(GoverningTickets.Interrupted) && text.contains("\"state\":\"Unknown\""), text)
+          }
         }
       } yield ()
     }
