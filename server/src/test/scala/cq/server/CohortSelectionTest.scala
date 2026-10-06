@@ -618,7 +618,7 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
         subject <- ZIO.attemptBlocking(new WorkflowAssembly(reads, fixture.scope.project, new WorkflowAssets, SessionOwnership.Attached).assemble(WorkflowRequest.Review(worker.id, ReviewerMode.Candidate)))
         _ <- assertIO(subject.subject.exists(_.members == fixture.members))
         _ <- ZIO.attemptBlocking(new WorkflowExecution(reads, fixture.scope.project, fixture.scope.actor.session, Some(WorkflowRequest.Review(worker.id, ReviewerMode.Candidate)))
-          .authorize(DispatchCommand.Start(dispatch.copy(work = review.work))))
+          .authorize(DispatchCommand.Start(UnitFixture.work(dispatch.copy(work = review.work)))))
         _ <- ledger.change(fixture.scope, ChangeRequest(RequestId(uuid), List(Mutation.Replace(producer.id, revised.item.revision,
           revised.item.draft.copy(body = "Changed requirements"))), List(fixture.fence), "Change the task content"))
         changed <- ledger.get(fixture.scope, producer.id)
@@ -1187,7 +1187,7 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
         subject <- ZIO.attemptBlocking(new WorkflowAssembly(reads, f.scope.project, new WorkflowAssets, SessionOwnership.Attached).assemble(WorkflowRequest.Review(stored.id, ReviewerMode.Plan)))
         _ <- assertIO(subject.subject.contains(WorkflowSubject(stored.id, DispatchWork.Planner(), choice.members, None)))
         _ <- ZIO.attemptBlocking(new WorkflowExecution(reads, f.scope.project, f.scope.actor.session, Some(WorkflowRequest.Review(stored.id, ReviewerMode.Plan)))
-          .authorize(DispatchCommand.Start(reviewDispatch)))
+          .authorize(DispatchCommand.Start(UnitFixture.work(reviewDispatch))))
         reviewAssignment <- usage.assign(collector, Assignment(AssignmentId(uuid), f.scope.project, claim.members, Attribution.Shared, Some(uuid), None))
         reviewAttempt <- usage.start(collector, Attempt(AttemptId(uuid), reviewAssignment.id, Some(parent.id), f.scope.actor.session, Role.Reviewer, Harness.Codex, "fixture", "fixture", "fixture", 1002, UsagePhase.Review, None))
         review = ChildResult(reviewAttempt.id, reviewDispatch, GitCommit("a" * 40), None,

@@ -13,7 +13,7 @@ import zio.{Task, Unsafe, ZIO}
 final case class AttachedChannels(input: InputStream, output: OutputStream, owner: ProcessOwner)
 
 final class AttachedProgram(config: SupervisorConfig, authority: SupervisorAuthority, gateway: AttachedGateway,
-  dispatch: DispatchController, integrations: IntegrationController, combinations: CombinationController, revalidations: RevalidationController,
+  dispatch: DispatchController, units: DispatchUnits, integrations: IntegrationController, combinations: CombinationController, revalidations: RevalidationController,
   watchdog: SupervisorWatchdog, channels: AttachedChannels, clock: Clock, local: LocalControlServer,
   codex: AttachedCodexUsage, cleanup: WorkspaceCleanup, release: SessionRelease, claims: SessionClaims, location: ProjectLocation, wait: WaitCommand, logger: IzLogger) {
   private val sessions = new AttachedSessions(location.directory)
@@ -34,7 +34,7 @@ final class AttachedProgram(config: SupervisorConfig, authority: SupervisorAutho
       HostDelivery.Usage(HostUsageInput(config.project.project, HostUsage.Start(config.run.attempt))))))
     queue.flush(authority.collector)
   } *> cleanup.recover.forkDaemon.unit
-  private def shutdown: Task[Unit] = integrations.shutdown.zipPar(combinations.shutdown).zipPar(revalidations.shutdown).zipPar(dispatch.shutdown).unit
+  private def shutdown: Task[Unit] = integrations.shutdown.zipPar(combinations.shutdown).zipPar(revalidations.shutdown).zipPar(units.shutdown).unit
   private def observe(operation: => Unit): Task[Unit] = ZIO.attemptBlocking(operation).catchAll { error => ZIO.attempt {
     codex.failure(error)
     val problem = codex.status

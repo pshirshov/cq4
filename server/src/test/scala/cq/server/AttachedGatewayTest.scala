@@ -219,6 +219,22 @@ final class AttachedGatewayLocal extends AnyWordSpec {
       } finally session.close()
     }
 
+    "I17: refuse a StartChoice or a Start that names a harness before anything is dispatched" in {
+      val session = new Session(AttachedGateway.FrameBytes, other => fail(s"Unexpected command $other"))
+      def refused(arguments: String): String =
+        fault(session.tool("dispatch", parser.parse(arguments).fold(throw _, identity))).hcursor.downField("Invalid").get[String]("message").fold(throw _, identity)
+      val fence = """"fence":{"claim":{"value":"00000000-0000-4000-8000-000000000002"},"generation":"1"}"""
+      try {
+        // The session names the choice and its claim; the host starts the models the configuration assigns.
+        assert(refused(s"""{"StartChoice":{"choice":{"value":"00000000-0000-4000-8000-000000000003"},"harness":"Codex",$fence}}""").contains("Noncanonical dispatch request"))
+        val work = s""""request":{"value":"00000000-0000-4000-8000-000000000003"},"work":{"Planner":{}},"members":[],"guidance":[],"artifacts":[],"previous":null,$fence,""" +
+          """"limits":{"startupMillis":"3000","heartbeatMillis":"1000","graceMillis":"300","killMillis":"2000","retainedOutputBytes":262144}"""
+        assert(refused(s"""{"Start":{"work":{"harness":"Codex",$work}}}""").contains("Noncanonical dispatch request"))
+        val former = refused(s"""{"Start":{"request":{"harness":"Codex",$work}}}""")
+        assert(former.contains("\"dispatch\"") && former.contains("do not match its input schema"), former)
+      } finally session.close()
+    }
+
     "tell the caller of a tool whose arguments cannot be decoded which tool it was and what its input schema expects" in {
       val session = new Session(AttachedGateway.FrameBytes, other => fail(s"Unexpected command $other"))
       def refused(tool: String, arguments: String): String =

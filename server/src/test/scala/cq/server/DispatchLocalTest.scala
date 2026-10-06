@@ -112,6 +112,28 @@ final class DispatchLocal extends AnyWordSpec {
       assert(conflict(active :+ request(5), request(6)).contains(DispatchController.MaxActiveChildren.toString))
       assert(DispatchController.MaxActiveChildren == 4)
     }
+    "I17: admit the attempts of one unit on the same members, count each against the bound, and refuse seats that do not fit together" in {
+      val project = ProjectId(UUID.randomUUID())
+      def request(id: RequestId, harness: Harness, numbers: Long*): DispatchRequest = DispatchRequest(id, DispatchWork.Reviewer(ReviewerMode.Candidate), harness,
+        numbers.toList.map(number => ItemRevision(ItemId(project, Ledger.Tasks, number), Revision(1))), Nil, Nil, Some(ArtifactId(UUID.randomUUID())),
+        Fence(ClaimId(UUID.randomUUID()), 1), HostLimits(3000, 1000, 300, 2000, 262144))
+      def conflict(operation: => Unit): String = intercept[cq.core.DomainFailure](operation).fault match {
+        case Fault.Conflict(message) => message
+        case other => fail(s"Expected a conflict, observed $other")
+      }
+      val unit = RequestId(UUID.randomUUID())
+      val seats = List(request(unit, Harness.Claude, 1, 2), request(unit, Harness.Codex, 1, 2), request(unit, Harness.Pi, 1, 2))
+      // A further seat or candidate of the same unit shares its members; another unit on one of them is refused as before.
+      DispatchController.admissible(seats, request(unit, Harness.Codex, 1, 2))
+      assert(conflict(DispatchController.admissible(seats, request(RequestId(UUID.randomUUID()), Harness.Codex, 2))).contains("An active child already covers T2"))
+      // The unit's own attempts fill the bound like any others.
+      assert(conflict(DispatchController.admissible(seats :+ request(unit, Harness.Codex, 1, 2), request(unit, Harness.Claude, 1, 2))).contains("at most 4 active children"))
+      assert(conflict(DispatchController.admissible(seats :+ request(RequestId(UUID.randomUUID()), Harness.Codex, 9), request(unit, Harness.Claude, 1, 2))).contains("at most 4 active children"))
+      // The seats a unit starts together fit together or not at all.
+      DispatchController.capacity(0, 4)
+      DispatchController.capacity(2, 2)
+      assert(conflict(DispatchController.capacity(2, 3)).contains("at most 4 active children") && conflict(DispatchController.capacity(0, 5)).contains("at most 4 active children"))
+    }
   }
   "Compact dispatch projection (Behavioral Active Blackbox Atomic)" should {
     "I33: reply to a selection with its choices as retained, without the limits the request stated" in {

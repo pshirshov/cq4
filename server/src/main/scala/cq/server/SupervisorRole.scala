@@ -190,7 +190,7 @@ object SupervisorProgram {
 }
 
 final class SupervisorProgram(config: SupervisorConfig, registry: HarnessRegistry, jobs: JobSupervisor, authority: SupervisorAuthority,
-  local: LocalControlServer, access: LocalAccess, dispatch: DispatchController, integrations: IntegrationController, combinations: CombinationController,
+  local: LocalControlServer, access: LocalAccess, units: DispatchUnits, integrations: IntegrationController, combinations: CombinationController,
   revalidations: RevalidationController, schemas: McpSchemas, output: HarnessOutput, workflows: WorkflowAssets, cleanup: WorkspaceCleanup, release: SessionRelease, watchdog: SupervisorWatchdog,
   clock: Clock, context: CliContext) {
   private val MaxInputBytes = 192 * 1024
@@ -218,8 +218,7 @@ final class SupervisorProgram(config: SupervisorConfig, registry: HarnessRegistr
         HostFiles.immutable(config.directory.resolve("run.json"), HostFiles.encode(SupervisorRun_JsonCodec, config.run), MaxRecordBytes)
         HostFiles.immutable(config.directory.resolve("settings.json"), HostFiles.encode(SupervisorSettings_JsonCodec, config.settings), MaxRecordBytes)
         val collector = authority.collector
-        val input = HostFiles.encode(GoverningInput_JsonCodec, GoverningInput(config.project,
-          config.settings.harnesses.map(value => HarnessRoute(value.harness, value.model, value.provider)), config.settings.checks.map(_.name), config.settings.limits, config.settings.integrationTarget,
+        val input = HostFiles.encode(GoverningInput_JsonCodec, GoverningInput(config.project, config.settings.checks.map(_.name), config.settings.limits, config.settings.integrationTarget,
           OperatorRequirements.governing(config.input, OperatorRequirements.standing(authority.governor.call, project)),
           config.workflow.map(new WorkflowAssembly(authority.governor, project, workflows, config.run.ownership).assemble)))
         require(input.getBytes(java.nio.charset.StandardCharsets.UTF_8).length <= MaxInputBytes, "Complete governing input exceeds its byte bound")
@@ -244,7 +243,7 @@ final class SupervisorProgram(config: SupervisorConfig, registry: HarnessRegistr
       _ <- cleanup.recover.forkDaemon
       _ <- jobs.start(config.owner, WorkspaceSpec(project, attempt.session, attempt.id, config.run.repository, config.run.base), command)
       record <- jobs.await(config.owner, attempt.id)
-      _ <- integrations.shutdown.zipPar(combinations.shutdown).zipPar(revalidations.shutdown).zipPar(dispatch.shutdown)
+      _ <- integrations.shutdown.zipPar(combinations.shutdown).zipPar(revalidations.shutdown).zipPar(units.shutdown)
       receipt <- ZIO.attemptBlocking {
         val stdout = NativeTranscript.retained(payload.resolve("stdout"), config.limits.retainedOutputBytes)
         val stderr = NativeTranscript.retained(payload.resolve("stderr"), config.limits.retainedOutputBytes)
@@ -339,6 +338,7 @@ object SupervisorPlugin extends PluginDef {
     make[CohortController]
     make[IntegrationController].fromResource[IntegrationController.Resource]
     make[CombinationController].fromResource[CombinationController.Resource]
+    make[DispatchUnits].fromResource[DispatchUnits.Resource]
     make[RevalidationController].fromResource[RevalidationController.Resource]
     make[LocalControl]
     make[WorkspaceCleanup.Bounds].fromValue(WorkspaceCleanup.Default)

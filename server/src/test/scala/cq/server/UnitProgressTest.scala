@@ -474,4 +474,141 @@ final class UnitProgressLocal extends AnyWordSpec {
       assert(ReviewAggregate(List(review(0, A, A), reversed.copy(members = reversed.members.reverse))).disputed == List(item(1)))
     }
   }
+
+  "The end of a unit, as its governing session and its drive read it (Behavioral Active Blackbox Atomic)" should {
+    val handle = attempt(0, 0)
+    val items = List(ItemId(project, Ledger.Tasks, 1), ItemId(project, Ledger.Tasks, 2))
+    def status(id: AttemptId, phase: DispatchPhase, next: ChildNext, blocker: Option[String], handle: Option[ArtifactId]): DispatchStatus =
+      DispatchStatus(RequestId(UUID.randomUUID()), id, phase, Some(JobPhase.Settled), items, DispatchProjection.EmptyCounts, next, blocker, handle, None, true, true, None, None)
+    def reviewed(seat: Int, candidate: Int, verdicts: ReviewVerdict*): EndedAttempt = {
+      val members = verdicts.toList.zip(items).map((verdict, item) => ReviewMember(item, verdict, if (verdict == ReviewVerdict.Accepted) Nil else List(s"finding of seat $seat")))
+      val next = if (verdicts.contains(ReviewVerdict.ChangesRequested)) ChildNext.Revise else ChildNext.ConsiderAcceptance
+      EndedAttempt(attempt(seat, candidate), status(attempt(seat, candidate), DispatchPhase.Completed, next, members.flatMap(_.findings).headOption, Some(result(seat))).copy(
+        counts = DispatchProjection.EmptyCounts.copy(accepted = verdicts.count(_ == ReviewVerdict.Accepted), changesRequested = verdicts.count(_ == ReviewVerdict.ChangesRequested))), false, Some(members))
+    }
+    def worked(seat: Int, candidate: Int): EndedAttempt =
+      EndedAttempt(attempt(seat, candidate), status(attempt(seat, candidate), DispatchPhase.Completed, ChildNext.Review, None, Some(result(seat))), false, None)
+    def failed(seat: Int, candidate: Int, fault: String): EndedAttempt =
+      EndedAttempt(attempt(seat, candidate), status(attempt(seat, candidate), DispatchPhase.Failed, ChildNext.Retry, Some(fault), None), false, None)
+    def abstained(seat: Int, candidate: Int): EndedAttempt = EndedAttempt(attempt(seat, candidate),
+      status(attempt(seat, candidate), DispatchPhase.Abstained, ChildNext.ResolveBlocker, Some(s"Abstained (Quota): detail $seat.$candidate"), None), false, None)
+    def cancelled(seat: Int, candidate: Int): EndedAttempt = EndedAttempt(attempt(seat, candidate),
+      status(attempt(seat, candidate), DispatchPhase.Cancelled, ChildNext.Retry, Some(DispatchUnits.Cancelled), None), true, None)
+    def seat(value: EndedAttempt, index: Int): DeliveredSeat = DeliveredSeat(index, value.attempt, value.status.result.get, value.status.next)
+    def fault(value: EndedAttempt, index: Int): FailedSeat = FailedSeat(index, value.attempt, value.status.blocker.get)
+    def tried(value: EndedAttempt, seat: Int, candidate: Int): SeatAttempt = SeatAttempt(value.attempt, route(seat, candidate), Some(AbstentionReason.Quota), Some(s"detail $seat.$candidate"))
+    def unit(outcome: UnitOutcome, ended: EndedAttempt*): DispatchStatus = DispatchUnits.status(request, handle, outcome, ended.toList, None)
+    val A = ReviewVerdict.Accepted
+    val C = ReviewVerdict.ChangesRequested
+
+    "be the delivering attempt's status under the unit's handle, whichever candidate delivered" in {
+      // The first candidate abstained and the second delivered: the handle is the first attempt, the result the second's.
+      val (first, second) = (abstained(0, 0), worked(0, 1))
+      val decided = unit(UnitOutcome.Decided(List(seat(second, 0)), Nil), first, second)
+      assert(decided == second.status.copy(request = request, attempt = handle) && decided.attempt == first.attempt && decided.result.contains(result(0)))
+      val outcomes = DispatchUnits.outcomes(UnitOutcome.Decided(List(seat(second, 0)), Nil), ChildOutcome(handle, items, ChildEnd.Admitted, Some("input"), None), List(first, second))
+      assert(outcomes == Map(
+        first.attempt -> ChildOutcome(first.attempt, items, ChildEnd.Abstained, Some("input"), Some("Abstained (Quota): detail 0.0")),
+        second.attempt -> ChildOutcome(second.attempt, items, ChildEnd.Admitted, Some("input"), None)))
+      outcomes.values.foreach(cq.core.DriverPolicy.outcome)
+    }
+    "stand for agreeing reviews with the first that delivered, and for disagreeing ones with the dissenting review and next Arbitrate" in {
+      val (accepting, also, dissenting) = (reviewed(0, 0, A, A), reviewed(1, 0, A, A), reviewed(2, 0, A, C))
+      val unanimous = unit(UnitOutcome.Decided(List(seat(also, 1), seat(accepting, 0)), Nil), accepting, also)
+      assert(unanimous == also.status.copy(request = request, attempt = handle) && unanimous.next == ChildNext.ConsiderAcceptance && unanimous.result.contains(result(1)))
+      val mixed = unit(UnitOutcome.Decided(List(seat(accepting, 0), seat(also, 1), seat(dissenting, 2)), Nil), accepting, also, dissenting)
+      assert(mixed.attempt == handle && mixed.phase == DispatchPhase.Completed && mixed.next == ChildNext.Arbitrate && mixed.result.contains(result(2)))
+      assert(mixed.blocker.contains("Reviewers disagree on T2: read Seats") && (mixed.counts.accepted, mixed.counts.changesRequested) == (1, 1))
+      // One delivered review of a panel decides it as a single seat does.
+      assert(unit(UnitOutcome.Decided(List(seat(dissenting, 2)), Nil), dissenting) == dissenting.status.copy(request = request, attempt = handle))
+      // Only reviews are delivered by several seats.
+      assert(intercept[IllegalStateException](unit(UnitOutcome.Decided(List(seat(worked(0, 0), 0), seat(worked(1, 0), 1)), Nil), worked(0, 0), worked(1, 0)))
+        .getMessage.contains("Only reviews are delivered by several seats"))
+    }
+    "name a failed seat that the others made up for, and settle its attempt as failed without offering the input again (Q69)" in {
+      val (broken, accepting) = (failed(0, 0, "Child report does not match its assigned role"), reviewed(1, 0, A, A))
+      val outcome = UnitOutcome.Decided(List(seat(accepting, 1)), List(fault(broken, 0)))
+      val decided = unit(outcome, broken, accepting)
+      assert(decided.next == ChildNext.ConsiderAcceptance && decided.result.contains(result(1)) && decided.phase == DispatchPhase.Completed)
+      assert(decided.blocker.contains("seat 0 failed and the other seats decided: Child report does not match its assigned role"))
+      val mixed = unit(UnitOutcome.Decided(List(seat(accepting, 1), seat(reviewed(2, 0, C, A), 2)), List(fault(broken, 0))), broken, accepting, reviewed(2, 0, C, A))
+      assert(mixed.blocker.contains("Reviewers disagree on T1: read Seats; seat 0 failed and the other seats decided: Child report does not match its assigned role"))
+      val outcomes = DispatchUnits.outcomes(outcome, ChildOutcome(handle, items, ChildEnd.Admitted, Some("input"), None), List(broken, accepting))
+      assert(outcomes(broken.attempt) == ChildOutcome(broken.attempt, items, ChildEnd.Failed, Some("input"), Some("Child report does not match its assigned role")))
+      assert(outcomes(accepting.attempt).end == ChildEnd.Admitted)
+      // A failure that is not offered again leaves the input no drive retries, and no repetition ends one.
+      outcomes.values.foreach(cq.core.DriverPolicy.outcome)
+    }
+    "be the first failed seat's status when too few delivered, with the retry decided once for the unit" in {
+      val (first, second, accepting) = (failed(1, 0, "first fault"), failed(0, 0, "second fault"), reviewed(2, 0, A, A))
+      val outcome = UnitOutcome.Failed(List(fault(first, 1), fault(second, 0)), List(seat(accepting, 2)))
+      val decided = unit(outcome, second, first, accepting)
+      assert(decided == first.status.copy(request = request, attempt = handle) && decided.phase == DispatchPhase.Failed && decided.next == ChildNext.Retry && decided.blocker.contains("first fault"))
+      def ends(reply: ChildEnd): Map[AttemptId, ChildEnd] =
+        DispatchUnits.outcomes(outcome, ChildOutcome(handle, items, reply, Some("input"), Some("first fault")), List(second, first, accepting)).view.mapValues(_.end).toMap
+      // Offered again: every failed seat is retryable, so the drive reads the input as retryable.
+      assert(ends(ChildEnd.Retryable) == Map(first.attempt -> ChildEnd.Retryable, second.attempt -> ChildEnd.Retryable, accepting.attempt -> ChildEnd.Admitted))
+      // The same fault as the unit before it: only the seat whose fault was compared is the repetition.
+      assert(ends(ChildEnd.Repeated) == Map(first.attempt -> ChildEnd.Repeated, second.attempt -> ChildEnd.Failed, accepting.attempt -> ChildEnd.Admitted))
+      // The fault could not be published: the input stays deferred.
+      assert(ends(ChildEnd.Failed) == Map(first.attempt -> ChildEnd.Failed, second.attempt -> ChildEnd.Failed, accepting.attempt -> ChildEnd.Admitted))
+      val retried = DispatchUnits.outcomes(outcome, ChildOutcome(handle, items, ChildEnd.Retryable, Some("input"), Some("first fault")), List(second, first, accepting))
+      assert(retried(second.attempt).fault.contains("second fault") && retried(first.attempt).attempt == first.attempt)
+      retried.values.foreach(cq.core.DriverPolicy.outcome)
+    }
+    "be Abstained with every candidate and reason when no model could run, and give each abstention that text" in {
+      val (first, second) = (abstained(0, 0), abstained(0, 1))
+      val candidates = List(tried(first, 0, 0), tried(second, 0, 1))
+      val outcome = UnitOutcome.Abstained(candidates, Nil)
+      val decided = unit(outcome, first, second)
+      val text = "No configured model could run this work: pi:provider0/model0 Quota (detail 0.0); pi:provider0/model1 Quota (detail 0.1)"
+      assert(decided.attempt == handle && decided.phase == DispatchPhase.Abstained && decided.next == ChildNext.ResolveBlocker && decided.result.isEmpty && decided.blocker.contains(text))
+      // No fault is published for it, and nothing advises a retry.
+      assert(cq.host.CohortFailure.fault(decided).isEmpty)
+      val reply = cq.host.CohortFailure.outcome(decided, Some("input"), None)
+      val outcomes = DispatchUnits.outcomes(outcome, reply, List(first, second))
+      assert(outcomes == Map(first.attempt -> ChildOutcome(first.attempt, items, ChildEnd.Abstained, Some("input"), Some(text)),
+        second.attempt -> ChildOutcome(second.attempt, items, ChildEnd.Abstained, Some("input"), Some(text))))
+      outcomes.values.foreach(cq.core.DriverPolicy.outcome)
+    }
+    "be Cancelled as the cancelled attempt ended, and a cancellation of its own when the unit was stopped between two candidates" in {
+      val (stopped, delivered) = (cancelled(1, 0), reviewed(0, 0, A, A))
+      assert(unit(UnitOutcome.Cancelled, delivered, stopped) == stopped.status.copy(request = request, attempt = handle))
+      // The first candidate abstained; the unit was cancelled before the second had an attempt.
+      val between = unit(UnitOutcome.Cancelled, abstained(0, 0))
+      assert(between.phase == DispatchPhase.Cancelled && between.blocker.contains(DispatchUnits.Cancelled) && between.result.isEmpty && between.attempt == handle)
+      // The host could not start the next candidate: the unit says why.
+      val refused = DispatchUnits.status(request, handle, UnitOutcome.Cancelled, List(abstained(0, 0)), Some("The host could not start the next model of this work: Dispatch admission is closed"))
+      assert(refused.phase == DispatchPhase.Cancelled && refused.blocker.contains("The host could not start the next model of this work: Dispatch admission is closed"))
+      val outcomes = DispatchUnits.outcomes(UnitOutcome.Cancelled, cq.host.CohortFailure.outcome(stopped.status, Some("input"), None), List(delivered, stopped))
+      assert(outcomes.view.mapValues(_.end).toMap == Map(delivered.attempt -> ChildEnd.Admitted, stopped.attempt -> ChildEnd.Cancelled))
+    }
+    "read an attempt's end as the event of its candidate" in {
+      val at = SeatCandidate(1, 2)
+      assert(DispatchUnits.event(at, worked(1, 2).status, None) == UnitEvent.Delivered(at, result(1), ChildNext.Review))
+      assert(DispatchUnits.event(at, abstained(1, 2).status, Some(cq.host.Abstention(AbstentionReason.RateLimit, "slow down"))) == UnitEvent.Abstained(at, AbstentionReason.RateLimit, "slow down"))
+      assert(DispatchUnits.event(at, cancelled(1, 2).status, None) == UnitEvent.Cancelled(at))
+      assert(DispatchUnits.event(at, failed(1, 2, "fault").status, None) == UnitEvent.Failed(at, "fault"))
+      // An attempt whose outcome is not known, or whose result awaits delivery, did not deliver: it is a failure of its seat, never an abstention.
+      for (phase <- List(DispatchPhase.Unknown, DispatchPhase.PublicationPending))
+        assert(DispatchUnits.event(at, failed(1, 2, "fault").status.copy(phase = phase), None) == UnitEvent.Failed(at, "fault"))
+      assert(DispatchUnits.event(at, failed(1, 2, "fault").status.copy(blocker = None), None) == UnitEvent.Failed(at, cq.host.CohortFailure.Unstated))
+      assert(intercept[IllegalStateException](DispatchUnits.event(at, abstained(1, 2).status, None)).getMessage.contains("states no abstention"))
+      assert(intercept[IllegalArgumentException](DispatchUnits.event(at, failed(1, 2, "fault").status.copy(phase = DispatchPhase.Running), None)).getMessage.contains("ended in phase Running"))
+    }
+    "say which role has no model and what to set, in the words of the configuration" in {
+      assert(DispatchUnits.unresolved(Harness.Codex, AgentRole.Reviewer, None, List(AgentProblem.RoleUnassigned(Harness.Codex, AgentRole.Reviewer))) ==
+        "no model is assigned to the reviewer role for governing harness codex: set defaults.roles.reviewer or harnesses.codex.roles.reviewer in the agent configuration " +
+          "(the server's default or this project's); cq agents init --settings FILE writes a starting configuration from a settings file")
+      assert(DispatchUnits.unresolved(Harness.Pi, AgentRole.Worker, Some(RoleOrigin(AgentLayer.Installation, RoleSource.DefaultRoles)),
+        List(AgentProblem.TierUndefined(Harness.Claude, ModelTier.Fast, AgentRole.Worker))) ==
+        "the worker role for governing harness pi (defaults.roles.worker of the server's default agent configuration) refers to the fast tier of claude, which no layer defines: " +
+          "set harnesses.claude.tiers.fast in the agent configuration")
+      assert(DispatchUnits.unresolved(Harness.Pi, AgentRole.Planner, Some(RoleOrigin(AgentLayer.Project, RoleSource.HarnessRoles)),
+        List(AgentProblem.ProviderRequired(TextPosition(3, 14), Harness.Pi))) ==
+        "the planner role for governing harness pi cannot run as harnesses.pi.roles.planner of this project's agent configuration assigns it: 3:14: a pi model is written provider/model")
+      assert(DispatchUnits.role(DispatchWork.Worker(WorkerMode.Probe)) == AgentRole.Worker && DispatchUnits.role(DispatchWork.Reviewer(ReviewerMode.Audit)) == AgentRole.Reviewer &&
+        DispatchUnits.role(DispatchWork.Planner()) == AgentRole.Planner && DispatchUnits.role(DispatchWork.Explorer(ExplorerMode.Research)) == AgentRole.Explorer)
+    }
+  }
 }

@@ -103,6 +103,32 @@ final class WorkflowLocal extends AnyWordSpec {
     }
   }
 
+  "The models of a child (Behavioral Active Blackbox Atomic)" should {
+    "I17: take the choice and the fence in StartChoice, and the work without a harness in Start" in {
+      val context = baboon.runtime.shared.BaboonCodecContext.Default
+      def decoded(text: String): Either[Throwable, DispatchCommand] = {
+        val json = io.circe.parser.parse(text).fold(throw _, identity)
+        DispatchCommand_JsonCodec.decode(context, json).filterOrElse(command => cq.core.JsonRoundtrip.lossless(json, DispatchCommand_JsonCodec.encode(context, command)),
+          new IllegalArgumentException("undeclared or noncanonical fields"))
+      }
+      val (choice, claim) = (UUID.randomUUID(), UUID.randomUUID())
+      val fence = s""""fence":{"claim":{"value":"$claim"},"generation":"1"}"""
+      assert(decoded(s"""{"StartChoice":{"choice":{"value":"$choice"},$fence}}""") ==
+        Right(DispatchCommand.StartChoice(RequestId(choice), Fence(ClaimId(claim), 1))))
+      // The session no longer names a harness: a command that does is not this contract's.
+      assert(decoded(s"""{"StartChoice":{"choice":{"value":"$choice"},"harness":"Codex",$fence}}""").isLeft)
+      val limits = """"limits":{"startupMillis":"3000","heartbeatMillis":"1000","graceMillis":"300","killMillis":"2000","retainedOutputBytes":262144}"""
+      val work = s""""request":{"value":"$choice"},"work":{"Planner":{}},"members":[],"guidance":[],"artifacts":[],"previous":null,$fence,$limits"""
+      assert(decoded(s"""{"Start":{"work":{$work}}}""").exists(_.isInstanceOf[DispatchCommand.Start]))
+      assert(decoded(s"""{"Start":{"work":{"harness":"Codex",$work}}}""").isLeft && decoded(s"""{"Start":{"request":{"harness":"Codex",$work}}}""").isLeft)
+      def schemas(root: io.circe.Json, name: String): io.circe.Json = root.hcursor.downField("$defs").downField(name).focus.getOrElse(root)
+      val schema = schemas(new McpSchemas().schema("DispatchCommand"), "cq_api_DispatchCommand_StartChoice")
+      assert(schema.hcursor.downField("properties").keys.map(_.toSet).contains(Set("choice", "fence")), schema.noSpaces)
+      val contexts = List("cq_api_AttachedContext", "cq_api_GoverningInput").map(name => name -> new McpSchemas().schema(name.stripPrefix("cq_api_")))
+      contexts.foreach((name, value) => assert(!schemas(value, name).hcursor.downField("properties").keys.exists(_.toSet("routes")) && !value.noSpaces.contains("HarnessRoute"), name))
+    }
+  }
+
   "Operator decisions in the governing workflows (Behavioral Active Blackbox Atomic)" should {
     "tell the session to record a Question before it stops, not to ask for a go-ahead it has, and to store a chat answer (D147)" in {
       val assets = new WorkflowAssets
