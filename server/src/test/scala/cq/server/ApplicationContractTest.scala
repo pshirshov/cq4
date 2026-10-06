@@ -392,6 +392,116 @@ abstract class ApplicationContractTest extends SpecZIO with AssertZIO {
         } yield ()
     }
 
+    "I17: keep the agent configuration of the installation and of a project under revision comparison, resolved for every role with access and writable by the operator only" in {
+      (ledger: LedgerService[IO], repository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
+        val auth = authorization(Now)
+        val session = SessionId(UUID.randomUUID())
+        val root = auth.authenticate(Token, Some(session.value.toString))
+        // The credential an operator's browser holds: the session cookie that a login with the operator token returns.
+        val browserSession = SessionId(UUID.randomUUID())
+        val browser = auth.authenticate(auth.login(Token, browserSession.value.toString).value, None)
+        val application = new Application(ledger, repository, usage, artifacts, admissions, integrations, proposals, auth, new CatalogRead(new McpSchemas()))
+        val project = ProjectId(UUID.randomUUID())
+        val other = ProjectId(UUID.randomUUID())
+        def granted(role: Role) = auth.authenticate(auth.grant(root, GrantRequest(project, Actor(role.toString, SessionId(UUID.randomUUID()), role), Now + 10000)).value, None)
+        def call(authority: Authority, target: ProjectId, action: AgentsAction) = application.execute(authority, Command.Agents(AgentsInput(target, action)))
+        def read(authority: Authority, target: ProjectId) = call(authority, target, AgentsAction.Read())
+        def view(result: Result): AgentsView = result match { case Result.Agents(value) => value; case found => fail(s"Expected an agent configuration, got $found") }
+        def replace(authority: Authority, scope: AgentsScope, expected: Revision, text: String) = call(authority, project, AgentsAction.Replace(scope, expected, text))
+        def resolve(authority: Authority, harness: Harness, role: AgentRole) = call(authority, project, AgentsAction.Resolve(harness, role))
+        def parsed(text: String): ParsedAgents = AgentConfigText.parse(text).fold(problems => fail(problems.toString), identity)
+        val Installation = AgentsScope.Installation()
+        val Project = AgentsScope.Project()
+        // Each test run writes another server default: the installation's document is shared by every project of a database.
+        val defaults = "defaults:\n  roles:\n    planner: $harness:@frontier\n    worker: codex:gpt-6.1-sol\nharnesses:\n  claude: { tiers: { frontier: [opus] } }\n# " + UUID.randomUUID() + "\n"
+        val overrides = "defaults: { roles: { worker: claude:sonnet } } # λ😀\n"
+        val panel = "defaults:\n  roles:\n    worker: { all: [claude:sonnet], min: 1 }\n"
+        val bound = LedgerPolicy.MaxConfigBytes
+        val writers = List(Installation -> "Operator authority required", Project -> "Agent configuration change requires human authority")
+        def fallback(model: String): List[ResolvedSeat] = List(ResolvedSeat(SeatStrategy.Fallback, List(ModelRoute(Harness.Claude, None, model, None))))
+        for {
+          _ <- application.execute(root, Command.Initialize(ProjectConfig(project, "http://localhost", "Agents")))
+          _ <- application.execute(root, Command.Initialize(ProjectConfig(other, "http://localhost", "Other")))
+          initial <- read(root, project).map(view)
+          base = initial.installation.revision
+          _ <- assertIO(initial.project == AgentsDocument(Revision(0), "", None, Nil) && initial.installation.problems.isEmpty &&
+            (base != Revision(0) || initial.installation == AgentsDocument(Revision(0), "", None, Nil)) &&
+            initial.assignments.map(value => value.harness -> value.role) == (for { harness <- Harness.all; role <- AgentRole.all } yield harness -> role))
+          denied <- ZIO.foreach(for { role <- List(Role.Governor, Role.Worker); (scope, message) <- writers } yield (granted(role), scope, message)) { (authority, scope, message) =>
+            for {
+              written <- replace(authority, scope, if (scope == Installation) base else Revision(0), overrides)
+              previewed <- call(authority, project, AgentsAction.Preview(scope, overrides))
+            } yield written == Result.Failed(Fault.Denied(message)) && previewed == Result.Failed(Fault.Denied(message))
+          }
+          _ <- assertIO(denied.forall(identity))
+          afterDenied <- read(root, project).map(view)
+          _ <- assertIO(afterDenied == initial)
+          installed <- replace(browser, Installation, base, defaults).map(view)
+          _ <- assertIO(installed.installation.revision == Revision(base.value + 1) && installed.installation.text == defaults && installed.installation.problems.isEmpty &&
+            installed.installation.change.exists(change => change.actor == Actor("operator", browserSession, Role.Human) && change.at > 0) && installed.project == initial.project)
+          written <- replace(root, Project, Revision(0), overrides).map(view)
+          _ <- assertIO(written.installation == installed.installation &&
+            written.project.revision == Revision(1) && written.project.text == overrides && written.project.problems.isEmpty &&
+            written.project.change.exists(_.actor == Actor("operator", session, Role.Human)) &&
+            written.assignments == AgentResolution.assignments(parsed(defaults), parsed(overrides)))
+          readers <- ZIO.foreach(List(root, browser, granted(Role.Governor), granted(Role.Planner), granted(Role.Worker), granted(Role.Reviewer)))(read(_, project))
+          _ <- assertIO(readers.forall(_ == Result.Agents(written)))
+          governor = granted(Role.Governor)
+          planner <- resolve(governor, Harness.Claude, AgentRole.Planner)
+          _ <- assertIO(planner == Result.AgentRoute(ResolvedAssignment(Harness.Claude, AgentRole.Planner, RoleResolution.Resolved(
+            ResolvedRole(PanelMode.All, 1, fallback("opus"), RoleOrigin(AgentLayer.Installation, RoleSource.DefaultRoles), Nil)))))
+          worker <- resolve(governor, Harness.Codex, AgentRole.Worker)
+          _ <- assertIO(worker == Result.AgentRoute(ResolvedAssignment(Harness.Codex, AgentRole.Worker, RoleResolution.Resolved(
+            ResolvedRole(PanelMode.All, 1, fallback("sonnet"), RoleOrigin(AgentLayer.Project, RoleSource.DefaultRoles), Nil)))))
+          undefined <- resolve(governor, Harness.Codex, AgentRole.Planner)
+          _ <- assertIO(undefined == Result.AgentRoute(ResolvedAssignment(Harness.Codex, AgentRole.Planner, RoleResolution.Unresolved(
+            Some(RoleOrigin(AgentLayer.Installation, RoleSource.DefaultRoles)), List(AgentProblem.TierUndefined(Harness.Codex, ModelTier.Frontier, AgentRole.Planner))))))
+          unassigned <- resolve(granted(Role.Worker), Harness.Pi, AgentRole.Reviewer)
+          _ <- assertIO(unassigned == Result.AgentRoute(ResolvedAssignment(Harness.Pi, AgentRole.Reviewer,
+            RoleResolution.Unresolved(None, List(AgentProblem.RoleUnassigned(Harness.Pi, AgentRole.Reviewer))))))
+          stale <- replace(root, Project, Revision(0), "")
+          _ <- assertIO(stale == Result.Failed(Fault.Conflict("Agent configuration of the project changed: expected revision 0, actual 1; reload before saving")))
+          staleDefaults <- replace(root, Installation, base, "")
+          _ <- assertIO(staleDefaults == Result.Failed(Fault.Conflict(
+            s"Agent configuration of the installation changed: expected revision ${base.value}, actual ${base.value + 1}; reload before saving")))
+          same <- replace(root, Project, Revision(1), overrides)
+          sameDefaults <- replace(root, Installation, Revision(base.value + 1), defaults)
+          _ <- assertIO(same == Result.Agents(written) && sameDefaults == Result.Agents(written))
+          refused <- ZIO.foreach(List(Installation -> Revision(base.value + 1), Project -> Revision(1)))((scope, revision) => replace(root, scope, revision, panel))
+          _ <- assertIO(refused.forall(_ == Result.Failed(Fault.Invalid(
+            "Agent configuration has problems: 3:13: the worker role takes a model reference or a strategy; only the reviewer role takes a panel"))))
+          oversized <- replace(root, Project, Revision(1), "#" + "λ" * (bound / 2))
+          _ <- assertIO(oversized == Result.Failed(Fault.Invalid(s"Agent configuration exceeds $bound bytes: ${bound + 1} supplied")))
+          nul <- replace(root, Project, Revision(1), "# a\u0000b")
+          _ <- assertIO(nul match { case Result.Failed(_: Fault.Invalid) => true; case _ => false })
+          previewed <- call(root, project, AgentsAction.Preview(Project, "")).map(view)
+          _ <- assertIO(previewed.installation == written.installation && previewed.project == written.project.copy(text = "") &&
+            previewed.assignments == AgentResolution.assignments(parsed(defaults), ParsedAgents.empty))
+          previewedDefaults <- call(browser, project, AgentsAction.Preview(Installation, panel)).map(view)
+          _ <- assertIO(previewedDefaults.project == written.project && previewedDefaults.assignments.isEmpty &&
+            previewedDefaults.installation == written.installation.copy(text = panel, problems = List(AgentProblem.PanelNotAllowed(TextPosition(3, 13), AgentRole.Worker))))
+          oversizedPreview <- call(root, project, AgentsAction.Preview(Project, "#" + "x" * bound))
+          _ <- assertIO(oversizedPreview == Result.Failed(Fault.Invalid(s"Agent configuration exceeds $bound bytes: ${bound + 1} supplied")))
+          unchanged <- read(root, project)
+          _ <- assertIO(unchanged == Result.Agents(written))
+          full <- replace(root, Project, Revision(1), "#" + "x" * (bound - 1)).map(view)
+          _ <- assertIO(full.project.revision == Revision(2) && full.project.text.length == bound)
+          cleared <- replace(root, Project, Revision(2), "").map(view)
+          _ <- assertIO(cleared.project.revision == Revision(3) && cleared.project.text.isEmpty && cleared.project.change.nonEmpty &&
+            cleared.assignments == AgentResolution.assignments(parsed(defaults), ParsedAgents.empty))
+          foreign <- read(granted(Role.Worker), other)
+          foreignRoute <- call(granted(Role.Governor), other, AgentsAction.Resolve(Harness.Claude, AgentRole.Planner))
+          _ <- assertIO(List(foreign, foreignRoute).forall { case Result.Failed(_: Fault.Denied) => true; case _ => false })
+          // The server default holds for every project; the override is the project's own.
+          separate <- read(root, other).map(view)
+          _ <- assertIO(separate.installation == written.installation && separate.project == AgentsDocument(Revision(0), "", None, Nil))
+          // The agent configuration is a document of its own beside the project's other settings.
+          requirements <- application.execute(root, Command.Requirements(RequirementsInput(project, RequirementsAction.Read())))
+          _ <- assertIO(requirements == Result.Requirements(ProjectRequirements(project, Revision(0), "", None)))
+          _ <- assertIO(!new McpSchemas().tools.exists(_.name.toLowerCase.contains("agent")))
+        } yield ()
+    }
+
     "preserve mutation acknowledgements across service re-creation and reject mixed snapshot pages" in {
       (ledger: LedgerService[IO], repository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
         val auth = authorization(Now)

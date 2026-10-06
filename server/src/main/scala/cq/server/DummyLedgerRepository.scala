@@ -5,10 +5,10 @@ import cq.core.*
 import distage.Lifecycle
 import zio.{IO, Ref, Task, ZIO}
 
-private final case class DummyCatalogue(cursor: CatalogueCursor, projects: Map[ProjectId, DummyLedgerState])
+private final case class DummyCatalogue(cursor: CatalogueCursor, projects: Map[ProjectId, DummyLedgerState], installation: Map[InstallationSettingKind, StoredInstallationSetting])
 
 final class DummyLedgerResource extends Lifecycle.LiftF[Task, LedgerRepository[IO]](
-  Ref.Synchronized.make(DummyCatalogue(CatalogueCursor(0L), Map.empty)).map { states =>
+  Ref.Synchronized.make(DummyCatalogue(CatalogueCursor(0L), Map.empty, Map.empty)).map { states =>
     new LedgerRepository[IO] {
       override def projects(after: Option[ProjectId], limit: Int): IO[Throwable, ProjectPage] = states.get.map { current =>
         val found = current.projects.valuesIterator.map(_.project).filter(p => after.forall(a => p.id.value.toString > a.value.toString))
@@ -19,7 +19,7 @@ final class DummyLedgerResource extends Lifecycle.LiftF[Task, LedgerRepository[I
       override def catalogueCursor: IO[Throwable, CatalogueCursor] = states.get.map(_.cursor)
       override def cursors(project: ProjectId, now: Long): IO[Throwable, LedgerCursors] = states.get.flatMap { current =>
         ZIO.fromOption(current.projects.get(project)).orElseFail(DomainFailure(Fault.Missing("Project not initialized")))
-          .map(state => LedgerCursors(ChangeCursor(state.cursor), new DummyLedgerTransaction(state).workCursor(now)))
+          .map(state => LedgerCursors(ChangeCursor(state.cursor), new DummyLedgerTransaction(state, current.installation).workCursor(now)))
       }
       override def initialize(project: Project): IO[Throwable, Project] = states.modify { current =>
         current.projects.get(project.id) match {
@@ -35,10 +35,10 @@ final class DummyLedgerResource extends Lifecycle.LiftF[Task, LedgerRepository[I
       override def transact[A](project: ProjectId)(operation: LedgerTransaction => A): IO[Throwable, A] = states.modifyZIO { current =>
         ZIO.attempt {
           val state = current.projects.getOrElse(project, throw DomainFailure(Fault.Missing("Project not initialized")))
-          val tx = new DummyLedgerTransaction(state)
+          val tx = new DummyLedgerTransaction(state, current.installation)
           val result = tx.driverOperation(operation(tx))
           val cursor = if (tx.result.project == state.project) current.cursor else CatalogueCursor(Math.addExact(current.cursor.value, 1L))
-          ((result, tx.committed), current.copy(cursor = cursor, projects = current.projects.updated(project, tx.result)))
+          ((result, tx.committed), current.copy(cursor = cursor, projects = current.projects.updated(project, tx.result), installation = tx.installationResult))
         }
       }.flatMap { (result, committed) => ZIO.attempt(committed.foreach(_())) *> ZIO.fromEither(result) }
     }
@@ -66,8 +66,10 @@ private final case class DummyLedgerState(
   drivers: Map[DriverKey, DriverRecord],
 )
 
-private final class DummyLedgerTransaction(initial: DummyLedgerState) extends LedgerTransaction {
+private final class DummyLedgerTransaction(initial: DummyLedgerState, installed: Map[InstallationSettingKind, StoredInstallationSetting]) extends LedgerTransaction {
   private var state = initial
+  private var installation = installed
+  def installationResult: Map[InstallationSettingKind, StoredInstallationSetting] = installation
   private var effects = List.empty[() => Unit]
   def result: DummyLedgerState = state
   def committed: List[() => Unit] = effects.reverse
@@ -79,10 +81,12 @@ private final class DummyLedgerTransaction(initial: DummyLedgerState) extends Le
   }
   override def driverOperation[A](operation: => A): Either[DomainFailure, A] = {
     val before = state
+    val installedBefore = installation
     val callbacks = effects
     try Right(operation) catch {
       case intent: DriverStopIntent =>
         state = before
+        installation = installedBefore
         effects = callbacks
         Left(DriverRejection.persist(this, intent))
     }
@@ -232,6 +236,13 @@ private final class DummyLedgerTransaction(initial: DummyLedgerState) extends Le
   override def setting(kind: ProjectSettingKind): Option[StoredSetting] = state.settings.get(kind)
   override def putSetting(value: StoredSetting): Unit = {
     state = state.copy(settings = state.settings.updated(ProjectSettingKind.of(value.value), value))
+  }
+  override def installationSetting(kind: InstallationSettingKind): Option[StoredInstallationSetting] = installation.get(kind)
+  override def replaceInstallationSetting(expected: Revision, value: StoredInstallationSetting): Boolean = {
+    val kind = InstallationSettingKind.of(value.value)
+    val matches = installation.get(kind).fold(Revision(0))(_.revision) == expected
+    if (matches) installation = installation.updated(kind, value)
+    matches
   }
   override def candidateRoots(after: Option[ItemId], limit: Int): ReadPage[ItemSummary] = {
     val candidates = state.items.valuesIterator.map(LedgerPolicy.summary).filter { item =>

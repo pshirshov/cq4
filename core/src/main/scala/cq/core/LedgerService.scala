@@ -12,6 +12,11 @@ trait LedgerService[F[_, _]] {
   def replaceRequirements(scope: Scope, expected: Revision, text: String): F[Throwable, ProjectRequirements]
   def mode(scope: Scope): F[Throwable, ProjectMode]
   def replaceMode(scope: Scope, expected: Revision, value: ProjectSetting.Mode): F[Throwable, ProjectMode]
+  def agents(scope: Scope): F[Throwable, AgentsView]
+  // The view that storing `text` as the document of `layer` would give; nothing is stored.
+  def previewAgents(scope: Scope, layer: AgentsScope, text: String): F[Throwable, AgentsView]
+  def replaceAgents(scope: Scope, layer: AgentsScope, expected: Revision, text: String): F[Throwable, AgentsView]
+  def agentRoute(scope: Scope, harness: Harness, role: AgentRole): F[Throwable, ResolvedAssignment]
   def change(scope: Scope, request: ChangeRequest): F[Throwable, ChangeAck]
   def get(scope: Scope, id: ItemId): F[Throwable, ItemView]
   def details(scope: Scope, members: List[ItemRevision], bytes: Int): F[Throwable, ItemViews]
@@ -114,6 +119,71 @@ object LedgerService {
         tx.putSetting(StoredSetting(Revision(Math.addExact(expected.value, 1L)), value, scope.actor, clock.millis()))
         processMode(tx)
       }
+    }
+
+    // A layer without a stored document has the empty text at revision 0. The problems are filled in by `agentsView`.
+    private def installationAgents(tx: LedgerTransaction): AgentsDocument = tx.installationSetting(InstallationSettingKind.Agents) match {
+      case Some(StoredInstallationSetting(revision, InstallationSetting.Agents(text), actor, updatedAt)) =>
+        AgentsDocument(revision, text, Some(RequirementsChange(actor, updatedAt)), Nil)
+      case None => AgentsDocument(Revision(0), "", None, Nil)
+    }
+
+    private def projectAgents(tx: LedgerTransaction): AgentsDocument = tx.setting(ProjectSettingKind.Agents) match {
+      case Some(StoredSetting(revision, ProjectSetting.Agents(text), actor, updatedAt)) => AgentsDocument(revision, text, Some(RequirementsChange(actor, updatedAt)), Nil)
+      case Some(other) => throw new IllegalStateException(s"The agent configuration row holds a ${ProjectSettingKind.of(other.value)} document")
+      case None => AgentsDocument(Revision(0), "", None, Nil)
+    }
+
+    // No role is resolved while a layer has problems: its text states no configuration.
+    private def agentsView(installation: AgentsDocument, project: AgentsDocument): AgentsView = {
+      val defaults = AgentConfigText.parse(installation.text)
+      val overrides = AgentConfigText.parse(project.text)
+      AgentsView(installation.copy(problems = defaults.left.getOrElse(Nil)), project.copy(problems = overrides.left.getOrElse(Nil)),
+        (for { lower <- defaults; upper <- overrides } yield AgentResolution.assignments(lower, upper)).getOrElse(Nil))
+    }
+
+    private def agentsWriter(scope: Scope): Unit =
+      if (scope.actor.role != Role.Human) throw DomainFailure(Fault.Denied("Agent configuration change requires human authority"))
+
+    override def agents(scope: Scope): F[Throwable, AgentsView] = repository.transact(scope.project)(tx => agentsView(installationAgents(tx), projectAgents(tx)))
+
+    override def previewAgents(scope: Scope, layer: AgentsScope, text: String): F[Throwable, AgentsView] = repository.transact(scope.project) { tx =>
+      agentsWriter(scope)
+      boundAgents(text)
+      layer match {
+        case AgentsScope.Installation() => agentsView(installationAgents(tx).copy(text = text), projectAgents(tx))
+        case AgentsScope.Project() => agentsView(installationAgents(tx), projectAgents(tx).copy(text = text))
+      }
+    }
+
+    override def replaceAgents(scope: Scope, layer: AgentsScope, expected: Revision, text: String): F[Throwable, AgentsView] = repository.transact(scope.project) { tx =>
+      agentsWriter(scope)
+      validateAgents(text)
+      def stored: (String, AgentsDocument) = layer match {
+        case AgentsScope.Installation() => "installation" -> installationAgents(tx)
+        case AgentsScope.Project() => "project" -> projectAgents(tx)
+      }
+      val (name, current) = stored
+      def conflict(actual: Revision): DomainFailure = DomainFailure(Fault.Conflict(
+        s"Agent configuration of the $name changed: expected revision ${expected.value}, actual ${actual.value}; reload before saving"))
+      if (current.revision != expected) throw conflict(current.revision)
+      if (current.text != text) {
+        val revision = Revision(Math.addExact(expected.value, 1L))
+        layer match {
+          case AgentsScope.Installation() =>
+            if (!tx.replaceInstallationSetting(expected, StoredInstallationSetting(revision, InstallationSetting.Agents(text), scope.actor, clock.millis())))
+              throw conflict(stored._2.revision)
+          case AgentsScope.Project() => tx.putSetting(StoredSetting(revision, ProjectSetting.Agents(text), scope.actor, clock.millis()))
+        }
+      }
+      agentsView(installationAgents(tx), projectAgents(tx))
+    }
+
+    override def agentRoute(scope: Scope, harness: Harness, role: AgentRole): F[Throwable, ResolvedAssignment] = repository.transact(scope.project) { tx =>
+      // Every stored text passed the save checks, so one that does not parse is not a state this release writes.
+      def parsed(name: String, document: AgentsDocument): ParsedAgents = AgentConfigText.parse(document.text).fold(problems => throw new IllegalStateException(
+        s"The stored agent configuration of the $name does not parse: " + problems.map(AgentConfigText.describe).mkString("; ")), identity)
+      ResolvedAssignment(harness, role, AgentResolution.resolve(parsed("installation", installationAgents(tx)), parsed("project", projectAgents(tx)), harness, role))
     }
 
     override def change(scope: Scope, request: ChangeRequest): F[Throwable, ChangeAck] =

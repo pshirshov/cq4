@@ -30,7 +30,7 @@ final case class SupervisorConfig(settings: SupervisorSettings, project: Project
 
 object SupervisorConfig {
   val AttachedGovernorCollector = cq.core.AttemptObservation.AttachedGovernorCollector
-  private val MaxConfigBytes = 64 * 1024
+  private val MaxConfigBytes = cq.core.LedgerPolicy.MaxConfigBytes
   val StaleIntegration = "This harness integration starts the CQ host without --executable, as an earlier CQ package generated it"
   private val MaxInputBytes = 192 * 1024
   private val MaxOutputBytes = 32 * 1024 * 1024

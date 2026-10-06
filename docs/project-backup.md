@@ -23,7 +23,14 @@ consistent database snapshot; changes committed afterward are excluded.
 The archive preserves the project UUID and stored items, relationships, history,
 request receipts, counters, usage audit and projections, artifacts, completed
 admissions, integration records, stored worksets and the project's settings
-(its standing requirements and its process mode). Restore refuses an existing project UUID.
+(its standing requirements, its process mode and its own layer of the agent
+configuration). Restore refuses an existing project UUID.
+
+The server's default agent configuration belongs to the installation, not to a
+project, and is in no archive: a restored project uses the defaults of the server
+it is restored into, with its own layer on top. Restore applies the checks of the
+write path to the project's layer and refuses an archive whose layer does not pass
+them. A database dump of the installation holds the server defaults.
 Backup refuses an existing destination file, including one created concurrently.
 Successful restore advances the live project catalogue cursor.
 

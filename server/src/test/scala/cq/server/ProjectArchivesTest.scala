@@ -240,6 +240,53 @@ final class ProjectArchivesPostgres extends SpecZIO with AssertZIO {
       } yield ()
     }
 
+    "I17: round-trip the project's agent configuration without the installation's and refuse one that the write path refuses" in {
+      (service: LedgerService[IO], repository: LedgerRepository[IO], config: DatabaseConfig, archives: ProjectArchives) =>
+      val separator = if (config.url.contains("?")) "&" else "?"
+      def fresh: IO[Throwable, LedgerDatabase] = {
+        val schema = "cq_restore_" + UUID.randomUUID().toString.replace("-", "")
+        val target = new LedgerDatabase(config.copy(url = config.url + separator + "currentSchema=" + schema))
+        ZIO.attemptBlocking(Using.resource(DriverManager.getConnection(config.url, config.user, config.password)) { connection =>
+          Using.resource(connection.createStatement())(_.execute(s"CREATE SCHEMA $schema")); ()
+        }) *> target.initialize.as(target)
+      }
+      // A hand-edited archive is reproduced by storing the row past the service: backup copies the table as it is.
+      def archived(text: String): IO[Throwable, (Scope, StoredSetting, Either[Throwable, BackupManifest], LedgerDatabase)] = {
+        val operator = Scope(ProjectId(UUID.randomUUID()), Actor("operator", SessionId(UUID.randomUUID()), Role.Human))
+        val stored = StoredSetting(Revision(3), ProjectSetting.Agents(text), operator.actor, 1700000000000L)
+        for {
+          _ <- service.initialize(operator, "archived agents")
+          _ <- repository.transact(operator.project)(_.putSetting(stored))
+          file <- ZIO.attempt(Files.createTempFile("cq-archive-", ".zip"))
+          manifest <- archives.backup(operator.project, file)
+          _ <- assertIO(manifest.entries.last.table == BackupTable.Settings && manifest.entries.last.rows == 1)
+          target <- fresh
+          restored <- new PostgresProjectArchives(target, Clock.systemUTC()).restore(file).either
+          _ <- ZIO.attempt(Files.deleteIfExists(file))
+        } yield (operator, stored, restored, target)
+      }
+      for {
+        kept <- archived("defaults: { roles: { worker: claude:sonnet } } # λ😀\n")
+        (operator, stored, restored, target) = kept
+        _ <- ZIO.attempt(assert(restored.isRight, restored.toString))
+        current <- service.agents(operator)
+        source <- service.replaceAgents(operator, AgentsScope.Installation(), current.installation.revision, s"# ${operator.project.value}\n")
+        again <- archived("defaults: { roles: { explorer: claude:haiku } }\n")
+        copy <- new PostgresLedgerRepository(target).transact(operator.project)(tx => tx.setting(ProjectSettingKind.Agents) -> tx.installationSetting(InstallationSettingKind.Agents))
+        // The installation's layer stays with its server: the archive of a project of a server that has one restores without it.
+        defaults <- new PostgresLedgerRepository(again._4).transact(again._1.project)(tx => tx.setting(ProjectSettingKind.Agents) -> tx.installationSetting(InstallationSettingKind.Agents))
+        _ <- assertIO(copy == (Some(stored), None) && source.installation.revision.value > 0 && again._3.isRight && defaults == (Some(again._2), None))
+        refused <- ZIO.foreach(List("defaults: [", "defaults: { roles: { worker: { all: [claude:sonnet], min: 1 } } }", "#" + "x" * LedgerPolicy.MaxConfigBytes))(archived)
+        _ <- ZIO.foreachDiscard(refused) { case (scope, _, outcome, schema) =>
+          for {
+            _ <- ZIO.attempt(assert(outcome.left.exists { case DomainFailure(_: Fault.Invalid) => true; case _ => false }, outcome.map(_.project).toString))
+            projects <- new PostgresLedgerRepository(schema).projects(None, 200)
+            _ <- assertIO(!projects.projects.exists(_.id == scope.project))
+          } yield ()
+        }
+      } yield ()
+    }
+
     "Q32: refuse an archive whose settings row breaks the bounds of the write path or misstates its kind" in {
       (service: LedgerService[IO], database: LedgerDatabase, config: DatabaseConfig, archives: ProjectArchives) =>
       val schema = "cq_restore_" + UUID.randomUUID().toString.replace("-", "")

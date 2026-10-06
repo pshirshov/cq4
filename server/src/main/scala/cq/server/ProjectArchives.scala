@@ -172,7 +172,7 @@ final class PostgresProjectArchives(database: LedgerDatabase, clock: Clock) exte
         setting match {
           case ProjectSetting.Requirements(text) => LedgerPolicy.validateRequirements(text)
           case mode: ProjectSetting.Mode => ProcessModePolicy.validate(mode)
-          case _: ProjectSetting.Agents => throw new IllegalStateException("Restoring an agent configuration is not implemented in this build")
+          case ProjectSetting.Agents(text) => LedgerPolicy.validateAgents(text)
         }
       }
       sql.query("SELECT body::text, summary::text, harness, session_key, revision FROM restore_cq_drivers")(_ => ()) { row =>

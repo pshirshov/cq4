@@ -419,6 +419,20 @@ private final class PostgresLedgerTransaction(connection: Connection, override v
     ()
   }
 
+  override def installationSetting(kind: InstallationSettingKind): Option[StoredInstallationSetting] =
+    sql.query("SELECT revision, body::text, actor::text, updated_at FROM cq_installation_settings WHERE kind = ?")(_.setString(1, kind.toString))(r =>
+      StoredInstallationSetting(Revision(r.getLong(1)), Wire.decode(InstallationSetting_JsonCodec, r.getString(2)), Wire.decode(Actor_JsonCodec, r.getString(3)), r.getLong(4))).headOption
+
+  // No stored revision is 0, so with `expected` 0 only the insertion of an absent document succeeds.
+  override def replaceInstallationSetting(expected: Revision, value: StoredInstallationSetting): Boolean =
+    sql.execute("INSERT INTO cq_installation_settings(kind, revision, actor, updated_at, body) VALUES (?, ?, ?::jsonb, ?, ?::jsonb) " +
+      "ON CONFLICT (kind) DO UPDATE SET revision = EXCLUDED.revision, actor = EXCLUDED.actor, updated_at = EXCLUDED.updated_at, body = EXCLUDED.body " +
+      "WHERE cq_installation_settings.revision = ?") { s =>
+      s.setString(1, InstallationSettingKind.of(value.value).toString); s.setLong(2, value.revision.value)
+      s.setString(3, Wire.encode(Actor_JsonCodec, value.actor)); s.setLong(4, value.updatedAt)
+      s.setString(5, Wire.encode(InstallationSetting_JsonCodec, value.value)); s.setLong(6, expected.value)
+    } == 1
+
   override def candidateRoots(after: Option[ItemId], limit: Int): ReadPage[ItemSummary] = {
     val open = PersistedItems.open
     val pagination = after.fold("")(_ => " AND (i.ledger, i.number) > (?, ?)")

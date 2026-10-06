@@ -275,6 +275,13 @@ CREATE TABLE cq_project_settings (
   body jsonb NOT NULL,
   PRIMARY KEY (project_id, kind)
 );
+CREATE TABLE cq_installation_settings (
+  kind text PRIMARY KEY,
+  revision bigint NOT NULL CHECK (revision > 0),
+  actor jsonb NOT NULL,
+  updated_at bigint NOT NULL,
+  body jsonb NOT NULL
+);
 
 CREATE TABLE cq_drivers (
   project_id uuid NOT NULL REFERENCES cq_projects,

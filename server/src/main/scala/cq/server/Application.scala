@@ -29,7 +29,12 @@ final class Application(ledger: LedgerService[IO], repository: LedgerRepository[
         case ModeAction.Replace(expected, mode, selfReviewWithoutChecks) =>
           ledger.replaceMode(scope, expected, ProjectSetting.Mode(mode, selfReviewWithoutChecks)).map(Result.Mode.apply)
       }}
-      case _: Command.Agents => ZIO.fail(new IllegalStateException("The Agents command is not implemented in this build"))
+      case Command.Agents(input) => scoped(authority, input.project) { scope => input.action match {
+        case AgentsAction.Read() => ledger.agents(scope).map(Result.Agents.apply)
+        case AgentsAction.Replace(layer, expected, text) => layered(authority, layer) *> ledger.replaceAgents(scope, layer, expected, text).map(Result.Agents.apply)
+        case AgentsAction.Preview(layer, text) => layered(authority, layer) *> ledger.previewAgents(scope, layer, text).map(Result.Agents.apply)
+        case AgentsAction.Resolve(harness, role) => ledger.agentRoute(scope, harness, role).map(Result.AgentRoute.apply)
+      }}
       case Command.Search(input) => scoped(authority, input.project) { scope =>
         ledger.search(scope, input.query, input.after, input.limit).flatMap { page =>
           if (input.snapshot.exists(_ != page.cursor)) ZIO.fail(DomainFailure(Fault.Resync("Snapshot changed; restart search")))
@@ -89,6 +94,12 @@ final class Application(ledger: LedgerService[IO], repository: LedgerRepository[
 
   private def scoped[A](authority: Authority, project: ProjectId)(operation: cq.core.Scope => Task[A]): Task[A] =
     ZIO.attempt(authority.scope(project)).flatMap(operation)
+
+  // The installation's layer of the agent configuration holds for every project, so a credential of one project does not write it.
+  private def layered(authority: Authority, layer: AgentsScope): Task[Unit] = ZIO.attempt(layer match {
+    case AgentsScope.Installation() => authority.requireRoot()
+    case AgentsScope.Project() => ()
+  })
 
   // The ledger marks claimed rows; usage adds the child attempt running under each claim. The page's work cursor is the sum the live revision
   // reports, so a browser refreshes when a claim or an attempt on the page's project starts or ends.
