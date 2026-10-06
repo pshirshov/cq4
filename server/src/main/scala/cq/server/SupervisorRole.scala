@@ -155,13 +155,13 @@ object SupervisorProgram {
     "Dispatch sequentially using item revisions and handles. The host assembles prompts, captures candidates and runs checks. Never read/compose child prompts or copy full results. Status reads the current state or the result of an attempt; use compact outcomes and bounded artifact reads only for necessary drill-down. " +
     "Status quietMillis is time since a running child's last output; long tool calls are silent. Report a long-quiet child to the operator; never cancel it yourself. " +
     "Use Explorer Investigate/Research for evidence, Worker Probe for experiments, Planner for typed proposals and Reviewer Plan/Audit for independent findings. Pass previous result handles with identical members and current fence. Preview read/Proposal, then apply by result handle; never reconstruct drafts. Children cannot mutate CQ or integrate. " +
-    "Pass worker candidates to Reviewer Candidate. " +
+    "Have every worker candidate reviewed as the workflow instructions say; without such instructions, pass it to Reviewer Candidate. " +
     "With integrationTarget, PrepareIntegration using a fresh ID and accepted reviewer handle, wait for the preparation to end, read IntegrationStatus, inspect its frozen preview, then Integrate that ID. Only Recorded establishes domain recording; reconcile Pending and inspect NotApplied. Discard a prepared integration that will not be applied with DiscardIntegration before releasing its claim or changing the workflow. Without a target, report the retained reviewed candidate. " +
     "PrepareIntegration rebases onto a moved target itself; after NotApplied, prepare again with a fresh ID. If Ready carries a blocker, Integrate, then Combine a fresh ID, that integration ID and current full fence; wait for it to end and read CombinationStatus. Dispatch Worker ResolveConflict with Ready plan in artifacts, its worker as previous and exact preview members/fence. Obtain fresh validation and Reviewer from the new worker handle; omit the plan from reviewer artifacts. Integrate with a fresh ID. For PublicationPending, replay identical Combine or cq job upload. " +
     "Before archiving scoped Decisions or their completed anchors, preserve important knowledge or rules that still apply as independently reviewed Memories or proposed standing requirements. Standing requirement edits need human authority: ask the operator to persist the proposed text before archival. Only Adopted Decisions with at least one outgoing DerivedFrom or PartOf anchor, all archived, are bulk eligible; keep active or unanchored Decisions. " +
     "Claim execution only with host evidence. Child completion/review acceptance does not establish final task acceptance."
   /** What the host carries out without the session, in the words every form of waiting uses. */
-  private val Work = "work the host carries out (a child, an integration being prepared or applied, a combination, a revalidation)"
+  private val Work = "work the host carries out (a child, an integration being prepared or applied, a combination, a revalidation, a submitted workspace)"
   private val Unfound = "4 or 5: the command found no single session of this checkout, and its output says why"
   private val ByStatus = "(Status, IntegrationStatus or CombinationStatus; repeat Revalidate)"
   /** The batch Governor of `cq run`: nothing tells it when work ends and it has no shell of its own, so it waits through its status calls. */
@@ -177,8 +177,9 @@ object SupervisorProgram {
     s"0: a unit ended, or nothing was active; the file has one line for each ended unit and for each still active. 3: the CQ host is not running. $Unfound. Report 3, 4 and 5 to the user. " +
     "Any other exit, including the harness ending the command at its lifetime limit: run it again while work is active. " +
     "After exit 0, read the outcome of each ended unit with one Status, IntegrationStatus or CombinationStatus call with waitMillis 0, and run the command again while other work is active. " +
-    "An integration being prepared or applied, a combination and a revalidation usually end within seconds: after starting one, start no command for it and do not end your turn. " +
-    s"Call its status once (IntegrationStatus or CombinationStatus; repeat Revalidate) with waitMillis ${DispatchWaits.MaxMillis}, which returns when the work ends. " +
+    "An integration being prepared or applied, a combination and a revalidation usually end within seconds, and the host checks a workspace you submitted as it runs a revalidation: " +
+    "after starting one, start no command for it and do not end your turn. " +
+    s"Call its status once (IntegrationStatus or CombinationStatus; repeat Revalidate; Status for a submitted workspace) with waitMillis ${DispatchWaits.MaxMillis}, which returns when the work ends. " +
     "Only if that call returns while the work continues, run the command above."
   /** Nothing wakes an idle Codex session when a background command exits (openai/codex#32188), and its shell call returns to the model
     * after at most 30 s whatever it is asked to yield (`MAX_YIELD_TIME_MS` of its unified exec), so it waits in a tool call of the host,
