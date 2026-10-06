@@ -23,7 +23,8 @@ lines.on('line', line => {
   if (value.method === 'initialize') { send({id:value.id,result:{protocolVersion:'2025-03-26'}}); send({id:'owner-ping',method:'ping'}); }
   else if (value.method === 'tools/list') send({id:value.id,result:{tools:config.tools}});
   else if (value.method === 'tools/call') {
-    if (!value.params.arguments.hold) send({id:value.id,result:{isError:false,content:[{type:'text',text:'bounded reply'}]}});
+    // A dispatch reply is one JSON value, as the host sends it; this one names no unit the host works on.
+    if (!value.params.arguments.hold) send({id:value.id,result:{isError:false,content:[{type:'text',text:value.params.name === 'dispatch' ? '{"Acknowledged":{}}' : 'bounded reply'}]}});
   }
   else if (value.method === 'cq/piUsage') send({id:value.id,result:{}});
   else if (value.method === 'cq/session') send({id:value.id,result:{directory:'/fixture/session'}});
@@ -35,7 +36,12 @@ const { default: load } = await import(pathToFileURL(extension));
 // The deadlines the extension arms, as it asks the runtime for them.
 const armed = [];
 const arm = globalThis.setTimeout;
-globalThis.setTimeout = (callback, millis, ...rest) => { armed.push(millis); return arm(callback, millis, ...rest); };
+globalThis.setTimeout = (callback, millis, ...rest) => {
+  // A timer without a delay fires at once: a request armed that way fails its connection as soon as the reply is late by a tick.
+  assert.ok(Number.isInteger(millis) && millis > 0, "a timer needs its delay");
+  armed.push(millis);
+  return arm(callback, millis, ...rest);
+};
 async function deadline(tool, parameters) {
   armed.length = 0;
   await pi.registered.get("cq_" + tool).execute("deadline", parameters, undefined);

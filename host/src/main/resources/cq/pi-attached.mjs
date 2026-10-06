@@ -351,7 +351,7 @@ export default async function (pi) {
       started.send({ jsonrpc: "2.0", method: "notifications/initialized" });
       const inventory = await started.rpc("tools/list", {}, undefined, REQUEST_MILLIS);
       if (!isDeepStrictEqual(inventory.tools, configuration.tools)) throw new Error("CQ tool contracts changed; rerun cq configure pi and restart");
-      const located = await started.rpc("cq/session", {}, undefined);
+      const located = await started.rpc("cq/session", {}, undefined, REQUEST_MILLIS);
       if (typeof located.directory !== "string") throw new Error("CQ host did not name its session directory");
       directory = located.directory;
       working.clear();
