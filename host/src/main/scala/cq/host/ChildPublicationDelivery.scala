@@ -15,6 +15,8 @@ final class ChildPublicationDelivery(directory: Path, ticket: DispatchTicket) {
   private val delivery = new DeliveryQueue(directory.resolve("delivery"))
 
   def sealedIntent: Boolean = Files.exists(intent)
+  /** The sealed publication: what the child was to publish, with its result when it left one. */
+  def published: ChildPublication = HostFiles.read(intent, ChildPublication_JsonCodec, MaxIntentBytes)
 
   private def validate(value: ChildPublication): Unit = {
     require(value.project == ticket.assignment.project && value.owner.role == Role.Governor && value.owner.session == ticket.attempt.session &&
@@ -46,7 +48,7 @@ final class ChildPublicationDelivery(directory: Path, ticket: DispatchTicket) {
   }
 
   def finish(api: ServerApi): ChildPublicationReceipt = {
-    val value = HostFiles.read(intent, ChildPublication_JsonCodec, MaxIntentBytes)
+    val value = published
     validate(value)
     require(evidence.finalized, "Child publication evidence was not sealed")
     forceIntent()

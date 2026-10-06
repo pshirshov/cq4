@@ -742,7 +742,6 @@ root data HostLimits { startupMillis: i64 heartbeatMillis: i64 graceMillis: i64 
 root data ValidationCheck { name: str command: lst[str] executionMillis: i64 retainedOutputBytes: i32 attempts: i32 revalidations: i32 }
 root data SupervisorSettings { stateRoot: str guardian: str harnesses: lst[HarnessSetting] limits: HostLimits checks: lst[ValidationCheck] evaluation: opt[EvaluationScope] integrationTarget: opt[str] }
 root data GoverningReport { summary: str }
-root data HarnessRoute { harness: Harness model: str provider: str }
 enum WorkflowPhase { Explore Plan Work Review Integrate }
 enum UpstreamAction { Prepare Report Recheck }
 root adt WorkflowRequest {
@@ -754,7 +753,7 @@ root adt WorkflowRequest {
 root data WorkflowSubject { result: ArtifactId work: DispatchWork members: lst[ItemRevision] candidate: opt[GitCommit] }
 // `mode` is the process mode whose section opens `instructions`: the project's mode when the workflow was activated, as a session of this ownership works it.
 root data WorkflowContext { request: WorkflowRequest instructions: str subject: opt[WorkflowSubject] mode: ProcessMode }
-root data GoverningInput { project: ProjectConfig routes: lst[HarnessRoute] checks: lst[str] limits: HostLimits integrationTarget: opt[str] request: str workflow: opt[WorkflowContext] }
+root data GoverningInput { project: ProjectConfig checks: lst[str] limits: HostLimits integrationTarget: opt[str] request: str workflow: opt[WorkflowContext] }
 enum SessionOwnership { Managed Attached }
 root data AttachedPiEvent {
   sequence: i64 session: str turn: i64 provider: str model: str timestamp: i64 responseId: opt[str] stopReason: str
@@ -772,7 +771,7 @@ root adt WorkflowInstructions {
 root data WorkflowReceipt { id: RequestId request: WorkflowRequest instructions: WorkflowInstructions subject: opt[WorkflowSubject] cycle: opt[CycleId] mode: ProcessMode }
 root data AttachedContext {
   session: SessionId attempt: AttemptId directory: str project: ProjectConfig
-  routes: lst[HarnessRoute] checks: lst[str] limits: HostLimits integrationTarget: opt[str]
+  checks: lst[str] limits: HostLimits integrationTarget: opt[str]
   instructions: str workflow: opt[ActiveWorkflow] usageCoverage: str
   // The project's process mode now; the next workflow activation takes it.
   mode: ProcessMode
@@ -817,6 +816,13 @@ root adt DispatchWork {
 }
 root data DispatchRequest {
   request: RequestId work: DispatchWork harness: Harness members: lst[ItemRevision]
+  guidance: lst[ItemRevision] artifacts: lst[ArtifactId] previous: opt[ArtifactId]
+  fence: Fence limits: HostLimits
+}
+// The work of one unit as a governing session assigns it: a DispatchRequest without the harness, which the host takes for each
+// attempt of the unit from the models the agent configuration assigns to the role.
+root data AssignedWork {
+  request: RequestId work: DispatchWork members: lst[ItemRevision]
   guidance: lst[ItemRevision] artifacts: lst[ArtifactId] previous: opt[ArtifactId]
   fence: Fence limits: HostLimits
 }
@@ -1021,8 +1027,8 @@ root adt WaitOutcome {
 }
 root adt DispatchCommand {
   data Select { request: CohortRequest }
-  data StartChoice { choice: RequestId harness: Harness fence: Fence }
-  data Start { request: DispatchRequest }
+  data StartChoice { choice: RequestId fence: Fence }
+  data Start { work: AssignedWork }
   data Status { attempt: AttemptId waitMillis: i32 }
   data Cancel { attempt: AttemptId }
   data Seats { attempt: AttemptId }

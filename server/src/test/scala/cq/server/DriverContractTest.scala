@@ -2616,7 +2616,7 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
             message => Unsafe.unsafe { implicit unsafe => runtime.unsafe.run(reports.update(message :: _)).getOrThrowFiberFailure() }, Pause, Pause, Pause.multipliedBy(4))
           finished <- Promise.make[Nothing, Unit]
           run = LineageMember.Run(one.run)
-          _ <- tracker.record(one.cycle, run, dispatch)
+          _ <- tracker.track(one.cycle, run, dispatch, ZIO.some(LineageOutcome.Settled))
           _ <- tracker.track(one.cycle, dispatch, attempt, finished.await.as(Some(LineageOutcome.Settled)))
           _ <- tracker.track(one.cycle, dispatch, attempt, ZIO.some(LineageOutcome.Settled))
           running <- status(ledger, session, key)

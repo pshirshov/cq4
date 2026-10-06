@@ -1,7 +1,7 @@
 """Behavioral Active Blackbox Good Communication: connected narrative growth."""
 import hashlib
 import json
-from fixture_runtime import guardian_binary
+from fixture_runtime import AGENTS_INIT, guardian_binary
 import os
 from pathlib import Path
 import subprocess
@@ -42,6 +42,7 @@ def main():
 
     endpoint = os.environ["CQ_ORIGIN"]
     run(["init", "--endpoint", endpoint], "init")
+    run(AGENTS_INIT + [str(settings)], "agents")
     source = root / "request.txt"
     source.write_text("traffic-growth-bootstrap")
     first = json.loads(run(["run", "codex", "--settings", str(settings), "--input", str(source)], "bootstrap"))
@@ -92,7 +93,7 @@ def main():
             assert ticket["request"]["members"] == members and ticket["request"]["artifacts"] == [value["input"]]
             assert ticket["request"]["previous"] == (None if role == "explorer" else value["explorer"]["result"])
             publication = json.loads((child / "publication.json").read_text())
-            dispatched = next(event for event in traffic if event["request"].get("Start", {}).get("request", {}).get("request") == ticket["request"]["request"])
+            dispatched = next(event for event in traffic if event["request"].get("Start", {}).get("work", {}).get("request") == ticket["request"]["request"])
             assert any(event["reply"] == {"Status": {"value": status}} for event in traffic)
             job = json.loads((session / "journal" / (status["attempt"]["value"] + ".json")).read_text())
             payload = session / "payload" / status["attempt"]["value"] / "input"

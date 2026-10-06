@@ -5,7 +5,7 @@ import com.comcast.ip4s.{Host, Port}
 import cq.api.*
 import cq.core.JsonRoundtrip
 import cq.core.DomainFailure
-import cq.host.{ChildContracts, DispatchProjection, DispatchWaits, WorkflowExecution}
+import cq.host.{DispatchProjection, DispatchWaits, WorkflowExecution}
 import distage.Lifecycle
 import io.circe.{Json, parser}
 import org.http4s.*
@@ -18,7 +18,7 @@ import java.nio.charset.StandardCharsets.UTF_8
 import zio.{Task, ZIO}
 import zio.interop.catz.*
 
-final class LocalControl(dispatch: DispatchController, cohorts: CohortController, integrations: IntegrationController, combinations: CombinationController,
+final class LocalControl(units: DispatchUnits, cohorts: CohortController, integrations: IntegrationController, combinations: CombinationController,
   revalidations: RevalidationController, access: LocalAccess, schemas: McpSchemas, config: SupervisorConfig, workflow: WorkflowExecution) extends Http4sDsl[Task] {
   private val Versions = List("2025-03-26", "2025-06-18", "2025-11-25")
   private val MaxRequestBytes = 65536
@@ -34,7 +34,7 @@ final class LocalControl(dispatch: DispatchController, cohorts: CohortController
     "name" -> Json.fromString(name), "description" -> Json.fromString(description), "inputSchema" -> input, "outputSchema" -> schemas.schema(output),
     "annotations" -> Json.obj("readOnlyHint" -> Json.fromBoolean(readOnly), "openWorldHint" -> Json.False))
   private[server] def advertised(capability: LocalCapability): Json = if (capability.role == Role.Governor)
-    tool("dispatch", schemas.localInput("DispatchCommand"), "DispatchReply", s"Select bounded cohorts, claim one complete choice, then StartChoice by ID, harness and fence. Workflow runs require choices; direct Start supports explicitly assigned non-workflow runs. Status reads the state or the result of an attempt and, with waitMillis up to ${DispatchWaits.MaxMillis}, first waits for the attempt to end; Cancel stops a child. Prepare/apply reviewed integration, or DiscardIntegration a prepared one that will not be applied; Combine a NotApplied integration; IntegrationStatus and CombinationStatus read and wait the same way. Forward handles directly; full prompts/results stay outside your context." + McpSchemas.Revalidation, false)
+    tool("dispatch", schemas.localInput("DispatchCommand"), "DispatchReply", s"Select bounded cohorts, claim one complete choice, then StartChoice by ID and fence: the host starts the models the project's agent configuration assigns to the role, as one unit named by one attempt ID. Workflow runs require choices; direct Start supports explicitly assigned non-workflow runs. Status reads the state or the result of an attempt and, with waitMillis up to ${DispatchWaits.MaxMillis}, first waits for the attempt to end; Cancel stops the whole unit of an attempt; Seats lists the models the host tried for it and how each seat ended. Prepare/apply reviewed integration, or DiscardIntegration a prepared one that will not be applied; Combine a NotApplied integration; IntegrationStatus and CombinationStatus read and wait the same way. Forward handles directly; full prompts/results stay outside your context." + McpSchemas.Revalidation, false)
   else tool("workspace", schemas.workspace(capability.role), "WorkspaceReply", "List or read bounded pages in your assigned workspace. A prepared resolver may read MergeReport. A candidate reviewer may request a configured Check by name and poll the same operation; wait for Completed evidence before returning. Relative paths only; Git metadata and symlink traversal are denied.", capability.role != Role.Reviewer)
   /** `input` is the tool's input schema, which is assembled only to describe a decode fault. */
   private def decode[A](name: String, input: => Json, codec: BaboonJsonCodec[A], json: Json): Task[A] = ZIO.attempt {
@@ -52,14 +52,13 @@ final class LocalControl(dispatch: DispatchController, cohorts: CohortController
     if (capability.role == Role.Governor && name == "dispatch") {
       val operation = decode(name, schemas.schema("DispatchCommand"), DispatchCommand_JsonCodec, arguments).tap(command => ZIO.attemptBlocking(workflow.authorize(command))).flatMap {
         case DispatchCommand.Select(request) => cohorts.select(request).map(value => DispatchReply.Selection(DispatchProjection.offer(value)))
-        case DispatchCommand.StartChoice(choice, harness, fence) => cohorts.start(choice, harness, fence).map(DispatchReply.Status.apply)
-        case DispatchCommand.Start(request) => ZIO.attempt {
+        case DispatchCommand.StartChoice(choice, fence) => cohorts.start(choice, fence).map(DispatchReply.Status.apply)
+        case DispatchCommand.Start(work) => ZIO.attempt {
           require(config.run.ownership == SessionOwnership.Managed && config.workflow.isEmpty, "Workflow execution requires a retained cohort choice")
-          ChildContracts.request(config.project.project, request)
-        } *> dispatch.start(request).map(DispatchReply.Status.apply)
-        case DispatchCommand.Status(attempt, wait) => dispatch.status(attempt, wait).map(DispatchReply.Status.apply)
-        case DispatchCommand.Cancel(attempt) => dispatch.cancel(attempt).map(DispatchReply.Status.apply)
-        case _: DispatchCommand.Seats => ZIO.fail(new IllegalStateException("The Seats command is not implemented in this build"))
+        } *> units.start(work, None).map(DispatchReply.Status.apply)
+        case DispatchCommand.Status(attempt, wait) => units.status(attempt, wait).map(DispatchReply.Status.apply)
+        case DispatchCommand.Cancel(attempt) => units.cancel(attempt).map(DispatchReply.Status.apply)
+        case DispatchCommand.Seats(attempt) => units.seats(attempt).map(DispatchReply.Seats.apply)
         case DispatchCommand.PrepareIntegration(id, reviewer) => integrations.prepare(IntegrationTicket(id, reviewer)).map(DispatchReply.Integration.apply)
         case DispatchCommand.Integrate(id) => integrations(id).map(DispatchReply.Integration.apply)
         case DispatchCommand.IntegrationStatus(id, wait) => integrations.status(id, wait).map(DispatchReply.Integration.apply)
@@ -71,7 +70,7 @@ final class LocalControl(dispatch: DispatchController, cohorts: CohortController
       operation.map(value => (DispatchReply_JsonCodec.encode(Context, value), false))
         .catchAll(error => ZIO.succeed((DispatchReply_JsonCodec.encode(Context, DispatchReply.Failed(fault(error))), true)))
     } else if (Set(Role.Explorer, Role.Planner, Role.Worker, Role.Reviewer)(capability.role) && name == "workspace") {
-      decode(name, schemas.workspace(capability.role), WorkspaceCommand_JsonCodec, arguments).flatMap(dispatch.workspace(capability.attempt, _))
+      decode(name, schemas.workspace(capability.role), WorkspaceCommand_JsonCodec, arguments).flatMap(units.workspace(capability.attempt, _))
         .map(value => (WorkspaceReply_JsonCodec.encode(Context, value), false))
         .catchAll(error => ZIO.succeed((WorkspaceReply_JsonCodec.encode(Context, WorkspaceReply.Failed(fault(error))), true)))
     } else ZIO.fail(DomainFailure(Fault.Denied("Local capability does not authorize this tool")))

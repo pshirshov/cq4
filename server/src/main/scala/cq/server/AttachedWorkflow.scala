@@ -53,12 +53,12 @@ final class WorkflowActivations(session: DriverSessionClient, unsettled: () => L
 }
 
 final class AttachedWorkflow(config: SupervisorConfig, authority: SupervisorAuthority, assets: WorkflowAssets, execution: WorkflowExecution,
-  requirements: OperatorRequirements, dispatch: DispatchController, integrations: IntegrationController, combinations: CombinationController,
+  requirements: OperatorRequirements, units: DispatchUnits, integrations: IntegrationController, combinations: CombinationController,
   revalidations: RevalidationController, driver: AttachedDriver) {
   // Instructions plus a session request of up to 64 KiB (the gateway bound) no longer fit the former 64 KiB record.
   private val MaxActivationBytes = 131072
   private val activations = new WorkflowActivations(driver.session,
-    () => dispatch.unsettled ++ revalidations.unsettled ++ integrations.unsettled ++ combinations.unsettled, begin)
+    () => units.unsettled ++ revalidations.unsettled ++ integrations.unsettled ++ combinations.unsettled, begin)
   private var integrationsByEpoch = Map.empty[IntegrationId, Long]
   private var combinationsByEpoch = Map.empty[RequestId, Long]
   def current: Option[WorkflowActivation] = activations.current

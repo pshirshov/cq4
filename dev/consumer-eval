@@ -17,6 +17,8 @@ import urllib.parse
 import urllib.request
 import uuid
 
+from fixture_runtime import role_agents, save_agents
+
 
 ROOT = Path(__file__).resolve().parent.parent
 PROFILES = {
@@ -245,7 +247,7 @@ def main():
                     "evaluation": {"run": identifier, "scenario": ("cohort-wordfreq-" if arguments.cohort else "wordfreq-") + language, "assessor": False}}
         write(evidence / "settings.json", settings)
         request = (f"Build the following unrelated consumer in {language}. Create one CQ task containing the complete specification below, assign it PartOf one new Open milestone and claim the task. "
-                   f"Dispatch {PROFILES[worker][0]} Worker Implement with that exact task revision; after host validation passes, dispatch {PROFILES[reviewer][0]} Reviewer using its result handle. "
+                   "Dispatch Worker Implement with that exact task revision; after host validation passes, dispatch Reviewer using its result handle. "
                    "Use references only; do not read or compose child prompts or read full child result bodies. Use compact status for correction loops when necessary. "
                    "After the accepted review, retain the exact reviewed task revision for the separate assessment step: release its claim and report handles without editing the task. "
                    "Keep process startup at 10000 ms, heartbeat at 2000 ms, grace at 1000 ms, kill at 3000 ms and output at 8388608 bytes; execution may use the supplied session limit. "
@@ -259,13 +261,17 @@ def main():
                 environment["CQ_TOKEN"] = checks.environment["CQ_TOKEN"]
                 with (evidence / "cq-init.log").open("w") as log:
                     subprocess.run(command + ["init", "--endpoint", checks.environment["CQ_ORIGIN"]], cwd=consumer, env=environment, stdout=log, stderr=subprocess.STDOUT, timeout=30, check=True)
+                # The host starts the models the project's agent configuration assigns: each role runs the harness this evaluation requires.
+                project = json.loads((consumer / ".git/cq/project.json").read_text())["project"]
+                agents = role_agents(routes, {"planner": PROFILES[planner][0], "worker": PROFILES[worker][0], "reviewer": PROFILES[reviewer][0]})
+                (evidence / "agents.yaml").write_text(agents)
+                save_agents(lambda body: call(checks.environment, body), project, agents)
                 try:
                     workflow = []
                     if arguments.cohort:
-                        project = json.loads((consumer / ".git/cq/project.json").read_text())["project"]
                         seed = cohort["seed"](lambda body: call(checks.environment, body), project, language, (ROOT / "dev/consumer-spec.md").read_text())
                         write(evidence / "cohort-seed.json", seed)
-                        (evidence / "request.txt").write_text(cohort["request"](seed, PROFILES[planner][0], PROFILES[worker][0], PROFILES[reviewer][0]))
+                        (evidence / "request.txt").write_text(cohort["request"](seed))
                         workflow = ["--workflow", "advance", "--roots", "G" + seed["goal"]["id"]["number"], "--through", "review"]
                     began = time.monotonic()
                     with (evidence / "governor.stdout").open("w") as out, (evidence / "governor.stderr").open("w") as err:

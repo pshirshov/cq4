@@ -14,8 +14,8 @@ class ReleaseMetricsTests(unittest.TestCase):
         self.metrics = runpy.run_path(str(ROOT / "dev/release-metrics.py"))
 
     def test_three_native_envelopes_preserve_dispatch_retries_errors_and_drilldowns(self):
-        calls = [("one", "cq_host", "dispatch", {"StartChoice": {"choice": {"value": "choice"}, "harness": "Codex", "fence": {}}}, {"Status": {"value": {}}}),
-                 ("two", "cq_host", "dispatch", {"StartChoice": {"choice": {"value": "choice"}, "harness": "Codex", "fence": {}}}, {"Failed": {"fault": {}}}),
+        calls = [("one", "cq_host", "dispatch", {"StartChoice": {"choice": {"value": "choice"}, "fence": {}}}, {"Status": {"value": {}}}),
+                 ("two", "cq_host", "dispatch", {"StartChoice": {"choice": {"value": "choice"}, "fence": {}}}, {"Failed": {"fault": {}}}),
                  ("three", "cq", "read", {"selection": {"ArtifactText": {"id": {"value": "result"}, "offset": 0, "limit": 10}}}, {"ArtifactText": {"page": {"text": "body"}}})]
         observed = []
         for harness in ["Claude", "Codex", "Pi"]:

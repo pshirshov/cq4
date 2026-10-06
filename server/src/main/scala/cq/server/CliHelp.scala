@@ -23,6 +23,7 @@ Operator commands (readable output by default; add --json for automation):
   restore           Restore a project archive without overwriting an existing ID
   web               Print this project's browser URL
   configure         Install integration for a directly launched harness
+  agents init       Write a starting agent model configuration from a settings file
   doctor            Verify commands, server, harness or agent models without writes
   assets export     Generate integration assets for declarative installation
   commands export   Write native CQ workflow commands/skills
@@ -134,6 +135,26 @@ Examples: cq status --task T1
           cq status phases --session SESSION_UUID
           cq status attempts --session SESSION_UUID --json
           cq status outcomes --attempt ATTEMPT_UUID
+"""
+      case Some("agents") => """Usage: cq agents init [--settings FILE] [--save installation|project] [--json]
+
+Write an agent model configuration to start from. Every harness of the settings
+file runs its settings model in the frontier, standard and fast tiers, and every
+role (planner, worker, explorer, reviewer) runs the standard tier of the
+governing harness. Without --save the text is printed and nothing is changed.
+  --settings FILE   Harness settings; otherwise CQ_SETTINGS
+  --save LAYER      Save the text as the configuration of the installation (the
+                    server's default for every project; operator credentials)
+                    or of this checkout's project. A layer that already holds
+                    a configuration is not replaced.
+
+A session starts a child only on the models the configuration assigns to the
+child's role: a project without any configuration starts none, and the refusal
+names the role to assign. Edit the saved text to assign other models.
+
+Examples:
+  cq agents init --settings ./cq-settings.json
+  cq agents init --settings ./cq-settings.json --save installation
 """
       case Some("proposal") => """Usage: cq proposal preview|apply RESULT_UUID [--json]
 

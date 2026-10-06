@@ -732,4 +732,52 @@ final class AgentConfigLocal extends AnyWordSpec {
       assert(resolved(text, "", Harness.Codex, AgentRole.Worker).selfReview.isEmpty)
     }
   }
+
+  "A starting configuration (Behavioral Active Blackbox Atomic)" should {
+    "write a starting configuration in which each harness of the settings runs its settings model and every role resolves" in {
+      val settings = List(HarnessSetting(Harness.Claude, "/bin/claude", "opus", "anthropic", "1", Nil, Set.empty),
+        HarnessSetting(Harness.Codex, "/bin/codex", "gpt-6.1", "openai", "1", Nil, Set.empty),
+        HarnessSetting(Harness.Pi, "/bin/pi", "glm 5,max", "z ai", "1", Nil, Set.empty))
+      val text = cq.core.AgentStarter.text(settings)
+      val parsed = cq.core.AgentConfigText.parse(text).fold(problems => fail(problems.toString), identity)
+      assert(text.contains("    reviewer: $harness:@standard\n") && text.contains("  codex:\n    tiers:\n      frontier: [gpt-6.1]\n      standard: [gpt-6.1]\n      fast: [gpt-6.1]\n"))
+      for (setting <- settings; role <- AgentRole.all) {
+        val expected = ModelRoute(setting.harness, Option.when(setting.harness == Harness.Pi)("z ai"), setting.model, None)
+        assert(cq.core.AgentResolution.resolve(parsed, cq.core.ParsedAgents.empty, setting.harness, role) == RoleResolution.Resolved(ResolvedRole(PanelMode.All, 1,
+          List(ResolvedSeat(SeatStrategy.Fallback, List(expected))), RoleOrigin(AgentLayer.Installation, RoleSource.DefaultRoles),
+          if (role == AgentRole.Reviewer) List(0) else Nil)), s"${setting.harness} $role")
+      }
+      // A harness the settings do not hold has no tier: its roles are unassigned in effect, and the refusal names the tier.
+      assert(cq.core.AgentResolution.resolve(cq.core.AgentConfigText.parse(cq.core.AgentStarter.text(settings.take(1))).toOption.get, cq.core.ParsedAgents.empty, Harness.Pi, AgentRole.Worker) ==
+        RoleResolution.Unresolved(Some(RoleOrigin(AgentLayer.Installation, RoleSource.DefaultRoles)), List(AgentProblem.TierUndefined(Harness.Pi, ModelTier.Standard, AgentRole.Worker))))
+      assert(intercept[IllegalArgumentException](cq.core.AgentStarter.text(settings :+ settings.head)).getMessage.contains("names each harness once"))
+      assert(intercept[IllegalArgumentException](cq.core.AgentStarter.text(Nil)).getMessage.contains("names each harness once"))
+    }
+    "save it as the configuration of a layer that holds none, leave a layer that holds it as it is, and replace no other configuration" in {
+      val project = ProjectId(java.util.UUID.randomUUID())
+      val text = cq.core.AgentStarter.text(List(HarnessSetting(Harness.Codex, "/bin/codex", "gpt-6.1", "openai", "1", Nil, Set.empty)))
+      var stored = AgentsView(AgentsDocument(Revision(0), "", None, Nil), AgentsDocument(Revision(0), "", None, Nil), Nil)
+      var replaced = List.empty[(AgentsScope, Revision)]
+      val call: Command => Result = {
+        case Command.Agents(AgentsInput(`project`, AgentsAction.Read())) => Result.Agents(stored)
+        case Command.Agents(AgentsInput(`project`, AgentsAction.Replace(scope, expected, value))) =>
+          replaced :+= scope -> expected
+          val document = AgentsDocument(Revision(expected.value + 1), value, None, Nil)
+          stored = scope match {
+            case AgentsScope.Installation() => stored.copy(installation = document)
+            case AgentsScope.Project() => stored.copy(project = document)
+          }
+          Result.Agents(stored)
+        case other => fail(s"Unexpected command $other")
+      }
+      assert(AgentsInit.save(call, project, "installation", text) == AgentsDocument(Revision(1), text, None, Nil) && stored.project.text.isEmpty)
+      // Saved again, it is found there and nothing is written.
+      assert(AgentsInit.save(call, project, "installation", text).revision == Revision(1) && replaced == List(AgentsScope.Installation() -> Revision(0)))
+      assert(AgentsInit.save(call, project, "project", text).revision == Revision(1) && replaced.size == 2)
+      stored = stored.copy(project = AgentsDocument(Revision(4), "defaults:\n  roles:\n    worker: codex:other\n", None, Nil))
+      val refused = intercept[IllegalArgumentException](AgentsInit.save(call, project, "project", text)).getMessage
+      assert(refused.contains("The project already holds an agent configuration (revision 4); cq agents init starts one and replaces none") && replaced.size == 2, refused)
+      assert(intercept[IllegalArgumentException](AgentsInit.save(call, project, "server", text)).getMessage.contains("--save takes installation or project"))
+    }
+  }
 }

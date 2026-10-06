@@ -93,10 +93,9 @@ final class LineageTracker(client: DriverSessionClient, report: String => Unit, 
       case _: DomainFailure => ZIO.unit
       case error => abandon(cycle, member, "resumption", "could not be resumed", error)
     }, followed => if (followed) ZIO.unit else track(cycle, parent, member, observed))
-  def record(cycle: CycleId, parent: LineageMember, member: LineageMember): Task[Unit] = track(cycle, parent, member, ZIO.some(LineageOutcome.Settled))
 }
 
-final class AttachedDriver(config: SupervisorConfig, authority: SupervisorAuthority, dispatch: DispatchController,
+final class AttachedDriver(config: SupervisorConfig, authority: SupervisorAuthority, units: DispatchUnits,
   integrations: IntegrationController, combinations: CombinationController, logger: IzLogger) {
   private val WaitMillis = 20000
   private val PollMillis = 1000L
@@ -128,10 +127,17 @@ final class AttachedDriver(config: SupervisorConfig, authority: SupervisorAuthor
   // A status wait returns at once once a member has left the phase it was awaited in, so the tracker paces every further read.
   def observe(activation: Option[WorkflowActivation], command: DispatchCommand, reply: DispatchReply): Task[Unit] =
     activation.flatMap(value => value.cycle.map(_ -> LineageMember.Run(value.id))).fold(ZIO.unit) { case (cycle, run) => (command, reply) match {
+      // The unit is in flight, as its request, until it has ended; each attempt the host makes for it is registered under the request
+      // before that and settles with its own outcome. The request therefore covers the time between two candidates.
       case (_: DispatchCommand.StartChoice | _: DispatchCommand.Start, DispatchReply.Status(status)) =>
         val request = LineageMember.Request(status.request)
-        tracker.record(cycle, run, request) *> tracker.track(cycle, request, LineageMember.Attempt(status.attempt),
-          dispatch.concluded(status.attempt, WaitMillis).map(_.map(LineageOutcome.Concluded.apply)))
+        val known = new java.util.concurrent.atomic.AtomicInteger(0)
+        val unit = ZIO.suspend(units.lineage(status.attempt, known.get, WaitMillis)).flatMap { (attempts, ended) =>
+          ZIO.foreachDiscard(attempts)(attempt => tracker.track(cycle, request, LineageMember.Attempt(attempt),
+            units.concluded(attempt, WaitMillis).map(_.map(LineageOutcome.Concluded.apply)))) *>
+            ZIO.succeed { known.set(attempts.size); Option.when(ended)(LineageOutcome.Settled) }
+        }
+        tracker.track(cycle, run, request, unit) *> unit.unit
       case (DispatchCommand.PrepareIntegration(id, _), _: DispatchReply.Integration) =>
         tracker.track(cycle, run, LineageMember.Integration(id), integrations.status(id, WaitMillis).map(value => AttachedDriver.integration(value.phase)))
       // Integrate returns once the host applies the integration; the tracker's next poll may be a status wait away.

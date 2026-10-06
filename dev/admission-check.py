@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import http.server
 import json
-from fixture_runtime import guardian_binary
+from fixture_runtime import AGENTS_INIT, guardian_binary
 import os
 from pathlib import Path
 import subprocess
@@ -139,7 +139,7 @@ def reproduce(checks, command, scenario):
     thread.start()
     endpoint = f"http://127.0.0.1:{proxy.server_port}"
     try:
-        for name, arguments in [("init", ["init", "--endpoint", endpoint]),
+        for name, arguments in [("init", ["init", "--endpoint", endpoint]), ("agents", AGENTS_INIT + [str(settings)]),
                                 ("run", ["run", "codex", "--settings", str(settings), "--input", str(request_file)])]:
             result = subprocess.run(command + arguments, cwd=repository, env=environment, capture_output=True, text=True, timeout=100)
             (evidence / f"{name}.stdout").write_text(result.stdout)

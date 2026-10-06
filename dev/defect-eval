@@ -161,6 +161,13 @@ def main():
                                    env=environment, stdout=log, stderr=subprocess.STDOUT, timeout=30, check=True)
                 project = json.loads((consumer / ".git/cq/project.json").read_text())["project"]
                 api = lambda value: call(checks.environment, value)
+                # The host starts the models the project's agent configuration assigns: the harness of each role of this stage.
+                roles = {"begin": {"explorer": "Codex", "planner": "Codex", "reviewer": "Pi"}, "probe": {"worker": "Codex"}, "research": {"explorer": "Pi"},
+                         "plan": {"planner": "Codex", "reviewer": "Pi"}, "integrate": {"planner": "Codex", "worker": "Pi", "reviewer": "Codex"},
+                         "upstream": {"planner": "Codex", "reviewer": "Pi"}, "assess": {"reviewer": "Codex"}}[arguments.stage]
+                agents = evaluation["role_agents"](routes, roles)
+                (evidence / "agents.yaml").write_text(agents)
+                evaluation["save_agents"](api, project, agents)
                 def total_usage():
                     return api({"Usage": {"input": {"project": project, "selection": {"Summary": {"filter": {"EvaluationOnly": {
                         "run": settings["evaluation"]["run"], "scenario": settings["evaluation"]["scenario"]}}}}}}})
@@ -230,13 +237,13 @@ def main():
                         "Use Select and StartChoice with the exact supplied roots, ALL guidance and artifact handles. The host supplies the recording/analysis instructions directly to the child through the input artifact; do not read or copy that body. "
                         "Complete this assignment once, forward compact outcomes, release every claim and finish. Do not create records, apply proposals, start Planner/Reviewer/Implement, or infer a completed fix.\n" +
                         json.dumps({"work": {"Worker": {"mode": "Probe"}} if arguments.stage == "probe" else {"Explorer": {"mode": "Research"}},
-                            "harness": "Codex" if arguments.stage == "probe" else "Pi", "roots": members, "guidance": guidance, "artifacts": context}))
+                            "roots": members, "guidance": guidance, "artifacts": context}))
                     (evidence / "request.txt").write_text(request)
                     workflow = ["--workflow", "advance", "--roots", "D" + intake["defect"]["number"], "--through", "explore"]
                     if arguments.stage == "plan":
                         context += [prior["manifest"]["proof"][key] for key in ["observations", "probe", "result"]]
                         request = ("Advance D1 through Plan only. Intake and empirical exploration are complete; earlier intake-only restrictions are historical. "
-                            "Use Codex Planners and independent Pi Plan reviews for every stored proposal before applying it. "
+                            "Use Planners and independent Plan reviews for every stored proposal before applying it. "
                             "First adjudicate existing R1/H1/H2/H3 from the empirical evidence; preserve their question/claims. "
                             "Then Produce one fix Goal from D1; in a fresh round Produce one Milestone from that Goal; "
                             "finally, in another round, Produce one Task from that Goal assigned to that existing Milestone. No direct ledger changes. "
@@ -248,9 +255,9 @@ def main():
                         workflow[-1] = "plan"
                     if arguments.stage == "integrate":
                         request = ("Advance the single supplied Ready Task through Integrate. The reviewed investigation and plan are complete; earlier intake/plan-only restrictions are historical. "
-                            "Use Pi Worker/Implement and independent Codex Reviewer/Candidate. Both must execute the fresh named defect-oracle check on the candidate. "
+                            "Use Worker/Implement and an independent Reviewer/Candidate. Both must execute the fresh named defect-oracle check on the candidate. "
                             "Use Select/StartChoice and current revisions; pass the supplied Input handle and ALL guidance to each child without reading/copying its body. "
-                            "If selection requires Planner assessment, use Codex for assessment only with the same context; no proposals or ledger edits. "
+                            "If selection requires Planner assessment, use it for assessment only with the same context; no proposals or ledger edits. "
                             "Correct through review handles and repeat independent review as necessary. Integrate the accepted exact candidate using host dispatch; no direct completion edits. "
                             "Only the Task may change to Done. Leave D1, Goal and Milestone Open, preserve all other records/history and release all claims. "
                             "No upstream work in this stage.\n" + json.dumps({"roots": members, "guidance": guidance, "artifacts": context}))
@@ -261,7 +268,7 @@ def main():
                         context += [chain["workerResult"], chain["reviewResult"], *(value["artifact"] for value in chain["validation"])]
                         request = ("Prepare the local synthetic dependency report and reviewed local closeout under upstream Prepare. "
                             "Implementation and integration are verified; earlier stage-only restrictions are historical. "
-                            "Use Codex Planners and independent Pi Plan reviewers; every mutation must come from an accepted stored proposal and current claimed revisions. "
+                            "Use Planners and independent Plan reviewers; every mutation must come from an accepted stored proposal and current claimed revisions. "
                             "Pass ALL supplied artifact handles to every Planner/Reviewer without reading or copying their bodies. "
                             "Execute the supplied four singleton rounds in order. For EVERY Select, including Plan reviews, roots contains ONLY that round's root; "
                             "guidance contains current ItemRevision references for ALL SEVEN other original records listed below. Do not use those context records as roots. "
@@ -277,13 +284,13 @@ def main():
                     if arguments.stage == "assess":
                         context += prepared["handles"]
                         write(evidence / "input-bound.json", assessment["bound"](before, metadata, body, prepared))
-                        request = ("Obtain exactly one Codex Reviewer Audit on the current T1 and exact incorporated workspace below. "
+                        request = ("Obtain exactly one Reviewer Audit on the current T1 and exact incorporated workspace below. "
                             "Use direct Start with the exact current members, ALL guidance and artifact handles, and previous:null. Acquire their exact claim for at most 300000 ms. "
                             "The host materializes the whole-process rubric and evidence; do not compose a child prompt or read/copy these bodies. "
                             "The reviewer must inspect the entire defect-to-upstream process, every referenced historical revision and every tracked candidate file. "
                             "Audit cannot execute checks; prior host observations are context. No ledger changes, proposals, implementation, integration or external action. "
                             "Release claims after this single review, including ChangesRequested or Blocked, and return its truthful bounded outcome. This is not human acceptance.\n" +
-                            json.dumps({"work": {"Reviewer": {"mode": "Audit"}}, "harness": "Codex",
+                            json.dumps({"work": {"Reviewer": {"mode": "Audit"}},
                                 "members": [{"id": view["item"]["id"], "revision": view["item"]["revision"]} for view in before["views"] if view["item"]["id"] in members],
                                 "guidance": guidance, "artifacts": context, "previous": None}))
                         (evidence / "request.txt").write_text(request)

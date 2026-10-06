@@ -218,7 +218,7 @@ def main():
             assert choice["members"] == [member]
             claim = tool("cq", "claim", {"project": project, "action": {"Acquire": {
                 "id": identity(), "members": [member["id"]], "durationMillis": "180000"}}})["Claimed"]["claim"]
-            started = tool("cq_host", "dispatch", {"StartChoice": {"choice": choice["id"], "harness": "Codex", "fence": claim["fence"]}})["Status"]["value"]
+            started = tool("cq_host", "dispatch", {"StartChoice": {"choice": choice["id"], "fence": claim["fence"]}})["Status"]["value"]
             settled = poll(started["attempt"])
             assert settled["phase"] == "Completed" and settled["result"] and settled["usageDelivered"], settled
             # A completed child's workspace is released as soon as its result is published (D96).
@@ -238,13 +238,13 @@ def main():
             "id": identity(), "members": [member["id"] for member in members], "durationMillis": "180000"}}})["Claimed"]["claim"]
         rounds = []
         for handle in scenario["artifacts"]:
-            request = {"request": identity(), "work": {"Explorer": {"mode": "Investigate"}}, "harness": "Codex", "members": members,
+            request = {"request": identity(), "work": {"Explorer": {"mode": "Investigate"}}, "members": members,
                 "guidance": [], "artifacts": [handle], "previous": None, "fence": claim["fence"], "limits": data["limits"]}
-            started = tool("cq_host", "dispatch", {"Start": {"request": request}})["Status"]["value"]
+            started = tool("cq_host", "dispatch", {"Start": {"work": request}})["Status"]["value"]
             explored = poll(started["attempt"])
             assert explored["phase"] == "Completed" and explored["counts"]["evidence"] == len(members) and explored["usageDelivered"], explored
             chained = {**request, "request": identity(), "work": {"Reviewer": {"mode": "Audit"}}, "previous": explored["result"]}
-            reviewed = tool("cq_host", "dispatch", {"Start": {"request": chained}})["Status"]["value"]
+            reviewed = tool("cq_host", "dispatch", {"Start": {"work": chained}})["Status"]["value"]
             reviewed = poll(reviewed["attempt"])
             assert reviewed["phase"] == "Completed" and reviewed["counts"]["accepted"] == len(members) and reviewed["usageDelivered"], reviewed
             rounds.append({"input": handle, "explorer": explored, "reviewer": reviewed})
@@ -307,14 +307,14 @@ def main():
         claim = tool("cq", "claim", {"project": project, "action": {"Acquire": {
             "id": identity(), "members": [member["id"] for member in choice["members"]], "durationMillis": "180000"}}})["Claimed"]["claim"]
         fence = claim["fence"]
-        direct = {"request": choice["id"], "work": choice["work"], "harness": "Codex", "members": choice["members"],
+        direct = {"request": choice["id"], "work": choice["work"], "members": choice["members"],
                   "guidance": [], "artifacts": [], "previous": None, "fence": fence, "limits": data["limits"]}
-        tool("cq_host", "dispatch", {"Start": {"request": direct}}, denied=True)
-        tool("cq_host", "dispatch", {"StartChoice": {"choice": choice["id"], "harness": "Codex", "fence": {"claim": identity(), "generation": "1"}}}, denied=True)
-        tool("cq_host", "dispatch", {"StartChoice": {"choice": choice["id"], "harness": "Codex", "fence": fence, "members": []}}, denied=True)
+        tool("cq_host", "dispatch", {"Start": {"work": direct}}, denied=True)
+        tool("cq_host", "dispatch", {"StartChoice": {"choice": choice["id"], "fence": {"claim": identity(), "generation": "1"}}}, denied=True)
+        tool("cq_host", "dispatch", {"StartChoice": {"choice": choice["id"], "fence": fence, "members": []}}, denied=True)
 
         def start(selected):
-            command = {"StartChoice": {"choice": selected["id"], "harness": "Codex", "fence": fence}}
+            command = {"StartChoice": {"choice": selected["id"], "fence": fence}}
             value = tool("cq_host", "dispatch", command)["Status"]["value"]
             assert tool("cq_host", "dispatch", command)["Status"]["value"]["attempt"] == value["attempt"]
             return poll(value["attempt"])
@@ -433,10 +433,10 @@ def main():
         members = selection["members"]
         claim = tool("cq", "claim", {"project": project, "action": {"Acquire": {
             "id": identity(), "members": [value["id"] for value in members], "durationMillis": "180000"}}})
-        request = {"request": identity(), "work": selection["work"], "harness": "Codex", "members": members,
+        request = {"request": identity(), "work": selection["work"], "members": members,
                    "guidance": [], "artifacts": [], "previous": selection["previous"],
                    "fence": claim["Claimed"]["claim"]["fence"], "limits": data["limits"]}
-        rejected = tool("cq_host", "dispatch", {"Start": {"request": request}}, denied=True)
+        rejected = tool("cq_host", "dispatch", {"Start": {"work": request}}, denied=True)
         assert "workflow" in json.dumps(rejected).lower(), rejected
         for operation in [{"PrepareIntegration": {"id": identity(), "reviewer": identity()}},
                           {"Integrate": {"id": identity()}},
@@ -475,7 +475,7 @@ def main():
         milestone = next(value for value in linked if value["id"] == milestone["id"])
         members[index] = next(value for value in linked if value["id"] == member["id"])
     claim = tool("cq", "claim", {"project": project, "action": {"Acquire": {"id": identity(), "members": [value["id"] for value in members], "durationMillis": "180000"}}})
-    request = {"request": identity(), "work": {"Worker": {"mode": "Implement"}}, "harness": "Codex", "members": members,
+    request = {"request": identity(), "work": {"Worker": {"mode": "Implement"}}, "members": members,
                "guidance": [], "artifacts": [], "previous": None, "fence": claim["Claimed"]["claim"]["fence"], "limits": data["limits"]}
     if data["request"] == "cohort-choice-ack":
         selection = {"request": identity(), "roots": [member["id"] for member in members], "work": request["work"],
@@ -488,7 +488,7 @@ def main():
         finish({"summary": "Selection publication acknowledgement replay preserved exact choice identity"})
         return
     if cohort:
-        planned = tool("cq_host", "dispatch", {"Start": {"request": {**request, "work": {"Planner": {}}}}})["Status"]["value"]
+        planned = tool("cq_host", "dispatch", {"Start": {"work": {**request, "work": {"Planner": {}}}}})["Status"]["value"]
         planned = poll(planned["attempt"])
         if data["request"] == "cohort-assessment-unknown-check":
             assert planned["phase"] == "Failed" and planned["result"] is None and "unconfigured check" in planned["blocker"], planned
@@ -498,7 +498,7 @@ def main():
         assert planned["phase"] == "Completed" and planned["counts"]["assessed"] == 2 and planned["next"] == "ConsiderGrouping", planned
         assert planned["counts"]["ready"] == 0 and planned["counts"]["accepted"] == 0
         tool("cq", "apply", {"project": project, "result": planned["result"]}, denied=True)
-        reviewed = tool("cq_host", "dispatch", {"Start": {"request": {**request, "request": identity(),
+        reviewed = tool("cq_host", "dispatch", {"Start": {"work": {**request, "request": identity(),
             "work": {"Reviewer": {"mode": "Plan"}}, "previous": planned["result"]}}})["Status"]["value"]
         reviewed = poll(reviewed["attempt"])
         assert reviewed["phase"] == "Completed" and reviewed["counts"]["accepted"] == 2, reviewed
@@ -511,7 +511,7 @@ def main():
         for work in [{"Explorer": {"mode": "Investigate"}}, {"Explorer": {"mode": "Research"}},
                      {"Worker": {"mode": "Probe"}}, {"Planner": {}}, {"Reviewer": {"mode": "Plan"}}, {"Reviewer": {"mode": "Audit"}}]:
             current = {**request, "request": identity(), "work": work, "previous": previous}
-            started = tool("cq_host", "dispatch", {"Start": {"request": current}})["Status"]["value"]
+            started = tool("cq_host", "dispatch", {"Start": {"work": current}})["Status"]["value"]
             settled = poll(started["attempt"])
             assert settled["phase"] == "Completed" and settled["result"] and settled["usageDelivered"], settled
             results.append(settled)
@@ -535,7 +535,7 @@ def main():
     exiting = data["request"] == "exit-with-running-child"
     if exiting:
         request["work"] = {"Worker": {"mode": "Probe"}}
-    first = tool("cq_host", "dispatch", {"Start": {"request": request}})["Status"]["value"]
+    first = tool("cq_host", "dispatch", {"Start": {"work": request}})["Status"]["value"]
     if exiting:
         for _ in range(100):
             running = tool("cq_host", "dispatch", {"Status": {"attempt": first["attempt"], "waitMillis": 0}})["Status"]["value"]
@@ -544,10 +544,10 @@ def main():
                 return
             time.sleep(0.05)
         raise AssertionError("Exit fixture child did not start")
-    replay = tool("cq_host", "dispatch", {"Start": {"request": request}})["Status"]["value"]
+    replay = tool("cq_host", "dispatch", {"Start": {"work": request}})["Status"]["value"]
     assert first["attempt"] == replay["attempt"]
     changed = {**request, "work": {"Worker": {"mode": "Probe"}}}
-    tool("cq_host", "dispatch", {"Start": {"request": changed}}, denied=True)
+    tool("cq_host", "dispatch", {"Start": {"work": changed}}, denied=True)
 
     worker = poll(first["attempt"])
     revalidating = data["request"] in ["revalidate-and-integrate", "revalidate-bound"]
@@ -589,7 +589,7 @@ def main():
     assert worker["result"] and worker["usageDelivered"] and worker["detailsOmitted"]
     assert poll(first["attempt"]) == worker
     review_request = {**request, "request": identity(), "work": {"Reviewer": {"mode": "Candidate"}}, "previous": worker["result"]}
-    review = tool("cq_host", "dispatch", {"Start": {"request": review_request}})["Status"]["value"]
+    review = tool("cq_host", "dispatch", {"Start": {"work": review_request}})["Status"]["value"]
     if data["request"].startswith(("reviewer-check-failed:", "reviewer-check-cancel:", "reviewer-check-hold:")):
         mode, marker = data["request"].split(":", 1)
         deadline = time.monotonic() + 30
@@ -652,7 +652,7 @@ def main():
         finish({"summary": "Reviewed candidate integrated into the configured target and task completion recorded exactly once"})
         return
     cancelled_request = {**request, "request": identity(), "work": {"Worker": {"mode": "Probe"}}}
-    cancelled = tool("cq_host", "dispatch", {"Start": {"request": cancelled_request}})["Status"]["value"]
+    cancelled = tool("cq_host", "dispatch", {"Start": {"work": cancelled_request}})["Status"]["value"]
     for _ in range(100):
         running = tool("cq_host", "dispatch", {"Status": {"attempt": cancelled["attempt"], "waitMillis": 0}})["Status"]["value"]
         if running["process"] == "Running":

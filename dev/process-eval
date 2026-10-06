@@ -119,8 +119,8 @@ def main():
                                    "executionMillis": "180000", "retainedOutputBytes": 262144, "attempts": 1, "revalidations": 0}]
         write(evidence / "settings.json", settings)
         request = ("Begin a new word-frequency consumer project from the specification below. Its implementation language is a genuine user preference and has not been chosen. "
-                   "Capture exactly one Idea without a milestone. Claim it and ask a Codex Planner to propose exactly one language-neutral Goal derived from it, preserving the complete specification. "
-                   "Obtain an independent Pi Reviewer in Plan mode, then preview/apply the accepted stored proposal by handle. "
+                   "Capture exactly one Idea without a milestone. Claim it and ask a Planner to propose exactly one language-neutral Goal derived from it, preserving the complete specification. "
+                   "Obtain an independent Reviewer in Plan mode, then preview/apply the accepted stored proposal by handle. "
                    "Create exactly one Question derived from that Goal, asking the user to choose the language with alternatives exactly [Python, Go] and stating your recommended alternative with its reason. "
                    "Leave its status Open and answer null; do not invent an answer or adopt a Decision. Do not create tasks/milestones or start implementation yet. "
                    "Release every claim and end this checkpoint with a bounded report containing the actual Question ID and both alternatives. "
@@ -131,8 +131,8 @@ def main():
                        "The host has recorded the answer in the Question using the supplied reply and committed its source record at .cq-evaluation/answer.json. "
                        "First re-read the current Question and Goal and acquire any claims required by their mutation rules. Keep every claim duration at most 300000 ms. "
                        "Record an adopted Decision directly from that actual answer using change, derive it from the answered Question and cite that exact file/commit. Preserve its bytes in every candidate. "
-                       "Record the planning scope below in that Decision before selecting a Planner. Then claim and re-read current records, and obtain NEW Codex Planner proposals "
-                       "and independent Pi Plan reviews before applying any proposal. Supply the CURRENT Goal and Decision references as guidance in every planning selection and review. "
+                       "Record the planning scope below in that Decision before selecting a Planner. Then claim and re-read current records, and obtain NEW Planner proposals "
+                       "and independent Plan reviews before applying any proposal. Supply the CURRENT Goal and Decision references as guidance in every planning selection and review. "
                        "Forward prior proposals/reviews through handles when revising a plan. Historical handles do not grant current publication authority. "
                        "From the existing Goal, produce exactly two tasks: counting/tokenization/sorting and command-line/top/error/help. Both include relevant automated tests and README requirements. "
                        "Preserve the complete original specification and chosen language; do not invent another choice or change the recorded answer. "
@@ -141,7 +141,7 @@ def main():
                        "because each link can revise its endpoints. Use actual server-allocated IDs and re-read the resulting current references after relationship edits. "
                        "Then select compatible work using the normal Planner assessment and selection path, preserving those assessed revisions while starting the choice. "
                        "Acquire a current claim for EXACTLY the returned choice members and use that claim's fence for StartChoice. "
-                       "Run Pi Worker Implement and independent Codex Candidate Reviewer. "
+                       "Run Worker Implement and an independent Candidate Reviewer. "
                        "The candidate reviewer must request a fresh consumer-oracle check. Correct through handles as needed. "
                        "Integrate accepted work through PrepareIntegration/status/preview/Integrate against the configured target; only Recorded establishes incorporation. "
                        "Do not mark tasks Done manually or infer completion from process exit. Once integration is Recorded, preserve the tasks at their acknowledged revisions: no further task edits or relationship changes. "
@@ -168,6 +168,14 @@ def main():
                 with (evidence / "cq-init.log").open("w") as log:
                     subprocess.run(command + init, cwd=consumer,
                                    env=environment, stdout=log, stderr=subprocess.STDOUT, timeout=30, check=True)
+                # The host starts the models the project's agent configuration assigns. It assigns one model to a role, whatever the mode of
+                # the work: the checkpoint has Codex plan and Pi review the plan; the continuation has Pi implement and Codex review, so
+                # its plans are reviewed by Codex too.
+                roles = {"planner": "Codex", "reviewer": "Pi"} if original is None else {"planner": "Codex", "worker": "Pi", "reviewer": "Codex"}
+                agents = evaluation["role_agents"](routes, roles)
+                (evidence / "agents.yaml").write_text(agents)
+                evaluation["save_agents"](lambda body: call(checks.environment, body),
+                                          json.loads((consumer / ".git/cq/project.json").read_text())["project"], agents)
                 if original is not None:
                     usage_selection = {"Summary": {"filter": {"EvaluationOnly": {"run": settings["evaluation"]["run"], "scenario": settings["evaluation"]["scenario"]}}}}
                     def total_usage():

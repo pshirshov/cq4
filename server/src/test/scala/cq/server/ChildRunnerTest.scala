@@ -12,6 +12,7 @@ import java.nio.file.{Files, Path}
 import java.nio.file.attribute.PosixFilePermissions
 import java.time.{Clock, Duration}
 import java.util.UUID
+import io.circe.{Json, parser}
 import zio.{IO, Promise, Runtime, Semaphore, Task, Unsafe, ZIO}
 
 /** Runs the real ChildRunner against an in-process server, a scripted Codex-shaped harness and the native guardian. */
@@ -108,6 +109,41 @@ sys.exit(1)
   private val Unclassified = Partial + """emit({"type": "turn.failed", "error": {"message": "unexpected status 400 Bad Request: Invalid schema"}})
 sys.exit(1)
 """
+  /**
+   * A harness whose behaviour is that of the model it is launched with, named `kind-label`: `refuse` is refused for quota, `fail`
+   * exits without a report, `slow` runs until it is stopped, `change` requests changes as a reviewer, and any other kind delivers:
+   * a candidate as a worker, an accepting review as a reviewer. Each launch leaves `MODEL.started` in `marks`. While `marks/together`
+   * lists models, a launch that delivers first waits until all of them have started and records in `MODEL.together` whether they had.
+   */
+  private def routed(marks: Path): String = Header + s"""marks = Path("$marks")
+model = sys.argv[sys.argv.index("--model") + 1]
+kind = model.split("-")[0]
+(marks / (model + ".started")).write_text("started")
+if kind == "refuse":
+    emit({"type": "error", "message": "$QuotaMessage"})
+    emit({"type": "turn.failed", "error": {"message": "$QuotaMessage"}})
+    sys.exit(1)
+if kind == "fail":
+    sys.exit(3)
+if kind == "slow":
+    time.sleep(60)
+together = marks / "together"
+if together.exists():
+    deadline = time.time() + 20
+    def all_started():
+        return all((marks / (name + ".started")).exists() for name in together.read_text().split())
+    while not all_started() and time.time() < deadline:
+        time.sleep(0.05)
+    (marks / (model + ".together")).write_text(str(all_started()))
+if "Reviewer" in data["input"]["request"]["work"]:
+    verdict = "ChangesRequested" if kind == "change" else "Accepted"
+    target.write_text(json.dumps({"Review": {"members": [{"item": item, "verdict": verdict,
+        "findings": [] if verdict == "Accepted" else ["Finding of " + model]} for item in members], "proposal": None}}))
+else:
+    Path("tracked.txt").write_text("candidate from " + model + "\\n")
+    target.write_text(json.dumps({"Work": {"members": [{"item": item, "disposition": "CandidateReady", "summary": "Implemented by " + model, "evidence": []} for item in members]}}))
+emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_tokens": 0, "cache_write_input_tokens": 0, "output_tokens": 5, "reasoning_output_tokens": 0}})
+"""
   /** A harness that answers the version probe and is gone when the guardian launches it. */
   private val Vanishing = Probe.replace("    sys.exit(0)\n", "    os.remove(sys.argv[0])\n    sys.exit(0)\n")
 
@@ -128,16 +164,37 @@ sys.exit(1)
     renewing: (SupervisorAuthority, ClaimRenewal.Policy) => ChildRunner, access: LocalAccess, reservations: java.util.concurrent.atomic.AtomicInteger,
     failingQuarantine: ChildRunner) {
     val limits: HostLimits = HostLimits(3000, 900, 100, 1000, 262144)
-    /** Runs one child of `controller` to its terminal status. */
-    def child(controller: DispatchController, script: String, request: DispatchRequest): Task[DispatchStatus] = for {
+    /** The units of this session over `runner`, and the attempts under them. */
+    def units(runner: ChildRunner): (DispatchUnits, DispatchController) = {
+      val children = new DispatchController(config, runner, jobs, clock)
+      new DispatchUnits(config, authority, children, logstage.IzLogger.NullLogger) -> children
+    }
+    def units: DispatchUnits = units(runner)._1
+    /** The cohort selection of this session over `units`, as its governing session uses it outside a workflow. */
+    def cohorts(units: DispatchUnits): CohortController = new CohortController(config, authority,
+      new WorkflowExecution(authority.governor, owner.project, owner.actor.session, None), units, new CandidateWorkspace(config), new OperatorRequirements(""), clock, logstage.IzLogger.NullLogger)
+    /** A role value of the agent configuration for each role named; the other roles are unassigned. */
+    def assign(roles: (String, String)*): Task[Unit] = configure("defaults:\n  roles:\n" + roles.map((role, value) => s"    $role: $value\n").mkString)
+    def marks: Path = Files.createDirectory(config.directory.resolve("marks-" + UUID.randomUUID()))
+    /** Every Attempt-kind event the host wrote for waiters, in order. */
+    def unitEvents: List[SessionUnitEvent] = SessionUnits.read(config.directory).filter {
+      case SessionUnitEvent.Started(value) => value.kind == SessionUnitKind.Attempt
+      case SessionUnitEvent.Ended(value) => value.unit.kind == SessionUnitKind.Attempt
+    }
+    def review(worker: ArtifactId): DispatchRequest =
+      DispatchRequest(RequestId(UUID.randomUUID()), DispatchWork.Reviewer(ReviewerMode.Candidate), Harness.Codex, members, Nil, Nil, Some(worker), fence, limits)
+    /** Makes `text` the project's agent configuration: the models the next unit starts. */
+    def configure(text: String): Task[Unit] = ZIO.attemptBlocking(UnitFixture.configure(authority.root, owner.project, text))
+    /** Runs one unit of `controller` to its terminal status. */
+    def child(controller: DispatchUnits, script: String, request: DispatchRequest): Task[DispatchStatus] = for {
       _ <- ZIO.attemptBlocking(install(script))
-      started <- controller.start(request)
+      started <- controller.start(UnitFixture.work(request), None)
       // One status call waits for the child: the longest wait is accepted and ends when the child does, not when the wait has passed.
       settled <- controller.status(started.attempt, 120000).repeatUntil(status => DispatchController.terminal(status.phase))
         .timeoutFail(new IllegalStateException("Child did not finish"))(zio.Duration.fromSeconds(60))
       refused <- controller.status(started.attempt, 120001).either
       _ <- ZIO.attempt(require(refused.left.exists(_.getMessage == "requirement failed: Status wait must be 0–120000 ms"), s"Unbounded status wait: $refused"))
-      // What `cq wait` reads: the host wrote that it started on the attempt and, once the end was visible to the session, how it ended.
+      // What `cq wait` reads: the host wrote that it started on the unit and, once the end was visible to the session, how it ended.
       unit = SessionUnit(SessionUnitKind.Attempt, started.attempt.value, request.members.map(_.id))
       events <- ZIO.attemptBlocking(SessionUnits.read(config.directory).filter {
         case SessionUnitEvent.Started(value) => value.id == unit.id
@@ -146,7 +203,7 @@ sys.exit(1)
       _ <- ZIO.attempt(require(events == List(SessionUnitEvent.Started(unit),
         SessionUnitEvent.Ended(UnitEnd(unit, settled.phase.toString, Some(settled.next.toString), settled.blocker))), s"Unexpected unit events: $events"))
     } yield settled
-    def revalidations(controller: DispatchController): ZIO[zio.Scope, Throwable, RevalidationController] = for {
+    def revalidations(controller: DispatchUnits): ZIO[zio.Scope, Throwable, RevalidationController] = for {
       requests <- Semaphore.make(1)
       admission <- Semaphore.make(1)
       value <- ZIO.acquireRelease(ZIO.succeed(new RevalidationController(config, authority, jobs, controller, renewal, clock, requests, admission)))(_.shutdown.orDie)
@@ -236,6 +293,8 @@ sys.exit(1)
         override def remove(scope: Scope, attempt: AttemptId): IO[Throwable, WorkspaceRecord] = workspaces.remove(scope, attempt)
         override def prune(scope: Scope, repository: String): IO[Throwable, Int] = workspaces.prune(scope, repository)
       }
+      // Every role of this project runs the settings model of the governing harness.
+      _ <- ZIO.attemptBlocking(UnitFixture.starting(authority.root, owner.project, settings))
       _ <- test(Fixture(owner, collector, config, authority, runner(authority, ClaimRenewal.Default, workspaces), agents, jobs, members, claim.fence, governor, profile, clock,
         runner(_, _, workspaces), access, reservations, runner(authority, ClaimRenewal.Default, unquarantinable)))
     } yield ()
@@ -589,7 +648,7 @@ sys.exit(1)
       val check = ValidationCheck("flaky", List("sh", "-c",
         s"n=$$(cat $counter 2>/dev/null || echo 0); echo $$((n + 1)) > $counter; git rev-parse HEAD >> $heads; test $$n -ge 1"), 10000, 65536, 1, 2)
       fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None, List(check)) { f => ZIO.scoped { for {
-        controller <- ZIO.succeed(new DispatchController(f.config, f.runner, f.jobs, f.clock))
+        controller <- ZIO.succeed(f.units)
         revalidations <- f.revalidations(controller)
         worked <- f.child(controller, Completing, f.request(f.limits))
         _ <- ZIO.attempt(assert(worked.phase == DispatchPhase.Completed && worked.counts.validationFailed == 1 && worked.next == ChildNext.Revise, worked.toString))
@@ -658,14 +717,14 @@ sys.exit(1)
       }
       fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None,
         List(counting("always", counter, 100, 1).copy(revalidations = 2))) { f => ZIO.scoped { for {
-        controller <- ZIO.succeed(new DispatchController(f.config, f.runner, f.jobs, f.clock))
+        controller <- ZIO.succeed(f.units)
         revalidations <- f.revalidations(controller)
         worked <- f.child(controller, Completing, f.request(f.limits))
         handle = worked.result.get
         foreign <- fault(revalidations.request(RequestId(uuid), handle, Fence(ClaimId(uuid), 1)))
         missing <- fault(revalidations.request(RequestId(uuid), ArtifactId(uuid), f.fence))
         _ <- ZIO.attemptBlocking(f.install(Stalling))
-        running <- controller.start(f.request(f.limits))
+        running <- controller.start(UnitFixture.work(f.request(f.limits)), None)
         occupied <- fault(revalidations.request(RequestId(uuid), handle, f.fence))
         _ <- controller.cancel(running.attempt)
         stopped <- controller.status(running.attempt, 120000).repeatUntil(status => DispatchController.terminal(status.phase))
@@ -705,7 +764,7 @@ sys.exit(1)
         }
       } yield () } } *> fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None,
         List(counting("always", disabled, 100, 1))) { f => ZIO.scoped { for {
-        controller <- ZIO.succeed(new DispatchController(f.config, f.runner, f.jobs, f.clock))
+        controller <- ZIO.succeed(f.units)
         revalidations <- f.revalidations(controller)
         worked <- f.child(controller, Completing, f.request(f.limits))
         refused <- fault(revalidations.request(RequestId(uuid), worked.result.get, f.fence))
@@ -720,7 +779,7 @@ sys.exit(1)
       // Each run takes 300 ms; the first two fail.
       val check = ValidationCheck("flaky", List("sh", "-c", s"sleep 0.3; n=$$(cat $counter 2>/dev/null || echo 0); echo $$((n + 1)) > $counter; test $$n -ge 2"), 10000, 65536, 2, 1)
       fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None, List(check)) { f => ZIO.scoped { for {
-        controller <- ZIO.succeed(new DispatchController(f.config, f.runner, f.jobs, f.clock))
+        controller <- ZIO.succeed(f.units)
         revalidations <- f.revalidations(controller)
         worked <- f.child(controller, Completing, f.request(f.limits))
         _ <- ZIO.attempt(assert(worked.phase == DispatchPhase.Completed && worked.counts.validationFailed == 1, worked.toString))
@@ -770,14 +829,14 @@ sys.exit(1)
       (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
         artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
       fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None, Nil) { f =>
-        val controller = new DispatchController(f.config, f.runner, f.jobs, f.clock)
+        val controller = f.units
         def observe(attempt: AttemptId, seen: List[DispatchStatus]): Task[List[DispatchStatus]] = controller.status(attempt, 0).flatMap { status =>
           if (DispatchController.terminal(status.phase)) ZIO.succeed((status :: seen).reverse)
           else ZIO.sleep(zio.Duration.fromMillis(100)) *> observe(attempt, status :: seen)
         }
         for {
           _ <- ZIO.attemptBlocking(f.install(Intermittent))
-          started <- controller.start(f.request(HostLimits(3000, 900, 100, 1000, 262144)))
+          started <- controller.start(UnitFixture.work(f.request(HostLimits(3000, 900, 100, 1000, 262144))), None)
           seen <- observe(started.attempt, Nil).timeoutFail(new IllegalStateException("Worker did not finish"))(zio.Duration.fromSeconds(60))
           _ <- ZIO.attempt {
             val running = seen.filter(_.process.contains(JobPhase.Running))
@@ -809,7 +868,7 @@ sys.exit(1)
           override def integrate(value: HostIntegrationInput): IntegrationRecord = delegate.integrate(value)
           override def grant(value: GrantRequest): AccessToken = delegate.grant(value)
         }
-        val controller = new DispatchController(f.config, f.renewing(f.authority.copy(collector = collector), ClaimRenewal.Default), f.jobs, f.clock)
+        val (controller, children) = f.units(f.renewing(f.authority.copy(collector = collector), ClaimRenewal.Default))
         val claims = new SessionClaims(f.owner, f.authority.governor, logstage.IzLogger.NullLogger)
         val members = f.members.map(_.id).toSet
         for {
@@ -817,7 +876,7 @@ sys.exit(1)
           held <- ZIO.attemptBlocking(claims.call(Command.ClaimWork(ClaimInput(f.owner.project, ClaimAction.Renew(f.fence, 300000)))))
           pending <- f.child(controller, Completing, f.request(f.limits))
           _ <- controller.shutdown
-          retained = controller.undelivered
+          retained = children.undelivered
           _ <- claims.release(retained)
           kept <- ledger.claimPreview(f.owner, members).map(_.claims.map(_.fence))
           _ <- ZIO.succeed(unreachable.set(false))
@@ -851,17 +910,19 @@ sys.exit(1)
           concluded.set(Some(outcome))
           outcome
         })
-        val controller = new DispatchController(f.config, f.runner, f.jobs, f.clock)
-        val blocker = s"Abstained (Quota): $QuotaMessage"
+        val controller = f.units
+        // The attempt records its own refusal; the unit, whose one candidate it was, names every candidate and reason.
+        val refusal = s"Abstained (Quota): $QuotaMessage"
+        val blocker = s"No configured model could run this work: codex:fixture-provider/fixture-model Quota ($QuotaMessage)"
         for {
           _ <- ZIO.attemptBlocking(f.install(Refused))
-          started <- controller.startSelected(f.request(f.limits), selection)
+          started <- controller.start(UnitFixture.work(f.request(f.limits)), Some(selection))
           status <- controller.status(started.attempt, 120000)
           attempts <- usage.attempts(f.owner, UsageFilter.SessionOnly(f.owner.actor.session), None, None, 100)
           record <- local.fixture.service.get(f.owner, started.attempt)
           partial <- text(artifacts, f.owner, status.partial.get).map(Wire.decode(PartialWork_JsonCodec, _))
           diff <- text(artifacts, f.owner, partial.diff.get)
-          ended <- controller.concluded(started.attempt, 0)
+          ended <- controller.concluded(started.attempt, 20000)
           _ <- ZIO.attempt {
             println(s"Abstained worker: phase=${status.phase} next=${status.next} blocker=${status.blocker} outcome=${ended.map(value => (value.end, value.fault))}")
             assert(status.phase == DispatchPhase.Abstained && status.next == ChildNext.ResolveBlocker && status.blocker.contains(blocker) && status.result.isEmpty &&
@@ -870,7 +931,7 @@ sys.exit(1)
             assert(CohortFailure.fault(status).isEmpty && ended == concluded.get && ended.contains(ChildOutcome(started.attempt, status.members, ChildEnd.Abstained, Some("input"), Some(blocker))))
             cq.core.DriverPolicy.outcome(ended.get)
             val view = attempts.entries.find(_.attempt.id == started.attempt).get
-            assert(view.outcome.map(_.value.state).contains(AttemptState.Abstained) && view.outcome.get.value.gaps.headOption.contains(blocker), view.toString)
+            assert(view.outcome.map(_.value.state).contains(AttemptState.Abstained) && view.outcome.get.value.gaps.headOption.contains(refusal), view.toString)
             assert(partial.state == AttemptState.Abstained && diff.contains("-committed\n+partial change\n"), partial.toString)
             assert(record.admission == WorkspaceAdmission.Quarantined && status.workspace.contains(WorkspaceState(WorkspaceAdmission.Quarantined, Some(record.directory))), record.toString)
             assert(HostFiles.read(f.config.directory.resolve("children").resolve(started.attempt.value.toString).resolve("receipt.json"), DispatchStatus_JsonCodec, 65536).phase == DispatchPhase.Abstained)
@@ -949,43 +1010,354 @@ sys.exit(1)
       }
     }
 
-    "launch a child on the model, provider and effort of its route and record them on its attempt" in {
+    "start the model the agent configuration assigns to the role, on its harness, provider and effort, and record them on the attempt" in {
       (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
         artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
       fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None, Nil) { f =>
-        val controller = new DispatchController(f.config, f.runner, f.jobs, f.clock)
-        def launched(route: Option[ModelRoute]): Task[(Attempt, List[String])] = for {
-          _ <- ZIO.attemptBlocking(f.install(Recording))
+        val controller = f.units
+        // `worker` is the role value of the configuration; none keeps the fixture's: the settings model as the standard tier.
+        def launched(worker: Option[String]): Task[(Attempt, List[String], Json)] = for {
+          _ <- ZIO.foreachDiscard(worker)(value => f.configure(s"defaults:\n  roles:\n    worker: $value\n"))
           request = f.request(f.limits)
-          started <- route.fold(controller.start(request))(controller.startRoute(request, _, None))
-          status <- controller.status(started.attempt, 120000)
+          status <- f.child(controller, Recording, request)
           _ <- ZIO.attempt(assert(status.phase == DispatchPhase.Completed && status.result.nonEmpty, status.toString))
           result <- text(artifacts, f.owner, status.result.get).map(Wire.decode(ChildResult_JsonCodec, _))
           recorded <- text(artifacts, f.owner, result.evidence.files.find(_.path == ".work/evidence/argv.json").get.artifact)
           attempts <- usage.attempts(f.owner, UsageFilter.SessionOnly(f.owner.actor.session), None, None, 100)
-        } yield attempts.entries.find(_.attempt.id == started.attempt).get.attempt -> io.circe.parser.parse(recorded).flatMap(_.as[List[String]]).fold(throw _, identity)
+          frozen <- ZIO.attemptBlocking(parser.parse(Files.readString(f.config.directory.resolve("units").resolve(request.request.value.toString + ".json"))).fold(throw _, identity))
+        } yield (attempts.entries.find(_.attempt.id == status.attempt).get.attempt, parser.parse(recorded).flatMap(_.as[List[String]]).fold(throw _, identity), frozen)
         for {
           entry <- launched(None)
-          routed <- launched(Some(ModelRoute(Harness.Codex, Some("route-provider"), "route-model", Some(Effort.XHigh))))
-          inherited <- launched(Some(ModelRoute(Harness.Codex, None, "other-model", None)))
-          refused <- controller.startRoute(f.request(f.limits), ModelRoute(Harness.Pi, Some("zai"), "glm", None), None).either
+          routed <- launched(Some("codex:route-provider/route-model?effort=xhigh"))
+          inherited <- launched(Some("$harness:other-model"))
+          // A role no layer assigns starts nothing, and the refusal says what to set.
+          _ <- f.configure("defaults:\n  roles:\n    reviewer: codex:other-model\n")
+          unassigned <- fault(controller.start(UnitFixture.work(f.request(f.limits)), None))
+          usageBefore <- usage.attempts(f.owner, UsageFilter.SessionOnly(f.owner.actor.session), None, None, 100)
+          // A model of a harness the session settings do not hold cannot be launched: its attempt is recorded and abstains.
+          _ <- f.configure("defaults:\n  roles:\n    worker: pi:zai/glm\n")
+          foreign <- f.child(controller, Recording, f.request(f.limits))
+          seats <- controller.seats(foreign.attempt)
+          attempts <- usage.attempts(f.owner, UsageFilter.SessionOnly(f.owner.actor.session), None, None, 100)
           _ <- ZIO.attempt {
-            // Today's callers: the settings entry is the route, and no effort is stated.
-            assert((entry._1.provider, entry._1.model, entry._1.effort) == ("fixture-provider", "fixture-model", None))
+            println(s"Configured routes: settings=${(entry._1.provider, entry._1.model, entry._1.effort)} exact=${(routed._1.provider, routed._1.model, routed._1.effort)} " +
+              s"inherited=${(inherited._1.provider, inherited._1.model)} unassigned=$unassigned foreign=${foreign.phase} ${foreign.blocker}")
+            // The starting configuration: the settings model, and no effort stated.
+            assert((entry._1.harness, entry._1.provider, entry._1.model, entry._1.effort) == (Harness.Codex, "fixture-provider", "fixture-model", None))
             assert(entry._2.containsSlice(List("--model", "fixture-model")) && entry._2.contains("model_provider=\"fixture-provider\"") &&
               !entry._2.exists(_.startsWith("model_reasoning_effort")), entry._2.toString)
             assert((routed._1.provider, routed._1.model, routed._1.effort) == ("route-provider", "route-model", Some(Effort.XHigh)))
             assert(routed._2.containsSlice(List("--model", "route-model")) &&
               routed._2.containsSlice(List("-c", "model_provider=\"route-provider\"", "-c", "model_reasoning_effort=\"xhigh\"")), routed._2.toString)
+            // A route that names no provider runs on the provider of the settings entry of its harness, and the frozen plan says so.
             assert((inherited._1.provider, inherited._1.model, inherited._1.effort) == ("fixture-provider", "other-model", None))
             assert(inherited._2.containsSlice(List("--model", "other-model")) && inherited._2.contains("model_provider=\"fixture-provider\""), inherited._2.toString)
-            assert(refused.left.exists(_.getMessage.contains("Model route and dispatch request name different harnesses")), refused.toString)
+            assert(Wire.decode(ResolvedAssignment_JsonCodec, inherited._3.noSpaces) == ResolvedAssignment(Harness.Codex, AgentRole.Worker, RoleResolution.Resolved(
+              ResolvedRole(PanelMode.All, 1, List(ResolvedSeat(SeatStrategy.Fallback, List(ModelRoute(Harness.Codex, Some("fixture-provider"), "other-model", None)))),
+                RoleOrigin(AgentLayer.Project, RoleSource.DefaultRoles), Nil))), inherited._3.noSpaces)
+            assert(unassigned.contains(Fault.Invalid("no model is assigned to the worker role for governing harness codex: set defaults.roles.worker or harnesses.codex.roles.worker " +
+              "in the agent configuration (the server's default or this project's); cq agents init --settings FILE writes a starting configuration from a settings file")), unassigned.toString)
+            assert(usageBefore.entries.size == 4, s"A refused start registered an attempt: ${usageBefore.entries.map(_.attempt.id)}")
+            assert(foreign.phase == DispatchPhase.Abstained && foreign.next == ChildNext.ResolveBlocker && foreign.result.isEmpty &&
+              foreign.blocker.contains("No configured model could run this work: pi:zai/glm Unconfigured (The session settings have no entry for Pi)"), foreign.toString)
+            assert(seats.seats.map(seat => (seat.end, seat.attempts.map(value => (value.attempt, value.route.harness, value.abstained)))) ==
+              List((SeatEnd.Abstained(), List((foreign.attempt, Harness.Pi, Some(AbstentionReason.Unconfigured))))), seats.toString)
+            val recorded = attempts.entries.find(_.attempt.id == foreign.attempt).get
+            assert((recorded.attempt.harness, recorded.attempt.provider, recorded.attempt.model) == (Harness.Pi, "zai", "glm") &&
+              recorded.outcome.map(_.value.state).contains(AttemptState.Abstained), recorded.toString)
           }
         } yield ()
       }
     }
 
-    "D145: show a selected child as still publishing until the release of its input has run, and as terminal from then on" in {
+    "I17: go on to a seat's next candidate when one abstains, as one unit with one status, one pair of events and every attempt in usage" in {
+      (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None, Nil) { f =>
+        val controller = f.units
+        val request = f.request(f.limits)
+        for {
+          marks <- ZIO.attemptBlocking(f.marks)
+          _ <- f.assign("worker" -> "{ fallback: [codex:refuse-a, codex:work-b?effort=low] }")
+          status <- f.child(controller, routed(marks), request)
+          seats <- controller.seats(status.attempt)
+          lineage <- controller.lineage(status.attempt, 0, 0)
+          outcomes <- ZIO.foreach(lineage._1)(controller.concluded(_, 20000))
+          byCandidate <- controller.status(lineage._1.last, 0)
+          attempts <- usage.attempts(f.owner, UsageFilter.SessionOnly(f.owner.actor.session), None, None, 100)
+          result <- text(artifacts, f.owner, status.result.get).map(Wire.decode(ChildResult_JsonCodec, _))
+          panel <- artifacts.metadata(f.owner, DispatchUnits.panel(f.governor.id, request.request))
+          published <- text(artifacts, f.owner, panel.id).map(Wire.decode(UnitSeats_JsonCodec, _))
+          events <- ZIO.attemptBlocking(f.unitEvents)
+          _ <- ZIO.attempt {
+            val (first, second) = (lineage._1.head, lineage._1.last)
+            println(s"Fallback unit: handle=${status.attempt.value} attempts=${lineage._1.map(_.value)} status=${(status.phase, status.next)} " +
+              s"seats=${seats.seats.map(seat => (seat.end, seat.attempts.map(value => (value.route.model, value.abstained))))} outcomes=${outcomes.map(_.map(value => (value.end, value.fault)))} events=${events.size}")
+            assert(lineage == (List(first, second), true) && first != second, lineage.toString)
+            // One status for the unit: under its first attempt's id, with the result of the candidate that ran; any attempt of the unit reads it.
+            assert(status.attempt == first && status.phase == DispatchPhase.Completed && status.next == ChildNext.Review && result.attempt == second && byCandidate == status, status.toString)
+            assert(result.request.request == request.request && result.request.harness == Harness.Codex)
+            assert(seats == UnitSeats(request.request, PanelMode.All, 1, List(SeatStatus(0, List(
+              SeatAttempt(first, ModelRoute(Harness.Codex, Some("fixture-provider"), "refuse-a", None), Some(AbstentionReason.Quota), Some(QuotaMessage)),
+              SeatAttempt(second, ModelRoute(Harness.Codex, Some("fixture-provider"), "work-b", Some(Effort.Low)), None, None)),
+              SeatEnd.Delivered(status.result.get, ChildNext.Review)))), seats.toString)
+            // The same record is retained as an artifact of the governing attempt.
+            assert(published == seats && panel.kind == ArtifactKind.Panel && panel.attempt == f.governor.id && panel.mediaType == "application/json", panel.toString)
+            // One pair of events for waiters, although two attempts ran.
+            val unit = SessionUnit(SessionUnitKind.Attempt, first.value, request.members.map(_.id))
+            assert(events == List(SessionUnitEvent.Started(unit), SessionUnitEvent.Ended(UnitEnd(unit, "Completed", Some("Review"), None))), events.toString)
+            val recorded = List(first, second).map(id => attempts.entries.find(_.attempt.id == id).get)
+            assert(recorded.map(view => (view.attempt.model, view.attempt.effort, view.outcome.map(_.value.state))) ==
+              List(("refuse-a", None, Some(AttemptState.Abstained)), ("work-b", Some(Effort.Low), Some(AttemptState.Completed))), recorded.toString)
+            assert(outcomes.map(_.map(value => (value.attempt, value.end, value.fault))) ==
+              List(Some((first, ChildEnd.Abstained, Some(s"Abstained (Quota): $QuotaMessage"))), Some((second, ChildEnd.Admitted, None))), outcomes.toString)
+            assert(Files.exists(marks.resolve("refuse-a.started")) && Files.exists(marks.resolve("work-b.started")) && controller.quiescent)
+          }
+        } yield ()
+      }
+    }
+
+    "I17: release the input of a unit no model could run without a fault, offer it again, and apply the retry rule once to a unit whose last candidate failed" in {
+      (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None, Nil) { f =>
+        val controller = f.units
+        val cohorts = f.cohorts(controller)
+        val roots = f.members.map(_.id).toSet
+        def selected: Task[CohortDecision] = cohorts.select(CohortRequest(RequestId(uuid), roots, DispatchWork.Worker(WorkerMode.Implement), Nil, Nil, None, f.limits))
+        def run(choice: CohortChoice): Task[DispatchStatus] = cohorts.start(choice.id, f.fence).flatMap(started => controller.status(started.attempt, 120000)
+          .repeatUntil(status => DispatchController.terminal(status.phase)).timeoutFail(new IllegalStateException("The unit did not end"))(zio.Duration.fromSeconds(90)))
+        def failure(handle: AttemptId): ArtifactId = NativeArtifacts.id(f.governor.id, "failure-" + handle.value)
+        for {
+          marks <- ZIO.attemptBlocking(f.marks)
+          _ <- ZIO.attemptBlocking(f.install(routed(marks)))
+          // `first` tries its first candidate only.
+          _ <- f.assign("worker" -> "{ first: [codex:refuse-a, codex:work-b] }")
+          one <- selected
+          alone <- run(one.choices.head)
+          aloneSeats <- controller.seats(alone.attempt)
+          _ <- f.assign("worker" -> "{ fallback: [codex:refuse-a, codex:refuse-b] }")
+          two <- selected
+          both <- run(two.choices.head)
+          bothLineage <- controller.lineage(both.attempt, 0, 0)
+          bothOutcomes <- ZIO.foreach(bothLineage._1)(controller.concluded(_, 20000))
+          unpublished <- artifacts.metadata(f.owner, failure(both.attempt)).either
+          // The second candidate fails: the unit fails with that seat's fault, which is published for the next unit on the input.
+          _ <- f.assign("worker" -> "{ fallback: [codex:refuse-a, codex:fail-b] }")
+          three <- selected
+          failed <- run(three.choices.head)
+          failedLineage <- controller.lineage(failed.attempt, 0, 0)
+          failedOutcomes <- ZIO.foreach(failedLineage._1)(controller.concluded(_, 20000))
+          fault <- text(artifacts, f.owner, failure(failed.attempt))
+          four <- selected
+          again <- run(four.choices.head)
+          againOutcomes <- controller.lineage(again.attempt, 0, 0).flatMap(value => ZIO.foreach(value._1)(controller.concluded(_, 20000)))
+          five <- selected
+          events <- ZIO.attemptBlocking(f.unitEvents)
+          _ <- ZIO.attempt {
+            println(s"Abstained and failed units: first=${(alone.phase, alone.blocker)} both=${(both.phase, both.next, both.blocker)} failed=${(failed.phase, failed.next, failed.blocker)} " +
+              s"choices=${List(one, two, three, four, five).map(_.choices.map(choice => (choice.reason, choice.artifacts.size)))} " +
+              s"outcomes=${failedOutcomes.map(_.map(_.end))} then ${againOutcomes.map(_.map(_.end))}")
+            assert(one.choices.map(_.work) == List(DispatchWork.Worker(WorkerMode.Implement)) && one.choices.head.artifacts.isEmpty, one.toString)
+            assert(alone.phase == DispatchPhase.Abstained && aloneSeats.seats.map(_.attempts.map(_.route.model)) == List(List("refuse-a")) && !Files.exists(marks.resolve("work-b.started")), alone.toString)
+            assert(both.phase == DispatchPhase.Abstained && both.next == ChildNext.ResolveBlocker && both.result.isEmpty && both.attempt == bothLineage._1.head && bothLineage._1.size == 2 &&
+              both.blocker.contains(s"No configured model could run this work: codex:fixture-provider/refuse-a Quota ($QuotaMessage); codex:fixture-provider/refuse-b Quota ($QuotaMessage)"), both.toString)
+            // Every abstention of the unit states all of them, with the input a drive knows it by.
+            assert(bothOutcomes.flatten.map(value => (value.end, value.fault, value.input.nonEmpty)) == List.fill(2)((ChildEnd.Abstained, both.blocker, true)), bothOutcomes.toString)
+            bothOutcomes.flatten.foreach(cq.core.DriverPolicy.outcome)
+            // No fault was published for a unit that ran no model, and its input is offered again as it was.
+            assert(unpublished.left.exists { case DomainFailure(_: Fault.Missing) => true; case _ => false }, unpublished.toString)
+            assert(List(two, three).forall(decision => decision.choices.map(choice => (choice.work, choice.members, choice.artifacts)) ==
+              List((DispatchWork.Worker(WorkerMode.Implement), f.members, Nil))), s"$two $three")
+            // The failed unit: the status of the seat that failed, under the handle of the candidate that abstained before it.
+            assert(failed.phase == DispatchPhase.Failed && failed.next == ChildNext.Retry && failed.result.isEmpty && failed.attempt == failedLineage._1.head && failedLineage._1.size == 2, failed.toString)
+            assert(fault.contains(failed.attempt.value.toString) && fault.contains(failed.blocker.get), fault)
+            assert(failedOutcomes.flatten.map(_.end) == List(ChildEnd.Abstained, ChildEnd.Retryable), failedOutcomes.toString)
+            assert(four.choices.map(_.artifacts) == List(List(failure(failed.attempt))), four.toString)
+            // The same fault again on the same input: the input stays deferred, and the outcome is the repetition that ends a drive.
+            assert(again.phase == DispatchPhase.Failed && again.blocker == failed.blocker && againOutcomes.flatten.map(_.end) == List(ChildEnd.Abstained, ChildEnd.Repeated), again.toString)
+            assert(five.choices.isEmpty, five.toString)
+            // One pair of events for each of the four units.
+            assert(events.size == 8 && events.collect { case SessionUnitEvent.Ended(end) => end.phase } == List("Abstained", "Abstained", "Failed", "Failed"), events.toString)
+          }
+        } yield ()
+      }
+    }
+
+    "I17: start the seat of an `rr` strategy with the next candidate in each unit" in {
+      (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None, Nil) { f =>
+        val controller = f.units
+        for {
+          marks <- ZIO.attemptBlocking(f.marks)
+          _ <- f.assign("worker" -> "{ rr: [codex:work-a, codex:work-b] }")
+          units <- ZIO.foreach(List(1, 2, 3))(_ => f.child(controller, routed(marks), f.request(f.limits)))
+          seats <- ZIO.foreach(units)(unit => controller.seats(unit.attempt))
+          _ <- ZIO.attempt {
+            val models = seats.map(_.seats.flatMap(_.attempts.map(_.route.model)))
+            val first = Math.floorMod(SeatRotation.offset(f.owner.actor.session), 2L).toInt
+            println(s"Round robin over three units: $models, starting at $first")
+            assert(units.forall(_.phase == DispatchPhase.Completed) && models == List(first, first + 1, first + 2).map(position => List(List("work-a", "work-b")(position % 2))), models.toString)
+          }
+        } yield ()
+      }
+    }
+
+    "I17: run the seats of a reviewer panel side by side on the same members, decide when they agree and ask for arbitration when they do not" in {
+      (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None, Nil) { f =>
+        val controller = f.units
+        val cohorts = f.cohorts(controller)
+        def reviewers(value: String): Task[Unit] = f.assign("worker" -> "codex:work-a", "reviewer" -> value)
+        for {
+          marks <- ZIO.attemptBlocking(f.marks)
+          _ <- reviewers("{ all: [codex:accept-a, codex:accept-b], min: 2 }")
+          worked <- f.child(controller, routed(marks), f.request(f.limits))
+          // Each reviewer delivers only once both have started: neither waits for the other to end.
+          _ <- ZIO.attemptBlocking(Files.writeString(marks.resolve("together"), "accept-a accept-b"))
+          first = f.review(worked.result.get)
+          agreed <- f.child(controller, routed(marks), first)
+          agreedSeats <- controller.seats(agreed.attempt)
+          bySecond <- controller.status(agreedSeats.seats(1).attempts.head.attempt, 0)
+          accepted <- text(artifacts, f.owner, agreed.result.get).map(Wire.decode(ChildResult_JsonCodec, _))
+          admission <- admissions.get(f.owner, accepted.attempt)
+          attempts <- usage.attempts(f.owner, UsageFilter.SessionOnly(f.owner.actor.session), None, None, 100)
+          _ <- ZIO.attemptBlocking {
+            val together = List("accept-a", "accept-b").map(name => Files.readString(marks.resolve(name + ".together")))
+            println(s"Agreeing panel: ${(agreed.phase, agreed.next, agreed.counts.accepted)} seats=${agreedSeats.seats.map(seat => (seat.seat, seat.end))} together=$together")
+            assert(together == List("True", "True"), s"The seats did not run side by side: $together")
+            assert(agreed.phase == DispatchPhase.Completed && agreed.next == ChildNext.ConsiderAcceptance && agreed.counts.accepted == 1 && agreed.blocker.isEmpty &&
+              agreed.attempt == agreedSeats.seats.head.attempts.head.attempt && bySecond == agreed, agreed.toString)
+            val results = agreedSeats.seats.map(_.end).collect { case SeatEnd.Delivered(result, ChildNext.ConsiderAcceptance) => result }
+            assert(agreedSeats.mode == PanelMode.All && agreedSeats.min == 2 && results.size == 2 && results.distinct.size == 2 && results.contains(agreed.result.get), agreedSeats.toString)
+            // The unit's result is one admitted review of the worker's result that accepts every member: what PrepareIntegration takes.
+            assert(accepted.request.previous == worked.result && accepted.request.request == first.request && admission.decision == AdmissionDecision.Accepted() &&
+              accepted.report == ChildReport.Review(f.members.map(member => ReviewMember(member.id, ReviewVerdict.Accepted, Nil)), None), accepted.toString)
+            val seats = agreedSeats.seats.flatMap(_.attempts.map(_.attempt)).map(id => attempts.entries.find(_.attempt.id == id).get)
+            assert(seats.map(view => (view.attempt.role, view.attempt.model, view.outcome.map(_.value.state))) ==
+              List((Role.Reviewer, "accept-a", Some(AttemptState.Completed)), (Role.Reviewer, "accept-b", Some(AttemptState.Completed))) &&
+              seats.map(_.assignment.id).distinct.size == 2 && seats.forall(_.assignment.members == f.members.map(_.id).toSet), seats.toString)
+            Files.delete(marks.resolve("together"))
+          }
+          _ <- reviewers("{ all: [codex:accept-a, codex:change-b], min: 2 }")
+          mixed <- f.child(controller, routed(marks), f.review(worked.result.get))
+          mixedSeats <- controller.seats(mixed.attempt)
+          dissent <- text(artifacts, f.owner, mixed.result.get).map(Wire.decode(ChildResult_JsonCodec, _))
+          // The default answer to a disagreement: one Worker corrects the candidate from the dissenting review.
+          correction <- cohorts.select(CohortRequest(RequestId(uuid), f.members.map(_.id).toSet, DispatchWork.Worker(WorkerMode.Implement), Nil, Nil, mixed.result, f.limits))
+          events <- ZIO.attemptBlocking(f.unitEvents)
+          _ <- ZIO.attempt {
+            println(s"Disagreeing panel: ${(mixed.phase, mixed.next, mixed.blocker, mixed.counts.accepted, mixed.counts.changesRequested)} " +
+              s"seats=${mixedSeats.seats.map(seat => (seat.seat, seat.end))} correction=${correction.choices.map(choice => (choice.work, choice.reason, choice.previous == mixed.result))}")
+            assert(mixed.phase == DispatchPhase.Completed && mixed.next == ChildNext.Arbitrate && mixed.blocker.contains("Reviewers disagree on T1: read Seats") &&
+              (mixed.counts.accepted, mixed.counts.changesRequested) == (0, 1), mixed.toString)
+            assert(dissent.attempt == mixedSeats.seats(1).attempts.head.attempt &&
+              dissent.report == ChildReport.Review(f.members.map(member => ReviewMember(member.id, ReviewVerdict.ChangesRequested, List("Finding of change-b"))), None), dissent.toString)
+            assert(mixedSeats.seats.map(_.end).collect { case SeatEnd.Delivered(_, next) => next } == List(ChildNext.ConsiderAcceptance, ChildNext.Revise), mixedSeats.toString)
+            assert(correction.choices.map(choice => (choice.work, choice.members, choice.previous)) ==
+              List((DispatchWork.Worker(WorkerMode.Implement), f.members, mixed.result)), correction.toString)
+            // Three units ran five attempts: three pairs of events.
+            assert(events.size == 6 && events.collect { case SessionUnitEvent.Ended(end) => end.next } == List(Some("Review"), Some("ConsiderAcceptance"), Some("Arbitrate")), events.toString)
+          }
+        } yield ()
+      }
+    }
+
+    "I17: start only the seats an `any` panel needs, tolerate a failed seat the others make up for, and refuse a panel whose seats do not fit" in {
+      (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None, Nil) { f =>
+        val controller = f.units
+        def reviewers(value: String): Task[Unit] = f.assign("worker" -> "codex:work-a", "reviewer" -> value)
+        def count: Task[Int] = usage.attempts(f.owner, UsageFilter.SessionOnly(f.owner.actor.session), None, None, 100).map(_.entries.size)
+        for {
+          marks <- ZIO.attemptBlocking(f.marks)
+          _ <- reviewers("{ any: [codex:refuse-a, codex:accept-b, codex:accept-c], min: 1 }")
+          worked <- f.child(controller, routed(marks), f.request(f.limits))
+          any <- f.child(controller, routed(marks), f.review(worked.result.get))
+          anySeats <- controller.seats(any.attempt)
+          _ <- reviewers("{ all: [codex:fail-d, codex:accept-e], min: 1 }")
+          tolerated <- f.child(controller, routed(marks), f.review(worked.result.get))
+          toleratedSeats <- controller.seats(tolerated.attempt)
+          outcomes <- controller.lineage(tolerated.attempt, 0, 0).flatMap(value => ZIO.foreach(value._1)(controller.concluded(_, 20000)))
+          _ <- reviewers("{ all: [codex:accept-f, codex:accept-g, codex:accept-h, codex:accept-i, codex:accept-j], min: 1 }")
+          before <- count
+          refused <- fault(controller.start(UnitFixture.work(f.review(worked.result.get)), None))
+          after <- count
+          events <- ZIO.attemptBlocking(f.unitEvents)
+          _ <- ZIO.attemptBlocking {
+            println(s"Any panel: ${(any.phase, any.next)} seats=${anySeats.seats.map(seat => (seat.end, seat.attempts.map(_.route.model)))}; " +
+              s"tolerated: ${(tolerated.phase, tolerated.next, tolerated.blocker)} outcomes=${outcomes.map(_.map(_.end))}; refused=$refused")
+            // The first seat abstained, the second took its place and delivered, and the third was never needed.
+            assert(any.phase == DispatchPhase.Completed && any.next == ChildNext.ConsiderAcceptance && any.attempt == anySeats.seats.head.attempts.head.attempt, any.toString)
+            assert(anySeats.seats.map(seat => (seat.end.getClass.getSimpleName, seat.attempts.map(value => (value.route.model, value.abstained)))) == List(
+              ("Abstained", List(("refuse-a", Some(AbstentionReason.Quota)))), ("Delivered", List(("accept-b", None))), ("Pending", Nil)), anySeats.toString)
+            assert(!Files.exists(marks.resolve("accept-c.started")))
+            // Q69: the seat that failed is listed with the unit, which the other seat decided.
+            assert(tolerated.phase == DispatchPhase.Completed && tolerated.next == ChildNext.ConsiderAcceptance && tolerated.result.nonEmpty &&
+              tolerated.blocker.exists(_.startsWith("seat 0 failed and the other seats decided: ")), tolerated.toString)
+            assert(toleratedSeats.seats.map(_.end.getClass.getSimpleName) == List("Failed", "Delivered") && outcomes.flatten.map(_.end) == List(ChildEnd.Failed, ChildEnd.Admitted), toleratedSeats.toString)
+            // Five seats that start together exceed the session's bound: nothing of the unit is started.
+            assert(refused.contains(Fault.Conflict(s"This session permits at most ${DispatchController.MaxActiveChildren} active children; wait for one to end or cancel it before starting another")), refused.toString)
+            assert(before == after && List("f", "g", "h", "i", "j").forall(label => !Files.exists(marks.resolve(s"accept-$label.started"))) && events.size == 6 && controller.quiescent)
+          }
+        } yield ()
+      }
+    }
+
+    "I17: cancel a whole unit by any of its attempts, start nothing after it, and never read the cancellation as an abstention" in {
+      (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None, Nil) { f =>
+        val controller = f.units
+        def started(marks: Path, names: String*): Task[Unit] = ZIO.attemptBlocking(names.forall(name => Files.exists(marks.resolve(name + ".started"))))
+          .repeatUntil(identity).timeoutFail(new IllegalStateException(s"${names.mkString(", ")} did not start"))(zio.Duration.fromSeconds(60)).unit
+        def ended(attempt: AttemptId): Task[DispatchStatus] = controller.status(attempt, 120000).repeatUntil(status => DispatchController.terminal(status.phase))
+          .timeoutFail(new IllegalStateException("The cancelled unit did not end"))(zio.Duration.fromSeconds(60))
+        for {
+          marks <- ZIO.attemptBlocking(f.marks)
+          _ <- ZIO.attemptBlocking(f.install(routed(marks)))
+          _ <- f.assign("worker" -> "{ fallback: [codex:slow-a, codex:work-b] }", "reviewer" -> "{ all: [codex:slow-c, codex:slow-d], min: 2 }")
+          single <- controller.start(UnitFixture.work(f.request(f.limits)), None)
+          _ <- started(marks, "slow-a")
+          running <- controller.status(single.attempt, 0)
+          unsettled = controller.unsettled
+          _ <- controller.cancel(single.attempt)
+          stopped <- ended(single.attempt)
+          stoppedSeats <- controller.seats(single.attempt)
+          // A panel is cancelled as a whole by the id of any of its attempts.
+          worker <- f.assign("worker" -> "codex:work-b", "reviewer" -> "{ all: [codex:slow-c, codex:slow-d], min: 2 }") *> f.child(controller, routed(marks), f.request(f.limits))
+          panel <- controller.start(UnitFixture.work(f.review(worker.result.get)), None)
+          _ <- started(marks, "slow-c", "slow-d")
+          second <- controller.seats(panel.attempt).map(_.seats(1).attempts.head.attempt)
+          _ <- controller.cancel(second)
+          cancelled <- ended(second)
+          cancelledSeats <- controller.seats(panel.attempt)
+          outcomes <- controller.lineage(panel.attempt, 0, 0).flatMap(value => ZIO.foreach(value._1)(controller.concluded(_, 20000)))
+          attempts <- usage.attempts(f.owner, UsageFilter.SessionOnly(f.owner.actor.session), None, None, 100)
+          events <- ZIO.attemptBlocking(f.unitEvents)
+          _ <- ZIO.attemptBlocking {
+            println(s"Cancelled units: running=${(running.phase, running.process)} unsettled=$unsettled single=${(stopped.phase, stopped.blocker)} seats=${stoppedSeats.seats.map(seat => (seat.end, seat.attempts.size))} " +
+              s"panel=${(cancelled.phase, cancelled.attempt == panel.attempt)} seats=${cancelledSeats.seats.map(_.end)} outcomes=${outcomes.map(_.map(_.end))}")
+            assert(running.attempt == single.attempt && !DispatchController.terminal(running.phase) && unsettled.size == 1 && unsettled.head.startsWith(s"child attempt ${single.attempt.value} ("), s"$running $unsettled")
+            assert(stopped.phase == DispatchPhase.Cancelled && stopped.attempt == single.attempt && stopped.result.isEmpty && stopped.blocker.contains(DispatchUnits.Cancelled), stopped.toString)
+            // The next candidate was never started, and the seat is cancelled, not abstained.
+            assert(stoppedSeats.seats.map(seat => (seat.end, seat.attempts.map(value => (value.route.model, value.abstained)))) == List((SeatEnd.Cancelled(), List(("slow-a", None)))), stoppedSeats.toString)
+            assert(cancelled.phase == DispatchPhase.Cancelled && cancelled.attempt == panel.attempt && cancelled.attempt != second, cancelled.toString)
+            assert(cancelledSeats.seats.map(_.end) == List(SeatEnd.Cancelled(), SeatEnd.Cancelled()) && outcomes.flatten.map(_.end) == List(ChildEnd.Cancelled, ChildEnd.Cancelled), cancelledSeats.toString)
+            val states = cancelledSeats.seats.flatMap(_.attempts.map(_.attempt)).map(id => attempts.entries.find(_.attempt.id == id).get.outcome.map(_.value.state))
+            assert(states == List(Some(AttemptState.Cancelled), Some(AttemptState.Cancelled)), states.toString)
+            // work-b ran once, as the worker of the second unit: the cancelled unit did not go on to it.
+            assert(attempts.entries.count(_.attempt.model == "work-b") == 1)
+            assert(events.collect { case SessionUnitEvent.Ended(end) => end.phase } == List("Cancelled", "Completed", "Cancelled") && events.size == 6 && controller.quiescent, events.toString)
+          }
+        } yield ()
+      }
+    }
+
+    "D145: show a selected unit as still publishing until the release of its input has run, and as terminal from then on" in {
       (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
         artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
       fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None, Nil) { f =>
@@ -999,10 +1371,10 @@ sys.exit(1)
           proceed.await(60, java.util.concurrent.TimeUnit.SECONDS)
           CohortFailure.outcome(status, None, None)
         })
-        val controller = new DispatchController(f.config, f.runner, f.jobs, f.clock)
+        val controller = f.units
         (for {
           _ <- ZIO.attemptBlocking(f.install(Failing))
-          started <- controller.startSelected(f.request(f.limits), selection)
+          started <- controller.start(UnitFixture.work(f.request(f.limits)), Some(selection))
           _ <- ZIO.attemptBlocking(assert(entered.await(60, java.util.concurrent.TimeUnit.SECONDS), "The child's conclusion never began"))
           during <- controller.status(started.attempt, 0)
           unsettled = controller.unsettled
@@ -1022,7 +1394,7 @@ sys.exit(1)
       (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
         artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
       fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None, Nil) { f =>
-        val controller = new DispatchController(f.config, f.runner, f.jobs, f.clock)
+        val controller = f.units
         for {
           settled <- ZIO.foreach((1 to 33).toList)(_ => f.child(controller, Recording, f.request(f.limits)))
           last = settled.last
@@ -1043,7 +1415,7 @@ sys.exit(1)
       artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
     fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, Some("refs/heads/integration"), Nil) { f =>
       val limits = HostLimits(3000, 900, 100, 1000, 262144)
-      val controller = new DispatchController(f.config, f.runner, f.jobs, f.clock)
+      val controller = f.units
       for {
         _ <- ZIO.attemptBlocking {
           local.git(local.source, "branch", "integration", local.base.value)
@@ -1053,7 +1425,7 @@ sys.exit(1)
           local.git(local.source, "add", "staged.txt")
           Files.writeString(local.source.resolve("untracked.log"), "operator notes\n")
         }
-        started <- controller.start(f.request(limits))
+        started <- controller.start(UnitFixture.work(f.request(limits)), None)
         settled <- controller.status(started.attempt, 120000).repeatUntil(status => DispatchController.terminal(status.phase))
           .timeoutFail(new IllegalStateException("Worker did not finish"))(zio.Duration.fromSeconds(60))
         _ <- ZIO.attempt {

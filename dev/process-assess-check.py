@@ -255,14 +255,15 @@ class ProcessAssessmentCheck(unittest.TestCase):
                 job_path.write_text(json.dumps({"workspace": {"attempt": attempt["id"], "owner": attempt["session"], "base": fixture["run"]["base"]},
                     "phase": "Settled", "exit": {"settled": True, "code": 0, "reason": "Exited", "hostFailure": False}}))
             values["observations"] = [{"upload": {"observation": {"attempt": value["attempt"]["id"], "counters": {"input": {"value": "1", "measurement": "Observed"}}}}} for value in values["attempts"]]
-            predicates["correction_routes"](values, settings)
+            routes = [({"Planner": {}}, "Planner", "Codex"), ({"Reviewer": {"mode": "Plan"}}, "Reviewer", "Pi")]
+            predicates["correction_routes"](values, settings, routes)
             for field, replacement in [("harness", "Claude"), ("parent", {"value": "foreign"}), ("session", {"value": "foreign"}), ("model", "other-model")]:
                 changed = json.loads(path.read_text())
                 original = changed["attempt"][field]
                 changed["attempt"][field] = replacement
                 path.write_text(json.dumps(changed))
                 with self.subTest(field=field), self.assertRaises(AssertionError):
-                    predicates["correction_routes"](values, settings)
+                    predicates["correction_routes"](values, settings, routes)
                 changed["attempt"][field] = original
                 path.write_text(json.dumps(changed))
 
