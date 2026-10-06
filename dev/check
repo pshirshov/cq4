@@ -268,7 +268,7 @@ class Checks:
         runpy.run_path(str(ROOT / "dev/project-archive-check.py"))["verify"](self, command, name)
 
     def browser_suite(self, name: str):
-        for scenario in ["browser", "polish-browser", "query-prefix-check", "archive-browser", "followup-browser", "question-browser", "question-live-check", "question-status-browser", "dialog-races-browser", "dialog-size-browser", "sizing-browser", "completion-browser", "query-local-check", "hold-browser", "wip-browser", "help-browser", "mode-browser", "relationship-graph-browser"]:
+        for scenario in ["browser", "polish-browser", "query-prefix-check", "archive-browser", "followup-browser", "question-browser", "question-live-check", "question-status-browser", "dialog-races-browser", "dialog-size-browser", "sizing-browser", "completion-browser", "query-local-check", "hold-browser", "wip-browser", "help-browser", "mode-browser", "agents-browser", "relationship-graph-browser"]:
             self.run(["node", f"dev/{scenario}.mjs"], f"{name}-{scenario}", COMMAND_TIMEOUT)
 
     def http_browser(self, command: list[str], name: str):

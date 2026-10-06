@@ -38,8 +38,12 @@ h3 { margin: 10px 0 6px; font-size: 13px; }
 .workspace { display: grid; flex: 1; min-height: 0; grid-template-columns: var(--navigation-width) var(--results-width) 8px minmax(0, 1fr); }
 .workspace[data-detail=closed] { grid-template-columns: var(--navigation-width) minmax(0, 1fr); }
 #navigation-pane { border-right: 1px solid #435364; }
-/* The navigation's entries fit a 1280×720 window without scrolling (dev/density-browser.mjs); its one heading therefore sits close to them. */
+/* The navigation's entries fit a 1280×720 window without scrolling (dev/density-browser.mjs); its one heading therefore sits close to them,
+   and its entries one pixel apart, the first one as far from the pane's edge as before, in a pane with less padding below than the others have. */
+#navigation-pane { padding-bottom: 4px; }
 #navigation-pane h3 { margin: 2px 0; }
+#navigation-pane .navigation-entry { margin: 1px 0; }
+#navigation-pane > .navigation-entry:first-child { margin-top: 2px; }
 .pane { min-width: 0; min-height: 0; padding: 10px; overflow: auto; overflow-wrap: anywhere; overscroll-behavior: contain; }
 .pane-separator { position: relative; cursor: col-resize; touch-action: none; background: #1c2630; }
 .pane-separator::after { content: ''; position: absolute; top: 0; bottom: 0; left: 3px; width: 2px; background: #435364; }
@@ -297,6 +301,50 @@ tbody tr[aria-selected=true] { background: #243d4c; }
 @media (max-width: 700px) {
   .help-layout { grid-template-columns: minmax(0, 1fr); }
   .help-list { position: static; }
+}
+
+/* Agent models dialog (web/src/agents.ts): the two layer editors side by side, then the problems of the texts as typed and the
+   resolved table, roles down and governing harnesses across, all inside the large dialog's scrolling body. */
+.agents-editors { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 16px; align-items: start; }
+.agents-layer { min-width: 0; }
+.agents-layer h3 { margin-top: 4px; }
+.agents-layer > button { width: auto; }
+.agents-layer > .revision-meta { margin: 4px 0 6px; }
+.agents-layer > [role=alert] { margin: 6px 0 0; overflow-wrap: anywhere; }
+.agents-text { display: block; font: 12px/1.45 ui-monospace, monospace; padding: 6px 8px; background: #192630; color: #e1e8ef; tab-size: 2; }
+.agents-text::placeholder { color: #8698a6; }
+.agents-conflict-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.agents-problems ul { margin: 0; padding: 0; list-style: none; }
+.agents-problems li { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; padding: 3px 0; color: #ffbd86; overflow-wrap: anywhere; }
+.agents-problem-layer { color: #a4c1d3; min-width: 104px; }
+.agents-position { width: auto; min-height: 0; padding: 0 6px; font: 12px ui-monospace, monospace; color: #e1e8ef; }
+.agents-table .agents-position { margin-right: 6px; }
+.agents-preview > p { margin: 0 0 6px; }
+.agents-table { table-layout: fixed; }
+.agents-table th:first-child { width: 88px; overflow-wrap: normal; }
+.agents-table thead th { position: sticky; top: 0; background: #141a20; }
+.agents-table tbody th { color: #e1e8ef; font-weight: 600; }
+.agents-table td { border-left: 1px solid #2b3c49; }
+.agents-table p { margin: 4px 0 0; }
+.agents-table ul, .agents-seats { margin: 0; padding: 0; list-style: none; }
+ol.agents-seats { counter-reset: seat; }
+ol.agents-seats > li { counter-increment: seat; position: relative; padding-left: 20px; margin-top: 3px; }
+ol.agents-seats > li::before { content: counter(seat) '.'; position: absolute; left: 0; color: #a4c1d3; }
+/* A model name that does not fit continues indented, so that it does not read as the next candidate. */
+.agents-route { display: block; padding-left: 14px; text-indent: -14px; font: 12px/1.45 ui-monospace, monospace; color: #e1e8ef; overflow-wrap: anywhere; }
+.agents-strategy { color: #68c7ec; font: 12px/1.45 ui-monospace, monospace; }
+.agents-strategy ~ .agents-route { padding-left: 28px; }
+.agents-panel { margin: 0 !important; color: #68c7ec; font: 12px/1.45 ui-monospace, monospace; }
+.agents-source { color: #a4c1d3; font-size: 11px; }
+.agents-source[data-layer=project] { color: #ffd591; }
+.agents-self-review { color: #ffd591; font-size: 11px; }
+.agents-unresolved { color: #ffbd86; }
+td.agents-unresolved { background: #3a2418; box-shadow: inset 3px 0 #ff8a80; }
+td.agents-unresolved li { margin-top: 3px; }
+.agents-help pre { max-height: none; font-size: 12px; white-space: pre; overflow-x: auto; }
+.agents-help h4 { margin: 10px 0 4px; }
+@media (max-width: 900px) {
+  .agents-editors { grid-template-columns: minmax(0, 1fr); }
 }
 
 .drivers-layout > section { padding: 16px 0; border-top: 1px solid #435364; }

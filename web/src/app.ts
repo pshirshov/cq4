@@ -26,6 +26,7 @@ import { DriversDialog } from './drivers.js';
 import { HelpDialog } from './help.js';
 import { CatalogSource } from './catalog.js';
 import { ModeDialog, ModeIndicator } from './mode.js';
+import { AgentsDialog } from './agents.js';
 
 const CONTEXT = BaboonCodecContext.Default;
 const PAGE_SIZE = 40;
@@ -159,6 +160,13 @@ class App {
   };
   private readonly mode = new ModeDialog(this.modeEffects);
   private readonly modeIndicator = new ModeIndicator(this.modeEffects, () => this.action(async () => this.mode.open(this.currentProject())));
+  private readonly agents = new AgentsDialog({
+    call: command => this.connection().call(command),
+    saved: (layer, value, changed) => {
+      const name = layer === 'installation' ? 'Server default agent models' : 'Agent models of this project';
+      this.notifications.show(changed ? `${name} saved at revision ${value.revision.value}.` : `${name} unchanged: the text equals the saved one.`, changed ? 'success' : 'info');
+    },
+  });
   private readonly historyPanel = element('section', '');
   private readonly projectDialog = new Dialog('standard', () => {});
   private readonly createDialog = new Dialog('large', () => this.closeEditor());
@@ -319,9 +327,10 @@ class App {
     const questions = button('Answer questions', () => this.action(async () => this.questions.open(this.currentProject()))); questions.className = 'navigation-entry'; questions.prepend(icon(api.Ledger.Questions));
     const requirements = button('Standing requirements', () => this.action(async () => this.requirements.open(this.currentProject()))); requirements.className = 'navigation-entry';
     const mode = button('Process mode', () => this.action(async () => this.mode.open(this.currentProject()))); mode.className = 'navigation-entry';
+    const agents = button('Agent models', () => this.action(async () => this.agents.open(this.currentProject()))); agents.className = 'navigation-entry';
     const drivers = button('Drivers and worksets', () => this.drivers.open(this.currentProject(), this.selection)); drivers.className = 'navigation-entry';
     this.clearWorkset.hidden = this.worksetFilter === null;
-    side.append(create, questions, usage, archive, requirements, mode, drivers, this.worksetLabel, this.clearWorkset, element('h3', 'Browse'), shortcuts);
+    side.append(create, questions, usage, archive, requirements, mode, agents, drivers, this.worksetLabel, this.clearWorkset, element('h3', 'Browse'), shortcuts);
     const table = element('table', ''); table.className = 'items-table'; table.setAttribute('aria-label', 'Items');
     const head = element('thead', ''); const headings = element('tr', '');
     const columns: TableColumn[] = [];
@@ -374,7 +383,7 @@ class App {
     list.append(table);
     content.append(workspace.toggle, this.detail, this.editorPanel, this.graph.element, this.usagePanel, this.auditPanel);
     this.root.replaceChildren(header, workspace.element, status, this.projectDialog.element, this.createDialog.element, this.conflictDialog.element,
-      this.historyDialog.element, this.usageDialog.element, this.archive.element, this.requirements.element, this.mode.element, this.graph.dialog.element, this.relationshipGraph.dialog.element, this.references.dialog.element, this.questions.dialog.element, this.drivers.element, this.help.element, this.notifications.element);
+      this.historyDialog.element, this.usageDialog.element, this.archive.element, this.requirements.element, this.mode.element, this.agents.element, this.graph.dialog.element, this.relationshipGraph.dialog.element, this.references.dialog.element, this.questions.dialog.element, this.drivers.element, this.help.element, this.notifications.element);
     this.notifications.reveal(); workspace.fit();
     this.manager = new ConnectionManager(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`, {
       status: stats => this.health.update(stats),
