@@ -88,6 +88,16 @@ final class CliOutput(output: PrintStream, format: CliFormat, invocation: List[S
     case CliFormat.Human => line(value)
   }
   def configuration(value: Path): Unit = if (format == CliFormat.Human) line(s"Configuration: $value")
+  /** `cq agents init`: the configuration text, or where it was saved. */
+  def starter(text: String, saved: Option[(String, AgentsDocument)]): Unit = format match {
+    case CliFormat.Json => output.println(io.circe.Json.obj("text" -> io.circe.Json.fromString(text),
+      "saved" -> saved.fold(io.circe.Json.Null)((layer, document) => io.circe.Json.obj("layer" -> io.circe.Json.fromString(layer),
+        "revision" -> io.circe.Json.fromLong(document.revision.value)))).noSpaces)
+    case CliFormat.Human => saved match {
+      case None => output.print(text)
+      case Some((layer, document)) => line(s"Saved as the agent configuration of the $layer, revision ${document.revision.value}")
+    }
+  }
   def doctor(report: CommandDoctorReport): Unit = format match {
     case CliFormat.Json =>
       output.println(io.circe.Json.obj("scope" -> io.circe.Json.fromString("commands"),
