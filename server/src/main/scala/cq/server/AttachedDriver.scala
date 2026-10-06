@@ -124,6 +124,17 @@ final class AttachedDriver(config: SupervisorConfig, authority: SupervisorAuthor
   // one of an earlier drive or of the session before it was driven.
   def settleable: Option[Set[IntegrationId]] = session.settleable
 
+  private def attempt(id: AttemptId): Task[Option[LineageOutcome]] = units.standing(id, WaitMillis).map {
+    case AttemptStanding.Working => None
+    case AttemptStanding.Resting => Some(LineageOutcome.Resting)
+    case AttemptStanding.Concluded(outcome) => Some(LineageOutcome.Concluded(outcome))
+  }
+  // The request of a unit with the one attempt `id`: it stands as that attempt does.
+  private def request(id: AttemptId): Task[Option[LineageOutcome]] = attempt(id).map(_.map {
+    case _: LineageOutcome.Concluded => LineageOutcome.Settled
+    case other => other
+  })
+
   // A status wait returns at once once a member has left the phase it was awaited in, so the tracker paces every further read.
   def observe(activation: Option[WorkflowActivation], command: DispatchCommand, reply: DispatchReply): Task[Unit] =
     activation.flatMap(value => value.cycle.map(_ -> LineageMember.Run(value.id))).fold(ZIO.unit) { case (cycle, run) => (command, reply) match {
@@ -138,6 +149,17 @@ final class AttachedDriver(config: SupervisorConfig, authority: SupervisorAuthor
             ZIO.succeed { known.set(attempts.size); Option.when(ended)(LineageOutcome.Settled) }
         }
         tracker.track(cycle, run, request, unit) *> unit.unit
+      // The governing session's own work is one attempt under its request. While its workspace is open both rest on the session, so
+      // a stop is answered as for any work that waits for the session; the host works on it from its submission or its cancellation.
+      case (_: DispatchCommand.OpenWorkspace | _: DispatchCommand.SelfReview, DispatchReply.Status(status)) =>
+        tracker.track(cycle, run, LineageMember.Request(status.request), request(status.attempt)) *>
+          tracker.track(cycle, LineageMember.Request(status.request), LineageMember.Attempt(status.attempt), attempt(status.attempt))
+      case (_: DispatchCommand.SubmitWorkspace | _: DispatchCommand.Cancel, DispatchReply.Status(status)) =>
+        ZIO.attempt(units.governing(status.attempt)).flatMap { own =>
+          if (!own) ZIO.unit
+          else tracker.resume(cycle, run, LineageMember.Request(status.request), request(status.attempt)) *>
+            tracker.resume(cycle, LineageMember.Request(status.request), LineageMember.Attempt(status.attempt), attempt(status.attempt))
+        }
       case (DispatchCommand.PrepareIntegration(id, _), _: DispatchReply.Integration) =>
         tracker.track(cycle, run, LineageMember.Integration(id), integrations.status(id, WaitMillis).map(value => AttachedDriver.integration(value.phase)))
       // Integrate returns once the host applies the integration; the tracker's next poll may be a status wait away.

@@ -26,6 +26,15 @@ private[server] object UnitWorker {
   final case class Governing(own: OwnWork) extends UnitWorker
 }
 
+/** Where an attempt stands for whoever follows it: in the host's hands, waiting for the governing session, or ended. */
+sealed trait AttemptStanding
+object AttemptStanding {
+  case object Working extends AttemptStanding
+  /** A workspace is open for the governing session: nothing ends the attempt until the session submits or cancels it. */
+  case object Resting extends AttemptStanding
+  final case class Concluded(outcome: ChildOutcome) extends AttemptStanding
+}
+
 /** One started choice and the attempts the host made for it. Its fields are read and written under the lock of its `DispatchUnits`. */
 private[server] final class DispatchUnit(val work: AssignedWork, val worker: UnitWorker,
   val cohort: Option[UUID], var progress: UnitProgress, val done: Promise[Nothing, Unit]) {
@@ -368,6 +377,20 @@ final class DispatchUnits(config: SupervisorConfig, authority: SupervisorAuthori
       synchronized(unit.attempts.find(_.id == attempt).get.outcome)
     }
     result <- promise.await.timeout(zio.Duration.fromMillis(waitMillis))
+  } yield result
+
+  /** Whether the governing session itself works the unit of `attempt`. */
+  def governing(attempt: AttemptId): Boolean = found(attempt).governing
+
+  /** Where `attempt` stands. While the host works on it, waits up to `waitMillis` for it to end; an open workspace is reported at once. */
+  def standing(attempt: AttemptId, waitMillis: Int): Task[AttemptStanding] = for {
+    own <- ZIO.attempt {
+      DispatchWaits.admitted(waitMillis, "Status")
+      val unit = found(attempt)
+      synchronized(unit.attempts.find(_.id == attempt).get)
+    }
+    result <- if (own.entry.status.phase == DispatchPhase.Editing) ZIO.succeed(AttemptStanding.Resting)
+      else own.outcome.await.timeout(zio.Duration.fromMillis(waitMillis)).map(_.fold[AttemptStanding](AttemptStanding.Working)(AttemptStanding.Concluded.apply))
   } yield result
 
   /** The attempts of the unit of `attempt` in the order the host started them, and whether the unit has ended. Waits up to `waitMillis`

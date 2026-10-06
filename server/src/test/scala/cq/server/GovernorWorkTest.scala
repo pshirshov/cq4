@@ -19,7 +19,7 @@ import zio.{IO, Runtime, Semaphore, Task, Unsafe, ZIO}
 
 /**
  * The governing session's own work from the dispatch tool of a real attached host to the integration target: the host's gateway,
- * workflow, units, workspaces, capture, configured checks, publication and integration controller against an
+ * workflow, units, workspaces, capture, configured checks, publication, integration controller and lineage tracker against an
  * in-process server, a real Git repository and guardian-supervised jobs. The server's release policy is pinned to offer the YOLO mode.
  */
 final class GovernorWorkProcess extends SpecZIO with AssertZIO {
@@ -527,6 +527,69 @@ emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_toke
           assert(attempts.filter(_.attempt.role == Role.Governor).map(_.outcome.map(_.value.state)) ==
             List(Some(AttemptState.Failed), Some(AttemptState.Cancelled), Some(AttemptState.Cancelled)), attempts.toString)
         }
+      } yield () }
+    }
+  }
+
+  "A drive whose session works itself (Behavioral Active Blackbox; in-process server and driver core Communication)" should {
+    "I30: rest an open workspace on the session, answer a stop with one resume directive and end the drive at the next stop on it" in {
+      (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO], registry: DriverInspector) =>
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, registry, List(Good)) { f => for {
+        _ <- f.mode(ProcessMode.Yolo, false)
+        _ <- f.driven
+        opened <- f.open(None)
+        resting = Set[LineageMember](LineageMember.Request(opened.request), LineageMember.Attempt(opened.attempt))
+        _ <- f.eventually("the open workspace rests on the session")(f.cycle.exists(cycle => cycle.held == resting && cycle.inFlight.isEmpty))
+        // The session is not waited for: a stop that claims to be woken is answered like any other.
+        prompted <- f.continuation(true)
+        resume = prompted match {
+          case DriverReply.Continue(directive, _, _) if directive.token.isInstanceOf[CycleToken.Resume] => directive
+          case other => fail(s"Expected one resume directive for the open workspace: $other")
+        }
+        _ <- f.workflow.activate(RequestId(uuid), f.advance, "", Some(resume.token))
+        stopped <- f.continuation(false)
+        _ <- ZIO.attempt(stopped match {
+          case DriverReply.Stop(DriverStopped(DriverStop.Failure, detail), _, _) =>
+            assert(detail.contains("a resume directive did not resolve it") && detail.contains(s"attempt ${opened.attempt.value}"), detail)
+          case other => fail(s"Expected the drive to end on the workspace that still rests: $other")
+        })
+        // The workspace outlives the drive: nothing was captured or removed, and the session may still submit or cancel it.
+        still <- f.status(DispatchCommand.Status(opened.attempt, 0))
+        _ <- assertIO(still.phase == DispatchPhase.Editing && Files.isDirectory(f.directory(opened)))
+        _ <- f.status(DispatchCommand.Cancel(opened.attempt)) *> f.ended(opened.attempt)
+      } yield () }
+    }
+
+    "I30: hold a submitted workspace in flight until its result is published, then conclude it with its outcome" in {
+      (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO], registry: DriverInspector) =>
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, registry, List(Slow)) { f => for {
+        _ <- f.mode(ProcessMode.Yolo, false)
+        _ <- f.driven
+        opened <- f.open(None)
+        members = Set[LineageMember](LineageMember.Request(opened.request), LineageMember.Attempt(opened.attempt))
+        _ <- f.eventually("the open workspace rests on the session")(f.cycle.exists(_.held == members))
+        _ <- f.write(opened, "good, under a drive\n")
+        _ <- f.submit(opened)
+        // The submission returns with the unit in flight on the server: a stop is answered as for a running child.
+        flying = f.cycle.map(cycle => (cycle.held, cycle.inFlight.map(_.member).toSet))
+        waiting <- f.continuation(true)
+        _ <- ZIO.attempt {
+          assert(flying.contains((Set.empty[LineageMember], members)), s"$flying; ${f.lineage}")
+          assert(waiting.isInstanceOf[DriverReply.Waiting], waiting.toString)
+        }
+        made <- f.ended(opened.attempt)
+        _ <- f.eventually("the submitted workspace is concluded in its cycle")(f.cycle.exists(cycle =>
+          members.forall(member => cycle.lineage.exists(entry => entry.member == member && entry.settled))))
+        _ <- ZIO.attempt {
+          assert(made.phase == DispatchPhase.Completed && made.result.nonEmpty, made.toString)
+          assert(f.cycle.exists(_.outcomes == List(ChildOutcome(opened.attempt, f.members.map(_.id), ChildEnd.Admitted, None, None))), f.lineage)
+        }
+        // A self-review ends in the call that makes it: it is accounted for in the cycle like any attempt and never rests.
+        review <- f.selfReview(made.result.get).map { case DispatchReply.Status(value) => value; case other => fail(s"The self-review was refused: $other") }
+        _ <- f.eventually("the self-review is concluded in its cycle")(f.cycle.exists(cycle => cycle.outcomes.map(outcome => outcome.attempt -> outcome.end) ==
+          List(opened.attempt -> ChildEnd.Admitted, review.attempt -> ChildEnd.Admitted) && cycle.held.isEmpty && cycle.inFlight.isEmpty))
       } yield () }
     }
   }
