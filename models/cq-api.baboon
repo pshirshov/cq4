@@ -221,7 +221,7 @@ enum Attribution { Direct Shared Unattributed }
 root data EvaluationScope { run: str scenario: str assessor: bit }
 root data Assignment { id: AssignmentId project: ProjectId members: set[ItemId] attribution: Attribution cohort: opt[uid] evaluation: opt[EvaluationScope] }
 enum UsagePhase { Govern Explore Probe Plan Work Check Review Combine Integrate }
-root data Attempt { id: AttemptId assignment: AssignmentId parent: opt[AttemptId] session: SessionId role: Role harness: Harness provider: str model: str collector: str startedAt: i64 phase: UsagePhase }
+root data Attempt { id: AttemptId assignment: AssignmentId parent: opt[AttemptId] session: SessionId role: Role harness: Harness provider: str model: str collector: str startedAt: i64 phase: UsagePhase effort: opt[Effort] }
 enum CounterScope { Increment Cumulative }
 enum Measurement { Observed Estimated Missing Unsupported }
 root data Counter { value: opt[i64] measurement: Measurement }
@@ -636,7 +636,7 @@ root data SessionRecovery { outcome: RecoveryOutcome reason: str recordedAt: i64
 // InstallationSetting.Agents); AgentConfig is what that text parses to and is never stored.
 enum AgentRole { Planner Worker Explorer Reviewer }
 enum ModelTier { Frontier Standard Fast }
-enum Effort { Off Minimal Low Medium High XHigh Max }
+enum Effort { Off Minimal Low Medium High XHigh Max Ultra }
 root data ModelName { provider: opt[str] model: str }
 root data TierEntry { model: ModelName effort: opt[Effort] }
 root adt HarnessSelector {
@@ -679,6 +679,8 @@ root adt AgentProblem {
   data ProviderRequired { at: TextPosition harness: Harness }
   data ProviderNotAllowed { at: TextPosition harness: Harness }
   data EffortUnsupported { at: TextPosition harness: Harness effort: Effort }
+  // Pi reads the text after the last colon of a model name as a thinking level when it is one of its levels.
+  data ModelAmbiguous { at: TextPosition harness: Harness model: str }
   data RoleUnassigned { harness: Harness role: AgentRole }
   data TierUndefined { harness: Harness tier: ModelTier role: AgentRole }
 }
@@ -974,7 +976,8 @@ root data DispatchStatus {
   counts: ChildCounts next: ChildNext blocker: opt[str] result: opt[ArtifactId] partial: opt[ArtifactId] detailsOmitted: bit usageDelivered: bit
   workspace: opt[WorkspaceState] quietMillis: opt[i64]
 }
-root data DispatchTicket { request: DispatchRequest assignment: Assignment attempt: Attempt profile: HarnessSetting selection: opt[ArtifactId] }
+// profile: the settings entry of the attempt's harness; an attempt whose harness has none abstains before any launch.
+root data DispatchTicket { request: DispatchRequest assignment: Assignment attempt: Attempt profile: opt[HarnessSetting] selection: opt[ArtifactId] }
 root data CohortRequest {
   request: RequestId roots: set[ItemId] work: DispatchWork guidance: lst[ItemRevision] artifacts: lst[ArtifactId]
   previous: opt[ArtifactId] limits: HostLimits

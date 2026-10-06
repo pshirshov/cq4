@@ -342,7 +342,7 @@ final class AgentConfigLocal extends AnyWordSpec {
       reference("claude:@best", "unknown tier 'best'")
       reference("claude:@Fast", "unknown tier 'Fast'")
       reference("claude:@", "unknown tier ''")
-      reference("claude:opus?effort=ultra", "unknown effort 'ultra'")
+      reference("claude:opus?effort=extreme", "unknown effort 'extreme'; expected one of off, minimal, low, medium, high, xhigh, max, ultra")
       reference("claude:opus?effort=High", "unknown effort 'High'")
       reference("claude:opus?effort=", "unknown effort ''")
       reference("claude:opus?effort=low&effort=high", "effort is given twice")
@@ -448,10 +448,12 @@ final class AgentConfigLocal extends AnyWordSpec {
     "include an effort the harness does not take, by the set of each harness" in {
       val accepted = Map[Harness, Set[Effort]](
         Harness.Claude -> Set(Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max),
-        Harness.Codex -> Set(Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max),
-        Harness.Pi -> Effort.all.toSet)
+        Harness.Codex -> Set(Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max, Effort.Ultra),
+        Harness.Pi -> Set(Effort.Off, Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max))
       val names = Map[Harness, (String, String)](Harness.Claude -> ("claude", "opus"), Harness.Codex -> ("codex", "gpt"), Harness.Pi -> ("pi", "zai/glm"))
-      for (harness <- Harness.all; (effort, text) <- Effort.all.zip(List("off", "minimal", "low", "medium", "high", "xhigh", "max"))) {
+      val texts = List("off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra")
+      assert(texts.size == Effort.all.size && Effort.all.map(AgentResolution.effortName) == texts)
+      for (harness <- Harness.all; (effort, text) <- Effort.all.zip(texts)) {
         val (key, model) = names(harness)
         assert(AgentResolution.efforts(harness) == accepted(harness))
         val expected = if (accepted(harness)(effort)) Nil else List(AgentProblem.EffortUnsupported(at(1, ValueColumn), harness, effort))
@@ -460,6 +462,22 @@ final class AgentConfigLocal extends AnyWordSpec {
         val entry = s"harnesses: { $key: { tiers: { fast: [$model?effort=$text] } } }"
         assert(problems(entry) == expected.map(_ => AgentProblem.EffortUnsupported(at(1, 34 + key.length), harness, effort)), entry)
       }
+    }
+
+    "include a Pi model name that ends in a colon and one of Pi's thinking levels, in a tier and in a reference with a known harness" in {
+      Effort.all.filter(AgentResolution.efforts(Harness.Pi)).map(AgentResolution.effortName).foreach { level =>
+        assert(AgentResolution.piThinkingSuffix(s"glm:$level") && AgentResolution.piThinkingSuffix(s"openai/gpt-4o:extended:$level"), level)
+        assert(problems(inRoles(s"pi:zai/glm:$level")) == List(AgentProblem.ModelAmbiguous(at(1, ValueColumn), Harness.Pi, s"glm:$level")), level)
+        assert(problems(inRoles(s"pi:zai/glm:$level?effort=low")) == List(AgentProblem.ModelAmbiguous(at(1, ValueColumn), Harness.Pi, s"glm:$level")), level)
+        assert(problems(s"harnesses: { pi: { tiers: { fast: [zai/glm:$level] } } }") == List(AgentProblem.ModelAmbiguous(at(1, 36), Harness.Pi, s"glm:$level")), level)
+        // Claude Code and Codex pass a model name on as it is written.
+        assert(problems(inRoles(s"{ rr: [claude:opus:$level, codex:gpt:$level] }")).isEmpty, level)
+      }
+      // A colon elsewhere, another ending, and a level Pi does not name leave the name whole.
+      List("glm:exacto", "glm:high:exacto", "glm:High", "glm:ultra", "glm-high", "high").foreach { model =>
+        assert(!AgentResolution.piThinkingSuffix(model) && problems(inRoles(s"pi:zai/$model")).isEmpty, model)
+      }
+      assert(!AgentResolution.piThinkingSuffix("glm:") && !AgentResolution.piThinkingSuffix(""))
     }
 
     "check a $harness reference under harnesses.<harness>.roles as a reference to that harness, and no other $harness reference" in {
@@ -513,6 +531,8 @@ final class AgentConfigLocal extends AnyWordSpec {
         AgentProblem.ProviderRequired(position, Harness.Pi),
         AgentProblem.ProviderNotAllowed(position, Harness.Claude),
         AgentProblem.EffortUnsupported(position, Harness.Claude, Effort.Off),
+        AgentProblem.EffortUnsupported(position, Harness.Pi, Effort.Ultra),
+        AgentProblem.ModelAmbiguous(position, Harness.Pi, "glm:high"),
         AgentProblem.RoleUnassigned(Harness.Codex, AgentRole.Explorer),
         AgentProblem.TierUndefined(Harness.Pi, ModelTier.Fast, AgentRole.Reviewer)).map(AgentConfigText.describe) == List(
         "3:7: anchors are not supported",
@@ -523,6 +543,8 @@ final class AgentConfigLocal extends AnyWordSpec {
         "3:7: a pi model is written provider/model",
         "3:7: a claude model is written without a provider",
         "3:7: claude does not take effort off; it takes low, medium, high, xhigh, max",
+        "3:7: pi does not take effort ultra; it takes off, minimal, low, medium, high, xhigh, max",
+        "3:7: pi reads the ending of the model name 'glm:high' as a thinking level, so the name selects no one model; a level is written ?effort=…",
         "no layer assigns the explorer role when codex governs",
         "the reviewer role refers to the fast tier of pi, which no layer defines"))
     }

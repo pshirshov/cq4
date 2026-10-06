@@ -249,9 +249,9 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
       members = created.items
       claim <- service.acquire(w.governor, ClaimId(uuid), members.map(_.id).toSet, 300000)
       governing <- usage.assign(collector, Assignment(AssignmentId(uuid), w.project, Set.empty, Attribution.Unattributed, None, None))
-      parent <- usage.start(collector, Attempt(AttemptId(uuid), governing.id, None, w.governor.actor.session, Role.Governor, Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Govern))
+      parent <- usage.start(collector, Attempt(AttemptId(uuid), governing.id, None, w.governor.actor.session, Role.Governor, Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Govern, None))
       assignment <- usage.assign(collector, Assignment(AssignmentId(uuid), w.project, claim.members, Attribution.Shared, Some(uuid), None))
-      attempt <- usage.start(collector, Attempt(AttemptId(uuid), assignment.id, Some(parent.id), w.governor.actor.session, Role.Planner, Harness.Codex, "fixture", "fixture", "fixture", 1001, UsagePhase.Plan))
+      attempt <- usage.start(collector, Attempt(AttemptId(uuid), assignment.id, Some(parent.id), w.governor.actor.session, Role.Planner, Harness.Codex, "fixture", "fixture", "fixture", 1001, UsagePhase.Plan, None))
       dispatch = DispatchRequest(RequestId(uuid), DispatchWork.Planner(), Harness.Codex, members, Nil, Nil, None, claim.fence, HostLimits(3000, 1000, 300, 2000, 262144))
       report = ChildReport.Plan(members.map(ref => PlanMember(ref.id, PlanDisposition.Proposed, "Proposed next step")),
         Some(LedgerProposal(mutations(members), "Apply the proposed next step")), Nil)
@@ -843,6 +843,9 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
         resolved <- after("resolved", List((ChildEnd.Retryable, Some("input"), fault), (ChildEnd.Admitted, Some("input"), None)))
         abandoned <- after("abandoned", List((ChildEnd.Retryable, Some("input"), fault), (ChildEnd.Cancelled, Some("input"), None)))
         _ <- assertIO(List(none, admitted, cancelled, unknown, deferred, unselected, resolved, abandoned).forall(quiescent))
+        // An abstained attempt is recorded, and is no failed input to retry: the drive does not continue on it.
+        abstained <- after("abstained", List((ChildEnd.Abstained, Some("input"), Some("Abstained (Quota): Quota exceeded. Check your plan and billing details."))))
+        _ <- assertIO(abstained match { case _: DriverReply.Stop => true; case _ => false })
         // One retryable input among others continues the drive, naming it.
         mixed <- after("mixed", List((ChildEnd.Admitted, Some("other"), None), (ChildEnd.Retryable, Some("input"), fault)))
         _ <- assertIO(mixed match { case DriverReply.Continue(_, value, List(message)) => value.cycle.exists(_.number == 2) && message.contains("its work on G"); case _ => false })

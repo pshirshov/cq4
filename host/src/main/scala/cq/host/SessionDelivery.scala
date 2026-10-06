@@ -61,14 +61,14 @@ final class SessionDelivery(journal: JobRepository, workspaces: WorkspaceService
   private val MaxRecordBytes = 64 * 1024
   private val MaxGaps = 32
   import SessionDelivery.Interrupted
-  private final case class Publication(assignment: Assignment, attempt: Attempt, version: String, retainedOutputBytes: Option[Int], queue: DeliveryQueue, child: Option[ChildPublicationDelivery])
+  private final case class Publication(assignment: Assignment, attempt: Attempt, version: Option[String], retainedOutputBytes: Option[Int], queue: DeliveryQueue, child: Option[ChildPublicationDelivery])
 
   private final case class Inventory(publications: List[Publication], incompleteTickets: List[Path])
 
   private def inventory(directory: Path, run: SupervisorRun): Inventory = {
     require(run.assignment.project == run.project.project && run.attempt.assignment == run.assignment.id &&
       run.attempt.parent.isEmpty && run.attempt.role == Role.Governor, "Invalid governing publication identity")
-    val governing = Publication(run.assignment, run.attempt, run.harnessVersion, None, new DeliveryQueue(directory.resolve("delivery")), None)
+    val governing = Publication(run.assignment, run.attempt, Some(run.harnessVersion), None, new DeliveryQueue(directory.resolve("delivery")), None)
     val root = directory.resolve("children")
     val (children, incomplete) = if (!Files.exists(root)) (Nil, Nil) else {
       require(Files.isDirectory(root) && !Files.isSymbolicLink(root), "Child delivery root must be a directory")
@@ -91,10 +91,10 @@ final class SessionDelivery(journal: JobRepository, workspaces: WorkspaceService
         require(child.getFileName.toString == ticket.attempt.id.value.toString && ticket.attempt.session == run.attempt.session &&
           ticket.attempt.parent.contains(run.attempt.id) && ticket.assignment.project == run.project.project &&
           ticket.attempt.assignment == ticket.assignment.id && ticket.assignment.members == ticket.request.members.map(_.id).toSet &&
-          ticket.attempt.role == ChildContracts.role(ticket.request.work) && ticket.attempt.harness == ticket.profile.harness &&
-          ticket.attempt.model == ticket.profile.model && ticket.attempt.provider == ticket.profile.provider,
+          ticket.attempt.role == ChildContracts.role(ticket.request.work) && ticket.attempt.harness == ticket.request.harness &&
+          ticket.profile.forall(_.harness == ticket.attempt.harness),
           "Child delivery ticket has another assignment or governing owner")
-        Publication(ticket.assignment, ticket.attempt, ticket.profile.version, Some(ticket.request.limits.retainedOutputBytes), new DeliveryQueue(child.resolve("delivery")),
+        Publication(ticket.assignment, ticket.attempt, HarnessUsage.launchable(ticket.profile).map(_.version), Some(ticket.request.limits.retainedOutputBytes), new DeliveryQueue(child.resolve("delivery")),
           Some(new ChildPublicationDelivery(child, ticket)))
       }
       (publications, incomplete)
@@ -133,8 +133,10 @@ final class SessionDelivery(journal: JobRepository, workspaces: WorkspaceService
     val (nativeId, outParts) = NativeArtifacts.binary(project, attempt.id, "stdout", "application/x-ndjson", stdout)
     val (_, errParts) = NativeArtifacts.binary(project, attempt.id, "stderr", "application/octet-stream", stderr)
     val collectedAt = math.max(attempt.startedAt, clock.millis())
-    val usage = Using.resource(NativeTranscript.stream(payload.resolve("stdout")))(new HarnessUsage().collect(_, UsageCollectionRequest(attempt.id,
-      attempt.harness, publication.version, UsageOrigin.Fresh, collectedAt, nativeId)))
+    val usage = publication.version.fold(HarnessUsage.Unlaunched) { version =>
+      Using.resource(NativeTranscript.stream(payload.resolve("stdout")))(new HarnessUsage().collect(_, UsageCollectionRequest(attempt.id,
+        attempt.harness, version, UsageOrigin.Fresh, collectedAt, nativeId)))
+    }
     def entry(value: HostUsage): HostDelivery = HostDelivery.Usage(HostUsageInput(project, value))
     val observations = usage.meters.flatMap { batch =>
       entry(HostUsage.Meter(batch.meter)) :: batch.observations.map { upload =>

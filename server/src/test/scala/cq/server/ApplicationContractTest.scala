@@ -76,7 +76,7 @@ abstract class ApplicationContractTest extends SpecZIO with AssertZIO {
         val project = ProjectId(UUID.randomUUID())
         val collector = Scope(project, Actor("collector", SessionId(UUID.randomUUID()), Role.Collector))
         val assignment = Assignment(AssignmentId(UUID.randomUUID()), project, Set.empty, Attribution.Unattributed, None, None)
-        val attempt = Attempt(AttemptId(UUID.randomUUID()), assignment.id, None, collector.actor.session, Role.Governor, Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Govern)
+        val attempt = Attempt(AttemptId(UUID.randomUUID()), assignment.id, None, collector.actor.session, Role.Governor, Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Govern, None)
         val tool = new McpSchemas().tools.find(_.name == "usage").get
         val input = io.circe.parser.parse(s"""{"project":{"value":"${project.value}"},"selection":{"Phases":{"filter":{"SessionOnly":{"id":{"value":"${collector.actor.session.value}"}}}}}}""").toTry.get
         for {
@@ -181,7 +181,7 @@ abstract class ApplicationContractTest extends SpecZIO with AssertZIO {
         }
         def host(operation: HostUsage): IO[Throwable, HostUsageResult] = application.ingest(root, HostUsageInput(project, operation))
         def attempt(assignment: Assignment, session: SessionId, startedAt: Long): Attempt =
-          Attempt(AttemptId(UUID.randomUUID()), assignment.id, None, session, Role.Worker, Harness.Codex, "fixture", "fixture", "fixture", startedAt, UsagePhase.Work)
+          Attempt(AttemptId(UUID.randomUUID()), assignment.id, None, session, Role.Worker, Harness.Codex, "fixture", "fixture", "fixture", startedAt, UsagePhase.Work, None)
         for {
           _ <- application.execute(root, Command.Initialize(ProjectConfig(project, "http://localhost", "running work")))
           created <- application.execute(root, Command.Change(ChangeInput(project, ChangeRequest(RequestId(UUID.randomUUID()), List(Mutation.Create(task), Mutation.Create(task)), Nil, "Create"))))
@@ -236,7 +236,7 @@ abstract class ApplicationContractTest extends SpecZIO with AssertZIO {
           }
         def host(operation: HostUsage): IO[Throwable, HostUsageResult] = application.ingest(first, HostUsageInput(project, operation))
         def attempt(assignment: Assignment, session: SessionId, startedAt: Long): Attempt =
-          Attempt(AttemptId(UUID.randomUUID()), assignment.id, None, session, Role.Worker, Harness.Codex, "fixture", "fixture", "fixture", startedAt, UsagePhase.Work)
+          Attempt(AttemptId(UUID.randomUUID()), assignment.id, None, session, Role.Worker, Harness.Codex, "fixture", "fixture", "fixture", startedAt, UsagePhase.Work, None)
         for {
           _ <- application.execute(first, Command.Initialize(ProjectConfig(project, "http://localhost", "several claimed rows")))
           created <- application.execute(first, Command.Change(ChangeInput(project, ChangeRequest(RequestId(UUID.randomUUID()), List.fill(4)(Mutation.Create(task)), Nil, "Create"))))

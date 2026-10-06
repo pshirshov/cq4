@@ -20,6 +20,18 @@ The earlier [usage probes](../drafts/20260926-usage-observability.md) establish 
 
 Profiles require an explicit executable, installed version, model and provider. No adapter changes model or harness on failure. Claude currently accepts only the verified `anthropic` route; Codex passes `model_provider`, and Pi passes `--provider`. Pi can load an explicit inventory of trusted provider extensions while disabling discovery of unrelated extensions. Alternate providers/extensions need their own runtime capability evidence.
 
+A launch takes its model, provider and reasoning effort from a `ModelRoute` and everything else (executable, version, provider extensions, provider environment) from the settings entry of the route's harness; a route without a provider takes the entry's. A settings entry by itself states the route of its own model and provider with no effort, which leaves the harness's default level. The attempt records the route: `Attempt.provider`, `model` and `effort`.
+
+| Harness | Effort argument | Levels |
+| --- | --- | --- |
+| Claude Code 2.1.285 | `--effort <level>` | low, medium, high, xhigh, max |
+| Codex 0.160.0 | `-c model_reasoning_effort="<level>"` | minimal, low, medium, high, xhigh, max, ultra |
+| Pi 0.99.1 | `--thinking <level>` | off, minimal, low, medium, high, xhigh, max |
+
+An adapter refuses a level its harness does not name: Claude Code and Pi answer an unknown level with a warning and run their default, and Codex takes any text. The harness may still map a level to what the model offers (observed against a stub provider: Codex sent `max` for `ultra` and Pi sent `xhigh` for `max` and `low` for `minimal` with the models probed, `gpt-6-sol` and `gpt-5.5`).
+
+Pi reads the text after the last colon of `--model` as a thinking level when it is one of its levels, unless its catalogue holds the whole name: `x:high` runs as model `x` when Pi knows `x`, and also when no `--thinking` is passed. A Pi model name with such an ending therefore selects no one model; the agent configuration reports it (`AgentProblem.ModelAmbiguous`) and the adapter refuses it. Any other colon in a name is passed on as written.
+
 Each invocation supplies host-owned system instructions, a result schema, scoped MCP endpoints and a private asset directory. Only Worker receives native editing/shell tools. That is tool policy: it says what a role is meant to do, and it is not filesystem protection. Governor has the six CQ domain tools and local `dispatch`; Explorer, Planner, Worker and Reviewer have `search`, `read`, `usage` and local `workspace`. Worker/reviewer dispatch is implemented; explorer/planner execution remains M4 work. CQ independently denies child domain writes even when called directly.
 
 The environment allowlist retains runtime, proxy/certificate and configured harness-home variables. Provider-specific variables must be named explicitly. CQ root/controller credentials and inherited harness control flags are excluded. Codex receives scoped bearer tokens through dedicated environment variables; Claude/Pi receive them in private configuration files. Tokens never appear in process arguments. Assets use 0700 directories and 0600 files, are forced to disk and accept only byte-identical retries; changed or symbolic replacements fail explicitly.
@@ -27,6 +39,26 @@ The environment allowlist retains runtime, proxy/certificate and configured harn
 The inherited `__NIXOS_SET_ENVIRONMENT_DONE` marker is retained for harness and validation commands: without it, NixOS shell startup replaces the supplied toolchain PATH. A production-adapter regression reproduces missing tool discovery before this correction.
 
 These controls implement the cooperative-agent threat model. Worker shell access is not a security boundary against an agent deliberately inspecting credentials or escaping its workspace. For Codex this holds for every role, not Worker alone: a Codex Governor, Explorer, Planner, Worker or Reviewer is launched with `danger-full-access` and can write files wherever the operator's outer sandbox lets the host process write ([Codex sandbox mode](#codex-sandbox-mode)). Server authorization remains authoritative for CQ writes. System-managed harness policy can further restrict a launch; failure is reported without privilege fallback.
+
+## Abstention
+
+An attempt abstains when it could not run its model for a reason that is none of the work's, so that another model may run the same input. It ends in state `Abstained` (dispatch phase `Abstained`, `next: ResolveBlocker`) with the gap and blocker `Abstained (<reason>): <detail>`. It is registered in usage like every attempt. Its input is released as it was: no fault artifact is published and nothing is compared for repetition. Nothing retries on an abstention yet. A Worker that abstained after changing files keeps its partial-work capture, and its workspace is quarantined as a failed one's is: the capture is bounded, and the tree is the only whole copy of what the Worker left.
+
+| Reason | When |
+| --- | --- |
+| `Unconfigured` | The session settings have no entry for the route's harness, or the entry names an unverified version. |
+| `Launch` | The installed version differs from the entry's, or the executable cannot be run; a `providerEnvironment` name is unset; the adapter refuses the route (effort, Pi model name, Claude provider); the guardian could not start the process (`StopReason.LaunchFailed`). |
+| `Credential`, `Quota`, `RateLimit`, `Unavailable` | The harness ran, ended by itself and its native output ends in a provider refusal of that class. |
+
+`AbstentionClassifier` reads the provider classes from the native events, for the harness version whose refusals were captured (Claude Code 2.1.285, Codex 0.160.0, Pi 0.99.1) and no other. The transcripts are retained under `server/src/test/resources/harness-usage/abstention/`; their README says how each was produced. A stopped, cancelled or uncertain job is judged by how it was stopped, whatever its output says. Everything the classifier does not recognise is a failure and follows the rules for failures: a model the provider does not know, a 403, a malformed report, a rejected admission, a crash.
+
+| Harness | Read from | Credential | Quota | RateLimit | Unavailable |
+| --- | --- | --- | --- | --- | --- |
+| Claude Code | the terminal `result` with `is_error` and `terminal_reason: "api_error"`, and the `error` of the last assistant event marked `is_api_error_message` | `authentication_failed` | `billing_error`; `rate_limit` after a `rate_limit_event` whose status is `rejected` (an exhausted plan window) | `rate_limit` otherwise | `server_error` (500, 503, 529 observed) |
+| Codex | the message of the last `turn.failed` | `unexpected status 401 Unauthorized: …` | `Quota exceeded. Check your plan and billing details.`; `You’ve hit your usage limit. …` | `exceeded retry limit, last status: 429 Too Many Requests` | `We’re currently experiencing high demand, …` (500); `unexpected status 502`/`503`/`504 …` |
+| Pi | the last assistant `message_end`: `stopReason: "error"` and `errorMessage`, after Pi's own retries | `anthropic-messages`: 401 `authentication_error`; `openai-responses`: 401 `invalid_api_key` | 400 with Anthropic's credit-balance message; 429 `insufficient_quota`; `openai-codex-responses`: `You have hit your ChatGPT usage limit …` | 429 `rate_limit_error`; 429 `rate_limit_exceeded` | 500, 503, 529 (`anthropic-messages`); 500, 502, 503, 504 `server_error` (`openai-responses`) |
+
+Pi's `openai-codex-responses` API reports every 429 as its usage-limit sentence, so a request-rate refusal there reads as `Quota`; its other errors carry the provider's message alone and are not classified. Pi passes on the reply of whichever provider it calls: a provider API other than these three is not classified.
 
 ## Harness differences
 

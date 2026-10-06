@@ -36,7 +36,7 @@ object IntegrationApiCheck {
     def attempt(role: Role, phase: UsagePhase, parent: Option[AttemptId]): Attempt = {
       val assignment = Assignment(AssignmentId(uuid), project, members.map(_.id).toSet, Attribution.Direct, None, None)
       require(collector.usage(HostUsageInput(project, HostUsage.Assign(assignment))) == HostUsageResult.Assigned(assignment))
-      val value = Attempt(AttemptId(uuid), assignment.id, parent, session, role, Harness.Codex, "fixture", "fixture", "fixture", 1000, phase)
+      val value = Attempt(AttemptId(uuid), assignment.id, parent, session, role, Harness.Codex, "fixture", "fixture", "fixture", 1000, phase, None)
       require(collector.usage(HostUsageInput(project, HostUsage.Start(value))) == HostUsageResult.Started(value))
       value
     }

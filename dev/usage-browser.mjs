@@ -30,7 +30,7 @@ export async function usageChecks(page, origin, projectId) {
   await page.getByRole('dialog').getByRole('button', { name: 'Close', exact: true }).click();
   const assignment = { id: id(), project, members: [member], attribution: 'Direct', cohort: null, evaluation: null };
   const attempt = { id: id(), assignment: assignment.id, parent: null, session: id(), role: 'Worker', harness: 'Codex',
-    provider: 'controlled-browser-fixture', model: 'no-model-call', collector: 'fixture', startedAt: '1000', phase: 'Work' };
+    provider: 'controlled-browser-fixture', model: 'no-model-call', collector: 'fixture', startedAt: '1000', phase: 'Work', effort: null };
   await host({ Assign: { value: assignment } }); await host({ Start: { value: attempt } });
   await page.getByRole('button', { name: 'Project usage', exact: true }).click();
   await page.getByText('Attempt coverage: 1 running; 0 open; 0 unknown outcomes; 0 with reported gaps.', { exact: true }).waitFor();
@@ -95,7 +95,7 @@ export async function usageChecks(page, origin, projectId) {
   await phases.locator('..').locator('..').getByText('Cost basis: ProviderEstimate.', { exact: true }).waitFor();
   await phaseTruncation.waitFor();
   const timed = [['Review', 'phase-review', 3720000], ['Plan', 'phase-plan', 200000], ['Probe', 'phase-probe', 45000]].map(([phase, model, finishedAt]) =>
-    ({ attempt: { ...attempt, id: id(), session: id(), model, startedAt: '0', phase }, finishedAt }));
+    ({ attempt: { ...attempt, id: id(), session: id(), model, startedAt: '0', phase, effort: phase === 'Plan' ? 'XHigh' : null }, finishedAt }));
   for (const entry of timed) {
     await host({ Start: { value: entry.attempt } });
     await host({ Finish: { value: { request: id(), attempt: entry.attempt.id, state: 'Completed', finishedAt: String(entry.finishedAt), gaps: [], supersedes: null } } });
@@ -114,6 +114,8 @@ export async function usageChecks(page, origin, projectId) {
     ['Work', '302', '0', '0', '1', '2.0000 USD', '1', '0', '0', '1 s'], ['Review', '0', '0', '0', '0', '—', '2', '1', '0', '1 h 02 min']]);
   await page.getByRole('button', { name: 'Attempts', exact: true }).click();
   await page.getByRole('table', { name: 'Attempts', exact: true }).getByRole('row').filter({ has: page.getByRole('cell', { name: 'controlled-browser-fixture / phase-govern', exact: true }) }).getByRole('cell', { name: 'Open', exact: true }).waitFor();
+  // The effort an attempt was launched with stands beside its provider and model; an attempt that stated none shows none.
+  await page.getByRole('table', { name: 'Attempts', exact: true }).getByRole('cell', { name: 'controlled-browser-fixture / phase-plan · effort xhigh', exact: true }).waitFor();
   await page.getByRole('table', { name: 'Attempts', exact: true }).getByRole('row').filter({ has: page.getByRole('cell', { name: 'controlled-browser-fixture / phase-probe', exact: true }) }).getByText('Attempt details', { exact: true }).click();
   await page.getByRole('button', { name: `Session usage · ${timed[2].attempt.session.value}`, exact: true }).click();
   await page.getByRole('heading', { name: `Usage · session ${timed[2].attempt.session.value}`, exact: true }).waitFor();

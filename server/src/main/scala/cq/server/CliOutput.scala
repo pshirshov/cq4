@@ -1,7 +1,7 @@
 package cq.server
 
 import cq.api.*
-import cq.core.LedgerPolicy
+import cq.core.{AgentResolution, LedgerPolicy}
 import java.io.PrintStream
 import java.nio.file.Path
 import java.time.Instant
@@ -235,8 +235,9 @@ final class CliOutput(output: PrintStream, format: CliFormat, invocation: List[S
     case Result.UsageCosts(value) => costs(value)
     case Result.UsagePhases(value) => phases(value)
     case Result.UsageAttempts(value) =>
-      table(List("Attempt", "Role", "Harness", "Model", "State", "Started", "Items"), value.entries.map(entry =>
+      table(List("Attempt", "Role", "Harness", "Model", "Effort", "State", "Started", "Items"), value.entries.map(entry =>
         List(entry.attempt.id.value.toString, entry.attempt.role.toString, entry.attempt.harness.toString, entry.attempt.model,
+          entry.attempt.effort.fold("-")(AgentResolution.effortName),
           entry.outcome.fold(if (entry.observed) "Running" else "Open")(_.value.state.toString), instant(entry.attempt.startedAt), entry.assignment.members.toList.sortBy(LedgerPolicy.key).map(id).mkString(", "))))
       value.entries.foreach(entry => entry.outcome.foreach(outcome => outcome.value.gaps.foreach(gap => line(s"${entry.attempt.id.value}: $gap"))))
       page(value.hasMore, value.after.fold("")(_.value.toString), Some(value.cursor.toString), invocation)

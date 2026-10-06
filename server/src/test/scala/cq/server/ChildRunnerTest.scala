@@ -23,13 +23,16 @@ final class ChildRunnerProcess extends SpecZIO with AssertZIO {
     memoizationRoots = Set(DIKey[LedgerService[IO]], DIKey[UsageService[IO]], DIKey[ArtifactService[IO]], DIKey[ResultAdmissionService[IO]]),
   )
   private def uuid: UUID = UUID.randomUUID()
-  private val Header = """#!/usr/bin/env python3
-import json, sys, time
+  // The version whose provider refusals the host classifies; its native usage format is that of the earlier verified versions.
+  private val Version = AbstentionClassifier.captured(Harness.Codex)
+  private val Probe = s"""#!/usr/bin/env python3
+import json, os, sys, time
 from pathlib import Path
 if sys.argv[1:] == ["--version"]:
-    print("codex-cli 0.156.1")
+    print("codex-cli $Version")
     sys.exit(0)
-target = Path(sys.argv[sys.argv.index("--output-last-message") + 1])
+"""
+  private val Header = Probe + """target = Path(sys.argv[sys.argv.index("--output-last-message") + 1])
 data = json.load(sys.stdin)
 members = [view["item"]["id"] for view in data["input"]["members"]]
 def emit(event):
@@ -95,6 +98,18 @@ sys.stderr.flush()
 """
   private val Stalling = Partial + "time.sleep(30)\n"
   private val Failing = Partial + "sys.exit(3)\n"
+  /** A worker whose provider refuses it for quota after it changed files: the last events and exit status of the retained Codex transcript. */
+  private val QuotaMessage = "Quota exceeded. Check your plan and billing details."
+  private val Refused = Partial + s"""emit({"type": "error", "message": "$QuotaMessage"})
+emit({"type": "turn.failed", "error": {"message": "$QuotaMessage"}})
+sys.exit(1)
+"""
+  /** A worker that ends as `Refused` does, with an error the host has no class for. */
+  private val Unclassified = Partial + """emit({"type": "turn.failed", "error": {"message": "unexpected status 400 Bad Request: Invalid schema"}})
+sys.exit(1)
+"""
+  /** A harness that answers the version probe and is gone when the guardian launches it. */
+  private val Vanishing = Probe.replace("    sys.exit(0)\n", "    os.remove(sys.argv[0])\n    sys.exit(0)\n")
 
   private final class Receiver(application: Application, auth: Authorization, root: Authority, authority: Authority, runtime: Runtime[Any]) extends ServerApi {
     private def execute[A](value: Task[A]): A = Unsafe.unsafe { implicit unsafe => runtime.unsafe.run(value).getOrThrowFiberFailure() }
@@ -143,7 +158,9 @@ sys.stderr.flush()
     }
     def request(limits: HostLimits): DispatchRequest =
       DispatchRequest(RequestId(uuid), DispatchWork.Worker(WorkerMode.Implement), Harness.Codex, members, Nil, Nil, None, fence, limits)
-    def dispatch(script: String, limits: HostLimits): Task[DispatchExecution] = for {
+    def dispatch(script: String, limits: HostLimits): Task[DispatchExecution] = routed(script, limits, None, Some(profile))
+    /** A child with the effort of its route and the settings entry its ticket froze, which a session's settings need not hold. */
+    def routed(script: String, limits: HostLimits, effort: Option[Effort], setting: Option[HarnessSetting]): Task[DispatchExecution] = for {
       ready <- Promise.make[Throwable, Unit]
       done <- Promise.make[Nothing, Unit]
       entry <- ZIO.attemptBlocking {
@@ -151,8 +168,8 @@ sys.stderr.flush()
         val request = this.request(limits)
         val assignment = Assignment(AssignmentId(uuid), owner.project, members.map(_.id).toSet, Attribution.Direct, None, None)
         val attempt = Attempt(AttemptId(uuid), assignment.id, Some(governor.id), owner.actor.session, Role.Worker, Harness.Codex,
-          profile.provider, profile.model, "fixture", clock.millis(), UsagePhase.Work)
-        val ticket = DispatchTicket(request, assignment, attempt, profile, None)
+          profile.provider, profile.model, "fixture", clock.millis(), UsagePhase.Work, effort)
+        val ticket = DispatchTicket(request, assignment, attempt, setting, None)
         val entry = new DispatchExecution(ticket, config.directory.resolve("children").resolve(attempt.id.value.toString), ready, done)
         HostFiles.directory(entry.directory)
         entry
@@ -181,9 +198,9 @@ sys.stderr.flush()
       claim <- ledger.acquire(owner, ClaimId(uuid), members.map(_.id).toSet, 300000)
       assignment <- usage.assign(collector, Assignment(AssignmentId(uuid), owner.project, Set.empty, Attribution.Unattributed, None, None))
       governor <- usage.start(collector, Attempt(AttemptId(uuid), assignment.id, None, owner.actor.session, Role.Governor, Harness.Codex,
-        "fixture-provider", "fixture-model", "fixture", clock.millis(), UsagePhase.Govern))
+        "fixture-provider", "fixture-model", "fixture", clock.millis(), UsagePhase.Govern, None))
       directory <- ZIO.attemptBlocking(Files.createTempDirectory(local.directory, "child-runner-"))
-      profile = HarnessSetting(Harness.Codex, directory.resolve("fixture-harness").toString, "fixture-model", "fixture-provider", "0.156.1", Nil, Set.empty)
+      profile = HarnessSetting(Harness.Codex, directory.resolve("fixture-harness").toString, "fixture-model", "fixture-provider", Version, Nil, Set.empty)
       settings = SupervisorSettings(directory.toString, guardian.binary.toString, List(profile), limits, checks, None, target)
       run = SupervisorRun(project, assignment, governor, profile.version, local.source.toString, local.base, SessionOwnership.Managed)
       config = SupervisorConfig(settings, project, SupervisorConfig.profile(profile), SupervisorConfig.limits(limits), run, directory, "", None, guardian.environment)
@@ -819,6 +836,150 @@ sys.stderr.flush()
             assert(admission.decision == AdmissionDecision.Accepted() && receipt.status.phase == DispatchPhase.Completed && receipt.status.result.nonEmpty,
               s"${admission.decision} ${receipt.status}")
             assert(after.isEmpty, after.toString)
+          }
+        } yield ()
+      }
+    }
+
+    "abstain when the provider refuses a worker for quota, keeping its partial work, and fail on a refusal it has no class for" in {
+      (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None, Nil) { f =>
+        val concluded = new java.util.concurrent.atomic.AtomicReference(Option.empty[ChildOutcome])
+        val selection = SelectedDispatch(None, ArtifactId(uuid), () => (), { status =>
+          val outcome = CohortFailure.outcome(status, Some("input"), CohortFailure.fault(status).map(_ => true))
+          concluded.set(Some(outcome))
+          outcome
+        })
+        val controller = new DispatchController(f.config, f.runner, f.jobs, f.clock)
+        val blocker = s"Abstained (Quota): $QuotaMessage"
+        for {
+          _ <- ZIO.attemptBlocking(f.install(Refused))
+          started <- controller.startSelected(f.request(f.limits), selection)
+          status <- controller.status(started.attempt, 120000)
+          attempts <- usage.attempts(f.owner, UsageFilter.SessionOnly(f.owner.actor.session), None, None, 100)
+          record <- local.fixture.service.get(f.owner, started.attempt)
+          partial <- text(artifacts, f.owner, status.partial.get).map(Wire.decode(PartialWork_JsonCodec, _))
+          diff <- text(artifacts, f.owner, partial.diff.get)
+          ended <- controller.concluded(started.attempt, 0)
+          _ <- ZIO.attempt {
+            println(s"Abstained worker: phase=${status.phase} next=${status.next} blocker=${status.blocker} outcome=${ended.map(value => (value.end, value.fault))}")
+            assert(status.phase == DispatchPhase.Abstained && status.next == ChildNext.ResolveBlocker && status.blocker.contains(blocker) && status.result.isEmpty &&
+              status.usageDelivered && DispatchController.terminal(status.phase) && controller.quiescent, status.toString)
+            // Nothing of D145 reads an abstention as a failure to retry: there is no fault to publish, and the outcome says so.
+            assert(CohortFailure.fault(status).isEmpty && ended == concluded.get && ended.contains(ChildOutcome(started.attempt, status.members, ChildEnd.Abstained, Some("input"), Some(blocker))))
+            cq.core.DriverPolicy.outcome(ended.get)
+            val view = attempts.entries.find(_.attempt.id == started.attempt).get
+            assert(view.outcome.map(_.value.state).contains(AttemptState.Abstained) && view.outcome.get.value.gaps.headOption.contains(blocker), view.toString)
+            assert(partial.state == AttemptState.Abstained && diff.contains("-committed\n+partial change\n"), partial.toString)
+            assert(record.admission == WorkspaceAdmission.Quarantined && status.workspace.contains(WorkspaceState(WorkspaceAdmission.Quarantined, Some(record.directory))), record.toString)
+            assert(HostFiles.read(f.config.directory.resolve("children").resolve(started.attempt.value.toString).resolve("receipt.json"), DispatchStatus_JsonCodec, 65536).phase == DispatchPhase.Abstained)
+          }
+          direct <- f.dispatch(Refused, f.limits)
+          _ <- f.runner.run(direct).timeoutFail(new IllegalStateException("Refused worker did not settle"))(zio.Duration.fromSeconds(60))
+          _ <- ZIO.attempt(assert(direct.abstention.contains(Abstention(AbstentionReason.Quota, QuotaMessage)) && direct.status.phase == DispatchPhase.Abstained, direct.status.toString))
+          failed <- f.dispatch(Unclassified, f.limits)
+          _ <- f.runner.run(failed).timeoutFail(new IllegalStateException("Failed worker did not settle"))(zio.Duration.fromSeconds(60))
+          _ <- ZIO.attempt {
+            val status = failed.status
+            assert(status.phase == DispatchPhase.Failed && status.next == ChildNext.Retry && failed.abstention.isEmpty && CohortFailure.fault(status).nonEmpty &&
+              !status.blocker.exists(_.startsWith("Abstained")), status.toString)
+          }
+          // A stopped child is judged by how it was stopped, whatever its output says.
+          cancelled <- f.dispatch(Refused.replace("sys.exit(1)", "time.sleep(30)"), f.limits)
+          running <- f.runner.run(cancelled).fork
+          _ <- ZIO.attemptBlocking {
+            val stdout = f.config.directory.resolve("payload").resolve(cancelled.ticket.attempt.id.value.toString).resolve("stdout")
+            val deadline = System.nanoTime() + zio.Duration.fromSeconds(20).toNanos
+            while (!(Files.exists(stdout) && Files.readString(stdout).contains("turn.failed")) && System.nanoTime() < deadline) Thread.sleep(20)
+            assert(cancelled.requestStop("Operator cancelled the attempt"))
+          }
+          _ <- f.jobs.cancel(f.config.owner, cancelled.ticket.attempt.id)
+          _ <- running.join.timeoutFail(new IllegalStateException("Cancelled worker did not settle"))(zio.Duration.fromSeconds(60))
+          _ <- ZIO.attempt(assert(cancelled.status.phase == DispatchPhase.Cancelled && cancelled.abstention.isEmpty, cancelled.status.toString))
+        } yield ()
+      }
+    }
+
+    "abstain before any launch when the route cannot be launched, and still register the attempt" in {
+      (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None, Nil) { f =>
+        def abstained(name: String, script: String, effort: Option[Effort], setting: Option[HarnessSetting], reason: AbstentionReason, detail: String): Task[Unit] = for {
+          entry <- f.routed(script, f.limits, effort, setting)
+          _ <- f.runner.run(entry).timeoutFail(new IllegalStateException(s"$name did not settle"))(zio.Duration.fromSeconds(60))
+          attempts <- usage.attempts(f.owner, UsageFilter.SessionOnly(f.owner.actor.session), None, None, 100)
+          workspace <- local.fixture.service.get(f.owner, entry.ticket.attempt.id).either
+          _ <- ZIO.attempt {
+            val status = entry.status
+            println(s"$name: phase=${status.phase} next=${status.next} blocker=${status.blocker}")
+            assert(entry.abstention.contains(Abstention(reason, detail)), s"$name: ${entry.abstention} $status")
+            assert(status.phase == DispatchPhase.Abstained && status.next == ChildNext.ResolveBlocker && status.blocker.contains(s"Abstained ($reason): $detail") &&
+              status.result.isEmpty && status.partial.isEmpty && status.usageDelivered, s"$name: $status")
+            val view = attempts.entries.find(_.attempt.id == entry.ticket.attempt.id).getOrElse(throw new IllegalStateException(s"$name: the attempt is not in usage"))
+            assert(view.attempt == entry.ticket.attempt && view.outcome.map(_.value.state).contains(AttemptState.Abstained), s"$name: $view")
+            reason match {
+              // Nothing was prepared for a route refused before the guardian was asked.
+              case AbstentionReason.Unconfigured => assert(workspace.left.exists { case DomainFailure(_: Fault.Missing) => true; case _ => false }, s"$name: $workspace")
+              case _ => ()
+            }
+          }
+        } yield ()
+        for {
+          _ <- abstained("No settings entry", Completing, None, None, AbstentionReason.Unconfigured, "The session settings have no entry for Codex")
+          _ <- abstained("Unverified version", Completing, None, Some(f.profile.copy(version = "0.0.1")), AbstentionReason.Unconfigured, HarnessProfile.Unverified)
+          _ <- abstained("Version mismatch", Completing, None, Some(f.profile.copy(version = "0.159.2")), AbstentionReason.Launch, SupervisorConfig.VersionMismatch)
+          _ <- abstained("Provider environment", Completing, None, Some(f.profile.copy(providerEnvironment = Set("ABSENT_PROVIDER_KEY"))), AbstentionReason.Launch,
+            "Configured provider environment is unavailable")
+          _ <- abstained("Unsupported effort", Completing, Some(Effort.Off), Some(f.profile), AbstentionReason.Launch, HarnessAdapter.EffortUnsupported)
+          missing = f.profile.copy(executable = f.profile.executable + "-absent")
+          entry <- f.routed(Completing, f.limits, None, Some(missing))
+          _ <- f.runner.run(entry).timeoutFail(new IllegalStateException("Missing executable did not settle"))(zio.Duration.fromSeconds(60))
+          _ <- ZIO.attempt(assert(entry.abstention.exists(_.reason == AbstentionReason.Launch) && entry.status.phase == DispatchPhase.Abstained, entry.status.toString))
+          // The guardian reports a process it could not start; the host reads that as the same abstention.
+          vanished <- f.routed(Vanishing, f.limits, None, Some(f.profile))
+          _ <- f.runner.run(vanished).timeoutFail(new IllegalStateException("Vanished harness did not settle"))(zio.Duration.fromSeconds(60))
+          job <- f.jobs.status(f.config.owner, vanished.ticket.attempt.id)
+          _ <- ZIO.attempt {
+            println(s"Vanished harness: job=${job.exit.map(_.reason)} problem=${job.problem} status=${vanished.status.phase} blocker=${vanished.status.blocker}")
+            assert(job.exit.exists(_.reason == StopReason.LaunchFailed) && vanished.abstention.exists(_.reason == AbstentionReason.Launch) &&
+              vanished.status.phase == DispatchPhase.Abstained && vanished.status.next == ChildNext.ResolveBlocker, vanished.status.toString)
+          }
+        } yield ()
+      }
+    }
+
+    "launch a child on the model, provider and effort of its route and record them on its attempt" in {
+      (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None, Nil) { f =>
+        val controller = new DispatchController(f.config, f.runner, f.jobs, f.clock)
+        def launched(route: Option[ModelRoute]): Task[(Attempt, List[String])] = for {
+          _ <- ZIO.attemptBlocking(f.install(Recording))
+          request = f.request(f.limits)
+          started <- route.fold(controller.start(request))(controller.startRoute(request, _, None))
+          status <- controller.status(started.attempt, 120000)
+          _ <- ZIO.attempt(assert(status.phase == DispatchPhase.Completed && status.result.nonEmpty, status.toString))
+          result <- text(artifacts, f.owner, status.result.get).map(Wire.decode(ChildResult_JsonCodec, _))
+          recorded <- text(artifacts, f.owner, result.evidence.files.find(_.path == ".work/evidence/argv.json").get.artifact)
+          attempts <- usage.attempts(f.owner, UsageFilter.SessionOnly(f.owner.actor.session), None, None, 100)
+        } yield attempts.entries.find(_.attempt.id == started.attempt).get.attempt -> io.circe.parser.parse(recorded).flatMap(_.as[List[String]]).fold(throw _, identity)
+        for {
+          entry <- launched(None)
+          routed <- launched(Some(ModelRoute(Harness.Codex, Some("route-provider"), "route-model", Some(Effort.XHigh))))
+          inherited <- launched(Some(ModelRoute(Harness.Codex, None, "other-model", None)))
+          refused <- controller.startRoute(f.request(f.limits), ModelRoute(Harness.Pi, Some("zai"), "glm", None), None).either
+          _ <- ZIO.attempt {
+            // Today's callers: the settings entry is the route, and no effort is stated.
+            assert((entry._1.provider, entry._1.model, entry._1.effort) == ("fixture-provider", "fixture-model", None))
+            assert(entry._2.containsSlice(List("--model", "fixture-model")) && entry._2.contains("model_provider=\"fixture-provider\"") &&
+              !entry._2.exists(_.startsWith("model_reasoning_effort")), entry._2.toString)
+            assert((routed._1.provider, routed._1.model, routed._1.effort) == ("route-provider", "route-model", Some(Effort.XHigh)))
+            assert(routed._2.containsSlice(List("--model", "route-model")) &&
+              routed._2.containsSlice(List("-c", "model_provider=\"route-provider\"", "-c", "model_reasoning_effort=\"xhigh\"")), routed._2.toString)
+            assert((inherited._1.provider, inherited._1.model, inherited._1.effort) == ("fixture-provider", "other-model", None))
+            assert(inherited._2.containsSlice(List("--model", "other-model")) && inherited._2.contains("model_provider=\"fixture-provider\""), inherited._2.toString)
+            assert(refused.left.exists(_.getMessage.contains("Model route and dispatch request name different harnesses")), refused.toString)
           }
         } yield ()
       }

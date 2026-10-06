@@ -186,7 +186,7 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
       claim <- ledger.acquire(owner, ClaimId(uuid), created.map(_.id).toSet, 300000)
       assignment <- usage.assign(collector, Assignment(AssignmentId(uuid), owner.project, Set.empty, Attribution.Unattributed, None, None))
       governor <- usage.start(collector, Attempt(AttemptId(uuid), assignment.id, None, owner.actor.session, Role.Governor, Harness.Codex,
-        "fixture-provider", "fixture-model", "fixture", clock.millis(), UsagePhase.Govern))
+        "fixture-provider", "fixture-model", "fixture", clock.millis(), UsagePhase.Govern, None))
       directory <- ZIO.attemptBlocking(Files.createTempDirectory(local.directory, "driver-integration-"))
       profile = HarnessSetting(Harness.Codex, directory.resolve("fixture-harness").toString, "fixture-model", "fixture-provider", "0.156.1", Nil, Set.empty)
       settings = SupervisorSettings(directory.toString, guardian.binary.toString, List(profile), limits, Nil, None, Some(Target))
@@ -241,7 +241,7 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
       _ <- ZIO.attemptBlocking {
         val child = directory.resolve("children").resolve(workerAttempt.id.value.toString)
         HostFiles.directory(child)
-        HostFiles.immutable(child.resolve("ticket.json"), HostFiles.encode(DispatchTicket_JsonCodec, DispatchTicket(request, workerAssignment, workerAttempt, profile, None)), 65536)
+        HostFiles.immutable(child.resolve("ticket.json"), HostFiles.encode(DispatchTicket_JsonCodec, DispatchTicket(request, workerAssignment, workerAttempt, Some(profile), None)), 65536)
       }
       reviewAssignment <- usage.assign(collector, workerAssignment.copy(id = AssignmentId(uuid)))
       reviewAttempt <- usage.start(collector, workerAttempt.copy(id = AttemptId(uuid), assignment = reviewAssignment.id, role = Role.Reviewer, phase = UsagePhase.Review))

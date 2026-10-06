@@ -77,7 +77,11 @@ final class CohortController(config: SupervisorConfig, authority: SupervisorAuth
   // A child whose receipt advises Retry left no result: its fault is published for the next attempt and its input is offered again.
   // When the attempt before it on the same input ended in the same fault, that input stays deferred, as it does when the fault cannot
   // be published. The reply tells a drive which of these happened.
-  private def concluded(fingerprint: CohortExecutionFingerprint, status: DispatchStatus): ChildOutcome = {
+  // An abstained child ran no model: its input is released as it was, with no fault to carry and nothing to compare a repetition with.
+  private def concluded(fingerprint: CohortExecutionFingerprint, status: DispatchStatus): ChildOutcome = if (status.phase == DispatchPhase.Abstained) {
+    progress.abstained(fingerprint)
+    CohortFailure.outcome(status, Some(fingerprint.group), None)
+  } else {
     val failure = CohortFailure.fault(status).flatMap { fault =>
       val upload = ArtifactUpload(config.project.project, NativeArtifacts.id(config.run.attempt.id, "failure-" + status.attempt.value), config.run.attempt.id,
         ArtifactKind.Evidence, "text/plain", s"The previous attempt on this assignment (${status.attempt.value}) left no admitted result. Its fault: $fault")

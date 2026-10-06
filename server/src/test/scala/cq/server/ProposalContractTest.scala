@@ -32,7 +32,7 @@ abstract class ProposalContractTest extends SpecZIO with AssertZIO {
       claim <- ledger.acquire(owner, ClaimId(uuid), created.items.map(_.id).toSet, 300000)
       assignment <- usage.assign(collector, Assignment(AssignmentId(uuid), owner.project, Set.empty, Attribution.Unattributed, None, None))
       parent <- usage.start(collector, Attempt(AttemptId(uuid), assignment.id, None, owner.actor.session, Role.Governor,
-        Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Govern))
+        Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Govern, None))
     } yield Fixture(owner, collector, claim, created.items, parent.id)
   }
 
@@ -42,7 +42,7 @@ abstract class ProposalContractTest extends SpecZIO with AssertZIO {
   private def publish(f: Fixture, work: DispatchWork, report: ChildReport, usage: UsageService[IO], artifacts: ArtifactService[IO]): IO[Throwable, Published] = for {
     assignment <- usage.assign(f.collector, Assignment(AssignmentId(uuid), f.owner.project, f.claim.members, Attribution.Shared, Some(uuid), None))
     attempt <- usage.start(f.collector, Attempt(AttemptId(uuid), assignment.id, Some(f.parent), f.owner.actor.session, ChildContracts.role(work),
-      Harness.Codex, "fixture", "fixture", "fixture", 1001, ChildContracts.phase(work)))
+      Harness.Codex, "fixture", "fixture", "fixture", 1001, ChildContracts.phase(work), None))
     request = DispatchRequest(RequestId(uuid), work, Harness.Codex, f.members, Nil, Nil, None, f.claim.fence,
       HostLimits(3000, 1000, 300, 2000, 262144))
     result = ChildResult(attempt.id, request, GitCommit("a" * 40), None, report, Nil, RetainedEvidence(Nil, Nil))

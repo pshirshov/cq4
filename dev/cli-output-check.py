@@ -78,7 +78,7 @@ def main():
         assignment = {"id": identity(), "project": project, "members": [{"project": project, "ledger": "Tasks", "number": "1"}],
                       "attribution": "Direct", "cohort": None, "evaluation": None}
         attempt = {"id": identity(), "assignment": assignment["id"], "parent": None, "session": identity(), "role": "Worker",
-                   "harness": "Codex", "provider": "fixture", "model": "controlled-model", "collector": "cli-output", "startedAt": "1000", "phase": "Work"}
+                   "harness": "Codex", "provider": "fixture", "model": "controlled-model", "collector": "cli-output", "startedAt": "1000", "phase": "Work", "effort": "XHigh"}
         meter = {"key": "cli", "attempt": attempt["id"], "scope": "Increment", "baseline": counters(0), "baselineCost": unknown_cost}
         observation = {"id": identity(), "attempt": attempt["id"], "source": "cli-fixture", "position": "1", "occurredAt": "2000", "receivedAt": "0", "scope": "Increment",
                        "counters": {**counters(101), "output": counter(7), "cacheRead": counter(20), "cacheWrite": {"value": None, "measurement": "Unsupported"}, "reasoning": counter(2)},
@@ -110,7 +110,7 @@ def main():
         audit = run("human-audit-measured", ["status", "audit"], 0, False).stdout
         assert all(value in audit for value in ["cli-fixture", "101", "Partial", "Deliberate fixture gap"]), audit
         attempts = run("human-attempts-measured", ["status", "attempts"], 0, False).stdout
-        assert all(value in attempts for value in ["controlled-model", "Completed", "T1", "Auxiliary calls unobserved"]), attempts
+        assert all(value in attempts for value in ["controlled-model", "Effort", " xhigh ", "Completed", "T1", "Auxiliary calls unobserved"]), attempts
         outcomes = run("human-outcomes", ["status", "outcomes", "--attempt", attempt["id"]["value"]], 0, False).stdout
         assert "Completed" in outcomes and "Auxiliary calls unobserved" in outcomes
         assert len(json.loads(run("json-outcomes", ["status", "outcomes", "--attempt", attempt["id"]["value"], "--json"], 0, False).stdout)["UsageOutcomes"]["page"]["entries"]) == 1

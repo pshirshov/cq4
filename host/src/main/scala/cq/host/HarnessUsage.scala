@@ -19,7 +19,8 @@ enum UsageOrigin {
 final case class UsageCollectionRequest(attempt: AttemptId, harness: Harness, version: String,
   origin: UsageOrigin, collectedAt: Long, evidence: ArtifactId)
 final case class CollectedMeter(meter: UsageMeter, observations: List[UsageUpload])
-final case class CollectedUsage(meters: List[CollectedMeter], terminalSeen: Boolean, nativeFailure: Boolean, gaps: List[String])
+/** `abstention`: the provider's refusal the native output ended in, when this harness version is known to state it. */
+final case class CollectedUsage(meters: List[CollectedMeter], terminalSeen: Boolean, nativeFailure: Boolean, gaps: List[String], abstention: Option[Abstention])
 
 /** Reads a completed native output stream line by line, whatever its length; never owns or drains a live process pipe. */
 final class HarnessUsage {
@@ -96,6 +97,10 @@ object HarnessUsage {
     case Harness.Pi => List("0.87.1", "0.99.1")
   }
   def version(harness: Harness): String = versions(harness).last
+  /** The settings entry an attempt can have been launched from: one of a verified version. Without it the attempt abstained unlaunched. */
+  def launchable(setting: Option[HarnessSetting]): Option[HarnessSetting] = setting.filter(value => verified(value.harness, value.version))
+  /** What an attempt without a launchable settings entry leaves: it was never launched, and no format reads its absent output. */
+  val Unlaunched: CollectedUsage = CollectedUsage(Nil, false, false, List("No harness was launched; there is no native usage"), None)
   def verified(harness: Harness, version: String): Boolean = versions(harness).contains(version)
   private def hash(value: String): String = java.util.HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value.getBytes(UTF_8)))
   private def obj(json: Json, field: String): JsonObject = json.hcursor.downField(field).focus.flatMap(_.asObject)
@@ -154,6 +159,7 @@ object HarnessUsage {
     private val messages = mutable.Map.empty[String, Json]
     private val invalidMeters = mutable.Set.empty[String]
     private val known = mutable.Map.empty[String, Known]
+    private val refusal = new AbstentionClassifier(request.harness, request.version)
     private var sampleCount = 0
     private var session = Option.empty[String]
     private var foreignSession = false
@@ -238,6 +244,7 @@ object HarnessUsage {
     }
     def accept(json: Json, position: Long): Unit = {
       val event = label(json, "type")
+      refusal.accept(json)
       request.harness match {
         case Harness.Claude => claude(json, event, position)
         case Harness.Codex => codex(json, event, position)
@@ -361,7 +368,7 @@ object HarnessUsage {
       if (samples.isEmpty) gap("No authoritative native usage sample was collected")
       if (request.harness == Harness.Pi) gap("Pi collection covers assistant responses; auxiliary, compaction and tool-result usage require separate observations")
       CollectedUsage(samples.valuesIterator.map { case (meter, entries) => CollectedMeter(meter, entries.toList) }.toList,
-        terminal, failed || piRetry.nonEmpty, problems.toList)
+        terminal, failed || piRetry.nonEmpty, problems.toList, refusal.result)
     }
   }
 }

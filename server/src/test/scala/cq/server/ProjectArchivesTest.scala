@@ -145,7 +145,7 @@ final class ProjectArchivesPostgres extends SpecZIO with AssertZIO {
         val host = owner.copy(actor = owner.actor.copy(role = Role.Collector))
         val overhead = Assignment(AssignmentId(UUID.randomUUID()), owner.project, Set.empty, Attribution.Unattributed, None, None)
         val governing = Attempt(AttemptId(UUID.randomUUID()), overhead.id, None, owner.actor.session, Role.Governor, Harness.Claude,
-          "provider", "model", collector, 1000, UsagePhase.Govern)
+          "provider", "model", collector, 1000, UsagePhase.Govern, None)
         service.initialize(owner, name) *> usage.assign(host, overhead) *> usage.start(host, governing).as(owner.project)
       }
       def backup(id: ProjectId): IO[Throwable, Either[Throwable, BackupManifest]] = for {
