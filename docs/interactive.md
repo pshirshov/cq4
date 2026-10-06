@@ -84,7 +84,7 @@ A project works in one of three process modes. The operator chooses it in the br
 
 - **Rigorous** (the default): a Planner plans, a Plan review approves, the phases run in order, and every candidate is independently reviewed.
 - **Cross-cutting**: the Governor may skip the Planner and the Plan review, writes each Task and its acceptance criteria itself before a Worker starts, and may take items and phases in any order. Isolated Workers, independent candidate review, the configured host checks and host integration stay mandatory.
-- **YOLO cross-cutting**: shown, and not available in this release.
+- **YOLO cross-cutting**: as Cross-cutting, and the Governor of an interactive session may also make a change itself and review any candidate itself; the configured host checks and host integration stay. It is saved by holding *Switch to YOLO cross-cutting*. A self-reviewed integration is refused while the project configures no check, unless the operator allows *Self-review without checks* in the same dialog, by a second hold: a change the governing session reviewed itself can then be integrated although no check examined it. The exemption exists only with this mode; a change to another mode removes it.
 
 The mode never widens a request: the roots and `through` bound the work in every mode. A change applies from the next workflow activation of a session; a workflow that is already active keeps its mode, and a drive takes the new mode with its next cycle. Only the operator can change the mode. A page that is already open in another browser shows the new mode when its project is loaded again or its mode dialog is opened.
 

@@ -25,7 +25,7 @@ object ProcessModePolicy {
   val Default: ProjectSetting.Mode = ProjectSetting.Mode(ProcessMode.Rigorous, false)
 
   /** Whether this release lets a project be given the YOLO mode and its exemption. */
-  val YoloAvailable = false
+  val YoloAvailable = true
   val Release: ProcessModePolicy = new ProcessModePolicy(YoloAvailable)
 
   private val YoloUnavailable = "The YOLO cross-cutting mode is not available in this release"
