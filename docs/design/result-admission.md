@@ -12,6 +12,8 @@ Artifact upload stores immutable evidence; it does not itself admit a child resu
 
 Inside the same project transaction used by release and takeover, admission first replays an identical existing decision keyed by project/attempt. Otherwise it checks full current claim membership, exact owner/fence/member IDs and all frozen item revisions, then persists an accepted or rejected decision atomically. The record binds the artifact identity and server-computed digest, owner, fence and revisions. Changed intent under the same attempt conflicts. Authorization and malformed envelopes fail without creating a decision.
 
+The registered attempt's role is the role of the result's work. The one other case is the governing session's own attempt in a project in the YOLO mode, decided inside the transaction; see [process modes](workflows.md#process-modes).
+
 Only a Collector credential owning the registered session may request admission. Governors and subordinate roles have no admission capability. Authorized reads may inspect its bounded record. Prior-result consumption requires the matching accepted admission in addition to the existing artifact digest, member and current-claim checks.
 
 Acceptance records validity at the admission transaction's linearization point. A later claim release does not rewrite the decision or defeat an identical retry after an uncertain acknowledgement. Later ledger application and Git integration still require their own current fences, revisions and target checks.

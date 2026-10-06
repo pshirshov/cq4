@@ -56,7 +56,7 @@ final class ProjectArchivesPostgres extends SpecZIO with AssertZIO {
           Using.resource(connection.createStatement())(_.execute(s"CREATE SCHEMA $schema")); ()
         })
         _ <- target.initialize
-        _ <- new PostgresProjectArchives(target, Clock.systemUTC()).restore(file)
+        _ <- new PostgresProjectArchives(target, Clock.systemUTC(), ProcessModePolicy.Release).restore(file)
         restored <- new PostgresLedgerRepository(target).driverRecords(operator.project)
         record = restored.head
         _ <- assertIO(record.state == DriverState.Off && record.stopped.exists(_.reason == DriverStop.RestoredArchive) && record.bind.isEmpty &&
@@ -97,7 +97,7 @@ final class ProjectArchivesPostgres extends SpecZIO with AssertZIO {
           Using.resource(connection.createStatement())(_.execute(s"CREATE SCHEMA $schema")); ()
         })
         _ <- target.initialize
-        restored <- new PostgresProjectArchives(target, Clock.systemUTC()).restore(file).either
+        restored <- new PostgresProjectArchives(target, Clock.systemUTC(), ProcessModePolicy.Release).restore(file).either
         _ <- ZIO.attempt(Files.deleteIfExists(file))
         _ <- assertIO(restored.map(_.project) == Right(owner.project))
         item <- new PostgresLedgerRepository(target).transact(owner.project)(tx => tx.get(decision.id))
@@ -130,7 +130,7 @@ final class ProjectArchivesPostgres extends SpecZIO with AssertZIO {
           Using.resource(connection.createStatement())(_.execute(s"CREATE SCHEMA $schema")); ()
         })
         _ <- target.initialize
-        restored <- new PostgresProjectArchives(target, Clock.systemUTC()).restore(file).either
+        restored <- new PostgresProjectArchives(target, Clock.systemUTC(), ProcessModePolicy.Release).restore(file).either
         _ <- ZIO.attempt(Files.deleteIfExists(file))
         _ <- assertIO(restored.map(_.entries) == Right(manifest.entries))
         copy <- new PostgresUsageRepository(target).read(owner.project)(reader => (reader.span(span.id), reader.spans(filter), reader.cursor))
@@ -180,7 +180,7 @@ final class ProjectArchivesPostgres extends SpecZIO with AssertZIO {
           Using.resource(connection.createStatement())(_.execute(s"CREATE SCHEMA $schema")); ()
         })
         _ <- target.initialize
-        restored <- new PostgresProjectArchives(target, Clock.systemUTC()).restore(file).either
+        restored <- new PostgresProjectArchives(target, Clock.systemUTC(), ProcessModePolicy.Release).restore(file).either
         _ <- ZIO.attempt(Files.deleteIfExists(file))
         _ <- assertIO(restored.map(_.entries) == Right(manifest.entries))
         copy <- new PostgresLedgerRepository(target).transact(operator.project)(_.setting(ProjectSettingKind.Requirements))
@@ -200,7 +200,7 @@ final class ProjectArchivesPostgres extends SpecZIO with AssertZIO {
         }) *> target.initialize.as(target)
       }
       // A hand-edited archive is reproduced by editing the stored row before the backup: backup copies the table as it is.
-      def archived(body: Option[ProjectSetting]): IO[Throwable, (Scope, ProjectMode, Either[Throwable, BackupManifest], LedgerDatabase)] = {
+      def archived(body: Option[ProjectSetting], modes: ProcessModePolicy): IO[Throwable, (Scope, ProjectMode, Either[Throwable, BackupManifest], LedgerDatabase)] = {
         val operator = Scope(ProjectId(UUID.randomUUID()), Actor("operator", SessionId(UUID.randomUUID()), Role.Human))
         for {
           _ <- service.initialize(operator, "archived mode")
@@ -217,19 +217,33 @@ final class ProjectArchivesPostgres extends SpecZIO with AssertZIO {
           manifest <- archives.backup(operator.project, file)
           _ <- assertIO(manifest.entries.last.table == BackupTable.Settings && manifest.entries.last.rows == 2)
           target <- fresh
-          restored <- new PostgresProjectArchives(target, Clock.systemUTC()).restore(file).either
+          restored <- new PostgresProjectArchives(target, Clock.systemUTC(), modes).restore(file).either
           _ <- ZIO.attempt(Files.deleteIfExists(file))
         } yield (operator, written, restored, target)
       }
+      val withheld = new ProcessModePolicy(false)
+      val delivered = new ProcessModePolicy(true)
       for {
-        kept <- archived(None)
+        kept <- archived(None, withheld)
         (operator, written, restored, target) = kept
         _ <- assertIO(restored.isRight)
         copy <- new PostgresLedgerRepository(target).transact(operator.project)(tx => ProjectSettingKind.values.toList.map(tx.setting))
         _ <- assertIO(copy(1).contains(StoredSetting(Revision(1), ProjectSetting.Mode(ProcessMode.CrossCutting, false), operator.actor, written.change.get.at)) &&
           copy(0).exists(_.value == ProjectSetting.Requirements("Every change carries a focused test.")))
-        refused <- ZIO.foreach(List[ProjectSetting](ProjectSetting.Mode(ProcessMode.Yolo, false), ProjectSetting.Mode(ProcessMode.CrossCutting, true),
-          ProjectSetting.Requirements("A requirements document in the mode row")))(body => archived(Some(body)))
+        misplaced = ProjectSetting.Requirements("A requirements document in the mode row")
+        // A release that withholds the YOLO mode refuses an archive holding it; one that delivers it restores the mode and its exemption
+        // as stored, and still refuses an exemption stored with another mode.
+        refused <- ZIO.foreach(List[(ProjectSetting, ProcessModePolicy)](ProjectSetting.Mode(ProcessMode.Yolo, false) -> withheld,
+          ProjectSetting.Mode(ProcessMode.Yolo, true) -> withheld, ProjectSetting.Mode(ProcessMode.CrossCutting, true) -> withheld, misplaced -> withheld,
+          ProjectSetting.Mode(ProcessMode.CrossCutting, true) -> delivered, misplaced -> delivered))((body, modes) => archived(Some(body), modes))
+        _ <- ZIO.foreachDiscard(List(ProjectSetting.Mode(ProcessMode.Yolo, false), ProjectSetting.Mode(ProcessMode.Yolo, true))) { body =>
+          for {
+            outcome <- archived(Some(body), delivered)
+            _ <- ZIO.attempt(assert(outcome._3.isRight, outcome._3.left.map(_.getMessage).toString))
+            stored <- new PostgresLedgerRepository(outcome._4).transact(outcome._1.project)(_.setting(ProjectSettingKind.Mode))
+            _ <- assertIO(stored.contains(StoredSetting(Revision(1), body, outcome._1.actor, outcome._2.change.get.at)))
+          } yield ()
+        }
         _ <- ZIO.foreachDiscard(refused) { case (scope, _, outcome, schema) =>
           for {
             _ <- ZIO.attempt(assert(outcome.left.exists { case DomainFailure(_: Fault.Invalid) => true; case _ => false }, outcome.map(_.project).toString))
@@ -261,7 +275,7 @@ final class ProjectArchivesPostgres extends SpecZIO with AssertZIO {
           manifest <- archives.backup(operator.project, file)
           _ <- assertIO(manifest.entries.last.table == BackupTable.Settings && manifest.entries.last.rows == 1)
           target <- fresh
-          restored <- new PostgresProjectArchives(target, Clock.systemUTC()).restore(file).either
+          restored <- new PostgresProjectArchives(target, Clock.systemUTC(), ProcessModePolicy.Release).restore(file).either
           _ <- ZIO.attempt(Files.deleteIfExists(file))
         } yield (operator, stored, restored, target)
       }
@@ -319,7 +333,7 @@ final class ProjectArchivesPostgres extends SpecZIO with AssertZIO {
           Using.resource(connection.createStatement())(_.execute(s"CREATE SCHEMA $schema")); ()
         })
         _ <- target.initialize
-        restorer = new PostgresProjectArchives(target, Clock.systemUTC())
+        restorer = new PostgresProjectArchives(target, Clock.systemUTC(), ProcessModePolicy.Release)
         refused <- restorer.restore(old).either
         accepted <- restorer.restore(file).either
         _ <- ZIO.attempt { Files.deleteIfExists(file); Files.deleteIfExists(old) }
@@ -348,7 +362,7 @@ final class ProjectArchivesPostgres extends SpecZIO with AssertZIO {
           _ <- assertIO(edited == 1)
           file <- ZIO.attempt(Files.createTempFile("cq-archive-", ".zip"))
           _ <- archives.backup(operator.project, file)
-          restored <- new PostgresProjectArchives(target, Clock.systemUTC()).restore(file).either
+          restored <- new PostgresProjectArchives(target, Clock.systemUTC(), ProcessModePolicy.Release).restore(file).either
           _ <- ZIO.attempt(Files.deleteIfExists(file))
           _ <- ZIO.attempt(assert(restored.left.exists { case DomainFailure(_: Fault.Invalid) => true; case _ => false }, s"$change: ${restored.map(_.project)}"))
           copy <- new PostgresLedgerRepository(target).projects(None, 200)

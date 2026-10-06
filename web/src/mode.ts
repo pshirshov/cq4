@@ -20,6 +20,12 @@ function provenance(value: api.ProjectMode, catalog: api.HelpCatalog): string {
   return value.change === undefined ? `No process mode has been saved for this project: it is ${entry(catalog, value.mode).label}.`
     : `Revision ${value.revision.value} · ${value.change.actor.subject} · ${new Date(Number(value.change.at)).toLocaleString()}`;
 }
+// The catalog carries no field for the exemption, so it states it as the last paragraph of the YOLO mode's description.
+function exemptionHint(catalog: api.HelpCatalog): string {
+  const paragraphs = entry(catalog, api.ProcessMode.Yolo).description.split('\n\n');
+  if (paragraphs.length < 2) throw new Error('The catalog does not describe self-review without checks');
+  return paragraphs[paragraphs.length - 1];
+}
 async function read(effects: ModeEffects, project: api.ProjectId): Promise<api.ProjectMode> {
   const result = await effects.call(new api.Command_Mode(new api.ModeInput(project, new api.ModeAction_Read())));
   if (result instanceof api.Result_Failed) throw new Error(faultMessage(result.fault));
@@ -61,9 +67,16 @@ export class ModeDialog {
   private readonly metadata = element('p', '');
   private readonly conflict = element('section', '');
   private readonly controls = element('div', '');
-  private readonly save = button('Save mode', () => this.action(() => this.submit()));
+  private readonly save = button('Save mode', () => this.action(() => this.submit(this.chosen, this.chosen === api.ProcessMode.Yolo && this.base?.selfReviewWithoutChecks === true)));
   // A mode whose change needs a deliberate press is saved by holding; the catalog decides which modes can be chosen at all.
-  private readonly confirm = holdButton('Switch to YOLO cross-cutting', () => this.action(() => this.submit()));
+  private readonly confirm = holdButton('Switch to YOLO cross-cutting', () => this.action(() => this.submit(api.ProcessMode.Yolo, false)));
+  // The exemption of a YOLO project from the rule that a self-reviewed integration needs a configured check. It is a separate
+  // decision with its own deliberate press, offered once the project is in that mode; withdrawing it tightens the process and is an ordinary press.
+  private readonly exemption = element('fieldset', '');
+  private readonly exemptionHint = element('p', '');
+  private readonly exemptionState = element('p', '');
+  private readonly allow = holdButton('Allow self-review without checks', () => this.action(() => this.submit(api.ProcessMode.Yolo, true)));
+  private readonly withdraw = button('Require a check again', () => this.action(() => this.submit(api.ProcessMode.Yolo, false)));
   // The revision the choice is based on and the catalog it is rendered from, null while they are loading.
   private base: api.ProjectMode | null = null;
   private catalog: api.HelpCatalog | null = null;
@@ -73,8 +86,12 @@ export class ModeDialog {
   constructor(private readonly effects: ModeEffects) {
     this.options.className = 'mode-options'; this.metadata.className = 'revision-meta'; this.conflict.hidden = true; this.controls.className = 'mode-actions';
     this.controls.append(this.save, this.confirm);
+    this.exemption.className = 'mode-exemption'; this.exemptionHint.className = 'mode-hint'; this.exemptionHint.id = 'mode-exemption-hint';
+    this.exemptionState.className = 'mode-exemption-state'; this.exemptionState.id = 'mode-exemption-state';
+    for (const control of [this.allow, this.withdraw]) control.setAttribute('aria-describedby', `${this.exemptionHint.id} ${this.exemptionState.id}`);
+    this.exemption.append(element('legend', 'Self-review without checks'), this.exemptionHint, this.exemptionState, this.allow, this.withdraw);
     const stale = element('p', 'A change made in another browser is shown here when the project is loaded again or this dialog is opened.'); stale.className = 'revision-meta';
-    this.dialog.body.append(this.effect, this.options, this.metadata, this.controls, this.conflict, stale);
+    this.dialog.body.append(this.effect, this.options, this.metadata, this.controls, this.exemption, this.conflict, stale);
     this.enable();
   }
   private action(effect: () => Promise<void>): void {
@@ -90,6 +107,12 @@ export class ModeDialog {
     const ready = this.base !== null && !this.busy;
     const guarded = this.chosen === api.ProcessMode.Yolo && this.base?.mode !== api.ProcessMode.Yolo;
     this.save.hidden = guarded; this.confirm.hidden = !guarded; this.save.disabled = !ready; this.confirm.disabled = !ready;
+    const stored = this.base?.mode === api.ProcessMode.Yolo; const allowed = stored && this.base?.selfReviewWithoutChecks === true;
+    this.exemption.hidden = this.chosen !== api.ProcessMode.Yolo || this.base === null;
+    this.allow.hidden = allowed; this.withdraw.hidden = !allowed; this.allow.disabled = !ready || !stored; this.withdraw.disabled = !ready;
+    this.exemption.dataset.allowed = String(allowed);
+    this.exemptionState.textContent = allowed ? 'Allowed for this project.'
+      : stored ? 'Not allowed for this project.' : 'Not allowed. It can be allowed once the project is in this mode.';
   }
   private render(catalog: api.HelpCatalog): void {
     const legend = element('legend', 'Process mode');
@@ -108,6 +131,7 @@ export class ModeDialog {
       return row;
     });
     this.options.replaceChildren(legend, ...choices); this.effect.textContent = catalog.modeEffect;
+    this.exemptionHint.textContent = exemptionHint(catalog);
   }
   open(project: api.ProjectId): void {
     this.dialog.open('Process mode');
@@ -120,14 +144,15 @@ export class ModeDialog {
       this.adopt(value, catalog); this.chosen = value.mode; this.render(catalog); this.enable();
     });
   }
-  private async submit(): Promise<void> {
-    const base = this.base; const catalog = this.catalog; const chosen = this.chosen;
+  // The exemption belongs to the YOLO mode only: a change to another mode stores none.
+  private async submit(chosen: api.ProcessMode | null, selfReviewWithoutChecks: boolean): Promise<void> {
+    const base = this.base; const catalog = this.catalog;
     if (base === null || catalog === null || chosen === null || this.busy) return;
     const generation = this.generation;
     this.dialog.error.hidden = true; this.busy = true; this.enable();
     try {
       const result = await this.effects.call(new api.Command_Mode(new api.ModeInput(base.project,
-        new api.ModeAction_Replace(base.revision, chosen, base.selfReviewWithoutChecks))));
+        new api.ModeAction_Replace(base.revision, chosen, selfReviewWithoutChecks))));
       if (result instanceof api.Result_Mode) {
         // A reply that arrives after the dialog was reopened for a fresh load must not become its base.
         if (this.base === base) { this.adopt(result.value, catalog); this.chosen = result.value.mode; this.render(catalog); }

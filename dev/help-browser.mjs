@@ -261,7 +261,7 @@ try {
         assert.equal(await entry.getAttribute('aria-current'), 'true');
         const detail = dialog.getByRole('article', {name: `Mode ${mode.label}`, exact: true}); await detail.waitFor();
         await detail.getByRole('heading', {name: mode.label, exact: true}).waitFor();
-        await detail.getByText(mode.hint, {exact: true}).waitFor(); await detail.getByText(mode.description, {exact: true}).waitFor();
+        await detail.getByText(mode.hint, {exact: true}).waitFor(); for (const paragraph of mode.description.split('\n\n')) await detail.getByText(paragraph, {exact: true}).waitFor();
         await detail.getByText(catalog.modeEffect, {exact: true}).waitFor();
         assert.equal(await detail.locator('.mode-note').count(), mode.unavailable === null || mode.unavailable === undefined ? 0 : 1, mode.label);
         if (mode.unavailable !== null && mode.unavailable !== undefined) assert.equal(await detail.locator('.mode-note').textContent(), mode.unavailable);
@@ -270,7 +270,8 @@ try {
         assert.ok(mode.instructions.text.startsWith(`Process mode of this project: ${mode.label}.`), mode.label);
         assert.ok(await instructions.isVisible(), `${viewport}: the instructions of ${mode.label} are collapsed`);
       }
-      assert.deepEqual(catalog.modes.filter(mode => mode.unavailable !== null && mode.unavailable !== undefined).map(mode => mode.mode), ['Yolo']);
+      // A release either withholds the YOLO mode, with a note, or delivers it; no other mode is ever withheld.
+      assert.ok(catalog.modes.filter(mode => mode.unavailable !== null && mode.unavailable !== undefined).every(mode => mode.mode === 'Yolo'));
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
       await modeList.getByRole('button').nth(1).click(); await dialog.getByRole('article', {name: `Mode ${catalog.modes[1].label}`, exact: true}).waitFor();
       await dialog.screenshot({path: `${evidence}/help-modes-${viewport}.png`});

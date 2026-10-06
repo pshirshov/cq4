@@ -36,14 +36,19 @@ final class ResultAdmissionServiceImpl[F[+_, +_]: Error2](ledger: LedgerReposito
       LedgerPolicy.invalid(value.attempt == metadata.attempt, "Result artifact attempt differs from its content")
       value
     }.toEither)
-    _ <- usage.read(scope.project) { reader =>
+    own <- usage.read(scope.project) { reader =>
       val attempt = reader.attempt(result.attempt).getOrElse(throw DomainFailure(Fault.Missing("Result attempt is not registered")))
       if (attempt.session != scope.actor.session) throw DomainFailure(Fault.Denied("Result attempt belongs to another session"))
       val assignment = reader.assignment(attempt.assignment).getOrElse(throw new IllegalStateException("Registered attempt has no assignment"))
       val parent = attempt.parent.flatMap(reader.attempt).getOrElse(throw DomainFailure(Fault.Invalid("Child result requires its registered governing attempt")))
+      // An attempt of the Governor role under the governing attempt is the governing session's own work, not a child's.
+      val own = attempt.role == Role.Governor
       LedgerPolicy.invalid(parent.role == Role.Governor && parent.session == attempt.session &&
-        attempt.role == ChildContracts.role(result.request.work) && attempt.harness == result.request.harness &&
+        (if (own) GoverningWorkPolicy.permits(result.request.work) else attempt.role == ChildContracts.role(result.request.work)) &&
+        attempt.harness == result.request.harness &&
         assignment.members == result.request.members.map(_.id).toSet, "Result differs from the registered child assignment")
+      if (own) GoverningWorkPolicy.interactive(parent)
+      own
     }
     admitted <- ledger.transact(scope.project) { tx =>
       tx.admission(result.attempt) match {
@@ -52,6 +57,8 @@ final class ResultAdmissionServiceImpl[F[+_, +_]: Error2](ledger: LedgerReposito
             previous.members != result.request.members) throw DomainFailure(Fault.Conflict("Attempt already has another result admission intent"))
           previous
         case None =>
+          // The mode is read where the admission is written, so a project that left the YOLO mode admits no such result.
+          if (own) GoverningWorkPolicy.admit(ProcessModePolicy.current(tx))
           val now = clock.millis()
           val owned = tx.claimById(result.request.fence.claim).exists { claim =>
             claim.fence == result.request.fence && claim.owner == input.owner && claim.members == result.request.members.map(_.id).toSet &&

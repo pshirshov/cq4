@@ -347,8 +347,16 @@ abstract class ApplicationContractTest extends SpecZIO with AssertZIO {
         val other = ProjectId(UUID.randomUUID())
         def granted(role: Role) = auth.authenticate(auth.grant(root, GrantRequest(project, Actor(role.toString, SessionId(UUID.randomUUID()), role), Now + 10000)).value, None)
         def read(authority: Authority, target: ProjectId) = application.execute(authority, Command.Mode(ModeInput(target, ModeAction.Read())))
-        def replace(authority: Authority, expected: Long, mode: ProcessMode, selfReviewWithoutChecks: Boolean) =
-          application.execute(authority, Command.Mode(ModeInput(project, ModeAction.Replace(Revision(expected), mode, selfReviewWithoutChecks))))
+        def replaceIn(target: Application)(authority: Authority, expected: Long, mode: ProcessMode, selfReviewWithoutChecks: Boolean) =
+          target.execute(authority, Command.Mode(ModeInput(project, ModeAction.Replace(Revision(expected), mode, selfReviewWithoutChecks))))
+        val replace = replaceIn(application)
+        // The same project under a release that withholds the YOLO mode and under one that delivers it.
+        def release(yoloAvailable: Boolean) = replaceIn(new Application(FixedLedger.service(repository, java.time.Clock.systemUTC(), new ProcessModePolicy(yoloAvailable)),
+          repository, usage, artifacts, admissions, integrations, proposals, auth, new CatalogRead(new McpSchemas())))
+        val withheld = release(false)
+        val delivered = release(true)
+        def exemption(mode: String, suffix: String) = Result.Failed(Fault.Invalid(
+          s"Self-review without configured checks can be allowed only in the YOLO cross-cutting mode; the requested mode is $mode$suffix"))
         val operator = Actor("operator", session, Role.Human)
         for {
           _ <- application.execute(root, Command.Initialize(ProjectConfig(project, "http://localhost", "Moded")))
@@ -372,16 +380,28 @@ abstract class ApplicationContractTest extends SpecZIO with AssertZIO {
           _ <- assertIO(stale == Result.Failed(Fault.Conflict("Process mode changed: expected revision 0, actual 1; reload before saving")))
           same <- replace(root, 1, ProcessMode.CrossCutting, false)
           _ <- assertIO(same == written)
-          // This release holds the YOLO mode in its model only: neither the mode nor its exemption from configured checks can be stored.
-          yolo <- replace(root, 1, ProcessMode.Yolo, false)
-          _ <- assertIO(yolo == Result.Failed(Fault.Invalid("The YOLO cross-cutting mode is not available in this release")))
-          optOut <- ZIO.foreach(List(ProcessMode.Rigorous, ProcessMode.CrossCutting))(replace(root, 1, _, true))
-          _ <- assertIO(optOut.forall(_ == Result.Failed(Fault.Invalid(
-            "A self-review without configured checks belongs to the YOLO cross-cutting mode. The YOLO cross-cutting mode is not available in this release"))))
+          // A release that withholds the YOLO mode stores neither the mode nor its exemption from configured checks.
+          yolo <- ZIO.foreach(List(false, true))(withheld(root, 1, ProcessMode.Yolo, _))
+          _ <- assertIO(yolo.forall(_ == Result.Failed(Fault.Invalid("The YOLO cross-cutting mode is not available in this release"))))
+          optOut <- ZIO.foreach(List(ProcessMode.Rigorous, ProcessMode.CrossCutting))(withheld(root, 1, _, true))
+          _ <- assertIO(optOut == List(exemption("Rigorous", ". The YOLO cross-cutting mode is not available in this release"),
+            exemption("Cross-cutting", ". The YOLO cross-cutting mode is not available in this release")))
+          // A release that delivers it stores the exemption only together with the YOLO mode, for the operator only.
+          coupled <- ZIO.foreach(List(ProcessMode.Rigorous, ProcessMode.CrossCutting))(delivered(root, 1, _, true))
+          _ <- assertIO(coupled == List(exemption("Rigorous", ""), exemption("Cross-cutting", "")))
           unchanged <- read(root, project)
           _ <- assertIO(unchanged == written)
-          back <- replace(root, 1, ProcessMode.Rigorous, false)
-          _ <- assertIO(back match { case Result.Mode(value) => value.revision == Revision(2) && value.mode == ProcessMode.Rigorous && value.change.nonEmpty; case _ => false })
+          deniedYolo <- delivered(granted(Role.Governor), 1, ProcessMode.Yolo, true)
+          _ <- assertIO(deniedYolo == Result.Failed(Fault.Denied("Process mode change requires human authority")))
+          chosen <- delivered(root, 1, ProcessMode.Yolo, false)
+          _ <- assertIO(chosen match { case Result.Mode(value) => value.revision == Revision(2) && value.mode == ProcessMode.Yolo && !value.selfReviewWithoutChecks; case _ => false })
+          exempted <- delivered(root, 2, ProcessMode.Yolo, true)
+          _ <- assertIO(exempted match { case Result.Mode(value) => value.revision == Revision(3) && value.mode == ProcessMode.Yolo && value.selfReviewWithoutChecks; case _ => false })
+          // Leaving the YOLO mode cannot keep the exemption: the stored value after the change holds none.
+          kept <- delivered(root, 3, ProcessMode.CrossCutting, true)
+          _ <- assertIO(kept == exemption("Cross-cutting", ""))
+          back <- delivered(root, 3, ProcessMode.Rigorous, false)
+          _ <- assertIO(back match { case Result.Mode(value) => value.revision == Revision(4) && value.mode == ProcessMode.Rigorous && !value.selfReviewWithoutChecks && value.change.nonEmpty; case _ => false })
           // The mode and the standing requirements are separate documents of the project, each with its own revision.
           requirements <- application.execute(root, Command.Requirements(RequirementsInput(project, RequirementsAction.Read())))
           _ <- assertIO(requirements == Result.Requirements(ProjectRequirements(project, Revision(0), "", None)))

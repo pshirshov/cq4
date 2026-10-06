@@ -24,6 +24,11 @@ header { position: relative; z-index: 2; display: flex; flex-direction: column; 
 .help-detail > .mode-note { margin-left: 0; }
 .help-lead { font-weight: 600; }
 .mode-actions { margin-top: 8px; }
+.mode-exemption { margin: 12px 0 8px; padding: 4px 10px 10px; border: 1px solid #ff8a80; }
+.mode-exemption[data-allowed=true] { background: #3a1616; }
+.mode-exemption > .mode-hint { margin-left: 0; }
+.mode-exemption-state { margin: 6px 0; font-weight: 600; }
+.mode-exemption[data-allowed=true] > .mode-exemption-state { color: #ffdad6; }
 .status-bar { flex: none; padding: 4px 12px; border-top: 1px solid #435364; background: #1c2630; font-size: 11px; color: #a4c1d3; }
 .keyboard-guidance { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 4px; }
 .keyboard-guidance > span { white-space: nowrap; }

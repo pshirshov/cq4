@@ -126,19 +126,20 @@ try {
   }
   if (process.argv.includes('--mode')) {
     // I30: the catalog decides which modes can be chosen. With a catalog in which the YOLO mode is available, choosing it replaces the
-    // ordinary save by the hold-to-confirm control; a release that makes the mode available needs no change of the dialog.
-    await page.evaluate(() => {
+    // ordinary save by the hold-to-confirm control, and the exemption from configured checks is a second, separately held decision.
+    const exemption = 'Fixture exemption: a change the governing session reviewed itself can be integrated although no check examined it.';
+    await page.evaluate(exemption => {
       const { api, ModeDialog } = CQComponents;
       const project = new api.ProjectId('00000000-0000-0000-0000-000000000001');
       const prompt = new api.CatalogPrompt('fixture.md', 'Fixture instructions');
       const catalog = new api.HelpCatalog([], [], [
         new api.CatalogMode(api.ProcessMode.Rigorous, 'Rigorous', 'Rigorous hint', 'Rigorous description', prompt, undefined),
         new api.CatalogMode(api.ProcessMode.CrossCutting, 'Cross-cutting', 'Cross-cutting hint', 'Cross-cutting description', prompt, undefined),
-        new api.CatalogMode(api.ProcessMode.Yolo, 'YOLO cross-cutting', 'YOLO hint', 'YOLO description', prompt, undefined)], 'Fixture effect.');
+        new api.CatalogMode(api.ProcessMode.Yolo, 'YOLO cross-cutting', 'YOLO hint', 'YOLO description\n\n' + exemption, prompt, undefined)], 'Fixture effect.');
       const state = { value: new api.ProjectMode(project, new api.Revision(0n), api.ProcessMode.Rigorous, false, undefined), replaced: [], saved: [] };
       const dialog = new ModeDialog({ catalog: async () => catalog, saved: (value, changed) => { state.saved.push([value.mode, changed]); }, call: async command => {
         if (command.input.action instanceof api.ModeAction_Replace) {
-          state.replaced.push(command.input.action.mode);
+          state.replaced.push([command.input.action.mode, command.input.action.selfReviewWithoutChecks]);
           state.value = new api.ProjectMode(project, new api.Revision(command.input.action.expected.value + 1n), command.input.action.mode, command.input.action.selfReviewWithoutChecks, undefined);
         }
         return new api.Result_Mode(state.value);
@@ -146,28 +147,61 @@ try {
       document.body.append(dialog.element);
       window.fixture = { dialog, project, state };
       dialog.open(project);
-    });
+    }, exemption);
+    const evidence = process.env.CQ_BROWSER_EVIDENCE;
+    const shot = async name => { if (evidence !== undefined) await page.getByRole('dialog', { name: 'Process mode', exact: true }).screenshot({ path: `${evidence}/${name}.png` }); };
     const save = page.getByRole('button', { name: 'Save mode', exact: true });
     const confirm = page.getByRole('button', { name: 'Switch to YOLO cross-cutting', exact: true });
+    const group = page.getByRole('group', { name: 'Self-review without checks', exact: true });
+    const allow = group.getByRole('button', { name: 'Allow self-review without checks', exact: true });
+    const withdraw = group.getByRole('button', { name: 'Require a check again', exact: true });
     const radio = name => page.getByRole('radio', { name, exact: true });
+    const replaced = () => page.evaluate(() => fixture.state.replaced);
+    const saves = count => page.waitForFunction(expected => fixture.state.saved.length === expected, count);
     await radio('Rigorous').waitFor();
-    assert.deepEqual([await radio('Rigorous').isChecked(), await radio('YOLO cross-cutting').isDisabled(), await save.isVisible(), await confirm.isVisible()], [true, false, true, false]);
+    assert.deepEqual([await radio('Rigorous').isChecked(), await radio('YOLO cross-cutting').isDisabled(), await save.isVisible(), await confirm.isVisible(), await group.isVisible()],
+      [true, false, true, false, false]);
     await radio('Cross-cutting').check();
-    assert.deepEqual([await save.isVisible(), await confirm.isVisible()], [true, false]);
+    assert.deepEqual([await save.isVisible(), await confirm.isVisible(), await group.isVisible()], [true, false, false]);
     await radio('YOLO cross-cutting').check();
     assert.deepEqual([await save.isVisible(), await confirm.isVisible(), await confirm.getAttribute('data-hold')], [false, true, 'idle']);
+    // The exemption is shown with the YOLO choice, in the catalog's words, and cannot be allowed before the project is in that mode.
+    assert.deepEqual([await group.isVisible(), await allow.isDisabled(), await withdraw.isVisible(), await group.getByText(exemption, { exact: true }).isVisible()], [true, true, false, true]);
+    await group.getByText('Not allowed. It can be allowed once the project is in this mode.', { exact: true }).waitFor();
+    assert.deepEqual(await allow.evaluate(node => node.getAttribute('aria-describedby').split(' ').map(id => document.getElementById(id).textContent)),
+      [exemption, 'Not allowed. It can be allowed once the project is in this mode.']);
     // A click is not a hold: nothing is sent.
     await confirm.click(); await page.waitForTimeout(HOLD_SETTLE_MS);
-    assert.deepEqual(await page.evaluate(() => fixture.state.replaced), []);
+    assert.deepEqual(await replaced(), []);
     await hold(page, confirm);
-    await page.waitForFunction(() => fixture.state.saved.length === 1);
-    assert.deepEqual(await page.evaluate(() => [fixture.state.replaced, fixture.state.saved]), [['Yolo'], [['Yolo', true]]]);
-    // In the YOLO mode the choice of another mode, and a save of the same one, is an ordinary save.
+    await saves(1);
+    assert.deepEqual(await page.evaluate(() => [fixture.state.replaced, fixture.state.saved]), [[['Yolo', false]], [['Yolo', true]]]);
+    // In the YOLO mode the exemption has its own hold; a click allows nothing.
     await save.waitFor();
-    assert.deepEqual([await radio('YOLO cross-cutting').isChecked(), await confirm.isVisible()], [true, false]);
-    await radio('Rigorous').check(); await save.click();
-    await page.waitForFunction(() => fixture.state.saved.length === 2);
-    assert.deepEqual(await page.evaluate(() => fixture.state.replaced), ['Yolo', 'Rigorous']);
-    console.log('PASS: a mode the catalog makes available is chosen with the ordinary save, except the YOLO mode, which is saved by holding');
+    assert.deepEqual([await radio('YOLO cross-cutting').isChecked(), await confirm.isVisible(), await allow.isEnabled(), await allow.getAttribute('data-hold')], [true, false, true, 'idle']);
+    await group.getByText('Not allowed for this project.', { exact: true }).waitFor();
+    await shot('mode-yolo-checks-required');
+    await allow.click(); await page.waitForTimeout(HOLD_SETTLE_MS);
+    assert.deepEqual(await replaced(), [['Yolo', false]]);
+    await hold(page, allow);
+    await saves(2);
+    await group.getByText('Allowed for this project.', { exact: true }).waitFor();
+    assert.deepEqual([await replaced(), await allow.isVisible(), await withdraw.isVisible(), await group.getAttribute('data-allowed')],
+      [[['Yolo', false], ['Yolo', true]], false, true, 'true']);
+    await shot('mode-yolo-exempted');
+    // A save of the YOLO mode keeps the exemption; withdrawing it is an ordinary press.
+    await save.click(); await saves(3);
+    await withdraw.click(); await saves(4);
+    await group.getByText('Not allowed for this project.', { exact: true }).waitFor();
+    assert.deepEqual((await replaced()).slice(2), [['Yolo', true], ['Yolo', false]]);
+    // A change to another mode stores no exemption.
+    await hold(page, allow); await saves(5);
+    await radio('Rigorous').check();
+    assert.equal(await group.isVisible(), false);
+    await save.click(); await saves(6);
+    assert.deepEqual((await replaced()).slice(4), [['Yolo', true], ['Rigorous', false]]);
+    await radio('YOLO cross-cutting').check();
+    assert.deepEqual([await confirm.isVisible(), await allow.isDisabled()], [true, true]);
+    console.log('PASS: the YOLO mode is saved by holding, and its exemption from configured checks by a second hold of its own; another mode stores no exemption');
   }
 } finally { await browser.close(); }

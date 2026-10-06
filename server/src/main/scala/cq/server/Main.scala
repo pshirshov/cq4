@@ -1,7 +1,7 @@
 package cq.server
 
 import com.comcast.ip4s.{Host, Port}
-import cq.core.{ArtifactRepository, ArtifactService, ClaimPlanner, DriverBoundary, DriverRegistry, DriverService, LedgerRepository, LedgerService, LedgerMutation, IntegrationService, ProbeRepository, ProbeService, ProposalService, QueryCompleter, QueryParser, ResultAdmissionService, TerminationPlanner, UsageRepository, UsageService, WorksetPlanner, WorksetTraversal}
+import cq.core.{ArtifactRepository, ArtifactService, ClaimPlanner, ProcessModePolicy, DriverBoundary, DriverRegistry, DriverService, LedgerRepository, LedgerService, LedgerMutation, IntegrationService, ProbeRepository, ProbeService, ProposalService, QueryCompleter, QueryParser, ResultAdmissionService, TerminationPlanner, UsageRepository, UsageService, WorksetPlanner, WorksetTraversal}
 import distage.{Activation, Lifecycle, ModuleDef}
 import distage.StandardAxis.Repo
 import izumi.distage.plugins.{PluginConfig, PluginDef}
@@ -49,6 +49,7 @@ object CqPlugin extends PluginDef {
   make[ProbeService[IO]].from[ProbeService.Impl[IO]]
   make[LedgerService[IO]].from[LedgerService.Impl[IO]]
   make[LedgerMutation]
+  make[ProcessModePolicy].fromValue(ProcessModePolicy.Release)
   make[DriverRegistry]
   make[DriverBoundary]
   make[DriverService]
@@ -73,7 +74,7 @@ object CqPlugin extends PluginDef {
   make[LiveSession]
   make[StaticAssets]
   make[McpSchemas]
-  make[CatalogRead].from((schemas: McpSchemas) => new CatalogRead(schemas))
+  make[CatalogRead].from((schemas: McpSchemas, modes: ProcessModePolicy) => new CatalogRead(schemas, modes))
   make[RunningServer].fromResource[RunningServer.Resource]
   modify[FailureHandler].by(_.map(ConnectionReports.reporting))
   make[DatabaseSetup]

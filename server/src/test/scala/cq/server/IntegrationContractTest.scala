@@ -3,7 +3,7 @@ package cq.server
 import cq.api.*
 import cq.core.*
 import cq.host.*
-import distage.{Activation, DIKey}
+import distage.{Activation, DIKey, ModuleDef}
 import distage.StandardAxis.Repo
 import izumi.distage.plugins.PluginConfig
 import izumi.distage.testkit.scalatest.{AssertZIO, SpecZIO}
@@ -15,7 +15,9 @@ import zio.{IO, Runtime, Task, Unsafe, ZIO}
 
 abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
   override def config = super.config.copy(pluginConfig = PluginConfig.const(List(CqPlugin)),
-    memoizationRoots = Set(DIKey[LedgerService[IO]], DIKey[UsageService[IO]], DIKey[ArtifactService[IO]], DIKey[IntegrationService[IO]]))
+    memoizationRoots = Set(DIKey[LedgerService[IO]], DIKey[UsageService[IO]], DIKey[ArtifactService[IO]], DIKey[IntegrationService[IO]]),
+    // The cases of a governing session's own work need a project in the YOLO mode, whatever this release delivers.
+    moduleOverrides = super.config.moduleOverrides ++ new ModuleDef { make[ProcessModePolicy].fromValue(new ProcessModePolicy(true)) })
   private def uuid: UUID = UUID.randomUUID()
   private val recordedResult = "Worker evidence: failing reproduction, then passing checks"
   private def task: ItemDraft = ItemDraft("Integration task", "Preserved narrative", Set("consumer"), false,
@@ -27,6 +29,7 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
     override def expected(base: GitCommit, candidate: GitCommit): GitCommit = base
     override def ancestor(earlier: GitCommit, later: GitCommit): Boolean = throw new IllegalStateException("Ancestry is not inspected by these cases")
   }
+  private val Independent = CandidateAuthorship(Role.Worker, Role.Reviewer)
   private def prepare(preparation: IntegrationPreparation, ticket: IntegrationTicket): IntegrationIntent = preparation.freeze(preparation.review(ticket), None)
   /** What an integration of `worker` (stored as `id`) and `reviewer` cites, given the published revalidation rounds of the worker result. */
   private def cited(owner: Scope, id: ArtifactId, worker: ChildResult, reviewer: ChildResult, checks: List[ValidationCheck],
@@ -34,8 +37,11 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
     IntegrationValidation.effective(owner.project, owner.actor.session, id, worker, checks, amendments), reviewer).citations
   private def completion(id: IntegrationId, repository: String, target: String, candidate: GitCommit, rebase: Option[IntegrationRebase], worker: ArtifactId,
     reviewer: ArtifactId, cited: ValidationCitations, fence: Fence, items: List[Item]): ChangeRequest =
-    IntegrationPolicy.completion(id, repository, target, candidate, rebase, worker, reviewer, cited.established, cited.failed, cited.rounds, fence, items)
-  private final class ServiceApi(scope: Scope, ledger: LedgerService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], runtime: Runtime[Any]) extends ServerApi {
+    completion(id, repository, target, candidate, rebase, worker, reviewer, Independent, cited, fence, items)
+  private def completion(id: IntegrationId, repository: String, target: String, candidate: GitCommit, rebase: Option[IntegrationRebase], worker: ArtifactId,
+    reviewer: ArtifactId, authorship: CandidateAuthorship, cited: ValidationCitations, fence: Fence, items: List[Item]): ChangeRequest =
+    IntegrationPolicy.completion(id, repository, target, candidate, rebase, worker, reviewer, authorship, cited.established, cited.failed, cited.rounds, fence, items)
+  private final class ServiceApi(scope: Scope, ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], runtime: Runtime[Any]) extends ServerApi {
     override def call(command: Command): Result = {
       val effect: IO[Throwable, Result] = command match {
         case Command.Read(ReadInput(_, ReadSelection.ItemDetail(id))) => ledger.get(scope, id).map(Result.Detail.apply)
@@ -45,6 +51,7 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
         case Command.Read(ReadInput(_, ReadSelection.Admission(attempt))) => admissions.get(scope, attempt).map(Result.Admission.apply)
         case Command.Requirements(RequirementsInput(_, RequirementsAction.Read())) => ledger.requirements(scope).map(Result.Requirements.apply)
         case Command.Mode(ModeInput(_, ModeAction.Read())) => ledger.mode(scope).map(Result.Mode.apply)
+        case Command.Usage(UsageInput(_, UsageSelection.Attempts(filter, after, snapshot, limit))) => usage.attempts(scope, filter, after, snapshot, limit).map(Result.UsageAttempts.apply)
         case Command.Read(ReadInput(_, ReadSelection.Claims(members))) => ledger.claimPreview(scope, members).map(Result.Claims.apply)
         case Command.ClaimWork(ClaimInput(_, ClaimAction.Renew(fence, millis))) => ledger.renew(scope, fence, millis).map(Result.Claimed.apply)
         case _ => ZIO.fail(new IllegalStateException("Unexpected integration preparation command"))
@@ -80,7 +87,16 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
     begin(ledger, usage, artifacts, admissions, None, 0)
   /** With `failed`, the worker's check passed on a rerun: the first run, altered given the governing attempt, is published and recorded as the evidence's failure. */
   private def begin(ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO],
-    failed: Option[AttemptId => ReviewValidation => ReviewValidation], revalidations: Int): IO[Throwable, Fixture] = {
+    failed: Option[AttemptId => ReviewValidation => ReviewValidation], revalidations: Int): IO[Throwable, Fixture] =
+    begin(ledger, usage, artifacts, admissions, failed, revalidations, Independent, true)
+  private def mode(ledger: LedgerService[IO], project: ProjectId, value: ProcessMode, selfReviewWithoutChecks: Boolean): IO[Throwable, Unit] = {
+    val operator = Scope(project, Actor("operator", SessionId(uuid), Role.Human))
+    ledger.mode(operator).flatMap(current => ledger.replaceMode(operator, current.revision, ProjectSetting.Mode(value, selfReviewWithoutChecks))).unit
+  }
+  /** With a Governor role in `authorship`, the governing attempt is an interactive session's and the project is in the YOLO mode,
+    * which admits that session's own results. Without `checked`, the project configures no check. */
+  private def begin(ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO],
+    failed: Option[AttemptId => ReviewValidation => ReviewValidation], revalidations: Int, authorship: CandidateAuthorship, checked: Boolean): IO[Throwable, Fixture] = {
     val owner = Scope(ProjectId(uuid), Actor("integration governor", SessionId(uuid), Role.Governor))
     val collector = owner.copy(actor = owner.actor.copy(subject = "host collector", role = Role.Collector))
     val candidate = GitCommit("b" * 40)
@@ -91,9 +107,12 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
       items <- ZIO.foreach(members)(ref => ledger.get(owner, ref.id).map(_.item))
       claim <- ledger.acquire(owner, ClaimId(uuid), members.map(_.id).toSet, 300000)
       parentAssignment <- usage.assign(collector, Assignment(AssignmentId(uuid), owner.project, Set.empty, Attribution.Unattributed, None, None))
-      parent <- usage.start(collector, Attempt(AttemptId(uuid), parentAssignment.id, None, owner.actor.session, Role.Governor, Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Govern, None))
+      parent <- usage.start(collector, Attempt(AttemptId(uuid), parentAssignment.id, None, owner.actor.session, Role.Governor, Harness.Codex, "fixture", "fixture",
+        if (authorship.governing) AttemptObservation.AttachedGovernorCollector else "fixture", 1000, UsagePhase.Govern, None))
+      _ <- ZIO.when(authorship.governing)(mode(ledger, owner.project, ProcessMode.Yolo, false))
+      checks = if (checked) List(check) else Nil
       workerAssignment <- usage.assign(collector, Assignment(AssignmentId(uuid), owner.project, claim.members, Attribution.Shared, Some(uuid), None))
-      workerAttempt <- usage.start(collector, parent.copy(id = AttemptId(uuid), assignment = workerAssignment.id, parent = Some(parent.id), role = Role.Worker))
+      workerAttempt <- usage.start(collector, parent.copy(id = AttemptId(uuid), assignment = workerAssignment.id, parent = Some(parent.id), role = authorship.maker))
       job = JobRecord(WorkspaceSpec(owner.project, owner.actor.session, AttemptId(uuid), "/consumer", candidate), "fixture", JobTarget.Run,
         JobPhase.Settled, Some(JobExit(Some(0), None, StopReason.Exited, 0, 0, true, false)), None, 1, 1000, 1001)
       validation <- artifacts.upload(collector, ArtifactUpload(owner.project, ArtifactId(uuid), workerAttempt.id, ArtifactKind.Validation, "application/json",
@@ -107,17 +126,17 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
       request = DispatchRequest(RequestId(uuid), DispatchWork.Worker(WorkerMode.Implement), Harness.Codex, members, Nil, Nil, None,
         claim.fence, HostLimits(3000, 1000, 300, 2000, 262144))
       worker = ChildResult(workerAttempt.id, request, GitCommit("a" * 40), Some(candidate),
-        ChildReport.Work(members.map(ref => WorkMember(ref.id, WorkDisposition.CandidateReady, "Ready", Nil))), List(ValidationEvidence(check.name, ValidationState.Passed, validation.id, failures)), RetainedEvidence(Nil, Nil))
+        ChildReport.Work(members.map(ref => WorkMember(ref.id, WorkDisposition.CandidateReady, "Ready", Nil))), checks.map(value => ValidationEvidence(value.name, ValidationState.Passed, validation.id, failures)), RetainedEvidence(Nil, Nil))
       workerArtifact <- publish(collector, worker, artifacts, admissions)
       reviewAssignment <- usage.assign(collector, workerAssignment.copy(id = AssignmentId(uuid), cohort = Some(uuid)))
-      reviewAttempt <- usage.start(collector, workerAttempt.copy(id = AttemptId(uuid), assignment = reviewAssignment.id, role = Role.Reviewer))
+      reviewAttempt <- usage.start(collector, workerAttempt.copy(id = AttemptId(uuid), assignment = reviewAssignment.id, role = authorship.reviewer))
       reviewer = ChildResult(reviewAttempt.id, request.copy(request = RequestId(uuid), work = DispatchWork.Reviewer(ReviewerMode.Candidate), previous = Some(workerArtifact)),
         candidate, Some(candidate), ChildReport.Review(members.map(ref => ReviewMember(ref.id, ReviewVerdict.Accepted, Nil)), None), worker.validation, RetainedEvidence(Nil, Nil))
       reviewArtifact <- publish(collector, reviewer, artifacts, admissions)
       id = IntegrationId(uuid)
-      change = completion(id, "/consumer", "refs/heads/integration", candidate, None, workerArtifact, reviewArtifact, cited(owner, workerArtifact, worker, reviewer, List(check), Nil), claim.fence, items)
+      change = completion(id, "/consumer", "refs/heads/integration", candidate, None, workerArtifact, reviewArtifact, authorship, cited(owner, workerArtifact, worker, reviewer, checks, Nil), claim.fence, items)
       intent = IntegrationIntent(id, owner.project, owner.actor, "/consumer", "refs/heads/integration", worker.base, candidate,
-        workerArtifact, reviewArtifact, List(check), claim.fence, members, change, None)
+        workerArtifact, reviewArtifact, checks, claim.fence, members, change, None)
     } yield Fixture(owner, collector, parent.id, claim, items, worker, reviewer, intent)
   }
   private def reject[A](operation: IO[Throwable, A], accepts: Fault => Boolean): IO[Throwable, Unit] = operation.either.flatMap { value =>
@@ -235,6 +254,104 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
       } yield ()
     }
 
+    "I30: reserve an integration of a candidate the governing session made or reviewed itself only while the project is in the YOLO mode, and state its part in the Task evidence" in {
+      (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO],
+        integrations: IntegrationService[IO]) => for {
+        runtime <- ZIO.runtime[Any]
+        _ <- ZIO.foreachDiscard(List(
+          CandidateAuthorship(Role.Worker, Role.Governor) -> "; candidate reviewed by the governing session (self-review, YOLO mode)",
+          CandidateAuthorship(Role.Governor, Role.Governor) -> "; candidate made and reviewed by the governing session (self-review, YOLO mode)",
+          CandidateAuthorship(Role.Governor, Role.Reviewer) -> "; candidate made by the governing session")) { (authorship, stated) =>
+          for {
+            f <- begin(ledger, usage, artifacts, admissions, None, 0, authorship, true)
+            host = ZIO.attemptBlocking(prepare(new IntegrationPreparation(new ServiceApi(f.owner, ledger, usage, artifacts, admissions, runtime), f.owner,
+              f.intent.repository, f.intent.target, f.intent.checks, Clock.systemUTC(), recordedBases), IntegrationTicket(f.intent.id, f.intent.reviewer)))
+            // The host derives the same completion from the roles the server registered, so the server's comparison holds.
+            prepared <- host
+            _ <- ZIO.attempt(assert(prepared == f.intent, s"$authorship: host preparation and the fixture disagree on the completion request"))
+            // The server reads the mode when it reserves: a project that left the YOLO mode reserves no such integration, and the host refuses in the same words.
+            _ <- ZIO.foreachDiscard(List(ProcessMode.CrossCutting -> "Cross-cutting", ProcessMode.Rigorous -> "Rigorous")) { (value, label) =>
+              val refusal = Fault.Denied("An integration of a candidate the governing session made or reviewed itself requires the YOLO cross-cutting mode; " +
+                s"the project's process mode is $label")
+              mode(ledger, f.owner.project, value, false) *> reject(integrations.reserve(f.collector, prepared), _ == refusal) *> reject(host, _ == refusal) *>
+                reject(integrations.get(f.owner, f.intent.id), _.isInstanceOf[Fault.Missing])
+            }
+            _ <- mode(ledger, f.owner.project, ProcessMode.Yolo, false)
+            // A completion that states another part than the registered roles give is not the exact one.
+            unstated = f.intent.copy(change = completion(f.intent.id, f.intent.repository, f.intent.target, f.intent.candidate, None, f.intent.worker, f.intent.reviewer,
+              cited(f.owner, f.intent.worker, f.worker, f.reviewer, f.intent.checks, Nil), f.intent.fence, f.items))
+            _ <- reject(integrations.reserve(f.collector, unstated), _ == Fault.Invalid("Integration may only apply the exact narrative-preserving task completion request"))
+            reserved <- integrations.reserve(f.collector, prepared)
+            _ <- assertIO(reserved.resolution == IntegrationResolution.Pending())
+            _ <- integrations.observe(f.collector, f.intent.id, IntegrationObservation.Incorporated(f.intent.candidate))
+            completed <- ZIO.foreach(f.items)(item => ledger.get(f.owner, item.id).map(_.item.draft.content.asInstanceOf[Content.Task]))
+            _ <- ZIO.attempt(completed.foreach { task =>
+              println(s"Governing work evidence ($authorship): ${task.validation.last.description}")
+              assert(task.status == TaskStatus.Done && task.validation.last.origin == EvidenceOrigin.HostObserved &&
+                task.validation.last.description == s"Host recorded integration ${f.intent.id.value} into ${f.intent.target}$stated", task.validation.toString)
+            })
+          } yield ()
+        }
+      } yield ()
+    }
+
+    "I30: require a configured check for a self-reviewed integration unless the operator exempted the project, and none for an independently reviewed one" in {
+      (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO],
+        integrations: IntegrationService[IO]) => for {
+        runtime <- ZIO.runtime[Any]
+        unchecked = Fault.Denied("A self-reviewed integration requires at least one configured check: configure at least one check for the project, " +
+          "or have the operator allow self-review without checks in the project's process mode")
+        _ <- ZIO.foreachDiscard(List(CandidateAuthorship(Role.Worker, Role.Governor), CandidateAuthorship(Role.Governor, Role.Governor))) { authorship =>
+          for {
+            f <- begin(ledger, usage, artifacts, admissions, None, 0, authorship, false)
+            _ <- assertIO(f.intent.checks.isEmpty)
+            host = ZIO.attemptBlocking(prepare(new IntegrationPreparation(new ServiceApi(f.owner, ledger, usage, artifacts, admissions, runtime), f.owner,
+              f.intent.repository, f.intent.target, f.intent.checks, Clock.systemUTC(), recordedBases), IntegrationTicket(f.intent.id, f.intent.reviewer)))
+            _ <- reject(integrations.reserve(f.collector, f.intent), _ == unchecked)
+            _ <- reject(host, _ == unchecked)
+            _ <- reject(integrations.get(f.owner, f.intent.id), _.isInstanceOf[Fault.Missing])
+            _ <- mode(ledger, f.owner.project, ProcessMode.Yolo, true)
+            prepared <- host
+            _ <- ZIO.attempt(assert(prepared == f.intent, s"$authorship: host preparation and the fixture disagree on the completion request"))
+            // The exemption is read with the mode: withdrawn, the same intent is refused again.
+            _ <- mode(ledger, f.owner.project, ProcessMode.Yolo, false)
+            _ <- reject(integrations.reserve(f.collector, prepared), _ == unchecked)
+            _ <- mode(ledger, f.owner.project, ProcessMode.Yolo, true)
+            reserved <- integrations.reserve(f.collector, prepared)
+            _ <- assertIO(reserved.resolution == IntegrationResolution.Pending())
+          } yield ()
+        }
+        // The Governor made the candidate and an independent Reviewer accepted it: no check is required of that review.
+        made <- begin(ledger, usage, artifacts, admissions, None, 0, CandidateAuthorship(Role.Governor, Role.Reviewer), false)
+        reserved <- integrations.reserve(made.collector, made.intent)
+        _ <- assertIO(reserved.resolution == IntegrationResolution.Pending())
+      } yield ()
+    }
+
+    "I30: leave an integration of a Worker's candidate that an independent Reviewer accepted unchanged in every mode, with and without configured checks" in {
+      (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO],
+        integrations: IntegrationService[IO]) => for {
+        runtime <- ZIO.runtime[Any]
+        settings = List(ProjectSetting.Mode(ProcessMode.Rigorous, false), ProjectSetting.Mode(ProcessMode.CrossCutting, false),
+          ProjectSetting.Mode(ProcessMode.Yolo, false), ProjectSetting.Mode(ProcessMode.Yolo, true))
+        _ <- ZIO.foreachDiscard(for { setting <- settings; checked <- List(true, false) } yield (setting, checked)) { (setting, checked) =>
+          for {
+            f <- begin(ledger, usage, artifacts, admissions, None, 0, Independent, checked)
+            _ <- mode(ledger, f.owner.project, setting.value, setting.selfReviewWithoutChecks)
+            prepared <- ZIO.attemptBlocking(prepare(new IntegrationPreparation(new ServiceApi(f.owner, ledger, usage, artifacts, admissions, runtime), f.owner,
+              f.intent.repository, f.intent.target, f.intent.checks, Clock.systemUTC(), recordedBases), IntegrationTicket(f.intent.id, f.intent.reviewer)))
+            _ <- ZIO.attempt(assert(prepared == f.intent && f.intent.checks.nonEmpty == checked, s"$setting, checked $checked"))
+            reserved <- integrations.reserve(f.collector, prepared)
+            _ <- assertIO(reserved.resolution == IntegrationResolution.Pending())
+            _ <- integrations.observe(f.collector, f.intent.id, IntegrationObservation.Incorporated(f.intent.candidate))
+            completed <- ZIO.foreach(f.items)(item => ledger.get(f.owner, item.id).map(_.item.draft.content.asInstanceOf[Content.Task]))
+            _ <- ZIO.attempt(completed.foreach(task => assert(task.status == TaskStatus.Done &&
+              task.validation.last.description == s"Host recorded integration ${f.intent.id.value} into ${f.intent.target}", s"$setting, checked $checked: ${task.validation}")))
+          } yield ()
+        }
+      } yield ()
+    }
+
     "I19: cite the failed runs of an intermittent check in the Task evidence and reject failures that are not this author's failed run of the check" in {
       (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO],
         integrations: IntegrationService[IO]) => for {
@@ -242,7 +359,7 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
         f <- begin(ledger, usage, artifacts, admissions, Some(_ => identity), 0)
         evidence = f.worker.validation.head
         _ <- assertIO(evidence.state == ValidationState.Passed && evidence.failures.size == 1 && f.reviewer.validation == f.worker.validation)
-        prepared <- ZIO.attemptBlocking(prepare(new IntegrationPreparation(new ServiceApi(f.owner, ledger, artifacts, admissions, runtime), f.owner,
+        prepared <- ZIO.attemptBlocking(prepare(new IntegrationPreparation(new ServiceApi(f.owner, ledger, usage, artifacts, admissions, runtime), f.owner,
           f.intent.repository, f.intent.target, f.intent.checks, Clock.systemUTC(), recordedBases), IntegrationTicket(f.intent.id, f.intent.reviewer)))
         _ <- ZIO.attempt(assert(prepared == f.intent, "Host preparation and the fixture disagree on the completion request"))
         _ <- integrations.reserve(f.collector, f.intent)
@@ -265,7 +382,7 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
           altered <- begin(ledger, usage, artifacts, admissions, Some(alter), 0)
           result <- integrations.reserve(altered.collector, altered.intent).either
           _ <- ZIO.attempt(assert(result == Left(DomainFailure(Fault.Invalid("Validation failure does not record this author's failed run of the check on this candidate"))), s"$name: $result"))
-          host <- ZIO.attemptBlocking(prepare(new IntegrationPreparation(new ServiceApi(altered.owner, ledger, artifacts, admissions, runtime), altered.owner,
+          host <- ZIO.attemptBlocking(prepare(new IntegrationPreparation(new ServiceApi(altered.owner, ledger, usage, artifacts, admissions, runtime), altered.owner,
             altered.intent.repository, altered.intent.target, altered.intent.checks, Clock.systemUTC(), recordedBases),
             IntegrationTicket(altered.intent.id, altered.intent.reviewer))).either
           _ <- ZIO.attempt(assert(host.isLeft, s"host preparation accepted $name"))
@@ -283,7 +400,7 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
         f = amended.fixture
         admitted <- artifacts.page(f.owner, f.intent.worker, 0, ArtifactService.MaxPageCodePoints).map(page => Wire.decode(ChildResult_JsonCodec, page.text))
         _ <- ZIO.attempt(assert(admitted == f.worker && admitted.validation.map(_.state) == List(ValidationState.Failed), "The admitted result changed"))
-        prepared <- ZIO.attemptBlocking(prepare(new IntegrationPreparation(new ServiceApi(f.owner, ledger, artifacts, admissions, runtime), f.owner,
+        prepared <- ZIO.attemptBlocking(prepare(new IntegrationPreparation(new ServiceApi(f.owner, ledger, usage, artifacts, admissions, runtime), f.owner,
           f.intent.repository, f.intent.target, f.intent.checks, Clock.systemUTC(), recordedBases), IntegrationTicket(f.intent.id, f.intent.reviewer)))
         _ <- ZIO.attempt(assert(prepared == f.intent, "Host preparation and the fixture disagree on the completion request"))
         reserved <- integrations.reserve(f.collector, f.intent)
@@ -336,7 +453,7 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
           result <- integrations.reserve(f.collector, f.intent).either
           _ <- ZIO.attempt(assert(result == Left(DomainFailure(fault)), s"$name: $result"))
           _ <- reject(integrations.get(f.owner, f.intent.id), _.isInstanceOf[Fault.Missing])
-          host <- ZIO.attemptBlocking(prepare(new IntegrationPreparation(new ServiceApi(f.owner, ledger, artifacts, admissions, runtime), f.owner,
+          host <- ZIO.attemptBlocking(prepare(new IntegrationPreparation(new ServiceApi(f.owner, ledger, usage, artifacts, admissions, runtime), f.owner,
             f.intent.repository, f.intent.target, f.intent.checks, Clock.systemUTC(), recordedBases), IntegrationTicket(f.intent.id, f.intent.reviewer))).either
           _ <- ZIO.attempt(assert(host == Left(DomainFailure(fault)), s"host preparation, $name: $host"))
         } yield () }
@@ -351,7 +468,7 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
         later = f.owner.copy(actor = f.owner.actor.copy(session = SessionId(uuid)))
         collector = later.copy(actor = later.actor.copy(role = Role.Collector))
         claim <- ledger.acquire(later, ClaimId(uuid), f.claim.members, 300000)
-        api = new ServiceApi(later, ledger, artifacts, admissions, runtime)
+        api = new ServiceApi(later, ledger, usage, artifacts, admissions, runtime)
         workflow <- ZIO.attemptBlocking(new WorkflowAssembly(api, later.project, new WorkflowAssets, SessionOwnership.Attached).assemble(WorkflowRequest.Review(f.intent.worker, ReviewerMode.Candidate)))
         _ <- assertIO(workflow.subject.exists(_.result == f.intent.worker))
         input <- ZIO.attemptBlocking(new InputAssembler(api, later, Clock.systemUTC(), "Continue retained candidate").assemble(
@@ -394,7 +511,7 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
           reviewed <- reviewCurrent(original)
           (f, current) = reviewed
           _ <- assertIO(f.intent.members != original.intent.members && current.map(_.draft) == original.items.map(_.draft))
-          prepared <- ZIO.attemptBlocking(prepare(new IntegrationPreparation(new ServiceApi(f.owner, ledger, artifacts, admissions, runtime), f.owner,
+          prepared <- ZIO.attemptBlocking(prepare(new IntegrationPreparation(new ServiceApi(f.owner, ledger, usage, artifacts, admissions, runtime), f.owner,
             f.intent.repository, f.intent.target, f.intent.checks, Clock.systemUTC(), recordedBases), IntegrationTicket(f.intent.id, f.intent.reviewer)))
           _ <- assertIO(prepared == f.intent)
           reserved <- integrations.reserve(f.collector, f.intent)
@@ -412,7 +529,7 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
             edited.draft.copy(body = "Changed requirements"))), List(changed.claim.fence), "Change the task content"))
           stale <- reviewCurrent(changed)
           _ <- reject(integrations.reserve(stale._1.collector, stale._1.intent), _.isInstanceOf[Fault.Invalid])
-          refused <- ZIO.attemptBlocking(prepare(new IntegrationPreparation(new ServiceApi(stale._1.owner, ledger, artifacts, admissions, runtime), stale._1.owner,
+          refused <- ZIO.attemptBlocking(prepare(new IntegrationPreparation(new ServiceApi(stale._1.owner, ledger, usage, artifacts, admissions, runtime), stale._1.owner,
             stale._1.intent.repository, stale._1.intent.target, stale._1.intent.checks, Clock.systemUTC(), recordedBases), IntegrationTicket(stale._1.intent.id, stale._1.intent.reviewer))).either
           _ <- assertIO(refused.isLeft)
         } yield ()
@@ -798,7 +915,7 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
     }
 
     "record one exact completion after claim expiry without reviving the lease or duplicating history" in {
-      (ledger: LedgerService[IO], repository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], artifactRepository: ArtifactRepository[IO],
+      (ledger: LedgerService[IO], repository: LedgerRepository[IO], usage: UsageService[IO], usageRepository: UsageRepository[IO], artifacts: ArtifactService[IO], artifactRepository: ArtifactRepository[IO],
         admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], mutations: LedgerMutation) => for {
         f <- begin(ledger, usage, artifacts, admissions)
         first <- integrations.reserve(f.collector, f.intent)
@@ -806,7 +923,7 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
         _ <- reject(expired.acquire(f.owner, ClaimId(uuid), f.claim.members, 300000), pending(f.intent.id))
         _ <- reject(expired.change(f.owner, f.intent.change), pending(f.intent.id))
         _ <- reject(expired.renew(f.owner, f.claim.fence, 300000), _.isInstanceOf[Fault.StaleFence])
-        late = new IntegrationServiceImpl[IO](repository, artifactRepository, mutations, Clock.fixed(Instant.ofEpochMilli(f.claim.expiresAt + 1), ZoneOffset.UTC))
+        late = new IntegrationServiceImpl[IO](repository, artifactRepository, usageRepository, mutations, Clock.fixed(Instant.ofEpochMilli(f.claim.expiresAt + 1), ZoneOffset.UTC))
         replay <- late.reserve(f.collector, f.intent)
         _ <- assertIO(replay == first)
         _ <- reject(late.reserve(f.collector, f.fresh), _.isInstanceOf[Fault.StaleFence])
@@ -890,7 +1007,7 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
     }
 
     "roll back failed recording and replay a lost acknowledgement without duplicate completion" in {
-      (ledger: LedgerService[IO], repository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], artifactRepository: ArtifactRepository[IO],
+      (ledger: LedgerService[IO], repository: LedgerRepository[IO], usage: UsageService[IO], usageRepository: UsageRepository[IO], artifacts: ArtifactService[IO], artifactRepository: ArtifactRepository[IO],
         admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], mutations: LedgerMutation) =>
         ZIO.foreachDiscard(List(true, false)) { abort =>
           val failing = new LedgerRepository[IO] {
@@ -904,7 +1021,7 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
               if (abort) repository.transact(project) { tx => operation(tx); throw new IOException("Recording transaction failed after applying changes") }
               else repository.transact(project)(operation).flatMap(_ => ZIO.fail(new IOException("Recording acknowledgement lost after commit")))
           }
-          val lossy = new IntegrationServiceImpl[IO](failing, artifactRepository, mutations, Clock.systemUTC())
+          val lossy = new IntegrationServiceImpl[IO](failing, artifactRepository, usageRepository, mutations, Clock.systemUTC())
           for {
             f <- begin(ledger, usage, artifacts, admissions)
             _ <- integrations.reserve(f.collector, f.intent)
