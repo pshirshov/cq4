@@ -165,13 +165,19 @@ object SupervisorProgram {
   /** The batch Governor of `cq run`: nothing tells it when work ends and it has no shell of its own, so it waits through its status calls. */
   val WaitByStatus: String = s" Waiting for $Work: call the status of that work $ByStatus with waitMillis ${DispatchWaits.MaxMillis}. " +
     "The call returns when the work ends or the wait has passed; call it again while the work continues."
-  /** Claude Code starts a turn when a background command exits; the notification carries the exit code and an output file. */
-  def waitInBackground(command: String): String = s" Waiting for $Work: do not call a status to wait. After starting such work, run exactly this command with the Bash tool " +
+  /** Claude Code starts a turn when a background command exits; the notification carries the exit code and an output file. Work that
+    * ends within seconds ends before the turn does, and a stop that finds nothing running is answered with a resume directive of the
+    * driver, so such work is awaited inside the turn. */
+  def waitInBackground(command: String): String = s" Waiting for $Work: a child is awaited in the background, anything else inside your turn. " +
+    "Do not call a status to wait for a child: after starting one, run exactly this command with the Bash tool " +
     s"as a background command (run_in_background true, timeout 7200000): `$command`. Then continue with other ready work or end your turn. " +
     "The command ends when the next unit ends, and you are notified with its exit code and an output file. " +
     s"0: a unit ended, or nothing was active; the file has one line for each ended unit and for each still active. 3: the CQ host is not running. $Unfound. Report 3, 4 and 5 to the user. " +
     "Any other exit, including the harness ending the command at its lifetime limit: run it again while work is active. " +
-    "After exit 0, read the outcome of each ended unit with one Status, IntegrationStatus or CombinationStatus call with waitMillis 0, and run the command again while other work is active."
+    "After exit 0, read the outcome of each ended unit with one Status, IntegrationStatus or CombinationStatus call with waitMillis 0, and run the command again while other work is active. " +
+    "An integration being prepared or applied, a combination and a revalidation usually end within seconds: after starting one, start no command for it and do not end your turn. " +
+    s"Call its status once (IntegrationStatus or CombinationStatus; repeat Revalidate) with waitMillis ${DispatchWaits.MaxMillis}, which returns when the work ends. " +
+    "Only if that call returns while the work continues, run the command above."
   /** Nothing wakes an idle Codex session when a background command exits (openai/codex#32188), and its shell call returns to the model
     * after at most 30 s whatever it is asked to yield (`MAX_YIELD_TIME_MS` of its unified exec), so it waits in a tool call of the host,
     * which Codex allows `tool_timeout_sec`. */

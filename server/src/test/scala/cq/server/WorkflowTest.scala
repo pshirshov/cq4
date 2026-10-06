@@ -42,14 +42,18 @@ final class WorkflowLocal extends AnyWordSpec {
   "Waiting for the host's work in the governing instructions (Behavioral Active Blackbox Atomic)" should {
     val schemas = new McpSchemas()
     val work = "Waiting for work the host carries out (a child, an integration being prepared or applied, a combination, a revalidation): "
-    "tell a Claude Code session to wait with one fixed background command at the longest background lifetime, and what each exit means" in {
+    "tell a Claude Code session to await a child with one fixed background command and anything quicker with one status call inside its turn" in {
       val text = schemas.attachedInstructions(Harness.Claude, Some(Wait))
-      assert(text.contains(work + "do not call a status to wait. After starting such work, run exactly this command with the Bash tool as a background command " +
-        "(run_in_background true, timeout 7200000): `" + Wait + "`. Then continue with other ready work or end your turn."))
+      assert(text.contains(work + "a child is awaited in the background, anything else inside your turn. Do not call a status to wait for a child: after starting one, " +
+        "run exactly this command with the Bash tool as a background command (run_in_background true, timeout 7200000): `" + Wait + "`. Then continue with other ready work or end your turn."))
       assert(text.contains("0: a unit ended, or nothing was active") && text.contains("3: the CQ host is not running") &&
         text.contains("4 or 5: the command found no single session of this checkout, and its output says why. Report 3, 4 and 5 to the user.") &&
         text.contains("Any other exit, including the harness ending the command at its lifetime limit: run it again while work is active.") &&
         text.contains("After exit 0, read the outcome of each ended unit with one Status, IntegrationStatus or CombinationStatus call with waitMillis 0, and run the command again while other work is active."))
+      // What ends within seconds would end before the session's turn does, and a stop that finds nothing running costs a resume directive.
+      assert(text.contains("An integration being prepared or applied, a combination and a revalidation usually end within seconds: after starting one, start no command for it and do not end your turn. " +
+        "Call its status once (IntegrationStatus or CombinationStatus; repeat Revalidate) with waitMillis 120000, which returns when the work ends. " +
+        "Only if that call returns while the work continues, run the command above."))
     }
     "tell a Codex session to wait with status calls of the longest wait inside its turn, because nothing wakes it, and with no shell command" in {
       val text = schemas.attachedInstructions(Harness.Codex, Some(Wait))
