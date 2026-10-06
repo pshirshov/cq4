@@ -3,7 +3,7 @@ package cq.server
 import cq.api.*
 import cq.host.{DispatchWaits, DriverAssets, HarnessUsage, HostFiles, WorkflowAssets}
 import io.circe.{Json, parser}
-import java.nio.file.Files
+import java.nio.file.{Files, Path}
 import org.scalatest.wordspec.AnyWordSpec
 import scala.jdk.CollectionConverters.*
 import scala.util.Using
@@ -20,6 +20,10 @@ final class AttachedAssetsLocal extends AnyWordSpec {
       binary.toString, profiles, HostLimits(1000, 500, 100, 1000, 65536), Nil, None, None)))
     (root, binary, settings)
   }
+
+  /** What `cq configure claude` allows for a state root `state` under `root`: the waiter, and the file tools in its sessions' workspaces. */
+  private def allowed(root: Path, binary: Path): List[String] =
+    List(s"Bash($binary wait)", s"Edit(/${root.resolve("state")}/*/workspaces/**)", s"Read(/${root.resolve("state")}/*/workspaces/**)")
 
   "Attached setup (Behavioral Active Effectual filesystem Good Communication)" should {
     "install scoped integrations without credentials and preserve unrelated Claude entries" in {
@@ -52,7 +56,9 @@ final class AttachedAssetsLocal extends AnyWordSpec {
       // A Codex session waits in a status call of the host and runs no command for it, so nothing is approved for its shell.
       assert(!Files.exists(root.resolve(".codex/rules")))
       assert(parser.parse(Files.readString(root.resolve(".claude/settings.local.json"))).fold(throw _, identity)
-        .hcursor.downField("permissions").get[List[String]]("allow") == Right(List(s"Bash($binary wait)")))
+        .hcursor.downField("permissions").get[List[String]]("allow") == Right(allowed(root, binary)))
+      // I30: nothing is configured for a Codex sandbox, whose writable roots take no pattern: see docs/interactive.md.
+      assert(!codex.contains("writable_roots") && !codex.contains("sandbox"))
       // Every harness allows a tool call the longest dispatch wait, the host's own 30 s for the request and a margin for the host to answer first.
       assert(codex.contains("\ntool_timeout_sec = 155\n") && claude.hcursor.downField("mcpServers").downField("cq").get[Long]("timeout") == Right(155000L))
       assert(DispatchWaits.AttachedHarnessSeconds * 1000 == DispatchWaits.MaxMillis + (DispatchWaits.RequestSeconds + DispatchWaits.HarnessMarginSeconds) * 1000)
@@ -93,7 +99,17 @@ final class AttachedAssetsLocal extends AnyWordSpec {
       assets.write(Harness.Claude, root, settings, binary, false, false)
       assert(approved.hcursor.get[List[String]]("enabledMcpjsonServers") == Right(List("other", "cq")))
       // The waiter is allowed as exactly one command line, with no wildcard; what the operator allowed stays, and nothing is added twice.
-      assert(approved.hcursor.downField("permissions").get[List[String]]("allow") == Right(List("Bash(ls)", s"Bash($binary wait)")))
+      assert(approved.hcursor.downField("permissions").get[List[String]]("allow") == Right("Bash(ls)" :: allowed(root, binary)))
+      // I30: the file tools are allowed in the workspaces of the sessions of this state root: the rule is rooted at the filesystem,
+      // names one directory level for the session and nothing else under the state root.
+      val state = root.resolve("state")
+      assert(assets.claudeWorkspaceRules(root, state.toString) == List(s"Edit(/$state/*/workspaces/**)", s"Read(/$state/*/workspaces/**)") &&
+        state.toString.startsWith("/") && assets.claudeWorkspaceRules(root, "state") == assets.claudeWorkspaceRules(root, state.toString))
+      // A state root reached through a symbolic link is named as written and as it resolves; one no rule can name is refused.
+      val real = Files.createDirectory(root.resolve("real-state"))
+      val link = Files.createSymbolicLink(root.resolve("linked-state"), real)
+      assert(assets.claudeWorkspaceRules(root, link.toString) == List(link, real.toRealPath()).flatMap(path => List(s"Edit(/$path/*/workspaces/**)", s"Read(/$path/*/workspaces/**)")))
+      List("state (old)", "state*", "my state", "state[1]").foreach(name => intercept[IllegalArgumentException](assets.claudeWorkspaceRules(root, root.resolve(name).toString)))
       // Claude Code records a declined server in disabledMcpjsonServers, which overrides the approval.
       Files.writeString(local, "{\"enabledMcpjsonServers\":[\"cq\"],\"disabledMcpjsonServers\":[\"other\",\"cq\"]}")
       assets.write(Harness.Claude, root, settings, binary, false, false)
@@ -141,7 +157,7 @@ final class AttachedAssetsLocal extends AnyWordSpec {
       assert(Files.readString(drive).contains("/cq:drive") && Files.readString(drive).contains("--setting-sources project,local") && Files.readString(park).contains("/cq:park"))
       assert(List(drive, park).forall(file => Files.readString(file).contains("cannot start or park a driver") && !Files.readString(file).contains("{{")))
       assert(installed == Json.obj("enabledMcpjsonServers" -> Json.arr(Json.fromString("cq")),
-        "permissions" -> Json.obj("allow" -> Json.arr(Json.fromString(s"Bash($binary wait)"))),
+        "permissions" -> Json.obj("allow" -> Json.fromValues(allowed(root, binary).map(Json.fromString))),
         "hooks" -> Json.obj("UserPromptSubmit" -> Json.arr(group(cq("UserPromptSubmit"))), "Stop" -> Json.arr(group(cq("Stop")))),
         "statusLine" -> cq("StatusLine")))
       // User-owned hook entries and events stay; an earlier CQ entry, even one for another executable, is replaced and not duplicated.
@@ -154,7 +170,7 @@ final class AttachedAssetsLocal extends AnyWordSpec {
       assets.write(Harness.Claude, root, settings, binary, false, false)
       val merged = installed
       assets.write(Harness.Claude, root, settings, binary, false, false)
-      assert(installed == merged && merged.hcursor.downField("permissions").get[List[String]]("allow") == Right(List("Bash(ls)", s"Bash($binary wait)")))
+      assert(installed == merged && merged.hcursor.downField("permissions").get[List[String]]("allow") == Right("Bash(ls)" :: allowed(root, binary)))
       assert(merged.hcursor.downField("hooks").focus.contains(Json.obj("Stop" -> Json.arr(notify, group(cq("Stop"))), "PreToolUse" -> audit,
         "UserPromptSubmit" -> Json.arr(group(handler("echo mine")), group(cq("UserPromptSubmit"))))))
       assert(merged.hcursor.downField("statusLine").focus.contains(cq("StatusLine")))

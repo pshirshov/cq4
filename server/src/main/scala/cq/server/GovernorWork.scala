@@ -129,7 +129,9 @@ final class GovernorWork(config: SupervisorConfig, authority: SupervisorAuthorit
         // The claim is renewed for as long as the workspace is open and while its content is captured and checked.
         _ <- settlement.maintain(entry, seat.work.began, withdraw(entry.ticket.attempt.id)).forkScoped
         workspace <- workspaces.prepare(config.owner, WorkspaceSpec(project, config.run.attempt.session, entry.ticket.attempt.id, config.run.repository, seat.work.base))
-        _ <- ZIO.succeed(entry.editing(DispatchProjection.workspace(workspace))) *> seat.opened.succeed(())
+        // The session is told an absolute directory, however the settings write the state root.
+        _ <- ZIO.attempt(entry.editing(WorkspaceState(workspace.admission, Some(java.nio.file.Path.of(workspace.directory).toAbsolutePath.normalize().toString)))) *>
+          seat.opened.succeed(())
         handed <- seat.handed.await
         report <- ZIO.attempt {
           entry.check()

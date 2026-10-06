@@ -13,6 +13,20 @@ final class AttachedAssets(schemas: McpSchemas, workflows: WorkflowAssets) {
   /** The Claude Code permission rule that allows the session to run `cq wait` without being asked. It is the exact command line, with
     * no wildcard: a prefix rule is a prefix match on the command string, and the session is given a command that needs no argument. */
   def claudeWaitRule(executable: Path): String = s"Bash($executable wait)"
+  /** The Claude Code permission rules that let the session's file tools read and write, without being asked, the workspaces a host of
+    * this state root opens (I30), and nothing else under it: `<stateRoot>/<session>/workspaces/`. A rule that begins with `//` is
+    * rooted at the filesystem, `*` stands for one session directory, and an `Edit` rule covers every file-writing tool. A state root
+    * that is reached through a symbolic link is named both ways, because the session is given the path as the settings write it.
+    * No rule can make such a workspace the working directory of the session's shell: see docs/interactive.md. */
+  def claudeWorkspaceRules(project: Path, stateRoot: String): List[String] = {
+    val written = project.resolve(stateRoot).toAbsolutePath.normalize()
+    val real = if (Files.isDirectory(written)) written.toRealPath() else written
+    List(written, real).distinct.flatMap { root =>
+      require(!root.toString.exists(character => character.isWhitespace || "()*?[]{}!\\".contains(character)),
+        "The state root path cannot be named in a Claude permission rule: it contains whitespace, a parenthesis or a pattern character")
+      List("Edit", "Read").map(tool => s"$tool(/$root/*/workspaces/**)")
+    }
+  }
   private def quoted(value: String): String = Json.fromString(value).noSpaces
   def write(harness: Harness, root: Path, settingsPath: Path, executable: Path, replace: Boolean, replaceStatusLine: Boolean): List[Path] = {
     if (harness == Harness.Codex) {
@@ -68,9 +82,9 @@ final class AttachedAssets(schemas: McpSchemas, workflows: WorkflowAssets) {
         require(permissions.isObject, "Claude permissions in .claude/settings.local.json must be an object")
         val allowed = permissions.hcursor.downField("allow").focus.getOrElse(Json.arr())
         require(allowed.isArray, "Claude permissions.allow in .claude/settings.local.json must be an array")
-        val rule = Json.fromString(claudeWaitRule(executable))
+        val rules = (claudeWaitRule(executable) :: claudeWorkspaceRules(project, settings.stateRoot)).map(Json.fromString)
         val permitted = settingsLocal.mapObject(_.add("permissions", permissions.mapObject(_.add("allow",
-          if (allowed.asArray.exists(_.contains(rule))) allowed else allowed.mapArray(_ :+ rule)))))
+          allowed.mapArray(present => present ++ rules.filterNot(present.contains))))))
         val driven = DriverAssets.statusLine(DriverAssets.hooks(permitted.mapObject(_.add("enabledMcpjsonServers", approved)), executable, harness, ClaudeSettings.toString),
           executable, replaceStatusLine, ClaudeSettings.toString)
         List(CommandAsset(Path.of(".mcp.json"), current.mapObject(_.add("mcpServers", servers.mapObject(_.add("cq", value)))).spaces2 + "\n"),
