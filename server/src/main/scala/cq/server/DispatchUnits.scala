@@ -244,7 +244,7 @@ final class DispatchUnits(config: SupervisorConfig, authority: SupervisorAuthori
         val origin = AttemptOrigin(unit.cohort, selection.map(_.evidence), if (first) selection.fold(() => ())(_.admit) else () => ())
         (dispatch.register(DispatchUnits.request(unit.work, route.harness), route, origin), (handle: AttemptId) => if (first) retained(unit, plan, handle))
       // No model was resolved for the unit and nothing announces it before the session hands its work back.
-      case UnitWorker.Governing(own) => (dispatch.own(template(unit.work), unit.cohort).tap(governor.assign(_, own)), (_: AttemptId) => ())
+      case UnitWorker.Governing(own) => (dispatch.own(template(unit.work), unit.cohort).tap(governor.assign(_, own, announce(unit).ignore)), (_: AttemptId) => ())
     }
     ZIO.succeed(synchronized(unit.stopping)).flatMap {
       // A unit that is being stopped starts nothing more.

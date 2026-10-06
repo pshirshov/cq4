@@ -22,7 +22,8 @@ final class GovernorWork(config: SupervisorConfig, authority: SupervisorAuthorit
   private val settlement = new AttemptSettlement(config, authority, jobs, workspaces, candidates, renewal, clock)
   private val project = config.project.project
   // `handed` is completed once: with the report of the submitted workspace, or with nothing when the attempt was stopped first.
-  private final class Seat(val work: OwnWork, val opened: Promise[Nothing, Unit], val handed: Promise[Nothing, Option[ChildReport.Work]])
+  // `stopping` runs before an attempt that the host itself stops is withdrawn.
+  private final class Seat(val work: OwnWork, val stopping: UIO[Unit], val opened: Promise[Nothing, Unit], val handed: Promise[Nothing, Option[ChildReport.Work]])
   private var seats = Map.empty[AttemptId, Seat]
   private def seat(attempt: AttemptId): Seat = synchronized(seats.getOrElse(attempt,
     throw DomainFailure(Fault.Missing("The attempt is not work of the governing session that is still open"))))
@@ -46,8 +47,10 @@ final class GovernorWork(config: SupervisorConfig, authority: SupervisorAuthorit
       ChildReport_JsonCodec.encode(baboon.runtime.shared.BaboonCodecContext.Default, ChildReport.Review(members, None))))
     val input = new InputAssembler(authority.governor, config.owner, clock, requirements.current).assemble(request)
     val previous = input.previous
-    previous.foreach(value => require(value.request.work.isInstanceOf[DispatchWork.Worker] && value.request.work != DispatchWork.Worker(WorkerMode.Probe) &&
-      value.candidate.nonEmpty, "The previous result must be an admitted worker result with a candidate"))
+    // As for a Worker: the candidate to continue from is that of a worker result, or of a review of one that asks for changes.
+    previous.foreach(value => require(value.candidate.nonEmpty && (value.request.work == DispatchWork.Reviewer(ReviewerMode.Candidate) ||
+      value.request.work.isInstanceOf[DispatchWork.Worker] && value.request.work != DispatchWork.Worker(WorkerMode.Probe)) &&
+      (review.isEmpty || value.request.work.isInstanceOf[DispatchWork.Worker]), "The previous result must be an admitted worker result with a candidate, or a review of one"))
     val validation = if (review.isEmpty) Nil else {
       val subject = request.previous.get
       val current = IntegrationValidation.effective(project, config.owner.actor.session, subject, previous.get, config.settings.checks,
@@ -70,11 +73,12 @@ final class GovernorWork(config: SupervisorConfig, authority: SupervisorAuthorit
     }
   }
 
-  /** Called once for a registered attempt of own work, before it is launched. */
-  def assign(entry: DispatchExecution, work: OwnWork): UIO[Unit] = for {
+  /** Called once for a registered attempt of own work, before it is launched. `stopping` runs when the host itself stops the
+    * attempt while its workspace is open, before the attempt goes on to its end. */
+  def assign(entry: DispatchExecution, work: OwnWork, stopping: UIO[Unit]): UIO[Unit] = for {
     opened <- Promise.make[Nothing, Unit]
     handed <- Promise.make[Nothing, Option[ChildReport.Work]]
-    _ <- ZIO.succeed(synchronized { seats = seats.updated(entry.ticket.attempt.id, new Seat(work, opened, handed)) })
+    _ <- ZIO.succeed(synchronized { seats = seats.updated(entry.ticket.attempt.id, new Seat(work, stopping, opened, handed)) })
   } yield ()
 
   /** Returns once the workspace of the attempt is open for the governing session, or the attempt has ended without one. */
@@ -127,7 +131,7 @@ final class GovernorWork(config: SupervisorConfig, authority: SupervisorAuthorit
       for {
         _ <- registered(entry, queue, seat.work)
         // The claim is renewed for as long as the workspace is open and while its content is captured and checked.
-        _ <- settlement.maintain(entry, seat.work.began, withdraw(entry.ticket.attempt.id)).forkScoped
+        _ <- settlement.maintain(entry, seat.work.began, seat.stopping *> withdraw(entry.ticket.attempt.id)).forkScoped
         workspace <- workspaces.prepare(config.owner, WorkspaceSpec(project, config.run.attempt.session, entry.ticket.attempt.id, config.run.repository, seat.work.base))
         // The session is told an absolute directory, however the settings write the state root.
         _ <- ZIO.attempt(entry.editing(WorkspaceState(workspace.admission, Some(java.nio.file.Path.of(workspace.directory).toAbsolutePath.normalize().toString)))) *>

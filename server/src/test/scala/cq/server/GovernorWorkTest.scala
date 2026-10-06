@@ -351,6 +351,10 @@ emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_toke
         _ <- assertIO(made.phase == DispatchPhase.Completed && made.next == ChildNext.Review)
         review <- f.child(DispatchWork.Reviewer(ReviewerMode.Candidate), made.result)
         _ <- assertIO(review.phase == DispatchPhase.Completed && review.next == ChildNext.ConsiderAcceptance)
+        // As a Worker's correction does, a workspace may continue from the candidate a review names.
+        continued <- f.open(review.result)
+        _ <- ZIO.attemptBlocking(assert(Files.readString(f.directory(continued).resolve("feature.txt")) == "good, by the governing session\n"))
+        _ <- f.status(DispatchCommand.Cancel(continued.attempt)) *> f.ended(continued.attempt)
         recorded <- f.integrated(review.result.get)
         task <- f.taskContent
         _ <- ZIO.attempt {

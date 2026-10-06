@@ -355,7 +355,7 @@ final class WorkflowLocal extends AnyWordSpec {
       // What a failed check means, how to correct, how to discard, and what an open workspace holds back.
       assert(yolo.contains("A failed check of your candidate means what it means for a Worker's: the status is Completed with next Revise, its blocker names the check, " +
         "the result is retained and nothing is integrated."))
-      assert(yolo.contains("To correct the candidate, call OpenWorkspace again with previous set to that result handle: the new workspace starts from the candidate as you submitted it."))
+      assert(yolo.contains("To correct the candidate, call OpenWorkspace again with previous set to that result handle, or to the handle of a review of it that requests changes: the new workspace starts from the candidate as you submitted it."))
       assert(yolo.contains("To discard a workspace, call Cancel with its attempt ID: nothing in it becomes a candidate, and the host keeps the directory as it is for the operator."))
       assert(yolo.contains("no child and no second workspace starts on them, the workflow cannot be changed, and a driver answers a stop with one resume directive and ends the drive at the next. " +
         "Submit or cancel every workspace before you end your turn."))

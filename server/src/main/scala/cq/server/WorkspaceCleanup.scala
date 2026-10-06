@@ -172,8 +172,8 @@ object WorkspaceCleanup {
 
   // Only the governing session's own work prepares a workspace without a job, so only the tickets no job names are read.
   private def own(owner: Scope, swept: SessionCleanup, jobless: Map[String, Path], workspaces: WorkspaceService[IO], expired: () => Boolean): Task[SessionCleanup] =
-    ZIO.foldLeft(jobless.toList.sortBy(_._1))(swept) { case (report, (name, child)) =>
-      val attempt = AttemptId(UUID.fromString(name))
+    // A child directory is named by its attempt; one that is not is reported by the delivery reconciliation and holds no workspace.
+    ZIO.foldLeft(jobless.toList.sortBy(_._1).flatMap((name, child) => Try(UUID.fromString(name)).toOption.map(AttemptId(_) -> child)))(swept) { case (report, (attempt, child)) =>
       def retain(reason: String): SessionCleanup = report.copy(retained = report.retained :+ RetainedWorkspace(attempt, reason))
       def quarantined(reason: String): SessionCleanup = report.copy(quarantined = report.quarantined :+ RetainedWorkspace(attempt, reason))
       if (expired()) ZIO.succeed(report)
