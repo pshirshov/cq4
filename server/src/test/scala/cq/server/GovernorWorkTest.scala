@@ -282,6 +282,9 @@ emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_toke
           // Nothing tells a waiter to wait for the session's own editing, and the open workspace keeps the workflow unsettled.
           assert(f.unitEvents(opened.attempt.value).isEmpty && f.units.unsettled == List(s"governor workspace ${opened.attempt.value} (Editing)"), f.units.unsettled.toString)
         }
+        // The item is marked as work in progress of the governing session itself for as long as the workspace is open.
+        marked <- f.usage.working(f.owner, Map(f.task -> f.owner.actor.session))
+        _ <- assertIO(marked.running.get(f.task).exists(work => work.role == Role.Governor && work.harness == Harness.Codex))
         // One work at a time on the same members (D83), whoever does it.
         second <- f.refused(DispatchCommand.OpenWorkspace(RequestId(uuid), f.members, None, f.fence))
         worker <- f.units.start(AssignedWork(RequestId(uuid), DispatchWork.Worker(WorkerMode.Implement), f.members, Nil, Nil, None, f.fence, f.limits), None).either
@@ -314,6 +317,8 @@ emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_toke
           assert(events == List("Started", "Completed") && f.units.unsettled.isEmpty, events.toString)
           assert(Files.readString(local.source.resolve("tracked.txt")) == "committed\n" && !Files.exists(local.source.resolve("feature.txt")))
         }
+        unmarked <- f.usage.working(f.owner, Map(f.task -> f.owner.actor.session))
+        _ <- assertIO(unmarked.running.isEmpty)
         reviewed <- f.selfReview(made.result.get)
         review = reviewed match { case DispatchReply.Status(value) => value; case other => fail(s"The self-review was refused: $other") }
         _ <- ZIO.attempt {

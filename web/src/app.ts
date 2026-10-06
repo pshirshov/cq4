@@ -16,7 +16,7 @@ import { icon } from './icons.js';
 import { ArchiveDialog } from './archive.js';
 import { RequirementsDialog } from './requirements.js';
 import { faultMessage } from './faults.js';
-import { attemptsTable, openAttemptNote, outcomesTable, auditTable, costsTable, phasesTable, sharedAssignmentsList, totalsTable } from './usage-view.js';
+import { attemptsTable, openAttemptNote, outcomesTable, auditTable, costsTable, phasesTable, sharedAssignmentsList, totalsTable, unmeasuredNote } from './usage-view.js';
 import { TableColumn, TableColumns } from './table-columns.js';
 import { ItemsView } from './items-view.js';
 import { Notifications } from './notifications.js';
@@ -40,8 +40,10 @@ function workLabel(work: api.ItemWork): string {
   const time = (value: bigint): string => new Date(Number(value)).toLocaleTimeString(undefined, { timeStyle: 'short' });
   const claim = `Claimed by ${work.owner.subject} (${work.owner.role}) · ${work.members} ${work.members === 1 ? 'item' : 'items'}`;
   // The host renews the lease under a running child without a refresh here, so the running state names the attempt instead of the lease.
-  return work.attempt === undefined ? `${claim} · lease until ${time(work.expiresAt)}`
-    : `${claim} · ${work.attempt.role} on ${work.attempt.harness} since ${time(work.attempt.startedAt)}`;
+  if (work.attempt === undefined) return `${claim} · lease until ${time(work.expiresAt)}`;
+  // An attempt of the Governor role on an item is the governing session's own work in a workspace of the host, or its own review.
+  const worker = work.attempt.role === api.Role.Governor ? 'the governing session itself' : `${work.attempt.role} on ${work.attempt.harness}`;
+  return `${claim} · ${worker} since ${time(work.attempt.startedAt)}`;
 }
 function workIcon(work: api.ItemWork): SVGSVGElement {
   const mark = icon(work.attempt === undefined ? 'Claimed' : 'Running'); mark.removeAttribute('aria-hidden'); mark.setAttribute('role', 'img'); mark.setAttribute('aria-label', workLabel(work));
@@ -940,7 +942,8 @@ class App {
     if (report.costs.hasMore) this.usagePanel.append(button('More costs', () => this.action(() => this.loadCosts(report.costs.after, report.cursor))));
     if (phases.phases.length > 0) this.usagePanel.append(phasesTable(phases.phases));
     if (phases.costsTruncated) this.usagePanel.append(element('p', 'Per-phase costs are truncated; the amounts shown are lower bounds. The cost breakdown lists every cost group.'));
-    this.usagePanel.append(element('p', `Shared work is counted once and is not divided among members. Incomplete meters: ${report.incompleteMeters}; attempts without measurements: ${report.attemptsWithoutMeters}.`),
+    this.usagePanel.append(element('p', `Shared work is counted once and is not divided among members. Incomplete meters: ${report.incompleteMeters}; attempts without measurements: ${report.attemptsWithoutMeters}.` +
+        (report.attemptsWithoutMeters > 0n ? ` ${unmeasuredNote}` : '')),
       element('p', `Attempt coverage: ${report.attempts.running} running; ${report.attempts.open} open; ${report.attempts.unknown} unknown outcomes; ${report.attempts.withGaps} with reported gaps.`),
       ...(report.attempts.open > 0n ? [element('p', `Open: governing attempts of attached sessions. ${openAttemptNote}`)] : []),
       button('Attempts', () => this.action(() => this.loadAttempts(undefined, undefined))), button('Usage audit', () => this.action(() => this.loadAudit(0n))));

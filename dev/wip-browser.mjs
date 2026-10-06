@@ -140,6 +140,14 @@ try {
     await host({Finish: {value: {request: id(), attempt: attempt.id, state: 'Completed', finishedAt: String(Date.now() + 1000), gaps: [], supersedes: null}}});
     await page.waitForFunction(() => document.querySelector('.items-table tbody td.item-work[data-work=running]') === null);
     assert.equal(await state('T1 · Held'), 'claimed'); assert.match(await mark('T1 · Held').getAttribute('aria-label'), / · lease until /);
+    // I30: an attempt of the Governor role on the item is the governing session's own work in a workspace of the host: the mark says so
+    // for as long as the workspace is open, and names no child.
+    const own = {...attempt, id: id(), parent: attempt.id, role: 'Governor', collector: 'CQ host; own work of the governing session, no meter', startedAt: String(Date.now())};
+    await host({Start: {value: own}});
+    await page.waitForFunction(() => document.querySelector('.items-table tbody td.item-work[data-work=running]') !== null);
+    assert.match(await mark('T1 · Held').getAttribute('aria-label'), /^Claimed by \S.* \(Human\) · 2 items · the governing session itself since \S+/);
+    await host({Finish: {value: {request: id(), attempt: own.id, state: 'Cancelled', finishedAt: String(Date.now() + 1000), gaps: [], supersedes: null}}});
+    await page.waitForFunction(() => document.querySelector('.items-table tbody td.item-work[data-work=running]') === null);
     assert.equal(navigations, loaded, 'the page must not reload');
   });
   await check('a renewal keeps the mark and a release removes it live', async () => {

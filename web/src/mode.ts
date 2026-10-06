@@ -45,8 +45,12 @@ export class ModeIndicator {
   }
   show(value: api.ProjectMode, catalog: api.HelpCatalog): void {
     const described = entry(catalog, value.mode);
-    this.generation++; this.element.textContent = `Mode: ${described.label}`; this.element.dataset.mode = value.mode;
-    this.element.title = described.hint; this.element.setAttribute('aria-label', `Process mode: ${described.label}`); this.element.hidden = false;
+    // The exemption of a YOLO project from configured checks removes the one independent gate of a self-reviewed change: it is always in view.
+    const exempt = value.mode === api.ProcessMode.Yolo && value.selfReviewWithoutChecks;
+    this.generation++; this.element.textContent = `Mode: ${described.label}${exempt ? ' · no checks required' : ''}`; this.element.dataset.mode = value.mode;
+    this.element.dataset.exempt = String(exempt);
+    this.element.title = exempt ? `${described.hint}\n\n${exemptionHint(catalog)}` : described.hint;
+    this.element.setAttribute('aria-label', `Process mode: ${described.label}${exempt ? ', self-review without checks allowed' : ''}`); this.element.hidden = false;
   }
   /** Reads the mode of `project`; no other browser's change is pushed to this page, so it is read when the project is loaded. */
   async load(project: api.ProjectId | null): Promise<void> {

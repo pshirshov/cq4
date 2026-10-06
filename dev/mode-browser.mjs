@@ -105,6 +105,10 @@ try {
         await hold(page, allow);
         await group.getByText('Allowed for this project.', {exact: true}).waitFor();
         assert.deepEqual(await stored(project), ['Yolo', String(start + 2), true]);
+        // The header says for as long as it holds that a self-reviewed integration of this project needs no check.
+        const exempted = await shown();
+        assert.deepEqual([exempted.text, exempted.mode, exempted.title, exempted.overflow], [`Mode: ${yolo.label} · no checks required`, 'Yolo', `${yolo.hint}\n\n${exemption}`, false], viewport);
+        assert.equal(await indicator.getAttribute('aria-label'), `Process mode: ${yolo.label}, self-review without checks allowed`);
         await dialog.screenshot({path: `${evidence}/mode-dialog-yolo-exempted-${viewport}.png`});
         await page.locator('header').screenshot({path: `${evidence}/mode-header-yolo-${viewport}.png`});
         // The exemption belongs to the YOLO mode: the server stores it with no other, and the dialog's change to another mode stores none.

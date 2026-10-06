@@ -6,7 +6,7 @@ import { hold, HOLD_SETTLE_MS } from './hold.mjs';
 const bundle = await build({ stdin: { contents: `export * as api from './generated/typescript/cq/api/index.js';
 export { QuestionBatch } from './web/src/questions.js'; export { itemView } from './web/src/presentation.js';
 export { ReferencePopup } from './web/src/references.js'; export { RequirementsDialog } from './web/src/requirements.js';
-export { ModeDialog } from './web/src/mode.js';`,
+export { ModeDialog, ModeIndicator } from './web/src/mode.js'; export { attemptsTable, unmeasuredNote } from './web/src/usage-view.js';`,
   resolveDir: process.cwd() }, bundle: true, format: 'iife', globalName: 'CQComponents', write: false });
 const browser = await chromium.launch({ headless: true });
 try {
@@ -129,7 +129,7 @@ try {
     // ordinary save by the hold-to-confirm control, and the exemption from configured checks is a second, separately held decision.
     const exemption = 'Fixture exemption: a change the governing session reviewed itself can be integrated although no check examined it.';
     await page.evaluate(exemption => {
-      const { api, ModeDialog } = CQComponents;
+      const { api, ModeDialog, ModeIndicator } = CQComponents;
       const project = new api.ProjectId('00000000-0000-0000-0000-000000000001');
       const prompt = new api.CatalogPrompt('fixture.md', 'Fixture instructions');
       const catalog = new api.HelpCatalog([], [], [
@@ -137,7 +137,9 @@ try {
         new api.CatalogMode(api.ProcessMode.CrossCutting, 'Cross-cutting', 'Cross-cutting hint', 'Cross-cutting description', prompt, undefined),
         new api.CatalogMode(api.ProcessMode.Yolo, 'YOLO cross-cutting', 'YOLO hint', 'YOLO description\n\n' + exemption, prompt, undefined)], 'Fixture effect.');
       const state = { value: new api.ProjectMode(project, new api.Revision(0n), api.ProcessMode.Rigorous, false, undefined), replaced: [], saved: [] };
-      const dialog = new ModeDialog({ catalog: async () => catalog, saved: (value, changed) => { state.saved.push([value.mode, changed]); }, call: async command => {
+      const indicator = new ModeIndicator({ catalog: async () => catalog, saved: () => {}, call: async () => new api.Result_Mode(state.value) }, () => {});
+      document.body.append(indicator.element);
+      const dialog = new ModeDialog({ catalog: async () => catalog, saved: (value, changed) => { state.saved.push([value.mode, changed]); indicator.show(value, catalog); }, call: async command => {
         if (command.input.action instanceof api.ModeAction_Replace) {
           state.replaced.push([command.input.action.mode, command.input.action.selfReviewWithoutChecks]);
           state.value = new api.ProjectMode(project, new api.Revision(command.input.action.expected.value + 1n), command.input.action.mode, command.input.action.selfReviewWithoutChecks, undefined);
@@ -157,6 +159,8 @@ try {
     const withdraw = group.getByRole('button', { name: 'Require a check again', exact: true });
     const radio = name => page.getByRole('radio', { name, exact: true });
     const replaced = () => page.evaluate(() => fixture.state.replaced);
+    // The header indicator as the application shows it after each save: its text, its accessible name, its tooltip and its mark.
+    const indicated = () => page.locator('button.mode-indicator').evaluate(node => [node.textContent, node.getAttribute('aria-label'), node.title, node.dataset.exempt]);
     const saves = count => page.waitForFunction(expected => fixture.state.saved.length === expected, count);
     await radio('Rigorous').waitFor();
     assert.deepEqual([await radio('Rigorous').isChecked(), await radio('YOLO cross-cutting').isDisabled(), await save.isVisible(), await confirm.isVisible(), await group.isVisible()],
@@ -176,6 +180,7 @@ try {
     await hold(page, confirm);
     await saves(1);
     assert.deepEqual(await page.evaluate(() => [fixture.state.replaced, fixture.state.saved]), [[['Yolo', false]], [['Yolo', true]]]);
+    assert.deepEqual(await indicated(), ['Mode: YOLO cross-cutting', 'Process mode: YOLO cross-cutting', 'YOLO hint', 'false']);
     // In the YOLO mode the exemption has its own hold; a click allows nothing.
     await save.waitFor();
     assert.deepEqual([await radio('YOLO cross-cutting').isChecked(), await confirm.isVisible(), await allow.isEnabled(), await allow.getAttribute('data-hold')], [true, false, true, 'idle']);
@@ -188,11 +193,17 @@ try {
     await group.getByText('Allowed for this project.', { exact: true }).waitFor();
     assert.deepEqual([await replaced(), await allow.isVisible(), await withdraw.isVisible(), await group.getAttribute('data-allowed')],
       [[['Yolo', false], ['Yolo', true]], false, true, 'true']);
+    // I30: a project that needs no check for a self-reviewed integration says so in the header for as long as that holds.
+    assert.deepEqual(await indicated(), ['Mode: YOLO cross-cutting · no checks required', 'Process mode: YOLO cross-cutting, self-review without checks allowed',
+      'YOLO hint\n\n' + exemption, 'true']);
+    assert.equal(await page.locator('button.mode-indicator').evaluate(node => getComputedStyle(node).borderTopStyle), 'dashed');
     await shot('mode-yolo-exempted');
     // A save of the YOLO mode keeps the exemption; withdrawing it is an ordinary press.
     await save.click(); await saves(3);
+    assert.equal((await indicated())[0], 'Mode: YOLO cross-cutting · no checks required');
     await withdraw.click(); await saves(4);
     await group.getByText('Not allowed for this project.', { exact: true }).waitFor();
+    assert.deepEqual(await indicated(), ['Mode: YOLO cross-cutting', 'Process mode: YOLO cross-cutting', 'YOLO hint', 'false']);
     assert.deepEqual((await replaced()).slice(2), [['Yolo', true], ['Yolo', false]]);
     // A change to another mode stores no exemption.
     await hold(page, allow); await saves(5);
@@ -200,8 +211,49 @@ try {
     assert.equal(await group.isVisible(), false);
     await save.click(); await saves(6);
     assert.deepEqual((await replaced()).slice(4), [['Yolo', true], ['Rigorous', false]]);
+    assert.deepEqual(await indicated(), ['Mode: Rigorous', 'Process mode: Rigorous', 'Rigorous hint', 'false']);
     await radio('YOLO cross-cutting').check();
     assert.deepEqual([await confirm.isVisible(), await allow.isDisabled()], [true, true]);
-    console.log('PASS: the YOLO mode is saved by holding, and its exemption from configured checks by a second hold of its own; another mode stores no exemption');
+    console.log('PASS: the YOLO mode is saved by holding, and its exemption from configured checks by a second hold of its own; another mode stores no exemption; the header shows the exemption while it holds');
+  }
+  if (process.argv.includes('--attempts')) {
+    // I30: an attempt of the Governor role under a governing attempt is the session's own work or review. It has no meter of its own,
+    // which the table says in words: a missing measurement is not zero usage.
+    await page.evaluate(() => {
+      const { api, attemptsTable } = CQComponents;
+      const project = new api.ProjectId('00000000-0000-0000-0000-000000000001');
+      const session = new api.SessionId('00000000-0000-0000-0000-00000000000a');
+      const member = new api.ItemId(project, api.Ledger.Tasks, 7n);
+      const id = n => `00000000-0000-0000-0000-0000000000${String(n).padStart(2, '0')}`;
+      const unattributed = new api.Assignment(new api.AssignmentId(id(1)), project, new Set(), api.Attribution.Unattributed, undefined, undefined);
+      const direct = n => new api.Assignment(new api.AssignmentId(id(n)), project, new Set([member]), api.Attribution.Direct, undefined, undefined);
+      const governing = new api.Attempt(new api.AttemptId(id(10)), unattributed.id, undefined, session, api.Role.Governor, api.Harness.Claude,
+        'unobserved-interactive-provider', 'unobserved-interactive-model', 'CQ attached session; outer usage unavailable', 1000n, api.UsagePhase.Govern, undefined);
+      const own = (n, phase) => new api.Attempt(new api.AttemptId(id(n)), new api.AssignmentId(id(n + 10)), governing.id, session, api.Role.Governor, api.Harness.Claude,
+        governing.provider, governing.model, 'CQ host; own work of the governing session, no meter', 2000n, phase, undefined);
+      const worker = new api.Attempt(new api.AttemptId(id(13)), new api.AssignmentId(id(23)), governing.id, session, api.Role.Worker, api.Harness.Codex,
+        'openai', 'fixture-model', 'CQ native collector 0.1.0', 3000n, api.UsagePhase.Work, api.Effort.High);
+      const gap = 'No meter: the work was done in the governing session, whose usage is that session\'s own';
+      const ended = attempt => new api.RecordedOutcome(new api.AttemptOutcome(new api.RequestId(id(40)), attempt.id, api.AttemptState.Completed, 4000n, [gap], undefined),
+        new api.Actor('CQ host collector', session, api.Role.Collector), 5000n, 1n);
+      const work = own(11, api.UsagePhase.Work); const review = own(12, api.UsagePhase.Review);
+      document.body.replaceChildren(attemptsTable([
+        new api.AttemptView(unattributed, governing, undefined, false), new api.AttemptView(direct(21), work, ended(work), true),
+        new api.AttemptView(direct(22), review, undefined, true), new api.AttemptView(direct(23), worker, undefined, true)], { scope: () => {}, outcomes: () => {} }));
+    });
+    const rows = await page.getByRole('table', { name: 'Attempts', exact: true }).locator('tbody tr').evaluateAll(found => found.map(row =>
+      Array.from(row.querySelectorAll('td'), cell => cell.textContent).slice(1, 4)).filter(cells => cells.length > 0));
+    assert.deepEqual(rows, [
+      ['Claude · Governor', 'unobserved-interactive-provider / unobserved-interactive-model', 'Open'],
+      ['Claude · Governor · own work', 'The governing session', 'Completed'],
+      ['Claude · Governor · own review', 'The governing session', 'Running'],
+      ['Codex · Worker', 'openai / fixture-model · effort high', 'Running']]);
+    const details = await page.getByRole('table', { name: 'Attempts', exact: true }).locator('tbody tr').evaluateAll(found => found.map(row =>
+      Object.fromEntries(Array.from(row.querySelectorAll('dt'), term => [term.textContent, term.nextElementSibling.textContent]))).filter(entry => 'Attempt' in entry));
+    const meter = 'None: the work was done in the governing session, whose usage is that session\'s own';
+    assert.deepEqual(details.map(entry => entry.Meter), [undefined, meter, meter, undefined]);
+    assert.equal(details[1].Gaps, 'No meter: the work was done in the governing session, whose usage is that session\'s own');
+    assert.match(await page.evaluate(() => CQComponents.unmeasuredNote), /^An attempt without a measurement counts no tokens here, which is not zero usage\./);
+    console.log('PASS: attempts of the governing session\'s own work and review are named as such, without a model of their own, and say that they have no meter');
   }
 } finally { await browser.close(); }
