@@ -442,12 +442,24 @@ emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_toke
         attempts <- f.attempts
         // The refusal registered nothing.
         _ <- assertIO(attempts.count(_.attempt.role == Role.Governor) == 1 && f.units.unsettled.isEmpty)
+        // The checks of the session's own candidate are rerun as a Worker's are; a defect of the candidate fails again and still bars the self-review.
+        rerun <- f.dispatch(DispatchCommand.Revalidate(RequestId(uuid), failed.result.get, f.fence))
+        _ <- ZIO.attempt(rerun match {
+          case DispatchReply.Revalidation(round) => assert(round.phase == RevalidationPhase.Completed && round.amendment.nonEmpty &&
+            round.validation.map(value => value.check -> value.state) == List("good" -> ValidationState.Failed), round.toString)
+          case other => fail(s"The revalidation of the session's own candidate was refused: $other")
+        })
+        still <- f.selfReview(failed.result.get)
+        _ <- assertIO(still == refused)
         opened <- f.open(failed.result)
         _ <- ZIO.attemptBlocking(assert(Files.readString(f.directory(opened).resolve("feature.txt")) == "defective\n"))
         _ <- f.write(opened, "good now\n")
         _ <- f.submit(opened)
         corrected <- f.ended(opened.attempt)
         _ <- ZIO.attempt(assert(corrected.phase == DispatchPhase.Completed && corrected.next == ChildNext.Review && corrected.counts.validationFailed == 0, corrected.toString))
+        // The corrected candidate is the later worker result for the members: the earlier one is no longer revalidated.
+        superseded <- f.refused(DispatchCommand.Revalidate(RequestId(uuid), failed.result.get, f.fence))
+        _ <- assertIO(conflict(superseded) == "Result is superseded by a later result for the same members")
         review <- f.selfReview(corrected.result.get).map { case DispatchReply.Status(value) => value; case other => fail(s"The self-review was refused: $other") }
         recorded <- f.integrated(review.result.get)
         _ <- ZIO.attemptBlocking(assert(recorded.phase == IntegrationPhase.Recorded && local.git(local.source, "show", f.target.value + ":feature.txt") == "good now", recorded.toString))
