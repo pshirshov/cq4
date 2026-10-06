@@ -3,7 +3,7 @@ package cq.server
 import baboon.runtime.shared.{BaboonCodecContext, BaboonJsonCodec}
 import cq.api.*
 import cq.core.DomainFailure
-import cq.host.{ChildContracts, DispatchProjection, HarnessInvocation, HarnessSchema, HarnessTools, McpTarget}
+import cq.host.{ChildContracts, DispatchProjection, DispatchWaits, HarnessInvocation, HarnessSchema, HarnessTools, McpTarget}
 import io.circe.{Json, JsonObject, parser}
 import java.nio.charset.StandardCharsets.UTF_8
 
@@ -180,7 +180,7 @@ final class McpSchemas {
     val waiting = (harness, wait) match {
       case (Harness.Pi, _) => SupervisorProgram.WaitForMessage
       case (Harness.Claude, Some(command)) => SupervisorProgram.waitInBackground(command)
-      case (Harness.Codex, Some(command)) => SupervisorProgram.waitInTurn(command)
+      case (Harness.Codex, Some(_)) => SupervisorProgram.WaitInTurn
       case (_, None) => throw new IllegalStateException(s"An attached $harness host has no wait command to name to its session")
     }
     val instructions = SupervisorProgram.Guidance + waiting +
@@ -200,7 +200,7 @@ final class McpSchemas {
     List(local("session", "SessionCommand", "SessionReply",
       "First call Context for project, routes, limits, governing instructions and complete argument guide. Then Workflow with a fresh id and typed scope before dispatch; token is null unless the invocation carries a CQ driver --start-token or --resume-token, which you pass unchanged. Workflow returns the workflow's instructions once: when their text is identical to one an earlier Workflow reply of this session carried, instructions is Unchanged with that activation's id, and you follow the text you hold. Instructions returns the active workflow complete, with its instruction text, operator requirements and subject: call it when you no longer hold them, for example after your context was compacted. An identical retry returns the same receipt without reactivating a superseded workflow. Context identifies the active workflow by id, request and cycle. Bind presents the token a CQ drive command printed; Driver reads this session's driver status. Neither starts nor parks a driver."),
       local("dispatch", "DispatchCommand", "DispatchReply",
-        s"Select bounded cohorts, claim one complete choice, then StartChoice by ID, harness and fence. Up to ${DispatchController.MaxActiveChildren} children with disjoint members may run at once. StartChoice returns at once. Status reads the current state or the result of an attempt and is not called to wait: the governing instructions of session Context say how this session learns that work has ended. Cancel stops a child. Status carries the child's workspace admission and retained directory, and quietMillis, the time since a running child's last output. Direct Start is unavailable. Prepare/apply reviewed integration, or DiscardIntegration a prepared one that will not be applied; Combine a NotApplied integration; IntegrationStatus and CombinationStatus read the state of those. Forward handles; full child prompts/results stay outside your context." + McpSchemas.Revalidation)) ++ tools.map(advertised)
+        s"Select bounded cohorts, claim one complete choice, then StartChoice by ID, harness and fence. Up to ${DispatchController.MaxActiveChildren} children with disjoint members may run at once. StartChoice returns at once. Status reads the current state or the result of an attempt, after waiting up to waitMillis (at most ${DispatchWaits.MaxMillis}) for the attempt to end: the governing instructions of session Context say how this session waits for work. Cancel stops a child. Status carries the child's workspace admission and retained directory, and quietMillis, the time since a running child's last output. Direct Start is unavailable. Prepare/apply reviewed integration, or DiscardIntegration a prepared one that will not be applied; Combine a NotApplied integration; IntegrationStatus and CombinationStatus read the state of those. Forward handles; full child prompts/results stay outside your context." + McpSchemas.Revalidation)) ++ tools.map(advertised)
   }
 
   private def argumentGuide(inputs: List[(String, Json)]): String = {

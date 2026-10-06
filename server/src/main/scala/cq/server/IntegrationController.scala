@@ -35,7 +35,6 @@ private[server] final class GovernedIntegrationJobs(owner: Scope, jobs: JobSuper
 
 final class IntegrationController(config: SupervisorConfig, authority: SupervisorAuthority, jobs: JobSupervisor, candidates: CandidateWorkspace,
   renewal: ClaimRenewal, clock: Clock, admission: Semaphore) {
-  private val MaxWaitMillis = 20000
   private val AcknowledgementMillis = 1000L
   private val journal = new FileIntegrationJournal(config.directory.resolve("integrations"), config.owner)
   private val execution = new GovernedIntegrationJobs(config.owner, jobs, admission)
@@ -197,7 +196,7 @@ final class IntegrationController(config: SupervisorConfig, authority: Superviso
 
   def status(id: IntegrationId, waitMillis: Int): Task[IntegrationStatus] = for {
     current <- ZIO.attempt(synchronized {
-      require(waitMillis >= 0 && waitMillis <= MaxWaitMillis, "Integration wait must be 0–20000 ms")
+      DispatchWaits.admitted(waitMillis, "Integration")
       val entry = found(id)
       (entry, entry.done)
     })

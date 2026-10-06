@@ -1,7 +1,7 @@
 package cq.server
 
 import cq.api.*
-import cq.host.{AttachedCodexUsage, CodexRollout, OwnerLiveness, PeerLimits, ServerApi, StdioPeer}
+import cq.host.{AttachedCodexUsage, CodexRollout, DispatchWaits, OwnerLiveness, PeerLimits, ServerApi, StdioPeer}
 import io.circe.{Json, parser}
 import java.io.{BufferedReader, InputStreamReader, PipedInputStream, PipedOutputStream}
 import java.nio.charset.StandardCharsets.UTF_8
@@ -46,7 +46,7 @@ final class AttachedGatewayLocal extends AnyWordSpec {
     private val output = new PipedOutputStream(response)
     private val lines = new BufferedReader(new InputStreamReader(response, UTF_8))
     val peer = new StdioPeer(input, output, new OwnerLiveness { override def alive: Boolean = true },
-      PeerLimits(LongInterval, LongInterval, LongInterval, LongInterval, frameBytes, 8), () => ())
+      PeerLimits(LongInterval, LongInterval, LongInterval, frameBytes, 8), () => ())
     private var sequence = 0
     def run[A](task: Task[A]): A = Unsafe.unsafe { implicit unsafe => Runtime.default.unsafe.run(task).getOrThrowFiberFailure() }
     /** What the host loop does with one request: handle it, send the answer, and return the frame the owner received. */
@@ -71,6 +71,28 @@ final class AttachedGatewayLocal extends AnyWordSpec {
     val structured = result.hcursor.downField("structuredContent").focus.get
     assert(result.hcursor.downField("content").downArray.get[String]("text") == Right(structured.noSpaces))
     structured.hcursor.downField("Failed").downField("fault").focus.get
+  }
+
+  "Attached request deadlines (Behavioral Active Blackbox Atomic)" should {
+    def call(name: String, arguments: String): Json = Json.obj("jsonrpc" -> Json.fromString("2.0"), "id" -> Json.fromInt(1), "method" -> Json.fromString("tools/call"),
+      "params" -> Json.obj("name" -> Json.fromString(name), "arguments" -> parser.parse(arguments).fold(throw _, identity)))
+    val id = """{"value":"00000000-0000-4000-8000-000000000009"}"""
+    val short = Duration.ofSeconds(DispatchWaits.RequestSeconds)
+    "allow a dispatch command its wait on top of the deadline that every request without a wait keeps" in {
+      assert(DispatchWaits.MaxMillis == 120000 && short == Duration.ofSeconds(30))
+      for (command <- List(s"""{"Status":{"attempt":$id,"waitMillis":120000}}""", s"""{"IntegrationStatus":{"id":$id,"waitMillis":120000}}""",
+        s"""{"CombinationStatus":{"id":$id,"waitMillis":120000}}""", s"""{"Revalidate":{"id":$id,"result":$id,"fence":{"claim":$id,"generation":"1"}}}"""))
+        assert(AttachedGateway.deadline(call("dispatch", command)) == Duration.ofSeconds(150), command)
+      assert(AttachedGateway.deadline(call("dispatch", s"""{"Status":{"attempt":$id,"waitMillis":45000}}""")) == Duration.ofSeconds(75))
+    }
+    "keep the short deadline for a request that does not wait, that the host refuses or that is no dispatch command" in {
+      for (command <- List(s"""{"Status":{"attempt":$id,"waitMillis":0}}""", s"""{"Status":{"attempt":$id,"waitMillis":120001}}""",
+        s"""{"Status":{"attempt":$id,"waitMillis":-1}}""", s"""{"Cancel":{"attempt":$id}}""", s"""{"Integrate":{"id":$id}}""", """{"Status":"{}"}"""))
+        assert(AttachedGateway.deadline(call("dispatch", command)) == short, command)
+      // A wait is honoured only where the host waits: the same field in another tool's arguments changes nothing.
+      assert(AttachedGateway.deadline(call("session", s"""{"Status":{"attempt":$id,"waitMillis":120000}}""")) == short)
+      assert(AttachedGateway.deadline(Json.obj("jsonrpc" -> Json.fromString("2.0"), "id" -> Json.fromInt(1), "method" -> Json.fromString("ping"))) == short)
+    }
   }
 
   "Attached gateway (Behavioral Active Blackbox Group)" should {

@@ -73,6 +73,11 @@ final class HarnessDoctor(assets: AttachedAssets, reader: CommandAssetReader) {
         check(asset.path.toString, current, "Package-generated content must match; unrelated JSON entries and TOML tables are preserved; symlinks are accepted")
       }
     }
+    // A trust check without its input fails like one whose input holds no approval; the detail tells the two apart.
+    def absent(options: (String, Option[Path])*): String = options.collect { case (name, None) => name } match {
+      case Nil => ""
+      case names => names.mkString("; not given: ", ", ", "")
+    }
     val trust = harness match {
       case Harness.Claude =>
         val accepted = Try {
@@ -81,7 +86,7 @@ final class HarnessDoctor(assets: AttachedAssets, reader: CommandAssetReader) {
           global.hcursor.downField("projects").downField(directory.toString).get[Boolean]("hasTrustDialogAccepted").contains(true) &&
             !global.hcursor.get[Boolean]("disableAllHooks").contains(true) && !local.hcursor.get[Boolean]("disableAllHooks").contains(true)
         }.getOrElse(false)
-        check("Hook trust", accepted, "Claude project trust must be accepted in --harness-config; hooks must not be disabled")
+        check("Hook trust", accepted, "Claude project trust must be accepted in --harness-config; hooks must not be disabled" + absent("--harness-config" -> harnessConfig))
       case Harness.Codex =>
         val accepted = Try {
           val config = toml(text(harnessConfig.getOrElse(throw new IllegalArgumentException("Codex trust configuration required"))))
@@ -107,7 +112,8 @@ final class HarnessDoctor(assets: AttachedAssets, reader: CommandAssetReader) {
               }
             }
         }.getOrElse(false)
-        check("Hook trust", accepted, "Current assets must match a same-version Codex hooks/list report and persisted project/hook approvals; record a fresh report with cq-codex-hook-report")
+        check("Hook trust", accepted, "Current assets must match a same-version Codex hooks/list report (--trust-report) and persisted project/hook approvals (--harness-config); " +
+          "record a fresh report with cq-codex-hook-report (in an archive: python3 examples/codex-hook-report.py)" + absent("--harness-config" -> harnessConfig, "--trust-report" -> trustReport))
       case Harness.Pi =>
         val accepted = Try {
           val raw = text(harnessConfig.getOrElse(throw new IllegalArgumentException("Pi trust configuration required")))
@@ -116,7 +122,8 @@ final class HarnessDoctor(assets: AttachedAssets, reader: CommandAssetReader) {
           Iterator.iterate(directory.toRealPath())(_.getParent).takeWhile(_ != null)
             .flatMap(path => entries(path.toString).flatMap(_.asBoolean)).take(1).toList == List(true)
         }.getOrElse(false)
-        check("Hook trust", accepted, "Pi project extensions require persisted trust in --harness-config (agent trust.json); the nearest canonical folder decision applies")
+        check("Hook trust", accepted, "Pi project extensions require persisted trust in --harness-config (agent trust.json); the nearest canonical folder decision applies; " +
+          "a launch with --approve saves none; /trust in Pi saves one" + absent("--harness-config" -> harnessConfig))
     }
     InstallationReport(harness.toString.toLowerCase, routeCheck :: versionCheck :: assetChecks ::: List(trust))
   }

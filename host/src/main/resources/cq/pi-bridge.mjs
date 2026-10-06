@@ -4,7 +4,21 @@ const MAX_CONFIG_BYTES = 262144;
 const MAX_MESSAGE_BYTES = 2097152;
 const MAX_TOOLS = 10;
 const REQUEST_MILLIS = 30000;
+// The longest wait a dispatch command may ask the host for (the host's DispatchWaits.MaxMillis).
+const MAX_WAIT_MILLIS = 120000;
 const PROTOCOL = "2025-03-26";
+
+// A dispatch command that waits for work is allowed that wait on top of the deadline every other request keeps; Revalidate waits
+// for its round as long as a status call may. A wait the host refuses is answered at once and gets no allowance.
+function waitMillis(endpoint, tool, parameters) {
+  if (endpoint !== "cq_host" || tool !== "dispatch" || parameters === null || typeof parameters !== "object") return 0;
+  const commands = Object.entries(parameters);
+  if (commands.length !== 1) return 0;
+  const [command, body] = commands[0];
+  if (command === "Revalidate") return MAX_WAIT_MILLIS;
+  const wait = body === null || typeof body !== "object" ? undefined : body.waitMillis;
+  return Number.isInteger(wait) && wait >= 0 && wait <= MAX_WAIT_MILLIS ? wait : 0;
+}
 
 export default async function (pi) {
   const file = await open(new URL("./pi-mcp.json", import.meta.url), "r");
@@ -27,11 +41,11 @@ export default async function (pi) {
   const names = new Set();
   let sequence = 0;
 
-  async function rpc(endpoint, method, params, signal) {
+  async function rpc(endpoint, method, params, signal, millis) {
     const id = ++sequence;
     const body = JSON.stringify({ jsonrpc: "2.0", id, method, params });
     if (Buffer.byteLength(body, "utf8") > MAX_MESSAGE_BYTES) throw new Error("CQ request exceeds its byte bound");
-    const timeout = AbortSignal.timeout(REQUEST_MILLIS);
+    const timeout = AbortSignal.timeout(millis);
     const bounded = signal === undefined ? timeout : AbortSignal.any([timeout, signal]);
     const response = await fetch(endpoint.url, {
       method: "POST", redirect: "error", signal: bounded,
@@ -91,10 +105,10 @@ export default async function (pi) {
     names.add(endpoint.name);
     const handshake = await rpc(endpoint, "initialize", {
       protocolVersion: PROTOCOL, capabilities: {}, clientInfo: { name: "cq-pi", version: "0.1.0" },
-    }, undefined);
+    }, undefined, REQUEST_MILLIS);
     if (handshake.protocolVersion !== PROTOCOL) throw new Error("CQ Pi MCP protocol mismatch");
     await initialized(endpoint);
-    const listed = await rpc(endpoint, "tools/list", {}, undefined);
+    const listed = await rpc(endpoint, "tools/list", {}, undefined, REQUEST_MILLIS);
     if (!Array.isArray(listed.tools) || listed.nextCursor !== undefined || listed.tools.length > MAX_TOOLS)
       throw new Error("CQ Pi requires a complete bounded tool inventory");
     for (const name of endpoint.tools) {
@@ -107,7 +121,7 @@ export default async function (pi) {
         name: endpoint.name + "_" + name, label: "CQ " + name, description: tool.description,
         parameters: tool.inputSchema,
         async execute(_callId, parameters, signal, _onUpdate, _context) {
-          const result = await rpc(endpoint, "tools/call", { name, arguments: parameters }, signal);
+          const result = await rpc(endpoint, "tools/call", { name, arguments: parameters }, signal, REQUEST_MILLIS + waitMillis(endpoint.name, name, parameters));
           if (!Array.isArray(result.content) || result.content.length > 16 ||
               !result.content.every(part => part.type === "text" && typeof part.text === "string"))
             throw new Error("CQ returned unsupported tool content");

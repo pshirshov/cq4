@@ -16,7 +16,6 @@ private[server] final class CombinationExecution(val ticket: CombinationTicket, 
 }
 
 final class CombinationController(config: SupervisorConfig, authority: SupervisorAuthority, candidates: CandidateWorkspace, clock: Clock) {
-  private val MaxWaitMillis = 20000
   private val AcknowledgementMillis = 1000L
   private var entries = Map.empty[RequestId, CombinationExecution]
   private var closing = false
@@ -97,7 +96,7 @@ final class CombinationController(config: SupervisorConfig, authority: Superviso
 
   def status(id: RequestId, waitMillis: Int): Task[CombinationStatus] = for {
     current <- ZIO.attempt(synchronized {
-      require(waitMillis >= 0 && waitMillis <= MaxWaitMillis, "Combination wait must be 0–20000 ms")
+      DispatchWaits.admitted(waitMillis, "Combination")
       val entry = found(id)
       (entry, entry.done)
     })

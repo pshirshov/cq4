@@ -5,7 +5,7 @@ import com.comcast.ip4s.{Host, Port}
 import cq.api.*
 import cq.core.JsonRoundtrip
 import cq.core.DomainFailure
-import cq.host.{ChildContracts, DispatchProjection, WorkflowExecution}
+import cq.host.{ChildContracts, DispatchProjection, DispatchWaits, WorkflowExecution}
 import distage.Lifecycle
 import io.circe.{Json, parser}
 import org.http4s.*
@@ -34,7 +34,7 @@ final class LocalControl(dispatch: DispatchController, cohorts: CohortController
     "name" -> Json.fromString(name), "description" -> Json.fromString(description), "inputSchema" -> input, "outputSchema" -> schemas.schema(output),
     "annotations" -> Json.obj("readOnlyHint" -> Json.fromBoolean(readOnly), "openWorldHint" -> Json.False))
   private[server] def advertised(capability: LocalCapability): Json = if (capability.role == Role.Governor)
-    tool("dispatch", schemas.localInput("DispatchCommand"), "DispatchReply", "Select bounded cohorts, claim one complete choice, then StartChoice by ID, harness and fence. Workflow runs require choices; direct Start supports explicitly assigned non-workflow runs. Status reads the state or the result of an attempt and, with waitMillis up to 20000, first waits for the attempt to end; Cancel stops a child. Prepare/apply reviewed integration, or DiscardIntegration a prepared one that will not be applied; Combine a NotApplied integration; IntegrationStatus and CombinationStatus read and wait the same way. Forward handles directly; full prompts/results stay outside your context." + McpSchemas.Revalidation, false)
+    tool("dispatch", schemas.localInput("DispatchCommand"), "DispatchReply", s"Select bounded cohorts, claim one complete choice, then StartChoice by ID, harness and fence. Workflow runs require choices; direct Start supports explicitly assigned non-workflow runs. Status reads the state or the result of an attempt and, with waitMillis up to ${DispatchWaits.MaxMillis}, first waits for the attempt to end; Cancel stops a child. Prepare/apply reviewed integration, or DiscardIntegration a prepared one that will not be applied; Combine a NotApplied integration; IntegrationStatus and CombinationStatus read and wait the same way. Forward handles directly; full prompts/results stay outside your context." + McpSchemas.Revalidation, false)
   else tool("workspace", schemas.workspace(capability.role), "WorkspaceReply", "List or read bounded pages in your assigned workspace. A prepared resolver may read MergeReport. A candidate reviewer may request a configured Check by name and poll the same operation; wait for Completed evidence before returning. Relative paths only; Git metadata and symlink traversal are denied.", capability.role != Role.Reviewer)
   /** `input` is the tool's input schema, which is assembled only to describe a decode fault. */
   private def decode[A](name: String, input: => Json, codec: BaboonJsonCodec[A], json: Json): Task[A] = ZIO.attempt {

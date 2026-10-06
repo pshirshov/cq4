@@ -149,6 +149,15 @@ project or parent-folder boolean decision applies; a child refusal overrides a
 parent approval, and null entries are skipped. The doctor requires persisted
 approval, even if an individual invocation uses `--approve` or global automatic
 trust. It neither writes approvals nor acquires Pi's writable trust-store lock.
+`--approve` decides for one Pi process and saves nothing, so a project that is
+only launched that way, as [interactive.md](interactive.md) launches it, keeps
+`Hook trust` Failed. Type `/trust` in Pi once: it saves the decision in
+`trust.json` of the agent directory (`~/.pi/agent/trust.json` by default). Then
+pass that file.
+
+Without `--harness-config`, and for Codex without `--trust-report`, `Hook trust`
+is Failed whatever the harness has approved; the detail of the check then ends
+with `not given:` and the missing options.
 
 Codex requires project trust and approval of
 the **current hook hashes**, as described in [official OpenAI documentation](https://learn.chatgpt.com/docs/hooks).
@@ -163,8 +172,10 @@ cq-codex-hook-report --executable /absolute/codex --version 0.159.2 \
   --project /absolute/consumer --output /absolute/private/codex-hook-report.json
 ```
 
-The Nix package provides that helper. An archive also contains
-`examples/codex-hook-report.py`, runnable with Python 3. It uses a private
+The Nix package provides that helper. An archive has only `cq` and
+`cq-guardian` in `bin/`; it contains the same helper as
+`examples/codex-hook-report.py`, run as `python3 examples/codex-hook-report.py`
+with the same options. It uses a private
 temporary Codex runtime without loading authentication, queries metadata without
 running hooks, and writes only the requested inspection report. It does not
 approve hooks. Review/approve the installed hooks through Codex `/hooks`.

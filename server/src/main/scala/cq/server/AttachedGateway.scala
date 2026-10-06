@@ -3,7 +3,7 @@ package cq.server
 import baboon.runtime.shared.BaboonCodecContext
 import cq.api.*
 import cq.core.{DomainFailure, JsonRoundtrip}
-import cq.host.{AttachedCodexUsage, AttachedUsage, DispatchProjection, OperatorRequirements, StdioPeer}
+import cq.host.{AttachedCodexUsage, AttachedUsage, DispatchProjection, DispatchWaits, OperatorRequirements, StdioPeer}
 import io.circe.Json
 import zio.{Task, ZIO}
 
@@ -11,6 +11,13 @@ object AttachedGateway {
   val FrameBytes: Int = 2 * 1024 * 1024
   /** The text block of a result whose payload is delivered as structured content alone. */
   val StructuredOnly: String = "The result is in structuredContent."
+  /** The deadline of `request`: that of a request that does not wait, plus the wait a dispatch command asks for. */
+  def deadline(request: Json): java.time.Duration = {
+    val params = request.hcursor.downField("params")
+    val command = if (request.hcursor.get[String]("method") != Right("tools/call") || params.get[String]("name") != Right("dispatch")) None
+      else params.get[Json]("arguments").toOption.flatMap(DispatchCommand_JsonCodec.decode(BaboonCodecContext.Default, _).toOption)
+    DispatchWaits.deadline(command.fold(0)(DispatchWaits.millis))
+  }
 }
 
 final class AttachedGateway(config: SupervisorConfig, authority: SupervisorAuthority, schemas: McpSchemas,

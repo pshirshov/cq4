@@ -198,11 +198,14 @@ harness checks settings, installed version, integrations, commands and trust:
   --readonly-home DIR  Existing immutable empty directory for public version probes
   --harness-config FILE  Claude .claude.json, Codex config.toml or Pi agent trust.json
   --trust-report FILE  Codex hook report recorded by cq-codex-hook-report
+                       (in an archive: python3 examples/codex-hook-report.py)
 
 Record Codex hook metadata separately after installing assets. Doctor binds
 the report to current hook bytes, declared version and persisted approvals;
 changed assets require a fresh report. Pi requires persisted project trust;
 the nearest canonical project or parent-folder decision in trust.json applies.
+A Pi launch with --approve saves no decision; /trust in Pi saves one.
+Without --harness-config (and --trust-report for Codex) Hook trust is Failed.
 File contents and probe output are withheld. Declarative symlinks are accepted.
 Any Failed or Unknown check exits 1 after the report; --json emits one value.
 """

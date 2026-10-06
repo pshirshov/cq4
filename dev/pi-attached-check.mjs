@@ -23,7 +23,8 @@ lines.on('line', line => {
   if (value.method === 'initialize') { send({id:value.id,result:{protocolVersion:'2025-03-26'}}); send({id:'owner-ping',method:'ping'}); }
   else if (value.method === 'tools/list') send({id:value.id,result:{tools:config.tools}});
   else if (value.method === 'tools/call') {
-    if (!value.params.arguments.hold) send({id:value.id,result:{isError:false,content:[{type:'text',text:'bounded reply'}]}});
+    // A dispatch reply is one JSON value, as the host sends it; this one names no unit the host works on.
+    if (!value.params.arguments.hold) send({id:value.id,result:{isError:false,content:[{type:'text',text:value.params.name === 'dispatch' ? '{"Acknowledged":{}}' : 'bounded reply'}]}});
   }
   else if (value.method === 'cq/piUsage') send({id:value.id,result:{}});
   else if (value.method === 'cq/session') send({id:value.id,result:{directory:'/fixture/session'}});
@@ -32,6 +33,21 @@ lines.on('close', () => writeFileSync(new URL('./observed.json', import.meta.url
 `);
 await writeFile(join(root, "cq-host.json"), JSON.stringify({ command: process.execPath, args: [fixture], directory: root, tools }));
 const { default: load } = await import(pathToFileURL(extension));
+// The deadlines the extension arms, as it asks the runtime for them.
+const armed = [];
+const arm = globalThis.setTimeout;
+globalThis.setTimeout = (callback, millis, ...rest) => {
+  // A timer without a delay fires at once: a request armed that way fails its connection as soon as the reply is late by a tick.
+  assert.ok(Number.isInteger(millis) && millis > 0, "a timer needs its delay");
+  armed.push(millis);
+  return arm(callback, millis, ...rest);
+};
+async function deadline(tool, parameters) {
+  armed.length = 0;
+  await pi.registered.get("cq_" + tool).execute("deadline", parameters, undefined);
+  assert.equal(armed.length, 1, "one deadline per request");
+  return armed[0];
+}
 function runtime() {
   const handlers = new Map();
   const registered = new Map();
@@ -45,6 +61,19 @@ assert.equal(pi.registered.size, 9);
 await pi.handlers.get("session_start")(undefined, idle);
 const response = await pi.registered.get("cq_session").execute("first", {}, undefined);
 assert.deepEqual(response.content, [{ type: "text", text: "bounded reply" }]);
+// A request that does not wait keeps the short deadline; a dispatch command that waits is allowed its wait on top of it.
+const attempt = { value: "00000000-0000-4000-8000-000000000001" };
+assert.equal(await deadline("session", { Context: {} }), 35000);
+assert.equal(await deadline("dispatch", { Cancel: { attempt } }), 35000);
+assert.equal(await deadline("dispatch", { Status: { attempt, waitMillis: 0 } }), 35000);
+assert.equal(await deadline("dispatch", { Status: { attempt, waitMillis: 120000 } }), 155000);
+assert.equal(await deadline("dispatch", { IntegrationStatus: { id: attempt, waitMillis: 60000 } }), 95000);
+assert.equal(await deadline("dispatch", { CombinationStatus: { id: attempt, waitMillis: 120000 } }), 155000);
+assert.equal(await deadline("dispatch", { Revalidate: { id: attempt, result: attempt, fence: {} } }), 155000);
+// A wait the host refuses is answered at once, and the same field of another tool is no wait.
+assert.equal(await deadline("dispatch", { Status: { attempt, waitMillis: 120001 } }), 35000);
+assert.equal(await deadline("dispatch", { Status: { attempt, waitMillis: "120000" } }), 35000);
+assert.equal(await deadline("session", { Status: { attempt, waitMillis: 120000 } }), 35000);
 pi.handlers.get("turn_start")();
 await pi.handlers.get("message_end")({ message: { role: "assistant", provider: "provider", model: "model", timestamp: 1000, stopReason: "stop",
   content: [{ type: "text", text: "PRIVATE_ASSISTANT_TEXT" }], usage: { input: 10, output: 3, cacheRead: 2, cacheWrite: 0, totalTokens: 15, cost: { total: 0.001 } } } },
@@ -79,4 +108,4 @@ const request = interrupted.registered.get("cq_session").execute("aborted", { ho
 controller.abort();
 await assert.rejects(() => request, /interrupted/);
 await interrupted.handlers.get("session_shutdown")();
-console.log(JSON.stringify({ stdio: "passed", heartbeat: "passed", usageMetadataOnly: "passed", shutdown: "passed", restart: "passed", abort: "passed" }));
+console.log(JSON.stringify({ stdio: "passed", heartbeat: "passed", usageMetadataOnly: "passed", shutdown: "passed", restart: "passed", abort: "passed", deadlines: "passed" }));
