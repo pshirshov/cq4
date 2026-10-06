@@ -303,6 +303,8 @@ root data ProjectPage { projects: lst[Project] after: opt[ProjectId] hasMore: bi
 root data ProjectConfig { project: ProjectId endpoint: str name: str }
 root adt ProjectSetting {
   data Requirements { text: str }
+  // The process mode of the project. `selfReviewWithoutChecks` lets a self-reviewed integration proceed in a project that configures no check.
+  data Mode { value: ProcessMode selfReviewWithoutChecks: bit }
 }
 root data RequirementsChange { actor: Actor at: i64 }
 root data ProjectRequirements { project: ProjectId revision: Revision text: str change: opt[RequirementsChange] }
@@ -311,6 +313,16 @@ root adt RequirementsAction {
   data Replace { expected: Revision text: str }
 }
 root data RequirementsInput { project: ProjectId action: RequirementsAction }
+// How strictly a project's work follows the process: the prescribed order with a Planner and plan review, the same safeguards with the
+// Governor planning itself, or additionally the Governor implementing and reviewing itself.
+enum ProcessMode { Rigorous CrossCutting Yolo }
+root data ModeChange { actor: Actor at: i64 }
+root data ProjectMode { project: ProjectId revision: Revision mode: ProcessMode selfReviewWithoutChecks: bit change: opt[ModeChange] }
+root adt ModeAction {
+  data Read {}
+  data Replace { expected: Revision mode: ProcessMode selfReviewWithoutChecks: bit }
+}
+root data ModeInput { project: ProjectId action: ModeAction }
 root data SearchInput { project: ProjectId query: str after: opt[ItemId] snapshot: opt[ChangeCursor] limit: i32 }
 enum ItemOrderField { Id Type Title Status Severity Modified }
 enum SortDirection { Ascending Descending }
@@ -500,6 +512,7 @@ root adt Command {
   data Initialize { config: ProjectConfig }
   data RenameProject { project: ProjectId expected: Revision name: str }
   data Requirements { input: RequirementsInput }
+  data Mode { input: ModeInput }
   data Search { input: SearchInput }
   data Graph { input: GraphInput }
   data Workset { input: WorksetInput }
@@ -532,6 +545,7 @@ root adt Result {
   data Projects { page: ProjectPage }
   data Initialized { project: Project }
   data Requirements { value: ProjectRequirements }
+  data Mode { value: ProjectMode }
   data Found { page: ItemPage }
   data Detail { view: ItemView }
   data History { page: HistoryPage }

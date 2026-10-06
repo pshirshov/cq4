@@ -189,6 +189,57 @@ final class ProjectArchivesPostgres extends SpecZIO with AssertZIO {
       } yield ()
     }
 
+    "I30: round-trip the project's process mode beside its standing requirements, and refuse a mode the write path refuses" in {
+      (service: LedgerService[IO], database: LedgerDatabase, config: DatabaseConfig, archives: ProjectArchives) =>
+      val separator = if (config.url.contains("?")) "&" else "?"
+      def fresh: IO[Throwable, LedgerDatabase] = {
+        val schema = "cq_restore_" + UUID.randomUUID().toString.replace("-", "")
+        val target = new LedgerDatabase(config.copy(url = config.url + separator + "currentSchema=" + schema))
+        ZIO.attemptBlocking(Using.resource(DriverManager.getConnection(config.url, config.user, config.password)) { connection =>
+          Using.resource(connection.createStatement())(_.execute(s"CREATE SCHEMA $schema")); ()
+        }) *> target.initialize.as(target)
+      }
+      // A hand-edited archive is reproduced by editing the stored row before the backup: backup copies the table as it is.
+      def archived(body: Option[ProjectSetting]): IO[Throwable, (Scope, ProjectMode, Either[Throwable, BackupManifest], LedgerDatabase)] = {
+        val operator = Scope(ProjectId(UUID.randomUUID()), Actor("operator", SessionId(UUID.randomUUID()), Role.Human))
+        for {
+          _ <- service.initialize(operator, "archived mode")
+          _ <- service.replaceRequirements(operator, Revision(0), "Every change carries a focused test.")
+          written <- service.replaceMode(operator, Revision(0), ProjectSetting.Mode(ProcessMode.CrossCutting, false))
+          _ <- ZIO.foreachDiscard(body) { value =>
+            database.transaction { connection =>
+              new Jdbc(connection).execute("UPDATE cq_project_settings SET body = ?::jsonb WHERE project_id = ? AND kind = 'Mode'") { s =>
+                s.setString(1, Wire.encode(ProjectSetting_JsonCodec, value)); s.setObject(2, operator.project.value)
+              }
+            }.flatMap(edited => assertIO(edited == 1))
+          }
+          file <- ZIO.attempt(Files.createTempFile("cq-archive-", ".zip"))
+          manifest <- archives.backup(operator.project, file)
+          _ <- assertIO(manifest.entries.last.table == BackupTable.Settings && manifest.entries.last.rows == 2)
+          target <- fresh
+          restored <- new PostgresProjectArchives(target, Clock.systemUTC()).restore(file).either
+          _ <- ZIO.attempt(Files.deleteIfExists(file))
+        } yield (operator, written, restored, target)
+      }
+      for {
+        kept <- archived(None)
+        (operator, written, restored, target) = kept
+        _ <- assertIO(restored.isRight)
+        copy <- new PostgresLedgerRepository(target).transact(operator.project)(tx => ProjectSettingKind.values.toList.map(tx.setting))
+        _ <- assertIO(copy(1).contains(StoredSetting(Revision(1), ProjectSetting.Mode(ProcessMode.CrossCutting, false), operator.actor, written.change.get.at)) &&
+          copy(0).exists(_.value == ProjectSetting.Requirements("Every change carries a focused test.")))
+        refused <- ZIO.foreach(List[ProjectSetting](ProjectSetting.Mode(ProcessMode.Yolo, false), ProjectSetting.Mode(ProcessMode.CrossCutting, true),
+          ProjectSetting.Requirements("A requirements document in the mode row")))(body => archived(Some(body)))
+        _ <- ZIO.foreachDiscard(refused) { case (scope, _, outcome, schema) =>
+          for {
+            _ <- ZIO.attempt(assert(outcome.left.exists { case DomainFailure(_: Fault.Invalid) => true; case _ => false }, outcome.map(_.project).toString))
+            projects <- new PostgresLedgerRepository(schema).projects(None, 200)
+            _ <- assertIO(!projects.projects.exists(_.id == scope.project))
+          } yield ()
+        }
+      } yield ()
+    }
+
     "Q32: refuse an archive whose settings row breaks the bounds of the write path or misstates its kind" in {
       (service: LedgerService[IO], database: LedgerDatabase, config: DatabaseConfig, archives: ProjectArchives) =>
       val schema = "cq_restore_" + UUID.randomUUID().toString.replace("-", "")
