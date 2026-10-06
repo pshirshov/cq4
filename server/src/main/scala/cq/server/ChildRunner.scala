@@ -4,54 +4,15 @@ import cq.api.*
 import cq.core.{DomainFailure, WorkspaceService}
 import cq.host.*
 import java.nio.file.{Files, Path}
-import java.time.{Clock, Duration}
-import scala.util.{Try, Using}
+import java.time.Clock
+import scala.util.Using
 import zio.{IO, Ref, Task, ZIO}
 
 final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority, registry: HarnessRegistry, jobs: JobSupervisor,
   workspaces: WorkspaceService[IO], agents: AgentCatalog, output: HarnessOutput,
   candidates: CandidateWorkspace, reader: WorkspaceReader, access: LocalAccess, requirements: OperatorRequirements, renewal: ClaimRenewal, clock: Clock) {
-  private val MaxGaps = 32
-  private val ClaimMillis = Duration.ofMinutes(3).toMillis
-  private val partials = new PartialWorkCapture(config)
-  private val validation = new HostValidation(config)
-  /** `unrun` names the checks the host could not start; the result is published with them Unknown. */
-  private final case class Trace(native: Option[JobRecord], extra: List[ArtifactUpload], spans: List[PhaseSpan], uncertain: Boolean, unrun: List[String])
+  private val settlement = new AttemptSettlement(config, authority, jobs, workspaces, candidates, renewal, clock)
   private def directory(attempt: AttemptId): Path = config.directory.resolve("payload").resolve(attempt.value.toString)
-  private def transcript(attempt: AttemptId, name: String, bound: Int): Array[Byte] = NativeTranscript.retained(directory(attempt).resolve(name), bound)
-  private def collect(ticket: DispatchTicket, collectedAt: Long): CollectedUsage = HarnessUsage.launchable(ticket.profile).fold(HarnessUsage.Unlaunched) { setting =>
-    Using.resource(NativeTranscript.stream(directory(ticket.attempt.id).resolve("stdout")))(new HarnessUsage().collect(_, UsageCollectionRequest(ticket.attempt.id,
-      ticket.attempt.harness, setting.version, UsageOrigin.Fresh, collectedAt, NativeArtifacts.id(ticket.attempt.id, "stdout"))))
-  }
-  /** A failed removal leaves the record open; the next host startup retries it and reports the outcome in its cleanup receipt. */
-  private def release(attempt: AttemptId): Task[Option[WorkspaceRecord]] = jobs.release(config.owner, attempt)
-  private def claim(entry: DispatchExecution, revisions: Boolean): Unit = {
-    val request = entry.ticket.request
-    authority.governor.call(Command.ClaimWork(ClaimInput(config.project.project, ClaimAction.Renew(request.fence, ClaimMillis)))) match {
-      case Result.Claimed(value) => require(value.owner == config.owner.actor && value.members == request.members.map(_.id).toSet &&
-        value.fence == request.fence && !value.released && value.expiresAt > clock.millis(), "Dispatch claim no longer owns its assignment")
-      case Result.Failed(fault) => throw DomainFailure(fault)
-      case _ => throw new IllegalStateException("Claim refresh returned an unexpected result")
-    }
-    if (revisions) request.members.foreach { reference =>
-      authority.governor.call(Command.Read(ReadInput(config.project.project, ReadSelection.ItemDetail(reference.id)))) match {
-        case Result.Detail(value) => require(value.item.id == reference.id && value.item.revision == reference.revision, "Assignment changed before result admission")
-        case Result.Failed(fault) => throw DomainFailure(fault)
-        case _ => throw new IllegalStateException("Admission read returned an unexpected result")
-      }
-    }
-  }
-  /** `obtained` is when the claim was last renewed for this child (the ZIO clock's `nanoTime`, which `ClaimRenewal` reads). */
-  private def maintain(entry: DispatchExecution, obtained: Long): Task[Unit] = renewal.maintain(obtained, ZIO.attemptBlocking(claim(entry, false))).catchAll { failure =>
-    ZIO.succeed(entry.requestStop("Work claim refresh failed: " + Option(failure.getMessage).getOrElse(failure.getClass.getSimpleName))) *>
-      ZIO.foreachDiscard(entry.ownedJobs)(id => jobs.cancel(config.owner, id).unit.catchSome { case DomainFailure(_: Fault.Missing) => ZIO.unit })
-  }
-  private def launch(entry: DispatchExecution, id: AttemptId, base: GitCommit, command: JobCommand): Task[JobRecord] = for {
-    _ <- ZIO.attempt { entry.check(); entry.active(id) }
-    _ <- jobs.start(config.owner, WorkspaceSpec(config.project.project, config.run.attempt.session, id, config.run.repository, base), command)
-    _ <- if (entry.stopReason.nonEmpty) jobs.cancel(config.owner, id).unit else ZIO.unit
-    record <- jobs.await(config.owner, id)
-  } yield record
 
   def workspace(entry: DispatchExecution, command: WorkspaceCommand): Task[WorkspaceReply] = command match {
     case WorkspaceCommand.Check(name, waitMillis) =>
@@ -79,7 +40,7 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
   }
 
   def run(entry: DispatchExecution): Task[Unit] = (for {
-    trace <- Ref.make(Trace(None, Nil, Nil, false, Nil))
+    trace <- Ref.make(AttemptTrace.Empty)
     queue <- ZIO.attemptBlocking(new DeliveryQueue(entry.directory.resolve("delivery")))
     result <- ZIO.scoped {
       for {
@@ -93,7 +54,7 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
         // Input assembly renews the claim; the renewals that follow count their lease from before it.
         began <- zio.Clock.nanoTime
         input <- ZIO.attemptBlocking(new InputAssembler(authority.governor, config.owner, clock, requirements.current).assemble(entry.ticket.request))
-        _ <- maintain(entry, began).forkScoped
+        _ <- settlement.maintain(entry, began, ZIO.unit).forkScoped
         prepared <- ZIO.attemptBlocking {
           entry.check()
           val ticket = entry.ticket
@@ -150,7 +111,7 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
             entry.installChecks(new ReviewerChecks(entry, base, config, authority.collector, jobs))
         }
         _ <- ZIO.succeed(entry.phase(DispatchPhase.Running))
-        native <- launch(entry, entry.ticket.attempt.id, base, command)
+        native <- settlement.launch(entry, entry.ticket.attempt.id, base, command)
         _ <- trace.update(_.copy(native = Some(native)))
         checks <- closeChecks(entry, trace)
         _ <- ZIO.attempt(require(!checks.pending && !checks.uncertain, "Reviewer exited without terminal published evidence for every requested check"))
@@ -158,7 +119,7 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
           entry.check()
           val observed = JobOutcome.observed(native)
           Abstention.launch(native).foreach(throw _)
-          val usage = collect(entry.ticket, clock.millis())
+          val usage = settlement.collect(entry.ticket, clock.millis())
           // A provider's refusal counts only when the harness ended by itself: a stopped or uncertain job is judged by how it was stopped.
           if (observed.state != AttemptState.Unknown && native.exit.exists(_.reason == StopReason.Exited)) usage.abstention.foreach(throw _)
           require(observed.succeeded, observed.problem.getOrElse("Child process did not complete successfully"))
@@ -174,123 +135,30 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
           }
           report
         }
-        evidence <- if (entry.ticket.attempt.role != Role.Worker) ZIO.succeed(CollectedEvidence(RetainedEvidence(Nil, Nil), Nil))
-          else workspaces.get(config.owner, entry.ticket.attempt.id).flatMap { workspace => ZIO.attemptBlocking {
-            val named = report match { case ChildReport.Work(members) => members.flatMap(_.evidence); case _ => Nil }
-            new WorkspaceEvidence(config.project.project, entry.ticket.attempt.id, "evidence").collect(Path.of(workspace.directory), named)
-          }}
+        evidence <- settlement.evidence(entry, report)
         _ <- trace.update(value => value.copy(extra = value.extra ++ evidence.uploads))
         candidate <- report match {
-          case ChildReport.Work(members) if members.exists(_.disposition == WorkDisposition.CandidateReady) =>
-            workspaces.get(config.owner, entry.ticket.attempt.id).flatMap { workspace => ZIO.attemptBlocking {
-              entry.check()
-              combination.foreach { _ =>
-                require(Set("0\n", "1\n")(HostFiles.text(entry.directory.resolve("assets/merge-ready"), 2)), "Merge preparation was not confirmed")
-              }
-              val commit = candidates.capture(workspace, combination, CandidateMessage(entry.ticket.attempt.id, input.members, input.guidance, combination))
-              HostFiles.immutable(entry.directory.resolve("candidate.json"), HostFiles.encode(GitCommit_JsonCodec, commit), 1024)
-              Some(commit)
-            }}
-          case _: ChildReport.Work => ZIO.succeed(None)
+          case ChildReport.Work(members) => settlement.capture(entry, members, input, combination)
           case _: ChildReport.Review if entry.ticket.request.work == DispatchWork.Reviewer(ReviewerMode.Candidate) => ZIO.succeed(input.previous.flatMap(_.candidate))
           case _: ChildReport.Review | _: ChildReport.Plan | _: ChildReport.Evidence => ZIO.succeed(None)
         }
-        validation <- if (entry.ticket.attempt.role == Role.Worker && candidate.nonEmpty) {
-          ZIO.succeed(entry.phase(DispatchPhase.Validating)) *> ZIO.foreach(config.settings.checks.zipWithIndex) { case (check, index) =>
-            validate(entry, candidate.get, check, index, trace)
-          }
-        } else if (entry.ticket.request.work == DispatchWork.Reviewer(ReviewerMode.Candidate)) ZIO.succeed {
+        validation <- if (entry.ticket.attempt.role == Role.Worker && candidate.nonEmpty) settlement.checked(entry, candidate.get, trace)
+        else if (entry.ticket.request.work == DispatchWork.Reviewer(ReviewerMode.Candidate)) ZIO.succeed {
           ReviewerValidation.overlay(inherited, checks.evidence)
         }
         else ZIO.succeed(Nil)
-        stored <- ZIO.attemptBlocking {
-          entry.check()
-          claim(entry, true)
-          val value = ChildResult(entry.ticket.attempt.id, entry.ticket.request, base, candidate, report, validation, evidence.retained)
-          ChildContracts.result(config.project.project, value)
-          value
-        }
+        stored <- settlement.stored(entry, base, candidate, report, validation, evidence.retained)
       } yield stored
     }.either
     _ <- closeChecks(entry, trace)
-    _ <- if (result.isLeft || entry.stopReason.nonEmpty) {
-      workspaces.quarantine(config.owner, entry.ticket.attempt.id, "Child result failed, was cancelled or lost admission; inspect retained evidence").unit
-        .catchSome { case DomainFailure(_: Fault.Missing) => ZIO.unit }
-    } else ZIO.unit
+    _ <- if (result.isLeft || entry.stopReason.nonEmpty) settlement.quarantine(entry, "Child result failed, was cancelled or lost admission; inspect retained evidence")
+      else ZIO.unit
     observed <- trace.get
-    _ <- publish(entry, result, observed)
+    _ <- settlement.publish(entry, result, observed)
   } yield ()).ensuring(ZIO.succeed(access.revoke(entry.ticket.attempt.id)))
 
-  private def closeChecks(entry: DispatchExecution, trace: Ref[Trace]): Task[ClosedReviewerChecks] = for {
+  private def closeChecks(entry: DispatchExecution, trace: Ref[AttemptTrace]): Task[ClosedReviewerChecks] = for {
     closed <- entry.reviewerChecks.fold(ZIO.succeed(ClosedReviewerChecks(Nil, false, false)))(_.close)
     _ <- trace.update(value => value.copy(uncertain = value.uncertain || closed.uncertain))
   } yield closed
-
-  private def validate(entry: DispatchExecution, candidate: GitCommit, check: ValidationCheck, index: Int, trace: Ref[Trace]): Task[ValidationEvidence] = for {
-    validated <- validation(entry.ticket.attempt.id, s"check-$index", candidate, check, (id, base, command) => launch(entry, id, base, command).ensuring(release(id).ignore)
-      .tap(record => trace.update(value => value.copy(spans = value.spans :+ PhaseSpans.check(record, entry.ticket.assignment.id)))))
-    evidence = validated.evidence
-    // A check that could not be started ran nothing: its cleanup is not in doubt and the worker's result stands.
-    uncertain = evidence.state == ValidationState.Unknown && validated.unrun.isEmpty
-    _ <- trace.update(value => value.copy(extra = value.extra ++ validated.artifacts, uncertain = value.uncertain || uncertain, unrun = value.unrun ++ validated.unrun))
-    _ <- ZIO.attempt(require(!uncertain, "Host validation cleanup is unconfirmed"))
-  } yield evidence
-
-  private def publish(entry: DispatchExecution, result: Either[Throwable, ChildResult], trace: Trace): Task[Unit] = {
-    val attempt = entry.ticket.attempt
-    for {
-      job <- trace.native match {
-        case Some(value) => ZIO.succeed(Some(value))
-        case None => jobs.await(config.owner, attempt.id).map(Some(_)).catchSome { case DomainFailure(_: Fault.Missing) => ZIO.succeed(None) }
-      }
-      workspace <- workspaces.get(config.owner, attempt.id).map(Some(_)).catchSome { case DomainFailure(_: Fault.Missing) => ZIO.succeed(None) }
-      _ <- ZIO.attemptBlocking {
-        val cancelled = entry.freeze()
-        val project = config.project.project
-        val stdout = transcript(attempt.id, "stdout", entry.ticket.request.limits.retainedOutputBytes)
-        val stderr = transcript(attempt.id, "stderr", entry.ticket.request.limits.retainedOutputBytes)
-        val (_, outParts) = NativeArtifacts.binary(project, attempt.id, "stdout", "application/x-ndjson", stdout)
-        val (_, errParts) = NativeArtifacts.binary(project, attempt.id, "stderr", "application/octet-stream", stderr)
-        val collectedAt = math.max(attempt.startedAt, clock.millis())
-        val usage = collect(entry.ticket, collectedAt)
-        val problem = cancelled.orElse(result.left.toOption.map(error => Option(error.getMessage).getOrElse(error.getClass.getSimpleName)))
-          .orElse(trace.unrun.headOption).map(DispatchProjection.concise)
-        val valid = if (cancelled.nonEmpty) None else result.toOption
-        val observed = job.map(JobOutcome.observed)
-        val abstention = result.left.toOption.collect { case value: Abstention => value }
-        val state = if (trace.uncertain || observed.exists(_.state == AttemptState.Unknown)) AttemptState.Unknown
-          else if (cancelled.nonEmpty) AttemptState.Cancelled
-          else if (abstention.nonEmpty) AttemptState.Abstained
-          else observed.map(_.withResult(valid.nonEmpty)).getOrElse(AttemptState.Failed)
-        if (state == AttemptState.Abstained) abstention.foreach(entry.abstained)
-        // A worker that failed, abstained or was cancelled leaves no result; its workspace state is retained so a following attempt can continue from it.
-        val partial = workspace.filter(_ => attempt.role == Role.Worker && Set(AttemptState.Failed, AttemptState.Cancelled, AttemptState.Abstained)(state))
-          .map(record => Try(partials.capture(attempt.id, state, Path.of(record.directory), stdout, stderr)).toEither)
-        val partialGap = partial.flatMap(_.left.toOption).map(error => "Partial work collection failed: " + Option(error.getMessage).getOrElse(error.getClass.getSimpleName))
-        val allArtifacts = outParts ++ errParts ++ trace.extra ++ partial.flatMap(_.toOption).toList.flatMap(_._2)
-        val observations = usage.meters.flatMap(batch => HostDelivery.Usage(HostUsageInput(project, HostUsage.Meter(batch.meter))) ::
-          batch.observations.map(value => HostDelivery.Usage(HostUsageInput(project, HostUsage.Ingest(value)))))
-        // The attempt ends when its native job settles; host checks that follow are spans of their own.
-        val finishedAt = job.filter(_.phase == JobPhase.Settled).fold(collectedAt)(record => math.max(attempt.startedAt, record.updatedAt))
-        val outcome = AttemptOutcome(RequestId(NativeArtifacts.id(attempt.id, "outcome").value), attempt.id, state, finishedAt,
-          (problem.toList ++ observed.toList.flatMap(_.problem).map(DispatchProjection.concise) ++ partialGap.map(DispatchProjection.concise) ++ usage.gaps).take(MaxGaps), None)
-        val entries = allArtifacts.map(HostDelivery.Artifact.apply) ++ observations ++ trace.spans.map(PhaseSpans.delivery(project, _))
-        val base = entry.status.copy(process = job.map(_.phase), blocker = problem, partial = partial.flatMap(_.toOption).map(_._1),
-          usageDelivered = false, detailsOmitted = true, workspace = workspace.map(DispatchProjection.workspace))
-        val publication = new ChildPublicationDelivery(entry.directory, entry.ticket)
-        publication.seal(ChildPublication(project, config.owner.actor, valid, base, outcome), entries)
-        val retained = Try(publication.finish(authority.collector)).toOption.map(_.status).getOrElse(base.copy(
-          phase = DispatchPhase.PublicationPending, next = ChildNext.RetryDelivery, result = None,
-          blocker = Some("Result admission or operational publication is pending; retain the session directory and run cq job upload")))
-        entry.finish(retained)
-      }
-      _ <- if (entry.status.phase == DispatchPhase.Failed && result.isRight)
-        workspaces.quarantine(config.owner, entry.ticket.attempt.id, "Server result admission rejected; inspect retained evidence")
-          .map(record => entry.finish(entry.status.copy(workspace = Some(DispatchProjection.workspace(record)))))
-      // The candidate is a commit under refs/cq/candidates and the evidence is published: nothing reads a completed attempt's tree again.
-      else if (entry.status.phase == DispatchPhase.Completed) release(attempt.id)
-        .map(_.foreach(record => entry.finish(entry.status.copy(workspace = Some(DispatchProjection.workspace(record)))))).ignore
-      else ZIO.unit
-    } yield ()
-  }
 }
