@@ -82,7 +82,13 @@ object AgentResolution {
         val expanded = entries.zip(at).map(expand.tupled)
         val problems = expanded.flatMap(_.left.getOrElse(Nil))
         val candidates = expanded.flatMap(_.getOrElse(Nil))
-        if (problems.nonEmpty) Left(problems) else Right(ResolvedSeat(strategy, if (strategy == SeatStrategy.First) candidates.take(1) else candidates))
+        // A fallback tries a route once: a model that abstained is not tried again, so later occurrences of a route are dropped.
+        // A round-robin keeps its repetitions, which give a route more of the turns.
+        if (problems.nonEmpty) Left(problems) else Right(ResolvedSeat(strategy, strategy match {
+          case SeatStrategy.First => candidates.take(1)
+          case SeatStrategy.Fallback => candidates.distinct
+          case SeatStrategy.RoundRobin => candidates
+        }))
       }
 
       val (mode, min, seats) = choice match {

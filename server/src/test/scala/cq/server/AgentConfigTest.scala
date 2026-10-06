@@ -107,7 +107,8 @@ final class AgentConfigLocal extends AnyWordSpec {
           RoleOrigin(AgentLayer.Installation, RoleSource.HarnessRoles), Nil)
         case (Harness.Pi, AgentRole.Planner) => plan(fallback(route(Harness.Pi, "openai-codex/gpt-6.1-sol", Effort.XHigh)))
         // Duplicates are kept: the governing harness's tier and the named one are the same list here.
-        case (Harness.Pi, AgentRole.Worker) => plan(fallback(route(Harness.Pi, Glm), route(Harness.Pi, Mimo), route(Harness.Pi, Glm), route(Harness.Pi, Mimo)))
+        // `$harness:@standard` and `pi:@standard` are one tier under a Pi governor: a fallback tries each of its models once.
+        case (Harness.Pi, AgentRole.Worker) => plan(fallback(route(Harness.Pi, Glm), route(Harness.Pi, Mimo)))
         case (Harness.Pi, AgentRole.Explorer) => plan(fallback(route(Harness.Pi, Mimo, Effort.Low)))
         case (Harness.Pi, AgentRole.Reviewer) => ResolvedRole(PanelMode.Any, 1, List(fallback(route(Harness.Claude, "sonnet")), piStandard), installationDefaults, List(1))
       }
@@ -633,7 +634,17 @@ final class AgentConfigLocal extends AnyWordSpec {
       // One model is a fallback over one candidate; a bare tier of several models is a fallback over them.
       assert(seats("claude:opus") == List(fallback(opus)))
       assert(seats("pi:@standard") == List(fallback(a, b)))
-      assert(seats("{ fallback: [claude:opus, pi:@standard, pi:@fast, claude:opus] }") == List(fallback(opus, a, b, c, opus)))
+      // A fallback tries a route once: a later occurrence of the same harness, provider, model and effort is dropped, the first kept.
+      assert(seats("{ fallback: [claude:opus, pi:@standard, pi:@fast, claude:opus] }") == List(fallback(opus, a, b, c)))
+      assert(seats("{ fallback: [pi:@standard, pi:zai/b, \"pi:zai/a?effort=low\", pi:zai/a, claude:opus?effort=high, claude:opus] }") ==
+        List(fallback(a, b, route(Harness.Pi, "zai/a"), route(Harness.Claude, "opus", Effort.High), opus)))
+      // The same holds for the implicit fallback of a bare tier that lists a model twice.
+      def doubled(value: String): List[ResolvedSeat] =
+        resolved(s"defaults: { roles: { worker: $value } }\nharnesses: { pi: { tiers: { fast: [zai/c, zai/c] } } }", "", Harness.Codex, AgentRole.Worker).seats
+      assert(doubled("pi:@fast") == List(fallback(c)))
+      // A round-robin keeps what is listed: a repeated route there takes more of the turns.
+      assert(seats("{ rr: [pi:@standard, pi:zai/b] }") == List(ResolvedSeat(SeatStrategy.RoundRobin, List(a, b, b))))
+      assert(doubled("{ rr: [pi:@fast] }") == List(ResolvedSeat(SeatStrategy.RoundRobin, List(c, c))))
       assert(seats("{ rr: [pi:@standard, claude:opus, pi:@fast] }") == List(ResolvedSeat(SeatStrategy.RoundRobin, List(a, b, opus, c))))
       // `first` runs the first candidate of the flattened list and reads nothing after its first entry.
       assert(seats("{ first: [pi:@standard, claude:opus] }") == List(ResolvedSeat(SeatStrategy.First, List(a))))

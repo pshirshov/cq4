@@ -14,8 +14,8 @@ Tier list                the harness's own models, without the harness:    stand
 
 A role takes one of:
   a reference            claude:@standard                 a tier of several models is tried in order
-  a strategy             { fallback: [a, b] }             the next one when one abstains
-                         { rr: [a, b] }                   round-robin across attempts
+  a strategy             { fallback: [a, b] }             the next one when one abstains; a model listed twice is tried once
+                         { rr: [a, b] }                   round-robin across attempts; a model listed twice takes two turns
                          { first: [a, b] }                always the first; abstains when it is unavailable
   a panel (reviewer)     { all: [seat, seat], min: 1 }    every seat reviews; min of them must deliver
                          { any: [seat, seat], min: 1 }    in the listed order, as many as min needs
