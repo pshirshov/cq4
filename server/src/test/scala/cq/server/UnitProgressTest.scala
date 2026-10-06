@@ -440,6 +440,32 @@ final class UnitProgressLocal extends AnyWordSpec {
         else assert(status.blocker.contains(s"Reviewers disagree on ${disputed.map(number => s"T$number").mkString(",")}: read Seats"), name)
       }
     }
+    "be mixed when seats that agree on every verdict advise different next steps, so that no seat's finding stands behind another's" in {
+      // A seat whose host-run check failed advises Revise although its verdicts accept; one that carries a proposal advises ConsiderProposal.
+      def advising(seat: Int, next: ChildNext, blocker: Option[String]): ReviewSeat = {
+        val accepted = review(seat, A, A)
+        accepted.copy(status = accepted.status.copy(next = next, blocker = blocker))
+      }
+      val failedCheck = advising(1, ChildNext.Revise, Some("Host check fast: Failed"))
+      val proposing = advising(2, ChildNext.ConsiderProposal, None)
+      for ((name, seats, representative, steps) <- List(
+        ("the second seat's check failed", List(review(0, A, A), failedCheck), 1, List(ChildNext.ConsiderAcceptance, ChildNext.Revise)),
+        ("the first seat's check failed", List(failedCheck, review(0, A, A)), 1, List(ChildNext.Revise, ChildNext.ConsiderAcceptance)),
+        ("one seat carries a proposal", List(review(0, A, A), review(1, A, A), proposing), 2, List(ChildNext.ConsiderAcceptance, ChildNext.ConsiderProposal)),
+        ("a failed check and a proposal", List(proposing, failedCheck), 2, List(ChildNext.ConsiderProposal, ChildNext.Revise)))) {
+        val aggregate = ReviewAggregate(seats)
+        assert(aggregate.disputed.isEmpty && aggregate.mixed && aggregate.steps == steps && aggregate.next == ChildNext.Arbitrate, name)
+        assert(aggregate.representative.seat == representative && aggregate.verdicts.forall(_._2 == A), name)
+        val status = aggregate.status(handle)
+        assert(status.attempt == handle && status.result.contains(result(representative)) && status.next == ChildNext.Arbitrate, name)
+        assert(status.blocker.contains(s"Reviewers agree on every verdict but their results advise different next steps (${steps.mkString(", ")}): read Seats"), name)
+      }
+      // Seats that advise the same step are unanimous, whatever that step is; disputed members are named before differing steps.
+      val agreeing = ReviewAggregate(List(failedCheck, advising(0, ChildNext.Revise, Some("Host check fast: Failed"))))
+      assert(!agreeing.mixed && agreeing.steps.isEmpty && agreeing.next == ChildNext.Revise && agreeing.representative.seat == 1)
+      val disputed = ReviewAggregate(List(review(0, A, A), review(1, C, A), proposing))
+      assert(disputed.disputed == List(item(1)) && disputed.representative.seat == 1 && disputed.status(handle).blocker.contains("Reviewers disagree on T1: read Seats"))
+    }
     "refuse seats that do not cover the same members, and no seat at all" in {
       assert(intercept[IllegalArgumentException](ReviewAggregate(Nil)).getMessage.contains("needs a delivered seat"))
       assert(intercept[IllegalArgumentException](ReviewAggregate(List(review(0, A, A), review(1, A)))).getMessage.contains("cover the same members"))
