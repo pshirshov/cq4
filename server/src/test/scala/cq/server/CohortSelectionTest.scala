@@ -496,6 +496,62 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
       } yield ()
     }
 
+    "I17: take the worst verdict of several reviews of one candidate for each member, so a disputed candidate continues as D113 continues a mixed review" in {
+      (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO]) => for {
+        runtime <- ZIO.runtime[Any]
+        fixture <- assessed(ledger, usage, artifacts, admissions, 2, CohortCompatibility.Compatible)
+        reads = new EvidenceApi(api(ledger, fixture.scope, runtime), artifacts, admissions, fixture.scope, runtime)
+        input = request(fixture.members.map(_.id).toSet, DispatchWork.Worker(WorkerMode.Implement))
+        worker <- publish(fixture, input.work, ChildReport.Work(fixture.members.map(ref =>
+          WorkMember(ref.id, WorkDisposition.CandidateReady, "Candidate", Nil))), None, Nil, ledger, usage, artifacts, admissions)
+        passed <- {
+          val bytes = "passed".getBytes(java.nio.charset.StandardCharsets.UTF_8)
+          val (out, uploads) = NativeArtifacts.binary(fixture.scope.project, worker.result.attempt, "passed", "text/plain", bytes)
+          val spec = WorkspaceSpec(fixture.scope.project, fixture.scope.actor.session, AttemptId(uuid), "/consumer", GitCommit("b" * 40))
+          val job = JobRecord(spec, uuid.toString, JobTarget.Run, JobPhase.Settled,
+            Some(JobExit(Some(0), None, StopReason.Exited, bytes.length.toLong, bytes.length.toLong, true, false)), None, 1, 1, 2)
+          ZIO.foreachDiscard(uploads)(artifacts.upload(fixture.collector, _)) *>
+            artifacts.upload(fixture.collector, ArtifactUpload(fixture.scope.project, ArtifactId(uuid), worker.result.attempt, ArtifactKind.Validation,
+              "application/json", Wire.encode(ValidationObservation_JsonCodec, ValidationObservation(fixture.checks.head, spec.base, job, out, out)))).map(_.id)
+        }
+        review = (verdicts: List[ReviewVerdict]) => publish(fixture, DispatchWork.Reviewer(ReviewerMode.Candidate),
+          ChildReport.Review(fixture.members.zip(verdicts).map((ref, verdict) =>
+            ReviewMember(ref.id, verdict, if (verdict == ReviewVerdict.Accepted) Nil else List("Fix this task"))), None),
+          Some(worker), List(ValidationEvidence(fixture.checks.head.name, ValidationState.Passed, passed, Nil)), ledger, usage, artifacts, admissions)
+        // The seats of one review unit: every review is of the worker's candidate.
+        accepting <- review(List(ReviewVerdict.Accepted, ReviewVerdict.Accepted))
+        agreeing <- review(List(ReviewVerdict.Accepted, ReviewVerdict.Accepted))
+        dissenting <- review(List(ReviewVerdict.ChangesRequested, ReviewVerdict.Accepted))
+        requesting <- review(List(ReviewVerdict.Accepted, ReviewVerdict.ChangesRequested))
+        blocking <- review(List(ReviewVerdict.Accepted, ReviewVerdict.Blocked))
+        selected = (previous: Published, others: List[Published]) => ZIO.attemptBlocking(
+          new CohortPlanner(reads, fixture.scope, fixed(fixture.base), fixture.checks, new CohortProgress, new OperatorRequirements(""))
+            .plan(input.copy(request = RequestId(uuid), previous = Some(previous.id), artifacts = others.map(_.id)), ArtifactId(uuid)))
+        continues = (plan: CohortPlan, previous: Published) => assert(plan.evidence.decision.choices.map(choice => (choice.work, choice.members, choice.previous, choice.reason)) ==
+          List((input.work, fixture.members, Some(previous.id), CohortReason.ExactPrevious)) && plan.evidence.decision.counts.excluded == 0, plan.evidence.toString)
+        // The first member is accepted by one review and not by the other: changes are requested for it, the second stays accepted, and
+        // the whole group continues on the candidate, whichever of the two reviews is the previous result.
+        disputed <- selected(dissenting, List(accepting))
+        _ <- ZIO.attempt(continues(disputed, dissenting))
+        reversed <- selected(accepting, List(dissenting))
+        _ <- ZIO.attempt(continues(reversed, accepting))
+        // Each review requests changes for another member: both are corrected, as one group.
+        crossed <- selected(dissenting, List(requesting, accepting))
+        _ <- ZIO.attempt(continues(crossed, dissenting))
+        // Reviews that agree decide as one of them does.
+        agreed <- selected(accepting, List(agreeing))
+        _ <- assertIO(agreed.evidence.decision.choices.isEmpty && agreed.evidence.decision.counts.excluded == 2 &&
+          agreed.evidence.considered.forall(_.reason == CohortReason.ReviewAccepted))
+        // Blocked is worse than ChangesRequested and than Accepted: the member stays excluded, and nothing continues around it.
+        blocked <- selected(requesting, List(blocking, accepting))
+        _ <- ZIO.attempt(assert(blocked.evidence.decision.choices.isEmpty && blocked.evidence.considered.map(value => (value.members, value.reason)).toSet ==
+          Set((fixture.members.take(1), CohortReason.ReviewAccepted), (fixture.members.drop(1), CohortReason.ReviewBlocked)), blocked.evidence.toString))
+        stopped <- selected(dissenting, List(blocking))
+        _ <- ZIO.attempt(assert(stopped.evidence.decision.choices.isEmpty && stopped.evidence.considered.map(value => (value.members, value.reason)).toSet ==
+          Set((fixture.members.take(1), CohortReason.CandidateContinuity), (fixture.members.drop(1), CohortReason.ReviewBlocked)), stopped.evidence.toString))
+      } yield ()
+    }
+
     "offer a started member again once the integration target advances and reject a start after it moves further" in {
       (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO]) => for {
         runtime <- ZIO.runtime[Any]
