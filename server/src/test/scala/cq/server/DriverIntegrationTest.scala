@@ -55,7 +55,17 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
 
   private final case class Fixture(local: LocalWorkspaceFixture, owner: Scope, authority: SupervisorAuthority, controller: IntegrationController,
     combinations: CombinationController, workflow: AttachedWorkflow, driver: AttachedDriver, registry: DriverInspector, collector: Collector,
-    task: ItemId, reviewer: ArtifactId, candidate: GitCommit, fence: Fence, session: java.nio.file.Path, gateway: Json => Task[Json]) {
+    task: ItemId, reviewer: ArtifactId, candidate: GitCommit, fence: Fence, session: java.nio.file.Path, gateway: Json => Task[Json], jobs: JobSupervisor) {
+    /** What the host retains about the Git job of an integration: its record with the reason it stopped, the evidence its executor left, its diagnostics and the target. */
+    def gitJob(id: IntegrationId): Task[String] = jobs.status(owner, AttemptId(id.value)).either.flatMap(record => ZIO.attemptBlocking {
+      import scala.jdk.CollectionConverters.*
+      val evidence = session.resolve("checkouts").resolve(id.value.toString)
+      val files = if (Files.isDirectory(evidence)) scala.util.Using.resource(Files.list(evidence))(_.iterator().asScala.map(_.getFileName.toString).toList.sorted) else Nil
+      val stderr = session.resolve("payload").resolve(id.value.toString).resolve("stderr")
+      val diagnostics = if (Files.isRegularFile(stderr)) Files.readString(stderr).takeRight(2000) else "none"
+      val described = record.fold(_.toString, value => s"${value.phase}, target ${value.target}, exit ${value.exit}, problem ${value.problem}")
+      s"Git job $described; checkout evidence $files; stderr '$diagnostics'; target ${target.value}"
+    })
     /** What the host wrote for waiters about one unit, in order: its starts and the phases it ended in. */
     def unitEvents(id: UUID): List[String] = SessionUnits.read(session).collect {
       case SessionUnitEvent.Started(unit) if unit.id == id => "Started"
@@ -215,7 +225,7 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
         new OwnerLiveness { override def alive: Boolean = true }, PeerLimits(idle, idle, idle, AttachedGateway.FrameBytes, 8), () => ())))(peer => ZIO.succeed(peer.close()))
       gateway = (request: Json) => served.handle(peer, request).map(_.get)
       _ <- gateway(parser.parse("""{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}""").fold(throw _, identity))
-      empty = Fixture(local, owner, authority, controller, combinations, workflow, driver, registry, hook, created.head.id, ArtifactId(uuid), local.base, claim.fence, directory, gateway)
+      empty = Fixture(local, owner, authority, controller, combinations, workflow, driver, registry, hook, created.head.id, ArtifactId(uuid), local.base, claim.fence, directory, gateway, jobs)
       candidate <- ZIO.attemptBlocking {
         local.git(local.source, "branch", "integration", local.base.value)
         empty.commit("candidate", Map("right.txt" -> "right\n"))
@@ -483,6 +493,7 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
         _ <- f.dispatch(DispatchCommand.Integrate(second.id))
         active <- f.dispatch(DispatchCommand.DiscardIntegration(second.id)).either
         recorded <- f.settled(second.id)
+        job <- f.gitJob(second.id)
         _ <- ZIO.attempt {
           assert(driving.state == DriverState.On && driving.stopped.isEmpty, driving.toString)
           println(s"Carried integration, discarded: start directive refused with '${refusal(refused)}'; reply $discarded; after it ${f.describe(after)}; " +
@@ -494,7 +505,7 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
           assert(started.exists(_.cycle.contains(start.cycle)) && running.state == DriverState.On && running.cycle.exists(_.state == CycleState.Active), s"$started $running")
           // The Git job normally still runs here; had it finished, the integration would be Recorded and refused as well.
           assert(active.left.exists { case DomainFailure(Fault.Conflict(message)) => message.contains("is Running") || message.contains("is Recorded"); case _ => false }, active.toString)
-          assert(recorded.phase == IntegrationPhase.Recorded, recorded.toString)
+          assert(recorded.phase == IntegrationPhase.Recorded, s"$recorded; $job")
         }
       } yield () }
     }
