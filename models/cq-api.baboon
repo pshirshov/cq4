@@ -660,7 +660,8 @@ root adt WorkflowRequest {
   data Upstream { roots: set[ItemId] action: UpstreamAction }
 }
 root data WorkflowSubject { result: ArtifactId work: DispatchWork members: lst[ItemRevision] candidate: opt[GitCommit] }
-root data WorkflowContext { request: WorkflowRequest instructions: str subject: opt[WorkflowSubject] }
+// `mode` is the process mode whose section opens `instructions`: the project's mode when the workflow was activated, as a session of this ownership works it.
+root data WorkflowContext { request: WorkflowRequest instructions: str subject: opt[WorkflowSubject] mode: ProcessMode }
 root data GoverningInput { project: ProjectConfig routes: lst[HarnessRoute] checks: lst[str] limits: HostLimits integrationTarget: opt[str] request: str workflow: opt[WorkflowContext] }
 enum SessionOwnership { Managed Attached }
 root data AttachedPiEvent {
@@ -670,17 +671,19 @@ root data AttachedPiEvent {
 root data AttachedPiSample { event: AttachedPiEvent receivedAt: i64 }
 root data WorkflowActivation { id: RequestId context: WorkflowContext operatorRequirements: str cycle: opt[CycleId] }
 // What a governing session is sent about an activation. The stored record is WorkflowActivation; these repeat no text the session holds.
-root data ActiveWorkflow { id: RequestId request: WorkflowRequest cycle: opt[CycleId] }
+root data ActiveWorkflow { id: RequestId request: WorkflowRequest cycle: opt[CycleId] mode: ProcessMode }
 root adt WorkflowInstructions {
   data Text { value: str }
   // The text is identical to the one the Workflow reply of activation `since` carried in this attached session.
   data Unchanged { since: RequestId }
 }
-root data WorkflowReceipt { id: RequestId request: WorkflowRequest instructions: WorkflowInstructions subject: opt[WorkflowSubject] cycle: opt[CycleId] }
+root data WorkflowReceipt { id: RequestId request: WorkflowRequest instructions: WorkflowInstructions subject: opt[WorkflowSubject] cycle: opt[CycleId] mode: ProcessMode }
 root data AttachedContext {
   session: SessionId attempt: AttemptId directory: str project: ProjectConfig
   routes: lst[HarnessRoute] checks: lst[str] limits: HostLimits integrationTarget: opt[str]
   instructions: str workflow: opt[ActiveWorkflow] usageCoverage: str
+  // The project's process mode now; the next workflow activation takes it.
+  mode: ProcessMode
 }
 root adt SessionCommand {
   data Context {}

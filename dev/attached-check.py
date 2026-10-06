@@ -151,10 +151,11 @@ def main():
             first = {"Workflow": {"id": identity(), "request": {"Begin": {"roots": []}}, "operatorRequirements": "Attached fixture: operator requirements text", "token": None}}
             activated = peer.tool("session", first)["Workflow"]["value"]
             begin_text = activated["instructions"]["Text"]["value"]
-            assert standing in begin_text and activated["id"] == first["Workflow"]["id"] and set(activated) == {"id", "request", "instructions", "subject", "cycle"}, activated
+            assert standing in begin_text and activated["id"] == first["Workflow"]["id"] and set(activated) == {"id", "request", "instructions", "subject", "cycle", "mode"}, activated
+            assert activated["mode"] == "Rigorous" and "Process mode of this project: Rigorous." in begin_text
             # The reply sends back nothing the session wrote in the call, and Context names the active workflow without its text.
             active = peer.tool("session", {"Context": {}})["Context"]["value"]
-            assert active["workflow"] == {"id": activated["id"], "request": activated["request"], "cycle": None}, active["workflow"]
+            assert active["workflow"] == {"id": activated["id"], "request": activated["request"], "cycle": None, "mode": "Rigorous"} and active["mode"] == "Rigorous", active
             assert begin_text not in json.dumps(peer.traffic[-1]["result"]) and "operator requirements text" not in json.dumps([activated, active])
             # The activation repeated returns its receipt as it was: the session may not have received the first reply.
             assert peer.tool("session", first)["Workflow"]["value"] == activated

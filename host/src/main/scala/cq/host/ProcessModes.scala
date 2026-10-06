@@ -44,6 +44,20 @@ object ProcessModes {
   val Effect: String = "A change applies from the next workflow activation of a session: a workflow that is already active keeps the mode it started with, " +
     "and a drive takes the new mode with its next cycle."
 
+  /** The project's mode as the server holds it now. `call` raises a failed read, so no workflow is assembled without it. */
+  def current(call: Command => Result, project: ProjectId): ProcessMode =
+    call(Command.Mode(ModeInput(project, ModeAction.Read()))) match {
+      case Result.Mode(value) => value.mode
+      case _ => throw new IllegalStateException("Process mode read returned an unexpected result")
+    }
+
+  // Only an attached session implements and reviews itself: the host launches a batch Governor without edit tools, so it works a YOLO
+  // project as a Cross-cutting one.
+  def governing(mode: ProcessMode, ownership: SessionOwnership): ProcessMode = (mode, ownership) match {
+    case (ProcessMode.Yolo, SessionOwnership.Managed) => ProcessMode.CrossCutting
+    case _ => mode
+  }
+
   def of(mode: ProcessMode): ProcessModeEntry = all.find(_.mode == mode)
     .getOrElse(throw new IllegalStateException(s"Process mode $mode is missing from the catalog"))
 }

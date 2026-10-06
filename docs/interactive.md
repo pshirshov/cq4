@@ -76,6 +76,16 @@ Claude/Pi workflow commands are `/cq:begin`, `/cq:advance`, `/cq:review`, `/cq:u
 
 A session's request reaches the children of that session only, and CQ launches child harnesses with an isolated configuration, so the repository's agent instruction files are not a reliable way to reach them. Rules that must hold in every session of a project, such as its testing policy or an evidence rule, belong in the project's standing requirements. Open the project in the browser, choose *Standing requirements*, edit the text and save it. The host delivers the saved text to the Governor through session Context and workflow activation, and to every Planner, Worker and plan or candidate reviewer of every later dispatch, under its own heading and ahead of the session's request. A workflow activation captures the standing text at activation; a later Context read or activation reads the current saved text. The dialog shows the revision, who changed the text and when. A save based on an older revision is refused and shows the current text beside yours. The text is limited to 8,192 code points, and an empty text means none.
 
+## Process mode of a project
+
+A project works in one of three process modes. The operator chooses it in the browser: the mode shown in the header, or *Process mode* beside *Standing requirements*. Help's *Modes* tab describes each mode and shows the instructions a governing session receives for it.
+
+- **Rigorous** (the default): a Planner plans, a Plan review approves, the phases run in order, and every candidate is independently reviewed.
+- **Cross-cutting**: the Governor may skip the Planner and the Plan review, writes each Task and its acceptance criteria itself before a Worker starts, and may take items and phases in any order. Isolated Workers, independent candidate review, the configured host checks and host integration stay mandatory.
+- **YOLO cross-cutting**: shown, and not available in this release.
+
+The mode never widens a request: the roots and `through` bound the work in every mode. A change applies from the next workflow activation of a session; a workflow that is already active keeps its mode, and a drive takes the new mode with its next cycle. Only the operator can change the mode. A page that is already open in another browser shows the new mode when its project is loaded again or its mode dialog is opened.
+
 ## Automatic advancement
 
 `/cq:drive <target IDs> through=<phase>` (Codex: `$cq-drive …`) switches a session's auto-driver on, and `/cq:park` (`$cq-park`) switches it off. While it is on, the session keeps running `advance` on the chosen items up to the chosen phase and stops with a stated reason. `cq configure` installs the commands, the Claude Code and Codex hooks, the Claude status line and the Pi toggle key (Ctrl+Alt+A); reconfigure each harness with `--replace` after installing a package that contains the driver. Codex additionally needs its `/hooks` review, and Claude needs `--replace-statusline` when `.claude/settings.local.json` already has a status line of its own.

@@ -296,6 +296,8 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
         val (first, second, third) = (uuid, uuid, uuid)
         def stored(id: UUID): Json = parser.parse(Files.readString(f.session.resolve("workflows").resolve(s"$id.json"))).fold(throw _, identity)
         def size(value: Json): Int = value.noSpaces.getBytes(java.nio.charset.StandardCharsets.UTF_8).length
+        def mode(expected: Long, value: ProcessMode): Task[Unit] = ZIO.attemptBlocking(f.authority.root.call(Command.Mode(ModeInput(f.owner.project,
+          ModeAction.Replace(Revision(expected), value, false))))).flatMap(result => assertIO(result.isInstanceOf[Result.Mode]).unit)
         for {
           before <- f.sessionTool("""{"Context":{}}""")
           _ <- assertIO(before.hcursor.downField("Context").downField("value").downField("workflow").focus.contains(Json.Null))
@@ -306,13 +308,14 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
           _ <- ZIO.attempt {
             // The receipt names the activation and carries its text; what the session wrote in the call is not sent back.
             assert(text == stored(first).hcursor.downField("context").get[String]("instructions").fold(throw _, identity) && text.length > 8000, text.take(200))
-            assert(one.keys.map(_.toSet).contains(Set("id", "request", "instructions", "subject", "cycle")), one.focus.get.noSpaces.take(300))
+            assert(one.keys.map(_.toSet).contains(Set("id", "request", "instructions", "subject", "cycle", "mode")), one.focus.get.noSpaces.take(300))
+            assert(one.get[String]("mode") == Right("Rigorous") && text.contains("Process mode of this project: Rigorous."))
             assert(!one.focus.get.noSpaces.contains(Requirements) && one.downField("id").get[UUID]("value") == Right(first))
           }
           context <- f.sessionTool("""{"Context":{}}""")
           active = context.hcursor.downField("Context").downField("value").downField("workflow").focus.get
           _ <- ZIO.attempt {
-            assert(active == parser.parse(s"""{"id":{"value":"$first"},"request":$advance,"cycle":null}""").fold(throw _, identity), active.noSpaces)
+            assert(active == parser.parse(s"""{"id":{"value":"$first"},"request":$advance,"cycle":null,"mode":"Rigorous"}""").fold(throw _, identity), active.noSpaces)
             // The base governing instructions stay in every Context; the workflow's text and the requirements do not come with it.
             assert(context.hcursor.downField("Context").downField("value").get[String]("instructions").exists(_.contains(SupervisorProgram.Guidance)))
             assert(!context.noSpaces.contains(Requirements) && size(context) < text.length, s"${size(context)} bytes")
@@ -333,6 +336,28 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
           other <- f.sessionTool(activation(third, s"""{"Begin":{"roots":[$item]}}""")).map(_.hcursor.downField("Workflow").downField("value"))
           // A different text is sent in full.
           _ <- assertIO(other.downField("instructions").downField("Text").get[String]("value").exists(value => value != text && value.length > 8000))
+          // I30: the operator changes the project's process mode. The active workflow keeps its mode; Context names the project's new one,
+          // and the next activation carries the text of that mode whole.
+          (fourth, fifth, sixth) = (uuid, uuid, uuid)
+          _ <- mode(0, ProcessMode.CrossCutting)
+          pending <- f.sessionTool("""{"Context":{}}""").map(_.hcursor.downField("Context").downField("value"))
+          _ <- assertIO(pending.get[String]("mode") == Right("CrossCutting") && pending.downField("workflow").get[String]("mode") == Right("Rigorous"))
+          changed <- f.sessionTool(activation(fourth, advance)).map(_.hcursor.downField("Workflow").downField("value"))
+          relaxed = changed.downField("instructions").downField("Text").get[String]("value").fold(error => throw new IllegalStateException(changed.focus.get.noSpaces.take(300), error), identity)
+          _ <- ZIO.attempt {
+            assert(changed.get[String]("mode") == Right("CrossCutting") && relaxed != text && relaxed.contains("Process mode of this project: Cross-cutting."))
+            assert(relaxed == stored(fourth).hcursor.downField("context").get[String]("instructions").fold(throw _, identity) &&
+              stored(fourth).hcursor.downField("context").get[String]("mode") == Right("CrossCutting"))
+            // What the two texts share is the whole of the rules after the mode's section.
+            assert(relaxed.substring(relaxed.indexOf("You govern the selected CQ workflow.")) == text.substring(text.indexOf("You govern the selected CQ workflow.")))
+          }
+          sameMode <- f.sessionTool(activation(fifth, advance)).map(_.hcursor.downField("Workflow").downField("value"))
+          _ <- assertIO(sameMode.downField("instructions").downField("Unchanged").downField("since").get[UUID]("value") == Right(fourth) && sameMode.get[String]("mode") == Right("CrossCutting"))
+          _ <- mode(1, ProcessMode.Rigorous)
+          // A return to the earlier mode names the activation that carried its text; the receipt's mode says which text applies.
+          returned <- f.sessionTool(activation(sixth, advance)).map(_.hcursor.downField("Workflow").downField("value"))
+          _ <- assertIO(returned.downField("instructions").downField("Unchanged").downField("since").get[UUID]("value") == Right(first) && returned.get[String]("mode") == Right("Rigorous"))
+          _ <- assertIO(stored(sixth).hcursor.downField("context").get[String]("instructions") == Right(text))
           _ <- ZIO.attempt(println(s"I33 session replies: first Workflow ${size(one.focus.get)} bytes, identical-text Workflow ${size(again.focus.get)} bytes, Context with an active workflow ${size(context)} bytes"))
         } yield ()
       }

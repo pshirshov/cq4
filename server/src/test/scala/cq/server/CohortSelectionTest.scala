@@ -54,6 +54,7 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
         case Command.Read(ReadInput(_, ReadSelection.History(id, before, limit))) => ledger.history(scope, id, before, limit).map(Result.History.apply)
         case Command.ClaimWork(ClaimInput(_, ClaimAction.Renew(fence, millis))) => ledger.renew(scope, fence, millis).map(Result.Claimed.apply)
         case Command.Requirements(RequirementsInput(_, RequirementsAction.Read())) => ledger.requirements(scope).map(Result.Requirements.apply)
+        case Command.Mode(ModeInput(_, ModeAction.Read())) => ledger.mode(scope).map(Result.Mode.apply)
         case _ => ZIO.fail(new IllegalStateException("Unexpected selection read"))
       }
       Unsafe.unsafe { implicit unsafe => runtime.unsafe.run(effect.either).getOrThrowFiberFailure() } match {
@@ -558,7 +559,7 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
         dispatch = DispatchRequest(choice.id, choice.work, Harness.Codex, choice.members, choice.guidance, choice.artifacts, choice.previous, fixture.fence, choice.limits)
         assembled <- ZIO.attemptBlocking(new InputAssembler(reads, fixture.scope, java.time.Clock.systemUTC(), "").assemble(dispatch))
         _ <- assertIO(assembled.previous.contains(worker.result) && assembled.members.map(view => ItemRevision(view.item.id, view.item.revision)) == expected)
-        subject <- ZIO.attemptBlocking(new WorkflowAssembly(reads, fixture.scope.project, new WorkflowAssets).assemble(WorkflowRequest.Review(worker.id, ReviewerMode.Candidate)))
+        subject <- ZIO.attemptBlocking(new WorkflowAssembly(reads, fixture.scope.project, new WorkflowAssets, SessionOwnership.Attached).assemble(WorkflowRequest.Review(worker.id, ReviewerMode.Candidate)))
         _ <- assertIO(subject.subject.exists(_.members == fixture.members))
         _ <- ZIO.attemptBlocking(new WorkflowExecution(reads, fixture.scope.project, fixture.scope.actor.session, Some(WorkflowRequest.Review(worker.id, ReviewerMode.Candidate)))
           .authorize(DispatchCommand.Start(dispatch.copy(work = review.work))))
@@ -1127,7 +1128,7 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
         reviewWork = DispatchWork.Reviewer(ReviewerMode.Plan)
         reviewDispatch = DispatchRequest(RequestId(uuid), reviewWork, Harness.Codex, choice.members, Nil, Nil, Some(stored.id), claim.fence, choice.limits)
         _ <- assertIO(CohortAssessmentPolicy.reviewable(dispatch.work, dispatch.members, report))
-        subject <- ZIO.attemptBlocking(new WorkflowAssembly(reads, f.scope.project, new WorkflowAssets).assemble(WorkflowRequest.Review(stored.id, ReviewerMode.Plan)))
+        subject <- ZIO.attemptBlocking(new WorkflowAssembly(reads, f.scope.project, new WorkflowAssets, SessionOwnership.Attached).assemble(WorkflowRequest.Review(stored.id, ReviewerMode.Plan)))
         _ <- assertIO(subject.subject.contains(WorkflowSubject(stored.id, DispatchWork.Planner(), choice.members, None)))
         _ <- ZIO.attemptBlocking(new WorkflowExecution(reads, f.scope.project, f.scope.actor.session, Some(WorkflowRequest.Review(stored.id, ReviewerMode.Plan)))
           .authorize(DispatchCommand.Start(reviewDispatch)))

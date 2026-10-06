@@ -323,7 +323,7 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
   private def host(service: LedgerService[IO], w: World, runtime: Runtime[Any], quiescent: () => Boolean): WorkflowActivations =
     new WorkflowActivations(new DriverSessionClient(new SessionApi(service, w.governor, runtime, _ => false), w.project),
       () => if (quiescent()) Nil else List("child attempt fixture (Running)"),
-      (id, request, requirements, cycle) => WorkflowActivation(id, WorkflowContext(request, "Fixture instructions", None), requirements, cycle))
+      (id, request, requirements, cycle) => WorkflowActivation(id, WorkflowContext(request, "Fixture instructions", None, ProcessMode.Rigorous), requirements, cycle))
   private def activation(text: String, project: ProjectId): (RequestId, WorkflowRequest, Option[CycleToken]) = {
     val (workflow, token) = submitted(project, text, invocation(text))
     (RequestId(uuid), workflow, Some(token))

@@ -4,7 +4,9 @@ import cq.api.*
 import cq.core.{CohortAssessmentPolicy, DomainFailure}
 import java.time.Duration
 
-final class WorkflowAssembly(api: ServerApi, project: ProjectId, assets: WorkflowAssets) {
+/** Assembles what a governing session of `ownership` is given when a workflow starts: the instructions of the project's process mode
+  * and standing requirements as the server holds them at that moment. */
+final class WorkflowAssembly(api: ServerApi, project: ProjectId, assets: WorkflowAssets, ownership: SessionOwnership) {
   private val AssemblyNanos = Duration.ofSeconds(60).toNanos
   private val MaxRoots = 64
   def assemble(request: WorkflowRequest): WorkflowContext = {
@@ -44,6 +46,7 @@ final class WorkflowAssembly(api: ServerApi, project: ProjectId, assets: Workflo
         Some(WorkflowSubject(id, value.request.work, value.request.members, value.candidate))
       case _ => None
     }
-    WorkflowContext(request, OperatorRequirements.governing(assets.instructions(request, ProcessMode.Rigorous), OperatorRequirements.standing(call, project)), subject)
+    val mode = ProcessModes.governing(ProcessModes.current(call, project), ownership)
+    WorkflowContext(request, OperatorRequirements.governing(assets.instructions(request, mode), OperatorRequirements.standing(call, project)), subject, mode)
   }
 }

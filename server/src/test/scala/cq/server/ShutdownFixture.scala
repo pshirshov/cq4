@@ -51,6 +51,7 @@ object ShutdownFixture extends RoleAppMain.LauncherBIO[IO] {
       // The batch program reads the project's standing requirements before it starts its governor; the fixture project has none.
       case (Command.Requirements(RequirementsInput(project, _: RequirementsAction.Read)), _) =>
         Result.Requirements(ProjectRequirements(project, Revision(0), "", None))
+      case (Command.Mode(ModeInput(project, _: ModeAction.Read)), _) => Result.Mode(ProjectMode(project, Revision(0), ProcessMode.Rigorous, false, None))
       case _ => throw new IllegalStateException("Fixture receiver does not execute commands")
     }
     override def admit(value: HostAdmissionInput): ResultAdmission = throw new IllegalStateException("Fixture receiver does not admit results")

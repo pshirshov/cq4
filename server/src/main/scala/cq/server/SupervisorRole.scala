@@ -222,7 +222,7 @@ final class SupervisorProgram(config: SupervisorConfig, registry: HarnessRegistr
         val input = HostFiles.encode(GoverningInput_JsonCodec, GoverningInput(config.project,
           config.settings.harnesses.map(value => HarnessRoute(value.harness, value.model, value.provider)), config.settings.checks.map(_.name), config.settings.limits, config.settings.integrationTarget,
           OperatorRequirements.governing(config.input, OperatorRequirements.standing(authority.governor.call, project)),
-          config.workflow.map(new WorkflowAssembly(authority.governor, project, workflows).assemble)))
+          config.workflow.map(new WorkflowAssembly(authority.governor, project, workflows, config.run.ownership).assemble)))
         require(input.getBytes(java.nio.charset.StandardCharsets.UTF_8).length <= MaxInputBytes, "Complete governing input exceeds its byte bound")
         val invocation = schemas.nativeInvocation(attempt.harness,
           HarnessInvocation(Role.Governor, attempt.id, SupervisorProgram.Instructions, schemas.schema("GoverningReport"),
