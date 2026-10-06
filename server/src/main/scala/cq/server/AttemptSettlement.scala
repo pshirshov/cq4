@@ -15,8 +15,9 @@ private[server] object AttemptTrace {
 }
 
 /**
- * What the attempts of one governing session share once their work is done: the claim the work holds, the capture of a candidate
- * from its workspace, the configured checks on that candidate, and the publication of how the attempt ended.
+ * What the attempts of one governing session share once their work is done, whoever did it (a child process, or the governing session
+ * in a workspace the host opened for it): the claim the work holds, the capture of a candidate from its workspace, the configured
+ * checks on that candidate, and the publication of how the attempt ended.
  */
 private[server] final class AttemptSettlement(config: SupervisorConfig, authority: SupervisorAuthority, jobs: JobSupervisor,
   workspaces: WorkspaceService[IO], candidates: CandidateWorkspace, renewal: ClaimRenewal, clock: Clock) {
@@ -29,13 +30,22 @@ private[server] final class AttemptSettlement(config: SupervisorConfig, authorit
   /** The work of a Worker, which leaves a workspace whose content may become a candidate. */
   private def working(ticket: DispatchTicket): Boolean = ChildContracts.role(ticket.request.work) == Role.Worker
 
-  def collect(ticket: DispatchTicket, collectedAt: Long): CollectedUsage = HarnessUsage.launchable(ticket.profile).fold(HarnessUsage.Unlaunched) { setting =>
-    Using.resource(NativeTranscript.stream(directory(ticket.attempt.id).resolve("stdout")))(new HarnessUsage().collect(_, UsageCollectionRequest(ticket.attempt.id,
-      ticket.attempt.harness, setting.version, UsageOrigin.Fresh, collectedAt, NativeArtifacts.id(ticket.attempt.id, "stdout"))))
-  }
+  def collect(ticket: DispatchTicket, collectedAt: Long): CollectedUsage =
+    if (AttemptSettlement.own(ticket)) AttemptSettlement.Unmetered
+    else HarnessUsage.launchable(ticket.profile).fold(HarnessUsage.Unlaunched) { setting =>
+      Using.resource(NativeTranscript.stream(directory(ticket.attempt.id).resolve("stdout")))(new HarnessUsage().collect(_, UsageCollectionRequest(ticket.attempt.id,
+        ticket.attempt.harness, setting.version, UsageOrigin.Fresh, collectedAt, NativeArtifacts.id(ticket.attempt.id, "stdout"))))
+    }
 
   /** A failed removal leaves the record open; the next host startup retries it and reports the outcome in its cleanup receipt. */
   def release(attempt: AttemptId): Task[Option[WorkspaceRecord]] = jobs.release(config.owner, attempt)
+
+  // The governing session's workspace has no job whose settlement would release it.
+  private def released(ticket: DispatchTicket): Task[Option[WorkspaceRecord]] =
+    if (!AttemptSettlement.own(ticket)) release(ticket.attempt.id)
+    else workspaces.get(config.owner, ticket.attempt.id).flatMap { record =>
+      if (record.admission == WorkspaceAdmission.Open) workspaces.remove(config.owner, ticket.attempt.id).map(Some(_)) else ZIO.succeed(Some(record))
+    }.catchSome { case DomainFailure(_: Fault.Missing) => ZIO.succeed(None) }
 
   def claim(entry: DispatchExecution, revisions: Boolean): Unit = {
     val request = entry.ticket.request
@@ -121,6 +131,7 @@ private[server] final class AttemptSettlement(config: SupervisorConfig, authorit
 
   def publish(entry: DispatchExecution, result: Either[Throwable, ChildResult], trace: AttemptTrace): Task[Unit] = {
     val attempt = entry.ticket.attempt
+    val own = AttemptSettlement.own(entry.ticket)
     for {
       job <- trace.native match {
         case Some(value) => ZIO.succeed(Some(value))
@@ -132,7 +143,8 @@ private[server] final class AttemptSettlement(config: SupervisorConfig, authorit
         val project = config.project.project
         val stdout = transcript(attempt.id, "stdout", entry.ticket.request.limits.retainedOutputBytes)
         val stderr = transcript(attempt.id, "stderr", entry.ticket.request.limits.retainedOutputBytes)
-        val native = NativeArtifacts.binary(project, attempt.id, "stdout", "application/x-ndjson", stdout)._2 ++
+        // The governing session's own work ran no process: it has no native output to retain.
+        val native = if (own) Nil else NativeArtifacts.binary(project, attempt.id, "stdout", "application/x-ndjson", stdout)._2 ++
           NativeArtifacts.binary(project, attempt.id, "stderr", "application/octet-stream", stderr)._2
         val collectedAt = math.max(attempt.startedAt, clock.millis())
         val usage = collect(entry.ticket, collectedAt)
@@ -144,7 +156,7 @@ private[server] final class AttemptSettlement(config: SupervisorConfig, authorit
         val state = if (trace.uncertain || observed.exists(_.state == AttemptState.Unknown)) AttemptState.Unknown
           else if (cancelled.nonEmpty) AttemptState.Cancelled
           else if (abstention.nonEmpty) AttemptState.Abstained
-          else observed.map(_.withResult(valid.nonEmpty)).getOrElse(AttemptState.Failed)
+          else observed.map(_.withResult(valid.nonEmpty)).getOrElse(if (own && valid.nonEmpty) AttemptState.Completed else AttemptState.Failed)
         if (state == AttemptState.Abstained) abstention.foreach(entry.abstained)
         // Work that failed, abstained or was cancelled leaves no result; its workspace state is retained so a following attempt can continue from it.
         val partial = workspace.filter(_ => working(entry.ticket) && Set(AttemptState.Failed, AttemptState.Cancelled, AttemptState.Abstained)(state))
@@ -171,9 +183,17 @@ private[server] final class AttemptSettlement(config: SupervisorConfig, authorit
         workspaces.quarantine(config.owner, entry.ticket.attempt.id, "Server result admission rejected; inspect retained evidence")
           .map(record => entry.finish(entry.status.copy(workspace = Some(DispatchProjection.workspace(record)))))
       // The candidate is a commit under refs/cq/candidates and the evidence is published: nothing reads a completed attempt's tree again.
-      else if (entry.status.phase == DispatchPhase.Completed) release(attempt.id)
+      else if (entry.status.phase == DispatchPhase.Completed) released(entry.ticket)
         .map(_.foreach(record => entry.finish(entry.status.copy(workspace = Some(DispatchProjection.workspace(record)))))).ignore
       else ZIO.unit
     } yield ()
   }
+}
+
+private[server] object AttemptSettlement {
+  /** An attempt of the Governor role under the governing attempt is the governing session's own work: no process ran for it. */
+  def own(ticket: DispatchTicket): Boolean = GoverningTickets.own(ticket)
+  /** What is said of the usage of such an attempt, with its outcome and wherever its usage is read. */
+  val UnmeteredGap = "No meter: the work was done in the governing session, whose usage is that session's own"
+  val Unmetered: CollectedUsage = CollectedUsage(Nil, false, false, List(UnmeteredGap), None)
 }

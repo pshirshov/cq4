@@ -70,6 +70,10 @@ assert.equal(await deadline("dispatch", { Status: { attempt, waitMillis: 120000 
 assert.equal(await deadline("dispatch", { IntegrationStatus: { id: attempt, waitMillis: 60000 } }), 95000);
 assert.equal(await deadline("dispatch", { CombinationStatus: { id: attempt, waitMillis: 120000 } }), 155000);
 assert.equal(await deadline("dispatch", { Revalidate: { id: attempt, result: attempt, fence: {} } }), 155000);
+// The host replies to these once it has opened the workspace or published the review; a submission returns at once.
+assert.equal(await deadline("dispatch", { OpenWorkspace: { request: attempt, members: [], previous: null, fence: {} } }), 155000);
+assert.equal(await deadline("dispatch", { SelfReview: { request: attempt, result: attempt, members: [], fence: {} } }), 155000);
+assert.equal(await deadline("dispatch", { SubmitWorkspace: { attempt, members: [] } }), 35000);
 // A wait the host refuses is answered at once, and the same field of another tool is no wait.
 assert.equal(await deadline("dispatch", { Status: { attempt, waitMillis: 120001 } }), 35000);
 assert.equal(await deadline("dispatch", { Status: { attempt, waitMillis: "120000" } }), 35000);

@@ -337,6 +337,7 @@ object SupervisorPlugin extends PluginDef {
     make[ClaimRenewal.Policy].fromValue(ClaimRenewal.Default)
     make[ClaimRenewal]
     make[ChildRunner]
+    make[GovernorWork]
     make[DispatchController].fromResource[DispatchController.Resource]
     make[DispatchUnits].fromResource[DispatchUnits.Resource]
     make[CohortController]

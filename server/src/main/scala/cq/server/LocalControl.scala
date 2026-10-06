@@ -4,7 +4,7 @@ import baboon.runtime.shared.{BaboonCodecContext, BaboonJsonCodec}
 import com.comcast.ip4s.{Host, Port}
 import cq.api.*
 import cq.core.JsonRoundtrip
-import cq.core.DomainFailure
+import cq.core.{DomainFailure, GoverningWorkPolicy}
 import cq.host.{DispatchProjection, DispatchWaits, WorkflowExecution}
 import distage.Lifecycle
 import io.circe.{Json, parser}
@@ -48,6 +48,8 @@ final class LocalControl(units: DispatchUnits, cohorts: CohortController, integr
     case _: IllegalArgumentException => Fault.Invalid(DispatchProjection.concise(Option(error.getMessage).getOrElse("Invalid local operation")))
     case _ => Fault.Conflict(DispatchProjection.concise("Local operation failed: " + Option(error.getMessage).getOrElse(error.getClass.getSimpleName)))
   }
+  // Only an interactive session works itself: a batch Governor is refused in the words the server would refuse its result with.
+  private val own: Task[Unit] = ZIO.attempt(GoverningWorkPolicy.interactive(config.run.ownership == SessionOwnership.Attached))
   private[server] def call(capability: LocalCapability, name: String, arguments: Json): Task[(Json, Boolean)] = {
     if (capability.role == Role.Governor && name == "dispatch") {
       val operation = decode(name, schemas.schema("DispatchCommand"), DispatchCommand_JsonCodec, arguments).tap(command => ZIO.attemptBlocking(workflow.authorize(command))).flatMap {
@@ -66,6 +68,9 @@ final class LocalControl(units: DispatchUnits, cohorts: CohortController, integr
         case DispatchCommand.Combine(id, source, fence) => combinations.prepare(CombinationTicket(id, source, fence)).map(DispatchReply.Combination.apply)
         case DispatchCommand.CombinationStatus(id, wait) => combinations.status(id, wait).map(DispatchReply.Combination.apply)
         case DispatchCommand.Revalidate(id, result, fence) => revalidations.request(id, result, fence).map(DispatchReply.Revalidation.apply)
+        case DispatchCommand.OpenWorkspace(request, members, previous, fence) => own *> units.open(request, members, previous, fence).map(DispatchReply.Status.apply)
+        case DispatchCommand.SubmitWorkspace(attempt, members) => own *> units.submit(attempt, members).map(DispatchReply.Status.apply)
+        case DispatchCommand.SelfReview(request, result, members, fence) => own *> units.selfReview(request, result, members, fence).map(DispatchReply.Status.apply)
       }
       operation.map(value => (DispatchReply_JsonCodec.encode(Context, value), false))
         .catchAll(error => ZIO.succeed((DispatchReply_JsonCodec.encode(Context, DispatchReply.Failed(fault(error))), true)))

@@ -115,6 +115,27 @@ abstract class DispatchAssemblyTest extends SpecZIO with AssertZIO {
               execution.authorize(DispatchCommand.Cancel(attempt.id))
               execution.authorize(DispatchCommand.IntegrationStatus(IntegrationId(UUID.randomUUID()), 0))
             }
+            // I30: the governing session's own work is bound by the phase limit and the selection as the child that would do it.
+            def opening(members: List[ItemRevision]) = DispatchCommand.OpenWorkspace(RequestId(UUID.randomUUID()), members, None, claim.fence)
+            val submitting = DispatchCommand.SubmitWorkspace(attempt.id, List(WorkMember(member.id, WorkDisposition.CandidateReady, "Implemented", Nil)))
+            val reviewing = DispatchCommand.SelfReview(RequestId(UUID.randomUUID()), previous.id, List(ReviewMember(member.id, ReviewVerdict.Accepted, Nil)), claim.fence)
+            def refusal(value: WorkflowExecution, command: DispatchCommand): String = intercept[DomainFailure](value.authorize(command)).fault match {
+              case Fault.Denied(message) => message
+              case other => fail(s"Expected a denial, observed $other")
+            }
+            val working = policy(WorkflowRequest.Advance(Set(member.id), WorkflowPhase.Work))
+            working.authorize(opening(List(member)))
+            working.authorize(submitting)
+            assert(refusal(working, reviewing) == "Workflow execution: SelfReview requires advance through review")
+            assert(refusal(working, opening(List(guidance))) == "Workflow execution: child or integration members are outside the selected descendants")
+            policy(WorkflowRequest.Advance(Set(member.id), WorkflowPhase.Review)).authorize(reviewing)
+            assert(refusal(policy(WorkflowRequest.Advance(Set(guidance.id), WorkflowPhase.Integrate)), reviewing) ==
+              "Workflow execution: child or integration members are outside the selected descendants")
+            List(explore, plan, standalone, policy(WorkflowRequest.Begin(Set.empty)), policy(WorkflowRequest.Upstream(Set(member.id), UpstreamAction.Prepare))).foreach { execution =>
+              assert(refusal(execution, opening(List(member))) == "Workflow execution: OpenWorkspace requires advance through work")
+              assert(refusal(execution, submitting) == "Workflow execution: SubmitWorkspace requires advance through work")
+              assert(refusal(execution, reviewing) == "Workflow execution: SelfReview requires advance through review")
+            }
             // I19: revalidation belongs to the work phase and to the workflow's selected members.
             policy(WorkflowRequest.Advance(Set(member.id), WorkflowPhase.Work)).authorize(DispatchCommand.Revalidate(RequestId(UUID.randomUUID()), previous.id, claim.fence))
             denied(policy(WorkflowRequest.Advance(Set(guidance.id), WorkflowPhase.Integrate)), DispatchCommand.Revalidate(RequestId(UUID.randomUUID()), previous.id, claim.fence))

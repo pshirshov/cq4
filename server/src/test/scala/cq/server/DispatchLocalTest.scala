@@ -135,6 +135,61 @@ final class DispatchLocal extends AnyWordSpec {
       assert(conflict(DispatchController.capacity(2, 3)).contains("at most 4 active children") && conflict(DispatchController.capacity(0, 5)).contains("at most 4 active children"))
     }
   }
+  "Admission beside the governing session's own work (Behavioral Active Blackbox Atomic)" should {
+    "I30: hold the members of an open workspace as any unit does (D83) and no child slot, whichever side starts" in {
+      val project = ProjectId(UUID.randomUUID())
+      def request(numbers: Long*): DispatchRequest = DispatchRequest(RequestId(UUID.randomUUID()), DispatchWork.Worker(WorkerMode.Implement), Harness.Codex,
+        numbers.toList.map(number => ItemRevision(ItemId(project, Ledger.Tasks, number), Revision(1))), Nil, Nil, None,
+        Fence(ClaimId(UUID.randomUUID()), 1), HostLimits(3000, 1000, 300, 2000, 262144))
+      def conflict(operation: => Unit): String = intercept[cq.core.DomainFailure](operation).fault match {
+        case Fault.Conflict(message) => message
+        case other => fail(s"Expected a conflict, observed $other")
+      }
+      val children = List(1L, 2L, 3L, 4L).map(number => DispatchUnits.Standing(request(number), 1))
+      val workspace = DispatchUnits.Standing(request(5), 0)
+      // A workspace opens although every child slot is taken: no process runs for it.
+      DispatchUnits.admissible(children, request(5), 0)
+      // An open workspace takes no slot from the children: four of them still start beside it, and a fifth is refused as without it.
+      DispatchUnits.admissible(workspace :: children.take(3), request(4), 1)
+      assert(conflict(DispatchUnits.admissible(workspace :: children, request(6), 1)).contains("at most 4 active children"))
+      // Its members are held against a child and against a second workspace, and a child's against a workspace.
+      assert(conflict(DispatchUnits.admissible(List(workspace), request(5, 6), 1)).contains("An active child already covers T5"))
+      assert(conflict(DispatchUnits.admissible(List(workspace), request(5), 0)).contains("An active child already covers T5"))
+      assert(conflict(DispatchUnits.admissible(children, request(2), 0)).contains("An active child already covers T2"))
+    }
+    "I30: say Editing with next Submit while the session works, and nothing of it once the host works on the attempt again" in {
+      val project = ProjectId(UUID.randomUUID())
+      val members = List(ItemRevision(ItemId(project, Ledger.Tasks, 1), Revision(1)))
+      val assignment = Assignment(AssignmentId(UUID.randomUUID()), project, members.map(_.id).toSet, Attribution.Direct, None, None)
+      val governing = AttemptId(UUID.randomUUID())
+      val attempt = Attempt(AttemptId(UUID.randomUUID()), assignment.id, Some(governing), SessionId(UUID.randomUUID()), Role.Governor, Harness.Claude,
+        "unobserved-interactive-provider", "unobserved-interactive-model", DispatchController.OwnWorkCollector, 1, UsagePhase.Work, None)
+      val request = DispatchRequest(RequestId(UUID.randomUUID()), DispatchWork.Worker(WorkerMode.Implement), Harness.Claude, members, Nil, Nil, None,
+        Fence(ClaimId(UUID.randomUUID()), 1), HostLimits(3000, 1000, 300, 2000, 262144))
+      def entry: DispatchExecution = Unsafe.unsafe { implicit unsafe =>
+        new DispatchExecution(DispatchTicket(request, assignment, attempt, None, None), Path.of("/unused"),
+          zio.Promise.unsafe.make[Throwable, Unit](zio.FiberId.None), zio.Promise.unsafe.make[Nothing, Unit](zio.FiberId.None))
+      }
+      val open = WorkspaceState(WorkspaceAdmission.Open, Some("/state/session/workspaces/attempt/tree"))
+      val editing = entry
+      editing.editing(open)
+      assert(editing.status.phase == DispatchPhase.Editing && editing.status.next == ChildNext.Submit && editing.status.workspace.contains(open))
+      assert(!DispatchController.terminal(DispatchPhase.Editing))
+      editing.phase(DispatchPhase.Validating)
+      assert(editing.status.phase == DispatchPhase.Validating && editing.status.next == ChildNext.Wait && editing.status.workspace.contains(open))
+      val cancelled = entry
+      cancelled.editing(open)
+      assert(cancelled.requestStop("Cancelled by the governing session") && cancelled.status.phase == DispatchPhase.Stopping && cancelled.status.next == ChildNext.Wait)
+      // A workspace that opens after the attempt was stopped is never offered for editing.
+      val late = entry
+      late.requestStop("Governing harness ended")
+      late.editing(open)
+      assert(late.status.phase == DispatchPhase.Stopping && late.status.workspace.isEmpty)
+      // The ticket of such an attempt is the governing session's own, and a child's is not.
+      assert(AttemptSettlement.own(editing.ticket) && !AttemptSettlement.own(editing.ticket.copy(attempt = attempt.copy(role = Role.Worker))) &&
+        !AttemptSettlement.own(editing.ticket.copy(attempt = attempt.copy(parent = None))))
+    }
+  }
   "Compact dispatch projection (Behavioral Active Blackbox Atomic)" should {
     "I33: reply to a selection with its choices as retained, without the limits the request stated" in {
       val context = baboon.runtime.shared.BaboonCodecContext.Default
