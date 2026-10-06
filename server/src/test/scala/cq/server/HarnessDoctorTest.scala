@@ -51,6 +51,23 @@ final class HarnessDoctorLocal extends AnyWordSpec {
       Files.delete(extension)
       assert(!f.inspect(Harness.Pi, None, None).current)
     }
+    "say which trust input was not given, and name the hook report helper as each package layout ships it" in Using.resource(new Fixture) { f =>
+      def trust(harness: Harness, config: Option[Path], report: Option[Path]): InstallationCheck = {
+        f.install(harness)
+        f.inspect(harness, config, report).checks.find(_.name == "Hook trust").get
+      }
+      val supplied = f.root.resolve("supplied")
+      Files.writeString(supplied, "")
+      // A check that fails for want of an option says so: its other reasons are a trust decision the file does not hold.
+      Harness.all.foreach(harness => assert(trust(harness, None, None).state == InstallationState.Failed && trust(harness, None, None).detail.endsWith(
+        if (harness == Harness.Codex) "; not given: --harness-config, --trust-report" else "; not given: --harness-config"), harness.toString))
+      assert(trust(Harness.Codex, Some(supplied), None).detail.endsWith("; not given: --trust-report"))
+      Harness.all.foreach(harness => assert(!trust(harness, Some(supplied), Some(supplied)).detail.contains("not given"), harness.toString))
+      // The Nix package installs the helper on the path; an archive has it as a script among its examples.
+      assert(trust(Harness.Codex, Some(supplied), Some(supplied)).detail.contains("record a fresh report with cq-codex-hook-report (in an archive: python3 examples/codex-hook-report.py)"))
+      // Pi's --approve decides for one process and saves nothing.
+      assert(trust(Harness.Pi, Some(supplied), Some(supplied)).detail.contains("a launch with --approve saves none; /trust in Pi saves one"))
+    }
     "refuse untrusted Pi projects and honor the nearest canonical folder decision without writes" in Using.resource(new Fixture) { f =>
       f.install(Harness.Pi)
       assert(!f.inspect(Harness.Pi, None, None).current)
