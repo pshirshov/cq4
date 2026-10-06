@@ -249,7 +249,7 @@ abstract class DispatchAssemblyTest extends SpecZIO with AssertZIO {
           request = DispatchRequest(requestId, DispatchWork.Worker(WorkerMode.Implement), Harness.Codex, List(member), Nil, Nil, None, claim.fence,
             HostLimits(3000, 1000, 300, 2000, 262144))
           assembler = new InputAssembler(new ApplicationApi(application, authority, runtime), scope, clock, "")
-          refusal = Fault.Invalid(s"Work refused: T${member.id.number} has no milestone. A Planner must assign each Task to a milestone under plan review before work starts")
+          refusal = Fault.Invalid(s"Work refused: T${member.id.number} has no milestone. Assign each Task to an Open milestone before work starts")
           _ <- ZIO.attemptBlocking {
             assert(intercept[DomainFailure](assembler.assemble(request)).fault == refusal)
             assert(intercept[DomainFailure](assembler.assemble(request.copy(work = DispatchWork.Worker(WorkerMode.ResolveConflict)))).fault == refusal)

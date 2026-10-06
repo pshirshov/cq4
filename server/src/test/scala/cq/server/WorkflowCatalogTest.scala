@@ -1,7 +1,7 @@
 package cq.server
 
 import cq.api.*
-import cq.host.{WorkflowAssets, WorkflowCatalog, WorkflowCommand}
+import cq.host.{ProcessModes, WorkflowAssets, WorkflowCatalog, WorkflowCommand}
 import io.circe.{Json, parser}
 import java.nio.file.Files
 import java.util.UUID
@@ -53,7 +53,11 @@ final class WorkflowCatalogLocal extends AnyWordSpec {
         WorkflowRequest.Review(ArtifactId(UUID.randomUUID()), ReviewerMode.Audit), WorkflowRequest.Upstream(Set.empty, UpstreamAction.Report)).foreach { request =>
         val command = WorkflowCatalog.of(request)
         assert(command.variant == request.getClass.getSimpleName)
-        assert(assets.instructions(request) == command.instructions.map(text).mkString("\n"))
+        // The section of the project's process mode opens the text; the command's own resources hold what every mode shares.
+        ProcessMode.all.foreach { mode =>
+          assert(assets.instructions(request, mode) == (ProcessModes.of(mode).instructions :: command.instructions).map(text).mkString("\n"))
+        }
+        assert(!command.instructions.exists(_.contains("mode-")))
       }
     }
 

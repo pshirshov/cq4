@@ -323,6 +323,8 @@ root adt ModeAction {
   data Replace { expected: Revision mode: ProcessMode selfReviewWithoutChecks: bit }
 }
 root data ModeInput { project: ProjectId action: ModeAction }
+// What Help and the mode dialog show of one mode. `unavailable` says why the mode cannot be selected in this release.
+root data CatalogMode { mode: ProcessMode label: str hint: str description: str instructions: CatalogPrompt unavailable: opt[str] }
 root data SearchInput { project: ProjectId query: str after: opt[ItemId] snapshot: opt[ChangeCursor] limit: i32 }
 enum ItemOrderField { Id Type Title Status Severity Modified }
 enum SortDirection { Ascending Descending }
@@ -978,4 +980,5 @@ root data CatalogAgent {
   inputType: str inputSchema: str report: str outputSchema: str workspaceSchema: str
   harnesses: lst[CatalogAgentHarness] inputExample: ChildExecutionInput outputExample: ChildReport
 }
-root data HelpCatalog { commands: lst[CatalogCommand] agents: lst[CatalogAgent] }
+// `modeEffect` says when a change of the process mode takes effect.
+root data HelpCatalog { commands: lst[CatalogCommand] agents: lst[CatalogAgent] modes: lst[CatalogMode] modeEffect: str }

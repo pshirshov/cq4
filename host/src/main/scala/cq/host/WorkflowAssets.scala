@@ -18,7 +18,9 @@ final class WorkflowAssets {
     UTF_8.newDecoder().decode(java.nio.ByteBuffer.wrap(bytes)).toString
   }
 
-  def instructions(request: WorkflowRequest): String = WorkflowCatalog.of(request).instructions.map(resource).mkString("\n")
+  /** The workflow instructions of a session whose project is in `mode`: the mode's section, then the rules shared by every mode. */
+  def instructions(request: WorkflowRequest, mode: ProcessMode): String =
+    (ProcessModes.of(mode).instructions :: WorkflowCatalog.of(request).instructions).map(resource).mkString("\n")
 
   def commands(harness: Harness): List[CommandAsset] = WorkflowCatalog.commands.map { command =>
     val alias = command.alias(harness)

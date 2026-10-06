@@ -1,7 +1,7 @@
 package cq.server
 
 import cq.api.*
-import cq.host.WorkflowAssets
+import cq.host.{ProcessModes, WorkflowAssets}
 import java.nio.file.Files
 import java.util.UUID
 import org.scalatest.wordspec.AnyWordSpec
@@ -91,9 +91,14 @@ final class WorkflowLocal extends AnyWordSpec {
       assert(dispatch.contains("StartChoice returns at once. Status reads the current state or the result of an attempt, after waiting up to waitMillis (at most 120000) for the attempt to end: " +
         "the governing instructions of session Context say how this session waits for work") &&
         !dispatch.toLowerCase.contains("poll"), dispatch)
-      List("workflows/common.md", "workflows/advance.md", "workflows/begin.md", "workflows/entrypoint.md").foreach { name =>
+      (List("workflows/common.md", "workflows/advance.md", "workflows/begin.md", "workflows/entrypoint.md") ++ ProcessModes.all.map(_.instructions.stripPrefix("cq/"))).foreach { name =>
         val text = new String(getClass.getResourceAsStream("/cq/" + name).readAllBytes(), java.nio.charset.StandardCharsets.UTF_8)
         assert(!text.toLowerCase.contains("poll"), name)
+      }
+      // The section of a process mode says nothing about waiting, so the one way to wait holds in every mode.
+      ProcessModes.all.foreach { mode =>
+        val text = new WorkflowAssets().resource(mode.instructions)
+        assert(!text.contains("waitMillis") && !text.contains("Waiting for") && !text.contains("cq wait"), mode.label)
       }
     }
   }
@@ -101,8 +106,10 @@ final class WorkflowLocal extends AnyWordSpec {
   "Operator decisions in the governing workflows (Behavioral Active Blackbox Atomic)" should {
     "tell the session to record a Question before it stops, not to ask for a go-ahead it has, and to store a chat answer (D147)" in {
       val assets = new WorkflowAssets
-      val begin = assets.instructions(WorkflowRequest.Begin(Set.empty))
-      val advance = assets.instructions(WorkflowRequest.Advance(Set.empty, WorkflowPhase.Work))
+      // The rules hold in every process mode.
+      ProcessMode.all.foreach { mode =>
+      val begin = assets.instructions(WorkflowRequest.Begin(Set.empty), mode)
+      val advance = assets.instructions(WorkflowRequest.Advance(Set.empty, WorkflowPhase.Work), mode)
       // The shared rules reach every workflow; begin and advance repeat the part that applies at their own stop.
       List(begin, advance).foreach { text =>
         assert(text.contains("record it before you stop") && text.contains("Name that Question's ID in your final message"))
@@ -115,6 +122,7 @@ final class WorkflowLocal extends AnyWordSpec {
       assert(begin.contains("the IDs of the Open Questions that hold the outstanding user choices") && begin.contains("never a prose question at the end of your message"))
       assert(advance.contains("as Questions recorded before you stop, never as prose alone"))
       assert(advance.contains("Do not ask for a go-ahead that the invocation already gives"))
+      }
     }
 
     "give both rules to a governing session that has no workflow text: a run without a workflow and an attached host before activation (D147)" in {
@@ -138,6 +146,10 @@ final class WorkflowLocal extends AnyWordSpec {
       val schemas = new McpSchemas()
       (List(resource("workflows/common.md"), resource("workflows/advance.md"), SupervisorProgram.Guidance) ++ attached(schemas))
         .foreach(text => assert(text.contains(answer)))
+      ProcessMode.all.foreach { mode =>
+        List(WorkflowRequest.Begin(Set.empty), WorkflowRequest.Advance(Set.empty, WorkflowPhase.Work)).map(new WorkflowAssets().instructions(_, mode))
+          .foreach(text => assert(text.contains(answer), mode))
+      }
       assert(!resource("workflows/advance.md").contains("Do not ask for a go-ahead that the invocation or an Answered Question already gives"))
       assert(resource("workflows/common.md").contains("While a driver is on, the removal of a link to a Question outside the drive is refused as an out-of-set change"))
     }
@@ -150,6 +162,11 @@ final class WorkflowLocal extends AnyWordSpec {
       val common = resource("workflows/common.md")
       assert(common.contains("When you apply a proposal that produces items from a producer that is BlockedBy an Open Question, link every produced item BlockedBy the same Question"))
       assert(common.contains("The compact outcome of a Planner does not carry its member summaries"))
+      ProcessMode.all.foreach { mode =>
+        val text = new WorkflowAssets().instructions(WorkflowRequest.Advance(Set.empty, WorkflowPhase.Work), mode)
+        assert(text.contains("When you apply a proposal that produces items from a producer that is BlockedBy an Open Question, link every produced item BlockedBy the same Question") &&
+          text.contains("The compact outcome of a Planner does not carry its member summaries"), mode)
+      }
     }
 
     "ask the Plan reviewer for a Question only where the Planner produces one (D146)" in {
@@ -167,6 +184,90 @@ final class WorkflowLocal extends AnyWordSpec {
         assert(text.contains(result) && text.contains(process))
         assert(text.contains("is met by the workflow that dispatched you: it is no reason to block, fail or abstain"))
       }
+    }
+  }
+
+  "Process modes in the governing workflows (Behavioral Active Blackbox Atomic)" should {
+    val assets = new WorkflowAssets
+    def resource(name: String): String = assets.resource(s"cq/workflows/$name.md")
+    def section(mode: ProcessMode): String = assets.resource(ProcessModes.of(mode).instructions)
+    val begin = WorkflowRequest.Begin(Set.empty)
+    val advance = WorkflowRequest.Advance(Set.empty, WorkflowPhase.Integrate)
+    // The rules of the prescribed order, which the shared texts carried before the modes existed, by the workflow that stated each.
+    val beginOrder = List(
+      "have Planner propose goals with distinct acceptance criteria",
+      "Obtain independent Plan review before choosing to apply the planner's result handle.",
+      "The Planner proposal that produces Tasks assigns each to an Open milestone or to a Milestone it creates, under the same Plan review")
+    val advanceOrder = List(
+      "Earlier phases may be necessary",
+      "Do not silently bypass an earlier unresolved requirement to reach the phase limit.")
+    val sharedOrder = List(
+      "When no Open milestone fits, select a Planner with those roots, obtain independent Plan review of the Milestone it proposes and apply it by handle.",
+      "Never create a milestone yourself.",
+      "A reviewed Planner proposal assigns the Tasks it produces")
+
+    "keep every rule of the prescribed order in the Rigorous instructions and state none of them in the texts every mode shares" in {
+      val rigorous = Map(begin -> assets.instructions(begin, ProcessMode.Rigorous), advance -> assets.instructions(advance, ProcessMode.Rigorous))
+      (beginOrder ++ sharedOrder).foreach(rule => assert(rigorous(begin).contains(rule), rule))
+      (advanceOrder ++ sharedOrder).foreach(rule => assert(rigorous(advance).contains(rule), rule))
+      // The remainder of each shared text is delivered whole, whatever the mode.
+      List("common", "begin", "advance").foreach { name =>
+        (beginOrder ++ advanceOrder ++ sharedOrder).foreach(rule => assert(!resource(name).toLowerCase.contains(rule.toLowerCase), s"$name: $rule"))
+        assert(!resource(name).contains("create a milestone yourself"), name)
+      }
+      ProcessMode.all.foreach { mode =>
+        assert(assets.instructions(begin, mode).endsWith("\n" + resource("common") + "\n" + resource("begin")), mode)
+        assert(assets.instructions(advance, mode).endsWith("\n" + resource("common") + "\n" + resource("advance")), mode)
+        assert(assets.instructions(begin, mode).startsWith(section(mode)) && section(mode).startsWith(s"Process mode of this project: ${ProcessModes.of(mode).label}."), mode)
+      }
+    }
+
+    "lift the Planner, the Plan review and the phase order in the relaxed modes and nothing else" in {
+      List(ProcessMode.CrossCutting, ProcessMode.Yolo).foreach { mode =>
+        val text = section(mode)
+        (beginOrder ++ advanceOrder ++ sharedOrder).foreach(rule => assert(!assets.instructions(advance, mode).contains(rule) && !assets.instructions(begin, mode).contains(rule), s"$mode: $rule"))
+        assert(text.contains("that step is optional: you may plan yourself and write the records with change"), mode)
+        assert(text.contains("You may take the selected items in any order and move between the phases in any order up to the phase limit"), mode)
+        // The request keeps its scope (Q59).
+        assert(text.contains("It does not widen the request: the roots and the phase limit bound the work as in every mode, and begin captures and plans without starting implementation."), mode)
+        // The Governor writes the item and its criteria before the work, by a Produce a drive admits.
+        assert(text.contains("Every piece of work has its own Task with acceptance criteria, under an Open milestone"), mode)
+        assert(text.contains("change with Produce from the in-scope item the work derives from") && text.contains("""milestone set to {"Existing":{"id":ItemId}} for an Open milestone whose objective covers the Task"""), mode)
+        assert(text.contains("""When no Open milestone fits, Create a Milestone draft earlier in the same request and set milestone to {"Created":{"mutation":its zero-based index}}"""), mode)
+        assert(text.contains("Never Create a Task without a producer"), mode)
+        assert(text.contains("To work a Task without that assessment, Select it as its own root."), mode)
+        // What no mode relaxes.
+        assert(text.contains("A recorded gate is never left out") && text.contains("Memories are not relaxed"), mode)
+        assert(text.contains("a Task becomes Done only by recorded integration") && text.contains("Keep the ledger current as you go"), mode)
+      }
+    }
+
+    "keep the isolated Worker and the independent Candidate review mandatory in Cross-cutting, and relax them only in YOLO" in {
+      val crossCutting = section(ProcessMode.CrossCutting)
+      assert(crossCutting.contains("Every change is made by a Worker in its isolated workspace and captured by the host: never edit, build or test yourself."))
+      assert(crossCutting.contains("Every candidate is checked by the host, reviewed by an independent Reviewer Candidate and integrated by the host"))
+      assert(section(ProcessMode.Rigorous).contains("Every change is made by a Worker in its isolated workspace, checked by the host, reviewed by an independent Reviewer Candidate and integrated by the host."))
+      val yolo = section(ProcessMode.Yolo)
+      val direct = "you may implement a Task yourself in an isolated workspace that the host gives you for it"
+      val selfReview = "you may instead review the candidate yourself, whether a Worker made it or you did"
+      assert(yolo.contains(direct) && yolo.contains(selfReview))
+      assert(yolo.contains("the ledger then records the integration as self-reviewed by the governing session"))
+      assert(yolo.contains("The configured host checks run on every candidate and are never waived by a verdict, yours included. Only the host integrates"))
+      assert(yolo.contains("A self-reviewed candidate is integrated only when the project configures at least one check, unless the operator has exempted the project from that rule."))
+      List(ProcessMode.Rigorous, ProcessMode.CrossCutting).map(section).foreach { text =>
+        assert(!text.contains("yourself in an isolated workspace") && !text.contains("review the candidate yourself") && !text.contains("self-review"))
+      }
+      // The rule the shared text states for every mode: the operator's checkout is never edited, in YOLO either.
+      ProcessMode.all.foreach(mode => assert(assets.instructions(advance, mode).contains("The operator's checkout is the integration target of your workers. Never edit, build, test or run checks there")))
+      assert(yolo.contains("they still hold for the operator's checkout and for every place other than that workspace"))
+    }
+
+    "name no Planner in the refusal of a Task without a milestone, which every mode meets" in {
+      val project = ProjectId(UUID.randomUUID())
+      val task = Item(ItemId(project, Ledger.Tasks, 7), Revision(1), ItemDraft("Task", "", Set.empty, false, Content.Task(TaskStatus.Ready, List("Observable result"), None, Nil), Nil), 1L, 1L,
+        Provenance(Actor("governor", SessionId(UUID.randomUUID()), Role.Governor), 1L, RequestId(UUID.randomUUID())))
+      val refusal = cq.core.MilestonePolicy.refusal(DispatchWork.Worker(WorkerMode.Implement), ItemView(task, Nil), _ => fail("No milestone is read"))
+      assert(refusal.contains(cq.core.MilestoneRefusal(CohortReason.NoMilestone, "Work refused: T7 has no milestone. Assign each Task to an Open milestone before work starts")))
     }
   }
 

@@ -44,6 +44,6 @@ final class WorkflowAssembly(api: ServerApi, project: ProjectId, assets: Workflo
         Some(WorkflowSubject(id, value.request.work, value.request.members, value.candidate))
       case _ => None
     }
-    WorkflowContext(request, OperatorRequirements.governing(assets.instructions(request), OperatorRequirements.standing(call, project)), subject)
+    WorkflowContext(request, OperatorRequirements.governing(assets.instructions(request, ProcessMode.Rigorous), OperatorRequirements.standing(call, project)), subject)
   }
 }

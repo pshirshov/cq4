@@ -72,6 +72,23 @@ final class CatalogReadLocal extends AnyWordSpec {
       }
     }
 
+    "carry the process modes with the texts the governing instructions are assembled from and the availability the write path enforces (I30)" in {
+      assert(catalog.modes.map(_.mode) == ProcessMode.all && ProcessModes.all.map(_.mode) == ProcessMode.all)
+      catalog.modes.zip(ProcessModes.all).foreach { (view, source) =>
+        withClue(s"${source.mode}: ") {
+          assert(view == CatalogMode(source.mode, source.label, source.hint, source.description, CatalogPrompt(source.instructions, resource(source.instructions)), source.unavailable))
+          assert(view.label.trim.nonEmpty && view.hint.trim.nonEmpty && !view.hint.contains("\n") && view.description.trim.nonEmpty)
+          // The same text opens the instructions of a session in that mode.
+          assert(workflows.instructions(WorkflowRequest.Begin(Set.empty), source.mode).startsWith(view.instructions.text))
+          assert(view.unavailable == cq.core.ProcessModePolicy.unavailable(source.mode))
+          assert(view.unavailable.isEmpty == scala.util.Try(cq.core.ProcessModePolicy.validate(ProjectSetting.Mode(source.mode, false))).isSuccess)
+        }
+      }
+      assert(catalog.modes.map(_.label) == List("Rigorous", "Cross-cutting", "YOLO cross-cutting") && catalog.modes.map(_.label).distinct.size == 3)
+      assert(catalog.modes.filter(_.unavailable.nonEmpty).map(_.mode) == List(ProcessMode.Yolo))
+      assert(catalog.modeEffect == ProcessModes.Effect && catalog.modeEffect.contains("next workflow activation") && catalog.modeEffect.contains("next cycle"))
+    }
+
     "include drive and park with their actual hook assets and Pi extension aliases" in {
       val drivers = catalog.commands.filter(view => Set("drive", "park").contains(view.command))
       assert(drivers.map(_.command) == List("drive", "park"))
