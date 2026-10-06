@@ -22,14 +22,15 @@ Read this before relying on a drive.
 
 ## Supported harness versions
 
-Two sets of versions apply, and they are not the same thing.
+Three sets of versions apply, and they are not the same thing.
 
 | Versions | Status | Evidence |
 | --- | --- | --- |
 | Claude Code 2.1.285, Codex 0.159.2, Pi 0.99.1 | **Driver-validated.** The driver was recorded on these versions, and the session key was validated on them: the hook-stdin `session_id` on Claude Code and Codex, and `ctx.sessionManager.getSessionId()` on Pi, stayed the same across the turns of one session and differed between two concurrent sessions. | Real-model sessions against a stub backend ([hook driver](validation/hook-driver.md), [Pi driver](validation/pi-driver.md)). For Claude Code 2.1.285 and Codex 0.159.2 there are also two concurrent sessions with distinct keys against real CQ servers and ledgers ([T59](validation/t59-driver-cases-20261004.md)). Pi 0.99.1 has no concurrent-session case against a real server. |
+| Pi 1.0.0 | **Checked without a model.** The generated extension ran in real Pi 1.0.0 processes against a scripted provider and a scripted host: `/cq:drive`, the submitted directive and its prompt expansion, the status refresh, the continuation after `agent_settled`, the stop, the waiter's message starting a turn in an idle session, and one session key in every request of a session. No model followed a directive, no real CQ host took part, and two concurrent sessions were not run. | [Pi 1.0.0](validation/pi-1.0.0-20261006.md) |
 | Claude Code 2.1.280, Codex 0.156.1, Pi 0.87.1 | **Supervisor-accepted only.** These are the older pins that CQ still accepts as harness versions in the supervisor settings. The driver was not run on them, and their session keys were not validated. | None for the driver. |
 
-Criterion 6 of G1 (host-held per-session driver state, with a session key validated against the supported harness version) covers only the driver-validated versions: Claude Code 2.1.285, Codex 0.159.2 and Pi 0.99.1. Driving a session on one of the older supervisor-accepted versions is outside that criterion. Treat it as an unvalidated trial.
+Criterion 6 of G1 (host-held per-session driver state, with a session key validated against the supported harness version) covers only the driver-validated versions: Claude Code 2.1.285, Codex 0.159.2 and Pi 0.99.1. Driving a session on Pi 1.0.0 or on one of the older supervisor-accepted versions is outside that criterion. Treat it as an unvalidated trial.
 
 ## Install
 
