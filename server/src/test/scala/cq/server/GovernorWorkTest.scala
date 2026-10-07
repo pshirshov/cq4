@@ -342,6 +342,28 @@ emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_toke
       } yield () }
     }
 
+    "I30 D83: refuse a child on the members of an open workspace before the unit draws its turn from a round-robin seat" in {
+      (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO], registry: DriverInspector) =>
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, registry, List(Good)) { f =>
+        val turns = List("turn-a", "turn-b")
+        val worker = AssignedWork(RequestId(uuid), DispatchWork.Worker(WorkerMode.Implement), f.members, Nil, Nil, None, f.fence, f.limits)
+        for {
+          _ <- f.yolo
+          _ <- ZIO.attemptBlocking(UnitFixture.configure(f.authority.root, f.owner.project, s"defaults: { roles: { worker: { rr: [${turns.map("codex:" + _).mkString(", ")}] } } }\n"))
+          opened <- f.open(None)
+          refused <- f.units.start(worker, None).either
+          _ <- ZIO.attempt(assert(refused.left.exists { case DomainFailure(Fault.Conflict(message)) => message.contains("An active child already covers T"); case _ => false }, refused.toString))
+          _ <- f.status(DispatchCommand.Cancel(opened.attempt)) *> f.ended(opened.attempt)
+          _ <- f.child(DispatchWork.Worker(WorkerMode.Implement), None)
+          attempts <- f.attempts
+          // The refused start was no unit of the seat: the first unit that starts takes the session's first turn, not its second.
+          first = turns(new cq.host.SeatRotation(f.owner.actor.session).next(AgentRole.Worker, 0, turns.map(ModelRoute(Harness.Codex, None, _, None))))
+          _ <- ZIO.attempt(assert(attempts.filter(_.attempt.role == Role.Worker).map(_.attempt.model) == List(first), attempts.map(view => view.attempt.role -> view.attempt.model).toString))
+        } yield ()
+      }
+    }
+
     "I30: integrate a candidate the governing session made and an independent Reviewer accepted as made by the governing session" in {
       (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
         artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO], registry: DriverInspector) =>
