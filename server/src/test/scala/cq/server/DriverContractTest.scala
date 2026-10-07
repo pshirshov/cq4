@@ -2641,6 +2641,37 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
       } yield ()
     }
 
+    "D156: show a unit whose attempt has ended and whose request has not settled as an active child, as a stop reads it" in {
+      (service: LedgerService[IO], repository: LedgerRepository[IO]) =>
+      val w = world
+      val key = claude("unit-in-flight")
+      val unit = LineageMember.Request(RequestId(uuid))
+      for {
+        _ <- service.initialize(w.operator, "unit-in-flight")
+        root <- create(service, w.operator, goal("Goal"))
+        one <- driven(service, w, key, workset(root))
+        // The unit is registered before its first attempt is: it is work in flight from then on.
+        _ <- act(service, w.governor, DriverSession.Inherit(one.cycle, LineageMember.Run(one.run), unit))
+        preparing <- status(service, w, key)
+        outcome = ChildOutcome(AttemptId(uuid), List(root), ChildEnd.Cancelled, None, None)
+        _ <- act(service, w.governor, DriverSession.Inherit(one.cycle, unit, LineageMember.Attempt(outcome.attempt)))
+        running <- status(service, w, key)
+        // The host reports the end of the attempt and the end of its unit in two calls: between them the unit is still in flight.
+        _ <- act(service, w.governor, DriverSession.Conclude(one.cycle, outcome))
+        between <- status(service, w, key)
+        stop <- query(service, w, key)
+        _ <- act(service, w.governor, DriverSession.Settle(one.cycle, unit))
+        settled <- status(service, w, key)
+        _ <- assertIO(between.map(value => value.activeChildren -> value.line) == Some(1 -> "CQ driver on: G1 through work; 1 active child"))
+        _ <- assertIO(stop match {
+          case DriverReply.Waiting(value, message) => value.activeChildren == 1 && message == s"CQ driver waiting: cycle 1 has request ${unit.id.value} in flight; the session continues when it ends"
+          case _ => false
+        })
+        _ <- assertIO(preparing.map(_.activeChildren) == Some(1) && running.map(_.activeChildren) == Some(1))
+        _ <- assertIO(settled.map(_.activeChildren) == Some(0))
+      } yield ()
+    }
+
     "register work dispatched from a driven run under its cycle and settle it when the host reports it done" in {
       (ledger: LedgerService[IO], repository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO],
         integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>

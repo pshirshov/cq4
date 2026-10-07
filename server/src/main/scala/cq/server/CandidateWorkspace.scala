@@ -8,11 +8,12 @@ import java.time.Duration
 final class CandidateWorkspace(config: SupervisorConfig, command: HostCommand) extends ExecutionBase {
   def this(config: SupervisorConfig) = this(config, CandidateWorkspace.command(config.environment))
   private val GitArguments = List("git", "--no-replace-objects", "--no-pager", "-c", "core.hooksPath=/dev/null", "-c", "submodule.recurse=false")
-  private def git(directory: Path, arguments: String*): String = {
+  private def output(directory: Path, arguments: String*): String = {
     val result = command.run(directory, GitArguments ++ arguments)
     require(result.exit == 0, s"Candidate Git operation failed: ${result.text.take(300)}")
-    result.text.trim
+    result.text
   }
+  private def git(directory: Path, arguments: String*): String = output(directory, arguments*).trim
   override def ancestor(earlier: GitCommit, later: GitCommit): Boolean = {
     def inspect(arguments: String*): Boolean = {
       val result = command.run(Path.of(config.run.repository), GitArguments ++ arguments)
@@ -44,6 +45,38 @@ final class CandidateWorkspace(config: SupervisorConfig, command: HostCommand) e
     // from the session base, which may have diverged from the target (D77). Any other commit is refused.
     val captured = git(repository, "for-each-ref", "--format=%(refname)", "--points-at=" + base.value, "refs/cq/candidates/").nonEmpty
     require(targetHead.contains(base) || base == config.run.base || captured, "Candidate base is neither the target head, the session base nor a captured candidate")
+  }
+  /**
+   * The paths `candidate` adds, changes or deletes against the commit at which it left the integration target (the session base when
+   * no target is configured), as the text of `CandidatePaths`. Renames are not paired: a moved file is one deleted and one added path.
+   */
+  def paths(candidate: GitCommit): String = {
+    val repository = Path.of(config.run.repository)
+    val base = GitCommit(git(repository, "merge-base", fresh().value, candidate.value))
+    // Read untrimmed: a name may end in white space.
+    def diff(format: String*): String =
+      output(repository, (List("diff", "--no-renames", "--no-ext-diff", "--no-textconv") ++ format ++ List(base.value, candidate.value, "--"))*)
+    def records(text: String): List[String] = text.split('\u0000').toList.filter(_.nonEmpty)
+    val changed = "(\\d+) files? changed".r.findFirstMatchIn(diff("--shortstat")).fold(0)(_.group(1).toInt)
+    if (changed > CandidateWorkspace.MaxListedPaths) CandidatePaths.unlisted(base, changed, CandidateWorkspace.MaxListedPaths)
+    else {
+      val binary = records(diff("--numstat", "-z")).map(_.split("\t", 3)).collect { case Array("-", "-", path) => path }.toSet
+      val states = records(diff("--raw", "-z")).grouped(2).map {
+        case List(state, path) => path -> (state.last match {
+          case 'A' => PathChange.Added
+          case 'D' => PathChange.Deleted
+          case _ => PathChange.Changed
+        })
+        case other => throw new IllegalStateException(s"Candidate path record is incomplete: ${other.mkString(" ").take(300)}")
+      }.toList
+      val sizes = states.collect { case (path, change) if change != PathChange.Deleted => path }.grouped(CandidateWorkspace.SizedTogether).flatMap { group =>
+        records(output(repository, (List("--literal-pathspecs", "ls-tree", "-r", "-l", "-z", candidate.value, "--") ++ group)*)).flatMap { record =>
+          val (entry, path) = record.splitAt(record.indexOf('\t'))
+          entry.trim.split("\\s+").last.toLongOption.map(path.drop(1) -> _)
+        }
+      }.toMap
+      CandidatePaths.render(base, states.map((path, change) => CandidatePath(path, change, sizes.get(path), binary(path))))
+    }
   }
   def observeTarget(candidate: GitCommit): GitCommit = {
     val target = config.settings.integrationTarget.getOrElse(throw new IllegalArgumentException("No integration target configured"))
@@ -136,6 +169,10 @@ final class CandidateWorkspace(config: SupervisorConfig, command: HostCommand) e
 
 object CandidateWorkspace {
   private val MaxOutputBytes = 1024 * 1024
+  // The names of more changed paths than this are not read: their records would not fit the bound of one Git command's output.
+  private val MaxListedPaths = 2000
+  // The paths one Git command sizes: their names are its arguments.
+  private val SizedTogether = 100
   def command(environment: Map[String, String]): HostCommand =
     new BoundedHostCommand(GitEnvironment.isolated(HostEnvironment.runtime(environment)), Duration.ofSeconds(10), MaxOutputBytes)
 }

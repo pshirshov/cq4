@@ -211,12 +211,18 @@ private final class PostgresUsageTransaction(connection: Connection, project: Pr
     }
 
   override def attempts(filter: UsageFilter, after: Option[AttemptId], limit: Int): ReadPage[AttemptView] = {
-    val pagination = after.fold("")(_ => " AND t.attempt_id > ?")
+    // Newest first, the ID breaking a tie; a page continues after the attempt that ended the one before it, whose start is read here.
+    val started = "(t.body->>'startedAt')::bigint"
+    val last = after.map { id =>
+      sql.query("SELECT (body->>'startedAt')::bigint FROM cq_usage_attempts WHERE project_id = ? AND attempt_id = ?") (identity(_, id.value))(_.getLong(1))
+        .headOption.getOrElse(throw DomainFailure(Fault.Invalid(UsageCursors.UnknownAttemptKey))) -> id
+    }
+    val pagination = last.fold("")(_ => s" AND ($started, t.attempt_id) < (?, ?)")
     sql.pageBy("SELECT a.body::text, t.body::text, t.effective_outcome::text FROM cq_usage_attempts t JOIN cq_usage_assignments a USING(project_id, assignment_id) WHERE t.project_id = ?" +
-      filterSql(filter) + pagination + " ORDER BY t.attempt_id LIMIT ?", limit, AttemptView_JsonCodec) { s =>
+      filterSql(filter) + pagination + s" ORDER BY $started DESC, t.attempt_id DESC LIMIT ?", limit, AttemptView_JsonCodec) { s =>
       val index = bindFilter(s, filter)
-      after match {
-        case Some(id) => s.setObject(index, id.value); s.setInt(index + 1, limit + 1)
+      last match {
+        case Some((at, id)) => s.setLong(index, at); s.setObject(index + 1, id.value); s.setInt(index + 2, limit + 1)
         case None => s.setInt(index, limit + 1)
       }
     } { r =>

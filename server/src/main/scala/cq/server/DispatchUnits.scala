@@ -335,7 +335,7 @@ final class DispatchUnits(config: SupervisorConfig, authority: SupervisorAuthori
       val status = attempt.ended.getOrElse(throw new IllegalStateException(s"Attempt ${attempt.id.value} of an ended unit has not ended"))
       EndedAttempt(attempt.id, status, attempt.entry.stopReason.nonEmpty, review(attempt, status))
     }
-    val decided = DispatchUnits.status(unit.work.request, attempts.head.id, outcome, all, refusal)
+    val decided = DispatchUnits.status(unit.work.request, attempts.head.id, outcome, all, seats.seats.flatMap(_.attempts).filter(_.abstained.nonEmpty), refusal)
     val reply = unit.selection.fold(CohortFailure.outcome(decided, None, None))(_.finished(decided))
     (decided, DispatchUnits.outcomes(outcome, reply, all), Some(seats))
   }.catchAll { error =>
@@ -536,8 +536,9 @@ object DispatchUnits {
    *  - Failed or Abstained with seats that delivered, too few for the unit: the blocker also names each of them with its result
    *    handle, so that a delivered and admitted review is read before the unit's end is acted on.
    *  - Cancelled: the status of the attempt that was cancelled; when the unit was stopped between two candidates, a cancelled status.
+   * `abstained` holds every candidate of the unit that abstained, however the unit ended: each is counted, and named in the blocker.
    */
-  def status(request: RequestId, handle: AttemptId, outcome: UnitOutcome, ended: List[EndedAttempt], refusal: Option[String]): DispatchStatus = {
+  def status(request: RequestId, handle: AttemptId, outcome: UnitOutcome, ended: List[EndedAttempt], abstained: List[SeatAttempt], refusal: Option[String]): DispatchStatus = {
     def own(attempt: AttemptId): EndedAttempt = ended.find(_.attempt == attempt).getOrElse(throw new IllegalStateException(s"Attempt ${attempt.value} is not of this unit"))
     val last = ended.lastOption.getOrElse(throw new IllegalStateException("An ended unit has an attempt")).status
     val decided = outcome match {
@@ -561,7 +562,13 @@ object DispatchUnits {
       case UnitOutcome.Cancelled => ended.find(_.status.phase == DispatchPhase.Cancelled).orElse(ended.find(_.stopped)).map(_.status)
         .getOrElse(last.copy(phase = DispatchPhase.Cancelled, next = ChildNext.Retry, blocker = Some(refusal.getOrElse(Cancelled)), result = None))
     }
-    DispatchProjection.bounded(decided.copy(request = request, attempt = handle))
+    // A unit that ended by abstention has named the candidates it ended by.
+    val unnamed = outcome match {
+      case UnitOutcome.Abstained(candidates, _) => abstained.filterNot(candidates.contains)
+      case _ => abstained
+    }
+    val blocker = if (unnamed.isEmpty) decided.blocker else Some(DispatchProjection.concise((decided.blocker.toList :+ UnitProgress.absent(unnamed)).mkString("; ")))
+    DispatchProjection.bounded(decided.copy(request = request, attempt = handle, counts = decided.counts.copy(abstained = decided.counts.abstained + abstained.size), blocker = blocker))
   }
 
   /**

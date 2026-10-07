@@ -80,7 +80,13 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
           } else None
           val base = combination.map(_.observedTarget).orElse(input.previous.flatMap(_.candidate)).getOrElse(candidates.fresh())
           if (combination.isEmpty) candidates.verifyBase(base)
-          val body = HostFiles.encode(ChildExecutionInput_JsonCodec, ChildExecutionInput(input, base, config.settings.checks))
+          // A candidate reviewer is given every path of the candidate's change: nothing else in its input names the files a candidate holds.
+          val shown = if (ticket.request.work != DispatchWork.Reviewer(ReviewerMode.Candidate)) input else {
+            val upload = ArtifactUpload(config.project.project, CandidatePaths.artifact(ticket.attempt.id), ticket.attempt.id, ArtifactKind.Evidence, "text/plain",
+              candidates.paths(base))
+            input.copy(artifacts = input.artifacts :+ ResolvedArtifact(authority.collector.artifact(upload), upload.body))
+          }
+          val body = HostFiles.encode(ChildExecutionInput_JsonCodec, ChildExecutionInput(shown, base, config.settings.checks))
           val domain = SupervisorAuthority.harnessGrant(authority.root, config.project.project,
             Actor("CQ child " + ticket.attempt.id.value, ticket.attempt.session, ticket.attempt.role), clock)
           val local = access.issue(ticket.attempt.id, ticket.attempt.role)

@@ -1,7 +1,7 @@
 package cq.server
 
-import cq.api.Harness
-import cq.host.{DriverAssets, WorkflowAssets}
+import cq.api.*
+import cq.host.{DriverAssets, HarnessUsage, HostFiles, WorkflowAssets}
 import java.io.{ByteArrayInputStream, ByteArrayOutputStream, PrintStream}
 import java.nio.charset.StandardCharsets.UTF_8
 import java.nio.file.{Files, Path}
@@ -133,6 +133,41 @@ final class CliDoctorLocal extends AnyWordSpec {
       } finally {
         if (process.isAlive) process.destroyForcibly()
         Files.deleteIfExists(errorFile)
+      }
+    }
+    "D158: refuse a settings entry in one line that names the entry and the cause, from the actual JVM entrypoint" in fixture { root =>
+      val classpath = Option(System.getProperty("cq.test.classpath")).getOrElse(throw new IllegalStateException("CLI fixture classpath is required"))
+      val source = Option(System.getProperty("cq.test.sourceRoot")).getOrElse(throw new IllegalStateException("CLI fixture source root is required"))
+      val options = Files.readString(Path.of(source, ".jvmopts")).trim.split("\\s+").toList
+      val binary = root.resolve("cq")
+      Files.writeString(binary, "#!/bin/sh\nexit 0\n")
+      assert(binary.toFile.setExecutable(true))
+      // The entry of one harness names a provider variable the host never forwards.
+      val entries = Harness.all.toList.map(harness => HarnessSetting(harness, binary.toString, "model", "provider", HarnessUsage.version(harness), Nil,
+        if (harness == Harness.Pi) Set("CQ_PROVIDER_VARIABLE") else Set.empty))
+      Files.writeString(root.resolve("settings.json"), HostFiles.encode(SupervisorSettings_JsonCodec,
+        SupervisorSettings(root.resolve("state").toString, binary.toString, entries, HostLimits(1000, 500, 100, 1000, 65536), Nil, None, None)))
+      val before = Using.resource(Files.list(root))(_.iterator().asScala.toSet)
+      List(List("configure", "claude", "--settings", "settings.json", "--executable", binary.toString, "--replace"),
+        List("assets", "export", "claude", "--directory", "exported", "--project-directory", ".", "--settings", "settings.json", "--executable", binary.toString)).foreach { arguments =>
+        val command = List(Path.of(System.getProperty("java.home"), "bin", "java").toString) ++ options ++ List("-cp", classpath, "cq.server.Main") ++ arguments
+        val errorFile = Files.createTempFile("cq-configure-stderr-", ".log")
+        val builder = new ProcessBuilder(command.asJava).directory(root.toFile).redirectError(errorFile.toFile)
+        builder.environment().keySet().asScala.toList.filter(_.startsWith("CQ_")).foreach(builder.environment().remove)
+        val process = builder.start()
+        try {
+          process.getOutputStream.close()
+          assert(process.waitFor(60, TimeUnit.SECONDS), "The command did not terminate")
+          val stdout = new String(process.getInputStream.readNBytes(65536), UTF_8)
+          val stderr = Files.readString(errorFile)
+          assert(process.exitValue() == 1 && stdout.isEmpty, stdout)
+          assert(stderr == "Settings entry for pi is refused: Provider environment cannot carry CQ or harness-control authority\n",
+            s"${arguments.head}: ${stderr.linesIterator.size} lines on standard error, beginning ${stderr.take(600)}")
+          assert(Using.resource(Files.list(root))(_.iterator().asScala.toSet) == before)
+        } finally {
+          if (process.isAlive) process.destroyForcibly()
+          Files.deleteIfExists(errorFile)
+        }
       }
     }
   }

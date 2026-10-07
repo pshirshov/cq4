@@ -223,6 +223,8 @@ CQ driver on: G1 through work; 2 active children
 CQ driver off: G1 through work; stopped (quiescent): No item of the advanceable set is ready to advance
 ```
 
+The active child count is the number of child attempts in flight plus the number of unit requests in flight that have none: a unit before its first attempt, between two candidates, or whose last attempt the host has reported while the end of the unit is still to come. The host reports an attempt's end and its unit's end in two calls, so a count of attempts alone read zero for a moment in which a stop was still answered with a wait (D156); the count and the stop now read the same lineage.
+
 Every state change and stop also returns a transcript message in its reply.
 
 ## Pi extension

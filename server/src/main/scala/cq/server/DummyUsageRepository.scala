@@ -110,8 +110,12 @@ private final class DummyUsageTransaction(initial: DummyUsageState) extends Usag
   override def outcomes(attempt: AttemptId, after: Long, limit: Int): ReadPage[RecordedOutcome] =
     ReadPage.select(state.outcomes.valuesIterator.filter(o => o.value.attempt == attempt && o.sequence > after).toList.sortBy(_.sequence).iterator, limit, RecordedOutcome_JsonCodec)
   override def attempts(filter: UsageFilter, after: Option[AttemptId], limit: Int): ReadPage[AttemptView] = {
-    val values = state.attempts.valuesIterator.filter(a => matches(filter, a) && after.forall(p => a.id.value.toString > p.value.toString))
-      .toList.sortBy(_.id.value.toString).iterator.map(a => AttemptView(state.assignments(a.assignment), a, latestOutcome(a.id), AttemptObservation.observed(a)))
+    // Newest first, the ID breaking a tie; a page continues after the attempt that ended the one before it.
+    def key(attempt: Attempt): (Long, String) = (attempt.startedAt, attempt.id.value.toString)
+    val ordering = Ordering[(Long, String)].reverse
+    val last = after.map(id => key(state.attempts.getOrElse(id, throw DomainFailure(Fault.Invalid(UsageCursors.UnknownAttemptKey)))))
+    val values = state.attempts.valuesIterator.filter(a => matches(filter, a) && last.forall(ordering.gt(key(a), _)))
+      .toList.sortBy(key)(ordering).iterator.map(a => AttemptView(state.assignments(a.assignment), a, latestOutcome(a.id), AttemptObservation.observed(a)))
     ReadPage.select(values, limit, AttemptView_JsonCodec)
   }
   override def coverage(filter: UsageFilter): AttemptCoverage = {

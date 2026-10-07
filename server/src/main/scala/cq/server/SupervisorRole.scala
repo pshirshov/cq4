@@ -28,6 +28,10 @@ final case class SupervisorConfig(settings: SupervisorSettings, project: Project
   val endpoint: URI = URI.create(project.endpoint)
 }
 
+/** A settings file holds an entry the host refuses. Its message is the one line a command that read the file prints. */
+final class SettingsRefusal(val harness: Harness, cause: RouteRefusal) extends IllegalArgumentException(
+  s"Settings entry for ${harness.toString.toLowerCase(java.util.Locale.ROOT)} is refused: ${cause.getMessage.stripPrefix("requirement failed: ")}", cause)
+
 object SupervisorConfig {
   val AttachedGovernorCollector = cq.core.AttemptObservation.AttachedGovernorCollector
   private val MaxConfigBytes = cq.core.LedgerPolicy.MaxConfigBytes
@@ -36,6 +40,9 @@ object SupervisorConfig {
   private val MaxOutputBytes = 32 * 1024 * 1024
   val VersionMismatch = "Installed harness version differs from its configured verified route"
   def profile(value: HarnessSetting): HarnessProfile = HarnessProfile(value, HarnessProfile.route(value))
+  /** The profile of every entry of a settings file. An entry the host refuses is named: the reader of the file is told which one to correct. */
+  def profiles(settings: SupervisorSettings): List[HarnessProfile] = settings.harnesses.map(entry =>
+    try profile(entry) catch { case refusal: RouteRefusal => throw new SettingsRefusal(entry.harness, refusal) })
   def limits(value: HostLimits): ExecutionLimits = ExecutionLimits(Duration.ofMillis(value.startupMillis), None,
     Duration.ofMillis(value.heartbeatMillis), Duration.ofMillis(value.graceMillis), Duration.ofMillis(value.killMillis), value.retainedOutputBytes)
   def within(value: HostLimits, ceiling: HostLimits): Unit = {
@@ -155,6 +162,7 @@ object SupervisorProgram {
     "One StartChoice is one unit of work. The host may make several attempts for it: the next assigned model when one cannot run, or several reviewers side by side. Its reply names the unit by one attempt ID, which Status, Cancel and Seats take; Cancel stops the whole unit. Seats lists every model the host tried and how each seat ended, with the result handle of each seat that delivered. " +
     "When some seats of a unit delivered and fewer than the work needs, the phase is Abstained or Failed all the same and the blocker names each seat that delivered with its result handle: read those results, and Seats for the others, before you decide. " +
     "Phase Abstained means that no assigned model could run the work (quota, rate limit, credentials, a provider outage or a launch that failed); the blocker names each model and reason. The input is not used up, but the same models would refuse it again: do not select it again at once, continue other work and report it. " +
+    "A unit that ended in another phase counts in abstained every assigned model that did not run, and its blocker names each with its reason: mention each such model in your report to the operator. " +
     "Next Arbitrate means that the reviewers of one unit disagree; the status carries the dissenting review. Read Seats. By default correct: Select Worker Implement with the dissenting review as previous and the other non-accepting reviews as artifacts. You decide: you may instead integrate with the review of an accepting seat when the dissent is unfounded, and then say so in your report. " +
     "An implementation selection may return Planner for compatibility assessment. Forward that result in artifacts to a fresh Worker Implement Select. Unknown/incompatible groups split; acquire each split's exact claim. Pass larger prior results as artifacts when selecting subgroups. Unchanged executed input is deferred; obtain substantive evidence or changed conditions. " +
     "Dispatch sequentially using item revisions and handles. The host assembles prompts, captures candidates and runs checks. Never read/compose child prompts or copy full results. Status reads the current state or the result of an attempt; use compact outcomes and bounded artifact reads only for necessary drill-down. " +

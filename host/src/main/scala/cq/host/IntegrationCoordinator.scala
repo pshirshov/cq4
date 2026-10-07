@@ -33,26 +33,33 @@ final class IntegrationCoordinator(owner: Scope, journal: IntegrationJournal, gi
     }
   }}
 
-  private def reconcile(intent: IntegrationIntent): Task[Option[IntegrationObservation]] = for {
+  // On the left, why neither incorporation nor a refusal is established (D155).
+  private def reconcile(intent: IntegrationIntent): Task[Either[String, IntegrationObservation]] = for {
     target <- git.inspect(intent)
     execution <- if (target.incorporated) ZIO.succeed(None) else git.execution(intent)
+    refused = execution.exists(_.refusedBeforeCommit)
+    // A job that ended without a settled refusal may still have started no effect: then it is withdrawn, and the integration settles (D153).
+    withdrawn <- if (target.incorporated || refused) ZIO.succeed(Left[String, String]("")) else git.withdraw(intent)
   } yield {
-    if (target.incorporated) Some(IntegrationObservation.Incorporated(target.commit))
-    else if (execution.exists(_.refusedBeforeCommit)) Some(IntegrationObservation.NotApplied(execution.get.refusal.getOrElse("Git refused the conditional update before commit; executor settled")))
-    else None
+    if (target.incorporated) Right(IntegrationObservation.Incorporated(target.commit))
+    else if (refused) Right(IntegrationObservation.NotApplied(execution.get.refusal.getOrElse("Git refused the conditional update before commit; executor settled")))
+    else withdrawn.map(IntegrationObservation.NotApplied.apply)
   }
 
-  private def observe(entry: IntegrationEntry, local: IntegrationLocal): Task[Option[IntegrationObservation]] = local.observation match {
-    case Some(value) => ZIO.succeed(Some(value))
+  private def observe(entry: IntegrationEntry, local: IntegrationLocal): Task[Either[String, IntegrationObservation]] = local.observation match {
+    case Some(value) => ZIO.succeed(Right(value))
     case None =>
       val effect = if (local.attempted) reconcile(local.intent) else {
         git.inspect(local.intent).flatMap { target =>
-          if (target.incorporated) ZIO.succeed(Some(IntegrationObservation.Incorporated(target.commit)))
-          else if (target.checkoutBlocked) ZIO.succeed(Some(IntegrationObservation.NotApplied("Configured integration target is checked out in another or multiple worktrees; no update launched")))
-          else if (target.commit != local.intent.expected) ZIO.succeed(Some(IntegrationObservation.NotApplied("Integration target advanced before execution; no update launched")))
+          if (target.incorporated) ZIO.succeed(Right(IntegrationObservation.Incorporated(target.commit)))
+          else if (target.checkoutBlocked) ZIO.succeed(Right(IntegrationObservation.NotApplied("Configured integration target is checked out in another or multiple worktrees; no update launched")))
+          else if (target.commit != local.intent.expected) ZIO.succeed(Right(IntegrationObservation.NotApplied("Integration target advanced before execution; no update launched")))
           else ZIO.attemptBlocking(entry.write(local.copy(attempted = true))) *> git.execute(local.intent).either.flatMap {
-            case Left(_: IntegrationAdmissionClosed) => ZIO.succeed(Some(IntegrationObservation.NotApplied("Owning supervisor closed execution admission before job registration")))
-            case _ => reconcile(local.intent)
+            case Left(_: IntegrationAdmissionClosed) => ZIO.succeed(Right(IntegrationObservation.NotApplied("Owning supervisor closed execution admission before job registration")))
+            // A launch that failed proves nothing about the job; what it said is kept beside what the job left.
+            case Left(error) => reconcile(local.intent).map(_.left.map(why =>
+              s"$why; its launch failed with ${error.getClass.getSimpleName}: ${Option(error.getMessage).getOrElse("no message")}"))
+            case Right(_) => reconcile(local.intent)
           }
         }
       }
@@ -125,14 +132,14 @@ final class IntegrationCoordinator(owner: Scope, journal: IntegrationJournal, gi
     result <- deliver(local, record, observe(entry, local))
   } yield result }
 
-  private def deliver(local: IntegrationLocal, record: IntegrationRecord, observation: Task[Option[IntegrationObservation]]): Task[IntegrationRun] = record.resolution match {
+  private def deliver(local: IntegrationLocal, record: IntegrationRecord, observation: Task[Either[String, IntegrationObservation]]): Task[IntegrationRun] = record.resolution match {
       case IntegrationResolution.Pending() => observation.either.flatMap {
-        case Right(Some(observation)) => ZIO.attemptBlocking {
+        case Right(Right(observation)) => ZIO.attemptBlocking {
           val recorded = collector.integrate(HostIntegrationInput(owner.project, HostIntegration.Observe(local.intent.id, observation)))
           require(recorded.intent == local.intent && recorded.resolution != IntegrationResolution.Pending(), "Server did not resolve the reserved integration")
           IntegrationRun(recorded, None)
         }.catchAll(error => ZIO.succeed(IntegrationRun(record, Some("Git observation retained; domain acknowledgement pending: " + error.getClass.getSimpleName))))
-        case Right(None) => ZIO.succeed(IntegrationRun(record, Some("Git execution or incorporation remains unconfirmed; retain the reservation and journal")))
+        case Right(Left(why)) => ZIO.succeed(IntegrationRun(record, Some("Git execution or incorporation remains unconfirmed; retain the reservation and journal: " + why)))
         case Left(error) => ZIO.succeed(IntegrationRun(record, Some("Git observation is pending: " + error.getClass.getSimpleName)))
       }
       case _ => ZIO.succeed(IntegrationRun(record, None))
@@ -148,7 +155,7 @@ final class IntegrationCoordinator(owner: Scope, journal: IntegrationJournal, gi
       }
       case Some(record) =>
         val observation = local.observation match {
-          case Some(value) => ZIO.succeed(Some(value))
+          case Some(value) => ZIO.succeed(Right(value))
           case None if local.attempted => reconcile(local.intent).flatMap { value => ZIO.attemptBlocking {
             value.foreach(observed => entry.write(local.copy(observation = Some(observed))))
             value
@@ -156,7 +163,7 @@ final class IntegrationCoordinator(owner: Scope, journal: IntegrationJournal, gi
           case None => ZIO.attemptBlocking {
             val value = IntegrationObservation.NotApplied("Owning supervisor ended before Git execution admission")
             entry.write(local.copy(observation = Some(value)))
-            Some(value)
+            Right(value)
           }
         }
         ZIO.attempt(require(record.intent == local.intent, "Server reservation differs from retained intent")) *>

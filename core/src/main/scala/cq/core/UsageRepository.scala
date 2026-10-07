@@ -6,6 +6,10 @@ final case class MeterKey(attempt: AttemptId, meter: String)
 final case class PhaseCost(phase: UsagePhase, total: CostTotal)
 final case class SpanTally(phase: UsagePhase, spans: Long, wallMillis: Long)
 final case class UsageCursors(usage: Long, attempts: Long)
+object UsageCursors {
+  /** The answer to a page of attempts asked to continue after an attempt the project does not hold. */
+  val UnknownAttemptKey = "The attempt a page continues after is not an attempt of this project"
+}
 final case class WorkAttempts(running: Map[ItemId, WorkAttempt], events: Long)
 
 /** The governing attempt of an attached session is the operator's own harness: CQ's host launches no process for it and nothing

@@ -53,6 +53,10 @@ target.write_text(json.dumps({"Work": {"members": [{"item": item, "disposition":
     "evidence": ["notes/extra.log", "../outside.log", "missing.log"]} for item in members]}}))
 emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_tokens": 0, "cache_write_input_tokens": 0, "output_tokens": 5, "reasoning_output_tokens": 0}})
 """
+  /** A worker that leaves a binary by-product of its own test run beside its change. */
+  private val Littering = Completing.replace("target.write_text(", """Path("cache").mkdir()
+Path("cache/module.bin").write_bytes(bytes([0xc3, 0x28, 0, 255]))
+target.write_text(""")
   private val Recording = Header + """Path(".work/evidence").mkdir(parents=True)
 Path(".work/evidence/argv.json").write_text(json.dumps(sys.argv))
 target.write_text(json.dumps({"Work": {"members": [{"item": item, "disposition": "Blocked", "summary": "Recorded the launch", "evidence": []} for item in members]}}))
@@ -318,6 +322,37 @@ emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_toke
   }
 
   "Child result collection (Behavioral Active Blackbox; real Git, supervised processes and in-process server Communication)" should {
+    "D159: give a candidate reviewer every path the candidate adds, changes or deletes, binary ones included, as the host read them" in {
+      (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None, Nil) { f => for {
+        controller <- ZIO.succeed(f.units)
+        worked <- f.child(controller, Littering, f.request(f.limits))
+        _ <- ZIO.attempt(assert(worked.phase == DispatchPhase.Completed && worked.next == ChildNext.Review, worked.toString))
+        result <- text(artifacts, f.owner, worked.result.get).map(Wire.decode(ChildResult_JsonCodec, _))
+        review = DispatchRequest(RequestId(uuid), DispatchWork.Reviewer(ReviewerMode.Candidate), Harness.Codex, f.members, Nil, Nil, worked.result, f.fence, f.limits)
+        record = local.directory.resolve("review-artifacts-" + uuid)
+        reviewed <- f.child(controller, reviewing(record), review)
+        _ <- ZIO.attempt(assert(reviewed.phase == DispatchPhase.Completed && reviewed.result.nonEmpty, reviewed.toString))
+        delivered <- ZIO.attemptBlocking(io.circe.parser.parse(Files.readString(record)).fold(throw _, identity))
+        listing <- artifacts.metadata(f.owner, CandidatePaths.artifact(reviewed.attempt)).either
+        _ <- ZIO.attempt {
+          println(s"Candidate paths shown to the reviewer: $delivered")
+          val shown = delivered.asArray.get.map(value => value.hcursor.get[String]("kind").toOption.get -> value.hcursor.get[String]("body").toOption.get)
+          // The worker's evidence directory is not in the candidate; the binary by-product and the unnamed log are, and the reviewer is told so.
+          assert(shown == Vector("Evidence" -> (s"Candidate paths: every path the candidate adds, changes or deletes against ${local.base.value}, as the host read them from Git.\n" +
+            "4 paths: 3 added, 1 changed, 0 deleted; 1 binary.\n" +
+            "added 4 bytes binary \"cache/module.bin\"\n" +
+            "added 15 bytes text \"notes/extra.log\"\n" +
+            "changed 22 bytes text \"tracked.txt\"\n" +
+            "added 10 bytes text \"unnamed.log\"\n")), shown.toString)
+          // The list is a stored artifact of the reviewing attempt, which its input names.
+          assert(listing.exists(value => value.kind == ArtifactKind.Evidence && value.mediaType == "text/plain" && value.attempt == reviewed.attempt), listing.toString)
+          assert(result.candidate.nonEmpty)
+        }
+      } yield () }
+    }
+
     "retain the worker's evidence directory and named files as readable result artifacts" in {
       (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
         artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
@@ -700,7 +735,8 @@ emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_toke
           println(s"Review of the revalidated result: counts=${reviewed.counts} next=${reviewed.next} validation=${verdict.validation} artifacts=$delivered")
           assert(verdict.validation == amendment.validation && reviewed.counts.accepted == 1 && reviewed.counts.validationFailed == 0 &&
             reviewed.next == ChildNext.ConsiderAcceptance, reviewed.toString)
-          assert(delivered.asArray.get.map(_.hcursor.get[String]("kind").toOption.get) == Vector("Amendment"))
+          // The round, and after it the candidate's paths, which the host gives every candidate reviewer (D159).
+          assert(delivered.asArray.get.map(_.hcursor.get[String]("kind").toOption.get) == Vector("Amendment", "Evidence"))
           assert(delivered.asArray.get.head.hcursor.get[String]("body").toOption.map(Wire.decode(ValidationAmendment_JsonCodec, _)).contains(amendment))
         }
       } yield () } }
@@ -1102,6 +1138,9 @@ emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_toke
             assert(lineage == (List(first, second), true) && first != second, lineage.toString)
             // One status for the unit: under its first attempt's id, with the result of the candidate that ran; any attempt of the unit reads it.
             assert(status.attempt == first && status.phase == DispatchPhase.Completed && status.next == ChildNext.Review && result.attempt == second && byCandidate == status, status.toString)
+            // D157: the status says that an assigned model did not run.
+            val absent = s"1 assigned model did not run: codex:fixture-provider/refuse-a Quota ($QuotaMessage)"
+            assert(status.counts.abstained == 1 && status.blocker.contains(absent), status.toString)
             assert(result.request.request == request.request && result.request.harness == Harness.Codex)
             assert(seats == UnitSeats(request.request, PanelMode.All, 1, List(SeatStatus(0, List(
               SeatAttempt(first, ModelRoute(Harness.Codex, Some("fixture-provider"), "refuse-a", None), Some(AbstentionReason.Quota), Some(QuotaMessage)),
@@ -1111,7 +1150,7 @@ emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_toke
             assert(published == seats && panel.kind == ArtifactKind.Panel && panel.attempt == f.governor.id && panel.mediaType == "application/json", panel.toString)
             // One pair of events for waiters, although two attempts ran.
             val unit = SessionUnit(SessionUnitKind.Attempt, first.value, request.members.map(_.id))
-            assert(events == List(SessionUnitEvent.Started(unit), SessionUnitEvent.Ended(UnitEnd(unit, "Completed", Some("Review"), None))), events.toString)
+            assert(events == List(SessionUnitEvent.Started(unit), SessionUnitEvent.Ended(UnitEnd(unit, "Completed", Some("Review"), Some(absent)))), events.toString)
             val recorded = List(first, second).map(id => attempts.entries.find(_.attempt.id == id).get)
             assert(recorded.map(view => (view.attempt.model, view.attempt.effort, view.outcome.map(_.value.state))) ==
               List(("refuse-a", None, Some(AttemptState.Abstained)), ("work-b", Some(Effort.Low), Some(AttemptState.Completed))), recorded.toString)

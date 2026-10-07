@@ -80,6 +80,7 @@ final case class IntegrationFixture(owner: Scope, repository: Path, target: Stri
   val counted: GitIntegration = new GitIntegration {
     override def inspect(value: IntegrationIntent) = git.inspect(value)
     override def execution(value: IntegrationIntent) = git.execution(value)
+    override def withdraw(value: IntegrationIntent) = git.withdraw(value)
     override def execute(value: IntegrationIntent) = ZIO.succeed(executions.incrementAndGet()) *> git.execute(value)
   }
   def coordinator(store: IntegrationJournal): IntegrationCoordinator = new IntegrationCoordinator(owner, store, counted, server, server)
@@ -126,6 +127,8 @@ final class DummyIntegrationHarness extends IntegrationHarness {
         executions = executions.updated(intent.id, IntegrationExecution(record, out, err, if (applied) None else Some("Conditional comparison refused")))
       })
       override def execution(intent: IntegrationIntent) = ZIO.attempt(lock.synchronized(executions.get(intent.id)))
+      // The dummy's jobs either settle or never exist: none ends without having started.
+      override def withdraw(intent: IntegrationIntent) = ZIO.left("no Git job is registered for it")
     }
     operation(IntegrationFixture(owner, repository, target, base, first, second, combined, git, new MemoryIntegrationJournal(owner),
       ZIO.succeed(new MemoryIntegrationJournal(owner)), value => ZIO.succeed(lock.synchronized { current = value }),
