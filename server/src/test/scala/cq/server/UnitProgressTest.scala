@@ -590,8 +590,15 @@ final class UnitProgressLocal extends AnyWordSpec {
       assert(decided == first.status.copy(request = request, attempt = handle, blocker = Some(named)) && decided.phase == DispatchPhase.Failed && decided.next == ChildNext.Retry)
       def ends(reply: ChildEnd): Map[AttemptId, ChildEnd] =
         DispatchUnits.outcomes(outcome, ChildOutcome(handle, items, reply, Some("input"), Some("first fault")), List(second, first, accepting)).view.mapValues(_.end).toMap
-      // Offered again: every failed seat is retryable, so the drive reads the input as retryable.
-      assert(ends(ChildEnd.Retryable) == Map(first.attempt -> ChildEnd.Retryable, second.attempt -> ChildEnd.Retryable, accepting.attempt -> ChildEnd.Admitted))
+      // Offered again: the retry is decided by the unit's end, not by one seat's admitted result. Every attempt of the unit, the
+      // delivering one included, reports a retryable input, so the drive reads the input as retryable (Q53) and continues on it.
+      assert(ends(ChildEnd.Retryable) == Map(first.attempt -> ChildEnd.Retryable, second.attempt -> ChildEnd.Retryable, accepting.attempt -> ChildEnd.Retryable))
+      val offered = DispatchUnits.outcomes(outcome, ChildOutcome(handle, items, ChildEnd.Retryable, Some("input"), Some("first fault")), List(second, first, accepting))
+      assert(offered(accepting.attempt) == ChildOutcome(accepting.attempt, items, ChildEnd.Retryable, Some("input"), Some("first fault")))
+      offered.values.foreach(cq.core.DriverPolicy.outcome)
+      // A candidate of that unit that abstained before another failed stays an abstention, which the drive does not count.
+      val refused = abstained(1, 1)
+      assert(DispatchUnits.outcomes(outcome, ChildOutcome(handle, items, ChildEnd.Retryable, Some("input"), Some("first fault")), List(refused, first, accepting))(refused.attempt).end == ChildEnd.Abstained)
       // The same fault as the unit before it: only the seat whose fault was compared is the repetition.
       assert(ends(ChildEnd.Repeated) == Map(first.attempt -> ChildEnd.Repeated, second.attempt -> ChildEnd.Failed, accepting.attempt -> ChildEnd.Admitted))
       // The fault could not be published: the input stays deferred.

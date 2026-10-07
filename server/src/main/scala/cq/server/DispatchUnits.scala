@@ -565,8 +565,9 @@ object DispatchUnits {
   /**
    * How each attempt of an ended unit ended, as a drive reads it. `reply` is the end of the unit: whether its input is offered again
    * and under which fingerprint.
-   *  - A failed seat of a unit that failed is retryable when the input is offered again. Only the first failed seat, whose fault was
-   *    compared with the one before it, can be the repetition that ends a drive.
+   *  - A failed seat of a unit that failed is retryable when the input is offered again, and so is a seat of that unit that
+   *    delivered: too few delivered, and the input is offered again whatever that seat returned. Only the first failed seat, whose
+   *    fault was compared with the one before it, can be the repetition that ends a drive.
    *  - A failed seat the other seats made up for failed and nothing else: its input was executed.
    *  - The attempts of a unit that ended by abstention all state the unit's blocker (every candidate and reason, and the seats that
    *    delivered), so that the last of them does. A seat that delivered in such a unit reports the abstention too.
@@ -588,6 +589,9 @@ object DispatchUnits {
         // A unit that ended by abstention did not serve its input, whichever of its seats delivered: each of its attempts reports
         // that end with the unit's text, so that a drive reads the input as unserved whichever attempt it concludes last.
         case _: UnitOutcome.Abstained => own.copy(end = ChildEnd.Abstained, input = reply.input, fault = reply.fault)
+        // The retry of a unit that failed is decided by the unit's end, not by one seat's admitted result: when its input is offered
+        // again, a seat that delivered reports that too, with the unit's fault, so that a drive reads the input as retryable.
+        case _: UnitOutcome.Failed if offered.contains(true) && own.end == ChildEnd.Admitted => own.copy(end = ChildEnd.Retryable, input = reply.input, fault = reply.fault)
         case _ => own
       })
     }.toMap

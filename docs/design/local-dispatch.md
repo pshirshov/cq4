@@ -37,7 +37,7 @@ The release of the unit's input runs once, for the unit, before its end is visib
 
 Units hold disjoint members (D83); the attempts of one unit share them. Every attempt counts against the bound of four active children, and a unit whose first seats do not fit together is refused. A panel that starts more seats together than that bound (every seat of `all`, `min` of `any`) could never start, so the configuration that holds it is refused when it is saved, previewed or checked by `cq doctor agents`, naming the role's key, the seats and the bound. A candidate that follows one that ended takes over its slot in the same step, so a later candidate never waits for a slot and a unit is never stalled by another unit's start.
 
-Under a drive the unit is a lineage member as its request, in flight until the unit has ended, and each attempt is a member under it. Every attempt is settled with its own outcome when the unit ends: an abstention is no attempt on the input, a failed seat the others made up for is a plain failure, and the failed seats of a failed unit are retryable when the input is offered again.
+Under a drive the unit is a lineage member as its request, in flight until the unit has ended, and each attempt is a member under it. Every attempt is settled with its own outcome when the unit ends: an abstention is no attempt on the input, a failed seat the others made up for is a plain failure, and every attempt of a failed unit, a seat that delivered included, is retryable when the input is offered again: the retry is decided by the unit's end, not by one seat's admitted result.
 
 ## The governing session's own work
 
