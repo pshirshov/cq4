@@ -268,7 +268,11 @@ def main():
                     break
             assert child["phase"] == "Completed", child
             deadline = time.monotonic() + 30
-            while dict(members(control("StatusLine", {"Status": {}})["Status"]["value"]))["Attempt"] is not True and time.monotonic() < deadline:
+            # The attempt and the request of its unit are settled by two followers of the host, in either order: both are awaited.
+            def unsettled():
+                standing = dict(members(control("StatusLine", {"Status": {}})["Status"]["value"]))
+                return standing["Attempt"] is not True or standing["Request"] is not True
+            while unsettled() and time.monotonic() < deadline:
                 time.sleep(0.2)
             settled = control("StatusLine", {"Status": {}})["Status"]["value"]
             assert members(settled) == [("Run", False), ("Claim", True), ("Request", True), ("Attempt", True)] and settled["activeChildren"] == 0, settled
