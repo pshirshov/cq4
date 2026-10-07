@@ -3,11 +3,11 @@ import json
 import os
 import shlex
 from pathlib import Path
-import subprocess
 import sys
 import tempfile
 import urllib.request
 import uuid
+from fixture_runtime import cli_case
 
 
 def main():
@@ -19,7 +19,7 @@ def main():
         root = Path(temporary)
 
         def run(name, args, expected, diagnostic):
-            result = subprocess.run(command + args, cwd=root, env=os.environ, capture_output=True, text=True, timeout=30)
+            result = cli_case(name, command + args, root, os.environ)
             (evidence / (name + ".stdout")).write_text(result.stdout)
             (evidence / (name + ".stderr")).write_text(result.stderr)
             assert result.returncode == expected, result.stdout + result.stderr

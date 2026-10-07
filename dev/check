@@ -54,7 +54,7 @@ class Checks:
         self.environment = environment
         self.results: list[dict[str, object]] = []
 
-    def run(self, command: list[str], name: str, timeout: int):
+    def run(self, command: list[str], name: str, timeout: int | None):
         print(f"Running {name}", flush=True)
         path = self.evidence / f"{name}.log"
         with path.open("w") as output:
@@ -235,10 +235,12 @@ class Checks:
             self.run(["node", "dev/artifacts.mjs"], f"{name}-artifacts", STARTUP_TIMEOUT)
             self.sbt(["server/Test/runMain cq.server.ServerApiCheck"], f"{name}-host-api")
             self.sbt(["server/Test/runMain cq.server.IntegrationApiCheck"], f"{name}-integration-api")
-            self.run(["python3", "dev/roles-check.py", *command], f"{name}-roles", STARTUP_TIMEOUT * fixture_scale)
+            # The three fixtures of many CLI invocations bound each invocation themselves (fixture_runtime.CLI_CASE_SECONDS) and print
+            # its duration: a stuck one fails by its name, and their total has no bound, which would hold on a quiet machine only.
+            self.run(["python3", "dev/roles-check.py", *command], f"{name}-roles", None)
             self.environment["CQ_CLI_EVIDENCE"] = str(self.evidence / f"{name}-cli-output")
-            self.run(["python3", "dev/cli-output-check.py", *command], f"{name}-cli-output", COMMAND_TIMEOUT)
-            self.run(["python3", "dev/cli-check.py", *command], f"{name}-cli", STARTUP_TIMEOUT * fixture_scale)
+            self.run(["python3", "dev/cli-output-check.py", *command], f"{name}-cli-output", None)
+            self.run(["python3", "dev/cli-check.py", *command], f"{name}-cli", None)
             self.run(["python3", "dev/cli-timeouts.py", *command], f"{name}-cli-timeouts", STARTUP_TIMEOUT * fixture_scale)
             self.run(["python3", "dev/supervisor-check.py", *command], f"{name}-supervisor", STARTUP_TIMEOUT * fixture_scale)
             self.environment["CQ_ATTACHED_EVIDENCE"] = str(self.evidence / f"{name}-attached")

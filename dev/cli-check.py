@@ -10,6 +10,7 @@ import tempfile
 import time
 import urllib.request
 import uuid
+from fixture_runtime import cli_case
 
 CLI_STARTUP_SECONDS = 15
 GIT_DEADLINE_WATCHDOG_SECONDS = 12
@@ -57,7 +58,7 @@ def main():
 
         def run(cwd, *args, expected=0):
             machine = ["--json"] if args[0] in {"init", "query", "status"} else []
-            result = subprocess.run(command + list(args) + machine, cwd=cwd, env=environment, capture_output=True, text=True, timeout=20)
+            result = cli_case(" ".join(args), command + list(args) + machine, cwd, environment)
             assert result.returncode == expected, result.stdout + result.stderr
             return result.stdout
 

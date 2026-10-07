@@ -2,8 +2,25 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import time
 import urllib.request
 import uuid
+
+# One CLI invocation of a fixture is a process start and one bounded request. A start took about 2 s on the JVM and up to 5.3 s
+# under the native-image agent on a loaded machine (2026-10-07); six times the slowest tells a slow start from a stuck one. A fixture
+# of many invocations bounds each of them by this and has no bound on their total, which would assume a quiet machine.
+CLI_CASE_SECONDS = 30
+
+
+def cli_case(label: str, command: list[str], cwd, environment) -> subprocess.CompletedProcess:
+    """Runs one CLI invocation and prints how long it took. One that does not end within the bound fails the fixture by its label."""
+    began = time.monotonic()
+    try:
+        result = subprocess.run(command, cwd=cwd, env=environment, capture_output=True, text=True, timeout=CLI_CASE_SECONDS)
+    except subprocess.TimeoutExpired:
+        raise AssertionError(f"CLI case did not end within {CLI_CASE_SECONDS} seconds: {label}") from None
+    print(json.dumps({"case": label, "seconds": round(time.monotonic() - began, 2), "exit": result.returncode}), flush=True)
+    return result
 
 
 def guardian_binary(directory: Path, provided: str | None) -> Path:
