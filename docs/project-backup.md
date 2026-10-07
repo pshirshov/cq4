@@ -53,7 +53,8 @@ driver`); [the local update](local-update.md) converts the database, not archive
 The release that added the installation's agent configuration and the reasoning
 effort of a stored attempt changed the schema, so it refuses every earlier archive
 by its schema hash (`Archive does not match the current CQ schema`) before a row
-is restored.
+is restored. So does the release that added the count of attempt events to the
+usage clock and the index of unreleased claims.
 
 The compressed archive and expanded table payload are each limited to 512 MiB.
 Transfer has a five-minute deadline. The server streams through temporary files;

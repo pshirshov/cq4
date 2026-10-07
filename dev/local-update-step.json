@@ -1,7 +1,9 @@
 {
-  "kind": "unchanged-data",
-  "schema": "19bac0029e8f2d1134a872671a186bc7282096b6d05a94f97930f30901259563",
+  "kind": "attempt-events-and-live-claims",
+  "schemaBefore": "19bac0029e8f2d1134a872671a186bc7282096b6d05a94f97930f30901259563",
+  "schemaAfter": "da5a0f6cb21680869d5d40e52f1ee403434ab5a8ab9a33652f6730feb6cf01f1",
   "modelBefore": "9fbd5dad726e1ee4047246c3295da81ef85bf6de5d69e308e651bddef64f7e80",
   "modelAfter": "9fbd5dad726e1ee4047246c3295da81ef85bf6de5d69e308e651bddef64f7e80",
-  "reason": "Since the installed release (e3682f8) neither the schema nor the model changed, so no stored type changed and no stored row is transformed. What the new release adds to stored data has existing shapes: two files of a session directory (executor.lock, which holds no content, and a refused.json the host writes for an integration, of the type that file already has), an Evidence artifact named candidate-paths with the list of paths a candidate changes, and text values of existing fields (blockers, evidence descriptions). The listing of attempts changed its order only."
+  "sqlSha256": "e5bb40da411ae5542c0a6b20593afe4111462ceb80150102755b3c5bd46d131a",
+  "reason": "Since the installed release (37dc475) the schema gained the column cq_usage_clock.attempt_events and the index cq_claims_live, so that reading a project's work cursor no longer counts every attempt and claim of the project: the server keeps in attempt_events the number of the project's attempts plus the number of those with a recorded outcome, and counts the unreleased claims whose lease has not ended through the index. dev/local-update.sql adds the column as server/src/main/resources/db/001-ledgers.sql declares it, sets it for every project to what the count over its stored attempts gives, creates the index and records that schema's hash; the updater refuses a database in which a project's fence counter differs from the number of its claims, and verifies that no other stored value changed and that the updated database has the structure the new schema declares. The model did not change, so no stored type changed: session directories, deliveries and the agent configuration of the installed release are read as they are. Project archives are not converted; an archive of the installed release is refused by its schema hash."
 }
