@@ -2358,62 +2358,6 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
       } yield ()
     }
 
-    "I30: rest the session's own work as its request and its attempt, hold both in flight from its submission and conclude the attempt" in { (service: LedgerService[IO]) =>
-      val w = world
-      val key = claude("own-work")
-      val (request, attempt) = (LineageMember.Request(RequestId(uuid)), LineageMember.Attempt(AttemptId(uuid)))
-      def held(reply: DriverReply): Option[String] = reply match {
-        case DriverReply.Stop(DriverStopped(DriverStop.Failure, detail), _, _) => Some(detail)
-        case _ => None
-      }
-      for {
-        _ <- service.initialize(w.operator, "own-work")
-        root <- create(service, w.operator, goal("Goal"))
-        one <- driven(service, w, key, workset(root))
-        run = LineageMember.Run(one.run)
-        _ <- act(service, w.governor, DriverSession.Inherit(one.cycle, run, request))
-        _ <- act(service, w.governor, DriverSession.Inherit(one.cycle, request, attempt))
-        // The workspace is open: the session edits, and nothing the host does would end the attempt.
-        _ <- act(service, w.governor, DriverSession.Rest(one.cycle, request))
-        _ <- act(service, w.governor, DriverSession.Rest(one.cycle, attempt))
-        resting <- status(service, w, key)
-        // A session that says it is woken when its work ends is not left waiting for its own editing: it gets its one resume directive.
-        prompted <- query(service, w, key)
-        _ <- assertIO(resting.exists(_.activeChildren == 0) && (prompted match {
-          case DriverReply.Continue(value, _, _) => value.cycle == one.cycle && value.token.isInstanceOf[CycleToken.Resume]
-          case _ => false
-        }))
-        // The session submits the workspace: the host captures and checks it, and both members are in flight until it has.
-        _ <- act(service, w.governor, DriverSession.Inherit(one.cycle, run, request))
-        _ <- act(service, w.governor, DriverSession.Inherit(one.cycle, request, attempt))
-        flying <- status(service, w, key)
-        waiting <- query(service, w, key)
-        _ <- assertIO(flying.exists(_.activeChildren == 1) && (waiting match {
-          case DriverReply.Waiting(_, text) => text.contains(s"attempt ${attempt.id.value}") && text.contains(s"request ${request.id.value}")
-          case _ => false
-        }))
-        // Its result is published: the attempt is concluded with its outcome, as a child's is, and its request settled.
-        outcome = ChildOutcome(attempt.id, List(root), ChildEnd.Admitted, None, None)
-        _ <- act(service, w.governor, DriverSession.Conclude(one.cycle, outcome))
-        _ <- act(service, w.governor, DriverSession.Settle(one.cycle, request))
-        settled <- status(service, w, key)
-        next <- query(service, w, key)
-        _ <- assertIO(lineage(settled).filter(entry => Set[LineageMember](request, attempt)(entry.member)).forall(_.settled) &&
-          settled.exists(_.activeChildren == 0) && held(next).isEmpty && !next.isInstanceOf[DriverReply.Waiting])
-        // A workspace that stays open over a second stop ends the drive with both of its members named.
-        other = w.copy(governor = w.other(Role.Governor))
-        two <- driven(service, other, claude("own-work-held"), workset(root))
-        _ <- act(service, other.governor, DriverSession.Inherit(two.cycle, LineageMember.Run(two.run), request))
-        _ <- act(service, other.governor, DriverSession.Inherit(two.cycle, request, attempt))
-        _ <- act(service, other.governor, DriverSession.Rest(two.cycle, request))
-        _ <- act(service, other.governor, DriverSession.Rest(two.cycle, attempt))
-        _ <- directive(service, other, claude("own-work-held"))
-        stopped <- query(service, other, claude("own-work-held"))
-        _ <- assertIO(held(stopped).contains(s"cycle 1 is held by attempt ${attempt.id.value}, request ${request.id.value}, " +
-          "which only the session can resolve, and a resume directive did not resolve it"))
-      } yield ()
-    }
-
     "give work that rests on the session one resume directive and then stop naming it" in { (service: LedgerService[IO]) =>
       val w = world
       val key = claude("resting")

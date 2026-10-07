@@ -39,6 +39,11 @@ final class GovernorWork(config: SupervisorConfig, authority: SupervisorAuthorit
     GoverningWorkPolicy.admit(ProcessModes.setting(call, project))
   }
 
+  /** As `admissible`, for a workspace that is open: the refusal also says what becomes of it. */
+  def submittable(): Unit = try admissible() catch {
+    case DomainFailure(Fault.Denied(message)) => throw DomainFailure(Fault.Denied(message + ". " + GovernorWork.Unsubmitted))
+  }
+
   /** Establishes `request` as own work of the governing session. A review names its verdicts in `review`; its subject is an admitted
     * worker result with a candidate on which every configured check has passed, as the revalidation rounds left it. */
   def prepare(request: DispatchRequest, review: Option[List[ReviewMember]]): Task[OwnWork] = zio.Clock.nanoTime.flatMap { began => ZIO.attemptBlocking {
@@ -108,6 +113,10 @@ final class GovernorWork(config: SupervisorConfig, authority: SupervisorAuthorit
     }
   }
 
+  /** The attempt could not be launched and will never run: nothing waits for its workspace any more. */
+  def abandon(attempt: AttemptId): UIO[Unit] = ZIO.succeed(synchronized { val seat = seats.get(attempt); seats = seats - attempt; seat })
+    .flatMap(_.fold(ZIO.unit)(seat => seat.handed.succeed(None) *> seat.opened.succeed(()).unit))
+
   /** An attempt that was asked to stop no longer waits for its workspace to be submitted. */
   def withdraw(attempt: AttemptId): UIO[Unit] = ZIO.succeed(synchronized(seats.get(attempt))).flatMap(_.fold(ZIO.unit)(_.handed.succeed(None).unit))
 
@@ -171,5 +180,7 @@ final class GovernorWork(config: SupervisorConfig, authority: SupervisorAuthorit
 
 object GovernorWork {
   /** How the record of a workspace that was not captured begins; the reason follows. */
+  /** What a session is told to do with a workspace whose submission the host refused. */
+  val Unsubmitted = "The workspace was not captured: Cancel it, and its directory is kept as it is"
   val Quarantined = "The governing session's workspace was not captured and its edits are retained here: "
 }

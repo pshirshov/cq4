@@ -47,6 +47,9 @@ if sys.argv[1:] == ["--version"]:
     sys.exit(0)
 target = Path(sys.argv[sys.argv.index("--output-last-message") + 1])
 data = json.load(sys.stdin)
+if Path(sys.argv[0]).with_name("hold").exists():
+    import time
+    time.sleep(120)
 members = [view["item"]["id"] for view in data["input"]["members"]]
 def emit(event):
     print(json.dumps(event), flush=True)
@@ -77,9 +80,10 @@ emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_toke
 
   private final case class Fixture(local: LocalWorkspaceFixture, owner: Scope, config: SupervisorConfig, authority: SupervisorAuthority, ledger: LedgerService[IO],
     usage: UsageService[IO], registry: DriverInspector, controller: IntegrationController, workflow: AttachedWorkflow, driver: AttachedDriver, units: DispatchUnits,
-    control: LocalControl, gateway: Json => Task[Json], task: ItemId, members: List[ItemRevision], fence: Fence, limits: HostLimits) {
+    control: LocalControl, gateway: Json => Task[Json], task: ItemId, members: List[ItemRevision], fence: Fence, limits: HostLimits,
+    others: List[(ItemRevision, Fence)], children: DispatchController) {
     val session: Path = config.directory
-    val advance: WorkflowRequest = WorkflowRequest.Advance(Set(task), WorkflowPhase.Integrate)
+    val advance: WorkflowRequest = WorkflowRequest.Advance((task :: others.map(_._1.id)).toSet, WorkflowPhase.Integrate)
     val ready: List[WorkMember] = members.map(member => WorkMember(member.id, WorkDisposition.CandidateReady, "Implemented by the governing session", Nil))
     val accepted: List[ReviewMember] = members.map(member => ReviewMember(member.id, ReviewVerdict.Accepted, Nil))
     def target: GitCommit = GitCommit(local.git(local.source, "show-ref", "--verify", "--hash", Target))
@@ -160,6 +164,7 @@ emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_toke
     }
     /** The continuation query the Stop hook makes when a turn ends; `waiting` says that the session is woken when its work ends. */
     def continuation(waiting: Boolean): Task[DriverReply] = control(DriverOrigin.Stop, DriverControl.Continue(waiting))
+    def parked: Task[Unit] = control(DriverOrigin.UserPromptSubmit, DriverControl.Park()).unit
     /** A drive of the task whose first cycle has started in this session. */
     def driven: Task[Unit] = for {
       started <- control(DriverOrigin.UserPromptSubmit, DriverControl.Start(WorksetTarget.Inline(Set(task), WorkflowPhase.Integrate), None))
@@ -183,7 +188,13 @@ emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_toke
   /** One Ready Task under an Open milestone, claimed by an interactive governing session whose host has an integration target and `checks`. */
   private def fixture(local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO],
     usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO],
-    proposals: ProposalService[IO], registry: DriverInspector, checks: List[ValidationCheck])(test: Fixture => Task[Unit]): Task[Unit] = ZIO.scoped {
+    proposals: ProposalService[IO], registry: DriverInspector, checks: List[ValidationCheck])(test: Fixture => Task[Unit]): Task[Unit] =
+    configured(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, registry, checks, ClaimRenewal.Default, 0)(test)
+
+  /** As `fixture`, with the policy by which the host renews the claims of its work and `further` Tasks, each claimed on its own. */
+  private def configured(local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO],
+    usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO],
+    proposals: ProposalService[IO], registry: DriverInspector, checks: List[ValidationCheck], renewing: ClaimRenewal.Policy, further: Int)(test: Fixture => Task[Unit]): Task[Unit] = ZIO.scoped {
     val clock = Clock.systemUTC()
     val project = ProjectConfig(ProjectId(uuid), "http://localhost", "Governor work")
     val owner = Scope(project.project, Actor("CQ governor", SessionId(uuid), Role.Governor))
@@ -198,9 +209,11 @@ emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_toke
     for {
       runtime <- ZIO.runtime[Any]
       _ <- ledger.initialize(owner, project.name)
-      created <- MilestoneFixture.assigned(ledger, owner, List(ItemDraft("Task", "Implement", Set.empty, false,
+      all <- MilestoneFixture.assigned(ledger, owner, List.tabulate(1 + further)(index => ItemDraft(s"Task $index", "Implement", Set.empty, false,
         Content.Task(TaskStatus.Ready, List("Verified"), None, Nil), Nil)))
+      created = all.take(1)
       claim <- ledger.acquire(owner, ClaimId(uuid), created.map(_.id).toSet, 300000)
+      others <- ZIO.foreach(all.drop(1))(member => ledger.acquire(owner, ClaimId(uuid), Set(member.id), 300000).map(member -> _.fence))
       assignment <- usage.assign(collector, Assignment(AssignmentId(uuid), owner.project, Set.empty, Attribution.Unattributed, None, None))
       // The governing attempt of an interactive session, as the attached host registers it.
       governor <- usage.start(collector, Attempt(AttemptId(uuid), assignment.id, None, owner.actor.session, Role.Governor, Harness.Codex,
@@ -223,7 +236,7 @@ emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_toke
       }
       jobs <- JobSupervisor.acquire(config.owner, ZIO.attemptBlocking(FileJobRepository.open(directory.resolve("journal"), project.project, owner.actor.session)),
         local.fixture.service, new GuardianDriver(guardian.binary), directory.resolve("payload"), clock)
-      renewal = new ClaimRenewal(ClaimRenewal.Default, logstage.IzLogger.NullLogger)
+      renewal = new ClaimRenewal(renewing, logstage.IzLogger.NullLogger)
       candidates = new CandidateWorkspace(config)
       admission <- Semaphore.make(1)
       controller <- ZIO.acquireRelease(ZIO.succeed(new IntegrationController(config, authority, jobs, candidates, renewal, clock, admission)))(_.shutdown.orDie)
@@ -233,7 +246,8 @@ emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_toke
       runner = new ChildRunner(config, authority, new HarnessRegistry(Set(new ClaudeAdapter, new CodexAdapter, new PiAdapter)), jobs, local.fixture.service,
         new AgentCatalog(schemas, new ChildInstructions), new HarnessOutput, candidates, new WorkspaceReader, access, requirements, renewal, clock)
       own = new GovernorWork(config, authority, jobs, local.fixture.service, candidates, requirements, renewal, clock)
-      units <- ZIO.acquireRelease(ZIO.succeed(new DispatchUnits(config, authority, new DispatchController(config, runner, own, jobs, clock), own, logstage.IzLogger.NullLogger)))(_.shutdown.orDie)
+      attempts = new DispatchController(config, runner, own, jobs, clock)
+      units <- ZIO.acquireRelease(ZIO.succeed(new DispatchUnits(config, authority, attempts, own, logstage.IzLogger.NullLogger)))(_.shutdown.orDie)
       combinations <- ZIO.acquireRelease(ZIO.succeed(new CombinationController(config, authority, candidates, clock)))(_.shutdown.orDie)
       requests <- Semaphore.make(1)
       revalidating <- Semaphore.make(1)
@@ -252,7 +266,7 @@ emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_toke
         new OwnerLiveness { override def alive: Boolean = true }, PeerLimits(idle, idle, idle, AttachedGateway.FrameBytes, 8), () => ())))(peer => ZIO.succeed(peer.close()))
       gateway = (request: Json) => served.handle(peer, request).map(_.get)
       _ <- gateway(parser.parse("""{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}""").fold(throw _, identity))
-      _ <- test(Fixture(local, owner, config, authority, ledger, usage, registry, controller, workflow, driver, units, control, gateway, created.head.id, created, claim.fence, limits))
+      _ <- test(Fixture(local, owner, config, authority, ledger, usage, registry, controller, workflow, driver, units, control, gateway, created.head.id, created, claim.fence, limits, others, attempts))
     } yield ()
   }
 
@@ -290,8 +304,10 @@ emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_toke
         worker <- f.units.start(AssignedWork(RequestId(uuid), DispatchWork.Worker(WorkerMode.Implement), f.members, Nil, Nil, None, f.fence, f.limits), None).either
         activation <- f.activate.either
         _ <- ZIO.attempt {
-          assert(conflict(second).contains("An active child already covers T"), second.toString)
-          assert(worker.left.exists { case DomainFailure(Fault.Conflict(message)) => message.contains("An active child already covers T"); case _ => false }, worker.toString)
+          // What covers the members is the caller's own workspace, and only the caller ends it.
+          val own = "The governing session's own open workspace already covers T1; submit or cancel it before starting other work on the same members"
+          assert(conflict(second) == own, second.toString)
+          assert(worker.left.exists { case DomainFailure(Fault.Conflict(message)) => message == own; case _ => false }, worker.toString)
           assert(activation.left.exists(_.getMessage.contains(s"governor workspace ${opened.attempt.value} (Editing)")), activation.toString)
         }
         // A repetition of the call returns how the same unit stands.
@@ -407,7 +423,8 @@ emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_toke
           kept <- f.refused(commands.head._2)
           _ <- assertIO(denied(kept).contains("this workflow activation works in the Cross-cutting mode"))
           _ <- f.activate
-          // The server reads the mode when it admits: a project that left the YOLO mode is refused before a workspace is opened.
+          // The host reads the project's mode as it is now before it opens anything, and refuses in the words the server would use when it
+          // admits; the server's own refusal is the test of a project that leaves the mode while a submission is checked.
           _ <- f.mode(ProcessMode.CrossCutting, false)
           left <- f.refused(commands.head._2)
           _ <- assertIO(denied(left) == "A result the governing session made or reviewed itself is admitted only in the YOLO cross-cutting mode; the project's process mode is Cross-cutting")
@@ -419,8 +436,8 @@ emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_toke
           _ <- assertIO(f.units.unsettled.isEmpty)
           // A batch Governor has the same tool and is refused in the words the server refuses its result with.
           batch = new LocalControl(f.units, null, null, null, null, null, new McpSchemas(), f.config.copy(run = f.config.run.copy(ownership = SessionOwnership.Managed)),
-            new WorkflowExecution(f.authority.governor, f.owner.project, f.owner.actor.session, Some(f.advance)))
-          refused <- ZIO.foreach(commands.take(2)) { (_, command) =>
+            new WorkflowExecution(f.authority.governor, f.owner.project, f.owner.actor.session, None))
+          refused <- ZIO.foreach(commands) { (_, command) =>
             batch.call(LocalCapability(f.config.run.attempt.id, Role.Governor), "dispatch", DispatchCommand_JsonCodec.encode(Context, command))
               .map((body, failed) => (DispatchReply_JsonCodec.decode(Context, body).fold(throw _, identity), failed))
           }
@@ -550,6 +567,184 @@ emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_toke
         }
       } yield () }
     }
+
+    "I30: refuse the submission of a workspace once the project has left the YOLO mode, and end a result the server denies as failed for good" in {
+      (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO], registry: DriverInspector) =>
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, registry, List(Slow)) { f => for {
+        _ <- f.yolo
+        // The operator leaves the mode while the session edits: nothing is captured, and the session is told what to do with the workspace.
+        kept <- f.open(None)
+        _ <- f.write(kept, "good, too late\n")
+        _ <- f.mode(ProcessMode.CrossCutting, false)
+        refused <- f.refused(DispatchCommand.SubmitWorkspace(kept.attempt, f.ready))
+        still <- f.status(DispatchCommand.Status(kept.attempt, 0))
+        _ <- ZIO.attempt {
+          assert(denied(refused) == "A result the governing session made or reviewed itself is admitted only in the YOLO cross-cutting mode; the project's process mode is Cross-cutting. " +
+            "The workspace was not captured: Cancel it, and its directory is kept as it is", refused.toString)
+          assert(still.phase == DispatchPhase.Editing && f.unitEvents(kept.attempt.value).isEmpty, still.toString)
+        }
+        _ <- f.status(DispatchCommand.Cancel(kept.attempt)) *> f.ended(kept.attempt)
+        record <- f.record(kept.attempt)
+        _ <- ZIO.attemptBlocking(assert(record.admission == WorkspaceAdmission.Quarantined && Files.readString(f.directory(kept).resolve("feature.txt")) == "good, too late\n", record.toString))
+        // The mode is left while the host checks a submitted workspace: the server denies the result, and that is its answer.
+        _ <- f.mode(ProcessMode.Yolo, false)
+        opened <- f.open(None)
+        _ <- f.write(opened, "good, and submitted in time\n")
+        _ <- f.submit(opened)
+        _ <- f.mode(ProcessMode.CrossCutting, false)
+        ended <- f.ended(opened.attempt)
+        events <- f.written(opened.attempt.value)
+        workspace <- f.record(opened.attempt)
+        attempts <- f.attempts
+        _ <- ZIO.attemptBlocking {
+          val denial = "admitted only in the YOLO cross-cutting mode; the project's process mode is Cross-cutting"
+          // A terminal status that names the denial, not a delivery to retry.
+          assert(ended.phase == DispatchPhase.Failed && ended.result.isEmpty && ended.next == ChildNext.Retry && ended.usageDelivered &&
+            ended.blocker.exists(text => text.startsWith("Result admission denied: ") && text.contains(denial)), ended.toString)
+          assert(events == List("Started", "Failed") && f.units.unsettled.isEmpty && f.children.undelivered.isEmpty)
+          // The attempt has its outcome, with the reason; nothing is left for recovery or cq job upload to deliver again.
+          val outcome = attempts.find(_.attempt.id == opened.attempt).flatMap(_.outcome).map(_.value)
+          assert(outcome.exists(value => value.state == AttemptState.Failed && value.gaps.exists(_.contains(denial))), outcome.toString)
+          val receipt = HostFiles.read(f.session.resolve("children").resolve(opened.attempt.value.toString).resolve("receipt.json"), DispatchStatus_JsonCodec, 65536)
+          assert(receipt.phase == DispatchPhase.Failed && receipt.copy(workspace = ended.workspace) == ended, receipt.toString)
+          // The workspace is kept with what was written and a reason that says what happened to it.
+          assert(workspace.admission == WorkspaceAdmission.Quarantined && workspace.quarantineReason.exists(reason => reason.startsWith("The server refused the result: ") && reason.contains("YOLO")) &&
+            Files.readString(f.directory(opened).resolve("feature.txt")) == "good, and submitted in time\n", workspace.toString)
+        }
+      } yield () }
+    }
+
+    "I30: keep a workspace that is submitted without a ready candidate, whatever its report says" in {
+      (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO], registry: DriverInspector) =>
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, registry, List(Good)) { f => for {
+        _ <- f.yolo
+        _ <- ZIO.foreachDiscard(List(WorkDisposition.Blocked, WorkDisposition.Failed)) { disposition => for {
+          opened <- f.open(None)
+          _ <- f.write(opened, s"unfinished and $disposition\n")
+          _ <- f.status(DispatchCommand.SubmitWorkspace(opened.attempt, f.members.map(member => WorkMember(member.id, disposition, "Could not finish", Nil))))
+          ended <- f.ended(opened.attempt)
+          record <- f.record(opened.attempt)
+          _ <- ZIO.attemptBlocking {
+            // The report is a result like a Worker's; no candidate was captured, so the host removes nothing of what the session wrote.
+            assert(ended.phase == DispatchPhase.Completed && ended.result.nonEmpty && ended.next != ChildNext.Review, ended.toString)
+            assert(record.admission == WorkspaceAdmission.Quarantined && record.quarantineReason.contains(AttemptSettlement.Uncaptured) &&
+              ended.workspace.contains(WorkspaceState(WorkspaceAdmission.Quarantined, Some(record.directory))) &&
+              Files.readString(f.directory(opened).resolve("feature.txt")) == s"unfinished and $disposition\n", s"$disposition: $record")
+          }
+        } yield () }
+      } yield () }
+    }
+
+    "I30 Q64: settle as not applied an integration prepared in the YOLO mode that the server refuses once the project has left it" in {
+      (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO], registry: DriverInspector) =>
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, registry, List(Good)) { f => for {
+        _ <- f.yolo
+        made <- f.made("good, by the governing session\n", None)
+        review <- f.selfReview(made.result.get).map { case DispatchReply.Status(value) => value; case other => fail(s"The self-review was refused: $other") }
+        ready <- f.prepared(review.result.get)
+        _ <- assertIO(ready.phase == IntegrationPhase.Ready)
+        _ <- f.mode(ProcessMode.CrossCutting, false)
+        _ <- f.dispatch(DispatchCommand.Integrate(ready.id))
+        settled <- f.controller.status(ready.id, 120000).repeatUntil(status => !Set(IntegrationPhase.Preparing, IntegrationPhase.Running)(status.phase))
+          .timeoutFail(new IllegalStateException("Integration did not settle"))(zio.Duration.fromSeconds(60))
+        task <- f.taskContent
+        _ <- ZIO.attempt {
+          // The refusal is the server's answer to this reservation: nothing was reserved or applied, and nothing is left pending.
+          assert(settled.phase == IntegrationPhase.NotApplied && settled.blocker.exists(_.contains("requires the YOLO cross-cutting mode; the project's process mode is Cross-cutting")), settled.toString)
+          assert(task.status == TaskStatus.Ready && f.target == local.base && f.controller.unsettled.isEmpty, f.controller.unsettled.toString)
+        }
+      } yield () }
+    }
+
+    "I30: answer an OpenWorkspace whose attempt cannot be launched instead of waiting for a workspace that never opens" in {
+      (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO], registry: DriverInspector) =>
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, registry, List(Good)) { f => for {
+        _ <- f.yolo
+        // The host cannot retain the ticket of the attempt: its directory of children is a file.
+        _ <- ZIO.attemptBlocking(Files.writeString(f.session.resolve("children"), "not a directory"))
+        request = DispatchCommand.OpenWorkspace(RequestId(uuid), f.members, None, f.fence)
+        first <- f.dispatch(request).timeoutFail(new IllegalStateException("OpenWorkspace waited for a workspace that cannot open"))(zio.Duration.fromSeconds(20))
+        again <- f.dispatch(request).timeoutFail(new IllegalStateException("A repeated OpenWorkspace waited for a workspace that cannot open"))(zio.Duration.fromSeconds(20))
+        _ <- ZIO.attempt(List(first, again).foreach {
+          case DispatchReply.Failed(_) => ()
+          case DispatchReply.Status(status) => assert(status.phase == DispatchPhase.Unknown && status.next == ChildNext.InspectEvidence && status.workspace.isEmpty, status.toString)
+          case other => fail(s"Unexpected reply $other")
+        })
+        _ <- ZIO.attemptBlocking(Files.delete(f.session.resolve("children")))
+      } yield () }
+    }
+
+    "I30: start the full number of children beside an open workspace, which holds its members and no child slot" in {
+      (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO], registry: DriverInspector) =>
+      configured(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, registry, List(Good), ClaimRenewal.Default, 5) { f =>
+        def child(index: Int) = f.units.start(AssignedWork(RequestId(uuid), DispatchWork.Worker(WorkerMode.Implement), List(f.others(index)._1), Nil, Nil, None, f.others(index)._2, f.limits), None)
+        for {
+          _ <- f.yolo
+          // Children of this test run until they are cancelled.
+          _ <- ZIO.attemptBlocking(Files.writeString(Path.of(f.config.settings.harnesses.head.executable).resolveSibling("hold"), ""))
+          opened <- f.open(None)
+          started <- ZIO.foreach(List(0, 1, 2, 3))(child)
+          fifth <- child(4).either
+          _ <- ZIO.attempt {
+            assert(started.forall(status => !DispatchController.terminal(status.phase)) && started.map(_.attempt).distinct.size == DispatchController.MaxActiveChildren, started.toString)
+            assert(fifth.left.exists { case DomainFailure(Fault.Conflict(message)) => message.contains("at most 4 active children"); case _ => false }, fifth.toString)
+          }
+          // With every child slot taken a second workspace is admitted as far as slots go: its refusal is the members', not the bound's.
+          second <- f.refused(DispatchCommand.OpenWorkspace(RequestId(uuid), List(f.others(0)._1), None, f.others(0)._2))
+          _ <- assertIO(conflict(second).contains("An active child already covers T2"))
+          still <- f.status(DispatchCommand.Status(opened.attempt, 0))
+          _ <- assertIO(still.phase == DispatchPhase.Editing)
+          _ <- ZIO.foreachDiscard(started)(status => f.units.cancel(status.attempt))
+          _ <- ZIO.foreachDiscard(started)(status => f.units.status(status.attempt, 120000).repeatUntil(value => DispatchController.terminal(value.phase)))
+            .timeoutFail(new IllegalStateException("The children did not end"))(zio.Duration.fromSeconds(60))
+          _ <- f.status(DispatchCommand.Cancel(opened.attempt)) *> f.ended(opened.attempt)
+        } yield ()
+      }
+    }
+
+    "I30: cancel an open workspace whose claim is lost, keep it and tell a waiter, and end one submission that races its cancellation in one way" in {
+      (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO], registry: DriverInspector) =>
+      configured(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, registry, List(Good), ClaimRenewal.Policy(java.time.Duration.ofSeconds(60), java.time.Duration.ofMillis(200), java.time.Duration.ofSeconds(1)), 1) { f => for {
+        _ <- f.yolo
+        opened <- f.open(None)
+        _ <- f.write(opened, "written under a claim that is released\n")
+        _ <- ledger.release(f.owner, f.fence)
+        lost <- f.ended(opened.attempt)
+        events <- f.written(opened.attempt.value)
+        record <- f.record(opened.attempt)
+        _ <- ZIO.attemptBlocking {
+          assert(lost.phase == DispatchPhase.Cancelled && lost.result.isEmpty && lost.blocker.exists(_.startsWith("Work claim refresh failed: ")), lost.toString)
+          // Whoever waits for the session's work is told that the host took it over and how it ended.
+          assert(events == List("Started", "Cancelled"), events.toString)
+          assert(record.admission == WorkspaceAdmission.Quarantined && record.quarantineReason.exists(_.startsWith(GovernorWork.Quarantined + "Work claim refresh failed: ")) &&
+            Files.readString(f.directory(opened).resolve("feature.txt")) == "written under a claim that is released\n", record.toString)
+        }
+        // A submission and a cancellation of the same workspace at once: one of them takes it, and everything agrees with that one.
+        (member, fence) = f.others.head
+        raced <- f.status(DispatchCommand.OpenWorkspace(RequestId(uuid), List(member), None, fence))
+        _ <- ZIO.attemptBlocking(Files.writeString(f.directory(raced).resolve("feature.txt"), "good, and raced\n"))
+        report = List(WorkMember(member.id, WorkDisposition.CandidateReady, "Implemented", Nil))
+        _ <- f.dispatch(DispatchCommand.SubmitWorkspace(raced.attempt, report)).zipPar(f.dispatch(DispatchCommand.Cancel(raced.attempt)))
+        ended <- f.ended(raced.attempt)
+        pair <- f.written(raced.attempt.value)
+        kept <- f.record(raced.attempt)
+        _ <- ZIO.attemptBlocking {
+          assert(pair == List("Started", ended.phase.toString), pair.toString)
+          ended.phase match {
+            case DispatchPhase.Completed => assert(ended.result.nonEmpty && kept.admission == WorkspaceAdmission.Removed, s"$ended $kept")
+            case DispatchPhase.Cancelled => assert(ended.result.isEmpty && kept.admission == WorkspaceAdmission.Quarantined &&
+              Files.readString(f.directory(raced).resolve("feature.txt")) == "good, and raced\n", s"$ended $kept")
+            case other => fail(s"A raced workspace ended $other: $ended")
+          }
+        }
+      } yield () }
+    }
   }
 
   "A drive whose session works itself (Behavioral Active Blackbox; in-process server and driver core Communication)" should {
@@ -611,6 +806,18 @@ emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_toke
         review <- f.selfReview(made.result.get).map { case DispatchReply.Status(value) => value; case other => fail(s"The self-review was refused: $other") }
         _ <- f.eventually("the self-review is concluded in its cycle")(f.cycle.exists(cycle => cycle.outcomes.map(outcome => outcome.attempt -> outcome.end) ==
           List(opened.attempt -> ChildEnd.Admitted, review.attempt -> ChildEnd.Admitted) && cycle.held.isEmpty && cycle.inFlight.isEmpty))
+        // A call on a unit that has ended reads how it ended and touches no cycle: neither the one that held it nor a later drive's.
+        _ <- f.parked
+        _ <- f.driven
+        later = f.cycle.map(_.id)
+        late <- f.dispatch(DispatchCommand.SubmitWorkspace(opened.attempt, f.ready))
+        stopped <- f.dispatch(DispatchCommand.Cancel(opened.attempt))
+        _ <- ZIO.sleep(zio.Duration.fromMillis(1500))
+        _ <- ZIO.attempt {
+          assert(late == DispatchReply.Status(made) && stopped == DispatchReply.Status(made), s"$late $stopped")
+          assert(f.cycle.map(_.id) == later && later.nonEmpty && f.cycle.exists(cycle => cycle.outcomes.isEmpty &&
+            cycle.lineage.map(_.member).forall(_.isInstanceOf[LineageMember.Run])), f.lineage)
+        }
       } yield () }
     }
   }

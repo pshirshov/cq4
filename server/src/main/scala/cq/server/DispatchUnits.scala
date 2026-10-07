@@ -130,6 +130,9 @@ final class DispatchUnits(config: SupervisorConfig, authority: SupervisorAuthori
       // Preparing a worktree of a large repository takes its time: the call waits as long as a status call may, and its repetition waits again.
       open <- ZIO.succeed(synchronized(unit.handle)).flatMap(ZIO.foreach(_)(governor.opened)).timeout(zio.Duration.fromMillis(DispatchWaits.MaxMillis))
       _ <- ZIO.fromOption(open).orElseFail(DomainFailure(Fault.Conflict(DispatchUnits.Opening)))
+      // An attempt that ended without a workspace is answered with how its unit ended, not with a unit that is still concluding.
+      failed <- ZIO.succeed(synchronized(unit.attempts.headOption.exists(attempt => DispatchController.terminal(attempt.entry.status.phase))))
+      _ <- if (failed) unit.done.await.timeout(zio.Duration.fromMillis(DispatchWaits.MaxMillis)) else ZIO.unit
       result <- status(unit)
     } yield result
   }
@@ -166,7 +169,7 @@ final class DispatchUnits(config: SupervisorConfig, authority: SupervisorAuthori
         admitted <- ZIO.attemptBlocking(synchronized {
           require(!closing, DispatchController.Closed)
           val active = units.filter(_.terminal.isEmpty).toList
-          val standing = active.map(unit => DispatchUnits.Standing(template(unit.work), if (unit.governing) 0 else unit.open))
+          val standing = active.map(unit => DispatchUnits.Standing(template(unit.work), DispatchUnits.slots(unit.governing, unit.open), unit.governing))
           val (progress, step, together) = worker match {
             case UnitWorker.Models(plan, _) =>
               // The seats a unit starts together fit together or the unit is not started: every seat of an `all` panel, `min` seats of an `any` one.
@@ -223,7 +226,8 @@ final class DispatchUnits(config: SupervisorConfig, authority: SupervisorAuthori
   def submit(attempt: AttemptId, members: List[WorkMember]): Task[DispatchStatus] = for {
     found <- ZIO.attempt { val unit = workspace(attempt); synchronized((unit, unit.terminal.nonEmpty, unit.attempts.head.entry)) }
     (unit, ended, entry) = found
-    _ <- if (ended) ZIO.unit else ZIO.attemptBlocking(governor.report(entry, members)).flatMap(report => announce(unit) *> governor.submit(entry, report))
+    // The project's mode is read again before anything is captured: a result the server would deny is not made.
+    _ <- if (ended) ZIO.unit else ZIO.attemptBlocking { governor.submittable(); governor.report(entry, members) }.flatMap(report => announce(unit) *> governor.submit(entry, report))
     result <- status(unit)
   } yield result
 
@@ -473,12 +477,16 @@ object DispatchUnits {
   }
 
   /** A unit that has not ended, as the admission of another reads it: its request and the child slots it holds. */
-  final case class Standing(request: DispatchRequest, slots: Int)
+  final case class Standing(request: DispatchRequest, slots: Int, own: Boolean)
+
+  /** The child slots a unit holds: one for each candidate in flight, and none for the governing session's own work. */
+  def slots(governing: Boolean, open: Int): Int = if (governing) 0 else open
 
   /** `request` is to start beside the `active` units, holding `slots` child slots. The members of running units are disjoint (D83).
     * A unit the governing session works itself holds its members as any unit does and no slot: no process runs for it. */
   def admissible(active: List[Standing], request: DispatchRequest, slots: Int): Unit = {
-    DispatchController.disjoint(active.map(_.request), request)
+    DispatchController.uncovered(active.filter(_.own).map(_.request), request)
+    DispatchController.disjoint(active.filterNot(_.own).map(_.request), request)
     DispatchController.capacity(active.map(_.slots).sum, slots)
   }
 

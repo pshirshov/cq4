@@ -13,18 +13,23 @@ final class AttachedAssets(schemas: McpSchemas, workflows: WorkflowAssets) {
   /** The Claude Code permission rule that allows the session to run `cq wait` without being asked. It is the exact command line, with
     * no wildcard: a prefix rule is a prefix match on the command string, and the session is given a command that needs no argument. */
   def claudeWaitRule(executable: Path): String = s"Bash($executable wait)"
-  /** The Claude Code permission rules that let the session's file tools read and write, without being asked, the workspaces a host of
-    * this state root opens (I30), and nothing else under it: `<stateRoot>/<session>/workspaces/`. A rule that begins with `//` is
-    * rooted at the filesystem, `*` stands for one session directory, and an `Edit` rule covers every file-writing tool. A state root
-    * that is reached through a symbolic link is named both ways, because the session is given the path as the settings write it.
+  /** The Claude Code permission rules that let the session's file tools read and write, without being asked, the worktrees a host of
+    * this state root opens (I30): `<stateRoot>/<session>/workspaces/<attempt>/tree/` and what is below it. They cover the tree of
+    * every workspace of every session under the state root, a child's and a check's as much as the Governor's own, because session
+    * and attempt are known only when a workspace exists and a rule names no narrower set. They do not cover the host's records
+    * beside a tree (`workspace.json`, the lock) or anything else under the state root. A rule that begins with `//` is rooted at the
+    * filesystem, each `*` stands for one directory, and an `Edit` rule covers every file-writing tool. A state root reached through
+    * a symbolic link, its own or an ancestor's, is named both ways: the session is given the path as the settings write it.
     * No rule can make such a workspace the working directory of the session's shell: see docs/interactive.md. */
   def claudeWorkspaceRules(project: Path, stateRoot: String): List[String] = {
     val written = project.resolve(stateRoot).toAbsolutePath.normalize()
-    val real = if (Files.isDirectory(written)) written.toRealPath() else written
+    // The host creates the state root when it first starts, so the link may be an ancestor of a directory that does not exist yet.
+    val existing = Iterator.iterate(written)(_.getParent).takeWhile(_ != null).find(Files.exists(_)).getOrElse(written.getRoot)
+    val real = existing.toRealPath().resolve(existing.relativize(written))
     List(written, real).distinct.flatMap { root =>
       require(!root.toString.exists(character => character.isWhitespace || "()*?[]{}!\\".contains(character)),
         "The state root path cannot be named in a Claude permission rule: it contains whitespace, a parenthesis or a pattern character")
-      List("Edit", "Read").map(tool => s"$tool(/$root/*/workspaces/**)")
+      List("Edit", "Read").map(tool => s"$tool(/$root/*/workspaces/*/tree/**)")
     }
   }
   private def quoted(value: String): String = Json.fromString(value).noSpaces

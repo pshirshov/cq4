@@ -23,7 +23,7 @@ final class AttachedAssetsLocal extends AnyWordSpec {
 
   /** What `cq configure claude` allows for a state root `state` under `root`: the waiter, and the file tools in its sessions' workspaces. */
   private def allowed(root: Path, binary: Path): List[String] =
-    List(s"Bash($binary wait)", s"Edit(/${root.resolve("state")}/*/workspaces/**)", s"Read(/${root.resolve("state")}/*/workspaces/**)")
+    List(s"Bash($binary wait)", s"Edit(/${root.resolve("state")}/*/workspaces/*/tree/**)", s"Read(/${root.resolve("state")}/*/workspaces/*/tree/**)")
 
   "Attached setup (Behavioral Active Effectual filesystem Good Communication)" should {
     "install scoped integrations without credentials and preserve unrelated Claude entries" in {
@@ -103,12 +103,22 @@ final class AttachedAssetsLocal extends AnyWordSpec {
       // I30: the file tools are allowed in the workspaces of the sessions of this state root: the rule is rooted at the filesystem,
       // names one directory level for the session and nothing else under the state root.
       val state = root.resolve("state")
-      assert(assets.claudeWorkspaceRules(root, state.toString) == List(s"Edit(/$state/*/workspaces/**)", s"Read(/$state/*/workspaces/**)") &&
+      // Only what is inside a worktree: the host's record and lock of a workspace lie beside its tree and match neither rule.
+      assert(assets.claudeWorkspaceRules(root, state.toString) == List(s"Edit(/$state/*/workspaces/*/tree/**)", s"Read(/$state/*/workspaces/*/tree/**)") &&
         state.toString.startsWith("/") && assets.claudeWorkspaceRules(root, "state") == assets.claudeWorkspaceRules(root, state.toString))
       // A state root reached through a symbolic link is named as written and as it resolves; one no rule can name is refused.
       val real = Files.createDirectory(root.resolve("real-state"))
       val link = Files.createSymbolicLink(root.resolve("linked-state"), real)
-      assert(assets.claudeWorkspaceRules(root, link.toString) == List(link, real.toRealPath()).flatMap(path => List(s"Edit(/$path/*/workspaces/**)", s"Read(/$path/*/workspaces/**)")))
+      def rules(paths: Path*): List[String] = paths.toList.flatMap(path => List(s"Edit(/$path/*/workspaces/*/tree/**)", s"Read(/$path/*/workspaces/*/tree/**)"))
+      assert(assets.claudeWorkspaceRules(root, link.toString) == rules(link, real.toRealPath()))
+      // The host creates the state root at its first start: a link among the ancestors is resolved before the directory exists.
+      val later = link.resolve("sessions").resolve("of-this-project")
+      assert(!Files.exists(later) && assets.claudeWorkspaceRules(root, later.toString) == rules(later, real.toRealPath().resolve("sessions").resolve("of-this-project")))
+      // The pattern is that of the directory the host reports for a workspace, and of nothing beside it.
+      val shape = java.util.regex.Pattern.compile("^" + java.util.regex.Pattern.quote(state.toString) + "/[^/]+/workspaces/[^/]+/tree/.*$")
+      val attempt = state.resolve("0b8c0000-0000-4000-8000-000000000001").resolve("workspaces").resolve("0b8c0000-0000-4000-8000-000000000002")
+      assert(shape.matcher(attempt.resolve("tree").resolve("src/file.txt").toString).matches() && !shape.matcher(attempt.resolve("workspace.json").toString).matches() &&
+        !shape.matcher(attempt.toString + ".lock").matches() && assets.claudeWorkspaceRules(root, state.toString).forall(_.endsWith("/*/workspaces/*/tree/**)")))
       List("state (old)", "state*", "my state", "state[1]").foreach(name => intercept[IllegalArgumentException](assets.claudeWorkspaceRules(root, root.resolve(name).toString)))
       // Claude Code records a declined server in disabledMcpjsonServers, which overrides the approval.
       Files.writeString(local, "{\"enabledMcpjsonServers\":[\"cq\"],\"disabledMcpjsonServers\":[\"other\",\"cq\"]}")

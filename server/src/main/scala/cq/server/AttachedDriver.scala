@@ -86,6 +86,15 @@ final class LineageTracker(client: DriverSessionClient, report: String => Unit, 
   // The session made the host work on a member again. A followed member is in flight on the server before this returns, so a continuation
   // query that follows the dispatch reply never finds it resting. A fault the server returns means the cycle is over and holds nothing;
   // the member's follower reports it. A member that is not followed is registered and followed.
+  // As `resume`, for a member that is registered only when its work begins: one that is not followed has ended, in this cycle or
+  // in an earlier one, and a call that names it afterwards changes nothing.
+  def wake(cycle: CycleId, parent: LineageMember, member: LineageMember): Task[Unit] =
+    reports.withPermit(ZIO.suspend {
+      if (resumed(cycle, member)) reliably(client.inherit(cycle, parent, member)).unit else ZIO.unit
+    }).catchAll {
+      case _: DomainFailure => ZIO.unit
+      case error => abandon(cycle, member, "resumption", "could not be resumed", error)
+    }
   def resume(cycle: CycleId, parent: LineageMember, member: LineageMember, observed: Task[Option[LineageOutcome]]): Task[Unit] =
     reports.withPermit(ZIO.suspend {
       if (resumed(cycle, member)) reliably(client.inherit(cycle, parent, member)).as(true) else ZIO.succeed(false)
@@ -157,8 +166,8 @@ final class AttachedDriver(config: SupervisorConfig, authority: SupervisorAuthor
       case (_: DispatchCommand.SubmitWorkspace | _: DispatchCommand.Cancel, DispatchReply.Status(status)) =>
         ZIO.attempt(units.governing(status.attempt)).flatMap { own =>
           if (!own) ZIO.unit
-          else tracker.resume(cycle, run, LineageMember.Request(status.request), request(status.attempt)) *>
-            tracker.resume(cycle, LineageMember.Request(status.request), LineageMember.Attempt(status.attempt), attempt(status.attempt))
+          else tracker.wake(cycle, run, LineageMember.Request(status.request)) *>
+            tracker.wake(cycle, LineageMember.Request(status.request), LineageMember.Attempt(status.attempt))
         }
       case (DispatchCommand.PrepareIntegration(id, _), _: DispatchReply.Integration) =>
         tracker.track(cycle, run, LineageMember.Integration(id), integrations.status(id, WaitMillis).map(value => AttachedDriver.integration(value.phase)))
