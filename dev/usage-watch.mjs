@@ -60,8 +60,8 @@ try {
   assert.equal(root.frames.filter(frame => frame.Updated).length, stableCount, 'Stable/replayed usage must not emit repeated notifications');
   queries = JSON.parse(sql("SELECT coalesce(json_agg(row_to_json(s)), '[]'::json) FROM (SELECT query, calls, rows FROM pg_stat_statements WHERE query LIKE '%cq_%' AND query NOT LIKE '%pg_stat_statements%') s"));
   assert.equal(queries.length, 5, 'Unified watch polling reads the catalogue clock, the project item and work cursors, the usage clock and attempt events, plus project existence');
-  assert.ok(queries.some(row => /^SELECT p\.change_cursor, p\.fence_counter \+ \(SELECT count\(\*\) FROM cq_claims c WHERE c\.project_id = p\.project_id AND \(c\.released OR c\.expires_at <= \$1\)\) FROM cq_projects p WHERE p\.project_id = \$2$/.test(row.query)));
-  assert.ok(queries.some(row => /^SELECT count\(\*\) \+ count\(effective_outcome\) FROM cq_usage_attempts WHERE project_id = \$1$/.test(row.query)));
+  assert.ok(queries.some(row => /^SELECT p\.change_cursor, \$\d+ \* p\.fence_counter - \(SELECT count\(\*\) FROM cq_claims c WHERE c\.project_id = p\.project_id AND NOT c\.released AND c\.expires_at > \$1\) FROM cq_projects p WHERE p\.project_id = \$2$/.test(row.query)));
+  assert.ok(queries.some(row => /^SELECT attempt_events FROM cq_usage_clock WHERE project_id = \$1$/.test(row.query)));
   assert.ok(queries.some(row => /^SELECT cursor FROM cq_catalogue_clock WHERE singleton$/.test(row.query)));
   assert.ok(queries.some(row => /^SELECT cursor FROM cq_usage_clock WHERE project_id = \$1$/.test(row.query)));
   assert.ok(queries.some(row => /^SELECT \$\d+ FROM cq_projects WHERE project_id = \$1$/.test(row.query)));

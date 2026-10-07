@@ -50,7 +50,7 @@ private final class PostgresUsageTransaction(connection: Connection, project: Pr
   }
   private def tick(): Long = sql.query("UPDATE cq_usage_clock SET cursor = cursor + 1 WHERE project_id = ? RETURNING cursor")(projectKey)(_.getLong(1)).head
   override def cursor: Long = sql.query("SELECT cursor FROM cq_usage_clock WHERE project_id = ?")(projectKey)(_.getLong(1)).headOption.getOrElse(0L)
-  override def attemptEvents: Long = sql.query("SELECT count(*) + count(effective_outcome) FROM cq_usage_attempts WHERE project_id = ?")(projectKey)(_.getLong(1)).head
+  override def attemptEvents: Long = sql.query("SELECT attempt_events FROM cq_usage_clock WHERE project_id = ?")(projectKey)(_.getLong(1)).headOption.getOrElse(0L)
   override def running(claimed: Map[ItemId, SessionId]): Map[ItemId, List[Attempt]] = if (claimed.isEmpty) Map.empty else {
     val items = claimed.keysIterator.map(item => (item.ledger.toString, item.number) -> item).toMap
     val rows = Json.fromValues(claimed.map { case (item, session) =>
@@ -90,6 +90,7 @@ private final class PostgresUsageTransaction(connection: Connection, project: Pr
       identity(s, value.id.value); s.setObject(3, value.assignment.value); optionalId(s, 4, value.parent.map(_.value)); s.setObject(5, value.session.value)
       s.setString(6, Wire.encode(Actor_JsonCodec, actor)); s.setLong(7, receivedAt); s.setString(8, Wire.encode(Attempt_JsonCodec, value))
     }
+    sql.execute("UPDATE cq_usage_clock SET attempt_events = attempt_events + 1 WHERE project_id = ?")(projectKey)
     tick()
     ()
   }
@@ -178,6 +179,10 @@ private final class PostgresUsageTransaction(connection: Connection, project: Pr
     sql.execute("INSERT INTO cq_usage_outcomes(project_id, request_id, attempt_id, actor, received_at, sequence, body) VALUES (?, ?, ?, ?::jsonb, ?, ?, ?::jsonb)") { s =>
       identity(s, value.request.value); s.setObject(3, value.attempt.value); s.setString(4, Wire.encode(Actor_JsonCodec, actor)); s.setLong(5, receivedAt)
       s.setLong(6, recorded.sequence); s.setString(7, encoded)
+    }
+    sql.execute("UPDATE cq_usage_clock SET attempt_events = attempt_events + 1 WHERE project_id = ? AND " +
+      "EXISTS (SELECT 1 FROM cq_usage_attempts WHERE project_id = ? AND attempt_id = ? AND effective_outcome IS NULL)") { s =>
+      projectKey(s); s.setObject(2, project.value); s.setObject(3, value.attempt.value)
     }
     val changed = sql.execute("UPDATE cq_usage_attempts SET effective_outcome = ?::jsonb WHERE project_id = ? AND attempt_id = ?") { s =>
       s.setString(1, encoded); s.setObject(2, project.value); s.setObject(3, value.attempt.value)

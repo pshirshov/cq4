@@ -146,6 +146,8 @@ abstract class BrowseContractTest extends SpecZIO with AssertZIO {
         again <- later.release(owner, renewed.fence)
         repeated <- rows(later)
         _ <- assertIO(again.released && repeated.work == released.work)
+        // D154: three fences; the short lease expires, its takeover releases what had already expired, the held claim is released once.
+        _ <- assertIO(List(initial, acquired, leased, afterRenewal, expired, replaced, released, repeated).map(_.work) == List(0L, 1L, 2L, 2L, 3L, 4L, 5L, 5L))
       } yield ()
     }
 

@@ -93,6 +93,7 @@ CREATE TABLE cq_claims (
   PRIMARY KEY (project_id, claim_id),
   UNIQUE (project_id, generation)
 );
+CREATE INDEX cq_claims_live ON cq_claims (project_id, expires_at) WHERE NOT released;
 CREATE TABLE cq_claim_members (
   project_id uuid NOT NULL,
   ledger text NOT NULL,
@@ -106,7 +107,8 @@ CREATE INDEX cq_claim_members_owner ON cq_claim_members (project_id, claim_id);
 
 CREATE TABLE cq_usage_clock (
   project_id uuid PRIMARY KEY REFERENCES cq_projects,
-  cursor bigint NOT NULL CHECK (cursor >= 0)
+  cursor bigint NOT NULL CHECK (cursor >= 0),
+  attempt_events bigint NOT NULL DEFAULT 0 CHECK (attempt_events >= 0)
 );
 CREATE TABLE cq_usage_assignments (
   project_id uuid NOT NULL REFERENCES cq_projects,

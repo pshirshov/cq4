@@ -210,10 +210,15 @@ abstract class ApplicationContractTest extends SpecZIO with AssertZIO {
           _ <- host(HostUsage.Finish(AttemptOutcome(RequestId(UUID.randomUUID()), child.id, AttemptState.Completed, 6000, Nil, None)))
           one <- browse
           _ <- assertIO(one.items.head.work.flatMap(_.attempt).contains(WorkAttempt(Role.Worker, Harness.Codex, 4000)))
-          _ <- host(HostUsage.Finish(AttemptOutcome(RequestId(UUID.randomUUID()), earlier.id, AttemptState.Completed, 6000, Nil, None)))
+          first = RequestId(UUID.randomUUID())
+          _ <- host(HostUsage.Finish(AttemptOutcome(first, earlier.id, AttemptState.Completed, 6000, Nil, None)))
           finished <- browse
           ended <- live
           _ <- assertIO(finished.items.map(_.work.map(_.attempt)) == List(Some(None), None) && ended.work > started.work && finished.work == ended.work)
+          _ <- host(HostUsage.Finish(AttemptOutcome(RequestId(UUID.randomUUID()), earlier.id, AttemptState.Failed, 7000, Nil, Some(first))))
+          corrected <- live
+          // D154: one acquired claim and the orphan's start, then two starts, two first outcomes and a correction that counts nothing.
+          _ <- assertIO(List(before, started, ended, corrected).map(_.work) == List(2L, 4L, 6L, 6L))
         } yield ()
     }
 

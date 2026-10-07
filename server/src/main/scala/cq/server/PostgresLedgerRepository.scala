@@ -84,8 +84,11 @@ private object PersistedItems {
 }
 
 private object PersistedClaims {
-  /** The work cursor of the aliased `cq_projects` row `p`; binds one bigint, the time. */
-  val workCursor: String = "p.fence_counter + (SELECT count(*) FROM cq_claims c WHERE c.project_id = p.project_id AND (c.released OR c.expires_at <= ?))"
+  /**
+   * The work cursor of the aliased `cq_projects` row `p`; binds one bigint, the time. Every fence value belongs to one claim and no claim is deleted,
+   * so the project's claims number `fence_counter`, and the released or expired ones are those less the live ones, which `cq_claims_live` holds.
+   */
+  val workCursor: String = "2 * p.fence_counter - (SELECT count(*) FROM cq_claims c WHERE c.project_id = p.project_id AND NOT c.released AND c.expires_at > ?)"
 }
 
 private final class PostgresLedgerTransaction(connection: Connection, override val project: Project) extends LedgerTransaction {
