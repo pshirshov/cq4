@@ -176,6 +176,24 @@ harnesses:
         "codex:gpt-6.1-sol (project override, harnesses.codex.roles); self-review: seat 1 of 1 can run a model of codex, the governing harness")
       assert(!f.found(f.inspect(Harness.Pi), "Role planner").detail.contains("self-review"))
     }
+    "check a mode that has a key of its own beside its role, under the key as it is written" in Using.resource(new Fixture) { f =>
+      f.served = Some(view(Example, "defaults:\n  roles:\n    reviewer/plan: $harness:@frontier\n    worker/probe: pi:@fast\n    explorer/research: $harness:missing\n"))
+      val codex = f.inspect(Harness.Codex)
+      assert(codex.current && codex.checks.map(_.name) == List("Project", "Credential", "Configuration", "Server defaults", "Project override", "Role planner", "Role worker",
+        "Role worker/probe", "Role explorer", "Role explorer/research", "Role reviewer", "Role reviewer/plan", "Session settings", "Settings entry claude", "Settings entry codex",
+        "Settings entry pi", "Providers"), codex.toString)
+      assert(f.found(codex, "Role reviewer/plan") == InstallationCheck("Role reviewer/plan", InstallationState.Current,
+        "codex:gpt-6.1-sol?effort=xhigh (project override, defaults.roles); self-review: seat 1 of 1 can run a model of codex, the governing harness"))
+      assert(f.found(codex, "Role reviewer").detail ==
+        "{ all: [claude:sonnet, { fallback: [pi:zai/glm-5.3, pi:xiaomi-token-plan-ams/mimo-v2.6-pro] }], min: 1 } (server defaults, harnesses.codex.roles)")
+      assert(f.found(codex, "Role worker/probe").detail == "pi:xiaomi-token-plan-ams/mimo-v2.6-pro?effort=low (project override, defaults.roles)")
+      assert(f.found(codex, "Settings entry codex").detail.endsWith("referenced by planner, worker, explorer, explorer/research, reviewer/plan") &&
+        f.found(codex, "Settings entry pi").detail.endsWith("referenced by worker, worker/probe, reviewer"))
+      // A key of a mode that the governing harness cannot run fails its own check and leaves the check of the role as it is.
+      val pi = f.inspect(Harness.Pi)
+      assert(!pi.current && f.found(pi, "Role explorer").state == InstallationState.Current &&
+        f.found(pi, "Role explorer/research") == InstallationCheck("Role explorer/research", InstallationState.Failed, "project override 5:24: a pi model is written provider/model"))
+    }
     "read the configuration of the project file's project from its endpoint with the operator credential" in Using.resource(new Fixture) { f =>
       @volatile var requests = List.empty[(String, String)]
       val server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0)

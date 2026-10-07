@@ -46,7 +46,8 @@ object AgentStarter {
     val unresolved = for {
       setting <- settings
       role <- AgentRole.all
-      problem <- AgentResolution.resolve(parsed, ParsedAgents.empty, setting.harness, role) match {
+      work <- RoleKeys.works(role)
+      problem <- AgentResolution.resolve(parsed, ParsedAgents.empty, setting.harness, work).resolution match {
         case RoleResolution.Unresolved(_, problems) => problems
         case _: RoleResolution.Resolved => Nil
       }

@@ -7,8 +7,57 @@ import java.nio.charset.StandardCharsets.UTF_8
 import java.util.Locale
 import scala.collection.mutable.ListBuffer
 
-/** Where a role is assigned in a document: in `defaults.roles` (no harness) or in `harnesses.<harness>.roles`. */
-final case class AgentRoleKey(harness: Option[Harness], role: AgentRole)
+/** Where a role is assigned in a document: in `defaults.roles` (no harness) or in `harnesses.<harness>.roles`, and under which key. */
+final case class AgentRoleKey(harness: Option[Harness], key: RoleKey)
+
+/** The keys of a roles mapping and the work each of them decides. */
+object RoleKeys {
+  def role(key: RoleKey): AgentRole = key match {
+    case RoleKey.Plain(role) => role
+    case _: RoleKey.Explorer => AgentRole.Explorer
+    case _: RoleKey.Worker => AgentRole.Worker
+    case _: RoleKey.Reviewer => AgentRole.Reviewer
+  }
+
+  def role(work: DispatchWork): AgentRole = work match {
+    case _: DispatchWork.Explorer => AgentRole.Explorer
+    case _: DispatchWork.Planner => AgentRole.Planner
+    case _: DispatchWork.Worker => AgentRole.Worker
+    case _: DispatchWork.Reviewer => AgentRole.Reviewer
+  }
+
+  /** The work of the role, one per mode; the planner role has no modes. */
+  def works(role: AgentRole): List[DispatchWork] = role match {
+    case AgentRole.Planner => List(DispatchWork.Planner())
+    case AgentRole.Worker => WorkerMode.all.map(DispatchWork.Worker(_))
+    case AgentRole.Explorer => ExplorerMode.all.map(DispatchWork.Explorer(_))
+    case AgentRole.Reviewer => ReviewerMode.all.map(DispatchWork.Reviewer(_))
+  }
+
+  /** The key of the mode of this work, which the work of the planner role does not have. */
+  def qualified(work: DispatchWork): Option[RoleKey] = work match {
+    case DispatchWork.Explorer(mode) => Some(RoleKey.Explorer(mode))
+    case DispatchWork.Planner() => None
+    case DispatchWork.Worker(mode) => Some(RoleKey.Worker(mode))
+    case DispatchWork.Reviewer(mode) => Some(RoleKey.Reviewer(mode))
+  }
+
+  /** The keys of the modes of the role, in the order of its modes. */
+  def modes(role: AgentRole): List[RoleKey] = works(role).flatMap(qualified)
+
+  private def lower(value: Any): String = value.toString.toLowerCase(Locale.ROOT)
+
+  /** The mode a key names, as a configuration writes it; the key of a role names none. */
+  def mode(key: RoleKey): Option[String] = key match {
+    case _: RoleKey.Plain => None
+    case RoleKey.Explorer(mode) => Some(lower(mode))
+    case RoleKey.Worker(mode) => Some(lower(mode))
+    case RoleKey.Reviewer(mode) => Some(lower(mode))
+  }
+
+  /** The key as a configuration writes it: `reviewer`, or `reviewer/plan` for one mode. */
+  def text(key: RoleKey): String = lower(role(key)) + mode(key).fold("")("/" + _)
+}
 
 /**
  * One layer of the agent configuration as its text states it, free of the problems that reject a text when it is saved.
@@ -17,7 +66,7 @@ final case class AgentRoleKey(harness: Option[Harness], role: AgentRole)
 final class ParsedAgents private[core] (val config: AgentConfig, private[core] val references: Map[AgentRoleKey, List[List[TextPosition]]])
 object ParsedAgents {
   /** The layer nobody has written: the empty text. */
-  val empty: ParsedAgents = new ParsedAgents(AgentConfig(Map.empty, Map.empty), Map.empty)
+  val empty: ParsedAgents = new ParsedAgents(AgentConfig(Nil, Map.empty), Map.empty)
 }
 
 /** The model reference syntax: `harness:[provider/]model?effort=…`, `harness:@tier?effort=…`, and `[provider/]model?effort=…` in a tier. */
@@ -169,7 +218,7 @@ object AgentConfigText {
       }.toMap
 
     def document(node: YamlNode): AgentConfig = {
-      var defaults = Map.empty[AgentRole, RoleChoice]
+      var defaults = List.empty[RoleAssignment]
       var harnesses = Map.empty[Harness, HarnessAgents]
       entries(node, "the keys defaults, harnesses").foreach { case (key, value) =>
         key.text match {
@@ -185,7 +234,7 @@ object AgentConfigText {
 
     private def harnessBody(harness: Harness, node: YamlNode): HarnessAgents = {
       var tiers = Map.empty[ModelTier, List[TierEntry]]
-      var assigned = Map.empty[AgentRole, RoleChoice]
+      var assigned = List.empty[RoleAssignment]
       entries(node, "the keys tiers, roles").foreach { case (key, value) =>
         key.text match {
           case "tiers" => tiers = keyed(value, Tiers, ModelTier.all)((_, models) => tier(harness, models))
@@ -210,11 +259,29 @@ object AgentConfigText {
       case other => syntax(other.at, "expected a list of models, as in [model, provider/model?effort=high]"); None
     }
 
-    private def roles(node: YamlNode, scope: Option[Harness]): Map[AgentRole, RoleChoice] =
-      keyed(node, Roles, AgentRole.all) { (role, value) =>
-        roleValue(role, scope, value).map { case (choice, positions) =>
-          references += AgentRoleKey(scope, role) -> positions
-          choice
+    /** The key of a roles mapping: a role, or a role, a slash and one of the modes of that role. */
+    private def roleKey(key: YamlNode.Scalar): Option[RoleKey] = key.text.indexOf('/') match {
+      case -1 => Roles.get(key.text).map(RoleKey.Plain(_)).orElse { unknown(key); None }
+      case at => Roles.get(key.text.substring(0, at)) match {
+        case None => unknown(key); None
+        case Some(role) =>
+          val modes = RoleKeys.modes(role)
+          modes.find(RoleKeys.mode(_).contains(key.text.substring(at + 1))).orElse {
+            syntax(key.at, if (modes.isEmpty) s"the key '${key.text}' names a mode, and the ${RoleKeys.text(RoleKey.Plain(role))} role has none"
+              else s"the key '${key.text}' names no mode of the ${RoleKeys.text(RoleKey.Plain(role))} role; its modes are ${modes.flatMap(RoleKeys.mode).mkString(", ")}")
+            None
+          }
+      }
+    }
+
+    private def roles(node: YamlNode, scope: Option[Harness]): List[RoleAssignment] =
+      entries(node, s"the keys ${listed(Roles, AgentRole.all)}, or role/mode for one mode of a role").flatMap { case (name, value) =>
+        for {
+          key <- roleKey(name)
+          (choice, positions) <- roleValue(key, scope, value)
+        } yield {
+          references += AgentRoleKey(scope, key) -> positions
+          RoleAssignment(key, choice)
         }
       }
 
@@ -284,7 +351,9 @@ object AgentConfigText {
       case Some((_, other)) => syntax(other.at, "min is a whole number"); None
     }
 
-    private def roleValue(role: AgentRole, scope: Option[Harness], node: YamlNode): Option[(RoleChoice, List[List[TextPosition]])] = node match {
+    private def roleValue(key: RoleKey, scope: Option[Harness], node: YamlNode): Option[(RoleChoice, List[List[TextPosition]])] = {
+      val role = RoleKeys.role(key)
+      node match {
       case scalar: YamlNode.Scalar => seat(scalar, scope).map { case (choice, positions) => RoleChoice.Seat(choice) -> List(positions) }
       case mapping: YamlNode.Mapping => selected(mapping).flatMap { found =>
         Modes.get(found.key.text) match {
@@ -300,13 +369,14 @@ object AgentConfigText {
               // The seats a unit starts together fit a session's child capacity, or no unit of the role could ever start.
               val together = if (mode == PanelMode.All) seats.size else min
               if (together > ChildCapacity.MaxActiveChildren) {
-                problems += AgentProblem.PanelOverCapacity(mapping.at, scope, role, together, ChildCapacity.MaxActiveChildren)
+                problems += AgentProblem.PanelOverCapacity(mapping.at, scope, key, together, ChildCapacity.MaxActiveChildren)
                 None
               } else Some(RoleChoice.Panel(mode, seats.flatten.map(_._1), min) -> seats.flatten.map(_._2))
             }
         }
       }
       case other => syntax(other.at, "expected a model reference, a strategy or a panel"); None
+      }
     }
   }
 
@@ -361,7 +431,7 @@ object AgentConfigText {
     case AgentProblem.InvalidMinimum(position, min, seats) => s"${at(position)}: min is $min, and a panel of $seats seats takes a min from 1 to $seats"
     case AgentProblem.PanelNotAllowed(position, value) => s"${at(position)}: the ${role(value)} role takes a model reference or a strategy; only the reviewer role takes a panel"
     case AgentProblem.PanelOverCapacity(position, scope, value, together, capacity) =>
-      s"${at(position)}: ${scope.fold("defaults")(named => s"harnesses.${harness(named)}")}.roles.${role(value)} starts $together seats together, " +
+      s"${at(position)}: ${scope.fold("defaults")(named => s"harnesses.${harness(named)}")}.roles.${RoleKeys.text(value)} starts $together seats together, " +
         s"and a session runs at most $capacity children at once"
     case AgentProblem.ProviderRequired(position, value) => s"${at(position)}: a ${harness(value)} model is written provider/model"
     case AgentProblem.ProviderNotAllowed(position, value) => s"${at(position)}: a ${harness(value)} model is written without a provider"

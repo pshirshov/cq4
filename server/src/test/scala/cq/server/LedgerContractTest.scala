@@ -122,8 +122,8 @@ abstract class LedgerContractTest extends SpecZIO with AssertZIO {
         _ <- denied(service.replaceAgents(human, Project, Revision(0), ""))(_ == Fault.Conflict("Agent configuration of the project changed: expected revision 0, actual 1; reload before saving"))
         unchanged <- service.replaceAgents(human, Project, Revision(1), "defaults: { roles: { explorer: claude:haiku } }\n")
         _ <- assertIO(unchanged == project)
-        route <- service.agentRoute(governor, Harness.Pi, AgentRole.Worker)
-        _ <- assertIO(route == ResolvedAssignment(Harness.Pi, AgentRole.Worker, RoleResolution.Resolved(ResolvedRole(PanelMode.All, 1,
+        route <- service.agentRoute(governor, Harness.Pi, DispatchWork.Worker(WorkerMode.Implement))
+        _ <- assertIO(route == ResolvedAssignment(Harness.Pi, RoleKey.Plain(AgentRole.Worker), RoleResolution.Resolved(ResolvedRole(PanelMode.All, 1,
           List(ResolvedSeat(SeatStrategy.Fallback, List(ModelRoute(Harness.Claude, None, "opus", None)))), RoleOrigin(AgentLayer.Installation, RoleSource.DefaultRoles), Nil))))
         _ <- ZIO.foreachDiscard(List(Installation -> second, Project -> Revision(1))) { (layer, revision) =>
           denied(service.replaceAgents(human, layer, revision, "#" + "x" * bound))(_ == Fault.Invalid(s"Agent configuration exceeds $bound bytes: ${bound + 1} supplied")) *>

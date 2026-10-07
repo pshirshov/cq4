@@ -7,6 +7,10 @@ export const AGENTS_GRAMMAR = `A text has these parts, all optional:
   harnesses.H.roles      the models of a role when H governs
 H is claude, codex or pi. Roles: planner, worker, explorer, reviewer. Tiers: frontier, standard, fast.
 
+Roles key                a role, or role/mode for one mode of it:    reviewer/plan: codex:@frontier
+                         worker/implement, worker/probe, worker/resolveconflict; explorer/investigate, explorer/research;
+                         reviewer/candidate, reviewer/plan, reviewer/audit. The key of a role holds for its modes without a key.
+
 Model reference          harness:model    harness:provider/model    harness:@tier
                          $harness stands for the governing harness; ?effort=LEVEL may follow (off, minimal, low, medium, high, xhigh, max, ultra)
                          a Pi model is written provider/model, a Claude model without a provider
@@ -23,6 +27,8 @@ A role takes one of:
 
 A role is looked up in this order, and the first place that assigns it decides it whole:
   this project's harnesses.H.roles, this project's defaults.roles, the server's harnesses.H.roles, the server's defaults.roles.
+A place assigns a role to work of one mode by the key of that mode or, without it, by the key of the role: reviewer in an earlier
+place decides before reviewer/plan in a later one.
 A tier list of this project replaces the server's list of that tier. A # starts a comment.`;
 
 export const AGENTS_EXAMPLE = `defaults:

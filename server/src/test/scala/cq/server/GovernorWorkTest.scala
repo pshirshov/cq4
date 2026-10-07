@@ -358,7 +358,7 @@ emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_toke
           _ <- f.child(DispatchWork.Worker(WorkerMode.Implement), None)
           attempts <- f.attempts
           // The refused start was no unit of the seat: the first unit that starts takes the session's first turn, not its second.
-          first = turns(new cq.host.SeatRotation(f.owner.actor.session).next(AgentRole.Worker, 0, turns.map(ModelRoute(Harness.Codex, None, _, None))))
+          first = turns(new cq.host.SeatRotation(f.owner.actor.session).next(RoleKey.Plain(AgentRole.Worker), 0, turns.map(ModelRoute(Harness.Codex, None, _, None))))
           _ <- ZIO.attempt(assert(attempts.filter(_.attempt.role == Role.Worker).map(_.attempt.model) == List(first), attempts.map(view => view.attempt.role -> view.attempt.model).toString))
         } yield ()
       }

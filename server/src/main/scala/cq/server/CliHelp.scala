@@ -154,7 +154,13 @@ changed.
 
 A session starts a child only on the models the configuration assigns to the
 child's role: a project without any configuration starts none, and the refusal
-names the role to assign. Edit the saved text to assign other models.
+names the role to assign. Edit the saved text to assign other models. A roles
+key names a role, or one mode of it as role/mode, which decides that mode
+before the key of the role in the same place:
+  reviewer/plan: codex:@frontier
+The modes are worker/implement, worker/probe, worker/resolveconflict,
+explorer/investigate, explorer/research, reviewer/candidate, reviewer/plan and
+reviewer/audit. The command writes keys of roles only.
 
 Examples:
   cq agents init --settings ./cq-settings.json
@@ -236,7 +242,8 @@ File contents and probe output are withheld. Declarative symlinks are accepted.
 agents checks the agent model configuration of this checkout's project when
 HARNESS governs: the server defaults and the project override have no problems
 (a problem is printed with its line:column), each of the planner, worker,
-explorer and reviewer roles resolves, every harness a resolved model runs on
+explorer and reviewer roles resolves, with a check of its own for a mode
+that a role/mode key decides, every harness a resolved model runs on
 has a valid entry in the session settings (--settings), and a model written
 without a provider can take the entry's. A reviewer seat that can run a model
 of HARNESS is reported as self-review in the detail, not as a failure.

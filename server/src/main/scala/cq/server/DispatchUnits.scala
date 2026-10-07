@@ -1,7 +1,7 @@
 package cq.server
 
 import cq.api.*
-import cq.core.{AgentConfigText, DomainFailure, LedgerPolicy}
+import cq.core.{AgentConfigText, DomainFailure, LedgerPolicy, RoleKeys}
 import cq.host.*
 import distage.Lifecycle
 import java.util.UUID
@@ -20,8 +20,9 @@ private[server] final class UnitAttempt(val at: SeatCandidate, val entry: Dispat
 /** Who works a unit. */
 private[server] sealed trait UnitWorker
 private[server] object UnitWorker {
-  /** The models the agent configuration assigns to the role of the work; `selection` is the cohort choice that started the unit. */
-  final case class Models(plan: ResolvedRole, selection: Option[SelectedDispatch]) extends UnitWorker
+  /** The models the agent configuration assigns to the role of the work, and the key of the configuration that decided them;
+    * `selection` is the cohort choice that started the unit. */
+  final case class Models(key: RoleKey, plan: ResolvedRole, selection: Option[SelectedDispatch]) extends UnitWorker
   /** The governing session itself: one seat, which the host starts no model for and which holds no child slot. */
   final case class Governing(own: OwnWork) extends UnitWorker
 }
@@ -40,7 +41,7 @@ private[server] final class DispatchUnit(val work: AssignedWork, val worker: Uni
   val cohort: Option[UUID], var progress: UnitProgress, val done: Promise[Nothing, Unit]) {
   def governing: Boolean = worker.isInstanceOf[UnitWorker.Governing]
   def selection: Option[SelectedDispatch] = worker match {
-    case UnitWorker.Models(_, value) => value
+    case UnitWorker.Models(_, _, value) => value
     case _: UnitWorker.Governing => None
   }
   // Whether `units.jsonl` says that the host works on the unit. A unit of the agent configuration is announced when it starts; one
@@ -81,14 +82,14 @@ final class DispatchUnits(config: SupervisorConfig, authority: SupervisorAuthori
   }
 
   // Read when the unit starts and never kept: a configuration saved during a session applies to the next unit.
-  private def resolve(role: AgentRole): ResolvedRole =
-    authority.governor.call(Command.Agents(AgentsInput(project, AgentsAction.Resolve(governing, role)))) match {
-      case Result.AgentRoute(ResolvedAssignment(_, _, RoleResolution.Resolved(plan))) =>
+  private def resolve(work: DispatchWork): (RoleKey, ResolvedRole) =
+    authority.governor.call(Command.Agents(AgentsInput(project, AgentsAction.Resolve(governing, work)))) match {
+      case Result.AgentRoute(ResolvedAssignment(_, key, RoleResolution.Resolved(plan))) =>
         // A route that names no provider runs on the provider of the settings entry of its harness.
-        plan.copy(seats = plan.seats.map(seat => seat.copy(candidates = seat.candidates.map(route =>
+        key -> plan.copy(seats = plan.seats.map(seat => seat.copy(candidates = seat.candidates.map(route =>
           route.copy(provider = route.provider.orElse(config.settings.harnesses.find(_.harness == route.harness).map(_.provider)))))))
-      case Result.AgentRoute(ResolvedAssignment(_, _, RoleResolution.Unresolved(origin, problems))) =>
-        throw DomainFailure(Fault.Invalid(DispatchUnits.unresolved(governing, role, origin, problems)))
+      case Result.AgentRoute(ResolvedAssignment(_, key, RoleResolution.Unresolved(origin, problems))) =>
+        throw DomainFailure(Fault.Invalid(DispatchUnits.unresolved(governing, key, origin, problems)))
       case Result.Failed(fault) => throw DomainFailure(fault)
       case _ => throw new IllegalStateException("Agent route resolution returned an unexpected result")
     }
@@ -114,7 +115,8 @@ final class DispatchUnits(config: SupervisorConfig, authority: SupervisorAuthori
   def start(work: AssignedWork, selection: Option[SelectedDispatch]): Task[DispatchStatus] = started(work, _.worker.isInstanceOf[UnitWorker.Models], ZIO.attemptBlocking {
     ChildContracts.request(project, template(work))
     SupervisorConfig.within(work.limits, config.settings.limits)
-    UnitWorker.Models(resolve(DispatchUnits.role(work.work)), selection)
+    val (key, plan) = resolve(work.work)
+    UnitWorker.Models(key, plan, selection)
   }).flatMap(status)
 
   private def own(request: RequestId, members: List[ItemRevision], work: DispatchWork, previous: Option[ArtifactId], fence: Fence): AssignedWork =
@@ -168,12 +170,11 @@ final class DispatchUnits(config: SupervisorConfig, authority: SupervisorAuthori
           val active = units.filter(_.terminal.isEmpty).toList
           val standing = active.map(unit => DispatchUnits.Standing(template(unit.work), if (unit.governing) 0 else unit.open))
           val (progress, step, together) = worker match {
-            case UnitWorker.Models(plan, _) =>
+            case UnitWorker.Models(key, plan, _) =>
               // The seats a unit starts together fit together or the unit is not started: every seat of an `all` panel, `min` seats of an `any` one.
               val together = if (plan.mode == PanelMode.All) plan.seats.size else plan.min
               DispatchUnits.admissible(standing, template(work), together)
-              val role = DispatchUnits.role(work.work)
-              val (progress, step) = UnitProgress.begin(work.request, plan, seat => rotation.next(role, seat, plan.seats(seat).candidates))
+              val (progress, step) = UnitProgress.begin(work.request, plan, seat => rotation.next(key, seat, plan.seats(seat).candidates))
               (progress, step, together)
             case _: UnitWorker.Governing =>
               DispatchUnits.admissible(standing, template(work), 0)
@@ -186,7 +187,7 @@ final class DispatchUnits(config: SupervisorConfig, authority: SupervisorAuthori
             case other => throw new IllegalStateException(s"A unit of $together first seats began with $other")
           }
           val members = work.members.map(_.id).toSet
-          val selection = worker match { case UnitWorker.Models(_, value) => value; case _ => None }
+          val selection = worker match { case UnitWorker.Models(_, _, value) => value; case _ => None }
           val unit = new DispatchUnit(work, worker, selection.fold(Option.when(members.size > 1)(UUID.randomUUID()))(_.cohort), progress, done)
           unit.open = initial.size
           units = units :+ unit
@@ -227,11 +228,11 @@ final class DispatchUnits(config: SupervisorConfig, authority: SupervisorAuthori
     result <- status(unit)
   } yield result
 
-  private def retained(unit: DispatchUnit, plan: ResolvedRole, handle: AttemptId): Unit = {
+  private def retained(unit: DispatchUnit, key: RoleKey, plan: ResolvedRole, handle: AttemptId): Unit = {
     val directory = config.directory.resolve("units")
     HostFiles.directory(directory)
     HostFiles.immutable(directory.resolve(unit.work.request.value.toString + ".json"), HostFiles.encode(ResolvedAssignment_JsonCodec,
-      ResolvedAssignment(governing, DispatchUnits.role(unit.work.work), RoleResolution.Resolved(plan))), MaxPlanBytes)
+      ResolvedAssignment(governing, key, RoleResolution.Resolved(plan))), MaxPlanBytes)
     events.started(SessionUnit(SessionUnitKind.Attempt, handle.value, unit.work.members.map(_.id)))
     synchronized { unit.announced = true }
   }
@@ -239,10 +240,10 @@ final class DispatchUnits(config: SupervisorConfig, authority: SupervisorAuthori
   // `first` is the unit's first candidate: its registration admits the unit, and a refusal of it is the refusal of the start.
   private def launch(unit: DispatchUnit, at: SeatCandidate, first: Boolean): Task[Unit] = {
     val (registered, prepared) = unit.worker match {
-      case UnitWorker.Models(plan, selection) =>
+      case UnitWorker.Models(key, plan, selection) =>
         val route = plan.seats(at.seat).candidates(at.candidate)
         val origin = AttemptOrigin(unit.cohort, selection.map(_.evidence), if (first) selection.fold(() => ())(_.admit) else () => ())
-        (dispatch.register(DispatchUnits.request(unit.work, route.harness), route, origin), (handle: AttemptId) => if (first) retained(unit, plan, handle))
+        (dispatch.register(DispatchUnits.request(unit.work, route.harness), route, origin), (handle: AttemptId) => if (first) retained(unit, key, plan, handle))
       // No model was resolved for the unit and nothing announces it before the session hands its work back.
       case UnitWorker.Governing(own) => (dispatch.own(template(unit.work), unit.cohort).tap(governor.assign(_, own, announce(unit).ignore)), (_: AttemptId) => ())
     }
@@ -465,13 +466,6 @@ object DispatchUnits {
   val Cancelled = "Cancelled by the governing session"
   val Opening = "The workspace is still being prepared: repeat OpenWorkspace with the same request, members, previous and fence to wait for it"
 
-  def role(work: DispatchWork): AgentRole = work match {
-    case _: DispatchWork.Explorer => AgentRole.Explorer
-    case _: DispatchWork.Planner => AgentRole.Planner
-    case _: DispatchWork.Worker => AgentRole.Worker
-    case _: DispatchWork.Reviewer => AgentRole.Reviewer
-  }
-
   /** A unit that has not ended, as the admission of another reads it: its request and the child slots it holds. */
   final case class Standing(request: DispatchRequest, slots: Int)
 
@@ -492,11 +486,11 @@ object DispatchUnits {
   private def name(value: Any): String = value.toString.toLowerCase(java.util.Locale.ROOT)
 
   /** Why a unit cannot start, in the words of the configuration its operator edits, and what to set. */
-  def unresolved(governing: Harness, role: AgentRole, origin: Option[RoleOrigin], problems: List[AgentProblem]): String = {
-    val (harness, assigned) = (name(governing), name(role))
+  def unresolved(governing: Harness, decided: RoleKey, origin: Option[RoleOrigin], problems: List[AgentProblem]): String = {
+    val (harness, assigned) = (name(governing), name(RoleKeys.role(decided)))
     val key = origin.map(_.source) match {
-      case Some(RoleSource.HarnessRoles) => s"harnesses.$harness.roles.$assigned"
-      case _ => s"defaults.roles.$assigned"
+      case Some(RoleSource.HarnessRoles) => s"harnesses.$harness.roles.${RoleKeys.text(decided)}"
+      case _ => s"defaults.roles.${RoleKeys.text(decided)}"
     }
     val layer = origin.map(_.layer) match {
       case Some(AgentLayer.Project) => "this project's agent configuration"

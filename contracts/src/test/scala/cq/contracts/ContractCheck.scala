@@ -25,9 +25,9 @@ object ContractCheck {
     ))
     // Maps keyed by an enumeration: both codecs write an object keyed by the value's name, as the schema describes.
     val agents = AgentConfig(
-      Map(AgentRole.Reviewer -> RoleChoice.Panel(PanelMode.Any,
-        List(SeatChoice.Single(ModelReference(HarnessSelector.Governing(), ModelTarget.Tier(ModelTier.Standard), Some(Effort.XHigh)))), 1)),
-      Map(Harness.Pi -> HarnessAgents(Map(ModelTier.Frontier -> List(TierEntry(ModelName(Some("zai"), "glm λ"), None)), ModelTier.Fast -> Nil), Map.empty)))
+      List(RoleAssignment(RoleKey.Plain(AgentRole.Reviewer), RoleChoice.Panel(PanelMode.Any,
+        List(SeatChoice.Single(ModelReference(HarnessSelector.Governing(), ModelTarget.Tier(ModelTier.Standard), Some(Effort.XHigh)))), 1))),
+      Map(Harness.Pi -> HarnessAgents(Map(ModelTier.Frontier -> List(TierEntry(ModelName(Some("zai"), "glm λ"), None)), ModelTier.Fast -> Nil), Nil)))
     val binary = new ByteArrayOutputStream()
     Probe_UEBACodec.encode(context, new LEDataOutputStream(binary), probe)
     assert(Probe_UEBACodec.decode(context, new LEDataInputStream(new ByteArrayInputStream(binary.toByteArray))) == Right(probe))

@@ -1,6 +1,7 @@
 package cq.server
 
 import cq.api.*
+import cq.core.RoleKeys
 import cq.host.{DeliveredSeat, DispatchProjection, FailedSeat, ReviewAggregate, ReviewSeat, SeatCandidate, SeatRotation, UnitEvent, UnitOutcome, UnitProgress, UnitStep}
 import java.util.UUID
 import java.util.concurrent.{CountDownLatch, Executors, TimeUnit}
@@ -392,20 +393,22 @@ final class UnitProgressLocal extends AnyWordSpec {
       for (low <- List(0L, 1L, 2L, 3L, 4L, -1L, -2L, Long.MaxValue, Long.MinValue)) {
         val rotation = new SeatRotation(session(low))
         val first = Math.floorMod(low, 3L).toInt
-        assert(List.fill(7)(rotation.next(AgentRole.Reviewer, 0, candidates)) == (0 until 7).toList.map(draw => (first + draw) % 3), s"session $low")
+        assert(List.fill(7)(rotation.next(RoleKey.Plain(AgentRole.Reviewer), 0, candidates)) == (0 until 7).toList.map(draw => (first + draw) % 3), s"session $low")
       }
       // Sessions differ in where they start.
-      assert(List(0L, 1L, 2L).map(low => new SeatRotation(session(low)).next(AgentRole.Worker, 0, candidates)) == List(0, 1, 2))
+      assert(List(0L, 1L, 2L).map(low => new SeatRotation(session(low)).next(RoleKey.Plain(AgentRole.Worker), 0, candidates)) == List(0, 1, 2))
       assert(SeatRotation.offset(session(5L)) == 5L)
     }
-    "keep one position for each role, seat index and candidate list" in {
+    "keep one position for each key of a role, seat index and candidate list" in {
       val rotation = new SeatRotation(session(0L))
-      assert(List.fill(2)(rotation.next(AgentRole.Reviewer, 0, candidates)) == List(0, 1))
-      assert(rotation.next(AgentRole.Worker, 0, candidates) == 0 && rotation.next(AgentRole.Reviewer, 1, candidates) == 0)
-      assert(rotation.next(AgentRole.Reviewer, 0, candidates.reverse) == 0 && rotation.next(AgentRole.Reviewer, 0, candidates.take(2)) == 0)
-      assert(rotation.next(AgentRole.Reviewer, 0, candidates) == 2 && rotation.next(AgentRole.Reviewer, 0, candidates) == 0)
-      assert(new SeatRotation(session(0L)).next(AgentRole.Reviewer, 0, candidates) == 0)
-      assert(intercept[IllegalArgumentException](rotation.next(AgentRole.Reviewer, 0, Nil)).getMessage.contains("A seat has candidates"))
+      assert(List.fill(2)(rotation.next(RoleKey.Plain(AgentRole.Reviewer), 0, candidates)) == List(0, 1))
+      // The key of a mode has its own position, apart from the key of its role and from the keys of the other modes.
+      assert(List.fill(2)(rotation.next(RoleKey.Reviewer(ReviewerMode.Plan), 0, candidates)) == List(0, 1) && rotation.next(RoleKey.Reviewer(ReviewerMode.Audit), 0, candidates) == 0)
+      assert(rotation.next(RoleKey.Plain(AgentRole.Worker), 0, candidates) == 0 && rotation.next(RoleKey.Plain(AgentRole.Reviewer), 1, candidates) == 0)
+      assert(rotation.next(RoleKey.Plain(AgentRole.Reviewer), 0, candidates.reverse) == 0 && rotation.next(RoleKey.Plain(AgentRole.Reviewer), 0, candidates.take(2)) == 0)
+      assert(rotation.next(RoleKey.Plain(AgentRole.Reviewer), 0, candidates) == 2 && rotation.next(RoleKey.Plain(AgentRole.Reviewer), 0, candidates) == 0)
+      assert(new SeatRotation(session(0L)).next(RoleKey.Plain(AgentRole.Reviewer), 0, candidates) == 0)
+      assert(intercept[IllegalArgumentException](rotation.next(RoleKey.Plain(AgentRole.Reviewer), 0, Nil)).getMessage.contains("A seat has candidates"))
     }
     "give every draw of concurrent units its own position" in {
       val rotation = new SeatRotation(session(1L))
@@ -416,14 +419,14 @@ final class UnitProgressLocal extends AnyWordSpec {
       val drawn = new java.util.concurrent.ConcurrentLinkedQueue[Int]()
       try {
         val tasks = (0 until threads).map(_ => pool.submit(new Runnable {
-          def run(): Unit = { ready.await(); (0 until each).foreach(_ => drawn.add(rotation.next(AgentRole.Reviewer, 0, candidates))) }
+          def run(): Unit = { ready.await(); (0 until each).foreach(_ => drawn.add(rotation.next(RoleKey.Plain(AgentRole.Reviewer), 0, candidates))) }
         }))
         ready.countDown()
         tasks.foreach(_.get(60, TimeUnit.SECONDS))
       } finally pool.shutdown()
       val counts = scala.jdk.CollectionConverters.IterableHasAsScala(drawn).asScala.toList.groupBy(identity).view.mapValues(_.size).toMap
       assert(counts == Map(0 -> 800, 1 -> 800, 2 -> 800), counts.toString)
-      assert(rotation.next(AgentRole.Reviewer, 0, candidates) == 1)
+      assert(rotation.next(RoleKey.Plain(AgentRole.Reviewer), 0, candidates) == 1)
     }
   }
 
@@ -670,18 +673,26 @@ final class UnitProgressLocal extends AnyWordSpec {
       assert(intercept[IllegalArgumentException](DispatchUnits.event(at, failed(1, 2, "fault").status.copy(phase = DispatchPhase.Running), None)).getMessage.contains("ended in phase Running"))
     }
     "say which role has no model and what to set, in the words of the configuration" in {
-      assert(DispatchUnits.unresolved(Harness.Codex, AgentRole.Reviewer, None, List(AgentProblem.RoleUnassigned(Harness.Codex, AgentRole.Reviewer))) ==
+      assert(DispatchUnits.unresolved(Harness.Codex, RoleKey.Plain(AgentRole.Reviewer), None, List(AgentProblem.RoleUnassigned(Harness.Codex, AgentRole.Reviewer))) ==
         "no model is assigned to the reviewer role for governing harness codex: set defaults.roles.reviewer or harnesses.codex.roles.reviewer in the agent configuration " +
           "(the server's default or this project's); cq agents init --settings FILE writes a starting configuration from a settings file")
-      assert(DispatchUnits.unresolved(Harness.Pi, AgentRole.Worker, Some(RoleOrigin(AgentLayer.Installation, RoleSource.DefaultRoles)),
+      assert(DispatchUnits.unresolved(Harness.Pi, RoleKey.Plain(AgentRole.Worker), Some(RoleOrigin(AgentLayer.Installation, RoleSource.DefaultRoles)),
         List(AgentProblem.TierUndefined(Harness.Claude, ModelTier.Fast, AgentRole.Worker))) ==
         "the worker role for governing harness pi (defaults.roles.worker of the server's default agent configuration) refers to the fast tier of claude, which no layer defines: " +
           "set harnesses.claude.tiers.fast in the agent configuration")
-      assert(DispatchUnits.unresolved(Harness.Pi, AgentRole.Planner, Some(RoleOrigin(AgentLayer.Project, RoleSource.HarnessRoles)),
+      assert(DispatchUnits.unresolved(Harness.Pi, RoleKey.Plain(AgentRole.Planner), Some(RoleOrigin(AgentLayer.Project, RoleSource.HarnessRoles)),
         List(AgentProblem.ProviderRequired(TextPosition(3, 14), Harness.Pi))) ==
         "the planner role for governing harness pi cannot run as harnesses.pi.roles.planner of this project's agent configuration assigns it: 3:14: a pi model is written provider/model")
-      assert(DispatchUnits.role(DispatchWork.Worker(WorkerMode.Probe)) == AgentRole.Worker && DispatchUnits.role(DispatchWork.Reviewer(ReviewerMode.Audit)) == AgentRole.Reviewer &&
-        DispatchUnits.role(DispatchWork.Planner()) == AgentRole.Planner && DispatchUnits.role(DispatchWork.Explorer(ExplorerMode.Research)) == AgentRole.Explorer)
+      // A key of a mode is named as it is written.
+      assert(DispatchUnits.unresolved(Harness.Pi, RoleKey.Reviewer(ReviewerMode.Plan), Some(RoleOrigin(AgentLayer.Project, RoleSource.HarnessRoles)),
+        List(AgentProblem.ProviderRequired(TextPosition(3, 14), Harness.Pi))) ==
+        "the reviewer role for governing harness pi cannot run as harnesses.pi.roles.reviewer/plan of this project's agent configuration assigns it: 3:14: a pi model is written provider/model")
+      assert(DispatchUnits.unresolved(Harness.Pi, RoleKey.Worker(WorkerMode.ResolveConflict), Some(RoleOrigin(AgentLayer.Installation, RoleSource.DefaultRoles)),
+        List(AgentProblem.TierUndefined(Harness.Claude, ModelTier.Fast, AgentRole.Worker))) ==
+        "the worker role for governing harness pi (defaults.roles.worker/resolveconflict of the server's default agent configuration) refers to the fast tier of claude, which no layer defines: " +
+          "set harnesses.claude.tiers.fast in the agent configuration")
+      assert(RoleKeys.role(DispatchWork.Worker(WorkerMode.Probe)) == AgentRole.Worker && RoleKeys.role(DispatchWork.Reviewer(ReviewerMode.Audit)) == AgentRole.Reviewer &&
+        RoleKeys.role(DispatchWork.Planner()) == AgentRole.Planner && RoleKeys.role(DispatchWork.Explorer(ExplorerMode.Research)) == AgentRole.Explorer)
     }
   }
 }

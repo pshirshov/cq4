@@ -1033,6 +1033,8 @@ emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_toke
           entry <- launched(None)
           routed <- launched(Some("codex:route-provider/route-model?effort=xhigh"))
           inherited <- launched(Some("$harness:other-model"))
+          // The key of the mode of the work decides beside the key of the role, and the frozen plan names it.
+          moded <- launched(Some("codex:role-model\n    worker/implement: codex:mode-model\n    worker/probe: codex:probe-model"))
           // A role no layer assigns starts nothing, and the refusal says what to set.
           _ <- f.configure("defaults:\n  roles:\n    reviewer: codex:other-model\n")
           unassigned <- fault(controller.start(UnitFixture.work(f.request(f.limits)), None))
@@ -1055,12 +1057,13 @@ emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_toke
             // A route that names no provider runs on the provider of the settings entry of its harness, and the frozen plan says so.
             assert((inherited._1.provider, inherited._1.model, inherited._1.effort) == ("fixture-provider", "other-model", None))
             assert(inherited._2.containsSlice(List("--model", "other-model")) && inherited._2.contains("model_provider=\"fixture-provider\""), inherited._2.toString)
-            assert(Wire.decode(ResolvedAssignment_JsonCodec, inherited._3.noSpaces) == ResolvedAssignment(Harness.Codex, AgentRole.Worker, RoleResolution.Resolved(
+            assert(Wire.decode(ResolvedAssignment_JsonCodec, inherited._3.noSpaces) == ResolvedAssignment(Harness.Codex, RoleKey.Plain(AgentRole.Worker), RoleResolution.Resolved(
               ResolvedRole(PanelMode.All, 1, List(ResolvedSeat(SeatStrategy.Fallback, List(ModelRoute(Harness.Codex, Some("fixture-provider"), "other-model", None)))),
                 RoleOrigin(AgentLayer.Project, RoleSource.DefaultRoles), Nil))), inherited._3.noSpaces)
+            assert(moded._1.model == "mode-model" && Wire.decode(ResolvedAssignment_JsonCodec, moded._3.noSpaces).key == RoleKey.Worker(WorkerMode.Implement), moded._3.noSpaces)
             assert(unassigned.contains(Fault.Invalid("no model is assigned to the worker role for governing harness codex: set defaults.roles.worker or harnesses.codex.roles.worker " +
               "in the agent configuration (the server's default or this project's); cq agents init --settings FILE writes a starting configuration from a settings file")), unassigned.toString)
-            assert(usageBefore.entries.size == 4, s"A refused start registered an attempt: ${usageBefore.entries.map(_.attempt.id)}")
+            assert(usageBefore.entries.size == 5, s"A refused start registered an attempt: ${usageBefore.entries.map(_.attempt.id)}")
             assert(foreign.phase == DispatchPhase.Abstained && foreign.next == ChildNext.ResolveBlocker && foreign.result.isEmpty &&
               foreign.blocker.contains("No configured model could run this work: pi:zai/glm Unconfigured (The session settings have no entry for Pi)"), foreign.toString)
             assert(seats.seats.map(seat => (seat.end, seat.attempts.map(value => (value.attempt, value.route.harness, value.abstained)))) ==

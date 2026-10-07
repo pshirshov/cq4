@@ -219,7 +219,7 @@ try {
     await page.getByText('Agent models of this project saved at revision 1.', {exact: true}).waitFor();
     assert.deepEqual(await layer(project, 'project'), [OVERRIDE, '1']);
     assert.deepEqual(await layer(other, 'project'), ['', '0']);
-    const route = (await call({Agents: {input: {project, action: {Resolve: {harness: 'Codex', role: 'Reviewer'}}}}})).AgentRoute.value.resolution.Resolved.plan;
+    const route = (await call({Agents: {input: {project, action: {Resolve: {harness: 'Codex', work: {Reviewer: {mode: 'Candidate'}}}}}}})).AgentRoute.value.resolution.Resolved.plan;
     assert.deepEqual([route.origin, route.seats.map(seat => seat.candidates.map(candidate => candidate.model)), route.selfReview], [{layer: 'Project', source: 'HarnessRoles'}, [['large-model']], [0]]);
     cases.push('a project override changes one cell and its source label, marks the self-review, and is saved for this project only; the server resolves the role the same way');
 
@@ -238,6 +238,31 @@ try {
     assert.deepEqual(await ui.editor('project').evaluate(node => [document.activeElement === node, node.selectionStart]), [true, broken.indexOf('$harness:mini')]);
     assert.equal(await ui.problems.getByRole('heading').textContent(), 'Problems: none');
     cases.push('a role that one governing harness cannot run is shown unresolved in the error style with the problem, its position in the layer that wrote it and that layer as the source');
+
+    // A key of one mode of a role decides that mode where it stands; the mode gets a row under the row of its role.
+    const moded = 'harnesses:\n  codex:\n    roles: { reviewer/plan: $harness:@frontier }\n';
+    await ui.editor('project').fill(moded); await ui.state('current');
+    assert.equal(await ui.problems.getByRole('heading').textContent(), 'Problems: none');
+    assert.deepEqual(await ui.dialog.locator('.agents-table tbody th').allTextContents(), ['Planner', 'Worker', 'Explorer', 'Reviewer other modes', 'Reviewer/Plan']);
+    const plan = harness => ui.dialog.locator(`.agents-table td[data-role=Reviewer][data-mode=Plan][data-harness=${harness}]`);
+    const rest = harness => ui.dialog.locator(`.agents-table td[data-role=Reviewer][data-harness=${harness}]:not([data-mode])`);
+    assert.deepEqual(await plan('Codex').locator('.agents-route').allTextContents(), ['codex:large-model?effort=xhigh']);
+    assert.equal(await plan('Codex').locator('.agents-source').textContent(), 'from project harnesses.codex.roles.reviewer/plan');
+    assert.equal(await plan('Codex').locator('.agents-self-review').textContent(), 'Self-review: a model of Codex, the governing harness, can review its own work.');
+    assert.equal(await rest('Codex').locator('.agents-panel').textContent(), 'all panel · min 1 of 2');
+    assert.equal(await rest('Codex').locator('.agents-source').textContent(), 'from server harnesses.codex.roles');
+    // A harness without the key of the mode runs the mode as its role, and the row says which key decided.
+    assert.deepEqual([await plan('Claude').locator('.agents-route').allTextContents(), await rest('Claude').locator('.agents-route').allTextContents()],
+      [['claude:sonnet', ...PI_ROUTES], ['claude:sonnet', ...PI_ROUTES]]);
+    assert.equal(await plan('Claude').locator('.agents-source').textContent(), 'from server defaults.roles.reviewer');
+    assert.equal(await rest('Claude').locator('.agents-source').textContent(), 'from server defaults.roles');
+    const planned = (await call({Agents: {input: {project, action: {Preview: {scope: {Project: {}}, text: moded}}}}})).Agents.value.assignments
+      .filter(value => value.harness === 'Codex' && value.key.Reviewer !== undefined);
+    assert.deepEqual(planned.map(value => [value.key, value.resolution.Resolved.plan.origin]), [[{Reviewer: {mode: 'Plan'}}, {layer: 'Project', source: 'HarnessRoles'}]]);
+    await ui.editor('project').fill('defaults:\n  roles:\n    reviewer/draft: claude:opus\n'); await ui.state('invalid');
+    assert.equal(await ui.problems.getByRole('listitem').textContent(), "This project3:5the key 'reviewer/draft' names no mode of the reviewer role; its modes are candidate, plan, audit");
+    await ui.editor('project').fill(broken); await ui.state('current');
+    cases.push('a key of one mode of a role is shown in a row of its own with the key that decided each cell, and a key with a mode its role does not have is a problem that names the modes');
 
     // The unsaved project text stays with its project while the dialog is opened for another one.
     await ui.close.click(); await ui.choose(other); await ui.open(); await ui.state('current');
@@ -309,5 +334,5 @@ try {
   await writeFile(`${evidence}/agents-results.json`, JSON.stringify({cases, errors, screenshots}, null, 2) + '\n');
   await browser.close();
 }
-assert.equal(cases.length, 10, JSON.stringify(cases));
-console.log('Chromium Agent models: two layer editors under revision comparison, server-side problems and preview, project override, unresolved role and stale preview replies');
+assert.equal(cases.length, 11, JSON.stringify(cases));
+console.log('Chromium Agent models: two layer editors under revision comparison, server-side problems and preview, project override, unresolved role, a key of one mode and stale preview replies');

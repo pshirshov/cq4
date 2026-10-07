@@ -41,18 +41,23 @@ object AgentResolution {
 
   /**
    * The first layer and part that assigns the role decides it whole: the project's roles for the governing harness, the project's
-   * defaults, the installation's roles for that harness, the installation's defaults. Tiers alone are merged: the project's list
-   * of a tier replaces the installation's, for every reference whichever layer wrote it.
+   * defaults, the installation's roles for that harness, the installation's defaults. A part assigns the role to this work by the key
+   * of the work's mode or, without that key, by the key of the role: the key of a mode wins within its part only, and the key of the
+   * role in an earlier part decides before the key of a mode in a later one. Tiers alone are merged: the project's list of a tier
+   * replaces the installation's, for every reference whichever layer wrote it.
    */
-  def resolve(installation: ParsedAgents, project: ParsedAgents, governing: Harness, role: AgentRole): RoleResolution = {
+  def resolve(installation: ParsedAgents, project: ParsedAgents, governing: Harness, work: DispatchWork): ResolvedAssignment = {
+    val role = RoleKeys.role(work)
+    val plain: RoleKey = RoleKey.Plain(role)
     val found = (for {
       (layer, document) <- List(AgentLayer.Project -> project, AgentLayer.Installation -> installation)
-      (source, key, assigned) <- List(
-        (RoleSource.HarnessRoles, AgentRoleKey(Some(governing), role), document.config.harnesses.get(governing).flatMap(_.roles.get(role))),
-        (RoleSource.DefaultRoles, AgentRoleKey(None, role), document.config.defaults.get(role)))
-      choice <- assigned
-    } yield (RoleOrigin(layer, source), choice, document.references(key))).headOption
-    found.fold[RoleResolution](RoleResolution.Unresolved(None, List(AgentProblem.RoleUnassigned(governing, role)))) { case (origin, choice, positions) =>
+      (source, scope, assigned) <- List(
+        (RoleSource.HarnessRoles, Some(governing), document.config.harnesses.get(governing).fold(List.empty[RoleAssignment])(_.roles)),
+        (RoleSource.DefaultRoles, None, document.config.defaults))
+      key <- RoleKeys.qualified(work).toList :+ plain
+      assignment <- assigned.find(_.key == key)
+    } yield (RoleOrigin(layer, source), key, assignment.choice, document.references(AgentRoleKey(scope, key)))).headOption
+    found.fold(ResolvedAssignment(governing, plain, RoleResolution.Unresolved(None, List(AgentProblem.RoleUnassigned(governing, role))))) { case (origin, key, choice, positions) =>
       def tier(harness: Harness, value: ModelTier): Option[List[TierEntry]] =
         List(project, installation).flatMap(_.config.harnesses.get(harness).flatMap(_.tiers.get(value))).headOption
 
@@ -97,18 +102,23 @@ object AgentResolution {
       }
       val resolved = seats.zip(positions).map(seat.tupled)
       val problems = resolved.flatMap(_.left.getOrElse(Nil)).distinct
-      if (problems.nonEmpty) RoleResolution.Unresolved(Some(origin), problems)
+      ResolvedAssignment(governing, key, if (problems.nonEmpty) RoleResolution.Unresolved(Some(origin), problems)
       else {
         val plan = resolved.flatMap(_.toOption)
         val selfReview = if (role == AgentRole.Reviewer) plan.zipWithIndex.collect { case (value, index) if value.candidates.exists(_.harness == governing) => index } else Nil
         RoleResolution.Resolved(ResolvedRole(mode, min, plan, origin, selfReview))
-      }
+      })
     }
   }
 
-  /** Every role under every governing harness. */
+  /**
+   * Every role under every governing harness: one assignment by the key of the role, for the modes that no key of their own decides,
+   * and after it one for each mode that a key of its own decides.
+   */
   def assignments(installation: ParsedAgents, project: ParsedAgents): List[ResolvedAssignment] = for {
     harness <- Harness.all
     role <- AgentRole.all
-  } yield ResolvedAssignment(harness, role, resolve(installation, project, harness, role))
+    (plain, modes) = RoleKeys.works(role).map(resolve(installation, project, harness, _)).distinct.partition(_.key == RoleKey.Plain(role))
+    assignment <- plain ++ modes
+  } yield assignment
 }
