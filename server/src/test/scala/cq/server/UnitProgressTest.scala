@@ -543,7 +543,7 @@ final class UnitProgressLocal extends AnyWordSpec {
     def seat(value: EndedAttempt, index: Int): DeliveredSeat = DeliveredSeat(index, value.attempt, value.status.result.get, value.status.next)
     def fault(value: EndedAttempt, index: Int): FailedSeat = FailedSeat(index, value.attempt, value.status.blocker.get)
     def tried(value: EndedAttempt, seat: Int, candidate: Int): SeatAttempt = SeatAttempt(value.attempt, route(seat, candidate), Some(AbstentionReason.Quota), Some(s"detail $seat.$candidate"))
-    def unit(outcome: UnitOutcome, ended: EndedAttempt*): DispatchStatus = DispatchUnits.status(request, handle, outcome, ended.toList, None)
+    def unit(outcome: UnitOutcome, ended: EndedAttempt*): DispatchStatus = DispatchUnits.status(request, handle, outcome, ended.toList, Nil, None)
     val A = ReviewVerdict.Accepted
     val C = ReviewVerdict.ChangesRequested
 
@@ -557,6 +557,27 @@ final class UnitProgressLocal extends AnyWordSpec {
         first.attempt -> ChildOutcome(first.attempt, items, ChildEnd.Abstained, Some("input"), Some("Abstained (Quota): detail 0.0")),
         second.attempt -> ChildOutcome(second.attempt, items, ChildEnd.Admitted, Some("input"), None)))
       outcomes.values.foreach(cq.core.DriverPolicy.outcome)
+    }
+    "D157: count and name the candidates that abstained in a unit that ended otherwise" in {
+      // A fallback whose first candidate abstained and whose second delivered: the status of the unit says that a model did not run.
+      val (first, second) = (abstained(0, 0), worked(0, 1))
+      val decided = DispatchUnits.status(request, handle, UnitOutcome.Decided(List(seat(second, 0)), Nil), List(first, second), List(tried(first, 0, 0)), None)
+      assert(decided.phase == DispatchPhase.Completed && decided.next == ChildNext.Review && decided.result.contains(result(0)))
+      assert(decided.counts.abstained == 1 && decided.blocker.contains("1 assigned model did not run: pi:provider0/model0 Quota (detail 0.0)"), decided.toString)
+      // The end of the unit is still read as admitted, with no fault.
+      assert(cq.host.CohortFailure.outcome(decided, Some("input"), None) == ChildOutcome(handle, items, ChildEnd.Admitted, Some("input"), None))
+      // It follows what the delivering attempt states, and a failed seat the others made up for.
+      val (broken, away, accepting) = (failed(0, 0, "Malformed report"), abstained(1, 0), reviewed(1, 1, A, C))
+      val panel = DispatchUnits.status(request, handle, UnitOutcome.Decided(List(seat(accepting, 1)), List(fault(broken, 0))), List(broken, away, accepting), List(tried(away, 1, 0)), None)
+      assert(panel.counts.abstained == 1 && panel.blocker.contains(
+        "finding of seat 1; seat 0 failed and the other seats decided: Malformed report; 1 assigned model did not run: pi:provider1/model0 Quota (detail 1.0)"), panel.toString)
+      // A unit that ended by abstention names its candidates once, and counts them.
+      val none = DispatchUnits.status(request, handle, UnitOutcome.Abstained(List(tried(first, 0, 0)), Nil), List(first), List(tried(first, 0, 0)), None)
+      assert(none.counts.abstained == 1 && none.blocker.contains("No configured model could run this work: pi:provider0/model0 Quota (detail 0.0)"), none.toString)
+      // A cancelled unit says which models had not run before it was stopped.
+      val stopped = DispatchUnits.status(request, handle, UnitOutcome.Cancelled, List(first), List(tried(first, 0, 0), tried(abstained(0, 1), 0, 1)), None)
+      assert(stopped.counts.abstained == 2 && stopped.blocker.contains(
+        DispatchUnits.Cancelled + "; 2 assigned models did not run: pi:provider0/model0 Quota (detail 0.0); pi:provider0/model1 Quota (detail 0.1)"), stopped.toString)
     }
     "stand for agreeing reviews with the first that delivered, and for disagreeing ones with the dissenting review and next Arbitrate" in {
       val (accepting, also, dissenting) = (reviewed(0, 0, A, A), reviewed(1, 0, A, A), reviewed(2, 0, A, C))
@@ -654,7 +675,7 @@ final class UnitProgressLocal extends AnyWordSpec {
       val between = unit(UnitOutcome.Cancelled, abstained(0, 0))
       assert(between.phase == DispatchPhase.Cancelled && between.blocker.contains(DispatchUnits.Cancelled) && between.result.isEmpty && between.attempt == handle)
       // The host could not start the next candidate: the unit says why.
-      val refused = DispatchUnits.status(request, handle, UnitOutcome.Cancelled, List(abstained(0, 0)), Some("The host could not start the next model of this work: Dispatch admission is closed"))
+      val refused = DispatchUnits.status(request, handle, UnitOutcome.Cancelled, List(abstained(0, 0)), Nil, Some("The host could not start the next model of this work: Dispatch admission is closed"))
       assert(refused.phase == DispatchPhase.Cancelled && refused.blocker.contains("The host could not start the next model of this work: Dispatch admission is closed"))
       val outcomes = DispatchUnits.outcomes(UnitOutcome.Cancelled, cq.host.CohortFailure.outcome(stopped.status, Some("input"), None), List(delivered, stopped))
       assert(outcomes.view.mapValues(_.end).toMap == Map(delivered.attempt -> ChildEnd.Admitted, stopped.attempt -> ChildEnd.Cancelled))

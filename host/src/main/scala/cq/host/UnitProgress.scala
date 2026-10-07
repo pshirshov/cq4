@@ -168,6 +168,10 @@ object UnitProgress {
   private def tried(candidates: List[SeatAttempt]): String = candidates.map(value =>
     s"${AgentConfigText.render(value.route)} ${value.abstained.get}" + value.detail.fold("")(detail => s" ($detail)")).mkString("; ")
 
+  /** The candidates that abstained in a unit, as the blocker of its status names them when the unit did not end by their abstention. */
+  def absent(candidates: List[SeatAttempt]): String =
+    s"${candidates.size} assigned ${if (candidates.size == 1) "model" else "models"} did not run: " + tried(candidates)
+
   /** The seats that delivered in a unit that ended with fewer than it needs, each with the handle of its result: what was delivered
     * and admitted is read before the unit's end is acted on. It comes first in a blocker, which is cut at its bound. */
   def delivered(seats: List[DeliveredSeat]): String =

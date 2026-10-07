@@ -1102,6 +1102,9 @@ emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_toke
             assert(lineage == (List(first, second), true) && first != second, lineage.toString)
             // One status for the unit: under its first attempt's id, with the result of the candidate that ran; any attempt of the unit reads it.
             assert(status.attempt == first && status.phase == DispatchPhase.Completed && status.next == ChildNext.Review && result.attempt == second && byCandidate == status, status.toString)
+            // D157: the status says that an assigned model did not run.
+            val absent = s"1 assigned model did not run: codex:fixture-provider/refuse-a Quota ($QuotaMessage)"
+            assert(status.counts.abstained == 1 && status.blocker.contains(absent), status.toString)
             assert(result.request.request == request.request && result.request.harness == Harness.Codex)
             assert(seats == UnitSeats(request.request, PanelMode.All, 1, List(SeatStatus(0, List(
               SeatAttempt(first, ModelRoute(Harness.Codex, Some("fixture-provider"), "refuse-a", None), Some(AbstentionReason.Quota), Some(QuotaMessage)),
@@ -1111,7 +1114,7 @@ emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_toke
             assert(published == seats && panel.kind == ArtifactKind.Panel && panel.attempt == f.governor.id && panel.mediaType == "application/json", panel.toString)
             // One pair of events for waiters, although two attempts ran.
             val unit = SessionUnit(SessionUnitKind.Attempt, first.value, request.members.map(_.id))
-            assert(events == List(SessionUnitEvent.Started(unit), SessionUnitEvent.Ended(UnitEnd(unit, "Completed", Some("Review"), None))), events.toString)
+            assert(events == List(SessionUnitEvent.Started(unit), SessionUnitEvent.Ended(UnitEnd(unit, "Completed", Some("Review"), Some(absent)))), events.toString)
             val recorded = List(first, second).map(id => attempts.entries.find(_.attempt.id == id).get)
             assert(recorded.map(view => (view.attempt.model, view.attempt.effort, view.outcome.map(_.value.state))) ==
               List(("refuse-a", None, Some(AttemptState.Abstained)), ("work-b", Some(Effort.Low), Some(AttemptState.Completed))), recorded.toString)
