@@ -321,6 +321,61 @@ final class CandidateWorkspaceLocal extends SpecZIO with AssertZIO {
       } yield ()
     }
 
+    "D159: list every path a captured candidate adds, changes or deletes against the commit where it left the target, with size and binary mark" in { (local: LocalWorkspaceFixture) =>
+      val settings = configuration(local)
+      val candidates = new CandidateWorkspace(settings)
+      val fixture = local.fixture
+      def commit(message: String): GitCommit = {
+        local.git(local.source, "add", "--all")
+        local.git(local.source, "-c", "user.name=CQ test", "-c", "user.email=cq@example.invalid", "commit", "--quiet", "-m", message)
+        GitCommit(local.git(local.source, "rev-parse", "HEAD"))
+      }
+      for {
+        fork <- ZIO.attemptBlocking {
+          Files.writeString(local.source.resolve("old.txt"), "to be deleted\n")
+          val head = commit("Fork point")
+          local.git(local.source, "branch", "integration", head.value)
+          head
+        }
+        workspace <- fixture.service.prepare(settings.owner, fixture.spec(settings.owner).copy(base = fork))
+        candidate <- ZIO.attemptBlocking {
+          val tree = Path.of(workspace.directory)
+          Files.delete(tree.resolve("old.txt"))
+          Files.writeString(tree.resolve("tracked.txt"), "changed\n")
+          Files.createDirectories(tree.resolve("cache"))
+          Files.write(tree.resolve("cache/module.bin"), Array[Byte](0xc3.toByte, 0x28, 0, -1))
+          Files.createDirectories(tree.resolve("new dir"))
+          Files.writeString(tree.resolve("new dir/quoted \"name\"\nsecond line.txt"), "text\n")
+          Files.writeString(tree.resolve("trailing "), "")
+          Files.createDirectories(tree.resolve(".work/evidence"))
+          Files.writeString(tree.resolve(".work/evidence/run.log"), "worker log\n")
+          candidates.capture(workspace, None, "Candidate\n")
+        }
+        _ <- ZIO.attemptBlocking {
+          // The target moves on after the candidate left it: what it gained is no part of the candidate's change.
+          local.git(local.source, "checkout", "--quiet", "integration")
+          Files.writeString(local.source.resolve("later.txt"), "later\n")
+          commit("Target moved")
+          val listed = candidates.paths(candidate)
+          println(s"Candidate paths:\n$listed")
+          assert(listed == s"Candidate paths: every path the candidate adds, changes or deletes against ${fork.value}, as the host read them from Git.\n" +
+            "5 paths: 3 added, 1 changed, 1 deleted; 1 binary.\n" +
+            "added 4 bytes binary \"cache/module.bin\"\n" +
+            "added 5 bytes text \"new dir/quoted \\\"name\\\"\\nsecond line.txt\"\n" +
+            "deleted \"old.txt\"\n" +
+            "changed 8 bytes text \"tracked.txt\"\n" +
+            "added 0 bytes text \"trailing \"\n")
+          // A list longer than its bound says how many paths it leaves out; a change of more paths than the host reads names none.
+          val many = (0 until 1500).toList.map(index => CandidatePath(f"directory/file-$index%04d.txt", PathChange.Added, Some(1), false))
+          val cut = CandidatePaths.render(fork, many)
+          val kept = cut.linesIterator.count(_.startsWith("added "))
+          assert(cut.getBytes("UTF-8").length <= 33 * 1024 && kept > 0 && kept < 1500 && cut.contains("1500 paths: 1500 added, 0 changed, 0 deleted; 0 binary.\n") &&
+            cut.endsWith(s"${1500 - kept} more paths are not listed: the list is cut at its size bound.\n"), cut.takeRight(200))
+          assert(CandidatePaths.unlisted(fork, 2001, 2000).endsWith("2001 paths, more than the 2000 the host lists: none is listed here.\n"))
+        }
+      } yield ()
+    }
+
     "capture both ordered immutable parents and reject changed HEAD or merge inputs" in { (local: LocalWorkspaceFixture) =>
       val settings = configuration(local)
       val candidates = new CandidateWorkspace(settings)
