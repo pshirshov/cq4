@@ -123,6 +123,27 @@ final class HarnessAdapterLocal extends AnyWordSpec {
       }
     }
 
+    "I17: read as an abstention only what refuses the route or its settings entry, and let every other fault before a launch through" in {
+      import cq.host.{Abstention, RouteRefusal}
+      def launched(step: => Unit): Either[Throwable, Unit] = scala.util.Try(Abstention.unless(AbstentionReason.Launch)(step)).toEither
+      // A fault of the host is a failure with its own text: another model would meet the same disk.
+      val disk = new java.io.IOException("No space left on device")
+      val bound = new IllegalArgumentException("requirement failed: Harness launch argument exceeds the operating system's per-argument limit")
+      assert(launched(throw disk) == Left(disk) && launched(throw bound) == Left(bound) && launched(()) == Right(()))
+      assert(launched(RouteRefusal.unless(false, "Configured provider environment is unavailable")) ==
+        Left(Abstention(AbstentionReason.Launch, "Configured provider environment is unavailable")))
+      // The refusals of a route: the settings entry, the effort, the provider environment, a provider Claude does not have, a Pi name.
+      val setting = HarnessSetting(Harness.Pi, "/bin/pi", "model", "provider", "0.99.1", Nil, Set.empty)
+      def refusal(step: => Any): String = intercept[RouteRefusal](step).getMessage
+      assert(refusal(HarnessProfile(setting.copy(version = "0.0.1"), ModelRoute(Harness.Pi, None, "model", None))).contains(HarnessProfile.Unverified))
+      assert(refusal(HarnessProfile(setting, ModelRoute(Harness.Pi, None, "", None))).contains("Explicit harness model/provider required"))
+      assert(refusal(HarnessProfile(setting, ModelRoute(Harness.Codex, None, "model", None))).contains("Model route and settings entry name different harnesses"))
+      val pi = HarnessProfile(setting, ModelRoute(Harness.Pi, None, "model", None))
+      assert(refusal(HarnessEnvironment.isolated(pi.copy(providerEnvironment = Set("ABSENT_KEY")), Map("HOME" -> "/h", "PATH" -> "/p"))).contains("Configured provider environment is unavailable"))
+      // A host without HOME or PATH is no property of the route.
+      val bare = intercept[IllegalArgumentException](HarnessEnvironment.isolated(pi, Map.empty))
+      assert(!bare.isInstanceOf[RouteRefusal] && bare.getMessage.contains("Harness execution requires explicit HOME and PATH"))
+    }
     "refuse a launch whose encoded argument exceeds the operating system's per-argument limit" in {
       // Codex receives the instructions JSON-encoded in one argument: a control character occupies six bytes there.
       val controls = invocation(Role.Governor, Path.of("/test/assets")).copy(system = "\u0001" * (HarnessInvocation.MaxSystemBytes / 2))

@@ -18,6 +18,6 @@ The files under `abstention/` are whole native stdout transcripts of the pinned 
 
 - `*-credential-*`: the provider's own endpoint answered the wrong key (`api-key`), a wrong OAuth token (`oauth`) or no credential (`none`).
 - Every other case: the harness's base URL pointed at a local stub that answered each request with one HTTP status and error body. The bodies imitate the error formats of the Anthropic and OpenAI APIs as their public documentation describes them, written from memory and not fetched; `quota-subscription` (Claude Code: a 429 with the unified rate-limit headers and a wrong OAuth token) and `quota-usage-limit` (`usage_limit_reached`) imitate what the harness's own client reads and are not publicly documented. The harness's reaction and output are real; the provider's reply is not.
-- `unclassified-*`: refusals the host does not read as an abstention (a model the provider does not know, a 403, a 500 of the ChatGPT backend through Pi).
+- `unclassified-*`: refusals the host does not read as an abstention (a model the provider does not know, a 403).
 
 Exit statuses: Claude Code and Codex exit 1 in every case; Pi exits 0 in every case. `AbstentionClassifierLocal` lists every file with the class it is read as.

@@ -953,7 +953,9 @@ emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_toke
           _ <- ZIO.attemptBlocking {
             val stdout = f.config.directory.resolve("payload").resolve(cancelled.ticket.attempt.id.value.toString).resolve("stdout")
             val deadline = System.nanoTime() + zio.Duration.fromSeconds(20).toNanos
-            while (!(Files.exists(stdout) && Files.readString(stdout).contains("turn.failed")) && System.nanoTime() < deadline) Thread.sleep(20)
+            def refused: Boolean = Files.exists(stdout) && Files.readString(stdout).contains("turn.failed")
+            while (!refused && System.nanoTime() < deadline) Thread.sleep(20)
+            assert(refused, "The child did not write its refusal before the deadline of this wait")
             assert(cancelled.requestStop("Operator cancelled the attempt"))
           }
           _ <- f.jobs.cancel(f.config.owner, cancelled.ticket.attempt.id)

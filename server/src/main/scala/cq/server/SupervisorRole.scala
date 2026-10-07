@@ -44,10 +44,14 @@ object SupervisorConfig {
       value.heartbeatMillis -> ceiling.heartbeatMillis, value.graceMillis -> ceiling.graceMillis, value.killMillis -> ceiling.killMillis,
       value.retainedOutputBytes.toLong -> ceiling.retainedOutputBytes.toLong).forall((actual, maximum) => actual <= maximum), "Child limits exceed the governing session's configured bounds")
   }
+  val NotRunnable = "The harness executable could not be run"
+  /** Refuses a route whose harness is not the configured verified version, or cannot be run at all: the same condition as a job
+    * the guardian could not start. Every other fault of the probe is a fault of the host. */
   def verifyProfile(config: SupervisorConfig, value: HarnessProfile): Unit = {
-    val version = new BoundedHostCommand(HarnessEnvironment.isolated(value, config.environment), Duration.ofSeconds(10), 4096)
-      .run(Path.of(config.run.repository), List(value.executable.toString, "--version"))
-    require(version.exit == 0 && version.text.split("[\\s()]+").contains(value.version), VersionMismatch)
+    val probe = new BoundedHostCommand(HarnessEnvironment.isolated(value, config.environment), Duration.ofSeconds(10), 4096)
+    RouteRefusal.unless(Files.isExecutable(value.executable), s"$NotRunnable: ${value.executable}")
+    val version = probe.run(Path.of(config.run.repository), List(value.executable.toString, "--version"))
+    RouteRefusal.unless(version.exit == 0 && version.text.split("[\\s()]+").contains(value.version), VersionMismatch)
   }
   /** A failing check is run at most `attempts` times on one commit, and a governor may request at most `revalidations` further
     * rounds of it for one admitted result. */

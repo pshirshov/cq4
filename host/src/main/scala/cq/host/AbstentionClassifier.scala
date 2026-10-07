@@ -3,6 +3,13 @@ package cq.host
 import cq.api.*
 import io.circe.Json
 
+/** A route, or the settings entry of its harness, that cannot be launched as it is configured: nothing of the work caused it, and
+  * another route may run the same input. Its message has the form of a refused requirement. */
+final class RouteRefusal(message: String) extends IllegalArgumentException("requirement failed: " + message)
+object RouteRefusal {
+  def unless(condition: Boolean, message: => String): Unit = if (!condition) throw new RouteRefusal(message)
+}
+
 /** An attempt that could not run its model for a reason that is none of the work's: another model may run the same input. */
 final case class Abstention(reason: AbstentionReason, detail: String) extends RuntimeException(Abstention.text(reason, detail)) {
   def text: String = Abstention.text(reason, detail)
@@ -10,10 +17,15 @@ final case class Abstention(reason: AbstentionReason, detail: String) extends Ru
 object Abstention {
   def text(reason: AbstentionReason, detail: String): String = s"Abstained ($reason): $detail"
   private def message(error: Throwable): String = Option(error.getMessage).fold(error.getClass.getSimpleName)(_.stripPrefix("requirement failed: "))
-  /** Runs one step that precedes the launch; a refused precondition or an executable that cannot be run is an abstention of `reason`. */
+  /** Runs one step that precedes the launch. A refusal of the route or of its settings entry is an abstention of `reason`; any other
+    * fault of the step, an I/O fault of the host included, is a failure of the attempt with its own text. */
   def unless[A](reason: AbstentionReason)(step: => A): A = try step catch {
-    case error @ (_: IllegalArgumentException | _: java.io.IOException) => throw Abstention(reason, message(error))
+    case error: RouteRefusal => throw Abstention(reason, message(error))
   }
+  /** The provider's refusal as the end of a job. It counts only when the harness ended by itself: a job that was stopped, by a
+    * cancellation, a deadline or the host, and a job whose end is not known are judged by how they ended, whatever their output says. */
+  def provider(record: JobRecord, refusal: Option[Abstention]): Option[Abstention] =
+    refusal.filter(_ => JobOutcome.observed(record).state != AttemptState.Unknown && record.exit.exists(_.reason == StopReason.Exited))
   /** A job that the guardian could not start ran nothing. */
   def launch(record: JobRecord): Option[Abstention] = record.exit.filter(_.reason == StopReason.LaunchFailed)
     .map(_ => Abstention(AbstentionReason.Launch, record.problem.getOrElse("The harness process could not be started")))
@@ -106,7 +118,8 @@ object AbstentionClassifier {
   }
 
   // Pi passes on the provider's reply: the HTTP status and the error body for the Anthropic and OpenAI APIs, and for the ChatGPT
-  // backend its own sentence for an exhausted plan.
+  // backend its own sentence for an exhausted plan and the backend's sentence for a server error, which carries no status.
+  private val PiCodexServerError = "The server had an error while processing your request. Sorry about that!"
   private val PiAnthropic = "(\\d{3}) (\\{.*\\})".r
   private val PiOpenAi = "OpenAI API error \\((\\d{3})\\): (\\{.*\\})".r
   private def field(body: String, path: String*): Option[String] =
@@ -127,6 +140,7 @@ object AbstentionClassifier {
       case _ => None
     }
     case ("openai-codex-responses", sentence) if sentence.startsWith("You have hit your ChatGPT usage limit") => Some(AbstentionReason.Quota)
+    case ("openai-codex-responses", PiCodexServerError) => Some(AbstentionReason.Unavailable)
     case _ => None
   }
 }

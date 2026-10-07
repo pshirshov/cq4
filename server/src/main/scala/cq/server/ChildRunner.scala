@@ -120,8 +120,7 @@ final class ChildRunner(config: SupervisorConfig, authority: SupervisorAuthority
           val observed = JobOutcome.observed(native)
           Abstention.launch(native).foreach(throw _)
           val usage = settlement.collect(entry.ticket, clock.millis())
-          // A provider's refusal counts only when the harness ended by itself: a stopped or uncertain job is judged by how it was stopped.
-          if (observed.state != AttemptState.Unknown && native.exit.exists(_.reason == StopReason.Exited)) usage.abstention.foreach(throw _)
+          Abstention.provider(native, usage.abstention).foreach(throw _)
           require(observed.succeeded, observed.problem.getOrElse("Child process did not complete successfully"))
           require(usage.terminalSeen && !usage.nativeFailure, "Child native output did not complete successfully")
           val report = ChildContracts.report(entry.ticket.request.work, entry.ticket.request.members,
