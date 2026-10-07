@@ -225,7 +225,19 @@ abstract class UsageContractTest extends SpecZIO with AssertZIO {
         }
         _ <- assertIO(paged._1 == expected && first.after.contains(expected(1)))
         // A key that is no attempt of the project is refused instead of read as a position.
-        _ <- denied(usage.attempts(owner, UsageFilter.TaskOnly(member), Some(AttemptId(UUID.randomUUID())), None, 2))(_.isInstanceOf[Fault.Invalid])
+        _ <- denied(usage.attempts(owner, UsageFilter.TaskOnly(member), Some(AttemptId(UUID.randomUUID())), Some(whole.cursor), 2))(
+          _ == Fault.Invalid(UsageCursors.UnknownAttemptKey))
+        // An attempt that starts between two page reads, in the tie the first page ended in: the continuation is refused, because the
+        // listing changed, and the listing read again from its start holds every attempt once, the new one in its place.
+        late = Attempt(AttemptId(UUID.randomUUID()), work.id, None, owner.actor.session, Role.Worker, Harness.Codex, "test-provider", "model", "fixture-v1", 3000L, UsagePhase.Work, None)
+        _ <- usage.start(collector(owner), late)
+        _ <- denied(usage.attempts(owner, UsageFilter.TaskOnly(member), first.after, Some(first.cursor), 2))(_ == Fault.Resync("Usage snapshot changed; restart attempt listing"))
+        all = (attempts :+ late).sortWith((left, right) => left.startedAt > right.startedAt || (left.startedAt == right.startedAt && left.id.value.toString > right.id.value.toString)).map(_.id)
+        again <- usage.attempts(owner, UsageFilter.TaskOnly(member), None, None, 3)
+        reread <- ZIO.iterate((again.entries.map(_.attempt.id), again))(_._2.hasMore) { (seen, page) =>
+          usage.attempts(owner, UsageFilter.TaskOnly(member), page.after, Some(page.cursor), 3).map(next => (seen ++ next.entries.map(_.attempt.id), next))
+        }
+        _ <- assertIO(reread._1 == all && all.size == 8)
       } yield ()
     }
 
