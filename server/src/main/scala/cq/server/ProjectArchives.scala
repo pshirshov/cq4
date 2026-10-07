@@ -165,6 +165,9 @@ final class PostgresProjectArchives(database: LedgerDatabase, clock: Clock, mode
           }
         }
       }
+      // The work cursor reads the usage clock's count of attempt events instead of counting the attempts (D154).
+      check(sql.query("SELECT COALESCE((SELECT attempt_events FROM restore_cq_usage_clock), 0) = (SELECT count(*) + count(effective_outcome) FROM restore_cq_usage_attempts)")(_ => ())(_.getBoolean(1)).head,
+        "Archive usage clock disagrees with the attempts the archive holds")
       // The host delivers a stored setting as it is, so a restored one passes the checks of the write path.
       sql.query("SELECT kind, body::text FROM restore_cq_project_settings")(_ => ())(row => (row.getString(1), row.getString(2))).foreach { case (kind, body) =>
         val setting = scala.util.Try(Wire.decode(ProjectSetting_JsonCodec, body)).getOrElse(invalid("Archive holds a project setting that cannot be decoded"))

@@ -349,6 +349,30 @@ final class ProjectArchivesPostgres extends SpecZIO with AssertZIO {
       } yield ()
     }
 
+    "D154: refuse an archive whose usage clock counts attempt events that its attempts do not give" in {
+      (service: LedgerService[IO], database: LedgerDatabase, config: DatabaseConfig, archives: ProjectArchives) =>
+      val schema = "cq_restore_" + UUID.randomUUID().toString.replace("-", "")
+      val separator = if (config.url.contains("?")) "&" else "?"
+      val target = new LedgerDatabase(config.copy(url = config.url + separator + "currentSchema=" + schema))
+      val operator = Scope(ProjectId(UUID.randomUUID()), Actor("operator", SessionId(UUID.randomUUID()), Role.Human))
+      for {
+        _ <- ZIO.attemptBlocking(Using.resource(DriverManager.getConnection(config.url, config.user, config.password)) { connection =>
+          Using.resource(connection.createStatement())(_.execute(s"CREATE SCHEMA $schema")); ()
+        })
+        _ <- target.initialize
+        _ <- service.initialize(operator, "edited usage clock")
+        // A hand-edited archive is reproduced by editing the stored row before the backup: backup copies the table as it is.
+        _ <- database.transaction { connection =>
+          new Jdbc(connection).execute("INSERT INTO cq_usage_clock(project_id, cursor, attempt_events) VALUES (?, 0, 1)")(_.setObject(1, operator.project.value))
+        }
+        file <- ZIO.attempt(Files.createTempFile("cq-archive-", ".zip"))
+        _ <- archives.backup(operator.project, file)
+        restored <- new PostgresProjectArchives(target, Clock.systemUTC(), ProcessModePolicy.Release).restore(file).either
+        _ <- ZIO.attempt(Files.deleteIfExists(file))
+        _ <- ZIO.attempt(assert(restored.left.toOption.contains(DomainFailure(Fault.Invalid("Archive usage clock disagrees with the attempts the archive holds"))), restored.map(_.project).toString))
+      } yield ()
+    }
+
     "Q32: refuse an archive whose settings row breaks the bounds of the write path or misstates its kind" in {
       (service: LedgerService[IO], database: LedgerDatabase, config: DatabaseConfig, archives: ProjectArchives) =>
       val schema = "cq_restore_" + UUID.randomUUID().toString.replace("-", "")

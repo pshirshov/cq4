@@ -26,7 +26,10 @@ MIGRATIONS = "cq_schema_migrations"
 ATTEMPT_EVENTS = "attempt_events"
 LIVE_CLAIMS_INDEX = "cq_claims_live"
 ATTEMPT_EVENTS_COUNTED = "SELECT json_object_agg(project_id, events) FROM (SELECT project_id, count(*) + count(effective_outcome) AS events FROM cq_usage_attempts GROUP BY project_id) counted"
-PROJECTS_WITH_A_FENCE_WITHOUT_A_CLAIM = "SELECT count(*) FROM cq_projects p WHERE p.fence_counter <> (SELECT count(*) FROM cq_claims c WHERE c.project_id = p.project_id)"
+PROJECTS_WITH_A_FENCE_WITHOUT_A_CLAIM = ("SELECT COALESCE(json_agg(json_build_array(project_id, fence_counter, claims) ORDER BY project_id), '[]') FROM "
+                                         "(SELECT p.project_id, p.fence_counter, (SELECT count(*) FROM cq_claims c WHERE c.project_id = p.project_id) AS claims FROM cq_projects p) counted "
+                                         "WHERE fence_counter <> claims")
+PROJECTS_NAMED = 10
 SCHEMA_CHECKSUM = f"SELECT checksum FROM {MIGRATIONS} WHERE version=1"
 STRUCTURE_DATABASE = "cq_update_structure"
 
@@ -34,6 +37,10 @@ STRUCTURE_DATABASE = "cq_update_structure"
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise RuntimeError(message)
+
+
+class Refused(RuntimeError):
+    """A database the step does not apply to, found before anything was changed."""
 
 
 def digest(path: Path) -> str:
@@ -191,8 +198,11 @@ class AttemptEventsAndLiveClaims:
 
     def capture(self, database: Database) -> None:
         # The new release takes a project's claims to number its fence counter; a database where they do not would get another work cursor.
-        require(database.query(PROJECTS_WITH_A_FENCE_WITHOUT_A_CLAIM, "claims-per-fence") == "0",
-                "A project's fence counter differs from the number of its claims; update refused")
+        differing = json.loads(database.query(PROJECTS_WITH_A_FENCE_WITHOUT_A_CLAIM, "claims-per-fence"))
+        if differing:
+            named = ", ".join(f"{project} has fence counter {fence} and {claims} claims" for project, fence, claims in differing[:PROJECTS_NAMED])
+            more = f", and {len(differing) - PROJECTS_NAMED} more" if len(differing) > PROJECTS_NAMED else ""
+            raise Refused(f"The fence counter of {len(differing)} of the projects differs from the number of its claims: {named}{more}; nothing was changed")
         self.clocks = self.rows(database, "clocks-before")
 
     def verify(self, database: Database, before: dict[str, str], after: dict[str, str]) -> dict:
@@ -305,7 +315,7 @@ def main() -> None:
             write_json(evidence / "receipt.json", receipt)
             install(state, release, candidate, rollback, evidence, receipt, schema, commands, data_step(before, after, step, checkout))
         except BaseException as error:
-            if receipt["status"] not in ("installed", "recovery-required", "rolled-back"):
+            if receipt["status"] not in ("installed", "recovery-required", "rolled-back", "refused"):
                 receipt.update(status="failed-before-install", error=str(error))
                 write_json(evidence / "receipt.json", receipt)
             raise
@@ -362,6 +372,8 @@ def install(state: Path, release: Path, candidate: Path, rollback: Path, evidenc
         actual = database.run(["psql", "--no-psqlrc", "-v", "ON_ERROR_STOP=1", "-At", "-c",
                               "SELECT checksum FROM cq_schema_migrations WHERE version=1"], "schema-before", 30).strip()
         require(actual == schema, "Database schema differs from package; update refused")
+        # An earlier run that was cut while it compared structures left its scratch database, which no backup of this database holds.
+        query(f"DROP DATABASE IF EXISTS {STRUCTURE_DATABASE}", "structure-leftover")
         attached = f"parent_id IS NULL AND body->>'role' = 'Governor' AND body->>'collector' = '{ATTACHED_GOVERNOR_COLLECTOR}'"
         pending = json.loads(query("SELECT json_build_object(" +
                         "'claims', (SELECT count(*) FROM cq_claims WHERE NOT released AND expires_at > (extract(epoch FROM clock_timestamp()) * 1000)::bigint), " +
@@ -434,7 +446,8 @@ def install(state: Path, release: Path, candidate: Path, rollback: Path, evidenc
                 owned = False
         require(not os.path.lexists(data / "postmaster.pid"), "Database recovery is incomplete")
         require(digest(release / "manifest.json") == receipt["oldManifest"], "Package recovery is incomplete")
-        receipt.update(status="rolled-back", databaseStopped=True)
+        # A step that refused the database before it applied anything rolled nothing back.
+        receipt.update(status="refused" if isinstance(error, Refused) and not transformation_attempted else "rolled-back", databaseStopped=True)
         write_json(evidence / "receipt.json", receipt)
         marker.unlink()
         sync_directory(state)

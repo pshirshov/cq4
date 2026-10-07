@@ -149,14 +149,17 @@ SELECT project_id, i.integration, replace(body::text, :'integration', i.integrat
 FROM cq_integrations t CROSS JOIN access_identities i WHERE t.project_id = :'project'::uuid AND t.integration_id = :'integration'::uuid;
 UPDATE cq_claims c SET released = false, expires_at = (t.body->>'reservedAt')::bigint + 1,
     body = c.body || jsonb_build_object('released', false, 'expiresAt', ((t.body->>'reservedAt')::bigint + 1)::text, 'owner', t.body#>'{intent,owner}')
-FROM cq_integrations t, access_identities i
-WHERE c.project_id = :'project'::uuid AND c.generation = (i.n + 1000) * 100 AND t.project_id = c.project_id AND t.integration_id = :'integration'::uuid;
+FROM cq_integrations t, access_identities i, cq_claim_members m
+WHERE c.project_id = :'project'::uuid AND m.project_id = c.project_id AND m.ledger = 'Tasks' AND m.number = i.n + 1000 AND c.claim_id = m.claim_id
+    AND t.project_id = c.project_id AND t.integration_id = :'integration'::uuid;
 INSERT INTO cq_integrations
 SELECT t.project_id, i.pending,
     jsonb_set(jsonb_set(replace(replace(t.body::text, :'integration', i.pending::text), '"number": "3"', '"number": "' || (i.n + 1000)::text || '"')::jsonb,
         '{intent,fence}', c.body->'fence'), '{resolution}', '{"Pending":{}}'::jsonb) || jsonb_build_object('resolvedAt', NULL),
     replace(replace(t.hold::text, :'integration', i.pending::text), '"number": "3"', '"number": "' || (i.n + 1000)::text || '"')::jsonb
-FROM cq_integrations t CROSS JOIN access_identities i JOIN cq_claims c ON c.project_id = :'project'::uuid AND c.generation = (i.n + 1000) * 100
+FROM cq_integrations t CROSS JOIN access_identities i
+    JOIN cq_claim_members m ON m.project_id = :'project'::uuid AND m.ledger = 'Tasks' AND m.number = i.n + 1000
+    JOIN cq_claims c ON c.project_id = m.project_id AND c.claim_id = m.claim_id
 WHERE t.project_id = :'project'::uuid AND t.integration_id = :'integration'::uuid;
 INSERT INTO cq_integration_members SELECT :'project'::uuid, 'Tasks', n + 1000, pending FROM access_identities;
 INSERT INTO cq_usage_assignments
@@ -175,7 +178,9 @@ FROM cq_usage_meters t CROSS JOIN access_identities i WHERE t.project_id = :'pro
 INSERT INTO cq_usage_costs
 SELECT project_id, i.attempt, meter, currency, basis, pricing_version, :'cost'::numeric, 1
 FROM cq_usage_costs t CROSS JOIN access_identities i WHERE t.project_id = :'project'::uuid AND t.attempt_id = :'attempt'::uuid;
-UPDATE cq_usage_clock SET cursor = cursor + 3 * (:upper - :lower + 1) WHERE project_id = :'project'::uuid;
+UPDATE cq_usage_clock SET cursor = cursor + 3 * (:upper - :lower + 1),
+    attempt_events = (SELECT count(*) + count(effective_outcome) FROM cq_usage_attempts WHERE project_id = :'project'::uuid)
+WHERE project_id = :'project'::uuid;
 INSERT INTO cq_usage_records
 SELECT t.project_id, i.observation, c.cursor + i.n - :lower + 1, i.attempt, meter, source, position,
     jsonb_set(jsonb_set(jsonb_set(body, '{upload,observation,id,value}', to_jsonb(i.observation::text)), '{upload,observation,attempt,value}', to_jsonb(i.attempt::text)),

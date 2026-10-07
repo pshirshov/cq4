@@ -98,15 +98,16 @@ WHERE i.project_id = :'project'::uuid AND i.number BETWEEN :lower + 1000 AND :up
 WITH template AS (SELECT body FROM cq_claims WHERE project_id = :'project'::uuid AND generation = 1),
 identities AS (SELECT n, gen_random_uuid() id FROM generate_series(:lower, :upper) n)
 INSERT INTO cq_claims(project_id, claim_id, generation, expires_at, released, body)
-SELECT :'project'::uuid, id, (n + 1000) * 100, 0, true,
+SELECT :'project'::uuid, id, fence.counter + n - :lower + 1, 0, true,
        body || jsonb_build_object('fence', jsonb_build_object('claim', jsonb_build_object('value', id::text),
-           'generation', ((n + 1000) * 100)::text), 'expiresAt', '0', 'released', true,
+           'generation', (fence.counter + n - :lower + 1)::text), 'expiresAt', '0', 'released', true,
            'members', jsonb_build_array(jsonb_build_object('project', jsonb_build_object('value', :'project'),
                'ledger', 'Tasks', 'number', (n + 1000)::text)))
-FROM template CROSS JOIN identities;
-INSERT INTO cq_claim_members SELECT project_id, 'Tasks', generation / 100, claim_id FROM cq_claims
-WHERE project_id = :'project'::uuid AND generation BETWEEN (:lower + 1000) * 100 AND (:upper + 1000) * 100;
-UPDATE cq_projects SET fence_counter = (:upper + 1000) * 100 WHERE project_id = :'project'::uuid;
+FROM template CROSS JOIN identities CROSS JOIN (SELECT fence_counter AS counter FROM cq_projects WHERE project_id = :'project'::uuid) fence;
+-- As the server writes them: every claim has the next fence value, so the project's claims number its fence counter.
+INSERT INTO cq_claim_members SELECT c.project_id, 'Tasks', (c.body->'members'->0->>'number')::bigint, c.claim_id FROM cq_claims c
+JOIN cq_projects p ON p.project_id = c.project_id WHERE c.project_id = :'project'::uuid AND c.generation > p.fence_counter;
+UPDATE cq_projects SET fence_counter = fence_counter + :upper - :lower + 1 WHERE project_id = :'project'::uuid;
 COMMIT;
 """, {"project": project["value"], "lower": str(lower), "upper": str(upper)})
 

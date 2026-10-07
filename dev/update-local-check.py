@@ -314,9 +314,18 @@ class PostgreSQLInstall(unittest.TestCase):
                 (path / "manifest.json").write_text(json.dumps({"modelVersion": "0.1.0", "platform": "x86_64-linux", "filesSha256": files}))
             for path, content in ((release, "old"), (candidate, "new")):
                 fixture(path, content)
+            def execute(statement):
+                subprocess.run(["pg_ctl", "-D", str(data), "-l", str(root / "setup.log"), "-o", f"-h 127.0.0.1 -p {port} -c unix_socket_directories=''", "-w", "start"], check=True, stdout=subprocess.DEVNULL)
+                try:
+                    subprocess.run(["psql", "-h", "127.0.0.1", "-p", str(port), "-U", "cq", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-c", statement], check=True, stdout=subprocess.DEVNULL)
+                finally:
+                    subprocess.run(["pg_ctl", "-D", str(data), "-m", "fast", "-w", "stop"], check=True, stdout=subprocess.DEVNULL)
+            # The scratch database of a structure comparison that was cut is dropped by the next update, whatever its step.
+            execute(f"CREATE DATABASE {update.STRUCTURE_DATABASE}")
             receipt = {"oldManifest": update.digest(release / "manifest.json"), "newManifest": update.digest(candidate / "manifest.json"), "status": "candidate-verified"}
             update.install(root, release, candidate, rollback, evidence, receipt, "schema", update.Commands(root, evidence, dict(os.environ)), None)
             self.assertEqual(receipt["status"], "installed")
+            execute(f"DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_database WHERE datname = '{update.STRUCTURE_DATABASE}') THEN RAISE EXCEPTION 'left behind'; END IF; END $$")
             self.assertFalse((data / "postmaster.pid").exists())
             self.assertFalse((root / ".cq-update-recovery.json").exists())
             self.assertEqual(update.digest(rollback / "manifest.json"), receipt["oldManifest"])
@@ -336,12 +345,6 @@ class PostgreSQLInstall(unittest.TestCase):
                 ("managedAttempts", "INSERT INTO cq_usage_attempts(parent_id,body) VALUES ('00000000-0000-0000-0000-000000000001','{\"role\":\"Governor\",\"collector\":\"CQ attached session; outer usage unavailable\"}')", "DELETE FROM cq_usage_attempts WHERE parent_id IS NOT NULL"),
                 ("pendingIntegrations", "INSERT INTO cq_integrations VALUES ('{\"resolution\":{\"Pending\":{}}}')", "DELETE FROM cq_integrations"),
             ]
-            def execute(statement):
-                subprocess.run(["pg_ctl", "-D", str(data), "-l", str(root / "setup.log"), "-o", f"-h 127.0.0.1 -p {port} -c unix_socket_directories=''", "-w", "start"], check=True, stdout=subprocess.DEVNULL)
-                try:
-                    subprocess.run(["psql", "-h", "127.0.0.1", "-p", str(port), "-U", "cq", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-c", statement], check=True, stdout=subprocess.DEVNULL)
-                finally:
-                    subprocess.run(["pg_ctl", "-D", str(data), "-m", "fast", "-w", "stop"], check=True, stdout=subprocess.DEVNULL)
             for category, insertion, deletion in cases:
                 with self.subTest(category=category, insertion=insertion):
                     execute(insertion)
@@ -525,11 +528,11 @@ class PostgreSQLInstall(unittest.TestCase):
                 planned = update.AttemptEventsAndLiveClaims(sql, step["schemaAfter"], ROOT / update.SCHEMA_SOURCE)
                 return receipt, lambda: update.install(root, release, candidate, root / f"rollback-{name}", evidence, receipt, step["schemaBefore"],
                                                        update.Commands(root, evidence, dict(os.environ)), planned)
-            def refused(name, reason, sql, modified):
+            def refused(name, reason, sql, modified, status):
                 receipt, run = attempt(name, sql, modified)
                 with self.assertRaisesRegex(RuntimeError, reason):
                     run()
-                self.assertEqual(receipt["status"], "rolled-back")
+                self.assertEqual(receipt["status"], status)
                 self.assertFalse((root / ".cq-update-recovery.json").exists())
                 self.assertEqual(update.digest(release / "manifest.json"), installed)
                 self.assertEqual(stored(), initial)
@@ -537,7 +540,8 @@ class PostgreSQLInstall(unittest.TestCase):
             # A project whose fence counter is not the number of its claims would get another work cursor: refused before any change.
             running(["-c", f"UPDATE cq_projects SET fence_counter = fence_counter + 1 WHERE project_id = '{idle}'"])
             initial = stored()
-            self.assertNotIn("databaseRestored", refused("stray-fence", "fence counter differs from the number of its claims", pinned, False))
+            stray = refused("stray-fence", f"fence counter of 1 of the projects differs from the number of its claims: {idle} has fence counter 1 and 0 claims; nothing was changed", pinned, False, "refused")
+            self.assertNotIn("databaseRestored", stray)
             running(["-c", f"UPDATE cq_projects SET fence_counter = 0 WHERE project_id = '{idle}'"])
             initial = stored()
             # Whatever fails after the SQL ran, the database is again the backup's: the column and the index are gone with the rest.
@@ -560,7 +564,7 @@ class PostgreSQLInstall(unittest.TestCase):
             for name, reason, sql, modified in failures:
                 with self.subTest(failure=name):
                     self.assertTrue(modified or sql != pinned, "The variant differs from the pinned SQL")
-                    self.assertTrue(refused(name, reason, sql, modified)["databaseRestored"])
+                    self.assertTrue(refused(name, reason, sql, modified, "rolled-back")["databaseRestored"])
             applied, run = attempt("pinned", pinned, False)
             run()
             self.assertEqual(applied["status"], "installed")
