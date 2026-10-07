@@ -2506,6 +2506,8 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
         _ <- settled(attempt) *> quiet
         // The unit's follower names every attempt of the unit at each reading, the concluded one too.
         _ <- ZIO.foreachDiscard(1 to 3)(_ => tracker.track(one.cycle, request, attempt, concluded) *> quiet)
+        // A call that names the ended attempt wakes nothing, and the unit's next reading still does not report it again.
+        _ <- tracker.wake(one.cycle, request, attempt) *> tracker.track(one.cycle, request, attempt, concluded) *> quiet
         _ <- ended.set(Some(LineageOutcome.Settled)) *> settled(request) *> quiet
         _ <- ZIO.attempt(assert(count { case DriverSession.Inherit(_, _, `attempt`) => true } == 1 && count { case DriverSession.Conclude(_, value) => value.attempt == attempt.id } == 1,
           sent.toString))

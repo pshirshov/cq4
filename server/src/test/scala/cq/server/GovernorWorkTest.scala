@@ -369,7 +369,7 @@ emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_toke
           _ <- ZIO.attemptBlocking(UnitFixture.configure(f.authority.root, f.owner.project, s"defaults: { roles: { worker: { rr: [${turns.map("codex:" + _).mkString(", ")}] } } }\n"))
           opened <- f.open(None)
           refused <- f.units.start(worker, None).either
-          _ <- ZIO.attempt(assert(refused.left.exists { case DomainFailure(Fault.Conflict(message)) => message.contains("An active child already covers T"); case _ => false }, refused.toString))
+          _ <- ZIO.attempt(assert(refused.left.exists { case DomainFailure(Fault.Conflict(message)) => message.contains("The governing session's own open workspace already covers T"); case _ => false }, refused.toString))
           _ <- f.status(DispatchCommand.Cancel(opened.attempt)) *> f.ended(opened.attempt)
           _ <- f.child(DispatchWork.Worker(WorkerMode.Implement), None)
           attempts <- f.attempts

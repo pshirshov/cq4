@@ -36,10 +36,10 @@ final class LineageTracker(client: DriverSessionClient, report: String => Unit, 
   private def resumed(cycle: CycleId, member: LineageMember): Boolean = synchronized {
     val count = tracked.get((cycle, member))
     count.foreach(value => tracked += (cycle, member) -> (value + 1))
-    // The host works again on a member whose follower had ended: it is followed anew.
-    if (count.isEmpty) ended -= ((cycle, member))
     count.nonEmpty
   }
+  // The host works again on a member whose follower had ended: it may be followed anew.
+  private def revived(cycle: CycleId, member: LineageMember): Unit = synchronized { ended -= ((cycle, member)) }
 
   // A request lost in transit is repeated with a doubling pause. A fault the server returned is its answer and is not repeated.
   private def reliably[A](operation: => A): Task[A] = {
@@ -106,7 +106,7 @@ final class LineageTracker(client: DriverSessionClient, report: String => Unit, 
     }).foldZIO({
       case _: DomainFailure => ZIO.unit
       case error => abandon(cycle, member, "resumption", "could not be resumed", error)
-    }, followed => if (followed) ZIO.unit else track(cycle, parent, member, observed))
+    }, followed => if (followed) ZIO.unit else ZIO.succeed(revived(cycle, member)) *> track(cycle, parent, member, observed))
 }
 
 final class AttachedDriver(config: SupervisorConfig, authority: SupervisorAuthority, units: DispatchUnits,
