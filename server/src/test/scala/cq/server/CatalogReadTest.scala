@@ -77,7 +77,9 @@ final class CatalogReadLocal extends AnyWordSpec {
       assert(catalog.modes.map(_.mode) == ProcessMode.all && ProcessModes.all.map(_.mode) == ProcessMode.all)
       catalog.modes.zip(ProcessModes.all).foreach { (view, source) =>
         withClue(s"${source.mode}: ") {
-          assert(view == CatalogMode(source.mode, source.label, source.hint, source.description, CatalogPrompt(source.instructions, resource(source.instructions)), view.unavailable))
+          assert(view == CatalogMode(source.mode, source.label, source.hint, source.description, CatalogPrompt(source.instructions, resource(source.instructions)),
+            // This catalog is that of a release that withholds the YOLO mode.
+            Option.when(source.mode == ProcessMode.Yolo)("The YOLO cross-cutting mode is not available in this release")))
           assert(view.label.trim.nonEmpty && view.hint.trim.nonEmpty && !view.hint.contains("\n") && view.description.trim.nonEmpty)
           // The same text opens the instructions of a session in that mode.
           assert(workflows.instructions(WorkflowRequest.Begin(Set.empty), source.mode).startsWith(view.instructions.text))

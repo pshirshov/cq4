@@ -522,6 +522,20 @@ abstract class ApplicationContractTest extends SpecZIO with AssertZIO {
         } yield ()
     }
 
+    "I30: ship the YOLO mode: the policy, the ledger service and the catalog this release wires accept it and attach no note to it" in {
+      (ledger: LedgerService[IO], modes: ProcessModePolicy, catalog: CatalogRead) =>
+      val operator = Scope(ProjectId(UUID.randomUUID()), Actor("operator", SessionId(UUID.randomUUID()), Role.Human))
+      for {
+        _ <- ledger.initialize(operator, "shipped modes")
+        chosen <- ledger.replaceMode(operator, Revision(0), ProjectSetting.Mode(ProcessMode.Yolo, true))
+        _ <- ZIO.attempt {
+          assert(ProcessModePolicy.YoloAvailable && (modes eq ProcessModePolicy.Release) && ProcessMode.all.forall(modes.unavailable(_).isEmpty))
+          assert(chosen.mode == ProcessMode.Yolo && chosen.selfReviewWithoutChecks && chosen.revision == Revision(1))
+          assert(catalog.value.modes.map(_.unavailable) == ProcessMode.all.map(_ => None))
+        }
+      } yield ()
+    }
+
     "preserve mutation acknowledgements across service re-creation and reject mixed snapshot pages" in {
       (ledger: LedgerService[IO], repository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
         val auth = authorization(Now)

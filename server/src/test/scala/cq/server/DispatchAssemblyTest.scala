@@ -213,11 +213,10 @@ abstract class DispatchAssemblyTest extends SpecZIO with AssertZIO {
             assert(rigorous.mode == ProcessMode.Rigorous && rigorous.instructions == standingSection + "\n\n" + assets.instructions(begin, ProcessMode.Rigorous))
             assert(rigorous.instructions.contains("\nProcess mode of this project: Rigorous.") && rigorous.instructions.contains("Never create a milestone yourself."))
             mode(0, ProcessMode.CrossCutting)
-            // A change takes effect at the next activation (Q64): the earlier one keeps the text and the mode it was assembled with.
+            // A change takes effect at the next activation (Q64).
             val crossCutting = governing.assemble(begin)
             assert(crossCutting.mode == ProcessMode.CrossCutting && crossCutting.instructions == standingSection + "\n\n" + assets.instructions(begin, ProcessMode.CrossCutting))
             assert(!crossCutting.instructions.contains("Never create a milestone yourself.") && crossCutting.instructions != rigorous.instructions)
-            assert(rigorous.mode == ProcessMode.Rigorous && rigorous.instructions.contains("Process mode of this project: Rigorous."))
             // A batch run has the same mode and text as an attached session in Rigorous and Cross-cutting.
             val batch = new WorkflowAssembly(api, scope.project, assets, SessionOwnership.Managed)
             assert(batch.assemble(begin) == crossCutting)

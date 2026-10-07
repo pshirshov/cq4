@@ -244,9 +244,12 @@ final class ProjectArchivesPostgres extends SpecZIO with AssertZIO {
             _ <- assertIO(stored.contains(StoredSetting(Revision(1), body, outcome._1.actor, outcome._2.change.get.at)))
           } yield ()
         }
-        _ <- ZIO.foreachDiscard(refused) { case (scope, _, outcome, schema) =>
+        unavailable = "The YOLO cross-cutting mode is not available in this release"
+        exemption = "Self-review without configured checks can be allowed only in the YOLO cross-cutting mode; the requested mode is Cross-cutting"
+        kind = "Archive project setting kind disagrees with its content"
+        _ <- ZIO.foreachDiscard(refused.zip(List(unavailable, unavailable, s"$exemption. $unavailable", kind, exemption, kind))) { case ((scope, _, outcome, schema), reason) =>
           for {
-            _ <- ZIO.attempt(assert(outcome.left.exists { case DomainFailure(_: Fault.Invalid) => true; case _ => false }, outcome.map(_.project).toString))
+            _ <- ZIO.attempt(assert(outcome.left.toOption.contains(DomainFailure(Fault.Invalid(reason))), outcome.left.map(_.getMessage).toString))
             projects <- new PostgresLedgerRepository(schema).projects(None, 200)
             _ <- assertIO(!projects.projects.exists(_.id == scope.project))
           } yield ()
@@ -290,10 +293,14 @@ final class ProjectArchivesPostgres extends SpecZIO with AssertZIO {
         // The installation's layer stays with its server: the archive of a project of a server that has one restores without it.
         defaults <- new PostgresLedgerRepository(again._4).transact(again._1.project)(tx => tx.setting(ProjectSettingKind.Agents) -> tx.installationSetting(InstallationSettingKind.Agents))
         _ <- assertIO(copy == (Some(stored), None) && source.installation.revision.value > 0 && again._3.isRight && defaults == (Some(again._2), None))
-        refused <- ZIO.foreach(List("defaults: [", "defaults: { roles: { worker: { all: [claude:sonnet], min: 1 } } }", "#" + "x" * LedgerPolicy.MaxConfigBytes))(archived)
-        _ <- ZIO.foreachDiscard(refused) { case (scope, _, outcome, schema) =>
+        reasons = List("defaults: [" -> "Agent configuration has problems: 1:12: a list or mapping is not closed",
+          "defaults: { roles: { worker: { all: [claude:sonnet], min: 1 } } }" ->
+            "Agent configuration has problems: 1:30: the worker role takes a model reference or a strategy; only the reviewer role takes a panel",
+          "#" + "x" * LedgerPolicy.MaxConfigBytes -> s"Agent configuration exceeds ${LedgerPolicy.MaxConfigBytes} bytes: ${LedgerPolicy.MaxConfigBytes + 1} supplied")
+        refused <- ZIO.foreach(reasons.map(_._1))(archived)
+        _ <- ZIO.foreachDiscard(refused.zip(reasons.map(_._2))) { case ((scope, _, outcome, schema), reason) =>
           for {
-            _ <- ZIO.attempt(assert(outcome.left.exists { case DomainFailure(_: Fault.Invalid) => true; case _ => false }, outcome.map(_.project).toString))
+            _ <- ZIO.attempt(assert(outcome.left.toOption.contains(DomainFailure(Fault.Invalid(reason))), outcome.left.map(_.getMessage).toString))
             projects <- new PostgresLedgerRepository(schema).projects(None, 200)
             _ <- assertIO(!projects.projects.exists(_.id == scope.project))
           } yield ()
@@ -301,7 +308,7 @@ final class ProjectArchivesPostgres extends SpecZIO with AssertZIO {
       } yield ()
     }
 
-    "I17: refuse the archive of a release whose stored attempts carry no effort, by its schema identity, before any row is restored" in {
+    "I17: refuse an archive whose manifest states the schema identity of the release 63db1c2, which this release's schema no longer has" in {
       (service: LedgerService[IO], config: DatabaseConfig, archives: ProjectArchives) =>
       // The schema identity of the release 63db1c2, the last one whose stored Attempt has no `effort`. Restore copies usage rows
       // undecoded, so the schema identity of the manifest is what keeps such rows out of a database whose readers require the field.

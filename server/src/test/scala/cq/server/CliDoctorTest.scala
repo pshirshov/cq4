@@ -74,7 +74,8 @@ final class CliDoctorLocal extends AnyWordSpec {
       assert(Using.resource(Files.list(root))(_.count()) == 0)
       val (refused, _) = run(root, List("doctor", "agents", "codex"))
       assert(refused.left.toOption.exists(_.getMessage.endsWith("Agents doctor requires --settings FILE")), refused.toString)
-      assert(run(root, List("doctor", "agents", "other", "--settings", "settings.json"))._1.isLeft)
+      val (unknown, _) = run(root, List("doctor", "agents", "other", "--settings", "settings.json"))
+      assert(unknown.left.toOption.exists(_.getMessage.endsWith("Unknown doctor harness")), unknown.toString)
     }
     "read the project file of the directory the agents doctor is given and say what it does not verify" in fixture { root =>
       val location = Files.createDirectories(root.resolve("project/.cq"))

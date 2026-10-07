@@ -845,7 +845,11 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
         _ <- assertIO(List(none, admitted, cancelled, unknown, deferred, unselected, resolved, abandoned).forall(quiescent))
         // An abstained attempt is recorded, and is no failed input to retry: the drive does not continue on it.
         abstained <- after("abstained", List((ChildEnd.Abstained, Some("input"), Some("Abstained (Quota): Quota exceeded. Check your plan and billing details."))))
-        _ <- assertIO(abstained match { case _: DriverReply.Stop => true; case _ => false })
+        _ <- assertIO(abstained match {
+          case DriverReply.Stop(DriverStopped(DriverStop.Failure, detail), _, _) =>
+            detail.startsWith("No configured model could run ") && detail.endsWith(": Abstained (Quota): Quota exceeded. Check your plan and billing details.")
+          case _ => false
+        })
         // One retryable input among others continues the drive, naming it.
         mixed <- after("mixed", List((ChildEnd.Admitted, Some("other"), None), (ChildEnd.Retryable, Some("input"), fault)))
         _ <- assertIO(mixed match { case DriverReply.Continue(_, value, List(message)) => value.cycle.exists(_.number == 2) && message.contains("its work on G"); case _ => false })

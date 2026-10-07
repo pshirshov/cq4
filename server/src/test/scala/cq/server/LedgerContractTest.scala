@@ -24,6 +24,49 @@ abstract class LedgerContractTest extends SpecZIO with AssertZIO {
     effect.either.flatMap(result => assertIO(result match { case Left(DomainFailure(fault)) => expected(fault); case _ => false })).unit
 
   "Durable ledger service (Behavioral Active Blackbox; dummy Group / PostgreSQL Good Communication)" should {
+    "I17: answer a save of the installation's agent configuration with a conflict when another writer replaced it after it was read" in {
+      (repository: LedgerRepository[IO]) =>
+      val human = Scope(ProjectId(UUID.randomUUID()), Actor("operator", SessionId(UUID.randomUUID()), Role.Human))
+      val rival = Actor("rival", SessionId(UUID.randomUUID()), Role.Human)
+      val Installation = AgentsScope.Installation()
+      def text(worker: String): String = s"defaults: { roles: { worker: $worker } } # ${human.project.value}\n"
+      // The transaction of another project commits its write between this one's reading and its write: here, just before the write.
+      val raced = new java.util.concurrent.atomic.AtomicInteger
+      val racing = new LedgerRepository[IO] {
+        override def initialize(project: Project): IO[Throwable, Project] = repository.initialize(project)
+        override def projects(after: Option[ProjectId], limit: Int): IO[Throwable, ProjectPage] = repository.projects(after, limit)
+        override def catalogueCursor: IO[Throwable, CatalogueCursor] = repository.catalogueCursor
+        override def cursors(project: ProjectId, now: Long): IO[Throwable, LedgerCursors] = repository.cursors(project, now)
+        override def driverRecords(project: ProjectId): IO[Throwable, List[DriverRecord]] = repository.driverRecords(project)
+        override def driverSummaries(project: ProjectId): IO[Throwable, List[DriverSummary]] = repository.driverSummaries(project)
+        override def transact[A](project: ProjectId)(operation: LedgerTransaction => A): IO[Throwable, A] = repository.transact(project) { tx =>
+          operation(java.lang.reflect.Proxy.newProxyInstance(classOf[LedgerTransaction].getClassLoader, Array(classOf[LedgerTransaction]), (_, method, arguments) => {
+            if (method.getName == "replaceInstallationSetting") {
+              val expected = arguments(0).asInstanceOf[Revision]
+              raced.incrementAndGet()
+              require(tx.replaceInstallationSetting(expected, StoredInstallationSetting(Revision(expected.value + 1), InstallationSetting.Agents(text("claude:rival")), rival, 1700000000000L)))
+            }
+            try method.invoke(tx, (if (arguments == null) Array.empty[AnyRef] else arguments)*) catch { case error: java.lang.reflect.InvocationTargetException => throw error.getCause }
+          }).asInstanceOf[LedgerTransaction])
+        }
+      }
+      val service = FixedLedger.service(racing, java.time.Clock.systemUTC())
+      for {
+        _ <- service.initialize(human, "raced configuration")
+        before <- service.agents(human)
+        base = before.installation.revision
+        lost <- service.replaceAgents(human, Installation, base, text("claude:mine")).either
+        after <- service.agents(human)
+        _ <- ZIO.attempt {
+          assert(raced.get == 1)
+          // The refused save names the revision the rival wrote, and writes nothing: its transaction, the rival's write in it, is undone.
+          assert(lost == Left(DomainFailure(Fault.Conflict(
+            s"Agent configuration of the installation changed: expected revision ${base.value}, actual ${base.value + 1}; reload before saving"))), lost.toString)
+          assert(after == before)
+        }
+      } yield ()
+    }
+
     "I17: store one agent configuration document per layer under compare-and-set, keep the revision of an unchanged text and bound the text" in {
       (service: LedgerService[IO], repository: LedgerRepository[IO]) =>
       val human = Scope(ProjectId(UUID.randomUUID()), Actor("operator", SessionId(UUID.randomUUID()), Role.Human))
