@@ -34,11 +34,15 @@ private[server] final class DispatchExecution(val ticket: DispatchTicket, val di
     if (publishing || DispatchController.terminal(view.phase)) false
     else {
       stop = stop.orElse(Some(DispatchProjection.concise(reason)))
-      view = view.copy(phase = DispatchPhase.Stopping, blocker = stop)
+      view = view.copy(phase = DispatchPhase.Stopping, next = ChildNext.Wait, blocker = stop)
       true
     }
   }
-  def phase(value: DispatchPhase): Unit = synchronized { view = view.copy(phase = if (stop.nonEmpty) DispatchPhase.Stopping else value) }
+  def phase(value: DispatchPhase): Unit = synchronized { view = view.copy(phase = if (stop.nonEmpty) DispatchPhase.Stopping else value, next = ChildNext.Wait) }
+  /** The governing session works in `workspace` until it submits it; the host waits for that. */
+  def editing(workspace: WorkspaceState): Unit = synchronized {
+    if (stop.isEmpty) view = view.copy(phase = DispatchPhase.Editing, next = ChildNext.Submit, workspace = Some(workspace))
+  }
   def own(value: AttemptId): Unit = synchronized { check(); owned += value }
   def active(value: AttemptId): Unit = synchronized { own(value); job = Some(value) }
   def freeze(): Option[String] = synchronized { publishing = true; view = view.copy(phase = DispatchPhase.Publishing); stop }
@@ -59,10 +63,12 @@ final case class AttemptOrigin(cohort: Option[UUID], selection: Option[ArtifactI
 
 /** Runs the child attempts of one governing session, each on the model route its unit names. What a governing session starts, reads
   * and cancels is a unit (`DispatchUnits`); an attempt is one candidate of one seat of a unit. */
-final class DispatchController(config: SupervisorConfig, runner: ChildRunner, jobs: JobSupervisor, clock: Clock) {
+final class DispatchController(config: SupervisorConfig, runner: ChildRunner, governor: GovernorWork, jobs: JobSupervisor, clock: Clock) {
   private val disabled = new AtomicBoolean(false)
   private var closing = false
   private var entries = Vector.empty[DispatchExecution]
+  // The tickets of the attempts that have not ended. Called under the lock.
+  private def live: List[DispatchTicket] = entries.filter(entry => !DispatchController.terminal(entry.status.phase)).map(_.ticket).toList
   private def found(attempt: AttemptId): DispatchExecution = synchronized {
     entries.find(_.ticket.attempt.id == attempt).getOrElse(throw DomainFailure(Fault.Missing("Child attempt is not owned by this governing session")))
   }
@@ -74,7 +80,10 @@ final class DispatchController(config: SupervisorConfig, runner: ChildRunner, jo
     entry <- ZIO.attemptBlocking(synchronized {
       require(!closing && !disabled.get(), DispatchController.Closed)
       ChildContracts.request(config.project.project, request)
-      DispatchController.admissible(entries.filter(entry => !DispatchController.terminal(entry.status.phase)).map(_.ticket.request).toList, request)
+      val (governing, children) = live.partition(AttemptSettlement.own)
+      // The governing session's own work holds its members as a child does and no child slot: it runs no process.
+      DispatchController.disjoint(governing.map(_.request), request)
+      DispatchController.admissible(children.map(_.request), request)
       SupervisorConfig.within(request.limits, config.settings.limits)
       require(route.harness == request.harness, "Model route and dispatch request name different harnesses")
       val profile = config.settings.harnesses.find(_.harness == request.harness)
@@ -94,6 +103,31 @@ final class DispatchController(config: SupervisorConfig, runner: ChildRunner, jo
       entry
     })
   } yield entry
+  /** Registers an attempt of the governing session itself on `request`: its own work in a host workspace, or its own review. The
+    * attempt is of the Governor role under the governing attempt, on that attempt's harness, provider, model and effort, and it has no
+    * settings entry: the host launches nothing for it. */
+  def own(request: DispatchRequest, cohort: Option[UUID]): Task[DispatchExecution] = for {
+    ready <- Promise.make[Throwable, Unit]
+    done <- Promise.make[Nothing, Unit]
+    entry <- ZIO.attemptBlocking(synchronized {
+      require(!closing && !disabled.get(), DispatchController.Closed)
+      ChildContracts.request(config.project.project, request)
+      require(cq.core.GoverningWorkPolicy.permits(request.work), "The governing session works itself only as a Worker Implement or a Reviewer Candidate")
+      DispatchController.disjoint(live.map(_.request).filter(_.request != request.request), request)
+      SupervisorConfig.within(request.limits, config.settings.limits)
+      val governing = config.run.attempt
+      require(request.harness == governing.harness, "The governing session's own work is on its own harness")
+      val id = AttemptId(UUID.randomUUID())
+      val members = request.members.map(_.id).toSet
+      val assignment = Assignment(AssignmentId(UUID.randomUUID()), config.project.project, members,
+        if (members.size == 1) Attribution.Direct else Attribution.Shared, cohort, config.run.assignment.evaluation)
+      val attempt = Attempt(id, assignment.id, Some(governing.id), governing.session, Role.Governor, governing.harness, governing.provider, governing.model,
+        DispatchController.OwnWorkCollector, clock.millis(), ChildContracts.phase(request.work), governing.effort)
+      val entry = new DispatchExecution(DispatchTicket(request, assignment, attempt, None, None), config.directory.resolve("children").resolve(id.value.toString), ready, done)
+      entries = entries :+ entry
+      entry
+    })
+  } yield entry
   /** Runs a registered attempt and returns once its ticket is retained. `prepared` runs before that; `ended` once the attempt's
     * terminal status stands, however the attempt ended. */
   def launch(entry: DispatchExecution, prepared: () => Unit, ended: zio.UIO[Unit]): Task[DispatchStatus] = {
@@ -101,7 +135,7 @@ final class DispatchController(config: SupervisorConfig, runner: ChildRunner, jo
       HostFiles.directory(entry.directory)
       HostFiles.immutable(entry.directory.resolve("ticket.json"), HostFiles.encode(DispatchTicket_JsonCodec, entry.ticket), 65536)
       prepared()
-    } *> entry.ready.succeed(()).unit *> runner.run(entry)).catchAll { failure =>
+    } *> entry.ready.succeed(()).unit *> (if (AttemptSettlement.own(entry.ticket)) governor.run(entry) else runner.run(entry))).catchAll { failure =>
       ZIO.succeed {
         disabled.set(true)
         entry.finish(entry.status.copy(phase = DispatchPhase.Unknown, next = ChildNext.InspectEvidence,
@@ -143,7 +177,7 @@ final class DispatchController(config: SupervisorConfig, runner: ChildRunner, jo
       }.forkDaemon.unit *> ZIO.foreachDiscard(entry.ownedJobs) { id =>
         jobs.cancel(config.owner, id).unit.catchSome { case DomainFailure(_: Fault.Missing) => ZIO.unit }
           .catchAll(error => ZIO.succeed { disabled.set(true); entry.requestStop("Cancellation acknowledgement failed: " + error.getClass.getSimpleName) }).forkDaemon.unit
-      }.as(true)
+      } *> governor.withdraw(entry.ticket.attempt.id).as(true)
     }
   }
   def workspace(attempt: AttemptId, command: WorkspaceCommand): Task[WorkspaceReply] = ZIO.attempt(found(attempt)).flatMap { entry =>
@@ -158,8 +192,9 @@ final class DispatchController(config: SupervisorConfig, runner: ChildRunner, jo
     val sharing = entries.filter(_.ticket.request.members.exists(reference => members(reference.id))).toList
     val own = sharing.find(_.ticket.attempt.id == result.attempt)
       .getOrElse(throw DomainFailure(Fault.Missing("Result was not produced by a child of this governing session")))
+    // A worker result is one whoever made it: a Worker child, or the governing session in its own workspace.
     if (sharing.exists(entry => (entry ne own) && entry.ticket.attempt.startedAt >= own.ticket.attempt.startedAt && entry.status.result.nonEmpty &&
-      entry.ticket.attempt.role == Role.Worker && entry.ticket.request.work != DispatchWork.Worker(WorkerMode.Probe)))
+      ChildContracts.role(entry.ticket.request.work) == Role.Worker && entry.ticket.request.work != DispatchWork.Worker(WorkerMode.Probe)))
       throw DomainFailure(Fault.Conflict("Result is superseded by a later result for the same members"))
   }
 
@@ -176,6 +211,8 @@ object DispatchController {
   val Ending = "Governing harness ended; stopping its child hierarchy"
   /** The provider of an attempt whose route names none and whose harness has no settings entry to take one from. */
   val UnconfiguredProvider = "unconfigured"
+  /** The collector of an attempt of the governing session's own work: the host records it and collects no usage for it. */
+  val OwnWorkCollector = "CQ host; own work of the governing session, no meter"
   def terminal(phase: DispatchPhase): Boolean = Set(DispatchPhase.Completed, DispatchPhase.Failed, DispatchPhase.Cancelled,
     DispatchPhase.Unknown, DispatchPhase.PublicationPending, DispatchPhase.Abstained)(phase)
   // Active units hold disjoint claims: a member belongs to at most one running unit (D83).
@@ -195,7 +232,7 @@ object DispatchController {
     disjoint(active.filter(_.request != request.request), request)
     capacity(active.size, 1)
   }
-  final class Resource(config: SupervisorConfig, runner: ChildRunner, jobs: JobSupervisor, clock: Clock, watchdog: SupervisorWatchdog) extends Lifecycle.Of[Task, DispatchController](
-    Lifecycle.make(ZIO.succeed(new DispatchController(config, runner, jobs, clock)))(value => ZIO.succeed(watchdog.beginShutdown()) *> value.shutdown)
+  final class Resource(config: SupervisorConfig, runner: ChildRunner, governor: GovernorWork, jobs: JobSupervisor, clock: Clock, watchdog: SupervisorWatchdog) extends Lifecycle.Of[Task, DispatchController](
+    Lifecycle.make(ZIO.succeed(new DispatchController(config, runner, governor, jobs, clock)))(value => ZIO.succeed(watchdog.beginShutdown()) *> value.shutdown)
   )
 }

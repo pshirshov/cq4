@@ -20,7 +20,10 @@ object GoverningWorkPolicy {
     work == DispatchWork.Worker(WorkerMode.Implement) || work == DispatchWork.Reviewer(ReviewerMode.Candidate)
 
   /** Only an interactive session works itself; `governing` is the attempt that parents the session's own attempt. */
-  def interactive(governing: Attempt): Unit = if (AttemptObservation.observed(governing)) throw DomainFailure(Fault.Denied(
+  def interactive(governing: Attempt): Unit = interactive(!AttemptObservation.observed(governing))
+
+  /** The same rule where the host applies it: `attached` says that the session is an interactive one. */
+  def interactive(attached: Boolean): Unit = if (!attached) throw DomainFailure(Fault.Denied(
     "A result the governing session made or reviewed itself is admitted only for an interactive session; a batch run dispatches a Worker and an independent Reviewer"))
 
   def admit(mode: ProjectSetting.Mode): Unit = if (mode.value != ProcessMode.Yolo) throw DomainFailure(Fault.Denied(

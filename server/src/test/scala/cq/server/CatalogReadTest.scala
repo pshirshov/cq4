@@ -98,6 +98,8 @@ final class CatalogReadLocal extends AnyWordSpec {
       assert(catalog.modes.map(_.label) == List("Rigorous", "Cross-cutting", "YOLO cross-cutting") && catalog.modes.map(_.label).distinct.size == 3)
       assert(catalog.modes.filter(_.unavailable.nonEmpty).map(_.mode) == List(ProcessMode.Yolo))
       assert(catalog.modeEffect == ProcessModes.Effect && catalog.modeEffect.contains("next workflow activation") && catalog.modeEffect.contains("next cycle"))
+      // Help shows a governing session's instructions for each mode: the commands of its own work are named in the YOLO mode's and in no other's.
+      assert(catalog.modes.map(view => List("OpenWorkspace", "SubmitWorkspace", "SelfReview").count(view.instructions.text.contains)) == List(0, 0, 3))
     }
 
     "include drive and park with their actual hook assets and Pi extension aliases" in {

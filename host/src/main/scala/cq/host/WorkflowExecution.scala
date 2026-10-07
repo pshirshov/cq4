@@ -105,10 +105,23 @@ final class WorkflowExecution(api: ServerApi, project: ProjectId, session: Sessi
       case WorkflowRequest.Advance(_, WorkflowPhase.Integrate) => true
       case _ => false
     }, "integration and combination require advance through integrate")
+    // The governing session's own work is bound by the phase limit as the child that would do it: a workspace as a Worker Implement,
+    // a review as a Reviewer Candidate. Which process mode permits it is the activation's to say.
+    def own(work: DispatchWork, name: String): Unit = permit(request match {
+      case WorkflowRequest.Advance(_, through) => within(phase(work), through)
+      case _ => false
+    }, s"$name requires advance through ${phase(work).toString.toLowerCase}")
     command match {
       case DispatchCommand.Start(value) =>
         allowed(value.work, request, value.previous)
         members(value.members)
+      case DispatchCommand.OpenWorkspace(_, values, _, _) =>
+        own(DispatchWork.Worker(WorkerMode.Implement), "OpenWorkspace")
+        members(values)
+      case _: DispatchCommand.SubmitWorkspace => own(DispatchWork.Worker(WorkerMode.Implement), "SubmitWorkspace")
+      case DispatchCommand.SelfReview(_, result, _, _) =>
+        own(DispatchWork.Reviewer(ReviewerMode.Candidate), "SelfReview")
+        members(new ArtifactReader(call, project).result(result).value.request.members)
       case _: DispatchCommand.Select | _: DispatchCommand.StartChoice => ()
       case DispatchCommand.PrepareIntegration(_, reviewer) =>
         integration()

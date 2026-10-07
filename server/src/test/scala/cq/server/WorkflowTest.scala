@@ -41,7 +41,7 @@ final class WorkflowLocal extends AnyWordSpec {
 
   "Waiting for the host's work in the governing instructions (Behavioral Active Blackbox Atomic)" should {
     val schemas = new McpSchemas()
-    val work = "Waiting for work the host carries out (a child, an integration being prepared or applied, a combination, a revalidation): "
+    val work = "Waiting for work the host carries out (a child, an integration being prepared or applied, a combination, a revalidation, a submitted workspace): "
     "tell a Claude Code session to await a child with one fixed background command and anything quicker with one status call inside its turn" in {
       val text = schemas.attachedInstructions(Harness.Claude, Some(Wait))
       assert(text.contains(work + "a child is awaited in the background, anything else inside your turn. Do not call a status to wait for a child: after starting one, " +
@@ -51,8 +51,10 @@ final class WorkflowLocal extends AnyWordSpec {
         text.contains("Any other exit, including the harness ending the command at its lifetime limit: run it again while work is active.") &&
         text.contains("After exit 0, read the outcome of each ended unit with one Status, IntegrationStatus or CombinationStatus call with waitMillis 0, and run the command again while other work is active."))
       // What ends within seconds would end before the session's turn does, and a stop that finds nothing running costs a resume directive.
-      assert(text.contains("An integration being prepared or applied, a combination and a revalidation usually end within seconds: after starting one, start no command for it and do not end your turn. " +
-        "Call its status once (IntegrationStatus or CombinationStatus; repeat Revalidate) with waitMillis 120000, which returns when the work ends. " +
+      // I30: a workspace the session submitted is captured and checked by the host, which is waited for in the same way and by no third one.
+      assert(text.contains("An integration being prepared or applied, a combination and a revalidation usually end within seconds, " +
+        "and the host checks a workspace you submitted as it runs a revalidation: after starting one, start no command for it and do not end your turn. " +
+        "Call its status once (IntegrationStatus or CombinationStatus; repeat Revalidate; Status for a submitted workspace) with waitMillis 120000, which returns when the work ends. " +
         "Only if that call returns while the work continues, run the command above."))
     }
     "tell a Codex session to wait with status calls of the longest wait inside its turn, because nothing wakes it, and with no shell command" in {
@@ -116,7 +118,9 @@ final class WorkflowLocal extends AnyWordSpec {
         assert(text.contains("Next Arbitrate means that the reviewers of one unit disagree; the status carries the dissenting review. Read Seats. " +
           "By default correct: Select Worker Implement with the dissenting review as previous and the other non-accepting reviews as artifacts. " +
           "You decide: you may instead integrate with the review of an accepting seat when the dissent is unfounded, and then say so in your report."))
-        assert(text.contains("Pass worker candidates to Reviewer Candidate. "))
+        // I30: who reviews a candidate is the mode's to say; without workflow instructions it is the independent Reviewer.
+        assert(text.contains("Have every worker candidate reviewed as the workflow instructions say; without such instructions, pass it to Reviewer Candidate. ") &&
+          !text.contains("Pass worker candidates to Reviewer Candidate"))
         assert(!text.contains("configured harness") && !text.contains("harness and fence"), text.take(200))
       }
       assert(!SupervisorProgram.Guidance.contains("routes"))
@@ -325,8 +329,64 @@ final class WorkflowLocal extends AnyWordSpec {
         assert(!text.contains("yourself in an isolated workspace") && !text.contains("review the candidate yourself") && !text.contains("self-review"))
       }
       // The rule the shared text states for every mode: the operator's checkout is never edited, in YOLO either.
-      ProcessMode.all.foreach(mode => assert(assets.instructions(advance, mode).contains("The operator's checkout is the integration target of your workers. Never edit, build, test or run checks there")))
-      assert(yolo.contains("they still hold for the operator's checkout and for every place other than that workspace"))
+      ProcessMode.all.foreach(mode => assert(assets.instructions(advance, mode).contains("The operator's checkout is the integration target. Never edit, build, test or run checks there: " +
+        "every change is made in an isolated workspace of the host, by whom the workflow instructions say, and the host captures the candidates.")))
+      assert(yolo.contains("they still hold for the operator's checkout and for every place other than that workspace: the operator's checkout is never touched."))
+      assert(assets.resource("cq/workflows/entrypoint.md").contains("Never edit, build, test or run checks in the operator's checkout: it is the integration target, " +
+        "a change is made only where the workflow instructions say, and the host preserves the operator's own in-progress work there."))
+    }
+
+    "I30: give the YOLO instructions the three commands of the session's own work in their sequence, and name none of them in another mode" in {
+      val yolo = section(ProcessMode.Yolo)
+      // Open, edit there only and without committing, submit with a Worker's report, wait as for host work, read the result.
+      val sequence = List(
+        "claim the members as for a child and call dispatch OpenWorkspace with a fresh request ID, the members at their current revisions, previous null and the fence of that claim",
+        "The reply's phase is Editing, its next is Submit, and its workspace names an absolute directory",
+        "outside the operator's checkout",
+        "edit only under that directory, by absolute path, and run commands with that directory as the working directory",
+        "Do not commit there and do not change its Git state: the host captures the content of the directory as the candidate and refuses a workspace whose HEAD moved",
+        "hand the workspace back with SubmitWorkspace: the attempt ID of the reply and, for each member, the report a Worker makes of its work",
+        "The call returns at once; from then on the host captures the candidate and runs the configured checks on it",
+        "Wait for that as the governing instructions say for work of the host that is not a child, then read its result with Status",
+        "a Completed status with next Review carries the result handle of your candidate: have it reviewed, by an independent Reviewer Candidate or by yourself as below, " +
+          "then prepare and apply the integration as for any candidate")
+      sequence.foreach(sentence => assert(yolo.contains(sentence), sentence))
+      assert(sequence.map(yolo.indexOf) == sequence.map(yolo.indexOf).sorted, "The steps are stated in the order they are taken")
+      // What a failed check means, how to correct, how to discard, and what an open workspace holds back.
+      assert(yolo.contains("A failed check of your candidate means what it means for a Worker's: the status is Completed with next Revise, its blocker names the check, " +
+        "the result is retained and nothing is integrated."))
+      assert(yolo.contains("To correct the candidate, call OpenWorkspace again with previous set to that result handle, or to the handle of a review of it that requests changes: the new workspace starts from the candidate as you submitted it."))
+      assert(yolo.contains("To discard a workspace, call Cancel with its attempt ID: nothing in it becomes a candidate, and the host keeps the directory as it is for the operator."))
+      assert(yolo.contains("no child and no second workspace starts on them, the workflow cannot be changed, and a driver answers a stop with one resume directive and ends the drive at the next. " +
+        "Submit or cancel every workspace before you end your turn."))
+      assert(yolo.contains("The host cannot see an edit you make elsewhere, and nothing you write elsewhere becomes part of a candidate."))
+      // The self-review is recorded with a command whose reply is a review's.
+      assert(yolo.contains("then call dispatch SelfReview with a fresh request ID, the result handle of the candidate, your verdict for each member " +
+        "(Accepted, ChangesRequested or Blocked, with findings for every verdict other than Accepted) and the fence of the claim."))
+      assert(yolo.contains("The host refuses it while a configured check of the candidate has not passed.") &&
+        yolo.contains("its result is the reviewer handle that PrepareIntegration takes, and its next names the next step"))
+      // No other mode names a command it would be refused, and no shared text does.
+      val commands = List("OpenWorkspace", "SubmitWorkspace", "SelfReview")
+      (List(ProcessMode.Rigorous, ProcessMode.CrossCutting).map(section) ++ List("common", "begin", "advance", "entrypoint", "review", "upstream").map(resource)).foreach { text =>
+        commands.foreach(command => assert(!text.contains(command), command))
+      }
+      commands.foreach(command => assert(!SupervisorProgram.Guidance.contains(command)))
+      // The tool is the same in every mode: its description names the three commands and says where they are permitted.
+      val schemas = new McpSchemas()
+      val attached = schemas.attachedTools.find(_.hcursor.get[String]("name") == Right("dispatch")).get.hcursor.get[String]("description").fold(throw _, identity)
+      val managed = new LocalControl(null, null, null, null, null, null, schemas, null, null)
+        .advertised(LocalCapability(AttemptId(UUID.randomUUID()), Role.Governor)).hcursor.get[String]("description").fold(throw _, identity)
+      List(attached, managed).foreach { description =>
+        assert(description.endsWith(" OpenWorkspace, SubmitWorkspace and SelfReview are the governing session's own work: the YOLO process mode permits them to an interactive session, " +
+          "its workflow instructions give their sequence, and they are refused in every other mode and to a batch run. " +
+          "OpenWorkspace replies with an isolated workspace directory for the members (phase Editing, next Submit), SubmitWorkspace hands it back with a Worker's report and returns at once, " +
+          "and SelfReview records your verdicts on the candidate of an admitted worker result and replies with the status of that review."), description.takeRight(300))
+      }
+      // The schema of the tool carries the commands, the phase and the next step for every session.
+      val schema = schemas.schema("DispatchCommand").noSpaces
+      commands.foreach(command => assert(schema.contains("\"" + command + "\""), command))
+      val reply = schemas.schema("DispatchReply").noSpaces
+      assert(reply.contains("\"Editing\"") && reply.contains("\"Submit\""))
     }
 
     "name no Planner in the refusal of a Task without a milestone, which every mode meets" in {

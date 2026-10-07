@@ -38,6 +38,10 @@ final class SessionUpload(context: CliContext, clock: Clock) {
         report.incompleteTickets.foreach(path => context.output.println(s"Unresolved child/check ticket or usage sample: $path; its record was never committed"))
         require(report.incompleteTickets.isEmpty, "Incomplete tickets or usage samples retained for inspection; valid publications were replayed")
       }}.either
+      // What the session wrote in a workspace of its own and never submitted is no delivery: it is kept, and its operator is told where.
+      _ <- delivery.ownWorkspaces(directory, Scope(run.project.project, Actor("CQ recovery", run.attempt.session, Role.Governor))).flatMap(kept => ZIO.attempt(kept.foreach { record =>
+        context.output.println(s"Governor workspace ${record.spec.attempt.value}: ${record.admission} at ${record.directory}" + record.quarantineReason.fold("")(reason => s" ($reason)"))
+      })).catchAll(error => ZIO.attempt(context.output.println(s"Governor workspaces could not be listed: ${error.getMessage}")))
       combined <- combinations(directory, run, collector).either
       integrated <- integrations(directory, run, journal, collector).either
       _ <- ZIO.attempt {

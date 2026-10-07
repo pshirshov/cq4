@@ -13,7 +13,7 @@ import zio.{Runtime, Task, Unsafe}
 
 final class AttachedGatewayLocal extends AnyWordSpec {
   private val LongInterval = Duration.ofSeconds(30)
-  private val InputSchemaBytes = 46000
+  private val InputSchemaBytes = 46200
   private val schemas = new McpSchemas()
   private val project = ProjectId(UUID.fromString("00000000-0000-4000-8000-000000000001"))
 
@@ -81,13 +81,17 @@ final class AttachedGatewayLocal extends AnyWordSpec {
     "allow a dispatch command its wait on top of the deadline that every request without a wait keeps" in {
       assert(DispatchWaits.MaxMillis == 120000 && short == Duration.ofSeconds(30))
       for (command <- List(s"""{"Status":{"attempt":$id,"waitMillis":120000}}""", s"""{"IntegrationStatus":{"id":$id,"waitMillis":120000}}""",
-        s"""{"CombinationStatus":{"id":$id,"waitMillis":120000}}""", s"""{"Revalidate":{"id":$id,"result":$id,"fence":{"claim":$id,"generation":"1"}}}"""))
+        s"""{"CombinationStatus":{"id":$id,"waitMillis":120000}}""", s"""{"Revalidate":{"id":$id,"result":$id,"fence":{"claim":$id,"generation":"1"}}}""",
+        // I30: these reply once the host has opened the workspace or published the review.
+        s"""{"OpenWorkspace":{"request":$id,"members":[],"previous":null,"fence":{"claim":$id,"generation":"1"}}}""",
+        s"""{"SelfReview":{"request":$id,"result":$id,"members":[],"fence":{"claim":$id,"generation":"1"}}}"""))
         assert(AttachedGateway.deadline(call("dispatch", command)) == Duration.ofSeconds(150), command)
       assert(AttachedGateway.deadline(call("dispatch", s"""{"Status":{"attempt":$id,"waitMillis":45000}}""")) == Duration.ofSeconds(75))
     }
     "keep the short deadline for a request that does not wait, that the host refuses or that is no dispatch command" in {
       for (command <- List(s"""{"Status":{"attempt":$id,"waitMillis":0}}""", s"""{"Status":{"attempt":$id,"waitMillis":120001}}""",
-        s"""{"Status":{"attempt":$id,"waitMillis":-1}}""", s"""{"Cancel":{"attempt":$id}}""", s"""{"Integrate":{"id":$id}}""", """{"Status":"{}"}"""))
+        s"""{"Status":{"attempt":$id,"waitMillis":-1}}""", s"""{"Cancel":{"attempt":$id}}""", s"""{"Integrate":{"id":$id}}""", """{"Status":"{}"}""",
+        s"""{"SubmitWorkspace":{"attempt":$id,"members":[]}}"""))
         assert(AttachedGateway.deadline(call("dispatch", command)) == short, command)
       // A wait is honoured only where the host waits: the same field in another tool's arguments changes nothing.
       assert(AttachedGateway.deadline(call("session", s"""{"Status":{"attempt":$id,"waitMillis":120000}}""")) == short)
@@ -200,7 +204,7 @@ final class AttachedGatewayLocal extends AnyWordSpec {
       val sizes = inputs.map((name, input) => name -> bytes(input))
       println("I33 advertised input schema bytes: " + sizes.map((name, size) => s"$name $size").mkString(", ") + s"; all nine ${sizes.map(_._2).sum}")
       // Measured 2026-10-05: 44,267 bytes; under the generated names and with the bounds, the nine schemas of the release before took 53,917.
-      // A deliberate addition to a command raises this bound.
+      // A deliberate addition to a command raises this bound: 46,107 bytes with the three commands of the governing session's own work (I30).
       assert(sizes.map(_._2).sum <= InputSchemaBytes, sizes.toString)
     }
 

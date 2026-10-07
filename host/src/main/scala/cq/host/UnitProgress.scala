@@ -43,7 +43,7 @@ object UnitStep {
  * gives the state after an event and what the unit layer does next. `start` gives the candidate a RoundRobin seat begins with and is
  * asked once for such a seat, when the seat's first candidate is launched: a seat that is never started draws no position.
  */
-final class UnitProgress private (request: RequestId, role: ResolvedRole, start: Int => Int, seats: Vector[UnitProgress.Seat],
+final class UnitProgress private (request: RequestId, role: UnitProgress.Panel, start: Int => Int, seats: Vector[UnitProgress.Seat],
   ended: Vector[Int], cancelling: Boolean) {
   import UnitProgress.*
 
@@ -147,12 +147,21 @@ object UnitProgress {
   // `order` is empty until the seat is started; `open` while its last candidate is in flight.
   private[host] final case class Seat(order: List[Int], tried: Vector[Tried], end: SeatEnd, open: Boolean)
 
+  /** The seats a unit runs and how many of them decide it: what the progress of a unit reads of the role it was resolved to. */
+  private[host] final case class Panel(mode: PanelMode, min: Int, seats: List[ResolvedSeat])
+
   /** The state of a unit that has launched the first candidates the step names. */
   def begin(request: RequestId, role: ResolvedRole, start: Int => Int): (UnitProgress, UnitStep) = {
     require(role.seats.nonEmpty && role.seats.forall(_.candidates.nonEmpty), "A resolved role has seats, and each seat has candidates")
     require(role.min >= 1 && role.min <= role.seats.size, s"A resolved role's min is between 1 and its ${role.seats.size} seats")
-    new UnitProgress(request, role, start, Vector.fill(role.seats.size)(Seat(Nil, Vector.empty, SeatEnd.Pending(), false)), Vector.empty, false).topUp
+    new UnitProgress(request, Panel(role.mode, role.min, role.seats), start, Vector.fill(role.seats.size)(Seat(Nil, Vector.empty, SeatEnd.Pending(), false)), Vector.empty, false).topUp
   }
+
+  /** The state of a unit of one seat with the one candidate `route`, which no agent configuration resolved: the governing session's
+    * own work. It has launched that candidate. */
+  def single(request: RequestId, route: ModelRoute): (UnitProgress, UnitStep) =
+    new UnitProgress(request, Panel(PanelMode.All, 1, List(ResolvedSeat(SeatStrategy.First, List(route)))), _ => 0,
+      Vector(Seat(Nil, Vector.empty, SeatEnd.Pending(), false)), Vector.empty, false).topUp
 
   /** Which candidates abstained and why, as the blocker of a unit no model could run and the fault of its outcome under a drive. */
   def abstention(candidates: List[SeatAttempt]): String = "No configured model could run this work: " + candidates.map(value =>

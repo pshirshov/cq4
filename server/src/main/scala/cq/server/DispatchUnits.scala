@@ -17,9 +17,35 @@ private[server] final class UnitAttempt(val at: SeatCandidate, val entry: Dispat
   var ended = Option.empty[DispatchStatus]
 }
 
+/** Who works a unit. */
+private[server] sealed trait UnitWorker
+private[server] object UnitWorker {
+  /** The models the agent configuration assigns to the role of the work; `selection` is the cohort choice that started the unit. */
+  final case class Models(plan: ResolvedRole, selection: Option[SelectedDispatch]) extends UnitWorker
+  /** The governing session itself: one seat, which the host starts no model for and which holds no child slot. */
+  final case class Governing(own: OwnWork) extends UnitWorker
+}
+
+/** Where an attempt stands for whoever follows it: in the host's hands, waiting for the governing session, or ended. */
+sealed trait AttemptStanding
+object AttemptStanding {
+  case object Working extends AttemptStanding
+  /** A workspace is open for the governing session: nothing ends the attempt until the session submits or cancels it. */
+  case object Resting extends AttemptStanding
+  final case class Concluded(outcome: ChildOutcome) extends AttemptStanding
+}
+
 /** One started choice and the attempts the host made for it. Its fields are read and written under the lock of its `DispatchUnits`. */
-private[server] final class DispatchUnit(val work: AssignedWork, val plan: ResolvedRole, val selection: Option[SelectedDispatch],
+private[server] final class DispatchUnit(val work: AssignedWork, val worker: UnitWorker,
   val cohort: Option[UUID], var progress: UnitProgress, val done: Promise[Nothing, Unit]) {
+  def governing: Boolean = worker.isInstanceOf[UnitWorker.Governing]
+  def selection: Option[SelectedDispatch] = worker match {
+    case UnitWorker.Models(_, value) => value
+    case _: UnitWorker.Governing => None
+  }
+  // Whether `units.jsonl` says that the host works on the unit. A unit of the agent configuration is announced when it starts; one
+  // the governing session works itself when the session hands it back or it is stopped, and never when it ends before that.
+  var announced = false
   var attempts = Vector.empty[UnitAttempt]
   // The candidates the unit has been told to launch and has not seen end. Each holds one of the session's child slots, and the
   // candidate that follows one that ended takes over its slot in the same step.
@@ -39,7 +65,7 @@ private[server] final class DispatchUnit(val work: AssignedWork, val plan: Resol
  * enough seats delivered or no more can. The governing session sees one status for the unit, under the id of its first attempt, and
  * one pair of events in `units.jsonl`.
  */
-final class DispatchUnits(config: SupervisorConfig, authority: SupervisorAuthority, dispatch: DispatchController, logger: IzLogger) {
+final class DispatchUnits(config: SupervisorConfig, authority: SupervisorAuthority, dispatch: DispatchController, governor: GovernorWork, logger: IzLogger) {
   private val MaxPlanBytes = 65536
   private val events = new SessionUnits(config.directory)
   private val rotation = new SeatRotation(config.run.attempt.session)
@@ -85,32 +111,83 @@ final class DispatchUnits(config: SupervisorConfig, authority: SupervisorAuthori
   private def template(work: AssignedWork): DispatchRequest = DispatchUnits.request(work, governing)
 
   /** Starts the unit of `work`, or returns the status of the unit an earlier call with the same request started. */
-  def start(work: AssignedWork, selection: Option[SelectedDispatch]): Task[DispatchStatus] = starting.withPermit {
+  def start(work: AssignedWork, selection: Option[SelectedDispatch]): Task[DispatchStatus] = started(work, _.worker.isInstanceOf[UnitWorker.Models], ZIO.attemptBlocking {
+    ChildContracts.request(project, template(work))
+    SupervisorConfig.within(work.limits, config.settings.limits)
+    UnitWorker.Models(resolve(DispatchUnits.role(work.work)), selection)
+  }).flatMap(status)
+
+  private def own(request: RequestId, members: List[ItemRevision], work: DispatchWork, previous: Option[ArtifactId], fence: Fence): AssignedWork =
+    AssignedWork(request, work, members, Nil, Nil, previous, fence, config.settings.limits)
+
+  /** Opens a workspace in which the governing session itself implements `members`, starting from the candidate of `previous` when
+    * given, and returns once it is open: the status then names its directory. A repetition returns how that unit stands. */
+  def open(request: RequestId, members: List[ItemRevision], previous: Option[ArtifactId], fence: Fence): Task[DispatchStatus] = {
+    val work = own(request, members, DispatchWork.Worker(WorkerMode.Implement), previous, fence)
+    for {
+      unit <- started(work, _.worker match { case UnitWorker.Governing(value) => value.review.isEmpty; case _ => false },
+        governor.prepare(template(work), None).map(UnitWorker.Governing.apply))
+      // Preparing a worktree of a large repository takes its time: the call waits as long as a status call may, and its repetition waits again.
+      open <- ZIO.succeed(synchronized(unit.handle)).flatMap(ZIO.foreach(_)(governor.opened)).timeout(zio.Duration.fromMillis(DispatchWaits.MaxMillis))
+      _ <- ZIO.fromOption(open).orElseFail(DomainFailure(Fault.Conflict(DispatchUnits.Opening)))
+      result <- status(unit)
+    } yield result
+  }
+
+  /** Records the governing session's own review of the candidate of the admitted worker result `result`, and returns once the
+    * review is published and admitted, as the result of a reviewer child would be. */
+  def selfReview(request: RequestId, result: ArtifactId, verdicts: List[ReviewMember], fence: Fence): Task[DispatchStatus] = {
+    def same(unit: DispatchUnit): Boolean = unit.work.previous.contains(result) && unit.work.fence == fence && (unit.worker match {
+      case UnitWorker.Governing(value) => value.review.contains(verdicts)
+      case _ => false
+    })
+    for {
+      existing <- ZIO.succeed(synchronized(units.find(_.work.request == request)))
+      unit <- existing match {
+        case Some(value) => if (same(value)) ZIO.succeed(value) else ZIO.fail(DomainFailure(Fault.Conflict("Dispatch request identity changed")))
+        case None => ZIO.attemptBlocking { governor.admissible(); governor.subject(result) }.flatMap { members =>
+          val work = own(request, members, DispatchWork.Reviewer(ReviewerMode.Candidate), Some(result), fence)
+          started(work, same, governor.prepare(template(work), Some(verdicts)).map(UnitWorker.Governing.apply))
+        }
+      }
+      _ <- unit.done.await.timeout(zio.Duration.fromMillis(DispatchWaits.MaxMillis))
+      reviewed <- status(unit)
+    } yield reviewed
+  }
+
+  // The unit of `work`: the one an earlier call with the same request started when it is `same`, else a new one worked by `worker`.
+  private def started(work: AssignedWork, same: DispatchUnit => Boolean, worker: Task[UnitWorker]): Task[DispatchUnit] = starting.withPermit {
     ZIO.attemptBlocking(synchronized(units.find(_.work.request == work.request))).flatMap {
       case Some(existing) =>
-        if (existing.work != work) ZIO.fail(DomainFailure(Fault.Conflict("Dispatch request identity changed"))) else status(existing)
+        if (existing.work != work || !same(existing)) ZIO.fail(DomainFailure(Fault.Conflict("Dispatch request identity changed"))) else ZIO.succeed(existing)
       case None => for {
-        plan <- ZIO.attemptBlocking {
-          ChildContracts.request(project, template(work))
-          SupervisorConfig.within(work.limits, config.settings.limits)
-          resolve(DispatchUnits.role(work.work))
-        }
+        worker <- worker
         done <- Promise.make[Nothing, Unit]
         admitted <- ZIO.attemptBlocking(synchronized {
           require(!closing, DispatchController.Closed)
-          val active = units.filter(_.terminal.isEmpty)
-          DispatchController.disjoint(active.map(unit => template(unit.work)).toList, template(work))
-          // The seats a unit starts together fit together or the unit is not started: every seat of an `all` panel, `min` seats of an `any` one.
-          val together = if (plan.mode == PanelMode.All) plan.seats.size else plan.min
-          DispatchController.capacity(active.map(_.open).sum, together)
-          val role = DispatchUnits.role(work.work)
-          val (progress, step) = UnitProgress.begin(work.request, plan, seat => rotation.next(role, seat, plan.seats(seat).candidates))
+          val active = units.filter(_.terminal.isEmpty).toList
+          val standing = active.map(unit => DispatchUnits.Standing(template(unit.work), if (unit.governing) 0 else unit.open))
+          val (progress, step, together) = worker match {
+            case UnitWorker.Models(plan, _) =>
+              // The seats a unit starts together fit together or the unit is not started: every seat of an `all` panel, `min` seats of an `any` one.
+              val together = if (plan.mode == PanelMode.All) plan.seats.size else plan.min
+              DispatchUnits.admissible(standing, template(work), together)
+              val role = DispatchUnits.role(work.work)
+              val (progress, step) = UnitProgress.begin(work.request, plan, seat => rotation.next(role, seat, plan.seats(seat).candidates))
+              (progress, step, together)
+            case _: UnitWorker.Governing =>
+              DispatchUnits.admissible(standing, template(work), 0)
+              val own = config.run.attempt
+              val (progress, step) = UnitProgress.single(work.request, ModelRoute(own.harness, Some(own.provider), own.model, own.effort))
+              (progress, step, 1)
+          }
           val initial = step match {
             case UnitStep.Launch(candidates) if candidates.size == together => candidates
             case other => throw new IllegalStateException(s"A unit of $together first seats began with $other")
           }
           val members = work.members.map(_.id).toSet
-          val unit = new DispatchUnit(work, plan, selection, selection.fold(Option.when(members.size > 1)(UUID.randomUUID()))(_.cohort), progress, done)
+          val selection = worker match { case UnitWorker.Models(_, value) => value; case _ => None }
+          val unit = new DispatchUnit(work, worker, selection.fold(Option.when(members.size > 1)(UUID.randomUUID()))(_.cohort), progress, done)
           unit.open = initial.size
           units = units :+ unit
           unit -> initial
@@ -120,27 +197,59 @@ final class DispatchUnits(config: SupervisorConfig, authority: SupervisorAuthori
         // A start that registered nothing made no unit; one that registered an attempt has a unit, whatever its launch then said.
         _ <- if (first.isLeft && synchronized(unit.attempts.isEmpty)) ZIO.succeed(synchronized { units = units.filterNot(_ eq unit) }) *> done.succeed(()) *> ZIO.fail(first.left.toOption.get)
           else ZIO.foreachDiscard(initial.tail)(launch(unit, _, false)) *> ZIO.fromEither(first)
-        result <- status(unit)
-      } yield result
+      } yield unit
     }
   }
 
-  private def retained(unit: DispatchUnit, handle: AttemptId): Unit = {
+  // The host works on a unit of the governing session's own work from the moment the session hands it back or it is stopped, and
+  // says so then. Written under the lock, so that the end of a unit is written if and only if its start was.
+  private def announce(unit: DispatchUnit): Task[Unit] = ZIO.attemptBlocking(synchronized {
+    if (unit.governing && !unit.announced && unit.terminal.isEmpty) unit.handle.foreach { handle =>
+      events.started(SessionUnit(SessionUnitKind.Attempt, handle.value, unit.work.members.map(_.id)))
+      unit.announced = true
+    }
+  })
+
+  private def workspace(attempt: AttemptId): DispatchUnit = {
+    val unit = found(attempt)
+    unit.worker match {
+      case UnitWorker.Governing(value) if value.review.isEmpty => unit
+      case _ => throw DomainFailure(Fault.Invalid(s"Attempt ${attempt.value} is not a workspace opened with OpenWorkspace: only such a workspace is submitted"))
+    }
+  }
+
+  /** Hands the workspace of `attempt` back with the report a Worker makes of its work, and returns at once: the host then captures
+    * the content of the workspace as the candidate and runs the configured checks on it. */
+  def submit(attempt: AttemptId, members: List[WorkMember]): Task[DispatchStatus] = for {
+    found <- ZIO.attempt { val unit = workspace(attempt); synchronized((unit, unit.terminal.nonEmpty, unit.attempts.head.entry)) }
+    (unit, ended, entry) = found
+    _ <- if (ended) ZIO.unit else ZIO.attemptBlocking(governor.report(entry, members)).flatMap(report => announce(unit) *> governor.submit(entry, report))
+    result <- status(unit)
+  } yield result
+
+  private def retained(unit: DispatchUnit, plan: ResolvedRole, handle: AttemptId): Unit = {
     val directory = config.directory.resolve("units")
     HostFiles.directory(directory)
     HostFiles.immutable(directory.resolve(unit.work.request.value.toString + ".json"), HostFiles.encode(ResolvedAssignment_JsonCodec,
-      ResolvedAssignment(governing, DispatchUnits.role(unit.work.work), RoleResolution.Resolved(unit.plan))), MaxPlanBytes)
+      ResolvedAssignment(governing, DispatchUnits.role(unit.work.work), RoleResolution.Resolved(plan))), MaxPlanBytes)
     events.started(SessionUnit(SessionUnitKind.Attempt, handle.value, unit.work.members.map(_.id)))
+    synchronized { unit.announced = true }
   }
 
   // `first` is the unit's first candidate: its registration admits the unit, and a refusal of it is the refusal of the start.
   private def launch(unit: DispatchUnit, at: SeatCandidate, first: Boolean): Task[Unit] = {
-    val route = unit.plan.seats(at.seat).candidates(at.candidate)
-    val origin = AttemptOrigin(unit.cohort, unit.selection.map(_.evidence), if (first) unit.selection.fold(() => ())(_.admit) else () => ())
+    val (registered, prepared) = unit.worker match {
+      case UnitWorker.Models(plan, selection) =>
+        val route = plan.seats(at.seat).candidates(at.candidate)
+        val origin = AttemptOrigin(unit.cohort, selection.map(_.evidence), if (first) selection.fold(() => ())(_.admit) else () => ())
+        (dispatch.register(DispatchUnits.request(unit.work, route.harness), route, origin), (handle: AttemptId) => if (first) retained(unit, plan, handle))
+      // No model was resolved for the unit and nothing announces it before the session hands its work back.
+      case UnitWorker.Governing(own) => (dispatch.own(template(unit.work), unit.cohort).tap(governor.assign(_, own, announce(unit).ignore)), (_: AttemptId) => ())
+    }
     ZIO.succeed(synchronized(unit.stopping)).flatMap {
       // A unit that is being stopped starts nothing more.
       case Some(_) => if (first) ZIO.fail(new IllegalArgumentException(DispatchController.Closed)) else abandon(unit, at)
-      case None => dispatch.register(DispatchUnits.request(unit.work, route.harness), route, origin).foldZIO(
+      case None => registered.foldZIO(
         error => if (first) ZIO.fail(error) else refuse(unit, at, error),
         entry => for {
           outcome <- Promise.make[Nothing, ChildOutcome]
@@ -155,7 +264,7 @@ final class DispatchUnits(config: SupervisorConfig, authority: SupervisorAuthori
           })
           (stopping, reached) = before
           _ <- reached.succeed(())
-          launched <- dispatch.launch(entry, () => if (first) retained(unit, attempt.id), ended(unit, attempt)).either
+          launched <- dispatch.launch(entry, () => prepared(attempt.id), ended(unit, attempt)).either
           _ <- stopping.fold(ZIO.unit)(reason => dispatch.stop(attempt.id, reason).unit)
           // The failure of a launch stands in the attempt's status; only the start of the unit also replies with it.
           _ <- if (first) ZIO.fromEither(launched) else ZIO.unit
@@ -234,7 +343,7 @@ final class DispatchUnits(config: SupervisorConfig, authority: SupervisorAuthori
 
   private def settle(unit: DispatchUnit, decided: DispatchStatus, outcome: AttemptId => Option[ChildOutcome], seats: Option[UnitSeats]): UIO[Unit] = for {
     // The durable record of the unit's seats. Its attempts are retained with or without it, so a refused upload does not hold the end back.
-    _ <- ZIO.attemptBlocking(seats.foreach { value =>
+    _ <- ZIO.attemptBlocking(seats.filterNot(_ => unit.governing).foreach { value =>
       val upload = ArtifactUpload(project, DispatchUnits.panel(config.run.attempt.id, unit.work.request), config.run.attempt.id, ArtifactKind.Panel,
         "application/json", HostFiles.encode(UnitSeats_JsonCodec, value))
       Try(authority.collector.artifact(upload)).failed.foreach { error =>
@@ -242,12 +351,13 @@ final class DispatchUnits(config: SupervisorConfig, authority: SupervisorAuthori
         logger.warn(s"$message")
       }
     }).ignore
-    attempts <- ZIO.succeed(synchronized { unit.terminal = Some(decided); unit.attempts.toList })
+    ended <- ZIO.succeed(synchronized { unit.terminal = Some(decided); (unit.attempts.toList, !unit.governing || unit.announced) })
+    (attempts, announced) = ended
     _ <- ZIO.foreachDiscard(attempts)(attempt => attempt.outcome.succeed(outcome(attempt.id).getOrElse(
       CohortFailure.outcome(attempt.ended.getOrElse(decided).copy(attempt = attempt.id), None, None))))
     _ <- unit.done.succeed(())
     // What a waiter outside the host reads; written after the end is visible to the session, whose status call may already wait on it.
-    _ <- ZIO.attemptBlocking(events.ended(SessionUnits.ended(decided))).orDie
+    _ <- if (announced) ZIO.attemptBlocking(events.ended(SessionUnits.ended(decided))).orDie else ZIO.unit
   } yield ()
 
   def status(attempt: AttemptId, waitMillis: Int): Task[DispatchStatus] = for {
@@ -269,6 +379,20 @@ final class DispatchUnits(config: SupervisorConfig, authority: SupervisorAuthori
     result <- promise.await.timeout(zio.Duration.fromMillis(waitMillis))
   } yield result
 
+  /** Whether the governing session itself works the unit of `attempt`. */
+  def governing(attempt: AttemptId): Boolean = found(attempt).governing
+
+  /** Where `attempt` stands. While the host works on it, waits up to `waitMillis` for it to end; an open workspace is reported at once. */
+  def standing(attempt: AttemptId, waitMillis: Int): Task[AttemptStanding] = for {
+    own <- ZIO.attempt {
+      DispatchWaits.admitted(waitMillis, "Status")
+      val unit = found(attempt)
+      synchronized(unit.attempts.find(_.id == attempt).get)
+    }
+    result <- if (own.entry.status.phase == DispatchPhase.Editing) ZIO.succeed(AttemptStanding.Resting)
+      else own.outcome.await.timeout(zio.Duration.fromMillis(waitMillis)).map(_.fold[AttemptStanding](AttemptStanding.Working)(AttemptStanding.Concluded.apply))
+  } yield result
+
   /** The attempts of the unit of `attempt` in the order the host started them, and whether the unit has ended. Waits up to `waitMillis`
     * for the unit to end or to hold more than `known` attempts. */
   def lineage(attempt: AttemptId, known: Int, waitMillis: Int): Task[(List[AttemptId], Boolean)] = {
@@ -283,7 +407,7 @@ final class DispatchUnits(config: SupervisorConfig, authority: SupervisorAuthori
 
   // A stop reaches the attempts that can still be stopped. The unit is cancelled when one of them takes it or none is running; one
   // that is already publishing ends as it ends, and the unit with it, but nothing follows it.
-  private def stop(unit: DispatchUnit, reason: String): Task[Unit] = ZIO.succeed(synchronized {
+  private def stop(unit: DispatchUnit, reason: String): Task[Unit] = announce(unit).ignore *> ZIO.succeed(synchronized {
     if (unit.concluding || unit.terminal.nonEmpty) None
     else {
       unit.stopping = unit.stopping.orElse(Some(reason))
@@ -309,7 +433,11 @@ final class DispatchUnits(config: SupervisorConfig, authority: SupervisorAuthori
   def unsettled: List[String] = synchronized(units.toList.filter(_.terminal.isEmpty).flatMap(unit => unit.handle.map { handle =>
     val phase = unit.attempts.find(_.ended.isEmpty).map(_.entry.status.phase).filterNot(DispatchController.terminal)
       .getOrElse(if (unit.concluding) DispatchPhase.Publishing else DispatchPhase.Preparing)
-    s"child attempt ${handle.value} ($phase)"
+    val kind = unit.worker match {
+      case UnitWorker.Governing(own) => if (own.review.isEmpty) "governor workspace" else "governor review"
+      case _: UnitWorker.Models => "child attempt"
+    }
+    s"$kind ${handle.value} ($phase)"
   }))
   def quiescent: Boolean = synchronized(units.forall(_.terminal.nonEmpty))
 
@@ -335,12 +463,23 @@ final case class EndedAttempt(attempt: AttemptId, status: DispatchStatus, stoppe
 
 object DispatchUnits {
   val Cancelled = "Cancelled by the governing session"
+  val Opening = "The workspace is still being prepared: repeat OpenWorkspace with the same request, members, previous and fence to wait for it"
 
   def role(work: DispatchWork): AgentRole = work match {
     case _: DispatchWork.Explorer => AgentRole.Explorer
     case _: DispatchWork.Planner => AgentRole.Planner
     case _: DispatchWork.Worker => AgentRole.Worker
     case _: DispatchWork.Reviewer => AgentRole.Reviewer
+  }
+
+  /** A unit that has not ended, as the admission of another reads it: its request and the child slots it holds. */
+  final case class Standing(request: DispatchRequest, slots: Int)
+
+  /** `request` is to start beside the `active` units, holding `slots` child slots. The members of running units are disjoint (D83).
+    * A unit the governing session works itself holds its members as any unit does and no slot: no process runs for it. */
+  def admissible(active: List[Standing], request: DispatchRequest, slots: Int): Unit = {
+    DispatchController.disjoint(active.map(_.request), request)
+    DispatchController.capacity(active.map(_.slots).sum, slots)
   }
 
   /** The request of one attempt of the unit of `work`: the same work on the harness of the attempt's route. */
@@ -443,8 +582,8 @@ object DispatchUnits {
     }.toMap
   }
 
-  final class Resource(config: SupervisorConfig, authority: SupervisorAuthority, dispatch: DispatchController, logger: IzLogger, watchdog: SupervisorWatchdog)
+  final class Resource(config: SupervisorConfig, authority: SupervisorAuthority, dispatch: DispatchController, governor: GovernorWork, logger: IzLogger, watchdog: SupervisorWatchdog)
     extends Lifecycle.Of[Task, DispatchUnits](
-      Lifecycle.make(ZIO.succeed(new DispatchUnits(config, authority, dispatch, logger)))(value => ZIO.succeed(watchdog.beginShutdown()) *> value.shutdown)
+      Lifecycle.make(ZIO.succeed(new DispatchUnits(config, authority, dispatch, governor, logger)))(value => ZIO.succeed(watchdog.beginShutdown()) *> value.shutdown)
     )
 }

@@ -162,12 +162,12 @@ emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_toke
   private final case class Fixture(owner: Scope, collector: Scope, config: SupervisorConfig, authority: SupervisorAuthority, runner: ChildRunner, agents: AgentCatalog,
     jobs: JobSupervisor, members: List[ItemRevision], fence: Fence, governor: Attempt, profile: HarnessSetting, clock: Clock,
     renewing: (SupervisorAuthority, ClaimRenewal.Policy) => ChildRunner, access: LocalAccess, reservations: java.util.concurrent.atomic.AtomicInteger,
-    failingQuarantine: ChildRunner) {
+    failingQuarantine: ChildRunner, own: GovernorWork) {
     val limits: HostLimits = HostLimits(3000, 900, 100, 1000, 262144)
     /** The units of this session over `runner`, and the attempts under them. */
     def units(runner: ChildRunner): (DispatchUnits, DispatchController) = {
-      val children = new DispatchController(config, runner, jobs, clock)
-      new DispatchUnits(config, authority, children, logstage.IzLogger.NullLogger) -> children
+      val children = new DispatchController(config, runner, own, jobs, clock)
+      new DispatchUnits(config, authority, children, own, logstage.IzLogger.NullLogger) -> children
     }
     def units: DispatchUnits = units(runner)._1
     /** The cohort selection of this session over `units`, as its governing session uses it outside a workflow. */
@@ -296,7 +296,8 @@ emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_toke
       // Every role of this project runs the settings model of the governing harness.
       _ <- ZIO.attemptBlocking(UnitFixture.starting(authority.root, owner.project, settings))
       _ <- test(Fixture(owner, collector, config, authority, runner(authority, ClaimRenewal.Default, workspaces), agents, jobs, members, claim.fence, governor, profile, clock,
-        runner(_, _, workspaces), access, reservations, runner(authority, ClaimRenewal.Default, unquarantinable)))
+        runner(_, _, workspaces), access, reservations, runner(authority, ClaimRenewal.Default, unquarantinable),
+        new GovernorWork(config, authority, jobs, workspaces, new CandidateWorkspace(config), new OperatorRequirements(""), renewal, clock)))
     } yield ()
   }
 

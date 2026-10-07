@@ -13,6 +13,7 @@ header { position: relative; z-index: 2; display: flex; flex-direction: column; 
 .mode-indicator { width: auto; flex: none; white-space: nowrap; }
 .mode-indicator[data-mode=CrossCutting] { border-color: #e0a341; color: #ffd591; box-shadow: inset 3px 0 #e0a341; }
 .mode-indicator[data-mode=Yolo] { border-color: #ff8a80; background: #5c1f1f; color: #ffdad6; font-weight: 600; }
+.mode-indicator[data-exempt=true] { border-style: dashed; border-width: 2px; }
 .mode-options { margin: 8px 0; padding: 4px 10px 8px; border: 1px solid #435364; }
 .mode-option { margin-top: 8px; }
 .mode-option > label { display: flex; align-items: center; gap: 8px; font-weight: 600; }

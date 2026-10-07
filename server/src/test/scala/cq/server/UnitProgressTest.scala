@@ -86,6 +86,22 @@ final class UnitProgressLocal extends AnyWordSpec {
       val cancelling = play(single(Fallback, 2))
       assert(cancelling.cancelled(0, 0) == ended(UnitOutcome.Cancelled) && cancelling.ends == List(Cancelled) && cancelling.tried(0) == Nil)
     }
+    "I30: run the governing session's own work as one seat with one candidate that no agent configuration resolved" in {
+      val own = ModelRoute(Harness.Claude, Some("unobserved-interactive-provider"), "unobserved-interactive-model", None)
+      val at = SeatCandidate(0, 0)
+      def begun: UnitProgress = {
+        val (state, step) = UnitProgress.single(request, own)
+        assert(step == launch(0 -> 0) && state.outcome.isEmpty)
+        state(UnitEvent.Started(at, attempt(0, 0)))._1
+      }
+      val (made, end) = begun(UnitEvent.Delivered(at, result(0), ChildNext.Review))
+      assert(end == ended(UnitOutcome.Decided(List(DeliveredSeat(0, attempt(0, 0), result(0), ChildNext.Review)), Nil)))
+      assert(made.snapshot == UnitSeats(request, PanelMode.All, 1, List(SeatStatus(0, List(SeatAttempt(attempt(0, 0), own, None, None)), SeatEnd.Delivered(result(0), ChildNext.Review)))))
+      // A capture the host refused fails the unit, and a withdrawn workspace cancels it: neither is an abstention, and nothing follows.
+      assert(begun(UnitEvent.Failed(at, "the session committed"))._2 == ended(UnitOutcome.Failed(List(FailedSeat(0, attempt(0, 0), "the session committed")), Nil)))
+      val (stopping, waiting) = begun.cancel
+      assert(waiting == UnitStep.Wait && stopping(UnitEvent.Cancelled(at))._2 == ended(UnitOutcome.Cancelled))
+    }
     "go to the next candidate only when one abstains, and deliver with the candidate that ran" in {
       given unit: Play = play(single(Fallback, 3))
       assert(unit.abstain(0, 0) == launch(0 -> 1) && unit.ends == List(Pending) && unit.state.outcome.isEmpty)

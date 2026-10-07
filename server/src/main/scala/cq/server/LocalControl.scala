@@ -4,7 +4,7 @@ import baboon.runtime.shared.{BaboonCodecContext, BaboonJsonCodec}
 import com.comcast.ip4s.{Host, Port}
 import cq.api.*
 import cq.core.JsonRoundtrip
-import cq.core.DomainFailure
+import cq.core.{DomainFailure, GoverningWorkPolicy}
 import cq.host.{DispatchProjection, DispatchWaits, WorkflowExecution}
 import distage.Lifecycle
 import io.circe.{Json, parser}
@@ -34,7 +34,7 @@ final class LocalControl(units: DispatchUnits, cohorts: CohortController, integr
     "name" -> Json.fromString(name), "description" -> Json.fromString(description), "inputSchema" -> input, "outputSchema" -> schemas.schema(output),
     "annotations" -> Json.obj("readOnlyHint" -> Json.fromBoolean(readOnly), "openWorldHint" -> Json.False))
   private[server] def advertised(capability: LocalCapability): Json = if (capability.role == Role.Governor)
-    tool("dispatch", schemas.localInput("DispatchCommand"), "DispatchReply", s"Select bounded cohorts, claim one complete choice, then StartChoice by ID and fence: the host starts the models the project's agent configuration assigns to the role, as one unit named by one attempt ID. Workflow runs require choices; direct Start supports explicitly assigned non-workflow runs. Status reads the state or the result of an attempt and, with waitMillis up to ${DispatchWaits.MaxMillis}, first waits for the attempt to end; Cancel stops the whole unit of an attempt; Seats lists the models the host tried for it and how each seat ended. Prepare/apply reviewed integration, or DiscardIntegration a prepared one that will not be applied; Combine a NotApplied integration; IntegrationStatus and CombinationStatus read and wait the same way. Forward handles directly; full prompts/results stay outside your context." + McpSchemas.Revalidation, false)
+    tool("dispatch", schemas.localInput("DispatchCommand"), "DispatchReply", s"Select bounded cohorts, claim one complete choice, then StartChoice by ID and fence: the host starts the models the project's agent configuration assigns to the role, as one unit named by one attempt ID. Workflow runs require choices; direct Start supports explicitly assigned non-workflow runs. Status reads the state or the result of an attempt and, with waitMillis up to ${DispatchWaits.MaxMillis}, first waits for the attempt to end; Cancel stops the whole unit of an attempt; Seats lists the models the host tried for it and how each seat ended. Prepare/apply reviewed integration, or DiscardIntegration a prepared one that will not be applied; Combine a NotApplied integration; IntegrationStatus and CombinationStatus read and wait the same way. Forward handles directly; full prompts/results stay outside your context." + McpSchemas.Revalidation + McpSchemas.OwnWork, false)
   else tool("workspace", schemas.workspace(capability.role), "WorkspaceReply", "List or read bounded pages in your assigned workspace. A prepared resolver may read MergeReport. A candidate reviewer may request a configured Check by name and poll the same operation; wait for Completed evidence before returning. Relative paths only; Git metadata and symlink traversal are denied.", capability.role != Role.Reviewer)
   /** `input` is the tool's input schema, which is assembled only to describe a decode fault. */
   private def decode[A](name: String, input: => Json, codec: BaboonJsonCodec[A], json: Json): Task[A] = ZIO.attempt {
@@ -48,6 +48,8 @@ final class LocalControl(units: DispatchUnits, cohorts: CohortController, integr
     case _: IllegalArgumentException => Fault.Invalid(DispatchProjection.concise(Option(error.getMessage).getOrElse("Invalid local operation")))
     case _ => Fault.Conflict(DispatchProjection.concise("Local operation failed: " + Option(error.getMessage).getOrElse(error.getClass.getSimpleName)))
   }
+  // Only an interactive session works itself: a batch Governor is refused in the words the server would refuse its result with.
+  private val own: Task[Unit] = ZIO.attempt(GoverningWorkPolicy.interactive(config.run.ownership == SessionOwnership.Attached))
   private[server] def call(capability: LocalCapability, name: String, arguments: Json): Task[(Json, Boolean)] = {
     if (capability.role == Role.Governor && name == "dispatch") {
       val operation = decode(name, schemas.schema("DispatchCommand"), DispatchCommand_JsonCodec, arguments).tap(command => ZIO.attemptBlocking(workflow.authorize(command))).flatMap {
@@ -66,6 +68,9 @@ final class LocalControl(units: DispatchUnits, cohorts: CohortController, integr
         case DispatchCommand.Combine(id, source, fence) => combinations.prepare(CombinationTicket(id, source, fence)).map(DispatchReply.Combination.apply)
         case DispatchCommand.CombinationStatus(id, wait) => combinations.status(id, wait).map(DispatchReply.Combination.apply)
         case DispatchCommand.Revalidate(id, result, fence) => revalidations.request(id, result, fence).map(DispatchReply.Revalidation.apply)
+        case DispatchCommand.OpenWorkspace(request, members, previous, fence) => own *> units.open(request, members, previous, fence).map(DispatchReply.Status.apply)
+        case DispatchCommand.SubmitWorkspace(attempt, members) => own *> units.submit(attempt, members).map(DispatchReply.Status.apply)
+        case DispatchCommand.SelfReview(request, result, members, fence) => own *> units.selfReview(request, result, members, fence).map(DispatchReply.Status.apply)
       }
       operation.map(value => (DispatchReply_JsonCodec.encode(Context, value), false))
         .catchAll(error => ZIO.succeed((DispatchReply_JsonCodec.encode(Context, DispatchReply.Failed(fault(error))), true)))

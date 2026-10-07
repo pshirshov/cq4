@@ -209,7 +209,8 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
       _ <- ZIO.succeed(access.bind(URI.create("http://127.0.0.1:1")))
       runner = new ChildRunner(config, authority, new HarnessRegistry(Set(new ClaudeAdapter, new CodexAdapter, new PiAdapter)), jobs, local.fixture.service,
         new AgentCatalog(new McpSchemas, new ChildInstructions), new HarnessOutput, candidates, new WorkspaceReader, access, new OperatorRequirements(""), renewal, clock)
-      children <- ZIO.acquireRelease(ZIO.succeed(new DispatchUnits(config, authority, new DispatchController(config, runner, jobs, clock), logstage.IzLogger.NullLogger)))(_.shutdown.orDie)
+      governing = new GovernorWork(config, authority, jobs, local.fixture.service, candidates, new OperatorRequirements(""), renewal, clock)
+      children <- ZIO.acquireRelease(ZIO.succeed(new DispatchUnits(config, authority, new DispatchController(config, runner, governing, jobs, clock), governing, logstage.IzLogger.NullLogger)))(_.shutdown.orDie)
       combinations <- ZIO.acquireRelease(ZIO.succeed(new CombinationController(config, authority, candidates, clock)))(_.shutdown.orDie)
       requests <- Semaphore.make(1)
       revalidating <- Semaphore.make(1)

@@ -35,6 +35,9 @@ export async function usageChecks(page, origin, projectId) {
   await page.getByRole('button', { name: 'Project usage', exact: true }).click();
   await page.getByText('Attempt coverage: 1 running; 0 open; 0 unknown outcomes; 0 with reported gaps.', { exact: true }).waitFor();
   await phaseRows([['Work', '0', '0', '0', '0', '—', '1', '1', '0', '0 s']]);
+  // An attempt that has no measurement counts no tokens: the page says that this is not zero usage, and when that is known to be so.
+  await page.getByText('attempts without measurements: 1. An attempt without a measurement counts no tokens here, which is not zero usage. ' +
+    'A Governor\'s own work and its own review are never measured: their tokens are part of the governing session\'s.', { exact: false }).waitFor();
   await page.getByRole('button', { name: 'Attempts', exact: true }).click();
   await page.getByRole('table', {name: 'Attempts', exact: true}).getByRole('cell', {name: 'Running', exact: true}).waitFor();
   await page.getByText('Attempt details', {exact: true}).click();

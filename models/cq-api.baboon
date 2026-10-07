@@ -970,8 +970,9 @@ root data RevalidationStatus {
 enum DeclaredCheckPhase { Starting Running Publishing Completed Failed Unknown }
 root data DeclaredCheckTicket { parent: AttemptId check: ValidationCheck workspace: WorkspaceSpec fingerprint: str failures: lst[ArtifactId] }
 root data DeclaredCheckStatus { name: str job: AttemptId phase: DeclaredCheckPhase evidence: opt[ValidationEvidence] blocker: opt[str] }
-enum DispatchPhase { Preparing Running Stopping Validating Publishing Completed Failed Cancelled Unknown PublicationPending Abstained }
-enum ChildNext { Wait Plan Review Revise ResolveBlocker Retry ConsiderAcceptance ConsiderProposal ConsiderGrouping InspectEvidence RetryDelivery Arbitrate }
+// Editing: the governing session works in a workspace the host opened for it; the host works on it again from SubmitWorkspace, whose reply's next was Submit.
+enum DispatchPhase { Preparing Running Stopping Validating Publishing Completed Failed Cancelled Unknown PublicationPending Abstained Editing }
+enum ChildNext { Wait Plan Review Revise ResolveBlocker Retry ConsiderAcceptance ConsiderProposal ConsiderGrouping InspectEvidence RetryDelivery Arbitrate Submit }
 root data ChildCounts {
   ready: i32 accepted: i32 changesRequested: i32 blocked: i32 failed: i32 validationFailed: i32 validationUnknown: i32
   proposed: i32 evidence: i32 abstained: i32 assessed: i32 validationIntermittent: i32
@@ -1039,6 +1040,12 @@ root adt DispatchCommand {
   data CombinationStatus { id: RequestId waitMillis: i32 }
   data Revalidate { id: RequestId result: ArtifactId fence: Fence }
   data DiscardIntegration { id: IntegrationId }
+  // The governing session's own work, admitted only in the YOLO mode and to an interactive session. OpenWorkspace gives it an
+  // isolated workspace for the members, starting from the candidate of `previous` when given; SubmitWorkspace hands the workspace
+  // back with the report a Worker makes; SelfReview records its verdicts on the candidate of an admitted worker result.
+  data OpenWorkspace { request: RequestId members: lst[ItemRevision] previous: opt[ArtifactId] fence: Fence }
+  data SubmitWorkspace { attempt: AttemptId members: lst[WorkMember] }
+  data SelfReview { request: RequestId result: ArtifactId members: lst[ReviewMember] fence: Fence }
 }
 root adt DispatchReply {
   data Selection { value: CohortOffer }

@@ -140,7 +140,10 @@ def main():
             assert ("call its status (Status, IntegrationStatus or CombinationStatus; repeat Revalidate) with waitMillis 120000." in context["instructions"]
                     and '`// @exec: {"yield_time_ms": 150000}`' in context["instructions"] and f"{wrapper} wait" not in context["instructions"]), context["instructions"][-1500:]
             assert not (repository / ".codex/rules").exists()
-            assert json.loads((repository / ".claude/settings.local.json").read_text())["permissions"]["allow"] == [f"Bash({wrapper} wait)"]
+            # The waiter is approved as one command line, and the file tools for the workspaces of this state root's sessions and nothing else under it.
+            workspaces = f"/{(root / 'sessions').resolve()}/*/workspaces/**"
+            assert json.loads((repository / ".claude/settings.local.json").read_text())["permissions"]["allow"] == [
+                f"Bash({wrapper} wait)", f"Edit({workspaces})", f"Read({workspaces})"]
             project = context["project"]["project"]
             standing = "Governor: preserve the operator's selected scope."
             operator({"Requirements": {"input": {"project": project, "action": {"Replace": {"expected": {"value": "0"}, "text": standing}}}}})
