@@ -1,7 +1,7 @@
 package cq.server
 
 import cq.api.*
-import cq.core.{DomainFailure, WorkspaceService}
+import cq.core.{DomainFailure, LedgerPolicy, WorkspaceService}
 import cq.host.*
 import java.nio.file.{Files, Path}
 import java.time.{Clock, Duration}
@@ -180,7 +180,12 @@ private[server] final class AttemptSettlement(config: SupervisorConfig, authorit
         entry.finish(retained)
       }
       _ <- if (entry.status.phase == DispatchPhase.Failed && result.isRight)
-        workspaces.quarantine(config.owner, entry.ticket.attempt.id, "Server result admission rejected; inspect retained evidence")
+        workspaces.quarantine(config.owner, entry.ticket.attempt.id, (AttemptSettlement.Refused + entry.status.blocker.getOrElse("it stated no reason")).take(LedgerPolicy.MaxTitle))
+          .map(record => entry.finish(entry.status.copy(workspace = Some(DispatchProjection.workspace(record)))))
+      // A workspace the governing session handed back without a ready candidate holds what the session wrote and nothing the host
+      // captured: unlike a child's, it is kept.
+      else if (entry.status.phase == DispatchPhase.Completed && own && working(entry.ticket) && result.exists(_.candidate.isEmpty))
+        workspaces.quarantine(config.owner, entry.ticket.attempt.id, AttemptSettlement.Uncaptured)
           .map(record => entry.finish(entry.status.copy(workspace = Some(DispatchProjection.workspace(record)))))
       // The candidate is a commit under refs/cq/candidates and the evidence is published: nothing reads a completed attempt's tree again.
       else if (entry.status.phase == DispatchPhase.Completed) released(entry.ticket)
@@ -195,5 +200,9 @@ private[server] object AttemptSettlement {
   def own(ticket: DispatchTicket): Boolean = GoverningTickets.own(ticket)
   /** What is said of the usage of such an attempt, with its outcome and wherever its usage is read. */
   val UnmeteredGap = "No meter: the work was done in the governing session, whose usage is that session's own"
+  /** Why the workspace of a result the server refused is kept; the server's reason follows. */
+  val Refused = "The server refused the result: "
+  /** Why a workspace the governing session submitted without a ready candidate is kept. */
+  val Uncaptured = "The governing session submitted this workspace without a ready candidate; nothing was captured and its content is retained here"
   val Unmetered: CollectedUsage = CollectedUsage(Nil, false, false, List(UnmeteredGap), None)
 }

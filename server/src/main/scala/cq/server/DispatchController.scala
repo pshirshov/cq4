@@ -82,7 +82,7 @@ final class DispatchController(config: SupervisorConfig, runner: ChildRunner, go
       ChildContracts.request(config.project.project, request)
       val (governing, children) = live.partition(AttemptSettlement.own)
       // The governing session's own work holds its members as a child does and no child slot: it runs no process.
-      DispatchController.disjoint(governing.map(_.request), request)
+      DispatchController.uncovered(governing.map(_.request), request)
       DispatchController.admissible(children.map(_.request), request)
       SupervisorConfig.within(request.limits, config.settings.limits)
       require(route.harness == request.harness, "Model route and dispatch request name different harnesses")
@@ -113,7 +113,9 @@ final class DispatchController(config: SupervisorConfig, runner: ChildRunner, go
       require(!closing && !disabled.get(), DispatchController.Closed)
       ChildContracts.request(config.project.project, request)
       require(cq.core.GoverningWorkPolicy.permits(request.work), "The governing session works itself only as a Worker Implement or a Reviewer Candidate")
-      DispatchController.disjoint(live.map(_.request).filter(_.request != request.request), request)
+      val (own, children) = live.filter(_.request.request != request.request).partition(AttemptSettlement.own)
+      DispatchController.uncovered(own.map(_.request), request)
+      DispatchController.disjoint(children.map(_.request), request)
       SupervisorConfig.within(request.limits, config.settings.limits)
       val governing = config.run.attempt
       require(request.harness == governing.harness, "The governing session's own work is on its own harness")
@@ -140,7 +142,7 @@ final class DispatchController(config: SupervisorConfig, runner: ChildRunner, go
         disabled.set(true)
         entry.finish(entry.status.copy(phase = DispatchPhase.Unknown, next = ChildNext.InspectEvidence,
           blocker = Some(DispatchProjection.concise("Dispatch storage/publication failed: " + Option(failure.getMessage).getOrElse(failure.getClass.getSimpleName))), detailsOmitted = true))
-      } *> entry.ready.fail(failure).unit
+      } *> governor.abandon(entry.ticket.attempt.id) *> entry.ready.fail(failure).unit
     }.ensuring(ZIO.succeed {
       // A run that ended without publishing left no receipt: what it did is not known.
       if (!DispatchController.terminal(entry.status.phase)) entry.finish(entry.status.copy(phase = DispatchPhase.Unknown, next = ChildNext.InspectEvidence,
@@ -216,11 +218,15 @@ object DispatchController {
   def terminal(phase: DispatchPhase): Boolean = Set(DispatchPhase.Completed, DispatchPhase.Failed, DispatchPhase.Cancelled,
     DispatchPhase.Unknown, DispatchPhase.PublicationPending, DispatchPhase.Abstained)(phase)
   // Active units hold disjoint claims: a member belongs to at most one running unit (D83).
-  def disjoint(active: List[DispatchRequest], request: DispatchRequest): Unit = {
+  def disjoint(active: List[DispatchRequest], request: DispatchRequest): Unit = overlap(active, request).foreach(covered =>
+    throw DomainFailure(Fault.Conflict(s"An active child already covers $covered; wait for it to end before starting another child on the same members")))
+  /** The same rule against the governing session's own work, which does not end by itself: only the session ends it. */
+  def uncovered(own: List[DispatchRequest], request: DispatchRequest): Unit = overlap(own, request).foreach(covered =>
+    throw DomainFailure(Fault.Conflict(s"The governing session's own open workspace already covers $covered; submit or cancel it before starting other work on the same members")))
+  private def overlap(active: List[DispatchRequest], request: DispatchRequest): Option[String] = {
     val members = request.members.map(_.id).toSet
     val overlapping = active.flatMap(_.members.map(_.id)).filter(members).distinct.sortBy(LedgerPolicy.key)
-    if (overlapping.nonEmpty)
-      throw DomainFailure(Fault.Conflict(s"An active child already covers ${overlapping.map(id => LedgerPolicy.prefix(id.ledger) + id.number).mkString(", ")}; wait for it to end before starting another child on the same members"))
+    Option.when(overlapping.nonEmpty)(overlapping.map(id => LedgerPolicy.prefix(id.ledger) + id.number).mkString(", "))
   }
   /** `active` child attempts run; `wanted` more are to start together. */
   def capacity(active: Int, wanted: Int): Unit =

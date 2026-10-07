@@ -361,7 +361,12 @@ final class WorkflowLocal extends AnyWordSpec {
       assert(yolo.contains("A failed check of your candidate means what it means for a Worker's: the status is Completed with next Revise, its blocker names the check, " +
         "the result is retained and nothing is integrated."))
       assert(yolo.contains("To correct the candidate, call OpenWorkspace again with previous set to that result handle, or to the handle of a review of it that requests changes: the new workspace starts from the candidate as you submitted it."))
-      assert(yolo.contains("To discard a workspace, call Cancel with its attempt ID: nothing in it becomes a candidate, and the host keeps the directory as it is for the operator."))
+      assert(yolo.contains("To discard a workspace, call Cancel with its attempt ID: nothing in it becomes a candidate, and the host keeps the directory as it is for the operator, " +
+        "as it keeps one you submit with no member CandidateReady."))
+      // The way out when the session's harness does not let it work in the directory, whichever harness that is.
+      val unable = "If you cannot edit or run commands there, Cancel the workspace and dispatch a Worker instead."
+      assert(yolo.contains(unable) && yolo.indexOf(unable) > yolo.indexOf("edit only under that directory") && yolo.indexOf(unable) < yolo.indexOf("Do not commit there") &&
+        List("Claude", "Codex", "Pi ", "sandbox", "permission").forall(word => !section(ProcessMode.Yolo).contains(word)))
       assert(yolo.contains("no child and no second workspace starts on them, the workflow cannot be changed, and a driver answers a stop with one resume directive and ends the drive at the next. " +
         "Submit or cancel every workspace before you end your turn."))
       assert(yolo.contains("The host cannot see an edit you make elsewhere, and nothing you write elsewhere becomes part of a candidate."))

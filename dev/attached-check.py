@@ -141,7 +141,7 @@ def main():
                     and '`// @exec: {"yield_time_ms": 150000}`' in context["instructions"] and f"{wrapper} wait" not in context["instructions"]), context["instructions"][-1500:]
             assert not (repository / ".codex/rules").exists()
             # The waiter is approved as one command line, and the file tools for the workspaces of this state root's sessions and nothing else under it.
-            workspaces = f"/{(root / 'sessions').resolve()}/*/workspaces/**"
+            workspaces = f"/{(root / 'sessions').resolve()}/*/workspaces/*/tree/**"
             assert json.loads((repository / ".claude/settings.local.json").read_text())["permissions"]["allow"] == [
                 f"Bash({wrapper} wait)", f"Edit({workspaces})", f"Read({workspaces})"]
             project = context["project"]["project"]

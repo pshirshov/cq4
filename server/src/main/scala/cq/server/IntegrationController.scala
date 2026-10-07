@@ -1,7 +1,7 @@
 package cq.server
 
 import cq.api.*
-import cq.core.{DomainFailure, Scope}
+import cq.core.{CandidateAuthorship, DomainFailure, GoverningWorkPolicy, Scope}
 import cq.host.*
 import distage.Lifecycle
 import java.nio.file.Path
@@ -12,6 +12,8 @@ import zio.{Promise, Semaphore, Task, ZIO}
 private[server] final class IntegrationExecutionState(val ticket: IntegrationTicket, val ready: Promise[Throwable, Unit],
   var done: Promise[Nothing, Unit], var view: IntegrationStatus, val startedAt: Long) {
   var assignment = Option.empty[AssignmentId]
+  // Who made and who reviewed the candidate, once the preparation has read it.
+  var authorship = Option.empty[CandidateAuthorship]
   var observedAt = startedAt
   var spanned = false
 }
@@ -128,7 +130,7 @@ final class IntegrationController(config: SupervisorConfig, authority: Superviso
       began <- zio.Clock.nanoTime
       reviewed <- ZIO.attemptBlocking(preparation.review(ticket))
       assignment <- ZIO.attemptBlocking(PhaseSpans.producer(config.directory, reviewed.workerId))
-      _ <- ZIO.succeed(synchronized { entry.assignment = Some(assignment) })
+      _ <- ZIO.succeed(synchronized { entry.assignment = Some(assignment); entry.authorship = Some(reviewed.authorship) })
       // The claim is renewed while host checks of a rebased commit run; a renewal that fails for good stops them.
       renewed = renewal.maintain(began, ZIO.attemptBlocking(preparation.renew(reviewed)))
       rebased <- ZIO.interruptible(rebase(ticket.id, config.settings.integrationTarget.get, reviewed.candidate, spans.check(jobs, execution, assignment)).raceFirst(renewed))
@@ -142,6 +144,19 @@ final class IntegrationController(config: SupervisorConfig, authority: Superviso
     _ <- restore(entry.ready.await).timeoutFail(new IllegalStateException("Integration ticket acknowledgement deadline exceeded; admission disabled"))(
       zio.Duration.fromMillis(AcknowledgementMillis)).tapError(_ => ZIO.succeed(synchronized { disabled = true }))
   } yield snapshot(entry) }
+
+  // The server's rule for a candidate the governing session made or reviewed itself, applied to the project's mode as it is now:
+  // the reason when it refuses. A project that left the YOLO mode after the preparation is refused its reservation for good (Q64).
+  private def refused(entry: IntegrationExecutionState): Option[String] = synchronized(entry.authorship).filter(_.governing).flatMap { authorship =>
+    def call(command: Command): Result = authority.governor.call(command) match {
+      case Result.Failed(fault) => throw DomainFailure(fault)
+      case value => value
+    }
+    scala.util.Try(GoverningWorkPolicy.integrate(ProcessModes.setting(call, config.owner.project), authorship, config.settings.checks.size)) match {
+      case scala.util.Failure(DomainFailure(Fault.Denied(message))) => Some(message)
+      case _ => None
+    }
+  }
 
   def apply(id: IntegrationId): Task[IntegrationStatus] = ZIO.uninterruptibleMask { _ => for {
     done <- Promise.make[Nothing, Unit]
@@ -158,7 +173,7 @@ final class IntegrationController(config: SupervisorConfig, authority: Superviso
       }
     })
     (entry, fresh) = registered
-    _ <- if (!fresh) ZIO.unit else background(entry, done, available.run(id).map(projected(entry, _)))
+    _ <- if (!fresh) ZIO.unit else background(entry, done, available.run(id, () => refused(entry)).map(projected(entry, _)))
   } yield snapshot(entry) }
 
   /** Settles an integration its session will not apply: sealed as not applied in the journal, its span ended as cancelled. One that is

@@ -1,6 +1,7 @@
 package cq.host
 
 import cq.api.*
+import cq.core.DomainFailure
 import java.nio.channels.FileChannel
 import java.nio.file.{Files, Path, StandardOpenOption}
 import scala.util.Using
@@ -10,7 +11,9 @@ final case class ChildPublicationReceipt(status: DispatchStatus, acknowledged: I
 final class ChildPublicationDelivery(directory: Path, ticket: DispatchTicket) {
   private val MaxIntentBytes = 256 * 1024
   private val MaxGaps = 32
+  private val MaxDenialBytes = 4096
   private val intent = directory.resolve("publication.json")
+  private val denied = directory.resolve("denied.txt")
   private val evidence = new DeliveryQueue(directory.resolve("publication-evidence"))
   private val delivery = new DeliveryQueue(directory.resolve("delivery"))
 
@@ -54,18 +57,33 @@ final class ChildPublicationDelivery(directory: Path, ticket: DispatchTicket) {
     forceIntent()
     val initial = delivery.flush(api)
     val uploaded = evidence.flush(api)
-    val admission = value.result.map { result =>
+    // A denial is the server's answer to this result, whoever asks and however often: the attempt ends with it. A request the server
+    // did not answer says nothing and fails this call, which is repeated.
+    val answered = value.result.map { result =>
       val artifact = NativeArtifacts.id(ticket.attempt.id, "result")
-      val record = api.admit(HostAdmissionInput(value.project, artifact, value.owner))
-      require(record.artifact.id == artifact && record.artifact.project == value.project && record.artifact.attempt == ticket.attempt.id &&
-        record.owner == value.owner && record.fence == result.request.fence && record.members == result.request.members,
-        "Server admission does not match the sealed result")
-      record
+      // The denial is retained before anything is concluded from it, and read back by every later delivery: the server is not asked
+      // again, so the attempt cannot end differently when its publication is replayed.
+      if (Files.exists(denied)) Left(HostFiles.text(denied, MaxDenialBytes)) else try {
+        val record = api.admit(HostAdmissionInput(value.project, artifact, value.owner))
+        require(record.artifact.id == artifact && record.artifact.project == value.project && record.artifact.attempt == ticket.attempt.id &&
+          record.owner == value.owner && record.fence == result.request.fence && record.members == result.request.members,
+          "Server admission does not match the sealed result")
+        Right(record)
+      } catch { case DomainFailure(Fault.Denied(message)) =>
+        val denial = DispatchProjection.concise(s"Result admission denied: $message")
+        HostFiles.immutable(denied, denial, MaxDenialBytes)
+        forceIntent()
+        Left(denial)
+      }
     }
-    val rejection = admission.flatMap(_.decision match {
-      case AdmissionDecision.Accepted() => None
-      case AdmissionDecision.Rejected(reason) => Some(s"Result admission rejected: $reason")
-    })
+    val admission = answered.flatMap(_.toOption)
+    val rejection = answered.flatMap {
+      case Left(denial) => Some(denial)
+      case Right(record) => record.decision match {
+        case AdmissionDecision.Accepted() => None
+        case AdmissionDecision.Rejected(reason) => Some(s"Result admission rejected: $reason")
+      }
+    }
     val outcome = rejection.fold(value.outcome)(reason => value.outcome.copy(state = AttemptState.Failed, gaps = (reason :: value.outcome.gaps).take(MaxGaps)))
     delivery.commit(List(HostDelivery.Usage(HostUsageInput(value.project, HostUsage.Finish(outcome)))))
     val finalized = delivery.flush(api)

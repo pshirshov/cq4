@@ -145,16 +145,18 @@ final class DispatchLocal extends AnyWordSpec {
         case Fault.Conflict(message) => message
         case other => fail(s"Expected a conflict, observed $other")
       }
-      val children = List(1L, 2L, 3L, 4L).map(number => DispatchUnits.Standing(request(number), 1))
-      val workspace = DispatchUnits.Standing(request(5), 0)
+      val children = List(1L, 2L, 3L, 4L).map(number => DispatchUnits.Standing(request(number), DispatchUnits.slots(false, 1), false))
+      val workspace = DispatchUnits.Standing(request(5), DispatchUnits.slots(true, 1), true)
+      assert(DispatchUnits.slots(true, 1) == 0 && DispatchUnits.slots(false, 3) == 3)
       // A workspace opens although every child slot is taken: no process runs for it.
       DispatchUnits.admissible(children, request(5), 0)
       // An open workspace takes no slot from the children: four of them still start beside it, and a fifth is refused as without it.
       DispatchUnits.admissible(workspace :: children.take(3), request(4), 1)
       assert(conflict(DispatchUnits.admissible(workspace :: children, request(6), 1)).contains("at most 4 active children"))
       // Its members are held against a child and against a second workspace, and a child's against a workspace.
-      assert(conflict(DispatchUnits.admissible(List(workspace), request(5, 6), 1)).contains("An active child already covers T5"))
-      assert(conflict(DispatchUnits.admissible(List(workspace), request(5), 0)).contains("An active child already covers T5"))
+      // What covers them is the caller's own work, which does not end by itself: the refusal says what ends it.
+      val own = "The governing session's own open workspace already covers T5; submit or cancel it before starting other work on the same members"
+      assert(conflict(DispatchUnits.admissible(List(workspace), request(5, 6), 1)) == own && conflict(DispatchUnits.admissible(List(workspace), request(5), 0)) == own)
       assert(conflict(DispatchUnits.admissible(children, request(2), 0)).contains("An active child already covers T2"))
     }
     "I30: say Editing with next Submit while the session works, and nothing of it once the host works on the attempt again" in {
