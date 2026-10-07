@@ -349,8 +349,8 @@ object DispatchUnits {
   def unresolved(governing: Harness, decided: RoleKey, origin: Option[RoleOrigin], problems: List[AgentProblem]): String = {
     val (harness, assigned) = (name(governing), name(RoleKeys.role(decided)))
     val key = origin.map(_.source) match {
-      case Some(RoleSource.HarnessRoles) => s"harnesses.$harness.roles.$assigned"
-      case _ => s"defaults.roles.$assigned"
+      case Some(RoleSource.HarnessRoles) => s"harnesses.$harness.roles.${RoleKeys.text(decided)}"
+      case _ => s"defaults.roles.${RoleKeys.text(decided)}"
     }
     val layer = origin.map(_.layer) match {
       case Some(AgentLayer.Project) => "this project's agent configuration"

@@ -33,6 +33,30 @@ object RoleKeys {
     case AgentRole.Explorer => ExplorerMode.all.map(DispatchWork.Explorer(_))
     case AgentRole.Reviewer => ReviewerMode.all.map(DispatchWork.Reviewer(_))
   }
+
+  /** The key of the mode of this work, which the work of the planner role does not have. */
+  def qualified(work: DispatchWork): Option[RoleKey] = work match {
+    case DispatchWork.Explorer(mode) => Some(RoleKey.Explorer(mode))
+    case DispatchWork.Planner() => None
+    case DispatchWork.Worker(mode) => Some(RoleKey.Worker(mode))
+    case DispatchWork.Reviewer(mode) => Some(RoleKey.Reviewer(mode))
+  }
+
+  /** The keys of the modes of the role, in the order of its modes. */
+  def modes(role: AgentRole): List[RoleKey] = works(role).flatMap(qualified)
+
+  private def lower(value: Any): String = value.toString.toLowerCase(Locale.ROOT)
+
+  /** The mode a key names, as a configuration writes it; the key of a role names none. */
+  def mode(key: RoleKey): Option[String] = key match {
+    case _: RoleKey.Plain => None
+    case RoleKey.Explorer(mode) => Some(lower(mode))
+    case RoleKey.Worker(mode) => Some(lower(mode))
+    case RoleKey.Reviewer(mode) => Some(lower(mode))
+  }
+
+  /** The key as a configuration writes it: `reviewer`, or `reviewer/plan` for one mode. */
+  def text(key: RoleKey): String = lower(role(key)) + mode(key).fold("")("/" + _)
 }
 
 /**
@@ -235,13 +259,31 @@ object AgentConfigText {
       case other => syntax(other.at, "expected a list of models, as in [model, provider/model?effort=high]"); None
     }
 
+    /** The key of a roles mapping: a role, or a role, a slash and one of the modes of that role. */
+    private def roleKey(key: YamlNode.Scalar): Option[RoleKey] = key.text.indexOf('/') match {
+      case -1 => Roles.get(key.text).map(RoleKey.Plain(_)).orElse { unknown(key); None }
+      case at => Roles.get(key.text.substring(0, at)) match {
+        case None => unknown(key); None
+        case Some(role) =>
+          val modes = RoleKeys.modes(role)
+          modes.find(RoleKeys.mode(_).contains(key.text.substring(at + 1))).orElse {
+            syntax(key.at, if (modes.isEmpty) s"the key '${key.text}' names a mode, and the ${RoleKeys.text(RoleKey.Plain(role))} role has none"
+              else s"the key '${key.text}' names no mode of the ${RoleKeys.text(RoleKey.Plain(role))} role; its modes are ${modes.flatMap(RoleKeys.mode).mkString(", ")}")
+            None
+          }
+      }
+    }
+
     private def roles(node: YamlNode, scope: Option[Harness]): List[RoleAssignment] =
-      keyed(node, Roles, AgentRole.all) { (role, value) =>
-        roleValue(role, scope, value).map { case (choice, positions) =>
-          references += AgentRoleKey(scope, RoleKey.Plain(role)) -> positions
-          choice
+      entries(node, s"the keys ${listed(Roles, AgentRole.all)}, or role/mode for one mode of a role").flatMap { case (name, value) =>
+        for {
+          key <- roleKey(name)
+          (choice, positions) <- roleValue(RoleKeys.role(key), scope, value)
+        } yield {
+          references += AgentRoleKey(scope, key) -> positions
+          RoleAssignment(key, choice)
         }
-      }.toList.map { case (role, choice) => RoleAssignment(RoleKey.Plain(role), choice) }
+      }
 
     // In `harnesses.<harness>.roles` the governing harness is that harness, so a `$harness` reference there is checked as a named one.
     private def reference(scalar: YamlNode.Scalar, scope: Option[Harness]): Option[ModelReference] =

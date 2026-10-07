@@ -57,17 +57,21 @@ final class AgentsDoctor(reader: AgentsReader) {
     case positioned => origin.fold("")(value => layer(value.layer) + " ") + AgentConfigText.describe(positioned)
   }
 
-  private def role(governing: Harness, role: AgentRole, view: AgentsView): (InstallationCheck, List[ModelRoute]) = {
-    val name = s"Role ${lower(role)}"
-    view.assignments.find(value => value.harness == governing && RoleKeys.role(value.key) == role).map(_.resolution) match {
-      case None => check(name, false, "Not resolved: a layer of the configuration has problems") -> Nil
-      case Some(RoleResolution.Unresolved(origin, problems)) => check(name, false, problems.map(remedy(_, origin)).mkString("; ")) -> Nil
-      case Some(RoleResolution.Resolved(plan)) =>
-        val selfReview = if (plan.selfReview.isEmpty) "" else
-          s"; self-review: ${if (plan.selfReview.size == 1) "seat" else "seats"} ${plan.selfReview.map(_ + 1).mkString(", ")} of ${plan.seats.size} can run a model of ${lower(governing)}, the governing harness"
-        check(name, true, s"${AgentConfigText.render(plan)} (${source(plan.origin, governing)})$selfReview") -> plan.seats.flatMap(_.candidates)
+  /** One check for each key that decides work of the role: the key of the role, and the key of each mode that has one of its own. */
+  private def role(governing: Harness, role: AgentRole, view: AgentsView): List[(RoleKey, InstallationCheck, List[ModelRoute])] =
+    view.assignments.filter(value => value.harness == governing && RoleKeys.role(value.key) == role) match {
+      case Nil => List((RoleKey.Plain(role), check(s"Role ${lower(role)}", false, "Not resolved: a layer of the configuration has problems"), Nil))
+      case assigned => assigned.map { assignment =>
+        val name = s"Role ${RoleKeys.text(assignment.key)}"
+        assignment.resolution match {
+          case RoleResolution.Unresolved(origin, problems) => (assignment.key, check(name, false, problems.map(remedy(_, origin)).mkString("; ")), Nil)
+          case RoleResolution.Resolved(plan) =>
+            val selfReview = if (plan.selfReview.isEmpty) "" else
+              s"; self-review: ${if (plan.selfReview.size == 1) "seat" else "seats"} ${plan.selfReview.map(_ + 1).mkString(", ")} of ${plan.seats.size} can run a model of ${lower(governing)}, the governing harness"
+            (assignment.key, check(name, true, s"${AgentConfigText.render(plan)} (${source(plan.origin, governing)})$selfReview"), plan.seats.flatMap(_.candidates))
+        }
+      }
     }
-  }
 
   def inspect(governing: Harness, projectFile: Path, settingsFile: Path, environment: Map[String, String]): InstallationReport = {
     val project = Try(HostFiles.read(projectFile.toRealPath(), ProjectConfig_JsonCodec, MaxBytes))
@@ -82,23 +86,23 @@ final class AgentsDoctor(reader: AgentsReader) {
       case Success(Failure(_)) => List(check("Configuration", false,
         "Cannot read the agent configuration; verify the endpoint and project of the project file, the operator credential and server availability"))
       case Success(Success(view)) =>
-        val roles = AgentRole.all.map(value => value -> role(governing, value, view))
-        val used = roles.flatMap { case (value, (_, routes)) => routes.map(_ -> value) }
+        val roles = AgentRole.all.flatMap(role(governing, _, view))
+        val used = roles.flatMap { case (key, _, routes) => routes.map(_ -> key) }
         check("Configuration", true, "Read from the server") :: document("Server defaults", view.installation) :: document("Project override", view.project) ::
-          roles.map(_._2._1) ::: settings(settingsFile, used)
+          roles.map(_._2) ::: settings(settingsFile, used)
     }
     InstallationReport("agents", identity ::: checks)
   }
 
   /** The settings entry of every harness a resolved route runs on, and the provider a route without one takes from it. */
-  private def settings(file: Path, used: List[(ModelRoute, AgentRole)]): List[InstallationCheck] = {
+  private def settings(file: Path, used: List[(ModelRoute, RoleKey)]): List[InstallationCheck] = {
     val read = Try {
       val value = HostFiles.read(file.toRealPath(), SupervisorSettings_JsonCodec, MaxBytes)
       require(value.harnesses.map(_.harness).distinct.size == value.harnesses.size, "two entries name one harness")
       value
     }
     val entries = read.toOption.fold(Map.empty[Harness, HarnessSetting])(_.harnesses.map(value => value.harness -> value).toMap)
-    def referrers(harness: Harness): String = used.collect { case (route, value) if route.harness == harness => lower(value) }.distinct.mkString(", ")
+    def referrers(harness: Harness): String = used.collect { case (route, value) if route.harness == harness => RoleKeys.text(value) }.distinct.mkString(", ")
     val harnesses = Harness.all.filter(harness => used.exists(_._1.harness == harness))
     val entryChecks = harnesses.map { harness =>
       val name = s"Settings entry ${lower(harness)}"

@@ -481,6 +481,14 @@ abstract class ApplicationContractTest extends SpecZIO with AssertZIO {
             RoleResolution.Unresolved(None, List(AgentProblem.RoleUnassigned(Harness.Pi, AgentRole.Reviewer))))))
           stale <- replace(root, Project, Revision(0), "")
           _ <- assertIO(stale == Result.Failed(Fault.Conflict("Agent configuration of the project changed: expected revision 0, actual 1; reload before saving")))
+          // A key of a mode decides the work of that mode, and the reply names the key that decided.
+          moded = "defaults:\n  roles:\n    worker: claude:sonnet\n    worker/probe: claude:probe-model\n"
+          previewedMode <- call(root, project, AgentsAction.Preview(Project, moded)).map(view)
+          _ <- assertIO(previewedMode.project.problems.isEmpty && previewedMode.assignments == AgentResolution.assignments(parsed(defaults), parsed(moded)) &&
+            previewedMode.assignments.count(_.key == RoleKey.Worker(WorkerMode.Probe)) == Harness.all.size)
+          badMode <- call(root, project, AgentsAction.Preview(Project, "defaults:\n  roles:\n    worker/plan: claude:probe-model\n")).map(view)
+          _ <- assertIO(badMode.project.problems == List(AgentProblem.Syntax(TextPosition(3, 5),
+            "the key 'worker/plan' names no mode of the worker role; its modes are implement, probe, resolveconflict")) && badMode.assignments.isEmpty)
           staleDefaults <- replace(root, Installation, base, "")
           _ <- assertIO(staleDefaults == Result.Failed(Fault.Conflict(
             s"Agent configuration of the installation changed: expected revision ${base.value}, actual ${base.value + 1}; reload before saving")))

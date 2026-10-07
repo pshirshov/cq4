@@ -241,6 +241,59 @@ final class AgentConfigLocal extends AnyWordSpec {
       assert(problems(inRoles("{ fallback: [claude:opus], max: 1 }")) == List(AgentProblem.UnknownKey(at(1, 57), "max")))
     }
 
+    "read a key that names one mode of a role, beside the key of the role" in {
+      val text =
+        """defaults:
+          |  roles:
+          |    reviewer: claude:opus
+          |    reviewer/plan: codex:gpt
+          |    worker/probe: { rr: [claude:haiku, codex:gpt] }
+          |harnesses: { pi: { roles: { explorer/research: claude:opus, reviewer/audit: { any: [claude:opus, codex:gpt], min: 1 } } } }
+          |""".stripMargin
+      val opus = SeatChoice.Single(exact(named(Harness.Claude), "opus"))
+      val gpt = SeatChoice.Single(exact(named(Harness.Codex), "gpt"))
+      assert(parsed(text).config == AgentConfig(
+        List(
+          RoleAssignment(plain(AgentRole.Reviewer), RoleChoice.Seat(opus)),
+          RoleAssignment(RoleKey.Reviewer(ReviewerMode.Plan), RoleChoice.Seat(gpt)),
+          RoleAssignment(RoleKey.Worker(WorkerMode.Probe), RoleChoice.Seat(SeatChoice.Strategy(SeatStrategy.RoundRobin, List(exact(named(Harness.Claude), "haiku"), exact(named(Harness.Codex), "gpt")))))),
+        Map(Harness.Pi -> HarnessAgents(Map.empty, List(
+          RoleAssignment(RoleKey.Explorer(ExplorerMode.Research), RoleChoice.Seat(opus)),
+          RoleAssignment(RoleKey.Reviewer(ReviewerMode.Audit), RoleChoice.Panel(PanelMode.Any, List(opus, gpt), 1)))))))
+      // Every mode of the dispatch model has a key, spelled as the role, a slash and the mode in lower case.
+      val keys = List[(String, RoleKey)](
+        "worker/implement" -> RoleKey.Worker(WorkerMode.Implement), "worker/probe" -> RoleKey.Worker(WorkerMode.Probe), "worker/resolveconflict" -> RoleKey.Worker(WorkerMode.ResolveConflict),
+        "explorer/investigate" -> RoleKey.Explorer(ExplorerMode.Investigate), "explorer/research" -> RoleKey.Explorer(ExplorerMode.Research),
+        "reviewer/candidate" -> RoleKey.Reviewer(ReviewerMode.Candidate), "reviewer/plan" -> RoleKey.Reviewer(ReviewerMode.Plan), "reviewer/audit" -> RoleKey.Reviewer(ReviewerMode.Audit))
+      assert(keys.size == WorkerMode.all.size + ExplorerMode.all.size + ReviewerMode.all.size)
+      keys.foreach { case (key, expected) =>
+        assert(parsed(s"defaults:\n  roles:\n    $key: claude:opus\n").config.defaults == List(RoleAssignment(expected, RoleChoice.Seat(opus))), key)
+        assert(parsed(s"harnesses: { codex: { roles: { \"$key\": claude:opus } } }").config.harnesses(Harness.Codex).roles == List(RoleAssignment(expected, RoleChoice.Seat(opus))), key)
+      }
+    }
+
+    "refuse a key whose mode its role does not have, naming the key and the modes of the role" in {
+      def key(text: String): List[AgentProblem] = problems(s"defaults: { roles: { $text: claude:opus } }")
+      val reviewer = "; its modes are candidate, plan, audit"
+      assert(key("reviewer/probe") == List(AgentProblem.Syntax(at(1, 22), "the key 'reviewer/probe' names no mode of the reviewer role" + reviewer)))
+      assert(key("reviewer/Plan") == List(AgentProblem.Syntax(at(1, 22), "the key 'reviewer/Plan' names no mode of the reviewer role" + reviewer)))
+      assert(key("reviewer/") == List(AgentProblem.Syntax(at(1, 22), "the key 'reviewer/' names no mode of the reviewer role" + reviewer)))
+      assert(key("reviewer/plan/audit") == List(AgentProblem.Syntax(at(1, 22), "the key 'reviewer/plan/audit' names no mode of the reviewer role" + reviewer)))
+      assert(key("worker/plan") == List(AgentProblem.Syntax(at(1, 22), "the key 'worker/plan' names no mode of the worker role; its modes are implement, probe, resolveconflict")))
+      assert(key("explorer/probe") == List(AgentProblem.Syntax(at(1, 22), "the key 'explorer/probe' names no mode of the explorer role; its modes are investigate, research")))
+      assert(key("planner/plan") == List(AgentProblem.Syntax(at(1, 22), "the key 'planner/plan' names a mode, and the planner role has none")))
+      assert(problems("harnesses:\n  pi:\n    roles:\n      worker/audit: pi:zai/a\n") ==
+        List(AgentProblem.Syntax(at(4, 7), "the key 'worker/audit' names no mode of the worker role; its modes are implement, probe, resolveconflict")))
+      // A key whose role is unknown is an unknown key, with or without a mode.
+      assert(key("governor/plan") == List(AgentProblem.UnknownKey(at(1, 22), "governor/plan")))
+      assert(key("/plan") == List(AgentProblem.UnknownKey(at(1, 22), "/plan")))
+      assert(key("Reviewer/plan") == List(AgentProblem.UnknownKey(at(1, 22), "Reviewer/plan")))
+      // The other keys of the mapping are read all the same, and a key is written once.
+      assert(problems("defaults: { roles: { reviewer/probe: claude:opus, worker/implement: pi:glm } }") == List(
+        AgentProblem.Syntax(at(1, 22), "the key 'reviewer/probe' names no mode of the reviewer role" + reviewer), AgentProblem.ProviderRequired(at(1, 69), Harness.Pi)))
+      assert(syntax("defaults:\n  roles:\n    reviewer/plan: claude:opus\n    reviewer/plan: claude:opus\n").at == at(4, 5))
+    }
+
     "report an empty list wherever a list is required" in {
       assert(problems("harnesses: { pi: { tiers: { fast: [] } } }") == List(AgentProblem.EmptyList(at(1, 35))))
       assert(problems(inRoles("{ rr: [] }")) == List(AgentProblem.EmptyList(at(1, 36))))
@@ -270,6 +323,15 @@ final class AgentConfigLocal extends AnyWordSpec {
       }
       assert(parsed("harnesses: { pi: { roles: { reviewer: { all: [claude:opus, codex:gpt], min: 2 } } } }").config.harnesses(Harness.Pi).roles == List(RoleAssignment(plain(AgentRole.Reviewer),
         RoleChoice.Panel(PanelMode.All, List(SeatChoice.Single(exact(named(Harness.Claude), "opus")), SeatChoice.Single(exact(named(Harness.Codex), "gpt"))), 2))))
+      // A key of a mode takes what its role takes: a panel under every key of the reviewer role, and under no key of another.
+      List("candidate" -> ReviewerMode.Candidate, "plan" -> ReviewerMode.Plan, "audit" -> ReviewerMode.Audit).foreach { case (mode, expected) =>
+        assert(parsed(s"defaults: { roles: { reviewer/$mode: { any: [claude:opus, codex:gpt], min: 1 } } }").config.defaults == List(RoleAssignment(RoleKey.Reviewer(expected),
+          RoleChoice.Panel(PanelMode.Any, List(SeatChoice.Single(exact(named(Harness.Claude), "opus")), SeatChoice.Single(exact(named(Harness.Codex), "gpt"))), 1))), mode)
+      }
+      List("worker/implement" -> AgentRole.Worker, "worker/probe" -> AgentRole.Worker, "worker/resolveconflict" -> AgentRole.Worker,
+        "explorer/investigate" -> AgentRole.Explorer, "explorer/research" -> AgentRole.Explorer).foreach { case (key, role) =>
+        assert(problems(s"defaults: { roles: { $key: { all: [claude:opus], min: 1 } } }") == List(AgentProblem.PanelNotAllowed(at(1, 24 + key.length), role)), key)
+      }
     }
 
     "read a role value as a reference, a strategy, or a panel with one seat per entry" in {
@@ -586,6 +648,95 @@ final class AgentConfigLocal extends AnyWordSpec {
       // A role the project does not assign is inherited key by key; the project's other keys do not hide it.
       assert(resolved(installation, projectDefaults, Harness.Codex, AgentRole.Explorer) == one("installation-explorer", origin(AgentLayer.Installation, RoleSource.DefaultRoles)))
       assert(resolved("", projectDefaults, Harness.Pi, AgentRole.Worker) == one("project-default", origin(AgentLayer.Project, RoleSource.DefaultRoles)))
+    }
+
+    val modes =
+      """defaults: { roles: { reviewer: claude:base, reviewer/plan: claude:base-plan, worker/probe: claude:base-probe } }
+        |harnesses: { codex: { roles: { reviewer/audit: claude:codex-audit } } }
+        |""".stripMargin
+    // Every model of these texts is one of Claude, so that under the other harnesses no review is a self-review.
+    def decided(installation: String, project: String, governing: Harness, work: DispatchWork): (RoleKey, RoleResolution) = {
+      val assignment = AgentResolution.resolve(parsed(installation), parsed(project), governing, work)
+      assert(assignment.harness == governing)
+      assignment.key -> assignment.resolution
+    }
+    def review(mode: ReviewerMode): DispatchWork = DispatchWork.Reviewer(mode)
+    def by(key: RoleKey, model: String, layer: AgentLayer, source: RoleSource): (RoleKey, RoleResolution) = key -> RoleResolution.Resolved(one(model, origin(layer, source)))
+    def base(key: RoleKey, model: String): (RoleKey, RoleResolution) = by(key, model, AgentLayer.Installation, RoleSource.DefaultRoles)
+
+    "take the key of the mode over the key of the role in the place that holds both, and the key of the role for a mode without a key" in {
+      assert(decided(modes, "", Harness.Pi, review(ReviewerMode.Plan)) == base(RoleKey.Reviewer(ReviewerMode.Plan), "base-plan"))
+      assert(decided(modes, "", Harness.Pi, review(ReviewerMode.Candidate)) == base(plain(AgentRole.Reviewer), "base"))
+      assert(decided(modes, "", Harness.Pi, review(ReviewerMode.Audit)) == base(plain(AgentRole.Reviewer), "base"))
+      // The place of a harness that holds the key of a mode decides that mode alone.
+      assert(decided(modes, "", Harness.Codex, review(ReviewerMode.Audit)) == by(RoleKey.Reviewer(ReviewerMode.Audit), "codex-audit", AgentLayer.Installation, RoleSource.HarnessRoles))
+      assert(decided(modes, "", Harness.Codex, review(ReviewerMode.Plan)) == base(RoleKey.Reviewer(ReviewerMode.Plan), "base-plan"))
+      assert(decided(modes, "", Harness.Codex, review(ReviewerMode.Candidate)) == base(plain(AgentRole.Reviewer), "base"))
+      // A key of a mode assigns nothing to the other modes of its role.
+      assert(decided(modes, "", Harness.Pi, DispatchWork.Worker(WorkerMode.Probe)) == base(RoleKey.Worker(WorkerMode.Probe), "base-probe"))
+      List(WorkerMode.Implement, WorkerMode.ResolveConflict).foreach { mode =>
+        assert(decided(modes, "", Harness.Pi, DispatchWork.Worker(mode)) ==
+          (plain(AgentRole.Worker) -> RoleResolution.Unresolved(None, List(AgentProblem.RoleUnassigned(Harness.Pi, AgentRole.Worker)))), mode.toString)
+      }
+    }
+
+    "let the first place that holds the key of the mode or the key of the role decide, in the order of the places" in {
+      val projectCodex = "harnesses: { codex: { roles: { reviewer: claude:project-codex } } }"
+      val projectDefault = "defaults: { roles: { reviewer: claude:project-default } }"
+      val projectPlan = "defaults: { roles: { reviewer/plan: claude:project-plan } }"
+      // The key of the role in an earlier place beats the key of the mode in a later one.
+      ReviewerMode.all.foreach { mode =>
+        assert(decided(modes, projectCodex, Harness.Codex, review(mode)) == by(plain(AgentRole.Reviewer), "project-codex", AgentLayer.Project, RoleSource.HarnessRoles), mode.toString)
+        List(Harness.Codex, Harness.Pi).foreach(harness =>
+          assert(decided(modes, projectDefault, harness, review(mode)) == by(plain(AgentRole.Reviewer), "project-default", AgentLayer.Project, RoleSource.DefaultRoles), s"$harness $mode"))
+      }
+      assert(decided(modes, projectCodex, Harness.Pi, review(ReviewerMode.Plan)) == by(RoleKey.Reviewer(ReviewerMode.Plan), "base-plan", AgentLayer.Installation, RoleSource.DefaultRoles))
+      // The key of the mode in an earlier place decides its mode, and the other modes go on to the later places.
+      assert(decided(modes, projectPlan, Harness.Codex, review(ReviewerMode.Plan)) == by(RoleKey.Reviewer(ReviewerMode.Plan), "project-plan", AgentLayer.Project, RoleSource.DefaultRoles))
+      assert(decided(modes, projectPlan, Harness.Codex, review(ReviewerMode.Audit)) == by(RoleKey.Reviewer(ReviewerMode.Audit), "codex-audit", AgentLayer.Installation, RoleSource.HarnessRoles))
+      assert(decided(modes, projectPlan, Harness.Codex, review(ReviewerMode.Candidate)) == by(plain(AgentRole.Reviewer), "base", AgentLayer.Installation, RoleSource.DefaultRoles))
+      assert(decided(modes, projectPlan + "\n" + projectCodex, Harness.Codex, review(ReviewerMode.Plan)) == by(plain(AgentRole.Reviewer), "project-codex", AgentLayer.Project, RoleSource.HarnessRoles))
+    }
+
+    "list a role once for its own key and once for every key of a mode that decides that mode" in {
+      def keys(installation: String, project: String, harness: Harness): List[RoleKey] =
+        AgentResolution.assignments(parsed(installation), parsed(project)).filter(_.harness == harness).map(_.key)
+      val others = List(plain(AgentRole.Planner), plain(AgentRole.Worker), RoleKey.Worker(WorkerMode.Probe), plain(AgentRole.Explorer))
+      assert(keys(modes, "", Harness.Claude) == others ++ List(plain(AgentRole.Reviewer), RoleKey.Reviewer(ReviewerMode.Plan)))
+      assert(keys(modes, "", Harness.Codex) == others ++ List(plain(AgentRole.Reviewer), RoleKey.Reviewer(ReviewerMode.Plan), RoleKey.Reviewer(ReviewerMode.Audit)))
+      // A key of a mode that an earlier key of the role hides decides nothing and is not listed.
+      assert(keys(modes, "defaults: { roles: { reviewer: claude:project-default } }", Harness.Codex) == others :+ plain(AgentRole.Reviewer))
+      // The key of the role comes first whichever mode it decides, and is left out when every mode has a key of its own.
+      assert(keys("defaults: { roles: { reviewer: claude:a, reviewer/candidate: claude:b } }", "", Harness.Pi).drop(3) == List(plain(AgentRole.Reviewer), RoleKey.Reviewer(ReviewerMode.Candidate)))
+      assert(keys("defaults: { roles: { explorer/investigate: claude:a, explorer/research: claude:b, explorer: claude:c } }", "", Harness.Pi) ==
+        List(plain(AgentRole.Planner), plain(AgentRole.Worker), RoleKey.Explorer(ExplorerMode.Investigate), RoleKey.Explorer(ExplorerMode.Research), plain(AgentRole.Reviewer)))
+      val listed = AgentResolution.assignments(parsed(modes), ParsedAgents.empty)
+      assert(listed.find(value => value.harness == Harness.Codex && value.key == RoleKey.Reviewer(ReviewerMode.Audit)).map(_.resolution).contains(
+        RoleResolution.Resolved(one("codex-audit", origin(AgentLayer.Installation, RoleSource.HarnessRoles)))))
+      assert(listed.find(value => value.harness == Harness.Codex && value.key == plain(AgentRole.Worker)).map(_.resolution).contains(
+        RoleResolution.Unresolved(None, List(AgentProblem.RoleUnassigned(Harness.Codex, AgentRole.Worker)))))
+    }
+
+    "resolve the value of a key of a mode as the value of a role: its positions, its tiers and its self-review" in {
+      val text =
+        """defaults:
+          |  roles:
+          |    reviewer: claude:opus
+          |    reviewer/plan: { all: [claude:opus, $harness:own], min: 1 }
+          |    worker/probe: $harness:@fast
+          |""".stripMargin
+      val defaults = Some(origin(AgentLayer.Installation, RoleSource.DefaultRoles))
+      assert(decided(text, "", Harness.Codex, review(ReviewerMode.Plan))._2 == RoleResolution.Resolved(ResolvedRole(PanelMode.All, 1,
+        List(fallback(route(Harness.Claude, "opus")), fallback(route(Harness.Codex, "own"))), defaults.get, List(1))))
+      assert(decided(text, "", Harness.Codex, review(ReviewerMode.Audit))._2 == RoleResolution.Resolved(one("opus", defaults.get)))
+      // The problem of a reference stands where the key of the mode wrote it.
+      assert(decided(text, "", Harness.Pi, review(ReviewerMode.Plan)) ==
+        (RoleKey.Reviewer(ReviewerMode.Plan) -> RoleResolution.Unresolved(defaults, List(AgentProblem.ProviderRequired(at(4, 41), Harness.Pi)))))
+      assert(decided(text, "", Harness.Pi, DispatchWork.Worker(WorkerMode.Probe)) ==
+        (RoleKey.Worker(WorkerMode.Probe) -> RoleResolution.Unresolved(defaults, List(AgentProblem.TierUndefined(Harness.Pi, ModelTier.Fast, AgentRole.Worker)))))
+      // A review alone is a self-review.
+      assert(decided("defaults: { roles: { worker/probe: $harness:own } }", "", Harness.Codex, DispatchWork.Worker(WorkerMode.Probe))._2 ==
+        RoleResolution.Resolved(ResolvedRole(PanelMode.All, 1, List(fallback(route(Harness.Codex, "own"))), defaults.get, Nil)))
     }
 
     "report a role that no layer assigns, for the governing harness" in {

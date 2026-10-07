@@ -356,9 +356,11 @@ final class UnitProgressLocal extends AnyWordSpec {
       assert(List(0L, 1L, 2L).map(low => new SeatRotation(session(low)).next(RoleKey.Plain(AgentRole.Worker), 0, candidates)) == List(0, 1, 2))
       assert(SeatRotation.offset(session(5L)) == 5L)
     }
-    "keep one position for each role, seat index and candidate list" in {
+    "keep one position for each key of a role, seat index and candidate list" in {
       val rotation = new SeatRotation(session(0L))
       assert(List.fill(2)(rotation.next(RoleKey.Plain(AgentRole.Reviewer), 0, candidates)) == List(0, 1))
+      // The key of a mode has its own position, apart from the key of its role and from the keys of the other modes.
+      assert(List.fill(2)(rotation.next(RoleKey.Reviewer(ReviewerMode.Plan), 0, candidates)) == List(0, 1) && rotation.next(RoleKey.Reviewer(ReviewerMode.Audit), 0, candidates) == 0)
       assert(rotation.next(RoleKey.Plain(AgentRole.Worker), 0, candidates) == 0 && rotation.next(RoleKey.Plain(AgentRole.Reviewer), 1, candidates) == 0)
       assert(rotation.next(RoleKey.Plain(AgentRole.Reviewer), 0, candidates.reverse) == 0 && rotation.next(RoleKey.Plain(AgentRole.Reviewer), 0, candidates.take(2)) == 0)
       assert(rotation.next(RoleKey.Plain(AgentRole.Reviewer), 0, candidates) == 2 && rotation.next(RoleKey.Plain(AgentRole.Reviewer), 0, candidates) == 0)
@@ -608,6 +610,14 @@ final class UnitProgressLocal extends AnyWordSpec {
       assert(DispatchUnits.unresolved(Harness.Pi, RoleKey.Plain(AgentRole.Planner), Some(RoleOrigin(AgentLayer.Project, RoleSource.HarnessRoles)),
         List(AgentProblem.ProviderRequired(TextPosition(3, 14), Harness.Pi))) ==
         "the planner role for governing harness pi cannot run as harnesses.pi.roles.planner of this project's agent configuration assigns it: 3:14: a pi model is written provider/model")
+      // A key of a mode is named as it is written.
+      assert(DispatchUnits.unresolved(Harness.Pi, RoleKey.Reviewer(ReviewerMode.Plan), Some(RoleOrigin(AgentLayer.Project, RoleSource.HarnessRoles)),
+        List(AgentProblem.ProviderRequired(TextPosition(3, 14), Harness.Pi))) ==
+        "the reviewer role for governing harness pi cannot run as harnesses.pi.roles.reviewer/plan of this project's agent configuration assigns it: 3:14: a pi model is written provider/model")
+      assert(DispatchUnits.unresolved(Harness.Pi, RoleKey.Worker(WorkerMode.ResolveConflict), Some(RoleOrigin(AgentLayer.Installation, RoleSource.DefaultRoles)),
+        List(AgentProblem.TierUndefined(Harness.Claude, ModelTier.Fast, AgentRole.Worker))) ==
+        "the worker role for governing harness pi (defaults.roles.worker/resolveconflict of the server's default agent configuration) refers to the fast tier of claude, which no layer defines: " +
+          "set harnesses.claude.tiers.fast in the agent configuration")
       assert(RoleKeys.role(DispatchWork.Worker(WorkerMode.Probe)) == AgentRole.Worker && RoleKeys.role(DispatchWork.Reviewer(ReviewerMode.Audit)) == AgentRole.Reviewer &&
         RoleKeys.role(DispatchWork.Planner()) == AgentRole.Planner && RoleKeys.role(DispatchWork.Explorer(ExplorerMode.Research)) == AgentRole.Explorer)
     }

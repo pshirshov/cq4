@@ -69,6 +69,22 @@ function sourceText(origin: api.RoleOrigin, governing: api.Harness): string {
   const layer = origin.layer === api.AgentLayer.Installation ? 'server' : 'project';
   return origin.source === api.RoleSource.HarnessRoles ? `${layer} harnesses.${lower(governing)}.roles` : `${layer} defaults.roles`;
 }
+// The modes of each role, in the order of the dispatch model; a key of a roles mapping names a role or one of its modes.
+const MODES: Record<api.AgentRole, ReadonlyArray<string>> = {
+  [api.AgentRole.Planner]: [], [api.AgentRole.Worker]: api.WorkerMode_values, [api.AgentRole.Explorer]: api.ExplorerMode_values, [api.AgentRole.Reviewer]: api.ReviewerMode_values,
+};
+function keyRole(key: api.RoleKey): api.AgentRole {
+  if (key instanceof api.RoleKey_Plain) return key.role;
+  if (key instanceof api.RoleKey_Explorer) return api.AgentRole.Explorer;
+  if (key instanceof api.RoleKey_Worker) return api.AgentRole.Worker;
+  return api.AgentRole.Reviewer;
+}
+function keyMode(key: api.RoleKey): string | null { return key instanceof api.RoleKey_Plain ? null : key.mode; }
+/** The key as a configuration writes it: reviewer, or reviewer/plan for one mode. */
+function keyText(key: api.RoleKey): string {
+  const mode = keyMode(key);
+  return lower(keyRole(key)) + (mode === null ? '' : `/${lower(mode)}`);
+}
 
 interface LayerView {
   section: HTMLElement; text: HTMLTextAreaElement; metadata: HTMLParagraphElement; save: HTMLButtonElement; error: HTMLParagraphElement; conflict: HTMLElement;
@@ -308,25 +324,39 @@ export class AgentsDialog {
     this.previewPanel.dataset.state = preview.state;
     this.previewPanel.replaceChildren(element('h3', 'Preview: who runs each role'), note, ...(preview.assignments.length === 0 ? [] : [this.table(preview.assignments)]));
   }
-  /** Roles down, governing harnesses across: twelve cells, each with its seats, where the role was found and whether it is a self-review. */
+  /**
+   * Roles down, governing harnesses across: each cell with its seats, where the role was found and whether it is a self-review. A mode
+   * that a key of its own decides under some harness has a row after the row of its role, which then stands for the other modes; a
+   * harness without that key shows there what its key of the role assigns, and says so in the source.
+   */
   private table(assignments: api.ResolvedAssignment[]): HTMLTableElement {
     const table = element('table', ''); table.className = 'agents-table'; table.setAttribute('aria-label', 'Resolved models by governing harness and role');
     const head = element('thead', ''); const headings = element('tr', ''); const corner = element('th', 'Role'); corner.scope = 'col'; headings.append(corner);
     for (const harness of api.Harness_values) { const cell = element('th', `${harnessName(harness)} governs`); cell.scope = 'col'; headings.append(cell); }
     head.append(headings); const body = element('tbody', '');
     for (const role of api.AgentRole_values) {
-      const line = element('tr', ''); const name = element('th', role); name.scope = 'row'; line.append(name);
-      for (const harness of api.Harness_values) {
-        const assignment = assignments.find(candidate => candidate.harness === harness && candidate.key instanceof api.RoleKey_Plain && candidate.key.role === role);
-        const cell = element('td', ''); cell.dataset.harness = harness; cell.dataset.role = role;
-        if (assignment === undefined) cell.append('—'); else this.cell(cell, assignment);
-        line.append(cell);
+      const assigned = assignments.filter(candidate => keyRole(candidate.key) === role);
+      const modes = MODES[role].filter(mode => assigned.some(candidate => keyMode(candidate.key) === mode));
+      const rows: Array<string | null> = assigned.length === 0 || assigned.some(candidate => keyMode(candidate.key) === null) ? [null, ...modes] : modes;
+      for (const mode of rows) {
+        const line = element('tr', ''); const name = element('th', mode === null ? role : `${role}/${mode}`); name.scope = 'row';
+        if (mode === null && modes.length > 0) { const rest = element('span', 'other modes'); rest.className = 'agents-other-modes'; name.append(' ', rest); }
+        line.append(name);
+        for (const harness of api.Harness_values) {
+          const under = assigned.filter(candidate => candidate.harness === harness);
+          const assignment = under.find(candidate => keyMode(candidate.key) === mode) ?? under.find(candidate => keyMode(candidate.key) === null);
+          const cell = element('td', ''); cell.dataset.harness = harness; cell.dataset.role = role;
+          if (mode !== null) cell.dataset.mode = mode;
+          if (assignment === undefined) cell.append('—'); else this.cell(cell, assignment, mode === null ? null : assignment.key);
+          line.append(cell);
+        }
+        body.append(line);
       }
-      body.append(line);
     }
     table.append(head, body); return table;
   }
-  private cell(cell: HTMLTableCellElement, assignment: api.ResolvedAssignment): void {
+  // `key`: the key the source names. The row of a mode names it, because either the key of the mode or the key of its role decides there.
+  private cell(cell: HTMLTableCellElement, assignment: api.ResolvedAssignment, key: api.RoleKey | null): void {
     const resolution = assignment.resolution;
     if (resolution instanceof api.RoleResolution_Unresolved) {
       cell.className = 'agents-unresolved'; cell.dataset.state = 'unresolved';
@@ -337,7 +367,7 @@ export class AgentsDialog {
         item.append(element('span', problemText(problem))); list.append(item);
       }
       cell.append(element('strong', 'Not resolved'), list);
-      if (resolution.origin !== undefined) cell.append(this.source(resolution.origin, assignment.harness));
+      if (resolution.origin !== undefined) cell.append(this.source(resolution.origin, assignment.harness, key));
       return;
     }
     const plan = resolution.plan; cell.dataset.state = 'resolved';
@@ -356,14 +386,14 @@ export class AgentsDialog {
       for (const route of seat.candidates) { const model = element('code', routeText(route)); model.className = 'agents-route'; item.append(model); }
       seats.append(item);
     }
-    cell.append(seats, this.source(plan.origin, assignment.harness));
+    cell.append(seats, this.source(plan.origin, assignment.harness, key));
     if (plan.selfReview.length > 0) {
       const note = element('p', `Self-review${single ? '' : ` (seat ${plan.selfReview.map(index => index + 1).join(', ')})`}: a model of ${harnessName(assignment.harness)}, the governing harness, can review its own work.`);
       note.className = 'agents-self-review'; cell.append(note);
     }
   }
-  private source(origin: api.RoleOrigin, governing: api.Harness): HTMLParagraphElement {
-    const source = element('p', `from ${sourceText(origin, governing)}`); source.className = 'agents-source';
+  private source(origin: api.RoleOrigin, governing: api.Harness, key: api.RoleKey | null): HTMLParagraphElement {
+    const source = element('p', `from ${sourceText(origin, governing)}${key === null ? '' : `.${keyText(key)}`}`); source.className = 'agents-source';
     source.dataset.layer = layerOf(origin.layer); source.dataset.source = origin.source;
     return source;
   }
