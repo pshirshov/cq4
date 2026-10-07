@@ -21,18 +21,23 @@ final class LineageTracker(client: DriverSessionClient, report: String => Unit, 
   private val Attempts = 6
   // A followed member and how often the session has resumed it.
   private var tracked = Map.empty[(CycleId, LineageMember), Long]
+  // The members whose follower has ended: their end was reported, or they were given up. A unit names its attempts again at each of
+  // its readings, and one that is named again after its end is not registered and reported a second time.
+  private var ended = Set.empty[(CycleId, LineageMember)]
   // Orders a report that a member rests against a report that the session resumed it.
   private val reports = Unsafe.unsafe { implicit unsafe => Semaphore.unsafe.make(1) }
   private def fresh(cycle: CycleId, member: LineageMember): Boolean = synchronized {
-    val added = !tracked.contains((cycle, member))
+    val added = !tracked.contains((cycle, member)) && !ended((cycle, member))
     if (added) tracked += (cycle, member) -> 0L
     added
   }
-  private def finished(cycle: CycleId, member: LineageMember): Unit = synchronized { tracked -= ((cycle, member)) }
+  private def finished(cycle: CycleId, member: LineageMember): Unit = synchronized { tracked -= ((cycle, member)); ended += ((cycle, member)) }
   private def resumes(cycle: CycleId, member: LineageMember): Long = synchronized(tracked.getOrElse((cycle, member), 0L))
   private def resumed(cycle: CycleId, member: LineageMember): Boolean = synchronized {
     val count = tracked.get((cycle, member))
     count.foreach(value => tracked += (cycle, member) -> (value + 1))
+    // The host works again on a member whose follower had ended: it is followed anew.
+    if (count.isEmpty) ended -= ((cycle, member))
     count.nonEmpty
   }
 

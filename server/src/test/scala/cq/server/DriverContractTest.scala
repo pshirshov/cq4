@@ -2527,6 +2527,49 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
       } yield ()
     }
 
+    "I17: report the end of a member once, although a unit names its attempts again at each of its readings, and follow it again when the session resumes it" in {
+      (service: LedgerService[IO], registry: DriverInspector) =>
+      val w = world
+      val session = w.copy(governor = w.other(Role.Governor))
+      val key = claude("tracker-once")
+      val request = LineageMember.Request(RequestId(uuid))
+      val attempt = LineageMember.Attempt(AttemptId(uuid))
+      val integration = LineageMember.Integration(IntegrationId(uuid))
+      val sent = new java.util.concurrent.ConcurrentLinkedQueue[DriverSession]()
+      def count(matches: PartialFunction[DriverSession, Boolean]): Int = { import scala.jdk.CollectionConverters.*; sent.asScala.count(matches.applyOrElse(_, (_: DriverSession) => false)) }
+      def settled(member: LineageMember): IO[Throwable, Unit] = (ZIO.sleep(zio.Duration.fromMillis(20)) *> ZIO.succeed(registry.get(w.project, key).flatMap(_.cycle)))
+        .repeatUntil(_.exists(_.lineage.exists(entry => entry.member == member && entry.settled)))
+        .timeoutFail(new IllegalStateException(s"$member was not settled"))(zio.Duration.fromSeconds(30)).unit
+      // Long enough for a follower that has reported its member's end to finish, and for one that should not exist to report.
+      val quiet = ZIO.sleep(Pause.multipliedBy(40))
+      for {
+        _ <- service.initialize(w.operator, "tracker-once")
+        runtime <- ZIO.runtime[Any]
+        root <- create(service, w.operator, goal("tracker-once"))
+        one <- driven(service, session, key, workset(root))
+        run = LineageMember.Run(one.run)
+        tracker = new LineageTracker(new DriverSessionClient(new SessionApi(service, session.governor, runtime, action => { sent.add(action); false }), w.project), _ => (), Pause, Pause, Pause.multipliedBy(4))
+        ended <- zio.Ref.make(Option.empty[LineageOutcome])
+        outcome = ChildOutcome(attempt.id, List(root), ChildEnd.Admitted, Some("input"), None)
+        concluded = ZIO.some(LineageOutcome.Concluded(outcome))
+        // The unit is in flight as its request; its first attempt has ended and the host goes on to the next candidate.
+        _ <- tracker.track(one.cycle, run, request, ended.get)
+        _ <- tracker.track(one.cycle, request, attempt, concluded)
+        _ <- settled(attempt) *> quiet
+        // The unit's follower names every attempt of the unit at each reading, the concluded one too.
+        _ <- ZIO.foreachDiscard(1 to 3)(_ => tracker.track(one.cycle, request, attempt, concluded) *> quiet)
+        _ <- ended.set(Some(LineageOutcome.Settled)) *> settled(request) *> quiet
+        _ <- ZIO.attempt(assert(count { case DriverSession.Inherit(_, _, `attempt`) => true } == 1 && count { case DriverSession.Conclude(_, value) => value.attempt == attempt.id } == 1,
+          sent.toString))
+        // A member whose follower ended is followed again when the session makes the host work on it again.
+        phase <- zio.Ref.make[Option[LineageOutcome]](Some(LineageOutcome.Settled))
+        _ <- tracker.track(one.cycle, run, integration, phase.get)
+        _ <- settled(integration) *> quiet
+        _ <- tracker.resume(one.cycle, run, integration, phase.get) *> quiet
+        _ <- ZIO.attempt(assert(count { case DriverSession.Inherit(_, _, `integration`) => true } == 2 && count { case DriverSession.Settle(_, `integration`) => true } == 2, sent.toString))
+      } yield ()
+    }
+
     "report a member the session resumed as in flight before the resume returns, whatever the tracker read or reported before it" in {
       (service: LedgerService[IO], registry: DriverInspector) =>
       val w = world
