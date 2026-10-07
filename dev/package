@@ -95,7 +95,7 @@ export CQ_ORIGIN=http://127.0.0.1:8080
         "integrationTarget": None, "stateRoot": "/absolute/private/cq-sessions", "guardian": str(guardian),
         "harnesses": [{"harness": "Codex", "executable": "/absolute/path/codex", "model": "gpt-6-sol",
                        "provider": "openai", "version": "0.156.1", "providerExtensions": [], "providerEnvironment": []}],
-        "limits": {"startupMillis": "10000", "heartbeatMillis": "2000",
+        "limits": {"startupMillis": "10000", "heartbeatMillis": "10000",
                    "graceMillis": "1000", "killMillis": "3000", "retainedOutputBytes": 1048576},
         "checks": [], "evaluation": None,
     }, indent=2) + "\n")

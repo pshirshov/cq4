@@ -83,7 +83,7 @@ SIGTERM with a 30-second stop bound; it does not drain externally owned harnesse
         } ];
         limits = {
           startupMillis = 10000;
-          heartbeatMillis = 2000;
+          heartbeatMillis = 10000;
           graceMillis = 1000;
           killMillis = 3000;
           retainedOutputBytes = 1048576;
