@@ -467,6 +467,9 @@ class PostgreSQLInstall(unittest.TestCase):
                         ("00000000-0000-0000-0000-000000000003", "'00000000-0000-0000-0000-000000000001'", "'{\"value\":{\"state\":\"Failed\"}}'", {"role": "Reviewer", "collector": "native", "model": "m", "nested": {"effort": "inner"}})]
             running(["-c", "CREATE TABLE cq_schema_migrations (version integer PRIMARY KEY, checksum text NOT NULL)", "-c", f"INSERT INTO cq_schema_migrations VALUES (1, '{step['schemaBefore']}')",
                      "-f", str(root / "earlier.sql"),
+                     # As an earlier update left it: a column added to an existing table stands after the columns the schema file declares later.
+                     "-c", "ALTER TABLE cq_items DROP COLUMN severity",
+                     "-c", "ALTER TABLE cq_items ADD COLUMN severity text CHECK (severity IN ('Critical', 'High', 'Medium', 'Low'))",
                      "-c", f"INSERT INTO cq_projects(project_id, body) VALUES ('{project}', '{{}}')",
                      "-c", f"INSERT INTO cq_usage_assignments(project_id, assignment_id, attribution, actor, received_at, body) VALUES ('{project}', '{assignment}', 'Unattributed', '{{}}', 1, '{{}}')"] +
                     [argument for identity, parent, outcome, body in attempts for argument in ("-c",

@@ -177,7 +177,21 @@ class InstallationSettingsAndAttemptEffort:
         """The tables, constraints and indexes of a database apart from the migration record, which the server creates itself."""
         text = database.run(["pg_dump", "--schema-only", "--no-owner", "--no-privileges", f"--exclude-table={MIGRATIONS}", "--dbname", name], label, 120)
         # pg_dump protects each dump with a key of its own.
-        return [line for line in text.splitlines() if not line.startswith(("\\restrict", "\\unrestrict"))]
+        lines = [line for line in text.splitlines() if not line.startswith(("\\restrict", "\\unrestrict"))]
+        # A column an earlier update added stands last in its table, wherever the schema file declares it: the entries of a table compare without their order.
+        ordered, entries = [], None
+        for line in lines:
+            if entries is None:
+                ordered.append(line)
+                if line.startswith("CREATE TABLE ") and line.endswith("("):
+                    entries = []
+            elif line == ");":
+                ordered.extend(sorted(entries) + [line])
+                entries = None
+            else:
+                entries.append(line.removesuffix(","))
+        require(entries is None, "Unterminated table in the dumped structure")
+        return ordered
 
     def capture(self, database: Database) -> None:
         self.attempts = self.rows(database, "attempts-before")
