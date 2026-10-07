@@ -204,6 +204,31 @@ abstract class UsageContractTest extends SpecZIO with AssertZIO {
       } yield ()
     }
 
+    "D162: list attempts by start time, newest first, with the attempt ID as tie-breaker, in pages that neither repeat nor skip one" in { (usage: UsageService[IO], ledger: LedgerService[IO]) =>
+      val owner = scope()
+      for {
+        _ <- ledger.initialize(owner, "attempt order")
+        member <- task(ledger, owner, "Listed task")
+        work = assignment(owner, Set(member), Attribution.Direct, None)
+        _ <- usage.assign(collector(owner), work)
+        // Seven attempts whose IDs say nothing about when they started; three of them started in the same millisecond.
+        attempts = List(5000L, 1000L, 3000L, 3000L, 9000L, 3000L, 7000L).map(startedAt =>
+          Attempt(AttemptId(UUID.randomUUID()), work.id, None, owner.actor.session, Role.Worker, Harness.Codex, "test-provider", "model", "fixture-v1", startedAt, UsagePhase.Work, None))
+        _ <- ZIO.foreachDiscard(attempts)(usage.start(collector(owner), _))
+        expected = attempts.sortWith((left, right) => left.startedAt > right.startedAt || (left.startedAt == right.startedAt && left.id.value.toString > right.id.value.toString)).map(_.id)
+        whole <- usage.attempts(owner, UsageFilter.TaskOnly(member), None, None, 20)
+        _ <- assertIO(whole.entries.map(_.attempt.id) == expected && !whole.hasMore)
+        // Pages of two, one of which ends inside the tie.
+        first <- usage.attempts(owner, UsageFilter.TaskOnly(member), None, None, 2)
+        paged <- ZIO.iterate((first.entries.map(_.attempt.id), first))(_._2.hasMore) { (seen, page) =>
+          usage.attempts(owner, UsageFilter.TaskOnly(member), page.after, Some(page.cursor), 2).map(next => (seen ++ next.entries.map(_.attempt.id), next))
+        }
+        _ <- assertIO(paged._1 == expected && first.after.contains(expected(1)))
+        // A key that is no attempt of the project is refused instead of read as a position.
+        _ <- denied(usage.attempts(owner, UsageFilter.TaskOnly(member), Some(AttemptId(UUID.randomUUID())), None, 2))(_.isInstanceOf[Fault.Invalid])
+      } yield ()
+    }
+
     "keep the effort an attempt was launched with, and an abstained outcome with its reason, apart from failed and unknown ones" in { (usage: UsageService[IO], ledger: LedgerService[IO]) =>
       val owner = scope()
       val reason = "Abstained (Quota): Quota exceeded. Check your plan and billing details."
