@@ -87,6 +87,23 @@ class Peer:
         self.reader.join(timeout=2)
 
 
+# A host that is alive is waited for until it reaches the file sync a stall fixture latches: how long its start takes depends on the
+# machine (a JVM host once had not reached it after 20 s under load). A host that has exited fails the fixture at once with what it
+# wrote, and this bound only ends the wait for a host that stays alive and never arrives.
+HOST_LATCH_SECONDS = 300
+
+
+def latched(process, latch, name):
+    """Waits until the stalled host of `process` has entered the latched file sync; `latch` is the fixture's stall directory."""
+    began = time.monotonic()
+    while not (latch / "entered").exists():
+        exited = process.poll()
+        assert exited is None, f"{name} fsync latch not reached: the host exited with {exited}: {(latch / 'stderr').read_text()[-2000:]}"
+        assert time.monotonic() - began < HOST_LATCH_SECONDS, f"{name} fsync latch not reached by a live host within {HOST_LATCH_SECONDS} seconds"
+        time.sleep(0.05)
+    print(json.dumps({"latch": name, "seconds": round(time.monotonic() - began, 2)}), flush=True)
+
+
 def main():
     command = sys.argv[1:]
     root = Path(os.environ["CQ_ATTACHED_EVIDENCE"])
@@ -484,10 +501,7 @@ def main():
     with (latch / "stderr").open("w") as log:
         stalled = subprocess.Popen(command + ["host", "codex", "--executable", str(wrapper)], cwd=repository, env=native_env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log)
         try:
-            deadline = time.monotonic() + 20
-            while not (latch / "entered").exists() and time.monotonic() < deadline and stalled.poll() is None:
-                time.sleep(0.05)
-            assert (latch / "entered").exists(), "Initial fsync latch not reached"
+            latched(stalled, latch, "Initial")
             stalled.stdin.close()
             try:
                 assert stalled.wait(timeout=16) == 75
@@ -508,10 +522,7 @@ def main():
         try:
             stalled.tool("session", next_scope)
             stalled.send({"jsonrpc": "2.0", "id": 99, "method": "tools/call", "params": {"name": "dispatch", "arguments": {"Select": {"request": {**selection, "request": identity()}}}}})
-            deadline = time.monotonic() + 20
-            while not (latch / "entered").exists() and time.monotonic() < deadline and stalled.process.poll() is None:
-                time.sleep(0.05)
-            assert (latch / "entered").exists(), "Operation fsync latch not reached"
+            latched(stalled.process, latch, "Operation")
             try:
                 assert stalled.process.wait(timeout=46) == 75
             except subprocess.TimeoutExpired:
