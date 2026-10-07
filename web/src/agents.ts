@@ -66,6 +66,16 @@ function problemText(problem: api.AgentProblem): string {
 function problemPosition(problem: api.AgentProblem): api.TextPosition | null {
   return problem instanceof api.AgentProblem_RoleUnassigned || problem instanceof api.AgentProblem_TierUndefined ? null : problem.at;
 }
+/** A roles key where it is written: the path of the key, its layer and its line:column there. */
+function placedText(governing: api.Harness, value: api.PlacedRoleKey): string {
+  const layer = value.origin.layer === api.AgentLayer.Installation ? 'the server defaults' : 'the project override';
+  const part = value.origin.source === api.RoleSource.HarnessRoles ? `harnesses.${lower(governing)}.roles` : 'defaults.roles';
+  return `${part}.${keyText(value.key)} of ${layer} (${value.at.line}:${value.at.column})`;
+}
+/** One line for a key of one mode that has no effect for a governing harness. The wording follows the server's, which cq doctor agents prints. */
+function noteText(note: api.ShadowedRoleKey): string {
+  return `when ${lower(note.harness)} governs, ${placedText(note.harness, note.shadowed)} never decides: ${placedText(note.harness, note.by)} is found first and decides every mode of the ${lower(keyRole(note.by.key))} role`;
+}
 /** Where a role was found: the layer and the part of its text. */
 function sourceText(origin: api.RoleOrigin, governing: api.Harness): string {
   const layer = origin.layer === api.AgentLayer.Installation ? 'server' : 'project';
@@ -93,7 +103,7 @@ interface LayerView {
   // The revision the text in the editor was started from, null while it is loading.
   base: api.AgentsDocument | null; busy: boolean;
 }
-interface Preview { state: 'pending' | 'current' | 'invalid' | 'error'; note: string; assignments: api.ResolvedAssignment[] }
+interface Preview { state: 'pending' | 'current' | 'invalid' | 'error'; note: string; assignments: api.ResolvedAssignment[]; notes: api.ShadowedRoleKey[] }
 
 /**
  * Edits the agent model configuration: the server's defaults and this project's override, each a text under revision comparison.
@@ -111,7 +121,7 @@ export class AgentsDialog {
   private readonly drafts = new Map<string, { base: api.AgentsDocument; text: string }>();
   // The problems of each text as typed, from the latest Preview reply for it.
   private readonly problems: Record<AgentsLayer, api.AgentProblem[]> = { installation: [], project: [] };
-  private preview: Preview = { state: 'pending', note: '', assignments: [] };
+  private preview: Preview = { state: 'pending', note: '', assignments: [], notes: [] };
   // The layer edited last: the table shows its unsaved text against the other layer as saved.
   private active: AgentsLayer = 'project';
   // Request ordering: a Preview reply is used for its layer only when no later one was sent for that layer, and for the table
@@ -198,7 +208,7 @@ export class AgentsDialog {
     this.dialog.open('Agent models');
     // An unsaved text survives closing and reopening the dialog; a layer without one is read again.
     for (const layer of LAYERS) if (!this.dirty(layer)) this.unload(layer);
-    this.preview = { state: 'pending', note: 'Loading…', assignments: [] }; this.render();
+    this.preview = { state: 'pending', note: 'Loading…', assignments: [], notes: [] }; this.render();
     const generation = this.generation;
     this.action(null, async () => {
       const view = await this.read(project);
@@ -219,8 +229,8 @@ export class AgentsDialog {
     this.render();
   }
   private show(view: api.AgentsView, note: string): void {
-    this.preview = view.assignments.length > 0 ? { state: 'current', note, assignments: view.assignments }
-      : { state: 'invalid', note: 'The preview needs a valid text: correct the problems listed above.', assignments: [] };
+    this.preview = view.assignments.length > 0 ? { state: 'current', note, assignments: view.assignments, notes: view.notes }
+      : { state: 'invalid', note: 'The preview needs a valid text: correct the problems listed above.', assignments: [], notes: [] };
   }
   private schedule(layer: AgentsLayer): void {
     this.cancel(layer); this.layers[layer].error.hidden = true;
@@ -247,7 +257,7 @@ export class AgentsDialog {
     }).catch(error => {
       if (!current()) return;
       this.problems[layer] = [];
-      if (ticket === this.sequence) this.preview = { state: 'error', note: `No preview of ${TITLES[layer]}: ${error instanceof Error ? error.message : String(error)}`, assignments: [] };
+      if (ticket === this.sequence) this.preview = { state: 'error', note: `No preview of ${TITLES[layer]}: ${error instanceof Error ? error.message : String(error)}`, assignments: [], notes: [] };
       this.render();
     });
   }
@@ -324,7 +334,11 @@ export class AgentsDialog {
     const note = element('p', preview.note); note.className = preview.state === 'current' || preview.state === 'pending' ? 'revision-meta' : 'agents-unresolved';
     if (preview.state === 'error') note.setAttribute('role', 'alert'); else note.setAttribute('role', 'status');
     this.previewPanel.dataset.state = preview.state;
-    this.previewPanel.replaceChildren(element('h3', 'Preview: who runs each role'), note, ...(preview.assignments.length === 0 ? [] : [this.table(preview.assignments)]));
+    // A key of one mode that an earlier place hides is valid and has no effect: said beside the table, in the style of its other notes.
+    const hidden = element('ul', ''); hidden.className = 'agents-notes'; hidden.setAttribute('aria-label', 'Notes');
+    for (const value of preview.notes) hidden.append(element('li', `Note: ${noteText(value)}.`));
+    this.previewPanel.replaceChildren(element('h3', 'Preview: who runs each role'), note, ...(preview.assignments.length === 0 ? [] : [this.table(preview.assignments)]),
+      ...(preview.notes.length === 0 ? [] : [hidden]));
   }
   /**
    * Roles down, governing harnesses across: each cell with its seats, where the role was found and whether it is a self-review. A mode

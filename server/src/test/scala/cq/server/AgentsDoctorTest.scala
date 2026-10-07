@@ -37,7 +37,8 @@ harnesses:
     val overrides = AgentConfigText.parse(project)
     def document(text: String, problems: List[AgentProblem]) = AgentsDocument(Revision(if (text.isEmpty) 0 else 1), text, None, problems)
     AgentsView(document(installation, defaults.left.getOrElse(Nil)), document(project, overrides.left.getOrElse(Nil)),
-      (for { lower <- defaults; upper <- overrides } yield AgentResolution.assignments(lower, upper)).getOrElse(Nil))
+      (for { lower <- defaults; upper <- overrides } yield AgentResolution.assignments(lower, upper)).getOrElse(Nil),
+      (for { lower <- defaults; upper <- overrides } yield AgentResolution.shadowed(lower, upper)).getOrElse(Nil))
   }
 
   private final class Fixture extends AutoCloseable {
@@ -76,7 +77,7 @@ harnesses:
       Harness.all.foreach { harness =>
         val report = f.inspect(harness)
         assert(report.current && report.scope == "agents", report.toString)
-        assert(report.checks.map(_.name) == Names ++ List("Session settings", "Settings entry claude", "Settings entry codex", "Settings entry pi", "Providers").filter(name =>
+        assert(report.checks.map(_.name) == Names ++ List("Mode keys", "Session settings", "Settings entry claude", "Settings entry codex", "Settings entry pi", "Providers").filter(name =>
           name != "Settings entry codex" || harness == Harness.Codex))
       }
       assert(f.asked.forall(_ == (f.project -> token)) && f.asked.size == 3 && f.snapshot() == before)
@@ -180,7 +181,7 @@ harnesses:
       f.served = Some(view(Example, "defaults:\n  roles:\n    reviewer/plan: $harness:@frontier\n    worker/probe: pi:@fast\n    explorer/research: $harness:missing\n"))
       val codex = f.inspect(Harness.Codex)
       assert(codex.current && codex.checks.map(_.name) == List("Project", "Credential", "Configuration", "Server defaults", "Project override", "Role planner", "Role worker",
-        "Role worker/probe", "Role explorer", "Role explorer/research", "Role reviewer", "Role reviewer/plan", "Session settings", "Settings entry claude", "Settings entry codex",
+        "Role worker/probe", "Role explorer", "Role explorer/research", "Role reviewer", "Role reviewer/plan", "Mode keys", "Session settings", "Settings entry claude", "Settings entry codex",
         "Settings entry pi", "Providers"), codex.toString)
       assert(f.found(codex, "Role reviewer/plan") == InstallationCheck("Role reviewer/plan", InstallationState.Current,
         "codex:gpt-6.1-sol?effort=xhigh (project override, defaults.roles); self-review: seat 1 of 1 can run a model of codex, the governing harness"))
@@ -193,6 +194,17 @@ harnesses:
       val pi = f.inspect(Harness.Pi)
       assert(!pi.current && f.found(pi, "Role explorer").state == InstallationState.Current &&
         f.found(pi, "Role explorer/research") == InstallationCheck("Role explorer/research", InstallationState.Failed, "project override 5:24: a pi model is written provider/model"))
+    }
+    "note a mode key that never decides for the governing harness in a current check, and none for another harness" in Using.resource(new Fixture) { f =>
+      val server = "defaults:\n  roles:\n    planner: claude:opus\n    worker: claude:opus\n    explorer: claude:opus\n    reviewer: claude:opus\n    reviewer/plan: claude:sonnet\n" +
+        "harnesses:\n  codex:\n    roles:\n      reviewer: claude:haiku\n"
+      f.served = Some(view(server, ""))
+      val codex = f.inspect(Harness.Codex)
+      assert(codex.current && f.found(codex, "Mode keys") == InstallationCheck("Mode keys", InstallationState.Current,
+        "Note: when codex governs, defaults.roles.reviewer/plan of the server defaults (7:5) never decides: " +
+          "harnesses.codex.roles.reviewer of the server defaults (11:7) is found first and decides every mode of the reviewer role"))
+      val claude = f.inspect(Harness.Claude)
+      assert(claude.current && f.found(claude, "Mode keys") == InstallationCheck("Mode keys", InstallationState.Current, "Every key of one mode can decide when claude governs"))
     }
     "read the configuration of the project file's project from its endpoint with the operator credential" in Using.resource(new Fixture) { f =>
       @volatile var requests = List.empty[(String, String)]

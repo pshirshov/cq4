@@ -508,6 +508,14 @@ abstract class ApplicationContractTest extends SpecZIO with AssertZIO {
           previewedDefaults <- call(browser, project, AgentsAction.Preview(Installation, panel)).map(view)
           _ <- assertIO(previewedDefaults.project == written.project && previewedDefaults.assignments.isEmpty &&
             previewedDefaults.installation == written.installation.copy(text = panel, problems = List(AgentProblem.PanelNotAllowed(TextPosition(3, 13), AgentRole.Worker))))
+          // A key of one mode that an earlier place hides is noted, in a preview and after the save, and the text is saved all the same.
+          hiding = "harnesses: { codex: { roles: { worker: claude:sonnet } } }\n"
+          hidden = "defaults: { roles: { worker/probe: claude:opus } }\n"
+          _ <- assertIO(written.notes.isEmpty)
+          shadowing <- call(root, project, AgentsAction.Preview(Project, hiding + hidden)).map(view)
+          _ <- assertIO(shadowing.project.problems.isEmpty && shadowing.assignments.nonEmpty && shadowing.notes == List(ShadowedRoleKey(Harness.Codex,
+            PlacedRoleKey(RoleOrigin(AgentLayer.Project, RoleSource.DefaultRoles), RoleKey.Worker(WorkerMode.Probe), TextPosition(2, 22)),
+            PlacedRoleKey(RoleOrigin(AgentLayer.Project, RoleSource.HarnessRoles), RoleKey.Plain(AgentRole.Worker), TextPosition(1, 32)))))
           oversizedPreview <- call(root, project, AgentsAction.Preview(Project, "#" + "x" * bound))
           _ <- assertIO(oversizedPreview == Result.Failed(Fault.Invalid(s"Agent configuration exceeds $bound bytes: ${bound + 1} supplied")))
           unchanged <- read(root, project)

@@ -259,6 +259,19 @@ try {
     const planned = (await call({Agents: {input: {project, action: {Preview: {scope: {Project: {}}, text: moded}}}}})).Agents.value.assignments
       .filter(value => value.harness === 'Codex' && value.key.Reviewer !== undefined);
     assert.deepEqual(planned.map(value => [value.key, value.resolution.Resolved.plan.origin]), [[{Reviewer: {mode: 'Plan'}}, {layer: 'Project', source: 'HarnessRoles'}]]);
+    // A key of one mode that an earlier place hides is noted under the table; the text has no problem and the table is shown.
+    assert.equal(await ui.dialog.locator('.agents-notes').count(), 0);
+    await ui.editor('project').fill('defaults:\n  roles:\n    reviewer/plan: claude:opus\n'); await ui.state('current');
+    assert.equal(await ui.problems.getByRole('heading').textContent(), 'Problems: none');
+    assert.deepEqual(await ui.dialog.locator('.agents-notes li').allTextContents(), []);
+    await ui.editor('project').fill('defaults:\n  roles:\n    reviewer/plan: claude:opus\nharnesses:\n  codex:\n    roles:\n      reviewer: claude:sonnet\n'); await ui.state('current');
+    assert.equal(await ui.problems.getByRole('heading').textContent(), 'Problems: none');
+    assert.deepEqual(await ui.dialog.locator('.agents-notes li').allTextContents(), [
+      'Note: when codex governs, defaults.roles.reviewer/plan of the project override (3:5) never decides: harnesses.codex.roles.reviewer of the project override (7:7) is found first and decides every mode of the reviewer role.']);
+    assert.deepEqual(await plan('Codex').count(), 0);
+    assert.deepEqual(await plan('Claude').locator('.agents-route').allTextContents(), ['claude:opus']);
+    cases.push('a key of one mode that the key of its role hides in an earlier place is noted under the table with both keys, their positions and the harness, and is no problem');
+
     await ui.editor('project').fill('defaults:\n  roles:\n    reviewer/draft: claude:opus\n'); await ui.state('invalid');
     assert.equal(await ui.problems.getByRole('listitem').textContent(), "This project3:5the key 'reviewer/draft' names no mode of the reviewer role; its modes are candidate, plan, audit");
     await ui.editor('project').fill(broken); await ui.state('current');
@@ -334,5 +347,5 @@ try {
   await writeFile(`${evidence}/agents-results.json`, JSON.stringify({cases, errors, screenshots}, null, 2) + '\n');
   await browser.close();
 }
-assert.equal(cases.length, 11, JSON.stringify(cases));
+assert.equal(cases.length, 12, JSON.stringify(cases));
 console.log('Chromium Agent models: two layer editors under revision comparison, server-side problems and preview, project override, unresolved role, a key of one mode and stale preview replies');

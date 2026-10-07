@@ -916,6 +916,59 @@ final class AgentConfigLocal extends AnyWordSpec {
     }
   }
 
+  "The notes on a configuration (Behavioral Active Blackbox Atomic)" should {
+    val Plan = RoleKey.Reviewer(ReviewerMode.Plan)
+    val Reviewer = RoleKey.Plain(AgentRole.Reviewer)
+    def placed(layer: AgentLayer, source: RoleSource, key: RoleKey, line: Int, column: Int): PlacedRoleKey = PlacedRoleKey(RoleOrigin(layer, source), key, at(line, column))
+    def notes(installation: String, project: String): List[ShadowedRoleKey] = AgentResolution.shadowed(parsed(installation), parsed(project))
+    // What cq agents init writes for a harness, under defaults that give plan reviews a model of their own.
+    val server =
+      """defaults:
+        |  roles:
+        |    reviewer: claude:opus
+        |    reviewer/plan: claude:sonnet
+        |harnesses:
+        |  codex:
+        |    roles:
+        |      reviewer: codex:gpt
+        |""".stripMargin
+
+    "name the key of a mode that never decides for a harness because the key of its role stands in an earlier place, and change no precedence" in {
+      val hidden = ShadowedRoleKey(Harness.Codex, placed(AgentLayer.Installation, RoleSource.DefaultRoles, Plan, 4, 5), placed(AgentLayer.Installation, RoleSource.HarnessRoles, Reviewer, 8, 7))
+      assert(notes(server, "") == List(hidden))
+      assert(AgentConfigText.describe(hidden) == "when codex governs, defaults.roles.reviewer/plan of the server defaults (4:5) never decides: " +
+        "harnesses.codex.roles.reviewer of the server defaults (8:7) is found first and decides every mode of the reviewer role")
+      // The lookup is what it was: Codex runs plan reviews on the model of its own plain key, the other harnesses on that of the mode key.
+      def plan(governing: Harness): String = AgentResolution.resolve(parsed(server), parsed(""), governing, DispatchWork.Reviewer(ReviewerMode.Plan)).resolution match {
+        case RoleResolution.Resolved(value) => AgentConfigText.render(value)
+        case other => fail(other.toString)
+      }
+      assert(plan(Harness.Codex) == "codex:gpt" && plan(Harness.Claude) == "claude:sonnet")
+      assert(AgentConfigText.problems(server).isEmpty)
+    }
+    "name it for every harness when a project's default holds the key of the role, and once for each place that is passed over" in {
+      val project = "defaults: { roles: { explorer: claude:haiku } }\n"
+      val research = RoleKey.Explorer(ExplorerMode.Research)
+      val later = "defaults: { roles: { explorer/research: claude:opus } }\nharnesses: { pi: { roles: { explorer/research: claude:opus } } }\n"
+      val by = placed(AgentLayer.Project, RoleSource.DefaultRoles, RoleKey.Plain(AgentRole.Explorer), 1, 22)
+      assert(notes(later, project) == List(
+        ShadowedRoleKey(Harness.Claude, placed(AgentLayer.Installation, RoleSource.DefaultRoles, research, 1, 22), by),
+        ShadowedRoleKey(Harness.Codex, placed(AgentLayer.Installation, RoleSource.DefaultRoles, research, 1, 22), by),
+        ShadowedRoleKey(Harness.Pi, placed(AgentLayer.Installation, RoleSource.HarnessRoles, research, 2, 29), by),
+        ShadowedRoleKey(Harness.Pi, placed(AgentLayer.Installation, RoleSource.DefaultRoles, research, 1, 22), by)))
+      assert(AgentConfigText.describe(notes(later, project)(2)) == "when pi governs, harnesses.pi.roles.explorer/research of the server defaults (2:29) never decides: " +
+        "defaults.roles.explorer of the project override (1:22) is found first and decides every mode of the explorer role")
+    }
+    "name nothing for a mode key that can decide: in the place of its role's key, in an earlier one, or with no key of its role before it" in {
+      assert(notes("defaults: { roles: { reviewer: claude:opus, reviewer/plan: claude:sonnet } }", "").isEmpty)
+      assert(notes("defaults: { roles: { reviewer: claude:opus } }", "defaults: { roles: { reviewer/plan: claude:sonnet } }").isEmpty)
+      assert(notes("defaults: { roles: { reviewer/plan: claude:sonnet, worker: claude:opus } }", "harnesses: { codex: { roles: { worker: claude:opus, explorer: claude:opus } } }").isEmpty)
+      // The key of a mode in an earlier place hides the same key later on purpose: that is an override, and no note.
+      assert(notes("defaults: { roles: { reviewer/plan: claude:sonnet } }", "defaults: { roles: { reviewer/plan: claude:opus } }").isEmpty)
+      assert(notes("", "").isEmpty)
+    }
+  }
+
   "A starting configuration (Behavioral Active Blackbox Atomic)" should {
     "write a starting configuration in which each harness of the settings runs its settings model and every role resolves" in {
       val settings = List(HarnessSetting(Harness.Claude, "/bin/claude", "opus", "anthropic", "1", Nil, Set.empty),
@@ -952,7 +1005,7 @@ final class AgentConfigLocal extends AnyWordSpec {
     "save it as the configuration of a layer that holds none, leave a layer that holds it as it is, and replace no other configuration" in {
       val project = ProjectId(java.util.UUID.randomUUID())
       val text = cq.core.AgentStarter.text(List(HarnessSetting(Harness.Codex, "/bin/codex", "gpt-6.1", "openai", "1", Nil, Set.empty)))
-      var stored = AgentsView(AgentsDocument(Revision(0), "", None, Nil), AgentsDocument(Revision(0), "", None, Nil), Nil)
+      var stored = AgentsView(AgentsDocument(Revision(0), "", None, Nil), AgentsDocument(Revision(0), "", None, Nil), Nil, Nil)
       var replaced = List.empty[(AgentsScope, Revision)]
       val call: Command => Result = {
         case Command.Agents(AgentsInput(`project`, AgentsAction.Read())) => Result.Agents(stored)

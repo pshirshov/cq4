@@ -28,7 +28,9 @@ A role takes one of:
 A role is looked up in this order, and the first place that assigns it decides it whole:
   this project's harnesses.H.roles, this project's defaults.roles, the server's harnesses.H.roles, the server's defaults.roles.
 A place assigns a role to work of one mode by the key of that mode or, without it, by the key of the role: reviewer in an earlier
-place decides before reviewer/plan in a later one.
+place decides before reviewer/plan in a later one. So with harnesses.codex.roles.reviewer and defaults.roles.reviewer/plan, Codex runs its
+plan reviews as harnesses.codex.roles.reviewer says, and the reviewer/plan key decides for the other harnesses only. The preview notes such
+a key; to give Codex the same plan reviewer, write harnesses.codex.roles.reviewer/plan too.
 A tier list of this project replaces the server's list of that tier. A # starts a comment.`;
 
 export const AGENTS_EXAMPLE = `defaults:

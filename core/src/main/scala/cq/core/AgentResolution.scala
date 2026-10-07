@@ -115,6 +115,27 @@ object AgentResolution {
    * Every role under every governing harness: one assignment by the key of the role, for the modes that no key of their own decides,
    * and after it one for each mode that a key of its own decides.
    */
+  /**
+   * The keys of one mode that never decide for a governing harness. The lookup takes the first place that holds the key of the mode
+   * or the key of its role, and within a place the key of the mode: so the key of a role in an earlier place decides every mode of
+   * the role there, and the key of a mode in a later place is never reached for that harness.
+   */
+  def shadowed(installation: ParsedAgents, project: ParsedAgents): List[ShadowedRoleKey] = for {
+    harness <- Harness.all
+    // The places of the lookup for this harness, in its order.
+    places = for {
+      (layer, document) <- List(AgentLayer.Project -> project, AgentLayer.Installation -> installation)
+      (source, scope, assigned) <- List(
+        (RoleSource.HarnessRoles, Some(harness), document.config.harnesses.get(harness).fold(List.empty[RoleAssignment])(_.roles)),
+        (RoleSource.DefaultRoles, None, document.config.defaults))
+    } yield (RoleOrigin(layer, source), assigned.map(_.key), (key: RoleKey) => document.keys(AgentRoleKey(scope, key)))
+    ((origin, keys, at), index) <- places.zipWithIndex
+    key <- keys
+    plain = RoleKey.Plain(RoleKeys.role(key))
+    if key != plain
+    (earlier, _, found) <- places.take(index).find(_._2.contains(plain)).toList
+  } yield ShadowedRoleKey(harness, PlacedRoleKey(origin, key, at(key)), PlacedRoleKey(earlier, plain, found(plain)))
+
   def assignments(installation: ParsedAgents, project: ParsedAgents): List[ResolvedAssignment] = for {
     harness <- Harness.all
     role <- AgentRole.all

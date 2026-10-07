@@ -721,7 +721,12 @@ root adt AgentsAction {
 }
 root data AgentsInput { project: ProjectId action: AgentsAction }
 root data AgentsDocument { revision: Revision text: str change: opt[RequirementsChange] problems: lst[AgentProblem] }
-root data AgentsView { installation: AgentsDocument project: AgentsDocument assignments: lst[ResolvedAssignment] }
+// A roles key where it is written: the layer and the part of its document, and the position of the key in that layer's text.
+root data PlacedRoleKey { origin: RoleOrigin key: RoleKey at: TextPosition }
+// The key of one mode that never decides when `harness` governs: `by`, the key of its role, stands in an earlier place of the
+// lookup and decides that mode there. The configuration is valid; the note says that `shadowed` has no effect for that harness.
+root data ShadowedRoleKey { harness: Harness shadowed: PlacedRoleKey by: PlacedRoleKey }
+root data AgentsView { installation: AgentsDocument project: AgentsDocument assignments: lst[ResolvedAssignment] notes: lst[ShadowedRoleKey] }
 // A unit is one started choice; it owns the attempts of its seats and their candidates.
 root adt SeatEnd {
   data Pending {}

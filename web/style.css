@@ -345,6 +345,7 @@ ol.agents-seats > li::before { content: counter(seat) '.'; position: absolute; l
 .agents-other-modes { color: #a4c1d3; font-size: 11px; font-weight: normal; }
 .agents-source[data-layer=project] { color: #ffd591; }
 .agents-self-review { color: #ffd591; font-size: 11px; }
+.agents-notes { margin: 6px 0 0; padding: 0; list-style: none; color: #ffd591; font-size: 11px; overflow-wrap: anywhere; }
 .agents-unresolved { color: #ffbd86; }
 td.agents-unresolved { background: #3a2418; box-shadow: inset 3px 0 #ff8a80; }
 td.agents-unresolved li { margin-top: 3px; }

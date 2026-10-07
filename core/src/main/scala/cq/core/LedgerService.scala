@@ -139,7 +139,8 @@ object LedgerService {
       val defaults = AgentConfigText.parse(installation.text)
       val overrides = AgentConfigText.parse(project.text)
       AgentsView(installation.copy(problems = defaults.left.getOrElse(Nil)), project.copy(problems = overrides.left.getOrElse(Nil)),
-        (for { lower <- defaults; upper <- overrides } yield AgentResolution.assignments(lower, upper)).getOrElse(Nil))
+        (for { lower <- defaults; upper <- overrides } yield AgentResolution.assignments(lower, upper)).getOrElse(Nil),
+        (for { lower <- defaults; upper <- overrides } yield AgentResolution.shadowed(lower, upper)).getOrElse(Nil))
     }
 
     private def agentsWriter(scope: Scope): Unit =

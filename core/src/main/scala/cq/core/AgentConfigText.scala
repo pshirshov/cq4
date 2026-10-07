@@ -61,12 +61,14 @@ object RoleKeys {
 
 /**
  * One layer of the agent configuration as its text states it, free of the problems that reject a text when it is saved.
- * `references` locates the model references of each role in the text: one list per seat, one position per listed entry.
+ * `references` locates the model references of each role in the text: one list per seat, one position per listed entry; `keys`
+ * locates each roles key.
  */
-final class ParsedAgents private[core] (val config: AgentConfig, private[core] val references: Map[AgentRoleKey, List[List[TextPosition]]])
+final class ParsedAgents private[core] (val config: AgentConfig, private[core] val references: Map[AgentRoleKey, List[List[TextPosition]]],
+  private[core] val keys: Map[AgentRoleKey, TextPosition])
 object ParsedAgents {
   /** The layer nobody has written: the empty text. */
-  val empty: ParsedAgents = new ParsedAgents(AgentConfig(Nil, Map.empty), Map.empty)
+  val empty: ParsedAgents = new ParsedAgents(AgentConfig(Nil, Map.empty), Map.empty, Map.empty)
 }
 
 /** The model reference syntax: `harness:[provider/]model?effort=…`, `harness:@tier?effort=…`, and `[provider/]model?effort=…` in a tier. */
@@ -190,7 +192,7 @@ object AgentConfigText {
     case Right(node) =>
       val reading = new Reading
       val config = reading.document(node)
-      if (reading.problems.isEmpty) Right(new ParsedAgents(config, reading.references.toMap)) else Left(reading.problems.toList.distinct)
+      if (reading.problems.isEmpty) Right(new ParsedAgents(config, reading.references.toMap, reading.keys.toMap)) else Left(reading.problems.toList.distinct)
   }
 
   /** The problems that reject this text of one layer when it is saved; they depend on nothing but the text. */
@@ -199,6 +201,7 @@ object AgentConfigText {
   private final class Reading {
     val problems = ListBuffer.empty[AgentProblem]
     val references = ListBuffer.empty[(AgentRoleKey, List[List[TextPosition]])]
+    val keys = ListBuffer.empty[(AgentRoleKey, TextPosition)]
 
     private def syntax(at: TextPosition, message: String): Unit = problems += AgentProblem.Syntax(at, message)
     private def unknown(key: YamlNode.Scalar): Unit = problems += AgentProblem.UnknownKey(key.at, key.text)
@@ -281,6 +284,7 @@ object AgentConfigText {
           (choice, positions) <- roleValue(key, scope, value)
         } yield {
           references += AgentRoleKey(scope, key) -> positions
+          keys += AgentRoleKey(scope, key) -> name.at
           RoleAssignment(key, choice)
         }
       }
@@ -422,6 +426,24 @@ object AgentConfigText {
   private def at(position: TextPosition): String = s"${position.line}:${position.column}"
   private def harness(value: Harness): String = AgentReferenceText.text(Harnesses, value)
   private def role(value: AgentRole): String = AgentReferenceText.text(Roles, value)
+
+  /** A roles key where it is written, as a person names it: the path of the key, its layer and its line:column there. */
+  private def placed(governing: Harness, value: PlacedRoleKey): String = {
+    val part = value.origin.source match {
+      case RoleSource.HarnessRoles => s"harnesses.${harness(governing)}.roles"
+      case RoleSource.DefaultRoles => "defaults.roles"
+    }
+    val layer = value.origin.layer match {
+      case AgentLayer.Installation => "the server defaults"
+      case AgentLayer.Project => "the project override"
+    }
+    s"$part.${RoleKeys.text(value.key)} of $layer (${at(value.at)})"
+  }
+
+  /** One line for a person: which key has no effect for which governing harness, and which key decides in its place. */
+  def describe(note: ShadowedRoleKey): String =
+    s"when ${harness(note.harness)} governs, ${placed(note.harness, note.shadowed)} never decides: ${placed(note.harness, note.by)} " +
+      s"is found first and decides every mode of the ${role(RoleKeys.role(note.by.key))} role"
 
   /** One line for a person; a positioned problem starts with line:column of its layer's text. */
   def describe(problem: AgentProblem): String = problem match {

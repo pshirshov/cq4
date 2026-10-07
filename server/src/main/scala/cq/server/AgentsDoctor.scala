@@ -89,9 +89,15 @@ final class AgentsDoctor(reader: AgentsReader) {
         val roles = AgentRole.all.flatMap(role(governing, _, view))
         val used = roles.flatMap { case (key, _, routes) => routes.map(_ -> key) }
         check("Configuration", true, "Read from the server") :: document("Server defaults", view.installation) :: document("Project override", view.project) ::
-          roles.map(_._2) ::: settings(settingsFile, used)
+          roles.map(_._2) ::: notes(governing, view) :: settings(settingsFile, used)
     }
     InstallationReport("agents", identity ::: checks)
+  }
+
+  /** A note, never a failure: the keys of one mode that have no effect when `governing` governs, each with the key that decides instead. */
+  private def notes(governing: Harness, view: AgentsView): InstallationCheck = view.notes.filter(_.harness == governing) match {
+    case Nil => check("Mode keys", true, s"Every key of one mode can decide when ${lower(governing)} governs")
+    case hidden => check("Mode keys", true, hidden.map(note => "Note: " + AgentConfigText.describe(note)).mkString("; "))
   }
 
   /** The settings entry of every harness a resolved route runs on, and the provider a route without one takes from it. */

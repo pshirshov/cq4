@@ -162,6 +162,19 @@ The modes are worker/implement, worker/probe, worker/resolveconflict,
 explorer/investigate, explorer/research, reviewer/candidate, reviewer/plan and
 reviewer/audit. The command writes keys of roles only.
 
+The places are read in this order: the project's harnesses.H.roles, the
+project's defaults.roles, the server's harnesses.H.roles, the server's
+defaults.roles. The first place that holds the key of the mode or the key of
+its role decides, so the key of a role in an earlier place hides the key of a
+mode in a later one. This command writes harnesses.H.roles.reviewer for each
+harness: with
+  harnesses.codex.roles.reviewer and defaults.roles.reviewer/plan
+Codex runs its plan reviews as harnesses.codex.roles.reviewer says, and
+defaults.roles.reviewer/plan decides for no harness that has a reviewer key of
+its own. The configuration is valid; the Agent models dialog and cq doctor
+agents note every such key. Write harnesses.codex.roles.reviewer/plan to give
+Codex its own plan reviewer.
+
 Examples:
   cq agents init --settings ./cq-settings.json
   cq agents init --settings ./cq-settings.json --save installation
