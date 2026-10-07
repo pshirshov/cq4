@@ -531,6 +531,8 @@ object DispatchUnits {
    *    them; when they do not, the dissenting one does, with `next` Arbitrate. A failed seat the others made up for is named in the blocker.
    *  - Failed: the status of the first seat that failed, as that attempt ended.
    *  - Abstained: phase Abstained, with every candidate and its reason as the blocker.
+   *  - Failed or Abstained with seats that delivered, too few for the unit: the blocker also names each of them with its result
+   *    handle, so that a delivered and admitted review is read before the unit's end is acted on.
    *  - Cancelled: the status of the attempt that was cancelled; when the unit was stopped between two candidates, a cancelled status.
    */
   def status(request: RequestId, handle: AttemptId, outcome: UnitOutcome, ended: List[EndedAttempt], refusal: Option[String]): DispatchStatus = {
@@ -545,9 +547,15 @@ object DispatchUnits {
         }
         if (failed.isEmpty) standing else standing.copy(blocker = Some(DispatchProjection.concise((standing.blocker.toList ++
           failed.map(seat => s"seat ${seat.seat} failed and the other seats decided: ${seat.fault}")).mkString("; "))))
-      case UnitOutcome.Failed(failed, _) => own(failed.head.attempt).status
-      case UnitOutcome.Abstained(candidates, _) => last.copy(phase = DispatchPhase.Abstained, next = ChildNext.ResolveBlocker,
-        blocker = Some(DispatchProjection.concise(UnitProgress.abstention(candidates))), result = None)
+      case UnitOutcome.Failed(failed, delivered) =>
+        val standing = own(failed.head.attempt).status
+        if (delivered.isEmpty) standing
+        else standing.copy(blocker = Some(DispatchProjection.concise((standing.blocker.toList :+ UnitProgress.delivered(delivered)).mkString("; "))))
+      case UnitOutcome.Abstained(candidates, delivered) =>
+        // The counts of a unit in which a seat delivered are that seat's, not those of whichever attempt ended last.
+        val counted = delivered.headOption.fold(last)(seat => last.copy(counts = own(seat.attempt).status.counts))
+        counted.copy(phase = DispatchPhase.Abstained, next = ChildNext.ResolveBlocker,
+          blocker = Some(DispatchProjection.concise(UnitProgress.abstention(candidates, delivered))), result = None)
       case UnitOutcome.Cancelled => ended.find(_.status.phase == DispatchPhase.Cancelled).orElse(ended.find(_.stopped)).map(_.status)
         .getOrElse(last.copy(phase = DispatchPhase.Cancelled, next = ChildNext.Retry, blocker = Some(refusal.getOrElse(Cancelled)), result = None))
     }
@@ -560,7 +568,8 @@ object DispatchUnits {
    *  - A failed seat of a unit that failed is retryable when the input is offered again. Only the first failed seat, whose fault was
    *    compared with the one before it, can be the repetition that ends a drive.
    *  - A failed seat the other seats made up for failed and nothing else: its input was executed.
-   *  - The abstentions of a unit no model could run all state every candidate and reason, so that the last of them does.
+   *  - The attempts of a unit that ended by abstention all state the unit's blocker (every candidate and reason, and the seats that
+   *    delivered), so that the last of them does. A seat that delivered in such a unit reports the abstention too.
    */
   def outcomes(outcome: UnitOutcome, reply: ChildOutcome, ended: List[EndedAttempt]): Map[AttemptId, ChildOutcome] = {
     val offered = reply.end match {
@@ -576,7 +585,9 @@ object DispatchUnits {
       val judged = if (first.contains(value.attempt)) offered else if (failing(value.attempt)) offered.filter(identity) else None
       val own = CohortFailure.outcome(value.status.copy(attempt = value.attempt), reply.input, judged)
       value.attempt -> (outcome match {
-        case _: UnitOutcome.Abstained if own.end == ChildEnd.Abstained => own.copy(fault = reply.fault)
+        // A unit that ended by abstention did not serve its input, whichever of its seats delivered: each of its attempts reports
+        // that end with the unit's text, so that a drive reads the input as unserved whichever attempt it concludes last.
+        case _: UnitOutcome.Abstained => own.copy(end = ChildEnd.Abstained, input = reply.input, fault = reply.fault)
         case _ => own
       })
     }.toMap

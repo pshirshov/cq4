@@ -164,6 +164,17 @@ object UnitProgress {
       Vector(Seat(Nil, Vector.empty, SeatEnd.Pending(), false)), Vector.empty, false).topUp
 
   /** Which candidates abstained and why, as the blocker of a unit no model could run and the fault of its outcome under a drive. */
-  def abstention(candidates: List[SeatAttempt]): String = "No configured model could run this work: " + candidates.map(value =>
+  def abstention(candidates: List[SeatAttempt]): String = "No configured model could run this work: " + tried(candidates)
+  private def tried(candidates: List[SeatAttempt]): String = candidates.map(value =>
     s"${AgentConfigText.render(value.route)} ${value.abstained.get}" + value.detail.fold("")(detail => s" ($detail)")).mkString("; ")
+
+  /** The seats that delivered in a unit that ended with fewer than it needs, each with the handle of its result: what was delivered
+    * and admitted is read before the unit's end is acted on. It comes first in a blocker, which is cut at its bound. */
+  def delivered(seats: List[DeliveredSeat]): String =
+    s"${seats.size} ${if (seats.size == 1) "seat" else "seats"} delivered, fewer than this work needs: " +
+      seats.map(seat => s"seat ${seat.seat} result ${seat.result.value} (next ${seat.next})").mkString("; ") + "; read each delivered result before deciding"
+
+  /** The blocker of a unit that ended by abstention: every candidate and its reason, after the seats that delivered when some did. */
+  def abstention(candidates: List[SeatAttempt], seats: List[DeliveredSeat]): String =
+    if (seats.isEmpty) abstention(candidates) else delivered(seats) + ". No model could run the other seats: " + tried(candidates)
 }

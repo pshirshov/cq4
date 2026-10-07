@@ -34,6 +34,9 @@ final class UnitProgressLocal extends AnyWordSpec {
     val first: UnitStep = begun._2
     private var known = Set.empty[SeatCandidate]
     private var latest = Map.empty[Int, AttemptId]
+    // What this test told the unit, by seat and in order: its expectations are built from it, not from the state under test.
+    private var faults = Map.empty[Int, Int]
+    private var refusals = Vector.empty[(Int, Int, AbstentionReason)]
     def last(seat: Int): AttemptId = latest(seat)
     private def send(event: UnitEvent): UnitStep = {
       val (next, step) = state(event)
@@ -50,9 +53,15 @@ final class UnitProgressLocal extends AnyWordSpec {
       send(event)
     }
     def deliver(seat: Int, candidate: Int): UnitStep = end(seat, candidate, UnitEvent.Delivered(SeatCandidate(seat, candidate), result(seat), ChildNext.ConsiderAcceptance))
-    def abstain(seat: Int, candidate: Int, reason: AbstentionReason): UnitStep = end(seat, candidate, UnitEvent.Abstained(SeatCandidate(seat, candidate), reason, s"detail $seat.$candidate"))
+    def abstain(seat: Int, candidate: Int, reason: AbstentionReason): UnitStep = {
+      refusals :+= (seat, candidate, reason)
+      end(seat, candidate, UnitEvent.Abstained(SeatCandidate(seat, candidate), reason, s"detail $seat.$candidate"))
+    }
     def abstain(seat: Int, candidate: Int): UnitStep = abstain(seat, candidate, AbstentionReason.Quota)
-    def fail(seat: Int, candidate: Int): UnitStep = end(seat, candidate, UnitEvent.Failed(SeatCandidate(seat, candidate), s"fault $seat.$candidate"))
+    def fail(seat: Int, candidate: Int): UnitStep = {
+      faults += seat -> candidate
+      end(seat, candidate, UnitEvent.Failed(SeatCandidate(seat, candidate), s"fault $seat.$candidate"))
+    }
     def cancelled(seat: Int, candidate: Int): UnitStep = send(UnitEvent.Cancelled(SeatCandidate(seat, candidate)))
     def cancel(): UnitStep = {
       val (next, step) = state.cancel
@@ -63,8 +72,10 @@ final class UnitProgressLocal extends AnyWordSpec {
     def ends: List[SeatEnd] = state.snapshot.seats.map(_.end)
     def tried(seat: Int): List[(Int, Option[AbstentionReason])] = state.snapshot.seats(seat).attempts.map(value =>
       role.seats(seat).candidates.indexOf(value.route) -> value.abstained)
-    def failed(seats: Int*): List[FailedSeat] = seats.toList.map(seat => FailedSeat(seat, last(seat), s"fault $seat.${role.seats(seat).candidates.indexWhere(_ == state.snapshot.seats(seat).attempts.last.route)}"))
-    def abstentions(seats: Int*): List[SeatAttempt] = seats.toList.flatMap(seat => state.snapshot.seats(seat).attempts)
+    def failed(seats: Int*): List[FailedSeat] = seats.toList.map(seat => FailedSeat(seat, attempt(seat, faults(seat)), s"fault $seat.${faults(seat)}"))
+    def abstentions(seats: Int*): List[SeatAttempt] = seats.toList.flatMap(seat => refusals.toList.collect {
+      case (`seat`, candidate, reason) => SeatAttempt(attempt(seat, candidate), route(seat, candidate), Some(reason), Some(s"detail $seat.$candidate"))
+    })
   }
   private def play(role: ResolvedRole): Play = new Play(role, _ => 0)
   private val Pending = SeatEnd.Pending()
@@ -288,6 +299,7 @@ final class UnitProgressLocal extends AnyWordSpec {
       val shapes = for { strategy <- strategies; candidates <- 1 to 2 } yield strategy -> candidates
       def lists(size: Int): List[List[(SeatStrategy, Int)]] = if (size == 0) List(Nil) else for { head <- shapes; tail <- lists(size - 1) } yield head :: tail
       var runs = 0
+      var cancelled = 0
       var outcomes = Set.empty[String]
       for { size <- 1 to 3; seats <- lists(size); mode <- List(PanelMode.All, PanelMode.Any); min <- 1 to size } {
         val plan = role(mode, min, seats*)
@@ -341,6 +353,21 @@ final class UnitProgressLocal extends AnyWordSpec {
           check(known, now, seats, context)
           assert(taken.isInstanceOf[UnitStep.Ended] == now.isEmpty && (taken match { case UnitStep.Ended(outcome) => known.outcome.contains(outcome); case _ => true }), context)
           if (now.isEmpty) runs += 1
+          // A cancellation at this point: nothing is launched any more, whatever the candidates in flight then report, and the unit
+          // ends Cancelled with the last of them.
+          def stopping(state: UnitProgress, flying: Set[SeatCandidate], context: String): Unit = for { candidate <- flying; end <- 0 until 2 } {
+            val event = if (end == 0) UnitEvent.Delivered(candidate, result(candidate.seat), ChildNext.ConsiderAcceptance) else UnitEvent.Cancelled(candidate)
+            val (next, following) = state(event)
+            val left = flying - candidate
+            assert(following == (if (left.isEmpty) UnitStep.Ended(UnitOutcome.Cancelled) else UnitStep.Wait) && next.outcome.isEmpty == left.nonEmpty, s"$context; $event")
+            assert(next.snapshot.seats.map(_.attempts.size) == state.snapshot.seats.map(_.attempts.size), s"$context; $event launched after the cancellation")
+            if (left.isEmpty) cancelled += 1 else stopping(next, left, s"$context; $event")
+          }
+          if (now.nonEmpty) {
+            val (stopped, waiting) = known.cancel
+            assert(waiting == UnitStep.Wait && stopped.outcome.isEmpty, s"$context; cancel")
+            stopping(stopped, now, s"$context; cancel")
+          }
           for { candidate <- now; end <- 0 until 3 } {
             val event = end match {
               case 0 => UnitEvent.Delivered(candidate, result(candidate.seat), ChildNext.ConsiderAcceptance)
@@ -354,7 +381,7 @@ final class UnitProgressLocal extends AnyWordSpec {
         val (state, first) = UnitProgress.begin(request, plan, start)
         step(state, first, Set.empty, Nil, cq.core.AgentConfigText.render(plan))
       }
-      assert(outcomes == Set("Decided", "Failed", "Abstained") && runs > 10000, s"$runs runs ended as $outcomes")
+      assert(outcomes == Set("Decided", "Failed", "Abstained") && runs > 10000 && cancelled > 10000, s"$runs runs ended as $outcomes, $cancelled were cancelled")
     }
   }
 
@@ -559,7 +586,8 @@ final class UnitProgressLocal extends AnyWordSpec {
       val (first, second, accepting) = (failed(1, 0, "first fault"), failed(0, 0, "second fault"), reviewed(2, 0, A, A))
       val outcome = UnitOutcome.Failed(List(fault(first, 1), fault(second, 0)), List(seat(accepting, 2)))
       val decided = unit(outcome, second, first, accepting)
-      assert(decided == first.status.copy(request = request, attempt = handle) && decided.phase == DispatchPhase.Failed && decided.next == ChildNext.Retry && decided.blocker.contains("first fault"))
+      val named = s"first fault; 1 seat delivered, fewer than this work needs: seat 2 result ${result(2).value} (next ConsiderAcceptance); read each delivered result before deciding"
+      assert(decided == first.status.copy(request = request, attempt = handle, blocker = Some(named)) && decided.phase == DispatchPhase.Failed && decided.next == ChildNext.Retry)
       def ends(reply: ChildEnd): Map[AttemptId, ChildEnd] =
         DispatchUnits.outcomes(outcome, ChildOutcome(handle, items, reply, Some("input"), Some("first fault")), List(second, first, accepting)).view.mapValues(_.end).toMap
       // Offered again: every failed seat is retryable, so the drive reads the input as retryable.
@@ -586,6 +614,28 @@ final class UnitProgressLocal extends AnyWordSpec {
       assert(outcomes == Map(first.attempt -> ChildOutcome(first.attempt, items, ChildEnd.Abstained, Some("input"), Some(text)),
         second.attempt -> ChildOutcome(second.attempt, items, ChildEnd.Abstained, Some("input"), Some(text))))
       outcomes.values.foreach(cq.core.DriverPolicy.outcome)
+    }
+    "I17: name every seat that delivered, with its result handle, when the unit ended with fewer seats than it needs" in {
+      // `all` of two reviewers: one requests changes, the other finds no model. The review that was delivered and admitted is not lost.
+      val (requesting, without) = (reviewed(0, 0, C, A), abstained(1, 0))
+      val outcome = UnitOutcome.Abstained(List(tried(without, 1, 0)), List(seat(requesting, 0)))
+      val decided = unit(outcome, requesting, without)
+      val text = s"1 seat delivered, fewer than this work needs: seat 0 result ${result(0).value} (next Revise); read each delivered result before deciding. " +
+        "No model could run the other seats: pi:provider1/model0 Quota (detail 1.0)"
+      assert(decided.attempt == handle && decided.phase == DispatchPhase.Abstained && decided.next == ChildNext.ResolveBlocker && decided.result.isEmpty && decided.blocker.contains(text), decided.toString)
+      // The counts are those of the delivered review, not of whichever attempt ended last.
+      assert(decided.counts == requesting.status.counts && unit(outcome, without, requesting).counts == requesting.status.counts)
+      // The drive reads the input as unserved, with the same text, whichever attempt it concludes last.
+      val reply = cq.host.CohortFailure.outcome(decided, Some("input"), None)
+      val outcomes = DispatchUnits.outcomes(outcome, reply, List(requesting, without))
+      assert(outcomes == Map(requesting.attempt -> ChildOutcome(requesting.attempt, items, ChildEnd.Abstained, Some("input"), Some(text)),
+        without.attempt -> ChildOutcome(without.attempt, items, ChildEnd.Abstained, Some("input"), Some(text))))
+      outcomes.values.foreach(cq.core.DriverPolicy.outcome)
+      // A seat that failed while another delivered and the unit needs both: the failure stands, and the delivered review is named with it.
+      val broken = failed(1, 0, "Malformed report")
+      val failing = unit(UnitOutcome.Failed(List(fault(broken, 1)), List(seat(requesting, 0))), requesting, broken)
+      assert(failing.phase == DispatchPhase.Failed && failing.next == ChildNext.Retry && failing.result.isEmpty && failing.blocker.contains(
+        s"Malformed report; 1 seat delivered, fewer than this work needs: seat 0 result ${result(0).value} (next Revise); read each delivered result before deciding"), failing.toString)
     }
     "be Cancelled as the cancelled attempt ended, and a cancellation of its own when the unit was stopped between two candidates" in {
       val (stopped, delivered) = (cancelled(1, 0), reviewed(0, 0, A, A))

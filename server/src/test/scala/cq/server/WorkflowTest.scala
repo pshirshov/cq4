@@ -113,6 +113,8 @@ final class WorkflowLocal extends AnyWordSpec {
           "the host starts the models the project's agent configuration assigns to the role."))
         assert(text.contains("One StartChoice is one unit of work.") && text.contains("Its reply names the unit by one attempt ID, which Status, Cancel and Seats take; Cancel stops the whole unit."))
         assert(text.contains("Seats lists every model the host tried and how each seat ended, with the result handle of each seat that delivered."))
+        assert(text.contains("When some seats of a unit delivered and fewer than the work needs, the phase is Abstained or Failed all the same and the blocker names each seat that delivered " +
+          "with its result handle: read those results, and Seats for the others, before you decide."))
         assert(text.contains("Phase Abstained means that no assigned model could run the work") &&
           text.contains("do not select it again at once, continue other work and report it."))
         assert(text.contains("Next Arbitrate means that the reviewers of one unit disagree; the status carries the dissenting review. Read Seats. " +
@@ -306,6 +308,9 @@ final class WorkflowLocal extends AnyWordSpec {
         assert(text.contains("change with Produce from the in-scope item the work derives from") && text.contains("""milestone set to {"Existing":{"id":ItemId}} for an Open milestone whose objective covers the Task"""), mode)
         assert(text.contains("""When no Open milestone fits, Create a Milestone draft earlier in the same request and set milestone to {"Created":{"mutation":its zero-based index}}"""), mode)
         assert(text.contains("Never Create a Task without a producer"), mode)
+        // A Goal the Governor writes itself has a form that a drive admits too.
+        assert(text.contains("A Goal you establish yourself is written the same way: change with Produce from the in-scope intake or other producer it derives from and that item's current revision, " +
+          "the Goal draft carrying its distinct acceptance criteria, and milestone null, because a milestone never owns a goal. Never Create a Goal without a producer"), mode)
         assert(text.contains("To work a Task without that assessment, Select it as its own root."), mode)
         // What no mode relaxes.
         assert(text.contains("A recorded gate is never left out") && text.contains("Memories are not relaxed"), mode)
