@@ -12,7 +12,12 @@ object DriverRecords {
     def inFlight: List[LineageEntry] = cycle.lineage.filter(entry => !entry.settled && !entry.member.isInstanceOf[LineageMember.Run] && !cycle.resting(entry.member))
     // Unsettled work that waits for the session, such as a prepared integration that was not applied. `prompted` is the work the last resume directive was issued for.
     def held: Set[LineageMember] = cycle.lineage.filter(entry => !entry.settled && cycle.resting(entry.member)).map(_.member).toSet
-    def activeChildren: Int = cycle.inFlight.count(_.member.isInstanceOf[LineageMember.Attempt])
+    // The attempts in flight, and each request in flight that has none: a unit before its first attempt, between two of them, or
+    // whose last attempt the host has reported while the end of the unit itself is still to come. A stop waits for each of these.
+    def activeChildren: Int = {
+      val attempts = cycle.inFlight.filter(_.member.isInstanceOf[LineageMember.Attempt])
+      attempts.size + cycle.inFlight.count(entry => entry.member.isInstanceOf[LineageMember.Request] && !attempts.exists(_.parent.contains(entry.member)))
+    }
     def delegated(session: SessionId): Boolean = cycle.lineage.exists(entry => !entry.settled && entry.member == LineageMember.Session(session))
     def tokens: Set[DriverToken] = cycle.resumed.keySet ++ cycle.resumeToken ++ cycle.startToken
   }
