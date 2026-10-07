@@ -21,7 +21,7 @@ const stored = async target => (await call({Agents: {input: {project: target, ac
 const layer = async (target, name) => { const value = (await stored(target))[name]; return [value.text, value.revision.value]; };
 const replace = (target, scope, expected, text) => agents(target, {Replace: {scope: {[scope]: {}}, expected: {value: String(expected)}, text}});
 
-// The example of the approved design.
+// The example of the approved design, with neutral model names: the text the help shows.
 const EXAMPLE = `defaults:
   roles:
     planner:  $harness:@frontier
@@ -31,14 +31,14 @@ const EXAMPLE = `defaults:
 harnesses:
   claude: { tiers: { frontier: [opus], standard: [sonnet], fast: [haiku] } }
   codex:
-    tiers: { frontier: [gpt-6.1-sol?effort=xhigh], standard: [gpt-6.1-sol], fast: [gpt-6-luna?effort=low] }
+    tiers: { frontier: [large-model?effort=xhigh], standard: [large-model], fast: [small-model?effort=low] }
     roles: { reviewer: { all: [claude:@standard, pi:@standard], min: 1 } }
   pi:
-    tiers: { frontier: [openai-codex/gpt-6.1-sol?effort=xhigh], standard: [zai/glm-5.3, xiaomi-token-plan-ams/mimo-v2.6-pro], fast: [xiaomi-token-plan-ams/mimo-v2.6-pro?effort=low] }
+    tiers: { frontier: [provider-a/large-model?effort=xhigh], standard: [provider-a/model-a, provider-b/model-b], fast: [provider-b/model-b?effort=low] }
 `;
 const MISSPELT = EXAMPLE.replace('$harness:@frontier\n', '$harness:@frontierr\n');
 const OVERRIDE = 'harnesses:\n  codex:\n    roles: { reviewer: $harness:@standard }\n';
-const PI_ROUTES = ['pi:zai/glm-5.3', 'pi:xiaomi-token-plan-ams/mimo-v2.6-pro'];
+const PI_ROUTES = ['pi:provider-a/model-a', 'pi:provider-b/model-b'];
 const VIEWPORTS = [{width: 1440, height: 900}, {width: 1280, height: 720}];
 
 const found = await stored(project);
@@ -125,10 +125,10 @@ try {
     assert.equal(await ui.dialog.locator('.agents-table td[data-state=resolved]').count(), 12);
     assert.deepEqual(await ui.dialog.locator('.agents-table thead th').allTextContents(), ['Role', 'Claude Code governs', 'Codex governs', 'Pi governs']);
     assert.deepEqual(await ui.dialog.locator('.agents-table tbody th').allTextContents(), ['Planner', 'Worker', 'Explorer', 'Reviewer']);
-    assert.deepEqual(await ui.routes('Planner', 'Codex'), ['codex:gpt-6.1-sol?effort=xhigh']);
-    assert.deepEqual(await ui.routes('Planner', 'Pi'), ['pi:openai-codex/gpt-6.1-sol?effort=xhigh']);
+    assert.deepEqual(await ui.routes('Planner', 'Codex'), ['codex:large-model?effort=xhigh']);
+    assert.deepEqual(await ui.routes('Planner', 'Pi'), ['pi:provider-a/large-model?effort=xhigh']);
     assert.deepEqual(await ui.routes('Explorer', 'Claude'), ['claude:haiku']);
-    assert.deepEqual(await ui.routes('Worker', 'Codex'), ['codex:gpt-6.1-sol', ...PI_ROUTES]);
+    assert.deepEqual(await ui.routes('Worker', 'Codex'), ['codex:large-model', ...PI_ROUTES]);
     assert.equal(await ui.cell('Worker', 'Codex').locator('.agents-strategy').textContent(), 'fallback:');
     assert.equal(await ui.cell('Planner', 'Codex').locator('.agents-source').textContent(), 'from server defaults.roles');
     const panel = ui.cell('Reviewer', 'Codex');
@@ -172,7 +172,7 @@ try {
     await page.reload(); await page.getByText('Connection: ALIVE', {exact: true}).waitFor(); await ui.choose(project);
     await ui.open(); await ui.state('current'); await revision('installation', start + 1);
     assert.equal(await ui.editor('installation').inputValue(), EXAMPLE);
-    assert.deepEqual(await ui.routes('Worker', 'Codex'), ['codex:gpt-6.1-sol', ...PI_ROUTES]);
+    assert.deepEqual(await ui.routes('Worker', 'Codex'), ['codex:large-model', ...PI_ROUTES]);
     cases.push('the corrected text is saved at the next revision, a second save says that nothing changed, and a reload shows the saved text, its revision and the table');
 
     // Another operator's browser saves the server defaults while this one holds an unsaved text.
@@ -208,7 +208,7 @@ try {
 
     await ui.editor('project').fill(OVERRIDE); await ui.state('current');
     await ui.preview.getByText('The preview shows the unsaved This project with the saved server defaults.', {exact: true}).waitFor();
-    assert.deepEqual(await ui.routes('Reviewer', 'Codex'), ['codex:gpt-6.1-sol']);
+    assert.deepEqual(await ui.routes('Reviewer', 'Codex'), ['codex:large-model']);
     assert.equal(await ui.cell('Reviewer', 'Codex').locator('.agents-source').textContent(), 'from project harnesses.codex.roles');
     assert.equal(await ui.cell('Reviewer', 'Codex').locator('.agents-self-review').textContent(), 'Self-review: a model of Codex, the governing harness, can review its own work.');
     assert.equal(await ui.cell('Reviewer', 'Codex').locator('.agents-panel').count(), 0);
@@ -220,7 +220,7 @@ try {
     assert.deepEqual(await layer(project, 'project'), [OVERRIDE, '1']);
     assert.deepEqual(await layer(other, 'project'), ['', '0']);
     const route = (await call({Agents: {input: {project, action: {Resolve: {harness: 'Codex', role: 'Reviewer'}}}}})).AgentRoute.value.resolution.Resolved.plan;
-    assert.deepEqual([route.origin, route.seats.map(seat => seat.candidates.map(candidate => candidate.model)), route.selfReview], [{layer: 'Project', source: 'HarnessRoles'}, [['gpt-6.1-sol']], [0]]);
+    assert.deepEqual([route.origin, route.seats.map(seat => seat.candidates.map(candidate => candidate.model)), route.selfReview], [{layer: 'Project', source: 'HarnessRoles'}, [['large-model']], [0]]);
     cases.push('a project override changes one cell and its source label, marks the self-review, and is saved for this project only; the server resolves the role the same way');
 
     // A reference that one governing harness cannot run leaves that cell unresolved; the other two resolve it.

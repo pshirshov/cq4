@@ -10,7 +10,7 @@ H is claude, codex or pi. Roles: planner, worker, explorer, reviewer. Tiers: fro
 Model reference          harness:model    harness:provider/model    harness:@tier
                          $harness stands for the governing harness; ?effort=LEVEL may follow (off, minimal, low, medium, high, xhigh, max, ultra)
                          a Pi model is written provider/model, a Claude model without a provider
-Tier list                the harness's own models, without the harness:    standard: [zai/glm-5.3, other/model?effort=high]
+Tier list                the harness's own models, without the harness:    standard: [provider-a/model-a, provider-b/model-b?effort=high]
 
 A role takes one of:
   a reference            claude:@standard                 a tier of several models is tried in order
@@ -34,8 +34,8 @@ export const AGENTS_EXAMPLE = `defaults:
 harnesses:
   claude: { tiers: { frontier: [opus], standard: [sonnet], fast: [haiku] } }
   codex:
-    tiers: { frontier: [gpt-6.1-sol?effort=xhigh], standard: [gpt-6.1-sol], fast: [gpt-6-luna?effort=low] }
+    tiers: { frontier: [large-model?effort=xhigh], standard: [large-model], fast: [small-model?effort=low] }
     roles: { reviewer: { all: [claude:@standard, pi:@standard], min: 1 } }
   pi:
-    tiers: { frontier: [openai-codex/gpt-6.1-sol?effort=xhigh], standard: [zai/glm-5.3, xiaomi-token-plan-ams/mimo-v2.6-pro], fast: [xiaomi-token-plan-ams/mimo-v2.6-pro?effort=low] }
+    tiers: { frontier: [provider-a/large-model?effort=xhigh], standard: [provider-a/model-a, provider-b/model-b], fast: [provider-b/model-b?effort=low] }
 `;
