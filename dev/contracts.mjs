@@ -41,7 +41,7 @@ const validateAgents = validator.getValidator({ ...definitions.cq_api_AgentConfi
 assert.deepEqual(Object.keys(agents.harnesses.Pi.tiers).sort(), ['Fast', 'Frontier']);
 assert.equal(validateAgents(agents).valid, true);
 assert.equal(validateAgents({ ...agents, harnesses: { Gemini: agents.harnesses.Pi } }).valid, false);
-assert.equal(validateAgents({ ...agents, defaults: [{ key: 'Reviewer', value: agents.defaults.Reviewer }] }).valid, false);
+assert.equal(validateAgents({ ...agents, harnesses: { Pi: { ...agents.harnesses.Pi, tiers: [{ key: 'Frontier', value: agents.harnesses.Pi.tiers.Frontier }] } } }).valid, false);
 const validate = validator.getValidator({ ...definitions.cq_api_Probe, $defs: definitions });
 const encoded = Probe_JsonCodec.instance.encode(context, probe);
 assert.equal(validate(encoded).valid, true);

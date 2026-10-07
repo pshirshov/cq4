@@ -16,7 +16,7 @@ trait LedgerService[F[_, _]] {
   // The view that storing `text` as the document of `layer` would give; nothing is stored.
   def previewAgents(scope: Scope, layer: AgentsScope, text: String): F[Throwable, AgentsView]
   def replaceAgents(scope: Scope, layer: AgentsScope, expected: Revision, text: String): F[Throwable, AgentsView]
-  def agentRoute(scope: Scope, harness: Harness, role: AgentRole): F[Throwable, ResolvedAssignment]
+  def agentRoute(scope: Scope, harness: Harness, work: DispatchWork): F[Throwable, ResolvedAssignment]
   def change(scope: Scope, request: ChangeRequest): F[Throwable, ChangeAck]
   def get(scope: Scope, id: ItemId): F[Throwable, ItemView]
   def details(scope: Scope, members: List[ItemRevision], bytes: Int): F[Throwable, ItemViews]
@@ -179,11 +179,11 @@ object LedgerService {
       agentsView(installationAgents(tx), projectAgents(tx))
     }
 
-    override def agentRoute(scope: Scope, harness: Harness, role: AgentRole): F[Throwable, ResolvedAssignment] = repository.transact(scope.project) { tx =>
+    override def agentRoute(scope: Scope, harness: Harness, work: DispatchWork): F[Throwable, ResolvedAssignment] = repository.transact(scope.project) { tx =>
       // Every stored text passed the save checks, so one that does not parse is not a state this release writes.
       def parsed(name: String, document: AgentsDocument): ParsedAgents = AgentConfigText.parse(document.text).fold(problems => throw new IllegalStateException(
         s"The stored agent configuration of the $name does not parse: " + problems.map(AgentConfigText.describe).mkString("; ")), identity)
-      ResolvedAssignment(harness, role, AgentResolution.resolve(parsed("installation", installationAgents(tx)), parsed("project", projectAgents(tx)), harness, role))
+      AgentResolution.resolve(parsed("installation", installationAgents(tx)), parsed("project", projectAgents(tx)), harness, work)
     }
 
     override def change(scope: Scope, request: ChangeRequest): F[Throwable, ChangeAck] =

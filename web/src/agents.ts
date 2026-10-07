@@ -317,7 +317,7 @@ export class AgentsDialog {
     for (const role of api.AgentRole_values) {
       const line = element('tr', ''); const name = element('th', role); name.scope = 'row'; line.append(name);
       for (const harness of api.Harness_values) {
-        const assignment = assignments.find(candidate => candidate.harness === harness && candidate.role === role);
+        const assignment = assignments.find(candidate => candidate.harness === harness && candidate.key instanceof api.RoleKey_Plain && candidate.key.role === role);
         const cell = element('td', ''); cell.dataset.harness = harness; cell.dataset.role = role;
         if (assignment === undefined) cell.append('—'); else this.cell(cell, assignment);
         line.append(cell);

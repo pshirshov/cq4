@@ -1,7 +1,7 @@
 package cq.server
 
 import cq.api.*
-import cq.core.AgentConfigText
+import cq.core.{AgentConfigText, RoleKeys}
 import cq.host.{ClaudeAdapter, HarnessProfile, HostFiles, HttpServerApi}
 import java.net.URI
 import java.nio.file.{Files, Path}
@@ -59,7 +59,7 @@ final class AgentsDoctor(reader: AgentsReader) {
 
   private def role(governing: Harness, role: AgentRole, view: AgentsView): (InstallationCheck, List[ModelRoute]) = {
     val name = s"Role ${lower(role)}"
-    view.assignments.find(value => value.harness == governing && value.role == role).map(_.resolution) match {
+    view.assignments.find(value => value.harness == governing && RoleKeys.role(value.key) == role).map(_.resolution) match {
       case None => check(name, false, "Not resolved: a layer of the configuration has problems") -> Nil
       case Some(RoleResolution.Unresolved(origin, problems)) => check(name, false, problems.map(remedy(_, origin)).mkString("; ")) -> Nil
       case Some(RoleResolution.Resolved(plan)) =>

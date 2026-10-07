@@ -33,7 +33,7 @@ final class Application(ledger: LedgerService[IO], repository: LedgerRepository[
         case AgentsAction.Read() => ledger.agents(scope).map(Result.Agents.apply)
         case AgentsAction.Replace(layer, expected, text) => layered(authority, layer) *> ledger.replaceAgents(scope, layer, expected, text).map(Result.Agents.apply)
         case AgentsAction.Preview(layer, text) => layered(authority, layer) *> ledger.previewAgents(scope, layer, text).map(Result.Agents.apply)
-        case AgentsAction.Resolve(harness, role) => ledger.agentRoute(scope, harness, role).map(Result.AgentRoute.apply)
+        case AgentsAction.Resolve(harness, work) => ledger.agentRoute(scope, harness, work).map(Result.AgentRoute.apply)
       }}
       case Command.Search(input) => scoped(authority, input.project) { scope =>
         ledger.search(scope, input.query, input.after, input.limit).flatMap { page =>

@@ -219,7 +219,7 @@ try {
     await page.getByText('Agent models of this project saved at revision 1.', {exact: true}).waitFor();
     assert.deepEqual(await layer(project, 'project'), [OVERRIDE, '1']);
     assert.deepEqual(await layer(other, 'project'), ['', '0']);
-    const route = (await call({Agents: {input: {project, action: {Resolve: {harness: 'Codex', role: 'Reviewer'}}}}})).AgentRoute.value.resolution.Resolved.plan;
+    const route = (await call({Agents: {input: {project, action: {Resolve: {harness: 'Codex', work: {Reviewer: {mode: 'Candidate'}}}}}}})).AgentRoute.value.resolution.Resolved.plan;
     assert.deepEqual([route.origin, route.seats.map(seat => seat.candidates.map(candidate => candidate.model)), route.selfReview], [{layer: 'Project', source: 'HarnessRoles'}, [['gpt-6.1-sol']], [0]]);
     cases.push('a project override changes one cell and its source label, marks the self-review, and is saved for this project only; the server resolves the role the same way');
 

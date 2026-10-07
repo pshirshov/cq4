@@ -658,8 +658,18 @@ root adt RoleChoice {
   data Seat { choice: SeatChoice }
   data Panel { mode: PanelMode seats: lst[SeatChoice] min: i32 }
 }
-root data HarnessAgents { tiers: map[ModelTier, lst[TierEntry]] roles: map[AgentRole, RoleChoice] }
-root data AgentConfig { defaults: map[AgentRole, RoleChoice] harnesses: map[Harness, HarnessAgents] }
+// What a key of a roles mapping names: a role in every mode that has no key of its own (`reviewer`), or one mode of a role
+// (`reviewer/plan`). The planner role has no modes.
+root adt RoleKey {
+  data Plain { role: AgentRole }
+  data Explorer { mode: ExplorerMode }
+  data Worker { mode: WorkerMode }
+  data Reviewer { mode: ReviewerMode }
+}
+root data RoleAssignment { key: RoleKey choice: RoleChoice }
+// A roles mapping holds a key once.
+root data HarnessAgents { tiers: map[ModelTier, lst[TierEntry]] roles: lst[RoleAssignment] }
+root data AgentConfig { defaults: lst[RoleAssignment] harnesses: map[Harness, HarnessAgents] }
 root data ModelRoute { harness: Harness provider: opt[str] model: str effort: opt[Effort] }
 root data ResolvedSeat { strategy: SeatStrategy candidates: lst[ModelRoute] }
 enum AgentLayer { Project Installation }
@@ -689,7 +699,9 @@ root adt RoleResolution {
   // The positions in the problems are those of the text of the origin's layer; a role that no layer assigns has no origin.
   data Unresolved { origin: opt[RoleOrigin] problems: lst[AgentProblem] }
 }
-root data ResolvedAssignment { harness: Harness role: AgentRole resolution: RoleResolution }
+// key: the key that decided the resolution, which is the plain key of the role when no layer assigns it. In a view, the
+// assignment of a plain key holds for every mode of the role that has no assignment of its own.
+root data ResolvedAssignment { harness: Harness key: RoleKey resolution: RoleResolution }
 root adt InstallationSetting {
   data Agents { text: str }
 }
@@ -702,7 +714,7 @@ root adt AgentsAction {
   data Replace { scope: AgentsScope expected: Revision text: str }
   // The unsaved text of one layer against the other layer as stored.
   data Preview { scope: AgentsScope text: str }
-  data Resolve { harness: Harness role: AgentRole }
+  data Resolve { harness: Harness work: DispatchWork }
 }
 root data AgentsInput { project: ProjectId action: AgentsAction }
 root data AgentsDocument { revision: Revision text: str change: opt[RequirementsChange] problems: lst[AgentProblem] }

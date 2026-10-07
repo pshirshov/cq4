@@ -1052,7 +1052,7 @@ emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_toke
             // A route that names no provider runs on the provider of the settings entry of its harness, and the frozen plan says so.
             assert((inherited._1.provider, inherited._1.model, inherited._1.effort) == ("fixture-provider", "other-model", None))
             assert(inherited._2.containsSlice(List("--model", "other-model")) && inherited._2.contains("model_provider=\"fixture-provider\""), inherited._2.toString)
-            assert(Wire.decode(ResolvedAssignment_JsonCodec, inherited._3.noSpaces) == ResolvedAssignment(Harness.Codex, AgentRole.Worker, RoleResolution.Resolved(
+            assert(Wire.decode(ResolvedAssignment_JsonCodec, inherited._3.noSpaces) == ResolvedAssignment(Harness.Codex, RoleKey.Plain(AgentRole.Worker), RoleResolution.Resolved(
               ResolvedRole(PanelMode.All, 1, List(ResolvedSeat(SeatStrategy.Fallback, List(ModelRoute(Harness.Codex, Some("fixture-provider"), "other-model", None)))),
                 RoleOrigin(AgentLayer.Project, RoleSource.DefaultRoles), Nil))), inherited._3.noSpaces)
             assert(unassigned.contains(Fault.Invalid("no model is assigned to the worker role for governing harness codex: set defaults.roles.worker or harnesses.codex.roles.worker " +

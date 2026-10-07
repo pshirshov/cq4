@@ -7,8 +7,33 @@ import java.nio.charset.StandardCharsets.UTF_8
 import java.util.Locale
 import scala.collection.mutable.ListBuffer
 
-/** Where a role is assigned in a document: in `defaults.roles` (no harness) or in `harnesses.<harness>.roles`. */
-final case class AgentRoleKey(harness: Option[Harness], role: AgentRole)
+/** Where a role is assigned in a document: in `defaults.roles` (no harness) or in `harnesses.<harness>.roles`, and under which key. */
+final case class AgentRoleKey(harness: Option[Harness], key: RoleKey)
+
+/** The keys of a roles mapping and the work each of them decides. */
+object RoleKeys {
+  def role(key: RoleKey): AgentRole = key match {
+    case RoleKey.Plain(role) => role
+    case _: RoleKey.Explorer => AgentRole.Explorer
+    case _: RoleKey.Worker => AgentRole.Worker
+    case _: RoleKey.Reviewer => AgentRole.Reviewer
+  }
+
+  def role(work: DispatchWork): AgentRole = work match {
+    case _: DispatchWork.Explorer => AgentRole.Explorer
+    case _: DispatchWork.Planner => AgentRole.Planner
+    case _: DispatchWork.Worker => AgentRole.Worker
+    case _: DispatchWork.Reviewer => AgentRole.Reviewer
+  }
+
+  /** The work of the role, one per mode; the planner role has no modes. */
+  def works(role: AgentRole): List[DispatchWork] = role match {
+    case AgentRole.Planner => List(DispatchWork.Planner())
+    case AgentRole.Worker => WorkerMode.all.map(DispatchWork.Worker(_))
+    case AgentRole.Explorer => ExplorerMode.all.map(DispatchWork.Explorer(_))
+    case AgentRole.Reviewer => ReviewerMode.all.map(DispatchWork.Reviewer(_))
+  }
+}
 
 /**
  * One layer of the agent configuration as its text states it, free of the problems that reject a text when it is saved.
@@ -17,7 +42,7 @@ final case class AgentRoleKey(harness: Option[Harness], role: AgentRole)
 final class ParsedAgents private[core] (val config: AgentConfig, private[core] val references: Map[AgentRoleKey, List[List[TextPosition]]])
 object ParsedAgents {
   /** The layer nobody has written: the empty text. */
-  val empty: ParsedAgents = new ParsedAgents(AgentConfig(Map.empty, Map.empty), Map.empty)
+  val empty: ParsedAgents = new ParsedAgents(AgentConfig(Nil, Map.empty), Map.empty)
 }
 
 /** The model reference syntax: `harness:[provider/]model?effort=…`, `harness:@tier?effort=…`, and `[provider/]model?effort=…` in a tier. */
@@ -169,7 +194,7 @@ object AgentConfigText {
       }.toMap
 
     def document(node: YamlNode): AgentConfig = {
-      var defaults = Map.empty[AgentRole, RoleChoice]
+      var defaults = List.empty[RoleAssignment]
       var harnesses = Map.empty[Harness, HarnessAgents]
       entries(node, "the keys defaults, harnesses").foreach { case (key, value) =>
         key.text match {
@@ -185,7 +210,7 @@ object AgentConfigText {
 
     private def harnessBody(harness: Harness, node: YamlNode): HarnessAgents = {
       var tiers = Map.empty[ModelTier, List[TierEntry]]
-      var assigned = Map.empty[AgentRole, RoleChoice]
+      var assigned = List.empty[RoleAssignment]
       entries(node, "the keys tiers, roles").foreach { case (key, value) =>
         key.text match {
           case "tiers" => tiers = keyed(value, Tiers, ModelTier.all)((_, models) => tier(harness, models))
@@ -210,13 +235,13 @@ object AgentConfigText {
       case other => syntax(other.at, "expected a list of models, as in [model, provider/model?effort=high]"); None
     }
 
-    private def roles(node: YamlNode, scope: Option[Harness]): Map[AgentRole, RoleChoice] =
+    private def roles(node: YamlNode, scope: Option[Harness]): List[RoleAssignment] =
       keyed(node, Roles, AgentRole.all) { (role, value) =>
         roleValue(role, scope, value).map { case (choice, positions) =>
-          references += AgentRoleKey(scope, role) -> positions
+          references += AgentRoleKey(scope, RoleKey.Plain(role)) -> positions
           choice
         }
-      }
+      }.toList.map { case (role, choice) => RoleAssignment(RoleKey.Plain(role), choice) }
 
     // In `harnesses.<harness>.roles` the governing harness is that harness, so a `$harness` reference there is checked as a named one.
     private def reference(scalar: YamlNode.Scalar, scope: Option[Harness]): Option[ModelReference] =

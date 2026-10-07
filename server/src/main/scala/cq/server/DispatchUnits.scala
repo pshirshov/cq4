@@ -1,7 +1,7 @@
 package cq.server
 
 import cq.api.*
-import cq.core.{AgentConfigText, DomainFailure, LedgerPolicy}
+import cq.core.{AgentConfigText, DomainFailure, LedgerPolicy, RoleKeys}
 import cq.host.*
 import distage.Lifecycle
 import java.util.UUID
@@ -18,7 +18,7 @@ private[server] final class UnitAttempt(val at: SeatCandidate, val entry: Dispat
 }
 
 /** One started choice and the attempts the host made for it. Its fields are read and written under the lock of its `DispatchUnits`. */
-private[server] final class DispatchUnit(val work: AssignedWork, val plan: ResolvedRole, val selection: Option[SelectedDispatch],
+private[server] final class DispatchUnit(val work: AssignedWork, val key: RoleKey, val plan: ResolvedRole, val selection: Option[SelectedDispatch],
   val cohort: Option[UUID], var progress: UnitProgress, val done: Promise[Nothing, Unit]) {
   var attempts = Vector.empty[UnitAttempt]
   // The candidates the unit has been told to launch and has not seen end. Each holds one of the session's child slots, and the
@@ -55,14 +55,14 @@ final class DispatchUnits(config: SupervisorConfig, authority: SupervisorAuthori
   }
 
   // Read when the unit starts and never kept: a configuration saved during a session applies to the next unit.
-  private def resolve(role: AgentRole): ResolvedRole =
-    authority.governor.call(Command.Agents(AgentsInput(project, AgentsAction.Resolve(governing, role)))) match {
-      case Result.AgentRoute(ResolvedAssignment(_, _, RoleResolution.Resolved(plan))) =>
+  private def resolve(work: DispatchWork): (RoleKey, ResolvedRole) =
+    authority.governor.call(Command.Agents(AgentsInput(project, AgentsAction.Resolve(governing, work)))) match {
+      case Result.AgentRoute(ResolvedAssignment(_, key, RoleResolution.Resolved(plan))) =>
         // A route that names no provider runs on the provider of the settings entry of its harness.
-        plan.copy(seats = plan.seats.map(seat => seat.copy(candidates = seat.candidates.map(route =>
+        key -> plan.copy(seats = plan.seats.map(seat => seat.copy(candidates = seat.candidates.map(route =>
           route.copy(provider = route.provider.orElse(config.settings.harnesses.find(_.harness == route.harness).map(_.provider)))))))
-      case Result.AgentRoute(ResolvedAssignment(_, _, RoleResolution.Unresolved(origin, problems))) =>
-        throw DomainFailure(Fault.Invalid(DispatchUnits.unresolved(governing, role, origin, problems)))
+      case Result.AgentRoute(ResolvedAssignment(_, key, RoleResolution.Unresolved(origin, problems))) =>
+        throw DomainFailure(Fault.Invalid(DispatchUnits.unresolved(governing, key, origin, problems)))
       case Result.Failed(fault) => throw DomainFailure(fault)
       case _ => throw new IllegalStateException("Agent route resolution returned an unexpected result")
     }
@@ -90,11 +90,12 @@ final class DispatchUnits(config: SupervisorConfig, authority: SupervisorAuthori
       case Some(existing) =>
         if (existing.work != work) ZIO.fail(DomainFailure(Fault.Conflict("Dispatch request identity changed"))) else status(existing)
       case None => for {
-        plan <- ZIO.attemptBlocking {
+        resolved <- ZIO.attemptBlocking {
           ChildContracts.request(project, template(work))
           SupervisorConfig.within(work.limits, config.settings.limits)
-          resolve(DispatchUnits.role(work.work))
+          resolve(work.work)
         }
+        (key, plan) = resolved
         done <- Promise.make[Nothing, Unit]
         admitted <- ZIO.attemptBlocking(synchronized {
           require(!closing, DispatchController.Closed)
@@ -103,14 +104,13 @@ final class DispatchUnits(config: SupervisorConfig, authority: SupervisorAuthori
           // The seats a unit starts together fit together or the unit is not started: every seat of an `all` panel, `min` seats of an `any` one.
           val together = if (plan.mode == PanelMode.All) plan.seats.size else plan.min
           DispatchController.capacity(active.map(_.open).sum, together)
-          val role = DispatchUnits.role(work.work)
-          val (progress, step) = UnitProgress.begin(work.request, plan, seat => rotation.next(role, seat, plan.seats(seat).candidates))
+          val (progress, step) = UnitProgress.begin(work.request, plan, seat => rotation.next(key, seat, plan.seats(seat).candidates))
           val initial = step match {
             case UnitStep.Launch(candidates) if candidates.size == together => candidates
             case other => throw new IllegalStateException(s"A unit of $together first seats began with $other")
           }
           val members = work.members.map(_.id).toSet
-          val unit = new DispatchUnit(work, plan, selection, selection.fold(Option.when(members.size > 1)(UUID.randomUUID()))(_.cohort), progress, done)
+          val unit = new DispatchUnit(work, key, plan, selection, selection.fold(Option.when(members.size > 1)(UUID.randomUUID()))(_.cohort), progress, done)
           unit.open = initial.size
           units = units :+ unit
           unit -> initial
@@ -129,7 +129,7 @@ final class DispatchUnits(config: SupervisorConfig, authority: SupervisorAuthori
     val directory = config.directory.resolve("units")
     HostFiles.directory(directory)
     HostFiles.immutable(directory.resolve(unit.work.request.value.toString + ".json"), HostFiles.encode(ResolvedAssignment_JsonCodec,
-      ResolvedAssignment(governing, DispatchUnits.role(unit.work.work), RoleResolution.Resolved(unit.plan))), MaxPlanBytes)
+      ResolvedAssignment(governing, unit.key, RoleResolution.Resolved(unit.plan))), MaxPlanBytes)
     events.started(SessionUnit(SessionUnitKind.Attempt, handle.value, unit.work.members.map(_.id)))
   }
 
@@ -336,13 +336,6 @@ final case class EndedAttempt(attempt: AttemptId, status: DispatchStatus, stoppe
 object DispatchUnits {
   val Cancelled = "Cancelled by the governing session"
 
-  def role(work: DispatchWork): AgentRole = work match {
-    case _: DispatchWork.Explorer => AgentRole.Explorer
-    case _: DispatchWork.Planner => AgentRole.Planner
-    case _: DispatchWork.Worker => AgentRole.Worker
-    case _: DispatchWork.Reviewer => AgentRole.Reviewer
-  }
-
   /** The request of one attempt of the unit of `work`: the same work on the harness of the attempt's route. */
   def request(work: AssignedWork, harness: Harness): DispatchRequest =
     DispatchRequest(work.request, work.work, harness, work.members, work.guidance, work.artifacts, work.previous, work.fence, work.limits)
@@ -353,8 +346,8 @@ object DispatchUnits {
   private def name(value: Any): String = value.toString.toLowerCase(java.util.Locale.ROOT)
 
   /** Why a unit cannot start, in the words of the configuration its operator edits, and what to set. */
-  def unresolved(governing: Harness, role: AgentRole, origin: Option[RoleOrigin], problems: List[AgentProblem]): String = {
-    val (harness, assigned) = (name(governing), name(role))
+  def unresolved(governing: Harness, decided: RoleKey, origin: Option[RoleOrigin], problems: List[AgentProblem]): String = {
+    val (harness, assigned) = (name(governing), name(RoleKeys.role(decided)))
     val key = origin.map(_.source) match {
       case Some(RoleSource.HarnessRoles) => s"harnesses.$harness.roles.$assigned"
       case _ => s"defaults.roles.$assigned"

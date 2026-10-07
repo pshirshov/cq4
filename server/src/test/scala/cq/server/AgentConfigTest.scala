@@ -2,7 +2,7 @@ package cq.server
 
 import baboon.runtime.shared.BaboonCodecContext
 import cq.api.*
-import cq.core.{AgentConfigText, AgentResolution, ParsedAgents}
+import cq.core.{AgentConfigText, AgentResolution, ParsedAgents, RoleKeys}
 import org.scalatest.wordspec.AnyWordSpec
 
 final class AgentConfigLocal extends AnyWordSpec {
@@ -52,9 +52,20 @@ final class AgentConfigLocal extends AnyWordSpec {
   }
   private def inRoles(value: String): String = s"defaults: { roles: { worker: $value } }"
   private val ValueColumn = 30
-  private def worker(value: String): RoleChoice = parsed(inRoles(value)).config.defaults(AgentRole.Worker)
+  private def plain(role: AgentRole): RoleKey = RoleKey.Plain(role)
+  private def assigned(document: ParsedAgents, role: AgentRole): RoleChoice = document.config.defaults match {
+    case List(RoleAssignment(RoleKey.Plain(`role`), choice)) => choice
+    case other => fail(s"Expected the $role role alone, got $other")
+  }
+  private def worker(value: String): RoleChoice = assigned(parsed(inRoles(value)), AgentRole.Worker)
+  // A role whose modes have no key of their own resolves alike in every mode, by the key of the role.
+  private def resolution(installation: ParsedAgents, project: ParsedAgents, governing: Harness, role: AgentRole): RoleResolution =
+    RoleKeys.works(role).map(AgentResolution.resolve(installation, project, governing, _)).distinct match {
+      case List(ResolvedAssignment(`governing`, RoleKey.Plain(`role`), value)) => value
+      case other => fail(s"Expected one resolution of $role by its own key, got $other")
+    }
   private def resolution(installation: String, project: String, governing: Harness, role: AgentRole): RoleResolution =
-    AgentResolution.resolve(parsed(installation), parsed(project), governing, role)
+    resolution(parsed(installation), parsed(project), governing, role)
   private def resolved(installation: String, project: String, governing: Harness, role: AgentRole): ResolvedRole =
     resolution(installation, project, governing, role) match {
       case RoleResolution.Resolved(plan) => plan
@@ -75,19 +86,19 @@ final class AgentConfigLocal extends AnyWordSpec {
     "parse unchanged into the configuration it states" in {
       val reviewers = List(SeatChoice.Single(tier(named(Harness.Claude), ModelTier.Standard)), SeatChoice.Single(tier(named(Harness.Pi), ModelTier.Standard)))
       assert(parsed(Approved).config == AgentConfig(
+        List(
+          RoleAssignment(plain(AgentRole.Planner), single(tier(Governing, ModelTier.Frontier))),
+          RoleAssignment(plain(AgentRole.Worker), RoleChoice.Seat(SeatChoice.Strategy(SeatStrategy.Fallback, List(tier(Governing, ModelTier.Standard), tier(named(Harness.Pi), ModelTier.Standard))))),
+          RoleAssignment(plain(AgentRole.Explorer), single(tier(Governing, ModelTier.Fast))),
+          RoleAssignment(plain(AgentRole.Reviewer), RoleChoice.Panel(PanelMode.Any, reviewers, 1))),
         Map(
-          AgentRole.Planner -> single(tier(Governing, ModelTier.Frontier)),
-          AgentRole.Worker -> RoleChoice.Seat(SeatChoice.Strategy(SeatStrategy.Fallback, List(tier(Governing, ModelTier.Standard), tier(named(Harness.Pi), ModelTier.Standard)))),
-          AgentRole.Explorer -> single(tier(Governing, ModelTier.Fast)),
-          AgentRole.Reviewer -> RoleChoice.Panel(PanelMode.Any, reviewers, 1)),
-        Map(
-          Harness.Claude -> HarnessAgents(Map(ModelTier.Frontier -> List(entry("opus")), ModelTier.Standard -> List(entry("sonnet")), ModelTier.Fast -> List(entry("haiku"))), Map.empty),
+          Harness.Claude -> HarnessAgents(Map(ModelTier.Frontier -> List(entry("opus")), ModelTier.Standard -> List(entry("sonnet")), ModelTier.Fast -> List(entry("haiku"))), Nil),
           Harness.Codex -> HarnessAgents(
             Map(ModelTier.Frontier -> List(entry("gpt-6.1-sol", Effort.XHigh)), ModelTier.Standard -> List(entry("gpt-6.1-sol")), ModelTier.Fast -> List(entry("gpt-6-luna", Effort.Low))),
-            Map(AgentRole.Reviewer -> RoleChoice.Panel(PanelMode.All, reviewers, 1))),
+            List(RoleAssignment(plain(AgentRole.Reviewer), RoleChoice.Panel(PanelMode.All, reviewers, 1)))),
           Harness.Pi -> HarnessAgents(
             Map(ModelTier.Frontier -> List(entry("openai-codex/gpt-6.1-sol", Effort.XHigh)), ModelTier.Standard -> List(entry(Glm), entry(Mimo)), ModelTier.Fast -> List(entry(Mimo, Effort.Low))),
-            Map.empty))))
+            Nil))))
       assert(problems(Approved).isEmpty)
     }
 
@@ -113,19 +124,20 @@ final class AgentConfigLocal extends AnyWordSpec {
         case (Harness.Pi, AgentRole.Reviewer) => ResolvedRole(PanelMode.Any, 1, List(fallback(route(Harness.Claude, "sonnet")), piStandard), installationDefaults, List(1))
       }
       val assignments = AgentResolution.assignments(parsed(Approved), ParsedAgents.empty)
-      assert(assignments.map(value => value.harness -> value.role) == (for (harness <- Harness.all; role <- AgentRole.all) yield harness -> role))
-      assignments.foreach(value => assert(value.resolution == RoleResolution.Resolved(expected(value.harness, value.role)), s"${value.harness} ${value.role}"))
+      assert(assignments.map(value => value.harness -> value.key) == (for (harness <- Harness.all; role <- AgentRole.all) yield harness -> plain(role)))
+      assignments.foreach(value => assert(value.resolution == RoleResolution.Resolved(expected(value.harness, RoleKeys.role(value.key))), s"${value.harness} ${value.key}"))
       assert(shown(Approved, "", Harness.Codex, AgentRole.Reviewer) == s"{ all: [claude:sonnet, { fallback: [pi:$Glm, pi:$Mimo] }], min: 1 }")
       assert(shown(Approved, "", Harness.Codex, AgentRole.Planner) == "codex:gpt-6.1-sol?effort=xhigh")
       assert(shown(Approved, "", Harness.Claude, AgentRole.Worker) == s"{ fallback: [claude:sonnet, pi:$Glm, pi:$Mimo] }")
     }
 
-    "survive the generated JSON codec with its enumeration-keyed maps written as objects" in {
+    "survive the generated JSON codec with its enumeration-keyed maps written as objects and its roles as a list of keys" in {
       val config = parsed(Approved).config
       val json = AgentConfig_JsonCodec.encode(BaboonCodecContext.Default, config)
       assert(AgentConfig_JsonCodec.decode(BaboonCodecContext.Default, json) == Right(config))
       assert(json.hcursor.downField("harnesses").downField("Codex").downField("tiers").downField("Frontier").downN(0).downField("effort").as[String] == Right("XHigh"))
-      assert(json.hcursor.downField("defaults").keys.map(_.toSet) == Some(Set("Planner", "Worker", "Explorer", "Reviewer")))
+      assert(json.hcursor.downField("defaults").values.map(_.toList.map(_.hcursor.downField("key").downField("Plain").downField("role").as[String])) ==
+        Some(List("Planner", "Worker", "Explorer", "Reviewer").map(Right(_))))
     }
   }
 
@@ -157,12 +169,12 @@ final class AgentConfigLocal extends AnyWordSpec {
     }
 
     "read a text without content, and keys without content, as stating nothing" in {
-      val nothing = AgentConfig(Map.empty, Map.empty)
+      val nothing = AgentConfig(Nil, Map.empty)
       List("", "\n\n", "# nothing yet\n", "   \n# a\n  # b", "defaults:\nharnesses:\n", "defaults:\n  roles:\nharnesses: {}", "{}").foreach { text =>
         assert(parsed(text).config == nothing, text)
       }
-      assert(parsed("harnesses:\n  pi:\n  codex: {}\n").config == AgentConfig(Map.empty, Map(
-        Harness.Pi -> HarnessAgents(Map.empty, Map.empty), Harness.Codex -> HarnessAgents(Map.empty, Map.empty))))
+      assert(parsed("harnesses:\n  pi:\n  codex: {}\n").config == AgentConfig(Nil, Map(
+        Harness.Pi -> HarnessAgents(Map.empty, Nil), Harness.Codex -> HarnessAgents(Map.empty, Nil))))
       assert(ParsedAgents.empty.config == nothing)
     }
 
@@ -256,8 +268,8 @@ final class AgentConfigLocal extends AnyWordSpec {
           assert(problems(s"harnesses:\n  codex:\n    roles:\n      $key: { $mode: [claude:opus], min: 1 }") == List(AgentProblem.PanelNotAllowed(at(4, 9 + key.length), role)))
         }
       }
-      assert(parsed("harnesses: { pi: { roles: { reviewer: { all: [claude:opus, codex:gpt], min: 2 } } } }").config.harnesses(Harness.Pi).roles(AgentRole.Reviewer) ==
-        RoleChoice.Panel(PanelMode.All, List(SeatChoice.Single(exact(named(Harness.Claude), "opus")), SeatChoice.Single(exact(named(Harness.Codex), "gpt"))), 2))
+      assert(parsed("harnesses: { pi: { roles: { reviewer: { all: [claude:opus, codex:gpt], min: 2 } } } }").config.harnesses(Harness.Pi).roles == List(RoleAssignment(plain(AgentRole.Reviewer),
+        RoleChoice.Panel(PanelMode.All, List(SeatChoice.Single(exact(named(Harness.Claude), "opus")), SeatChoice.Single(exact(named(Harness.Codex), "gpt"))), 2))))
     }
 
     "read a role value as a reference, a strategy, or a panel with one seat per entry" in {
@@ -266,7 +278,7 @@ final class AgentConfigLocal extends AnyWordSpec {
         assert(worker(s"{ $key: [claude:opus, $$harness:@fast] }") ==
           RoleChoice.Seat(SeatChoice.Strategy(strategy, List(exact(named(Harness.Claude), "opus"), tier(Governing, ModelTier.Fast)))))
       }
-      assert(parsed("defaults: { roles: { reviewer: { any: [claude:opus, { rr: [codex:gpt, $harness:@fast] }, { first: [pi:zai/a] }], min: 2 } } }").config.defaults(AgentRole.Reviewer) ==
+      assert(assigned(parsed("defaults: { roles: { reviewer: { any: [claude:opus, { rr: [codex:gpt, $harness:@fast] }, { first: [pi:zai/a] }], min: 2 } } }"), AgentRole.Reviewer) ==
         RoleChoice.Panel(PanelMode.Any, List(
           SeatChoice.Single(exact(named(Harness.Claude), "opus")),
           SeatChoice.Strategy(SeatStrategy.RoundRobin, List(exact(named(Harness.Codex), "gpt"), tier(Governing, ModelTier.Fast))),
@@ -393,8 +405,8 @@ final class AgentConfigLocal extends AnyWordSpec {
         val value = reference()
         val rendered = AgentConfigText.render(value)
         assert(worker(rendered) == single(value), rendered)
-        assert(parsed(s"defaults:\n  roles:\n    worker: $rendered   # trailing\n").config.defaults(AgentRole.Worker) == single(value), rendered)
-        assert(parsed(s"defaults: { roles: { worker: \"${rendered.replace("\\", "\\\\").replace("\"", "\\\"")}\" } }").config.defaults(AgentRole.Worker) == single(value), rendered)
+        assert(assigned(parsed(s"defaults:\n  roles:\n    worker: $rendered   # trailing\n"), AgentRole.Worker) == single(value), rendered)
+        assert(assigned(parsed(s"defaults: { roles: { worker: \"${rendered.replace("\\", "\\\\").replace("\"", "\\\"")}\" } }"), AgentRole.Worker) == single(value), rendered)
       }
       (1 to 500).foreach { _ =>
         val choice = RoleChoice.Seat(seat())
@@ -402,7 +414,7 @@ final class AgentConfigLocal extends AnyWordSpec {
         val seats = List.fill(1 + random.nextInt(3))(seat())
         val panel = RoleChoice.Panel(pick(PanelMode.all), seats, 1 + random.nextInt(seats.size))
         val rendered = AgentConfigText.render(panel)
-        assert(parsed(s"defaults:\n  roles:\n    reviewer: $rendered\n").config.defaults(AgentRole.Reviewer) == panel, rendered)
+        assert(assigned(parsed(s"defaults:\n  roles:\n    reviewer: $rendered\n"), AgentRole.Reviewer) == panel, rendered)
       }
       (1 to 500).foreach { _ =>
         val value = ModelRoute(Harness.Codex, Option.when(random.nextBoolean())(text()), text(), Option.when(random.nextBoolean())(Effort.High))
@@ -421,7 +433,7 @@ final class AgentConfigLocal extends AnyWordSpec {
     "render a resolved role as a role value that resolves to the same plan" in {
       val approved = parsed(Approved)
       for (harness <- Harness.all; role <- List("planner" -> AgentRole.Planner, "worker" -> AgentRole.Worker, "explorer" -> AgentRole.Explorer, "reviewer" -> AgentRole.Reviewer)) {
-        val plan = AgentResolution.resolve(approved, ParsedAgents.empty, harness, role._2) match {
+        val plan = resolution(approved, ParsedAgents.empty, harness, role._2) match {
           case RoleResolution.Resolved(value) => value
           case other => fail(other.toString)
         }
@@ -752,16 +764,16 @@ final class AgentConfigLocal extends AnyWordSpec {
           ResolvedRole(PanelMode.All, 1, List(ResolvedSeat(SeatStrategy.Fallback, settings.filterNot(_ == setting).map(own) :+ own(setting))),
             RoleOrigin(AgentLayer.Installation, RoleSource.HarnessRoles), List(0))
         else ResolvedRole(PanelMode.All, 1, List(ResolvedSeat(SeatStrategy.Fallback, List(own(setting)))), RoleOrigin(AgentLayer.Installation, RoleSource.DefaultRoles), Nil)
-        assert(cq.core.AgentResolution.resolve(parsed, cq.core.ParsedAgents.empty, setting.harness, role) == RoleResolution.Resolved(expected), s"${setting.harness} $role")
+        assert(resolution(parsed, ParsedAgents.empty, setting.harness, role) == RoleResolution.Resolved(expected), s"${setting.harness} $role")
       }
       // With one harness there is no other to review: every role runs it, and the operator is told that reviews are self-reviews.
       val single = cq.core.AgentStarter.text(settings.take(1))
       assert(single.contains("    reviewer: $harness:@standard\n") && !single.contains("fallback") &&
         cq.core.AgentStarter.note(settings.take(1)).contains("The settings file holds one harness, so every review is a self-review by the governing harness until another harness is configured"))
-      assert(cq.core.AgentResolution.resolve(cq.core.AgentConfigText.parse(single).toOption.get, cq.core.ParsedAgents.empty, Harness.Claude, AgentRole.Reviewer) ==
+      assert(resolution(cq.core.AgentConfigText.parse(single).toOption.get, ParsedAgents.empty, Harness.Claude, AgentRole.Reviewer) ==
         RoleResolution.Resolved(ResolvedRole(PanelMode.All, 1, List(ResolvedSeat(SeatStrategy.Fallback, List(own(settings.head)))), RoleOrigin(AgentLayer.Installation, RoleSource.DefaultRoles), List(0))))
       // A harness the settings do not hold has no tier: its roles are unassigned in effect, and the refusal names the tier.
-      assert(cq.core.AgentResolution.resolve(cq.core.AgentConfigText.parse(cq.core.AgentStarter.text(settings.take(1))).toOption.get, cq.core.ParsedAgents.empty, Harness.Pi, AgentRole.Worker) ==
+      assert(resolution(cq.core.AgentConfigText.parse(cq.core.AgentStarter.text(settings.take(1))).toOption.get, ParsedAgents.empty, Harness.Pi, AgentRole.Worker) ==
         RoleResolution.Unresolved(Some(RoleOrigin(AgentLayer.Installation, RoleSource.DefaultRoles)), List(AgentProblem.TierUndefined(Harness.Pi, ModelTier.Standard, AgentRole.Worker))))
       assert(intercept[IllegalArgumentException](cq.core.AgentStarter.text(settings :+ settings.head)).getMessage.contains("names each harness once"))
       assert(intercept[IllegalArgumentException](cq.core.AgentStarter.text(Nil)).getMessage.contains("names each harness once"))

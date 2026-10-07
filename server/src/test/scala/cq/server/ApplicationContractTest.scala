@@ -428,7 +428,7 @@ abstract class ApplicationContractTest extends SpecZIO with AssertZIO {
         def read(authority: Authority, target: ProjectId) = call(authority, target, AgentsAction.Read())
         def view(result: Result): AgentsView = result match { case Result.Agents(value) => value; case found => fail(s"Expected an agent configuration, got $found") }
         def replace(authority: Authority, scope: AgentsScope, expected: Revision, text: String) = call(authority, project, AgentsAction.Replace(scope, expected, text))
-        def resolve(authority: Authority, harness: Harness, role: AgentRole) = call(authority, project, AgentsAction.Resolve(harness, role))
+        def resolve(authority: Authority, harness: Harness, work: DispatchWork) = call(authority, project, AgentsAction.Resolve(harness, work))
         def parsed(text: String): ParsedAgents = AgentConfigText.parse(text).fold(problems => fail(problems.toString), identity)
         val Installation = AgentsScope.Installation()
         val Project = AgentsScope.Project()
@@ -446,7 +446,7 @@ abstract class ApplicationContractTest extends SpecZIO with AssertZIO {
           base = initial.installation.revision
           _ <- assertIO(initial.project == AgentsDocument(Revision(0), "", None, Nil) && initial.installation.problems.isEmpty &&
             (base != Revision(0) || initial.installation == AgentsDocument(Revision(0), "", None, Nil)) &&
-            initial.assignments.map(value => value.harness -> value.role) == (for { harness <- Harness.all; role <- AgentRole.all } yield harness -> role))
+            initial.assignments.map(value => value.harness -> value.key) == (for { harness <- Harness.all; role <- AgentRole.all } yield harness -> RoleKey.Plain(role)))
           denied <- ZIO.foreach(for { role <- List(Role.Governor, Role.Worker); (scope, message) <- writers } yield (granted(role), scope, message)) { (authority, scope, message) =>
             for {
               written <- replace(authority, scope, if (scope == Installation) base else Revision(0), overrides)
@@ -467,17 +467,17 @@ abstract class ApplicationContractTest extends SpecZIO with AssertZIO {
           readers <- ZIO.foreach(List(root, browser, granted(Role.Governor), granted(Role.Planner), granted(Role.Worker), granted(Role.Reviewer)))(read(_, project))
           _ <- assertIO(readers.forall(_ == Result.Agents(written)))
           governor = granted(Role.Governor)
-          planner <- resolve(governor, Harness.Claude, AgentRole.Planner)
-          _ <- assertIO(planner == Result.AgentRoute(ResolvedAssignment(Harness.Claude, AgentRole.Planner, RoleResolution.Resolved(
+          planner <- resolve(governor, Harness.Claude, DispatchWork.Planner())
+          _ <- assertIO(planner == Result.AgentRoute(ResolvedAssignment(Harness.Claude, RoleKey.Plain(AgentRole.Planner), RoleResolution.Resolved(
             ResolvedRole(PanelMode.All, 1, fallback("opus"), RoleOrigin(AgentLayer.Installation, RoleSource.DefaultRoles), Nil)))))
-          worker <- resolve(governor, Harness.Codex, AgentRole.Worker)
-          _ <- assertIO(worker == Result.AgentRoute(ResolvedAssignment(Harness.Codex, AgentRole.Worker, RoleResolution.Resolved(
+          worker <- resolve(governor, Harness.Codex, DispatchWork.Worker(WorkerMode.Probe))
+          _ <- assertIO(worker == Result.AgentRoute(ResolvedAssignment(Harness.Codex, RoleKey.Plain(AgentRole.Worker), RoleResolution.Resolved(
             ResolvedRole(PanelMode.All, 1, fallback("sonnet"), RoleOrigin(AgentLayer.Project, RoleSource.DefaultRoles), Nil)))))
-          undefined <- resolve(governor, Harness.Codex, AgentRole.Planner)
-          _ <- assertIO(undefined == Result.AgentRoute(ResolvedAssignment(Harness.Codex, AgentRole.Planner, RoleResolution.Unresolved(
+          undefined <- resolve(governor, Harness.Codex, DispatchWork.Planner())
+          _ <- assertIO(undefined == Result.AgentRoute(ResolvedAssignment(Harness.Codex, RoleKey.Plain(AgentRole.Planner), RoleResolution.Unresolved(
             Some(RoleOrigin(AgentLayer.Installation, RoleSource.DefaultRoles)), List(AgentProblem.TierUndefined(Harness.Codex, ModelTier.Frontier, AgentRole.Planner))))))
-          unassigned <- resolve(granted(Role.Worker), Harness.Pi, AgentRole.Reviewer)
-          _ <- assertIO(unassigned == Result.AgentRoute(ResolvedAssignment(Harness.Pi, AgentRole.Reviewer,
+          unassigned <- resolve(granted(Role.Worker), Harness.Pi, DispatchWork.Reviewer(ReviewerMode.Audit))
+          _ <- assertIO(unassigned == Result.AgentRoute(ResolvedAssignment(Harness.Pi, RoleKey.Plain(AgentRole.Reviewer),
             RoleResolution.Unresolved(None, List(AgentProblem.RoleUnassigned(Harness.Pi, AgentRole.Reviewer))))))
           stale <- replace(root, Project, Revision(0), "")
           _ <- assertIO(stale == Result.Failed(Fault.Conflict("Agent configuration of the project changed: expected revision 0, actual 1; reload before saving")))
@@ -510,7 +510,7 @@ abstract class ApplicationContractTest extends SpecZIO with AssertZIO {
           _ <- assertIO(cleared.project.revision == Revision(3) && cleared.project.text.isEmpty && cleared.project.change.nonEmpty &&
             cleared.assignments == AgentResolution.assignments(parsed(defaults), ParsedAgents.empty))
           foreign <- read(granted(Role.Worker), other)
-          foreignRoute <- call(granted(Role.Governor), other, AgentsAction.Resolve(Harness.Claude, AgentRole.Planner))
+          foreignRoute <- call(granted(Role.Governor), other, AgentsAction.Resolve(Harness.Claude, DispatchWork.Planner()))
           _ <- assertIO(List(foreign, foreignRoute).forall { case Result.Failed(_: Fault.Denied) => true; case _ => false })
           // The server default holds for every project; the override is the project's own.
           separate <- read(root, other).map(view)
