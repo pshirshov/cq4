@@ -164,7 +164,10 @@ const produced = planned.find(item => item.id.ledger === "Tasks" && item.id.numb
 assert.equal((await status(first)).state, "On", "assigning a produced Task to an out-of-set Open milestone keeps the driver on");
 await first.tool("dispatch", { Cancel: { attempt: child.attempt } });
 const deadline = Date.now() + 60000;
-while ((await first.driver()).activeChildren !== 0) { assert(Date.now() < deadline, "The cancelled child did not settle"); await sleep(200); }
+// The attempt and the request of its unit are settled by two followers of the host, in either order: until both are, the unit is
+// still work in flight, and a stop then would be answered with a wait.
+const inFlight = async () => { const value = await first.driver(); return value.activeChildren !== 0 || value.cycle.lineage.some(entry => entry.member.Run === undefined && !entry.settled); };
+while (await inFlight()) { assert(Date.now() < deadline, "The cancelled child did not settle"); await sleep(200); }
 // The extension's own `cq wait` on the real session directory told the session, in a message that starts a turn; the model started no waiter.
 while (first.injected.length === 0) { assert(Date.now() < deadline, "The session was not told that its child ended"); await sleep(200); }
 assert.deepEqual(first.injected.map(entry => entry.options), [{ triggerTurn: true }]);
