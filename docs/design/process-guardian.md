@@ -32,6 +32,7 @@ A fixed execution deadline killed legitimate work and could not be tuned per tas
 | Exec acknowledgement `startupMillis` | `guardian.c` `StartupDeadline`, `GuardianDriver.monitor` | stays |
 | Owner heartbeat `heartbeatMillis` (frozen or dead owner) | `guardian.c` `HeartbeatLost`, control-pipe EOF `OwnerExited` | stays |
 | Termination `graceMillis`, `killMillis`, the driver's 2 s drain | `guardian.c`, `GuardianDriver` | stays |
+| Driver deadline of 2 s between a guardian's terminal record and its exit → `Uncertain` | `GuardianDriver.monitor` | **removed** (D155): a guardian that reported the end of its job is waited for while it is alive |
 | Output disk-safety ceiling, 1 GiB per stream | `ExecutionLimits.OutputCeilingBytes` | stays |
 | Shutdown drain grace + kill + 10 s, then exit 75 | `SupervisorWatchdog`, armed by `beginShutdown` | stays |
 | Host operation bounds: 1 s journal/ticket acknowledgements, 10 s HTTP and Git inspection, 30 s per attached MCP operation plus the wait a dispatch command asks for (at most 120 s), 60 s integration preparation (server calls) | `JobSupervisor`, `HttpServerApi`, `BoundedHostCommand`, `AttachedProgram`, `IntegrationPreparation` | stays |

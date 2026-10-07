@@ -167,7 +167,6 @@ final class GuardianDriver(binary: Path) extends ExecutionDriver {
         try {
           val maximum = spec.limits.execution.map(spec.limits.startup.plus(_).plus(spec.limits.grace).plus(spec.limits.kill).plusMillis(DrainMillis).toNanos)
           var cancelledAt = Option.empty[Long]
-          var terminalAt = Option.empty[Long]
           var stoppedAt = Option.empty[Long]
           while (child.isAlive && active.get()) {
             if (stdout.isDone) {
@@ -178,16 +177,14 @@ final class GuardianDriver(binary: Path) extends ExecutionDriver {
             if (writerResult.isDone) writerResult.get()
             val now = System.nanoTime()
             val current = transcript.get()
-            if (current.result.nonEmpty && terminalAt.isEmpty) terminalAt = Some(now)
             if (current.stop.nonEmpty && stoppedAt.isEmpty) stoppedAt = Some(now)
             if (status.cancellationRequested && cancelledAt.isEmpty) cancelledAt = Some(now)
             val cancelLimit = spec.limits.heartbeat.plus(spec.limits.grace).plus(spec.limits.kill).plusMillis(DrainMillis).toNanos
             val stopLimit = spec.limits.grace.plus(spec.limits.kill).plusMillis(DrainMillis).toNanos
             if (current.root.isEmpty && current.stop.isEmpty && now - began >= spec.limits.startup.toNanos)
               uncertain("Guardian start acknowledgement deadline exceeded")
-            else if (terminalAt.exists(now - _ >= TimeUnit.MILLISECONDS.toNanos(DrainMillis)))
-              uncertain("Guardian reported completion but did not exit within its deadline")
-            else if (stoppedAt.exists(now - _ >= stopLimit)) uncertain("Guardian stopping deadline exceeded; process termination is unconfirmed")
+            // A guardian that reported the end of its job is waited for while it is alive: how long its exit takes says nothing of the job (D155).
+            else if (current.result.isEmpty && stoppedAt.exists(now - _ >= stopLimit)) uncertain("Guardian stopping deadline exceeded; process termination is unconfirmed")
             else if (maximum.exists(now - began >= _) || cancelledAt.exists(now - _ >= cancelLimit)) uncertain("Guardian cleanup deadline exceeded; process termination is unconfirmed")
             else Thread.sleep(PollMillis)
           }

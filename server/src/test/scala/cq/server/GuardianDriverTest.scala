@@ -134,10 +134,18 @@ final class GuardianDriverProcess extends SpecZIO with AssertZIO {
       }
     }}
 
-    "bound a hung helper after its terminal record" in { (fixture: GuardianFixture) => ZIO.attemptBlocking {
-      val (helper, spec) = fixture.artificial("printf 'START 123\\nSTOP Exited\\nEXIT 0 0 Exited 0 0 1 0\\n'\nread line")
-      Using.resource(new GuardianDriver(helper).start(spec)) { running =>
-        assert(running.await(Duration.ofSeconds(3)).phase == ProcessPhase.Uncertain)
+    "D155: wait for a helper that is alive after its terminal record, and bound one that hangs there by its cancellation" in { (fixture: GuardianFixture) => ZIO.attemptBlocking {
+      // Longer than the drain, the stopping deadline and the heartbeat deadline of the fixture: the job ended as the record says.
+      val (slow, completed) = fixture.artificial("printf 'START 123\\nSTOP Exited\\nEXIT 0 0 Exited 0 0 1 0\\n'\nsleep 4")
+      Using.resource(new GuardianDriver(slow).start(completed)) { running =>
+        val observed = running.await(Duration.ofSeconds(30))
+        assert(observed.phase == ProcessPhase.Settled && observed.result.exists(value => value.settled && value.code.contains(0)) && observed.problem.isEmpty, observed.toString)
+      }
+      val (hung, spec) = fixture.artificial("printf 'START 123\\nSTOP Exited\\nEXIT 0 0 Exited 0 0 1 0\\n'\nread line")
+      Using.resource(new GuardianDriver(hung).start(spec)) { running =>
+        assert(scala.util.Try(running.await(Duration.ofSeconds(3))).isFailure && running.status.phase != ProcessPhase.Uncertain)
+        running.cancel()
+        assert(running.await(Duration.ofSeconds(10)).phase == ProcessPhase.Uncertain)
       }
     }}
 

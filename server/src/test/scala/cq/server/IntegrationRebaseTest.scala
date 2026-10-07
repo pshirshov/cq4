@@ -78,7 +78,9 @@ final class IntegrationRebaseProcess extends SpecZIO with AssertZIO {
     val root = auth.authenticate(token, Some(owner.actor.session.value.toString))
     val expires = clock.millis() + 60L * 60 * 1000
     val application = new Application(ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, auth, new CatalogRead(new McpSchemas()))
-    val limits = HostLimits(5000, 900, 100, 1000, 262144)
+    // The heartbeat deadline is no measure of this suite's host: a gate machine under memory pressure stalls it for seconds (D155), and
+    // an owner that has exited is known by the closed control pipe at once. Cancellation reaches a job within a third of it.
+    val limits = HostLimits(5000, 15000, 100, 1000, 262144)
     val renewals = new AtomicInteger(0)
     def publish(value: ChildResult): Task[ArtifactId] = for {
       artifact <- artifacts.upload(collector, ArtifactUpload(owner.project, NativeArtifacts.id(value.attempt, "result"), value.attempt, ArtifactKind.Result,
@@ -578,6 +580,37 @@ final class IntegrationRebaseProcess extends SpecZIO with AssertZIO {
           missing <- integrations.get(f.owner, id).either
           _ <- assertIO(missing.left.exists { case DomainFailure(_: Fault.Missing) => true; case _ => false })
         } yield ()
+      }
+    }
+
+    // D155: one run in eight ended Pending with the Git outcome unconfirmed. Two stalls reproduce that status: a host silent for longer
+    // than the guardian's heartbeat deadline, and a guardian still alive two seconds after it reported the job's end.
+    List("a host that stalls for 1.5 s while the Git job runs", "a guardian that exits 3 s after it reported the end of the Git job").foreach { stalled =>
+      s"D155: record an integration despite $stalled" in {
+        (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
+          artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
+        val host = stalled.startsWith("a host")
+        val latch = Files.createTempDirectory(local.directory, "stall-")
+        val wrapper = latch.resolve("guardian")
+        // The Git job alone is affected. Its executor waits, after its effect, until the host has been stalled; or its guardian's process outlives the guardian.
+        val job = if (host) s"""export LD_PRELOAD=${sys.env("CQ_SHUTDOWN_STALL_LIBRARY")} CQ_FIXTURE_STALL_MODE=checkout-completed CQ_FIXTURE_STALL_ROOT=$latch; exec ${guardian.binary} "$$@" """
+          else s"""${guardian.binary} "$$@"; code=$$?; sleep 3; exit $$code"""
+        Files.writeString(wrapper, s"""#!/bin/sh\ncase " $$* " in *" :checkout "*) $job;; esac\nexec ${guardian.binary} "$$@"\n""")
+        require(wrapper.toFile.setExecutable(true))
+        fixture(local, guardian.copy(binary = wrapper), ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, List(BothSides), false, false) { f => for {
+          ready <- f.prepare
+          running <- f.integrate(ready.id).fork
+          _ <- ZIO.when(host)(ZIO.attemptBlocking {
+            val limit = System.nanoTime() + java.time.Duration.ofSeconds(120).toNanos
+            while (!Files.exists(latch.resolve("entered"))) { require(System.nanoTime() < limit, "The Git job did not reach its effect"); Thread.sleep(20) }
+            val pid = ProcessHandle.current().pid()
+            // The whole host process stops, as under memory pressure, and is continued by a process it does not run.
+            require(new ProcessBuilder("sh", "-c", s"kill -STOP $pid; sleep 1.5; kill -CONT $pid").inheritIO().start().waitFor() == 0)
+            Files.createFile(latch.resolve("release"))
+          })
+          recorded <- running.join
+          _ <- ZIO.attempt(assert(recorded.phase == IntegrationPhase.Recorded && recorded.blocker.isEmpty && f.target == ready.preview.get.candidate, recorded.toString))
+        } yield () }
       }
     }
   }
