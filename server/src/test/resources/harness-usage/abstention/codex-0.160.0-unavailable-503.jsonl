@@ -1,0 +1,14 @@
+{"type":"thread.started","thread_id":"01a110b7-15a9-71a1-8b4f-02a1fec4547f"}
+{"type":"turn.started"}
+{"type":"error","message":"Reconnecting... 2/5 (unexpected status 503 Service Unavailable: The engine is currently overloaded, please try again later., url: ws://127.0.0.1:1/v1/responses)"}
+{"type":"error","message":"Reconnecting... 3/5 (unexpected status 503 Service Unavailable: The engine is currently overloaded, please try again later., url: ws://127.0.0.1:1/v1/responses)"}
+{"type":"error","message":"Reconnecting... 4/5 (unexpected status 503 Service Unavailable: The engine is currently overloaded, please try again later., url: ws://127.0.0.1:1/v1/responses)"}
+{"type":"error","message":"Reconnecting... 5/5 (unexpected status 503 Service Unavailable: The engine is currently overloaded, please try again later., url: ws://127.0.0.1:1/v1/responses)"}
+{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Falling back from WebSockets to HTTPS transport. unexpected status 503 Service Unavailable: The engine is currently overloaded, please try again later., url: ws://127.0.0.1:1/v1/responses"}}
+{"type":"error","message":"Reconnecting... 1/5 (unexpected status 503 Service Unavailable: The engine is currently overloaded, please try again later., url: http://127.0.0.1:1/v1/responses)"}
+{"type":"error","message":"Reconnecting... 2/5 (unexpected status 503 Service Unavailable: The engine is currently overloaded, please try again later., url: http://127.0.0.1:1/v1/responses)"}
+{"type":"error","message":"Reconnecting... 3/5 (unexpected status 503 Service Unavailable: The engine is currently overloaded, please try again later., url: http://127.0.0.1:1/v1/responses)"}
+{"type":"error","message":"Reconnecting... 4/5 (unexpected status 503 Service Unavailable: The engine is currently overloaded, please try again later., url: http://127.0.0.1:1/v1/responses)"}
+{"type":"error","message":"Reconnecting... 5/5 (unexpected status 503 Service Unavailable: The engine is currently overloaded, please try again later., url: http://127.0.0.1:1/v1/responses)"}
+{"type":"error","message":"unexpected status 503 Service Unavailable: The engine is currently overloaded, please try again later., url: http://127.0.0.1:1/v1/responses"}
+{"type":"turn.failed","error":{"message":"unexpected status 503 Service Unavailable: The engine is currently overloaded, please try again later., url: http://127.0.0.1:1/v1/responses"}}

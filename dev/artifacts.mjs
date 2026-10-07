@@ -29,7 +29,7 @@ const worker = await grant('Worker', session);
 const assignment = { id: id(), project, members: [], attribution: 'Unattributed', cohort: null, evaluation: null };
 await accepted('/api/usage', { project, operation: { Assign: { value: assignment } } }, collector);
 await accepted('/api/usage', { project, operation: { Start: { value: { id: attempt, assignment: assignment.id, parent: null,
-  session, role: 'Worker', harness: 'Codex', provider: 'fixture', model: 'fixture', collector: 'fixture', startedAt: '1000', phase: 'Work' } } } }, collector);
+  session, role: 'Worker', harness: 'Codex', provider: 'fixture', model: 'fixture', collector: 'fixture', startedAt: '1000', phase: 'Work', effort: null } } } }, collector);
 const upload = { project, id: id(), attempt, kind: 'Transcript', mediaType: 'application/x-ndjson', body: '\u0000'.repeat(256 * 1024) };
 const metadata = await accepted('/api/artifact', upload, collector);
 assert.equal(metadata.sha256, createHash('sha256').update(upload.body).digest('hex'));

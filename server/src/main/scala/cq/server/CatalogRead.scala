@@ -1,17 +1,23 @@
 package cq.server
 
 import cq.api.*
-import cq.host.{ChildInstructions, DriverAssets, DriverCommand, PiAssets, HarnessTool, HarnessToolPolicy, McpTarget, ToolAccess, WorkflowArgument, WorkflowAssets, WorkflowCatalog, WorkflowCommand}
+import cq.core.ProcessModePolicy
+import cq.host.{ChildInstructions, DriverAssets, DriverCommand, PiAssets, HarnessTool, HarnessToolPolicy, McpTarget, ProcessModeEntry, ProcessModes, ToolAccess, WorkflowArgument, WorkflowAssets, WorkflowCatalog, WorkflowCommand}
 
 /** The typed `ReadSelection.Catalog` view. It only projects the workflow and driver command catalogs, their installed assets,
-  * and the dispatched agent catalog into the generated cq-api model; it holds no descriptions, aliases, argument docs, prompts, schemas,
+  * the process modes and the dispatched agent catalog into the generated cq-api model; it holds no descriptions, aliases, argument docs, prompts, schemas,
   * examples or tool lists of its own. */
-final class CatalogRead(agents: AgentCatalog, workflows: WorkflowAssets) {
-  def this(schemas: McpSchemas) = this(new AgentCatalog(schemas, new ChildInstructions()), new WorkflowAssets())
+final class CatalogRead(agents: AgentCatalog, workflows: WorkflowAssets, modes: ProcessModePolicy) {
+  def this(schemas: McpSchemas, modes: ProcessModePolicy) = this(new AgentCatalog(schemas, new ChildInstructions()), new WorkflowAssets(), modes)
+  def this(schemas: McpSchemas) = this(schemas, ProcessModePolicy.Release)
 
-  lazy val value: HelpCatalog = HelpCatalog(WorkflowCatalog.commands.map(command) ++ DriverAssets.catalog.map(driver), agents.entries.map(agent))
+  lazy val value: HelpCatalog = HelpCatalog(WorkflowCatalog.commands.map(command) ++ DriverAssets.catalog.map(driver), agents.entries.map(agent),
+    ProcessModes.all.map(mode), ProcessModes.Effect)
 
   private def prompt(resource: String): CatalogPrompt = CatalogPrompt(resource, workflows.resource(resource))
+
+  private def mode(value: ProcessModeEntry): CatalogMode =
+    CatalogMode(value.mode, value.label, value.hint, value.description, prompt(value.instructions), modes.unavailable(value.mode))
 
   private def argument(value: WorkflowArgument): CatalogArgument = CatalogArgument(value.option.field, value.option.flag, value.option.value,
     value.option.summary, value.option.choices, value.required, value.note)

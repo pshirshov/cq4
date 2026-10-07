@@ -77,6 +77,11 @@ const first = await session(randomUUID());
 const second = await session(randomUUID());
 const context = (await first.tool("session", { Context: {} })).Context.value;
 const project = context.project.project;
+// The children of both sessions run the Codex-shaped fixture harness although Pi governs: the project's agent configuration says so.
+const assigned = await operator({ Agents: { input: { project, action: { Replace: { scope: { Project: {} }, expected: { value: "0" },
+  text: "defaults:\n  roles:\n" + ["planner", "worker", "explorer", "reviewer"].map(role => `    ${role}: codex:fixture-model\n`).join("") } } } } });
+assert.deepEqual([assigned.Agents.value.project.revision, assigned.Agents.value.project.problems], [{ value: "1" }, []]);
+assert(!("routes" in context), "The session is told no models to choose");
 const draft = { title: "Driven task", body: "Advance the fixture", labels: [], archived: false,
   content: { Task: { status: "Ready", acceptance: ["Report findings"], result: null, validation: [] } }, citations: [] };
 const change = (pi, mutations, fences) => pi.tool("change", { project, change: { request: identity(), mutations, fences, reason: "Pi driver fixture" } });
@@ -137,7 +142,7 @@ assert.deepEqual((await first.tool("session", { Context: {} })).Context.value.wo
 const selection = { request: identity(), roots: [target.id], work: { Worker: { mode: "Probe" } }, guidance: [], artifacts: [], previous: null, limits };
 const [choice] = (await first.tool("dispatch", { Select: { request: selection } })).Selection.value.choices;
 const claim = (await first.tool("claim", { project, action: { Acquire: { id: identity(), members: [target.id], durationMillis: "180000" } } })).Claimed.claim;
-const child = (await first.tool("dispatch", { StartChoice: { choice: choice.id, harness: "Codex", fence: claim.fence } })).Status.value;
+const child = (await first.tool("dispatch", { StartChoice: { choice: choice.id, fence: claim.fence } })).Status.value;
 // The turn ends while the child runs: the driver waits. Nothing is submitted, the drive stays on and the cycle keeps its one run.
 const submittedBefore = first.sent.length;
 await first.settle("completed");
@@ -159,7 +164,10 @@ const produced = planned.find(item => item.id.ledger === "Tasks" && item.id.numb
 assert.equal((await status(first)).state, "On", "assigning a produced Task to an out-of-set Open milestone keeps the driver on");
 await first.tool("dispatch", { Cancel: { attempt: child.attempt } });
 const deadline = Date.now() + 60000;
-while ((await first.driver()).activeChildren !== 0) { assert(Date.now() < deadline, "The cancelled child did not settle"); await sleep(200); }
+// The attempt and the request of its unit are settled by two followers of the host, in either order: until both are, the unit is
+// still work in flight, and a stop then would be answered with a wait.
+const inFlight = async () => { const value = await first.driver(); return value.activeChildren !== 0 || value.cycle.lineage.some(entry => entry.member.Run === undefined && !entry.settled); };
+while (await inFlight()) { assert(Date.now() < deadline, "The cancelled child did not settle"); await sleep(200); }
 // The extension's own `cq wait` on the real session directory told the session, in a message that starts a turn; the model started no waiter.
 while (first.injected.length === 0) { assert(Date.now() < deadline, "The session was not told that its child ended"); await sleep(200); }
 assert.deepEqual(first.injected.map(entry => entry.options), [{ triggerTurn: true }]);

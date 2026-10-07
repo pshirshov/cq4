@@ -1,6 +1,7 @@
 package cq.host
 
 import cq.api.*
+import cq.core.AgentResolution
 import io.circe.Json
 import java.net.URI
 import java.nio.charset.StandardCharsets.UTF_8
@@ -8,19 +9,28 @@ import java.nio.file.{Files, Path, StandardOpenOption}
 import java.nio.file.attribute.PosixFilePermissions
 import scala.util.Using
 
-final case class HarnessProfile(harness: Harness, executable: Path, model: String, provider: String, version: String,
+/** `effort` absent leaves the harness's own default level. */
+final case class HarnessProfile(harness: Harness, executable: Path, model: String, provider: String, effort: Option[Effort], version: String,
   providerExtensions: List[Path], providerEnvironment: Set[String]) {
-  require(executable.isAbsolute && executable.normalize() == executable, "Harness executable must be absolute and normalized")
-  require(List(model, provider).forall(s => s.nonEmpty && s.length <= 100 && !s.exists(_.isControl)), "Explicit harness model/provider required")
-  require(HarnessUsage.verified(harness, version), HarnessProfile.Unverified)
-  require(providerExtensions.forall(p => p.isAbsolute && p.normalize() == p), "Provider extension paths must be absolute and normalized")
-  require(providerExtensions.isEmpty || harness == Harness.Pi, "Only Pi accepts explicit provider extensions")
-  require(providerExtensions.distinct == providerExtensions && providerExtensions.size <= 8, "Invalid provider extension inventory")
-  require(providerEnvironment.forall(name => name.matches("[A-Z][A-Z0-9_]{0,99}") && !name.startsWith("CQ_") &&
+  RouteRefusal.unless(executable.isAbsolute && executable.normalize() == executable, "Harness executable must be absolute and normalized")
+  RouteRefusal.unless(List(model, provider).forall(s => s.nonEmpty && s.length <= 100 && !s.exists(_.isControl)), "Explicit harness model/provider required")
+  RouteRefusal.unless(HarnessUsage.verified(harness, version), HarnessProfile.Unverified)
+  RouteRefusal.unless(providerExtensions.forall(p => p.isAbsolute && p.normalize() == p), "Provider extension paths must be absolute and normalized")
+  RouteRefusal.unless(providerExtensions.isEmpty || harness == Harness.Pi, "Only Pi accepts explicit provider extensions")
+  RouteRefusal.unless(providerExtensions.distinct == providerExtensions && providerExtensions.size <= 8, "Invalid provider extension inventory")
+  RouteRefusal.unless(providerEnvironment.forall(name => name.matches("[A-Z][A-Z0-9_]{0,99}") && !name.startsWith("CQ_") &&
     !Set("CLAUDECODE", "CLAUDE_CODE_SIMPLE", "CLAUDE_CODE_SAFE_MODE")(name)), "Provider environment cannot carry CQ or harness-control authority")
 }
 object HarnessProfile {
   val Unverified = "Unverified harness version"
+  /** The settings entry of a harness with the model, provider and effort of one route; a route that names no provider takes the entry's. */
+  def apply(setting: HarnessSetting, route: ModelRoute): HarnessProfile = {
+    RouteRefusal.unless(setting.harness == route.harness, "Model route and settings entry name different harnesses")
+    HarnessProfile(setting.harness, Path.of(setting.executable), route.model, route.provider.getOrElse(setting.provider), route.effort, setting.version,
+      setting.providerExtensions.map(Path.of(_)), setting.providerEnvironment)
+  }
+  /** The route a settings entry states by itself: its own model and provider, and the harness's default effort. */
+  def route(setting: HarnessSetting): ModelRoute = ModelRoute(setting.harness, Some(setting.provider), setting.model, None)
 }
 
 enum McpTarget {
@@ -92,6 +102,14 @@ trait HarnessAdapter {
   def harness: Harness
   def launch(profile: HarnessProfile, invocation: HarnessInvocation, environment: Map[String, String]): HarnessLaunch
 }
+object HarnessAdapter {
+  val EffortUnsupported = "Harness does not take the requested effort"
+  /** The effort as the harness's command line spells it; a level the harness does not name is refused, not passed on. */
+  def effort(profile: HarnessProfile): Option[String] = profile.effort.map { value =>
+    RouteRefusal.unless(AgentResolution.efforts(profile.harness)(value), EffortUnsupported)
+    AgentResolution.effortName(value)
+  }
+}
 
 object HarnessEnvironment {
   private val Runtime = Set("HOME", "PATH", "LANG", "LC_ALL", "TERM", "TMPDIR", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME",
@@ -102,16 +120,21 @@ object HarnessEnvironment {
     val allowed = Runtime ++ profile.providerEnvironment
     val selected = environment.filter((name, _) => allowed(name))
     require(selected.contains("HOME") && selected.contains("PATH"), "Harness execution requires explicit HOME and PATH")
-    require(profile.providerEnvironment.subsetOf(environment.keySet), "Configured provider environment is unavailable")
+    RouteRefusal.unless(profile.providerEnvironment.subsetOf(environment.keySet), "Configured provider environment is unavailable")
     selected
   }
+}
+
+object ClaudeAdapter {
+  /** The one provider Claude Code is launched for; a Claude route names none. */
+  val Provider = "anthropic"
 }
 
 final class ClaudeAdapter extends HarnessAdapter {
   override val harness: Harness = Harness.Claude
   override def launch(profile: HarnessProfile, invocation: HarnessInvocation, environment: Map[String, String]): HarnessLaunch = {
     require(profile.harness == harness)
-    require(profile.provider == "anthropic", "Claude adapter supports only the verified Anthropic provider route")
+    RouteRefusal.unless(profile.provider == ClaudeAdapter.Provider, "Claude adapter supports only the verified Anthropic provider route")
     val policy = HarnessTools.policy(invocation.role, harness)
     val builtin = policy.enabledBuiltin
     val mcp = invocation.endpoints.flatMap(endpoint => policy.enabledMcp(endpoint.target).map(tool => s"mcp__${endpoint.name}__$tool"))
@@ -123,7 +146,8 @@ final class ClaudeAdapter extends HarnessAdapter {
       Option.when(HarnessInvocation.waits(invocation.role, endpoint.target))("timeout" -> Json.fromLong(DispatchWaits.ManagedGovernorSeconds * 1000))
     ) }*)
     val arguments = List(profile.executable.toString, "--print", "--output-format", "stream-json", "--verbose", "--restricted",
-      "--no-session-persistence", "--session-id", invocation.attempt.value.toString, "--model", profile.model,
+      "--no-session-persistence", "--session-id", invocation.attempt.value.toString, "--model", profile.model) ++
+      HarnessAdapter.effort(profile).toList.flatMap(value => List("--effort", value)) ++ List(
       "--disable-slash-commands", "--strict-mcp-config", "--mcp-config", invocation.assets.resolve("claude-mcp.json").toString,
       "--tools", builtin.mkString(","), "--allowedTools", (builtin ++ mcp).mkString(","),
       "--disallowedTools", policy.deniedBuiltin.mkString(","), "--system-prompt", invocation.system,
@@ -150,7 +174,8 @@ final class CodexAdapter extends HarnessAdapter {
     // Approval and provider settings stay between agents.enabled and web_search, where the launch has always placed them.
     val (leading, trailing) = policy.builtin.span(_.name != "web_search")
     val restrictions = leading.flatMap(setting) ++ config("approval_policy", Json.fromString("never")) ++
-      config("model_provider", Json.fromString(profile.provider)) ++ trailing.flatMap(setting) ++
+      config("model_provider", Json.fromString(profile.provider)) ++
+      HarnessAdapter.effort(profile).toList.flatMap(value => config("model_reasoning_effort", Json.fromString(value))) ++ trailing.flatMap(setting) ++
       config("developer_instructions", Json.fromString(invocation.system))
     val mcp = invocation.endpoints.flatMap { endpoint =>
       val prefix = "mcp_servers." + endpoint.name + "."
@@ -179,10 +204,15 @@ final class CodexAdapter extends HarnessAdapter {
   }
 }
 
+object PiAdapter {
+  val AmbiguousModel = "Pi reads the ending of this model name as a thinking level; the name selects no one model"
+}
+
 final class PiAdapter extends HarnessAdapter {
   override val harness: Harness = Harness.Pi
   override def launch(profile: HarnessProfile, invocation: HarnessInvocation, environment: Map[String, String]): HarnessLaunch = {
     require(profile.harness == harness)
+    RouteRefusal.unless(!AgentResolution.piThinkingSuffix(profile.model), PiAdapter.AmbiguousModel)
     val policy = HarnessTools.policy(invocation.role, harness)
     val builtin = policy.enabledBuiltin
     val mcp = invocation.endpoints.flatMap(endpoint => policy.enabledMcp(endpoint.target).map(tool => s"${endpoint.name}_$tool"))
@@ -195,7 +225,8 @@ final class PiAdapter extends HarnessAdapter {
       new String(stream.readAllBytes(), UTF_8)
     }
     val arguments = List(profile.executable.toString, "--offline", "--mode", "json", "--print", "--no-session",
-      "--session-id", invocation.attempt.value.toString, "--provider", profile.provider, "--model", profile.model,
+      "--session-id", invocation.attempt.value.toString, "--provider", profile.provider, "--model", profile.model) ++
+      HarnessAdapter.effort(profile).toList.flatMap(value => List("--thinking", value)) ++ List(
       "--no-extensions", "--no-skills", "--no-context-files", "--no-prompt-templates", "--no-themes", "--no-approve",
       "--tools", (builtin ++ mcp).mkString(","), "--extension", invocation.assets.resolve("pi-bridge.mjs").toString,
       "--system-prompt", invocation.system) ++ profile.providerExtensions.flatMap(path => List("--extension", path.toString))

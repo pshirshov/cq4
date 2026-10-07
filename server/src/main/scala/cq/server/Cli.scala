@@ -162,6 +162,26 @@ final class Cli(context: CliContext, location: ProjectLocation, upload: SessionU
         opts.get("--harness-config").map(value => directory.resolve(value).normalize()), opts.get("--trust-report").map(value => directory.resolve(value).normalize()), environment)
       renderer.installation(report)
       if (!report.current) throw new InstallationNeedsAttention
+    // Reads the project file, the operator credential, the server's agent configuration and the settings file; writes nothing.
+    case "doctor" :: "agents" :: harness :: rest =>
+      val opts = options(rest, Set("--directory", "--settings"))
+      require(opts.contains("--settings"), "Agents doctor requires --settings FILE")
+      val checkout = opts.get("--directory").fold(location)(value => new ProjectLocation(context.copy(directory = directory.resolve(value).normalize())))
+      val report = new AgentsDoctor(new HttpAgentsReader).inspect(nativeHarness(harness, "doctor"), checkout.directory.resolve("project.json"),
+        directory.resolve(opts("--settings")).normalize(), environment)
+      renderer.agents(report)
+      if (!report.current) throw new InstallationNeedsAttention
+    // Writes an agent configuration to start from. No session reads a settings file for a model in its place.
+    case "agents" :: "init" :: rest =>
+      val opts = options(rest, Set("--settings", "--save"))
+      val settings = opts.get("--settings").orElse(environment.get("CQ_SETTINGS"))
+        .getOrElse(throw new IllegalArgumentException("agents init requires --settings FILE or CQ_SETTINGS"))
+      val (text, note) = AgentsInit.starting(directory.resolve(settings).normalize())
+      renderer.starter(text, note, opts.get("--save").map { layer =>
+        val location = configDirectory
+        val (config, actorSession) = locked(location)((configuration(location), session(location)))
+        layer -> AgentsInit.save(request(config, actorSession, _), config.project, layer, text)
+      })
     case "init" :: rest =>
       val opts = options(rest, Set("--endpoint", "--project-id", "--name"))
       val location = configDirectory

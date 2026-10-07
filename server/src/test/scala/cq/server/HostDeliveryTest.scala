@@ -209,8 +209,8 @@ final class HostDeliveryLocal extends AnyWordSpec {
       // D108: more children than the former 32-child session bound.
       val tickets = List.fill(33) {
         val assignment = Assignment(AssignmentId(UUID.randomUUID()), p, Set(item.id), Attribution.Direct, None, None)
-        val worker = Attempt(attempt, assignment.id, Some(attempt), session, Role.Worker, Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Work)
-        val ticket = DispatchTicket(request, assignment, worker, HarnessSetting(Harness.Codex, "/fixture", "fixture", "fixture", "0.156.1", Nil, Set.empty), None)
+        val worker = Attempt(attempt, assignment.id, Some(attempt), session, Role.Worker, Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Work, None)
+        val ticket = DispatchTicket(request, assignment, worker, Some(HarnessSetting(Harness.Codex, "/fixture", "fixture", "fixture", "0.156.1", Nil, Set.empty)), None)
         HostFiles.directory(root.resolve("children").resolve(worker.id.value.toString))
         HostFiles.immutable(root.resolve("children").resolve(worker.id.value.toString).resolve("ticket.json"), HostFiles.encode(DispatchTicket_JsonCodec, ticket), 65536)
         ticket
@@ -258,10 +258,10 @@ final class HostDeliveryLocal extends AnyWordSpec {
       val owner = Actor("governor", SessionId(UUID.randomUUID()), Role.Governor)
       val item = ItemRevision(ItemId(p, Ledger.Tasks, 1), Revision(1))
       val assignment = Assignment(AssignmentId(UUID.randomUUID()), p, Set(item.id), Attribution.Direct, None, None)
-      val record = Attempt(a, assignment.id, Some(attempt), owner.session, Role.Worker, Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Work)
+      val record = Attempt(a, assignment.id, Some(attempt), owner.session, Role.Worker, Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Work, None)
       val request = DispatchRequest(RequestId(UUID.randomUUID()), DispatchWork.Worker(WorkerMode.Implement), Harness.Codex, List(item), Nil, Nil, None,
         Fence(ClaimId(UUID.randomUUID()), 1), HostLimits(3000, 1000, 300, 2000, 262144))
-      val ticket = DispatchTicket(request, assignment, record, HarnessSetting(Harness.Codex, "/fixture", "fixture", "fixture", "0.156.1", Nil, Set.empty), None)
+      val ticket = DispatchTicket(request, assignment, record, Some(HarnessSetting(Harness.Codex, "/fixture", "fixture", "fixture", "0.156.1", Nil, Set.empty)), None)
       val ready = ChildResult(a, request, GitCommit("a" * 40), Some(GitCommit("b" * 40)),
         ChildReport.Work(List(WorkMember(item.id, WorkDisposition.CandidateReady, "Ready", Nil))), Nil, RetainedEvidence(Nil, Nil))
       val blocked = ready.copy(report = ChildReport.Work(List(WorkMember(item.id, WorkDisposition.Blocked, "Blocked", Nil))))
@@ -271,6 +271,124 @@ final class HostDeliveryLocal extends AnyWordSpec {
       val directory = Files.createTempDirectory("cq-inconsistent-publication-")
       intercept[IllegalArgumentException](new ChildPublicationDelivery(directory, ticket).seal(intent, List(HostDelivery.Artifact(upload))))
       assert(!Files.exists(directory.resolve("publication.json")))
+    }
+
+    "publish an abstained attempt as its own terminal phase that advises no retry, with or without a settings entry, and replay it unchanged" in {
+      val p = project
+      val owner = Actor("governor", SessionId(UUID.randomUUID()), Role.Governor)
+      val item = ItemRevision(ItemId(p, Ledger.Tasks, 1), Revision(1))
+      val text = "Abstained (Quota): Quota exceeded. Check your plan and billing details."
+      val finished = scala.collection.mutable.ListBuffer.empty[AttemptOutcome]
+      val uploaded = scala.collection.mutable.ListBuffer.empty[ArtifactUpload]
+      val receiver = new ServerApi {
+        override def call(value: Command): Result = throw new IllegalStateException("Not a publication operation")
+        override def artifact(value: ArtifactUpload): ArtifactMetadata = {
+          uploaded += value
+          ArtifactMetadata(value.project, value.id, value.attempt, value.kind, value.mediaType, "fixture", value.body.getBytes(UTF_8).length,
+            value.body.codePointCount(0, value.body.length), Actor("fixture", SessionId(UUID.randomUUID()), Role.Collector), 1)
+        }
+        override def usage(value: HostUsageInput): HostUsageResult = value.operation match {
+          case HostUsage.Finish(outcome) => finished += outcome; HostUsageResult.Finished(outcome)
+          case _ => throw new IllegalStateException("Not used in this scenario")
+        }
+        override def admit(value: HostAdmissionInput): ResultAdmission = throw new IllegalStateException("An abstained attempt has no result to admit")
+        override def integrate(value: HostIntegrationInput): IntegrationRecord = throw new IllegalStateException("Publication cannot integrate candidates")
+        override def grant(value: GrantRequest): AccessToken = throw new IllegalStateException("Publication queue cannot grant authority")
+      }
+      List(Some(HarnessSetting(Harness.Codex, "/fixture", "fixture", "fixture", "0.160.0", Nil, Set.empty)), None).foreach { setting =>
+        val a = attempt
+        val assignment = Assignment(AssignmentId(UUID.randomUUID()), p, Set(item.id), Attribution.Direct, None, None)
+        val record = Attempt(a, assignment.id, Some(attempt), owner.session, Role.Worker, Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Work, Some(Effort.High))
+        val request = DispatchRequest(RequestId(UUID.randomUUID()), DispatchWork.Worker(WorkerMode.Implement), Harness.Codex, List(item), Nil, Nil, None,
+          Fence(ClaimId(UUID.randomUUID()), 1), HostLimits(3000, 1000, 300, 2000, 262144))
+        val ticket = DispatchTicket(request, assignment, record, setting, None)
+        // The ticket is a session file: it reads back as it was written, with the effort of its attempt and with or without a settings entry.
+        assert(HostFiles.decode(HostFiles.encode(DispatchTicket_JsonCodec, ticket).getBytes(UTF_8), DispatchTicket_JsonCodec) == ticket)
+        val outcome = AttemptOutcome(RequestId(NativeArtifacts.id(a, "outcome").value), a, AttemptState.Abstained, 2000, List(text), None)
+        val directory = Files.createTempDirectory("cq-abstained-publication-")
+        val publication = new ChildPublicationDelivery(directory, ticket)
+        val transcript = HostDelivery.Artifact(ArtifactUpload(p, NativeArtifacts.id(a, "stdout"), a, ArtifactKind.Transcript, "application/x-ndjson", "{}\n"))
+        val ready = ChildResult(a, request, GitCommit("a" * 40), None, ChildReport.Work(List(WorkMember(item.id, WorkDisposition.Blocked, "Blocked", Nil))), Nil, RetainedEvidence(Nil, Nil))
+        val pending = DispatchProjection.pending(ticket).copy(blocker = Some(text))
+        // An abstained attempt has no result.
+        intercept[IllegalArgumentException](publication.seal(ChildPublication(p, owner, Some(ready), pending, outcome), List(transcript)))
+        assert(!publication.sealedIntent)
+        publication.seal(ChildPublication(p, owner, None, pending, outcome), List(transcript))
+        val receipt = publication.finish(receiver)
+        assert(receipt.status == pending.copy(phase = DispatchPhase.Abstained, next = ChildNext.ResolveBlocker, usageDelivered = true, detailsOmitted = true), receipt.status.toString)
+        assert(finished.lastOption.contains(outcome) && uploaded.lastOption.contains(transcript.value))
+        assert(cq.host.CohortFailure.fault(receipt.status).isEmpty && HostFiles.read(directory.resolve("receipt.json"), DispatchStatus_JsonCodec, 16384) == receipt.status)
+        // A later host replays the sealed publication from the session directory to the same status and sends nothing twice.
+        val (sent, stored) = (finished.size, uploaded.size)
+        assert(HostFiles.read(directory.resolve("publication.json"), ChildPublication_JsonCodec, 262144).outcome == outcome)
+        val replayed = new ChildPublicationDelivery(directory, ticket).finish(receiver)
+        assert(replayed.status == receipt.status && replayed.acknowledged == 0 && finished.size == sent && uploaded.size == stored)
+      }
+    }
+
+    "I30: end an attempt whose result the server denies as failed with the denial, once and for good, and keep one the server did not answer for a later delivery" in {
+      val p = project
+      val owner = Actor("governor", SessionId(UUID.randomUUID()), Role.Governor)
+      val item = ItemRevision(ItemId(p, Ledger.Tasks, 1), Revision(1))
+      val Denial = "A result the governing session made or reviewed itself is admitted only in the YOLO cross-cutting mode; the project's process mode is Cross-cutting"
+      // The governing session's own work and its own review: both are published by the same delivery, and so is a child's result.
+      List(DispatchWork.Worker(WorkerMode.Implement) -> Role.Governor, DispatchWork.Reviewer(ReviewerMode.Candidate) -> Role.Governor, DispatchWork.Worker(WorkerMode.Implement) -> Role.Worker).foreach { (work, role) =>
+        val finished = scala.collection.mutable.ListBuffer.empty[AttemptOutcome]
+        var asked = 0
+        var answer: () => ResultAdmission = () => throw cq.core.DomainFailure(Fault.Denied(Denial))
+        val receiver = new ServerApi {
+          override def call(value: Command): Result = throw new IllegalStateException("Not a publication operation")
+          override def artifact(value: ArtifactUpload): ArtifactMetadata = ArtifactMetadata(value.project, value.id, value.attempt, value.kind, value.mediaType, "fixture",
+            value.body.getBytes(UTF_8).length, value.body.codePointCount(0, value.body.length), Actor("fixture", SessionId(UUID.randomUUID()), Role.Collector), 1)
+          override def usage(value: HostUsageInput): HostUsageResult = value.operation match {
+            case HostUsage.Finish(outcome) => finished += outcome; HostUsageResult.Finished(outcome)
+            case _ => throw new IllegalStateException("Not used in this scenario")
+          }
+          override def admit(value: HostAdmissionInput): ResultAdmission = { asked += 1; answer() }
+          override def integrate(value: HostIntegrationInput): IntegrationRecord = throw new IllegalStateException("Publication cannot integrate candidates")
+          override def grant(value: GrantRequest): AccessToken = throw new IllegalStateException("Publication queue cannot grant authority")
+        }
+        val a = attempt
+        val assignment = Assignment(AssignmentId(UUID.randomUUID()), p, Set(item.id), Attribution.Direct, None, None)
+        val record = Attempt(a, assignment.id, Some(attempt), owner.session, role, Harness.Codex, "fixture", "fixture", "fixture", 1000, cq.host.ChildContracts.phase(work), None)
+        val review = work.isInstanceOf[DispatchWork.Reviewer]
+        val request = DispatchRequest(RequestId(UUID.randomUUID()), work, Harness.Codex, List(item), Nil, Nil, Option.when(review)(ArtifactId(UUID.randomUUID())),
+          Fence(ClaimId(UUID.randomUUID()), 1), HostLimits(3000, 1000, 300, 2000, 262144))
+        val ticket = DispatchTicket(request, assignment, record, None, None)
+        val candidate = GitCommit("b" * 40)
+        val result = ChildResult(a, request, if (review) candidate else GitCommit("a" * 40), Some(candidate),
+          if (review) ChildReport.Review(List(ReviewMember(item.id, ReviewVerdict.Accepted, Nil)), None)
+          else ChildReport.Work(List(WorkMember(item.id, WorkDisposition.CandidateReady, "Implemented", Nil))), Nil, RetainedEvidence(Nil, Nil))
+        val outcome = AttemptOutcome(RequestId(NativeArtifacts.id(a, "outcome").value), a, AttemptState.Completed, 2000, Nil, None)
+        val pending = DispatchProjection.pending(ticket)
+        def sealedAt(name: String): (Path, ChildPublicationDelivery) = {
+          val directory = Files.createTempDirectory(name)
+          val publication = new ChildPublicationDelivery(directory, ticket)
+          publication.seal(ChildPublication(p, owner, Some(result), pending, outcome), Nil)
+          directory -> publication
+        }
+        // The server did not answer: nothing is concluded, no outcome is delivered and no receipt is written, so the delivery is made again.
+        val (unanswered, lost) = sealedAt("cq-unanswered-admission-")
+        answer = () => throw new cq.host.ServerUnavailable("HTTP response deadline exceeded", new java.util.concurrent.TimeoutException)
+        intercept[cq.host.ServerUnavailable](lost.finish(receiver))
+        assert(finished.isEmpty && !Files.exists(unanswered.resolve("receipt.json")) && asked == 1, s"$work as $role")
+        // The server denied the result: that is its answer. The attempt fails with it, its outcome is delivered and its receipt written.
+        val (directory, publication) = sealedAt("cq-denied-admission-")
+        answer = () => throw cq.core.DomainFailure(Fault.Denied(Denial))
+        val receipt = publication.finish(receiver)
+        val blocker = "Result admission denied: " + Denial
+        assert(receipt.status == pending.copy(phase = DispatchPhase.Failed, next = ChildNext.Retry, blocker = Some(blocker), usageDelivered = true, detailsOmitted = true), s"$work as $role: ${receipt.status}")
+        assert(finished.toList == List(outcome.copy(state = AttemptState.Failed, gaps = List(blocker))), finished.toString)
+        assert(HostFiles.read(directory.resolve("receipt.json"), DispatchStatus_JsonCodec, 16384) == receipt.status)
+        // A later host, or cq job upload, replays the sealed publication to the same end: no second outcome, and never an admission.
+        answer = () => throw cq.core.DomainFailure(Fault.Denied("another answer"))
+        val replayed = new ChildPublicationDelivery(directory, ticket).finish(receiver)
+        assert(replayed.status == receipt.status && replayed.acknowledged == 0 && finished.size == 1 && asked == 2, s"$work as $role: ${replayed.status}")
+        // Also when the host ended after the denial and before the receipt: the denial is what it retained first.
+        Files.delete(directory.resolve("receipt.json"))
+        answer = () => fail("A denied result is not offered to the server again")
+        assert(new ChildPublicationDelivery(directory, ticket).finish(receiver).status == receipt.status && finished.size == 1)
+      }
     }
 
     "admit only normal successful exits and retain cancellation and uncertain cleanup outcomes" in {

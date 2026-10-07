@@ -10,6 +10,7 @@ import runpy
 import signal
 import socket
 import subprocess
+import types
 import uuid
 from typing import Callable, Protocol
 
@@ -18,6 +19,15 @@ SCHEMA_SOURCE = "server/src/main/resources/db/001-ledgers.sql"
 MODEL_SOURCE = "models/cq-api.baboon"
 ATTACHED_GOVERNOR_COLLECTOR = "CQ attached session; outer usage unavailable"
 UNCHANGED_DATA = "unchanged-data"
+INSTALLATION_SETTINGS_AND_ATTEMPT_EFFORT = "installation-settings-and-attempt-effort"
+STEP_SQL = "dev/local-update.sql"
+INSTALLATION_SETTINGS = "cq_installation_settings"
+ATTEMPTS = "cq_usage_attempts"
+MIGRATIONS = "cq_schema_migrations"
+ATTEMPT_EFFORT = "effort"
+ATTEMPTS_LACKING_EFFORT = f"SELECT count(*) FROM {ATTEMPTS} WHERE NOT jsonb_exists(body, '{ATTEMPT_EFFORT}')"
+SCHEMA_CHECKSUM = f"SELECT checksum FROM {MIGRATIONS} WHERE version=1"
+STRUCTURE_DATABASE = "cq_update_structure"
 
 
 def require(condition: bool, message: str) -> None:
@@ -102,13 +112,107 @@ def package(path: Path) -> dict:
 
 
 def compatible(before: dict, after: dict, step: dict) -> str:
+    """The schema hash the database holds before the replacement. A transition that changes the schema or the model is accepted only
+    as the one the pinned step names."""
     old, new = before["runtimeSourceSha256"], after["runtimeSourceSha256"]
-    require(old[SCHEMA_SOURCE] == new[SCHEMA_SOURCE], "Schema changes require a matching explicit local update step; replacement refused")
-    if old[MODEL_SOURCE] != new[MODEL_SOURCE]:
+    if old[SCHEMA_SOURCE] != new[SCHEMA_SOURCE]:
+        require(step["kind"] == INSTALLATION_SETTINGS_AND_ATTEMPT_EFFORT
+                and step["schemaBefore"] == old[SCHEMA_SOURCE] and step["schemaAfter"] == new[SCHEMA_SOURCE]
+                and step["modelBefore"] == old[MODEL_SOURCE] and step["modelAfter"] == new[MODEL_SOURCE],
+                "Schema changes require a matching explicit local update step; replacement refused")
+    elif old[MODEL_SOURCE] != new[MODEL_SOURCE]:
         require(step["kind"] == UNCHANGED_DATA and step["schema"] == old[SCHEMA_SOURCE]
                 and step["modelBefore"] == old[MODEL_SOURCE] and step["modelAfter"] == new[MODEL_SOURCE],
                 "Model changes require a matching explicit data update step; replacement refused")
-    return new[SCHEMA_SOURCE]
+    return old[SCHEMA_SOURCE]
+
+
+class Database(Protocol):
+    """The stopped installation's database while the updater runs it: one statement, or one command with its connection settings."""
+    def query(self, statement: str, label: str) -> str: ...
+    def run(self, arguments: list[str], label: str, timeout: int) -> str: ...
+
+
+class DataStep(Protocol):
+    """What an accepted transition does to stored data: SQL applied after the backup, and the proof of what it changed."""
+    sql: str
+    def capture(self, database: Database) -> None: ...
+    def verify(self, database: Database, before: dict[str, str], after: dict[str, str]) -> dict: ...
+
+
+class Sql:
+    """SQL without a verification of its own; the receipt names the tables it changed."""
+    def __init__(self, sql: str):
+        self.sql = sql
+
+    def capture(self, database: Database) -> None:
+        pass
+
+    def verify(self, database: Database, before: dict[str, str], after: dict[str, str]) -> dict:
+        return {}
+
+
+def with_effort(attempt: dict) -> dict:
+    """A cq_usage_attempts row as the step leaves it: a stored attempt that states no effort states that it has none."""
+    body = attempt["body"]
+    return attempt if ATTEMPT_EFFORT in body else {**attempt, "body": {**body, ATTEMPT_EFFORT: None}}
+
+
+class InstallationSettingsAndAttemptEffort:
+    """The step from the schema without cq_installation_settings and attempts without an effort: it creates the table, records the
+    schema hash that declares it, and adds a null effort to every stored attempt lacking the field."""
+    def __init__(self, sql: str, schema_after: str, schema_source: Path):
+        self.sql = sql
+        self.schema_after = schema_after
+        self.schema_source = schema_source
+        self.attempts: list[dict] = []
+
+    @staticmethod
+    def rows(database: Database, label: str) -> list[dict]:
+        rows = database.query(f"SELECT to_jsonb(t) FROM {ATTEMPTS} t ORDER BY project_id, attempt_id", label)
+        return [json.loads(row) for row in rows.splitlines()]
+
+    @staticmethod
+    def structure(database: Database, name: str, label: str) -> list[str]:
+        """The tables, constraints and indexes of a database apart from the migration record, which the server creates itself."""
+        text = database.run(["pg_dump", "--schema-only", "--no-owner", "--no-privileges", f"--exclude-table={MIGRATIONS}", "--dbname", name], label, 120)
+        # pg_dump protects each dump with a key of its own.
+        return [line for line in text.splitlines() if not line.startswith(("\\restrict", "\\unrestrict"))]
+
+    def capture(self, database: Database) -> None:
+        self.attempts = self.rows(database, "attempts-before")
+
+    def verify(self, database: Database, before: dict[str, str], after: dict[str, str]) -> dict:
+        require(database.query(SCHEMA_CHECKSUM, "schema-after") == self.schema_after, "Data step did not record the schema of the new package")
+        require(database.query(ATTEMPTS_LACKING_EFFORT, "attempts-lacking-effort") == "0", "Data step left a stored attempt without its effort")
+        require(set(after) == set(before) | {INSTALLATION_SETTINGS}, "Data step created or dropped a table other than " + INSTALLATION_SETTINGS)
+        require(all(after[table] == value for table, value in before.items() if table not in (ATTEMPTS, MIGRATIONS)),
+                f"Data step changed a table other than {ATTEMPTS} and {MIGRATIONS}")
+        require(database.query(f"SELECT count(*) FROM {INSTALLATION_SETTINGS}", "installation-settings-rows") == "0", "Data step wrote an installation setting")
+        attempts = self.rows(database, "attempts-after")
+        require(attempts == [with_effort(attempt) for attempt in self.attempts], "Data step changed attempt rows beyond adding a null effort")
+        # The updated database has the structure the new package's schema declares, table by table: a recorded hash alone does not show it.
+        database.query(f"DROP DATABASE IF EXISTS {STRUCTURE_DATABASE}", "structure-clear")
+        database.query(f"CREATE DATABASE {STRUCTURE_DATABASE}", "structure-create")
+        try:
+            database.run(["psql", "--no-psqlrc", "-v", "ON_ERROR_STOP=1", "--single-transaction", "--dbname", STRUCTURE_DATABASE,
+                          "--file", str(self.schema_source)], "structure-declare", 120)
+            declared = self.structure(database, STRUCTURE_DATABASE, "structure-declared")
+        finally:
+            database.query(f"DROP DATABASE IF EXISTS {STRUCTURE_DATABASE}", "structure-drop")
+        require(self.structure(database, "postgres", "structure-updated") == declared, "Updated database structure differs from the schema of the new package")
+        return {"dataStep": INSTALLATION_SETTINGS_AND_ATTEMPT_EFFORT, "attempts": len(attempts),
+                "attemptsTransformed": sum(1 for old, new in zip(self.attempts, attempts) if old != new),
+                "tableCreated": INSTALLATION_SETTINGS, "otherDataUnchanged": True, "structureAsDeclared": True}
+
+
+def data_step(before: dict, after: dict, step: dict, source: Path) -> DataStep | None:
+    """What the accepted transition applies to stored data from the snapshot `source`; none when the stored data stays as it is."""
+    compatible(before, after, step)
+    if before["runtimeSourceSha256"][SCHEMA_SOURCE] == after["runtimeSourceSha256"][SCHEMA_SOURCE]:
+        return None
+    require(digest(source / STEP_SQL) == step["sqlSha256"], "Local update SQL differs from its pinned step")
+    return InstallationSettingsAndAttemptEffort((source / STEP_SQL).read_text(), step["schemaAfter"], source / SCHEMA_SOURCE)
 
 
 class Commands:
@@ -186,8 +290,7 @@ def main() -> None:
             new = digest(candidate / "manifest.json")
             receipt.update(status="candidate-verified", newManifest=new, schema=schema)
             write_json(evidence / "receipt.json", receipt)
-            # The only step kind accepted leaves the stored data as it is: no SQL is applied.
-            install(state, release, candidate, rollback, evidence, receipt, schema, commands, None)
+            install(state, release, candidate, rollback, evidence, receipt, schema, commands, data_step(before, after, step, checkout))
         except BaseException as error:
             if receipt["status"] not in ("installed", "recovery-required", "rolled-back"):
                 receipt.update(status="failed-before-install", error=str(error))
@@ -200,7 +303,8 @@ def main() -> None:
 
 
 def install(state: Path, release: Path, candidate: Path, rollback: Path, evidence: Path,
-            receipt: dict, schema: str, commands: Commands, sql: str | None) -> None:
+            receipt: dict, schema: str, commands: Commands, step: DataStep | None) -> None:
+    """`schema` is the hash the database must hold before the replacement; `step` is applied to it after the backup."""
     data = state / "postgres"
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
@@ -228,6 +332,8 @@ def install(state: Path, release: Path, candidate: Path, rollback: Path, evidenc
             values[table] = hashlib.sha256(rows.encode()).hexdigest()
         write_json(evidence / (label + ".json"), values)
         return values
+
+    stopped = types.SimpleNamespace(query=query, run=database.run)
 
     def interrupted(number, frame):
         raise KeyboardInterrupt(f"Interrupted by signal {number}")
@@ -260,12 +366,14 @@ def install(state: Path, release: Path, candidate: Path, rollback: Path, evidenc
         sync_directory(evidence)
         receipt.update(backup=str(backup), backupSha256=digest(backup))
         write_json(evidence / "receipt.json", receipt)
-        if sql is not None:
+        if step is not None:
             before_data = fingerprints("data-before")
+            step.capture(stopped)
             transformation_attempted = True
-            query(sql, "data-update")
+            query(step.sql, "data-update")
             after_data = fingerprints("data-after")
             receipt.update(dataChanged=sorted(table for table in set(before_data) | set(after_data) if before_data.get(table) != after_data.get(table)))
+            receipt.update(step.verify(stopped, before_data, after_data))
             write_json(evidence / "receipt.json", receipt)
         database.run(["pg_ctl", "-D", str(data), "-m", "fast", "-w", "-t", "30", "stop"], "database-stop", 40)
         owned = False
@@ -299,6 +407,11 @@ def install(state: Path, release: Path, candidate: Path, rollback: Path, evidenc
                 # One transaction: a restore that fails leaves the database as the failed step left it, never partly dropped.
                 database.run(["pg_restore", "--clean", "--if-exists", "--single-transaction", "--exit-on-error", "--no-owner", "--no-privileges",
                               "--dbname", "postgres", str(backup)], "database-rollback", 600)
+                # The backup does not know a table the step created, so its restore leaves that table in place.
+                created = set(query("SELECT tablename FROM pg_tables WHERE schemaname='public'", "tables-restored").splitlines()) - set(before_data)
+                for table in sorted(created):
+                    require(table.startswith("cq_") and all(character.isalnum() or character == '_' for character in table), "Unexpected database table identity")
+                    query(f'DROP TABLE "{table}"', "database-rollback-drop-" + table)
                 require(fingerprints("data-restored") == before_data, "Restored database differs from backup state")
                 require(query("SELECT checksum FROM cq_schema_migrations WHERE version=1", "schema-restored") == schema, "Restored schema differs")
                 receipt.update(databaseRestored=True)

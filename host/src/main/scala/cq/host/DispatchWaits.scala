@@ -37,6 +37,8 @@ object DispatchWaits {
       case DispatchCommand.CombinationStatus(_, wait) => wait
       // A revalidation request waits for its round as long as a status call may.
       case _: DispatchCommand.Revalidate => MaxMillis
+      // These reply once the host has done its part: the workspace is open, the review is published and admitted.
+      case _: DispatchCommand.OpenWorkspace | _: DispatchCommand.SelfReview => MaxMillis
       case _ => 0
     }
     if (asked >= 0 && asked <= MaxMillis) asked else 0

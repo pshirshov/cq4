@@ -64,6 +64,47 @@ final class CliDoctorLocal extends AnyWordSpec {
       assert(Files.readString(stale) == "fixture secret must not print" && Files.getLastModifiedTime(stale) == before)
       assert(!Files.exists(root.resolve(".cq")) && !Files.exists(project.resolve(".cq")))
     }
+    "report a checkout without a project file to the agents doctor as one JSON value and fail without writes or credentials" in fixture { root =>
+      val (result, output) = run(root, List("doctor", "agents", "codex", "--settings", "settings.json", "--json"))
+      assert(result.left.toOption.exists(_.isInstanceOf[InstallationNeedsAttention]), result.toString)
+      val report = io.circe.parser.parse(output).fold(throw _, identity)
+      assert(report.hcursor.get[String]("scope").contains("agents") && report.hcursor.get[Boolean]("current").contains(false))
+      val checks = report.hcursor.get[List[io.circe.Json]]("checks").toOption.get
+      assert(checks.map(_.hcursor.get[String]("name").toOption.get) == List("Project", "Credential") && checks.forall(_.hcursor.get[String]("state") == Right("Failed")))
+      assert(Using.resource(Files.list(root))(_.count()) == 0)
+      val (refused, _) = run(root, List("doctor", "agents", "codex"))
+      assert(refused.left.toOption.exists(_.getMessage.endsWith("Agents doctor requires --settings FILE")), refused.toString)
+      val (unknown, _) = run(root, List("doctor", "agents", "other", "--settings", "settings.json"))
+      assert(unknown.left.toOption.exists(_.getMessage.endsWith("Unknown doctor harness")), unknown.toString)
+    }
+    "read the project file of the directory the agents doctor is given and say what it does not verify" in fixture { root =>
+      val location = Files.createDirectories(root.resolve("project/.cq"))
+      val project = java.util.UUID.randomUUID()
+      val file = location.resolve("project.json")
+      Files.writeString(file, s"""{"project":{"value":"$project"},"endpoint":"http://127.0.0.1:1","name":"Doctor"}""")
+      val before = Files.getLastModifiedTime(file)
+      val (result, human) = run(root, List("doctor", "agents", "pi", "--settings", "settings.json", "--directory", "project"))
+      assert(result.left.toOption.exists(_.isInstanceOf[InstallationNeedsAttention]), result.toString)
+      val lines = human.linesIterator.toList
+      assert(lines.exists(line => line.startsWith("Project") && line.contains("Current") && line.contains(s"Project $project at http://127.0.0.1:1")), human)
+      assert(lines.exists(line => line.startsWith("Credential") && line.contains("Failed")) && !human.contains("Configuration"), human)
+      assert(lines.last == AgentsDoctor.Scope && lines.last.contains("not verified against providers") && lines.last.contains("cq doctor harness"), human)
+      assert(Files.getLastModifiedTime(file) == before && Using.resource(Files.list(location))(_.count()) == 1 && !Files.exists(root.resolve(".cq")))
+    }
+    "print the whole detail of an agents doctor check, which says what to set" in {
+      val bytes = new ByteArrayOutputStream
+      val detail = "no layer assigns the planner role when codex governs; " + "set defaults.roles.planner " * 8 + "end"
+      new CliOutput(new PrintStream(bytes, true, UTF_8), CliFormat.Human, List("doctor", "agents", "codex")).agents(
+        InstallationReport("agents", List(InstallationCheck("Project", InstallationState.Current, "short"), InstallationCheck("Role planner", InstallationState.Failed, detail))))
+      assert(bytes.toString(UTF_8).linesIterator.toList == List("Check         State    Detail", "────────────  ───────  ──────", "Project       Current  short",
+        s"Role planner  Failed   $detail", AgentsDoctor.Scope))
+    }
+    "describe the agents doctor in doctor help" in {
+      val help = CliHelp.render(List("doctor", "--help"))
+      assert(help.contains("cq doctor agents HARNESS --settings FILE [--directory DIR] [--json]"))
+      assert(help.contains("self-review") && help.contains("not verified against providers") && help.contains("line:column"))
+      assert(CliHelp.render(Nil).contains("doctor            Verify commands, server, harness or agent models without writes"))
+    }
     "describe the command-assets scope in doctor help" in {
       val help = CliHelp.render(List("doctor", "--help"))
       assert(help.contains("doctor commands HARNESS") && help.contains("--directory") && help.contains("--json"))

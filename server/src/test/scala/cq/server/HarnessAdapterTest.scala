@@ -11,7 +11,7 @@ import java.util.UUID
 import org.scalatest.wordspec.AnyWordSpec
 
 final class HarnessAdapterLocal extends AnyWordSpec {
-  private def profile(harness: Harness): HarnessProfile = HarnessProfile(harness, Path.of("/test/harness"), "selected-model", if (harness == Harness.Claude) "anthropic" else "selected-provider",
+  private def profile(harness: Harness): HarnessProfile = HarnessProfile(harness, Path.of("/test/harness"), "selected-model", if (harness == Harness.Claude) "anthropic" else "selected-provider", None,
     HarnessUsage.version(harness), Nil, Set("PROVIDER_TOKEN"))
   private def invocation(role: Role, root: Path): HarnessInvocation = HarnessInvocation(role, AttemptId(UUID.randomUUID()), "Host role instructions",
     Json.obj("type" -> Json.fromString("object")), List(
@@ -23,6 +23,63 @@ final class HarnessAdapterLocal extends AnyWordSpec {
     "PROVIDER_TOKEN" -> "configured-provider-secret", "UNRELATED_SECRET" -> "unrelated-secret")
 
   "Harness launch boundaries (Behavioral Active Blackbox; Group / filesystem Communication)" should {
+    "pass a route's effort to each harness in its own spelling, and no effort argument when the route states none" in {
+      val worker = invocation(Role.Worker, Path.of("/test/assets"))
+      def arguments(harness: Harness, effort: Option[Effort]): List[String] =
+        adapters.find(_.harness == harness).get.launch(profile(harness).copy(effort = effort), worker, environment).arguments
+      for (harness <- Harness.all; effort <- Effort.all.filter(cq.core.AgentResolution.efforts(harness))) {
+        val text = effort.toString.toLowerCase
+        val launched = arguments(harness, Some(effort))
+        val expected = harness match {
+          case Harness.Claude => List("--model", "selected-model", "--effort", text)
+          case Harness.Pi => List("--provider", "selected-provider", "--model", "selected-model", "--thinking", text)
+          case Harness.Codex => List("-c", "model_provider=\"selected-provider\"", "-c", s"model_reasoning_effort=\"$text\"")
+        }
+        assert(launched.containsSlice(expected), s"$harness $effort")
+        // Nothing else of the launch depends on the effort.
+        assert(launched.diff(arguments(harness, None)).sorted == expected.takeRight(2).sorted && arguments(harness, None).diff(launched).isEmpty, s"$harness $effort")
+      }
+      Harness.all.foreach { harness =>
+        val plain = arguments(harness, None)
+        assert(!plain.exists(argument => Set("--effort", "--thinking")(argument) || argument.startsWith("model_reasoning_effort")), harness)
+      }
+      // A level the harness does not name is refused and never passed on: Claude Code and Pi would run their default level instead.
+      for (harness <- Harness.all; effort <- Effort.all.filterNot(cq.core.AgentResolution.efforts(harness)))
+        assert(intercept[IllegalArgumentException](arguments(harness, Some(effort))).getMessage.contains(HarnessAdapter.EffortUnsupported), s"$harness $effort")
+      assert(!cq.core.AgentResolution.efforts(Harness.Claude)(Effort.Off) && !cq.core.AgentResolution.efforts(Harness.Pi)(Effort.Ultra) &&
+        cq.core.AgentResolution.efforts(Harness.Codex)(Effort.Ultra))
+    }
+
+    "refuse a Pi model name that Pi would read as a model and a thinking level" in {
+      val pi = new PiAdapter()
+      def launch(model: String, effort: Option[Effort]): HarnessLaunch =
+        pi.launch(profile(Harness.Pi).copy(model = model, effort = effort), invocation(Role.Worker, Path.of("/test/assets")), environment)
+      List(None, Some(Effort.Low)).foreach { effort =>
+        assert(intercept[IllegalArgumentException](launch("glm:high", effort)).getMessage.contains(PiAdapter.AmbiguousModel))
+        assert(launch("gpt-4o:extended", effort).arguments.containsSlice(List("--model", "gpt-4o:extended")))
+      }
+      // The other harnesses pass the name on.
+      List(new ClaudeAdapter, new CodexAdapter).foreach { adapter =>
+        assert(adapter.launch(profile(adapter.harness).copy(model = "m:high"), invocation(Role.Worker, Path.of("/test/assets")), environment).arguments.containsSlice(List("--model", "m:high")))
+      }
+    }
+
+    "take the model, the provider and the effort of a launch from its route and the rest from the settings entry" in {
+      val setting = HarnessSetting(Harness.Codex, "/test/codex", "entry-model", "entry-provider", HarnessUsage.version(Harness.Codex), Nil, Set("PROVIDER_TOKEN"))
+      assert(HarnessProfile.route(setting) == ModelRoute(Harness.Codex, Some("entry-provider"), "entry-model", None))
+      assert(HarnessProfile(setting, HarnessProfile.route(setting)) == HarnessProfile(Harness.Codex, Path.of("/test/codex"), "entry-model", "entry-provider", None,
+        setting.version, Nil, Set("PROVIDER_TOKEN")))
+      val routed = HarnessProfile(setting, ModelRoute(Harness.Codex, Some("route-provider"), "route-model", Some(Effort.Ultra)))
+      assert((routed.model, routed.provider, routed.effort, routed.executable, routed.version) ==
+        ("route-model", "route-provider", Some(Effort.Ultra), Path.of("/test/codex"), setting.version))
+      // A route without a provider takes the entry's.
+      assert(HarnessProfile(setting, ModelRoute(Harness.Codex, None, "route-model", None)).provider == "entry-provider")
+      intercept[IllegalArgumentException](HarnessProfile(setting, ModelRoute(Harness.Pi, Some("zai"), "glm", None)))
+      val launched = new CodexAdapter().launch(routed, invocation(Role.Worker, Path.of("/test/assets")), environment).arguments
+      assert(launched.containsSlice(List("--model", "route-model")) &&
+        launched.containsSlice(List("-c", "model_provider=\"route-provider\"", "-c", "model_reasoning_effort=\"ultra\"")))
+    }
+
     "restrict child-authored evidence to model-declared provenance in the output contract" in {
       val schemas = new McpSchemas()
       val modes = ExplorerMode.all.map(DispatchWork.Explorer.apply) :+ DispatchWork.Worker(WorkerMode.Probe)
@@ -66,6 +123,27 @@ final class HarnessAdapterLocal extends AnyWordSpec {
       }
     }
 
+    "I17: read as an abstention only what refuses the route or its settings entry, and let every other fault before a launch through" in {
+      import cq.host.{Abstention, RouteRefusal}
+      def launched(step: => Unit): Either[Throwable, Unit] = scala.util.Try(Abstention.unless(AbstentionReason.Launch)(step)).toEither
+      // A fault of the host is a failure with its own text: another model would meet the same disk.
+      val disk = new java.io.IOException("No space left on device")
+      val bound = new IllegalArgumentException("requirement failed: Harness launch argument exceeds the operating system's per-argument limit")
+      assert(launched(throw disk) == Left(disk) && launched(throw bound) == Left(bound) && launched(()) == Right(()))
+      assert(launched(RouteRefusal.unless(false, "Configured provider environment is unavailable")) ==
+        Left(Abstention(AbstentionReason.Launch, "Configured provider environment is unavailable")))
+      // The refusals of a route: the settings entry, the effort, the provider environment, a provider Claude does not have, a Pi name.
+      val setting = HarnessSetting(Harness.Pi, "/bin/pi", "model", "provider", "0.99.1", Nil, Set.empty)
+      def refusal(step: => Any): String = intercept[RouteRefusal](step).getMessage
+      assert(refusal(HarnessProfile(setting.copy(version = "0.0.1"), ModelRoute(Harness.Pi, None, "model", None))).contains(HarnessProfile.Unverified))
+      assert(refusal(HarnessProfile(setting, ModelRoute(Harness.Pi, None, "", None))).contains("Explicit harness model/provider required"))
+      assert(refusal(HarnessProfile(setting, ModelRoute(Harness.Codex, None, "model", None))).contains("Model route and settings entry name different harnesses"))
+      val pi = HarnessProfile(setting, ModelRoute(Harness.Pi, None, "model", None))
+      assert(refusal(HarnessEnvironment.isolated(pi.copy(providerEnvironment = Set("ABSENT_KEY")), Map("HOME" -> "/h", "PATH" -> "/p"))).contains("Configured provider environment is unavailable"))
+      // A host without HOME or PATH is no property of the route.
+      val bare = intercept[IllegalArgumentException](HarnessEnvironment.isolated(pi, Map.empty))
+      assert(!bare.isInstanceOf[RouteRefusal] && bare.getMessage.contains("Harness execution requires explicit HOME and PATH"))
+    }
     "refuse a launch whose encoded argument exceeds the operating system's per-argument limit" in {
       // Codex receives the instructions JSON-encoded in one argument: a control character occupies six bytes there.
       val controls = invocation(Role.Governor, Path.of("/test/assets")).copy(system = "\u0001" * (HarnessInvocation.MaxSystemBytes / 2))

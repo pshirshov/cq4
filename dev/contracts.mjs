@@ -26,7 +26,7 @@ const query = contracts.QueryExpression_JsonCodec.instance.decode(context, query
 const encodedQuery = contracts.QueryExpression_JsonCodec.instance.encode(context, query);
 assert.deepEqual(encodedQuery, queryJson);
 await writeFile(`${directory}/typescript-query.json`, JSON.stringify(encodedQuery));
-for (const [name, codec] of [['watch', contracts.ClientFrame_JsonCodec], ['usage-cursor', contracts.ServerFrame_JsonCodec]]) {
+for (const [name, codec] of [['watch', contracts.ClientFrame_JsonCodec], ['usage-cursor', contracts.ServerFrame_JsonCodec], ['agents', contracts.AgentConfig_JsonCodec]]) {
   const original = JSON.parse(await readFile(`${directory}/scala-${name}.json`, 'utf8'));
   const decoded = codec.instance.decode(context, original);
   if (name === 'usage-cursor') assert.equal(decoded.revision.project.usage, 9007199254740993n);
@@ -36,6 +36,12 @@ for (const [name, codec] of [['watch', contracts.ClientFrame_JsonCodec], ['usage
 const definitions = JSON.parse(await readFile('generated/resources/cq-schemas.json', 'utf8'));
 const validator = new AjvJsonSchemaValidator();
 assert.equal(validator.getValidator({ ...definitions.cq_api_QueryExpression, $defs: definitions })(encodedQuery).valid, true);
+const agents = JSON.parse(await readFile(`${directory}/typescript-agents.json`, 'utf8'));
+const validateAgents = validator.getValidator({ ...definitions.cq_api_AgentConfig, $defs: definitions });
+assert.deepEqual(Object.keys(agents.harnesses.Pi.tiers).sort(), ['Fast', 'Frontier']);
+assert.equal(validateAgents(agents).valid, true);
+assert.equal(validateAgents({ ...agents, harnesses: { Gemini: agents.harnesses.Pi } }).valid, false);
+assert.equal(validateAgents({ ...agents, harnesses: { Pi: { ...agents.harnesses.Pi, tiers: [{ key: 'Frontier', value: agents.harnesses.Pi.tiers.Frontier }] } } }).valid, false);
 const validate = validator.getValidator({ ...definitions.cq_api_Probe, $defs: definitions });
 const encoded = Probe_JsonCodec.instance.encode(context, probe);
 assert.equal(validate(encoded).valid, true);

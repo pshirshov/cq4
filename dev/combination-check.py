@@ -1,5 +1,5 @@
 import json
-from fixture_runtime import guardian_binary
+from fixture_runtime import AGENTS_INIT, guardian_binary
 import os
 from pathlib import Path
 import subprocess
@@ -63,6 +63,7 @@ def main():
             "limits": {"startupMillis": "5000", "heartbeatMillis": "1000", "graceMillis": "300", "killMillis": "2000", "retainedOutputBytes": 262144},
             "checks": [{"name": "independent-changes", "command": [sys.executable, "-c", checks], "executionMillis": "5000", "retainedOutputBytes": 65536, "attempts": 1, "revalidations": 0}]}))
         run(["init", "--endpoint", endpoint])
+        run(AGENTS_INIT + [str(settings)])
         processes, streams = {}, []
         latch = case / "crash"
         latch.mkdir()
@@ -275,7 +276,7 @@ def main():
                         assert value["assignment"]["members"] == [member["id"] for member in ticket["request"]["members"]]
             maximum = max(len(json.dumps(value["reply"]).encode()) for value in all_traffic)
             assert maximum < 4096
-            resolvers = [value for value in all_traffic if value["request"].get("Start", {}).get("request", {}).get("work") == {"Worker": {"mode": "ResolveConflict"}}]
+            resolvers = [value for value in all_traffic if value["request"].get("Start", {}).get("work", {}).get("work") == {"Worker": {"mode": "ResolveConflict"}}]
             assert len(resolvers) == len(rounds) == (0 if scenario == "clean" else 1), resolvers
             assert len(list((beta_session / "children").iterdir())) == 2 + 2 * len(rounds)
             summaries.append({"scenario": scenario, "alphaSession": str(alpha_session), "betaSession": str(beta_session),

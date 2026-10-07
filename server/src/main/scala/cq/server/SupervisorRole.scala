@@ -30,13 +30,12 @@ final case class SupervisorConfig(settings: SupervisorSettings, project: Project
 
 object SupervisorConfig {
   val AttachedGovernorCollector = cq.core.AttemptObservation.AttachedGovernorCollector
-  private val MaxConfigBytes = 64 * 1024
+  private val MaxConfigBytes = cq.core.LedgerPolicy.MaxConfigBytes
   val StaleIntegration = "This harness integration starts the CQ host without --executable, as an earlier CQ package generated it"
   private val MaxInputBytes = 192 * 1024
   private val MaxOutputBytes = 32 * 1024 * 1024
   val VersionMismatch = "Installed harness version differs from its configured verified route"
-  def profile(value: HarnessSetting): HarnessProfile = HarnessProfile(value.harness, Path.of(value.executable), value.model, value.provider, value.version,
-    value.providerExtensions.map(Path.of(_)), value.providerEnvironment)
+  def profile(value: HarnessSetting): HarnessProfile = HarnessProfile(value, HarnessProfile.route(value))
   def limits(value: HostLimits): ExecutionLimits = ExecutionLimits(Duration.ofMillis(value.startupMillis), None,
     Duration.ofMillis(value.heartbeatMillis), Duration.ofMillis(value.graceMillis), Duration.ofMillis(value.killMillis), value.retainedOutputBytes)
   def within(value: HostLimits, ceiling: HostLimits): Unit = {
@@ -45,10 +44,14 @@ object SupervisorConfig {
       value.heartbeatMillis -> ceiling.heartbeatMillis, value.graceMillis -> ceiling.graceMillis, value.killMillis -> ceiling.killMillis,
       value.retainedOutputBytes.toLong -> ceiling.retainedOutputBytes.toLong).forall((actual, maximum) => actual <= maximum), "Child limits exceed the governing session's configured bounds")
   }
+  val NotRunnable = "The harness executable could not be run"
+  /** Refuses a route whose harness is not the configured verified version, or cannot be run at all: the same condition as a job
+    * the guardian could not start. Every other fault of the probe is a fault of the host. */
   def verifyProfile(config: SupervisorConfig, value: HarnessProfile): Unit = {
-    val version = new BoundedHostCommand(HarnessEnvironment.isolated(value, config.environment), Duration.ofSeconds(10), 4096)
-      .run(Path.of(config.run.repository), List(value.executable.toString, "--version"))
-    require(version.exit == 0 && version.text.split("[\\s()]+").contains(value.version), VersionMismatch)
+    val probe = new BoundedHostCommand(HarnessEnvironment.isolated(value, config.environment), Duration.ofSeconds(10), 4096)
+    RouteRefusal.unless(Files.isExecutable(value.executable), s"$NotRunnable: ${value.executable}")
+    val version = probe.run(Path.of(config.run.repository), List(value.executable.toString, "--version"))
+    RouteRefusal.unless(version.exit == 0 && version.text.split("[\\s()]+").contains(value.version), VersionMismatch)
   }
   /** A failing check is run at most `attempts` times on one commit, and a governor may request at most `revalidations` further
     * rounds of it for one admitted result. */
@@ -121,7 +124,7 @@ object SupervisorConfig {
     val attempt = Attempt(AttemptId(UUID.randomUUID()), assignment.id, None, session, Role.Governor, harness,
       if (attached) "unobserved-interactive-provider" else profile.provider,
       if (attached) "unobserved-interactive-model" else profile.model,
-      if (attached) SupervisorConfig.AttachedGovernorCollector else "CQ native collector 0.1.0", clock.millis(), UsagePhase.Govern)
+      if (attached) SupervisorConfig.AttachedGovernorCollector else "CQ native collector 0.1.0", clock.millis(), UsagePhase.Govern, None)
     val run = SupervisorRun(project, assignment, attempt, profile.version, repository.toString, base,
       if (attached) SessionOwnership.Attached else SessionOwnership.Managed)
     val input = if (attached) "" else HostFiles.text(context.directory.resolve(options("--input")).normalize(), MaxInputBytes)
@@ -143,23 +146,27 @@ final class SupervisorJobs(config: SupervisorConfig, workspaces: WorkspaceServic
   )
 
 object SupervisorProgram {
-  val Guidance = "Govern CQ through the exposed tools. Input identifies project, routes, limits, checks and human request. Discover/create work. " +
+  val Guidance = "Govern CQ through the exposed tools. Input identifies project, limits, checks and human request. Discover/create work. " +
     "When workflow is present, follow its host-installed instructions and typed scope. " +
     "When you need the operator's decision or approval before work may continue, record it as a Question, with the items it gates BlockedBy it, before you stop; never ask it in prose alone. " +
     "The request is the go-ahead for what it asks: do not ask whether to do it. " +
     "Before you dispatch work that a Question gated, read its answer: an Answered Question releases the work only as far as the answer allows. When the answer refuses the work, do not dispatch it: cancel it or leave it blocked, and tell the operator. Carry a condition the answer sets into the requirements of the work, or ask it in a follow-up Question. A Withdrawn Question never releases the work: Produce a new Question and link the gated items BlockedBy it, or remove the link and record the reason. " +
-    "Before a child, dispatch Select with explicit roots, desired work, guidance/artifact handles, optional previous and limits. Claim all members of one returned choice, then StartChoice with its ID, configured harness and current fence. Choices fix membership and work; selection itself acquires no claim. Workflow runs require choices. Read excluded/unexamined/ineligible counts. " +
+    "Before a child, dispatch Select with explicit roots, desired work, guidance/artifact handles, optional previous and limits. Claim all members of one returned choice, then StartChoice with its ID and current fence; the host starts the models the project's agent configuration assigns to the role. Choices fix membership and work; selection itself acquires no claim. Workflow runs require choices. Read excluded/unexamined/ineligible counts. " +
+    "One StartChoice is one unit of work. The host may make several attempts for it: the next assigned model when one cannot run, or several reviewers side by side. Its reply names the unit by one attempt ID, which Status, Cancel and Seats take; Cancel stops the whole unit. Seats lists every model the host tried and how each seat ended, with the result handle of each seat that delivered. " +
+    "When some seats of a unit delivered and fewer than the work needs, the phase is Abstained or Failed all the same and the blocker names each seat that delivered with its result handle: read those results, and Seats for the others, before you decide. " +
+    "Phase Abstained means that no assigned model could run the work (quota, rate limit, credentials, a provider outage or a launch that failed); the blocker names each model and reason. The input is not used up, but the same models would refuse it again: do not select it again at once, continue other work and report it. " +
+    "Next Arbitrate means that the reviewers of one unit disagree; the status carries the dissenting review. Read Seats. By default correct: Select Worker Implement with the dissenting review as previous and the other non-accepting reviews as artifacts. You decide: you may instead integrate with the review of an accepting seat when the dissent is unfounded, and then say so in your report. " +
     "An implementation selection may return Planner for compatibility assessment. Forward that result in artifacts to a fresh Worker Implement Select. Unknown/incompatible groups split; acquire each split's exact claim. Pass larger prior results as artifacts when selecting subgroups. Unchanged executed input is deferred; obtain substantive evidence or changed conditions. " +
     "Dispatch sequentially using item revisions and handles. The host assembles prompts, captures candidates and runs checks. Never read/compose child prompts or copy full results. Status reads the current state or the result of an attempt; use compact outcomes and bounded artifact reads only for necessary drill-down. " +
     "Status quietMillis is time since a running child's last output; long tool calls are silent. Report a long-quiet child to the operator; never cancel it yourself. " +
     "Use Explorer Investigate/Research for evidence, Worker Probe for experiments, Planner for typed proposals and Reviewer Plan/Audit for independent findings. Pass previous result handles with identical members and current fence. Preview read/Proposal, then apply by result handle; never reconstruct drafts. Children cannot mutate CQ or integrate. " +
-    "Pass worker candidates to Reviewer Candidate; prefer another configured harness. " +
+    "Have every worker candidate reviewed as the workflow instructions say; without such instructions, pass it to Reviewer Candidate. " +
     "With integrationTarget, PrepareIntegration using a fresh ID and accepted reviewer handle, wait for the preparation to end, read IntegrationStatus, inspect its frozen preview, then Integrate that ID. Only Recorded establishes domain recording; reconcile Pending and inspect NotApplied. Discard a prepared integration that will not be applied with DiscardIntegration before releasing its claim or changing the workflow. Without a target, report the retained reviewed candidate. " +
     "PrepareIntegration rebases onto a moved target itself; after NotApplied, prepare again with a fresh ID. If Ready carries a blocker, Integrate, then Combine a fresh ID, that integration ID and current full fence; wait for it to end and read CombinationStatus. Dispatch Worker ResolveConflict with Ready plan in artifacts, its worker as previous and exact preview members/fence. Obtain fresh validation and Reviewer from the new worker handle; omit the plan from reviewer artifacts. Integrate with a fresh ID. For PublicationPending, replay identical Combine or cq job upload. " +
     "Before archiving scoped Decisions or their completed anchors, preserve important knowledge or rules that still apply as independently reviewed Memories or proposed standing requirements. Standing requirement edits need human authority: ask the operator to persist the proposed text before archival. Only Adopted Decisions with at least one outgoing DerivedFrom or PartOf anchor, all archived, are bulk eligible; keep active or unanchored Decisions. " +
     "Claim execution only with host evidence. Child completion/review acceptance does not establish final task acceptance."
   /** What the host carries out without the session, in the words every form of waiting uses. */
-  private val Work = "work the host carries out (a child, an integration being prepared or applied, a combination, a revalidation)"
+  private val Work = "work the host carries out (a child, an integration being prepared or applied, a combination, a revalidation, a submitted workspace)"
   private val Unfound = "4 or 5: the command found no single session of this checkout, and its output says why"
   private val ByStatus = "(Status, IntegrationStatus or CombinationStatus; repeat Revalidate)"
   /** The batch Governor of `cq run`: nothing tells it when work ends and it has no shell of its own, so it waits through its status calls. */
@@ -175,8 +182,9 @@ object SupervisorProgram {
     s"0: a unit ended, or nothing was active; the file has one line for each ended unit and for each still active. 3: the CQ host is not running. $Unfound. Report 3, 4 and 5 to the user. " +
     "Any other exit, including the harness ending the command at its lifetime limit: run it again while work is active. " +
     "After exit 0, read the outcome of each ended unit with one Status, IntegrationStatus or CombinationStatus call with waitMillis 0, and run the command again while other work is active. " +
-    "An integration being prepared or applied, a combination and a revalidation usually end within seconds: after starting one, start no command for it and do not end your turn. " +
-    s"Call its status once (IntegrationStatus or CombinationStatus; repeat Revalidate) with waitMillis ${DispatchWaits.MaxMillis}, which returns when the work ends. " +
+    "An integration being prepared or applied, a combination and a revalidation usually end within seconds, and the host checks a workspace you submitted as it runs a revalidation: " +
+    "after starting one, start no command for it and do not end your turn. " +
+    s"Call its status once (IntegrationStatus or CombinationStatus; repeat Revalidate; Status for a submitted workspace) with waitMillis ${DispatchWaits.MaxMillis}, which returns when the work ends. " +
     "Only if that call returns while the work continues, run the command above."
   /** Nothing wakes an idle Codex session when a background command exits (openai/codex#32188), and its shell call returns to the model
     * after at most 30 s whatever it is asked to yield (`MAX_YIELD_TIME_MS` of its unified exec), so it waits in a tool call of the host,
@@ -191,7 +199,7 @@ object SupervisorProgram {
 }
 
 final class SupervisorProgram(config: SupervisorConfig, registry: HarnessRegistry, jobs: JobSupervisor, authority: SupervisorAuthority,
-  local: LocalControlServer, access: LocalAccess, dispatch: DispatchController, integrations: IntegrationController, combinations: CombinationController,
+  local: LocalControlServer, access: LocalAccess, units: DispatchUnits, integrations: IntegrationController, combinations: CombinationController,
   revalidations: RevalidationController, schemas: McpSchemas, output: HarnessOutput, workflows: WorkflowAssets, cleanup: WorkspaceCleanup, release: SessionRelease, watchdog: SupervisorWatchdog,
   clock: Clock, context: CliContext) {
   private val MaxInputBytes = 192 * 1024
@@ -219,10 +227,9 @@ final class SupervisorProgram(config: SupervisorConfig, registry: HarnessRegistr
         HostFiles.immutable(config.directory.resolve("run.json"), HostFiles.encode(SupervisorRun_JsonCodec, config.run), MaxRecordBytes)
         HostFiles.immutable(config.directory.resolve("settings.json"), HostFiles.encode(SupervisorSettings_JsonCodec, config.settings), MaxRecordBytes)
         val collector = authority.collector
-        val input = HostFiles.encode(GoverningInput_JsonCodec, GoverningInput(config.project,
-          config.settings.harnesses.map(value => HarnessRoute(value.harness, value.model, value.provider)), config.settings.checks.map(_.name), config.settings.limits, config.settings.integrationTarget,
+        val input = HostFiles.encode(GoverningInput_JsonCodec, GoverningInput(config.project, config.settings.checks.map(_.name), config.settings.limits, config.settings.integrationTarget,
           OperatorRequirements.governing(config.input, OperatorRequirements.standing(authority.governor.call, project)),
-          config.workflow.map(new WorkflowAssembly(authority.governor, project, workflows).assemble)))
+          config.workflow.map(new WorkflowAssembly(authority.governor, project, workflows, config.run.ownership).assemble)))
         require(input.getBytes(java.nio.charset.StandardCharsets.UTF_8).length <= MaxInputBytes, "Complete governing input exceeds its byte bound")
         val invocation = schemas.nativeInvocation(attempt.harness,
           HarnessInvocation(Role.Governor, attempt.id, SupervisorProgram.Instructions, schemas.schema("GoverningReport"),
@@ -245,7 +252,7 @@ final class SupervisorProgram(config: SupervisorConfig, registry: HarnessRegistr
       _ <- cleanup.recover.forkDaemon
       _ <- jobs.start(config.owner, WorkspaceSpec(project, attempt.session, attempt.id, config.run.repository, config.run.base), command)
       record <- jobs.await(config.owner, attempt.id)
-      _ <- integrations.shutdown.zipPar(combinations.shutdown).zipPar(revalidations.shutdown).zipPar(dispatch.shutdown)
+      _ <- integrations.shutdown.zipPar(combinations.shutdown).zipPar(revalidations.shutdown).zipPar(units.shutdown)
       receipt <- ZIO.attemptBlocking {
         val stdout = NativeTranscript.retained(payload.resolve("stdout"), config.limits.retainedOutputBytes)
         val stderr = NativeTranscript.retained(payload.resolve("stderr"), config.limits.retainedOutputBytes)
@@ -336,7 +343,9 @@ object SupervisorPlugin extends PluginDef {
     make[ClaimRenewal.Policy].fromValue(ClaimRenewal.Default)
     make[ClaimRenewal]
     make[ChildRunner]
+    make[GovernorWork]
     make[DispatchController].fromResource[DispatchController.Resource]
+    make[DispatchUnits].fromResource[DispatchUnits.Resource]
     make[CohortController]
     make[IntegrationController].fromResource[IntegrationController.Resource]
     make[CombinationController].fromResource[CombinationController.Resource]

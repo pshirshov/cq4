@@ -106,10 +106,20 @@ final class HarnessDoctorLocal extends AnyWordSpec {
       assert(!stale.current && stale.checks.exists(check => check.name == ".mcp.json" && check.state == InstallationState.Failed))
       Files.writeString(mcp, current.noSpaces)
       // Without the permission for the waiter, a session would be asked before each background wait.
-      assert(json.hcursor.downField("permissions").get[List[String]]("allow") == Right(List(s"Bash(${f.binary} wait)")))
+      val workspaces = s"/${f.root.resolve("state")}/*/workspaces/*/tree/**"
+      assert(json.hcursor.downField("permissions").get[List[String]]("allow") == Right(List(s"Bash(${f.binary} wait)", s"Edit($workspaces)", s"Read($workspaces)")))
       Files.writeString(local, json.mapObject(_.remove("permissions")).noSpaces)
       val unapproved = f.inspect(Harness.Claude, Some(config), None)
       assert(!unapproved.current && unapproved.checks.exists(check => check.name == ".claude/settings.local.json" && check.state == InstallationState.Failed))
+      // I30: without the rules for the workspaces of its sessions, a Governor that works itself would be asked before each edit there.
+      List(s"Edit($workspaces)", s"Read($workspaces)").foreach { rule =>
+        Files.writeString(local, json.deepMerge(Json.obj("permissions" -> Json.obj("allow" -> Json.fromValues(
+          json.hcursor.downField("permissions").get[List[String]]("allow").toOption.get.filterNot(_ == rule).map(Json.fromString))))).noSpaces)
+        val asked = f.inspect(Harness.Claude, Some(config), None)
+        assert(!asked.current && asked.checks.exists(check => check.name == ".claude/settings.local.json" && check.state == InstallationState.Failed), rule)
+      }
+      Files.writeString(local, json.noSpaces)
+      assert(f.inspect(Harness.Claude, Some(config), None).current)
     }
     "inspect declarative configuration and approval symlinks without changing them" in Using.resource(new Fixture) { f =>
       f.install(Harness.Claude)

@@ -58,9 +58,9 @@ abstract class DispatchAssemblyTest extends SpecZIO with AssertZIO {
           assignment <- usage.assign(collector, Assignment(AssignmentId(UUID.randomUUID()), scope.project, Set(member.id), Attribution.Direct, None, None))
           governing <- usage.assign(collector, Assignment(AssignmentId(UUID.randomUUID()), scope.project, Set.empty, Attribution.Unattributed, None, None))
           parent <- usage.start(collector, Attempt(AttemptId(UUID.randomUUID()), governing.id, None, scope.actor.session, Role.Governor,
-            Harness.Codex, "fixture", "fixture", "fixture", clock.millis(), UsagePhase.Govern))
+            Harness.Codex, "fixture", "fixture", "fixture", clock.millis(), UsagePhase.Govern, None))
           attempt <- usage.start(collector, Attempt(AttemptId(UUID.randomUUID()), assignment.id, Some(parent.id), scope.actor.session, Role.Worker,
-            Harness.Codex, "fixture", "fixture", "fixture", clock.millis(), UsagePhase.Work))
+            Harness.Codex, "fixture", "fixture", "fixture", clock.millis(), UsagePhase.Work, None))
           small <- artifacts.upload(collector, ArtifactUpload(scope.project, ArtifactId(UUID.randomUUID()), attempt.id, ArtifactKind.Input, "text/plain", "short"))
           large <- artifacts.upload(collector, ArtifactUpload(scope.project, ArtifactId(UUID.randomUUID()), attempt.id, ArtifactKind.Input, "text/plain", largeBody))
           limits = HostLimits(3000, 1000, 300, 2000, 262144)
@@ -79,7 +79,7 @@ abstract class DispatchAssemblyTest extends SpecZIO with AssertZIO {
           _ <- ZIO.attemptBlocking {
             val api = new ApplicationApi(application, authority, runtime)
             val assembler = new InputAssembler(api, scope, clock, requirements)
-            val workflows = new WorkflowAssembly(api, scope.project, new WorkflowAssets)
+            val workflows = new WorkflowAssembly(api, scope.project, new WorkflowAssets, SessionOwnership.Attached)
             val subject = workflows.assemble(WorkflowRequest.Review(previous.id, ReviewerMode.Candidate))
             assert(subject.subject.contains(WorkflowSubject(previous.id, request.work, List(member), stored.candidate)))
             assert(!Wire.encode(WorkflowContext_JsonCodec, subject).contains(narrative) &&
@@ -92,20 +92,20 @@ abstract class DispatchAssemblyTest extends SpecZIO with AssertZIO {
             def denied(value: WorkflowExecution, command: DispatchCommand): Unit =
               assert(intercept[DomainFailure](value.authorize(command)).fault.isInstanceOf[Fault.Denied])
             val explore = policy(WorkflowRequest.Advance(Set(member.id), WorkflowPhase.Explore))
-            denied(explore, DispatchCommand.Start(request))
-            explore.authorize(DispatchCommand.Start(request.copy(work = DispatchWork.Worker(WorkerMode.Probe))))
+            denied(explore, DispatchCommand.Start(UnitFixture.work(request)))
+            explore.authorize(DispatchCommand.Start(UnitFixture.work(request.copy(work = DispatchWork.Worker(WorkerMode.Probe)))))
             val plan = policy(WorkflowRequest.Advance(Set(member.id), WorkflowPhase.Plan))
-            plan.authorize(DispatchCommand.Start(request.copy(work = DispatchWork.Planner())))
-            denied(plan, DispatchCommand.Start(request.copy(members = List(guidance), work = DispatchWork.Planner())))
-            policy(WorkflowRequest.Begin(Set.empty)).authorize(DispatchCommand.Start(request.copy(work = DispatchWork.Planner())))
+            plan.authorize(DispatchCommand.Start(UnitFixture.work(request.copy(work = DispatchWork.Planner()))))
+            denied(plan, DispatchCommand.Start(UnitFixture.work(request.copy(members = List(guidance), work = DispatchWork.Planner()))))
+            policy(WorkflowRequest.Begin(Set.empty)).authorize(DispatchCommand.Start(UnitFixture.work(request.copy(work = DispatchWork.Planner()))))
             denied(new WorkflowExecution(api, scope.project, SessionId(UUID.randomUUID()), Some(WorkflowRequest.Begin(Set.empty))),
-              DispatchCommand.Start(request.copy(work = DispatchWork.Planner())))
+              DispatchCommand.Start(UnitFixture.work(request.copy(work = DispatchWork.Planner()))))
             val standalone = policy(WorkflowRequest.Review(previous.id, ReviewerMode.Candidate))
             val exact = request.copy(work = DispatchWork.Reviewer(ReviewerMode.Candidate), previous = Some(previous.id))
-            standalone.authorize(DispatchCommand.Start(exact))
-            denied(standalone, DispatchCommand.Start(exact.copy(previous = Some(unbound.id))))
-            denied(standalone, DispatchCommand.Start(exact.copy(work = DispatchWork.Reviewer(ReviewerMode.Audit))))
-            denied(standalone, DispatchCommand.Start(exact.copy(members = List(guidance))))
+            standalone.authorize(DispatchCommand.Start(UnitFixture.work(exact)))
+            denied(standalone, DispatchCommand.Start(UnitFixture.work(exact.copy(previous = Some(unbound.id)))))
+            denied(standalone, DispatchCommand.Start(UnitFixture.work(exact.copy(work = DispatchWork.Reviewer(ReviewerMode.Audit)))))
+            denied(standalone, DispatchCommand.Start(UnitFixture.work(exact.copy(members = List(guidance)))))
             List(explore, plan, standalone, policy(WorkflowRequest.Begin(Set.empty)), policy(WorkflowRequest.Upstream(Set(member.id), UpstreamAction.Prepare))).foreach { execution =>
               denied(execution, DispatchCommand.PrepareIntegration(IntegrationId(UUID.randomUUID()), previous.id))
               denied(execution, DispatchCommand.Integrate(IntegrationId(UUID.randomUUID())))
@@ -114,6 +114,27 @@ abstract class DispatchAssemblyTest extends SpecZIO with AssertZIO {
               execution.authorize(DispatchCommand.Status(attempt.id, 0))
               execution.authorize(DispatchCommand.Cancel(attempt.id))
               execution.authorize(DispatchCommand.IntegrationStatus(IntegrationId(UUID.randomUUID()), 0))
+            }
+            // I30: the governing session's own work is bound by the phase limit and the selection as the child that would do it.
+            def opening(members: List[ItemRevision]) = DispatchCommand.OpenWorkspace(RequestId(UUID.randomUUID()), members, None, claim.fence)
+            val submitting = DispatchCommand.SubmitWorkspace(attempt.id, List(WorkMember(member.id, WorkDisposition.CandidateReady, "Implemented", Nil)))
+            val reviewing = DispatchCommand.SelfReview(RequestId(UUID.randomUUID()), previous.id, List(ReviewMember(member.id, ReviewVerdict.Accepted, Nil)), claim.fence)
+            def refusal(value: WorkflowExecution, command: DispatchCommand): String = intercept[DomainFailure](value.authorize(command)).fault match {
+              case Fault.Denied(message) => message
+              case other => fail(s"Expected a denial, observed $other")
+            }
+            val working = policy(WorkflowRequest.Advance(Set(member.id), WorkflowPhase.Work))
+            working.authorize(opening(List(member)))
+            working.authorize(submitting)
+            assert(refusal(working, reviewing) == "Workflow execution: SelfReview requires advance through review")
+            assert(refusal(working, opening(List(guidance))) == "Workflow execution: child or integration members are outside the selected descendants")
+            policy(WorkflowRequest.Advance(Set(member.id), WorkflowPhase.Review)).authorize(reviewing)
+            assert(refusal(policy(WorkflowRequest.Advance(Set(guidance.id), WorkflowPhase.Integrate)), reviewing) ==
+              "Workflow execution: child or integration members are outside the selected descendants")
+            List(explore, plan, standalone, policy(WorkflowRequest.Begin(Set.empty)), policy(WorkflowRequest.Upstream(Set(member.id), UpstreamAction.Prepare))).foreach { execution =>
+              assert(refusal(execution, opening(List(member))) == "Workflow execution: OpenWorkspace requires advance through work")
+              assert(refusal(execution, submitting) == "Workflow execution: SubmitWorkspace requires advance through work")
+              assert(refusal(execution, reviewing) == "Workflow execution: SelfReview requires advance through review")
             }
             // I19: revalidation belongs to the work phase and to the workflow's selected members.
             policy(WorkflowRequest.Advance(Set(member.id), WorkflowPhase.Work)).authorize(DispatchCommand.Revalidate(RequestId(UUID.randomUUID()), previous.id, claim.fence))
@@ -170,7 +191,7 @@ abstract class DispatchAssemblyTest extends SpecZIO with AssertZIO {
             // A session without a request of its own, such as a driven one, still delivers the standing requirements.
             assert(new InputAssembler(api, scope, clock, "").assemble(request).operatorRequirements.contains(standingSection))
             assert(assembler.assemble(request.copy(work = DispatchWork.Explorer(ExplorerMode.Investigate))).operatorRequirements.isEmpty)
-            val governing = new WorkflowAssembly(api, scope.project, new WorkflowAssets)
+            val governing = new WorkflowAssembly(api, scope.project, new WorkflowAssets, SessionOwnership.Attached)
             val activated = governing.assemble(WorkflowRequest.Begin(Set(member.id)))
             assert(activated.instructions.contains(standingSection), "Governor activation omitted standing requirements")
             stand(1, "Changed before the next dispatch.")
@@ -182,6 +203,45 @@ abstract class DispatchAssemblyTest extends SpecZIO with AssertZIO {
             assert(assembler.assemble(request).operatorRequirements.contains(requirements))
             assert(new InputAssembler(api, scope, clock, "").assemble(request).operatorRequirements.isEmpty)
             stand(3, standing)
+            // I30: the section of the project's process mode, as the server holds it at activation, follows the standing requirements and
+            // opens the workflow's instructions; the activation names the mode it was assembled with.
+            val assets = new WorkflowAssets
+            val begin = WorkflowRequest.Begin(Set(member.id))
+            def mode(expected: Long, value: ProcessMode): Unit = assert(operator.call(Command.Mode(ModeInput(scope.project,
+              ModeAction.Replace(Revision(expected), value, false)))).isInstanceOf[Result.Mode])
+            val rigorous = governing.assemble(begin)
+            assert(rigorous.mode == ProcessMode.Rigorous && rigorous.instructions == standingSection + "\n\n" + assets.instructions(begin, ProcessMode.Rigorous))
+            assert(rigorous.instructions.contains("\nProcess mode of this project: Rigorous.") && rigorous.instructions.contains("Never create a milestone yourself."))
+            mode(0, ProcessMode.CrossCutting)
+            // A change takes effect at the next activation (Q64).
+            val crossCutting = governing.assemble(begin)
+            assert(crossCutting.mode == ProcessMode.CrossCutting && crossCutting.instructions == standingSection + "\n\n" + assets.instructions(begin, ProcessMode.CrossCutting))
+            assert(!crossCutting.instructions.contains("Never create a milestone yourself.") && crossCutting.instructions != rigorous.instructions)
+            // A batch run has the same mode and text as an attached session in Rigorous and Cross-cutting.
+            val batch = new WorkflowAssembly(api, scope.project, assets, SessionOwnership.Managed)
+            assert(batch.assemble(begin) == crossCutting)
+            // The write path does not store the YOLO mode in this release, so the server's answer is replaced here. An attached session
+            // gets the YOLO text; a batch run, whose Governor has no edit tools, works the project as Cross-cutting (Q62).
+            final class Moded(value: () => Result) extends ServerApi {
+              override def call(command: Command): Result = command match {
+                case _: Command.Mode => value()
+                case other => api.call(other)
+              }
+              override def usage(value: HostUsageInput): HostUsageResult = api.usage(value)
+              override def artifact(value: ArtifactUpload): ArtifactMetadata = api.artifact(value)
+              override def admit(value: HostAdmissionInput): ResultAdmission = api.admit(value)
+              override def integrate(value: HostIntegrationInput): IntegrationRecord = api.integrate(value)
+              override def grant(value: GrantRequest): AccessToken = api.grant(value)
+            }
+            val yolo = new Moded(() => Result.Mode(ProjectMode(scope.project, Revision(2), ProcessMode.Yolo, false, None)))
+            val attachedYolo = new WorkflowAssembly(yolo, scope.project, assets, SessionOwnership.Attached).assemble(begin)
+            assert(attachedYolo.mode == ProcessMode.Yolo && attachedYolo.instructions == standingSection + "\n\n" + assets.instructions(begin, ProcessMode.Yolo))
+            assert(new WorkflowAssembly(yolo, scope.project, assets, SessionOwnership.Managed).assemble(begin) == crossCutting)
+            // A failed read of the mode fails the activation; it never falls back to a mode.
+            val unreadable = intercept[DomainFailure](new WorkflowAssembly(new Moded(() => Result.Failed(Fault.Denied("Process mode unreadable"))), scope.project, assets, SessionOwnership.Attached).assemble(begin))
+            assert(unreadable.fault == Fault.Denied("Process mode unreadable"))
+            mode(1, ProcessMode.Rigorous)
+            assert(governing.assemble(begin) == rigorous)
             // A failed read of the standing requirements fails the dispatch; it never drops them.
             final class Unreadable(failure: () => Result) extends ServerApi {
               override def call(command: Command): Result = command match {
@@ -224,7 +284,7 @@ abstract class DispatchAssemblyTest extends SpecZIO with AssertZIO {
           _ <- ledger.change(scope, ChangeRequest(requestId, List(Mutation.Replace(member.id, member.revision, draft("Changed acceptance context"))),
             List(replacement.fence), "Current task correction"))
           _ <- ZIO.attemptBlocking {
-            val workflows = new WorkflowAssembly(new ApplicationApi(application, authority, runtime), scope.project, new WorkflowAssets)
+            val workflows = new WorkflowAssembly(new ApplicationApi(application, authority, runtime), scope.project, new WorkflowAssets, SessionOwnership.Attached)
             val stale = intercept[IllegalArgumentException](workflows.assemble(WorkflowRequest.Review(previous.id, ReviewerMode.Candidate)))
             assert(stale.getMessage.contains("stale"))
           }
@@ -249,7 +309,7 @@ abstract class DispatchAssemblyTest extends SpecZIO with AssertZIO {
           request = DispatchRequest(requestId, DispatchWork.Worker(WorkerMode.Implement), Harness.Codex, List(member), Nil, Nil, None, claim.fence,
             HostLimits(3000, 1000, 300, 2000, 262144))
           assembler = new InputAssembler(new ApplicationApi(application, authority, runtime), scope, clock, "")
-          refusal = Fault.Invalid(s"Work refused: T${member.id.number} has no milestone. A Planner must assign each Task to a milestone under plan review before work starts")
+          refusal = Fault.Invalid(s"Work refused: T${member.id.number} has no milestone. Assign each Task to an Open milestone before work starts")
           _ <- ZIO.attemptBlocking {
             assert(intercept[DomainFailure](assembler.assemble(request)).fault == refusal)
             assert(intercept[DomainFailure](assembler.assemble(request.copy(work = DispatchWork.Worker(WorkerMode.ResolveConflict)))).fault == refusal)

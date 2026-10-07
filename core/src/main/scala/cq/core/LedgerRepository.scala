@@ -9,13 +9,24 @@ final case class StoredRequest(fingerprint: String, acknowledgement: ChangeAck)
 final case class LedgerCursors(items: ChangeCursor, work: Long)
 
 /** The kinds of per-project configuration document; a project holds at most one document of each kind. */
-enum ProjectSettingKind { case Requirements }
+enum ProjectSettingKind { case Requirements, Mode, Agents }
 object ProjectSettingKind {
   def of(value: ProjectSetting): ProjectSettingKind = value match {
     case _: ProjectSetting.Requirements => ProjectSettingKind.Requirements
+    case _: ProjectSetting.Mode => ProjectSettingKind.Mode
+    case _: ProjectSetting.Agents => ProjectSettingKind.Agents
   }
 }
 final case class StoredSetting(revision: Revision, value: ProjectSetting, actor: Actor, updatedAt: Long)
+
+/** The kinds of configuration document of the installation; it holds at most one document of each kind, for all its projects. */
+enum InstallationSettingKind { case Agents }
+object InstallationSettingKind {
+  def of(value: InstallationSetting): InstallationSettingKind = value match {
+    case _: InstallationSetting.Agents => InstallationSettingKind.Agents
+  }
+}
+final case class StoredInstallationSetting(revision: Revision, value: InstallationSetting, actor: Actor, updatedAt: Long)
 
 trait LedgerRepository[F[_, _]] {
   def initialize(project: Project): F[Throwable, Project]
@@ -79,6 +90,10 @@ trait LedgerTransaction {
   def setting(kind: ProjectSettingKind): Option[StoredSetting]
   // Replaces the project's document of the value's kind.
   def putSetting(value: StoredSetting): Unit
+  def installationSetting(kind: InstallationSettingKind): Option[StoredInstallationSetting]
+  // Replaces the installation's document of the value's kind when its revision is `expected` (0: no document) and says whether it did.
+  // Transactions of other projects write the same document, so the comparison is part of the write.
+  def replaceInstallationSetting(expected: Revision, value: StoredInstallationSetting): Boolean
   // Open (unarchived, non-terminal) items without an open DerivedFrom producer or PartOf milestone, in (ledger, number) order.
   def candidateRoots(after: Option[ItemId], limit: Int): ReadPage[ItemSummary]
 }

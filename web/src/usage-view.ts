@@ -140,6 +140,12 @@ export function phasesTable(phases: readonly api.PhaseUsage[]): HTMLElement {
 }
 export const openAttemptNote = 'No outcome delivered. CQ does not observe an attached session\'s own harness, so the session may have ended; ' +
   'cq job upload --session DIR over its retained session directory delivers the outcome.';
+/** What the tokens of an attempt without a measurement are: unknown, and for a Governor's own work known to be elsewhere. */
+export const unmeasuredNote = 'An attempt without a measurement counts no tokens here, which is not zero usage. ' +
+  'A Governor\'s own work and its own review are never measured: their tokens are part of the governing session\'s.';
+const ownWorkMeter = 'None: the work was done in the governing session, whose usage is that session\'s own';
+/** An attempt of the Governor role under a governing attempt is that session's own work or review, not a child. */
+function ownWork(attempt: api.Attempt): boolean { return attempt.role === api.Role.Governor && attempt.parent !== undefined; }
 interface AttemptActions {
   scope(filter: api.UsageFilter_ProjectAll | api.UsageFilter_TaskOnly | api.UsageFilter_CohortOnly | api.UsageFilter_SessionOnly): void;
   outcomes(attempt: api.AttemptId): void;
@@ -155,11 +161,13 @@ export function attemptsTable(entries: api.AttemptView[], actions: AttemptAction
     for (const member of assignment.members) scopes.append(button(`Task usage · ${itemName(member)}`, () => actions.scope(new api.UsageFilter_TaskOnly(member))));
     const metadata = fields([['Attempt', attempt.id.value], ['Assignment', assignment.id.value], ['Session', attempt.session.value],
       ['Parent attempt', attempt.parent === undefined ? 'None' : attempt.parent.value], ['Collector', attempt.collector],
+      ...(ownWork(attempt) ? [['Meter', ownWorkMeter] as [string, string]] : []),
       ['Finished', outcome === undefined ? entry.observed ? 'No outcome recorded' : openAttemptNote : time(outcome.value.finishedAt)],
       ['Gaps', outcome === undefined ? 'No outcome recorded' : outcome.value.gaps.join('; ') || 'None recorded']]);
     const evaluation = assignment.evaluation;
     if (evaluation !== undefined) metadata.append(element('dt', 'Evaluation'), element('dd', `${evaluation.run} · ${evaluation.scenario} · ${evaluation.assessor ? 'Assessor' : 'Consumer'}`));
-    return [time(attempt.startedAt), `${attempt.harness} · ${attempt.role}`, `${attempt.provider} / ${attempt.model}`,
+    return [time(attempt.startedAt), `${attempt.harness} · ${attempt.role}${ownWork(attempt) ? ` · own ${attempt.phase.toLowerCase()}` : ''}`,
+      ownWork(attempt) ? 'The governing session' : `${attempt.provider} / ${attempt.model}${attempt.effort === undefined ? '' : ` · effort ${attempt.effort.toLowerCase()}`}`,
       outcome === undefined ? entry.observed ? 'Running' : 'Open' : outcome.value.state,
       `${assignment.attribution} · ${[...assignment.members].map(itemName).join(', ') || 'No assigned items'}`,
       details('Attempt details', metadata, scopes, button('Outcome history', () => actions.outcomes(attempt.id)))];

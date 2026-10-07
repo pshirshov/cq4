@@ -10,6 +10,13 @@ trait LedgerService[F[_, _]] {
   def rename(scope: Scope, expected: Revision, name: String): F[Throwable, Project]
   def requirements(scope: Scope): F[Throwable, ProjectRequirements]
   def replaceRequirements(scope: Scope, expected: Revision, text: String): F[Throwable, ProjectRequirements]
+  def mode(scope: Scope): F[Throwable, ProjectMode]
+  def replaceMode(scope: Scope, expected: Revision, value: ProjectSetting.Mode): F[Throwable, ProjectMode]
+  def agents(scope: Scope): F[Throwable, AgentsView]
+  // The view that storing `text` as the document of `layer` would give; nothing is stored.
+  def previewAgents(scope: Scope, layer: AgentsScope, text: String): F[Throwable, AgentsView]
+  def replaceAgents(scope: Scope, layer: AgentsScope, expected: Revision, text: String): F[Throwable, AgentsView]
+  def agentRoute(scope: Scope, harness: Harness, work: DispatchWork): F[Throwable, ResolvedAssignment]
   def change(scope: Scope, request: ChangeRequest): F[Throwable, ChangeAck]
   def get(scope: Scope, id: ItemId): F[Throwable, ItemView]
   def details(scope: Scope, members: List[ItemRevision], bytes: Int): F[Throwable, ItemViews]
@@ -44,7 +51,7 @@ trait LedgerService[F[_, _]] {
 object LedgerService {
   private final case class Hypothetical(preview: WorksetPreview) extends RuntimeException("Hypothetical workset evaluation", null, false, false)
 
-  final class Impl[F[+_, +_]: Error2](repository: LedgerRepository[F], clock: Clock, queries: QueryParser, completions: QueryCompleter, worksets: WorksetTraversal, terminationPlanner: TerminationPlanner, claimPlanner: ClaimPlanner, mutations: LedgerMutation, drivers: DriverService, boundary: DriverBoundary) extends LedgerService[F] {
+  final class Impl[F[+_, +_]: Error2](repository: LedgerRepository[F], clock: Clock, queries: QueryParser, completions: QueryCompleter, worksets: WorksetTraversal, terminationPlanner: TerminationPlanner, claimPlanner: ClaimPlanner, mutations: LedgerMutation, drivers: DriverService, boundary: DriverBoundary, modes: ProcessModePolicy) extends LedgerService[F] {
     import LedgerPolicy.*
     import LedgerAccess.*
 
@@ -72,6 +79,7 @@ object LedgerService {
     private def standing(tx: LedgerTransaction): ProjectRequirements = tx.setting(ProjectSettingKind.Requirements) match {
       case Some(StoredSetting(revision, ProjectSetting.Requirements(text), actor, updatedAt)) =>
         ProjectRequirements(tx.project.id, revision, text, Some(RequirementsChange(actor, updatedAt)))
+      case Some(other) => throw new IllegalStateException(s"The standing requirements row holds a ${ProjectSettingKind.of(other.value)} document")
       case None => ProjectRequirements(tx.project.id, Revision(0), "", None)
     }
 
@@ -88,6 +96,95 @@ object LedgerService {
         tx.putSetting(StoredSetting(Revision(Math.addExact(expected.value, 1L)), ProjectSetting.Requirements(text), scope.actor, clock.millis()))
         standing(tx)
       }
+    }
+
+    // A project without a stored document is Rigorous at revision 0.
+    private def processMode(tx: LedgerTransaction): ProjectMode = tx.setting(ProjectSettingKind.Mode) match {
+      case Some(StoredSetting(revision, ProjectSetting.Mode(value, selfReviewWithoutChecks), actor, updatedAt)) =>
+        ProjectMode(tx.project.id, revision, value, selfReviewWithoutChecks, Some(ModeChange(actor, updatedAt)))
+      case Some(other) => throw new IllegalStateException(s"The process mode row holds a ${ProjectSettingKind.of(other.value)} document")
+      case None => ProjectMode(tx.project.id, Revision(0), ProcessModePolicy.Default.value, ProcessModePolicy.Default.selfReviewWithoutChecks, None)
+    }
+
+    override def mode(scope: Scope): F[Throwable, ProjectMode] = repository.transact(scope.project)(processMode)
+
+    override def replaceMode(scope: Scope, expected: Revision, value: ProjectSetting.Mode): F[Throwable, ProjectMode] = repository.transact(scope.project) { tx =>
+      if (scope.actor.role != Role.Human) throw DomainFailure(Fault.Denied("Process mode change requires human authority"))
+      modes.validate(value)
+      val current = processMode(tx)
+      if (current.revision != expected)
+        throw DomainFailure(Fault.Conflict(s"Process mode changed: expected revision ${expected.value}, actual ${current.revision.value}; reload before saving"))
+      if (ProjectSetting.Mode(current.mode, current.selfReviewWithoutChecks) == value) current
+      else {
+        tx.putSetting(StoredSetting(Revision(Math.addExact(expected.value, 1L)), value, scope.actor, clock.millis()))
+        processMode(tx)
+      }
+    }
+
+    // A layer without a stored document has the empty text at revision 0. The problems are filled in by `agentsView`.
+    private def installationAgents(tx: LedgerTransaction): AgentsDocument = tx.installationSetting(InstallationSettingKind.Agents) match {
+      case Some(StoredInstallationSetting(revision, InstallationSetting.Agents(text), actor, updatedAt)) =>
+        AgentsDocument(revision, text, Some(RequirementsChange(actor, updatedAt)), Nil)
+      case None => AgentsDocument(Revision(0), "", None, Nil)
+    }
+
+    private def projectAgents(tx: LedgerTransaction): AgentsDocument = tx.setting(ProjectSettingKind.Agents) match {
+      case Some(StoredSetting(revision, ProjectSetting.Agents(text), actor, updatedAt)) => AgentsDocument(revision, text, Some(RequirementsChange(actor, updatedAt)), Nil)
+      case Some(other) => throw new IllegalStateException(s"The agent configuration row holds a ${ProjectSettingKind.of(other.value)} document")
+      case None => AgentsDocument(Revision(0), "", None, Nil)
+    }
+
+    // No role is resolved while a layer has problems: its text states no configuration.
+    private def agentsView(installation: AgentsDocument, project: AgentsDocument): AgentsView = {
+      val defaults = AgentConfigText.parse(installation.text)
+      val overrides = AgentConfigText.parse(project.text)
+      AgentsView(installation.copy(problems = defaults.left.getOrElse(Nil)), project.copy(problems = overrides.left.getOrElse(Nil)),
+        (for { lower <- defaults; upper <- overrides } yield AgentResolution.assignments(lower, upper)).getOrElse(Nil),
+        (for { lower <- defaults; upper <- overrides } yield AgentResolution.shadowed(lower, upper)).getOrElse(Nil))
+    }
+
+    private def agentsWriter(scope: Scope): Unit =
+      if (scope.actor.role != Role.Human) throw DomainFailure(Fault.Denied("Agent configuration change requires human authority"))
+
+    override def agents(scope: Scope): F[Throwable, AgentsView] = repository.transact(scope.project)(tx => agentsView(installationAgents(tx), projectAgents(tx)))
+
+    override def previewAgents(scope: Scope, layer: AgentsScope, text: String): F[Throwable, AgentsView] = repository.transact(scope.project) { tx =>
+      agentsWriter(scope)
+      boundAgents(text)
+      layer match {
+        case AgentsScope.Installation() => agentsView(installationAgents(tx).copy(text = text), projectAgents(tx))
+        case AgentsScope.Project() => agentsView(installationAgents(tx), projectAgents(tx).copy(text = text))
+      }
+    }
+
+    override def replaceAgents(scope: Scope, layer: AgentsScope, expected: Revision, text: String): F[Throwable, AgentsView] = repository.transact(scope.project) { tx =>
+      agentsWriter(scope)
+      validateAgents(text)
+      def stored: (String, AgentsDocument) = layer match {
+        case AgentsScope.Installation() => "installation" -> installationAgents(tx)
+        case AgentsScope.Project() => "project" -> projectAgents(tx)
+      }
+      val (name, current) = stored
+      def conflict(actual: Revision): DomainFailure = DomainFailure(Fault.Conflict(
+        s"Agent configuration of the $name changed: expected revision ${expected.value}, actual ${actual.value}; reload before saving"))
+      if (current.revision != expected) throw conflict(current.revision)
+      if (current.text != text) {
+        val revision = Revision(Math.addExact(expected.value, 1L))
+        layer match {
+          case AgentsScope.Installation() =>
+            if (!tx.replaceInstallationSetting(expected, StoredInstallationSetting(revision, InstallationSetting.Agents(text), scope.actor, clock.millis())))
+              throw conflict(stored._2.revision)
+          case AgentsScope.Project() => tx.putSetting(StoredSetting(revision, ProjectSetting.Agents(text), scope.actor, clock.millis()))
+        }
+      }
+      agentsView(installationAgents(tx), projectAgents(tx))
+    }
+
+    override def agentRoute(scope: Scope, harness: Harness, work: DispatchWork): F[Throwable, ResolvedAssignment] = repository.transact(scope.project) { tx =>
+      // Every stored text passed the save checks, so one that does not parse is not a state this release writes.
+      def parsed(name: String, document: AgentsDocument): ParsedAgents = AgentConfigText.parse(document.text).fold(problems => throw new IllegalStateException(
+        s"The stored agent configuration of the $name does not parse: " + problems.map(AgentConfigText.describe).mkString("; ")), identity)
+      AgentResolution.resolve(parsed("installation", installationAgents(tx)), parsed("project", projectAgents(tx)), harness, work)
     }
 
     override def change(scope: Scope, request: ChangeRequest): F[Throwable, ChangeAck] =

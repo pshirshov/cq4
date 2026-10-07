@@ -24,6 +24,119 @@ abstract class LedgerContractTest extends SpecZIO with AssertZIO {
     effect.either.flatMap(result => assertIO(result match { case Left(DomainFailure(fault)) => expected(fault); case _ => false })).unit
 
   "Durable ledger service (Behavioral Active Blackbox; dummy Group / PostgreSQL Good Communication)" should {
+    "I17: answer a save of the installation's agent configuration with a conflict when another writer replaced it after it was read" in {
+      (repository: LedgerRepository[IO]) =>
+      val human = Scope(ProjectId(UUID.randomUUID()), Actor("operator", SessionId(UUID.randomUUID()), Role.Human))
+      val rival = Actor("rival", SessionId(UUID.randomUUID()), Role.Human)
+      val Installation = AgentsScope.Installation()
+      def text(worker: String): String = s"defaults: { roles: { worker: $worker } } # ${human.project.value}\n"
+      // The transaction of another project commits its write between this one's reading and its write: here, just before the write.
+      val raced = new java.util.concurrent.atomic.AtomicInteger
+      val racing = new LedgerRepository[IO] {
+        override def initialize(project: Project): IO[Throwable, Project] = repository.initialize(project)
+        override def projects(after: Option[ProjectId], limit: Int): IO[Throwable, ProjectPage] = repository.projects(after, limit)
+        override def catalogueCursor: IO[Throwable, CatalogueCursor] = repository.catalogueCursor
+        override def cursors(project: ProjectId, now: Long): IO[Throwable, LedgerCursors] = repository.cursors(project, now)
+        override def driverRecords(project: ProjectId): IO[Throwable, List[DriverRecord]] = repository.driverRecords(project)
+        override def driverSummaries(project: ProjectId): IO[Throwable, List[DriverSummary]] = repository.driverSummaries(project)
+        override def transact[A](project: ProjectId)(operation: LedgerTransaction => A): IO[Throwable, A] = repository.transact(project) { tx =>
+          operation(java.lang.reflect.Proxy.newProxyInstance(classOf[LedgerTransaction].getClassLoader, Array(classOf[LedgerTransaction]), (_, method, arguments) => {
+            if (method.getName == "replaceInstallationSetting") {
+              val expected = arguments(0).asInstanceOf[Revision]
+              raced.incrementAndGet()
+              require(tx.replaceInstallationSetting(expected, StoredInstallationSetting(Revision(expected.value + 1), InstallationSetting.Agents(text("claude:rival")), rival, 1700000000000L)))
+            }
+            try method.invoke(tx, (if (arguments == null) Array.empty[AnyRef] else arguments)*) catch { case error: java.lang.reflect.InvocationTargetException => throw error.getCause }
+          }).asInstanceOf[LedgerTransaction])
+        }
+      }
+      val service = FixedLedger.service(racing, java.time.Clock.systemUTC())
+      for {
+        _ <- service.initialize(human, "raced configuration")
+        before <- service.agents(human)
+        base = before.installation.revision
+        lost <- service.replaceAgents(human, Installation, base, text("claude:mine")).either
+        after <- service.agents(human)
+        _ <- ZIO.attempt {
+          assert(raced.get == 1)
+          // The refused save names the revision the rival wrote, and writes nothing: its transaction, the rival's write in it, is undone.
+          assert(lost == Left(DomainFailure(Fault.Conflict(
+            s"Agent configuration of the installation changed: expected revision ${base.value}, actual ${base.value + 1}; reload before saving"))), lost.toString)
+          assert(after == before)
+        }
+      } yield ()
+    }
+
+    "I17: store one agent configuration document per layer under compare-and-set, keep the revision of an unchanged text and bound the text" in {
+      (service: LedgerService[IO], repository: LedgerRepository[IO]) =>
+      val human = Scope(ProjectId(UUID.randomUUID()), Actor("operator", SessionId(UUID.randomUUID()), Role.Human))
+      val governor = human.copy(actor = Actor("governor", SessionId(UUID.randomUUID()), Role.Governor))
+      val sibling = Scope(ProjectId(UUID.randomUUID()), human.actor)
+      val Installation = AgentsScope.Installation()
+      val Project = AgentsScope.Project()
+      val bound = LedgerPolicy.MaxConfigBytes
+      // The installation's document is shared by every project of a database, so each run writes a text of its own.
+      def defaults(worker: String): String = s"defaults: { roles: { worker: $worker } } # ${human.project.value}\n"
+      def installed(scope: Scope): IO[Throwable, Option[StoredInstallationSetting]] = repository.transact(scope.project)(_.installationSetting(InstallationSettingKind.Agents))
+      def stored(scope: Scope): IO[Throwable, Option[StoredSetting]] = repository.transact(scope.project)(_.setting(ProjectSettingKind.Agents))
+      def setting(revision: Revision, text: String): StoredInstallationSetting = StoredInstallationSetting(revision, InstallationSetting.Agents(text), human.actor, 1700000000000L)
+      for {
+        _ <- service.initialize(human, "agent configuration")
+        _ <- service.initialize(sibling, "sibling")
+        initial <- service.agents(human)
+        base = initial.installation.revision
+        absent <- installed(human)
+        _ <- assertIO(initial.project == AgentsDocument(Revision(0), "", None, Nil) && absent.map(_.revision).getOrElse(Revision(0)) == base &&
+          (base != Revision(0) || (absent.isEmpty && initial.installation == AgentsDocument(Revision(0), "", None, Nil))))
+        // Saving the text a layer has without a stored document writes nothing.
+        empty <- service.replaceAgents(human, Project, Revision(0), "")
+        nothing <- stored(human)
+        _ <- assertIO(empty == initial && nothing.isEmpty)
+        _ <- denied(service.replaceAgents(governor, Project, Revision(0), defaults("claude:sonnet")))(_ == Fault.Denied("Agent configuration change requires human authority"))
+        _ <- denied(service.previewAgents(governor, Project, defaults("claude:sonnet")))(_ == Fault.Denied("Agent configuration change requires human authority"))
+        first <- service.replaceAgents(human, Installation, base, defaults("claude:sonnet"))
+        next = Revision(base.value + 1)
+        row <- installed(sibling)
+        _ <- assertIO(first.installation.revision == next && first.installation.text == defaults("claude:sonnet") && first.installation.change.exists(_.actor == human.actor) &&
+          row.exists(value => value.revision == next && value.value == InstallationSetting.Agents(defaults("claude:sonnet")) && value.actor == human.actor &&
+            first.installation.change.exists(_.at == value.updatedAt)))
+        _ <- denied(service.replaceAgents(human, Installation, base, defaults("claude:opus")))(_ == Fault.Conflict(
+          s"Agent configuration of the installation changed: expected revision ${base.value}, actual ${next.value}; reload before saving"))
+        same <- service.replaceAgents(sibling, Installation, next, defaults("claude:sonnet"))
+        kept <- installed(human)
+        _ <- assertIO(same.installation == first.installation && kept == row)
+        // The comparison is the repository's: a write based on another revision than the stored one changes nothing.
+        lost <- ZIO.foreach(List(base, Revision(next.value + 1)))(expected => repository.transact(human.project)(_.replaceInstallationSetting(expected, setting(Revision(next.value + 5), ""))))
+        after <- installed(human)
+        _ <- assertIO(lost == List(false, false) && after == row)
+        second = Revision(next.value + 1)
+        won <- repository.transact(sibling.project)(_.replaceInstallationSetting(next, setting(second, defaults("claude:opus"))))
+        replaced <- installed(human)
+        _ <- assertIO(won && replaced.contains(setting(second, defaults("claude:opus"))))
+        project <- service.replaceAgents(human, Project, Revision(0), "defaults: { roles: { explorer: claude:haiku } }\n")
+        document <- stored(human)
+        other <- service.agents(sibling)
+        _ <- assertIO(project.project.revision == Revision(1) && project.installation.revision == second &&
+          document.exists(value => value.revision == Revision(1) && value.value == ProjectSetting.Agents("defaults: { roles: { explorer: claude:haiku } }\n") && value.actor == human.actor) &&
+          other.project == AgentsDocument(Revision(0), "", None, Nil) && other.installation == project.installation)
+        _ <- denied(service.replaceAgents(human, Project, Revision(0), ""))(_ == Fault.Conflict("Agent configuration of the project changed: expected revision 0, actual 1; reload before saving"))
+        unchanged <- service.replaceAgents(human, Project, Revision(1), "defaults: { roles: { explorer: claude:haiku } }\n")
+        _ <- assertIO(unchanged == project)
+        route <- service.agentRoute(governor, Harness.Pi, DispatchWork.Worker(WorkerMode.Implement))
+        _ <- assertIO(route == ResolvedAssignment(Harness.Pi, RoleKey.Plain(AgentRole.Worker), RoleResolution.Resolved(ResolvedRole(PanelMode.All, 1,
+          List(ResolvedSeat(SeatStrategy.Fallback, List(ModelRoute(Harness.Claude, None, "opus", None)))), RoleOrigin(AgentLayer.Installation, RoleSource.DefaultRoles), Nil))))
+        _ <- ZIO.foreachDiscard(List(Installation -> second, Project -> Revision(1))) { (layer, revision) =>
+          denied(service.replaceAgents(human, layer, revision, "#" + "x" * bound))(_ == Fault.Invalid(s"Agent configuration exceeds $bound bytes: ${bound + 1} supplied")) *>
+            denied(service.replaceAgents(human, layer, revision, "#" + "λ" * (bound / 2)))(_ == Fault.Invalid(s"Agent configuration exceeds $bound bytes: ${bound + 1} supplied")) *>
+            denied(service.replaceAgents(human, layer, revision, "defaults: ["))(_.isInstanceOf[Fault.Invalid])
+        }
+        settled <- service.agents(human)
+        _ <- assertIO(settled == project)
+        full <- service.replaceAgents(human, Installation, second, "#" + "x" * (bound - 1))
+        _ <- assertIO(full.installation.revision == Revision(second.value + 1) && full.installation.text.length == bound && full.project == project.project)
+      } yield ()
+    }
+
     "keep accepted ideas active until implemented and forbid premature archival" in { (service: LedgerService[IO]) =>
       val owner = scope()
       val accepted = task("Accepted idea").copy(content = Content.Idea(IdeaStatus.Accepted, "Deliver outcome", "Motivation"))

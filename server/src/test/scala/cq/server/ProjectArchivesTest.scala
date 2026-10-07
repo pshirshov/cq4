@@ -56,7 +56,7 @@ final class ProjectArchivesPostgres extends SpecZIO with AssertZIO {
           Using.resource(connection.createStatement())(_.execute(s"CREATE SCHEMA $schema")); ()
         })
         _ <- target.initialize
-        _ <- new PostgresProjectArchives(target, Clock.systemUTC()).restore(file)
+        _ <- new PostgresProjectArchives(target, Clock.systemUTC(), ProcessModePolicy.Release).restore(file)
         restored <- new PostgresLedgerRepository(target).driverRecords(operator.project)
         record = restored.head
         _ <- assertIO(record.state == DriverState.Off && record.stopped.exists(_.reason == DriverStop.RestoredArchive) && record.bind.isEmpty &&
@@ -97,7 +97,7 @@ final class ProjectArchivesPostgres extends SpecZIO with AssertZIO {
           Using.resource(connection.createStatement())(_.execute(s"CREATE SCHEMA $schema")); ()
         })
         _ <- target.initialize
-        restored <- new PostgresProjectArchives(target, Clock.systemUTC()).restore(file).either
+        restored <- new PostgresProjectArchives(target, Clock.systemUTC(), ProcessModePolicy.Release).restore(file).either
         _ <- ZIO.attempt(Files.deleteIfExists(file))
         _ <- assertIO(restored.map(_.project) == Right(owner.project))
         item <- new PostgresLedgerRepository(target).transact(owner.project)(tx => tx.get(decision.id))
@@ -130,7 +130,7 @@ final class ProjectArchivesPostgres extends SpecZIO with AssertZIO {
           Using.resource(connection.createStatement())(_.execute(s"CREATE SCHEMA $schema")); ()
         })
         _ <- target.initialize
-        restored <- new PostgresProjectArchives(target, Clock.systemUTC()).restore(file).either
+        restored <- new PostgresProjectArchives(target, Clock.systemUTC(), ProcessModePolicy.Release).restore(file).either
         _ <- ZIO.attempt(Files.deleteIfExists(file))
         _ <- assertIO(restored.map(_.entries) == Right(manifest.entries))
         copy <- new PostgresUsageRepository(target).read(owner.project)(reader => (reader.span(span.id), reader.spans(filter), reader.cursor))
@@ -145,7 +145,7 @@ final class ProjectArchivesPostgres extends SpecZIO with AssertZIO {
         val host = owner.copy(actor = owner.actor.copy(role = Role.Collector))
         val overhead = Assignment(AssignmentId(UUID.randomUUID()), owner.project, Set.empty, Attribution.Unattributed, None, None)
         val governing = Attempt(AttemptId(UUID.randomUUID()), overhead.id, None, owner.actor.session, Role.Governor, Harness.Claude,
-          "provider", "model", collector, 1000, UsagePhase.Govern)
+          "provider", "model", collector, 1000, UsagePhase.Govern, None)
         service.initialize(owner, name) *> usage.assign(host, overhead) *> usage.start(host, governing).as(owner.project)
       }
       def backup(id: ProjectId): IO[Throwable, Either[Throwable, BackupManifest]] = for {
@@ -180,12 +180,172 @@ final class ProjectArchivesPostgres extends SpecZIO with AssertZIO {
           Using.resource(connection.createStatement())(_.execute(s"CREATE SCHEMA $schema")); ()
         })
         _ <- target.initialize
-        restored <- new PostgresProjectArchives(target, Clock.systemUTC()).restore(file).either
+        restored <- new PostgresProjectArchives(target, Clock.systemUTC(), ProcessModePolicy.Release).restore(file).either
         _ <- ZIO.attempt(Files.deleteIfExists(file))
         _ <- assertIO(restored.map(_.entries) == Right(manifest.entries))
         copy <- new PostgresLedgerRepository(target).transact(operator.project)(_.setting(ProjectSettingKind.Requirements))
         _ <- assertIO(written.revision == Revision(2) && written.change.exists(_.actor == operator.actor) &&
           copy.contains(StoredSetting(written.revision, ProjectSetting.Requirements(written.text), operator.actor, written.change.get.at)))
+      } yield ()
+    }
+
+    "I30: round-trip the project's process mode beside its standing requirements, and refuse a mode the write path refuses" in {
+      (service: LedgerService[IO], database: LedgerDatabase, config: DatabaseConfig, archives: ProjectArchives) =>
+      val separator = if (config.url.contains("?")) "&" else "?"
+      def fresh: IO[Throwable, LedgerDatabase] = {
+        val schema = "cq_restore_" + UUID.randomUUID().toString.replace("-", "")
+        val target = new LedgerDatabase(config.copy(url = config.url + separator + "currentSchema=" + schema))
+        ZIO.attemptBlocking(Using.resource(DriverManager.getConnection(config.url, config.user, config.password)) { connection =>
+          Using.resource(connection.createStatement())(_.execute(s"CREATE SCHEMA $schema")); ()
+        }) *> target.initialize.as(target)
+      }
+      // A hand-edited archive is reproduced by editing the stored row before the backup: backup copies the table as it is.
+      def archived(body: Option[ProjectSetting], modes: ProcessModePolicy): IO[Throwable, (Scope, ProjectMode, Either[Throwable, BackupManifest], LedgerDatabase)] = {
+        val operator = Scope(ProjectId(UUID.randomUUID()), Actor("operator", SessionId(UUID.randomUUID()), Role.Human))
+        for {
+          _ <- service.initialize(operator, "archived mode")
+          _ <- service.replaceRequirements(operator, Revision(0), "Every change carries a focused test.")
+          written <- service.replaceMode(operator, Revision(0), ProjectSetting.Mode(ProcessMode.CrossCutting, false))
+          _ <- ZIO.foreachDiscard(body) { value =>
+            database.transaction { connection =>
+              new Jdbc(connection).execute("UPDATE cq_project_settings SET body = ?::jsonb WHERE project_id = ? AND kind = 'Mode'") { s =>
+                s.setString(1, Wire.encode(ProjectSetting_JsonCodec, value)); s.setObject(2, operator.project.value)
+              }
+            }.flatMap(edited => assertIO(edited == 1))
+          }
+          file <- ZIO.attempt(Files.createTempFile("cq-archive-", ".zip"))
+          manifest <- archives.backup(operator.project, file)
+          _ <- assertIO(manifest.entries.last.table == BackupTable.Settings && manifest.entries.last.rows == 2)
+          target <- fresh
+          restored <- new PostgresProjectArchives(target, Clock.systemUTC(), modes).restore(file).either
+          _ <- ZIO.attempt(Files.deleteIfExists(file))
+        } yield (operator, written, restored, target)
+      }
+      val withheld = new ProcessModePolicy(false)
+      val delivered = new ProcessModePolicy(true)
+      for {
+        kept <- archived(None, withheld)
+        (operator, written, restored, target) = kept
+        _ <- assertIO(restored.isRight)
+        copy <- new PostgresLedgerRepository(target).transact(operator.project)(tx => ProjectSettingKind.values.toList.map(tx.setting))
+        _ <- assertIO(copy(1).contains(StoredSetting(Revision(1), ProjectSetting.Mode(ProcessMode.CrossCutting, false), operator.actor, written.change.get.at)) &&
+          copy(0).exists(_.value == ProjectSetting.Requirements("Every change carries a focused test.")))
+        misplaced = ProjectSetting.Requirements("A requirements document in the mode row")
+        // A release that withholds the YOLO mode refuses an archive holding it; one that delivers it restores the mode and its exemption
+        // as stored, and still refuses an exemption stored with another mode.
+        refused <- ZIO.foreach(List[(ProjectSetting, ProcessModePolicy)](ProjectSetting.Mode(ProcessMode.Yolo, false) -> withheld,
+          ProjectSetting.Mode(ProcessMode.Yolo, true) -> withheld, ProjectSetting.Mode(ProcessMode.CrossCutting, true) -> withheld, misplaced -> withheld,
+          ProjectSetting.Mode(ProcessMode.CrossCutting, true) -> delivered, misplaced -> delivered))((body, modes) => archived(Some(body), modes))
+        _ <- ZIO.foreachDiscard(List(ProjectSetting.Mode(ProcessMode.Yolo, false), ProjectSetting.Mode(ProcessMode.Yolo, true))) { body =>
+          for {
+            outcome <- archived(Some(body), delivered)
+            _ <- ZIO.attempt(assert(outcome._3.isRight, outcome._3.left.map(_.getMessage).toString))
+            stored <- new PostgresLedgerRepository(outcome._4).transact(outcome._1.project)(_.setting(ProjectSettingKind.Mode))
+            _ <- assertIO(stored.contains(StoredSetting(Revision(1), body, outcome._1.actor, outcome._2.change.get.at)))
+          } yield ()
+        }
+        unavailable = "The YOLO cross-cutting mode is not available in this release"
+        exemption = "Self-review without configured checks can be allowed only in the YOLO cross-cutting mode; the requested mode is Cross-cutting"
+        kind = "Archive project setting kind disagrees with its content"
+        _ <- ZIO.foreachDiscard(refused.zip(List(unavailable, unavailable, s"$exemption. $unavailable", kind, exemption, kind))) { case ((scope, _, outcome, schema), reason) =>
+          for {
+            _ <- ZIO.attempt(assert(outcome.left.toOption.contains(DomainFailure(Fault.Invalid(reason))), outcome.left.map(_.getMessage).toString))
+            projects <- new PostgresLedgerRepository(schema).projects(None, 200)
+            _ <- assertIO(!projects.projects.exists(_.id == scope.project))
+          } yield ()
+        }
+      } yield ()
+    }
+
+    "I17: round-trip the project's agent configuration without the installation's and refuse one that the write path refuses" in {
+      (service: LedgerService[IO], repository: LedgerRepository[IO], config: DatabaseConfig, archives: ProjectArchives) =>
+      val separator = if (config.url.contains("?")) "&" else "?"
+      def fresh: IO[Throwable, LedgerDatabase] = {
+        val schema = "cq_restore_" + UUID.randomUUID().toString.replace("-", "")
+        val target = new LedgerDatabase(config.copy(url = config.url + separator + "currentSchema=" + schema))
+        ZIO.attemptBlocking(Using.resource(DriverManager.getConnection(config.url, config.user, config.password)) { connection =>
+          Using.resource(connection.createStatement())(_.execute(s"CREATE SCHEMA $schema")); ()
+        }) *> target.initialize.as(target)
+      }
+      // A hand-edited archive is reproduced by storing the row past the service: backup copies the table as it is.
+      def archived(text: String): IO[Throwable, (Scope, StoredSetting, Either[Throwable, BackupManifest], LedgerDatabase)] = {
+        val operator = Scope(ProjectId(UUID.randomUUID()), Actor("operator", SessionId(UUID.randomUUID()), Role.Human))
+        val stored = StoredSetting(Revision(3), ProjectSetting.Agents(text), operator.actor, 1700000000000L)
+        for {
+          _ <- service.initialize(operator, "archived agents")
+          _ <- repository.transact(operator.project)(_.putSetting(stored))
+          file <- ZIO.attempt(Files.createTempFile("cq-archive-", ".zip"))
+          manifest <- archives.backup(operator.project, file)
+          _ <- assertIO(manifest.entries.last.table == BackupTable.Settings && manifest.entries.last.rows == 1)
+          target <- fresh
+          restored <- new PostgresProjectArchives(target, Clock.systemUTC(), ProcessModePolicy.Release).restore(file).either
+          _ <- ZIO.attempt(Files.deleteIfExists(file))
+        } yield (operator, stored, restored, target)
+      }
+      for {
+        kept <- archived("defaults: { roles: { worker: claude:sonnet } } # λ😀\n")
+        (operator, stored, restored, target) = kept
+        _ <- ZIO.attempt(assert(restored.isRight, restored.toString))
+        current <- service.agents(operator)
+        source <- service.replaceAgents(operator, AgentsScope.Installation(), current.installation.revision, s"# ${operator.project.value}\n")
+        again <- archived("defaults: { roles: { explorer: claude:haiku } }\n")
+        copy <- new PostgresLedgerRepository(target).transact(operator.project)(tx => tx.setting(ProjectSettingKind.Agents) -> tx.installationSetting(InstallationSettingKind.Agents))
+        // The installation's layer stays with its server: the archive of a project of a server that has one restores without it.
+        defaults <- new PostgresLedgerRepository(again._4).transact(again._1.project)(tx => tx.setting(ProjectSettingKind.Agents) -> tx.installationSetting(InstallationSettingKind.Agents))
+        _ <- assertIO(copy == (Some(stored), None) && source.installation.revision.value > 0 && again._3.isRight && defaults == (Some(again._2), None))
+        reasons = List("defaults: [" -> "Agent configuration has problems: 1:12: a list or mapping is not closed",
+          "defaults: { roles: { worker: { all: [claude:sonnet], min: 1 } } }" ->
+            "Agent configuration has problems: 1:30: the worker role takes a model reference or a strategy; only the reviewer role takes a panel",
+          "#" + "x" * LedgerPolicy.MaxConfigBytes -> s"Agent configuration exceeds ${LedgerPolicy.MaxConfigBytes} bytes: ${LedgerPolicy.MaxConfigBytes + 1} supplied")
+        refused <- ZIO.foreach(reasons.map(_._1))(archived)
+        _ <- ZIO.foreachDiscard(refused.zip(reasons.map(_._2))) { case ((scope, _, outcome, schema), reason) =>
+          for {
+            _ <- ZIO.attempt(assert(outcome.left.toOption.contains(DomainFailure(Fault.Invalid(reason))), outcome.left.map(_.getMessage).toString))
+            projects <- new PostgresLedgerRepository(schema).projects(None, 200)
+            _ <- assertIO(!projects.projects.exists(_.id == scope.project))
+          } yield ()
+        }
+      } yield ()
+    }
+
+    "I17: refuse an archive whose manifest states the schema identity of the release 63db1c2, which this release's schema no longer has" in {
+      (service: LedgerService[IO], config: DatabaseConfig, archives: ProjectArchives) =>
+      // The schema identity of the release 63db1c2, the last one whose stored Attempt has no `effort`. Restore copies usage rows
+      // undecoded, so the schema identity of the manifest is what keeps such rows out of a database whose readers require the field.
+      val earlier = "f0aaf1d080e961fdd09b6a098cbcaac3e108afca1af1df2a4515fa03ff924945"
+      val operator = Scope(ProjectId(UUID.randomUUID()), Actor("operator", SessionId(UUID.randomUUID()), Role.Human))
+      val schema = "cq_restore_" + UUID.randomUUID().toString.replace("-", "")
+      val separator = if (config.url.contains("?")) "&" else "?"
+      val target = new LedgerDatabase(config.copy(url = config.url + separator + "currentSchema=" + schema))
+      def restated(source: java.nio.file.Path, destination: java.nio.file.Path): Unit =
+        Using.resources(new java.util.zip.ZipInputStream(Files.newInputStream(source)), new java.util.zip.ZipOutputStream(Files.newOutputStream(destination))) { (input, output) =>
+          Iterator.continually(input.getNextEntry).takeWhile(_ != null).foreach { entry =>
+            val bytes = input.readAllBytes()
+            output.putNextEntry(new java.util.zip.ZipEntry(entry.getName))
+            output.write(if (entry.getName != "manifest.json") bytes else {
+              val manifest = Wire.decode(BackupManifest_JsonCodec, new String(bytes, java.nio.charset.StandardCharsets.UTF_8))
+              Wire.encode(BackupManifest_JsonCodec, manifest.copy(schemaSha256 = earlier)).getBytes(java.nio.charset.StandardCharsets.UTF_8)
+            })
+            output.closeEntry()
+          }
+        }
+      for {
+        _ <- assertIO(SchemaIdentity.current().sha256 != earlier)
+        _ <- service.initialize(operator, "earlier release")
+        file <- ZIO.attempt(Files.createTempFile("cq-archive-", ".zip"))
+        old <- ZIO.attempt(Files.createTempFile("cq-archive-earlier-", ".zip"))
+        _ <- archives.backup(operator.project, file)
+        _ <- ZIO.attempt(restated(file, old))
+        _ <- ZIO.attemptBlocking(Using.resource(DriverManager.getConnection(config.url, config.user, config.password)) { connection =>
+          Using.resource(connection.createStatement())(_.execute(s"CREATE SCHEMA $schema")); ()
+        })
+        _ <- target.initialize
+        restorer = new PostgresProjectArchives(target, Clock.systemUTC(), ProcessModePolicy.Release)
+        refused <- restorer.restore(old).either
+        accepted <- restorer.restore(file).either
+        _ <- ZIO.attempt { Files.deleteIfExists(file); Files.deleteIfExists(old) }
+        _ <- ZIO.attempt(assert(refused.left.toOption.contains(DomainFailure(Fault.Invalid("Archive does not match the current CQ schema"))), refused.map(_.project).toString))
+        _ <- ZIO.attempt(assert(accepted.isRight, accepted.toString))
       } yield ()
     }
 
@@ -209,7 +369,7 @@ final class ProjectArchivesPostgres extends SpecZIO with AssertZIO {
           _ <- assertIO(edited == 1)
           file <- ZIO.attempt(Files.createTempFile("cq-archive-", ".zip"))
           _ <- archives.backup(operator.project, file)
-          restored <- new PostgresProjectArchives(target, Clock.systemUTC()).restore(file).either
+          restored <- new PostgresProjectArchives(target, Clock.systemUTC(), ProcessModePolicy.Release).restore(file).either
           _ <- ZIO.attempt(Files.deleteIfExists(file))
           _ <- ZIO.attempt(assert(restored.left.exists { case DomainFailure(_: Fault.Invalid) => true; case _ => false }, s"$change: ${restored.map(_.project)}"))
           copy <- new PostgresLedgerRepository(target).projects(None, 200)

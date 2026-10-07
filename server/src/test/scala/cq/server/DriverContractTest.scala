@@ -249,9 +249,9 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
       members = created.items
       claim <- service.acquire(w.governor, ClaimId(uuid), members.map(_.id).toSet, 300000)
       governing <- usage.assign(collector, Assignment(AssignmentId(uuid), w.project, Set.empty, Attribution.Unattributed, None, None))
-      parent <- usage.start(collector, Attempt(AttemptId(uuid), governing.id, None, w.governor.actor.session, Role.Governor, Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Govern))
+      parent <- usage.start(collector, Attempt(AttemptId(uuid), governing.id, None, w.governor.actor.session, Role.Governor, Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Govern, None))
       assignment <- usage.assign(collector, Assignment(AssignmentId(uuid), w.project, claim.members, Attribution.Shared, Some(uuid), None))
-      attempt <- usage.start(collector, Attempt(AttemptId(uuid), assignment.id, Some(parent.id), w.governor.actor.session, Role.Planner, Harness.Codex, "fixture", "fixture", "fixture", 1001, UsagePhase.Plan))
+      attempt <- usage.start(collector, Attempt(AttemptId(uuid), assignment.id, Some(parent.id), w.governor.actor.session, Role.Planner, Harness.Codex, "fixture", "fixture", "fixture", 1001, UsagePhase.Plan, None))
       dispatch = DispatchRequest(RequestId(uuid), DispatchWork.Planner(), Harness.Codex, members, Nil, Nil, None, claim.fence, HostLimits(3000, 1000, 300, 2000, 262144))
       report = ChildReport.Plan(members.map(ref => PlanMember(ref.id, PlanDisposition.Proposed, "Proposed next step")),
         Some(LedgerProposal(mutations(members), "Apply the proposed next step")), Nil)
@@ -323,7 +323,7 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
   private def host(service: LedgerService[IO], w: World, runtime: Runtime[Any], quiescent: () => Boolean): WorkflowActivations =
     new WorkflowActivations(new DriverSessionClient(new SessionApi(service, w.governor, runtime, _ => false), w.project),
       () => if (quiescent()) Nil else List("child attempt fixture (Running)"),
-      (id, request, requirements, cycle) => WorkflowActivation(id, WorkflowContext(request, "Fixture instructions", None), requirements, cycle))
+      (id, request, requirements, cycle) => WorkflowActivation(id, WorkflowContext(request, "Fixture instructions", None, ProcessMode.Rigorous), requirements, cycle))
   private def activation(text: String, project: ProjectId): (RequestId, WorkflowRequest, Option[CycleToken]) = {
     val (workflow, token) = submitted(project, text, invocation(text))
     (RequestId(uuid), workflow, Some(token))
@@ -843,6 +843,13 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
         resolved <- after("resolved", List((ChildEnd.Retryable, Some("input"), fault), (ChildEnd.Admitted, Some("input"), None)))
         abandoned <- after("abandoned", List((ChildEnd.Retryable, Some("input"), fault), (ChildEnd.Cancelled, Some("input"), None)))
         _ <- assertIO(List(none, admitted, cancelled, unknown, deferred, unselected, resolved, abandoned).forall(quiescent))
+        // An abstained attempt is recorded, and is no failed input to retry: the drive does not continue on it.
+        abstained <- after("abstained", List((ChildEnd.Abstained, Some("input"), Some("Abstained (Quota): Quota exceeded. Check your plan and billing details."))))
+        _ <- assertIO(abstained match {
+          case DriverReply.Stop(DriverStopped(DriverStop.Failure, detail), _, _) =>
+            detail.startsWith("No configured model could run ") && detail.endsWith(": Abstained (Quota): Quota exceeded. Check your plan and billing details.")
+          case _ => false
+        })
         // One retryable input among others continues the drive, naming it.
         mixed <- after("mixed", List((ChildEnd.Admitted, Some("other"), None), (ChildEnd.Retryable, Some("input"), fault)))
         _ <- assertIO(mixed match { case DriverReply.Continue(_, value, List(message)) => value.cycle.exists(_.number == 2) && message.contains("its work on G"); case _ => false })
@@ -887,6 +894,73 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
         late <- act(service, repeating.governor, DriverSession.Conclude(cycle.cycle, outcome))
         off <- status(service, repeating, repeatKey)
         _ <- assertIO(late.isInstanceOf[DriverReply.Lineage] && off.flatMap(_.stopped).contains(expected))
+      } yield ()
+    }
+    "I17: stop a drive with Failure when an unchanged cycle left an input no configured model could run, and count no abstention as a failure" in { (service: LedgerService[IO]) =>
+      val w = world
+      val unchanged = "The previous cycle changed nothing in the advanceable set, its context or its readiness"
+      // One driven cycle that changes nothing in the ledger and ends with `attempts`, then the next continuation query.
+      def after(name: String, attempts: List[(ChildEnd, Option[String], Option[String])]): IO[Throwable, (ItemId, DriverReply)] = {
+        val session = w.copy(governor = w.other(Role.Governor))
+        for {
+          root <- create(service, w.operator, goal(name))
+          one <- driven(service, session, claude(name), workset(root))
+          _ <- ZIO.foreachDiscard(attempts)((end, input, fault) => concluded(service, session, one, List(root), end, input, fault))
+          reply <- query(service, session, claude(name))
+        } yield root -> reply
+      }
+      def quiescent(reply: DriverReply): Boolean = reply match { case DriverReply.Stop(DriverStopped(DriverStop.Quiescent, detail), _, _) => detail == unchanged; case _ => false }
+      def failure(reply: DriverReply): Option[String] = reply match { case DriverReply.Stop(DriverStopped(DriverStop.Failure, detail), _, List(message)) if message == "CQ driver stopped (failure): " + detail => Some(detail); case _ => None }
+      def continued(reply: DriverReply): Boolean = reply match { case DriverReply.Continue(_, value, List(message)) => value.cycle.exists(_.number == 2) && message.contains("failed without a result"); case _ => false }
+      val quota = Some("claude sonnet: Quota (usage limit reached); pi zai/glm-5.3: Unavailable (HTTP 529)")
+      val launch = Some("codex gpt-6.1-sol: Launch (version mismatch)")
+      val fault = Some("Process exited with status 1")
+      for {
+        _ <- service.initialize(w.operator, "abstentions")
+        // An abstention followed by an admitted result, a cancellation or an unknown end on the same input is no failure of that input.
+        resolved <- after("abstained-admitted", List((ChildEnd.Abstained, Some("input"), quota), (ChildEnd.Admitted, Some("input"), None)))
+        cancelled <- after("abstained-cancelled", List((ChildEnd.Abstained, Some("input"), quota), (ChildEnd.Cancelled, Some("input"), None)))
+        deferred <- after("abstained-failed", List((ChildEnd.Abstained, Some("input"), quota), (ChildEnd.Failed, Some("input"), fault)))
+        _ <- assertIO(List(resolved, cancelled, deferred).map(_._2).forall(quiescent))
+        // Every attempt on the input abstained: the stop names the items and why no model ran, the last report for the input.
+        alone <- after("abstained", List((ChildEnd.Abstained, Some("input"), quota)))
+        _ <- assertIO(failure(alone._2).contains(s"No configured model could run ${DriverPolicy.reference(alone._1)}: ${quota.get}"))
+        twice <- after("abstained-twice", List((ChildEnd.Abstained, Some("input"), quota), (ChildEnd.Abstained, Some("input"), launch)))
+        _ <- assertIO(failure(twice._2).contains(s"No configured model could run ${DriverPolicy.reference(twice._1)}: ${launch.get}"))
+        several <- after("abstained-inputs", List((ChildEnd.Abstained, Some("input-a"), quota), (ChildEnd.Admitted, Some("other"), None), (ChildEnd.Abstained, Some("input-b"), launch)))
+        _ <- assertIO(failure(several._2).contains(s"No configured model could run ${DriverPolicy.reference(several._1)}: ${quota.get}; ${DriverPolicy.reference(several._1)}: ${launch.get}"))
+        // Abstentions are ignored when an input is judged retryable (Q53), in either order, and a retryable input continues the drive
+        // although another input found no model.
+        before <- after("abstained-retryable", List((ChildEnd.Abstained, Some("input"), quota), (ChildEnd.Retryable, Some("input"), fault)))
+        behind <- after("retryable-abstained", List((ChildEnd.Retryable, Some("input"), fault), (ChildEnd.Abstained, Some("input"), quota)))
+        beside <- after("retryable-beside", List((ChildEnd.Abstained, Some("input-a"), quota), (ChildEnd.Retryable, Some("input-b"), fault)))
+        _ <- assertIO(List(before, behind, beside).map(_._2).forall(continued))
+        // The input that failed once and then found no model is not counted as failing a second time: the stop says no model could run it.
+        session = w.copy(governor = w.other(Role.Governor))
+        key = claude("retried-abstained")
+        root <- create(service, w.operator, goal("retried-abstained"))
+        one <- driven(service, session, key, workset(root))
+        _ <- concluded(service, session, one, List(root), ChildEnd.Retryable, Some("input"), fault)
+        second <- directive(service, session, key)
+        two <- submit(service, session, session.governor, second.directive.text)
+        _ <- concluded(service, session, two, List(root), ChildEnd.Abstained, Some("input"), quota)
+        ended <- query(service, session, key)
+        _ <- assertIO(failure(ended).contains(s"No configured model could run ${DriverPolicy.reference(root)}: ${quota.get}"))
+        // An abstained outcome carries its input fingerprint and the abstention text.
+        other = w.copy(governor = w.other(Role.Governor))
+        target <- create(service, w.operator, goal("abstained-shape"))
+        cycle <- driven(service, other, claude("abstained-shape"), workset(target))
+        request = LineageMember.Request(RequestId(uuid))
+        attempt = AttemptId(uuid)
+        _ <- act(service, other.governor, DriverSession.Inherit(cycle.cycle, LineageMember.Run(cycle.run), request))
+        _ <- act(service, other.governor, DriverSession.Inherit(cycle.cycle, request, LineageMember.Attempt(attempt)))
+        unnamed <- act(service, other.governor, DriverSession.Conclude(cycle.cycle, ChildOutcome(attempt, List(target), ChildEnd.Abstained, None, quota))).either
+        silent <- act(service, other.governor, DriverSession.Conclude(cycle.cycle, ChildOutcome(attempt, List(target), ChildEnd.Abstained, Some("input"), None))).either
+        _ <- assertIO(invalid(unnamed) && invalid(silent))
+        // Unlike a repeated fault, an abstention reported for the active cycle does not stop the drive when it is reported.
+        reported <- act(service, other.governor, DriverSession.Conclude(cycle.cycle, ChildOutcome(attempt, List(target), ChildEnd.Abstained, Some("input"), quota)))
+        running <- status(service, other, claude("abstained-shape"))
+        _ <- assertIO(reported.isInstanceOf[DriverReply.Lineage] && running.exists(_.stopped.isEmpty))
       } yield ()
     }
     "answer Waiting for work in flight only to a caller that accepts it, issuing nothing, and decide the cycle at the stop after it" in { (service: LedgerService[IO]) =>
@@ -2401,6 +2475,51 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
       } yield ()
     }
 
+    "I17: report the end of a member once, although a unit names its attempts again at each of its readings, and follow it again when the session resumes it" in {
+      (service: LedgerService[IO], registry: DriverInspector) =>
+      val w = world
+      val session = w.copy(governor = w.other(Role.Governor))
+      val key = claude("tracker-once")
+      val request = LineageMember.Request(RequestId(uuid))
+      val attempt = LineageMember.Attempt(AttemptId(uuid))
+      val integration = LineageMember.Integration(IntegrationId(uuid))
+      val sent = new java.util.concurrent.ConcurrentLinkedQueue[DriverSession]()
+      def count(matches: PartialFunction[DriverSession, Boolean]): Int = { import scala.jdk.CollectionConverters.*; sent.asScala.count(matches.applyOrElse(_, (_: DriverSession) => false)) }
+      def settled(member: LineageMember): IO[Throwable, Unit] = (ZIO.sleep(zio.Duration.fromMillis(20)) *> ZIO.succeed(registry.get(w.project, key).flatMap(_.cycle)))
+        .repeatUntil(_.exists(_.lineage.exists(entry => entry.member == member && entry.settled)))
+        .timeoutFail(new IllegalStateException(s"$member was not settled"))(zio.Duration.fromSeconds(30)).unit
+      // Long enough for a follower that has reported its member's end to finish, and for one that should not exist to report.
+      val quiet = ZIO.sleep(Pause.multipliedBy(40))
+      for {
+        _ <- service.initialize(w.operator, "tracker-once")
+        runtime <- ZIO.runtime[Any]
+        root <- create(service, w.operator, goal("tracker-once"))
+        one <- driven(service, session, key, workset(root))
+        run = LineageMember.Run(one.run)
+        tracker = new LineageTracker(new DriverSessionClient(new SessionApi(service, session.governor, runtime, action => { sent.add(action); false }), w.project), _ => (), Pause, Pause, Pause.multipliedBy(4))
+        ended <- zio.Ref.make(Option.empty[LineageOutcome])
+        outcome = ChildOutcome(attempt.id, List(root), ChildEnd.Admitted, Some("input"), None)
+        concluded = ZIO.some(LineageOutcome.Concluded(outcome))
+        // The unit is in flight as its request; its first attempt has ended and the host goes on to the next candidate.
+        _ <- tracker.track(one.cycle, run, request, ended.get)
+        _ <- tracker.track(one.cycle, request, attempt, concluded)
+        _ <- settled(attempt) *> quiet
+        // The unit's follower names every attempt of the unit at each reading, the concluded one too.
+        _ <- ZIO.foreachDiscard(1 to 3)(_ => tracker.track(one.cycle, request, attempt, concluded) *> quiet)
+        // A call that names the ended attempt wakes nothing, and the unit's next reading still does not report it again.
+        _ <- tracker.wake(one.cycle, request, attempt) *> tracker.track(one.cycle, request, attempt, concluded) *> quiet
+        _ <- ended.set(Some(LineageOutcome.Settled)) *> settled(request) *> quiet
+        _ <- ZIO.attempt(assert(count { case DriverSession.Inherit(_, _, `attempt`) => true } == 1 && count { case DriverSession.Conclude(_, value) => value.attempt == attempt.id } == 1,
+          sent.toString))
+        // A member whose follower ended is followed again when the session makes the host work on it again.
+        phase <- zio.Ref.make[Option[LineageOutcome]](Some(LineageOutcome.Settled))
+        _ <- tracker.track(one.cycle, run, integration, phase.get)
+        _ <- settled(integration) *> quiet
+        _ <- tracker.resume(one.cycle, run, integration, phase.get) *> quiet
+        _ <- ZIO.attempt(assert(count { case DriverSession.Inherit(_, _, `integration`) => true } == 2 && count { case DriverSession.Settle(_, `integration`) => true } == 2, sent.toString))
+      } yield ()
+    }
+
     "report a member the session resumed as in flight before the resume returns, whatever the tracker read or reported before it" in {
       (service: LedgerService[IO], registry: DriverInspector) =>
       val w = world
@@ -2546,7 +2665,7 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
             message => Unsafe.unsafe { implicit unsafe => runtime.unsafe.run(reports.update(message :: _)).getOrThrowFiberFailure() }, Pause, Pause, Pause.multipliedBy(4))
           finished <- Promise.make[Nothing, Unit]
           run = LineageMember.Run(one.run)
-          _ <- tracker.record(one.cycle, run, dispatch)
+          _ <- tracker.track(one.cycle, run, dispatch, ZIO.some(LineageOutcome.Settled))
           _ <- tracker.track(one.cycle, dispatch, attempt, finished.await.as(Some(LineageOutcome.Settled)))
           _ <- tracker.track(one.cycle, dispatch, attempt, ZIO.some(LineageOutcome.Settled))
           running <- status(ledger, session, key)

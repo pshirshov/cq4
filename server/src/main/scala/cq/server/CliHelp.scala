@@ -23,7 +23,8 @@ Operator commands (readable output by default; add --json for automation):
   restore           Restore a project archive without overwriting an existing ID
   web               Print this project's browser URL
   configure         Install integration for a directly launched harness
-  doctor            Verify commands, server or harness installation without writes
+  agents init       Write a starting agent model configuration from a settings file
+  doctor            Verify commands, server, harness or agent models without writes
   assets export     Generate integration assets for declarative installation
   commands export   Write native CQ workflow commands/skills
 
@@ -135,6 +136,49 @@ Examples: cq status --task T1
           cq status attempts --session SESSION_UUID --json
           cq status outcomes --attempt ATTEMPT_UUID
 """
+      case Some("agents") => """Usage: cq agents init [--settings FILE] [--save installation|project] [--json]
+
+Write an agent model configuration to start from. Every harness of the settings
+file runs its settings model in the frontier, standard and fast tiers. The
+planner, worker and explorer roles run the standard tier of the governing
+harness. The reviewer role of each harness goes to the other harnesses of the
+settings file first, in its order, and to the governing harness only when they
+abstain. With one harness in the settings file every review is a self-review,
+and the command says so. Without --save the text is printed and nothing is
+changed.
+  --settings FILE   Harness settings; otherwise CQ_SETTINGS
+  --save LAYER      Save the text as the configuration of the installation (the
+                    server's default for every project; operator credentials)
+                    or of this checkout's project. A layer that already holds
+                    a configuration is not replaced.
+
+A session starts a child only on the models the configuration assigns to the
+child's role: a project without any configuration starts none, and the refusal
+names the role to assign. Edit the saved text to assign other models. A roles
+key names a role, or one mode of it as role/mode, which decides that mode
+before the key of the role in the same place:
+  reviewer/plan: codex:@frontier
+The modes are worker/implement, worker/probe, worker/resolveconflict,
+explorer/investigate, explorer/research, reviewer/candidate, reviewer/plan and
+reviewer/audit. The command writes keys of roles only.
+
+The places are read in this order: the project's harnesses.H.roles, the
+project's defaults.roles, the server's harnesses.H.roles, the server's
+defaults.roles. The first place that holds the key of the mode or the key of
+its role decides, so the key of a role in an earlier place hides the key of a
+mode in a later one. This command writes harnesses.H.roles.reviewer for each
+harness: with
+  harnesses.codex.roles.reviewer and defaults.roles.reviewer/plan
+Codex runs its plan reviews as harnesses.codex.roles.reviewer says, and
+defaults.roles.reviewer/plan decides for no harness that has a reviewer key of
+its own. The configuration is valid; the Agent models dialog and cq doctor
+agents note every such key. Write harnesses.codex.roles.reviewer/plan to give
+Codex its own plan reviewer.
+
+Examples:
+  cq agents init --settings ./cq-settings.json
+  cq agents init --settings ./cq-settings.json --save installation
+"""
       case Some("proposal") => """Usage: cq proposal preview|apply RESULT_UUID [--json]
 
 Preview a stored reviewed proposal or apply it under the current authority.
@@ -184,6 +228,7 @@ are included. Use this for Nix/home-manager; keep configure for imperative use.
       case Some("doctor") => """Usage: cq doctor commands HARNESS [--directory DIR] [--json]
        cq doctor server [--endpoint URL] [--require-settled] [--json]
        cq doctor harness HARNESS --settings FILE --executable FILE --readonly-home DIR [OPTIONS] [--json]
+       cq doctor agents HARNESS --settings FILE [--directory DIR] [--json]
 
 HARNESS is claude, codex or pi. Doctor performs read-only checks.
 It never repairs or writes installations.
@@ -204,9 +249,21 @@ Record Codex hook metadata separately after installing assets. Doctor binds
 the report to current hook bytes, declared version and persisted approvals;
 changed assets require a fresh report. Pi requires persisted project trust;
 the nearest canonical project or parent-folder decision in trust.json applies.
-A Pi launch with --approve saves no decision; /trust in Pi saves one.
+Trust the project once with /trust in Pi and launch without --approve, which saves no decision.
 Without --harness-config (and --trust-report for Codex) Hook trust is Failed.
 File contents and probe output are withheld. Declarative symlinks are accepted.
+agents checks the agent model configuration of this checkout's project when
+HARNESS governs: the server defaults and the project override have no problems
+(a problem is printed with its line:column), each of the planner, worker,
+explorer and reviewer roles resolves, with a check of its own for a mode
+that a role/mode key decides, every harness a resolved model runs on
+has a valid entry in the session settings (--settings), and a model written
+without a provider can take the entry's. A reviewer seat that can run a model
+of HARNESS is reported as self-review in the detail, not as a failure.
+It reads the project file (of --directory, default the current directory) for
+the endpoint and project, and the operator credential as doctor server does.
+Model names are not verified against providers; doctor harness verifies
+executables and trust.
 Any Failed or Unknown check exits 1 after the report; --json emits one value.
 """
       case Some("serve") => """Usage: cq serve

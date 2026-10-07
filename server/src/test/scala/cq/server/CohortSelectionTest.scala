@@ -54,6 +54,7 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
         case Command.Read(ReadInput(_, ReadSelection.History(id, before, limit))) => ledger.history(scope, id, before, limit).map(Result.History.apply)
         case Command.ClaimWork(ClaimInput(_, ClaimAction.Renew(fence, millis))) => ledger.renew(scope, fence, millis).map(Result.Claimed.apply)
         case Command.Requirements(RequirementsInput(_, RequirementsAction.Read())) => ledger.requirements(scope).map(Result.Requirements.apply)
+        case Command.Mode(ModeInput(_, ModeAction.Read())) => ledger.mode(scope).map(Result.Mode.apply)
         case _ => ZIO.fail(new IllegalStateException("Unexpected selection read"))
       }
       Unsafe.unsafe { implicit unsafe => runtime.unsafe.run(effect.either).getOrThrowFiberFailure() } match {
@@ -102,9 +103,9 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
       members <- MilestoneFixture.assigned(ledger, scope, List.fill(count)(task))
       claim <- ledger.acquire(scope, ClaimId(uuid), members.map(_.id).toSet, 300000)
       governing <- usage.assign(collector, Assignment(AssignmentId(uuid), scope.project, Set.empty, Attribution.Unattributed, None, None))
-      parent <- usage.start(collector, Attempt(AttemptId(uuid), governing.id, None, scope.actor.session, Role.Governor, Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Govern))
+      parent <- usage.start(collector, Attempt(AttemptId(uuid), governing.id, None, scope.actor.session, Role.Governor, Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Govern, None))
       assignment <- usage.assign(collector, Assignment(AssignmentId(uuid), scope.project, claim.members, Attribution.Shared, Some(uuid), None))
-      attempt <- usage.start(collector, Attempt(AttemptId(uuid), assignment.id, Some(parent.id), scope.actor.session, Role.Planner, Harness.Codex, "fixture", "fixture", "fixture", 1001, UsagePhase.Plan))
+      attempt <- usage.start(collector, Attempt(AttemptId(uuid), assignment.id, Some(parent.id), scope.actor.session, Role.Planner, Harness.Codex, "fixture", "fixture", "fixture", 1001, UsagePhase.Plan, None))
       dispatch = DispatchRequest(RequestId(uuid), DispatchWork.Planner(), Harness.Codex, members, Nil, Nil, None, claim.fence,
         HostLimits(3000, 1000, 300, 2000, 262144))
       views <- ZIO.foreach(members)(ref => ledger.get(scope, ref.id))
@@ -146,7 +147,7 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
     ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO]): IO[Throwable, Published] = for {
     assignment <- usage.assign(f.collector, Assignment(AssignmentId(uuid), f.scope.project, f.members.map(_.id).toSet,
       if (f.members.size == 1) Attribution.Direct else Attribution.Shared, if (f.members.size == 1) None else Some(uuid), None))
-    attempt <- usage.start(f.collector, Attempt(AttemptId(uuid), assignment.id, Some(f.parent), f.scope.actor.session, ChildContracts.role(work), Harness.Codex, "fixture", "fixture", "fixture", 1002, ChildContracts.phase(work)))
+    attempt <- usage.start(f.collector, Attempt(AttemptId(uuid), assignment.id, Some(f.parent), f.scope.actor.session, ChildContracts.role(work), Harness.Codex, "fixture", "fixture", "fixture", 1002, ChildContracts.phase(work), None))
     dispatch = DispatchRequest(RequestId(uuid), work, Harness.Codex, f.members, Nil, Nil, previous.map(_.id), f.fence,
       HostLimits(3000, 1000, 300, 2000, 262144))
     base = previous.flatMap(_.result.candidate).getOrElse(f.base)
@@ -495,6 +496,62 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
       } yield ()
     }
 
+    "I17: take the worst verdict of several reviews of one candidate for each member, so a disputed candidate continues as D113 continues a mixed review" in {
+      (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO]) => for {
+        runtime <- ZIO.runtime[Any]
+        fixture <- assessed(ledger, usage, artifacts, admissions, 2, CohortCompatibility.Compatible)
+        reads = new EvidenceApi(api(ledger, fixture.scope, runtime), artifacts, admissions, fixture.scope, runtime)
+        input = request(fixture.members.map(_.id).toSet, DispatchWork.Worker(WorkerMode.Implement))
+        worker <- publish(fixture, input.work, ChildReport.Work(fixture.members.map(ref =>
+          WorkMember(ref.id, WorkDisposition.CandidateReady, "Candidate", Nil))), None, Nil, ledger, usage, artifacts, admissions)
+        passed <- {
+          val bytes = "passed".getBytes(java.nio.charset.StandardCharsets.UTF_8)
+          val (out, uploads) = NativeArtifacts.binary(fixture.scope.project, worker.result.attempt, "passed", "text/plain", bytes)
+          val spec = WorkspaceSpec(fixture.scope.project, fixture.scope.actor.session, AttemptId(uuid), "/consumer", GitCommit("b" * 40))
+          val job = JobRecord(spec, uuid.toString, JobTarget.Run, JobPhase.Settled,
+            Some(JobExit(Some(0), None, StopReason.Exited, bytes.length.toLong, bytes.length.toLong, true, false)), None, 1, 1, 2)
+          ZIO.foreachDiscard(uploads)(artifacts.upload(fixture.collector, _)) *>
+            artifacts.upload(fixture.collector, ArtifactUpload(fixture.scope.project, ArtifactId(uuid), worker.result.attempt, ArtifactKind.Validation,
+              "application/json", Wire.encode(ValidationObservation_JsonCodec, ValidationObservation(fixture.checks.head, spec.base, job, out, out)))).map(_.id)
+        }
+        review = (verdicts: List[ReviewVerdict]) => publish(fixture, DispatchWork.Reviewer(ReviewerMode.Candidate),
+          ChildReport.Review(fixture.members.zip(verdicts).map((ref, verdict) =>
+            ReviewMember(ref.id, verdict, if (verdict == ReviewVerdict.Accepted) Nil else List("Fix this task"))), None),
+          Some(worker), List(ValidationEvidence(fixture.checks.head.name, ValidationState.Passed, passed, Nil)), ledger, usage, artifacts, admissions)
+        // The seats of one review unit: every review is of the worker's candidate.
+        accepting <- review(List(ReviewVerdict.Accepted, ReviewVerdict.Accepted))
+        agreeing <- review(List(ReviewVerdict.Accepted, ReviewVerdict.Accepted))
+        dissenting <- review(List(ReviewVerdict.ChangesRequested, ReviewVerdict.Accepted))
+        requesting <- review(List(ReviewVerdict.Accepted, ReviewVerdict.ChangesRequested))
+        blocking <- review(List(ReviewVerdict.Accepted, ReviewVerdict.Blocked))
+        selected = (previous: Published, others: List[Published]) => ZIO.attemptBlocking(
+          new CohortPlanner(reads, fixture.scope, fixed(fixture.base), fixture.checks, new CohortProgress, new OperatorRequirements(""))
+            .plan(input.copy(request = RequestId(uuid), previous = Some(previous.id), artifacts = others.map(_.id)), ArtifactId(uuid)))
+        continues = (plan: CohortPlan, previous: Published) => assert(plan.evidence.decision.choices.map(choice => (choice.work, choice.members, choice.previous, choice.reason)) ==
+          List((input.work, fixture.members, Some(previous.id), CohortReason.ExactPrevious)) && plan.evidence.decision.counts.excluded == 0, plan.evidence.toString)
+        // The first member is accepted by one review and not by the other: changes are requested for it, the second stays accepted, and
+        // the whole group continues on the candidate, whichever of the two reviews is the previous result.
+        disputed <- selected(dissenting, List(accepting))
+        _ <- ZIO.attempt(continues(disputed, dissenting))
+        reversed <- selected(accepting, List(dissenting))
+        _ <- ZIO.attempt(continues(reversed, accepting))
+        // Each review requests changes for another member: both are corrected, as one group.
+        crossed <- selected(dissenting, List(requesting, accepting))
+        _ <- ZIO.attempt(continues(crossed, dissenting))
+        // Reviews that agree decide as one of them does.
+        agreed <- selected(accepting, List(agreeing))
+        _ <- assertIO(agreed.evidence.decision.choices.isEmpty && agreed.evidence.decision.counts.excluded == 2 &&
+          agreed.evidence.considered.forall(_.reason == CohortReason.ReviewAccepted))
+        // Blocked is worse than ChangesRequested and than Accepted: the member stays excluded, and nothing continues around it.
+        blocked <- selected(requesting, List(blocking, accepting))
+        _ <- ZIO.attempt(assert(blocked.evidence.decision.choices.isEmpty && blocked.evidence.considered.map(value => (value.members, value.reason)).toSet ==
+          Set((fixture.members.take(1), CohortReason.ReviewAccepted), (fixture.members.drop(1), CohortReason.ReviewBlocked)), blocked.evidence.toString))
+        stopped <- selected(dissenting, List(blocking))
+        _ <- ZIO.attempt(assert(stopped.evidence.decision.choices.isEmpty && stopped.evidence.considered.map(value => (value.members, value.reason)).toSet ==
+          Set((fixture.members.take(1), CohortReason.CandidateContinuity), (fixture.members.drop(1), CohortReason.ReviewBlocked)), stopped.evidence.toString))
+      } yield ()
+    }
+
     "offer a started member again once the integration target advances and reject a start after it moves further" in {
       (ledger: LedgerService[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO]) => for {
         runtime <- ZIO.runtime[Any]
@@ -530,7 +587,7 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
         producer = members.head
         claim <- ledger.acquire(scope, ClaimId(uuid), Set(producer.id), 300000)
         governing <- usage.assign(collector, Assignment(AssignmentId(uuid), scope.project, Set.empty, Attribution.Unattributed, None, None))
-        parent <- usage.start(collector, Attempt(AttemptId(uuid), governing.id, None, scope.actor.session, Role.Governor, Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Govern))
+        parent <- usage.start(collector, Attempt(AttemptId(uuid), governing.id, None, scope.actor.session, Role.Governor, Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Govern, None))
         fixture = Assessed(scope, members, ArtifactId(uuid), Nil, GitCommit("a" * 40), collector, parent.id, claim.fence)
         worker <- publish(fixture, DispatchWork.Worker(WorkerMode.Implement), ChildReport.Work(fixture.members.map(ref =>
           WorkMember(ref.id, WorkDisposition.CandidateReady, "Candidate", Nil))), None, Nil, ledger, usage, artifacts, admissions)
@@ -558,10 +615,10 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
         dispatch = DispatchRequest(choice.id, choice.work, Harness.Codex, choice.members, choice.guidance, choice.artifacts, choice.previous, fixture.fence, choice.limits)
         assembled <- ZIO.attemptBlocking(new InputAssembler(reads, fixture.scope, java.time.Clock.systemUTC(), "").assemble(dispatch))
         _ <- assertIO(assembled.previous.contains(worker.result) && assembled.members.map(view => ItemRevision(view.item.id, view.item.revision)) == expected)
-        subject <- ZIO.attemptBlocking(new WorkflowAssembly(reads, fixture.scope.project, new WorkflowAssets).assemble(WorkflowRequest.Review(worker.id, ReviewerMode.Candidate)))
+        subject <- ZIO.attemptBlocking(new WorkflowAssembly(reads, fixture.scope.project, new WorkflowAssets, SessionOwnership.Attached).assemble(WorkflowRequest.Review(worker.id, ReviewerMode.Candidate)))
         _ <- assertIO(subject.subject.exists(_.members == fixture.members))
         _ <- ZIO.attemptBlocking(new WorkflowExecution(reads, fixture.scope.project, fixture.scope.actor.session, Some(WorkflowRequest.Review(worker.id, ReviewerMode.Candidate)))
-          .authorize(DispatchCommand.Start(dispatch.copy(work = review.work))))
+          .authorize(DispatchCommand.Start(UnitFixture.work(dispatch.copy(work = review.work)))))
         _ <- ledger.change(fixture.scope, ChangeRequest(RequestId(uuid), List(Mutation.Replace(producer.id, revised.item.revision,
           revised.item.draft.copy(body = "Changed requirements"))), List(fixture.fence), "Change the task content"))
         changed <- ledger.get(fixture.scope, producer.id)
@@ -1106,9 +1163,9 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
         collector = f.scope.copy(actor = f.scope.actor.copy(subject = "host", role = Role.Collector))
         claim <- ledger.acquire(f.scope, ClaimId(uuid), choice.members.map(_.id).toSet, 300000)
         governing <- usage.assign(collector, Assignment(AssignmentId(uuid), f.scope.project, Set.empty, Attribution.Unattributed, None, None))
-        parent <- usage.start(collector, Attempt(AttemptId(uuid), governing.id, None, f.scope.actor.session, Role.Governor, Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Govern))
+        parent <- usage.start(collector, Attempt(AttemptId(uuid), governing.id, None, f.scope.actor.session, Role.Governor, Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Govern, None))
         assignment <- usage.assign(collector, Assignment(AssignmentId(uuid), f.scope.project, claim.members, Attribution.Shared, Some(uuid), None))
-        attempt <- usage.start(collector, Attempt(AttemptId(uuid), assignment.id, Some(parent.id), f.scope.actor.session, Role.Planner, Harness.Codex, "fixture", "fixture", "fixture", 1001, UsagePhase.Plan))
+        attempt <- usage.start(collector, Attempt(AttemptId(uuid), assignment.id, Some(parent.id), f.scope.actor.session, Role.Planner, Harness.Codex, "fixture", "fixture", "fixture", 1001, UsagePhase.Plan, None))
         dispatch = DispatchRequest(choice.id, choice.work, Harness.Codex, choice.members, Nil, Nil, None, claim.fence, choice.limits)
         // The ledger changes each item at most once per batch, so one proposal links one Task to the milestone.
         mutations = List(ProposedMutation.Reference(f.tasks.head, Relation.PartOf, f.milestone, true),
@@ -1127,12 +1184,12 @@ abstract class CohortSelectionTest extends SpecZIO with AssertZIO {
         reviewWork = DispatchWork.Reviewer(ReviewerMode.Plan)
         reviewDispatch = DispatchRequest(RequestId(uuid), reviewWork, Harness.Codex, choice.members, Nil, Nil, Some(stored.id), claim.fence, choice.limits)
         _ <- assertIO(CohortAssessmentPolicy.reviewable(dispatch.work, dispatch.members, report))
-        subject <- ZIO.attemptBlocking(new WorkflowAssembly(reads, f.scope.project, new WorkflowAssets).assemble(WorkflowRequest.Review(stored.id, ReviewerMode.Plan)))
+        subject <- ZIO.attemptBlocking(new WorkflowAssembly(reads, f.scope.project, new WorkflowAssets, SessionOwnership.Attached).assemble(WorkflowRequest.Review(stored.id, ReviewerMode.Plan)))
         _ <- assertIO(subject.subject.contains(WorkflowSubject(stored.id, DispatchWork.Planner(), choice.members, None)))
         _ <- ZIO.attemptBlocking(new WorkflowExecution(reads, f.scope.project, f.scope.actor.session, Some(WorkflowRequest.Review(stored.id, ReviewerMode.Plan)))
-          .authorize(DispatchCommand.Start(reviewDispatch)))
+          .authorize(DispatchCommand.Start(UnitFixture.work(reviewDispatch))))
         reviewAssignment <- usage.assign(collector, Assignment(AssignmentId(uuid), f.scope.project, claim.members, Attribution.Shared, Some(uuid), None))
-        reviewAttempt <- usage.start(collector, Attempt(AttemptId(uuid), reviewAssignment.id, Some(parent.id), f.scope.actor.session, Role.Reviewer, Harness.Codex, "fixture", "fixture", "fixture", 1002, UsagePhase.Review))
+        reviewAttempt <- usage.start(collector, Attempt(AttemptId(uuid), reviewAssignment.id, Some(parent.id), f.scope.actor.session, Role.Reviewer, Harness.Codex, "fixture", "fixture", "fixture", 1002, UsagePhase.Review, None))
         review = ChildResult(reviewAttempt.id, reviewDispatch, GitCommit("a" * 40), None,
           ChildReport.Review(choice.members.map(ref => ReviewMember(ref.id, ReviewVerdict.Accepted, Nil)), None), Nil, RetainedEvidence(Nil, Nil))
         reviewed <- artifacts.upload(collector, ArtifactUpload(f.scope.project, ArtifactId(uuid), reviewAttempt.id, ArtifactKind.Result, "application/json",

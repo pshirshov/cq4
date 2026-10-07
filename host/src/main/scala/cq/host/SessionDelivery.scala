@@ -1,7 +1,7 @@
 package cq.host
 
 import cq.api.*
-import cq.core.{DomainFailure, Scope, WorkspaceService}
+import cq.core.{DomainFailure, GoverningWorkPolicy, Scope, WorkspaceService}
 import java.nio.file.{Files, LinkOption, Path}
 import java.time.Clock
 import java.util.UUID
@@ -61,14 +61,16 @@ final class SessionDelivery(journal: JobRepository, workspaces: WorkspaceService
   private val MaxRecordBytes = 64 * 1024
   private val MaxGaps = 32
   import SessionDelivery.Interrupted
-  private final case class Publication(assignment: Assignment, attempt: Attempt, version: String, retainedOutputBytes: Option[Int], queue: DeliveryQueue, child: Option[ChildPublicationDelivery])
+  /** `own`: the attempt is work of the governing session itself, for which no process ran. */
+  private final case class Publication(assignment: Assignment, attempt: Attempt, version: Option[String], retainedOutputBytes: Option[Int], queue: DeliveryQueue,
+    child: Option[ChildPublicationDelivery], own: Boolean)
 
   private final case class Inventory(publications: List[Publication], incompleteTickets: List[Path])
 
   private def inventory(directory: Path, run: SupervisorRun): Inventory = {
     require(run.assignment.project == run.project.project && run.attempt.assignment == run.assignment.id &&
       run.attempt.parent.isEmpty && run.attempt.role == Role.Governor, "Invalid governing publication identity")
-    val governing = Publication(run.assignment, run.attempt, run.harnessVersion, None, new DeliveryQueue(directory.resolve("delivery")), None)
+    val governing = Publication(run.assignment, run.attempt, Some(run.harnessVersion), None, new DeliveryQueue(directory.resolve("delivery")), None, false)
     val root = directory.resolve("children")
     val (children, incomplete) = if (!Files.exists(root)) (Nil, Nil) else {
       require(Files.isDirectory(root) && !Files.isSymbolicLink(root), "Child delivery root must be a directory")
@@ -91,22 +93,25 @@ final class SessionDelivery(journal: JobRepository, workspaces: WorkspaceService
         require(child.getFileName.toString == ticket.attempt.id.value.toString && ticket.attempt.session == run.attempt.session &&
           ticket.attempt.parent.contains(run.attempt.id) && ticket.assignment.project == run.project.project &&
           ticket.attempt.assignment == ticket.assignment.id && ticket.assignment.members == ticket.request.members.map(_.id).toSet &&
-          ticket.attempt.role == ChildContracts.role(ticket.request.work) && ticket.attempt.harness == ticket.profile.harness &&
-          ticket.attempt.model == ticket.profile.model && ticket.attempt.provider == ticket.profile.provider,
+          // The attempt of a child has the role of its work; the governing session's own attempt does the work of a Worker or a Reviewer.
+          (if (GoverningTickets.own(ticket)) GoverningWorkPolicy.permits(ticket.request.work) && ticket.profile.isEmpty
+           else ticket.attempt.role == ChildContracts.role(ticket.request.work)) && ticket.attempt.harness == ticket.request.harness &&
+          ticket.profile.forall(_.harness == ticket.attempt.harness),
           "Child delivery ticket has another assignment or governing owner")
-        Publication(ticket.assignment, ticket.attempt, ticket.profile.version, Some(ticket.request.limits.retainedOutputBytes), new DeliveryQueue(child.resolve("delivery")),
-          Some(new ChildPublicationDelivery(child, ticket)))
+        Publication(ticket.assignment, ticket.attempt, HarnessUsage.launchable(ticket.profile).map(_.version), Some(ticket.request.limits.retainedOutputBytes), new DeliveryQueue(child.resolve("delivery")),
+          Some(new ChildPublicationDelivery(child, ticket)), GoverningTickets.own(ticket))
       }
       (publications, incomplete)
     }
     Inventory(governing :: children, incomplete)
   }
 
-  private def quarantine(owner: Scope, attempt: AttemptId): Task[Unit] =
+  private def quarantine(owner: Scope, attempt: AttemptId, reason: String): Task[Unit] =
     workspaces.get(owner, attempt).flatMap { value =>
       if (value.admission != WorkspaceAdmission.Open) ZIO.unit
-      else workspaces.quarantine(owner, attempt, Interrupted).unit
+      else workspaces.quarantine(owner, attempt, reason).unit
     }.catchSome { case DomainFailure(_: Fault.Missing) => ZIO.unit }
+  private def quarantine(owner: Scope, attempt: AttemptId): Task[Unit] = quarantine(owner, attempt, Interrupted)
 
   private def snapshot(path: Path, bound: => Int): (Array[Byte], List[String]) =
     if (Files.exists(path)) (NativeTranscript.retained(path, bound), Nil) else (Array.emptyByteArray, List(s"Native ${path.getFileName} was absent at reconciliation"))
@@ -122,6 +127,15 @@ final class SessionDelivery(journal: JobRepository, workspaces: WorkspaceService
         HostDelivery.Usage(HostUsageInput(project, HostUsage.Finish(outcome)))))
       return
     }
+    if (publication.own) {
+      // No process ran for the session's own work: there is no output to retain and no usage to read.
+      val outcome = AttemptOutcome(RequestId(NativeArtifacts.id(publication.attempt.id, "outcome").value), publication.attempt.id,
+        AttemptState.Unknown, math.max(publication.attempt.startedAt, clock.millis()), List(GoverningTickets.Interrupted), None)
+      publication.queue.commit(List(HostDelivery.Usage(HostUsageInput(publication.assignment.project, HostUsage.Assign(publication.assignment))),
+        HostDelivery.Usage(HostUsageInput(publication.assignment.project, HostUsage.Start(publication.attempt))),
+        HostDelivery.Usage(HostUsageInput(publication.assignment.project, HostUsage.Finish(outcome)))))
+      return
+    }
     val attempt = publication.attempt
     val project = publication.assignment.project
     val payload = directory.resolve("payload").resolve(attempt.id.value.toString)
@@ -133,8 +147,10 @@ final class SessionDelivery(journal: JobRepository, workspaces: WorkspaceService
     val (nativeId, outParts) = NativeArtifacts.binary(project, attempt.id, "stdout", "application/x-ndjson", stdout)
     val (_, errParts) = NativeArtifacts.binary(project, attempt.id, "stderr", "application/octet-stream", stderr)
     val collectedAt = math.max(attempt.startedAt, clock.millis())
-    val usage = Using.resource(NativeTranscript.stream(payload.resolve("stdout")))(new HarnessUsage().collect(_, UsageCollectionRequest(attempt.id,
-      attempt.harness, publication.version, UsageOrigin.Fresh, collectedAt, nativeId)))
+    val usage = publication.version.fold(HarnessUsage.Unlaunched) { version =>
+      Using.resource(NativeTranscript.stream(payload.resolve("stdout")))(new HarnessUsage().collect(_, UsageCollectionRequest(attempt.id,
+        attempt.harness, version, UsageOrigin.Fresh, collectedAt, nativeId)))
+    }
     def entry(value: HostUsage): HostDelivery = HostDelivery.Usage(HostUsageInput(project, value))
     val observations = usage.meters.flatMap { batch =>
       entry(HostUsage.Meter(batch.meter)) :: batch.observations.map { upload =>
@@ -166,6 +182,16 @@ final class SessionDelivery(journal: JobRepository, workspaces: WorkspaceService
     journal.replace(record, next)
     next
   }
+
+  /** The workspaces the governing session of `directory` opened for its own work and the host has not removed, oldest attempt first by
+    * identity: what its operator finds retained there. */
+  def ownWorkspaces(directory: Path, owner: Scope): Task[List[WorkspaceRecord]] = ZIO.attemptBlocking {
+    val root = directory.resolve("children")
+    val tickets = if (!Files.isDirectory(root, LinkOption.NOFOLLOW_LINKS)) Nil else Using.resource(Files.list(root))(_.iterator().asScala.toList)
+      .map(_.resolve("ticket.json")).filter(Files.exists(_, LinkOption.NOFOLLOW_LINKS)).map(HostFiles.read(_, DispatchTicket_JsonCodec, MaxRecordBytes))
+    tickets.filter(GoverningTickets.workspace).map(_.attempt.id).sortBy(_.value.toString)
+  }.flatMap(ZIO.foreach(_)(attempt => workspaces.get(owner, attempt).map(Some(_)).catchSome { case DomainFailure(_: Fault.Missing) => ZIO.succeed(None) }))
+    .map(_.flatten.filter(_.admission != WorkspaceAdmission.Removed))
 
   /** Records every job the ended owner left unsettled as `Uncertain`, because nothing observed its termination, and returns the
     * jobs it changed. `flush` does the same before it delivers; this part needs no server. */
@@ -243,7 +269,9 @@ final class SessionDelivery(journal: JobRepository, workspaces: WorkspaceService
         } yield receipt.acknowledged
         case None => for {
           committed <- ZIO.attemptBlocking(publication.queue.finalized)
-          _ <- if (committed) ZIO.unit else quarantine(owner, publication.attempt.id) *> ZIO.attemptBlocking(reconcile(directory, publication, run.ownership))
+          // A workspace the governing session had open is kept for the operator with what the session wrote in it.
+          _ <- if (committed) ZIO.unit else quarantine(owner, publication.attempt.id, if (publication.own) GoverningTickets.Abandoned else Interrupted) *>
+            ZIO.attemptBlocking(reconcile(directory, publication, run.ownership))
           count <- ZIO.attemptBlocking(publication.queue.flush(api))
         } yield count
       }).either

@@ -143,17 +143,18 @@ session files or runtime directories.
 Claude requires `--harness-config` pointing at the global `.claude.json` with
 project trust accepted; disabled hooks fail.
 
-Pi requires `--harness-config /absolute/private/pi-agent/trust.json`. Both
-supported versions gate project extensions on trust. The nearest canonical
+Pi requires `--harness-config /absolute/private/pi-agent/trust.json`. Every
+supported version gates project extensions on trust and reads that file the
+same way (0.99.1 and 1.0.0 were observed). The nearest canonical
 project or parent-folder boolean decision applies; a child refusal overrides a
 parent approval, and null entries are skipped. The doctor requires persisted
 approval, even if an individual invocation uses `--approve` or global automatic
 trust. It neither writes approvals nor acquires Pi's writable trust-store lock.
 `--approve` decides for one Pi process and saves nothing, so a project that is
-only launched that way, as [interactive.md](interactive.md) launches it, keeps
-`Hook trust` Failed. Type `/trust` in Pi once: it saves the decision in
+only launched that way keeps `Hook trust` Failed. Type `/trust` in Pi once, as
+[interactive.md](interactive.md) describes: it saves the decision in
 `trust.json` of the agent directory (`~/.pi/agent/trust.json` by default). Then
-pass that file.
+launch Pi without `--approve` and pass that file.
 
 Without `--harness-config`, and for Codex without `--trust-report`, `Hook trust`
 is Failed whatever the harness has approved; the detail of the check then ends

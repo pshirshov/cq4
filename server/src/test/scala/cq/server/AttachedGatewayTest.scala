@@ -1,7 +1,7 @@
 package cq.server
 
 import cq.api.*
-import cq.host.{AttachedCodexUsage, CodexRollout, DispatchWaits, OwnerLiveness, PeerLimits, ServerApi, StdioPeer}
+import cq.host.{AttachedCodexUsage, CodexRollout, DispatchWaits, OwnerLiveness, PeerLimits, ServerApi, StdioPeer, WorkflowAssets}
 import io.circe.{Json, parser}
 import java.io.{BufferedReader, InputStreamReader, PipedInputStream, PipedOutputStream}
 import java.nio.charset.StandardCharsets.UTF_8
@@ -13,7 +13,7 @@ import zio.{Runtime, Task, Unsafe}
 
 final class AttachedGatewayLocal extends AnyWordSpec {
   private val LongInterval = Duration.ofSeconds(30)
-  private val InputSchemaBytes = 46000
+  private val InputSchemaBytes = 46200
   private val schemas = new McpSchemas()
   private val project = ProjectId(UUID.fromString("00000000-0000-4000-8000-000000000001"))
 
@@ -32,7 +32,7 @@ final class AttachedGatewayLocal extends AnyWordSpec {
     private def uuid: UUID = UUID.randomUUID()
     private val assignment = Assignment(AssignmentId(uuid), project, Set.empty, Attribution.Unattributed, None, None)
     private val attempt = Attempt(AttemptId(uuid), assignment.id, None, SessionId(uuid), Role.Governor, harness,
-      "fixture-provider", "fixture-model", "fixture", 0, UsagePhase.Govern)
+      "fixture-provider", "fixture-model", "fixture", 0, UsagePhase.Govern, None)
     private val settings = ProjectConfig(project, "http://localhost", "Attached gateway")
     private val config = SupervisorConfig(null, settings, null, null,
       SupervisorRun(settings, assignment, attempt, "fixture", "/nonexistent", GitCommit("0" * 40), SessionOwnership.Attached), Path.of("/nonexistent"), "", None, Map("HOME" -> "/nonexistent"))
@@ -81,17 +81,45 @@ final class AttachedGatewayLocal extends AnyWordSpec {
     "allow a dispatch command its wait on top of the deadline that every request without a wait keeps" in {
       assert(DispatchWaits.MaxMillis == 120000 && short == Duration.ofSeconds(30))
       for (command <- List(s"""{"Status":{"attempt":$id,"waitMillis":120000}}""", s"""{"IntegrationStatus":{"id":$id,"waitMillis":120000}}""",
-        s"""{"CombinationStatus":{"id":$id,"waitMillis":120000}}""", s"""{"Revalidate":{"id":$id,"result":$id,"fence":{"claim":$id,"generation":"1"}}}"""))
+        s"""{"CombinationStatus":{"id":$id,"waitMillis":120000}}""", s"""{"Revalidate":{"id":$id,"result":$id,"fence":{"claim":$id,"generation":"1"}}}""",
+        // I30: these reply once the host has opened the workspace or published the review.
+        s"""{"OpenWorkspace":{"request":$id,"members":[],"previous":null,"fence":{"claim":$id,"generation":"1"}}}""",
+        s"""{"SelfReview":{"request":$id,"result":$id,"members":[],"fence":{"claim":$id,"generation":"1"}}}"""))
         assert(AttachedGateway.deadline(call("dispatch", command)) == Duration.ofSeconds(150), command)
       assert(AttachedGateway.deadline(call("dispatch", s"""{"Status":{"attempt":$id,"waitMillis":45000}}""")) == Duration.ofSeconds(75))
     }
     "keep the short deadline for a request that does not wait, that the host refuses or that is no dispatch command" in {
       for (command <- List(s"""{"Status":{"attempt":$id,"waitMillis":0}}""", s"""{"Status":{"attempt":$id,"waitMillis":120001}}""",
-        s"""{"Status":{"attempt":$id,"waitMillis":-1}}""", s"""{"Cancel":{"attempt":$id}}""", s"""{"Integrate":{"id":$id}}""", """{"Status":"{}"}"""))
+        s"""{"Status":{"attempt":$id,"waitMillis":-1}}""", s"""{"Cancel":{"attempt":$id}}""", s"""{"Integrate":{"id":$id}}""", """{"Status":"{}"}""",
+        s"""{"SubmitWorkspace":{"attempt":$id,"members":[]}}"""))
         assert(AttachedGateway.deadline(call("dispatch", command)) == short, command)
       // A wait is honoured only where the host waits: the same field in another tool's arguments changes nothing.
       assert(AttachedGateway.deadline(call("session", s"""{"Status":{"attempt":$id,"waitMillis":120000}}""")) == short)
       assert(AttachedGateway.deadline(Json.obj("jsonrpc" -> Json.fromString("2.0"), "id" -> Json.fromInt(1), "method" -> Json.fromString("ping"))) == short)
+    }
+  }
+
+  "Workflow replies of an attached session (Behavioral Active Blackbox Atomic)" should {
+    "I30: send the instructions again when the process mode changed between two activations, and name the earlier activation on a return to its mode" in {
+      val assets = new WorkflowAssets
+      val request = WorkflowRequest.Advance(Set(ItemId(project, Ledger.Tasks, 1)), WorkflowPhase.Integrate)
+      def activation(mode: ProcessMode): WorkflowActivation =
+        WorkflowActivation(RequestId(UUID.randomUUID()), WorkflowContext(request, assets.instructions(request, mode), None, mode), "", None)
+      val receipts = new WorkflowReceipts
+      val List(rigorous, same, crossCutting, repeated, back) =
+        List(ProcessMode.Rigorous, ProcessMode.Rigorous, ProcessMode.CrossCutting, ProcessMode.CrossCutting, ProcessMode.Rigorous).map(activation)
+      def text(value: WorkflowActivation) = WorkflowInstructions.Text(value.context.instructions)
+      assert(receipts(rigorous) == WorkflowReceipt(rigorous.id, request, text(rigorous), None, None, ProcessMode.Rigorous))
+      // The same mode again: the text is the one the session holds.
+      assert(receipts(same) == WorkflowReceipt(same.id, request, WorkflowInstructions.Unchanged(rigorous.id), None, None, ProcessMode.Rigorous))
+      // The mode changed: the session holds no text for it, so it is sent whole.
+      assert(crossCutting.context.instructions != rigorous.context.instructions)
+      assert(receipts(crossCutting) == WorkflowReceipt(crossCutting.id, request, text(crossCutting), None, None, ProcessMode.CrossCutting))
+      assert(receipts(repeated).instructions == WorkflowInstructions.Unchanged(crossCutting.id) && receipts(repeated).mode == ProcessMode.CrossCutting)
+      // Back to the first mode: its text was sent by the first activation, and the receipt's mode says which of the texts it holds applies.
+      assert(receipts(back) == WorkflowReceipt(back.id, request, WorkflowInstructions.Unchanged(rigorous.id), None, None, ProcessMode.Rigorous))
+      // The activation whose reply first carried a text gets the text again when its call is repeated.
+      assert(receipts(rigorous).instructions == text(rigorous) && receipts(crossCutting).instructions == text(crossCutting))
     }
   }
 
@@ -176,7 +204,7 @@ final class AttachedGatewayLocal extends AnyWordSpec {
       val sizes = inputs.map((name, input) => name -> bytes(input))
       println("I33 advertised input schema bytes: " + sizes.map((name, size) => s"$name $size").mkString(", ") + s"; all nine ${sizes.map(_._2).sum}")
       // Measured 2026-10-05: 44,267 bytes; under the generated names and with the bounds, the nine schemas of the release before took 53,917.
-      // A deliberate addition to a command raises this bound.
+      // A deliberate addition to a command raises this bound: 46,107 bytes with the three commands of the governing session's own work (I30).
       assert(sizes.map(_._2).sum <= InputSchemaBytes, sizes.toString)
     }
 
@@ -192,6 +220,22 @@ final class AttachedGatewayLocal extends AnyWordSpec {
         val tool = schemas.attachedTools.find(_.hcursor.get[String]("name") == Right("read")).get
         assert(!tool.noSpaces.contains("Catalog") && !tool.hcursor.get[String]("description").exists(_.toLowerCase.contains("catalog")))
         assert(!schemas.attachedInstructions(Harness.Codex, Some("/opt/cq/bin/cq wait")).contains("Catalog"))
+      } finally session.close()
+    }
+
+    "I17: refuse a StartChoice or a Start that names a harness before anything is dispatched" in {
+      val session = new Session(AttachedGateway.FrameBytes, other => fail(s"Unexpected command $other"))
+      def refused(arguments: String): String =
+        fault(session.tool("dispatch", parser.parse(arguments).fold(throw _, identity))).hcursor.downField("Invalid").get[String]("message").fold(throw _, identity)
+      val fence = """"fence":{"claim":{"value":"00000000-0000-4000-8000-000000000002"},"generation":"1"}"""
+      try {
+        // The session names the choice and its claim; the host starts the models the configuration assigns.
+        assert(refused(s"""{"StartChoice":{"choice":{"value":"00000000-0000-4000-8000-000000000003"},"harness":"Codex",$fence}}""").contains("Noncanonical dispatch request"))
+        val work = s""""request":{"value":"00000000-0000-4000-8000-000000000003"},"work":{"Planner":{}},"members":[],"guidance":[],"artifacts":[],"previous":null,$fence,""" +
+          """"limits":{"startupMillis":"3000","heartbeatMillis":"1000","graceMillis":"300","killMillis":"2000","retainedOutputBytes":262144}"""
+        assert(refused(s"""{"Start":{"work":{"harness":"Codex",$work}}}""").contains("Noncanonical dispatch request"))
+        val former = refused(s"""{"Start":{"request":{"harness":"Codex",$work}}}""")
+        assert(former.contains("\"dispatch\"") && former.contains("do not match its input schema"), former)
       } finally session.close()
     }
 

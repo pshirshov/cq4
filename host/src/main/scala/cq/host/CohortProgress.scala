@@ -24,12 +24,13 @@ object CohortFailure {
   def outcome(status: DispatchStatus, input: Option[String], offered: Option[Boolean]): ChildOutcome = {
     val end = status.phase match {
       case DispatchPhase.Cancelled => ChildEnd.Cancelled
+      case DispatchPhase.Abstained => ChildEnd.Abstained
       case DispatchPhase.Completed | DispatchPhase.Failed if status.result.nonEmpty => ChildEnd.Admitted
       case DispatchPhase.Failed => offered.fold(ChildEnd.Failed)(again => if (again) ChildEnd.Retryable else ChildEnd.Repeated)
       case _ => ChildEnd.Unknown
     }
     ChildOutcome(status.attempt, status.members, end, input,
-      status.blocker.filter(_ => Set(ChildEnd.Retryable, ChildEnd.Repeated, ChildEnd.Failed)(end))
+      status.blocker.filter(_ => Set(ChildEnd.Retryable, ChildEnd.Repeated, ChildEnd.Failed, ChildEnd.Abstained)(end))
         .map(text => if (text.trim.isEmpty) Unstated else text.take(DriverPolicy.MaxDetail)))
   }
 }
@@ -78,6 +79,15 @@ final class CohortProgress {
       failures ++= inputs.map(_ -> value)
     }
     repeated
+  }
+  /**
+   * An attempt that abstained ran no model on its input, which is offered again as it was: no fault is added, and the fault of a
+   * failure before it stays, so that a failure after it is still compared with that one.
+   */
+  def abstained(fingerprint: CohortExecutionFingerprint): Unit = synchronized {
+    require(executed(fingerprint.group), "Unstarted cohort cannot finish")
+    completed += fingerprint.group
+    executed --= fingerprint.members.values.toSet + fingerprint.group
   }
   def failure(fingerprint: String): Option[CohortFailure] = synchronized(failures.get(fingerprint))
   def ended(fingerprint: String): Boolean = synchronized(completed(fingerprint))

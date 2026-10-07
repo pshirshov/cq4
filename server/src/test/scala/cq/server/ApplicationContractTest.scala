@@ -76,7 +76,7 @@ abstract class ApplicationContractTest extends SpecZIO with AssertZIO {
         val project = ProjectId(UUID.randomUUID())
         val collector = Scope(project, Actor("collector", SessionId(UUID.randomUUID()), Role.Collector))
         val assignment = Assignment(AssignmentId(UUID.randomUUID()), project, Set.empty, Attribution.Unattributed, None, None)
-        val attempt = Attempt(AttemptId(UUID.randomUUID()), assignment.id, None, collector.actor.session, Role.Governor, Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Govern)
+        val attempt = Attempt(AttemptId(UUID.randomUUID()), assignment.id, None, collector.actor.session, Role.Governor, Harness.Codex, "fixture", "fixture", "fixture", 1000, UsagePhase.Govern, None)
         val tool = new McpSchemas().tools.find(_.name == "usage").get
         val input = io.circe.parser.parse(s"""{"project":{"value":"${project.value}"},"selection":{"Phases":{"filter":{"SessionOnly":{"id":{"value":"${collector.actor.session.value}"}}}}}}""").toTry.get
         for {
@@ -181,7 +181,7 @@ abstract class ApplicationContractTest extends SpecZIO with AssertZIO {
         }
         def host(operation: HostUsage): IO[Throwable, HostUsageResult] = application.ingest(root, HostUsageInput(project, operation))
         def attempt(assignment: Assignment, session: SessionId, startedAt: Long): Attempt =
-          Attempt(AttemptId(UUID.randomUUID()), assignment.id, None, session, Role.Worker, Harness.Codex, "fixture", "fixture", "fixture", startedAt, UsagePhase.Work)
+          Attempt(AttemptId(UUID.randomUUID()), assignment.id, None, session, Role.Worker, Harness.Codex, "fixture", "fixture", "fixture", startedAt, UsagePhase.Work, None)
         for {
           _ <- application.execute(root, Command.Initialize(ProjectConfig(project, "http://localhost", "running work")))
           created <- application.execute(root, Command.Change(ChangeInput(project, ChangeRequest(RequestId(UUID.randomUUID()), List(Mutation.Create(task), Mutation.Create(task)), Nil, "Create"))))
@@ -236,7 +236,7 @@ abstract class ApplicationContractTest extends SpecZIO with AssertZIO {
           }
         def host(operation: HostUsage): IO[Throwable, HostUsageResult] = application.ingest(first, HostUsageInput(project, operation))
         def attempt(assignment: Assignment, session: SessionId, startedAt: Long): Attempt =
-          Attempt(AttemptId(UUID.randomUUID()), assignment.id, None, session, Role.Worker, Harness.Codex, "fixture", "fixture", "fixture", startedAt, UsagePhase.Work)
+          Attempt(AttemptId(UUID.randomUUID()), assignment.id, None, session, Role.Worker, Harness.Codex, "fixture", "fixture", "fixture", startedAt, UsagePhase.Work, None)
         for {
           _ <- application.execute(first, Command.Initialize(ProjectConfig(project, "http://localhost", "several claimed rows")))
           created <- application.execute(first, Command.Change(ChangeInput(project, ChangeRequest(RequestId(UUID.randomUUID()), List.fill(4)(Mutation.Create(task)), Nil, "Create"))))
@@ -335,6 +335,221 @@ abstract class ApplicationContractTest extends SpecZIO with AssertZIO {
           renamed <- application.execute(root, Command.RenameProject(project, Revision(1), "Renamed"))
           _ <- assertIO(renamed match { case Result.Initialized(value) => value.revision == Revision(2); case _ => false })
         } yield ()
+    }
+
+    "I30: keep a project's process mode under revision comparison, Rigorous until the operator changes it and writable by the operator only" in {
+      (ledger: LedgerService[IO], repository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
+        val auth = authorization(Now)
+        val session = SessionId(UUID.randomUUID())
+        val root = auth.authenticate(Token, Some(session.value.toString))
+        val application = new Application(ledger, repository, usage, artifacts, admissions, integrations, proposals, auth, new CatalogRead(new McpSchemas()))
+        val project = ProjectId(UUID.randomUUID())
+        val other = ProjectId(UUID.randomUUID())
+        def granted(role: Role) = auth.authenticate(auth.grant(root, GrantRequest(project, Actor(role.toString, SessionId(UUID.randomUUID()), role), Now + 10000)).value, None)
+        def read(authority: Authority, target: ProjectId) = application.execute(authority, Command.Mode(ModeInput(target, ModeAction.Read())))
+        def replaceIn(target: Application)(authority: Authority, expected: Long, mode: ProcessMode, selfReviewWithoutChecks: Boolean) =
+          target.execute(authority, Command.Mode(ModeInput(project, ModeAction.Replace(Revision(expected), mode, selfReviewWithoutChecks))))
+        val replace = replaceIn(application)
+        // The same project under a release that withholds the YOLO mode and under one that delivers it.
+        def release(yoloAvailable: Boolean) = replaceIn(new Application(FixedLedger.service(repository, java.time.Clock.systemUTC(), new ProcessModePolicy(yoloAvailable)),
+          repository, usage, artifacts, admissions, integrations, proposals, auth, new CatalogRead(new McpSchemas())))
+        val withheld = release(false)
+        val delivered = release(true)
+        def exemption(mode: String, suffix: String) = Result.Failed(Fault.Invalid(
+          s"Self-review without configured checks can be allowed only in the YOLO cross-cutting mode; the requested mode is $mode$suffix"))
+        val operator = Actor("operator", session, Role.Human)
+        for {
+          _ <- application.execute(root, Command.Initialize(ProjectConfig(project, "http://localhost", "Moded")))
+          _ <- application.execute(root, Command.Initialize(ProjectConfig(other, "http://localhost", "Other")))
+          initial <- read(root, project)
+          _ <- assertIO(initial == Result.Mode(ProjectMode(project, Revision(0), ProcessMode.Rigorous, false, None)))
+          deniedGovernor <- replace(granted(Role.Governor), 0, ProcessMode.CrossCutting, false)
+          deniedWorker <- replace(granted(Role.Worker), 0, ProcessMode.CrossCutting, false)
+          _ <- assertIO(List(deniedGovernor, deniedWorker) == List.fill(2)(Result.Failed(Fault.Denied("Process mode change requires human authority"))))
+          // Saving the value a project has without a stored document writes nothing.
+          default <- replace(root, 0, ProcessMode.Rigorous, false)
+          _ <- assertIO(default == initial)
+          written <- replace(root, 0, ProcessMode.CrossCutting, false)
+          _ <- assertIO(written match {
+            case Result.Mode(ProjectMode(`project`, Revision(1), ProcessMode.CrossCutting, false, Some(ModeChange(`operator`, at)))) => at > 0
+            case _ => false
+          })
+          readers <- ZIO.foreach(List(root, granted(Role.Governor), granted(Role.Planner), granted(Role.Worker), granted(Role.Reviewer)))(read(_, project))
+          _ <- assertIO(readers.forall(_ == written))
+          stale <- replace(root, 0, ProcessMode.Rigorous, false)
+          _ <- assertIO(stale == Result.Failed(Fault.Conflict("Process mode changed: expected revision 0, actual 1; reload before saving")))
+          same <- replace(root, 1, ProcessMode.CrossCutting, false)
+          _ <- assertIO(same == written)
+          // A release that withholds the YOLO mode stores neither the mode nor its exemption from configured checks.
+          yolo <- ZIO.foreach(List(false, true))(withheld(root, 1, ProcessMode.Yolo, _))
+          _ <- assertIO(yolo.forall(_ == Result.Failed(Fault.Invalid("The YOLO cross-cutting mode is not available in this release"))))
+          optOut <- ZIO.foreach(List(ProcessMode.Rigorous, ProcessMode.CrossCutting))(withheld(root, 1, _, true))
+          _ <- assertIO(optOut == List(exemption("Rigorous", ". The YOLO cross-cutting mode is not available in this release"),
+            exemption("Cross-cutting", ". The YOLO cross-cutting mode is not available in this release")))
+          // A release that delivers it stores the exemption only together with the YOLO mode, for the operator only.
+          coupled <- ZIO.foreach(List(ProcessMode.Rigorous, ProcessMode.CrossCutting))(delivered(root, 1, _, true))
+          _ <- assertIO(coupled == List(exemption("Rigorous", ""), exemption("Cross-cutting", "")))
+          unchanged <- read(root, project)
+          _ <- assertIO(unchanged == written)
+          deniedYolo <- delivered(granted(Role.Governor), 1, ProcessMode.Yolo, true)
+          _ <- assertIO(deniedYolo == Result.Failed(Fault.Denied("Process mode change requires human authority")))
+          chosen <- delivered(root, 1, ProcessMode.Yolo, false)
+          _ <- assertIO(chosen match { case Result.Mode(value) => value.revision == Revision(2) && value.mode == ProcessMode.Yolo && !value.selfReviewWithoutChecks; case _ => false })
+          exempted <- delivered(root, 2, ProcessMode.Yolo, true)
+          _ <- assertIO(exempted match { case Result.Mode(value) => value.revision == Revision(3) && value.mode == ProcessMode.Yolo && value.selfReviewWithoutChecks; case _ => false })
+          // Leaving the YOLO mode cannot keep the exemption: the stored value after the change holds none.
+          kept <- delivered(root, 3, ProcessMode.CrossCutting, true)
+          _ <- assertIO(kept == exemption("Cross-cutting", ""))
+          back <- delivered(root, 3, ProcessMode.Rigorous, false)
+          _ <- assertIO(back match { case Result.Mode(value) => value.revision == Revision(4) && value.mode == ProcessMode.Rigorous && !value.selfReviewWithoutChecks && value.change.nonEmpty; case _ => false })
+          // The mode and the standing requirements are separate documents of the project, each with its own revision.
+          requirements <- application.execute(root, Command.Requirements(RequirementsInput(project, RequirementsAction.Read())))
+          _ <- assertIO(requirements == Result.Requirements(ProjectRequirements(project, Revision(0), "", None)))
+          foreign <- read(granted(Role.Worker), other)
+          _ <- assertIO(foreign match { case Result.Failed(_: Fault.Denied) => true; case _ => false })
+          separate <- read(root, other)
+          _ <- assertIO(separate == Result.Mode(ProjectMode(other, Revision(0), ProcessMode.Rigorous, false, None)))
+        } yield ()
+    }
+
+    "I17: keep the agent configuration of the installation and of a project under revision comparison, resolved for every role with access and writable by the operator only" in {
+      (ledger: LedgerService[IO], repository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
+        val auth = authorization(Now)
+        val session = SessionId(UUID.randomUUID())
+        val root = auth.authenticate(Token, Some(session.value.toString))
+        // The credential an operator's browser holds: the session cookie that a login with the operator token returns.
+        val browserSession = SessionId(UUID.randomUUID())
+        val browser = auth.authenticate(auth.login(Token, browserSession.value.toString).value, None)
+        val application = new Application(ledger, repository, usage, artifacts, admissions, integrations, proposals, auth, new CatalogRead(new McpSchemas()))
+        val project = ProjectId(UUID.randomUUID())
+        val other = ProjectId(UUID.randomUUID())
+        def granted(role: Role) = auth.authenticate(auth.grant(root, GrantRequest(project, Actor(role.toString, SessionId(UUID.randomUUID()), role), Now + 10000)).value, None)
+        def call(authority: Authority, target: ProjectId, action: AgentsAction) = application.execute(authority, Command.Agents(AgentsInput(target, action)))
+        def read(authority: Authority, target: ProjectId) = call(authority, target, AgentsAction.Read())
+        def view(result: Result): AgentsView = result match { case Result.Agents(value) => value; case found => fail(s"Expected an agent configuration, got $found") }
+        def replace(authority: Authority, scope: AgentsScope, expected: Revision, text: String) = call(authority, project, AgentsAction.Replace(scope, expected, text))
+        def resolve(authority: Authority, harness: Harness, work: DispatchWork) = call(authority, project, AgentsAction.Resolve(harness, work))
+        def parsed(text: String): ParsedAgents = AgentConfigText.parse(text).fold(problems => fail(problems.toString), identity)
+        val Installation = AgentsScope.Installation()
+        val Project = AgentsScope.Project()
+        // Each test run writes another server default: the installation's document is shared by every project of a database.
+        val defaults = "defaults:\n  roles:\n    planner: $harness:@frontier\n    worker: codex:gpt-6.1-sol\nharnesses:\n  claude: { tiers: { frontier: [opus] } }\n# " + UUID.randomUUID() + "\n"
+        val overrides = "defaults: { roles: { worker: claude:sonnet } } # λ😀\n"
+        val panel = "defaults:\n  roles:\n    worker: { all: [claude:sonnet], min: 1 }\n"
+        val bound = LedgerPolicy.MaxConfigBytes
+        val writers = List(Installation -> "Operator authority required", Project -> "Agent configuration change requires human authority")
+        def fallback(model: String): List[ResolvedSeat] = List(ResolvedSeat(SeatStrategy.Fallback, List(ModelRoute(Harness.Claude, None, model, None))))
+        for {
+          _ <- application.execute(root, Command.Initialize(ProjectConfig(project, "http://localhost", "Agents")))
+          _ <- application.execute(root, Command.Initialize(ProjectConfig(other, "http://localhost", "Other")))
+          initial <- read(root, project).map(view)
+          base = initial.installation.revision
+          _ <- assertIO(initial.project == AgentsDocument(Revision(0), "", None, Nil) && initial.installation.problems.isEmpty &&
+            (base != Revision(0) || initial.installation == AgentsDocument(Revision(0), "", None, Nil)) &&
+            initial.assignments.map(value => value.harness -> value.key) == (for { harness <- Harness.all; role <- AgentRole.all } yield harness -> RoleKey.Plain(role)))
+          denied <- ZIO.foreach(for { role <- List(Role.Governor, Role.Worker); (scope, message) <- writers } yield (granted(role), scope, message)) { (authority, scope, message) =>
+            for {
+              written <- replace(authority, scope, if (scope == Installation) base else Revision(0), overrides)
+              previewed <- call(authority, project, AgentsAction.Preview(scope, overrides))
+            } yield written == Result.Failed(Fault.Denied(message)) && previewed == Result.Failed(Fault.Denied(message))
+          }
+          _ <- assertIO(denied.forall(identity))
+          afterDenied <- read(root, project).map(view)
+          _ <- assertIO(afterDenied == initial)
+          installed <- replace(browser, Installation, base, defaults).map(view)
+          _ <- assertIO(installed.installation.revision == Revision(base.value + 1) && installed.installation.text == defaults && installed.installation.problems.isEmpty &&
+            installed.installation.change.exists(change => change.actor == Actor("operator", browserSession, Role.Human) && change.at > 0) && installed.project == initial.project)
+          written <- replace(root, Project, Revision(0), overrides).map(view)
+          _ <- assertIO(written.installation == installed.installation &&
+            written.project.revision == Revision(1) && written.project.text == overrides && written.project.problems.isEmpty &&
+            written.project.change.exists(_.actor == Actor("operator", session, Role.Human)) &&
+            written.assignments == AgentResolution.assignments(parsed(defaults), parsed(overrides)))
+          readers <- ZIO.foreach(List(root, browser, granted(Role.Governor), granted(Role.Planner), granted(Role.Worker), granted(Role.Reviewer)))(read(_, project))
+          _ <- assertIO(readers.forall(_ == Result.Agents(written)))
+          governor = granted(Role.Governor)
+          planner <- resolve(governor, Harness.Claude, DispatchWork.Planner())
+          _ <- assertIO(planner == Result.AgentRoute(ResolvedAssignment(Harness.Claude, RoleKey.Plain(AgentRole.Planner), RoleResolution.Resolved(
+            ResolvedRole(PanelMode.All, 1, fallback("opus"), RoleOrigin(AgentLayer.Installation, RoleSource.DefaultRoles), Nil)))))
+          worker <- resolve(governor, Harness.Codex, DispatchWork.Worker(WorkerMode.Probe))
+          _ <- assertIO(worker == Result.AgentRoute(ResolvedAssignment(Harness.Codex, RoleKey.Plain(AgentRole.Worker), RoleResolution.Resolved(
+            ResolvedRole(PanelMode.All, 1, fallback("sonnet"), RoleOrigin(AgentLayer.Project, RoleSource.DefaultRoles), Nil)))))
+          undefined <- resolve(governor, Harness.Codex, DispatchWork.Planner())
+          _ <- assertIO(undefined == Result.AgentRoute(ResolvedAssignment(Harness.Codex, RoleKey.Plain(AgentRole.Planner), RoleResolution.Unresolved(
+            Some(RoleOrigin(AgentLayer.Installation, RoleSource.DefaultRoles)), List(AgentProblem.TierUndefined(Harness.Codex, ModelTier.Frontier, AgentRole.Planner))))))
+          unassigned <- resolve(granted(Role.Worker), Harness.Pi, DispatchWork.Reviewer(ReviewerMode.Audit))
+          _ <- assertIO(unassigned == Result.AgentRoute(ResolvedAssignment(Harness.Pi, RoleKey.Plain(AgentRole.Reviewer),
+            RoleResolution.Unresolved(None, List(AgentProblem.RoleUnassigned(Harness.Pi, AgentRole.Reviewer))))))
+          stale <- replace(root, Project, Revision(0), "")
+          _ <- assertIO(stale == Result.Failed(Fault.Conflict("Agent configuration of the project changed: expected revision 0, actual 1; reload before saving")))
+          // A key of a mode decides the work of that mode, and the reply names the key that decided.
+          moded = "defaults:\n  roles:\n    worker: claude:sonnet\n    worker/probe: claude:probe-model\n"
+          previewedMode <- call(root, project, AgentsAction.Preview(Project, moded)).map(view)
+          _ <- assertIO(previewedMode.project.problems.isEmpty && previewedMode.assignments == AgentResolution.assignments(parsed(defaults), parsed(moded)) &&
+            previewedMode.assignments.count(_.key == RoleKey.Worker(WorkerMode.Probe)) == Harness.all.size)
+          badMode <- call(root, project, AgentsAction.Preview(Project, "defaults:\n  roles:\n    worker/plan: claude:probe-model\n")).map(view)
+          _ <- assertIO(badMode.project.problems == List(AgentProblem.Syntax(TextPosition(3, 5),
+            "the key 'worker/plan' names no mode of the worker role; its modes are implement, probe, resolveconflict")) && badMode.assignments.isEmpty)
+          staleDefaults <- replace(root, Installation, base, "")
+          _ <- assertIO(staleDefaults == Result.Failed(Fault.Conflict(
+            s"Agent configuration of the installation changed: expected revision ${base.value}, actual ${base.value + 1}; reload before saving")))
+          same <- replace(root, Project, Revision(1), overrides)
+          sameDefaults <- replace(root, Installation, Revision(base.value + 1), defaults)
+          _ <- assertIO(same == Result.Agents(written) && sameDefaults == Result.Agents(written))
+          refused <- ZIO.foreach(List(Installation -> Revision(base.value + 1), Project -> Revision(1)))((scope, revision) => replace(root, scope, revision, panel))
+          _ <- assertIO(refused.forall(_ == Result.Failed(Fault.Invalid(
+            "Agent configuration has problems: 3:13: the worker role takes a model reference or a strategy; only the reviewer role takes a panel"))))
+          oversized <- replace(root, Project, Revision(1), "#" + "λ" * (bound / 2))
+          _ <- assertIO(oversized == Result.Failed(Fault.Invalid(s"Agent configuration exceeds $bound bytes: ${bound + 1} supplied")))
+          nul <- replace(root, Project, Revision(1), "# a\u0000b")
+          _ <- assertIO(nul match { case Result.Failed(_: Fault.Invalid) => true; case _ => false })
+          previewed <- call(root, project, AgentsAction.Preview(Project, "")).map(view)
+          _ <- assertIO(previewed.installation == written.installation && previewed.project == written.project.copy(text = "") &&
+            previewed.assignments == AgentResolution.assignments(parsed(defaults), ParsedAgents.empty))
+          previewedDefaults <- call(browser, project, AgentsAction.Preview(Installation, panel)).map(view)
+          _ <- assertIO(previewedDefaults.project == written.project && previewedDefaults.assignments.isEmpty &&
+            previewedDefaults.installation == written.installation.copy(text = panel, problems = List(AgentProblem.PanelNotAllowed(TextPosition(3, 13), AgentRole.Worker))))
+          // A key of one mode that an earlier place hides is noted, in a preview and after the save, and the text is saved all the same.
+          hiding = "harnesses: { codex: { roles: { worker: claude:sonnet } } }\n"
+          hidden = "defaults: { roles: { worker/probe: claude:opus } }\n"
+          _ <- assertIO(written.notes.isEmpty)
+          shadowing <- call(root, project, AgentsAction.Preview(Project, hiding + hidden)).map(view)
+          _ <- assertIO(shadowing.project.problems.isEmpty && shadowing.assignments.nonEmpty && shadowing.notes == List(ShadowedRoleKey(Harness.Codex,
+            PlacedRoleKey(RoleOrigin(AgentLayer.Project, RoleSource.DefaultRoles), RoleKey.Worker(WorkerMode.Probe), TextPosition(2, 22)),
+            PlacedRoleKey(RoleOrigin(AgentLayer.Project, RoleSource.HarnessRoles), RoleKey.Plain(AgentRole.Worker), TextPosition(1, 32)))))
+          oversizedPreview <- call(root, project, AgentsAction.Preview(Project, "#" + "x" * bound))
+          _ <- assertIO(oversizedPreview == Result.Failed(Fault.Invalid(s"Agent configuration exceeds $bound bytes: ${bound + 1} supplied")))
+          unchanged <- read(root, project)
+          _ <- assertIO(unchanged == Result.Agents(written))
+          full <- replace(root, Project, Revision(1), "#" + "x" * (bound - 1)).map(view)
+          _ <- assertIO(full.project.revision == Revision(2) && full.project.text.length == bound)
+          cleared <- replace(root, Project, Revision(2), "").map(view)
+          _ <- assertIO(cleared.project.revision == Revision(3) && cleared.project.text.isEmpty && cleared.project.change.nonEmpty &&
+            cleared.assignments == AgentResolution.assignments(parsed(defaults), ParsedAgents.empty))
+          foreign <- read(granted(Role.Worker), other)
+          foreignRoute <- call(granted(Role.Governor), other, AgentsAction.Resolve(Harness.Claude, DispatchWork.Planner()))
+          _ <- assertIO(List(foreign, foreignRoute).forall { case Result.Failed(_: Fault.Denied) => true; case _ => false })
+          // The server default holds for every project; the override is the project's own.
+          separate <- read(root, other).map(view)
+          _ <- assertIO(separate.installation == written.installation && separate.project == AgentsDocument(Revision(0), "", None, Nil))
+          // The agent configuration is a document of its own beside the project's other settings.
+          requirements <- application.execute(root, Command.Requirements(RequirementsInput(project, RequirementsAction.Read())))
+          _ <- assertIO(requirements == Result.Requirements(ProjectRequirements(project, Revision(0), "", None)))
+          _ <- assertIO(!new McpSchemas().tools.exists(_.name.toLowerCase.contains("agent")))
+        } yield ()
+    }
+
+    "I30: ship the YOLO mode: the policy, the ledger service and the catalog this release wires accept it and attach no note to it" in {
+      (ledger: LedgerService[IO], modes: ProcessModePolicy, catalog: CatalogRead) =>
+      val operator = Scope(ProjectId(UUID.randomUUID()), Actor("operator", SessionId(UUID.randomUUID()), Role.Human))
+      for {
+        _ <- ledger.initialize(operator, "shipped modes")
+        chosen <- ledger.replaceMode(operator, Revision(0), ProjectSetting.Mode(ProcessMode.Yolo, true))
+        _ <- ZIO.attempt {
+          assert(ProcessModePolicy.YoloAvailable && (modes eq ProcessModePolicy.Release) && ProcessMode.all.forall(modes.unavailable(_).isEmpty))
+          assert(chosen.mode == ProcessMode.Yolo && chosen.selfReviewWithoutChecks && chosen.revision == Revision(1))
+          assert(catalog.value.modes.map(_.unavailable) == ProcessMode.all.map(_ => None))
+        }
+      } yield ()
     }
 
     "preserve mutation acknowledgements across service re-creation and reject mixed snapshot pages" in {

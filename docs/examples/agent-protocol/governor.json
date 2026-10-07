@@ -1,6 +1,7 @@
 {
   "provenance": {
     "description": "Actual retained execution. JSON values are pretty-printed; prompt and input artifact bodies are preserved as JSON string/value contents. This documentation envelope is not a wire contract.",
+    "contractNote": "A record of the release that produced it, kept unchanged. Its initialInput lists routes and its instructions name a configured harness to choose; the current contract has neither: the host starts the models the agent configuration assigns to the role.",
     "role": "Governor",
     "harness": "Claude",
     "model": "claude-opus-5-5",

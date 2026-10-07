@@ -17,6 +17,8 @@ object LedgerPolicy {
   val MaxTouchedItems = 512
   // Standing requirements reach every Planner, Worker and reviewer untruncated, beside a session request of at most 16384 code points.
   val MaxRequirementsCodePoints = 8192
+  // The bound of a configuration document: the settings and project files a host reads, and one layer of the agent configuration.
+  val MaxConfigBytes = 64 * 1024
 
   def invalid(condition: Boolean, message: String): Unit =
     if (!condition) throw DomainFailure(Fault.Invalid(message))
@@ -25,6 +27,19 @@ object LedgerPolicy {
     val count = text.codePointCount(0, text.length)
     invalid(count <= MaxRequirementsCodePoints, s"Standing requirements exceed $MaxRequirementsCodePoints code points: $count supplied")
     invalid(!text.contains('\u0000') && java.nio.charset.StandardCharsets.UTF_8.newEncoder().canEncode(text), "Standing requirements contain invalid Unicode or NUL")
+  }
+
+  def boundAgents(text: String): Unit = {
+    invalid(!text.contains('\u0000') && java.nio.charset.StandardCharsets.UTF_8.newEncoder().canEncode(text), "Agent configuration contains invalid Unicode or NUL")
+    val bytes = text.getBytes(java.nio.charset.StandardCharsets.UTF_8).length
+    invalid(bytes <= MaxConfigBytes, s"Agent configuration exceeds $MaxConfigBytes bytes: $bytes supplied")
+  }
+
+  /** The checks a text of one agent configuration layer passes to be stored. */
+  def validateAgents(text: String): Unit = {
+    boundAgents(text)
+    val problems = AgentConfigText.problems(text)
+    invalid(problems.isEmpty, "Agent configuration has problems: " + problems.map(AgentConfigText.describe).mkString("; "))
   }
 
   def ledger(content: Content): Ledger = content match {

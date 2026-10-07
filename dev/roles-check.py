@@ -1,10 +1,10 @@
 import json
 import os
 from pathlib import Path
-import subprocess
 import sys
 import tempfile
 import uuid
+from fixture_runtime import cli_case
 
 
 def main():
@@ -19,7 +19,7 @@ def main():
         (config / "project.json").write_text(json.dumps({"project": {"value": str(uuid.uuid4())}, "endpoint": endpoint, "name": "offline role fixture"}))
 
         def run(arguments, expected):
-            result = subprocess.run(command + arguments, cwd=root, env=environment, capture_output=True, text=True, timeout=15)
+            result = cli_case(" ".join(arguments), command + arguments, root, environment)
             assert result.returncode == expected, result.stdout + result.stderr
             return result
 

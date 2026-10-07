@@ -1,5 +1,5 @@
 import json
-from fixture_runtime import guardian_binary
+from fixture_runtime import AGENTS_INIT, guardian_binary
 import os
 from pathlib import Path
 import signal
@@ -47,6 +47,7 @@ def main():
         source = root / "request.txt"
         source.write_text("exit-with-running-child")
         subprocess.run(command + ["init", "--endpoint", endpoint], cwd=repository, env=environment, capture_output=True, check=True, timeout=30)
+        subprocess.run(command + AGENTS_INIT + [str(settings)], cwd=repository, env=environment, capture_output=True, check=True, timeout=30)
         for mode in ["ticket", "input", "exit", "normal"]:
             latch = root / mode
             latch.mkdir()

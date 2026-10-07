@@ -23,6 +23,11 @@ object ContractCheck {
       QueryExpression.Not(QueryExpression.Reference(Relation.BlockedBy, QueryItem(Ledger.Tasks, Long.MaxValue))),
       QueryExpression.Text(List("retry", "λ"), true)
     ))
+    // Maps keyed by an enumeration: both codecs write an object keyed by the value's name, as the schema describes.
+    val agents = AgentConfig(
+      List(RoleAssignment(RoleKey.Plain(AgentRole.Reviewer), RoleChoice.Panel(PanelMode.Any,
+        List(SeatChoice.Single(ModelReference(HarnessSelector.Governing(), ModelTarget.Tier(ModelTier.Standard), Some(Effort.XHigh)))), 1))),
+      Map(Harness.Pi -> HarnessAgents(Map(ModelTier.Frontier -> List(TierEntry(ModelName(Some("zai"), "glm λ"), None)), ModelTier.Fast -> Nil), Nil)))
     val binary = new ByteArrayOutputStream()
     Probe_UEBACodec.encode(context, new LEDataOutputStream(binary), probe)
     assert(Probe_UEBACodec.decode(context, new LEDataInputStream(new ByteArrayInputStream(binary.toByteArray))) == Right(probe))
@@ -39,6 +44,7 @@ object ContractCheck {
         Files.writeString(directory.resolve("scala-query.json"), QueryExpression_JsonCodec.encode(context, query).noSpaces)
         Files.writeString(directory.resolve("scala-watch.json"), ClientFrame_JsonCodec.encode(context, watch).noSpaces)
         Files.writeString(directory.resolve("scala-usage-cursor.json"), ServerFrame_JsonCodec.encode(context, usageCursor).noSpaces)
+        Files.writeString(directory.resolve("scala-agents.json"), AgentConfig_JsonCodec.encode(context, agents).noSpaces)
       case "verify" =>
         val returnedIdeas = parse(Files.readString(directory.resolve("typescript-ideas.json"))).toOption.get.asArray.get.toList.map(Content_JsonCodec.decode(context, _))
         assert(returnedIdeas == ideas.map(Right.apply))
@@ -50,6 +56,7 @@ object ContractCheck {
         assert(returnedQuery == Right(query))
         assert(parse(Files.readString(directory.resolve("typescript-watch.json"))).flatMap(ClientFrame_JsonCodec.decode(context, _)) == Right(watch))
         assert(parse(Files.readString(directory.resolve("typescript-usage-cursor.json"))).flatMap(ServerFrame_JsonCodec.decode(context, _)) == Right(usageCursor))
+        assert(parse(Files.readString(directory.resolve("typescript-agents.json"))).flatMap(AgentConfig_JsonCodec.decode(context, _)) == Right(agents))
       case _ => throw new IllegalArgumentException("Expected export|verify")
     }
     println(s"contracts ${args(0)} passed: JSON, UEBA, 64-bit values, typed error, recursive query")

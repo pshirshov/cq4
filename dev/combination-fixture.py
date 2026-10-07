@@ -134,12 +134,12 @@ def main():
         if value["id"] == member["id"]]
     claim = tool("cq", "claim", {"project": project, "action": {"Acquire": {"id": identity(),
         "members": [member["id"] for member in members], "durationMillis": "180000"}}})["Claimed"]["claim"]
-    base_request = {"harness": "Codex", "members": members, "guidance": [], "artifacts": [], "previous": None,
+    base_request = {"members": members, "guidance": [], "artifacts": [], "previous": None,
         "fence": claim["fence"], "limits": data["limits"]}
 
     def child_result(work, previous, artifacts):
         request = {**base_request, "request": identity(), "work": work, "previous": previous, "artifacts": artifacts}
-        started = dispatch({"Start": {"request": request}})["Status"]["value"]
+        started = dispatch({"Start": {"work": request}})["Status"]["value"]
         result = poll("Status", "attempt", started["attempt"], "Status", ["Preparing", "Running", "Stopping", "Validating", "Publishing"])
         assert result["phase"] == "Completed" and result["result"] and result["usageDelivered"], result
         assert result["counts"]["accepted" if "Reviewer" in work else "ready"] == 1, result

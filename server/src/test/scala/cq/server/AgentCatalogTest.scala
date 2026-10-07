@@ -48,7 +48,7 @@ final class AgentCatalogLocal extends AnyWordSpec {
     case McpTarget.Local => HarnessMcp(McpTarget.Local, URI.create("http://127.0.0.1:1235/mcp"), AccessToken("scoped-local-token", 2000))
   }
   private def profile(harness: Harness): HarnessProfile = HarnessProfile(harness, Path.of("/test/harness"), "selected-model",
-    if (harness == Harness.Claude) "anthropic" else "selected-provider", HarnessUsage.version(harness), Nil, Set.empty)
+    if (harness == Harness.Claude) "anthropic" else "selected-provider", None, HarnessUsage.version(harness), Nil, Set.empty)
   private def option(arguments: List[String], name: String): String = {
     require(arguments.count(_ == name) == 1, s"Expected one $name")
     arguments(arguments.indexOf(name) + 1)
@@ -141,7 +141,10 @@ final class AgentCatalogLocal extends AnyWordSpec {
       val plan = instructions(DispatchWork.Reviewer(ReviewerMode.Plan))
       val candidate = instructions(DispatchWork.Reviewer(ReviewerMode.Candidate))
       val assets = new WorkflowAssets
-      val governing = List(WorkflowRequest.Begin(Set.empty), WorkflowRequest.Advance(Set.empty, WorkflowPhase.Plan)).map(assets.instructions)
+      val governing = for {
+        request <- List(WorkflowRequest.Begin(Set.empty), WorkflowRequest.Advance(Set.empty, WorkflowPhase.Plan))
+        mode <- ProcessMode.all
+      } yield assets.instructions(request, mode)
       (List(planner, plan, candidate) ++ governing).foreach(text => assert(text.contains(result) && text.contains(process)))
       // The Planner keeps a process requirement out of the criteria and the Plan reviewer neither demands it there nor accepts it there.
       assert(planner.contains("is not an acceptance criterion of any Goal or Task") && planner.contains("propose no second one"))

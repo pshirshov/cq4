@@ -51,6 +51,7 @@ object ShutdownFixture extends RoleAppMain.LauncherBIO[IO] {
       // The batch program reads the project's standing requirements before it starts its governor; the fixture project has none.
       case (Command.Requirements(RequirementsInput(project, _: RequirementsAction.Read)), _) =>
         Result.Requirements(ProjectRequirements(project, Revision(0), "", None))
+      case (Command.Mode(ModeInput(project, _: ModeAction.Read)), _) => Result.Mode(ProjectMode(project, Revision(0), ProcessMode.Rigorous, false, None))
       case _ => throw new IllegalStateException("Fixture receiver does not execute commands")
     }
     override def admit(value: HostAdmissionInput): ResultAdmission = throw new IllegalStateException("Fixture receiver does not admit results")
@@ -94,7 +95,7 @@ object ShutdownFixture extends RoleAppMain.LauncherBIO[IO] {
     val settings = SupervisorSettings(state.getOrElse(root).toString, guardian.toString, List(profile), Limits, Nil, None, None)
     val assignment = Assignment(AssignmentId(UUID.randomUUID()), project.project, Set.empty, Attribution.Unattributed, None, None)
     val attempt = Attempt(AttemptId(UUID.randomUUID()), assignment.id, None, workspace.owner, Role.Governor, harness,
-      if (attached) "unobserved-interactive-provider" else profile.provider, if (attached) "unobserved-interactive-model" else profile.model, "fixture", clock.millis(), UsagePhase.Govern)
+      if (attached) "unobserved-interactive-provider" else profile.provider, if (attached) "unobserved-interactive-model" else profile.model, "fixture", clock.millis(), UsagePhase.Govern, None)
     Files.writeString(root.resolve("governor-attempt"), attempt.id.value.toString)
     SupervisorConfig(settings, project, SupervisorConfig.profile(profile), SupervisorConfig.limits(Limits),
       SupervisorRun(project, assignment, attempt, profile.version, workspace.repository, workspace.base, if (attached) SessionOwnership.Attached else SessionOwnership.Managed),

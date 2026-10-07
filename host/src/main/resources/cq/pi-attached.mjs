@@ -29,13 +29,14 @@ const WORKING = { Status: ["Preparing", "Running", "Stopping", "Validating", "Pu
   Combination: ["Preparing"], Revalidation: ["Running"] };
 const UNIT_KIND = { Status: "Attempt", Integration: "Integration", Combination: "Combination", Revalidation: "Revalidation" };
 // A dispatch command that waits for work is allowed that wait on top of the deadline every other request keeps; Revalidate waits
-// for its round as long as a status call may. A wait the host refuses is answered at once and gets no allowance.
+// for its round as long as a status call may, and OpenWorkspace and SelfReview reply once the host has done its part. A wait the host
+// refuses is answered at once and gets no allowance.
 function waitMillis(tool, parameters) {
   if (tool !== "dispatch" || parameters === null || typeof parameters !== "object") return 0;
   const commands = Object.entries(parameters);
   if (commands.length !== 1) return 0;
   const [command, body] = commands[0];
-  if (command === "Revalidate") return MAX_WAIT_MILLIS;
+  if (command === "Revalidate" || command === "OpenWorkspace" || command === "SelfReview") return MAX_WAIT_MILLIS;
   const wait = body === null || typeof body !== "object" ? undefined : body.waitMillis;
   return Number.isInteger(wait) && wait >= 0 && wait <= MAX_WAIT_MILLIS ? wait : 0;
 }

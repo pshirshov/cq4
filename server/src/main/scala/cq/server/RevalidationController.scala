@@ -11,7 +11,7 @@ private[server] final class RevalidationExecution(val result: ArtifactId, val fe
 
 /** Reruns the failed configured checks of an admitted worker result on its exact candidate and publishes the round as a
   * `ValidationAmendment` under the governing attempt. The admitted result is never changed. */
-final class RevalidationController(config: SupervisorConfig, authority: SupervisorAuthority, jobs: JobSupervisor, dispatch: DispatchController,
+final class RevalidationController(config: SupervisorConfig, authority: SupervisorAuthority, jobs: JobSupervisor, children: DispatchUnits,
   renewal: ClaimRenewal, clock: Clock, requests: Semaphore, admission: Semaphore) {
   private val units = new SessionUnits(config.directory)
   private val ClaimMillis = Duration.ofMinutes(3).toMillis
@@ -51,7 +51,7 @@ final class RevalidationController(config: SupervisorConfig, authority: Supervis
       "Revalidation requires an admitted worker result with a candidate")
     if (fence != value.request.fence) throw DomainFailure(Fault.StaleFence("Revalidation requires the claim fence its result was admitted under"))
     renew(call, value.request)
-    dispatch.revalidatable(value)
+    children.revalidatable(value)
     val effective = IntegrationValidation.effective(config.owner.project, config.owner.actor.session, result, value, config.settings.checks, reader.amendments(result))
     Round(value, effective.amendments.size + 1, IntegrationValidation.revalidated(effective), effective, obtained)
   }
@@ -127,8 +127,8 @@ final class RevalidationController(config: SupervisorConfig, authority: Supervis
 }
 
 object RevalidationController {
-  final class Resource(config: SupervisorConfig, authority: SupervisorAuthority, jobs: JobSupervisor, dispatch: DispatchController,
+  final class Resource(config: SupervisorConfig, authority: SupervisorAuthority, jobs: JobSupervisor, children: DispatchUnits,
     renewal: ClaimRenewal, clock: Clock, watchdog: SupervisorWatchdog) extends Lifecycle.Of[Task, RevalidationController](Lifecycle.make(
-      Semaphore.make(1).zip(Semaphore.make(1)).map((requests, admission) => new RevalidationController(config, authority, jobs, dispatch, renewal, clock, requests, admission)))(
+      Semaphore.make(1).zip(Semaphore.make(1)).map((requests, admission) => new RevalidationController(config, authority, jobs, children, renewal, clock, requests, admission)))(
       value => ZIO.succeed(watchdog.beginShutdown()) *> value.shutdown))
 }

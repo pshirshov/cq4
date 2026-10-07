@@ -55,7 +55,8 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
 
   private final case class Fixture(local: LocalWorkspaceFixture, owner: Scope, authority: SupervisorAuthority, controller: IntegrationController,
     combinations: CombinationController, workflow: AttachedWorkflow, driver: AttachedDriver, registry: DriverInspector, collector: Collector,
-    task: ItemId, reviewer: ArtifactId, candidate: GitCommit, fence: Fence, session: java.nio.file.Path, gateway: Json => Task[Json], jobs: JobSupervisor) {
+    task: ItemId, reviewer: ArtifactId, candidate: GitCommit, fence: Fence, session: java.nio.file.Path, gateway: Json => Task[Json], jobs: JobSupervisor,
+    units: DispatchUnits, members: List[ItemRevision], worker: ArtifactId, limits: HostLimits) {
     /** What the host retains about the Git job of an integration: its record with the reason it stopped, the evidence its executor left, its diagnostics and the target. */
     def gitJob(id: IntegrationId): Task[String] = jobs.status(owner, AttemptId(id.value)).either.flatMap(record => ZIO.attemptBlocking {
       import scala.jdk.CollectionConverters.*
@@ -186,7 +187,7 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
       claim <- ledger.acquire(owner, ClaimId(uuid), created.map(_.id).toSet, 300000)
       assignment <- usage.assign(collector, Assignment(AssignmentId(uuid), owner.project, Set.empty, Attribution.Unattributed, None, None))
       governor <- usage.start(collector, Attempt(AttemptId(uuid), assignment.id, None, owner.actor.session, Role.Governor, Harness.Codex,
-        "fixture-provider", "fixture-model", "fixture", clock.millis(), UsagePhase.Govern))
+        "fixture-provider", "fixture-model", "fixture", clock.millis(), UsagePhase.Govern, None))
       directory <- ZIO.attemptBlocking(Files.createTempDirectory(local.directory, "driver-integration-"))
       profile = HarnessSetting(Harness.Codex, directory.resolve("fixture-harness").toString, "fixture-model", "fixture-provider", "0.156.1", Nil, Set.empty)
       settings = SupervisorSettings(directory.toString, guardian.binary.toString, List(profile), limits, Nil, None, Some(Target))
@@ -208,7 +209,8 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
       _ <- ZIO.succeed(access.bind(URI.create("http://127.0.0.1:1")))
       runner = new ChildRunner(config, authority, new HarnessRegistry(Set(new ClaudeAdapter, new CodexAdapter, new PiAdapter)), jobs, local.fixture.service,
         new AgentCatalog(new McpSchemas, new ChildInstructions), new HarnessOutput, candidates, new WorkspaceReader, access, new OperatorRequirements(""), renewal, clock)
-      children <- ZIO.acquireRelease(ZIO.succeed(new DispatchController(config, runner, jobs, clock)))(_.shutdown.orDie)
+      governing = new GovernorWork(config, authority, jobs, local.fixture.service, candidates, new OperatorRequirements(""), renewal, clock)
+      children <- ZIO.acquireRelease(ZIO.succeed(new DispatchUnits(config, authority, new DispatchController(config, runner, governing, jobs, clock), governing, logstage.IzLogger.NullLogger)))(_.shutdown.orDie)
       combinations <- ZIO.acquireRelease(ZIO.succeed(new CombinationController(config, authority, candidates, clock)))(_.shutdown.orDie)
       requests <- Semaphore.make(1)
       revalidating <- Semaphore.make(1)
@@ -225,7 +227,8 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
         new OwnerLiveness { override def alive: Boolean = true }, PeerLimits(idle, idle, idle, AttachedGateway.FrameBytes, 8), () => ())))(peer => ZIO.succeed(peer.close()))
       gateway = (request: Json) => served.handle(peer, request).map(_.get)
       _ <- gateway(parser.parse("""{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}""").fold(throw _, identity))
-      empty = Fixture(local, owner, authority, controller, combinations, workflow, driver, registry, hook, created.head.id, ArtifactId(uuid), local.base, claim.fence, directory, gateway, jobs)
+      empty = Fixture(local, owner, authority, controller, combinations, workflow, driver, registry, hook, created.head.id, ArtifactId(uuid), local.base, claim.fence, directory, gateway, jobs,
+        children, created, ArtifactId(uuid), limits)
       candidate <- ZIO.attemptBlocking {
         local.git(local.source, "branch", "integration", local.base.value)
         empty.commit("candidate", Map("right.txt" -> "right\n"))
@@ -241,14 +244,14 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
       _ <- ZIO.attemptBlocking {
         val child = directory.resolve("children").resolve(workerAttempt.id.value.toString)
         HostFiles.directory(child)
-        HostFiles.immutable(child.resolve("ticket.json"), HostFiles.encode(DispatchTicket_JsonCodec, DispatchTicket(request, workerAssignment, workerAttempt, profile, None)), 65536)
+        HostFiles.immutable(child.resolve("ticket.json"), HostFiles.encode(DispatchTicket_JsonCodec, DispatchTicket(request, workerAssignment, workerAttempt, Some(profile), None)), 65536)
       }
       reviewAssignment <- usage.assign(collector, workerAssignment.copy(id = AssignmentId(uuid)))
       reviewAttempt <- usage.start(collector, workerAttempt.copy(id = AttemptId(uuid), assignment = reviewAssignment.id, role = Role.Reviewer, phase = UsagePhase.Review))
       review = ChildResult(reviewAttempt.id, request.copy(request = RequestId(uuid), work = DispatchWork.Reviewer(ReviewerMode.Candidate), previous = Some(workerArtifact)),
         candidate, Some(candidate), ChildReport.Review(created.map(ref => ReviewMember(ref.id, ReviewVerdict.Accepted, Nil)), None), Nil, RetainedEvidence(Nil, Nil))
       reviewArtifact <- publish(review)
-      _ <- test(empty.copy(reviewer = reviewArtifact, candidate = candidate))
+      _ <- test(empty.copy(reviewer = reviewArtifact, candidate = candidate, worker = workerArtifact))
     } yield ()
   }
 
@@ -296,9 +299,13 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
         val (first, second, third) = (uuid, uuid, uuid)
         def stored(id: UUID): Json = parser.parse(Files.readString(f.session.resolve("workflows").resolve(s"$id.json"))).fold(throw _, identity)
         def size(value: Json): Int = value.noSpaces.getBytes(java.nio.charset.StandardCharsets.UTF_8).length
+        def mode(expected: Long, value: ProcessMode): Task[Unit] = ZIO.attemptBlocking(f.authority.root.call(Command.Mode(ModeInput(f.owner.project,
+          ModeAction.Replace(Revision(expected), value, false))))).flatMap(result => assertIO(result.isInstanceOf[Result.Mode]).unit)
         for {
           before <- f.sessionTool("""{"Context":{}}""")
           _ <- assertIO(before.hcursor.downField("Context").downField("value").downField("workflow").focus.contains(Json.Null))
+          // I17: the session is told nothing about models to choose.
+          _ <- assertIO(before.hcursor.downField("Context").downField("value").keys.exists(keys => !keys.toSet("routes") && keys.toSet("checks")) && !before.noSpaces.contains("fixture-model"))
           missing <- f.sessionTool("""{"Instructions":{}}""")
           _ <- assertIO(missing.hcursor.downField("Failed").downField("fault").downField("Missing").get[String]("message").exists(_.contains("No workflow is active")))
           one <- f.sessionTool(activation(first, advance)).map(_.hcursor.downField("Workflow").downField("value"))
@@ -306,13 +313,14 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
           _ <- ZIO.attempt {
             // The receipt names the activation and carries its text; what the session wrote in the call is not sent back.
             assert(text == stored(first).hcursor.downField("context").get[String]("instructions").fold(throw _, identity) && text.length > 8000, text.take(200))
-            assert(one.keys.map(_.toSet).contains(Set("id", "request", "instructions", "subject", "cycle")), one.focus.get.noSpaces.take(300))
+            assert(one.keys.map(_.toSet).contains(Set("id", "request", "instructions", "subject", "cycle", "mode")), one.focus.get.noSpaces.take(300))
+            assert(one.get[String]("mode") == Right("Rigorous") && text.contains("Process mode of this project: Rigorous."))
             assert(!one.focus.get.noSpaces.contains(Requirements) && one.downField("id").get[UUID]("value") == Right(first))
           }
           context <- f.sessionTool("""{"Context":{}}""")
           active = context.hcursor.downField("Context").downField("value").downField("workflow").focus.get
           _ <- ZIO.attempt {
-            assert(active == parser.parse(s"""{"id":{"value":"$first"},"request":$advance,"cycle":null}""").fold(throw _, identity), active.noSpaces)
+            assert(active == parser.parse(s"""{"id":{"value":"$first"},"request":$advance,"cycle":null,"mode":"Rigorous"}""").fold(throw _, identity), active.noSpaces)
             // The base governing instructions stay in every Context; the workflow's text and the requirements do not come with it.
             assert(context.hcursor.downField("Context").downField("value").get[String]("instructions").exists(_.contains(SupervisorProgram.Guidance)))
             assert(!context.noSpaces.contains(Requirements) && size(context) < text.length, s"${size(context)} bytes")
@@ -333,7 +341,100 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
           other <- f.sessionTool(activation(third, s"""{"Begin":{"roots":[$item]}}""")).map(_.hcursor.downField("Workflow").downField("value"))
           // A different text is sent in full.
           _ <- assertIO(other.downField("instructions").downField("Text").get[String]("value").exists(value => value != text && value.length > 8000))
+          // I30: the operator changes the project's process mode. The active workflow keeps its mode; Context names the project's new one,
+          // and the next activation carries the text of that mode whole.
+          (fourth, fifth, sixth) = (uuid, uuid, uuid)
+          _ <- mode(0, ProcessMode.CrossCutting)
+          pending <- f.sessionTool("""{"Context":{}}""").map(_.hcursor.downField("Context").downField("value"))
+          _ <- assertIO(pending.get[String]("mode") == Right("CrossCutting") && pending.downField("workflow").get[String]("mode") == Right("Rigorous"))
+          changed <- f.sessionTool(activation(fourth, advance)).map(_.hcursor.downField("Workflow").downField("value"))
+          relaxed = changed.downField("instructions").downField("Text").get[String]("value").fold(error => throw new IllegalStateException(changed.focus.get.noSpaces.take(300), error), identity)
+          _ <- ZIO.attempt {
+            assert(changed.get[String]("mode") == Right("CrossCutting") && relaxed != text && relaxed.contains("Process mode of this project: Cross-cutting."))
+            assert(relaxed == stored(fourth).hcursor.downField("context").get[String]("instructions").fold(throw _, identity) &&
+              stored(fourth).hcursor.downField("context").get[String]("mode") == Right("CrossCutting"))
+            // What the two texts share is the whole of the rules after the mode's section.
+            assert(relaxed.substring(relaxed.indexOf("You govern the selected CQ workflow.")) == text.substring(text.indexOf("You govern the selected CQ workflow.")))
+          }
+          sameMode <- f.sessionTool(activation(fifth, advance)).map(_.hcursor.downField("Workflow").downField("value"))
+          _ <- assertIO(sameMode.downField("instructions").downField("Unchanged").downField("since").get[UUID]("value") == Right(fourth) && sameMode.get[String]("mode") == Right("CrossCutting"))
+          _ <- mode(1, ProcessMode.Rigorous)
+          // A return to the earlier mode names the activation that carried its text; the receipt's mode says which text applies.
+          returned <- f.sessionTool(activation(sixth, advance)).map(_.hcursor.downField("Workflow").downField("value"))
+          _ <- assertIO(returned.downField("instructions").downField("Unchanged").downField("since").get[UUID]("value") == Right(first) && returned.get[String]("mode") == Right("Rigorous"))
+          _ <- assertIO(stored(sixth).hcursor.downField("context").get[String]("instructions") == Right(text))
           _ <- ZIO.attempt(println(s"I33 session replies: first Workflow ${size(one.focus.get)} bytes, identical-text Workflow ${size(again.focus.get)} bytes, Context with an active workflow ${size(context)} bytes"))
+        } yield ()
+      }
+    }
+  }
+
+  /** A Codex-shaped reviewer of the fixture's version that accepts every member. */
+  private val Accepting = """#!/usr/bin/env python3
+import json, sys
+from pathlib import Path
+if sys.argv[1:] == ["--version"]:
+    print("codex-cli 0.156.1")
+    sys.exit(0)
+target = Path(sys.argv[sys.argv.index("--output-last-message") + 1])
+data = json.load(sys.stdin)
+print(json.dumps({"type": "thread.started", "thread_id": "fixture-thread"}), flush=True)
+print(json.dumps({"type": "turn.started"}), flush=True)
+target.write_text(json.dumps({"Review": {"members": [{"item": view["item"]["id"], "verdict": "Accepted", "findings": []} for view in data["input"]["members"]], "proposal": None}}))
+print(json.dumps({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_tokens": 0, "cache_write_input_tokens": 0, "output_tokens": 5, "reasoning_output_tokens": 0}}), flush=True)
+"""
+
+  "A driven session's units (Behavioral Active Blackbox; real Git, supervised processes and in-process server Communication)" should {
+    "I17: keep a unit in flight as its request until it ends, settle each of its attempts with its outcome, and integrate on the review of a panel" in {
+      (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO], registry: DriverInspector) =>
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, registry) { f =>
+        // Two reviewers. The first seat's first model is of a harness the session's settings do not hold: it abstains, and the seat goes on.
+        val work = AssignedWork(RequestId(uuid), DispatchWork.Reviewer(ReviewerMode.Candidate), f.members, Nil, Nil, Some(f.worker), f.fence, f.limits)
+        val selection = SelectedDispatch(None, ArtifactId(uuid), () => (), status => CohortFailure.outcome(status, Some("input"), CohortFailure.fault(status).map(_ => true)))
+        val request = LineageMember.Request(work.request)
+        for {
+          _ <- ZIO.attemptBlocking {
+            val harness = f.session.resolve("fixture-harness")
+            Files.writeString(harness, Accepting)
+            Files.setPosixFilePermissions(harness, java.nio.file.attribute.PosixFilePermissions.fromString("rwx------"))
+            UnitFixture.configure(f.authority.root, f.owner.project, "defaults:\n  roles:\n    reviewer: { all: [{ fallback: [pi:zai/glm, codex:accept-a] }, codex:accept-b], min: 2 }\n")
+          }
+          activation <- f.driven
+          run = LineageMember.Run(activation.id)
+          started <- f.units.start(work, Some(selection))
+          _ <- f.driver.observe(f.workflow.current, DispatchCommand.StartChoice(work.request, f.fence), DispatchReply.Status(started))
+          // The reply of the start is followed by a continuation query: the unit is in flight from then on, whichever candidate runs.
+          registered <- ZIO.attempt(f.cycle.map(_.inFlight.map(_.member)))
+          status <- f.units.status(started.attempt, 120000).repeatUntil(value => DispatchController.terminal(value.phase))
+            .timeoutFail(new IllegalStateException("The review unit did not end"))(zio.Duration.fromSeconds(90))
+          seats <- f.units.seats(started.attempt)
+          attempts = seats.seats.flatMap(_.attempts.map(_.attempt))
+          _ <- f.eventually("the unit and its attempts are settled in the cycle")(f.cycle.exists(cycle =>
+            (request :: attempts.map(LineageMember.Attempt.apply)).forall(member => cycle.lineage.exists(entry => entry.member == member && entry.settled))))
+          driver <- f.status
+          prepared <- { val id = IntegrationId(uuid); f.dispatch(DispatchCommand.PrepareIntegration(id, status.result.get)) *> f.settled(id) }
+          _ <- ZIO.attempt {
+            val cycle = f.cycle.get
+            val outcomes = attempts.map(id => cycle.outcomes.find(_.attempt == id).map(value => (value.end, value.input, value.fault)))
+            println(s"Driven panel: ${(status.phase, status.next)} attempts=${attempts.size} first in flight=$registered outcomes=$outcomes driver=${f.describe(driver)} " +
+              s"events=${f.unitEvents(started.attempt.value)} prepared=${prepared.phase}; ${f.lineage}")
+            assert(registered.exists(members => members.contains(request) && members.contains(LineageMember.Attempt(started.attempt))), registered.toString)
+            assert(status.phase == DispatchPhase.Completed && status.next == ChildNext.ConsiderAcceptance && status.attempt == attempts.head && attempts.size == 3, s"$status $seats")
+            assert(seats.seats.map(seat => (seat.end.getClass.getSimpleName, seat.attempts.map(value => (value.route.harness, value.abstained)))) == List(
+              ("Delivered", List((Harness.Pi, Some(AbstentionReason.Unconfigured)), (Harness.Codex, None))), ("Delivered", List((Harness.Codex, None)))), seats.toString)
+            // Every attempt of the unit is a member of the cycle under the unit's request and settled with its own outcome.
+            assert(cycle.lineage.contains(LineageEntry(request, Some(run), true)) &&
+              attempts.forall(id => cycle.lineage.contains(LineageEntry(LineageMember.Attempt(id), Some(request), true))), f.lineage)
+            assert(outcomes == List(Some((ChildEnd.Abstained, Some("input"), Some("Abstained (Unconfigured): The session settings have no entry for Pi"))),
+              Some((ChildEnd.Admitted, Some("input"), None)), Some((ChildEnd.Admitted, Some("input"), None))), outcomes.toString)
+            // The abstention of one candidate is no failure of the drive, and no attempt on its input.
+            assert(driver.state == DriverState.On && driver.stopped.isEmpty && driver.activeChildren == 0 && DriverPolicy.retryable(cycle).isEmpty && DriverPolicy.abstained(cycle).isEmpty, f.describe(driver))
+            // A waiter is woken once, for the unit; the attempts of its candidates write nothing of their own.
+            assert(f.unitEvents(started.attempt.value) == List("Started", "Completed") && attempts.tail.forall(id => f.unitEvents(id.value).isEmpty))
+            // The unit's result is the one review handle an integration is prepared with.
+            assert(prepared.phase == IntegrationPhase.Ready && prepared.blocker.isEmpty && prepared.preview.exists(_.reviewer == status.result.get), prepared.toString)
+          }
         } yield ()
       }
     }

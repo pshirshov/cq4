@@ -80,7 +80,7 @@ class ExtendedAccess:
         self.host(project, "/api/usage", {"Assign": {"value": assignment}})
         attempt = {"id": identity(), "assignment": assignment["id"], "parent": parent, "session": self.scopes[project["value"]]["owner"]["session"],
             "role": role, "harness": "Codex", "provider": "fixture", "model": "fixture", "collector": "fixture", "startedAt": "1000",
-            "phase": {"Governor": "Govern", "Worker": "Work", "Reviewer": "Review"}[role]}
+            "phase": {"Governor": "Govern", "Worker": "Work", "Reviewer": "Review"}[role], "effort": None}
         self.host(project, "/api/usage", {"Start": {"value": attempt}})
         return attempt
 

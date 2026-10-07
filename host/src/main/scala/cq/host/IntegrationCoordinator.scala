@@ -85,14 +85,17 @@ final class IntegrationCoordinator(owner: Scope, journal: IntegrationJournal, gi
 
   // A conclusive refusal is the server's answer, so nothing was reserved; with no execution admitted either, the integration can be
   // sealed. Any other refusal, and an unanswered reservation, prove neither and leave it pending.
-  private def reserve(entry: IntegrationEntry, local: IntegrationLocal): IntegrationRecord =
+  // `refused` is asked about a denial, which by itself may only mean a credential the server did not accept: it gives the reason
+  // when the caller knows a rule of the server that refuses this reservation as things stand.
+  private def reserve(entry: IntegrationEntry, local: IntegrationLocal, refused: () => Option[String]): IntegrationRecord =
     try {
       val value = collector.integrate(HostIntegrationInput(owner.project, HostIntegration.Reserve(local.intent)))
       require(value.intent == local.intent, "Server reservation differs from local intent")
       value
     } catch {
       case failure @ DomainFailure(fault) =>
-        if (!conclusive(fault) || !unapplied(local)) throw failure
+        val answered = conclusive(fault) || fault.isInstanceOf[Fault.Denied] && refused().nonEmpty
+        if (!answered || !unapplied(local)) throw failure
         val reason = DispatchProjection.concise("Server refused the reservation, so no Git update was launched: " + fault)
         entry.write(local.copy(observation = Some(IntegrationObservation.NotApplied(reason))))
         throw new IntegrationRefused(reason)
@@ -110,11 +113,14 @@ final class IntegrationCoordinator(owner: Scope, journal: IntegrationJournal, gi
   }}
 
   /** Fails with `IntegrationRefused` when the server refused the reservation before any attempt, now or in an earlier run. */
-  def run(id: IntegrationId): Task[IntegrationRun] = journal.locked(id) { entry => for {
+  def run(id: IntegrationId): Task[IntegrationRun] = run(id, () => None)
+
+  /** As `run`; `refused` says why the server refuses this reservation now, when the caller can tell (see `reserve`). */
+  def run(id: IntegrationId, refused: () => Option[String]): Task[IntegrationRun] = journal.locked(id) { entry => for {
     local <- ZIO.attemptBlocking(entry.read.getOrElse(throw DomainFailure(Fault.Missing("Integration journal is missing; no effect may be retried"))))
     record <- ZIO.attemptBlocking {
       refusal(local).foreach(reason => throw new IntegrationRefused(reason))
-      reserve(entry, local)
+      reserve(entry, local, refused)
     }
     result <- deliver(local, record, observe(entry, local))
   } yield result }

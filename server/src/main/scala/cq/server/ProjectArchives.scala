@@ -1,7 +1,7 @@
 package cq.server
 
 import cq.api.*
-import cq.core.{DomainFailure, DriverRecords, LedgerPolicy, ProjectSettingKind}
+import cq.core.{DomainFailure, DriverRecords, LedgerPolicy, ProcessModePolicy, ProjectSettingKind}
 import java.io.{FilterInputStream, FilterOutputStream}
 import java.nio.charset.StandardCharsets.UTF_8
 import java.nio.file.{Files, Path}
@@ -27,7 +27,7 @@ private[server] object ArchiveLimits {
   def bounded(size: Long): Unit = if (size > MaxBytes) throw DomainFailure(Fault.Limit("Project archive exceeds 512 MiB"))
 }
 
-final class PostgresProjectArchives(database: LedgerDatabase, clock: Clock) extends ProjectArchives {
+final class PostgresProjectArchives(database: LedgerDatabase, clock: Clock, modes: ProcessModePolicy) extends ProjectArchives {
   import ArchiveLimits.*
   private val ValidationFetchRows = 32
   private val tables = List(
@@ -169,7 +169,11 @@ final class PostgresProjectArchives(database: LedgerDatabase, clock: Clock) exte
       sql.query("SELECT kind, body::text FROM restore_cq_project_settings")(_ => ())(row => (row.getString(1), row.getString(2))).foreach { case (kind, body) =>
         val setting = scala.util.Try(Wire.decode(ProjectSetting_JsonCodec, body)).getOrElse(invalid("Archive holds a project setting that cannot be decoded"))
         check(ProjectSettingKind.of(setting).toString == kind, "Archive project setting kind disagrees with its content")
-        setting match { case ProjectSetting.Requirements(text) => LedgerPolicy.validateRequirements(text) }
+        setting match {
+          case ProjectSetting.Requirements(text) => LedgerPolicy.validateRequirements(text)
+          case mode: ProjectSetting.Mode => modes.validate(mode)
+          case ProjectSetting.Agents(text) => LedgerPolicy.validateAgents(text)
+        }
       }
       sql.query("SELECT body::text, summary::text, harness, session_key, revision FROM restore_cq_drivers")(_ => ()) { row =>
         val record = scala.util.Try(Wire.decode(DriverRecord_JsonCodec, row.getString(1))).getOrElse(invalid("Archive holds an undecodable driver"))

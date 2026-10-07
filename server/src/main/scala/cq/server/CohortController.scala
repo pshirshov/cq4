@@ -9,7 +9,7 @@ import scala.util.{Failure, Success, Try}
 import zio.{Task, ZIO}
 
 final class CohortController(config: SupervisorConfig, authority: SupervisorAuthority, workflow: WorkflowExecution,
-  dispatch: DispatchController, candidates: CandidateWorkspace, requirements: OperatorRequirements, clock: Clock, logger: IzLogger) {
+  units: DispatchUnits, candidates: CandidateWorkspace, requirements: OperatorRequirements, clock: Clock, logger: IzLogger) {
   private val progress = new CohortProgress
   private val planner = new CohortPlanner(authority.governor, config.owner, candidates, config.settings.checks, progress, requirements)
   private var decisions = Map.empty[RequestId, CohortPlan]
@@ -50,13 +50,13 @@ final class CohortController(config: SupervisorConfig, authority: SupervisorAuth
     value.evidence.decision
   })
 
-  def start(id: RequestId, harness: Harness, fence: Fence): Task[DispatchStatus] = {
+  def start(id: RequestId, fence: Fence): Task[DispatchStatus] = {
     val resolved = ZIO.attemptBlocking(synchronized {
       val (plan, choice) = decisions.values.filter(plan => advertised(plan.evidence.request.request)).toList.flatMap(plan => plan.evidence.decision.choices.map(plan -> _)).find(_._2.id == id)
         .getOrElse(throw DomainFailure(Fault.Missing("Cohort choice is not owned by this governing session or belongs to a previous workflow activation")))
       require(generations(plan.evidence.request.request) == workflow.generation, "Cohort choice belongs to a previous workflow activation")
-      val request = DispatchRequest(choice.id, choice.work, harness, choice.members, choice.guidance, choice.artifacts, choice.previous, fence, choice.limits)
-      workflow.authorize(DispatchCommand.Start(request))
+      val work = AssignedWork(choice.id, choice.work, choice.members, choice.guidance, choice.artifacts, choice.previous, fence, choice.limits)
+      workflow.authorize(DispatchCommand.Start(work))
       val admission = () => {
         planner.verify(plan.evidence.request, choice, plan.fingerprints(id))
         val preview = authority.governor.call(Command.Read(ReadInput(config.project.project, ReadSelection.Claims(choice.members.map(_.id).toSet)))) match {
@@ -69,15 +69,20 @@ final class CohortController(config: SupervisorConfig, authority: SupervisorAuth
           !claim.released && claim.expiresAt > clock.millis()), "Cohort start requires its exact current governing claim")
         progress.started(plan.fingerprints(id))
       }
-      request -> SelectedDispatch(choice.cohort, plan.evidence.decision.artifact, admission, concluded(plan.fingerprints(id), _))
+      work -> SelectedDispatch(choice.cohort, plan.evidence.decision.artifact, admission, concluded(plan.fingerprints(id), _))
     })
-    resolved.flatMap((request, selected) => dispatch.startSelected(request, selected))
+    resolved.flatMap((work, selected) => units.start(work, Some(selected)))
   }
 
-  // A child whose receipt advises Retry left no result: its fault is published for the next attempt and its input is offered again.
-  // When the attempt before it on the same input ended in the same fault, that input stays deferred, as it does when the fault cannot
+  // `status` is the final status of a unit, which may have made several attempts.
+  // A unit whose status advises Retry left no result: its fault is published for the next unit and its input is offered again.
+  // When the unit before it on the same input ended in the same fault, that input stays deferred, as it does when the fault cannot
   // be published. The reply tells a drive which of these happened.
-  private def concluded(fingerprint: CohortExecutionFingerprint, status: DispatchStatus): ChildOutcome = {
+  // A unit that abstained ran no model: its input is released as it was, with no fault to carry and nothing to compare a repetition with.
+  private def concluded(fingerprint: CohortExecutionFingerprint, status: DispatchStatus): ChildOutcome = if (status.phase == DispatchPhase.Abstained) {
+    progress.abstained(fingerprint)
+    CohortFailure.outcome(status, Some(fingerprint.group), None)
+  } else {
     val failure = CohortFailure.fault(status).flatMap { fault =>
       val upload = ArtifactUpload(config.project.project, NativeArtifacts.id(config.run.attempt.id, "failure-" + status.attempt.value), config.run.attempt.id,
         ArtifactKind.Evidence, "text/plain", s"The previous attempt on this assignment (${status.attempt.value}) left no admitted result. Its fault: $fault")

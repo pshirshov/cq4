@@ -1,7 +1,7 @@
 package cq.server
 
 import cq.api.*
-import cq.core.DomainFailure
+import cq.core.{DomainFailure, ProcessModePolicy}
 import cq.host.{DriverSessionClient, HostFiles, OperatorRequirements, WorkflowAssembly, WorkflowAssets, WorkflowExecution}
 import zio.{Task, ZIO}
 
@@ -53,18 +53,18 @@ final class WorkflowActivations(session: DriverSessionClient, unsettled: () => L
 }
 
 final class AttachedWorkflow(config: SupervisorConfig, authority: SupervisorAuthority, assets: WorkflowAssets, execution: WorkflowExecution,
-  requirements: OperatorRequirements, dispatch: DispatchController, integrations: IntegrationController, combinations: CombinationController,
+  requirements: OperatorRequirements, units: DispatchUnits, integrations: IntegrationController, combinations: CombinationController,
   revalidations: RevalidationController, driver: AttachedDriver) {
   // Instructions plus a session request of up to 64 KiB (the gateway bound) no longer fit the former 64 KiB record.
   private val MaxActivationBytes = 131072
   private val activations = new WorkflowActivations(driver.session,
-    () => dispatch.unsettled ++ revalidations.unsettled ++ integrations.unsettled ++ combinations.unsettled, begin)
+    () => units.unsettled ++ revalidations.unsettled ++ integrations.unsettled ++ combinations.unsettled, begin)
   private var integrationsByEpoch = Map.empty[IntegrationId, Long]
   private var combinationsByEpoch = Map.empty[RequestId, Long]
   def current: Option[WorkflowActivation] = activations.current
 
   private def begin(id: RequestId, request: WorkflowRequest, operatorRequirements: String, cycle: Option[CycleId]): WorkflowActivation = {
-    val value = WorkflowActivation(id, new WorkflowAssembly(authority.governor, config.project.project, assets).assemble(request), operatorRequirements, cycle)
+    val value = WorkflowActivation(id, new WorkflowAssembly(authority.governor, config.project.project, assets, config.run.ownership).assemble(request), operatorRequirements, cycle)
     val directory = config.directory.resolve("workflows")
     HostFiles.directory(directory)
     HostFiles.immutable(directory.resolve(id.value.toString + ".json"), HostFiles.encode(WorkflowActivation_JsonCodec, value), MaxActivationBytes)
@@ -105,10 +105,17 @@ final class AttachedWorkflow(config: SupervisorConfig, authority: SupervisorAuth
   def authorize(command: DispatchCommand): Unit = synchronized {
     command match {
       // A discard withdraws work as a cancellation does: it starts nothing and writes nothing to the server or to Git.
-      case _: DispatchCommand.Status | _: DispatchCommand.Cancel | _: DispatchCommand.IntegrationStatus | _: DispatchCommand.CombinationStatus |
-        _: DispatchCommand.DiscardIntegration => ()
+      case _: DispatchCommand.Status | _: DispatchCommand.Seats | _: DispatchCommand.Cancel | _: DispatchCommand.IntegrationStatus |
+        _: DispatchCommand.CombinationStatus | _: DispatchCommand.DiscardIntegration => ()
       case _ =>
         if (current.isEmpty) throw DomainFailure(Fault.Denied("Activate a CQ workflow with session/Workflow before dispatch"))
+        command match {
+          // The mode is the activation's: a project that entered the YOLO mode later gives it to the next activation.
+          case _: DispatchCommand.OpenWorkspace | _: DispatchCommand.SubmitWorkspace | _: DispatchCommand.SelfReview =>
+            val mode = current.get.context.mode
+            if (mode != ProcessMode.Yolo) throw DomainFailure(Fault.Denied(AttachedWorkflow.ownWork(command, mode)))
+          case _ => ()
+        }
         execution.authorize(command)
         command match {
           case DispatchCommand.PrepareIntegration(id, _) =>
@@ -127,4 +134,17 @@ final class AttachedWorkflow(config: SupervisorConfig, authority: SupervisorAuth
         }
     }
   }
+}
+
+object AttachedWorkflow {
+  private def name(command: DispatchCommand): String = command match {
+    case _: DispatchCommand.OpenWorkspace => "OpenWorkspace"
+    case _: DispatchCommand.SubmitWorkspace => "SubmitWorkspace"
+    case _: DispatchCommand.SelfReview => "SelfReview"
+    case other => throw new IllegalArgumentException(s"${other.getClass.getSimpleName} is not the governing session's own work")
+  }
+  /** Why a command of the governing session's own work is refused in an activation of `mode`. */
+  def ownWork(command: DispatchCommand, mode: ProcessMode): String =
+    s"Workflow execution: ${name(command)} is the governing session's own work, which only the ${ProcessModePolicy.label(ProcessMode.Yolo)} mode permits; " +
+      s"this workflow activation works in the ${ProcessModePolicy.label(mode)} mode. Dispatch a Worker and an independent Reviewer"
 }

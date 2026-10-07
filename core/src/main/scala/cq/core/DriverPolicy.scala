@@ -108,13 +108,22 @@ object DriverPolicy {
     invalid(value.fault.forall(fault => fault.trim.nonEmpty && fault.length <= MaxDetail), s"An attempt outcome's fault has 1–$MaxDetail characters")
     invalid(!Set(ChildEnd.Retryable, ChildEnd.Repeated)(value.end) || (value.input.nonEmpty && value.fault.nonEmpty),
       "A retryable or repeated failure carries its input fingerprint and its fault")
+    invalid(value.end != ChildEnd.Abstained || (value.input.nonEmpty && value.fault.nonEmpty),
+      "An abstention carries its input fingerprint and, as its fault, which models abstained and why")
   }
 
   // The inputs a cycle left retryable: every attempt the cycle made on them failed without a result and the host offers them again.
-  // Each is represented by the last such attempt the host reported.
+  // Each is represented by the last such attempt the host reported. An abstention is no attempt on the input: no model ran on it.
   def retryable(cycle: CycleRecord): List[ChildOutcome] = {
+    val attempted = cycle.outcomes.filterNot(_.end == ChildEnd.Abstained)
+    val inputs = attempted.groupBy(_.input)
+    attempted.filter(value => inputs(value.input).forall(_.end == ChildEnd.Retryable) && inputs(value.input).last == value)
+  }
+
+  // The inputs a cycle left without a model: every unit the cycle started on them abstained. Each is represented by the last one.
+  def abstained(cycle: CycleRecord): List[ChildOutcome] = {
     val inputs = cycle.outcomes.groupBy(_.input)
-    cycle.outcomes.filter(value => inputs(value.input).forall(_.end == ChildEnd.Retryable) && inputs(value.input).last == value)
+    cycle.outcomes.filter(value => inputs(value.input).forall(_.end == ChildEnd.Abstained) && inputs(value.input).last == value)
   }
 
   def repeated(member: LineageMember, cycle: CycleRecord, value: ChildOutcome): DriverStopped = DriverStopped(DriverStop.Failure,
@@ -139,6 +148,7 @@ object DriverPolicy {
     val offered = if (unchanged) previous.toList.flatMap(retryable) else Nil
     val earlier = previous.toList.flatMap(_.retried)
     val again = for { now <- offered; before <- earlier if before.input == now.input } yield before -> now
+    val unserved = if (unchanged) previous.toList.flatMap(abstained) else Nil
     if (work.nonEmpty && !unchanged) DriverDecision.Continue(Nil, Nil)
     else if (work.nonEmpty && again.nonEmpty) DriverDecision.Stop(DriverStopped(DriverStop.Failure, again.map { (before, now) =>
       s"${references(now.members)} failed without a result twice on the same input while no cycle in between changed anything: " +
@@ -148,6 +158,9 @@ object DriverPolicy {
       DriverDecision.Continue(earlier.filterNot(before => offered.exists(_.input == before.input)) ++ offered, offered)
     else if (user.nonEmpty) DriverDecision.Stop(DriverStopped(DriverStop.UserInputRequired,
       s"Awaiting the user on ${references(user)}; the driver never answers questions or infers approval"))
+    // Nothing changed because no model could run the work; selecting it again at once would find the same models unavailable.
+    else if (work.nonEmpty && unserved.nonEmpty) DriverDecision.Stop(DriverStopped(DriverStop.Failure,
+      "No configured model could run " + unserved.map(value => s"${references(value.members)}: ${value.fault.get}").mkString("; ")))
     else if (work.nonEmpty) DriverDecision.Stop(DriverStopped(DriverStop.Quiescent,
       "The previous cycle changed nothing in the advanceable set, its context or its readiness" + blocked(snapshot)))
     else DriverDecision.Stop(DriverStopped(DriverStop.Quiescent, "No item of the advanceable set is ready to advance" + blocked(snapshot)))

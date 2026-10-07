@@ -216,12 +216,12 @@ root adt Fault {
 }
 
 enum Harness { Claude Codex Pi }
-enum AttemptState { Running Completed Failed Cancelled Unknown }
+enum AttemptState { Running Completed Failed Cancelled Unknown Abstained }
 enum Attribution { Direct Shared Unattributed }
 root data EvaluationScope { run: str scenario: str assessor: bit }
 root data Assignment { id: AssignmentId project: ProjectId members: set[ItemId] attribution: Attribution cohort: opt[uid] evaluation: opt[EvaluationScope] }
 enum UsagePhase { Govern Explore Probe Plan Work Check Review Combine Integrate }
-root data Attempt { id: AttemptId assignment: AssignmentId parent: opt[AttemptId] session: SessionId role: Role harness: Harness provider: str model: str collector: str startedAt: i64 phase: UsagePhase }
+root data Attempt { id: AttemptId assignment: AssignmentId parent: opt[AttemptId] session: SessionId role: Role harness: Harness provider: str model: str collector: str startedAt: i64 phase: UsagePhase effort: opt[Effort] }
 enum CounterScope { Increment Cumulative }
 enum Measurement { Observed Estimated Missing Unsupported }
 root data Counter { value: opt[i64] measurement: Measurement }
@@ -303,6 +303,9 @@ root data ProjectPage { projects: lst[Project] after: opt[ProjectId] hasMore: bi
 root data ProjectConfig { project: ProjectId endpoint: str name: str }
 root adt ProjectSetting {
   data Requirements { text: str }
+  // The process mode of the project. `selfReviewWithoutChecks` lets a self-reviewed integration proceed in a project that configures no check.
+  data Mode { value: ProcessMode selfReviewWithoutChecks: bit }
+  data Agents { text: str }
 }
 root data RequirementsChange { actor: Actor at: i64 }
 root data ProjectRequirements { project: ProjectId revision: Revision text: str change: opt[RequirementsChange] }
@@ -311,6 +314,18 @@ root adt RequirementsAction {
   data Replace { expected: Revision text: str }
 }
 root data RequirementsInput { project: ProjectId action: RequirementsAction }
+// How strictly a project's work follows the process: the prescribed order with a Planner and plan review, the same safeguards with the
+// Governor planning itself, or additionally the Governor implementing and reviewing itself.
+enum ProcessMode { Rigorous CrossCutting Yolo }
+root data ModeChange { actor: Actor at: i64 }
+root data ProjectMode { project: ProjectId revision: Revision mode: ProcessMode selfReviewWithoutChecks: bit change: opt[ModeChange] }
+root adt ModeAction {
+  data Read {}
+  data Replace { expected: Revision mode: ProcessMode selfReviewWithoutChecks: bit }
+}
+root data ModeInput { project: ProjectId action: ModeAction }
+// What Help and the mode dialog show of one mode. `unavailable` says why the mode cannot be selected in this release.
+root data CatalogMode { mode: ProcessMode label: str hint: str description: str instructions: CatalogPrompt unavailable: opt[str] }
 root data SearchInput { project: ProjectId query: str after: opt[ItemId] snapshot: opt[ChangeCursor] limit: i32 }
 enum ItemOrderField { Id Type Title Status Severity Modified }
 enum SortDirection { Ascending Descending }
@@ -375,7 +390,7 @@ root adt LineageMember {
   data Combination { id: RequestId }
 }
 root data LineageEntry { member: LineageMember parent: opt[LineageMember] settled: bit }
-enum ChildEnd { Admitted Retryable Repeated Failed Cancelled Unknown }
+enum ChildEnd { Admitted Retryable Repeated Failed Cancelled Unknown Abstained }
 root data ChildOutcome { attempt: AttemptId members: lst[ItemId] end: ChildEnd input: opt[str] fault: opt[str] }
 root data DriverCycle {
   id: CycleId number: i32 state: CycleState roots: set[ItemId] through: WorkflowPhase snapshot: WorksetSnapshot
@@ -500,6 +515,8 @@ root adt Command {
   data Initialize { config: ProjectConfig }
   data RenameProject { project: ProjectId expected: Revision name: str }
   data Requirements { input: RequirementsInput }
+  data Mode { input: ModeInput }
+  data Agents { input: AgentsInput }
   data Search { input: SearchInput }
   data Graph { input: GraphInput }
   data Workset { input: WorksetInput }
@@ -532,6 +549,9 @@ root adt Result {
   data Projects { page: ProjectPage }
   data Initialized { project: Project }
   data Requirements { value: ProjectRequirements }
+  data Mode { value: ProjectMode }
+  data Agents { value: AgentsView }
+  data AgentRoute { value: ResolvedAssignment }
   data Found { page: ItemPage }
   data Detail { view: ItemView }
   data History { page: HistoryPage }
@@ -612,7 +632,115 @@ adt SourceBuild {
 }
 root data SessionRecovery { outcome: RecoveryOutcome reason: str recordedAt: i64 host: str build: SourceBuild }
 
-enum ArtifactKind { Prompt Input Result Transcript Validation Combination Selection Evidence Amendment }
+// Agent model configuration (I17). The stored form of a layer is the text its operator wrote (ProjectSetting.Agents,
+// InstallationSetting.Agents); AgentConfig is what that text parses to and is never stored.
+enum AgentRole { Planner Worker Explorer Reviewer }
+enum ModelTier { Frontier Standard Fast }
+enum Effort { Off Minimal Low Medium High XHigh Max Ultra }
+root data ModelName { provider: opt[str] model: str }
+root data TierEntry { model: ModelName effort: opt[Effort] }
+root adt HarnessSelector {
+  data Governing {}
+  data Named { harness: Harness }
+}
+root adt ModelTarget {
+  data Exact { model: ModelName }
+  data Tier { value: ModelTier }
+}
+root data ModelReference { harness: HarnessSelector target: ModelTarget effort: opt[Effort] }
+enum SeatStrategy { Fallback RoundRobin First }
+root adt SeatChoice {
+  data Single { reference: ModelReference }
+  data Strategy { kind: SeatStrategy entries: lst[ModelReference] }
+}
+enum PanelMode { All Any }
+root adt RoleChoice {
+  data Seat { choice: SeatChoice }
+  data Panel { mode: PanelMode seats: lst[SeatChoice] min: i32 }
+}
+// What a key of a roles mapping names: a role in every mode that has no key of its own (`reviewer`), or one mode of a role
+// (`reviewer/plan`). The planner role has no modes.
+root adt RoleKey {
+  data Plain { role: AgentRole }
+  data Explorer { mode: ExplorerMode }
+  data Worker { mode: WorkerMode }
+  data Reviewer { mode: ReviewerMode }
+}
+root data RoleAssignment { key: RoleKey choice: RoleChoice }
+// A roles mapping holds a key once.
+root data HarnessAgents { tiers: map[ModelTier, lst[TierEntry]] roles: lst[RoleAssignment] }
+root data AgentConfig { defaults: lst[RoleAssignment] harnesses: map[Harness, HarnessAgents] }
+root data ModelRoute { harness: Harness provider: opt[str] model: str effort: opt[Effort] }
+root data ResolvedSeat { strategy: SeatStrategy candidates: lst[ModelRoute] }
+enum AgentLayer { Project Installation }
+enum RoleSource { HarnessRoles DefaultRoles }
+// Where the lookup found a role: the layer and the part of its document.
+root data RoleOrigin { layer: AgentLayer source: RoleSource }
+// selfReview: the indices of the seats of a Reviewer role that hold a candidate of the governing harness.
+root data ResolvedRole { mode: PanelMode min: i32 seats: lst[ResolvedSeat] origin: RoleOrigin selfReview: lst[i32] }
+// Line and column are 1-based; a column counts UTF-16 code units.
+root data TextPosition { line: i32 column: i32 }
+root adt AgentProblem {
+  data Syntax { at: TextPosition message: str }
+  data UnknownKey { at: TextPosition key: str }
+  data EmptyList { at: TextPosition }
+  data InvalidMinimum { at: TextPosition min: i32 seats: i32 }
+  data PanelNotAllowed { at: TextPosition role: AgentRole }
+  // The panel starts `together` seats at once (every seat of `all`, `min` of `any`), more than the `capacity` of child attempts a
+  // session runs at once. `harness` is absent for a key of the defaults.
+  data PanelOverCapacity { at: TextPosition harness: opt[Harness] key: RoleKey together: i32 capacity: i32 }
+  data ProviderRequired { at: TextPosition harness: Harness }
+  data ProviderNotAllowed { at: TextPosition harness: Harness }
+  data EffortUnsupported { at: TextPosition harness: Harness effort: Effort }
+  // Pi reads the text after the last colon of a model name as a thinking level when it is one of its levels.
+  data ModelAmbiguous { at: TextPosition harness: Harness model: str }
+  data RoleUnassigned { harness: Harness role: AgentRole }
+  data TierUndefined { harness: Harness tier: ModelTier role: AgentRole }
+}
+root adt RoleResolution {
+  data Resolved { plan: ResolvedRole }
+  // The positions in the problems are those of the text of the origin's layer; a role that no layer assigns has no origin.
+  data Unresolved { origin: opt[RoleOrigin] problems: lst[AgentProblem] }
+}
+// key: the key that decided the resolution, which is the plain key of the role when no layer assigns it. In a view, the
+// assignment of a plain key holds for every mode of the role that has no assignment of its own.
+root data ResolvedAssignment { harness: Harness key: RoleKey resolution: RoleResolution }
+root adt InstallationSetting {
+  data Agents { text: str }
+}
+root adt AgentsScope {
+  data Installation {}
+  data Project {}
+}
+root adt AgentsAction {
+  data Read {}
+  data Replace { scope: AgentsScope expected: Revision text: str }
+  // The unsaved text of one layer against the other layer as stored.
+  data Preview { scope: AgentsScope text: str }
+  data Resolve { harness: Harness work: DispatchWork }
+}
+root data AgentsInput { project: ProjectId action: AgentsAction }
+root data AgentsDocument { revision: Revision text: str change: opt[RequirementsChange] problems: lst[AgentProblem] }
+// A roles key where it is written: the layer and the part of its document, and the position of the key in that layer's text.
+root data PlacedRoleKey { origin: RoleOrigin key: RoleKey at: TextPosition }
+// The key of one mode that never decides when `harness` governs: `by`, the key of its role, stands in an earlier place of the
+// lookup and decides that mode there. The configuration is valid; the note says that `shadowed` has no effect for that harness.
+root data ShadowedRoleKey { harness: Harness shadowed: PlacedRoleKey by: PlacedRoleKey }
+root data AgentsView { installation: AgentsDocument project: AgentsDocument assignments: lst[ResolvedAssignment] notes: lst[ShadowedRoleKey] }
+// A unit is one started choice; it owns the attempts of its seats and their candidates.
+root adt SeatEnd {
+  data Pending {}
+  data Delivered { result: ArtifactId next: ChildNext }
+  data Abstained {}
+  data Failed { fault: str }
+  data Cancelled {}
+}
+enum AbstentionReason { Unconfigured Launch Credential Quota RateLimit Unavailable }
+root data SeatAttempt { attempt: AttemptId route: ModelRoute abstained: opt[AbstentionReason] detail: opt[str] }
+root data SeatStatus { seat: i32 attempts: lst[SeatAttempt] end: SeatEnd }
+root data UnitSeats { request: RequestId mode: PanelMode min: i32 seats: lst[SeatStatus] }
+
+enum ArtifactKind { Prompt Input Result Transcript Validation Combination Selection Evidence Amendment Panel }
 root data ArtifactUpload { project: ProjectId id: ArtifactId attempt: AttemptId kind: ArtifactKind mediaType: str body: str }
 root data ArtifactMetadata { project: ProjectId id: ArtifactId attempt: AttemptId kind: ArtifactKind mediaType: str sha256: str bytes: i32 codePoints: i32 actor: Actor receivedAt: i64 }
 root data ArtifactPage { metadata: ArtifactMetadata offset: i32 next: i32 hasMore: bit text: str }
@@ -634,7 +762,6 @@ root data HostLimits { startupMillis: i64 heartbeatMillis: i64 graceMillis: i64 
 root data ValidationCheck { name: str command: lst[str] executionMillis: i64 retainedOutputBytes: i32 attempts: i32 revalidations: i32 }
 root data SupervisorSettings { stateRoot: str guardian: str harnesses: lst[HarnessSetting] limits: HostLimits checks: lst[ValidationCheck] evaluation: opt[EvaluationScope] integrationTarget: opt[str] }
 root data GoverningReport { summary: str }
-root data HarnessRoute { harness: Harness model: str provider: str }
 enum WorkflowPhase { Explore Plan Work Review Integrate }
 enum UpstreamAction { Prepare Report Recheck }
 root adt WorkflowRequest {
@@ -644,8 +771,9 @@ root adt WorkflowRequest {
   data Upstream { roots: set[ItemId] action: UpstreamAction }
 }
 root data WorkflowSubject { result: ArtifactId work: DispatchWork members: lst[ItemRevision] candidate: opt[GitCommit] }
-root data WorkflowContext { request: WorkflowRequest instructions: str subject: opt[WorkflowSubject] }
-root data GoverningInput { project: ProjectConfig routes: lst[HarnessRoute] checks: lst[str] limits: HostLimits integrationTarget: opt[str] request: str workflow: opt[WorkflowContext] }
+// `mode` is the process mode whose section opens `instructions`: the project's mode when the workflow was activated, as a session of this ownership works it.
+root data WorkflowContext { request: WorkflowRequest instructions: str subject: opt[WorkflowSubject] mode: ProcessMode }
+root data GoverningInput { project: ProjectConfig checks: lst[str] limits: HostLimits integrationTarget: opt[str] request: str workflow: opt[WorkflowContext] }
 enum SessionOwnership { Managed Attached }
 root data AttachedPiEvent {
   sequence: i64 session: str turn: i64 provider: str model: str timestamp: i64 responseId: opt[str] stopReason: str
@@ -654,17 +782,19 @@ root data AttachedPiEvent {
 root data AttachedPiSample { event: AttachedPiEvent receivedAt: i64 }
 root data WorkflowActivation { id: RequestId context: WorkflowContext operatorRequirements: str cycle: opt[CycleId] }
 // What a governing session is sent about an activation. The stored record is WorkflowActivation; these repeat no text the session holds.
-root data ActiveWorkflow { id: RequestId request: WorkflowRequest cycle: opt[CycleId] }
+root data ActiveWorkflow { id: RequestId request: WorkflowRequest cycle: opt[CycleId] mode: ProcessMode }
 root adt WorkflowInstructions {
   data Text { value: str }
   // The text is identical to the one the Workflow reply of activation `since` carried in this attached session.
   data Unchanged { since: RequestId }
 }
-root data WorkflowReceipt { id: RequestId request: WorkflowRequest instructions: WorkflowInstructions subject: opt[WorkflowSubject] cycle: opt[CycleId] }
+root data WorkflowReceipt { id: RequestId request: WorkflowRequest instructions: WorkflowInstructions subject: opt[WorkflowSubject] cycle: opt[CycleId] mode: ProcessMode }
 root data AttachedContext {
   session: SessionId attempt: AttemptId directory: str project: ProjectConfig
-  routes: lst[HarnessRoute] checks: lst[str] limits: HostLimits integrationTarget: opt[str]
+  checks: lst[str] limits: HostLimits integrationTarget: opt[str]
   instructions: str workflow: opt[ActiveWorkflow] usageCoverage: str
+  // The project's process mode now; the next workflow activation takes it.
+  mode: ProcessMode
 }
 root adt SessionCommand {
   data Context {}
@@ -706,6 +836,13 @@ root adt DispatchWork {
 }
 root data DispatchRequest {
   request: RequestId work: DispatchWork harness: Harness members: lst[ItemRevision]
+  guidance: lst[ItemRevision] artifacts: lst[ArtifactId] previous: opt[ArtifactId]
+  fence: Fence limits: HostLimits
+}
+// The work of one unit as a governing session assigns it: a DispatchRequest without the harness, which the host takes for each
+// attempt of the unit from the models the agent configuration assigns to the role.
+root data AssignedWork {
+  request: RequestId work: DispatchWork members: lst[ItemRevision]
   guidance: lst[ItemRevision] artifacts: lst[ArtifactId] previous: opt[ArtifactId]
   fence: Fence limits: HostLimits
 }
@@ -853,8 +990,9 @@ root data RevalidationStatus {
 enum DeclaredCheckPhase { Starting Running Publishing Completed Failed Unknown }
 root data DeclaredCheckTicket { parent: AttemptId check: ValidationCheck workspace: WorkspaceSpec fingerprint: str failures: lst[ArtifactId] }
 root data DeclaredCheckStatus { name: str job: AttemptId phase: DeclaredCheckPhase evidence: opt[ValidationEvidence] blocker: opt[str] }
-enum DispatchPhase { Preparing Running Stopping Validating Publishing Completed Failed Cancelled Unknown PublicationPending }
-enum ChildNext { Wait Plan Review Revise ResolveBlocker Retry ConsiderAcceptance ConsiderProposal ConsiderGrouping InspectEvidence RetryDelivery }
+// Editing: the governing session works in a workspace the host opened for it; the host works on it again from SubmitWorkspace, whose reply's next was Submit.
+enum DispatchPhase { Preparing Running Stopping Validating Publishing Completed Failed Cancelled Unknown PublicationPending Abstained Editing }
+enum ChildNext { Wait Plan Review Revise ResolveBlocker Retry ConsiderAcceptance ConsiderProposal ConsiderGrouping InspectEvidence RetryDelivery Arbitrate Submit }
 root data ChildCounts {
   ready: i32 accepted: i32 changesRequested: i32 blocked: i32 failed: i32 validationFailed: i32 validationUnknown: i32
   proposed: i32 evidence: i32 abstained: i32 assessed: i32 validationIntermittent: i32
@@ -865,7 +1003,8 @@ root data DispatchStatus {
   counts: ChildCounts next: ChildNext blocker: opt[str] result: opt[ArtifactId] partial: opt[ArtifactId] detailsOmitted: bit usageDelivered: bit
   workspace: opt[WorkspaceState] quietMillis: opt[i64]
 }
-root data DispatchTicket { request: DispatchRequest assignment: Assignment attempt: Attempt profile: HarnessSetting selection: opt[ArtifactId] }
+// profile: the settings entry of the attempt's harness; an attempt whose harness has none abstains before any launch.
+root data DispatchTicket { request: DispatchRequest assignment: Assignment attempt: Attempt profile: opt[HarnessSetting] selection: opt[ArtifactId] }
 root data CohortRequest {
   request: RequestId roots: set[ItemId] work: DispatchWork guidance: lst[ItemRevision] artifacts: lst[ArtifactId]
   previous: opt[ArtifactId] limits: HostLimits
@@ -909,10 +1048,11 @@ root adt WaitOutcome {
 }
 root adt DispatchCommand {
   data Select { request: CohortRequest }
-  data StartChoice { choice: RequestId harness: Harness fence: Fence }
-  data Start { request: DispatchRequest }
+  data StartChoice { choice: RequestId fence: Fence }
+  data Start { work: AssignedWork }
   data Status { attempt: AttemptId waitMillis: i32 }
   data Cancel { attempt: AttemptId }
+  data Seats { attempt: AttemptId }
   data PrepareIntegration { id: IntegrationId reviewer: ArtifactId }
   data Integrate { id: IntegrationId }
   data IntegrationStatus { id: IntegrationId waitMillis: i32 }
@@ -920,10 +1060,17 @@ root adt DispatchCommand {
   data CombinationStatus { id: RequestId waitMillis: i32 }
   data Revalidate { id: RequestId result: ArtifactId fence: Fence }
   data DiscardIntegration { id: IntegrationId }
+  // The governing session's own work, admitted only in the YOLO mode and to an interactive session. OpenWorkspace gives it an
+  // isolated workspace for the members, starting from the candidate of `previous` when given; SubmitWorkspace hands the workspace
+  // back with the report a Worker makes; SelfReview records its verdicts on the candidate of an admitted worker result.
+  data OpenWorkspace { request: RequestId members: lst[ItemRevision] previous: opt[ArtifactId] fence: Fence }
+  data SubmitWorkspace { attempt: AttemptId members: lst[WorkMember] }
+  data SelfReview { request: RequestId result: ArtifactId members: lst[ReviewMember] fence: Fence }
 }
 root adt DispatchReply {
   data Selection { value: CohortOffer }
   data Status { value: DispatchStatus }
+  data Seats { value: UnitSeats }
   data Integration { value: IntegrationStatus }
   data Combination { value: CombinationStatus }
   data Revalidation { value: RevalidationStatus }
@@ -964,4 +1111,5 @@ root data CatalogAgent {
   inputType: str inputSchema: str report: str outputSchema: str workspaceSchema: str
   harnesses: lst[CatalogAgentHarness] inputExample: ChildExecutionInput outputExample: ChildReport
 }
-root data HelpCatalog { commands: lst[CatalogCommand] agents: lst[CatalogAgent] }
+// `modeEffect` says when a change of the process mode takes effect.
+root data HelpCatalog { commands: lst[CatalogCommand] agents: lst[CatalogAgent] modes: lst[CatalogMode] modeEffect: str }

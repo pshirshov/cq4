@@ -72,7 +72,7 @@ final class RecoveryState(val root: Path, val project: ProjectConfig, val reposi
   def run(harness: Harness, session: SessionId): SupervisorRun = {
     val assignment = Assignment(AssignmentId(uuid), project.project, Set.empty, Attribution.Unattributed, None, None)
     val attempt = Attempt(AttemptId(uuid), assignment.id, None, session, Role.Governor, harness,
-      "unobserved-interactive-provider", "unobserved-interactive-model", "fixture", 1000, UsagePhase.Govern)
+      "unobserved-interactive-provider", "unobserved-interactive-model", "fixture", 1000, UsagePhase.Govern, None)
     SupervisorRun(project, assignment, attempt, HarnessUsage.version(harness), repository, base, SessionOwnership.Attached)
   }
   def settings(run: SupervisorRun, checks: List[ValidationCheck]): SupervisorConfig = {
@@ -177,9 +177,9 @@ final case class EndedSession(state: RecoveryState, directory: Path, run: Superv
     val profile = HarnessSetting(Harness.Codex, "/fixture", "fixture", "fixture", "0.156.1", Nil, Set.empty)
     val review = work.isInstanceOf[DispatchWork.Reviewer]
     val child = Attempt(attempt, assignment.id, Some(run.attempt.id), run.attempt.session, ChildContracts.role(work), Harness.Codex, "fixture", "fixture", "fixture", 1000,
-      if (review) UsagePhase.Review else UsagePhase.Work)
+      if (review) UsagePhase.Review else UsagePhase.Work, None)
     val request = DispatchRequest(RequestId(uuid), work, Harness.Codex, members, Nil, Nil, Option.when(review)(ArtifactId(uuid)), Fence(ClaimId(uuid), 1), limits)
-    val ticket = DispatchTicket(request, assignment, child, profile, None)
+    val ticket = DispatchTicket(request, assignment, child, Some(profile), None)
     val at = directory.resolve("children").resolve(attempt.value.toString)
     HostFiles.directory(at)
     HostFiles.immutable(at.resolve("ticket.json"), HostFiles.encode(DispatchTicket_JsonCodec, ticket), 65536)

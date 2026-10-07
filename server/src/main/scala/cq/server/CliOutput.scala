@@ -1,7 +1,7 @@
 package cq.server
 
 import cq.api.*
-import cq.core.LedgerPolicy
+import cq.core.{AgentResolution, LedgerPolicy}
 import java.io.PrintStream
 import java.nio.file.Path
 import java.time.Instant
@@ -88,6 +88,20 @@ final class CliOutput(output: PrintStream, format: CliFormat, invocation: List[S
     case CliFormat.Human => line(value)
   }
   def configuration(value: Path): Unit = if (format == CliFormat.Human) line(s"Configuration: $value")
+  /** `cq agents init`: the configuration text, or where it was saved. */
+  def starter(text: String, note: Option[String], saved: Option[(String, AgentsDocument)]): Unit = format match {
+    case CliFormat.Json => output.println(io.circe.Json.obj("text" -> io.circe.Json.fromString(text),
+      "note" -> note.fold(io.circe.Json.Null)(io.circe.Json.fromString),
+      "saved" -> saved.fold(io.circe.Json.Null)((layer, document) => io.circe.Json.obj("layer" -> io.circe.Json.fromString(layer),
+        "revision" -> io.circe.Json.fromLong(document.revision.value)))).noSpaces)
+    case CliFormat.Human => saved match {
+      case None => output.print(text)
+      // The printed text states the note in its heading; a saved one is not shown, so the note is.
+      case Some((layer, document)) =>
+        line(s"Saved as the agent configuration of the $layer, revision ${document.revision.value}")
+        note.foreach(value => line(s"Note: $value"))
+    }
+  }
   def doctor(report: CommandDoctorReport): Unit = format match {
     case CliFormat.Json =>
       output.println(io.circe.Json.obj("scope" -> io.circe.Json.fromString("commands"),
@@ -110,6 +124,19 @@ final class CliOutput(output: PrintStream, format: CliFormat, invocation: List[S
         "name" -> io.circe.Json.fromString(check.name), "state" -> io.circe.Json.fromString(check.state.toString),
         "detail" -> io.circe.Json.fromString(check.detail))))).noSpaces)
     case CliFormat.Human => table(List("Check", "State", "Detail"), report.checks.map(check => List(check.name, check.state.toString, check.detail)))
+  }
+  // A detail of this report says what the operator sets, so the last column is printed whole, not cut at the cell limit.
+  def agents(report: InstallationReport): Unit = format match {
+    case CliFormat.Json => installation(report)
+    case CliFormat.Human =>
+      val headers = List("Check", "State")
+      val rows = report.checks.map(check => List(check.name, check.state.toString))
+      val widths = headers.indices.map(index => (headers :: rows).map(_(index).length).max)
+      def row(values: List[String], detail: String): String = values.zip(widths).map((value, width) => value.padTo(width, ' ')).mkString("  ") + "  " + detail
+      line(row(headers, "Detail"))
+      line(row(widths.map("─" * _).toList, "──────"))
+      report.checks.foreach(check => line(row(List(check.name, check.state.toString), check.detail)))
+      line(AgentsDoctor.Scope)
   }
   private def costs(value: CostPage): Unit = {
     table(List("Attribution", "Amount", "Currency", "Basis", "Pricing", "Measurements"), value.entries.map { entry =>
@@ -235,8 +262,9 @@ final class CliOutput(output: PrintStream, format: CliFormat, invocation: List[S
     case Result.UsageCosts(value) => costs(value)
     case Result.UsagePhases(value) => phases(value)
     case Result.UsageAttempts(value) =>
-      table(List("Attempt", "Role", "Harness", "Model", "State", "Started", "Items"), value.entries.map(entry =>
+      table(List("Attempt", "Role", "Harness", "Model", "Effort", "State", "Started", "Items"), value.entries.map(entry =>
         List(entry.attempt.id.value.toString, entry.attempt.role.toString, entry.attempt.harness.toString, entry.attempt.model,
+          entry.attempt.effort.fold("-")(AgentResolution.effortName),
           entry.outcome.fold(if (entry.observed) "Running" else "Open")(_.value.state.toString), instant(entry.attempt.startedAt), entry.assignment.members.toList.sortBy(LedgerPolicy.key).map(id).mkString(", "))))
       value.entries.foreach(entry => entry.outcome.foreach(outcome => outcome.value.gaps.foreach(gap => line(s"${entry.attempt.id.value}: $gap"))))
       page(value.hasMore, value.after.fold("")(_.value.toString), Some(value.cursor.toString), invocation)

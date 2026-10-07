@@ -21,20 +21,25 @@ final class LineageTracker(client: DriverSessionClient, report: String => Unit, 
   private val Attempts = 6
   // A followed member and how often the session has resumed it.
   private var tracked = Map.empty[(CycleId, LineageMember), Long]
+  // The members whose follower has ended: their end was reported, or they were given up. A unit names its attempts again at each of
+  // its readings, and one that is named again after its end is not registered and reported a second time.
+  private var ended = Set.empty[(CycleId, LineageMember)]
   // Orders a report that a member rests against a report that the session resumed it.
   private val reports = Unsafe.unsafe { implicit unsafe => Semaphore.unsafe.make(1) }
   private def fresh(cycle: CycleId, member: LineageMember): Boolean = synchronized {
-    val added = !tracked.contains((cycle, member))
+    val added = !tracked.contains((cycle, member)) && !ended((cycle, member))
     if (added) tracked += (cycle, member) -> 0L
     added
   }
-  private def finished(cycle: CycleId, member: LineageMember): Unit = synchronized { tracked -= ((cycle, member)) }
+  private def finished(cycle: CycleId, member: LineageMember): Unit = synchronized { tracked -= ((cycle, member)); ended += ((cycle, member)) }
   private def resumes(cycle: CycleId, member: LineageMember): Long = synchronized(tracked.getOrElse((cycle, member), 0L))
   private def resumed(cycle: CycleId, member: LineageMember): Boolean = synchronized {
     val count = tracked.get((cycle, member))
     count.foreach(value => tracked += (cycle, member) -> (value + 1))
     count.nonEmpty
   }
+  // The host works again on a member whose follower had ended: it may be followed anew.
+  private def revived(cycle: CycleId, member: LineageMember): Unit = synchronized { ended -= ((cycle, member)) }
 
   // A request lost in transit is repeated with a doubling pause. A fault the server returned is its answer and is not repeated.
   private def reliably[A](operation: => A): Task[A] = {
@@ -86,17 +91,25 @@ final class LineageTracker(client: DriverSessionClient, report: String => Unit, 
   // The session made the host work on a member again. A followed member is in flight on the server before this returns, so a continuation
   // query that follows the dispatch reply never finds it resting. A fault the server returns means the cycle is over and holds nothing;
   // the member's follower reports it. A member that is not followed is registered and followed.
+  // As `resume`, for a member that is registered only when its work begins: one that is not followed has ended, in this cycle or
+  // in an earlier one, and a call that names it afterwards changes nothing.
+  def wake(cycle: CycleId, parent: LineageMember, member: LineageMember): Task[Unit] =
+    reports.withPermit(ZIO.suspend {
+      if (resumed(cycle, member)) reliably(client.inherit(cycle, parent, member)).unit else ZIO.unit
+    }).catchAll {
+      case _: DomainFailure => ZIO.unit
+      case error => abandon(cycle, member, "resumption", "could not be resumed", error)
+    }
   def resume(cycle: CycleId, parent: LineageMember, member: LineageMember, observed: Task[Option[LineageOutcome]]): Task[Unit] =
     reports.withPermit(ZIO.suspend {
       if (resumed(cycle, member)) reliably(client.inherit(cycle, parent, member)).as(true) else ZIO.succeed(false)
     }).foldZIO({
       case _: DomainFailure => ZIO.unit
       case error => abandon(cycle, member, "resumption", "could not be resumed", error)
-    }, followed => if (followed) ZIO.unit else track(cycle, parent, member, observed))
-  def record(cycle: CycleId, parent: LineageMember, member: LineageMember): Task[Unit] = track(cycle, parent, member, ZIO.some(LineageOutcome.Settled))
+    }, followed => if (followed) ZIO.unit else ZIO.succeed(revived(cycle, member)) *> track(cycle, parent, member, observed))
 }
 
-final class AttachedDriver(config: SupervisorConfig, authority: SupervisorAuthority, dispatch: DispatchController,
+final class AttachedDriver(config: SupervisorConfig, authority: SupervisorAuthority, units: DispatchUnits,
   integrations: IntegrationController, combinations: CombinationController, logger: IzLogger) {
   private val WaitMillis = 20000
   private val PollMillis = 1000L
@@ -125,13 +138,42 @@ final class AttachedDriver(config: SupervisorConfig, authority: SupervisorAuthor
   // one of an earlier drive or of the session before it was driven.
   def settleable: Option[Set[IntegrationId]] = session.settleable
 
+  private def attempt(id: AttemptId): Task[Option[LineageOutcome]] = units.standing(id, WaitMillis).map {
+    case AttemptStanding.Working => None
+    case AttemptStanding.Resting => Some(LineageOutcome.Resting)
+    case AttemptStanding.Concluded(outcome) => Some(LineageOutcome.Concluded(outcome))
+  }
+  // The request of a unit with the one attempt `id`: it stands as that attempt does.
+  private def request(id: AttemptId): Task[Option[LineageOutcome]] = attempt(id).map(_.map {
+    case _: LineageOutcome.Concluded => LineageOutcome.Settled
+    case other => other
+  })
+
   // A status wait returns at once once a member has left the phase it was awaited in, so the tracker paces every further read.
   def observe(activation: Option[WorkflowActivation], command: DispatchCommand, reply: DispatchReply): Task[Unit] =
     activation.flatMap(value => value.cycle.map(_ -> LineageMember.Run(value.id))).fold(ZIO.unit) { case (cycle, run) => (command, reply) match {
+      // The unit is in flight, as its request, until it has ended; each attempt the host makes for it is registered under the request
+      // before that and settles with its own outcome. The request therefore covers the time between two candidates.
       case (_: DispatchCommand.StartChoice | _: DispatchCommand.Start, DispatchReply.Status(status)) =>
         val request = LineageMember.Request(status.request)
-        tracker.record(cycle, run, request) *> tracker.track(cycle, request, LineageMember.Attempt(status.attempt),
-          dispatch.concluded(status.attempt, WaitMillis).map(_.map(LineageOutcome.Concluded.apply)))
+        val known = new java.util.concurrent.atomic.AtomicInteger(0)
+        val unit = ZIO.suspend(units.lineage(status.attempt, known.get, WaitMillis)).flatMap { (attempts, ended) =>
+          ZIO.foreachDiscard(attempts)(attempt => tracker.track(cycle, request, LineageMember.Attempt(attempt),
+            units.concluded(attempt, WaitMillis).map(_.map(LineageOutcome.Concluded.apply)))) *>
+            ZIO.succeed { known.set(attempts.size); Option.when(ended)(LineageOutcome.Settled) }
+        }
+        tracker.track(cycle, run, request, unit) *> unit.unit
+      // The governing session's own work is one attempt under its request. While its workspace is open both rest on the session, so
+      // a stop is answered as for any work that waits for the session; the host works on it from its submission or its cancellation.
+      case (_: DispatchCommand.OpenWorkspace | _: DispatchCommand.SelfReview, DispatchReply.Status(status)) =>
+        tracker.track(cycle, run, LineageMember.Request(status.request), request(status.attempt)) *>
+          tracker.track(cycle, LineageMember.Request(status.request), LineageMember.Attempt(status.attempt), attempt(status.attempt))
+      case (_: DispatchCommand.SubmitWorkspace | _: DispatchCommand.Cancel, DispatchReply.Status(status)) =>
+        ZIO.attempt(units.governing(status.attempt)).flatMap { own =>
+          if (!own) ZIO.unit
+          else tracker.wake(cycle, run, LineageMember.Request(status.request)) *>
+            tracker.wake(cycle, LineageMember.Request(status.request), LineageMember.Attempt(status.attempt))
+        }
       case (DispatchCommand.PrepareIntegration(id, _), _: DispatchReply.Integration) =>
         tracker.track(cycle, run, LineageMember.Integration(id), integrations.status(id, WaitMillis).map(value => AttachedDriver.integration(value.phase)))
       // Integrate returns once the host applies the integration; the tracker's next poll may be a status wait away.

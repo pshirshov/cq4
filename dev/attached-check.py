@@ -1,5 +1,6 @@
 """Behavioral Effectual Good Communication: attached MCP, real server/Git/processes."""
 import datetime
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -11,7 +12,7 @@ import threading
 import time
 import urllib.request
 import uuid
-from fixture_runtime import guardian_binary
+from fixture_runtime import ROLES, guardian_binary, role_agents, save_agents
 
 
 # Above the longest dispatch wait (120 s) and what the host allows a request besides it (30 s).
@@ -139,10 +140,15 @@ def main():
             assert ("call its status (Status, IntegrationStatus or CombinationStatus; repeat Revalidate) with waitMillis 120000." in context["instructions"]
                     and '`// @exec: {"yield_time_ms": 150000}`' in context["instructions"] and f"{wrapper} wait" not in context["instructions"]), context["instructions"][-1500:]
             assert not (repository / ".codex/rules").exists()
-            assert json.loads((repository / ".claude/settings.local.json").read_text())["permissions"]["allow"] == [f"Bash({wrapper} wait)"]
+            # The waiter is approved as one command line, and the file tools for the workspaces of this state root's sessions and nothing else under it.
+            workspaces = f"/{(root / 'sessions').resolve()}/*/workspaces/*/tree/**"
+            assert json.loads((repository / ".claude/settings.local.json").read_text())["permissions"]["allow"] == [
+                f"Bash({wrapper} wait)", f"Edit({workspaces})", f"Read({workspaces})"]
             project = context["project"]["project"]
             standing = "Governor: preserve the operator's selected scope."
             operator({"Requirements": {"input": {"project": project, "action": {"Replace": {"expected": {"value": "0"}, "text": standing}}}}})
+            # The children of every session of this fixture run the Codex-shaped fixture harness, whichever harness governs.
+            save_agents(operator, project, role_agents(json.loads(settings.read_text())["harnesses"], dict.fromkeys(ROLES, "Codex")))
             assert standing in peer.tool("session", {"Context": {}})["Context"]["value"]["instructions"]
             peer.tool("initialize", {}, denied=True)
             peer.tool("workspace", {"Read": {"path": ".", "offset": 0, "limit": 20}}, denied=True)
@@ -151,10 +157,11 @@ def main():
             first = {"Workflow": {"id": identity(), "request": {"Begin": {"roots": []}}, "operatorRequirements": "Attached fixture: operator requirements text", "token": None}}
             activated = peer.tool("session", first)["Workflow"]["value"]
             begin_text = activated["instructions"]["Text"]["value"]
-            assert standing in begin_text and activated["id"] == first["Workflow"]["id"] and set(activated) == {"id", "request", "instructions", "subject", "cycle"}, activated
+            assert standing in begin_text and activated["id"] == first["Workflow"]["id"] and set(activated) == {"id", "request", "instructions", "subject", "cycle", "mode"}, activated
+            assert activated["mode"] == "Rigorous" and "Process mode of this project: Rigorous." in begin_text
             # The reply sends back nothing the session wrote in the call, and Context names the active workflow without its text.
             active = peer.tool("session", {"Context": {}})["Context"]["value"]
-            assert active["workflow"] == {"id": activated["id"], "request": activated["request"], "cycle": None}, active["workflow"]
+            assert active["workflow"] == {"id": activated["id"], "request": activated["request"], "cycle": None, "mode": "Rigorous"} and active["mode"] == "Rigorous", active
             assert begin_text not in json.dumps(peer.traffic[-1]["result"]) and "operator requirements text" not in json.dumps([activated, active])
             # The activation repeated returns its receipt as it was: the session may not have received the first reply.
             assert peer.tool("session", first)["Workflow"]["value"] == activated
@@ -170,7 +177,7 @@ def main():
             next_scope = {"Workflow": {"id": identity(), "request": {"Advance": {"roots": [created["id"]], "through": "Explore"}}, "operatorRequirements": "Attached fixture: operator requirements text", "token": None}}
             peer.tool("session", next_scope)
             peer.tool("dispatch", {"Select": {"request": selection}}, denied=True)
-            peer.tool("dispatch", {"StartChoice": {"choice": choice["id"], "harness": "Codex", "fence": claim["fence"]}}, denied=True)
+            peer.tool("dispatch", {"StartChoice": {"choice": choice["id"], "fence": claim["fence"]}}, denied=True)
             assert peer.tool("session", first)["Workflow"]["value"] == activated
             assert peer.tool("session", {"Context": {}})["Context"]["value"]["workflow"]["id"] == next_scope["Workflow"]["id"]
             selection["request"] = identity()
@@ -180,7 +187,7 @@ def main():
             retained = json.loads((Path(context["directory"]) / "selections" / (selection["request"]["value"] + ".json")).read_text())
             kept, = retained["decision"]["choices"]
             assert kept == {**choice, "limits": limits} and retained["request"] == selection, retained
-            started = peer.tool("dispatch", {"StartChoice": {"choice": choice["id"], "harness": "Codex", "fence": claim["fence"]}})["Status"]["value"]
+            started = peer.tool("dispatch", {"StartChoice": {"choice": choice["id"], "fence": claim["fence"]}})["Status"]["value"]
             # The asynchronous child must finish before a different workflow is admitted.
             if started["phase"] in ["Preparing", "Running"]:
                 peer.tool("session", {"Workflow": {"id": identity(), "request": {"Begin": {"roots": []}}, "operatorRequirements": "Attached fixture: operator requirements text", "token": None}}, denied=True)
@@ -222,7 +229,9 @@ def main():
     with (root / "driver-host.log").open("w") as log:
         driven = Peer(command + ["host", "codex", "--executable", str(wrapper)], repository, env, log)
         try:
-            driven_session = driven.tool("session", {"Context": {}})["Context"]["value"]["session"]
+            driven_context = driven.tool("session", {"Context": {}})["Context"]["value"]
+            driven_session = driven_context["session"]
+            driven_directory = Path(driven_context["directory"])
             assert driven.tool("session", {"Driver": {}}) == {"Driver": {"reply": {"Status": {"value": None}}}}
             def change(mutations, fences, denied=False):
                 return driven.tool("change", {"project": project, "change": {"request": identity(), "mutations": mutations, "fences": fences, "reason": "Driven fixture"}}, denied=denied)
@@ -250,7 +259,7 @@ def main():
             assert driven.tool("session", {"Context": {}})["Context"]["value"]["workflow"]["cycle"] == issued["cycle"]
             driven_choice, = driven.tool("dispatch", {"Select": {"request": {**selection, "request": identity(), "roots": [target["id"]]}}})["Selection"]["value"]["choices"]
             driven_claim = driven.tool("claim", {"project": project, "action": {"Acquire": {"id": identity(), "members": [target["id"]], "durationMillis": "180000"}}})["Claimed"]["claim"]
-            child = driven.tool("dispatch", {"StartChoice": {"choice": driven_choice["id"], "harness": "Codex", "fence": driven_claim["fence"]}})["Status"]["value"]
+            child = driven.tool("dispatch", {"StartChoice": {"choice": driven_choice["id"], "fence": driven_claim["fence"]}})["Status"]["value"]
             registered = control("StatusLine", {"Status": {}})["Status"]["value"]
             assert [name for name, _ in members(registered)] == ["Run", "Claim", "Request", "Attempt"] and registered["cycle"]["run"] == directed["Workflow"]["id"], registered
             for _ in range(6):
@@ -259,7 +268,11 @@ def main():
                     break
             assert child["phase"] == "Completed", child
             deadline = time.monotonic() + 30
-            while dict(members(control("StatusLine", {"Status": {}})["Status"]["value"]))["Attempt"] is not True and time.monotonic() < deadline:
+            # The attempt and the request of its unit are settled by two followers of the host, in either order: both are awaited.
+            def unsettled():
+                standing = dict(members(control("StatusLine", {"Status": {}})["Status"]["value"]))
+                return standing["Attempt"] is not True or standing["Request"] is not True
+            while unsettled() and time.monotonic() < deadline:
                 time.sleep(0.2)
             settled = control("StatusLine", {"Status": {}})["Status"]["value"]
             assert members(settled) == [("Run", False), ("Claim", True), ("Request", True), ("Attempt", True)] and settled["activeChildren"] == 0, settled
@@ -306,16 +319,33 @@ def main():
             # to wait in a status call.
             started_token = blocked["reason"].splitlines()[-1].split(" ")[-1]
             driven.tool("session", {"Workflow": {"id": identity(), "request": advance, "operatorRequirements": "", "token": {"Start": {"token": {"value": started_token}}}}})
-            probing, = driven.tool("dispatch", {"Select": {"request": {**selection, "request": identity(), "roots": [target["id"]], "work": {"Worker": {"mode": "Probe"}}}}})["Selection"]["value"]["choices"]
-            probe = driven.tool("dispatch", {"StartChoice": {"choice": probing["id"], "harness": "Codex", "fence": driven_claim["fence"]}})["Status"]["value"]
+            def probed():
+                choice, = driven.tool("dispatch", {"Select": {"request": {**selection, "request": identity(), "roots": [target["id"]], "work": {"Worker": {"mode": "Probe"}}}}})["Selection"]["value"]["choices"]
+                started = driven.tool("dispatch", {"StartChoice": {"choice": choice["id"], "fence": driven_claim["fence"]}})["Status"]["value"]
+                # The unit's start is in the session's event file when the starting call has returned: a waiter started from then on finds it.
+                events = [json.loads(line) for line in (driven_directory / "units.jsonl").read_text().splitlines()]
+                assert events[-1] == {"Started": {"unit": {"kind": "Attempt", "id": started["attempt"]["value"], "members": [target["id"]]}}}, events
+                return started
+            def watched(arguments):
+                """Starts a `cq wait` and returns it once it watches the driven session: it holds a shared lock on the session's
+                `waiters.lock` for as long as it runs, which refuses an exclusive one, and reads the session's units right after taking it."""
+                process = subprocess.Popen([str(wrapper), "wait"] + arguments, cwd=repository, env=env, stdout=subprocess.PIPE, text=True)
+                with (driven_directory / "waiters.lock").open("r+") as stream:
+                    while True:
+                        assert process.poll() is None, ("The wait command ended while the child ran", process.communicate()[0])
+                        try:
+                            fcntl.lockf(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        except OSError:
+                            return process
+                        fcntl.lockf(stream, fcntl.LOCK_UN)
+                        time.sleep(0.05)
+            probe = probed()
             ordered = hook("Stop", hooked, stop_hook_active=False, last_assistant_message="Started.")
             assert ordered is not None and ordered.get("decision") == "block" and ordered["reason"].startswith(
                 f"CQ driver: work of this session still runs (attempt {probe['attempt']['value']} on {reference}). Do not end your turn"), ordered
             assert "with the CQ dispatch tool (Status, IntegrationStatus or CombinationStatus) with waitMillis 120000" in ordered["reason"] and f"{wrapper} wait" not in ordered["reason"], ordered
             # The checkout's wait command still waits on this session without being told its directory, for a harness that uses it.
-            waiter = subprocess.Popen([str(wrapper), "wait"], cwd=repository, env=env, stdout=subprocess.PIPE, text=True)
-            time.sleep(3)
-            assert waiter.poll() is None, "The wait command ended while the child ran"
+            waiter = watched([])
             driven.tool("dispatch", {"Cancel": {"attempt": probe["attempt"]}})
             reported, _ = waiter.communicate(timeout=60)
             assert waiter.returncode == 0 and reported.startswith(f"attempt {probe['attempt']['value']} on {reference} ended: "), (waiter.returncode, reported)
@@ -426,7 +456,7 @@ def main():
             created = closing.tool("change", {"project": project, "change": {"request": identity(), "mutations": [{"Create": {"draft": {**draft, "labels": []}}}], "fences": [], "reason": "Owned child shutdown"}})["Changed"]["ack"]["items"][0]
             selected, = closing.tool("dispatch", {"Select": {"request": {**selection, "request": identity(), "roots": [created["id"]], "work": {"Worker": {"mode": "Probe"}}}}})["Selection"]["value"]["choices"]
             owned = closing.tool("claim", {"project": project, "action": {"Acquire": {"id": identity(), "members": [created["id"]], "durationMillis": "180000"}}})["Claimed"]["claim"]
-            running = closing.tool("dispatch", {"StartChoice": {"choice": selected["id"], "harness": "Codex", "fence": owned["fence"]}})["Status"]["value"]
+            running = closing.tool("dispatch", {"StartChoice": {"choice": selected["id"], "fence": owned["fence"]}})["Status"]["value"]
             deadline = time.monotonic() + 20
             while running["process"] != "Running" and time.monotonic() < deadline:
                 running = closing.tool("dispatch", {"Status": {"attempt": running["attempt"], "waitMillis": 100}})["Status"]["value"]
