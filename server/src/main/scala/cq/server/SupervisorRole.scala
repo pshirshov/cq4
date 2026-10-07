@@ -28,6 +28,10 @@ final case class SupervisorConfig(settings: SupervisorSettings, project: Project
   val endpoint: URI = URI.create(project.endpoint)
 }
 
+/** A settings file holds an entry the host refuses. Its message is the one line a command that read the file prints. */
+final class SettingsRefusal(val harness: Harness, cause: RouteRefusal) extends IllegalArgumentException(
+  s"Settings entry for ${harness.toString.toLowerCase(java.util.Locale.ROOT)} is refused: ${cause.getMessage.stripPrefix("requirement failed: ")}", cause)
+
 object SupervisorConfig {
   val AttachedGovernorCollector = cq.core.AttemptObservation.AttachedGovernorCollector
   private val MaxConfigBytes = cq.core.LedgerPolicy.MaxConfigBytes
@@ -36,6 +40,9 @@ object SupervisorConfig {
   private val MaxOutputBytes = 32 * 1024 * 1024
   val VersionMismatch = "Installed harness version differs from its configured verified route"
   def profile(value: HarnessSetting): HarnessProfile = HarnessProfile(value, HarnessProfile.route(value))
+  /** The profile of every entry of a settings file. An entry the host refuses is named: the reader of the file is told which one to correct. */
+  def profiles(settings: SupervisorSettings): List[HarnessProfile] = settings.harnesses.map(entry =>
+    try profile(entry) catch { case refusal: RouteRefusal => throw new SettingsRefusal(entry.harness, refusal) })
   def limits(value: HostLimits): ExecutionLimits = ExecutionLimits(Duration.ofMillis(value.startupMillis), None,
     Duration.ofMillis(value.heartbeatMillis), Duration.ofMillis(value.graceMillis), Duration.ofMillis(value.killMillis), value.retainedOutputBytes)
   def within(value: HostLimits, ceiling: HostLimits): Unit = {

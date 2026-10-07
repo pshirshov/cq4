@@ -51,7 +51,7 @@ final class AttachedAssets(schemas: McpSchemas, workflows: WorkflowAssets) {
   def plan(harness: Harness, root: Path, project: Path, settingsPath: Path, executable: Path, replace: Boolean, replaceStatusLine: Boolean): List[CommandAsset] = {
     require(executable.isAbsolute && Files.isExecutable(executable) && Files.isRegularFile(executable), "CQ executable must be an absolute executable file")
     val settings = HostFiles.read(settingsPath.toRealPath(), SupervisorSettings_JsonCodec, MaxConfigBytes)
-    val profiles = settings.harnesses.map(SupervisorConfig.profile)
+    val profiles = SupervisorConfig.profiles(settings)
     require(profiles.nonEmpty && profiles.map(_.harness).distinct.size == profiles.size, "Harness settings must have unique verified routes")
     require(settings.harnesses.exists(_.harness == harness), "Settings do not include this harness route")
     require(harness == Harness.Claude || !replaceStatusLine,

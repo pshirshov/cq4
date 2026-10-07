@@ -8,12 +8,15 @@ import izumi.distage.roles.model.definition.RoleModuleDef
 import izumi.fundamentals.platform.cli.{CLIParser, CLIParserImpl}
 import izumi.fundamentals.platform.cli.model.{EntrypointArgs, RoleAppArgs, RoleArgs}
 import izumi.fundamentals.platform.cli.model.schema.{ParserDef, RoleParserSchema}
+import java.io.PrintStream
 import java.nio.file.Path
 import zio.{Task, ZIO}
 
 final case class ClientExit(exit: Int => Unit)
+/** Where a client command says why it did nothing. */
+final case class ClientDiagnostics(stream: PrintStream)
 
-final class ClientRole(cli: Cli, termination: ClientExit) extends RoleTask[Task] {
+final class ClientRole(cli: Cli, termination: ClientExit, diagnostics: ClientDiagnostics) extends RoleTask[Task] {
   private val AttentionExit = 1
   override def start(parameters: EntrypointArgs): Task[Unit] = {
     val arguments = parameters.raw.toList
@@ -21,6 +24,8 @@ final class ClientRole(cli: Cli, termination: ClientExit) extends RoleTask[Task]
       case _: CommandAssetsNeedAttention => ZIO.attempt(termination.exit(AttentionExit))
       case _: InstallationNeedsAttention => ZIO.attempt(termination.exit(AttentionExit))
       case finished: WaitFinished => ZIO.attempt(termination.exit(finished.exit))
+      // The operator corrects the settings file: the entry and the cause are the whole answer, and the trace of the refusal is none.
+      case refused: SettingsRefusal => ZIO.attempt { diagnostics.stream.println(refused.getMessage); termination.exit(AttentionExit) }
     }
   }
 }
@@ -37,6 +42,7 @@ object ClientPlugin extends PluginDef {
     include(BundledRolesModule[Task])
     make[Cli]
     make[ClientExit].fromValue(ClientExit(System.exit))
+    make[ClientDiagnostics].fromValue(ClientDiagnostics(System.err))
     make[AttachedAssets]
     make[cq.host.WorkflowAssets]
     make[SessionUpload]
