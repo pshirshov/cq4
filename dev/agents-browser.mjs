@@ -268,7 +268,9 @@ try {
     assert.equal(await ui.problems.getByRole('heading').textContent(), 'Problems: none');
     assert.deepEqual(await ui.dialog.locator('.agents-notes li').allTextContents(), [
       'Note: when codex governs, defaults.roles.reviewer/plan of the project override (3:5) never decides: harnesses.codex.roles.reviewer of the project override (7:7) is found first and decides every mode of the reviewer role.']);
-    assert.deepEqual(await plan('Codex').count(), 0);
+    // The table agrees with the note: under Codex the row of the mode is decided by the key of the role.
+    assert.deepEqual(await plan('Codex').locator('.agents-route').allTextContents(), ['claude:sonnet']);
+    assert.equal(await plan('Codex').locator('.agents-source').textContent(), 'from project harnesses.codex.roles.reviewer');
     assert.deepEqual(await plan('Claude').locator('.agents-route').allTextContents(), ['claude:opus']);
     cases.push('a key of one mode that the key of its role hides in an earlier place is noted under the table with both keys, their positions and the harness, and is no problem');
 
