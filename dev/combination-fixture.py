@@ -86,10 +86,14 @@ def main():
                     Path("shared.txt").write_text(actor + "\n")
             finish({"Work": {"members": [{"item": member, "disposition": "CandidateReady", "summary": "CHILD_ONLY_NARRATIVE " + "details " * 500, "evidence": []}]}})
         else:
-            assert sandbox == "danger-full-access" and not context["artifacts"]
+            assert sandbox == "danger-full-access"
+            paths, = context["artifacts"]
+            assert paths["metadata"]["kind"] == "Evidence" and paths["metadata"]["actor"]["role"] == "Collector"
+            assert paths["body"].startswith("Candidate paths: ")
             previous = context["previous"]
             assert previous["validation"] and all(check["state"] == "Passed" for check in previous["validation"])
             combined = previous["request"]["work"]["Worker"]["mode"] == "ResolveConflict"
+            assert combined or f'"{actor}.txt"' in paths["body"]
             for name in (["alpha", "beta"] if combined else [actor]):
                 page = tool("cq_host", "workspace", {"Read": {"path": name + ".txt", "offset": 0, "limit": 64}})["Text"]["page"]
                 assert page["text"] == name + "\n"
