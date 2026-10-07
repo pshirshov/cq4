@@ -13,6 +13,9 @@ import java.util.UUID
 import zio.{IO, Runtime, Unsafe, ZIO}
 
 abstract class DispatchAssemblyTest extends SpecZIO with AssertZIO {
+  // The credential of a test is to hold for the test, however long the machine takes over it: an hour, of the 24 the server grants.
+  // A run of 2 min 32 s under load ended a credential of one minute before the refusal the test was about.
+  private val CredentialMillis = 3600000L
   override def config = super.config.copy(
     pluginConfig = PluginConfig.const(List(CqPlugin)),
     memoizationRoots = Set(DIKey[LedgerService[IO]], DIKey[UsageService[IO]], DIKey[ArtifactService[IO]]),
@@ -40,7 +43,7 @@ abstract class DispatchAssemblyTest extends SpecZIO with AssertZIO {
         val collector = scope.copy(actor = scope.actor.copy(subject = "assembly collector", role = Role.Collector))
         val authorization = new Authorization(AccessConfig("assembly-contract-test-root", "http://localhost"), clock)
         val root = authorization.authenticate("assembly-contract-test-root", Some(scope.actor.session.value.toString))
-        val authority = authorization.authenticate(authorization.grant(root, GrantRequest(scope.project, scope.actor, clock.millis() + 60000)).value, None)
+        val authority = authorization.authenticate(authorization.grant(root, GrantRequest(scope.project, scope.actor, clock.millis() + CredentialMillis)).value, None)
         val application = new Application(ledger, repository, usage, artifacts, admissions, integrations, proposals, authorization, new CatalogRead(new McpSchemas()))
         val narrative = "Consumer specification λ😀" * 1000
         val largeBody = "evidence λ😀\n" * 5000
@@ -297,7 +300,7 @@ abstract class DispatchAssemblyTest extends SpecZIO with AssertZIO {
         val scope = Scope(ProjectId(UUID.randomUUID()), Actor("assembly governor", SessionId(UUID.randomUUID()), Role.Governor))
         val authorization = new Authorization(AccessConfig("assembly-contract-test-root", "http://localhost"), clock)
         val root = authorization.authenticate("assembly-contract-test-root", Some(scope.actor.session.value.toString))
-        val authority = authorization.authenticate(authorization.grant(root, GrantRequest(scope.project, scope.actor, clock.millis() + 60000)).value, None)
+        val authority = authorization.authenticate(authorization.grant(root, GrantRequest(scope.project, scope.actor, clock.millis() + CredentialMillis)).value, None)
         val application = new Application(ledger, repository, usage, artifacts, admissions, integrations, proposals, authorization, new CatalogRead(new McpSchemas()))
         for {
           runtime <- ZIO.runtime[Any]
