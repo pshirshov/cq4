@@ -113,9 +113,8 @@ def lifecycle(command, repository, environment, settings, root, client):
             elapsed = time.monotonic() - started
             if mode == "frozen":
                 os.kill(owner, signal.SIGCONT)
-            client(["job", "upload", "--session", str(session)], mode + "-recovery")
-            client(["job", "upload", "--session", str(session)], mode + "-replay")
-            assert "No session is recorded" in (root / (mode + "-replay.stdout")).read_text()
+            # The session made no tool call: its host recorded nothing and, ending in order once its owner was gone, removed its directory.
+            assert not session.exists(), f"A host that recorded no session left {session}"
             observations.append({"mode": mode, "outerPid": process.pid, "ownerPid": owner, "hostPid": host,
                                  "chain": chain + [process.pid], "exitSeconds": round(elapsed, 3), "session": str(session)})
         finally:

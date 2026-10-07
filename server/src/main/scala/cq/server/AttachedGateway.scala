@@ -11,12 +11,29 @@ object AttachedGateway {
   val FrameBytes: Int = 2 * 1024 * 1024
   /** The text block of a result whose payload is delivered as structured content alone. */
   val StructuredOnly: String = "The result is in structuredContent."
-  /** The deadline of `request`: that of a request that does not wait, plus the wait a dispatch command asks for. */
-  def deadline(request: Json): java.time.Duration = {
+  /** A method this host serves. `governing`: a request of it does governing work or accounts for it, so the session is recorded and
+    * its governing attempt registered before the first one is served. A tool call is one whatever the tool and whether it reads or
+    * writes, since only the session's model or its operator makes one; so are a Pi response's usage, which is stored under the
+    * governing attempt, and a request to the Pi driver, which the operator starts. What a harness sends by itself when it opens the
+    * connection is not. `only`: the one harness whose integration sends the method, when it is not sent by all. */
+  final case class Served(governing: Boolean, only: Option[Harness])
+  /** Every method of a request this host answers with a result; a method that is not here is answered `Method not found`. */
+  val Methods: Map[String, Served] = Map(
+    "initialize" -> Served(false, None), "ping" -> Served(false, None), "tools/list" -> Served(false, None),
+    "cq/session" -> Served(false, Some(Harness.Pi)),
+    "tools/call" -> Served(true, None), "cq/piUsage" -> Served(true, None), "cq/driver" -> Served(true, Some(Harness.Pi)))
+  def served(method: String, harness: Harness): Option[Served] = Methods.get(method).filter(_.only.forall(_ == harness))
+  /** Recording a session tells the server of its assignment and of its attempt: two calls. */
+  val Registration: java.time.Duration = SupervisorAuthority.HttpDeadline.multipliedBy(2)
+  /** The deadline of `request`: that of a request that does not wait, plus the wait a dispatch command asks for, plus the time of
+    * the registration that precedes a governing request of a session that is not `recorded` yet. */
+  def deadline(request: Json, harness: Harness, recorded: Boolean): java.time.Duration = {
     val params = request.hcursor.downField("params")
-    val command = if (request.hcursor.get[String]("method") != Right("tools/call") || params.get[String]("name") != Right("dispatch")) None
+    val method = request.hcursor.get[String]("method").getOrElse("")
+    val command = if (method != "tools/call" || params.get[String]("name") != Right("dispatch")) None
       else params.get[Json]("arguments").toOption.flatMap(DispatchCommand_JsonCodec.decode(BaboonCodecContext.Default, _).toOption)
-    DispatchWaits.deadline(command.fold(0)(DispatchWaits.millis))
+    val registers = !recorded && served(method, harness).exists(_.governing)
+    DispatchWaits.deadline(command.fold(0)(DispatchWaits.millis)).plus(if (registers) Registration else java.time.Duration.ZERO)
   }
 }
 
@@ -104,11 +121,8 @@ final class AttachedGateway(config: SupervisorConfig, authority: SupervisorAutho
   /** A response the peer cannot frame fails its own request only; sending it would end the host for every later request.
     * The request was executed before its response was measured, so a change it made stands.
     *
-    * `governing` runs before every request that does governing work or accounts for it: a tool call, whatever the tool and whether it
-    * reads or writes, since only the session's model or its operator makes one; a Pi response's usage, which is stored under the
-    * governing attempt; and a request to the Pi driver, which the operator starts. What a harness sends by itself when it opens the
-    * connection is none of these: `initialize`, notifications, `ping`, `tools/list`, the Pi extension's question for the session
-    * directory, and methods this host does not serve. */
+    * `governing` runs before every request of a governing method (`AttachedGateway.Methods`). When it fails, that request is answered
+    * with the failure and the host keeps serving. */
   def handle(peer: StdioPeer, json: Json, governing: Task[Unit]): Task[Option[Json]] = respond(peer, json, governing).map(_.map { response =>
     val size = StdioPeer.frame(response).length
     if (size <= peer.frameBytes) response
@@ -138,26 +152,33 @@ final class AttachedGateway(config: SupervisorConfig, authority: SupervisorAutho
     else if (!initialized) ZIO.some(failure(id, -32002, "Initialize the MCP connection first"))
     else if (method == "notifications/initialized" && id.isNull) ZIO.none
     else if (id.isNull) ZIO.none
-    else method match {
+    else AttachedGateway.served(method, config.run.attempt.harness) match {
+      case None => ZIO.some(failure(id, -32601, "Method not found"))
+      case Some(served) => serve(method, cursor, id, if (served.governing) governing else ZIO.unit)
+    }
+  }
+  private def serve(method: String, cursor: io.circe.HCursor, id: Json, governing: Task[Unit]): Task[Option[Json]] = method match {
       case "ping" => ZIO.some(success(id, Json.obj()))
       case "tools/list" => ZIO.some(success(id, Json.obj("tools" -> Json.arr(schemas.attachedTools*))))
-      case "cq/piUsage" => governing *> ZIO.attemptBlocking {
+      case "cq/piUsage" => governing.either.flatMap {
+        case Left(error) => ZIO.some(failure(id, -32603, DispatchProjection.concise(Option(error.getMessage).getOrElse(error.getClass.getSimpleName))))
+        case Right(_) => ZIO.attemptBlocking {
         val body = cursor.downField("params").focus.getOrElse(throw new IllegalArgumentException("Missing native Pi usage"))
         require(body.noSpaces.getBytes(java.nio.charset.StandardCharsets.UTF_8).length <= MaxLocalBytes, "Native Pi usage exceeds its bound")
         val event = AttachedPiEvent_JsonCodec.decode(CodecContext, body).fold(throw _, identity)
         require(JsonRoundtrip.lossless(body, AttachedPiEvent_JsonCodec.encode(CodecContext, event)), "Noncanonical native Pi usage")
         accounting.accept(event, authority.collector)
         Some(success(id, Json.obj()))
-      }
+      }}
       // The Pi extension runs `cq wait` on this directory itself; its model starts no waiter.
-      case "cq/session" if config.run.attempt.harness == Harness.Pi => ZIO.some(success(id, Json.obj("directory" -> Json.fromString(config.directory.toString))))
-      case "cq/driver" if config.run.attempt.harness == Harness.Pi => governing *> ZIO.attemptBlocking {
+      case "cq/session" => ZIO.some(success(id, Json.obj("directory" -> Json.fromString(config.directory.toString))))
+      case "cq/driver" => (governing *> ZIO.attemptBlocking {
         val body = cursor.downField("params").focus.getOrElse(throw new IllegalArgumentException("Missing driver request"))
         require(body.noSpaces.getBytes(java.nio.charset.StandardCharsets.UTF_8).length <= MaxLocalBytes, "Driver request exceeds its bound")
         val command = ExtensionDriver_JsonCodec.decode(CodecContext, body).fold(throw _, identity)
         require(JsonRoundtrip.lossless(body, ExtensionDriver_JsonCodec.encode(CodecContext, command)), "Noncanonical driver request")
         Some(success(id, DriverReply_JsonCodec.encode(CodecContext, driver.extension(command))))
-      }.catchAll { error =>
+      }).catchAll { error =>
         val fault = error match {
           case DomainFailure(value) => value
           case _ => Fault.Invalid(DispatchProjection.concise(Option(error.getMessage).getOrElse(error.getClass.getSimpleName)))
@@ -165,7 +186,8 @@ final class AttachedGateway(config: SupervisorConfig, authority: SupervisorAutho
         ZIO.some(success(id, Json.obj("Failed" -> Json.obj("fault" -> Fault_JsonCodec.encode(CodecContext, fault)))))
       }
       case "tools/call" =>
-        governing *> (for {
+        (for {
+          _ <- governing
           _ <- ZIO.attemptBlocking {
             if (config.run.attempt.harness == Harness.Codex) {
               val home = config.environment.get("CODEX_HOME").map(java.nio.file.Path.of(_))
@@ -183,7 +205,6 @@ final class AttachedGateway(config: SupervisorConfig, authority: SupervisorAutho
           }
           ZIO.some(success(id, result(SessionReply_JsonCodec.encode(CodecContext, SessionReply.Failed(fault)), true)))
         }
-      case _ => ZIO.some(failure(id, -32601, "Method not found"))
-    }
+      case other => ZIO.fail(new IllegalStateException(s"Method $other is classified and not served"))
   }
 }

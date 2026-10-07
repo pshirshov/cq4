@@ -88,6 +88,13 @@ object WorkspaceCleanup {
     val journal = directory.resolve("journal")
     names(directory).subsetOf(Set("journal")) && (!Files.exists(journal, LinkOption.NOFOLLOW_LINKS) || names(journal).subsetOf(Set("owner.lock")))
   }
+  /** Removes a directory that `unrecorded` holds true of: its lock, its journal directory and itself, and nothing else. A file that
+    * appeared since is left with everything above it. */
+  def discard(directory: Path): Unit = {
+    val journal = directory.resolve("journal")
+    try List(journal.resolve("owner.lock"), journal, directory).foreach(Files.deleteIfExists(_))
+    catch { case _: java.nio.file.DirectoryNotEmptyException => () }
+  }
 
   private enum Disposition {
     case Unrelated
@@ -281,6 +288,17 @@ final class WorkspaceCleanup(config: SupervisorConfig, sessions: SessionWorkspac
     Disposition.Examined(SessionCleanup(session, Nil, Nil, Nil, 0, Some(reason)), Some(RecoveryOutcome.Abandoned))
   }
 
+  /** A directory in which no session was recorded and whose host is gone is removed, so that no later startup looks at it again. The
+    * lock is taken for the removal: a host that holds it is alive, and a directory without the lock file may be one a host is creating. */
+  private def abandoned(directory: Path): Unit = {
+    val lock = directory.resolve("journal").resolve("owner.lock")
+    if (Files.isRegularFile(lock, LinkOption.NOFOLLOW_LINKS)) Using.resource(FileChannel.open(lock, StandardOpenOption.WRITE)) { channel =>
+      (try Option(channel.tryLock()) catch { case _: OverlappingFileLockException => None }).foreach { held =>
+        try if (unrecorded(directory)) discard(directory) finally held.release()
+      }
+    }
+  }
+
   private def unexamined(session: SessionId, error: Throwable): Disposition =
     Disposition.Examined(SessionCleanup(session, Nil, Nil, Nil, 0, Some(problem("Session could not be examined", error))), None)
 
@@ -296,7 +314,7 @@ final class WorkspaceCleanup(config: SupervisorConfig, sessions: SessionWorkspac
       ZIO.attemptBlocking(HostFiles.bytes(directory.resolve("run.json"), MaxRecordBytes)).either.flatMap {
         // Not reached. A host that has not recorded itself yet holds its lock; otherwise the fault is reported and nothing concluded.
         case Left(error) => ZIO.attemptBlocking {
-          if (ownerRuns(directory)) Disposition.Live(id) else if (unrecorded(directory)) Disposition.Unrelated else unexamined(id, error)
+          if (ownerRuns(directory)) Disposition.Live(id) else if (unrecorded(directory)) { abandoned(directory); Disposition.Unrelated } else unexamined(id, error)
         }
         case Right(bytes) => ZIO.attempt(HostFiles.decode(bytes, SupervisorRun_JsonCodec)).either.flatMap {
           case Left(error) => ZIO.attemptBlocking {

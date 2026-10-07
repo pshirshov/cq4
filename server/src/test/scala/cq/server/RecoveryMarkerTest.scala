@@ -89,7 +89,7 @@ final class RecoveryMarkerLocal extends SpecZIO with AssertZIO {
         }
         first <- state.recover.ensuring(ZIO.succeed(owner.close()))
         unmarked <- ZIO.attemptBlocking {
-          val seen = (faulty.map(_.markerText), healthy.outcome, Files.exists(starting.resolve("recovery.json")))
+          val seen = (faulty.map(_.markerText), healthy.outcome, Files.exists(starting.resolve("recovery.json")), Files.exists(starting.resolve("journal").resolve("owner.lock")))
           Files.delete(linked.directory.resolve("run.json"))
           faulty.zip(away).foreach((session, kept) => Files.move(kept, session.directory.resolve("run.json")))
           seen
@@ -106,12 +106,11 @@ final class RecoveryMarkerLocal extends SpecZIO with AssertZIO {
           assert(first.live == List(unrecorded) && first.totals.examined == 3 && first.totals.problems == 2 && first.totals.abandoned == 0 && first.totals.recovered == 1, first.toString)
           assert(unmarked._2.contains(RecoveryOutcome.Recovered) && healthy.reported(first).exists(_.removed == healthy.attempts), s"$unmarked $first")
           // The records are back: both sessions are swept and marked. The host that never recorded itself has ended and left only its
-          // lock: there is nothing to recover or report there, and nothing is concluded about it.
+          // lock: there is nothing to recover or report there, and the directory, kept while its host held the lock, is removed (D160).
           assert(faulty.forall(session => second.sessions.find(_.session == session.id).exists(value => value.removed == session.attempts && value.problem.isEmpty)), second.toString)
           assert(second.totals.examined == 2 && second.totals.recovered == 2 && second.totals.abandoned == 0 && second.totals.problems == 0 && second.live.isEmpty, second.toString)
           assert(faulty.forall(_.outcome.contains(RecoveryOutcome.Recovered)) && states == List.fill(2)(List(WorkspaceAdmission.Removed)), s"$states")
-          assert(third.totals.examined == 0 && third.sessions.isEmpty && !unmarked._3 && !Files.exists(starting.resolve("recovery.json")) &&
-            Files.exists(starting.resolve("journal").resolve("owner.lock")), third.toString)
+          assert(third.totals.examined == 0 && third.sessions.isEmpty && !unmarked._3 && unmarked._4 && !Files.exists(starting), third.toString)
         }
       } yield ()
     }

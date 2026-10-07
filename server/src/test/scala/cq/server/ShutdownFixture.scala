@@ -35,11 +35,23 @@ object ShutdownFixture extends RoleAppMain.LauncherBIO[IO] {
   /** Every claim command the governing receiver answered, one line each, under the fixture root. */
   val ClaimLog = "claims.log"
 
-  /** `claims` answers the claim commands of the attached session's Governor; the collector and root receivers get none. */
-  private final class Receiver(claims: Option[ClaimInput => Result]) extends ServerApi {
+  /** Every start of an attempt the collector was told of, one line each with its start time, under the fixture root. */
+  val StartLog = "starts.log"
+  /** When `true`, the collector fails the first start it is told of, as a server that cannot be reached does. */
+  val RefuseStartProperty = "cq.fixture.refuse-start"
+  private def starts(log: Path): Attempt => Unit = {
+    val refuse = new java.util.concurrent.atomic.AtomicBoolean(java.lang.Boolean.getBoolean(RefuseStartProperty))
+    attempt => {
+      Files.writeString(log, s"${attempt.id.value} ${attempt.startedAt}\n", java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.APPEND)
+      if (refuse.getAndSet(false)) throw new IllegalStateException("Fixture server refused the start")
+    }
+  }
+
+  /** `claims` answers the claim commands of the attached session's Governor; the collector and root receivers get none. `started` sees every start. */
+  private final class Receiver(claims: Option[ClaimInput => Result], started: Attempt => Unit) extends ServerApi {
     override def usage(value: HostUsageInput): HostUsageResult = value.operation match {
       case HostUsage.Assign(assignment) => HostUsageResult.Assigned(assignment)
-      case HostUsage.Start(attempt) => HostUsageResult.Started(attempt)
+      case HostUsage.Start(attempt) => started(attempt); HostUsageResult.Started(attempt)
       case HostUsage.Finish(outcome) => HostUsageResult.Finished(outcome)
       case other => throw new IllegalStateException("Unexpected fixture usage: " + other.getClass.getSimpleName)
     }
@@ -142,10 +154,10 @@ object ShutdownFixture extends RoleAppMain.LauncherBIO[IO] {
       }
       make[SupervisorAuthority].from { (config: SupervisorConfig, clock: Clock) =>
         val expires = clock.millis() + Duration.ofHours(1).toMillis
-        SupervisorAuthority(new Receiver(None), new Receiver(None),
-          new Receiver(Some(claims(config.owner.actor, config.directory, property(RootProperty).resolve(ClaimLog), clock))), AccessToken("governor", expires))
+        SupervisorAuthority(new Receiver(None, _ => ()), new Receiver(None, starts(property(RootProperty).resolve(StartLog))),
+          new Receiver(Some(claims(config.owner.actor, config.directory, property(RootProperty).resolve(ClaimLog), clock)), _ => ()), AccessToken("governor", expires))
       }
-      make[SessionCollectors].fromValue(new SessionCollectors { override def collector(run: SupervisorRun): ServerApi = new Receiver(None) })
+      make[SessionCollectors].fromValue(new SessionCollectors { override def collector(run: SupervisorRun): ServerApi = new Receiver(None, _ => ()) })
       make[CliContext].from((config: SupervisorConfig) => CliContext(sys.env, config.directory, System.out, System.in))
       make[McpSchemas]
       make[WorkflowAssets]

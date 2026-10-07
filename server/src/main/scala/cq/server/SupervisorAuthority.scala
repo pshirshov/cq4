@@ -9,7 +9,8 @@ import zio.{Task, ZIO}
 final case class SupervisorAuthority(root: ServerApi, collector: ServerApi, governor: ServerApi, governorToken: AccessToken)
 
 object SupervisorAuthority {
-  private val HttpDeadline = Duration.ofSeconds(10)
+  /** What one call to the server may take. */
+  val HttpDeadline: Duration = Duration.ofSeconds(10)
   /** The server grants scoped credentials for at most 24 hours; the margin absorbs clock difference between host and server. */
   val GrantLifetime: Duration = Duration.ofHours(24).minus(Duration.ofMinutes(10))
   private val RenewalMargin = Duration.ofHours(1)

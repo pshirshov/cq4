@@ -49,14 +49,15 @@ final class AttachedGatewayLocal extends AnyWordSpec {
     val peer = new StdioPeer(input, output, new OwnerLiveness { override def alive: Boolean = true },
       PeerLimits(LongInterval, LongInterval, LongInterval, frameBytes, 8), () => ())
     private var sequence = 0
-    /** How often the gateway asked for the session to be recorded. */
+    /** How often the gateway asked for the session to be recorded, and whether the next request for it fails. */
     val governing = new AtomicInteger(0)
+    @volatile var refused = false
     def run[A](task: Task[A]): A = Unsafe.unsafe { implicit unsafe => Runtime.default.unsafe.run(task).getOrThrowFiberFailure() }
     /** What the host loop does with one request: handle it, send the answer, and return the frame the owner received. */
     def exchange(method: String, params: Json): Json = {
       sequence += 1
       val answer = run(gateway.handle(peer, Json.obj("jsonrpc" -> Json.fromString("2.0"), "id" -> Json.fromInt(sequence),
-        "method" -> Json.fromString(method), "params" -> params), ZIO.succeed(governing.incrementAndGet()).unit)).get
+        "method" -> Json.fromString(method), "params" -> params), ZIO.attempt { governing.incrementAndGet(); if (refused) { refused = false; throw new IllegalStateException("Fixture server refused the registration") } })).get
       peer.send(answer)
       val received = parser.parse(lines.readLine()).fold(throw _, identity)
       assert(received == answer && received.hcursor.get[Int]("id") == Right(sequence) && peer.reason.isEmpty)
@@ -81,6 +82,7 @@ final class AttachedGatewayLocal extends AnyWordSpec {
       "params" -> Json.obj("name" -> Json.fromString(name), "arguments" -> parser.parse(arguments).fold(throw _, identity)))
     val id = """{"value":"00000000-0000-4000-8000-000000000009"}"""
     val short = Duration.ofSeconds(DispatchWaits.RequestSeconds)
+    def deadline(request: Json): Duration = AttachedGateway.deadline(request, Harness.Claude, true)
     "allow a dispatch command its wait on top of the deadline that every request without a wait keeps" in {
       assert(DispatchWaits.MaxMillis == 120000 && short == Duration.ofSeconds(30))
       for (command <- List(s"""{"Status":{"attempt":$id,"waitMillis":120000}}""", s"""{"IntegrationStatus":{"id":$id,"waitMillis":120000}}""",
@@ -88,17 +90,28 @@ final class AttachedGatewayLocal extends AnyWordSpec {
         // I30: these reply once the host has opened the workspace or published the review.
         s"""{"OpenWorkspace":{"request":$id,"members":[],"previous":null,"fence":{"claim":$id,"generation":"1"}}}""",
         s"""{"SelfReview":{"request":$id,"result":$id,"members":[],"fence":{"claim":$id,"generation":"1"}}}"""))
-        assert(AttachedGateway.deadline(call("dispatch", command)) == Duration.ofSeconds(150), command)
-      assert(AttachedGateway.deadline(call("dispatch", s"""{"Status":{"attempt":$id,"waitMillis":45000}}""")) == Duration.ofSeconds(75))
+        assert(deadline(call("dispatch", command)) == Duration.ofSeconds(150), command)
+      assert(deadline(call("dispatch", s"""{"Status":{"attempt":$id,"waitMillis":45000}}""")) == Duration.ofSeconds(75))
     }
     "keep the short deadline for a request that does not wait, that the host refuses or that is no dispatch command" in {
       for (command <- List(s"""{"Status":{"attempt":$id,"waitMillis":0}}""", s"""{"Status":{"attempt":$id,"waitMillis":120001}}""",
         s"""{"Status":{"attempt":$id,"waitMillis":-1}}""", s"""{"Cancel":{"attempt":$id}}""", s"""{"Integrate":{"id":$id}}""", """{"Status":"{}"}""",
         s"""{"SubmitWorkspace":{"attempt":$id,"members":[]}}"""))
-        assert(AttachedGateway.deadline(call("dispatch", command)) == short, command)
+        assert(deadline(call("dispatch", command)) == short, command)
       // A wait is honoured only where the host waits: the same field in another tool's arguments changes nothing.
-      assert(AttachedGateway.deadline(call("session", s"""{"Status":{"attempt":$id,"waitMillis":120000}}""")) == short)
-      assert(AttachedGateway.deadline(Json.obj("jsonrpc" -> Json.fromString("2.0"), "id" -> Json.fromInt(1), "method" -> Json.fromString("ping"))) == short)
+      assert(deadline(call("session", s"""{"Status":{"attempt":$id,"waitMillis":120000}}""")) == short)
+      assert(deadline(Json.obj("jsonrpc" -> Json.fromString("2.0"), "id" -> Json.fromInt(1), "method" -> Json.fromString("ping"))) == short)
+    }
+    "D160: allow the first governing request of a session the two server calls of its registration on top of its own deadline" in {
+      val registration = Duration.ofSeconds(20)
+      assert(AttachedGateway.Registration == registration)
+      def request(method: String): Json = Json.obj("jsonrpc" -> Json.fromString("2.0"), "id" -> Json.fromInt(1), "method" -> Json.fromString(method), "params" -> Json.obj())
+      for ((method, served) <- AttachedGateway.Methods; harness <- Harness.all; recorded <- List(false, true)) {
+        val registers = served.governing && served.only.forall(_ == harness) && !recorded
+        assert(AttachedGateway.deadline(request(method), harness, recorded) == (if (registers) short.plus(registration) else short), s"$method $harness $recorded")
+      }
+      assert(AttachedGateway.deadline(call("dispatch", s"""{"Status":{"attempt":$id,"waitMillis":120000}}"""), Harness.Codex, false) == Duration.ofSeconds(170))
+      assert(AttachedGateway.deadline(request("resources/list"), Harness.Pi, false) == short)
     }
   }
 
@@ -229,6 +242,22 @@ final class AttachedGatewayLocal extends AnyWordSpec {
         assert(scala.util.Try(session.exchange("cq/piUsage", Json.obj())).isFailure && session.governing.get() == 3)
         session.exchange("cq/driver", Json.obj())
         assert(session.governing.get() == 4)
+        // Every method the host answers is classified, and no other is answered.
+        assert(AttachedGateway.Methods.keySet == Set("initialize", "ping", "tools/list", "cq/session", "tools/call", "cq/piUsage", "cq/driver"))
+      } finally session.close()
+    }
+    "D160: answer the request whose registration failed with that failure, keep serving, and ask for the registration again at the next governing request" in {
+      val session = new Session(AttachedGateway.FrameBytes, Harness.Pi, _ => Result.Counts(LedgerCounts(Nil, ChangeCursor(7L))))
+      try {
+        def refusal(method: String, params: Json): Json = { session.refused = true; session.exchange(method, params) }
+        val tool = refusal("tools/call", Json.obj("name" -> Json.fromString("read"), "arguments" -> read("""{"Counts":{}}"""))).hcursor.downField("result").focus.get
+        assert(fault(tool).hcursor.downField("Invalid").get[String]("message") == Right("Fixture server refused the registration"), tool.noSpaces)
+        val driver = refusal("cq/driver", Json.obj())
+        assert(driver.hcursor.downField("result").downField("Failed").downField("fault").downField("Invalid").get[String]("message") == Right("Fixture server refused the registration"), driver.noSpaces)
+        val usage = refusal("cq/piUsage", Json.obj())
+        assert(usage.hcursor.downField("error").get[String]("message") == Right("Fixture server refused the registration"), usage.noSpaces)
+        assert(session.governing.get() == 3 && !session.refused)
+        assert(session.tool("read", read("""{"Counts":{}}""")).hcursor.get[Boolean]("isError") == Right(false) && session.governing.get() == 4)
       } finally session.close()
     }
     "refuse a read of the Help catalog, which is served to the browser only, without reaching the server, and keep serving" in {

@@ -244,7 +244,9 @@ def main():
         return json.loads(cli(["status", "attempts", "--session", directory.name, "--json"]))["UsageAttempts"]["page"]["entries"]
     def entries(directory):
         return sorted(str(path.relative_to(directory)) for path in directory.rglob("*"))
-    known = session_directories()
+    def registered():
+        return [entry["attempt"]["id"] for entry in json.loads(cli(["status", "attempts", "--json"]))["UsageAttempts"]["page"]["entries"]]
+    known, before_idle = session_directories(), registered()
     with (root / "idle-host.log").open("w") as log:
         idle = Peer(command + ["host", "codex", "--executable", str(wrapper)], repository, env, log)
         try:
@@ -252,6 +254,13 @@ def main():
             idle.refused("resources/list", {})
         finally:
             idle.close()
+    assert session_directories() == known and registered() == before_idle, "A host that recorded no session left a directory or an attempt"
+    # A host killed before any tool call leaves the directory with its lock; nothing is recorded in it, and the next host that records a session removes it.
+    with (root / "idle-host.log").open("a") as log:
+        idle = Peer(command + ["host", "codex", "--executable", str(wrapper)], repository, env, log)
+        idle.rpc("tools/list", {})
+        idle.process.kill()
+        idle.process.wait(timeout=5)
     opened, = session_directories() - known
     assert attempts(opened) == [] and entries(opened) == ["journal", "journal/owner.lock"], (attempts(opened), entries(opened))
     assert cli(["job", "upload", "--session", str(opened)]) == f"No session is recorded in {opened}; there is nothing to deliver\n"
@@ -279,7 +288,7 @@ def main():
     def recovered(reply):
         assert "Failed" in reply, reply
         began = time.monotonic()
-        while not (earlier / "recovery.json").exists():
+        while not (earlier / "recovery.json").exists() or opened.exists():
             assert time.monotonic() - began < HOST_LATCH_SECONDS, "The later host did not recover the killed session"
             time.sleep(0.05)
     later = killed_after(recovered, True)
@@ -289,7 +298,7 @@ def main():
     assert "Acknowledged 1" in cli(["job", "upload", "--session", str(later)])
     uploaded, = attempts(later)
     assert uploaded["outcome"]["value"]["state"] == "Unknown" and "Acknowledged 0" in cli(["job", "upload", "--session", str(later)]), uploaded
-    assert opened in session_directories() and attempts(opened) == [] and entries(opened) == ["journal", "journal/owner.lock"]
+    assert not opened.exists() and attempts(opened) == []
     print(json.dumps({"connectionOnly": "no attempt and no session record", "killedAfterFirstCall": ["recovered", "uploaded"]}))
 
     # A driven session: the hook entry points hold the operator credential; the attached session binds, activates the issued directive and

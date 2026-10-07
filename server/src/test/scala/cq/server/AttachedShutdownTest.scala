@@ -199,6 +199,32 @@ final class AttachedShutdownProcess extends SpecZIO with AssertZIO {
         }
       } yield () }
     }
+    "D160: answer the tool call whose registration the server failed, register the same start at the next tool call, and deliver the Finish of the session recorded then" in { (local: LocalWorkspaceFixture, guardian: GuardianFixture) =>
+      val scope = owner
+      ZIO.scoped { for {
+        state <- ZIO.attemptBlocking(Files.createTempDirectory(local.directory, "state-"))
+        // The fixture's launch makes the first tool call, whose registration the collector refuses at the start of the attempt.
+        running <- host(local, guardian, scope, state, Map(ShutdownFixture.RefuseStartProperty -> "true"))
+        _ <- ZIO.attemptBlocking {
+          def starts: List[String] = { val log = running.at.resolve(ShutdownFixture.StartLog); if (Files.exists(log)) Files.readString(log).linesIterator.toList else Nil }
+          ShutdownFixture.awaitUntil(running.process, running.at, Duration.ofSeconds(60))(running.log.contains("\"id\":2"))
+          val delivery = running.session.resolve("delivery")
+          assert(running.log.contains("Fixture server refused the start") && starts.size == 1, running.log)
+          assert(Files.exists(running.session.resolve("run.json")) && Files.exists(delivery.resolve("000000.json")) && !Files.exists(delivery.resolve("000000.ack")) &&
+            !Files.exists(receiptFile(running.session)) && !Files.exists(delivery.resolve("final")))
+          val input = running.process.getOutputStream
+          input.write(("""{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"none","arguments":{}}}""" + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8))
+          input.flush()
+          ShutdownFixture.awaitUntil(running.process, running.at, Duration.ofSeconds(60))(running.log.contains("\"id\":3") && Files.exists(receiptFile(running.session)))
+          // One start: the second registration repeated the record the first one wrote, with its start time.
+          val recorded = HostFiles.read(running.session.resolve("run.json"), SupervisorRun_JsonCodec, 65536).attempt
+          assert(starts == List.fill(2)(s"${recorded.id.value} ${recorded.startedAt}") && Files.exists(delivery.resolve("000000.ack")), starts.toString)
+          input.close()
+          assert(running.process.waitFor(60, TimeUnit.SECONDS) && running.process.exitValue() == 0, running.log)
+          assert(finishDelivered(running.session), running.log)
+        }
+      } yield () }
+    }
     "halt with the unresolved exit at the base drain deadline when EOF finds the initial record fsync stalled" in { (local: LocalWorkspaceFixture, guardian: GuardianFixture) =>
       val scope = owner
       for {
