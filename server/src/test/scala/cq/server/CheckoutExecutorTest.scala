@@ -154,17 +154,19 @@ final class CheckoutExecutorLocal extends SpecZIO {
         val id = IntegrationId(UUID.randomUUID())
         value.copy(id = id, change = value.change.copy(request = RequestId(id.value)))
       }
-      val Unconfirmed = Some("Git execution or incorporation remains unconfirmed; retain the reservation and journal")
+      val Unconfirmed = "Git execution or incorporation remains unconfirmed; retain the reservation and journal: target is at the expected commit; "
+      val Uncertain = "Job Uncertain: no confirmed exit; Guardian start acknowledgement deadline exceeded; "
       def target: String = local.git(local.source, "rev-parse", value.target)
       // The job of `of` ends as the case arranges once its intent is retained; the integration then stays pending, whatever is asked again.
-      def pending(of: IntegrationIntent, arrange: => Unit, release: => Unit): Task[Unit] = for {
+      // D155: the blocker says why the outcome is unconfirmed.
+      def pending(of: IntegrationIntent, why: String, arrange: => Unit, release: => Unit): Task[Unit] = for {
         _ <- coordinator.prepare(of)
         _ <- ZIO.attemptBlocking { HostFiles.directory(evidence(of)); arrange }
         runs <- ZIO.foreach(List(1, 2))(_ => coordinator.run(of.id))
         discarded <- coordinator.discard(of.id).either
         _ <- ZIO.attemptBlocking {
           release
-          assert(runs.forall(run => run.record.resolution == IntegrationResolution.Pending() && run.blocker == Unconfirmed), runs.toString)
+          assert(runs.forall(run => run.record.resolution == IntegrationResolution.Pending() && run.blocker.exists(_.startsWith(Unconfirmed + why))), runs.toString)
           assert(discarded.isLeft && !Files.exists(evidence(of).resolve("refused.json")) && target == local.base.value, files(of).toString)
         }
       } yield ()
@@ -194,16 +196,16 @@ final class CheckoutExecutorLocal extends SpecZIO {
         // What cannot be settled stays pending: a job that began its effects, one whose executor runs, one whose executor left the index
         // locked, and one that has not ended.
         started = another
-        _ <- pending(started, { Files.writeString(evidence(started).resolve("started.json"), "{}"); () }, ())
+        _ <- pending(started, Uncertain + "checkout evidence: started.json", { Files.writeString(evidence(started).resolve("started.json"), "{}"); () }, ())
         running = another
         held = new java.util.concurrent.atomic.AtomicReference[java.nio.channels.FileChannel]()
-        _ <- pending(running, { held.set(CheckoutRecords.lock(evidence(running))); held.get.lock(); () }, held.get.close())
+        _ <- pending(running, Uncertain + "its executor holds the checkout lock", { held.set(CheckoutRecords.lock(evidence(running))); held.get.lock(); () }, held.get.close())
         locking = another
-        _ <- pending(locking, { Files.writeString(local.source.resolve(".git/index.lock"), CheckoutRecords.lockText(locking, evidence(locking))); () },
+        _ <- pending(locking, Uncertain + "its executor left the index locked", { Files.writeString(local.source.resolve(".git/index.lock"), CheckoutRecords.lockText(locking, evidence(locking))); () },
           Files.delete(local.source.resolve(".git/index.lock")))
         unfinished = another
         _ <- ZIO.succeed(phase.set(JobPhase.Running))
-        _ <- pending(unfinished, (), ())
+        _ <- pending(unfinished, "its Git job is Running", (), ())
         // Once the evidence of an effect is gone, the same integration settles.
         _ <- ZIO.attemptBlocking(Files.delete(evidence(started).resolve("started.json")))
         settled <- coordinator.run(started.id)

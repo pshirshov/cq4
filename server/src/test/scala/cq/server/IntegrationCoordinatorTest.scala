@@ -128,7 +128,7 @@ final class DummyIntegrationHarness extends IntegrationHarness {
       })
       override def execution(intent: IntegrationIntent) = ZIO.attempt(lock.synchronized(executions.get(intent.id)))
       // The dummy's jobs either settle or never exist: none ends without having started.
-      override def withdraw(intent: IntegrationIntent) = ZIO.none
+      override def withdraw(intent: IntegrationIntent) = ZIO.left("no Git job is registered for it")
     }
     operation(IntegrationFixture(owner, repository, target, base, first, second, combined, git, new MemoryIntegrationJournal(owner),
       ZIO.succeed(new MemoryIntegrationJournal(owner)), value => ZIO.succeed(lock.synchronized { current = value }),
