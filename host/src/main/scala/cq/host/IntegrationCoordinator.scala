@@ -36,10 +36,13 @@ final class IntegrationCoordinator(owner: Scope, journal: IntegrationJournal, gi
   private def reconcile(intent: IntegrationIntent): Task[Option[IntegrationObservation]] = for {
     target <- git.inspect(intent)
     execution <- if (target.incorporated) ZIO.succeed(None) else git.execution(intent)
+    refused = execution.exists(_.refusedBeforeCommit)
+    // A job that ended without a settled refusal may still have started no effect: then it is withdrawn, and the integration settles (D153).
+    withdrawn <- if (target.incorporated || refused) ZIO.succeed(None) else git.withdraw(intent)
   } yield {
     if (target.incorporated) Some(IntegrationObservation.Incorporated(target.commit))
-    else if (execution.exists(_.refusedBeforeCommit)) Some(IntegrationObservation.NotApplied(execution.get.refusal.getOrElse("Git refused the conditional update before commit; executor settled")))
-    else None
+    else if (refused) Some(IntegrationObservation.NotApplied(execution.get.refusal.getOrElse("Git refused the conditional update before commit; executor settled")))
+    else withdrawn.map(IntegrationObservation.NotApplied.apply)
   }
 
   private def observe(entry: IntegrationEntry, local: IntegrationLocal): Task[Option[IntegrationObservation]] = local.observation match {

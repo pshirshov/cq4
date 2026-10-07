@@ -130,5 +130,85 @@ final class CheckoutExecutorLocal extends SpecZIO {
           "Branch advanced to candidate while its checked-out files remained at the old commit")
       }
     }
+    "D153: settle as not applied an integration whose Git job ended without starting, and keep the job from starting afterwards" in { (local: LocalWorkspaceFixture) =>
+      val value = intent(local, false)
+      local.git(local.source, "branch", "integration")
+      val owner = Scope(value.project, value.owner)
+      // Git jobs that the host gave up on before they started: each record is terminal unless the case says otherwise, and nothing ran.
+      val phase = new java.util.concurrent.atomic.AtomicReference[JobPhase](JobPhase.Uncertain)
+      val jobs = new IntegrationJobs {
+        private var records = Map.empty[AttemptId, JobRecord]
+        override def execute(workspace: WorkspaceSpec, command: JobCommand): Task[Unit] = ZIO.attempt {
+          val problem = Option.when(phase.get == JobPhase.Uncertain)("Guardian start acknowledgement deadline exceeded")
+          records = records.updated(workspace.attempt, JobRecord(workspace, command.fingerprint, if (problem.isEmpty) JobTarget.Run else JobTarget.Stop, phase.get, None, problem, 2, 1, 2))
+        }
+        override def status(id: AttemptId): Task[JobRecord] = ZIO.attempt(records.getOrElse(id, throw cq.core.DomainFailure(Fault.Missing("No job"))))
+      }
+      val git = new SupervisedGitIntegration(owner, local.source, value.target, local.command, jobs, local.directory.resolve("payload"), sys.env,
+        ExecutionLimits(Duration.ofSeconds(3), None, Duration.ofSeconds(1), Duration.ofMillis(100), Duration.ofSeconds(2), 65536), CqEntrypoint.command)
+      val server = new IntegrationReceiver
+      val coordinator = new IntegrationCoordinator(owner, new MemoryIntegrationJournal(owner), git, server, server)
+      def evidence(of: IntegrationIntent): Path = local.directory.resolve("checkouts").resolve(of.id.value.toString)
+      def files(of: IntegrationIntent): Set[String] = scala.util.Using.resource(Files.list(evidence(of)))(_.iterator().asScala.map(_.getFileName.toString).toSet)
+      def another: IntegrationIntent = {
+        val id = IntegrationId(UUID.randomUUID())
+        value.copy(id = id, change = value.change.copy(request = RequestId(id.value)))
+      }
+      val Unconfirmed = Some("Git execution or incorporation remains unconfirmed; retain the reservation and journal")
+      def target: String = local.git(local.source, "rev-parse", value.target)
+      // The job of `of` ends as the case arranges once its intent is retained; the integration then stays pending, whatever is asked again.
+      def pending(of: IntegrationIntent, arrange: => Unit, release: => Unit): Task[Unit] = for {
+        _ <- coordinator.prepare(of)
+        _ <- ZIO.attemptBlocking { HostFiles.directory(evidence(of)); arrange }
+        runs <- ZIO.foreach(List(1, 2))(_ => coordinator.run(of.id))
+        discarded <- coordinator.discard(of.id).either
+        _ <- ZIO.attemptBlocking {
+          release
+          assert(runs.forall(run => run.record.resolution == IntegrationResolution.Pending() && run.blocker == Unconfirmed), runs.toString)
+          assert(discarded.isLeft && !Files.exists(evidence(of).resolve("refused.json")) && target == local.base.value, files(of).toString)
+        }
+      } yield ()
+      for {
+        _ <- coordinator.prepare(value)
+        first <- coordinator.run(value.id)
+        _ <- ZIO.attemptBlocking {
+          println(s"Integration whose job never started: ${first.record.resolution} blocker=${first.blocker} evidence=${files(value)}")
+          assert(first.record.resolution == IntegrationResolution.NotApplied(SupervisedGitIntegration.Withdrawn) && first.blocker.isEmpty, s"${first.record.resolution} ${first.blocker} evidence=${files(value)}")
+          assert(server.observations.get() == 1 && target == local.base.value && files(value) == Set("intent.json", "refused.json", CheckoutRecords.Lock))
+          // The job cannot start any more: an executor launched late finds the withdrawal and changes nothing.
+          val late = scala.util.Try(new CheckoutExecutor(sys.env).run(evidence(value).resolve("intent.json")))
+          assert(late.isFailure && late.failed.get.getMessage.contains("already has retained evidence") && !Files.exists(evidence(value).resolve("started.json")) && target == local.base.value, late.toString)
+          assert(!Files.exists(local.source.resolve(".git/index.lock")))
+        }
+        replay <- coordinator.run(value.id)
+        _ <- ZIO.attempt(assert(replay.record == first.record && server.observations.get() == 1))
+        // An executor that refused before any effect, under a job the host could not confirm: its own refusal settles the integration.
+        refusing = another
+        _ <- coordinator.prepare(refusing)
+        _ <- ZIO.attemptBlocking {
+          HostFiles.directory(evidence(refusing))
+          HostFiles.immutable(evidence(refusing).resolve("refused.json"), HostFiles.encode(CheckoutRefusal_JsonCodec, CheckoutRefusal(refusing, "Checkout refused: fixture")), CheckoutRecords.MaxBytes)
+        }
+        refused <- coordinator.run(refusing.id)
+        _ <- ZIO.attempt(assert(refused.record.resolution == IntegrationResolution.NotApplied("Checkout refused: fixture") && refused.blocker.isEmpty, refused.toString))
+        // What cannot be settled stays pending: a job that began its effects, one whose executor runs, one whose executor left the index
+        // locked, and one that has not ended.
+        started = another
+        _ <- pending(started, { Files.writeString(evidence(started).resolve("started.json"), "{}"); () }, ())
+        running = another
+        held = new java.util.concurrent.atomic.AtomicReference[java.nio.channels.FileChannel]()
+        _ <- pending(running, { held.set(CheckoutRecords.lock(evidence(running))); held.get.lock(); () }, held.get.close())
+        locking = another
+        _ <- pending(locking, { Files.writeString(local.source.resolve(".git/index.lock"), CheckoutRecords.lockText(locking, evidence(locking))); () },
+          Files.delete(local.source.resolve(".git/index.lock")))
+        unfinished = another
+        _ <- ZIO.succeed(phase.set(JobPhase.Running))
+        _ <- pending(unfinished, (), ())
+        // Once the evidence of an effect is gone, the same integration settles.
+        _ <- ZIO.attemptBlocking(Files.delete(evidence(started).resolve("started.json")))
+        settled <- coordinator.run(started.id)
+        _ <- ZIO.attempt(assert(settled.record.resolution == IntegrationResolution.NotApplied(SupervisedGitIntegration.Withdrawn) && target == local.base.value, settled.toString))
+      } yield ()
+    }
   }
 }

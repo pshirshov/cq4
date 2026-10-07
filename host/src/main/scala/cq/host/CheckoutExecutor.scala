@@ -6,6 +6,7 @@ import java.io.ByteArrayOutputStream
 import java.nio.channels.FileChannel
 import java.nio.charset.StandardCharsets.UTF_8
 import java.nio.file.{Files, LinkOption, Path, StandardCopyOption, StandardOpenOption}
+import java.nio.file.attribute.PosixFilePermissions
 import java.security.MessageDigest
 import java.time.Duration
 import java.util.concurrent.{FutureTask, TimeUnit}
@@ -18,6 +19,11 @@ object CheckoutRecords {
   def lockText(intent: IntegrationIntent, directory: Path): String = s"CQ checkout ${intent.id.value}\n$directory\n"
   def hash(path: Path): String = java.util.HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(HostFiles.bytes(path, MaxIndexBytes)))
   def force(path: Path): Unit = Using.resource(FileChannel.open(path, StandardOpenOption.READ))(_.force(true))
+  /** The file of a checkout's directory that its executor locks for its whole run. Whoever holds that lock knows that no executor of
+    * the checkout is running, and what it then writes into the directory is read by every executor that starts later. */
+  val Lock = "executor.lock"
+  def lock(directory: Path): FileChannel = FileChannel.open(directory.resolve(Lock), java.util.Set.of(StandardOpenOption.CREATE, StandardOpenOption.WRITE),
+    PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------")))
 }
 
 /** Executed only as a guardian-owned job; interrupted work retains the real index lock and journal. */
@@ -79,6 +85,12 @@ final class CheckoutExecutor(environment: Map[String, String]) {
   def run(input: Path): Unit = {
     val directory = input.getParent.toRealPath()
     HostFiles.directory(directory)
+    // Taken before the retained evidence is read and kept until the process ends: a host that withdrew this checkout did so under
+    // the same lock, and its refusal is then found below.
+    Using.resource(CheckoutRecords.lock(directory))(channel => Using.resource(channel.lock())(_ => execute(input, directory)))
+  }
+
+  private def execute(input: Path, directory: Path): Unit = {
     val plan = HostFiles.read(input, CheckoutPlan_JsonCodec, CheckoutRecords.MaxBytes)
     val intent = plan.intent
     require(!List("started.json", "completed.json", "refused.json", "index-before").exists(name => Files.exists(directory.resolve(name))),

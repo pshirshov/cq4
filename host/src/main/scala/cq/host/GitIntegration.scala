@@ -2,8 +2,11 @@ package cq.host
 
 import cq.api.*
 import cq.core.{DomainFailure, Scope}
+import java.nio.channels.OverlappingFileLockException
 import java.nio.file.{Files, Path}
 import java.time.Duration
+import scala.jdk.CollectionConverters.*
+import scala.util.Using
 import zio.{Task, ZIO}
 
 final case class IntegrationTarget(commit: GitCommit, incorporated: Boolean, checkoutBlocked: Boolean)
@@ -17,6 +20,9 @@ trait GitIntegration {
   def inspect(intent: IntegrationIntent): Task[IntegrationTarget]
   def execute(intent: IntegrationIntent): Task[Unit]
   def execution(intent: IntegrationIntent): Task[Option[IntegrationExecution]]
+  /** Establishes that the Git job of `intent` started no effect and can start none any more, and gives the reason; empty when that
+    * cannot be established: the job has not ended, its executor is running, or it left evidence of effects. */
+  def withdraw(intent: IntegrationIntent): Task[Option[String]]
 }
 
 trait IntegrationJobs {
@@ -35,6 +41,8 @@ final class RetainedIntegrationJobs(journal: JobRepository) extends IntegrationJ
 }
 
 object SupervisedGitIntegration {
+  /** The refusal the host retains for a Git job it withdrew. */
+  val Withdrawn = "The Git job ended without starting the update; the host withdrew it, so that it can no longer start"
   /** Above the sum of the checkout executor's own 30 s command deadlines, so it stops only a Git job those failed to bound. */
   val Execution: Duration = Duration.ofMinutes(30)
 }
@@ -136,4 +144,33 @@ final class SupervisedGitIntegration(owner: Scope, repository: Path, target: Str
         if (settled) output("stderr", record.exit.get.stderrBytes) else "", refusal))
     }}.catchSome { case DomainFailure(_: Fault.Missing) => ZIO.succeed(None) }
   }
+
+  // The executor holds the lock of its checkout directory while it runs, so under that lock no executor is running; and it writes
+  // `started.json` before its first effect, so a directory without one holds no effect. A refusal retained there under the lock is
+  // found by every executor that starts later, which then does nothing. A job that has not ended is left to its supervisor.
+  override def withdraw(intent: IntegrationIntent): Task[Option[String]] = jobs.status(AttemptId(intent.id.value)).flatMap { record => ZIO.attemptBlocking {
+    require(record.workspace == workspace(intent) && record.fingerprint == launch(intent).fingerprint, "Git job differs from the frozen integration effect")
+    val directory = checkoutDirectory(intent)
+    if (!JobRecords.terminal(record.phase)) None
+    else Using.resource(CheckoutRecords.lock(directory)) { channel =>
+      (try Option(channel.tryLock()) catch { case _: OverlappingFileLockException => None }).flatMap { held =>
+        try {
+          val retained = Using.resource(Files.list(directory))(_.iterator().asScala.map(_.getFileName.toString).toSet) -- Set(checkoutInput(intent).getFileName.toString, CheckoutRecords.Lock)
+          val refusal = directory.resolve("refused.json")
+          // An executor that was stopped between taking the index lock and its first effect left that lock behind: it is not removed here.
+          val indexLock = Path.of(required("rev-parse", "--path-format=absolute", "--git-path", "index.lock"))
+          val locked = Files.exists(indexLock) && HostFiles.text(indexLock, CheckoutRecords.MaxBytes) == CheckoutRecords.lockText(intent, directory)
+          if (locked || !retained.subsetOf(Set(refusal.getFileName.toString))) None
+          else if (retained.isEmpty) {
+            HostFiles.immutable(refusal, HostFiles.encode(CheckoutRefusal_JsonCodec, CheckoutRefusal(intent, SupervisedGitIntegration.Withdrawn)), CheckoutRecords.MaxBytes)
+            Some(SupervisedGitIntegration.Withdrawn)
+          } else {
+            val value = HostFiles.read(refusal, CheckoutRefusal_JsonCodec, CheckoutRecords.MaxBytes)
+            require(value.intent == intent, "Checkout refusal differs from integration")
+            Some(value.reason)
+          }
+        } finally held.release()
+      }
+    }
+  }}.catchSome { case DomainFailure(_: Fault.Missing) => ZIO.succeed(None) }
 }
