@@ -676,6 +676,9 @@ root adt AgentProblem {
   data EmptyList { at: TextPosition }
   data InvalidMinimum { at: TextPosition min: i32 seats: i32 }
   data PanelNotAllowed { at: TextPosition role: AgentRole }
+  // The panel starts `together` seats at once (every seat of `all`, `min` of `any`), more than the `capacity` of child attempts a
+  // session runs at once. `harness` is absent for a role of the defaults.
+  data PanelOverCapacity { at: TextPosition harness: opt[Harness] role: AgentRole together: i32 capacity: i32 }
   data ProviderRequired { at: TextPosition harness: Harness }
   data ProviderNotAllowed { at: TextPosition harness: Harness }
   data EffortUnsupported { at: TextPosition harness: Harness effort: Effort }

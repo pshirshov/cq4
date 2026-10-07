@@ -106,7 +106,6 @@ final class AgentConfigLocal extends AnyWordSpec {
         case (Harness.Codex, AgentRole.Reviewer) => ResolvedRole(PanelMode.All, 1, List(fallback(route(Harness.Claude, "sonnet")), piStandard),
           RoleOrigin(AgentLayer.Installation, RoleSource.HarnessRoles), Nil)
         case (Harness.Pi, AgentRole.Planner) => plan(fallback(route(Harness.Pi, "openai-codex/gpt-6.1-sol", Effort.XHigh)))
-        // Duplicates are kept: the governing harness's tier and the named one are the same list here.
         // `$harness:@standard` and `pi:@standard` are one tier under a Pi governor: a fallback tries each of its models once.
         case (Harness.Pi, AgentRole.Worker) => plan(fallback(route(Harness.Pi, Glm), route(Harness.Pi, Mimo)))
         case (Harness.Pi, AgentRole.Explorer) => plan(fallback(route(Harness.Pi, Mimo, Effort.Low)))
@@ -239,6 +238,15 @@ final class AgentConfigLocal extends AnyWordSpec {
     "require a panel's min to be between one and its number of seats" in {
       def minimum(value: String): List[AgentProblem] = problems(s"defaults: { roles: { reviewer: { any: [claude:opus, codex:gpt], min: $value } } }")
       assert(minimum("3") == List(AgentProblem.InvalidMinimum(at(1, 70), 3, 2)))
+      // A panel that starts more seats together than a session runs children at once could never start: every seat of `all`, `min` of `any`.
+      val capacity = cq.core.ChildCapacity.MaxActiveChildren
+      def panel(scope: String, mode: String, seats: Int, min: Int): List[String] =
+        problems(scope.format(s"{ $mode: [${List.fill(seats)("claude:opus").mkString(", ")}], min: $min }")).map(AgentConfigText.describe)
+      val defaults = "defaults: { roles: { reviewer: %s } }"
+      val harness = "harnesses: { codex: { roles: { reviewer: %s } } }"
+      assert(panel(defaults, "all", capacity + 1, 1) == List(s"1:32: defaults.roles.reviewer starts ${capacity + 1} seats together, and a session runs at most $capacity children at once"))
+      assert(panel(harness, "any", capacity + 2, capacity + 1) == List(s"1:42: harnesses.codex.roles.reviewer starts ${capacity + 1} seats together, and a session runs at most $capacity children at once"))
+      assert(panel(defaults, "all", capacity, 1).isEmpty && panel(defaults, "any", capacity + 2, capacity).isEmpty && panel(harness, "all", capacity, capacity).isEmpty)
       assert(minimum("0") == List(AgentProblem.InvalidMinimum(at(1, 70), 0, 2)))
       assert(minimum("-1") == List(AgentProblem.InvalidMinimum(at(1, 70), -1, 2)))
       assert(minimum("1").isEmpty && minimum("2").isEmpty)
@@ -303,8 +311,15 @@ final class AgentConfigLocal extends AnyWordSpec {
         assert(worker(s"pi:@$text") == single(tier(named(Harness.Pi), value)))
         assert(worker(s"$$harness:@$text?effort=high") == single(ModelReference(Governing, ModelTarget.Tier(value), Some(Effort.High))))
       }
-      Effort.all.zip(List("off", "minimal", "low", "medium", "high", "xhigh", "max")).foreach { case (value, text) =>
-        assert(worker(s"pi:zai/a?effort=$text") == single(ModelReference(named(Harness.Pi), ModelTarget.Exact(ModelName(Some("zai"), "a")), Some(value))))
+      val efforts = List("off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra")
+      assert(efforts.size == Effort.all.size)
+      Effort.all.zip(efforts).foreach { case (value, text) =>
+        // Every level is read; a harness that does not take one refuses it by name, as Pi does `ultra`.
+        if (AgentResolution.efforts(Harness.Pi)(value))
+          assert(worker(s"pi:zai/a?effort=$text") == single(ModelReference(named(Harness.Pi), ModelTarget.Exact(ModelName(Some("zai"), "a")), Some(value))))
+        else assert(problems(inRoles(s"pi:zai/a?effort=$text")) == List(AgentProblem.EffortUnsupported(at(1, ValueColumn), Harness.Pi, value)))
+        if (AgentResolution.efforts(Harness.Codex)(value))
+          assert(worker(s"codex:a?effort=$text") == single(ModelReference(named(Harness.Codex), ModelTarget.Exact(ModelName(None, "a")), Some(value))))
       }
     }
 

@@ -206,7 +206,7 @@ final class DispatchController(config: SupervisorConfig, runner: ChildRunner, go
 }
 
 object DispatchController {
-  val MaxActiveChildren = 4
+  val MaxActiveChildren = cq.core.ChildCapacity.MaxActiveChildren
   val Closed = "Dispatch admission is closed"
   val Ending = "Governing harness ended; stopping its child hierarchy"
   /** The provider of an attempt whose route names none and whose harness has no settings entry to take one from. */

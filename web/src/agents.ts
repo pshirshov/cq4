@@ -52,6 +52,8 @@ function problemText(problem: api.AgentProblem): string {
   if (problem instanceof api.AgentProblem_EmptyList) return 'the list is empty';
   if (problem instanceof api.AgentProblem_InvalidMinimum) return `min is ${problem.min}, and a panel of ${problem.seats} seats takes a min from 1 to ${problem.seats}`;
   if (problem instanceof api.AgentProblem_PanelNotAllowed) return `the ${lower(problem.role)} role takes a model reference or a strategy; only the reviewer role takes a panel`;
+  if (problem instanceof api.AgentProblem_PanelOverCapacity)
+    return `${problem.harness === undefined || problem.harness === null ? 'defaults' : `harnesses.${lower(problem.harness)}`}.roles.${lower(problem.role)} starts ${problem.together} seats together, and a session runs at most ${problem.capacity} children at once`;
   if (problem instanceof api.AgentProblem_ProviderRequired) return `a ${lower(problem.harness)} model is written provider/model`;
   if (problem instanceof api.AgentProblem_ProviderNotAllowed) return `a ${lower(problem.harness)} model is written without a provider`;
   if (problem instanceof api.AgentProblem_EffortUnsupported) return `${lower(problem.harness)} does not take effort ${lower(problem.effort)}`;

@@ -1266,7 +1266,7 @@ emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_toke
       }
     }
 
-    "I17: start only the seats an `any` panel needs, tolerate a failed seat the others make up for, and refuse a panel whose seats do not fit" in {
+    "I17: start only the seats an `any` panel needs, tolerate a failed seat the others make up for, and refuse to save a panel whose seats could never fit" in {
       (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
         artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
       fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, None, Nil) { f =>
@@ -1283,9 +1283,8 @@ emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_toke
           tolerated <- f.child(controller, routed(marks), f.review(worked.result.get))
           toleratedSeats <- controller.seats(tolerated.attempt)
           outcomes <- controller.lineage(tolerated.attempt, 0, 0).flatMap(value => ZIO.foreach(value._1)(controller.concluded(_, 20000)))
-          _ <- reviewers("{ all: [codex:accept-f, codex:accept-g, codex:accept-h, codex:accept-i, codex:accept-j], min: 1 }")
           before <- count
-          refused <- fault(controller.start(UnitFixture.work(f.review(worked.result.get)), None))
+          refused <- fault(reviewers("{ all: [codex:accept-f, codex:accept-g, codex:accept-h, codex:accept-i, codex:accept-j], min: 1 }"))
           after <- count
           events <- ZIO.attemptBlocking(f.unitEvents)
           _ <- ZIO.attemptBlocking {
@@ -1300,8 +1299,10 @@ emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_toke
             assert(tolerated.phase == DispatchPhase.Completed && tolerated.next == ChildNext.ConsiderAcceptance && tolerated.result.nonEmpty &&
               tolerated.blocker.exists(_.startsWith("seat 0 failed and the other seats decided: ")), tolerated.toString)
             assert(toleratedSeats.seats.map(_.end.getClass.getSimpleName) == List("Failed", "Delivered") && outcomes.flatten.map(_.end) == List(ChildEnd.Failed, ChildEnd.Admitted), toleratedSeats.toString)
-            // Five seats that start together exceed the session's bound: nothing of the unit is started.
-            assert(refused.contains(Fault.Conflict(s"This session permits at most ${DispatchController.MaxActiveChildren} active children; wait for one to end or cancel it before starting another")), refused.toString)
+            // Five seats that start together exceed the session's bound, so no unit of the role could ever start: the configuration is
+            // refused when it is saved, and the one before it stays.
+            assert(refused.contains(Fault.Invalid(s"Agent configuration has problems: 4:15: defaults.roles.reviewer starts 5 seats together, " +
+              s"and a session runs at most ${DispatchController.MaxActiveChildren} children at once")), refused.toString)
             assert(before == after && List("f", "g", "h", "i", "j").forall(label => !Files.exists(marks.resolve(s"accept-$label.started"))) && events.size == 6 && controller.quiescent)
           }
         } yield ()

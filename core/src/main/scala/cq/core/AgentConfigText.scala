@@ -296,8 +296,13 @@ object AgentConfigText {
               case YamlNode.Sequence(items, _) => items.map(seat(_, scope))
               case other => syntax(other.at, "expected a list of seats, as in [claude:@standard, pi:@standard]"); Nil
             }
-            minimum(found, mapping.at, seats.size).filter(_ => seats.nonEmpty && seats.forall(_.nonEmpty) && role == AgentRole.Reviewer).map { min =>
-              RoleChoice.Panel(mode, seats.flatten.map(_._1), min) -> seats.flatten.map(_._2)
+            minimum(found, mapping.at, seats.size).filter(_ => seats.nonEmpty && seats.forall(_.nonEmpty) && role == AgentRole.Reviewer).flatMap { min =>
+              // The seats a unit starts together fit a session's child capacity, or no unit of the role could ever start.
+              val together = if (mode == PanelMode.All) seats.size else min
+              if (together > ChildCapacity.MaxActiveChildren) {
+                problems += AgentProblem.PanelOverCapacity(mapping.at, scope, role, together, ChildCapacity.MaxActiveChildren)
+                None
+              } else Some(RoleChoice.Panel(mode, seats.flatten.map(_._1), min) -> seats.flatten.map(_._2))
             }
         }
       }
@@ -355,6 +360,9 @@ object AgentConfigText {
     case AgentProblem.EmptyList(position) => s"${at(position)}: the list is empty"
     case AgentProblem.InvalidMinimum(position, min, seats) => s"${at(position)}: min is $min, and a panel of $seats seats takes a min from 1 to $seats"
     case AgentProblem.PanelNotAllowed(position, value) => s"${at(position)}: the ${role(value)} role takes a model reference or a strategy; only the reviewer role takes a panel"
+    case AgentProblem.PanelOverCapacity(position, scope, value, together, capacity) =>
+      s"${at(position)}: ${scope.fold("defaults")(named => s"harnesses.${harness(named)}")}.roles.${role(value)} starts $together seats together, " +
+        s"and a session runs at most $capacity children at once"
     case AgentProblem.ProviderRequired(position, value) => s"${at(position)}: a ${harness(value)} model is written provider/model"
     case AgentProblem.ProviderNotAllowed(position, value) => s"${at(position)}: a ${harness(value)} model is written without a provider"
     case AgentProblem.EffortUnsupported(position, value, effort) =>
