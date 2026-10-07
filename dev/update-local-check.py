@@ -214,14 +214,53 @@ class Compatibility(unittest.TestCase):
             update.compatible(self.manifest("schema", "other"), self.manifest("schema", "new"), step)
         with self.assertRaisesRegex(RuntimeError, "Schema changes"):
             update.compatible(self.manifest("old-schema", "old"), self.manifest("schema", "new"), step)
+        self.assertIsNone(update.data_step(self.manifest("schema", "old"), self.manifest("schema", "new"), step, ROOT))
+
+    STEP = {"kind": "installation-settings-and-attempt-effort", "schemaBefore": "old-schema", "schemaAfter": "schema", "modelBefore": "old", "modelAfter": "new"}
+
+    def test_schema_transition_only_as_the_step_names_it(self):
+        # The hash returned is the one the database holds before the replacement.
+        self.assertEqual(update.compatible(self.manifest("old-schema", "old"), self.manifest("schema", "new"), self.STEP), "old-schema")
+        # The same package again changes nothing and needs no step, whatever step the tree pins.
+        self.assertEqual(update.compatible(self.manifest("schema", "new"), self.manifest("schema", "new"), self.STEP), "schema")
+        self.assertIsNone(update.data_step(self.manifest("schema", "new"), self.manifest("schema", "new"), self.STEP, ROOT))
+        for before, after in [(("other-schema", "old"), ("schema", "new")), (("old-schema", "other"), ("schema", "new")),
+                              (("old-schema", "old"), ("other-schema", "new")), (("old-schema", "old"), ("schema", "other")),
+                              (("schema", "new"), ("old-schema", "old"))]:
+            with self.subTest(before=before, after=after), self.assertRaisesRegex(RuntimeError, "Schema changes"):
+                update.compatible(self.manifest(*before), self.manifest(*after), self.STEP)
+        # A later model change on the new schema is not the pinned step's transition.
+        with self.assertRaisesRegex(RuntimeError, "data update step"):
+            update.compatible(self.manifest("schema", "new"), self.manifest("schema", "newer"), self.STEP)
 
     def test_pinned_step_describes_this_tree(self):
         step = json.loads((ROOT / "dev/local-update-step.json").read_text())
-        self.assertEqual(step["kind"], update.UNCHANGED_DATA)
-        self.assertEqual(step["schema"], update.digest(ROOT / update.SCHEMA_SOURCE))
+        schema = (ROOT / update.SCHEMA_SOURCE).read_text()
+        sql = (ROOT / update.STEP_SQL).read_text()
+        self.assertEqual(step["kind"], update.INSTALLATION_SETTINGS_AND_ATTEMPT_EFFORT)
+        self.assertEqual(step["schemaAfter"], update.digest(ROOT / update.SCHEMA_SOURCE))
         self.assertEqual(step["modelAfter"], update.digest(ROOT / update.MODEL_SOURCE))
-        before, after = self.manifest(step["schema"], step["modelBefore"]), self.manifest(step["schema"], step["modelAfter"])
-        self.assertEqual(update.compatible(before, after, step), step["schema"])
+        self.assertEqual(step["sqlSha256"], update.digest(ROOT / update.STEP_SQL))
+        before, after = self.manifest(step["schemaBefore"], step["modelBefore"]), self.manifest(step["schemaAfter"], step["modelAfter"])
+        self.assertEqual(update.compatible(before, after, step), step["schemaBefore"])
+        planned = update.data_step(before, after, step, ROOT)
+        self.assertEqual((planned.sql, planned.schema_after, planned.schema_source), (sql, step["schemaAfter"], ROOT / update.SCHEMA_SOURCE))
+        # The table the SQL creates is the one the schema declares, and the schema without it is the one the step starts from.
+        start = schema.index(f"CREATE TABLE {update.INSTALLATION_SETTINGS} (")
+        declared = schema[start:schema.index(");\n", start) + 3]
+        self.assertIn(declared.replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", 1), sql)
+        self.assertEqual(hashlib.sha256(schema.replace(declared, "").encode()).hexdigest(), step["schemaBefore"])
+        self.assertIn(f"SET checksum = '{step['schemaAfter']}' WHERE version = 1 AND checksum = '{step['schemaBefore']}'", sql)
+        tampered = {**step, "sqlSha256": "0" * 64}
+        with self.assertRaisesRegex(RuntimeError, "SQL differs from its pinned step"):
+            update.data_step(before, after, tampered, ROOT)
+
+    def test_effort_added_only_where_lacking(self):
+        lacking = {"attempt_id": "a", "body": {"model": "m"}}
+        stated = {"attempt_id": "b", "body": {"model": "m", "effort": "High"}}
+        self.assertEqual(update.with_effort(lacking), {"attempt_id": "a", "body": {"model": "m", "effort": None}})
+        self.assertEqual(update.with_effort(stated), stated)
+        self.assertEqual(update.with_effort(update.with_effort(lacking)), update.with_effort(lacking))
 
     def test_unknown_step_kind_refused(self):
         step = {"kind": "other", "schema": "schema", "modelBefore": "old", "modelAfter": "new"}
@@ -353,7 +392,7 @@ class PostgreSQLInstall(unittest.TestCase):
                         (failing / "bin/cq").write_text("modified after candidate verification")
                     with self.assertRaisesRegex(RuntimeError, reason):
                         update.install(root, release, failing, root / f"failing-rollback-{index}", evidence, refused, "schema",
-                                       update.Commands(root, evidence, dict(os.environ)), statement)
+                                       update.Commands(root, evidence, dict(os.environ)), update.Sql(statement))
                     self.assertEqual(refused["status"], "rolled-back")
                     self.assertTrue(refused["databaseRestored"])
                     self.assertEqual(json.loads((evidence / "data-before.json").read_text()), json.loads((evidence / "data-restored.json").read_text()))
@@ -367,7 +406,7 @@ class PostgreSQLInstall(unittest.TestCase):
                     fixture(stepped, f"stepped {attempt}")
                     applied = {"oldManifest": update.digest(release / "manifest.json"), "newManifest": update.digest(stepped / "manifest.json"), "status": "candidate-verified"}
                     update.install(root, release, stepped, root / f"stepped-rollback-{attempt}", evidence, applied, "schema",
-                                   update.Commands(root, evidence, dict(os.environ)), sql)
+                                   update.Commands(root, evidence, dict(os.environ)), update.Sql(sql))
                     self.assertEqual(applied["status"], "installed")
                     self.assertEqual(applied["dataChanged"], changed)
                     self.assertEqual(update.digest(release / "manifest.json"), applied["newManifest"])
@@ -382,7 +421,7 @@ class PostgreSQLInstall(unittest.TestCase):
             try:
                 with self.assertRaisesRegex(RuntimeError, "database-rollback failed"):
                     update.install(root, release, unrestorable, root / "unrestorable-rollback", evidence, stranded, "schema", update.Commands(root, evidence, dict(os.environ)),
-                                   "BEGIN; CREATE VIEW cq_dependent AS SELECT value FROM cq_fixture; UPDATE cq_fixture SET value = 'changed'; COMMIT;")
+                                   update.Sql("BEGIN; CREATE VIEW cq_dependent AS SELECT value FROM cq_fixture; UPDATE cq_fixture SET value = 'changed'; COMMIT;"))
                 self.assertFalse((data / "postmaster.pid").exists(), "A failed restore must not leave the database running")
             finally:
                 if (data / "postmaster.pid").exists():
@@ -395,6 +434,115 @@ class PostgreSQLInstall(unittest.TestCase):
             # The restore ran in one transaction: the database is as the failed step left it, not partly dropped.
             self.assertEqual(stored(), ["changed"])
 
+
+    def test_pinned_step_creates_the_table_and_adds_effort(self):
+        if not POSTGRES:
+            self.skipTest("Run with --postgres for the disposable PostgreSQL adapter")
+        step = json.loads((ROOT / "dev/local-update-step.json").read_text())
+        schema = (ROOT / update.SCHEMA_SOURCE).read_text()
+        start = schema.index(f"CREATE TABLE {update.INSTALLATION_SETTINGS} (")
+        earlier = schema.replace(schema[start:schema.index(");\n", start) + 3], "")
+        pinned = (ROOT / update.STEP_SQL).read_text()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            data = root / "postgres"
+            evidence = root / "evidence"
+            evidence.mkdir()
+            (root / "database-password").write_text("disposable-test-password")
+            (root / "earlier.sql").write_text(earlier)
+            subprocess.run(["initdb", "-D", str(data), "-U", "cq", "--auth=trust", "--no-locale"], check=True, stdout=subprocess.DEVNULL)
+            with socket.socket() as listener:
+                listener.bind(("127.0.0.1", 0))
+                port = listener.getsockname()[1]
+            def running(arguments):
+                subprocess.run(["pg_ctl", "-D", str(data), "-l", str(root / "setup.log"), "-o", f"-h 127.0.0.1 -p {port} -c unix_socket_directories=''", "-w", "start"], check=True, stdout=subprocess.DEVNULL)
+                try:
+                    return subprocess.check_output(["psql", "--no-psqlrc", "-h", "127.0.0.1", "-p", str(port), "-U", "cq", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-At"] + arguments, text=True)
+                finally:
+                    subprocess.run(["pg_ctl", "-D", str(data), "-m", "fast", "-w", "stop"], check=True, stdout=subprocess.DEVNULL)
+            # A database of the release the step starts from, with attempts as that release stored them: no effort.
+            project, assignment = "00000000-0000-0000-0000-00000000000a", "00000000-0000-0000-0000-00000000000b"
+            attempts = [("00000000-0000-0000-0000-000000000001", "NULL", "NULL", {"role": "Governor", "collector": update.ATTACHED_GOVERNOR_COLLECTOR, "model": "outer"}),
+                        ("00000000-0000-0000-0000-000000000002", "'00000000-0000-0000-0000-000000000001'", "'{\"value\":{\"state\":\"Completed\"}}'", {"role": "Worker", "collector": "native", "model": "a model", "provider": "p"}),
+                        ("00000000-0000-0000-0000-000000000003", "'00000000-0000-0000-0000-000000000001'", "'{\"value\":{\"state\":\"Failed\"}}'", {"role": "Reviewer", "collector": "native", "model": "m", "nested": {"effort": "inner"}})]
+            running(["-c", "CREATE TABLE cq_schema_migrations (version integer PRIMARY KEY, checksum text NOT NULL)", "-c", f"INSERT INTO cq_schema_migrations VALUES (1, '{step['schemaBefore']}')",
+                     "-f", str(root / "earlier.sql"),
+                     "-c", f"INSERT INTO cq_projects(project_id, body) VALUES ('{project}', '{{}}')",
+                     "-c", f"INSERT INTO cq_usage_assignments(project_id, assignment_id, attribution, actor, received_at, body) VALUES ('{project}', '{assignment}', 'Unattributed', '{{}}', 1, '{{}}')"] +
+                    [argument for identity, parent, outcome, body in attempts for argument in ("-c",
+                        f"INSERT INTO cq_usage_attempts(project_id, attempt_id, assignment_id, parent_id, effective_outcome, session_id, actor, received_at, body) "
+                        f"VALUES ('{project}', '{identity}', '{assignment}', {parent}, {outcome}, '{project}', '{{}}', 1, '{json.dumps(body)}')")])
+            def stored():
+                return json.loads(running(["-c", "SELECT json_build_object('checksum', (SELECT checksum FROM cq_schema_migrations), "
+                    "'tables', (SELECT json_agg(tablename ORDER BY tablename) FROM pg_tables WHERE schemaname = 'public'), "
+                    "'databases', (SELECT json_agg(datname ORDER BY datname) FROM pg_database WHERE NOT datistemplate), "
+                    "'attempts', (SELECT json_agg(to_jsonb(t) ORDER BY attempt_id) FROM cq_usage_attempts t), "
+                    "'projects', (SELECT json_agg(to_jsonb(t)) FROM cq_projects t), 'assignments', (SELECT json_agg(to_jsonb(t)) FROM cq_usage_assignments t))"]))
+            initial = stored()
+            self.assertNotIn(update.INSTALLATION_SETTINGS, initial["tables"])
+            self.assertEqual([attempt["body"] for attempt in initial["attempts"]], [body for _, _, _, body in attempts])
+            release = root / "release"
+            def fixture(path, content):
+                path.mkdir()
+                (path / "bin").mkdir()
+                files = {}
+                for name in ("bin/cq", "bin/cq-guardian", "runtime.nar", "runtime-paths.txt"):
+                    (path / name).write_text(content)
+                    (path / name).chmod(0o700)
+                    files[name] = update.digest(path / name)
+                (path / "manifest.json").write_text(json.dumps({"modelVersion": "0.1.0", "platform": "x86_64-linux", "filesSha256": files}))
+            fixture(release, "old")
+            installed = update.digest(release / "manifest.json")
+            def attempt(name, sql, modified):
+                candidate = root / f"candidate-{name}"
+                fixture(candidate, name)
+                receipt = {"oldManifest": installed, "newManifest": update.digest(candidate / "manifest.json"), "status": "candidate-verified"}
+                if modified:
+                    (candidate / "bin/cq").write_text("modified after candidate verification")
+                planned = update.InstallationSettingsAndAttemptEffort(sql, step["schemaAfter"], ROOT / update.SCHEMA_SOURCE)
+                return receipt, lambda: update.install(root, release, candidate, root / f"rollback-{name}", evidence, receipt, step["schemaBefore"],
+                                                       update.Commands(root, evidence, dict(os.environ)), planned)
+            # Whatever fails after the SQL ran, the database is again the backup's: the created table is gone with the rest.
+            effort = "UPDATE cq_usage_attempts SET body = body || '{\"effort\": null}'::jsonb WHERE NOT jsonb_exists(body, 'effort');\n"
+            checksum = f"UPDATE cq_schema_migrations SET checksum = '{step['schemaAfter']}'"
+            self.assertIn(effort, pinned)
+            failures = [
+                ("replacement", "Package file differs", pinned, True),
+                ("no-effort", "left a stored attempt without its effort", pinned.replace(effort, ""), False),
+                ("no-checksum", "did not record the schema of the new package", pinned.replace(checksum, checksum.replace("SET checksum = '", "SET checksum = 'x")), False),
+                ("other-attempt-change", "changed attempt rows beyond adding a null effort", pinned.replace(effort, effort + "UPDATE cq_usage_attempts SET received_at = 2;\n"), False),
+                ("other-table", "changed a table other than", pinned.replace(effort, effort + "UPDATE cq_projects SET body = '{\"changed\": true}';\n"), False),
+                ("other-structure", "structure differs from the schema of the new package", pinned.replace("  body jsonb NOT NULL\n);", "  body jsonb\n);"), False),
+                ("setting-written", "wrote an installation setting", pinned.replace(effort, effort + "INSERT INTO cq_installation_settings VALUES ('Agents', 1, '{}', 1, '{}');\n"), False),
+            ]
+            for name, reason, sql, modified in failures:
+                with self.subTest(failure=name):
+                    self.assertTrue(modified or sql != pinned, "The variant differs from the pinned SQL")
+                    refused, run = attempt(name, sql, modified)
+                    with self.assertRaisesRegex(RuntimeError, reason):
+                        run()
+                    self.assertEqual((refused["status"], refused.get("databaseRestored")), ("rolled-back", True))
+                    self.assertFalse((root / ".cq-update-recovery.json").exists())
+                    self.assertEqual(update.digest(release / "manifest.json"), installed)
+                    self.assertEqual(stored(), initial)
+            applied, run = attempt("pinned", pinned, False)
+            run()
+            self.assertEqual(applied["status"], "installed")
+            self.assertEqual(applied["dataChanged"], [update.INSTALLATION_SETTINGS, update.MIGRATIONS, update.ATTEMPTS])
+            self.assertEqual({key: applied[key] for key in ("dataStep", "attempts", "attemptsTransformed", "tableCreated", "otherDataUnchanged", "structureAsDeclared")},
+                             {"dataStep": update.INSTALLATION_SETTINGS_AND_ATTEMPT_EFFORT, "attempts": 3, "attemptsTransformed": 3,
+                              "tableCreated": update.INSTALLATION_SETTINGS, "otherDataUnchanged": True, "structureAsDeclared": True})
+            updated = stored()
+            self.assertEqual(updated, {**initial, "checksum": step["schemaAfter"], "tables": sorted(initial["tables"] + [update.INSTALLATION_SETTINGS]),
+                                       "attempts": [{**row, "body": {**row["body"], "effort": None}} for row in initial["attempts"]]})
+            self.assertEqual(updated["attempts"][2]["body"]["nested"], {"effort": "inner"})
+            self.assertEqual(updated["databases"], ["postgres"], "The database the structure was declared in is dropped")
+            # The SQL applied again, and to an attempt that states an effort, changes nothing.
+            running(["-c", "UPDATE cq_usage_attempts SET body = body || '{\"effort\": \"High\"}'::jsonb WHERE attempt_id = '00000000-0000-0000-0000-000000000002'"])
+            stated = stored()
+            running(["-c", pinned])
+            self.assertEqual(stored(), stated)
+            self.assertEqual(stated["attempts"][1]["body"]["effort"], "High")
 
 
 if __name__ == "__main__":
