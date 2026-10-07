@@ -186,7 +186,7 @@ Recovery never launches/adopts a process. Repeated completed recovery acknowledg
 
 ### Closing open governing attempts
 
-The usage view and `cq status` count a governing attempt of an attached session that has no outcome as **open**, apart from running attempts: the attempt started and no outcome was delivered. CQ does not observe the operator's harness, so the server cannot tell a live session from one whose host was killed before its final delivery. A host that starts later for the same project and repository delivers the missing outcome for every ended session whose directory is still under its session root. A directory that was moved elsewhere (for example aside into an archive directory at an update) is never visited, and its attempt stays open until it is uploaded.
+The usage view and `cq status` count a governing attempt of an attached session that has no outcome as **open**, apart from running attempts: the attempt started and no outcome was delivered. CQ does not observe the operator's harness, so the server cannot tell a live session from one whose host was killed before its final delivery. A host that starts later for the same project and repository delivers the missing outcome for every ended session whose directory is still under its session root, once its own session has made its first tool call: a harness that only opens the connection to CQ registers no attempt and recovers nothing. A directory that was moved elsewhere (for example aside into an archive directory at an update) is never visited, and its attempt stays open until it is uploaded.
 
 To close them, with no harness open on the project:
 

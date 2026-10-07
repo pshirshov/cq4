@@ -102,8 +102,14 @@ final class AttachedGateway(config: SupervisorConfig, authority: SupervisorAutho
     }
   }
   /** A response the peer cannot frame fails its own request only; sending it would end the host for every later request.
-    * The request was executed before its response was measured, so a change it made stands. */
-  def handle(peer: StdioPeer, json: Json): Task[Option[Json]] = respond(peer, json).map(_.map { response =>
+    * The request was executed before its response was measured, so a change it made stands.
+    *
+    * `governing` runs before every request that does governing work or accounts for it: a tool call, whatever the tool and whether it
+    * reads or writes, since only the session's model or its operator makes one; a Pi response's usage, which is stored under the
+    * governing attempt; and a request to the Pi driver, which the operator starts. What a harness sends by itself when it opens the
+    * connection is none of these: `initialize`, notifications, `ping`, `tools/list`, the Pi extension's question for the session
+    * directory, and methods this host does not serve. */
+  def handle(peer: StdioPeer, json: Json, governing: Task[Unit]): Task[Option[Json]] = respond(peer, json, governing).map(_.map { response =>
     val size = StdioPeer.frame(response).length
     if (size <= peer.frameBytes) response
     else {
@@ -115,7 +121,7 @@ final class AttachedGateway(config: SupervisorConfig, authority: SupervisorAutho
       else success(id, result(SessionReply_JsonCodec.encode(CodecContext, SessionReply.Failed(Fault.Limit(message))), true))
     }
   })
-  private def respond(peer: StdioPeer, json: Json): Task[Option[Json]] = {
+  private def respond(peer: StdioPeer, json: Json, governing: Task[Unit]): Task[Option[Json]] = {
     val cursor = json.hcursor
     val id = cursor.downField("id").focus.getOrElse(Json.Null)
     val method = cursor.get[String]("method").getOrElse("")
@@ -135,7 +141,7 @@ final class AttachedGateway(config: SupervisorConfig, authority: SupervisorAutho
     else method match {
       case "ping" => ZIO.some(success(id, Json.obj()))
       case "tools/list" => ZIO.some(success(id, Json.obj("tools" -> Json.arr(schemas.attachedTools*))))
-      case "cq/piUsage" => ZIO.attemptBlocking {
+      case "cq/piUsage" => governing *> ZIO.attemptBlocking {
         val body = cursor.downField("params").focus.getOrElse(throw new IllegalArgumentException("Missing native Pi usage"))
         require(body.noSpaces.getBytes(java.nio.charset.StandardCharsets.UTF_8).length <= MaxLocalBytes, "Native Pi usage exceeds its bound")
         val event = AttachedPiEvent_JsonCodec.decode(CodecContext, body).fold(throw _, identity)
@@ -145,7 +151,7 @@ final class AttachedGateway(config: SupervisorConfig, authority: SupervisorAutho
       }
       // The Pi extension runs `cq wait` on this directory itself; its model starts no waiter.
       case "cq/session" if config.run.attempt.harness == Harness.Pi => ZIO.some(success(id, Json.obj("directory" -> Json.fromString(config.directory.toString))))
-      case "cq/driver" if config.run.attempt.harness == Harness.Pi => ZIO.attemptBlocking {
+      case "cq/driver" if config.run.attempt.harness == Harness.Pi => governing *> ZIO.attemptBlocking {
         val body = cursor.downField("params").focus.getOrElse(throw new IllegalArgumentException("Missing driver request"))
         require(body.noSpaces.getBytes(java.nio.charset.StandardCharsets.UTF_8).length <= MaxLocalBytes, "Driver request exceeds its bound")
         val command = ExtensionDriver_JsonCodec.decode(CodecContext, body).fold(throw _, identity)
@@ -159,7 +165,7 @@ final class AttachedGateway(config: SupervisorConfig, authority: SupervisorAutho
         ZIO.some(success(id, Json.obj("Failed" -> Json.obj("fault" -> Fault_JsonCodec.encode(CodecContext, fault)))))
       }
       case "tools/call" =>
-        (for {
+        governing *> (for {
           _ <- ZIO.attemptBlocking {
             if (config.run.attempt.harness == Harness.Codex) {
               val home = config.environment.get("CODEX_HOME").map(java.nio.file.Path.of(_))

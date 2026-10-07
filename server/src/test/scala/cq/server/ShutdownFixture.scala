@@ -165,7 +165,15 @@ object ShutdownFixture extends RoleAppMain.LauncherBIO[IO] {
       properties.toList.sorted.map((name, value) => s"-D$name=$value") ++ List("cq.server.ShutdownFixture", ":" + role.id)
     val builder = new ProcessBuilder(arguments.asJava).redirectErrorStream(true).redirectOutput(at.resolve("owner.log").toFile)
     builder.environment().putAll(environment.asJava)
-    builder.start()
+    val process = builder.start()
+    // An attached host records its session when the session first does governing work: the fixture's owner makes one tool call, which
+    // the host refuses, as a harness whose session works does.
+    if (role == AttachedFixtureRole) {
+      process.getOutputStream.write(("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}""" + "\n" +
+        """{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"none","arguments":{}}}""" + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8))
+      process.getOutputStream.flush()
+    }
+    process
   }
 
   def awaitUntil(process: Process, at: Path, limit: Duration)(ready: => Boolean): Unit = {

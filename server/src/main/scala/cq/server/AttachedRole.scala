@@ -8,6 +8,7 @@ import izumi.fundamentals.platform.cli.model.schema.{ParserDef, RoleParserSchema
 import logstage.IzLogger
 import java.io.{InputStream, OutputStream}
 import java.time.{Clock, Duration}
+import java.util.concurrent.atomic.AtomicBoolean
 import zio.{Task, Unsafe, ZIO}
 
 final case class AttachedChannels(input: InputStream, output: OutputStream, owner: ProcessOwner)
@@ -19,7 +20,11 @@ final class AttachedProgram(config: SupervisorConfig, authority: SupervisorAutho
   private val sessions = new AttachedSessions(location.directory)
   private val MaxRecordBytes = 65536
   private val limits = PeerLimits(Duration.ofSeconds(30), Duration.ofSeconds(10), Duration.ofSeconds(30), AttachedGateway.FrameBytes, 32)
-  private val queue = new DeliveryQueue(config.directory.resolve("delivery"))
+  private lazy val queue = new DeliveryQueue(config.directory.resolve("delivery"))
+  private val recorded = new AtomicBoolean(false)
+  /** Records the session and registers its governing attempt, once, when the session first does governing work (`AttachedGateway.handle`).
+    * A host whose harness only opened the connection writes nothing into its session directory and tells the server of no attempt (D160). */
+  private def record: Task[Unit] = ZIO.suspend(if (recorded.compareAndSet(false, true)) initial else ZIO.unit)
   private def initial: Task[Unit] = ZIO.attemptBlocking {
     require(config.run.ownership == SessionOwnership.Attached, "Attached host requires attached ownership")
     HostFiles.directory(config.directory)
@@ -42,7 +47,7 @@ final class AttachedProgram(config: SupervisorConfig, authority: SupervisorAutho
   }}.uninterruptible
   private val monitor: Task[Nothing] = (observe(codex.poll(authority.collector)) *> ZIO.sleep(zio.Duration.fromSeconds(5))).forever
   private def finish(peer: StdioPeer): Task[Unit] =
-    (ZIO.succeed(peer.close()) *> shutdown *> observe(codex.finish(authority.collector)) *>
+    (ZIO.succeed(peer.close()) *> shutdown *> ZIO.when(recorded.get())(observe(codex.finish(authority.collector)) *>
       ZIO.attemptBlocking {
         val outcome = AttemptOutcome(RequestId(NativeArtifacts.id(config.run.attempt.id, "outcome").value), config.run.attempt.id,
           AttemptState.Unknown, math.max(config.run.attempt.startedAt, clock.millis()),
@@ -52,7 +57,7 @@ final class AttachedProgram(config: SupervisorConfig, authority: SupervisorAutho
         queue.commit(List(HostDelivery.Usage(HostUsageInput(config.project.project, HostUsage.Finish(outcome)))))
         queue.flush(authority.collector)
         new SessionSpans(config, authority).flush()
-      }.unit *>
+      }) *>
       // The claims go once the work under them has settled or was cancelled and the Finish is committed locally; a claim under which a
       // child's result still awaits admission stays, and a host that dies leaves them all to their leases.
       claims.release(dispatch.undelivered) *> release.finish).ensuring(ZIO.attemptBlocking {
@@ -65,7 +70,7 @@ final class AttachedProgram(config: SupervisorConfig, authority: SupervisorAutho
       // A request that waits for work is allowed that wait on top of the deadline every other request keeps, so a host that hangs is
       // still noticed as early as before.
       val deadline = AttachedGateway.deadline(request)
-      (ZIO.attempt(peer.beginOperation(deadline)) *> gateway.handle(peer, request))
+      (ZIO.attempt(peer.beginOperation(deadline)) *> gateway.handle(peer, request, record))
       .timeoutFail(new IllegalStateException(s"Attached MCP operation exceeded ${deadline.toSeconds} seconds"))(zio.Duration.fromJava(deadline))
       .ensuring(ZIO.succeed(peer.endOperation()))
       .flatMap(value => ZIO.attempt(value.foreach(peer.send))) *> ZIO.suspendSucceed(loop(peer))
@@ -80,7 +85,7 @@ final class AttachedProgram(config: SupervisorConfig, authority: SupervisorAutho
       guard.install()
       (peer, guard)
     })({ (peer, guard) => finish(peer).orDie.ensuring(ZIO.succeed(guard.release())) })({ (peer, _) =>
-      initial *> ZIO.acquireReleaseWith(monitor.interruptible.fork)(_.interrupt)( _ => loop(peer)) }) }
+      ZIO.acquireReleaseWith(monitor.interruptible.fork)(_.interrupt)( _ => loop(peer)) }) }
 }
 
 final class AttachedRole(program: AttachedProgram) extends RoleTask[Task] {

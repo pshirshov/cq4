@@ -225,7 +225,7 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
       idle = java.time.Duration.ofMinutes(10)
       peer <- ZIO.acquireRelease(ZIO.attempt(new StdioPeer(new java.io.PipedInputStream(new java.io.PipedOutputStream()), java.io.OutputStream.nullOutputStream(),
         new OwnerLiveness { override def alive: Boolean = true }, PeerLimits(idle, idle, idle, AttachedGateway.FrameBytes, 8), () => ())))(peer => ZIO.succeed(peer.close()))
-      gateway = (request: Json) => served.handle(peer, request).map(_.get)
+      gateway = (request: Json) => served.handle(peer, request, ZIO.unit).map(_.get)
       _ <- gateway(parser.parse("""{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}""").fold(throw _, identity))
       empty = Fixture(local, owner, authority, controller, combinations, workflow, driver, registry, hook, created.head.id, ArtifactId(uuid), local.base, claim.fence, directory, gateway, jobs,
         children, created, ArtifactId(uuid), limits)

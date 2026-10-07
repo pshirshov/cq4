@@ -8,8 +8,9 @@ import java.nio.charset.StandardCharsets.UTF_8
 import java.nio.file.Path
 import java.time.Duration
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicInteger
 import org.scalatest.wordspec.AnyWordSpec
-import zio.{Runtime, Task, Unsafe}
+import zio.{Runtime, Task, Unsafe, ZIO}
 
 final class AttachedGatewayLocal extends AnyWordSpec {
   private val LongInterval = Duration.ofSeconds(30)
@@ -48,12 +49,14 @@ final class AttachedGatewayLocal extends AnyWordSpec {
     val peer = new StdioPeer(input, output, new OwnerLiveness { override def alive: Boolean = true },
       PeerLimits(LongInterval, LongInterval, LongInterval, frameBytes, 8), () => ())
     private var sequence = 0
+    /** How often the gateway asked for the session to be recorded. */
+    val governing = new AtomicInteger(0)
     def run[A](task: Task[A]): A = Unsafe.unsafe { implicit unsafe => Runtime.default.unsafe.run(task).getOrThrowFiberFailure() }
     /** What the host loop does with one request: handle it, send the answer, and return the frame the owner received. */
     def exchange(method: String, params: Json): Json = {
       sequence += 1
       val answer = run(gateway.handle(peer, Json.obj("jsonrpc" -> Json.fromString("2.0"), "id" -> Json.fromInt(sequence),
-        "method" -> Json.fromString(method), "params" -> params))).get
+        "method" -> Json.fromString(method), "params" -> params), ZIO.succeed(governing.incrementAndGet()).unit)).get
       peer.send(answer)
       val received = parser.parse(lines.readLine()).fold(throw _, identity)
       assert(received == answer && received.hcursor.get[Int]("id") == Right(sequence) && peer.reason.isEmpty)
@@ -208,6 +211,26 @@ final class AttachedGatewayLocal extends AnyWordSpec {
       assert(sizes.map(_._2).sum <= InputSchemaBytes, sizes.toString)
     }
 
+    "D160: have the session recorded at a tool call, a Pi response's usage and a Pi driver request, and at nothing a harness sends when it only opens the connection" in {
+      val session = new Session(AttachedGateway.FrameBytes, Harness.Pi, _ => Result.Counts(LedgerCounts(Nil, ChangeCursor(7L))))
+      try {
+        session.exchange("tools/list", Json.obj())
+        session.exchange("ping", Json.obj())
+        session.exchange("cq/session", Json.obj())
+        for (method <- List("resources/list", "prompts/list", "resources/templates/list"))
+          assert(session.exchange(method, Json.obj()).hcursor.downField("error").get[Int]("code") == Right(-32601), method)
+        assert(session.governing.get() == 0)
+        // A tool call counts whatever it does: one that only reads, and one the host refuses.
+        session.tool("read", read("""{"Counts":{}}"""))
+        assert(session.governing.get() == 1)
+        fault(session.tool("unknown", Json.obj()))
+        assert(session.governing.get() == 2)
+        // Neither request is well-formed here: the record is asked for before the request is looked at.
+        assert(scala.util.Try(session.exchange("cq/piUsage", Json.obj())).isFailure && session.governing.get() == 3)
+        session.exchange("cq/driver", Json.obj())
+        assert(session.governing.get() == 4)
+      } finally session.close()
+    }
     "refuse a read of the Help catalog, which is served to the browser only, without reaching the server, and keep serving" in {
       val session = new Session(AttachedGateway.FrameBytes, {
         case Command.Read(ReadInput(_, _: ReadSelection.Counts)) => Result.Counts(LedgerCounts(Nil, ChangeCursor(0L)))

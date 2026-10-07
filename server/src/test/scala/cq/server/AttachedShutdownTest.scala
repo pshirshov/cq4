@@ -47,7 +47,7 @@ final class AttachedShutdownProcess extends SpecZIO with AssertZIO {
       attempts <- ZIO.attemptBlocking {
         val process = ShutdownFixture.launch(at, ShutdownFixture.AttachedFixtureRole, guardian.binary, Map.empty, Map.empty)
         try {
-          // owner.json is written by the program's initial step, after its termination guard is installed; the recovery receipt follows in the background.
+          // owner.json is written when the session is recorded, at its first tool call and after the termination guard is installed; the recovery receipt follows in the background.
           val started = List(at.resolve("attempts"), session.resolve("owner.json"), receiptFile(session))
           ShutdownFixture.awaitUntil(process, at, Duration.ofSeconds(60))(started.forall(Files.exists(_)))
           val attempts = Files.readString(at.resolve("attempts")).linesIterator.map(value => AttemptId(UUID.fromString(value))).toList
@@ -174,9 +174,9 @@ final class AttachedShutdownProcess extends SpecZIO with AssertZIO {
         "method" -> io.circe.Json.fromString("tools/call"), "params" -> io.circe.Json.obj("name" -> io.circe.Json.fromString("claim"),
           "arguments" -> ClaimInput_JsonCodec.encode(BaboonCodecContext.Default, ClaimInput(scope.project, action)))).noSpaces
       val member = Set(ItemId(scope.project, Ledger.Tasks, 1))
-      val requests = List("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}""") ++
-        (held :+ returned).zipWithIndex.map((id, index) => call(index + 2, ClaimAction.Acquire(id, member, 60000))) ++
-        List(call(5, ClaimAction.Release(Fence(returned, 1))))
+      // The fixture's launch has initialized the connection and made its first tool call, with the identifiers 1 and 2.
+      val requests = (held :+ returned).zipWithIndex.map((id, index) => call(index + 3, ClaimAction.Acquire(id, member, 60000))) ++
+        List(call(6, ClaimAction.Release(Fence(returned, 1))))
       ZIO.scoped { for {
         state <- ZIO.attemptBlocking(Files.createTempDirectory(local.directory, "state-"))
         running <- host(local, guardian, scope, state, Map.empty)
@@ -189,7 +189,7 @@ final class AttachedShutdownProcess extends SpecZIO with AssertZIO {
           // The fixture marks a release that precedes the session's local Finish commit, as the Governor's own release does.
           val acquired = (held :+ returned).map("Acquire " + _.value) :+ s"Release ${returned.value} before Finish"
           // The reply to the last request follows its log line; the host has then observed every claim reply.
-          ShutdownFixture.awaitUntil(running.process, running.at, Duration.ofSeconds(60))(lines == acquired && running.log.contains("\"id\":5"))
+          ShutdownFixture.awaitUntil(running.process, running.at, Duration.ofSeconds(60))(lines == acquired && running.log.contains("\"id\":6"))
           input.close()
           assert(running.process.waitFor(60, TimeUnit.SECONDS) && running.process.exitValue() == 0, running.log)
           println(s"Claims at orderly shutdown: ${lines.drop(acquired.size)}")

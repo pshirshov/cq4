@@ -264,7 +264,7 @@ emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_toke
       idle = java.time.Duration.ofMinutes(10)
       peer <- ZIO.acquireRelease(ZIO.attempt(new StdioPeer(new java.io.PipedInputStream(new java.io.PipedOutputStream()), java.io.OutputStream.nullOutputStream(),
         new OwnerLiveness { override def alive: Boolean = true }, PeerLimits(idle, idle, idle, AttachedGateway.FrameBytes, 8), () => ())))(peer => ZIO.succeed(peer.close()))
-      gateway = (request: Json) => served.handle(peer, request).map(_.get)
+      gateway = (request: Json) => served.handle(peer, request, ZIO.unit).map(_.get)
       _ <- gateway(parser.parse("""{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}""").fold(throw _, identity))
       _ <- test(Fixture(local, owner, config, authority, ledger, usage, registry, controller, workflow, driver, units, control, gateway, created.head.id, created, claim.fence, limits, others, attempts))
     } yield ()

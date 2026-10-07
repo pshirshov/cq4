@@ -172,7 +172,7 @@ object SessionWaiters {
 /** How the attached host of a session stands, as a process of its checkout finds it. */
 sealed trait HostView
 object HostView {
-  /** No host of this checkout recorded the session: its host ended in order, or it is a host of a package before the record existed. */
+  /** No host of this checkout recorded the session: its host ended in order, its session has done no governing work yet, or it is a host of a package before the record existed. */
   case object Unrecorded extends HostView
   /** The host recorded the session and no longer holds its lock. */
   case object Gone extends HostView

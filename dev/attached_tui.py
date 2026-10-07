@@ -1,5 +1,4 @@
 """Native interactive process ownership checks, without model requests."""
-import json
 import fcntl
 import os
 from pathlib import Path
@@ -81,7 +80,8 @@ def lifecycle(command, repository, environment, settings, root, client):
             session = None
             while time.monotonic() < deadline:
                 current = set((root / "sessions").glob("*")) - before
-                ready = [value for value in current if (value / "owner.json").exists()]
+                # An idle session makes no tool call, so its host records no session: the lock every host takes shows that it started.
+                ready = [value for value in current if (value / "journal/owner.lock").exists()]
                 if ready:
                     assert len(ready) == 1
                     session = ready[0]
@@ -89,7 +89,6 @@ def lifecycle(command, repository, environment, settings, root, client):
                 assert process.poll() is None, "Interactive harness exited before starting CQ"
                 time.sleep(0.1)
             assert session is not None, "Interactive harness did not start project CQ; inspect retained terminal"
-            owner = json.loads((session / "owner.json").read_text())["pid"]
             hosts = processes(settings)
             assert len(hosts) == 1, hosts
             host = hosts[0]
@@ -98,7 +97,8 @@ def lifecycle(command, repository, environment, settings, root, client):
             while current != process.pid and current > 1:
                 chain.append(current)
                 current = int(Path(f"/proc/{current}/stat").read_text().rsplit(")", 1)[1].split()[1])
-            assert current == process.pid and owner == (chain[1] if len(chain) > 1 else process.pid), (chain, owner, process.pid)
+            assert current == process.pid, (chain, process.pid)
+            owner = chain[1] if len(chain) > 1 else process.pid
             # Surviving startup plus a heartbeat proves the TUI completed MCP initialization.
             deadline = time.monotonic() + 42
             while time.monotonic() < deadline:
@@ -115,7 +115,7 @@ def lifecycle(command, repository, environment, settings, root, client):
                 os.kill(owner, signal.SIGCONT)
             client(["job", "upload", "--session", str(session)], mode + "-recovery")
             client(["job", "upload", "--session", str(session)], mode + "-replay")
-            assert "Acknowledged 0" in (root / (mode + "-replay.stdout")).read_text()
+            assert "No session is recorded" in (root / (mode + "-replay.stdout")).read_text()
             observations.append({"mode": mode, "outerPid": process.pid, "ownerPid": owner, "hostPid": host,
                                  "chain": chain + [process.pid], "exitSeconds": round(elapsed, 3), "session": str(session)})
         finally:

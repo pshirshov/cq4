@@ -16,7 +16,12 @@ final class SessionUpload(context: CliContext, clock: Clock) {
   private val RequestTimeout = Duration.ofSeconds(30)
   private val CredentialLifetime = Duration.ofHours(1)
 
-  def run(directory: Path): Task[Unit] = ZIO.scoped {
+  def run(directory: Path): Task[Unit] = ZIO.attemptBlocking(WorkspaceCleanup.unrecorded(directory)).flatMap {
+    case true => ZIO.attempt(context.output.println(s"No session is recorded in $directory; there is nothing to deliver"))
+    case false => recorded(directory)
+  }
+
+  private def recorded(directory: Path): Task[Unit] = ZIO.scoped {
     for {
       run <- ZIO.attemptBlocking(HostFiles.read(directory.resolve("run.json"), SupervisorRun_JsonCodec, MaxRecordBytes))
       journal <- ZIO.acquireRelease(ZIO.attemptBlocking(FileJobRepository.open(directory.resolve("journal"), run.project.project,

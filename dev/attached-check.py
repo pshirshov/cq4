@@ -236,6 +236,62 @@ def main():
     assert totals["attempts"]["unknown"] == "1" and totals["attempts"]["running"] == "0" and totals["attemptsWithoutMeters"] == "1", totals
     print(json.dumps({"attachedSession": context["session"], "child": status, "usage": totals, "activationFence": True, "tokenFile": True, "replay": True}))
 
+    # D160: a harness that opens the connection, lists the tools and closes it has done no governing work. Its host tells the server of
+    # no attempt and records no session, so nothing is left to deliver, recover or upload.
+    def session_directories():
+        return {path for path in (root / "sessions").iterdir()}
+    def attempts(directory):
+        return json.loads(cli(["status", "attempts", "--session", directory.name, "--json"]))["UsageAttempts"]["page"]["entries"]
+    def entries(directory):
+        return sorted(str(path.relative_to(directory)) for path in directory.rglob("*"))
+    known = session_directories()
+    with (root / "idle-host.log").open("w") as log:
+        idle = Peer(command + ["host", "codex", "--executable", str(wrapper)], repository, env, log)
+        try:
+            assert idle.rpc("tools/list", {})["tools"] == inventory and idle.rpc("ping", {}) == {}
+            idle.refused("resources/list", {})
+        finally:
+            idle.close()
+    opened, = session_directories() - known
+    assert attempts(opened) == [] and entries(opened) == ["journal", "journal/owner.lock"], (attempts(opened), entries(opened))
+    assert cli(["job", "upload", "--session", str(opened)]) == f"No session is recorded in {opened}; there is nothing to deliver\n"
+    # A session that works is recorded at its first tool call, whatever the call: here one that takes a claim. Its host is killed at once.
+    member = operator({"Change": {"input": {"project": project, "change": {"request": identity(), "mutations": [{"Create": {"draft": draft}}], "fences": [],
+                                                                         "reason": "Attached fixture"}}}})["Changed"]["ack"]["items"][0]["id"]
+    def killed_after(first, denied):
+        before = session_directories()
+        with (root / "killed-host.log").open("a") as log:
+            host = Peer(command + ["host", "codex", "--executable", str(wrapper)], repository, env, log)
+            try:
+                reply = host.tool("claim", {"project": project, "action": {"Acquire": {"id": identity(), "members": [member], "durationMillis": "180000"}}}, denied)
+                first(reply)
+            finally:
+                host.process.kill()
+                host.process.wait(timeout=5)
+        directory, = session_directories() - before
+        started, = attempts(directory)
+        assert started["outcome"] is None and not started["observed"] and started["attempt"]["role"] == "Governor", started
+        assert {"run.json", "settings.json", "owner.json", "waiters.lock", "delivery/000000.json", "delivery/000000.ack", "journal/owner.lock"} <= set(entries(directory)), entries(directory)
+        return directory
+    earlier = killed_after(lambda reply: reply["Claimed"]["claim"], False)
+    # The killed host's claim stands until its lease ends: the next host is refused the member. That refused call is its first, and
+    # records it: its startup recovery then closes the killed session, which leaves the upload nothing to deliver.
+    def recovered(reply):
+        assert "Failed" in reply, reply
+        began = time.monotonic()
+        while not (earlier / "recovery.json").exists():
+            assert time.monotonic() - began < HOST_LATCH_SECONDS, "The later host did not recover the killed session"
+            time.sleep(0.05)
+    later = killed_after(recovered, True)
+    closed, = attempts(earlier)
+    assert closed["outcome"]["value"]["state"] == "Unknown" and json.loads((earlier / "recovery.json").read_text())["outcome"] == "Recovered", closed
+    assert "Acknowledged 0" in cli(["job", "upload", "--session", str(earlier)])
+    assert "Acknowledged 1" in cli(["job", "upload", "--session", str(later)])
+    uploaded, = attempts(later)
+    assert uploaded["outcome"]["value"]["state"] == "Unknown" and "Acknowledged 0" in cli(["job", "upload", "--session", str(later)]), uploaded
+    assert opened in session_directories() and attempts(opened) == [] and entries(opened) == ["journal", "journal/owner.lock"]
+    print(json.dumps({"connectionOnly": "no attempt and no session record", "killedAfterFirstCall": ["recovered", "uploaded"]}))
+
     # A driven session: the hook entry points hold the operator credential; the attached session binds, activates the issued directive and
     # writes inside its cycle. Its first out-of-set write is rejected and stops the driver.
     key = {"harness": "Codex", "session": "attached-fixture-session"}
@@ -501,6 +557,11 @@ def main():
     with (latch / "stderr").open("w") as log:
         stalled = subprocess.Popen(command + ["host", "codex", "--executable", str(wrapper)], cwd=repository, env=native_env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log)
         try:
+            # The host records its session at the first tool call; the fixture reads neither reply.
+            for request in [{"id": 1, "method": "initialize", "params": {"protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": {"name": "attached-fixture", "version": "1"}}},
+                            {"id": 2, "method": "tools/call", "params": {"name": "session", "arguments": {"Context": {}}}}]:
+                stalled.stdin.write((json.dumps({"jsonrpc": "2.0", **request}) + "\n").encode())
+            stalled.stdin.flush()
             latched(stalled, latch, "Initial")
             stalled.stdin.close()
             try:

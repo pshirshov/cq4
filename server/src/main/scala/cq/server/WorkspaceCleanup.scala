@@ -80,6 +80,15 @@ object WorkspaceCleanup {
   private val Host = s"${SupervisorRun.baboonDomainIdentifier} ${SupervisorRun.baboonDomainVersion} " + ProcessHandle.current().info().command().orElse("unknown executable")
   val Upload = "cq job upload --session"
 
+  /** A host takes its lock before it writes `run.json` and writes everything else after it; an attached host writes `run.json` when
+    * its session first does governing work. A directory holding at most that lock was never recorded as a session and holds
+    * nothing to recover, deliver or report, whichever project its host served. */
+  def unrecorded(directory: Path): Boolean = {
+    def names(path: Path): Set[String] = Using.resource(Files.list(path))(_.iterator().asScala.map(_.getFileName.toString).toSet)
+    val journal = directory.resolve("journal")
+    names(directory).subsetOf(Set("journal")) && (!Files.exists(journal, LinkOption.NOFOLLOW_LINKS) || names(journal).subsetOf(Set("owner.lock")))
+  }
+
   private enum Disposition {
     case Unrelated
     case Live(session: SessionId)
@@ -270,14 +279,6 @@ final class WorkspaceCleanup(config: SupervisorConfig, sessions: SessionWorkspac
   private def abandon(directory: Path, session: SessionId, reason: String): Disposition = {
     mark(directory, RecoveryOutcome.Abandoned, reason)
     Disposition.Examined(SessionCleanup(session, Nil, Nil, Nil, 0, Some(reason)), Some(RecoveryOutcome.Abandoned))
-  }
-
-  /** A host takes its lock before it writes `run.json` and writes everything else after it. A directory holding at most that lock
-    * was never recorded as a session and holds nothing to recover, deliver or report, whichever project its host served. */
-  private def unrecorded(directory: Path): Boolean = {
-    def names(path: Path): Set[String] = Using.resource(Files.list(path))(_.iterator().asScala.map(_.getFileName.toString).toSet)
-    val journal = directory.resolve("journal")
-    names(directory).subsetOf(Set("journal")) && (!Files.exists(journal, LinkOption.NOFOLLOW_LINKS) || names(journal).subsetOf(Set("owner.lock")))
   }
 
   private def unexamined(session: SessionId, error: Throwable): Disposition =
