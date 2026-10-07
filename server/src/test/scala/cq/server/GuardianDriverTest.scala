@@ -134,18 +134,23 @@ final class GuardianDriverProcess extends SpecZIO with AssertZIO {
       }
     }}
 
-    "D155: wait for a helper that is alive after its terminal record, and bound one that hangs there by its cancellation" in { (fixture: GuardianFixture) => ZIO.attemptBlocking {
-      // Longer than the drain, the stopping deadline and the heartbeat deadline of the fixture: the job ended as the record says.
-      val (slow, completed) = fixture.artificial("printf 'START 123\\nSTOP Exited\\nEXIT 0 0 Exited 0 0 1 0\\n'\nsleep 4")
-      Using.resource(new GuardianDriver(slow).start(completed)) { running =>
+    "bound a hung helper after its terminal record by the startup deadline, and settle one that exits later than the drain within it (D155)" in { (fixture: GuardianFixture) => ZIO.attemptBlocking {
+      val record = "printf 'START 123\\nSTOP Exited\\nEXIT 0 0 Exited 0 0 1 0\\n'\n"
+      // The helper outlives its record by more than the drain and the stopping deadline, and by less than the startup deadline of 6 s.
+      def limits(spec: ExecutionSpec): ExecutionSpec = spec.copy(limits = spec.limits.copy(startup = Duration.ofSeconds(6)))
+      val (late, completed) = fixture.artificial(record + "sleep 3.3")
+      Using.resource(new GuardianDriver(late).start(limits(completed))) { running =>
         val observed = running.await(Duration.ofSeconds(30))
         assert(observed.phase == ProcessPhase.Settled && observed.result.exists(value => value.settled && value.code.contains(0)) && observed.problem.isEmpty, observed.toString)
       }
-      val (hung, spec) = fixture.artificial("printf 'START 123\\nSTOP Exited\\nEXIT 0 0 Exited 0 0 1 0\\n'\nread line")
-      Using.resource(new GuardianDriver(hung).start(spec)) { running =>
-        assert(scala.util.Try(running.await(Duration.ofSeconds(3))).isFailure && running.status.phase != ProcessPhase.Uncertain)
-        running.cancel()
-        assert(running.await(Duration.ofSeconds(10)).phase == ProcessPhase.Uncertain)
+      // The helper stays alive and never reads its control pipe, whether open or closed: only the deadline ends the wait.
+      val (hung, spec) = fixture.artificial(record + "exec sleep 60")
+      val began = System.nanoTime()
+      Using.resource(new GuardianDriver(hung).start(limits(spec))) { running =>
+        val observed = running.await(Duration.ofSeconds(30))
+        val elapsed = Duration.ofNanos(System.nanoTime() - began)
+        assert(observed.phase == ProcessPhase.Uncertain && observed.problem.contains("Guardian reported completion but did not exit within its deadline"), observed.toString)
+        assert(elapsed.compareTo(Duration.ofSeconds(6)) >= 0, elapsed.toString)
       }
     }}
 

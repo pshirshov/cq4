@@ -78,9 +78,7 @@ final class IntegrationRebaseProcess extends SpecZIO with AssertZIO {
     val root = auth.authenticate(token, Some(owner.actor.session.value.toString))
     val expires = clock.millis() + 60L * 60 * 1000
     val application = new Application(ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, auth, new CatalogRead(new McpSchemas()))
-    // The heartbeat deadline is no measure of this suite's host: a gate machine under memory pressure stalls it for seconds (D155), and
-    // an owner that has exited is known by the closed control pipe at once. Cancellation reaches a job within a third of it.
-    val limits = HostLimits(5000, 15000, 100, 1000, 262144)
+    val limits = HostLimits(5000, 900, 100, 1000, 262144)
     val renewals = new AtomicInteger(0)
     def publish(value: ChildResult): Task[ArtifactId] = for {
       artifact <- artifacts.upload(collector, ArtifactUpload(owner.project, NativeArtifacts.id(value.attempt, "result"), value.attempt, ArtifactKind.Result,
@@ -583,35 +581,93 @@ final class IntegrationRebaseProcess extends SpecZIO with AssertZIO {
       }
     }
 
-    // D155: one run in eight ended Pending with the Git outcome unconfirmed. Two stalls reproduce that status: a host silent for longer
-    // than the guardian's heartbeat deadline, and a guardian still alive two seconds after it reported the job's end.
-    List("a host that stalls for 1.5 s while the Git job runs", "a guardian that exits 3 s after it reported the end of the Git job").foreach { stalled =>
-      s"D155: record an integration despite $stalled" in {
-        (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
-          artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
-        val host = stalled.startsWith("a host")
-        val latch = Files.createTempDirectory(local.directory, "stall-")
-        val wrapper = latch.resolve("guardian")
-        // The Git job alone is affected. Its executor waits, after its effect, until the host has been stalled; or its guardian's process outlives the guardian.
-        val job = if (host) s"""export LD_PRELOAD=${sys.env("CQ_SHUTDOWN_STALL_LIBRARY")} CQ_FIXTURE_STALL_MODE=checkout-completed CQ_FIXTURE_STALL_ROOT=$latch; exec ${guardian.binary} "$$@" """
-          else s"""${guardian.binary} "$$@"; code=$$?; sleep 3; exit $$code"""
-        Files.writeString(wrapper, s"""#!/bin/sh\ncase " $$* " in *" :checkout "*) $job;; esac\nexec ${guardian.binary} "$$@"\n""")
-        require(wrapper.toFile.setExecutable(true))
-        fixture(local, guardian.copy(binary = wrapper), ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, List(BothSides), false, false) { f => for {
-          ready <- f.prepare
-          running <- f.integrate(ready.id).fork
-          _ <- ZIO.when(host)(ZIO.attemptBlocking {
-            val limit = System.nanoTime() + java.time.Duration.ofSeconds(120).toNanos
-            while (!Files.exists(latch.resolve("entered"))) { require(System.nanoTime() < limit, "The Git job did not reach its effect"); Thread.sleep(20) }
-            val pid = ProcessHandle.current().pid()
-            // The whole host process stops, as under memory pressure, and is continued by a process it does not run.
-            require(new ProcessBuilder("sh", "-c", s"kill -STOP $pid; sleep 1.5; kill -CONT $pid").inheritIO().start().waitFor() == 0)
-            Files.createFile(latch.resolve("release"))
-          })
-          recorded <- running.join
-          _ <- ZIO.attempt(assert(recorded.phase == IntegrationPhase.Recorded && recorded.blocker.isEmpty && f.target == ready.preview.get.candidate, recorded.toString))
-        } yield () }
+    // D155: one run in eight ended Pending with the Git outcome unconfirmed. Two stalls reproduce that status: an owner silent for longer
+    // than the guardian's heartbeat deadline, and a guardian still alive after it reported the job's end for longer than the driver allows.
+    "D155: record an integration whose guardian exits 3 s after it reported the end of the Git job, within the startup deadline" in {
+      (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
+      val wrapper = Files.createTempDirectory(local.directory, "late-").resolve("guardian")
+      Files.writeString(wrapper, s"""#!/bin/sh\ncase " $$* " in *" :checkout "*) ${guardian.binary} "$$@"; code=$$?; sleep 3; exit $$code;; esac\nexec ${guardian.binary} "$$@"\n""")
+      require(wrapper.toFile.setExecutable(true))
+      fixture(local, guardian.copy(binary = wrapper), ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, List(BothSides), false, false) { f => for {
+        ready <- f.prepare
+        recorded <- f.integrate(ready.id)
+        _ <- ZIO.attempt(assert(recorded.phase == IntegrationPhase.Recorded && recorded.blocker.isEmpty && f.target == ready.preview.get.candidate, recorded.toString))
+      } yield () }
+    }
+
+    // To its guardian an owner that sends no heartbeat for `heartbeatMillis` (900 ms here) is frozen, and the guardian stops the job. The Git
+    // job's guardian gets its heartbeats through a filter that holds them back for 1.5 s once `hold` exists, as a host frozen for that long
+    // sends them; freezing the host itself would silence every job of this suite. `job` says how that guardian is started.
+    def silenced(local: LocalWorkspaceFixture, guardian: GuardianFixture, job: String): (java.nio.file.Path, GuardianFixture) = {
+      val latch = Files.createTempDirectory(local.directory, "silence-")
+      val wrapper = latch.resolve("guardian")
+      Files.writeString(wrapper, s"""#!/usr/bin/env bash
+case " $$* " in *" :checkout "*) ;; *) exec ${guardian.binary} "$$@";; esac
+export LD_PRELOAD=${sys.env("CQ_SHUTDOWN_STALL_LIBRARY")} CQ_FIXTURE_STALL_MODE=checkout-completed CQ_FIXTURE_STALL_ROOT=$latch
+touch $latch/launched
+while IFS= read -r -N1 beat; do
+  if [ -e $latch/hold ]; then sleep 1.5; rm $latch/hold; fi
+  printf %s "$$beat"
+done | ${guardian.binary} $job
+""")
+      require(wrapper.toFile.setExecutable(true))
+      (latch, guardian.copy(binary = wrapper))
+    }
+    def silence(latch: java.nio.file.Path, reached: String): Task[Unit] = ZIO.attemptBlocking {
+      def await(condition: => Boolean, what: String): Unit = {
+        val limit = System.nanoTime() + java.time.Duration.ofSeconds(120).toNanos
+        while (!condition) { require(System.nanoTime() < limit, what); Thread.sleep(20) }
       }
+      await(Files.exists(latch.resolve(reached)), s"The Git job did not reach $reached")
+      Files.createFile(latch.resolve("hold"))
+      await(!Files.exists(latch.resolve("hold")), "The heartbeats were not held back")
+      Files.createFile(latch.resolve("release"))
+      ()
+    }
+
+    "D155: leave an integration Pending when its owner fell silent for longer than the heartbeat deadline after the Git job moved the target, and record it once the index lock that job left is removed" in {
+      (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
+      // The executor waits, after its effect and before its exit, until the heartbeats have been held back.
+      val (latch, wrapped) = silenced(local, guardian, """"$@"""")
+      fixture(local, wrapped, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, List(BothSides), false, false) { f => for {
+        ready <- f.prepare
+        running <- f.integrate(ready.id).fork
+        _ <- silence(latch, "entered")
+        stopped <- running.join
+        again <- f.integrate(ready.id)
+        lock = local.source.resolve(".git").resolve("index.lock")
+        _ <- ZIO.attempt {
+          println(s"Owner silent after the effect: ${stopped.phase} ${stopped.next} ${stopped.blocker}")
+          assert(f.target == ready.preview.get.candidate && Files.exists(lock))
+          for (status <- List(stopped, again)) assert(status.phase == IntegrationPhase.Pending && status.next == IntegrationNext.Reconcile && status.blocker.exists(text =>
+            text.startsWith("Git execution or incorporation remains unconfirmed; retain the reservation and journal: target holds the candidate; Job Settled: HeartbeatLost") &&
+              text.contains("its executor left the index locked")), status.toString)
+          Files.delete(lock)
+        }
+        recorded <- f.integrate(ready.id)
+        _ <- ZIO.attempt(assert(recorded.phase == IntegrationPhase.Recorded && recorded.blocker.isEmpty, recorded.toString))
+      } yield () }
+    }
+
+    "D155: settle an integration as not applied when its owner fell silent for longer than the heartbeat deadline before the Git job started its effect" in {
+      (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>
+      // The executor starts 5 s after its guardian, which has stopped the job by then.
+      val (latch, wrapped) = silenced(local, guardian, """"${@:1:10}" sh -c 'sleep 5; exec "$@"' sh "${@:11}"""")
+      fixture(local, wrapped, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, List(BothSides), false, false) { f => for {
+        ready <- f.prepare
+        running <- f.integrate(ready.id).fork
+        _ <- silence(latch, "launched")
+        stopped <- running.join
+        again <- f.integrate(ready.id)
+        _ <- ZIO.attempt {
+          println(s"Owner silent before the effect: ${stopped.phase} ${stopped.next} ${stopped.blocker}")
+          for (status <- List(stopped, again)) assert(status.phase == IntegrationPhase.NotApplied && status.blocker.contains(SupervisedGitIntegration.Withdrawn), status.toString)
+          assert(f.target == f.head)
+        }
+      } yield () }
     }
   }
 }
