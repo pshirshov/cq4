@@ -144,12 +144,12 @@ def main():
         question = lambda number: {"project": {"value": PROJECT}, "ledger": "Questions", "number": str(number)}
         answered = lambda number, slot: {"Settled": {"end": {"item": question(number), "title": "Which \"way\"", "status": "Answered", "detail": "The second\nway"}, "waiter": slot}}
         asking.event({"Watching": {"item": question(7)}})
+        asking.event({"Watching": {"item": question(8)}})
         started = []
         def give():
             asking.event(answered(7, str(started[0].pid + 1)))
             time.sleep(1)
             assert started[0].poll() is None, "cq wait ended for an end the host gave to another waiter"
-            asking.event({"Watching": {"item": question(8)}})
             asking.event(answered(8, str(started[0].pid)))
         code, output, errors = wait(asking.directory, "--after", "now", after=give, started=started)
         assert code == 0 and output == 'question Q8 "Which \\"way\\"" answered: "The second way"\n', (code, output, errors)
