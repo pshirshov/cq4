@@ -435,17 +435,20 @@ def main():
                 assert events[-1] == {"Started": {"unit": {"kind": "Attempt", "id": started["attempt"]["value"], "members": [target["id"]]}}}, events
                 return started
             def watched(arguments):
-                """Starts a `cq wait` and returns it once it watches the driven session: it holds a shared lock on the session's
-                `waiters.lock` for as long as it runs, which refuses an exclusive one, and reads the session's units right after taking it."""
+                """Starts a `cq wait` and returns it once it watches the driven session: it holds a shared lock on the byte of its own
+                slot of the session's `waiters.lock` for as long as it runs, which refuses an exclusive one, and reads the session's
+                units in the turn in which it takes it. The slot is its process identifier and follows the turn byte; the lock of
+                another waiter says nothing about this one."""
                 process = subprocess.Popen([str(wrapper), "wait"] + arguments, cwd=repository, env=env, stdout=subprocess.PIPE, text=True)
+                slot = 1 + process.pid
                 with (driven_directory / "waiters.lock").open("r+") as stream:
                     while True:
                         assert process.poll() is None, ("The wait command ended while the child ran", process.communicate()[0])
                         try:
-                            fcntl.lockf(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                            fcntl.lockf(stream, fcntl.LOCK_EX | fcntl.LOCK_NB, 1, slot)
                         except OSError:
                             return process
-                        fcntl.lockf(stream, fcntl.LOCK_UN)
+                        fcntl.lockf(stream, fcntl.LOCK_UN, 1, slot)
                         time.sleep(0.05)
             probe = probed()
             ordered = hook("Stop", hooked, stop_hook_active=False, last_assistant_message="Started.")
