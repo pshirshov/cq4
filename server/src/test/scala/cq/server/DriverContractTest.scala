@@ -2903,5 +2903,9 @@ final class DriverContractDummy extends DriverContractTest {
   override def config = super.config.copy(activation = Activation(Repo -> Repo.Dummy))
 }
 final class DriverContractPostgres extends DriverContractTest {
-  override def config = super.config.copy(activation = Activation(Repo -> Repo.Prod))
+  // The server opens a connection per transaction and the preset cluster admits 64 (docs/examples/postgres-settings.py): this suite has
+  // more tests than that, and a test's followers hold connections of their own, so its tests run a bounded number at a time.
+  private val TestsAtATime = 16
+  override def config = super.config.copy(activation = Activation(Repo -> Repo.Prod),
+    parallelTests = izumi.distage.testkit.model.TestConfig.Parallelism.Fixed(TestsAtATime))
 }
