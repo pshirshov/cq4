@@ -15,7 +15,7 @@ final class RebasePreparation(config: SupervisorConfig, authority: SupervisorAut
     * bound to their governing session, so no other session prepares the same pair. */
   private var failed = Map.empty[(GitCommit, GitCommit), List[(IntegrationId, RebaseAttempt)]]
 
-  def apply(id: IntegrationId, target: String, reviewed: GitCommit, launch: (AttemptId, GitCommit, JobCommand) => Task[JobRecord]): Task[PreparedRebase] =
+  def apply(id: IntegrationId, target: String, reviewed: GitCommit, launch: (String, AttemptId, GitCommit, JobCommand) => Task[JobRecord]): Task[PreparedRebase] =
     ZIO.attemptBlocking(candidates.advanced(reviewed)).flatMap {
       case None => ZIO.succeed(PreparedRebase(RebaseOutcome.Unneeded(), None))
       case Some(head) if config.settings.checks.isEmpty =>

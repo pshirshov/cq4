@@ -41,7 +41,7 @@ final class DeclaredCheckPublication(directory: Path, ticket: DeclaredCheckTicke
     val summary = ArtifactUpload(project, NativeArtifacts.id(ticket.parent, prefix + "-status"), ticket.parent, ArtifactKind.Transcript,
       "application/json", HostFiles.encode(DeclaredCheckStatus_JsonCodec, status))
     queue.commit((outParts ++ errParts ++ artifact.toList :+ summary).map(HostDelivery.Artifact.apply) ++
-      record.map(value => PhaseSpans.delivery(project, PhaseSpans.check(value, assignment))))
+      record.map(value => PhaseSpans.delivery(project, PhaseSpans.check(value, assignment, ticket.check.name))))
     retain(status)
   }
 

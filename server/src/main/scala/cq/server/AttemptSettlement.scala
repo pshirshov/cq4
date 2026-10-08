@@ -106,8 +106,8 @@ private[server] final class AttemptSettlement(config: SupervisorConfig, authorit
     }
 
   private def validate(entry: DispatchExecution, candidate: GitCommit, check: ValidationCheck, index: Int, trace: Ref[AttemptTrace]): Task[ValidationEvidence] = for {
-    validated <- validation(entry.ticket.attempt.id, s"check-$index", candidate, check, (id, base, command) => launch(entry, id, base, command).ensuring(release(id).ignore)
-      .tap(record => trace.update(value => value.copy(spans = value.spans :+ PhaseSpans.check(record, entry.ticket.assignment.id)))))
+    validated <- validation(entry.ticket.attempt.id, s"check-$index", candidate, check, (name, id, base, command) => launch(entry, id, base, command).ensuring(release(id).ignore)
+      .tap(record => trace.update(value => value.copy(spans = value.spans :+ PhaseSpans.check(record, entry.ticket.assignment.id, name)))))
     evidence = validated.evidence
     // A check that could not be started ran nothing: its cleanup is not in doubt and the result stands.
     uncertain = evidence.state == ValidationState.Unknown && validated.unrun.isEmpty

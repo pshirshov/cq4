@@ -177,7 +177,7 @@ final class HostDeliveryLocal extends AnyWordSpec {
       missing.reconcile(None)
       missing.finish(receiver)
       assert(receiver.spans == List(first -> AttemptState.Failed, second -> AttemptState.Unknown).map { case (record, state) =>
-        PhaseSpan(PhaseSpans.check(record, reviewing).id, reviewing, session, UsagePhase.Check, 5000, 5700, state)
+        PhaseSpan(PhaseSpans.check(record, reviewing, "verify").id, reviewing, session, UsagePhase.Check, 5000, 5700, state, Some("verify"))
       }, receiver.spans.toString)
       assert(receiver.spans.map(_.id).distinct.size == 2 && failed.finish(receiver).acknowledged == 0 && receiver.spans.size == 2)
     }

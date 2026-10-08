@@ -206,6 +206,12 @@ private final class PostgresUsageTransaction(connection: Connection, project: Pr
     sql.query("SELECT t.phase, count(*), sum(t.finished_at - t.started_at) FROM cq_usage_spans t JOIN cq_usage_assignments a USING(project_id, assignment_id) WHERE t.project_id = ?" +
       filterSql(filter) + " GROUP BY t.phase")(s => { bindFilter(s, filter); () })(r => SpanTally(UsagePhase.parse(r.getString(1)).get, r.getLong(2), r.getBigDecimal(3).longValueExact()))
 
+  override def checks(filter: UsageFilter, limit: Int): List[CheckTally] =
+    sql.query("SELECT g.name, g.state, g.runs, g.wall FROM (SELECT t.body->>'check' AS name, t.body->>'state' AS state, count(*) AS runs, sum(t.finished_at - t.started_at) AS wall " +
+      "FROM cq_usage_spans t JOIN cq_usage_assignments a USING(project_id, assignment_id) WHERE t.project_id = ? AND t.phase = 'Check'" +
+      filterSql(filter) + " GROUP BY 1, 2) g ORDER BY g.name COLLATE \"C\" NULLS FIRST, g.state COLLATE \"C\" LIMIT ?")(s => { s.setInt(bindFilter(s, filter), limit); () })(
+      r => CheckTally(Option(r.getString(1)), AttemptState.parse(r.getString(2)).get, r.getLong(3), r.getBigDecimal(4).longValueExact()))
+
   override def latestOutcome(attempt: AttemptId): Option[RecordedOutcome] =
     sql.query("SELECT effective_outcome::text FROM cq_usage_attempts WHERE project_id = ? AND attempt_id = ?")(identity(_, attempt.value))
       (r => Option(r.getString(1)).map(Wire.decode(RecordedOutcome_JsonCodec, _))).headOption.flatten

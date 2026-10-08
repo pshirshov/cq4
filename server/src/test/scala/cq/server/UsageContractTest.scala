@@ -518,7 +518,7 @@ abstract class UsageContractTest extends SpecZIO with AssertZIO {
       val host = collector(owner)
       val session = UsageFilter.SessionOnly(owner.actor.session)
       def span(assignment: AssignmentId, phase: UsagePhase, startedAt: Long, finishedAt: Long, state: AttemptState): PhaseSpan =
-        PhaseSpan(RequestId(UUID.randomUUID()), assignment, owner.actor.session, phase, startedAt, finishedAt, state)
+        PhaseSpan(RequestId(UUID.randomUUID()), assignment, owner.actor.session, phase, startedAt, finishedAt, state, None)
       for {
         _ <- ledger.initialize(owner, "phase spans")
         item <- task(ledger, owner, "Checked task")
@@ -565,6 +565,65 @@ abstract class UsageContractTest extends SpecZIO with AssertZIO {
         _ <- assertIO(apartOnly.phases.map(value => (value.phase, value.spans, value.wallMillis)) == List((UsagePhase.Work, 0L, 0L), (UsagePhase.Check, 1L, 50L)))
         foreign <- usage.phases(owner, UsageFilter.SessionOnly(other.actor.session))
         _ <- assertIO(foreign.phases.map(value => (value.phase, value.attempts, value.spans, value.wallMillis)) == List((UsagePhase.Check, 0L, 1L, 10L)))
+      } yield ()
+    }
+
+    "report check runs per check name and state, equal to the Check phase row, with spans without a name as one group" in { (usage: UsageService[IO], ledger: LedgerService[IO]) =>
+      val owner = scope()
+      val other = owner.copy(actor = owner.actor.copy(session = SessionId(UUID.randomUUID())))
+      val host = collector(owner)
+      def check(assignment: AssignmentId, name: Option[String], startedAt: Long, finishedAt: Long, state: AttemptState): PhaseSpan =
+        PhaseSpan(RequestId(UUID.randomUUID()), assignment, owner.actor.session, UsagePhase.Check, startedAt, finishedAt, state, name)
+      def entries(report: CheckReport): List[(Option[String], AttemptState, Long, Long)] = report.checks.map(value => (value.check, value.state, value.runs, value.wallMillis))
+      def phase(report: PhaseReport): (Long, Long) = report.phases.find(_.phase == UsagePhase.Check).map(value => (value.spans, value.wallMillis)).getOrElse((0L, 0L))
+      def consistent(filter: UsageFilter): IO[Throwable, CheckReport] = for {
+        report <- usage.checks(owner, filter)
+        phases <- usage.phases(owner, filter)
+        _ <- assertIO(!report.truncated && report.cursor == phases.cursor && (report.checks.map(_.runs).sum, report.checks.map(_.wallMillis).sum) == phase(phases))
+      } yield report
+      for {
+        _ <- ledger.initialize(owner, "check runs")
+        item <- task(ledger, owner, "Checked task")
+        apart <- task(ledger, owner, "Another task")
+        work <- phased(usage, owner, item, Role.Worker, UsagePhase.Work, 1000)
+        separate <- phased(usage, owner, apart, Role.Worker, UsagePhase.Work, 1000)
+        unit = check(work.assignment, Some("unit"), 4000, 4100, AttemptState.Completed)
+        before <- usage.cursor(owner)
+        _ <- denied(usage.span(host, unit.copy(phase = UsagePhase.Integrate)))(_.isInstanceOf[Fault.Invalid])
+        _ <- denied(usage.span(host, unit.copy(phase = UsagePhase.Combine)))(_.isInstanceOf[Fault.Invalid])
+        _ <- denied(usage.span(host, unit.copy(check = Some(""))))(_.isInstanceOf[Fault.Invalid])
+        _ <- denied(usage.span(host, unit.copy(check = Some("  \t"))))(_.isInstanceOf[Fault.Invalid])
+        _ <- denied(usage.span(host, unit.copy(check = Some("c" * 301))))(_.isInstanceOf[Fault.Invalid])
+        refused <- usage.cursor(owner)
+        _ <- assertIO(refused == before)
+        _ <- usage.span(host, unit.copy(check = Some("c" * 300), id = RequestId(UUID.randomUUID()), startedAt = 0, finishedAt = 0))
+        _ <- usage.span(host, unit)
+        replayed <- usage.span(host, unit)
+        _ <- assertIO(replayed == unit)
+        _ <- usage.span(host, check(work.assignment, Some("unit"), 4100, 4150, AttemptState.Failed))
+        _ <- usage.span(host, check(work.assignment, Some("lint"), 4150, 4180, AttemptState.Completed))
+        _ <- usage.span(host, check(work.assignment, Some("lint"), 4180, 4200, AttemptState.Cancelled))
+        _ <- usage.span(host, check(work.assignment, None, 5000, 5000, AttemptState.Unknown))
+        _ <- usage.span(host, check(work.assignment, Some("unit"), 4200, 4210, AttemptState.Completed))
+        _ <- usage.span(host, check(separate.assignment, Some("lint"), 100, 105, AttemptState.Unknown))
+        _ <- usage.span(host, PhaseSpan(RequestId(UUID.randomUUID()), work.assignment, owner.actor.session, UsagePhase.Integrate, 6000, 8500, AttemptState.Cancelled, None))
+        _ <- usage.span(host, check(work.assignment, Some("unit"), 1, 8, AttemptState.Completed).copy(session = other.actor.session))
+        long = Some("c" * 300)
+        session <- consistent(UsageFilter.SessionOnly(owner.actor.session))
+        _ <- assertIO(entries(session) == List((None, AttemptState.Unknown, 1L, 0L), (long, AttemptState.Completed, 1L, 0L),
+          (Some("lint"), AttemptState.Cancelled, 1L, 20L), (Some("lint"), AttemptState.Completed, 1L, 30L), (Some("lint"), AttemptState.Unknown, 1L, 5L),
+          (Some("unit"), AttemptState.Completed, 2L, 110L), (Some("unit"), AttemptState.Failed, 1L, 50L)))
+        byTask <- consistent(UsageFilter.TaskOnly(item))
+        _ <- assertIO(entries(byTask) == List((None, AttemptState.Unknown, 1L, 0L), (long, AttemptState.Completed, 1L, 0L),
+          (Some("lint"), AttemptState.Cancelled, 1L, 20L), (Some("lint"), AttemptState.Completed, 1L, 30L),
+          (Some("unit"), AttemptState.Completed, 3L, 117L), (Some("unit"), AttemptState.Failed, 1L, 50L)))
+        apartOnly <- consistent(UsageFilter.TaskOnly(apart))
+        _ <- assertIO(entries(apartOnly) == List((Some("lint"), AttemptState.Unknown, 1L, 5L)))
+        foreign <- consistent(UsageFilter.SessionOnly(other.actor.session))
+        _ <- assertIO(entries(foreign) == List((Some("unit"), AttemptState.Completed, 1L, 7L)))
+        project <- consistent(UsageFilter.ProjectAll())
+        _ <- assertIO(entries(project).map(_._1).distinct == List(None, long, Some("lint"), Some("unit")) && entries(project).map(_._3).sum == 9 && entries(project).map(_._4).sum == 222)
+        _ <- denied(usage.checks(owner, UsageFilter.TaskOnly(item.copy(project = ProjectId(UUID.randomUUID())))))(_.isInstanceOf[Fault.Denied])
       } yield ()
     }
 

@@ -119,7 +119,7 @@ final class ProjectArchivesPostgres extends SpecZIO with AssertZIO {
         created <- service.change(owner, request(List(Mutation.Create(task))))
         assignment = Assignment(AssignmentId(UUID.randomUUID()), owner.project, Set(created.items.head.id), Attribution.Direct, None, None)
         _ <- usage.assign(host, assignment)
-        span = PhaseSpan(RequestId(UUID.randomUUID()), assignment.id, owner.actor.session, UsagePhase.Check, 1000, 1700, AttemptState.Failed)
+        span = PhaseSpan(RequestId(UUID.randomUUID()), assignment.id, owner.actor.session, UsagePhase.Check, 1000, 1700, AttemptState.Failed, Some("verify"))
         _ <- usage.span(host, span)
         before <- usage.phases(owner, filter)
         _ <- assertIO(before.phases.map(value => (value.phase, value.spans, value.wallMillis)) == List((UsagePhase.Check, 1L, 700L)))
@@ -133,8 +133,8 @@ final class ProjectArchivesPostgres extends SpecZIO with AssertZIO {
         restored <- new PostgresProjectArchives(target, Clock.systemUTC(), ProcessModePolicy.Release).restore(file).either
         _ <- ZIO.attempt(Files.deleteIfExists(file))
         _ <- assertIO(restored.map(_.entries) == Right(manifest.entries))
-        copy <- new PostgresUsageRepository(target).read(owner.project)(reader => (reader.span(span.id), reader.spans(filter), reader.cursor))
-        _ <- assertIO(copy == (Some(span), List(SpanTally(UsagePhase.Check, 1, 700)), before.cursor))
+        copy <- new PostgresUsageRepository(target).read(owner.project)(reader => (reader.span(span.id), reader.spans(filter), reader.cursor, reader.checks(filter, 200)))
+        _ <- assertIO(copy == (Some(span), List(SpanTally(UsagePhase.Check, 1, 700)), before.cursor, List(CheckTally(Some("verify"), AttemptState.Failed, 1, 700))))
       } yield ()
     }
 

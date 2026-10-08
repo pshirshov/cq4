@@ -243,7 +243,7 @@ final class ReviewerChecksProcess extends SpecZIO with AssertZIO {
           println(s"Reviewer check spans: ${f.receiver.spans}")
           assert(complete.evidence.exists(value => value.state == ValidationState.Passed && value.failures.size == 1), complete.toString)
           assert(f.receiver.spans == records.zip(List(AttemptState.Failed, AttemptState.Completed)).map { case (record, state) =>
-            PhaseSpan(PhaseSpans.check(record, assignment).id, assignment, f.config.owner.actor.session, UsagePhase.Check, record.createdAt, record.updatedAt, state)
+            PhaseSpan(PhaseSpans.check(record, assignment, "verify").id, assignment, f.config.owner.actor.session, UsagePhase.Check, record.createdAt, record.updatedAt, state, Some("verify"))
           }, f.receiver.spans.toString)
           assert(f.receiver.spans.map(_.id).distinct.size == 2 && f.receiver.spans.forall(span => span.finishedAt - span.startedAt >= 200))
         }

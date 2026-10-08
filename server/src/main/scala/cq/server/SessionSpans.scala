@@ -15,8 +15,8 @@ private[server] final class SessionSpans(config: SupervisorConfig, authority: Su
 
   /** Runs a check job on `execution` and records it as a Check span on `assignment`; an interrupted run is cancelled, recorded as it
     * settles and its workspace released. */
-  def check(jobs: JobSupervisor, execution: GovernedIntegrationJobs, assignment: AssignmentId)(id: AttemptId, base: GitCommit, command: JobCommand): Task[JobRecord] = {
-    val span = (record: JobRecord) => this.record(PhaseSpans.check(record, assignment))
+  def check(jobs: JobSupervisor, execution: GovernedIntegrationJobs, assignment: AssignmentId)(name: String, id: AttemptId, base: GitCommit, command: JobCommand): Task[JobRecord] = {
+    val span = (record: JobRecord) => this.record(PhaseSpans.check(record, assignment, name))
     val interrupted = jobs.cancel(config.owner, id) *> jobs.await(config.owner, id).flatMap(span) *> jobs.release(config.owner, id)
     (execution.execute(WorkspaceSpec(config.owner.project, config.owner.actor.session, id, config.run.repository, base), command)
       .onInterrupt(interrupted.ignore) *> execution.status(id)).tap(span)

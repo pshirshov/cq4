@@ -20,7 +20,7 @@ final class HostValidation(config: SupervisorConfig) {
     NativeTranscript.retained(config.directory.resolve("payload").resolve(attempt.value.toString).resolve(name), bound)
 
   def apply(parent: AttemptId, label: String, candidate: GitCommit, check: ValidationCheck,
-    launch: (AttemptId, GitCommit, JobCommand) => Task[JobRecord]): Task[HostValidated] = {
+    launch: (String, AttemptId, GitCommit, JobCommand) => Task[JobRecord]): Task[HostValidated] = {
     def attempt(number: Int, failed: List[HostValidated]): Task[HostValidated] =
       run(parent, if (number == 1) label else s"$label-r$number", candidate, check, launch).flatMap { last =>
         if (last.evidence.state == ValidationState.Failed && number < check.attempts) attempt(number + 1, failed :+ last)
@@ -30,11 +30,11 @@ final class HostValidation(config: SupervisorConfig) {
   }
 
   private def run(parent: AttemptId, label: String, candidate: GitCommit, check: ValidationCheck,
-    launch: (AttemptId, GitCommit, JobCommand) => Task[JobRecord]): Task[HostValidated] = for {
+    launch: (String, AttemptId, GitCommit, JobCommand) => Task[JobRecord]): Task[HostValidated] = for {
     id <- ZIO.succeed(AttemptId(UUID.randomUUID()))
     source = config.limits
     limits = ExecutionLimits(source.startup, Some(Duration.ofMillis(check.executionMillis)), source.heartbeat, source.grace, source.kill, check.retainedOutputBytes)
-    launched <- launch(id, candidate, JobCommand(check.command, HostEnvironment.runtime(config.environment), "", limits)).map(Right(_))
+    launched <- launch(check.name, id, candidate, JobCommand(check.command, HostEnvironment.runtime(config.environment), "", limits)).map(Right(_))
       .catchSome { case DomainFailure(Fault.Limit(reason)) => ZIO.succeed(Left(s"Host check ${check.name} was not run: $reason")) }
     validated <- ZIO.attemptBlocking(launched match {
       case Left(reason) =>

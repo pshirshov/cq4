@@ -19,6 +19,7 @@ trait UsageService[F[_, _]] {
   def costs(scope: Scope, filter: UsageFilter, after: Option[CostGroup], snapshot: Option[Long], limit: Int): F[Throwable, CostPage]
   def summary(scope: Scope, filter: UsageFilter): F[Throwable, UsageReport]
   def phases(scope: Scope, filter: UsageFilter): F[Throwable, PhaseReport]
+  def checks(scope: Scope, filter: UsageFilter): F[Throwable, CheckReport]
   def attempts(scope: Scope, filter: UsageFilter, after: Option[AttemptId], snapshot: Option[Long], limit: Int): F[Throwable, AttemptPage]
   def outcomes(scope: Scope, attempt: AttemptId, after: Long, limit: Int): F[Throwable, OutcomePage]
   def audit(scope: Scope, filter: UsageFilter, after: Long, limit: Int): F[Throwable, UsagePage]
@@ -188,6 +189,8 @@ object UsageService {
       host(scope)
       found(tx.assignment(value.assignment), "Assignment not registered")
       invalid(HostPhases(value.phase), "A host span is a check, a combination or an integration")
+      invalid(value.check.isEmpty || value.phase == UsagePhase.Check, "Only a check span carries a check name")
+      invalid(value.check.forall(name => name.trim.nonEmpty && name.length <= 300 && !name.contains('\u0000')), "A check name is nonblank and at most 300 characters")
       invalid(value.state != AttemptState.Running && value.startedAt >= 0 && value.finishedAt >= value.startedAt, "Invalid span outcome or times")
       if (!same(tx.span(value.id), value)) tx.putSpan(value, scope.actor, clock.millis())
       value
@@ -268,6 +271,12 @@ object UsageService {
         PhaseUsage(phase, tally.attempts, span.spans, tally.running, tally.open, Math.addExact(tally.wallMillis, span.wallMillis), totals.getOrElse(phase, UsageMath.zeroTotals),
           costs.take(ReadBatch).filter(_.phase == phase).map(_.total))
       }, costs.size > ReadBatch, reader.cursor)
+    }
+
+    override def checks(scope: Scope, value: UsageFilter): F[Throwable, CheckReport] = repository.read(scope.project) { reader =>
+      filter(scope, value)
+      val tallies = reader.checks(value, ReadBatch + 1)
+      CheckReport(tallies.take(ReadBatch).map(t => CheckUsage(t.check, t.state, t.runs, t.wallMillis)), tallies.size > ReadBatch, reader.cursor)
     }
 
     private def costPage(reader: UsageReader, filter: UsageFilter, after: Option[CostGroup], limit: Int): CostPage = {

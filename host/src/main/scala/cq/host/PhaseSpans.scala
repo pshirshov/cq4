@@ -14,12 +14,12 @@ object PhaseSpans {
   private def id(kind: String, value: UUID): RequestId = RequestId(UUID.nameUUIDFromBytes(s"$kind:$value".getBytes(UTF_8)))
 
   /** One run of a check: from the job's registration to its last recorded transition, which for a settled job is its settlement. */
-  def check(record: JobRecord, assignment: AssignmentId): PhaseSpan = PhaseSpan(id("check", record.workspace.attempt.value), assignment,
-    record.workspace.owner, UsagePhase.Check, record.createdAt, record.updatedAt, JobOutcome.observed(record).state)
+  def check(record: JobRecord, assignment: AssignmentId, name: String): PhaseSpan = PhaseSpan(id("check", record.workspace.attempt.value), assignment,
+    record.workspace.owner, UsagePhase.Check, record.createdAt, record.updatedAt, JobOutcome.observed(record).state, Some(name))
   def integration(value: IntegrationId, assignment: AssignmentId, session: SessionId, startedAt: Long, finishedAt: Long, state: AttemptState): PhaseSpan =
-    PhaseSpan(id("integration", value.value), assignment, session, UsagePhase.Integrate, startedAt, finishedAt, state)
+    PhaseSpan(id("integration", value.value), assignment, session, UsagePhase.Integrate, startedAt, finishedAt, state, None)
   def combination(value: RequestId, assignment: AssignmentId, session: SessionId, startedAt: Long, finishedAt: Long, state: AttemptState): PhaseSpan =
-    PhaseSpan(id("combination", value.value), assignment, session, UsagePhase.Combine, startedAt, finishedAt, state)
+    PhaseSpan(id("combination", value.value), assignment, session, UsagePhase.Combine, startedAt, finishedAt, state, None)
   def delivery(project: ProjectId, span: PhaseSpan): HostDelivery = HostDelivery.Usage(HostUsageInput(project, HostUsage.Span(span)))
 
   /** The assignment of the child of this session that produced `result`; work the governing session runs on that result belongs to it. */

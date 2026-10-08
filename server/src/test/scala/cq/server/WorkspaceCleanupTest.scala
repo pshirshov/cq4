@@ -342,7 +342,7 @@ final class WorkspaceCleanupLocal extends SpecZIO with AssertZIO {
         ended <- state.session(0)
         span <- ZIO.attemptBlocking {
           ended.finish()
-          val span = PhaseSpan(RequestId(uuid), ended.run.assignment.id, ended.run.attempt.session, UsagePhase.Check, 1000, 2000, AttemptState.Cancelled)
+          val span = PhaseSpan(RequestId(uuid), ended.run.assignment.id, ended.run.attempt.session, UsagePhase.Check, 1000, 2000, AttemptState.Cancelled, None)
           new SpanDelivery(ended.directory.resolve("spans"), ended.run.project.project).retain(span)
           ended.directory.resolve("spans").resolve(span.id.value.toString)
         }

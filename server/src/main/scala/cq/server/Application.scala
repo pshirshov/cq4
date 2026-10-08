@@ -85,6 +85,7 @@ final class Application(ledger: LedgerService[IO], repository: LedgerRepository[
         case UsageSelection.Costs(filter, after, snapshot, limit) => usage.costs(scope, filter, after, snapshot, limit).map(Result.UsageCosts.apply)
         case UsageSelection.Summary(filter) => usage.summary(scope, filter).map(Result.UsageSummary.apply)
         case UsageSelection.Phases(filter) => usage.phases(scope, filter).map(Result.UsagePhases.apply)
+        case UsageSelection.Checks(filter) => usage.checks(scope, filter).map(Result.UsageChecks.apply)
         case UsageSelection.Attempts(filter, after, snapshot, limit) => usage.attempts(scope, filter, after, snapshot, limit).map(Result.UsageAttempts.apply)
         case UsageSelection.Outcomes(attempt, after, limit) => usage.outcomes(scope, attempt, after, limit).map(Result.UsageOutcomes.apply)
         case UsageSelection.Audit(filter, after, limit) => usage.audit(scope, filter, after, limit).map(Result.UsageAudit.apply)
