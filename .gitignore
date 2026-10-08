@@ -12,6 +12,7 @@ generated/
 .bloop/
 metals.sbt
 __pycache__/
+.codegraph/
 # Harness integrations generated per checkout by cq configure (absolute machine paths)
 .agents/
 .claude/
