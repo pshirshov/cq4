@@ -4,6 +4,7 @@ import { Dialog } from './dialog.js';
 import { faultMessage } from './faults.js';
 import { harnessName } from './help.js';
 import { AGENTS_EXAMPLE, AGENTS_GRAMMAR } from './agents-help.js';
+import { ColouredText, HighlightedEditor } from './agents-editor.js';
 
 export type AgentsLayer = 'installation' | 'project';
 interface AgentsEffects {
@@ -66,15 +67,11 @@ function problemText(problem: api.AgentProblem): string {
 function problemPosition(problem: api.AgentProblem): api.TextPosition | null {
   return problem instanceof api.AgentProblem_RoleUnassigned || problem instanceof api.AgentProblem_TierUndefined ? null : problem.at;
 }
-/** A roles key where it is written: the path of the key, its layer and its line:column there. */
+/** A roles key where it is written: the path of the key and its layer; its line:column there follows in the note. */
 function placedText(governing: api.Harness, value: api.PlacedRoleKey): string {
   const layer = value.origin.layer === api.AgentLayer.Installation ? 'the server defaults' : 'the project override';
   const part = value.origin.source === api.RoleSource.HarnessRoles ? `harnesses.${lower(governing)}.roles` : 'defaults.roles';
-  return `${part}.${keyText(value.key)} of ${layer} (${value.at.line}:${value.at.column})`;
-}
-/** One line for a key of one mode that has no effect for a governing harness. The wording follows the server's, which cq doctor agents prints. */
-function noteText(note: api.ShadowedRoleKey): string {
-  return `when ${lower(note.harness)} governs, ${placedText(note.harness, note.shadowed)} never decides: ${placedText(note.harness, note.by)} is found first and decides every mode of the ${lower(keyRole(note.by.key))} role`;
+  return `${part}.${keyText(value.key)} of ${layer}`;
 }
 /** Where a role was found: the layer and the part of its text. */
 function sourceText(origin: api.RoleOrigin, governing: api.Harness): string {
@@ -99,14 +96,17 @@ function keyText(key: api.RoleKey): string {
 }
 
 interface LayerView {
-  section: HTMLElement; text: HTMLTextAreaElement; metadata: HTMLParagraphElement; save: HTMLButtonElement; error: HTMLParagraphElement; conflict: HTMLElement;
+  tab: HTMLButtonElement; section: HTMLElement; editor: HighlightedEditor; text: HTMLTextAreaElement; metadata: HTMLParagraphElement; save: HTMLButtonElement; error: HTMLParagraphElement; conflict: HTMLElement;
   // The revision the text in the editor was started from, null while it is loading.
   base: api.AgentsDocument | null; busy: boolean;
+  // The scroll offsets of the editor when its tab was left: a hidden textarea does not keep them.
+  scroll: { top: number; left: number };
 }
 interface Preview { state: 'pending' | 'current' | 'invalid' | 'error'; note: string; assignments: api.ResolvedAssignment[]; notes: api.ShadowedRoleKey[] }
 
 /**
- * Edits the agent model configuration: the server's defaults and this project's override, each a text under revision comparison.
+ * Edits the agent model configuration: the server's defaults and this project's override, each a text under revision comparison
+ * in a tab of its own.
  * The server parses and resolves; the dialog shows the problems and the resolved table of an unsaved text from its Preview reply.
  */
 export class AgentsDialog {
@@ -124,6 +124,8 @@ export class AgentsDialog {
   private preview: Preview = { state: 'pending', note: '', assignments: [], notes: [] };
   // The layer edited last: the table shows its unsaved text against the other layer as saved.
   private active: AgentsLayer = 'project';
+  // The layer whose tab is selected.
+  private selected: AgentsLayer = 'installation';
   // Request ordering: a Preview reply is used for its layer only when no later one was sent for that layer, and for the table
   // only when no later one was sent at all.
   private sequence = 0;
@@ -131,31 +133,66 @@ export class AgentsDialog {
   private readonly timers: Record<AgentsLayer, number | null> = { installation: null, project: null };
 
   constructor(private readonly effects: AgentsEffects) {
-    const editors = element('div', ''); editors.className = 'agents-editors'; editors.append(this.layers.installation.section, this.layers.project.section);
+    const tabs = element('div', ''); tabs.className = 'help-tabs agents-tabs'; tabs.setAttribute('role', 'tablist'); tabs.setAttribute('aria-label', 'Texts');
+    tabs.append(...LAYERS.map(layer => this.layers[layer].tab));
+    tabs.addEventListener('keydown', event => {
+      const index = LAYERS.indexOf(this.selected);
+      const next = event.key === 'ArrowRight' ? LAYERS[(index + 1) % LAYERS.length] : event.key === 'ArrowLeft' ? LAYERS[(index + LAYERS.length - 1) % LAYERS.length]
+        : event.key === 'Home' ? LAYERS[0] : event.key === 'End' ? LAYERS[LAYERS.length - 1] : null;
+      if (next !== null) { event.preventDefault(); this.select(next, true); }
+    });
     const help = element('details', ''); help.className = 'help-block agents-help';
     const grammar = element('pre', AGENTS_GRAMMAR); grammar.setAttribute('aria-label', 'How an agent model configuration is written'); grammar.tabIndex = 0;
-    const example = element('pre', AGENTS_EXAMPLE); example.setAttribute('aria-label', 'Example of server defaults'); example.tabIndex = 0;
+    const example = element('pre', ''); new ColouredText(example).update(AGENTS_EXAMPLE); example.setAttribute('aria-label', 'Example of server defaults'); example.tabIndex = 0;
     help.append(element('summary', 'How to write it'), grammar, element('h4', 'Example of server defaults'), example);
     this.problemsPanel.className = 'agents-problems'; this.problemsPanel.setAttribute('aria-label', 'Problems');
     this.previewPanel.className = 'agents-preview'; this.previewPanel.setAttribute('aria-label', 'Preview');
     this.dialog.body.classList.add('agents-body');
     this.dialog.body.append(
       element('p', 'Which models run the planner, worker, explorer and reviewer children of a session, by the harness that governs it. The server defaults hold for every project; this project\'s text overrides them key by key. A saved text applies to the next child that starts.'),
-      editors, this.problemsPanel, this.previewPanel, help);
+      tabs, ...LAYERS.map(layer => this.layers[layer].section), this.problemsPanel, this.previewPanel, help);
+    this.mark();
   }
 
   private layer(layer: AgentsLayer): LayerView {
-    const section = element('section', ''); section.className = 'agents-layer'; section.dataset.layer = layer;
-    const heading = element('h3', TITLES[layer]); heading.id = `agents-${layer}`; section.setAttribute('aria-labelledby', heading.id);
-    const text = element('textarea', ''); text.setAttribute('aria-label', TITLES[layer]); text.rows = EDITOR_ROWS; text.spellcheck = false; text.wrap = 'off';
-    text.placeholder = PLACEHOLDERS[layer]; text.className = 'agents-text';
+    const tab = button(TITLES[layer], () => this.select(layer, false)); tab.id = `agents-tab-${layer}`;
+    tab.setAttribute('role', 'tab'); tab.setAttribute('aria-controls', `agents-panel-${layer}`);
+    const section = element('section', ''); section.className = 'agents-layer'; section.dataset.layer = layer; section.id = `agents-panel-${layer}`;
+    section.setAttribute('role', 'tabpanel'); section.setAttribute('aria-labelledby', tab.id);
+    const editor = new HighlightedEditor(); const text = editor.text; text.setAttribute('aria-label', TITLES[layer]); text.rows = EDITOR_ROWS;
+    text.placeholder = PLACEHOLDERS[layer];
     const metadata = element('p', ''); metadata.className = 'revision-meta';
     const error = element('p', ''); error.setAttribute('role', 'alert'); error.hidden = true;
     const conflict = element('section', ''); conflict.hidden = true;
     const save = button(layer === 'installation' ? 'Save server defaults' : 'Save this project', () => this.action(layer, () => this.submit(layer)));
     text.addEventListener('input', () => { this.active = layer; this.schedule(layer); });
-    section.append(heading, text, metadata, save, error, conflict);
-    return { section, text, metadata, save, error, conflict, base: null, busy: false };
+    section.append(editor.element, metadata, save, error, conflict);
+    return { tab, section, editor, text, metadata, save, error, conflict, base: null, busy: false, scroll: { top: 0, left: 0 } };
+  }
+  /** Shows one layer's tab. Each editor keeps its text, its caret and its scroll position while the other one is shown. */
+  private select(layer: AgentsLayer, focus: boolean): void {
+    if (layer !== this.selected) {
+      const left = this.layers[this.selected]; left.scroll = { top: left.text.scrollTop, left: left.text.scrollLeft };
+      this.selected = layer; this.mark();
+      const shown = this.layers[layer]; shown.text.scrollTop = shown.scroll.top; shown.text.scrollLeft = shown.scroll.left; shown.editor.follow();
+    }
+    if (focus) this.layers[layer].tab.focus();
+  }
+  private mark(): void {
+    for (const layer of LAYERS) {
+      const view = this.layers[layer]; const selected = layer === this.selected;
+      view.tab.setAttribute('aria-selected', String(selected)); view.tab.tabIndex = selected ? 0 : -1; view.section.hidden = !selected;
+    }
+  }
+  /** The state of each layer on its tab: the revision its text was started from, whether the text differs from it, and its problems. */
+  private label(): void {
+    for (const layer of LAYERS) {
+      const view = this.layers[layer]; const count = this.problems[layer].length;
+      const part = (text: string, kind: string): HTMLSpanElement => { const node = element('span', text); node.className = `agents-tab-${kind}`; return node; };
+      const parts = [part(view.base === null ? 'loading…' : `revision ${view.base.revision.value}`, 'revision'),
+        ...(this.dirty(layer) ? [part('unsaved', 'unsaved')] : []), ...(count === 0 ? [] : [part(count === 1 ? '1 problem' : `${count} problems`, 'problems')])];
+      view.tab.replaceChildren(TITLES[layer], ...parts.flatMap(node => [' · ', node]));
+    }
   }
   private provenance(layer: AgentsLayer, value: api.AgentsDocument): string {
     return value.change !== undefined ? `Revision ${value.revision.value} · ${value.change.actor.subject} · ${new Date(Number(value.change.at)).toLocaleString()}`
@@ -180,7 +217,7 @@ export class AgentsDialog {
   }
   private unload(layer: AgentsLayer): void {
     const view = this.layers[layer];
-    view.base = null; view.text.value = ''; view.metadata.textContent = 'Loading…'; view.error.hidden = true; view.conflict.hidden = true; view.conflict.replaceChildren();
+    view.base = null; view.editor.set(''); view.scroll = { top: 0, left: 0 }; view.metadata.textContent = 'Loading…'; view.error.hidden = true; view.conflict.hidden = true; view.conflict.replaceChildren();
     this.problems[layer] = []; this.cancel(layer); this.enable(layer);
   }
   private cancel(layer: AgentsLayer): void {
@@ -204,19 +241,23 @@ export class AgentsDialog {
     }
     this.project = project;
     const kept = this.drafts.get(project.value);
-    if (kept !== undefined) { this.drafts.delete(project.value); this.adopt('project', kept.base); override.text.value = kept.text; }
+    if (kept !== undefined) { this.drafts.delete(project.value); this.adopt('project', kept.base); override.editor.set(kept.text); }
     this.dialog.open('Agent models');
     // An unsaved text survives closing and reopening the dialog; a layer without one is read again.
     for (const layer of LAYERS) if (!this.dirty(layer)) this.unload(layer);
+    this.select(this.initial(), false);
     this.preview = { state: 'pending', note: 'Loading…', assignments: [], notes: [] }; this.render();
     const generation = this.generation;
     this.action(null, async () => {
       const view = await this.read(project);
       if (generation !== this.generation) return;
-      for (const layer of LAYERS) if (this.layers[layer].base === null) { this.adopt(layer, view[layer]); this.layers[layer].text.value = view[layer].text; }
+      for (const layer of LAYERS) if (this.layers[layer].base === null) { this.adopt(layer, view[layer]); this.layers[layer].editor.set(view[layer].text); }
+      this.select(this.initial(), false);
       this.settle(view);
     });
   }
+  /** The tab an opened dialog shows: the project's text when it has one, else the server defaults. */
+  private initial(): AgentsLayer { return this.layers.project.text.value === '' ? 'installation' : 'project'; }
 
   /** Shows what a reply says of the saved texts, and asks for a preview of every unsaved one. */
   private settle(view: api.AgentsView): void {
@@ -294,7 +335,7 @@ export class AgentsDialog {
       button('Use current revision as base', () => { if (view.base === base) { this.adopt(layer, current); this.send(layer); this.render(); } }),
       button('Discard my text and take the current one', () => {
         if (view.base !== base) return;
-        this.adopt(layer, current); view.text.value = current.text; this.send(layer); this.render();
+        this.adopt(layer, current); view.editor.set(current.text); this.send(layer); this.render();
       }));
     view.conflict.replaceChildren(
       element('h4', 'Edit conflict'),
@@ -304,20 +345,36 @@ export class AgentsDialog {
     view.conflict.hidden = false;
   }
 
-  /** Moves the caret of a layer's editor to a 1-based line and column, which counts UTF-16 code units as the server does. */
+  /** Shows a layer's tab and moves the caret of its editor to a 1-based line and column, which counts UTF-16 code units as the server does. */
   private reveal(layer: AgentsLayer, at: api.TextPosition): void {
-    const text = this.layers[layer].text; const lines = text.value.split('\n');
+    this.select(layer, false);
+    const view = this.layers[layer]; const text = view.text; const lines = text.value.split('\n');
     const line = Math.min(Math.max(at.line, 1), lines.length);
     const offset = lines.slice(0, line - 1).reduce((sum, value) => sum + value.length + 1, 0) + Math.min(Math.max(at.column - 1, 0), lines[line - 1].length);
     text.focus(); text.setSelectionRange(offset, Math.min(offset + 1, text.value.length));
+    // The tab was shown at the scroll position it was left at, which need not show this line.
+    const height = parseFloat(getComputedStyle(text).lineHeight); const top = (line - 1) * height;
+    if (top < text.scrollTop || top + height > text.scrollTop + text.clientHeight - height) text.scrollTop = Math.max(0, top - text.clientHeight / 2);
+    view.editor.follow();
   }
-  private position(layer: AgentsLayer, problem: api.AgentProblem): Node {
-    const at = problemPosition(problem); if (at === null) return document.createTextNode('');
+  private jump(layer: AgentsLayer, at: api.TextPosition): HTMLButtonElement {
     const jump = button(`${at.line}:${at.column}`, () => this.reveal(layer, at)); jump.className = 'agents-position';
     jump.setAttribute('aria-label', `${TITLES[layer]}, line ${at.line}, column ${at.column}: show in the editor`);
     return jump;
   }
+  private position(layer: AgentsLayer, problem: api.AgentProblem): Node {
+    const at = problemPosition(problem); return at === null ? document.createTextNode('') : this.jump(layer, at);
+  }
+  /** One line for a key of one mode that has no effect for a governing harness. The wording follows the server's, which cq doctor agents prints. */
+  private note(note: api.ShadowedRoleKey): HTMLLIElement {
+    const placed = (value: api.PlacedRoleKey): Array<string | Node> => [`${placedText(note.harness, value)} (`, this.jump(layerOf(value.origin.layer), value.at), ')'];
+    const item = element('li', '');
+    item.append(`Note: when ${lower(note.harness)} governs, `, ...placed(note.shadowed), ' never decides: ', ...placed(note.by),
+      ` is found first and decides every mode of the ${lower(keyRole(note.by.key))} role.`);
+    return item;
+  }
   private render(): void {
+    this.label();
     const listed = LAYERS.flatMap(layer => this.problems[layer].map(problem => ({ layer, problem })));
     const heading = element('h3', listed.length === 0 ? 'Problems: none' : `Problems: ${listed.length}`);
     if (listed.length === 0) this.problemsPanel.replaceChildren(heading);
@@ -336,7 +393,7 @@ export class AgentsDialog {
     this.previewPanel.dataset.state = preview.state;
     // A key of one mode that an earlier place hides is valid and has no effect: said beside the table, in the style of its other notes.
     const hidden = element('ul', ''); hidden.className = 'agents-notes'; hidden.setAttribute('aria-label', 'Notes');
-    for (const value of preview.notes) hidden.append(element('li', `Note: ${noteText(value)}.`));
+    for (const value of preview.notes) hidden.append(this.note(value));
     this.previewPanel.replaceChildren(element('h3', 'Preview: who runs each role'), note, ...(preview.assignments.length === 0 ? [] : [this.table(preview.assignments)]),
       ...(preview.notes.length === 0 ? [] : [hidden]));
   }
