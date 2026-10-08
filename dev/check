@@ -32,6 +32,9 @@ FAILURE_TAIL_CHARACTERS = 12000
 STARTUP_TIMEOUT = 60
 SHUTDOWN_TIMEOUT = 20
 DISPATCH_FIXTURE_TIMEOUT = 180
+# The attached fixture runs its cases one after another in one process: about 340 s against the JVM and, at the last measurement
+# (2026-10-08), more than 540 s against the JVM under the tracing agent, both run at three times this bound.
+ATTACHED_FIXTURE_TIMEOUT = 300
 COMBINATION_FIXTURE_TIMEOUT = 240
 TRACE_FIXTURE_SCALE = 3
 # JVM CLI invocations start slowly; the CLI fixture alone takes about 66 s on an idle machine.
@@ -244,7 +247,7 @@ class Checks:
             self.run(["python3", "dev/cli-timeouts.py", *command], f"{name}-cli-timeouts", STARTUP_TIMEOUT * fixture_scale)
             self.run(["python3", "dev/supervisor-check.py", *command], f"{name}-supervisor", STARTUP_TIMEOUT * fixture_scale)
             self.environment["CQ_ATTACHED_EVIDENCE"] = str(self.evidence / f"{name}-attached")
-            self.run(["python3", "dev/attached-check.py", *command], f"{name}-attached", DISPATCH_FIXTURE_TIMEOUT * fixture_scale)
+            self.run(["python3", "dev/attached-check.py", *command], f"{name}-attached", ATTACHED_FIXTURE_TIMEOUT * fixture_scale)
             self.environment["CQ_PI_DRIVER_EVIDENCE"] = str(self.evidence / f"{name}-pi-driver")
             self.run(["node", "dev/pi-driver-session.mjs", *command], f"{name}-pi-driver", DISPATCH_FIXTURE_TIMEOUT * fixture_scale)
             self.environment["CQ_WORKFLOW_EVIDENCE"] = str(self.evidence / f"{name}-workflow")
