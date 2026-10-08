@@ -20,6 +20,6 @@ object UnitFixture {
     require(saved.project.text == text && saved.project.problems.isEmpty, s"The fixture's agent configuration was not saved: ${saved.project.problems}")
   }
 
-  /** What `cq agents init` writes for these settings; with one harness in them every role runs the settings model of the governing harness. */
+  /** What `cq agents init` writes for these settings; with one harness in them, whose settings model is of no known lineup, every role runs the settings model of the governing harness. */
   def starting(api: ServerApi, project: ProjectId, settings: SupervisorSettings): Unit = configure(api, project, AgentStarter.text(settings.harnesses))
 }

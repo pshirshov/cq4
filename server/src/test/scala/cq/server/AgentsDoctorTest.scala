@@ -91,6 +91,24 @@ harnesses:
       assert(f.found(codex, "Settings entry pi").detail.endsWith("referenced by worker, reviewer"))
       assert(!codex.toString.contains(token))
     }
+    "report what cq agents init writes for a settings file as current for each governing harness, on the models of its lineups" in Using.resource(new Fixture) { f =>
+      val entries = List(f.entry(Harness.Claude).copy(model = "claude-sonnet-5-5"), f.entry(Harness.Codex).copy(model = "gpt-6.1-sol"),
+        f.entry(Harness.Pi).copy(model = "gpt-6-luna", provider = "openai-codex"))
+      f.settings(entries)
+      f.served = Some(view(cq.core.AgentStarter.text(entries), ""))
+      Harness.all.foreach(harness => assert(f.inspect(harness).current, f.inspect(harness).toString))
+      val codex = f.inspect(Harness.Codex)
+      assert(f.found(codex, "Role planner").detail == "codex:gpt-6.1-sol?effort=high (server defaults, defaults.roles)")
+      assert(f.found(codex, "Role worker").detail == "codex:gpt-6.1-sol (server defaults, defaults.roles)")
+      assert(f.found(codex, "Role explorer").detail == "codex:gpt-6-luna?effort=medium (server defaults, defaults.roles)")
+      assert(f.found(codex, "Role reviewer").detail ==
+        "{ fallback: [claude:claude-opus-5-5, pi:openai-codex/gpt-6.1-sol?effort=high, codex:gpt-6.1-sol?effort=high] } (server defaults, harnesses.codex.roles); " +
+        "self-review: seat 1 of 1 can run a model of codex, the governing harness")
+      // The settings model of every tier is current as well.
+      f.settings(Harness.all.map(f.entry))
+      f.served = Some(view(cq.core.AgentStarter.text(Harness.all.map(f.entry)), ""))
+      Harness.all.foreach(harness => assert(f.inspect(harness).current, f.inspect(harness).toString))
+    }
     "fail on a missing project file, a missing credential and an unreadable configuration without showing why the read failed" in Using.resource(new Fixture) { f =>
       val absent = f.doctor.inspect(Harness.Codex, f.root.resolve("absent.json"), f.settingsFile, Map("CQ_TOKEN" -> token))
       assert(!absent.current && absent.checks.map(_.name) == List("Project", "Credential") && f.found(absent, "Project").state == InstallationState.Failed &&
