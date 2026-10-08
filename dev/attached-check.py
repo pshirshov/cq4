@@ -87,6 +87,27 @@ class Peer:
         self.reader.join(timeout=2)
 
 
+class Journal:
+    """What a host wrote into the units file of its session directory about what the session waits on a person for."""
+    def __init__(self, directory):
+        self.file = Path(directory) / "units.jsonl"
+
+    def events(self):
+        return [json.loads(line) for line in self.file.read_text().splitlines()] if self.file.exists() else []
+
+    def written(self, event):
+        """Waits until the host has written `event`: it does at its next round, which comes at its claim-renewal interval."""
+        deadline = time.monotonic() + 90
+        while event not in self.events():
+            assert time.monotonic() < deadline, (event, self.events()[-4:])
+            time.sleep(0.2)
+
+
+def settled_event(item, current, detail, waiter):
+    """The event of an answered Question; `waiter` is the slot of the `cq wait` the host gave it to, its process identifier."""
+    return {"Settled": {"end": {"item": item["id"], "title": current(item)["draft"]["title"], "status": "Answered", "detail": detail}, "waiter": waiter}}
+
+
 # A host that is alive is waited for until it reaches the file sync a stall fixture latches: how long its start takes depends on the
 # machine (a JVM host once had not reached it after 20 s under load). A host that has exited fails the fixture at once with what it
 # wrote, and this bound only ends the wait for a host that stays alive and never arrives.
@@ -262,7 +283,7 @@ def main():
         idle.process.kill()
         idle.process.wait(timeout=5)
     opened, = session_directories() - known
-    assert attempts(opened) == [] and entries(opened) == ["journal", "journal/owner.lock"], (attempts(opened), entries(opened))
+    assert attempts(opened) == [] and entries(opened) == ["journal", "journal/owner.lock", "journal/started-by"], (attempts(opened), entries(opened))
     assert cli(["job", "upload", "--session", str(opened)]) == f"No session is recorded in {opened}; there is nothing to deliver\n"
     # A session that works is recorded at its first tool call, whatever the call: here one that takes a claim. Its host is killed at once.
     member = operator({"Change": {"input": {"project": project, "change": {"request": identity(), "mutations": [{"Create": {"draft": draft}}], "fences": [],
@@ -300,6 +321,11 @@ def main():
     assert uploaded["outcome"]["value"]["state"] == "Unknown" and "Acknowledged 0" in cli(["job", "upload", "--session", str(later)]), uploaded
     assert not opened.exists() and attempts(opened) == []
     print(json.dumps({"connectionOnly": "no attempt and no session record", "killedAfterFirstCall": ["recovered", "uploaded"]}))
+
+    def operate(mutations):
+        return operator({"Change": {"input": {"project": project, "change": {"request": identity(), "mutations": mutations, "fences": [], "reason": "Question fixture"}}}})["Changed"]["ack"]["items"]
+    def current(item):
+        return operator({"Read": {"input": {"project": project, "selection": {"ItemDetail": {"id": item["id"]}}}}})["Detail"]["view"]["item"]
 
     # A driven session: the hook entry points hold the operator credential; the attached session binds, activates the issued directive and
     # writes inside its cycle. Its first out-of-set write is rejected and stops the driver.
@@ -435,29 +461,18 @@ def main():
             assert hook("Stop", hooked, stop_hook_active=True, last_assistant_message="Parked.") is None
             assert hook("Stop", None, stop_hook_active=False) == {"systemMessage": "CQ Stop hook error: Driver session key is missing; no default session is used"}
 
-            # D164: a session learns that the operator settled a Question it waits on. The host reads the Questions the session
-            # waits on at its claim-renewal interval, so each step that depends on it waits for the host's next round.
+            # D164: a session learns that the operator settled what it waits on. The host reads what the session waits on at its
+            # claim-renewal interval, so each step that depends on it waits for the host's next round.
             question = {"title": "Which way", "body": "Fixture question", "labels": [], "archived": False, "citations": [],
                         "content": {"Question": {"status": "Open", "prompt": "Which way?", "context": "Fixture", "alternatives": [], "recommendation": None, "answer": None}}}
-            def operate(mutations):
-                return operator({"Change": {"input": {"project": project, "change": {"request": identity(), "mutations": mutations, "fences": [], "reason": "Question fixture"}}}})["Changed"]["ack"]["items"]
-            def current(item):
-                return operator({"Read": {"input": {"project": project, "selection": {"ItemDetail": {"id": item["id"]}}}}})["Detail"]["view"]["item"]
             def answer(item, text):
                 held = current(item)
                 operate([{"Replace": {"id": item["id"], "expected": held["revision"], "draft": {**held["draft"], "content": {"Question": {**held["draft"]["content"]["Question"], "status": "Answered", "answer": text}}}}}])
-            def events():
-                return [json.loads(line) for line in (driven_directory / "units.jsonl").read_text().splitlines()]
-            def written(event):
-                """Waits until the host has written `event` about a Question into the session's units file."""
-                deadline = time.monotonic() + 90
-                while event not in events():
-                    assert time.monotonic() < deadline, (event, events()[-4:])
-                    time.sleep(0.2)
-            def ended(item, text, waiter):
-                return {"Settled": {"end": {"question": item["id"], "title": current(item)["draft"]["title"], "status": "Answered", "answer": text}, "waiter": waiter}}
             said = "CQ: a person settled what this session waits on:"
             act = "Read each of them with the CQ read tool (ItemDetail) and act on it before you end your turn."
+            journal = Journal(driven_directory)
+            def read(item):
+                driven.tool("read", {"project": project, "selection": {"ItemDetail": {"id": item["id"]}}})
             # A drive on a Task that a Question of the operator gates stops for user input at once, and rests.
             gate, gated = operate([{"Create": {"draft": {**question, "title": "Gate"}}}, {"Create": {"draft": {**draft, "labels": [], "title": "Gated task"}}}])
             operate([{"Reference": {"source": gated["id"], "expectedSource": gated["revision"], "relation": "BlockedBy", "target": gate["id"], "expectedTarget": gate["revision"], "present": True}}])
@@ -466,41 +481,76 @@ def main():
             printed, = [line for line in offered.splitlines() if '{"Bind":' in line]
             driven.tool("session", json.loads(printed[printed.index('{"Bind":'):]))
             rested = hook("Stop", asking, stop_hook_active=False, last_assistant_message="Bound.")
-            assert rested == {"systemMessage": f"CQ driver stopped (user input required): Awaiting the user on {gate_reference}; the driver never answers questions or infers approval"}, rested
-            # The session records a Question of its own and advances the gated Task: it waits on both, and a stop with nothing new is allowed.
+            awaiting = f"Awaiting the user on {gate_reference}; the driver never answers questions or infers approval"
+            assert rested == {"systemMessage": f"CQ driver stopped (user input required): {awaiting}"}, rested
+            # The session of a resting drive does not answer what the drive waits for.
+            refused = driven.tool("change", {"project": project, "change": {"request": identity(), "fences": [], "reason": "Driven fixture", "mutations": [
+                {"Replace": {"id": gate["id"], "expected": current(gate)["revision"], "draft": {**current(gate)["draft"],
+                             "content": {"Question": {**question["content"]["Question"], "status": "Answered", "answer": "The session's own"}}}}}]}}, denied=True)
+            assert "The CQ driver never answers Questions" in json.dumps(refused), refused
+            # The session records a Question of its own and advances the gated Task: at the host's next round it waits on both, and a
+            # stop with nothing new is allowed.
             own, = change([{"Create": {"draft": question}}], [])["Changed"]["ack"]["items"]
-            assert events()[-1] == {"Watching": {"question": own["id"]}}, events()[-2:]
             driven.tool("session", {"Workflow": {"id": identity(), "request": {"Advance": {"roots": [gated["id"]], "through": "Explore"}}, "operatorRequirements": "Question fixture", "token": None}})
+            journal.written({"Watching": {"item": gate["id"]}})
+            journal.written({"Watching": {"item": own["id"]}})
             assert hook("Stop", asking, stop_hook_active=False, last_assistant_message="Asked.") is None
             # Answered with no waiter running: the host's next round writes the end, and the next stop says it once.
-            answer(own, "The second\nway")
-            written({"Watching": {"question": gate["id"]}})
-            written(ended(own, "The second\nway", False))
+            answer(own, "The second\n\"way\"")
+            journal.written(settled_event(own, current, "The second\n\"way\"", None))
             told = hook("Stop", asking, stop_hook_active=False, last_assistant_message="Done.")
-            assert told == {"decision": "block", "reason": "\n".join([said, f'- question Q{own["id"]["number"]} "Which way" answered: The second way', act])}, told
-            assert hook("Stop", asking, stop_hook_active=True, last_assistant_message="Read.") is None
-            # Answered while a `cq wait` runs on the session: the waiter, which waits although the host works on nothing, reports it, and no stop does.
+            assert told == {"decision": "block", "reason": "\n".join([said, f'- question Q{own["id"]["number"]} "Which way" answered: "The second \\"way\\""', act])}, told
+            assert hook("Stop", asking, stop_hook_active=True, last_assistant_message="Again.") is None
+            read(own)
+            assert journal.events()[-1] == {"Released": {"item": own["id"]}}, journal.events()[-2:]
+            # Answered while two `cq wait` run on the session: both wait although the host works on nothing, the host gives the end to
+            # one of them, which reports it and ends, and the other stays. The session, once it has read it, is told by no stop.
             waited, = change([{"Create": {"draft": {**question, "title": "Waited for"}}}], [])["Changed"]["ack"]["items"]
-            waiter = watched([])
+            waiters = [watched([]), watched([])]
             answer(waited, "Yes")
-            reported, _ = waiter.communicate(timeout=90)
-            assert waiter.returncode == 0 and reported == f'question Q{waited["id"]["number"]} "Waited for" answered: Yes\n', (waiter.returncode, reported)
-            assert ended(waited, "Yes", True) in events()
-            assert hook("Stop", asking, stop_hook_active=False, last_assistant_message="Woken.") is None
+            given, kept = sorted(waiters, key=lambda process: process.pid)
+            reported, _ = given.communicate(timeout=90)
+            assert given.returncode == 0 and reported == f'question Q{waited["id"]["number"]} "Waited for" answered: "Yes"\n', (given.returncode, reported)
+            assert settled_event(waited, current, "Yes", str(given.pid)) in journal.events()
+            time.sleep(2)
+            assert kept.poll() is None, ("The waiter the end was not given to ended as well", kept.communicate()[0])
+            kept.terminate()
+            kept.wait(timeout=30)
+            # Unread, it is said once more at the next turn end, and by a waiter that starts later; read, by nothing.
+            reminded = hook("Stop", asking, stop_hook_active=False, last_assistant_message="Woken.")
+            assert reminded["reason"].splitlines()[1] == f'- question Q{waited["id"]["number"]} "Waited for" answered: "Yes"', reminded
+            again = subprocess.run([str(wrapper), "wait"], cwd=repository, env=env, capture_output=True, text=True, timeout=60)
+            assert (again.returncode, again.stdout) == (0, reported), again
+            read(waited)
+            assert hook("Stop", asking, stop_hook_active=False, last_assistant_message="Read.") is None
             # The answer the drive rested on: one stop announces it and carries the start directive of the drive, which is on again.
             answer(gate, "This way")
-            written(ended(gate, "This way", False))
+            journal.written(settled_event(gate, current, "This way", None))
             continued = hook("Stop", asking, stop_hook_active=False, last_assistant_message="Done.")["reason"].splitlines()
-            assert continued[:3] == [said, f'- question {gate_reference} "Gate" answered: This way', act] and "CQ driver: the user settled what this drive waited for; it continues" in continued, continued
+            assert continued[:3] == [said, f'- question {gate_reference} "Gate" answered: "This way"', act] and "CQ driver: the user settled what this drive waited for; it continues" in continued, continued
             assert continued[-1].startswith(f"$cq-advance --roots {gated_reference} --through explore --start-token "), continued
             assert hook("UserPromptSubmit", asking, prompt="$cq-park")["systemMessage"] == f"CQ driver park: CQ driver parked: {gated_reference} through explore"
-            # A session key no driver knows: the hook finds the session by the host that the process it descends from started, which
-            # is this fixture, the owner of the host. A hook that does not descend from it says nothing and lets the stop through.
+            status_line = json.loads((repository / ".claude/settings.local.json").read_text())["statusLine"]["command"]
+            shown = subprocess.run(shlex.split(status_line), cwd=repository, env=env, input=json.dumps({"session_id": "attached-fixture-status"}), capture_output=True, text=True, timeout=60)
+            assert shlex.split(status_line) == [str(wrapper), "hook", "claude", "StatusLine"] and shown.returncode == 0 and shown.stdout == "CQ driver off\n", shown
+        finally:
+            driven.close()
+    print(json.dumps({"drivenSession": driven_session, "cycle": issued["cycle"], "lineage": members(settled), "stop": stop["stopped"]}))
+
+    # D164: a session no driver ever knew. The hook finds it by the host that the process it descends from started, which is this
+    # fixture, the owner of the host, and gives its ends to the harness session that found the host first. A hook that does not
+    # descend from the owner, and one with another harness session identifier, say nothing and let the stop through.
+    with (root / "undriven-host.log").open("w") as log:
+        alone = Peer(command + ["host", "codex", "--executable", str(wrapper)], repository, env, log)
+        try:
+            alone_journal = Journal(alone.tool("session", {"Context": {}})["Context"]["value"]["directory"])
             undriven = "attached-fixture-undriven-session"
-            alone, = change([{"Create": {"draft": {**question, "title": "Asked without a drive"}}}], [])["Changed"]["ack"]["items"]
+            asked, = alone.tool("change", {"project": project, "change": {"request": identity(), "fences": [], "reason": "Undriven fixture",
+                                           "mutations": [{"Create": {"draft": {**question, "title": "Asked without a drive"}}}]}})["Changed"]["ack"]["items"]
+            alone_journal.written({"Watching": {"item": asked["id"]}})
             assert hook("Stop", undriven, stop_hook_active=False, last_assistant_message="Asked.") is None
-            answer(alone, "Go on")
-            written(ended(alone, "Go on", False))
+            answer(asked, "Go on")
+            alone_journal.written(settled_event(asked, current, "Go on", None))
             payload = {"session_id": undriven, "turn_id": str(uuid.uuid4()), "cwd": str(repository), "hook_event_name": "Stop", "model": "fixture-model",
                        "permission_mode": "default", "stop_hook_active": False}
             (root / "orphan-input.json").write_text(json.dumps(payload))
@@ -513,15 +563,12 @@ def main():
                 assert time.monotonic() < deadline, "The hook without the harness among its ancestors did not end"
                 time.sleep(0.1)
             assert ((root / "orphan-exit").read_text(), (root / "orphan-output").read_text()) == ("0\n", ""), (root / "orphan-output").read_text()
+            assert hook("Stop", "attached-fixture-another-session-id", stop_hook_active=False, last_assistant_message="Done.") is None
             alone_told = hook("Stop", undriven, stop_hook_active=False, last_assistant_message="Done.")
-            assert alone_told == {"decision": "block", "reason": "\n".join([said, f'- question Q{alone["id"]["number"]} "Asked without a drive" answered: Go on', act])}, alone_told
+            assert alone_told == {"decision": "block", "reason": "\n".join([said, f'- question Q{asked["id"]["number"]} "Asked without a drive" answered: "Go on"', act])}, alone_told
             assert hook("Stop", undriven, stop_hook_active=True, last_assistant_message="Read.") is None
-            status_line = json.loads((repository / ".claude/settings.local.json").read_text())["statusLine"]["command"]
-            shown = subprocess.run(shlex.split(status_line), cwd=repository, env=env, input=json.dumps({"session_id": "attached-fixture-status"}), capture_output=True, text=True, timeout=60)
-            assert shlex.split(status_line) == [str(wrapper), "hook", "claude", "StatusLine"] and shown.returncode == 0 and shown.stdout == "CQ driver off\n", shown
         finally:
-            driven.close()
-    print(json.dumps({"drivenSession": driven_session, "cycle": issued["cycle"], "lineage": members(settled), "stop": stop["stopped"]}))
+            alone.close()
 
     with (root / "pi-host.log").open("w") as log:
         pi = Peer(command + ["host", "pi"], repository, env, log)

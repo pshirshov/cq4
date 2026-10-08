@@ -28,7 +28,8 @@ final class AttachedGatewayLocal extends AnyWordSpec {
   }
 
   /** An initialized gateway on a real peer. Only the governing API is live: the tools exercised here reach nothing else. */
-  private final class Session(frameBytes: Int, harness: Harness, answer: Command => Result) extends AutoCloseable {
+  private final class Session(frameBytes: Int, harness: Harness, directory: Path, answer: Command => Result) extends AutoCloseable {
+    def this(frameBytes: Int, harness: Harness, answer: Command => Result) = this(frameBytes, harness, Path.of("/nonexistent"), answer)
     def this(frameBytes: Int, answer: Command => Result) = this(frameBytes, Harness.Claude, answer)
     private def uuid: UUID = UUID.randomUUID()
     private val assignment = Assignment(AssignmentId(uuid), project, Set.empty, Attribution.Unattributed, None, None)
@@ -36,11 +37,11 @@ final class AttachedGatewayLocal extends AnyWordSpec {
       "fixture-provider", "fixture-model", "fixture", 0, UsagePhase.Govern, None)
     private val settings = ProjectConfig(project, "http://localhost", "Attached gateway")
     private val config = SupervisorConfig(null, settings, null, null,
-      SupervisorRun(settings, assignment, attempt, "fixture", "/nonexistent", GitCommit("0" * 40), SessionOwnership.Attached), Path.of("/nonexistent"), "", None, Map("HOME" -> "/nonexistent"))
+      SupervisorRun(settings, assignment, attempt, "fixture", "/nonexistent", GitCommit("0" * 40), SessionOwnership.Attached), directory, "", None, Map("HOME" -> "/nonexistent"))
     private val api = new Api(answer)
     private val gateway = new AttachedGateway(config, SupervisorAuthority(api, api, api, AccessToken("governor", 0)), schemas, null, null, null,
       new AttachedCodexUsage(Path.of("/nonexistent"), config.run, new CodexRollout, java.time.Clock.systemUTC()), null,
-      new SessionClaims(config.owner, api, logstage.IzLogger.NullLogger), WaitCommand(Some("/opt/cq/bin/cq")), new cq.host.QuestionWatch(api, config.project.project, config.directory, _ => ()))
+      new SessionClaims(config.owner, api, logstage.IzLogger.NullLogger), WaitCommand(Some("/opt/cq/bin/cq")), new cq.host.AwaitedWatch(api, config.project.project, config.directory, _ => (), true))
     private val input = new PipedInputStream(8192)
     private val client = new PipedOutputStream(input)
     private val response = new PipedInputStream(8192)
@@ -231,7 +232,7 @@ final class AttachedGatewayLocal extends AnyWordSpec {
         session.exchange("ping", Json.obj())
         session.exchange("cq/session", Json.obj())
         // What the Pi extension asks at every turn end is no governing work: a session that waits on nothing is told so.
-        assert(session.exchange("cq/settled", Json.obj()).hcursor.downField("result").focus.contains(Json.obj("lines" -> Json.arr(), "waiting" -> Json.False)))
+        assert(session.exchange("cq/settled", Json.obj()).hcursor.downField("result").focus.contains(Json.obj("lines" -> Json.arr(), "waiting" -> Json.False, "events" -> Json.fromInt(0))))
         for (method <- List("resources/list", "prompts/list", "resources/templates/list"))
           assert(session.exchange(method, Json.obj()).hcursor.downField("error").get[Int]("code") == Right(-32601), method)
         assert(session.governing.get() == 0)
@@ -246,6 +247,26 @@ final class AttachedGatewayLocal extends AnyWordSpec {
         assert(session.governing.get() == 4)
         // Every method the host answers is classified, and no other is answered.
         assert(AttachedGateway.Methods.keySet == Set("initialize", "ping", "tools/list", "cq/session", "cq/settled", "tools/call", "cq/piUsage", "cq/driver"))
+      } finally session.close()
+    }
+    "D164: answer the Pi extension's turn end with what a person settled and the session has not read, once, and with whether the session still waits" in {
+      val directory = java.nio.file.Files.createTempDirectory("cq-gateway-session-")
+      cq.host.SessionWaiters.create(directory)
+      val units = new cq.host.SessionUnits(directory)
+      val (first, second) = (ItemId(project, Ledger.Questions, 3L), ItemId(project, Ledger.OperatorActions, 1L))
+      val end = AwaitedEnd(first, "Which key", "Answered", Some("ctrl+alt+a"))
+      val session = new Session(AttachedGateway.FrameBytes, Harness.Pi, directory, _ => Result.Counts(LedgerCounts(Nil, ChangeCursor(7L))))
+      try {
+        def settled: Json = session.exchange("cq/settled", Json.obj()).hcursor.downField("result").focus.get
+        units.watching(first); units.watching(second)
+        assert(settled == Json.obj("lines" -> Json.arr(), "waiting" -> Json.True, "events" -> Json.fromInt(2)))
+        units.settled(end, () => false)
+        assert(settled == Json.obj("lines" -> Json.arr(Json.fromString("question Q3 \"Which key\" answered: \"ctrl+alt+a\"")), "waiting" -> Json.True, "events" -> Json.fromInt(3)))
+        assert(settled == Json.obj("lines" -> Json.arr(), "waiting" -> Json.True, "events" -> Json.fromInt(3)))
+        // What the session read before its turn ended is not said, and it waits on nothing more.
+        units.settled(AwaitedEnd(second, "Requested", "Confirmed", None), () => false)
+        units.released(second)
+        assert(settled == Json.obj("lines" -> Json.arr(), "waiting" -> Json.False, "events" -> Json.fromInt(5)) && session.governing.get() == 0)
       } finally session.close()
     }
     "D160: answer the request whose registration failed with that failure, keep serving, and ask for the registration again at the next governing request" in {

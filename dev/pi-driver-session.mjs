@@ -208,10 +208,10 @@ assert.equal((await status(first)).state, "On", "parking one session leaves the 
 await second.settle("completed");
 assert.equal(second.sent.length, 1);
 
-// D164: a session that waits on a Question is told once when the operator settles it. The second session, whose driver is off, records
+// D164: a session that waits on a Question is told when the operator settles it. The second session, whose driver is off, records
 // a Question. From its next turn end on the extension keeps a `cq wait` on the real session directory, because its host says that the
-// session waits; the host finds the answer at its next round and gives it to that waiter, or, while the waiter was not running yet, to
-// the turn end. Either says the same line in one message that starts a turn.
+// session waits; the host finds the answer at its next round and gives it to that waiter, which also reports what was settled while
+// it started. Its message starts a turn; the session reads the Question in it, and the turn end that follows says nothing more.
 const question = { ...draft, title: "Which way", content: { Question: { status: "Open", prompt: "Which way?", context: "Fixture", alternatives: [], recommendation: null, answer: null } } };
 const [asked] = (await change(second, [{ Create: { draft: question } }], [])).Changed.ack.items;
 await second.settle("completed");
@@ -220,11 +220,12 @@ const open = (await operator({ Read: { input: { project, selection: { ItemDetail
 await operator({ Change: { input: { project, change: { request: identity(), fences: [], reason: "The operator answers", mutations: [{ Replace: { id: asked.id, expected: open.revision,
   draft: { ...open.draft, content: { Question: { ...open.draft.content.Question, status: "Answered", answer: "The second\nway" } } } } }] } } } });
 const told = Date.now() + 90000;
-while (second.injected.length === 0) { assert(Date.now() < told, "The session was not told that its Question was answered"); await sleep(1000); await second.settle("completed"); }
+while (second.injected.length === 0) { assert(Date.now() < told, "The session was not told that its Question was answered"); await sleep(200); }
+assert.equal((await second.tool("read", { project, selection: { ItemDetail: { id: asked.id } } })).Detail.view.item.draft.content.Question.status, "Answered");
 await second.settle("completed");
 await sleep(1000);
 assert.deepEqual(second.injected.map(entry => [entry.message.content, entry.options]),
-  [[`CQ: question Q${asked.id.number} "Which way" answered: The second way\nRead each of them with cq_read (ItemDetail) and act on it before you end your turn.`, { triggerTurn: true }]]);
+  [[`CQ: question Q${asked.id.number} "Which way" answered: "The second way"\nRead each of them with cq_read (ItemDetail) and act on it before you end your turn.`, { triggerTurn: true }]]);
 assert.deepEqual(second.notices.filter(notice => notice.type === "error"), []);
 
 // Failure stops. Each leaves the ledger as it was; the toggle key started this drive, and restarts the next ones.

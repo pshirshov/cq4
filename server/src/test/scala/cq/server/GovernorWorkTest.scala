@@ -260,7 +260,7 @@ emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_toke
       // The gateway of a Claude Code session: its Context reads no native Codex usage.
       attached = config.copy(run = run.copy(attempt = governor.copy(harness = Harness.Claude)))
       served = new AttachedGateway(attached, authority, schemas, control, workflow, null, null, driver, new SessionClaims(config.owner, authority.governor, logstage.IzLogger.NullLogger),
-        WaitCommand(Some("/opt/cq/bin/cq")), new QuestionWatch(authority.governor, config.project.project, config.directory, _ => ()))
+        WaitCommand(Some("/opt/cq/bin/cq")), new AwaitedWatch(authority.governor, config.project.project, config.directory, _ => (), true))
       idle = java.time.Duration.ofMinutes(10)
       peer <- ZIO.acquireRelease(ZIO.attempt(new StdioPeer(new java.io.PipedInputStream(new java.io.PipedOutputStream()), java.io.OutputStream.nullOutputStream(),
         new OwnerLiveness { override def alive: Boolean = true }, PeerLimits(idle, idle, idle, AttachedGateway.FrameBytes, 8), () => ())))(peer => ZIO.succeed(peer.close()))

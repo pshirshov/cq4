@@ -1,7 +1,7 @@
 package cq.server
 
 import cq.api.*
-import cq.host.{AttachedSessions, HostView, SessionOwner, SessionQuestions, SessionUnits, SessionWait, SessionWaiters}
+import cq.host.{AttachedSessions, HostView, SessionOwner, SessionAwaited, SessionUnits, SessionWait, SessionWaiters}
 import java.nio.channels.{FileChannel, FileLock}
 import java.nio.file.{Files, Path, StandardOpenOption}
 import java.util.UUID
@@ -12,9 +12,10 @@ final class SessionWaitLocal extends AnyWordSpec {
   private def task(number: Long): ItemId = ItemId(project, Ledger.Tasks, number)
   private def attempt(members: Long*): SessionUnit = SessionUnit(SessionUnitKind.Attempt, UUID.randomUUID(), members.toList.map(task))
   private def key(unit: SessionUnit): (SessionUnitKind, UUID) = (unit.kind, unit.id)
+  private val Slot = 7L
   private def over(unit: SessionUnit, phase: String): UnitEnd = UnitEnd(unit, phase, Some("ConsiderAcceptance"), None)
   private def question(number: Long): ItemId = ItemId(project, Ledger.Questions, number)
-  private def answered(number: Long, answer: String): QuestionEnd = QuestionEnd(question(number), s"Question $number", QuestionStatus.Answered, Some(answer))
+  private def answered(number: Long, answer: String): AwaitedEnd = AwaitedEnd(question(number), s"Question $number", "Answered", Some(answer))
 
   /** A session directory as a host leaves it, with the lock a live host holds. `steps` run one per pause of the waiter, in order;
     * a waiter that pauses more often than that would wait for ever, which fails the test instead. */
@@ -29,13 +30,14 @@ final class SessionWaitLocal extends AnyWordSpec {
     var pauses = 0
     def hostStarts(): Unit = lock = Some(channel.lock())
     def hostEnds(): Unit = { lock.foreach(_.release()); lock = None }
-    def await(named: SessionUnit*): WaitOutcome = new SessionWait(directory, () => {
+    def await(named: SessionUnit*): WaitOutcome = awaitAs(Slot, SessionWait.After.Start, named*)
+    def awaitAs(slot: Long, after: SessionWait.After, named: SessionUnit*): WaitOutcome = new SessionWait(directory, () => {
       pauses += 1
       remaining match {
         case step :: later => remaining = later; step(this)
         case Nil => fail("The waiter kept waiting after everything that could end its wait had happened")
       }
-    }).await(named.toList.map(key))
+    }, slot).await(named.toList.map(key), after)
     hostStarts()
     override def close(): Unit = { hostEnds(); channel.close() }
   }
@@ -127,33 +129,63 @@ final class SessionWaitLocal extends AnyWordSpec {
         assert(session.await(unit) == WaitOutcome.Ended(List(over(unit, "Completed")), Nil, Nil))
       } finally session.close()
     }
-    "D164: wait while the session waits on a Question, report the end the host gave to the waiter, and none that was written for the turn end" in {
+    "D164: wait while the session waits on a person, report the end the host gave to this waiter and the ones the session has not read, and none it has read" in {
+      val never = () => false
       // Nothing runs, and the session waits on Q1: the waiter stays until Q1 is settled, and the host, which finds it running, gives it the end.
-      val session = new Session(_ => (), _.units.settled(answered(1, "Yes")))
+      val session = new Session(_ => (), _.units.settled(answered(1, "Yes"), never))
       try {
         SessionWaiters.create(session.directory)
         session.units.watching(question(1))
         val outcome = session.await()
         assert(outcome == WaitOutcome.Ended(Nil, Nil, List(answered(1, "Yes"))) && session.pauses == 2, outcome.toString)
-        assert(SessionWait.lines(session.directory, outcome) == List("question Q1 \"Question 1\" answered: Yes"))
-        assert(SessionUnits.read(session.directory).last == SessionUnitEvent.Settled(answered(1, "Yes"), true))
-        // An end written while no waiter ran belongs to the session's next turn end: no waiter reports it, then or later.
+        assert(SessionWait.lines(session.directory, outcome) == List("question Q1 \"Question 1\" answered: \"Yes\""))
+        assert(SessionUnits.read(session.directory).last == SessionUnitEvent.Settled(answered(1, "Yes"), Some(Slot)))
+        // An end written while no waiter ran is given to none. A waiter that starts later reports it and the one a waiter was given,
+        // since the session has read neither: the report of a waiter that was killed is not lost. One that is asked for what is
+        // settled from some event on, or from now on, leaves out what was written before.
         session.units.watching(question(2))
-        session.units.settled(answered(2, "No"))
-        assert(SessionUnits.read(session.directory).last == SessionUnitEvent.Settled(answered(2, "No"), false))
-        assert(session.await() == WaitOutcome.Idle() && session.pauses == 2)
-        assert(SessionQuestions.unannounced(SessionUnits.read(session.directory), 0) == List(answered(2, "No")))
+        session.units.settled(answered(2, "No"), never)
+        val events = SessionUnits.read(session.directory)
+        assert(events.last == SessionUnitEvent.Settled(answered(2, "No"), None))
+        assert(session.await() == WaitOutcome.Ended(Nil, Nil, List(answered(1, "Yes"), answered(2, "No"))) && session.pauses == 2)
+        assert(session.awaitAs(Slot, SessionWait.After.Events(events.size - 1)) == WaitOutcome.Ended(Nil, Nil, List(answered(2, "No"))))
+        assert(session.awaitAs(Slot, SessionWait.After.Now) == WaitOutcome.Idle() && session.pauses == 2)
+        // What the session has read is reported by nothing.
+        session.units.released(question(1)); session.units.released(question(2))
+        assert(session.await() == WaitOutcome.Idle() && SessionAwaited.unread(SessionUnits.read(session.directory), 0, events.size + 2).isEmpty)
       } finally session.close()
-      // A unit that ends and a Question that is settled meanwhile are reported together, and a Question the session no longer waits on ends the wait for it.
+      // A unit that ends and an item that is settled meanwhile are reported together, and the session reading what a waiter was
+      // about to leave for keeps the waiter: its reason is gone.
       val unit = attempt(1)
-      val both = new Session(_.units.settled(answered(3, "Both")), _.units.ended(over(unit, "Completed")), _.units.released(question(4)))
+      val both = new Session(_.units.settled(answered(3, "Both"), never), _.units.ended(over(unit, "Completed")), _.units.released(question(4)))
       try {
         SessionWaiters.create(both.directory)
         both.units.started(unit); both.units.watching(question(3)); both.units.watching(question(4))
-        assert(both.await(unit) == WaitOutcome.Ended(Nil, List(unit), List(answered(3, "Both"))) && both.pauses == 1)
+        assert(both.awaitAs(Slot, SessionWait.After.Now, unit) == WaitOutcome.Ended(Nil, List(unit), List(answered(3, "Both"))) && both.pauses == 1)
+        both.units.released(question(3))
         assert(both.await(unit) == WaitOutcome.Ended(List(over(unit, "Completed")), Nil, Nil) && both.pauses == 2)
         assert(both.await() == WaitOutcome.Idle() && both.pauses == 3)
       } finally both.close()
+      // The end is given to the waiter of the lowest slot that runs, and to no other: a second waiter stays for what it waits for.
+      val shared = new Session()
+      try {
+        SessionWaiters.create(shared.directory)
+        shared.units.watching(question(5))
+        val (low, _) = SessionWaiters.hold(shared.directory, 3L)(())
+        val (high, _) = SessionWaiters.hold(shared.directory, 900000L)(())
+        try {
+          shared.units.settled(answered(5, "One"), never)
+          val written = SessionUnits.read(shared.directory)
+          assert(written.last == SessionUnitEvent.Settled(answered(5, "One"), Some(3L)))
+          assert(SessionAwaited.handed(written, 1, 3L) == List(answered(5, "One")) && SessionAwaited.handed(written, 1, 900000L).isEmpty)
+          // Asking whether a waiter runs takes the turn the host decides in: a look never passes for a waiter.
+          assert(SessionWaiters.present(shared.directory))
+        } finally { low.close(); high.close() }
+        assert(!SessionWaiters.present(shared.directory))
+        shared.units.watching(question(6))
+        shared.units.settled(answered(6, "None"), never)
+        assert(SessionUnits.read(shared.directory).last == SessionUnitEvent.Settled(answered(6, "None"), None))
+      } finally shared.close()
     }
     "tell a process of the checkout how an attached session's host stands: unrecorded, gone, or running with its standing units and its waiter" in {
       val configuration = Files.createTempDirectory("cq-checkout-")
@@ -174,7 +206,7 @@ final class SessionWaitLocal extends AnyWordSpec {
         session.units.started(unit)
         assert(sessions.view(id) == HostView.Running(session.directory, List(unit), Nil, false, Some("/opt/cq/bin/cq wait")))
         // A `cq wait` on the session is seen for as long as it runs, by its lock and without knowing its process.
-        val waiter = SessionWaiters.hold(session.directory)(())._1
+        val waiter = SessionWaiters.hold(session.directory, Slot)(())._1
         try assert(sessions.view(id) == HostView.Running(session.directory, List(unit), Nil, true, Some("/opt/cq/bin/cq wait")))
         finally waiter.close()
         session.units.ended(over(unit, "Completed"))
@@ -194,7 +226,7 @@ final class SessionWaitLocal extends AnyWordSpec {
         Files.writeString(session.directory.resolve(SessionUnits.File), line, StandardOpenOption.APPEND)
         assert(session.await() == WaitOutcome.Ended(List(over(unit, "Completed")), Nil, Nil) && session.pauses == 1)
       } finally session.close()
-      val refused = intercept[SessionWait.NotASession](new SessionWait(Files.createTempDirectory("cq-no-session-"), () => ()))
+      val refused = intercept[SessionWait.NotASession](new SessionWait(Files.createTempDirectory("cq-no-session-"), () => (), Slot))
       assert(refused.getMessage.contains("is not a CQ session directory"))
     }
   }

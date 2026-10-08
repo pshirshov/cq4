@@ -17,7 +17,7 @@ final case class AttachedChannels(input: InputStream, output: OutputStream, owne
 final class AttachedProgram(config: SupervisorConfig, authority: SupervisorAuthority, gateway: AttachedGateway,
   dispatch: DispatchController, units: DispatchUnits, integrations: IntegrationController, combinations: CombinationController, revalidations: RevalidationController,
   watchdog: SupervisorWatchdog, channels: AttachedChannels, clock: Clock, local: LocalControlServer,
-  codex: AttachedCodexUsage, cleanup: WorkspaceCleanup, release: SessionRelease, claims: SessionClaims, location: ProjectLocation, wait: WaitCommand, questions: QuestionWatch,
+  codex: AttachedCodexUsage, cleanup: WorkspaceCleanup, release: SessionRelease, claims: SessionClaims, location: ProjectLocation, wait: WaitCommand, awaited: AwaitedWatch,
   logger: IzLogger) {
   private val sessions = new AttachedSessions(location.directory)
   private val MaxRecordBytes = 65536
@@ -39,7 +39,8 @@ final class AttachedProgram(config: SupervisorConfig, authority: SupervisorAutho
     require(run.copy(attempt = run.attempt.copy(startedAt = config.run.attempt.startedAt)) == config.run, "Session record differs from the session of this host")
     HostFiles.immutable(file, HostFiles.encode(SupervisorRun_JsonCodec, run), MaxRecordBytes)
     HostFiles.immutable(config.directory.resolve("settings.json"), HostFiles.encode(SupervisorSettings_JsonCodec, config.settings), MaxRecordBytes)
-    SessionOwner.record(config.directory, ProcessIdentity(channels.owner.pid, channels.owner.startMillis))
+    HostFiles.immutable(config.directory.resolve("owner.json"), io.circe.Json.obj("pid" -> io.circe.Json.fromLong(channels.owner.pid),
+      "startMillis" -> io.circe.Json.fromLong(channels.owner.startMillis)).noSpaces, 1024)
     SessionWaiters.create(config.directory)
     sessions.record(run.attempt.session, AttachedHostRecord(config.directory.toString, wait.line))
     queue.enqueue(0, DeliveryBatch(List(
@@ -55,9 +56,10 @@ final class AttachedProgram(config: SupervisorConfig, authority: SupervisorAutho
     logger.warn(s"Attached usage observation failed: $problem")
   }}.uninterruptible
   private val monitor: Task[Nothing] = (observe(codex.poll(authority.collector)) *> ZIO.sleep(zio.Duration.fromSeconds(5))).forever
-  // The Questions the session waits on are read at the interval at which the host renews a claim; a round that fails is made again.
-  private val watch: Task[Nothing] = (ZIO.sleep(zio.Duration.fromJava(ClaimRenewal.Default.tick)) *> ZIO.attemptBlocking(questions.poll())
-    .catchAll(error => ZIO.succeed(logger.warn(s"The Questions this session waits on were not read: ${error.getMessage}")))).forever
+  // What the session waits on a person for is read at the interval at which the host renews a claim. A round that fails is made
+  // again, whatever fails in it and in saying so; a host that is stopping ends its round between two requests.
+  private val watch: Task[Nothing] = (ZIO.sleep(zio.Duration.fromJava(ClaimRenewal.Default.tick)) *> ZIO.attemptBlocking(awaited.poll(() => watchdog.stopping))
+    .catchAllCause(cause => ZIO.attempt(logger.warn(s"What this session waits on a person for was not read: ${cause.squash.getMessage}")).ignore)).forever
   private def finish(peer: StdioPeer): Task[Unit] =
     (ZIO.succeed(peer.close()) *> shutdown *> ZIO.foreachDiscard(recorded.get())(run => observe(codex.finish(authority.collector)) *>
       ZIO.attemptBlocking {
@@ -91,6 +93,9 @@ final class AttachedProgram(config: SupervisorConfig, authority: SupervisorAutho
   }
   def run: Task[Unit] = ZIO.runtime[Any].flatMap { runtime => ZIO.acquireReleaseWith(
     ZIO.attempt {
+      // Known to the hooks of the checkout from here on, whether or not the session ever records anything.
+      SessionOwner.provision(config.directory, ProcessIdentity(channels.owner.pid, channels.owner.startMillis))
+      sessions.provision(config.run.attempt.session, config.directory)
       val peer = new StdioPeer(channels.input, channels.output, channels.owner, limits, () => {
         watchdog.beginShutdown()
         Unsafe.unsafe { implicit unsafe => runtime.unsafe.fork(shutdown.orDie); () }

@@ -167,13 +167,14 @@ object DriverPolicy {
   }
 
   // What a set waits for a person on: its ready items that only a person settles, and such items that block one of its members.
-  def awaited(snapshot: WorksetPreview): List[ItemId] = {
+  def awaiting(snapshot: WorksetPreview): List[ItemSummary] = {
     val items = (snapshot.advanceable.map(_.item) ++ snapshot.context.map(_.item)).map(item => item.id -> item).toMap
     val waiting = snapshot.readiness.filter(_.ready).map(entry => items(entry.item)).filter(awaitsUser)
     val blockers = snapshot.readiness.flatMap(_.reasons).collect { case WorksetReason.Blocked(prerequisite) => prerequisite }.distinct
       .flatMap(items.get).filter(awaitsUser)
-    (waiting ++ blockers).map(_.id).distinct
+    (waiting ++ blockers).distinctBy(_.id)
   }
+  def awaited(snapshot: WorksetPreview): List[ItemId] = awaiting(snapshot).map(_.id)
 
   // The prerequisites outside the advanceable set that keep its items from being ready. The drive cannot change them, so the stop names
   // them: the first MaxBlockersNamed in ledger order, each with as many of the items it blocks, and a count of the rest.

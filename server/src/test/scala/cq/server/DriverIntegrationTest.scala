@@ -56,7 +56,7 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
   private final case class Fixture(local: LocalWorkspaceFixture, owner: Scope, authority: SupervisorAuthority, controller: IntegrationController,
     combinations: CombinationController, workflow: AttachedWorkflow, driver: AttachedDriver, registry: DriverInspector, collector: Collector,
     task: ItemId, reviewer: ArtifactId, candidate: GitCommit, fence: Fence, session: java.nio.file.Path, gateway: Json => Task[Json], jobs: JobSupervisor,
-    units: DispatchUnits, members: List[ItemRevision], worker: ArtifactId, limits: HostLimits, questions: QuestionWatch) {
+    units: DispatchUnits, members: List[ItemRevision], worker: ArtifactId, limits: HostLimits, questions: AwaitedWatch) {
     /** What the host retains about the Git job of an integration: its record with the reason it stopped, the evidence its executor left, its diagnostics and the target. */
     def gitJob(id: IntegrationId): Task[String] = jobs.status(owner, AttemptId(id.value)).either.flatMap(record => ZIO.attemptBlocking {
       import scala.jdk.CollectionConverters.*
@@ -220,7 +220,7 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
         new OperatorRequirements(""), children, controller, combinations, revalidations, driver)
       // The gateway of a Claude Code session: its Context reads no native Codex usage.
       attached = config.copy(run = run.copy(attempt = governor.copy(harness = Harness.Claude)))
-      questions = new QuestionWatch(authority.governor, config.project.project, config.directory, problem => throw new IllegalStateException(problem))
+      questions = new AwaitedWatch(authority.governor, config.project.project, config.directory, problem => throw new IllegalStateException(problem), true)
       served = new AttachedGateway(attached, authority, new McpSchemas, null, workflow, null, null, driver, new SessionClaims(config.owner, authority.governor, logstage.IzLogger.NullLogger),
         WaitCommand(Some("/opt/cq/bin/cq")), questions)
       idle = java.time.Duration.ofMinutes(10)
@@ -445,15 +445,15 @@ print(json.dumps({"type": "turn.completed", "usage": {"input_tokens": 10, "cache
           _ <- operator(change(Mutation.Reference(gated.id, gated.revision, Relation.BlockedBy, gate.id, gate.revision, true)))
           _ <- f.sessionTool(SessionCommand_JsonCodec.encode(context,
             SessionCommand.Workflow(RequestId(uuid), WorkflowRequest.Advance(Set(gated.id), WorkflowPhase.Work), "Advance the gated Task", None)).noSpaces)
-          _ <- ZIO.attemptBlocking(f.questions.poll())
+          _ <- ZIO.attemptBlocking(f.questions.poll(() => false))
           _ <- ZIO.attempt(assert(events == List(SessionUnitEvent.Watching(own), SessionUnitEvent.Watching(gate.id)), events.toString))
           // The session reads its own Question after the operator answered it: nothing is left to announce for it. The other is announced.
           _ <- answer(own, "Read by the session") *> answer(gate.id, "Found by the host")
           _ <- tool("read", ReadInput_JsonCodec.encode(context, ReadInput(f.owner.project, ReadSelection.ItemDetail(own))))
-          _ <- ZIO.attemptBlocking(f.questions.poll())
+          _ <- ZIO.attemptBlocking(f.questions.poll(() => false))
           title <- view(gate.id).map(_.draft.title)
           _ <- ZIO.attempt(assert(events.drop(2) == List(SessionUnitEvent.Released(own),
-            SessionUnitEvent.Settled(QuestionEnd(gate.id, title, QuestionStatus.Answered, Some("Found by the host")), false)), events.toString))
+            SessionUnitEvent.Settled(AwaitedEnd(gate.id, title, "Answered", Some("Found by the host")), None)), events.toString))
         } yield ()
       }
     }

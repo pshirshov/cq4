@@ -66,11 +66,21 @@ function ended(end) {
   return `CQ: ${end.unit.kind.toLowerCase()} ${end.unit.id}${items} ended: ${end.phase}` + (end.next === null ? "" : `, next ${end.next}`) +
     (end.blocker === null ? "" : `, blocker: ${end.blocker.replace(/\s+/g, " ")}`);
 }
-// One line per Question `cq wait` reported as settled, as the host words it (SessionQuestions.described).
-const ANSWER_CODE_POINTS = 300;
+// One line per item `cq wait` reported as settled, as the host words it (SessionAwaited.described): user text on one line, cut and
+// marked when it is long, and quoted with `\` and `"` escaped.
+const SETTLED_TITLE_CODE_POINTS = 80;
+const SETTLED_DETAIL_CODE_POINTS = 300;
+const AWAITED_KIND = { Questions: "question", OperatorActions: "operator action" };
+function quoted(text, limit) {
+  const points = Array.from(text.replace(/[\p{Cc}\u2028\u2029]/gu, " ").replace(/ +/g, " ").replace(/^ | $/g, ""));
+  const cut = points.length <= limit ? points.join("") : points.slice(0, limit).join("") + "…";
+  return '"' + cut.replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"';
+}
 function settled(end) {
-  const line = text => Array.from(text.replace(/\s+/g, " ").trim()).slice(0, ANSWER_CODE_POINTS).join("");
-  return `CQ: question ${reference(end.question)} "${line(end.title)}" ${end.status.toLowerCase()}` + (end.answer === null ? "" : `: ${line(end.answer)}`);
+  const kind = AWAITED_KIND[end.item.ledger];
+  if (kind === undefined) throw new Error("No session waits on a person for an item of " + end.item.ledger);
+  return `CQ: ${kind} ${reference(end.item)} ${quoted(end.title, SETTLED_TITLE_CODE_POINTS)} ${end.status.toLowerCase()}` +
+    (end.detail === null ? "" : `: ${quoted(end.detail, SETTLED_DETAIL_CODE_POINTS)}`);
 }
 const SETTLED_ACT = "Read each of them with cq_read (ItemDetail) and act on it before you end your turn.";
 // An item title is user text: it is shown on one line, without control characters and bounded in length.
@@ -225,26 +235,38 @@ export default async function (pi) {
   // works on nothing. Whether the drive stopped for user input: the host decides such a drive anew when a turn ends.
   let waiting = false;
   let resting = false;
-  function watch(context) {
+  // How many events of the session the host had taken into account when it last said what was settled: a waiter that starts after
+  // a turn end reports what was settled from there on, so that nothing is missed while it starts.
+  let seen = 0;
+  const say = lines => pi.sendMessage({ customType: "cq-wait", content: lines.join("\n"), display: true, details: {} }, { triggerTurn: true });
+  // `after` is the number of events from which the waiter reports what was settled before it began, or "now" for none of it.
+  function watch(context, after) {
     if (waiter !== undefined) { const stale = waiter; waiter = undefined; stale.kill("SIGTERM"); }
     if ((working.size === 0 && !waiting) || connection === undefined) return;
     const named = [...working.values()].flatMap(unit => ["--" + unit.kind.toLowerCase(), unit.id]);
-    const child = spawn(configuration.command, ["wait", "--session", directory, ...named, "--json"],
+    const child = spawn(configuration.command, ["wait", "--session", directory, ...named, "--after", String(after), "--json"],
       { cwd: configuration.directory, env: process.env, stdio: ["ignore", "pipe", "inherit"], detached: false });
     waiter = child;
     const chunks = [];
     let size = 0;
     child.stdout.on("data", chunk => { size += chunk.length; if (size <= MAX_WAIT_OUTPUT_BYTES) chunks.push(chunk); });
     const failed = cause => {
-      if (!restarted) { restarted = true; watch(context); return; }
+      if (!restarted) { restarted = true; watch(context, after); return; }
       context.ui.notify("CQ waiter failed twice: " + cause + "; this session is not told when its running work ends. " +
         "Read its state with cq_dispatch Status; a drive continues with resume directives", "error");
       if (driving && context.isIdle()) void proceed(context);
     };
     child.once("error", error => { if (waiter === child) { waiter = undefined; failed("it could not start: " + error.message); } });
     child.once("close", code => {
-      // A waiter that was replaced or stopped reports nothing: its successor names the same units.
-      if (waiter !== child) return;
+      // A waiter that was replaced or stopped reports no unit: its successor names the same units. What the host gave to it
+      // alone before it was stopped, an item a person settled, is still said.
+      if (waiter !== child) {
+        try {
+          const [name, body] = variant(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+          if (code === 0 && size <= MAX_WAIT_OUTPUT_BYTES && name === "Ended" && body.settled.length > 0) say([...body.settled.map(settled), SETTLED_ACT]);
+        } catch { /* it was stopped before it reported anything */ }
+        return;
+      }
       waiter = undefined;
       try {
         if (size > MAX_WAIT_OUTPUT_BYTES) throw new Error("its output exceeds its byte bound");
@@ -264,8 +286,8 @@ export default async function (pi) {
           if (body.units.length > 0) lines.push("Read details with cq_dispatch Status (waitMillis 0) only if you need them.");
           if (body.settled.length > 0) lines.push(...body.settled.map(settled), SETTLED_ACT);
           // Reaches the model at its next tool-call boundary when it is busy, and starts a turn when it is idle.
-          pi.sendMessage({ customType: "cq-wait", content: lines.join("\n"), display: true, details: {} }, { triggerTurn: true });
-          watch(context);
+          say(lines);
+          watch(context, "now");
         } else if (name === "Idle") {
           // The session no longer waits on a Question, and nothing is reported.
           restarted = false;
@@ -283,7 +305,7 @@ export default async function (pi) {
     const key = UNIT_KIND[name] + " " + id;
     if (working.has(key)) return;
     working.set(key, { kind: UNIT_KIND[name], id });
-    watch(context);
+    watch(context, "now");
   }
   const show = (context, status) => context.ui.setStatus(DRIVER_FOOTER, status === null ? DRIVER_OFF : status.line);
   // The session key is Pi's own session identifier; the attached host adds its attached session.
@@ -309,10 +331,11 @@ export default async function (pi) {
     try { reply = await connection.rpc("cq/settled", {}, undefined, REQUEST_MILLIS); }
     catch (error) { context.ui.notify("CQ could not read which Questions of this session were settled: " + error.message, "error"); return false; }
     waiting = reply.waiting === true;
+    seen = reply.events;
     // A waiter that failed twice is not started again for it: the turn ends still say what was settled.
-    if (waiter === undefined && waiting && working.size === 0 && !restarted) watch(context);
+    if (waiter === undefined && waiting && working.size === 0 && !restarted) watch(context, seen);
     if (reply.lines.length === 0) return false;
-    pi.sendMessage({ customType: "cq-wait", content: [...reply.lines.map(line => "CQ: " + line), SETTLED_ACT].join("\n"), display: true, details: {} }, { triggerTurn: true });
+    say([...reply.lines.map(line => "CQ: " + line), SETTLED_ACT]);
     return true;
   }
   // The continuation decision is the host's: a directive is submitted unchanged, a stop is shown and nothing is sent.
@@ -338,8 +361,8 @@ export default async function (pi) {
       // Work of the host is in flight and the waiter runs: nothing is sent, and its message starts the turn that continues the cycle.
       show(context, body.status);
     } else if (name === "Stop") {
-      // A drive that rests and is still off was decided as before: nothing new is shown.
-      if (!driving && body.stopped.reason === "Off") return;
+      // A drive that rests and was decided as before: the host says nothing, and nothing new is shown but what it waits for now.
+      if (!driving && body.stopped.reason === "UserInputRequired" && body.messages.length === 0) { show(context, body.status); return; }
       driving = false;
       resting = body.stopped.reason === "UserInputRequired";
       show(context, body.status);
@@ -393,7 +416,8 @@ export default async function (pi) {
       started.send({ jsonrpc: "2.0", method: "notifications/initialized" });
       const inventory = await started.rpc("tools/list", {}, undefined, REQUEST_MILLIS);
       if (!isDeepStrictEqual(inventory.tools, configuration.tools)) throw new Error("CQ tool contracts changed; rerun cq configure pi and restart");
-      const located = await started.rpc("cq/session", {}, undefined, REQUEST_MILLIS);
+      // The host watches what the session waits on a person for only for an extension that can say when it is settled.
+      const located = await started.rpc("cq/session", { settled: true }, undefined, REQUEST_MILLIS);
       if (typeof located.directory !== "string") throw new Error("CQ host did not name its session directory");
       directory = located.directory;
       working.clear();
@@ -415,7 +439,7 @@ export default async function (pi) {
       directory = undefined;
       working.clear();
       waiting = false;
-      watch(context);
+      watch(context, "now");
       await active.close();
     }
   });
@@ -428,11 +452,13 @@ export default async function (pi) {
     catch (error) { context.ui.setStatus(DRIVER_FOOTER, "CQ driver status unavailable: " + error.message); }
   });
   pi.on("agent_settled", async (_event, context) => {
-    if (driving && outcome !== "completed") {
+    // A turn that did not complete parks the driver, and asks for no continuation whether or not the park succeeded.
+    const interrupted = driving && outcome !== "completed";
+    if (interrupted) {
       context.ui.notify(`CQ driver: the last turn ended ${outcome}, so the driver parks instead of continuing`, "warning");
       await park(context);
     }
-    if (await answered(context)) return;
+    if (await answered(context) || interrupted) return;
     // A drive that rests is asked to continue only when the host works on nothing for the session.
     if (driving || (resting && outcome === "completed" && working.size === 0)) await proceed(context);
   });

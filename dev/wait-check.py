@@ -61,10 +61,12 @@ class Session:
 def main():
     command = sys.argv[1:]
 
-    def wait(session, *arguments, after=None, checkout=None):
+    def wait(session, *arguments, after=None, checkout=None, started=None):
         """Runs `cq wait`; `after` runs once the command has been waiting for a while, on the side of the host. Without a session it runs in `checkout`."""
         located = [] if session is None else ["--session", str(session)]
         process = subprocess.Popen(command + ["wait", *located, *arguments], cwd=checkout, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if started is not None:
+            started.append(process)
         acted = None
         if after is not None:
             def act():
@@ -136,21 +138,32 @@ def main():
         code, output, _ = wait(session.directory)
         assert code == HOST_GONE and "is not running" in output and f"attempt {second['id']} on T3" in output and f"cq job upload --session {session.directory}" in output, output
 
-        # D164: a Question the session waits on keeps the command waiting although the host works on nothing; the end the host
-        # gives to the waiter that runs ends the wait. An end the host kept for the session's turn end is reported by no waiter.
+        # D164: what the session waits on a person for keeps the command waiting although the host works on nothing. The end the
+        # host gives to this waiter, by its slot, which is its process identifier, ends the wait; one given to another slot does not.
         asking = Session(root)
         question = lambda number: {"project": {"value": PROJECT}, "ledger": "Questions", "number": str(number)}
-        answered = {"question": question(7), "title": "Which way", "status": "Answered", "answer": "The second\nway"}
-        asking.event({"Watching": {"question": question(7)}})
-        code, output, errors = wait(asking.directory, after=lambda: asking.event({"Settled": {"end": answered, "waiter": True}}))
-        assert code == 0 and output == 'question Q7 "Which way" answered: The second way\n', (code, output, errors)
-        asking.event({"Watching": {"question": question(8)}})
-        asking.event({"Settled": {"end": {**answered, "question": question(8)}, "waiter": False}})
+        answered = lambda number, slot: {"Settled": {"end": {"item": question(number), "title": "Which \"way\"", "status": "Answered", "detail": "The second\nway"}, "waiter": slot}}
+        asking.event({"Watching": {"item": question(7)}})
+        started = []
+        def give():
+            asking.event(answered(7, str(started[0].pid + 1)))
+            time.sleep(1)
+            assert started[0].poll() is None, "cq wait ended for an end the host gave to another waiter"
+            asking.event({"Watching": {"item": question(8)}})
+            asking.event(answered(8, str(started[0].pid)))
+        code, output, errors = wait(asking.directory, "--after", "now", after=give, started=started)
+        assert code == 0 and output == 'question Q8 "Which \\"way\\"" answered: "The second way"\n', (code, output, errors)
+        # A waiter that starts later reports what the session has not read, whoever was given it: the report of a waiter that was
+        # killed is not lost. From a number of events on, or from now on, it leaves out what was written before.
+        code, output, errors = wait(asking.directory, "--json")
+        assert code == 0 and [end["item"] for end in json.loads(output)["Ended"]["settled"]] == [question(7), question(8)], (code, output, errors)
+        code, output, errors = wait(asking.directory, "--after", "3", "--json")
+        assert code == 0 and [end["item"] for end in json.loads(output)["Ended"]["settled"]] == [question(8)], (code, output, errors)
+        assert wait(asking.directory, "--after", "now", "--json")[:2] == (0, '{"Idle":{}}\n')
+        # What the session has read is reported by nothing.
+        asking.event({"Released": {"item": question(7)}})
+        asking.event({"Released": {"item": question(8)}})
         assert wait(asking.directory, "--json")[:2] == (0, '{"Idle":{}}\n')
-        asking.event({"Watching": {"question": question(9)}})
-        withdrawn = {"question": question(9), "title": "Dropped", "status": "Withdrawn", "answer": None}
-        code, output, errors = wait(asking.directory, "--json", after=lambda: asking.event({"Settled": {"end": withdrawn, "waiter": True}}))
-        assert code == 0 and json.loads(output) == {"Ended": {"units": [], "active": [], "settled": [withdrawn]}}, (code, output, errors)
         asking.host_ends()
 
         code, output, _ = wait(root)

@@ -86,13 +86,13 @@ object WorkspaceCleanup {
   def unrecorded(directory: Path): Boolean = {
     def names(path: Path): Set[String] = Using.resource(Files.list(path))(_.iterator().asScala.map(_.getFileName.toString).toSet)
     val journal = directory.resolve("journal")
-    names(directory).subsetOf(Set("journal")) && (!Files.exists(journal, LinkOption.NOFOLLOW_LINKS) || names(journal).subsetOf(Set("owner.lock")))
+    names(directory).subsetOf(Set("journal")) && (!Files.exists(journal, LinkOption.NOFOLLOW_LINKS) || names(journal).subsetOf(Set("owner.lock", cq.host.SessionOwner.Starter)))
   }
   /** Removes a directory that `unrecorded` holds true of: its lock, its journal directory and itself, and nothing else. A file that
     * appeared since is left with everything above it. */
   def discard(directory: Path): Unit = {
     val journal = directory.resolve("journal")
-    try List(journal.resolve("owner.lock"), journal, directory).foreach(Files.deleteIfExists(_))
+    try List(journal.resolve(cq.host.SessionOwner.Starter), journal.resolve("owner.lock"), journal, directory).foreach(Files.deleteIfExists(_))
     catch { case _: java.nio.file.DirectoryNotEmptyException => () }
   }
 

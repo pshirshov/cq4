@@ -95,6 +95,7 @@ final class DriverHook(entry: () => DriverEntry, sessions: SessionViews) {
     // The stop is blocked for `order` as well, which is said first: a directive stays the last line. What was only posted is said
     // to the session too, since its turn goes on.
     def blocked(order: String): Answer = copy(reason = Some((order :: reason.orElse(posted).toList).mkString("\n")))
+    def posting(text: String): Answer = copy(posted = Some((posted.toList :+ text).mkString("\n")))
   }
   private def message(text: String): Answer = Answer(None, Some(text))
   // A stop that would leave the drive waiting for something that will not come ends the drive here, where it can still be said.
@@ -139,7 +140,7 @@ final class DriverHook(entry: () => DriverEntry, sessions: SessionViews) {
   private def resting(dialect: HookDialect, session: SessionId, host: HostView.Running, answer: Answer): Answer =
     if (host.standing.nonEmpty) answer
     else {
-      val key = host.watched.map(question => "Question " + SessionUnits.reference(question)).sorted.mkString(",")
+      val key = host.watched.map(question => "Awaited " + SessionUnits.reference(question)).sorted.mkString(",")
       dialect.resting.filter(_ => answer.reason.isEmpty && host.watched.nonEmpty && !host.waited) match {
         case Some(order) if !sessions.asked(session).contains(key) =>
           sessions.ask(session, Some(key))
@@ -149,10 +150,22 @@ final class DriverHook(entry: () => DriverEntry, sessions: SessionViews) {
       }
     }
 
-  // The driver is asked about the session it names, which is bound by token: one that is on, or that rests on user input. The
-  // Questions are those of the session whose host the harness of this hook started, driven or not; where the hook cannot see that
-  // process, they are those of the session the driver names. What that host wrote about them is said before the turn ends, once
-  // for each end.
+  // What the host of `session` wrote about what the session waits on a person for: each end the session has not read is said
+  // once, the first ones by their line and the rest by their reference, so that a directive after them stays whole.
+  private def awaited(dialect: HookDialect, session: SessionId, driven: Answer): Answer = sessions.view(session) match {
+    case host: HostView.Running =>
+      val answer = resting(dialect, session, host, driven)
+      val settled = sessions.announce(session)
+      val (said, more) = settled.splitAt(MaxSettled)
+      val rest = if (more.isEmpty) Nil else List(s"- and ${more.size} more: ${more.map(end => SessionUnits.reference(end.item)).mkString(", ")}")
+      if (settled.isEmpty) answer else answer.blocked((Settled :: said.map("- " + SessionAwaited.described(_)) ::: rest ::: List(SessionAwaited.Act)).mkString("\n"))
+    case _ => driven
+  }
+
+  // The driver is asked about the session it names, which is bound by token: one that is on, or that rests on user input. What a
+  // session waits on a person for is that of the session whose host the harness of this hook started, driven or not; where the
+  // hook finds no such host, it is that of the session the driver names. A failure in that part leaves what the driver answered as
+  // it is and is said beside it: a directive the driver issued is handed to the session whatever else fails.
   private def stop(dialect: HookDialect, call: DriverCall): String = {
     val status = entry().status(call) match {
       case DriverReply.Status(value) => value
@@ -169,15 +182,9 @@ final class DriverHook(entry: () => DriverEntry, sessions: SessionViews) {
         case unseen => if (on) answered(dialect, call, true, Some(unseen)) else Answer(None, None)
       }
     }
-    sessions.owned.orElse(bound).fold(driven) { session =>
-      sessions.view(session) match {
-        case host: HostView.Running =>
-          val answer = resting(dialect, session, host, driven)
-          val settled = sessions.announce(session)
-          if (settled.isEmpty) answer else answer.blocked((Settled :: settled.map("- " + SessionQuestions.described(_)) ::: List(SessionQuestions.Act)).mkString("\n"))
-        case _ => driven
-      }
-    }.rendered
+    (try sessions.owned(DriverEntry.identify(call)._1.session).orElse(bound).fold(driven)(awaited(dialect, _, driven)) catch {
+      case NonFatal(error) => driven.posting(s"CQ Stop hook could not read what this session waits on a person for: ${describe(error)}")
+    }).rendered
   }
 }
 
@@ -191,6 +198,10 @@ object DriverHook {
     "or a CQ package without the waiter started it. Nothing would continue the drive."
   val Unwaited = "CQ driver stopped: this session was told how to wait for its running work and stopped again without waiting, so nothing would continue the drive. Still running:"
   val Settled = "CQ: a person settled what this session waits on:"
+  // The ends a blocked stop says by their line. A line has at most some 800 characters (SessionAwaited.MaxTitle and MaxDetail, both
+  // quoted), so these stay well below the 10,000 characters Claude Code passes to the model from one hook; that this bound holds
+  // for the reason of a blocked stop as well is assumed, not established.
+  val MaxSettled = 8
   private val Restart = "Restart the harness session and drive again; cq job upload --session DIR recovers what a host retained."
   private val Background = "Run exactly this command now with the Bash tool as a background command (run_in_background true, timeout 7200000), then end your turn: "
   private def command(value: Option[String]): String = s"`${value.getOrElse(throw new IllegalStateException("The CQ host of this session named no wait command"))}`"
@@ -207,7 +218,7 @@ object DriverHook {
     HookDialect(Harness.Claude, "/cq:drive", "/cq:park", s"$Instruction Invoke it as the cq:advance command through the Skill tool with exactly these arguments:", true,
       (units, wait) => s"CQ driver: work of this session still runs ($units) and no cq wait runs for it, so nothing would start your next turn. " +
         Background + command(wait),
-      Some((questions, wait) => s"CQ: this session waits on $questions and no cq wait runs for it, so nothing would start your next turn when a person settles one of them. " +
+      Some((awaited, wait) => s"CQ: this session waits on $awaited and no cq wait runs for it, so nothing would start your next turn when a person settles one of them. " +
         Background + command(wait))),
     // Nothing wakes an idle Codex session when a background command exits (openai/codex#32188): it waits inside its turn, in a
     // status call of the host.

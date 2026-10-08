@@ -64,7 +64,8 @@ abstract class DriverHookTest extends SpecZIO with AssertZIO {
     val words: Spelling = spelling(harness)
     val server = new ApplicationApi(application, root, runtime)
     /** The CQ directory of the checkout the hook runs in: what its attached hosts left there. */
-    val sessions = new AttachedSessions(Files.createTempDirectory("cq-hook-checkout-"))
+    val checkout: Path = Files.createTempDirectory("cq-hook-checkout-")
+    val sessions = new AttachedSessions(checkout)
     /** The processes the hook descends from, nearest first: its harness is among them when the harness runs its hooks itself. */
     var ancestors = List.empty[ProcessIdentity]
     val views = new CheckoutSessions(() => sessions, () => ancestors)
@@ -98,6 +99,18 @@ abstract class DriverHookTest extends SpecZIO with AssertZIO {
       ()
     }
     def create(value: ItemDraft): ChangeRequest = request(List(Mutation.Create(value)), Nil)
+    def link(source: ItemId, relation: Relation, target: ItemId): ChangeRequest = {
+      val (from, to) = (await(ledger.get(operator, source)), await(ledger.get(operator, target)))
+      request(List(Mutation.Reference(source, from.item.revision, relation, target, to.item.revision, true)), Nil)
+    }
+    def action(title: String): ItemDraft = draft(title, Content.OperatorAction(OperatorActionStatus.Requested, "Do it", "Evidence", None, Nil))
+    /** The operator confirms an Operator Action in the ledger. */
+    def confirm(id: ItemId, confirmation: String): Unit = {
+      val view = await(ledger.get(operator, id))
+      await(ledger.change(operator, request(List(Mutation.Replace(id, view.item.revision,
+        view.item.draft.copy(content = Content.OperatorAction(OperatorActionStatus.Confirmed, "Do it", "Evidence", Some(confirmation), Nil)))), Nil)))
+      ()
+    }
     def cursor: ChangeCursor = await(ledger.counts(operator)).cursor
     def stored(targets: Set[ItemId], through: WorkflowPhase): WorksetId = await(ledger.createWorkset(operator, targets, through)).id
     // Produces one descendant under `producer` as `scope`, holding the producer claim only for the write.
@@ -141,36 +154,46 @@ abstract class DriverHookTest extends SpecZIO with AssertZIO {
 
   private val WaitLine = "/opt/cq/bin/cq wait"
   /** The attached host of a session, as it leaves itself in its checkout and in its session directory. */
-  private final class Host(world: World, session: SessionId) extends AutoCloseable {
+  private final class Host(world: World, session: SessionId, recorded: Boolean) extends AutoCloseable {
+    def this(world: World, session: SessionId) = this(world, session, true)
     val directory: Path = Files.createTempDirectory("cq-hook-host-")
     Files.createDirectories(directory.resolve("journal"))
     private val channel = java.nio.channels.FileChannel.open(directory.resolve("journal/owner.lock"), java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.WRITE)
     private var lock = Option(channel.lock())
     SessionWaiters.create(directory)
     val units = new SessionUnits(directory)
-    world.sessions.record(session, AttachedHostRecord(directory.toString, Some(WaitLine)))
+    if (recorded) world.sessions.record(session, AttachedHostRecord(directory.toString, Some(WaitLine)))
     def works(attempt: AttemptId): SessionUnit = { val unit = SessionUnit(SessionUnitKind.Attempt, attempt.value, Nil); units.started(unit); unit }
     def finishes(unit: SessionUnit): Unit = units.ended(UnitEnd(unit, "Completed", Some("ConsiderAcceptance"), None))
     /** A `cq wait` of the session, for as long as the result is open. */
-    def waiter(): AutoCloseable = SessionWaiters.hold(directory)(())._1
-    /** The harness process that started this host, as the host leaves it in its session directory. */
-    def startedBy(owner: ProcessIdentity): Unit = SessionOwner.record(directory, owner)
-    /** What the host wrote about the Questions the session waits on, in order. */
+    def waiter(): AutoCloseable = SessionWaiters.hold(directory, 1L)(())._1
+    /** The harness process that started this host, as the host leaves it from the moment it holds its lock. */
+    def startedBy(owner: ProcessIdentity): Unit = { SessionOwner.provision(directory, owner); world.sessions.provision(session, directory) }
+    /** What the host wrote about what the session waits on a person for, in order. */
     def questions: List[SessionUnitEvent] = SessionUnits.read(directory).filter {
       case _: SessionUnitEvent.Watching | _: SessionUnitEvent.Settled | _: SessionUnitEvent.Released => true
       case _ => false
     }
-    /** A real `cq wait` of the session, running until something ends it. */
-    def waits(): java.util.concurrent.Future[WaitOutcome] = {
+    private var waiters = List.empty[java.util.concurrent.Future[WaitOutcome]]
+    /** A real `cq wait` of the session in the slot `slot`, running until something ends it. */
+    def waits(slot: Long, after: SessionWait.After): java.util.concurrent.Future[WaitOutcome] = {
       if (!Files.exists(directory.resolve("run.json"))) Files.writeString(directory.resolve("run.json"), "{}")
-      val outcome = new java.util.concurrent.FutureTask[WaitOutcome](() => new SessionWait(directory, () => Thread.sleep(5)).await(Nil))
+      val began = new java.util.concurrent.CountDownLatch(1)
+      val outcome = new java.util.concurrent.FutureTask[WaitOutcome](() => new SessionWait(directory, () => { began.countDown(); Thread.sleep(5) }, slot).await(Nil, after))
       new Thread(outcome, "cq-hook-test-waiter").start()
       val deadline = System.nanoTime() + 30000000000L
-      while (!SessionWaiters.present(directory) && !outcome.isDone) { assert(System.nanoTime() < deadline, "The waiter did not start"); Thread.sleep(5) }
+      while (began.getCount > 0 && !outcome.isDone) { assert(System.nanoTime() < deadline, "The waiter did not start"); Thread.sleep(5) }
+      waiters ::= outcome
       outcome
     }
+    /** Ends the waiters that still run. */
+    def unwaited(): Unit = {
+      waiters.foreach(_.cancel(true))
+      waiters = Nil
+      while (SessionWaiters.present(directory)) Thread.sleep(5)
+    }
     def ends(): Unit = { lock.foreach(_.release()); lock = None }
-    override def close(): Unit = { ends(); channel.close() }
+    override def close(): Unit = { unwaited(); ends(); channel.close() }
   }
 
   // One harness session: its hooks receive its session_id, and its model reaches CQ only through its attached session.
@@ -226,12 +249,12 @@ abstract class DriverHookTest extends SpecZIO with AssertZIO {
     }
     def refused(operation: => Any): Fault = try { operation; throw new IllegalStateException("The operation was admitted") } catch { case DomainFailure(fault) => fault }
     /** A domain tool call as the attached gateway makes it: the command under the session's credential, then the host's look at its result. */
-    def tool(watch: QuestionWatch, command: Command): Result = { val result = api.call(command); watch.observe(command, result); result }
-    def records(watch: QuestionWatch, value: ItemDraft): ItemId = tool(watch, Command.Change(ChangeInput(project, create(value)))) match {
+    def tool(watch: AwaitedWatch, command: Command): Result = { val result = api.call(command); watch.observe(command, result); result }
+    def records(watch: AwaitedWatch, value: ItemDraft): ItemId = tool(watch, Command.Change(ChangeInput(project, create(value)))) match {
       case Result.Changed(ack) => ack.items.head.id
       case other => throw new IllegalStateException(other.toString)
     }
-    def reads(watch: QuestionWatch, id: ItemId): Result = tool(watch, Command.Read(ReadInput(project, ReadSelection.ItemDetail(id))))
+    def reads(watch: AwaitedWatch, id: ItemId): Result = tool(watch, Command.Read(ReadInput(project, ReadSelection.ItemDetail(id))))
     def failure(reply: Json, detail: String): Unit = {
       val message = allowed(reply).get
       assert(message.startsWith("CQ driver stopped (failure): ") && message.contains(detail))
@@ -424,7 +447,7 @@ abstract class DriverHookTest extends SpecZIO with AssertZIO {
       assert(status(a.id).exists(value => value.state == DriverState.Off && value.stopped.exists(_.reason == DriverStop.Parked)) && status(b.id) == runningB)
     }
 
-    "D164: tell a session at its turn end, once, how a person settled a Question it waits on, wake its waiter with it instead when one runs, and let a session with nothing new stop" in scenarios { world =>
+    "D164: tell a session at its turn end how a person settled what it waits on, hand it to one waiter instead when waiters run, and let a session with nothing new stop" in scenarios { world =>
       import world.*
       val root = goal("Goal")
       // A drive whose one root waits for an answer rests from its first stop on: every later stop asks the driver again.
@@ -433,119 +456,151 @@ abstract class DriverHookTest extends SpecZIO with AssertZIO {
       val s = session("answers")
       s.on("G1 through=work")
       val host = new Host(world, s.scope.actor.session)
-      val watch = new QuestionWatch(s.api, project, host.directory, problem => fail(problem))
-      def end(id: ItemId, status: QuestionStatus, answer: Option[String]): QuestionEnd = QuestionEnd(id, title(id), status, answer)
+      val watch = new AwaitedWatch(s.api, project, host.directory, problem => fail(problem), true)
+      def end(id: ItemId, status: QuestionStatus, answer: Option[String]): AwaitedEnd = AwaitedEnd(id, title(id), status.toString, answer)
       def said(reply: Json): List[String] = reply.hcursor.get[String]("reason").toOption.toList.flatMap(_.linesIterator.toList)
       def announced(reply: Json): List[String] = {
         val lines = said(reply)
         if (!lines.contains(DriverHook.Settled)) Nil
         else {
-          assert(reply.hcursor.get[String]("decision") == Right("block") && lines.head == DriverHook.Settled && lines.contains(SessionQuestions.Act))
-          lines.tail.takeWhile(_ != SessionQuestions.Act).map(_.stripPrefix("- "))
+          assert(reply.hcursor.get[String]("decision") == Right("block") && lines.head == DriverHook.Settled && lines.contains(SessionAwaited.Act))
+          lines.tail.takeWhile(_ != SessionAwaited.Act).map(_.stripPrefix("- "))
         }
       }
       val stopped = allowed(s.stop())
       assert(stopped.contains("CQ driver stopped (user input required): Awaiting the user on Q1; the driver never answers questions or infers approval"), stopped.toString)
-      assert(status(s.id).exists(value => value.state == DriverState.Off && value.attached.contains(s.scope.actor.session)))
+      assert(status(s.id).exists(value => value.state == DriverState.Off && value.attached.contains(s.scope.actor.session) &&
+        value.line == "CQ driver resting: G1 through work; Awaiting the user on Q1; the driver never answers questions or infers approval"))
 
-      // The set: the Open Questions the session wrote, and those the workset of its advance workflow waits on; nothing else.
+      // The set: what the session wrote waiting, at once and without a reading, and what the workset of its advance workflow waits
+      // on, at the host's next round; nothing else.
+      val calls = server.driverReplies.size
       val own = s.records(watch, question("Asked by the session"))
       val foreign = asked("Asked by somebody else")
       assert(host.questions == List(SessionUnitEvent.Watching(own)))
       watch.enter(WorkflowRequest.Advance(Set(root), WorkflowPhase.Work))
-      watch.poll()
+      watch.poll(() => false)
       assert(host.questions == List(SessionUnitEvent.Watching(own), SessionUnitEvent.Watching(held)), host.questions.toString)
       assert(sessions.view(s.scope.actor.session) == HostView.Running(host.directory, Nil, List(own, held), false, Some(WaitLine)))
 
       // Nothing was settled: a round of the host writes nothing, and the stop announces nothing. Where a waiter can start the next
       // turn the session is told once to start it; told or not, it may stop.
-      val before = (host.questions, server.driverReplies.size)
-      watch.poll()
+      val before = host.questions
+      watch.poll(() => false)
       val first = s.stop()
       if (harness == Harness.Codex) assert(first.isNull, first.noSpaces)
       else {
         assert(said(first) == List(s"CQ: this session waits on Q2, Q1 and no cq wait runs for it, so nothing would start your next turn when a person settles one of them. " +
           s"Run exactly this command now with the Bash tool as a background command (run_in_background true, timeout 7200000), then end your turn: `$WaitLine`"), first.noSpaces)
       }
-      assert(List.fill(2)(s.stop()).forall(_.isNull) && host.questions == before._1)
-      assert(server.driverReplies.drop(0).take(server.driverReplies.size - before._2).forall {
-        case DriverReply.Stop(DriverStopped(DriverStop.Off, _), _, Nil) | _: DriverReply.Status => true
+      assert(List.fill(2)(s.stop()).forall(_.isNull) && host.questions == before)
+      assert(server.driverReplies.take(server.driverReplies.size - calls).forall {
+        case DriverReply.Stop(DriverStopped(DriverStop.UserInputRequired, _), _, Nil) | _: DriverReply.Status => true
         case _ => false
       })
 
-      // Settled with no waiter running: the next turn end says so, once. A Question outside the set is not announced.
-      settle(own, QuestionStatus.Answered, Some("Take the\nsecond  alternative"))
+      // Settled with no waiter running: the next turn end says so, once. What is outside the set is not announced. User text is
+      // on one line and quoted, so that a title cannot pass for an answer.
+      settle(own, QuestionStatus.Answered, Some("Take the\nsecond   \"alternative\" \\ answered: no"))
       settle(foreign, QuestionStatus.Answered, Some("Nobody of this session asked"))
-      watch.poll()
-      assert(host.questions.last == SessionUnitEvent.Settled(end(own, QuestionStatus.Answered, Some("Take the\nsecond  alternative")), false))
+      watch.poll(() => false)
+      assert(host.questions.last == SessionUnitEvent.Settled(end(own, QuestionStatus.Answered, Some("Take the\nsecond   \"alternative\" \\ answered: no")), None))
       val told = s.stop()
-      assert(announced(told) == List("question Q2 \"Asked by the session\" answered: Take the second alternative"), told.noSpaces)
+      assert(announced(told) == List("question Q2 \"Asked by the session\" answered: \"Take the second \\\"alternative\\\" \\\\ answered: no\""), told.noSpaces)
       assert(List.fill(2)(s.stop()).forall(reply => announced(reply).isEmpty) && !SessionUnits.read(host.directory).toString.contains("Nobody of this session"))
+      s.reads(watch, own)
+      assert(host.questions.last == SessionUnitEvent.Released(own))
 
-      // Settled while a waiter runs: the waiter reports it and ends, and no turn end announces it again.
+      // Settled while two waiters run: the host gives the end to one of them, which reports it and ends; the other stays.
       val waited = s.records(watch, question("Waited for"))
-      val waiter = host.waits()
+      watch.poll(() => false)
+      val (low, high) = (host.waits(11L, SessionWait.After.Start), host.waits(12L, SessionWait.After.Start))
       assert(allowed(s.stop()).isEmpty)
       settle(waited, QuestionStatus.Withdrawn, None)
-      watch.poll()
-      val outcome = waiter.get(30, java.util.concurrent.TimeUnit.SECONDS)
-      assert(outcome == WaitOutcome.Ended(Nil, Nil, List(end(waited, QuestionStatus.Withdrawn, None))), outcome.toString)
-      assert(SessionWait.lines(host.directory, outcome) == List("question Q4 \"Waited for\" withdrawn"))
-      assert(host.questions.last == SessionUnitEvent.Settled(end(waited, QuestionStatus.Withdrawn, None), true))
-      assert(List.fill(2)(s.stop()).forall(reply => announced(reply).isEmpty))
-      // A waiter that starts afterwards has nothing of it to report: the session still waits on the first Question only.
-      val later = host.waits()
-      assert(!later.isDone)
+      watch.poll(() => false)
+      val outcome = low.get(30, java.util.concurrent.TimeUnit.SECONDS)
+      val line = "question Q4 \"Waited for\" withdrawn"
+      assert(outcome == WaitOutcome.Ended(Nil, Nil, List(end(waited, QuestionStatus.Withdrawn, None))) && SessionWait.lines(host.directory, outcome) == List(line), outcome.toString)
+      assert(host.questions.last == SessionUnitEvent.Settled(end(waited, QuestionStatus.Withdrawn, None), Some(11L)))
+      Thread.sleep(50)
+      assert(!high.isDone, "A waiter the end was not given to ended for it")
+      // The session did not read it: the next turn end reminds it, once. A waiter that starts later reports it again, as it does
+      // what a waiter that was killed never reported, unless it is asked for what is new only.
+      assert(announced(s.stop()) == List(line) && announced(s.stop()).isEmpty)
+      assert(host.waits(13L, SessionWait.After.Start).get(30, java.util.concurrent.TimeUnit.SECONDS) == outcome)
+      val fresh = host.waits(14L, SessionWait.After.Now)
+      // Once the session has read it, nothing reports it: a waiter then waits for what the session still waits on.
+      s.reads(watch, waited)
+      val later = host.waits(15L, SessionWait.After.Start)
+      Thread.sleep(50)
+      assert(!fresh.isDone && !later.isDone && !high.isDone)
+      host.unwaited()
 
-      // A Question the session reads after it was settled is not announced: it has read it.
+      // What the session reads after it was settled is not announced: it has read it.
       val read = s.records(watch, question("Read in time"))
-      later.cancel(true)
-      while (SessionWaiters.present(host.directory)) Thread.sleep(5)
+      watch.poll(() => false)
       settle(read, QuestionStatus.Answered, Some("Read before the turn ended"))
       s.reads(watch, read)
-      watch.poll()
+      watch.poll(() => false)
       assert(host.questions.takeRight(2) == List(SessionUnitEvent.Watching(read), SessionUnitEvent.Released(read)), host.questions.toString)
       assert(announced(s.stop()).isEmpty)
 
+      // More ends than a reason names by their line: the rest are named by reference.
+      val many = (1 to DriverHook.MaxSettled + 2).toList.map(number => s.records(watch, question(s"Of many $number")))
+      watch.poll(() => false)
+      many.foreach(settle(_, QuestionStatus.Withdrawn, None))
+      watch.poll(() => false)
+      val crowded = announced(s.stop())
+      assert(crowded.size == DriverHook.MaxSettled + 1 && crowded.last == s"and 2 more: ${many.takeRight(2).map(id => "Q" + id.number).mkString(", ")}", crowded.toString)
+      many.foreach(s.reads(watch, _))
+
       // The answer the drive rested on: the same stop announces it and carries the directive of the drive, which continues.
       settle(held, QuestionStatus.Answered, Some("This way"))
-      watch.poll()
+      watch.poll(() => false)
       val continued = s.stop()
       val issued = server.driverReplies.head match { case value: DriverReply.Continue => value; case other => fail(other.toString) }
-      assert(announced(continued) == List("question Q1 \"Which way\" answered: This way") &&
+      assert(announced(continued) == List("question Q1 \"Which way\" answered: \"This way\"") &&
         said(continued).takeRight(3) == List(DriverPolicy.Rested, said(continued).takeRight(2).head, issued.directive.text) &&
         issued.directive.text.startsWith(s"${words.advance} --roots G1 --through work --start-token "), continued.noSpaces)
-      assert(status(s.id).exists(_.state == DriverState.On) && SessionQuestions.open(SessionUnits.read(host.directory)).isEmpty)
+      assert(status(s.id).exists(_.state == DriverState.On) && SessionAwaited.open(SessionUnits.read(host.directory)).isEmpty)
 
-      // A session whose turn end asks its host, as the Pi extension does, is told by the host, once.
+      // A session whose turn end asks its host, as the Pi extension does, is told by the host, once. The host watches nothing for
+      // an extension that has not said it can tell its session.
       val direct = session("asks-its-host")
       val other = new Host(world, direct.scope.actor.session)
-      val asking = new QuestionWatch(direct.api, project, other.directory, problem => fail(problem))
-      val plain = direct.records(asking, question("Asked through the host"))
-      assert(asking.settled() == (Nil, true))
-      settle(plain, QuestionStatus.Answered, Some("Yes"))
-      asking.poll()
-      assert(asking.settled() == (List(end(plain, QuestionStatus.Answered, Some("Yes"))), false) && asking.settled() == (Nil, false))
+      val asking = new AwaitedWatch(direct.api, project, other.directory, problem => fail(problem), false)
+      direct.records(asking, question("Asked before the extension spoke"))
+      asking.poll(() => false)
+      assert(other.questions.isEmpty)
+      asking.enable()
+      val plain = direct.records(asking, action("Requested of the operator"))
+      asking.poll(() => false)
+      assert(other.questions == List(SessionUnitEvent.Watching(plain)) && asking.settled() == (Nil, true, 1))
+      confirm(plain, "Done by hand")
+      asking.poll(() => false)
+      val confirmed = AwaitedEnd(plain, "Requested of the operator", "Confirmed", Some("Done by hand"))
+      assert(asking.settled() == (List(confirmed), false, 2) && asking.settled() == (Nil, false, 2))
+      assert(SessionAwaited.described(confirmed) == "operator action OA1 \"Requested of the operator\" confirmed: \"Done by hand\"")
       host.close(); other.close()
     }
 
-    "D164: tell a session that never drove how a person settled a Question it waits on, when its host was started by a process the hook descends from, and no other session" in scenarios { world =>
+    "D164: tell a session that never drove what a person settled, through the host that the nearest ancestor of the hook started, for the harness session that found it first" in scenarios { world =>
       import world.*
-      def end(id: ItemId, answer: String): QuestionEnd = QuestionEnd(id, title(id), QuestionStatus.Answered, Some(answer))
+      def end(id: ItemId, answer: String): AwaitedEnd = AwaitedEnd(id, title(id), "Answered", Some(answer))
       def announced(reply: Json): List[String] = reply.hcursor.get[String]("reason").toOption.toList.flatMap(_.linesIterator.toList)
-        .dropWhile(_ != DriverHook.Settled).drop(1).takeWhile(_ != SessionQuestions.Act).map(_.stripPrefix("- "))
+        .dropWhile(_ != DriverHook.Settled).drop(1).takeWhile(_ != SessionAwaited.Act).map(_.stripPrefix("- "))
       // Two harness processes in one checkout, each with its own host; neither session has a driver.
-      val (mine, theirs) = (ProcessIdentity(4242L, 1000L), ProcessIdentity(5151L, 2000L))
+      val (mine, theirs, shell) = (ProcessIdentity(4242L, 1000L), ProcessIdentity(5151L, 2000L), ProcessIdentity(9001L, 3000L))
       val (s, other) = (session("never-driven"), session("another-harness"))
       val (host, second) = (new Host(world, s.scope.actor.session), new Host(world, other.scope.actor.session))
       host.startedBy(mine); second.startedBy(theirs)
-      val (watch, watching) = (new QuestionWatch(s.api, project, host.directory, problem => fail(problem)), new QuestionWatch(other.api, project, second.directory, problem => fail(problem)))
+      val (watch, watching) = (new AwaitedWatch(s.api, project, host.directory, problem => fail(problem), true), new AwaitedWatch(other.api, project, second.directory, problem => fail(problem), true))
       val own = s.records(watch, question("Asked without a drive"))
       val foreign = other.records(watching, question("Asked in the other harness"))
+      watch.poll(() => false); watching.poll(() => false)
       assert(status(s.id).isEmpty && status(other.id).isEmpty)
       // The hook of the first harness: a shell between it and the harness, and what started the harness, are ancestors as well.
-      ancestors = List(ProcessIdentity(9001L, 3000L), mine, ProcessIdentity(1L, 0L))
-      assert(views.owned.contains(s.scope.actor.session))
+      ancestors = List(shell, mine, ProcessIdentity(1L, 0L))
       // Nothing settled: where a waiter can start the next turn the session is told once to start it, and then it stops.
       val first = s.stop()
       if (harness == Harness.Codex) assert(first.isNull, first.noSpaces)
@@ -553,28 +608,128 @@ abstract class DriverHookTest extends SpecZIO with AssertZIO {
       assert(s.stop().isNull)
       settle(own, QuestionStatus.Answered, Some("Go on"))
       settle(foreign, QuestionStatus.Answered, Some("For the other harness"))
-      watch.poll(); watching.poll()
-      assert(host.questions.last == SessionUnitEvent.Settled(end(own, "Go on"), false) && second.questions.last == SessionUnitEvent.Settled(end(foreign, "For the other harness"), false))
+      watch.poll(() => false); watching.poll(() => false)
+      assert(host.questions.last == SessionUnitEvent.Settled(end(own, "Go on"), None) && second.questions.last == SessionUnitEvent.Settled(end(foreign, "For the other harness"), None))
       // A hook that descends from no process that started a host says nothing and lets the stop through: one run by hand, one whose
       // ancestors it cannot see, and one whose ancestor has the pid of the harness and another start.
-      List(Nil, List(ProcessIdentity(9001L, 3000L)), List(mine.copy(startMillis = 999L))).foreach { unrelated =>
+      List(Nil, List(shell), List(mine.copy(startMillis = 999L))).foreach { unrelated =>
         ancestors = unrelated
-        assert(views.owned.isEmpty && s.stop().isNull && other.stop().isNull, unrelated.toString)
+        assert(s.stop().isNull && other.stop().isNull, unrelated.toString)
       }
-      // The hook of the first harness announces the first session's Question, once, whatever session key it is run with; the second
-      // session's Question is said by the hook of the second harness alone.
-      ancestors = List(ProcessIdentity(9001L, 3000L), mine)
+      // A harness that the session started in its shell: its hook descends from both harness processes, and the nearer one is its
+      // own. Its host has recorded nothing, or has recorded a session that waits on nothing: either way the hook says nothing, and
+      // takes nothing from the session of the farther harness.
+      val (inner, nested) = (ProcessIdentity(7001L, 4000L), session("nested-harness"))
+      val quiet = new Host(world, nested.scope.actor.session, false)
+      quiet.startedBy(inner)
+      ancestors = List(inner, shell, mine)
+      assert(nested.stop().isNull && sessions.view(nested.scope.actor.session) == HostView.Unrecorded)
+      sessions.record(nested.scope.actor.session, AttachedHostRecord(quiet.directory.toString, Some(WaitLine)))
+      assert(nested.stop().isNull)
+      // The hook of the first harness, run with another harness session identifier than the one that found the host first, is
+      // given nothing either: one harness process may carry several sessions.
+      ancestors = List(shell, mine)
+      assert(session("another-session-id").stop().isNull)
+      // The session that found it is told, once; the second session's Question is said by the hook of the second harness alone.
       val told = s.stop()
-      assert(told.hcursor.get[String]("decision") == Right("block") && announced(told) == List("question Q1 \"Asked without a drive\" answered: Go on"), told.noSpaces)
+      assert(told.hcursor.get[String]("decision") == Right("block") && announced(told) == List("question Q1 \"Asked without a drive\" answered: \"Go on\""), told.noSpaces)
       assert(s.stop().isNull && other.stop().isNull)
       ancestors = List(theirs)
-      assert(announced(other.stop()) == List("question Q2 \"Asked in the other harness\" answered: For the other harness") && other.stop().isNull)
+      assert(announced(other.stop()) == List("question Q2 \"Asked in the other harness\" answered: \"For the other harness\"") && other.stop().isNull)
       // Two hosts that the same process started cannot be told apart: neither session is named.
       val third = new Host(world, session("same-owner").scope.actor.session)
       third.startedBy(mine)
       ancestors = List(mine)
-      assert(views.owned.isEmpty)
-      host.close(); second.close(); third.close()
+      assert(views.owned(s.id).isEmpty)
+      // A host that is gone leaves nothing behind for the next host to trip over.
+      third.close()
+      val fourth = new Host(world, session("after-the-gone").scope.actor.session)
+      fourth.startedBy(ProcessIdentity(1234L, 1L))
+      assert(views.owned(s.id).contains(s.scope.actor.session))
+      host.close(); second.close(); quiet.close(); fourth.close()
+    }
+
+    "D164: announce what was settled before the workflow that waited on it was replaced" in scenarios { world =>
+      import world.*
+      val root = goal("Goal")
+      val gating = asked("Gate")
+      gate(root, gating)
+      val s = session("replaced-scope")
+      val host = new Host(world, s.scope.actor.session)
+      val watch = new AwaitedWatch(s.api, project, host.directory, problem => fail(problem), true)
+      watch.enter(WorkflowRequest.Advance(Set(root), WorkflowPhase.Work))
+      watch.poll(() => false)
+      assert(host.questions == List(SessionUnitEvent.Watching(gating)))
+      // The operator answers, and the session activates another workflow before the host's next round.
+      settle(gating, QuestionStatus.Answered, Some("Yes"))
+      watch.enter(WorkflowRequest.Begin(Set.empty))
+      watch.poll(() => false)
+      assert(host.questions.last == SessionUnitEvent.Settled(AwaitedEnd(gating, "Gate", "Answered", Some("Yes")), None),
+        s"A Question settled before its workflow was replaced left the set unannounced: ${host.questions}")
+      // What the session wrote waiting and a person settled before the host's first round is announced as well; what the session
+      // wrote settled never waited.
+      val quick = s.records(watch, question("Settled at once"))
+      s.records(watch, question("Recorded with its answer").copy(content = Content.Question(QuestionStatus.Answered, "Prompt", "Context", Nil, None, Some("Known"))))
+      settle(quick, QuestionStatus.Answered, Some("Fast"))
+      watch.poll(() => false)
+      assert(host.questions.drop(2) == List(SessionUnitEvent.Watching(quick), SessionUnitEvent.Settled(AwaitedEnd(quick, "Settled at once", "Answered", Some("Fast")), None)), host.questions.toString)
+      // What the session links an item BlockedBy is read at the next round: only what waits then is waited on. Any other relation
+      // to a Question, and a Question the change merely revised, is not.
+      val (linked, decided, related) = (asked("Linked while open"), asked("Linked when answered"), asked("Related"))
+      settle(decided, QuestionStatus.Answered, Some("Before the link"))
+      val blocked = goal("Blocked goal")
+      List(Relation.BlockedBy -> linked, Relation.BlockedBy -> decided, Relation.RelatesTo -> related).foreach((relation, target) =>
+        s.tool(watch, Command.Change(ChangeInput(project, link(blocked, relation, target)))))
+      val quiet = host.questions
+      watch.poll(() => false)
+      assert(host.questions == quiet :+ SessionUnitEvent.Watching(linked), host.questions.toString)
+      // One that is still open when its workflow is replaced is released, and a round that ends between two requests reads nothing.
+      val open = asked("Still open")
+      val next = goal("Next goal")
+      gate(next, open)
+      watch.enter(WorkflowRequest.Advance(Set(next), WorkflowPhase.Work))
+      watch.poll(() => false)
+      watch.enter(WorkflowRequest.Begin(Set.empty))
+      watch.poll(() => true)
+      assert(host.questions.last == SessionUnitEvent.Watching(open))
+      watch.poll(() => false)
+      assert(host.questions.last == SessionUnitEvent.Released(open))
+      host.close()
+    }
+
+    "D164: keep the directive the driver issued when the hook cannot read what a host wrote for it" in scenarios { world =>
+      import world.*
+      goal("Goal")
+      val owner = ProcessIdentity(4242L, 1000L)
+      def told(session: SessionId): Path = checkout.resolve("hosts").resolve(session.value.toString + ".told")
+      // Each fault meets a drive that is about to issue its start directive.
+      val faults = List[(String, (Session, Host) => Unit)](
+        "a count of announced events that is no number" -> ((s, _) => { Files.writeString(told(s.scope.actor.session), "not a number"); () }),
+        "a count of announced events that cannot be written" -> ((s, _) => { Files.createDirectories(told(s.scope.actor.session)); () }),
+        "an undecodable owner of another live host" -> { (_, _) =>
+          val broken = new Host(world, session("broken-owner").scope.actor.session, false)
+          broken.startedBy(owner)
+          Files.writeString(broken.directory.resolve("journal").resolve(SessionOwner.Starter), "{")
+          ancestors = List(owner)
+        },
+        "an undecodable event of the host of this harness" -> { (_, _) =>
+          val garbled = new Host(world, session("garbled-events").scope.actor.session)
+          garbled.startedBy(ProcessIdentity(4343L, 1000L))
+          Files.writeString(garbled.directory.resolve(SessionUnits.File), "garbage\n")
+          ancestors = List(ProcessIdentity(4343L, 1000L))
+        })
+      faults.zipWithIndex.foreach { case ((name, fault), index) =>
+        ancestors = Nil
+        val s = session(s"unreadable-$index")
+        s.on("G1 through=work")
+        val host = new Host(world, s.scope.actor.session)
+        fault(s, host)
+        val reply = s.stop()
+        val issued = server.driverReplies.head match { case value: DriverReply.Continue => value; case other => fail(s"$name: $other") }
+        assert(reply.hcursor.get[String]("decision") == Right("block") && reply.hcursor.get[String]("reason").exists(_.linesIterator.toList.last == issued.directive.text),
+          s"$name: the directive of cycle ${issued.status.cycle.map(_.number)} was issued and not handed to the session: ${reply.noSpaces}")
+        assert(reply.hcursor.get[String]("systemMessage").exists(_.startsWith("CQ Stop hook could not read what this session waits on a person for: ")), s"$name: ${reply.noSpaces}")
+      }
     }
 
     "reject malformed input, a missing session_id and an unknown event with an explicit error, change nothing and allow the stop" in scenarios { world =>

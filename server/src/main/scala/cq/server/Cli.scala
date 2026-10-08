@@ -271,8 +271,9 @@ final class Cli(context: CliContext, location: ProjectLocation, upload: SessionU
       require(rest.size % 2 == 0, "Options require values")
       val pairs = rest.grouped(2).map(pair => pair.head -> pair(1)).toList
       val kinds = SessionUnitKind.all.map(kind => "--" + kind.toString.toLowerCase -> kind).toMap
-      require(pairs.forall((option, _) => option == "--session" || kinds.contains(option)) && pairs.count(_._1 == "--session") <= 1,
-        "wait accepts --session DIR once and --attempt, --integration, --combination and --revalidation ID, each any number of times")
+      val single = Set("--session", SessionWait.After.Flag)
+      require(pairs.forall((option, _) => single(option) || kinds.contains(option)) && single.forall(option => pairs.count(_._1 == option) <= 1),
+        s"wait accepts --session DIR and ${SessionWait.After.Flag} COUNT|now once each and --attempt, --integration, --combination and --revalidation ID, each any number of times")
       // Without a directory, the session is that of the one CQ host of this checkout that runs.
       val session = pairs.collectFirst { case ("--session", value) => directory.resolve(value).normalize() }.getOrElse {
         new cq.host.AttachedSessions(configDirectory).running match {
@@ -286,7 +287,8 @@ final class Cli(context: CliContext, location: ProjectLocation, upload: SessionU
         }
       }
       val named = pairs.collect { case (option, value) if kinds.contains(option) => kinds(option) -> UUID.fromString(value) }
-      val outcome = try new SessionWait(session, () => Thread.sleep(SessionWait.PollMillis)).await(named)
+      val after = pairs.collectFirst { case (SessionWait.After.Flag, value) => SessionWait.After.parse(value) }.getOrElse(SessionWait.After.Start)
+      val outcome = try new SessionWait(session, () => Thread.sleep(SessionWait.PollMillis), ProcessHandle.current().pid()).await(named, after)
         catch { case error: SessionWait.NotASession => output.println(error.getMessage); throw new WaitFinished(SessionWait.NotASessionExit) }
       renderer.waited(session, outcome)
       if (outcome.isInstanceOf[WaitOutcome.HostGone]) throw new WaitFinished(SessionWait.HostGoneExit)

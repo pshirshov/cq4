@@ -77,7 +77,7 @@ input.on('line', line => {
   if (value.method === 'initialize') send({ id: value.id, result: { protocolVersion: '2025-03-26' } });
   else if (value.method === 'tools/list') send({ id: value.id, result: { tools: config } });
   else if (value.method === 'cq/session') send({ id: value.id, result: { directory: '/fixture/session' } });
-  else if (value.method === 'cq/settled') send({ id: value.id, result: { lines: [], waiting: false } });
+  else if (value.method === 'cq/settled') send({ id: value.id, result: { lines: [], waiting: false, events: 0 } });
   else if (value.method === 'cq/piUsage') { appendFileSync(file('usage.jsonl'), JSON.stringify(value.params) + '\\n'); send({ id: value.id, result: {} }); }
   else if (value.method === 'tools/call') {
     appendFileSync(file('calls.jsonl'), JSON.stringify(value.params) + '\\n');
@@ -199,7 +199,7 @@ assert.equal(requests.length, 2);
 for (const name of NAMES) assert(requests[0].tools.includes("cq_" + name), `cq_${name} in ${requests[0].tools}`);
 assert.deepEqual(lines("calls.jsonl"), [{ name: "dispatch", arguments: { Status: { attempt: { value: attempt }, waitMillis: 0 } } }]);
 assert(requests[1].input.includes("function_call_output") && requests[1].input.includes(attempt) && requests[1].input.includes("Running"));
-assert.deepEqual(await waits(1), [["wait", "--session", "/fixture/session", "--attempt", attempt, "--json"]]);
+assert.deepEqual(await waits(1), [["wait", "--session", "/fixture/session", "--attempt", attempt, "--after", "now", "--json"]]);
 // Each assistant response is reported to the host with Pi's session identifier and the usage Pi derived from the provider's counts.
 assert.deepEqual(lines("usage.jsonl").map(record => [record.sequence, record.session, record.turn, record.provider, record.model, record.responseId, record.stopReason,
   record.input, record.output, record.cacheRead, record.cacheWrite, record.reasoning, record.totalTokens]), [
