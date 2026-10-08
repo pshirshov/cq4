@@ -702,33 +702,38 @@ abstract class DriverHookTest extends SpecZIO with AssertZIO {
       goal("Goal")
       val owner = ProcessIdentity(4242L, 1000L)
       def told(session: SessionId): Path = checkout.resolve("hosts").resolve(session.value.toString + ".told")
-      // Each fault meets a drive that is about to issue its start directive.
-      val faults = List[(String, (Session, Host) => Unit)](
-        "a count of announced events that is no number" -> ((s, _) => { Files.writeString(told(s.scope.actor.session), "not a number"); () }),
-        "a count of announced events that cannot be written" -> ((s, _) => { Files.createDirectories(told(s.scope.actor.session)); () }),
+      // Each fault meets a drive that is about to issue its start directive, and returns the further host it started: a host is live
+      // while its lock is held, and the lock of a host nothing refers to is released whenever the collector closes its channel.
+      val faults = List[(String, (Session, Host) => Option[Host])](
+        "a count of announced events that is no number" -> ((s, _) => { Files.writeString(told(s.scope.actor.session), "not a number"); None }),
+        "a count of announced events that cannot be written" -> ((s, _) => { Files.createDirectories(told(s.scope.actor.session)); None }),
         "an undecodable owner of another live host" -> { (_, _) =>
           val broken = new Host(world, session("broken-owner").scope.actor.session, false)
           broken.startedBy(owner)
           Files.writeString(broken.directory.resolve("journal").resolve(SessionOwner.Starter), "{")
           ancestors = List(owner)
+          Some(broken)
         },
         "an undecodable event of the host of this harness" -> { (_, _) =>
           val garbled = new Host(world, session("garbled-events").scope.actor.session)
           garbled.startedBy(ProcessIdentity(4343L, 1000L))
           Files.writeString(garbled.directory.resolve(SessionUnits.File), "garbage\n")
           ancestors = List(ProcessIdentity(4343L, 1000L))
+          Some(garbled)
         })
       faults.zipWithIndex.foreach { case ((name, fault), index) =>
         ancestors = Nil
         val s = session(s"unreadable-$index")
         s.on("G1 through=work")
         val host = new Host(world, s.scope.actor.session)
-        fault(s, host)
+        val further = fault(s, host)
         val reply = s.stop()
         val issued = server.driverReplies.head match { case value: DriverReply.Continue => value; case other => fail(s"$name: $other") }
         assert(reply.hcursor.get[String]("decision") == Right("block") && reply.hcursor.get[String]("reason").exists(_.linesIterator.toList.last == issued.directive.text),
           s"$name: the directive of cycle ${issued.status.cycle.map(_.number)} was issued and not handed to the session: ${reply.noSpaces}")
         assert(reply.hcursor.get[String]("systemMessage").exists(_.startsWith("CQ Stop hook could not read what this session waits on a person for: ")), s"$name: ${reply.noSpaces}")
+        java.lang.ref.Reference.reachabilityFence(host)
+        java.lang.ref.Reference.reachabilityFence(further)
       }
     }
 
