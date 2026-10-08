@@ -109,6 +109,7 @@ A failure in this part of the hook, such as a file of another host that cannot b
 **Limits.**
 
 - A Stop hook that finds no host started by one of its ancestors, and whose session key has no driver that is on or rests, says nothing at the turn end. The session's `cq wait`, when it runs one, still reports the answer, and the governing instructions tell a Claude Code session to start the wait command before it ends a turn in which it waits on a person.
+- A host that the harness starts through a wrapper process that stays between the harness and `cq host`, one that does not `exec` it, is started by that wrapper, which is no ancestor of the hook: the Stop hook of a session that never drove does not find such a host. That session learns of a settled item from `cq wait`, or from the hook once a drive names its session. Start `cq host` directly, as the generated integrations do, or through a wrapper that ends in `exec`.
 - An answer recorded less than 20 seconds before a turn end may miss that turn end. It is then reported by the waiter, or at the next turn end.
 - Claude Code ends a background command after two hours at most. A session that rests on a Question for longer is started by that end, stops again and is told to start the waiter again: one short turn every two hours for as long as the Question stays open. A session that does not start the waiter is not asked a second time for the same items.
 - A session that does not read what it was told is told again: once at its next turn end, and by every `cq wait` it starts. Nothing else repeats.
