@@ -170,13 +170,14 @@ final class AttachedDriver(config: SupervisorConfig, authority: SupervisorAuthor
       // before that and settles with its own outcome. The request therefore covers the time between two candidates.
       case (_: DispatchCommand.StartChoice | _: DispatchCommand.Start, DispatchReply.Status(status)) =>
         val request = LineageMember.Request(status.request)
-        val known = new java.util.concurrent.atomic.AtomicInteger(0)
-        val unit = ZIO.suspend(units.lineage(status.attempt, known.get, WaitMillis)).flatMap { (attempts, ended) =>
+        // A reading waits for the unit to hold more attempts than `known`, which is the reader's own count: the reply starts from
+        // none and so never waits for an attempt the follower has registered already (D165).
+        def unit(known: java.util.concurrent.atomic.AtomicInteger) = ZIO.suspend(units.lineage(status.attempt, known.get, WaitMillis)).flatMap { (attempts, ended) =>
           ZIO.foreachDiscard(attempts)(attempt => tracker.track(cycle, request, LineageMember.Attempt(attempt),
             units.concluded(attempt, WaitMillis).map(_.map(LineageOutcome.Concluded.apply)))) *>
             ZIO.succeed { known.set(attempts.size); Option.when(ended)(LineageOutcome.Settled) }
         }
-        tracker.track(cycle, run, request, unit) *> unit.unit
+        tracker.track(cycle, run, request, unit(new java.util.concurrent.atomic.AtomicInteger(0))) *> unit(new java.util.concurrent.atomic.AtomicInteger(0)).unit
       // The governing session's own work is one attempt under its request. While its workspace is open both rest on the session, so
       // a stop is answered as for any work that waits for the session; the host works on it from its submission or its cancellation.
       case (_: DispatchCommand.OpenWorkspace | _: DispatchCommand.SelfReview, DispatchReply.Status(status)) =>

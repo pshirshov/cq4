@@ -384,6 +384,31 @@ target.write_text(json.dumps({"Review": {"members": [{"item": view["item"]["id"]
 print(json.dumps({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_tokens": 0, "cache_write_input_tokens": 0, "output_tokens": 5, "reasoning_output_tokens": 0}}), flush=True)
 """
 
+  /** A Codex-shaped reviewer that runs until the file `fixture-release` stands beside it, then accepts every member. */
+  private val Held = Accepting.replace("data = json.load(sys.stdin)\n", "data = json.load(sys.stdin)\nimport time\nwhile not Path(__file__).with_name(\"fixture-release\").exists():\n    time.sleep(0.05)\n")
+
+  /** Holds the fiber that `answers` from its first fork on, until the fiber it forked has registered a member of its own and come to
+    * rest: the order in which the follower of a unit's request takes its first reading of the unit before the reply to the start does. */
+  private final class FollowerFirst extends zio.Supervisor[Unit] {
+    private val answering = new java.util.concurrent.atomic.AtomicReference(Option.empty[zio.FiberId])
+    def answers[A](reply: Task[A]): Task[A] = (ZIO.fiberId.map(id => answering.set(Some(id))) *> reply)
+      .supervised(this).withRuntimeFlags(zio.RuntimeFlags.enable(zio.RuntimeFlag.OpSupervision))
+    private val follower = new java.util.concurrent.atomic.AtomicReference(Option.empty[zio.FiberId])
+    private val registered = new AtomicBoolean(false)
+    private val rested = new CountDownLatch(1)
+    private val held = new AtomicBoolean(false)
+    @volatile var ordered = false
+    override def value(implicit trace: zio.Trace): zio.UIO[Unit] = ZIO.unit
+    override def onStart[R, E, A](environment: zio.ZEnvironment[R], effect: ZIO[R, E, A], parent: Option[zio.Fiber.Runtime[Any, Any]], fiber: zio.Fiber.Runtime[E, A])(implicit unsafe: Unsafe): Unit =
+      if (parent.exists(value => answering.get.contains(value.id))) { follower.compareAndSet(None, Some(fiber.id)); () }
+      else if (parent.exists(value => follower.get.contains(value.id))) registered.set(true)
+    override def onEnd[R, E, A](value: zio.Exit[E, A], fiber: zio.Fiber.Runtime[E, A])(implicit unsafe: Unsafe): Unit = ()
+    override def onSuspend[E, A](fiber: zio.Fiber.Runtime[E, A])(implicit unsafe: Unsafe): Unit =
+      if (registered.get && follower.get.contains(fiber.id)) rested.countDown()
+    override def onEffect[E, A](fiber: zio.Fiber.Runtime[E, A], effect: ZIO[?, ?, ?])(implicit unsafe: Unsafe): Unit =
+      if (answering.get.contains(fiber.id) && follower.get.nonEmpty && held.compareAndSet(false, true)) ordered = rested.await(30, java.util.concurrent.TimeUnit.SECONDS)
+  }
+
   "A driven session's units (Behavioral Active Blackbox; real Git, supervised processes and in-process server Communication)" should {
     "I17: keep a unit in flight as its request until it ends, settle each of its attempts with its outcome, and integrate on the review of a panel" in {
       (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
@@ -434,6 +459,43 @@ print(json.dumps({"type": "turn.completed", "usage": {"input_tokens": 10, "cache
             assert(f.unitEvents(started.attempt.value) == List("Started", "Completed") && attempts.tail.forall(id => f.unitEvents(id.value).isEmpty))
             // The unit's result is the one review handle an integration is prepared with.
             assert(prepared.phase == IntegrationPhase.Ready && prepared.blocker.isEmpty && prepared.preview.exists(_.reviewer == status.result.get), prepared.toString)
+          }
+        } yield ()
+      }
+    }
+    "D165: answer the start of a unit once its first attempt is registered, when the follower of its request has read the unit first" in {
+      (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO], registry: DriverInspector) =>
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, registry) { f =>
+        val work = AssignedWork(RequestId(uuid), DispatchWork.Reviewer(ReviewerMode.Candidate), f.members, Nil, Nil, Some(f.worker), f.fence, f.limits)
+        val selection = SelectedDispatch(None, ArtifactId(uuid), () => (), status => CohortFailure.outcome(status, Some("input"), CohortFailure.fault(status).map(_ => true)))
+        val release = f.session.resolve("fixture-release")
+        for {
+          _ <- ZIO.attemptBlocking {
+            val harness = f.session.resolve("fixture-harness")
+            Files.writeString(harness, Held)
+            Files.setPosixFilePermissions(harness, java.nio.file.attribute.PosixFilePermissions.fromString("rwx------"))
+            UnitFixture.configure(f.authority.root, f.owner.project, "defaults: { roles: { reviewer: codex:held } }\n")
+          }
+          _ <- f.driven
+          started <- f.units.start(work, Some(selection))
+          // The one attempt of the unit runs until it is released, so the unit neither ends nor gains an attempt while the reply is awaited.
+          outcome <- (for {
+            order <- ZIO.succeed(new FollowerFirst)
+            began <- zio.Clock.nanoTime
+            replied <- order.answers(f.driver.observe(f.workflow.current, DispatchCommand.StartChoice(work.request, f.fence), DispatchReply.Status(started)))
+              .timeout(zio.Duration.fromSeconds(10))
+            ended <- zio.Clock.nanoTime
+            standing <- f.units.lineage(started.attempt, 0, 0)
+          } yield (order.ordered, replied.nonEmpty, java.time.Duration.ofNanos(ended - began).toMillis, standing)).ensuring(ZIO.attemptBlocking(Files.writeString(release, "")).orDie)
+          _ <- f.units.status(started.attempt, 120000).repeatUntil(value => DispatchController.terminal(value.phase))
+            .timeoutFail(new IllegalStateException("The held review unit did not end"))(zio.Duration.fromSeconds(90))
+          _ <- ZIO.attempt {
+            val (ordered, replied, millis, standing) = outcome
+            println(s"D165: follower read first=$ordered, replied=$replied after $millis ms, unit then ${standing._1.size} attempts, ended=${standing._2}; ${f.lineage}")
+            assert(ordered, "The follower of the request did not take its first reading before the reply")
+            assert(standing == (List(started.attempt), false), s"The unit did not hold its first attempt while the reply was awaited: $standing")
+            assert(replied, s"The reply to the start waited for the unit to end or to gain an attempt: no reply within $millis ms although its first attempt was registered")
           }
         } yield ()
       }
