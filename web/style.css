@@ -309,16 +309,41 @@ tbody tr[aria-selected=true] { background: #243d4c; }
   .help-list { position: static; }
 }
 
-/* Agent models dialog (web/src/agents.ts): the two layer editors side by side, then the problems of the texts as typed and the
+/* Agent models dialog (web/src/agents.ts): the two layer editors, one tab each, then the problems of the texts as typed and the
    resolved table, roles down and governing harnesses across, all inside the large dialog's scrolling body. */
-.agents-editors { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 16px; align-items: start; }
+.agents-tabs { flex-wrap: wrap; }
+.agents-tab-revision { color: #a4c1d3; }
+.agents-tab-unsaved { color: #ffd591; }
+.agents-tab-problems { color: #ffbd86; }
 .agents-layer { min-width: 0; }
-.agents-layer h3 { margin-top: 4px; }
 .agents-layer > button { width: auto; }
 .agents-layer > .revision-meta { margin: 4px 0 6px; }
 .agents-layer > [role=alert] { margin: 6px 0 0; overflow-wrap: anywhere; }
-.agents-text { display: block; font: 12px/1.45 ui-monospace, monospace; padding: 6px 8px; background: #192630; color: #e1e8ef; tab-size: 2; }
+/* The editor (web/src/agents-editor.ts): a textarea with transparent glyphs over a coloured copy of its text. The two share every
+   property that places a glyph, and neither wraps. A token is a range of the highlight registry, coloured by ::highlight() and told by
+   its colour alone: an element, a weight or a slant of its own would move the glyphs after it. */
+.agents-editor { position: relative; background: #192630; }
+.agents-text, .agents-highlight { font: 12px/1.45 ui-monospace, monospace; padding: 6px 8px; tab-size: 2; letter-spacing: 0; font-variant-ligatures: none; font-kerning: none; white-space: pre; overflow-wrap: normal; }
+.agents-highlight { position: absolute; inset: 0; margin: 0; max-height: none; overflow: hidden; border: 1px solid transparent; color: #e1e8ef; pointer-events: none; }
+.agents-highlight > code { display: block; font: inherit; }
+.agents-text { display: block; position: relative; background: transparent; color: transparent; caret-color: #e1e8ef; }
+.agents-text::selection { background: #68c7ec66; color: transparent; }
 .agents-text::placeholder { color: #8698a6; }
+.agents-line { display: block; }
+::highlight(agents-token-comment) { color: #8698a6; }
+::highlight(agents-token-punctuation) { color: #a4c1d3; }
+::highlight(agents-token-section) { color: #68c7ec; }
+::highlight(agents-token-harness) { color: #ffd591; }
+::highlight(agents-token-governing) { color: #e0a341; }
+::highlight(agents-token-role), ::highlight(agents-token-mode), ::highlight(agents-token-string) { color: #8be0b2; }
+::highlight(agents-token-tier) { color: #c9b3f5; }
+::highlight(agents-token-strategy), ::highlight(agents-token-panel) { color: #f0a6ca; }
+::highlight(agents-token-provider) { color: #c5d6e2; }
+::highlight(agents-token-model) { color: #e1e8ef; }
+::highlight(agents-token-effort), ::highlight(agents-token-number) { color: #ffbd86; }
+@media (forced-colors: active) {
+  .agents-highlight { visibility: hidden; }
+}
 .agents-conflict-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .agents-problems ul { margin: 0; padding: 0; list-style: none; }
 .agents-problems li { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; padding: 3px 0; color: #ffbd86; overflow-wrap: anywhere; }
@@ -351,9 +376,6 @@ td.agents-unresolved { background: #3a2418; box-shadow: inset 3px 0 #ff8a80; }
 td.agents-unresolved li { margin-top: 3px; }
 .agents-help pre { max-height: none; font-size: 12px; white-space: pre; overflow-x: auto; }
 .agents-help h4 { margin: 10px 0 4px; }
-@media (max-width: 900px) {
-  .agents-editors { grid-template-columns: minmax(0, 1fr); }
-}
 
 .drivers-layout > section { padding: 16px 0; border-top: 1px solid #435364; }
 .drivers-layout h3 { margin-top: 0; font-size: 16px; }
