@@ -2,10 +2,17 @@
 set -euo pipefail
 
 usage() {
-  echo "Usage: $0 <claude|codex|pi> [harness arguments...]" >&2
+  echo "Usage: $0 [--profile YOLO_PROFILE] <claude|codex|pi> [harness arguments...]" >&2
+  echo "The yolo profile is 'work' unless --profile or CQ_LOCAL_PROFILE names another." >&2
   echo "Optional environment: CQ_ORIGIN, CQ_LOCAL_STATE, CQ_LOCAL_PORT, CQ_LOCAL_PROFILE" >&2
   exit 2
 }
+profile="${CQ_LOCAL_PROFILE:-work}"
+if [[ ${1:-} == --profile ]]; then
+  [[ $# -ge 2 && -n $2 ]] || usage
+  profile=$2
+  shift 2
+fi
 [[ $# -ge 1 ]] || usage
 harness=$1
 shift
@@ -34,4 +41,4 @@ curl --silent --output /dev/null --max-time 5 "$origin/api/hello" ||
   echo "Warning: no CQ server answers at $origin; start ./run-local.sh in another terminal" >&2
 
 cd "$repo"
-exec yolo --profile "${CQ_LOCAL_PROFILE:-work}" --env "CQ_TOKEN_FILE=$token" "$harness" "${arguments[@]}" "$@"
+exec yolo --profile "$profile" --env "CQ_TOKEN_FILE=$token" "$harness" "${arguments[@]}" "$@"

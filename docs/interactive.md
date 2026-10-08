@@ -33,7 +33,7 @@ can retain locks and an unresolved reservation for inspection; do not delete
 locks or reset the checkout to force success. See the
 [integration and recovery contract](validation/checked-out-integration.md).
 
-Launch directly from the normal checkout. `./harness-local.sh <claude|codex|pi>` runs the launch below for one harness, after checking that the package, the token and that harness's integration are present; further arguments go to the harness:
+Launch directly from the normal checkout. `./harness-local.sh [--profile YOLO_PROFILE] <claude|codex|pi>` runs the launch below for one harness, after checking that the package, the token and that harness's integration are present; further arguments go to the harness:
 
 ```sh
 yolo --profile work --env CQ_TOKEN_FILE=/srv/nvme/tmp/cq4-playground/token codex
