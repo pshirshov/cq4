@@ -137,10 +137,8 @@ object DriverPolicy {
   // host reported about that cycle's child attempts.
   def decide(snapshot: WorksetPreview, previous: Option[CycleRecord]): DriverDecision = {
     val items = (snapshot.advanceable.map(_.item) ++ snapshot.context.map(_.item)).map(item => item.id -> item).toMap
-    val (waiting, work) = snapshot.readiness.filter(_.ready).map(entry => items(entry.item)).partition(awaitsUser)
-    val blockers = snapshot.readiness.flatMap(_.reasons).collect { case WorksetReason.Blocked(prerequisite) => prerequisite }.distinct
-      .flatMap(items.get).filter(awaitsUser)
-    val user = (waiting ++ blockers).map(_.id).distinct
+    val work = snapshot.readiness.filter(_.ready).map(entry => items(entry.item)).filterNot(awaitsUser)
+    val user = awaited(snapshot)
     val unchanged = previous.exists(_.snapshot.copy(snapshot = snapshot.snapshot) == snapshot)
     // A cycle that changed nothing but left failed inputs for the host to offer again is not quiescent. Its `retried` holds what the
     // unchanged cycles before it left in the same way, so an input that fails a second time before any cycle changes something ends the
@@ -164,6 +162,15 @@ object DriverPolicy {
     else if (work.nonEmpty) DriverDecision.Stop(DriverStopped(DriverStop.Quiescent,
       "The previous cycle changed nothing in the advanceable set, its context or its readiness" + blocked(snapshot)))
     else DriverDecision.Stop(DriverStopped(DriverStop.Quiescent, "No item of the advanceable set is ready to advance" + blocked(snapshot)))
+  }
+
+  // What a set waits for a person on: its ready items that only a person settles, and such items that block one of its members.
+  def awaited(snapshot: WorksetPreview): List[ItemId] = {
+    val items = (snapshot.advanceable.map(_.item) ++ snapshot.context.map(_.item)).map(item => item.id -> item).toMap
+    val waiting = snapshot.readiness.filter(_.ready).map(entry => items(entry.item)).filter(awaitsUser)
+    val blockers = snapshot.readiness.flatMap(_.reasons).collect { case WorksetReason.Blocked(prerequisite) => prerequisite }.distinct
+      .flatMap(items.get).filter(awaitsUser)
+    (waiting ++ blockers).map(_.id).distinct
   }
 
   // The prerequisites outside the advanceable set that keep its items from being ready. The drive cannot change them, so the stop names
@@ -205,6 +212,11 @@ object DriverPolicy {
   def stopped(record: DriverRecord, value: DriverStopped, announced: Boolean, now: Long): DriverRecord =
     record.copy(state = DriverState.Off, bind = None, cycle = record.cycle.map(ended), stopped = Some(value), announced = announced, touchedAt = now, stoppedAt = Some(now))
 
+  // A drive that stopped for user input rests: it is off, and the next continuation query decides it anew (D164).
+  def rests(record: DriverRecord): Boolean = record.state == DriverState.Off && record.announced && record.attached.nonEmpty &&
+    record.stopped.exists(_.reason == DriverStop.UserInputRequired)
+  val Rested = "CQ driver: the user settled what this drive waited for; it continues"
+
   def reason(value: DriverStop): String = value match {
     case DriverStop.Quiescent => "quiescent"
     case DriverStop.UserInputRequired => "user input required"
@@ -229,7 +241,7 @@ object DriverPolicy {
     case DriverState.Off => s"CQ driver off: ${describe(record)}" + record.stopped.fold("")(value => s"; stopped (${reason(value.reason)}): ${value.detail}")
   }
 
-  def status(record: DriverRecord): DriverStatus = DriverStatus(record.key, record.state, record.attached.filter(_ => record.on), record.workset,
+  def status(record: DriverRecord): DriverStatus = DriverStatus(record.key, record.state, record.attached.filter(_ => record.on || rests(record)), record.workset,
     record.targets, record.through,
     record.cycle.map(cycle => DriverCycle(cycle.id, cycle.number, cycle.state, cycle.roots, cycle.through, cycle.snapshot.snapshot,
       cycle.snapshot.advanceable.map(member => ItemRevision(member.item.id, member.item.revision)), cycle.run, cycle.created, cycle.lineage)),

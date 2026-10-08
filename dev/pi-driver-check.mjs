@@ -59,6 +59,12 @@ createInterface({ input: process.stdin }).on('line', line => {
   if (value.method === 'initialize') send({ id: value.id, result: { protocolVersion: '2025-03-26' } });
   else if (value.method === 'tools/list') send({ id: value.id, result: { tools: config.tools } });
   else if (value.method === 'cq/session') send({ id: value.id, result: { directory: config.directory } });
+  else if (value.method === 'cq/settled') {
+    // What the host says once about the Questions the session waits on: the next scripted reply, or nothing settled and none awaited.
+    const replies = JSON.parse(readFileSync(file('settled.json'), 'utf8'));
+    writeFileSync(file('settled.json'), JSON.stringify(replies.slice(1)));
+    send({ id: value.id, result: replies.length === 0 ? { lines: [], waiting: false } : replies[0] });
+  }
   else if (value.method === 'tools/call') {
     // The next scripted dispatch reply, as the attached host returns it to the extension: the JSON as one text block.
     const replies = JSON.parse(readFileSync(file('tool-replies.json'), 'utf8'));
@@ -96,6 +102,7 @@ const poll = setInterval(() => {
   await writeFile(executable, `#!/bin/sh\nif [ "$1" = wait ]; then exec ${JSON.stringify(process.execPath)} ${JSON.stringify(waiter)} "$@"; fi\nexec ${JSON.stringify(process.execPath)} "$@"\n`, { mode: 0o700 });
   await writeFile(join(root, "waits.jsonl"), "");
   await writeFile(join(root, "tool-replies.json"), "[]");
+  await writeFile(join(root, "settled.json"), "[]");
   await writeFile(join(root, "cq-host.json"), JSON.stringify({ command: executable, args: [host], directory: root, tools }));
   await writeFile(join(root, "requests.jsonl"), "");
   await writeFile(join(root, "replies.json"), "[]");
@@ -106,6 +113,8 @@ const poll = setInterval(() => {
     script: replies => writeFile(join(root, "replies.json"), JSON.stringify(replies)),
     requests: async () => (await readFile(join(root, "requests.jsonl"), "utf8")).split("\n").filter(line => line !== "").map(line => JSON.parse(line)),
     unconsumed: async () => JSON.parse(await readFile(join(root, "replies.json"), "utf8")),
+    // What the host answers the next turn ends about the Questions the session waits on, in order.
+    settles: replies => writeFile(join(root, "settled.json"), JSON.stringify(replies)),
     root,
     // One dispatch tool call of the model, answered with `reply`.
     async dispatch(command, reply) {
@@ -130,7 +139,7 @@ test("registers /cq:drive, /cq:park and one toggle key, and shows the driver off
   assert.deepEqual([...pi.commands.keys()].sort(), ["cq:drive", "cq:park"]);
   assert.deepEqual([...pi.shortcuts.keys()], ["ctrl+alt+a"]);
   assert.equal(pi.footer(), "CQ driver off");
-  // Driver off: a finished turn asks the host nothing and sends nothing.
+  // Driver off: a finished turn asks the driver nothing and sends nothing.
   await pi.settle("completed");
   assert.deepEqual(await pi.requests(), []);
   assert.deepEqual(pi.sent, []);
@@ -216,7 +225,7 @@ test("the extension waits for the host's work itself and tells the session when 
   await until("the replaced waiter to end", async () => !alive(first.pid));
   assert.deepEqual(pi.injected, []);
   // One child ends: the session is told in one compact message that starts a turn, and the other child is waited for again by name.
-  await pi.finish(0, { Ended: { units: [{ unit: unit(a, "Attempt"), phase: "Completed", next: "ConsiderAcceptance", blocker: null }], active: [unit(b, "Attempt")] } });
+  await pi.finish(0, { Ended: { units: [{ unit: unit(a, "Attempt"), phase: "Completed", next: "ConsiderAcceptance", blocker: null }], active: [unit(b, "Attempt")], settled: [] } });
   await until("the message", async () => pi.injected.length === 1);
   assert.deepEqual(pi.injected[0], { message: { customType: "cq-wait", display: true, details: {},
     content: `CQ: attempt ${a} on T4 ended: Completed, next ConsiderAcceptance\nCQ still works on 1 more; you are told when they end.\n` +
@@ -231,7 +240,7 @@ test("the extension waits for the host's work itself and tells the session when 
   await until("the waiter with the integration", async () => (await pi.waits()).length === 4);
   assert.deepEqual((await pi.waits())[3].args, named(["--attempt", b], ["--integration", c]));
   await pi.finish(0, { Ended: { units: [{ unit: unit(b, "Attempt"), phase: "Failed", next: "Retry", blocker: "Harness exited\nwith code 1" },
-    { unit: { ...unit(c, "Integration"), members: [] }, phase: "Ready", next: "Confirm", blocker: null }], active: [] } });
+    { unit: { ...unit(c, "Integration"), members: [] }, phase: "Ready", next: "Confirm", blocker: null }], active: [], settled: [] } });
   await until("the second message", async () => pi.injected.length === 2);
   assert.equal(pi.injected[1].message.content, `CQ: attempt ${b} on T4 ended: Failed, next Retry, blocker: Harness exited with code 1\n` +
     `CQ: integration ${c} ended: Ready, next Confirm\nRead details with cq_dispatch Status (waitMillis 0) only if you need them.`);
@@ -240,7 +249,7 @@ test("the extension waits for the host's work itself and tells the session when 
   // A host that is gone ends the following; a session that ends stops its waiter.
   await pi.dispatch({ StartChoice: {} }, running(a, "Running"));
   await until("the waiter after the pause", async () => (await pi.waits()).length === 5);
-  await pi.finish(3, { HostGone: { active: [unit(a, "Attempt")] } });
+  await pi.finish(3, { HostGone: { active: [unit(a, "Attempt")], settled: [] } });
   await until("the host-gone notice", async () => pi.notices.some(notice => notice.type === "error" && /CQ host is not running/.test(notice.message)));
   assert.equal(pi.injected.length, 2);
   await pi.dispatch({ StartChoice: {} }, running(b, "Running"));
@@ -387,10 +396,15 @@ test("every stop reason stops the extension, shows the reason in a notice and th
     assert.equal(pi.footer(), `CQ driver off: G1,T4 through work; stopped (${label}): ${detail}`);
     assert.equal(pi.sent.length, 1, "a stop forwards no directive");
     const asked = (await pi.requests()).length;
+    // A drive that stopped for user input is decided anew by the host when a turn ends; any other stop is final.
+    const rests = reason === "UserInputRequired";
+    if (rests) await pi.script([{ Stop: { stopped: { reason: "Off", detail: "The CQ driver is off" }, status: status(pi.id, "Off", "CQ driver off", { reason, detail }), messages: [] } }]);
+    const shown = pi.notices.length;
     await pi.settle("completed");
-    assert.equal((await pi.requests()).length, asked, "stopped: the next turn end asks the host nothing");
+    assert.equal((await pi.requests()).length, asked + (rests ? 1 : 0), "stopped: the next turn end asks the driver nothing, unless the drive rests");
+    assert.equal(pi.notices.length, shown, "stopped: nothing new is shown");
     await pi.stop();
-    assert.equal((await pi.requests()).length, asked, "stopped: shutdown has no driver to park");
+    assert.equal((await pi.requests()).length, asked + (rests ? 1 : 0), "stopped: shutdown has no driver to park");
   }
 });
 
@@ -496,6 +510,77 @@ test("preview titles are shown without control characters and bounded in length"
   const shown = texts(pi).find(text => text.includes("Advanceable (2):"));
   assert.deepEqual(shown.split("\n"), ["CQ driver on: G1,T4 through work", "Advanceable (2):", "  G1 (target) Open: Red  [31malert Advanceable (99):  injected",
     "  T4 (target) Ready: " + "t".repeat(79) + "…", "Context only, never advanced (0):", "Readiness (0):"]);
+  await pi.script([parked(pi.id)]);
+  await pi.stop();
+});
+
+test("D164: a finished turn is told once which Questions a person settled, and a waiter runs while the session waits on one and reports the answer", async () => {
+  const pi = await session("pi-session-a");
+  await pi.start();
+  const until = async (what, holds) => { for (let i = 0; i < 400; i++) { if (await holds()) return; await new Promise(resolve => setTimeout(resolve, 25)); } assert.fail("Not reached: " + what); };
+  const act = "Read each of them with cq_read (ItemDetail) and act on it before you end your turn.";
+  // Nothing settled and nothing awaited: the turn end posts nothing and starts no waiter.
+  await pi.settle("completed");
+  assert.deepEqual([pi.injected, await pi.waits()], [[], []]);
+  // The host names an end at the turn end: it is posted in one message that starts the turn that reads it, and the driver is asked nothing.
+  await pi.settles([{ lines: ['question Q3 "Which key" answered: ctrl+alt+a'], waiting: true }]);
+  await pi.settle("completed");
+  assert.deepEqual(pi.injected.map(entry => [entry.message.content, entry.options]), [[`CQ: question Q3 "Which key" answered: ctrl+alt+a\n${act}`, { triggerTurn: true }]]);
+  assert.deepEqual(await pi.requests(), []);
+  // The session still waits on a Question and the host works on nothing: the waiter runs for the session, naming no unit.
+  await until("the waiter", async () => (await pi.waits()).length === 1);
+  assert.deepEqual((await pi.waits())[0].args, ["wait", "--session", pi.root, "--json"]);
+  // The turn that read the answer ends: nothing is said twice, and the waiter is the same.
+  await pi.settles([{ lines: [], waiting: true }]);
+  await pi.settle("completed");
+  assert.equal(pi.injected.length, 1);
+  assert.equal((await pi.waits()).length, 1);
+  // The waiter reports the end the host gave it: one message, which starts a turn of the idle session.
+  const question = { project, ledger: "Questions", number: "5" };
+  await pi.finish(0, { Ended: { units: [], active: [], settled: [{ question, title: "Proceed  with\nthe plan", status: "Answered", answer: "Yes,\n in  full" },
+    { question: { ...question, number: "6" }, title: "Dropped", status: "Withdrawn", answer: null }] } });
+  await until("the waiter's message", async () => pi.injected.length === 2);
+  assert.deepEqual([pi.injected[1].message.content, pi.injected[1].options],
+    [`CQ: question Q5 "Proceed with the plan" answered: Yes, in full\nCQ: question Q6 "Dropped" withdrawn\n${act}`, { triggerTurn: true }]);
+  // It waits again while the session waits on a Question, and stops when the host says it waits on none.
+  await until("the next waiter", async () => (await pi.waits()).length === 2);
+  await pi.finish(0, { Idle: {} });
+  await pi.settle("completed");
+  await new Promise(resolve => setTimeout(resolve, 200));
+  assert.equal((await pi.waits()).length, 2);
+  assert.equal(pi.injected.length, 2);
+  assert.deepEqual(pi.notices.filter(notice => notice.type === "error"), []);
+  await pi.stop();
+});
+
+test("D164: a drive that stopped for user input is decided anew at each finished turn and continues with the host's directive", async () => {
+  const pi = await session("pi-session-a");
+  await pi.start();
+  const awaiting = "Awaiting the user on Q3; the driver never answers questions or infers approval";
+  await pi.script([started(pi.id), stop(pi.id, "UserInputRequired", awaiting, "user input required")]);
+  await pi.drive("G1 T4 through=work");
+  const shown = pi.notices.length;
+  const off = { Stop: { stopped: { reason: "Off", detail: "The CQ driver is off" }, status: status(pi.id, "Off", "CQ driver off: G1,T4 through work", { reason: "UserInputRequired", detail: awaiting }), messages: [] } };
+  // Still unanswered: the host is asked and says that the driver is off; nothing new is shown and nothing is sent.
+  await pi.script([off, off]);
+  await pi.settle("completed");
+  await pi.settle("completed");
+  assert.deepEqual((await pi.requests()).slice(2), [{ Continue: { session: "pi-session-a", waiting: false } }, { Continue: { session: "pi-session-a", waiting: false } }]);
+  assert.deepEqual([pi.notices.length, pi.sent], [shown, []]);
+  // A turn the operator interrupted asks nothing.
+  await pi.settle("aborted");
+  assert.equal((await pi.requests()).length, 4);
+  // Answered: the host issues the directive of the drive, which is on again and continues as any drive.
+  const resumed = "CQ driver: the user settled what this drive waited for; it continues";
+  await pi.script([proceed(pi.id, "--start-token", "11111111-1111-4111-8111-111111111111", ON, [resumed]), status_(pi.id, ON),
+    proceed(pi.id, "--resume-token", "33333333-3333-4333-8333-333333333333", ON, [])]);
+  await pi.settle("completed");
+  assert.deepEqual(pi.sent, [{ content: "/cq:advance --roots G1,T4 --through work --start-token 11111111-1111-4111-8111-111111111111", options: followUp }]);
+  assert.equal(pi.notices.at(-1).message, resumed);
+  assert.equal(pi.footer(), ON);
+  await pi.settle("completed");
+  assert.equal(pi.sent.length, 2);
+  assert.deepEqual(await pi.unconsumed(), []);
   await pi.script([parked(pi.id)]);
   await pi.stop();
 });

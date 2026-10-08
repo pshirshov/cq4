@@ -1,9 +1,7 @@
 {
-  "kind": "attempt-events-and-live-claims",
-  "schemaBefore": "19bac0029e8f2d1134a872671a186bc7282096b6d05a94f97930f30901259563",
-  "schemaAfter": "da5a0f6cb21680869d5d40e52f1ee403434ab5a8ab9a33652f6730feb6cf01f1",
+  "kind": "unchanged-data",
+  "schema": "da5a0f6cb21680869d5d40e52f1ee403434ab5a8ab9a33652f6730feb6cf01f1",
   "modelBefore": "9fbd5dad726e1ee4047246c3295da81ef85bf6de5d69e308e651bddef64f7e80",
-  "modelAfter": "9fbd5dad726e1ee4047246c3295da81ef85bf6de5d69e308e651bddef64f7e80",
-  "sqlSha256": "e5bb40da411ae5542c0a6b20593afe4111462ceb80150102755b3c5bd46d131a",
-  "reason": "Since the installed release (37dc475) the schema gained the column cq_usage_clock.attempt_events and the index cq_claims_live, so that reading a project's work cursor no longer counts every attempt and claim of the project: the server keeps in attempt_events the number of the project's attempts plus the number of those with a recorded outcome, and counts the unreleased claims whose lease has not ended through the index. dev/local-update.sql adds the column as server/src/main/resources/db/001-ledgers.sql declares it, sets it for every project to what the count over its stored attempts gives, creates the index and records that schema's hash; the updater refuses a database in which a project's fence counter differs from the number of its claims, and verifies that no other stored value changed and that the updated database has the structure the new schema declares. The model did not change, so no stored type changed: session directories, deliveries and the agent configuration of the installed release are read as they are. Project archives are not converted; an archive of the installed release is refused by its schema hash."
+  "modelAfter": "3d6686a0dc072ab748fedf3e89a146b262b9a58bc1e531047dc68911ea64f3da",
+  "reason": "Since the installed release (39b2dd1) the schema did not change and the model gained what tells a governing session that a person settled a Question it waits on: the type QuestionEnd, the branches Watching, Settled and Released of SessionUnitEvent, and the field settled of WaitOutcome.Ended. No stored row and no stored file is transformed. SessionUnitEvent is stored only in the units.jsonl of a session directory, which the new release reads as it is: the new branches are written by hosts of the new release alone. WaitOutcome is the output of cq wait and is stored nowhere. The generated Pi extension changed, so a project that uses Pi runs cq configure pi --replace after the update."
 }

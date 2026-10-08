@@ -19,18 +19,6 @@ SCHEMA_SOURCE = "server/src/main/resources/db/001-ledgers.sql"
 MODEL_SOURCE = "models/cq-api.baboon"
 ATTACHED_GOVERNOR_COLLECTOR = "CQ attached session; outer usage unavailable"
 UNCHANGED_DATA = "unchanged-data"
-ATTEMPT_EVENTS_AND_LIVE_CLAIMS = "attempt-events-and-live-claims"
-STEP_SQL = "dev/local-update.sql"
-CLOCKS = "cq_usage_clock"
-MIGRATIONS = "cq_schema_migrations"
-ATTEMPT_EVENTS = "attempt_events"
-LIVE_CLAIMS_INDEX = "cq_claims_live"
-ATTEMPT_EVENTS_COUNTED = "SELECT json_object_agg(project_id, events) FROM (SELECT project_id, count(*) + count(effective_outcome) AS events FROM cq_usage_attempts GROUP BY project_id) counted"
-PROJECTS_WITH_A_FENCE_WITHOUT_A_CLAIM = ("SELECT COALESCE(json_agg(json_build_array(project_id, fence_counter, claims) ORDER BY project_id), '[]') FROM "
-                                         "(SELECT p.project_id, p.fence_counter, (SELECT count(*) FROM cq_claims c WHERE c.project_id = p.project_id) AS claims FROM cq_projects p) counted "
-                                         "WHERE fence_counter <> claims")
-PROJECTS_NAMED = 10
-SCHEMA_CHECKSUM = f"SELECT checksum FROM {MIGRATIONS} WHERE version=1"
 STRUCTURE_DATABASE = "cq_update_structure"
 
 
@@ -120,15 +108,11 @@ def package(path: Path) -> dict:
 
 
 def compatible(before: dict, after: dict, step: dict) -> str:
-    """The schema hash the database holds before the replacement. A transition that changes the schema or the model is accepted only
-    as the one the pinned step names."""
+    """The schema hash the database holds before and after the replacement. A model transition is accepted only as the one the pinned
+    step names; no step kind changes the schema."""
     old, new = before["runtimeSourceSha256"], after["runtimeSourceSha256"]
-    if old[SCHEMA_SOURCE] != new[SCHEMA_SOURCE]:
-        require(step["kind"] == ATTEMPT_EVENTS_AND_LIVE_CLAIMS
-                and step["schemaBefore"] == old[SCHEMA_SOURCE] and step["schemaAfter"] == new[SCHEMA_SOURCE]
-                and step["modelBefore"] == old[MODEL_SOURCE] and step["modelAfter"] == new[MODEL_SOURCE],
-                "Schema changes require a matching explicit local update step; replacement refused")
-    elif old[MODEL_SOURCE] != new[MODEL_SOURCE]:
+    require(old[SCHEMA_SOURCE] == new[SCHEMA_SOURCE], "Schema changes require a matching explicit local update step; replacement refused")
+    if old[MODEL_SOURCE] != new[MODEL_SOURCE]:
         require(step["kind"] == UNCHANGED_DATA and step["schema"] == old[SCHEMA_SOURCE]
                 and step["modelBefore"] == old[MODEL_SOURCE] and step["modelAfter"] == new[MODEL_SOURCE],
                 "Model changes require a matching explicit data update step; replacement refused")
@@ -158,84 +142,6 @@ class Sql:
 
     def verify(self, database: Database, before: dict[str, str], after: dict[str, str]) -> dict:
         return {}
-
-
-def structure(database: Database, name: str, label: str) -> list[str]:
-    """The tables, constraints and indexes of a database apart from the migration record, which the server creates itself."""
-    text = database.run(["pg_dump", "--schema-only", "--no-owner", "--no-privileges", f"--exclude-table={MIGRATIONS}", "--dbname", name], label, 120)
-    # pg_dump protects each dump with a key of its own.
-    lines = [line for line in text.splitlines() if not line.startswith(("\\restrict", "\\unrestrict"))]
-    # A column an earlier update added stands last in its table, wherever the schema file declares it: the entries of a table compare without their order.
-    ordered, entries = [], None
-    for line in lines:
-        if entries is None:
-            ordered.append(line)
-            if line.startswith("CREATE TABLE ") and line.endswith("("):
-                entries = []
-        elif line == ");":
-            ordered.extend(sorted(entries) + [line])
-            entries = None
-        else:
-            entries.append(line.removesuffix(","))
-    require(entries is None, "Unterminated table in the dumped structure")
-    return ordered
-
-
-class AttemptEventsAndLiveClaims:
-    """The step from the schema whose work cursor counts a project's attempts and claims at every read: it adds the column
-    cq_usage_clock.attempt_events holding what that count of attempts gives, creates the index of unreleased claims, and records the
-    schema hash that declares both."""
-    def __init__(self, sql: str, schema_after: str, schema_source: Path):
-        self.sql = sql
-        self.schema_after = schema_after
-        self.schema_source = schema_source
-        self.clocks: list[dict] = []
-
-    @staticmethod
-    def rows(database: Database, label: str) -> list[dict]:
-        rows = database.query(f"SELECT to_jsonb(t) FROM {CLOCKS} t ORDER BY project_id", label)
-        return [json.loads(row) for row in rows.splitlines()]
-
-    def capture(self, database: Database) -> None:
-        # The new release takes a project's claims to number its fence counter; a database where they do not would get another work cursor.
-        differing = json.loads(database.query(PROJECTS_WITH_A_FENCE_WITHOUT_A_CLAIM, "claims-per-fence"))
-        if differing:
-            named = ", ".join(f"{project} has fence counter {fence} and {claims} claims" for project, fence, claims in differing[:PROJECTS_NAMED])
-            more = f", and {len(differing) - PROJECTS_NAMED} more" if len(differing) > PROJECTS_NAMED else ""
-            raise Refused(f"The fence counter of {len(differing)} of the projects differs from the number of its claims: {named}{more}; nothing was changed")
-        self.clocks = self.rows(database, "clocks-before")
-
-    def verify(self, database: Database, before: dict[str, str], after: dict[str, str]) -> dict:
-        require(database.query(SCHEMA_CHECKSUM, "schema-after") == self.schema_after, "Data step did not record the schema of the new package")
-        require(set(after) == set(before), "Data step created or dropped a table")
-        require(all(after[table] == value for table, value in before.items() if table not in (CLOCKS, MIGRATIONS)),
-                f"Data step changed a table other than {CLOCKS} and {MIGRATIONS}")
-        counted = json.loads(database.query(ATTEMPT_EVENTS_COUNTED, "attempt-events-counted") or "null") or {}
-        clocks = self.rows(database, "clocks-after")
-        require(clocks == [{**clock, ATTEMPT_EVENTS: counted.get(clock["project_id"], 0)} for clock in self.clocks],
-                "Data step left a usage clock other than the one it was with the count of its project's attempt events")
-        require(set(counted) <= {clock["project_id"] for clock in clocks}, "A project with attempts has no usage clock to hold their count")
-        # The updated database has the structure the new package's schema declares, table by table: a recorded hash alone does not show it.
-        database.query(f"DROP DATABASE IF EXISTS {STRUCTURE_DATABASE}", "structure-clear")
-        database.query(f"CREATE DATABASE {STRUCTURE_DATABASE}", "structure-create")
-        try:
-            database.run(["psql", "--no-psqlrc", "-v", "ON_ERROR_STOP=1", "--single-transaction", "--dbname", STRUCTURE_DATABASE,
-                          "--file", str(self.schema_source)], "structure-declare", 120)
-            declared = structure(database, STRUCTURE_DATABASE, "structure-declared")
-        finally:
-            database.query(f"DROP DATABASE IF EXISTS {STRUCTURE_DATABASE}", "structure-drop")
-        require(structure(database, "postgres", "structure-updated") == declared, "Updated database structure differs from the schema of the new package")
-        return {"dataStep": ATTEMPT_EVENTS_AND_LIVE_CLAIMS, "usageClocks": len(clocks), "attemptEvents": sum(clock[ATTEMPT_EVENTS] for clock in clocks),
-                "columnAdded": f"{CLOCKS}.{ATTEMPT_EVENTS}", "indexCreated": LIVE_CLAIMS_INDEX, "otherDataUnchanged": True, "structureAsDeclared": True}
-
-
-def data_step(before: dict, after: dict, step: dict, source: Path) -> DataStep | None:
-    """What the accepted transition applies to stored data from the snapshot `source`; none when the stored data stays as it is."""
-    compatible(before, after, step)
-    if before["runtimeSourceSha256"][SCHEMA_SOURCE] == after["runtimeSourceSha256"][SCHEMA_SOURCE]:
-        return None
-    require(digest(source / STEP_SQL) == step["sqlSha256"], "Local update SQL differs from its pinned step")
-    return AttemptEventsAndLiveClaims((source / STEP_SQL).read_text(), step["schemaAfter"], source / SCHEMA_SOURCE)
 
 
 class Commands:
@@ -313,7 +219,8 @@ def main() -> None:
             new = digest(candidate / "manifest.json")
             receipt.update(status="candidate-verified", newManifest=new, schema=schema)
             write_json(evidence / "receipt.json", receipt)
-            install(state, release, candidate, rollback, evidence, receipt, schema, commands, data_step(before, after, step, checkout))
+            # The only step kind accepted leaves the stored data as it is: no SQL is applied.
+            install(state, release, candidate, rollback, evidence, receipt, schema, commands, None)
         except BaseException as error:
             if receipt["status"] not in ("installed", "recovery-required", "rolled-back", "refused"):
                 receipt.update(status="failed-before-install", error=str(error))

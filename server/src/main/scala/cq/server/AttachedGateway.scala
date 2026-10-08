@@ -3,7 +3,7 @@ package cq.server
 import baboon.runtime.shared.BaboonCodecContext
 import cq.api.*
 import cq.core.{DomainFailure, JsonRoundtrip}
-import cq.host.{AttachedCodexUsage, AttachedUsage, DispatchProjection, DispatchWaits, OperatorRequirements, ProcessModes, StdioPeer}
+import cq.host.{AttachedCodexUsage, AttachedUsage, DispatchProjection, DispatchWaits, OperatorRequirements, ProcessModes, QuestionWatch, SessionQuestions, StdioPeer}
 import io.circe.Json
 import zio.{Task, ZIO}
 
@@ -20,7 +20,7 @@ object AttachedGateway {
   /** Every method of a request this host answers with a result; a method that is not here is answered `Method not found`. */
   val Methods: Map[String, Served] = Map(
     "initialize" -> Served(false, None), "ping" -> Served(false, None), "tools/list" -> Served(false, None),
-    "cq/session" -> Served(false, Some(Harness.Pi)),
+    "cq/session" -> Served(false, Some(Harness.Pi)), "cq/settled" -> Served(false, Some(Harness.Pi)),
     "tools/call" -> Served(true, None), "cq/piUsage" -> Served(true, None), "cq/driver" -> Served(true, Some(Harness.Pi)))
   def served(method: String, harness: Harness): Option[Served] = Methods.get(method).filter(_.only.forall(_ == harness))
   /** Recording a session tells the server of its assignment and of its attempt: two calls. */
@@ -55,7 +55,8 @@ final class WorkflowReceipts {
 }
 
 final class AttachedGateway(config: SupervisorConfig, authority: SupervisorAuthority, schemas: McpSchemas,
-  local: LocalControl, workflow: AttachedWorkflow, accounting: AttachedUsage, codex: AttachedCodexUsage, driver: AttachedDriver, claims: SessionClaims, wait: WaitCommand) {
+  local: LocalControl, workflow: AttachedWorkflow, accounting: AttachedUsage, codex: AttachedCodexUsage, driver: AttachedDriver, claims: SessionClaims, wait: WaitCommand,
+  questions: QuestionWatch) {
   private val Versions = List("2025-03-26", "2025-06-18", "2025-11-25")
   private val CodecContext = BaboonCodecContext.Default
   private val MaxLocalBytes = 65536
@@ -92,7 +93,10 @@ final class AttachedGateway(config: SupervisorConfig, authority: SupervisorAutho
         command
       }.flatMap {
         case _: SessionCommand.Context => ZIO.attemptBlocking(SessionReply.Context(context))
-        case SessionCommand.Workflow(id, request, operatorRequirements, token) => workflow.activate(id, request, operatorRequirements, token).map(value => SessionReply.Workflow(receipts(value)))
+        case SessionCommand.Workflow(id, request, operatorRequirements, token) => workflow.activate(id, request, operatorRequirements, token).map { value =>
+          questions.enter(request)
+          SessionReply.Workflow(receipts(value))
+        }
         case _: SessionCommand.Instructions => ZIO.attempt(SessionReply.Instructions(workflow.current.getOrElse(
           throw DomainFailure(Fault.Missing("No workflow is active in this session: activate one with session Workflow")))))
         // The model-facing driver surface: a bind gated by the hook-minted token and a read-only status. Neither starts nor parks a driver.
@@ -115,6 +119,7 @@ final class AttachedGateway(config: SupervisorConfig, authority: SupervisorAutho
       val canonical = Command_JsonCodec.encode(CodecContext, command).asObject.get.values.head.hcursor.downField("input").focus.get
       require(JsonRoundtrip.lossless(arguments, canonical), "Noncanonical domain request")
       val value = claims.call(command)
+      questions.observe(command, value)
       Result_JsonCodec.encode(CodecContext, value) -> value.isInstanceOf[Result.Failed]
     }
   }
@@ -172,6 +177,12 @@ final class AttachedGateway(config: SupervisorConfig, authority: SupervisorAutho
       }}
       // The Pi extension runs `cq wait` on this directory itself; its model starts no waiter.
       case "cq/session" => ZIO.some(success(id, Json.obj("directory" -> Json.fromString(config.directory.toString))))
+      // What the Pi extension asks when a turn of its session has ended: the ends of Questions to announce, each once, as one line
+      // each, and whether the session still waits on a Question, for which the extension keeps its waiter running.
+      case "cq/settled" => ZIO.attemptBlocking {
+        val (ends, waiting) = questions.settled()
+        Some(success(id, Json.obj("lines" -> Json.fromValues(ends.map(end => Json.fromString(SessionQuestions.described(end)))), "waiting" -> Json.fromBoolean(waiting))))
+      }
       case "cq/driver" => (governing *> ZIO.attemptBlocking {
         val body = cursor.downField("params").focus.getOrElse(throw new IllegalArgumentException("Missing driver request"))
         require(body.noSpaces.getBytes(java.nio.charset.StandardCharsets.UTF_8).length <= MaxLocalBytes, "Driver request exceeds its bound")

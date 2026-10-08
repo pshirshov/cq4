@@ -77,6 +77,7 @@ input.on('line', line => {
   if (value.method === 'initialize') send({ id: value.id, result: { protocolVersion: '2025-03-26' } });
   else if (value.method === 'tools/list') send({ id: value.id, result: { tools: config } });
   else if (value.method === 'cq/session') send({ id: value.id, result: { directory: '/fixture/session' } });
+  else if (value.method === 'cq/settled') send({ id: value.id, result: { lines: [], waiting: false } });
   else if (value.method === 'cq/piUsage') { appendFileSync(file('usage.jsonl'), JSON.stringify(value.params) + '\\n'); send({ id: value.id, result: {} }); }
   else if (value.method === 'tools/call') {
     appendFileSync(file('calls.jsonl'), JSON.stringify(value.params) + '\\n');
@@ -207,7 +208,7 @@ assert.deepEqual(lines("usage.jsonl").map(record => [record.sequence, record.ses
 
 // The session is idle. The waiter reports that the unit ended, and the extension's message starts a turn by itself.
 from = session.position();
-writeFileSync(join(root, "wait.json"), JSON.stringify({ Ended: { units: [{ unit: { kind: "Attempt", id: attempt, members: [] }, phase: "Succeeded", next: "Review", blocker: null }] } }));
+writeFileSync(join(root, "wait.json"), JSON.stringify({ Ended: { units: [{ unit: { kind: "Attempt", id: attempt, members: [] }, phase: "Succeeded", next: "Review", blocker: null }], active: [], settled: [] } }));
 await session.event("agent_start", from);
 await session.event("agent_settled", from);
 assert.equal(requests.length, 3);

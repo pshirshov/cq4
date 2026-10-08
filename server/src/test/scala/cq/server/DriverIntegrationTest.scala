@@ -56,7 +56,7 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
   private final case class Fixture(local: LocalWorkspaceFixture, owner: Scope, authority: SupervisorAuthority, controller: IntegrationController,
     combinations: CombinationController, workflow: AttachedWorkflow, driver: AttachedDriver, registry: DriverInspector, collector: Collector,
     task: ItemId, reviewer: ArtifactId, candidate: GitCommit, fence: Fence, session: java.nio.file.Path, gateway: Json => Task[Json], jobs: JobSupervisor,
-    units: DispatchUnits, members: List[ItemRevision], worker: ArtifactId, limits: HostLimits) {
+    units: DispatchUnits, members: List[ItemRevision], worker: ArtifactId, limits: HostLimits, questions: QuestionWatch) {
     /** What the host retains about the Git job of an integration: its record with the reason it stopped, the evidence its executor left, its diagnostics and the target. */
     def gitJob(id: IntegrationId): Task[String] = jobs.status(owner, AttemptId(id.value)).either.flatMap(record => ZIO.attemptBlocking {
       import scala.jdk.CollectionConverters.*
@@ -220,15 +220,16 @@ final class DriverIntegrationProcess extends SpecZIO with AssertZIO {
         new OperatorRequirements(""), children, controller, combinations, revalidations, driver)
       // The gateway of a Claude Code session: its Context reads no native Codex usage.
       attached = config.copy(run = run.copy(attempt = governor.copy(harness = Harness.Claude)))
+      questions = new QuestionWatch(authority.governor, config.project.project, config.directory, problem => throw new IllegalStateException(problem))
       served = new AttachedGateway(attached, authority, new McpSchemas, null, workflow, null, null, driver, new SessionClaims(config.owner, authority.governor, logstage.IzLogger.NullLogger),
-        WaitCommand(Some("/opt/cq/bin/cq")))
+        WaitCommand(Some("/opt/cq/bin/cq")), questions)
       idle = java.time.Duration.ofMinutes(10)
       peer <- ZIO.acquireRelease(ZIO.attempt(new StdioPeer(new java.io.PipedInputStream(new java.io.PipedOutputStream()), java.io.OutputStream.nullOutputStream(),
         new OwnerLiveness { override def alive: Boolean = true }, PeerLimits(idle, idle, idle, AttachedGateway.FrameBytes, 8), () => ())))(peer => ZIO.succeed(peer.close()))
       gateway = (request: Json) => served.handle(peer, request, ZIO.unit).map(_.get)
       _ <- gateway(parser.parse("""{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}""").fold(throw _, identity))
       empty = Fixture(local, owner, authority, controller, combinations, workflow, driver, registry, hook, created.head.id, ArtifactId(uuid), local.base, claim.fence, directory, gateway, jobs,
-        children, created, ArtifactId(uuid), limits)
+        children, created, ArtifactId(uuid), limits, questions)
       candidate <- ZIO.attemptBlocking {
         local.git(local.source, "branch", "integration", local.base.value)
         empty.commit("candidate", Map("right.txt" -> "right\n"))
@@ -407,6 +408,55 @@ print(json.dumps({"type": "turn.completed", "usage": {"input_tokens": 10, "cache
       if (registered.get && follower.get.contains(fiber.id)) rested.countDown()
     override def onEffect[E, A](fiber: zio.Fiber.Runtime[E, A], effect: ZIO[?, ?, ?])(implicit unsafe: Unsafe): Unit =
       if (answering.get.contains(fiber.id) && follower.get.nonEmpty && held.compareAndSet(false, true)) ordered = rested.await(30, java.util.concurrent.TimeUnit.SECONDS)
+  }
+
+  "An attached session's Questions (Behavioral Active Blackbox; in-process server Communication)" should {
+    "D164: watch the Question the session records with its change tool and the one that gates the workset of the workflow it activates, until the session reads how each was settled" in {
+      (local: LocalWorkspaceFixture, guardian: GuardianFixture, ledger: LedgerService[IO], ledgerRepository: LedgerRepository[IO], usage: UsageService[IO],
+        artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO], integrations: IntegrationService[IO], proposals: ProposalService[IO], registry: DriverInspector) =>
+      fixture(local, guardian, ledger, ledgerRepository, usage, artifacts, admissions, integrations, proposals, registry) { f =>
+        val context = baboon.runtime.shared.BaboonCodecContext.Default
+        def draft(title: String, content: Content): ItemDraft = ItemDraft(title, "Narrative", Set.empty, false, content, Nil)
+        val question = Content.Question(QuestionStatus.Open, "Prompt", "Context", Nil, None, None)
+        def change(mutations: Mutation*): ChangeInput = ChangeInput(f.owner.project, ChangeRequest(RequestId(uuid), mutations.toList, Nil, "Question scenario"))
+        /** One domain tool call of the session through the attached gateway. */
+        def tool(name: String, arguments: Json): Task[Result] = f.gateway(Json.obj("jsonrpc" -> Json.fromString("2.0"), "id" -> Json.fromInt(1), "method" -> Json.fromString("tools/call"),
+          "params" -> Json.obj("name" -> Json.fromString(name), "arguments" -> arguments)))
+          .map(reply => Result_JsonCodec.decode(context, reply.hcursor.downField("result").downField("structuredContent").focus.get).fold(throw _, identity))
+        def operator(input: ChangeInput): Task[List[ItemRevision]] = ZIO.attemptBlocking(f.authority.root.call(Command.Change(input)) match {
+          case Result.Changed(ack) => ack.items
+          case other => throw new IllegalStateException(other.toString)
+        })
+        def view(id: ItemId): Task[Item] = ledger.get(f.owner, id).map(_.item)
+        def answer(id: ItemId, text: String): Task[Unit] = view(id).flatMap(item =>
+          operator(change(Mutation.Replace(id, item.revision, item.draft.copy(content = question.copy(status = QuestionStatus.Answered, answer = Some(text))))))).unit
+        def events: List[SessionUnitEvent] = SessionUnits.read(f.session)
+        for {
+          // What the host leaves in its session directory when the session first does governing work.
+          _ <- ZIO.attemptBlocking(SessionWaiters.create(f.session))
+          own <- tool("change", ChangeInput_JsonCodec.encode(context, change(Mutation.Create(draft("Asked by the session", question))))).map {
+            case Result.Changed(ack) => ack.items.head.id
+            case other => throw new IllegalStateException(other.toString)
+          }
+          _ <- ZIO.attempt(assert(events == List(SessionUnitEvent.Watching(own)), events.toString))
+          // A Task somebody else gated on a Question: the session's advance of that Task waits on it from the host's next round on.
+          created <- operator(change(Mutation.Create(draft("Gate", question)), Mutation.Create(draft("Gated", Content.Task(TaskStatus.Ready, List("Observed outcome"), None, Nil)))))
+          (gate, gated) = (created.find(_.id.ledger == Ledger.Questions).get, created.find(_.id.ledger == Ledger.Tasks).get)
+          _ <- operator(change(Mutation.Reference(gated.id, gated.revision, Relation.BlockedBy, gate.id, gate.revision, true)))
+          _ <- f.sessionTool(SessionCommand_JsonCodec.encode(context,
+            SessionCommand.Workflow(RequestId(uuid), WorkflowRequest.Advance(Set(gated.id), WorkflowPhase.Work), "Advance the gated Task", None)).noSpaces)
+          _ <- ZIO.attemptBlocking(f.questions.poll())
+          _ <- ZIO.attempt(assert(events == List(SessionUnitEvent.Watching(own), SessionUnitEvent.Watching(gate.id)), events.toString))
+          // The session reads its own Question after the operator answered it: nothing is left to announce for it. The other is announced.
+          _ <- answer(own, "Read by the session") *> answer(gate.id, "Found by the host")
+          _ <- tool("read", ReadInput_JsonCodec.encode(context, ReadInput(f.owner.project, ReadSelection.ItemDetail(own))))
+          _ <- ZIO.attemptBlocking(f.questions.poll())
+          title <- view(gate.id).map(_.draft.title)
+          _ <- ZIO.attempt(assert(events.drop(2) == List(SessionUnitEvent.Released(own),
+            SessionUnitEvent.Settled(QuestionEnd(gate.id, title, QuestionStatus.Answered, Some("Found by the host")), false)), events.toString))
+        } yield ()
+      }
+    }
   }
 
   "A driven session's units (Behavioral Active Blackbox; real Git, supervised processes and in-process server Communication)" should {

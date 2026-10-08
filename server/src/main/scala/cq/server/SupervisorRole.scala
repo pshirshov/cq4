@@ -187,8 +187,9 @@ object SupervisorProgram {
     "Do not call a status to wait for a child: after starting one, run exactly this command with the Bash tool " +
     s"as a background command (run_in_background true, timeout 7200000): `$command`. Then continue with other ready work or end your turn. " +
     "The command ends when the next unit ends, and you are notified with its exit code and an output file. " +
-    s"0: a unit ended, or nothing was active; the file has one line for each ended unit and for each still active. 3: the CQ host is not running. $Unfound. Report 3, 4 and 5 to the user. " +
-    "Any other exit, including the harness ending the command at its lifetime limit: run it again while work is active. " +
+    "0: a unit ended, a Question you wait on was settled, or nothing was active and you wait on no Question; the file has one line for each ended unit, " +
+    s"each settled Question and each unit still active. 3: the CQ host is not running. $Unfound. Report 3, 4 and 5 to the user. " +
+    "Any other exit, including the harness ending the command at its lifetime limit: run it again while work is active or you wait on a Question. " +
     "After exit 0, read the outcome of each ended unit with one Status, IntegrationStatus or CombinationStatus call with waitMillis 0, and run the command again while other work is active. " +
     "An integration being prepared or applied, a combination and a revalidation usually end within seconds, and the host checks a workspace you submitted as it runs a revalidation: " +
     "after starting one, start no command for it and do not end your turn. " +
@@ -203,6 +204,15 @@ object SupervisorProgram {
   /** The CQ extension of Pi waits itself and injects a message. */
   val WaitForMessage: String = s" Waiting for $Work: do not call a status to wait and start no waiter yourself. After starting such work, continue with other ready work or end your turn: " +
     "CQ sends you a message that begins `CQ:` when a unit ends, naming it, its items, its phase and the next step. Read details with one status call with waitMillis 0 only if you need them."
+  /** What an attached session does when it learns that a person settled a Question it waits on; `told` is where its harness says so. */
+  def settled(told: String): String = " Questions you wait on: when a person answers or withdraws an Open Question that you recorded or that gates the work of your workflow, " +
+    s"CQ tells you $told, in a line `question <ID> \"<title>\" answered: <answer>` or `question <ID> \"<title>\" withdrawn`. " +
+    "Read that Question before you end your turn and record what follows from it: it releases the work it gated only as far as its answer allows, as stated above. " +
+    "Then continue with the work it releases, or stop and tell the operator what remains."
+  val SettledAtStop: String = settled("at the end of a turn, where your stop is held for it")
+  val SettledInBackground: String = settled("at the end of a turn, where your stop is held for it, or in the output file of the wait command") +
+    " The wait command ends for such a Question as it does for a unit: when you are about to end your turn while you wait on one and no work is active, run it first."
+  val SettledByMessage: String = settled("in a message that begins `CQ:`")
   val Instructions = Guidance + WaitByStatus + " Return exactly {\"summary\":\"observed outcome and remaining work\"}."
 }
 
@@ -368,6 +378,8 @@ object SupervisorPlugin extends PluginDef {
     make[AttachedProgram]
     make[AttachedGateway]
     make[SessionClaims].from((config: SupervisorConfig, authority: SupervisorAuthority, logger: logstage.IzLogger) => new SessionClaims(config.owner, authority.governor, logger))
+    make[QuestionWatch].from((config: SupervisorConfig, authority: SupervisorAuthority, logger: logstage.IzLogger) =>
+      new QuestionWatch(authority.governor, config.project.project, config.directory, message => logger.warn(s"$message")))
     make[AttachedWorkflow]
     make[AttachedDriver]
     make[AttachedUsage].from { (config: SupervisorConfig, clock: Clock) => new AttachedUsage(config.directory, config.run, clock) }

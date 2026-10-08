@@ -1034,15 +1034,23 @@ root data CohortEvidence { request: CohortRequest decision: CohortDecision consi
 enum SessionUnitKind { Attempt Integration Combination Revalidation }
 root data SessionUnit { kind: SessionUnitKind id: uid members: lst[ItemId] }
 root data UnitEnd { unit: SessionUnit phase: str next: opt[str] blocker: opt[str] }
+// How a person settled a Question a governing session waits on: answered, with the answer, or withdrawn.
+root data QuestionEnd { question: ItemId title: str status: QuestionStatus answer: opt[str] }
 root adt SessionUnitEvent {
   data Started { unit: SessionUnit }
   data Ended { end: UnitEnd }
+  // The session waits on this Open Question from now on: one it wrote, or one that gates the work of its workflow.
+  data Watching { question: ItemId }
+  // `waiter`: a `cq wait` ran on the session when the host wrote the event, and reports it; otherwise the session's next turn end does.
+  data Settled { end: QuestionEnd waiter: bit }
+  // The session no longer waits on the Question and nothing announces it: the session read how it was settled, or its workflow left it.
+  data Released { question: ItemId }
 }
 // What an attached host leaves in its checkout's CQ directory for the hooks and the `cq wait` of that checkout: where its session
 // directory is, and the command line its harness integration approved for waiting, when it approved one.
 root data AttachedHostRecord { directory: str waitCommand: opt[str] }
 root adt WaitOutcome {
-  data Ended { units: lst[UnitEnd] active: lst[SessionUnit] }
+  data Ended { units: lst[UnitEnd] active: lst[SessionUnit] settled: lst[QuestionEnd] }
   data Idle {}
   data HostGone { active: lst[SessionUnit] }
 }

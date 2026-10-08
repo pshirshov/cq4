@@ -61,7 +61,8 @@ final class DriverService(registry: DriverRegistry, planner: WorksetPlanner) {
           if (attached.isEmpty) s"CQ driver binding: ${describe(record)}; it turns on when this session presents the bind token"
           else s"CQ driver on: ${describe(record)}")
       case _: DriverControl.Park => registry.get(project, key) match {
-        case Some(record) if record.state != DriverState.Off =>
+        // A drive that rests is parked as one that is on: it then no longer continues by itself.
+        case Some(record) if record.state != DriverState.Off || rests(record) =>
           val parked = stopped(record, DriverStopped(DriverStop.Parked, "Parked by the operator"), true, now)
           registry.put(parked)
           DriverReply.Parked(Some(status(parked)), s"CQ driver parked: ${describe(parked)}")
@@ -71,13 +72,16 @@ final class DriverService(registry: DriverRegistry, planner: WorksetPlanner) {
       case DriverControl.Continue(waiting) => registry.get(project, key) match {
         case None => DriverReply.Stop(DriverStopped(DriverStop.Off, "No CQ driver is on for this session"), None, Nil)
         case Some(record) => record.state match {
-          case DriverState.Off if record.announced => DriverReply.Stop(DriverStopped(DriverStop.Off, "The CQ driver is off"), Some(status(record)), Nil)
+          // The attached session may drive under another key meanwhile: that drive is its one binding.
+          case DriverState.Off if rests(record) && registry.bound(project, record.attached.get).isEmpty =>
+            continuation(tx, record.copy(state = DriverState.On, stopped = None, stoppedAt = None), false, now, Some(record))
+          case DriverState.Off if record.announced => off(record)
           case DriverState.Off =>
             registry.put(record.copy(announced = true))
             DriverReply.Stop(record.stopped.get, Some(status(record)), List(stopMessage(record.stopped.get)))
           case DriverState.Binding => stop(record, DriverStopped(DriverStop.NotBound,
             "failure: no attached CQ session presented the bind token, so the driver never turned on"), Nil, now)
-          case DriverState.On => continuation(tx, record, waiting, now)
+          case DriverState.On => continuation(tx, record, waiting, now, None)
         }
       }
     }
@@ -126,7 +130,11 @@ final class DriverService(registry: DriverRegistry, planner: WorksetPlanner) {
 
   private def limit: DriverStopped = DriverStopped(DriverStop.LimitReached, s"This drive issued its $MaxDirectives directives; drive again to continue")
 
-  private def continuation(tx: LedgerTransaction, record: DriverRecord, waiting: Boolean, now: Long): DriverReply = {
+  private def off(record: DriverRecord): DriverReply = DriverReply.Stop(DriverStopped(DriverStop.Off, "The CQ driver is off"), Some(status(record)), Nil)
+
+  // `rested` is the record of a drive that stopped for user input, of which `record` is the copy that is on again: while the decision
+  // is the same nothing is said and nothing changes, and any other decision is that of a drive that is on.
+  private def continuation(tx: LedgerTransaction, record: DriverRecord, waiting: Boolean, now: Long, rested: Option[DriverRecord]): DriverReply = {
     given LedgerTransaction = tx
     record.cycle match {
     case Some(cycle) if cycle.state == CycleState.Pending =>
@@ -160,13 +168,14 @@ final class DriverService(registry: DriverRegistry, planner: WorksetPlanner) {
           if (unselected.nonEmpty) stop(settled, DriverStopped(DriverStop.Failure,
             s"${references(unselected)} created by cycle ${finished.get.number} is not in the recomputed advanceable set"), messages, now)
           else decide(snapshot, finished) match {
+            case DriverDecision.Stop(DriverStopped(DriverStop.UserInputRequired, _)) if rested.nonEmpty => off(rested.get)
             case DriverDecision.Stop(value) => stop(settled, value, messages, now)
             case _: DriverDecision.Continue if record.directives >= MaxDirectives => stop(settled, limit, messages, now)
             case DriverDecision.Continue(retried, offered) =>
               val start = token()
               val cycle = CycleRecord(CycleId(UUID.randomUUID()), finished.fold(1)(_.number + 1), record.targets, record.through, snapshot,
                 CycleState.Pending, Some(start), None, Map.empty, None, Nil, Nil, Set.empty, Set.empty, Nil, retried)
-              directed(record, cycle, CycleToken.Start(start), messages ++ finished.flatMap(retrying(_, offered)), now)
+              directed(record, cycle, CycleToken.Start(start), rested.map(_ => Rested).toList ++ messages ++ finished.flatMap(retrying(_, offered)), now)
           }
       }
   }

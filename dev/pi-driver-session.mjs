@@ -208,6 +208,25 @@ assert.equal((await status(first)).state, "On", "parking one session leaves the 
 await second.settle("completed");
 assert.equal(second.sent.length, 1);
 
+// D164: a session that waits on a Question is told once when the operator settles it. The second session, whose driver is off, records
+// a Question. From its next turn end on the extension keeps a `cq wait` on the real session directory, because its host says that the
+// session waits; the host finds the answer at its next round and gives it to that waiter, or, while the waiter was not running yet, to
+// the turn end. Either says the same line in one message that starts a turn.
+const question = { ...draft, title: "Which way", content: { Question: { status: "Open", prompt: "Which way?", context: "Fixture", alternatives: [], recommendation: null, answer: null } } };
+const [asked] = (await change(second, [{ Create: { draft: question } }], [])).Changed.ack.items;
+await second.settle("completed");
+assert.deepEqual(second.injected, []);
+const open = (await operator({ Read: { input: { project, selection: { ItemDetail: { id: asked.id } } } } })).Detail.view.item;
+await operator({ Change: { input: { project, change: { request: identity(), fences: [], reason: "The operator answers", mutations: [{ Replace: { id: asked.id, expected: open.revision,
+  draft: { ...open.draft, content: { Question: { ...open.draft.content.Question, status: "Answered", answer: "The second\nway" } } } } }] } } } });
+const told = Date.now() + 90000;
+while (second.injected.length === 0) { assert(Date.now() < told, "The session was not told that its Question was answered"); await sleep(1000); await second.settle("completed"); }
+await second.settle("completed");
+await sleep(1000);
+assert.deepEqual(second.injected.map(entry => [entry.message.content, entry.options]),
+  [[`CQ: question Q${asked.id.number} "Which way" answered: The second way\nRead each of them with cq_read (ItemDetail) and act on it before you end your turn.`, { triggerTurn: true }]]);
+assert.deepEqual(second.notices.filter(notice => notice.type === "error"), []);
+
 // Failure stops. Each leaves the ledger as it was; the toggle key started this drive, and restarts the next ones.
 const ledger = async () => JSON.stringify(await Promise.all([target.id, outsider.id, other.id, produced.id].map(detail)));
 const failure = async detailPattern => {

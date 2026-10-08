@@ -101,7 +101,7 @@ def main():
                                         f"still active: attempt {second['id']} on T3\n"), (code, output, errors)
         # A named attempt that has ended answers at once; the other one is waited for by name.
         code, output, _ = wait(session.directory, "--attempt", first["id"], "--json")
-        assert code == 0 and json.loads(output) == {"Ended": {"units": [{"unit": first, "phase": "Completed", "next": "ConsiderAcceptance", "blocker": None}], "active": [second]}}, output
+        assert code == 0 and json.loads(output) == {"Ended": {"units": [{"unit": first, "phase": "Completed", "next": "ConsiderAcceptance", "blocker": None}], "active": [second], "settled": []}}, output
         code, output, _ = wait(session.directory, "--attempt", second["id"], "--attempt", first["id"])
         assert code == 0 and output.splitlines()[0].startswith(f"attempt {first['id']}"), output
 
@@ -136,11 +136,28 @@ def main():
         code, output, _ = wait(session.directory)
         assert code == HOST_GONE and "is not running" in output and f"attempt {second['id']} on T3" in output and f"cq job upload --session {session.directory}" in output, output
 
+        # D164: a Question the session waits on keeps the command waiting although the host works on nothing; the end the host
+        # gives to the waiter that runs ends the wait. An end the host kept for the session's turn end is reported by no waiter.
+        asking = Session(root)
+        question = lambda number: {"project": {"value": PROJECT}, "ledger": "Questions", "number": str(number)}
+        answered = {"question": question(7), "title": "Which way", "status": "Answered", "answer": "The second\nway"}
+        asking.event({"Watching": {"question": question(7)}})
+        code, output, errors = wait(asking.directory, after=lambda: asking.event({"Settled": {"end": answered, "waiter": True}}))
+        assert code == 0 and output == 'question Q7 "Which way" answered: The second way\n', (code, output, errors)
+        asking.event({"Watching": {"question": question(8)}})
+        asking.event({"Settled": {"end": {**answered, "question": question(8)}, "waiter": False}})
+        assert wait(asking.directory, "--json")[:2] == (0, '{"Idle":{}}\n')
+        asking.event({"Watching": {"question": question(9)}})
+        withdrawn = {"question": question(9), "title": "Dropped", "status": "Withdrawn", "answer": None}
+        code, output, errors = wait(asking.directory, "--json", after=lambda: asking.event({"Settled": {"end": withdrawn, "waiter": True}}))
+        assert code == 0 and json.loads(output) == {"Ended": {"units": [], "active": [], "settled": [withdrawn]}}, (code, output, errors)
+        asking.host_ends()
+
         code, output, _ = wait(root)
         assert code == NOT_A_SESSION and "is not a CQ session directory" in output, (code, output)
         code, _, errors = wait(session.directory, "--attempt", str(uuid.uuid4()))
         assert code not in (0, HOST_GONE, NOT_A_SESSION), (code, errors)
-    print(json.dumps({"idle": "passed", "ends": "passed", "named": "passed", "integration": "passed", "hostGone": "passed", "notASession": "passed", "withoutDirectory": "passed", "waiterLock": "passed"}))
+    print(json.dumps({"idle": "passed", "ends": "passed", "named": "passed", "integration": "passed", "hostGone": "passed", "notASession": "passed", "withoutDirectory": "passed", "waiterLock": "passed", "questions": "passed"}))
 
 
 if __name__ == "__main__":

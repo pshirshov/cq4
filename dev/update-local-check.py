@@ -23,14 +23,6 @@ update = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(update)
 
 
-def schema_before(schema):
-    """The schema the pinned step starts from: this tree's without the column and the index the step adds."""
-    column = f"  cursor bigint NOT NULL CHECK (cursor >= 0),\n  {update.ATTEMPT_EVENTS} bigint NOT NULL DEFAULT 0 CHECK ({update.ATTEMPT_EVENTS} >= 0)\n"
-    index = f"CREATE INDEX {update.LIVE_CLAIMS_INDEX} ON cq_claims (project_id, expires_at) WHERE NOT released;\n"
-    assert schema.count(column) == 1 and schema.count(index) == 1, "The schema declares the column and the index of the pinned step"
-    return schema.replace(column, "  cursor bigint NOT NULL CHECK (cursor >= 0)\n").replace(index, "")
-
-
 class MemoryDirectories:
     def __init__(self):
         self.packages = {}
@@ -222,55 +214,14 @@ class Compatibility(unittest.TestCase):
             update.compatible(self.manifest("schema", "other"), self.manifest("schema", "new"), step)
         with self.assertRaisesRegex(RuntimeError, "Schema changes"):
             update.compatible(self.manifest("old-schema", "old"), self.manifest("schema", "new"), step)
-        self.assertIsNone(update.data_step(self.manifest("schema", "old"), self.manifest("schema", "new"), step, ROOT))
-
-    STEP = {"kind": "attempt-events-and-live-claims", "schemaBefore": "old-schema", "schemaAfter": "schema", "modelBefore": "old", "modelAfter": "new"}
-
-    def test_schema_transition_only_as_the_step_names_it(self):
-        # The hash returned is the one the database holds before the replacement.
-        self.assertEqual(update.compatible(self.manifest("old-schema", "old"), self.manifest("schema", "new"), self.STEP), "old-schema")
-        # The same package again changes nothing and needs no step, whatever step the tree pins.
-        self.assertEqual(update.compatible(self.manifest("schema", "new"), self.manifest("schema", "new"), self.STEP), "schema")
-        self.assertIsNone(update.data_step(self.manifest("schema", "new"), self.manifest("schema", "new"), self.STEP, ROOT))
-        for before, after in [(("other-schema", "old"), ("schema", "new")), (("old-schema", "other"), ("schema", "new")),
-                              (("old-schema", "old"), ("other-schema", "new")), (("old-schema", "old"), ("schema", "other")),
-                              (("schema", "new"), ("old-schema", "old"))]:
-            with self.subTest(before=before, after=after), self.assertRaisesRegex(RuntimeError, "Schema changes"):
-                update.compatible(self.manifest(*before), self.manifest(*after), self.STEP)
-        # A later model change on the new schema is not the pinned step's transition.
-        with self.assertRaisesRegex(RuntimeError, "data update step"):
-            update.compatible(self.manifest("schema", "new"), self.manifest("schema", "newer"), self.STEP)
 
     def test_pinned_step_describes_this_tree(self):
         step = json.loads((ROOT / "dev/local-update-step.json").read_text())
-        schema = (ROOT / update.SCHEMA_SOURCE).read_text()
-        sql = (ROOT / update.STEP_SQL).read_text()
-        self.assertEqual(step["kind"], update.ATTEMPT_EVENTS_AND_LIVE_CLAIMS)
-        self.assertEqual(step["schemaAfter"], update.digest(ROOT / update.SCHEMA_SOURCE))
+        self.assertEqual(step["kind"], update.UNCHANGED_DATA)
+        self.assertEqual(step["schema"], update.digest(ROOT / update.SCHEMA_SOURCE))
         self.assertEqual(step["modelAfter"], update.digest(ROOT / update.MODEL_SOURCE))
-        self.assertEqual(step["sqlSha256"], update.digest(ROOT / update.STEP_SQL))
-        before, after = self.manifest(step["schemaBefore"], step["modelBefore"]), self.manifest(step["schemaAfter"], step["modelAfter"])
-        self.assertEqual(update.compatible(before, after, step), step["schemaBefore"])
-        planned = update.data_step(before, after, step, ROOT)
-        self.assertEqual((planned.sql, planned.schema_after, planned.schema_source), (sql, step["schemaAfter"], ROOT / update.SCHEMA_SOURCE))
-        # The column and the index the SQL adds are the ones the schema declares, and the schema without them is the one the step starts from.
-        self.assertEqual(hashlib.sha256(schema_before(schema).encode()).hexdigest(), step["schemaBefore"])
-        self.assertIn(f"ALTER TABLE {update.CLOCKS} ADD COLUMN IF NOT EXISTS {update.ATTEMPT_EVENTS} bigint NOT NULL DEFAULT 0 CHECK ({update.ATTEMPT_EVENTS} >= 0);\n", sql)
-        self.assertIn(f"CREATE INDEX IF NOT EXISTS {update.LIVE_CLAIMS_INDEX} ON cq_claims (project_id, expires_at) WHERE NOT released;\n", sql)
-        self.assertIn(f"SET checksum = '{step['schemaAfter']}' WHERE version = 1 AND checksum = '{step['schemaBefore']}'", sql)
-        tampered = {**step, "sqlSha256": "0" * 64}
-        with self.assertRaisesRegex(RuntimeError, "SQL differs from its pinned step"):
-            update.data_step(before, after, tampered, ROOT)
-
-    def test_table_entries_compare_without_their_order(self):
-        dumps = {"declared": "CREATE TABLE public.t (\n    a text,\n    b text\n);\nCREATE INDEX i ON public.t USING btree (a);\n",
-                 "altered": "\\restrict key\nCREATE TABLE public.t (\n    b text,\n    a text\n);\nCREATE INDEX i ON public.t USING btree (a);\n",
-                 "other": "CREATE TABLE public.t (\n    a text,\n    b bigint\n);\nCREATE INDEX i ON public.t USING btree (a);\n"}
-        class Dumped:
-            def run(self, arguments, label, timeout):
-                return dumps[arguments[-1]]
-        self.assertEqual(update.structure(Dumped(), "declared", "label"), update.structure(Dumped(), "altered", "label"))
-        self.assertNotEqual(update.structure(Dumped(), "declared", "label"), update.structure(Dumped(), "other", "label"))
+        before, after = self.manifest(step["schema"], step["modelBefore"]), self.manifest(step["schema"], step["modelAfter"])
+        self.assertEqual(update.compatible(before, after, step), step["schema"])
 
     def test_unknown_step_kind_refused(self):
         step = {"kind": "other", "schema": "schema", "modelBefore": "old", "modelAfter": "new"}
@@ -448,146 +399,6 @@ class PostgreSQLInstall(unittest.TestCase):
             self.assertEqual(update.digest(unrestorable / "manifest.json"), stranded["newManifest"])
             # The restore ran in one transaction: the database is as the failed step left it, not partly dropped.
             self.assertEqual(stored(), ["changed"])
-
-    def test_pinned_step_adds_attempt_events_and_the_index_of_live_claims(self):
-        if not POSTGRES:
-            self.skipTest("Run with --postgres for the disposable PostgreSQL adapter")
-        step = json.loads((ROOT / "dev/local-update-step.json").read_text())
-        pinned = (ROOT / update.STEP_SQL).read_text()
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            data = root / "postgres"
-            evidence = root / "evidence"
-            evidence.mkdir()
-            (root / "database-password").write_text("disposable-test-password")
-            (root / "earlier.sql").write_text(schema_before((ROOT / update.SCHEMA_SOURCE).read_text()))
-            subprocess.run(["initdb", "-D", str(data), "-U", "cq", "--auth=trust", "--no-locale"], check=True, stdout=subprocess.DEVNULL)
-            with socket.socket() as listener:
-                listener.bind(("127.0.0.1", 0))
-                port = listener.getsockname()[1]
-            def running(arguments):
-                subprocess.run(["pg_ctl", "-D", str(data), "-l", str(root / "setup.log"), "-o", f"-h 127.0.0.1 -p {port} -c unix_socket_directories=''", "-w", "start"], check=True, stdout=subprocess.DEVNULL)
-                try:
-                    return subprocess.check_output(["psql", "--no-psqlrc", "-h", "127.0.0.1", "-p", str(port), "-U", "cq", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-At"] + arguments, text=True)
-                finally:
-                    subprocess.run(["pg_ctl", "-D", str(data), "-m", "fast", "-w", "stop"], check=True, stdout=subprocess.DEVNULL)
-            # A database of the release the step starts from. The first project has three claims, none live, and three attempts of
-            # which two have an outcome; the second has a usage clock and no attempt; the third has neither.
-            worked, idle, empty = (f"00000000-0000-0000-0000-00000000000{digit}" for digit in "abc")
-            def identity(number):
-                return f"00000000-0000-0000-0000-{number:012d}"
-            attempts = [(identity(1), "NULL", "NULL", {"role": "Governor", "collector": update.ATTACHED_GOVERNOR_COLLECTOR}),
-                        (identity(2), f"'{identity(1)}'", "'{\"value\":{\"state\":\"Completed\"}}'", {"role": "Worker", "collector": "native"}),
-                        (identity(3), f"'{identity(1)}'", "'{\"value\":{\"state\":\"Failed\"}}'", {"role": "Reviewer", "collector": "native"})]
-            claims = [(identity(11), 1, 0, True), (identity(12), 2, 9223372036854775807, True), (identity(13), 3, 0, False)]
-            running(["-c", "CREATE TABLE cq_schema_migrations (version integer PRIMARY KEY, checksum text NOT NULL)", "-c", f"INSERT INTO cq_schema_migrations VALUES (1, '{step['schemaBefore']}')",
-                     "-f", str(root / "earlier.sql"),
-                     # As an earlier update left it: a column added to an existing table stands after the columns the schema file declares later.
-                     "-c", "ALTER TABLE cq_items DROP COLUMN severity",
-                     "-c", "ALTER TABLE cq_items ADD COLUMN severity text CHECK (severity IN ('Critical', 'High', 'Medium', 'Low'))",
-                     "-c", f"INSERT INTO cq_projects(project_id, body, fence_counter) VALUES ('{worked}', '{{}}', {len(claims)}), ('{idle}', '{{}}', 0), ('{empty}', '{{}}', 0)",
-                     "-c", f"INSERT INTO cq_usage_clock(project_id, cursor) VALUES ('{worked}', 4), ('{idle}', 7)",
-                     "-c", f"INSERT INTO cq_usage_assignments(project_id, assignment_id, attribution, actor, received_at, body) VALUES ('{worked}', '{identity(21)}', 'Unattributed', '{{}}', 1, '{{}}')"] +
-                    [argument for claim, generation, expires, released in claims for argument in ("-c",
-                        f"INSERT INTO cq_claims(project_id, claim_id, generation, expires_at, released, body) VALUES ('{worked}', '{claim}', {generation}, {expires}, {released}, '{{}}')")] +
-                    [argument for attempt, parent, outcome, body in attempts for argument in ("-c",
-                        f"INSERT INTO cq_usage_attempts(project_id, attempt_id, assignment_id, parent_id, effective_outcome, session_id, actor, received_at, body) "
-                        f"VALUES ('{worked}', '{attempt}', '{identity(21)}', {parent}, {outcome}, '{worked}', '{{}}', 1, '{json.dumps(body)}')")])
-            def stored():
-                return json.loads(running(["-c", "SELECT json_build_object('checksum', (SELECT checksum FROM cq_schema_migrations), "
-                    "'tables', (SELECT json_agg(tablename ORDER BY tablename) FROM pg_tables WHERE schemaname = 'public'), "
-                    "'indexes', (SELECT json_agg(indexdef ORDER BY indexname) FROM pg_indexes WHERE schemaname = 'public'), "
-                    "'columns', (SELECT json_agg(table_name || '.' || column_name ORDER BY table_name, ordinal_position) FROM information_schema.columns WHERE table_schema = 'public'), "
-                    "'databases', (SELECT json_agg(datname ORDER BY datname) FROM pg_database WHERE NOT datistemplate), "
-                    "'clocks', (SELECT json_agg(to_jsonb(t) ORDER BY project_id) FROM cq_usage_clock t), "
-                    "'claims', (SELECT json_agg(to_jsonb(t) ORDER BY generation) FROM cq_claims t), "
-                    "'attempts', (SELECT json_agg(to_jsonb(t) ORDER BY attempt_id) FROM cq_usage_attempts t), "
-                    "'projects', (SELECT json_agg(to_jsonb(t) ORDER BY project_id) FROM cq_projects t))"]))
-            initial = stored()
-            self.assertEqual([column for column in initial["columns"] if column.startswith("cq_usage_clock.")], ["cq_usage_clock.project_id", "cq_usage_clock.cursor"])
-            self.assertEqual([column for column in initial["columns"] if column.startswith("cq_items.")][-1], "cq_items.severity")
-            self.assertFalse(any(update.LIVE_CLAIMS_INDEX in index for index in initial["indexes"]))
-            release = root / "release"
-            def fixture(path, content):
-                path.mkdir()
-                (path / "bin").mkdir()
-                files = {}
-                for name in ("bin/cq", "bin/cq-guardian", "runtime.nar", "runtime-paths.txt"):
-                    (path / name).write_text(content)
-                    (path / name).chmod(0o700)
-                    files[name] = update.digest(path / name)
-                (path / "manifest.json").write_text(json.dumps({"modelVersion": "0.1.0", "platform": "x86_64-linux", "filesSha256": files}))
-            fixture(release, "old")
-            installed = update.digest(release / "manifest.json")
-            def attempt(name, sql, modified):
-                candidate = root / f"candidate-{name}"
-                fixture(candidate, name)
-                receipt = {"oldManifest": installed, "newManifest": update.digest(candidate / "manifest.json"), "status": "candidate-verified"}
-                if modified:
-                    (candidate / "bin/cq").write_text("modified after candidate verification")
-                planned = update.AttemptEventsAndLiveClaims(sql, step["schemaAfter"], ROOT / update.SCHEMA_SOURCE)
-                return receipt, lambda: update.install(root, release, candidate, root / f"rollback-{name}", evidence, receipt, step["schemaBefore"],
-                                                       update.Commands(root, evidence, dict(os.environ)), planned)
-            def refused(name, reason, sql, modified, status):
-                receipt, run = attempt(name, sql, modified)
-                with self.assertRaisesRegex(RuntimeError, reason):
-                    run()
-                self.assertEqual(receipt["status"], status)
-                self.assertFalse((root / ".cq-update-recovery.json").exists())
-                self.assertEqual(update.digest(release / "manifest.json"), installed)
-                self.assertEqual(stored(), initial)
-                return receipt
-            # A project whose fence counter is not the number of its claims would get another work cursor: refused before any change.
-            running(["-c", f"UPDATE cq_projects SET fence_counter = fence_counter + 1 WHERE project_id = '{idle}'"])
-            initial = stored()
-            stray = refused("stray-fence", f"fence counter of 1 of the projects differs from the number of its claims: {idle} has fence counter 1 and 0 claims; nothing was changed", pinned, False, "refused")
-            self.assertNotIn("databaseRestored", stray)
-            running(["-c", f"UPDATE cq_projects SET fence_counter = 0 WHERE project_id = '{idle}'"])
-            initial = stored()
-            # Whatever fails after the SQL ran, the database is again the backup's: the column and the index are gone with the rest.
-            count = pinned[pinned.index(f"UPDATE {update.CLOCKS} c"):pinned.index("CREATE INDEX")]
-            index = f"CREATE INDEX IF NOT EXISTS {update.LIVE_CLAIMS_INDEX} ON cq_claims (project_id, expires_at) WHERE NOT released;\n"
-            checksum = f"UPDATE cq_schema_migrations SET checksum = '{step['schemaAfter']}'"
-            self.assertTrue(count.endswith(";\n") and count.count(";") == 1 and index in pinned and checksum in pinned)
-            failures = [
-                ("replacement", "Package file differs", pinned, True),
-                ("no-count", "usage clock other than the one it was", pinned.replace(count, ""), False),
-                ("no-checksum", "did not record the schema of the new package", pinned.replace(checksum, checksum.replace("SET checksum = '", "SET checksum = 'x")), False),
-                ("other-clock-change", "usage clock other than the one it was", pinned.replace(index, index + f"UPDATE {update.CLOCKS} SET cursor = cursor + 1;\n"), False),
-                ("other-table", "changed a table other than", pinned.replace(index, index + "UPDATE cq_projects SET body = '{\"changed\": true}';\n"), False),
-                ("no-index", "structure differs from the schema of the new package", pinned.replace(index, ""), False),
-                ("other-index", "structure differs from the schema of the new package", pinned.replace(index, index.replace(" WHERE NOT released", "")), False),
-                ("further-index", "structure differs from the schema of the new package", pinned.replace(index, index + "CREATE INDEX cq_claims_expiry ON cq_claims (expires_at);\n"), False),
-                ("other-column", "structure differs from the schema of the new package", pinned.replace("NOT NULL DEFAULT 0 CHECK", "NOT NULL DEFAULT 0 CONSTRAINT other CHECK"), False),
-                ("table-created", "created or dropped a table", pinned.replace(index, index + "CREATE TABLE cq_created(value text);\n"), False),
-            ]
-            for name, reason, sql, modified in failures:
-                with self.subTest(failure=name):
-                    self.assertTrue(modified or sql != pinned, "The variant differs from the pinned SQL")
-                    self.assertTrue(refused(name, reason, sql, modified, "rolled-back")["databaseRestored"])
-            applied, run = attempt("pinned", pinned, False)
-            run()
-            self.assertEqual(applied["status"], "installed")
-            self.assertEqual(applied["dataChanged"], [update.MIGRATIONS, update.CLOCKS])
-            self.assertEqual({key: applied[key] for key in ("dataStep", "usageClocks", "attemptEvents", "columnAdded", "indexCreated", "otherDataUnchanged", "structureAsDeclared")},
-                             {"dataStep": update.ATTEMPT_EVENTS_AND_LIVE_CLAIMS, "usageClocks": 2, "attemptEvents": 5, "columnAdded": "cq_usage_clock.attempt_events",
-                              "indexCreated": update.LIVE_CLAIMS_INDEX, "otherDataUnchanged": True, "structureAsDeclared": True})
-            updated = stored()
-            self.assertEqual(updated, {**initial, "checksum": step["schemaAfter"], "columns": [added for column in initial["columns"] for added in ([column, "cq_usage_clock.attempt_events"] if column == "cq_usage_clock.cursor" else [column])],
-                                       "indexes": sorted(initial["indexes"] + ["CREATE INDEX cq_claims_live ON public.cq_claims USING btree (project_id, expires_at) WHERE (NOT released)"],
-                                                         key=lambda definition: definition.split(" ON ")[0].split()[-1]),
-                                       "clocks": [{**clock, "attempt_events": events} for clock, events in zip(initial["clocks"], (5, 0))]})
-            self.assertEqual(updated["databases"], ["postgres"], "The database the structure was declared in is dropped")
-            # The work cursor the new release reads is the one the installed release counted, at a time before and after the lease that ended.
-            cursors = running(["-c", "SELECT p.fence_counter + (SELECT count(*) FROM cq_claims c WHERE c.project_id = p.project_id AND (c.released OR c.expires_at <= t.now)) + "
-                "(SELECT count(*) + count(effective_outcome) FROM cq_usage_attempts a WHERE a.project_id = p.project_id), "
-                "2 * p.fence_counter - (SELECT count(*) FROM cq_claims c WHERE c.project_id = p.project_id AND NOT c.released AND c.expires_at > t.now) + "
-                "COALESCE((SELECT attempt_events FROM cq_usage_clock u WHERE u.project_id = p.project_id), 0) "
-                "FROM cq_projects p, (VALUES (-1), (1)) t(now) ORDER BY p.project_id, t.now"]).split()
-            self.assertEqual(cursors, ["10|10", "11|11", "0|0", "0|0", "0|0", "0|0"])
-            # The SQL applied again changes nothing.
-            running(["-c", pinned])
-            self.assertEqual(stored(), updated)
 
 
 if __name__ == "__main__":

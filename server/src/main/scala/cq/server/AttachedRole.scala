@@ -17,7 +17,8 @@ final case class AttachedChannels(input: InputStream, output: OutputStream, owne
 final class AttachedProgram(config: SupervisorConfig, authority: SupervisorAuthority, gateway: AttachedGateway,
   dispatch: DispatchController, units: DispatchUnits, integrations: IntegrationController, combinations: CombinationController, revalidations: RevalidationController,
   watchdog: SupervisorWatchdog, channels: AttachedChannels, clock: Clock, local: LocalControlServer,
-  codex: AttachedCodexUsage, cleanup: WorkspaceCleanup, release: SessionRelease, claims: SessionClaims, location: ProjectLocation, wait: WaitCommand, logger: IzLogger) {
+  codex: AttachedCodexUsage, cleanup: WorkspaceCleanup, release: SessionRelease, claims: SessionClaims, location: ProjectLocation, wait: WaitCommand, questions: QuestionWatch,
+  logger: IzLogger) {
   private val sessions = new AttachedSessions(location.directory)
   private val MaxRecordBytes = 65536
   private val limits = PeerLimits(Duration.ofSeconds(30), Duration.ofSeconds(10), Duration.ofSeconds(30), AttachedGateway.FrameBytes, 32)
@@ -55,6 +56,9 @@ final class AttachedProgram(config: SupervisorConfig, authority: SupervisorAutho
     logger.warn(s"Attached usage observation failed: $problem")
   }}.uninterruptible
   private val monitor: Task[Nothing] = (observe(codex.poll(authority.collector)) *> ZIO.sleep(zio.Duration.fromSeconds(5))).forever
+  // The Questions the session waits on are read at the interval at which the host renews a claim; a round that fails is made again.
+  private val watch: Task[Nothing] = (ZIO.sleep(zio.Duration.fromJava(ClaimRenewal.Default.tick)) *> ZIO.attemptBlocking(questions.poll())
+    .catchAll(error => ZIO.succeed(logger.warn(s"The Questions this session waits on were not read: ${error.getMessage}")))).forever
   private def finish(peer: StdioPeer): Task[Unit] =
     (ZIO.succeed(peer.close()) *> shutdown *> ZIO.foreachDiscard(recorded.get())(run => observe(codex.finish(authority.collector)) *>
       ZIO.attemptBlocking {
@@ -96,7 +100,7 @@ final class AttachedProgram(config: SupervisorConfig, authority: SupervisorAutho
       guard.install()
       (peer, guard)
     })({ (peer, guard) => finish(peer).orDie.ensuring(ZIO.succeed(guard.release())) })({ (peer, _) =>
-      ZIO.acquireReleaseWith(monitor.interruptible.fork)(_.interrupt)( _ => loop(peer)) }) }
+      ZIO.acquireReleaseWith(monitor.zipPar(watch).interruptible.fork)(_.interrupt)( _ => loop(peer)) }) }
 }
 
 final class AttachedRole(program: AttachedProgram) extends RoleTask[Task] {

@@ -125,6 +125,7 @@ final class Cli(context: CliContext, location: ProjectLocation, upload: SessionU
         override def view(session: SessionId): cq.host.HostView = sessions.view(session)
         override def asked(session: SessionId): Option[String] = sessions.asked(session)
         override def ask(session: SessionId, units: Option[String]): Unit = sessions.ask(session, units)
+        override def announce(session: SessionId): List[QuestionEnd] = sessions.announce(session)
       })
       output.print(hook.run(harness, event, context.input.readNBytes(DriverHook.MaxInputBytes + 1)))
       output.flush()

@@ -133,7 +133,7 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
   private def denied[A](result: Either[Throwable, A]): Boolean = fault(result).exists(_.isInstanceOf[Fault.Denied])
   private def conflict[A](result: Either[Throwable, A]): Boolean = fault(result).exists(_.isInstanceOf[Fault.Conflict])
   private def stopped(value: Option[DriverStatus], reason: DriverStop): Boolean =
-    value.exists(found => found.state == DriverState.Off && found.attached.isEmpty && found.stopped.exists(_.reason == reason))
+    value.exists(found => found.state == DriverState.Off && found.attached.isEmpty == (reason != DriverStop.UserInputRequired) && found.stopped.exists(_.reason == reason))
   private def failed(service: LedgerService[IO], w: World, key: DriverKey, detail: String): IO[Throwable, Unit] =
     status(service, w, key).flatMap(value => assertIO(stopped(value, DriverStop.Failure) && value.get.stopped.get.detail.contains(detail))).unit
   private def lineage(value: Option[DriverStatus]): List[LineageEntry] = value.flatMap(_.cycle).toList.flatMap(_.lineage)
@@ -1939,6 +1939,69 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
           (parked match { case DriverReply.Parked(Some(value), "CQ driver parked: T3 through work") => stopped(Some(value), DriverStop.Parked); case _ => false }) &&
           unknown == DriverReply.Stop(DriverStopped(DriverStop.Off, "No CQ driver is on for this session"), None, Nil) && none.isEmpty)
         _ <- assertIO(DriverStop.all.map(DriverPolicy.reason) == List("quiescent", "user input required", "limit reached", "not bound", "failure", "parked", "off", "restored archive"))
+      } yield ()
+    }
+
+    "D164: decide a drive that stopped for user input anew at each continuation query, and continue it once the person has settled what it waited for" in { (service: LedgerService[IO]) =>
+      val w = world
+      val off = DriverStopped(DriverStop.Off, "The CQ driver is off")
+      def set(asked: ItemId, status: QuestionStatus, answer: Option[String]) = service.get(w.operator, asked).flatMap(view => service.change(w.operator,
+        request(List(Mutation.Replace(asked, view.item.revision, view.item.draft.copy(content = Content.Question(status, "Prompt", "Context", Nil, None, answer)))), Nil)))
+      // A drive on one Task that an Open Question gates: its first continuation query stops it for user input.
+      def resting(name: String): IO[Throwable, (World, DriverKey, ItemId, ItemId)] = {
+        val session = w.copy(governor = w.other(Role.Governor))
+        val key = claude(name)
+        for {
+          asked <- create(service, w.operator, question("Open question"))
+          gated <- create(service, w.operator, task("Gated by the question"))
+          _ <- reference(service, w.operator, gated, Relation.BlockedBy, asked, true).flatMap(service.change(w.operator, _))
+          _ <- on(service, session, key, workset(gated))
+          first <- query(service, session, key)
+          _ <- assertIO(first match { case DriverReply.Stop(DriverStopped(DriverStop.UserInputRequired, _), _, List(_)) => true; case _ => false })
+        } yield (session, key, asked, gated)
+      }
+      for {
+        _ <- service.initialize(w.operator, "resting drive")
+        // Still open: the query says nothing and changes nothing, so the session stops as it did before.
+        (session, key, asked, gated) <- resting("rests")
+        rested <- status(service, session, key)
+        again <- query(service, session, key)
+        unchanged <- status(service, session, key)
+        _ <- ZIO.attempt(assert(again == DriverReply.Stop(off, rested, Nil) && unchanged == rested, s"$again $rested $unchanged"))
+        // Answered: the next query issues the start directive of a new cycle, which the attached session of the drive starts.
+        _ <- set(asked, QuestionStatus.Answered, Some("Yes"))
+        resumed <- query(service, session, key)
+        _ <- ZIO.attempt(assert(resumed.isInstanceOf[DriverReply.Continue], s"A drive that waited for an answer did not continue once the Question was answered: $resumed"))
+        continued = resumed.asInstanceOf[DriverReply.Continue]
+        _ <- ZIO.attempt(assert(continued.status.state == DriverState.On && continued.status.stopped.isEmpty && continued.status.attached.contains(session.governor.actor.session) &&
+          continued.directive.token.isInstanceOf[CycleToken.Start] && continued.messages == List("CQ driver: the user settled what this drive waited for; it continues"), continued.toString))
+        cycle <- submit(service, session, session.governor, continued.directive.text)
+        _ <- assertIO(cycle.workflow == WorkflowRequest.Advance(Set(gated), WorkflowPhase.Work))
+        // While it rests the drive names its attached session, which is how the caller of the query finds that session's host.
+        _ <- ZIO.attempt(assert(rested.exists(value => value.state == DriverState.Off && value.attached.contains(session.governor.actor.session) &&
+          value.stopped.exists(_.reason == DriverStop.UserInputRequired)), rested.toString))
+        // Withdrawn: the gated Task stays blocked and nothing waits for a person any more, so the drive ends with that reason, said once.
+        (other, second, withdrawn, _) <- resting("withdrawn")
+        _ <- set(withdrawn, QuestionStatus.Withdrawn, None)
+        ended <- query(service, other, second)
+        last <- query(service, other, second)
+        _ <- ZIO.attempt(assert((ended match {
+          case DriverReply.Stop(value @ DriverStopped(DriverStop.Quiescent, _), Some(found), messages) => stopped(Some(found), DriverStop.Quiescent) && messages == List(DriverPolicy.stopMessage(value))
+          case _ => false
+        }) && (last match { case DriverReply.Stop(`off`, Some(found), Nil) => stopped(Some(found), DriverStop.Quiescent); case _ => false }), s"$ended $last"))
+        // A session that drives under another key meanwhile keeps that drive: the one that rested stays off.
+        (moved, third, later, _) <- resting("superseded")
+        ready <- create(service, w.operator, task("Ready"))
+        _ <- on(service, moved, claude("superseding"), workset(ready))
+        _ <- set(later, QuestionStatus.Answered, Some("Yes"))
+        kept <- query(service, moved, third)
+        _ <- ZIO.attempt(assert(kept match { case DriverReply.Stop(`off`, Some(found), Nil) => found.state == DriverState.Off; case _ => false }, kept.toString))
+        // A parked drive does not rest.
+        (parked, fourth, last2, _) <- resting("parked")
+        _ <- park(service, parked, fourth)
+        _ <- set(last2, QuestionStatus.Answered, Some("Yes"))
+        still <- query(service, parked, fourth)
+        _ <- ZIO.attempt(assert(still match { case DriverReply.Stop(`off`, Some(found), Nil) => found.state == DriverState.Off; case _ => false }, still.toString))
       } yield ()
     }
 

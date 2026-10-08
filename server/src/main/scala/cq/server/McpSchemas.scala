@@ -183,9 +183,9 @@ final class McpSchemas {
   /** `wait` is the command line that waits on this session's work, when the harness integration approved one for the session's shell. */
   def attachedInstructions(harness: Harness, wait: Option[String]): String = {
     val waiting = (harness, wait) match {
-      case (Harness.Pi, _) => SupervisorProgram.WaitForMessage
-      case (Harness.Claude, Some(command)) => SupervisorProgram.waitInBackground(command)
-      case (Harness.Codex, Some(_)) => SupervisorProgram.WaitInTurn
+      case (Harness.Pi, _) => SupervisorProgram.WaitForMessage + SupervisorProgram.SettledByMessage
+      case (Harness.Claude, Some(command)) => SupervisorProgram.waitInBackground(command) + SupervisorProgram.SettledInBackground
+      case (Harness.Codex, Some(_)) => SupervisorProgram.WaitInTurn + SupervisorProgram.SettledAtStop
       case (_, None) => throw new IllegalStateException(s"An attached $harness host has no wait command to name to its session")
     }
     val instructions = SupervisorProgram.Guidance + waiting +

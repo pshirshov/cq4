@@ -1,7 +1,7 @@
 package cq.server
 
 import cq.api.*
-import cq.host.{AttachedSessions, HostView, SessionOwner, SessionUnits, SessionWait, SessionWaiters}
+import cq.host.{AttachedSessions, HostView, SessionOwner, SessionQuestions, SessionUnits, SessionWait, SessionWaiters}
 import java.nio.channels.{FileChannel, FileLock}
 import java.nio.file.{Files, Path, StandardOpenOption}
 import java.util.UUID
@@ -13,6 +13,8 @@ final class SessionWaitLocal extends AnyWordSpec {
   private def attempt(members: Long*): SessionUnit = SessionUnit(SessionUnitKind.Attempt, UUID.randomUUID(), members.toList.map(task))
   private def key(unit: SessionUnit): (SessionUnitKind, UUID) = (unit.kind, unit.id)
   private def over(unit: SessionUnit, phase: String): UnitEnd = UnitEnd(unit, phase, Some("ConsiderAcceptance"), None)
+  private def question(number: Long): ItemId = ItemId(project, Ledger.Questions, number)
+  private def answered(number: Long, answer: String): QuestionEnd = QuestionEnd(question(number), s"Question $number", QuestionStatus.Answered, Some(answer))
 
   /** A session directory as a host leaves it, with the lock a live host holds. `steps` run one per pause of the waiter, in order;
     * a waiter that pauses more often than that would wait for ever, which fails the test instead. */
@@ -54,7 +56,7 @@ final class SessionWaitLocal extends AnyWordSpec {
       try {
         session.units.started(first); session.units.started(second)
         // A unit started after the waiter does not end its wait: the session starts a waiter of its own for it.
-        assert(session.await() == WaitOutcome.Ended(List(over(second, "Failed")), List(first)) && session.pauses == 4)
+        assert(session.await() == WaitOutcome.Ended(List(over(second, "Failed")), List(first), Nil) && session.pauses == 4)
         assert(SessionWait.lines(session.directory, session.await(second)) ==
           List(s"attempt ${second.id} on T3 ended: Failed, next ConsiderAcceptance", s"still active: attempt ${first.id} on T1,T2"))
       } finally session.close()
@@ -64,8 +66,8 @@ final class SessionWaitLocal extends AnyWordSpec {
       val session = new Session(_.units.ended(over(first, "Completed")))
       try {
         session.units.started(first); session.units.started(second)
-        assert(session.await(second, first) == WaitOutcome.Ended(List(over(first, "Completed")), List(second)) && session.pauses == 1)
-        assert(session.await(first) == WaitOutcome.Ended(List(over(first, "Completed")), List(second)) && session.pauses == 1)
+        assert(session.await(second, first) == WaitOutcome.Ended(List(over(first, "Completed")), List(second), Nil) && session.pauses == 1)
+        assert(session.await(first) == WaitOutcome.Ended(List(over(first, "Completed")), List(second), Nil) && session.pauses == 1)
         val unknown = intercept[IllegalArgumentException](session.await(attempt(9)))
         assert(unknown.getMessage.contains("is not a unit of the session"))
       } finally session.close()
@@ -77,12 +79,12 @@ final class SessionWaitLocal extends AnyWordSpec {
       val session = new Session(_.units.ended(prepared), _.units.ended(applied))
       try {
         session.units.started(integration)
-        assert(session.await() == WaitOutcome.Ended(List(prepared), Nil))
-        assert(SessionWait.lines(session.directory, WaitOutcome.Ended(List(prepared), Nil)) ==
+        assert(session.await() == WaitOutcome.Ended(List(prepared), Nil, Nil))
+        assert(SessionWait.lines(session.directory, WaitOutcome.Ended(List(prepared), Nil, Nil)) ==
           List(s"integration ${integration.id} on T5 ended: Ready, next Confirm, blocker: Host check verify: Failed"))
         // Applying it is the host working on it again: the earlier end no longer answers a wait for it.
         session.units.started(prepared.unit)
-        assert(session.await(integration) == WaitOutcome.Ended(List(applied), Nil) && session.pauses == 2)
+        assert(session.await(integration) == WaitOutcome.Ended(List(applied), Nil, Nil) && session.pauses == 2)
       } finally session.close()
     }
     "end when the host is gone, reporting an end the host wrote last and otherwise what it left unfinished" in {
@@ -90,7 +92,7 @@ final class SessionWaitLocal extends AnyWordSpec {
       val written = new Session(session => { session.units.ended(over(first, "Cancelled")); session.hostEnds() })
       try {
         written.units.started(first)
-        assert(written.await() == WaitOutcome.Ended(List(over(first, "Cancelled")), Nil))
+        assert(written.await() == WaitOutcome.Ended(List(over(first, "Cancelled")), Nil, Nil))
       } finally written.close()
       val lost = new Session(_ => (), _.hostEnds())
       try {
@@ -122,8 +124,36 @@ final class SessionWaitLocal extends AnyWordSpec {
         assert(cut > 0 && next(cut) < 0, "The fragment must end inside a multi-byte character")
         Files.write(session.directory.resolve(SessionUnits.File), next.take(cut), StandardOpenOption.APPEND)
         assert(SessionUnits.read(session.directory) == List(SessionUnitEvent.Started(unit), SessionUnitEvent.Ended(over(unit, "Completed"))))
-        assert(session.await(unit) == WaitOutcome.Ended(List(over(unit, "Completed")), Nil))
+        assert(session.await(unit) == WaitOutcome.Ended(List(over(unit, "Completed")), Nil, Nil))
       } finally session.close()
+    }
+    "D164: wait while the session waits on a Question, report the end the host gave to the waiter, and none that was written for the turn end" in {
+      // Nothing runs, and the session waits on Q1: the waiter stays until Q1 is settled, and the host, which finds it running, gives it the end.
+      val session = new Session(_ => (), _.units.settled(answered(1, "Yes")))
+      try {
+        SessionWaiters.create(session.directory)
+        session.units.watching(question(1))
+        val outcome = session.await()
+        assert(outcome == WaitOutcome.Ended(Nil, Nil, List(answered(1, "Yes"))) && session.pauses == 2, outcome.toString)
+        assert(SessionWait.lines(session.directory, outcome) == List("question Q1 \"Question 1\" answered: Yes"))
+        assert(SessionUnits.read(session.directory).last == SessionUnitEvent.Settled(answered(1, "Yes"), true))
+        // An end written while no waiter ran belongs to the session's next turn end: no waiter reports it, then or later.
+        session.units.watching(question(2))
+        session.units.settled(answered(2, "No"))
+        assert(SessionUnits.read(session.directory).last == SessionUnitEvent.Settled(answered(2, "No"), false))
+        assert(session.await() == WaitOutcome.Idle() && session.pauses == 2)
+        assert(SessionQuestions.unannounced(SessionUnits.read(session.directory), 0) == List(answered(2, "No")))
+      } finally session.close()
+      // A unit that ends and a Question that is settled meanwhile are reported together, and a Question the session no longer waits on ends the wait for it.
+      val unit = attempt(1)
+      val both = new Session(_.units.settled(answered(3, "Both")), _.units.ended(over(unit, "Completed")), _.units.released(question(4)))
+      try {
+        SessionWaiters.create(both.directory)
+        both.units.started(unit); both.units.watching(question(3)); both.units.watching(question(4))
+        assert(both.await(unit) == WaitOutcome.Ended(Nil, List(unit), List(answered(3, "Both"))) && both.pauses == 1)
+        assert(both.await(unit) == WaitOutcome.Ended(List(over(unit, "Completed")), Nil, Nil) && both.pauses == 2)
+        assert(both.await() == WaitOutcome.Idle() && both.pauses == 3)
+      } finally both.close()
     }
     "tell a process of the checkout how an attached session's host stands: unrecorded, gone, or running with its standing units and its waiter" in {
       val configuration = Files.createTempDirectory("cq-checkout-")
@@ -142,13 +172,13 @@ final class SessionWaitLocal extends AnyWordSpec {
         assert(sessions.view(other) == HostView.Unrecorded && sessions.running == List(AttachedHostRecord(session.directory.toString, Some("/opt/cq/bin/cq wait"))))
         val unit = attempt(1)
         session.units.started(unit)
-        assert(sessions.view(id) == HostView.Running(session.directory, List(unit), false, Some("/opt/cq/bin/cq wait")))
+        assert(sessions.view(id) == HostView.Running(session.directory, List(unit), Nil, false, Some("/opt/cq/bin/cq wait")))
         // A `cq wait` on the session is seen for as long as it runs, by its lock and without knowing its process.
-        val waiter = SessionWaiters.hold(session.directory)
-        try assert(sessions.view(id) == HostView.Running(session.directory, List(unit), true, Some("/opt/cq/bin/cq wait")))
+        val waiter = SessionWaiters.hold(session.directory)(())._1
+        try assert(sessions.view(id) == HostView.Running(session.directory, List(unit), Nil, true, Some("/opt/cq/bin/cq wait")))
         finally waiter.close()
         session.units.ended(over(unit, "Completed"))
-        assert(sessions.view(id) == HostView.Running(session.directory, Nil, false, Some("/opt/cq/bin/cq wait")))
+        assert(sessions.view(id) == HostView.Running(session.directory, Nil, Nil, false, Some("/opt/cq/bin/cq wait")))
         session.hostEnds()
         assert(sessions.view(id) == HostView.Gone && sessions.running.isEmpty)
         sessions.forget(id)
@@ -162,7 +192,7 @@ final class SessionWaitLocal extends AnyWordSpec {
         session.units.started(unit)
         val line = SessionUnitEvent_JsonCodec.encode(baboon.runtime.shared.BaboonCodecContext.Default, SessionUnitEvent.Ended(over(unit, "Completed"))).noSpaces
         Files.writeString(session.directory.resolve(SessionUnits.File), line, StandardOpenOption.APPEND)
-        assert(session.await() == WaitOutcome.Ended(List(over(unit, "Completed")), Nil) && session.pauses == 1)
+        assert(session.await() == WaitOutcome.Ended(List(over(unit, "Completed")), Nil, Nil) && session.pauses == 1)
       } finally session.close()
       val refused = intercept[SessionWait.NotASession](new SessionWait(Files.createTempDirectory("cq-no-session-"), () => ()))
       assert(refused.getMessage.contains("is not a CQ session directory"))

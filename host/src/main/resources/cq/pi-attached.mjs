@@ -66,6 +66,13 @@ function ended(end) {
   return `CQ: ${end.unit.kind.toLowerCase()} ${end.unit.id}${items} ended: ${end.phase}` + (end.next === null ? "" : `, next ${end.next}`) +
     (end.blocker === null ? "" : `, blocker: ${end.blocker.replace(/\s+/g, " ")}`);
 }
+// One line per Question `cq wait` reported as settled, as the host words it (SessionQuestions.described).
+const ANSWER_CODE_POINTS = 300;
+function settled(end) {
+  const line = text => Array.from(text.replace(/\s+/g, " ").trim()).slice(0, ANSWER_CODE_POINTS).join("");
+  return `CQ: question ${reference(end.question)} "${line(end.title)}" ${end.status.toLowerCase()}` + (end.answer === null ? "" : `: ${line(end.answer)}`);
+}
+const SETTLED_ACT = "Read each of them with cq_read (ItemDetail) and act on it before you end your turn.";
 // An item title is user text: it is shown on one line, without control characters and bounded in length.
 function shown(title) {
   const points = Array.from(title.replace(/\p{Cc}/gu, " "));
@@ -214,9 +221,13 @@ export default async function (pi) {
   // asks for a resume directive, which keeps the session in its turn, instead of waiting for a message that would not come.
   let restarted = false;
   const working = new Map();
+  // Whether the session waits on a Question, as its host said when the last turn ended: the waiter then runs although the host
+  // works on nothing. Whether the drive stopped for user input: the host decides such a drive anew when a turn ends.
+  let waiting = false;
+  let resting = false;
   function watch(context) {
     if (waiter !== undefined) { const stale = waiter; waiter = undefined; stale.kill("SIGTERM"); }
-    if (working.size === 0 || connection === undefined) return;
+    if ((working.size === 0 && !waiting) || connection === undefined) return;
     const named = [...working.values()].flatMap(unit => ["--" + unit.kind.toLowerCase(), unit.id]);
     const child = spawn(configuration.command, ["wait", "--session", directory, ...named, "--json"],
       { cwd: configuration.directory, env: process.env, stdio: ["ignore", "pipe", "inherit"], detached: false });
@@ -241,6 +252,7 @@ export default async function (pi) {
         const [name, body] = variant(JSON.parse(Buffer.concat(chunks).toString("utf8")));
         if (name === "HostGone") {
           working.clear();
+          waiting = false;
           context.ui.notify("CQ host is not running: its children are not followed any more; restart the session; retained deliveries can be recovered", "error");
           // A drive must not stay on in silence: the continuation query fails on the lost host and says so.
           if (driving && context.isIdle()) void proceed(context);
@@ -249,10 +261,15 @@ export default async function (pi) {
           for (const end of body.units) working.delete(end.unit.kind + " " + end.unit.id);
           const lines = body.units.map(ended);
           if (working.size > 0) lines.push(`CQ still works on ${working.size} more; you are told when they end.`);
-          lines.push("Read details with cq_dispatch Status (waitMillis 0) only if you need them.");
+          if (body.units.length > 0) lines.push("Read details with cq_dispatch Status (waitMillis 0) only if you need them.");
+          if (body.settled.length > 0) lines.push(...body.settled.map(settled), SETTLED_ACT);
           // Reaches the model at its next tool-call boundary when it is busy, and starts a turn when it is idle.
           pi.sendMessage({ customType: "cq-wait", content: lines.join("\n"), display: true, details: {} }, { triggerTurn: true });
           watch(context);
+        } else if (name === "Idle") {
+          // The session no longer waits on a Question, and nothing is reported.
+          restarted = false;
+          waiting = false;
         } else throw new Error("unexpected outcome " + name);
       } catch (error) { failed(error.message); }
     });
@@ -284,19 +301,36 @@ export default async function (pi) {
     if (name !== expected) throw new Error(`Unexpected CQ driver reply ${name}; expected ${expected}`);
     return body;
   }
+  // What a person settled of the Questions this session waits on, as the host says it once when a turn has ended: the message
+  // starts the turn that reads it. The waiter runs from then on while the session waits on a Question.
+  async function answered(context) {
+    if (connection === undefined) return false;
+    let reply;
+    try { reply = await connection.rpc("cq/settled", {}, undefined, REQUEST_MILLIS); }
+    catch (error) { context.ui.notify("CQ could not read which Questions of this session were settled: " + error.message, "error"); return false; }
+    waiting = reply.waiting === true;
+    // A waiter that failed twice is not started again for it: the turn ends still say what was settled.
+    if (waiter === undefined && waiting && working.size === 0 && !restarted) watch(context);
+    if (reply.lines.length === 0) return false;
+    pi.sendMessage({ customType: "cq-wait", content: [...reply.lines.map(line => "CQ: " + line), SETTLED_ACT].join("\n"), display: true, details: {} }, { triggerTurn: true });
+    return true;
+  }
   // The continuation decision is the host's: a directive is submitted unchanged, a stop is shown and nothing is sent.
   async function proceed(context) {
     let reply;
-    // Waiting is accepted only while the waiter runs: it is what starts the next turn.
-    try { reply = await driver(context, "Continue", { waiting: waiter !== undefined }); }
+    // Waiting is accepted only while the waiter runs for work of the host: it is what starts the next turn.
+    try { reply = await driver(context, "Continue", { waiting: waiter !== undefined && working.size > 0 }); }
     catch (error) {
       driving = false;
+      resting = false;
       context.ui.setStatus(DRIVER_FOOTER, DRIVER_OFF + ": continuation query failed");
       context.ui.notify(`CQ driver stopped: continuation query failed: ${error.message}; run /cq:park to release the driver`, "error");
       return;
     }
     const [name, body] = variant(reply);
     if (name === "Continue") {
+      driving = true;
+      resting = false;
       show(context, body.status);
       for (const message of body.messages) context.ui.notify(message, "info");
       pi.sendUserMessage(body.directive.text, { deliverAs: "followUp", expandPromptTemplates: true });
@@ -304,7 +338,10 @@ export default async function (pi) {
       // Work of the host is in flight and the waiter runs: nothing is sent, and its message starts the turn that continues the cycle.
       show(context, body.status);
     } else if (name === "Stop") {
+      // A drive that rests and is still off was decided as before: nothing new is shown.
+      if (!driving && body.stopped.reason === "Off") return;
       driving = false;
+      resting = body.stopped.reason === "UserInputRequired";
       show(context, body.status);
       const messages = body.messages.length === 0 ? ["CQ driver stopped: " + body.stopped.detail] : body.messages;
       for (const message of messages) context.ui.notify(message, FAILURE_STOPS.has(body.stopped.reason) ? "error" : "info");
@@ -315,6 +352,7 @@ export default async function (pi) {
     try { started = expect(await driver(context, "Start", { input }), "Started"); }
     catch (error) { context.ui.notify("CQ driver not started: " + error.message, "error"); return; }
     driving = true;
+    resting = false;
     workset = input;
     show(context, started.status);
     context.ui.notify(started.message + "\n" + previewText(started.preview), "info");
@@ -325,6 +363,7 @@ export default async function (pi) {
     try { parked = expect(await driver(context, "Park", {}), "Parked"); }
     catch (error) { context.ui.notify("CQ driver not parked: " + error.message, "error"); return; }
     driving = false;
+    resting = false;
     show(context, parked.status);
     context.ui.notify(parked.message, "info");
   }
@@ -343,6 +382,8 @@ export default async function (pi) {
     sequence = 0;
     turn = 0;
     driving = false;
+    resting = false;
+    waiting = false;
     workset = undefined;
     const started = new Connection(configuration);
     connection = started;
@@ -373,6 +414,7 @@ export default async function (pi) {
       connection = undefined;
       directory = undefined;
       working.clear();
+      waiting = false;
       watch(context);
       await active.close();
     }
@@ -386,12 +428,13 @@ export default async function (pi) {
     catch (error) { context.ui.setStatus(DRIVER_FOOTER, "CQ driver status unavailable: " + error.message); }
   });
   pi.on("agent_settled", async (_event, context) => {
-    if (!driving) return;
-    if (outcome === "completed") await proceed(context);
-    else {
+    if (driving && outcome !== "completed") {
       context.ui.notify(`CQ driver: the last turn ended ${outcome}, so the driver parks instead of continuing`, "warning");
       await park(context);
     }
+    if (await answered(context)) return;
+    // A drive that rests is asked to continue only when the host works on nothing for the session.
+    if (driving || (resting && outcome === "completed" && working.size === 0)) await proceed(context);
   });
   pi.on("message_end", async (event, context) => {
     const message = event.message;

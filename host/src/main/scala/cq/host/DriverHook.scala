@@ -10,8 +10,10 @@ import scala.util.control.NonFatal
 
 /** How one hook-driven harness spells the drive and park commands and is told to run an advance directive. */
 /** `woken` says whether an idle session of the harness is started again when a background command of it exits; `waiter` is the order
-  * to start the wait command for the standing units, in the way the harness can wait. */
-final case class HookDialect(harness: Harness, drive: String, park: String, advance: String, woken: Boolean, waiter: (String, Option[String]) => String)
+  * to start the wait command for the standing units, in the way the harness can wait. `resting` is that order for a session that
+  * ends its turn with nothing running while it waits on Open Questions; a harness whose idle session nothing wakes has none. */
+final case class HookDialect(harness: Harness, drive: String, park: String, advance: String, woken: Boolean, waiter: (String, Option[String]) => String,
+  resting: Option[(String, Option[String]) => String])
 
 /**
  * The shared CQ hook program of Claude Code and Codex: one hook invocation (harness, event, the hook's stdin) becomes the hook's stdout.
@@ -81,19 +83,31 @@ final class DriverHook(entry: () => DriverEntry, sessions: SessionViews) {
     }).getOrElse("")
   }
 
-  private def message(text: String): String = render(JsonObject("systemMessage" -> Json.fromString(text)))
+  // What a Stop hook answers: `reason` blocks the stop and is what the session reads; `posted` is shown in the transcript.
+  private final case class Answer(reason: Option[String], posted: Option[String]) {
+    def rendered: String = {
+      val shown = posted.fold(JsonObject.empty)(text => JsonObject("systemMessage" -> Json.fromString(text)))
+      reason match {
+        case Some(text) => render(shown.add("decision", Json.fromString("block")).add("reason", Json.fromString(text)))
+        case None => if (posted.isEmpty) "" else render(shown)
+      }
+    }
+    // The stop is blocked for `order` as well, which is said first: a directive stays the last line. What was only posted is said
+    // to the session too, since its turn goes on.
+    def blocked(order: String): Answer = copy(reason = Some((order :: reason.orElse(posted).toList).mkString("\n")))
+  }
+  private def message(text: String): Answer = Answer(None, Some(text))
   // A stop that would leave the drive waiting for something that will not come ends the drive here, where it can still be said.
-  private def parked(call: DriverCall, cause: String): String = entry().park(call) match {
+  private def parked(call: DriverCall, cause: String): Answer = entry().park(call) match {
     case DriverReply.Parked(_, parked) => message(s"$cause $parked. $Restart")
     case other => unexpected(other)
   }
 
   /** `unseen` is the host of the drive's session when this checkout does not find it running. */
-  private def answered(dialect: HookDialect, call: DriverCall, waiting: Boolean, unseen: Option[HostView]): String = entry().continuation(call, waiting) match {
+  private def answered(dialect: HookDialect, call: DriverCall, waiting: Boolean, unseen: Option[HostView]): Answer = entry().continuation(call, waiting) match {
     case DriverReply.Continue(directive, _, messages) =>
-      val posted = if (messages.isEmpty) JsonObject.empty else JsonObject("systemMessage" -> Json.fromString(messages.mkString("\n")))
-      render(posted.add("decision", Json.fromString("block")).add("reason", Json.fromString((messages ++ List(dialect.advance, directive.text)).mkString("\n"))))
-    case DriverReply.Stop(_, _, messages) => if (messages.isEmpty) "" else message(messages.mkString("\n"))
+      Answer(Some((messages ++ List(dialect.advance, directive.text)).mkString("\n")), Option.when(messages.nonEmpty)(messages.mkString("\n")))
+    case DriverReply.Stop(_, _, messages) => Answer(None, Option.when(messages.nonEmpty)(messages.mkString("\n")))
     case DriverReply.Waiting(_, waited) => unseen match {
       case None => message(waited)
       // A host that is gone finishes nothing and wakes nobody.
@@ -107,29 +121,51 @@ final class DriverHook(entry: () => DriverEntry, sessions: SessionViews) {
   // and a `cq wait` runs on the session of a harness whose idle session a finished background command wakes. With work standing and
   // no such waiter the stop is blocked with the order to start one; that is no directive of the driver and counts as none. A session
   // that stops again on the same standing work without a waiter is not asked twice: the drive is parked.
-  private def stop(dialect: HookDialect, call: DriverCall): String = {
-    val driven = entry().status(call) match {
-      case DriverReply.Status(Some(value)) if value.state == DriverState.On => value.attached
-      case _ => None
-    }
-    driven.fold(answered(dialect, call, false, None)) { session =>
-      sessions.view(session) match {
-        case HostView.Running(_, standing, waited, command) if standing.nonEmpty =>
-          if (dialect.woken && waited) { sessions.ask(session, None); answered(dialect, call, true, None) }
-          else {
-            val units = standing.map(SessionUnits.described).mkString("; ")
-            val key = standing.map(unit => s"${unit.kind} ${unit.id}").sorted.mkString(",")
-            if (sessions.asked(session).contains(key)) { sessions.ask(session, None); parked(call, s"$Unwaited $units.") }
-            else {
-              sessions.ask(session, Some(key))
-              render(JsonObject("decision" -> Json.fromString("block"), "reason" -> Json.fromString(dialect.waiter(units, command))))
-            }
-          }
-        // The host works on nothing: what the server still holds in flight is settled by its own rules, with a resume directive.
-        case _: HostView.Running => sessions.ask(session, None); answered(dialect, call, false, None)
-        case unseen => answered(dialect, call, true, Some(unseen))
+  private def working(dialect: HookDialect, call: DriverCall, session: SessionId, host: HostView.Running): Answer =
+    if (dialect.woken && host.waited) { sessions.ask(session, None); answered(dialect, call, true, None) }
+    else {
+      val units = host.standing.map(SessionUnits.described).mkString("; ")
+      val key = host.standing.map(unit => s"${unit.kind} ${unit.id}").sorted.mkString(",")
+      if (sessions.asked(session).contains(key)) { sessions.ask(session, None); parked(call, s"$Unwaited $units.") }
+      else {
+        sessions.ask(session, Some(key))
+        Answer(Some(dialect.waiter(units, host.waitCommand)), None)
       }
     }
+
+  // The host works on nothing: what the server still holds in flight is settled by its own rules, with a resume directive. A session
+  // that then stops while it waits on Open Questions is told once to start its waiter, where a waiter can start its next turn: the
+  // answer then does. A session that stops again without one may stop, and learns of the answer at its next turn end.
+  private def idle(dialect: HookDialect, call: DriverCall, session: SessionId, host: HostView.Running): Answer = {
+    val answer = answered(dialect, call, false, None)
+    val key = host.watched.map(question => "Question " + SessionUnits.reference(question)).sorted.mkString(",")
+    dialect.resting.filter(_ => answer.reason.isEmpty && host.watched.nonEmpty && !host.waited) match {
+      case Some(order) if !sessions.asked(session).contains(key) =>
+        sessions.ask(session, Some(key))
+        answer.blocked(order(host.watched.map(SessionUnits.reference).mkString(", "), host.waitCommand))
+      case Some(_) => answer
+      case None => sessions.ask(session, None); answer
+    }
+  }
+
+  // The session of a drive that is on, or that rests on user input, is the one this hook can name: what its host wrote about the
+  // Questions it waits on is said before the turn ends, once for each end.
+  private def stop(dialect: HookDialect, call: DriverCall): String = {
+    val status = entry().status(call) match {
+      case DriverReply.Status(value) => value
+      case other => unexpected(other)
+    }
+    val on = status.exists(_.state == DriverState.On)
+    status.flatMap(_.attached).fold(answered(dialect, call, false, None)) { session =>
+      sessions.view(session) match {
+        case host: HostView.Running =>
+          // A drive that rests is asked to continue only when its session has nothing running.
+          val answer = if (host.standing.isEmpty) idle(dialect, call, session, host) else if (on) working(dialect, call, session, host) else Answer(None, None)
+          val settled = sessions.announce(session)
+          if (settled.isEmpty) answer else answer.blocked((Settled :: settled.map("- " + SessionQuestions.described(_)) ::: List(SessionQuestions.Act)).mkString("\n"))
+        case unseen => if (on) answered(dialect, call, true, Some(unseen)) else Answer(None, None)
+      }
+    }.rendered
   }
 }
 
@@ -142,7 +178,10 @@ object DriverHook {
   val HostUnrecorded = "CQ driver stopped: this checkout holds no record of the CQ host of this session while its work was in flight: the host has ended, " +
     "or a CQ package without the waiter started it. Nothing would continue the drive."
   val Unwaited = "CQ driver stopped: this session was told how to wait for its running work and stopped again without waiting, so nothing would continue the drive. Still running:"
+  val Settled = "CQ: a person settled what this session waits on:"
   private val Restart = "Restart the harness session and drive again; cq job upload --session DIR recovers what a host retained."
+  private val Background = "Run exactly this command now with the Bash tool as a background command (run_in_background true, timeout 7200000), then end your turn: "
+  private def command(value: Option[String]): String = s"`${value.getOrElse(throw new IllegalStateException("The CQ host of this session named no wait command"))}`"
   private val Unchanged = "Nothing changed for this session's driver and no bind token was issued."
   private def unknown(dialect: HookDialect): String = "The CQ server's reply was not received, so this session's driver may have changed and a bind token may have been issued. " +
     s"""Read the driver status with the CQ session tool ({"Driver":{}}) or run ${dialect.park} before driving again."""
@@ -154,14 +193,16 @@ object DriverHook {
 
   val Dialects: List[HookDialect] = List(
     HookDialect(Harness.Claude, "/cq:drive", "/cq:park", s"$Instruction Invoke it as the cq:advance command through the Skill tool with exactly these arguments:", true,
-      (units, command) => s"CQ driver: work of this session still runs ($units) and no cq wait runs for it, so nothing would start your next turn. " +
-        "Run exactly this command now with the Bash tool as a background command (run_in_background true, timeout 7200000), then end your turn: " +
-        s"`${command.getOrElse(throw new IllegalStateException("The CQ host of this session named no wait command"))}`"),
+      (units, wait) => s"CQ driver: work of this session still runs ($units) and no cq wait runs for it, so nothing would start your next turn. " +
+        Background + command(wait),
+      Some((questions, wait) => s"CQ: this session waits on $questions and no cq wait runs for it, so nothing would start your next turn when a person settles one of them. " +
+        Background + command(wait))),
     // Nothing wakes an idle Codex session when a background command exits (openai/codex#32188): it waits inside its turn, in a
     // status call of the host.
     HookDialect(Harness.Codex, "$cq-drive", "$cq-park", s"$Instruction Follow the cq-advance skill with exactly these arguments:", false,
       (units, _) => s"CQ driver: work of this session still runs ($units). Do not end your turn: nothing wakes you when it ends. " +
-        s"Call the status of that work now with the CQ dispatch tool (Status, IntegrationStatus or CombinationStatus) with waitMillis ${DispatchWaits.MaxMillis}, and again while the work continues. " + DispatchWaits.CodexScript),
+        s"Call the status of that work now with the CQ dispatch tool (Status, IntegrationStatus or CombinationStatus) with waitMillis ${DispatchWaits.MaxMillis}, and again while the work continues. " + DispatchWaits.CodexScript,
+      None),
   )
 
   private def invalid(message: String): Nothing = throw DomainFailure(Fault.Invalid(message))

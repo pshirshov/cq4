@@ -40,7 +40,7 @@ final class AttachedGatewayLocal extends AnyWordSpec {
     private val api = new Api(answer)
     private val gateway = new AttachedGateway(config, SupervisorAuthority(api, api, api, AccessToken("governor", 0)), schemas, null, null, null,
       new AttachedCodexUsage(Path.of("/nonexistent"), config.run, new CodexRollout, java.time.Clock.systemUTC()), null,
-      new SessionClaims(config.owner, api, logstage.IzLogger.NullLogger), WaitCommand(Some("/opt/cq/bin/cq")))
+      new SessionClaims(config.owner, api, logstage.IzLogger.NullLogger), WaitCommand(Some("/opt/cq/bin/cq")), new cq.host.QuestionWatch(api, config.project.project, config.directory, _ => ()))
     private val input = new PipedInputStream(8192)
     private val client = new PipedOutputStream(input)
     private val response = new PipedInputStream(8192)
@@ -230,6 +230,8 @@ final class AttachedGatewayLocal extends AnyWordSpec {
         session.exchange("tools/list", Json.obj())
         session.exchange("ping", Json.obj())
         session.exchange("cq/session", Json.obj())
+        // What the Pi extension asks at every turn end is no governing work: a session that waits on nothing is told so.
+        assert(session.exchange("cq/settled", Json.obj()).hcursor.downField("result").focus.contains(Json.obj("lines" -> Json.arr(), "waiting" -> Json.False)))
         for (method <- List("resources/list", "prompts/list", "resources/templates/list"))
           assert(session.exchange(method, Json.obj()).hcursor.downField("error").get[Int]("code") == Right(-32601), method)
         assert(session.governing.get() == 0)
@@ -243,7 +245,7 @@ final class AttachedGatewayLocal extends AnyWordSpec {
         session.exchange("cq/driver", Json.obj())
         assert(session.governing.get() == 4)
         // Every method the host answers is classified, and no other is answered.
-        assert(AttachedGateway.Methods.keySet == Set("initialize", "ping", "tools/list", "cq/session", "tools/call", "cq/piUsage", "cq/driver"))
+        assert(AttachedGateway.Methods.keySet == Set("initialize", "ping", "tools/list", "cq/session", "cq/settled", "tools/call", "cq/piUsage", "cq/driver"))
       } finally session.close()
     }
     "D160: answer the request whose registration failed with that failure, keep serving, and ask for the registration again at the next governing request" in {

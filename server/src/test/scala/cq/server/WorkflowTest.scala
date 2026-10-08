@@ -46,9 +46,10 @@ final class WorkflowLocal extends AnyWordSpec {
       val text = schemas.attachedInstructions(Harness.Claude, Some(Wait))
       assert(text.contains(work + "a child is awaited in the background, anything else inside your turn. Do not call a status to wait for a child: after starting one, " +
         "run exactly this command with the Bash tool as a background command (run_in_background true, timeout 7200000): `" + Wait + "`. Then continue with other ready work or end your turn."))
-      assert(text.contains("0: a unit ended, or nothing was active") && text.contains("3: the CQ host is not running") &&
+      assert(text.contains("0: a unit ended, a Question you wait on was settled, or nothing was active and you wait on no Question; " +
+        "the file has one line for each ended unit, each settled Question and each unit still active.") && text.contains("3: the CQ host is not running") &&
         text.contains("4 or 5: the command found no single session of this checkout, and its output says why. Report 3, 4 and 5 to the user.") &&
-        text.contains("Any other exit, including the harness ending the command at its lifetime limit: run it again while work is active.") &&
+        text.contains("Any other exit, including the harness ending the command at its lifetime limit: run it again while work is active or you wait on a Question.") &&
         text.contains("After exit 0, read the outcome of each ended unit with one Status, IntegrationStatus or CombinationStatus call with waitMillis 0, and run the command again while other work is active."))
       // What ends within seconds would end before the session's turn does, and a stop that finds nothing running costs a resume directive.
       // I30: a workspace the session submitted is captured and checked by the host, which is waited for in the same way and by no third one.

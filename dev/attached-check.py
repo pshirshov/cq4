@@ -434,6 +434,66 @@ def main():
             assert hook("UserPromptSubmit", hooked, prompt="$cq-park")["systemMessage"] == f"CQ driver park: CQ driver parked: {reference} through explore"
             assert hook("Stop", hooked, stop_hook_active=True, last_assistant_message="Parked.") is None
             assert hook("Stop", None, stop_hook_active=False) == {"systemMessage": "CQ Stop hook error: Driver session key is missing; no default session is used"}
+
+            # D164: a session learns that the operator settled a Question it waits on. The host reads the Questions the session
+            # waits on at its claim-renewal interval, so each step that depends on it waits for the host's next round.
+            question = {"title": "Which way", "body": "Fixture question", "labels": [], "archived": False, "citations": [],
+                        "content": {"Question": {"status": "Open", "prompt": "Which way?", "context": "Fixture", "alternatives": [], "recommendation": None, "answer": None}}}
+            def operate(mutations):
+                return operator({"Change": {"input": {"project": project, "change": {"request": identity(), "mutations": mutations, "fences": [], "reason": "Question fixture"}}}})["Changed"]["ack"]["items"]
+            def current(item):
+                return operator({"Read": {"input": {"project": project, "selection": {"ItemDetail": {"id": item["id"]}}}}})["Detail"]["view"]["item"]
+            def answer(item, text):
+                held = current(item)
+                operate([{"Replace": {"id": item["id"], "expected": held["revision"], "draft": {**held["draft"], "content": {"Question": {**held["draft"]["content"]["Question"], "status": "Answered", "answer": text}}}}}])
+            def events():
+                return [json.loads(line) for line in (driven_directory / "units.jsonl").read_text().splitlines()]
+            def written(event):
+                """Waits until the host has written `event` about a Question into the session's units file."""
+                deadline = time.monotonic() + 90
+                while event not in events():
+                    assert time.monotonic() < deadline, (event, events()[-4:])
+                    time.sleep(0.2)
+            def ended(item, text, waiter):
+                return {"Settled": {"end": {"question": item["id"], "title": current(item)["draft"]["title"], "status": "Answered", "answer": text}, "waiter": waiter}}
+            said = "CQ: a person settled what this session waits on:"
+            act = "Read each of them with the CQ read tool (ItemDetail) and act on it before you end your turn."
+            # A drive on a Task that a Question of the operator gates stops for user input at once, and rests.
+            gate, gated = operate([{"Create": {"draft": {**question, "title": "Gate"}}}, {"Create": {"draft": {**draft, "labels": [], "title": "Gated task"}}}])
+            operate([{"Reference": {"source": gated["id"], "expectedSource": gated["revision"], "relation": "BlockedBy", "target": gate["id"], "expectedTarget": gate["revision"], "present": True}}])
+            asking, gated_reference, gate_reference = "attached-fixture-question-session", "T" + gated["id"]["number"], "Q" + gate["id"]["number"]
+            offered = hook("UserPromptSubmit", asking, prompt=f"$cq-drive {gated_reference} through=explore")["hookSpecificOutput"]["additionalContext"]
+            printed, = [line for line in offered.splitlines() if '{"Bind":' in line]
+            driven.tool("session", json.loads(printed[printed.index('{"Bind":'):]))
+            rested = hook("Stop", asking, stop_hook_active=False, last_assistant_message="Bound.")
+            assert rested == {"systemMessage": f"CQ driver stopped (user input required): Awaiting the user on {gate_reference}; the driver never answers questions or infers approval"}, rested
+            # The session records a Question of its own and advances the gated Task: it waits on both, and a stop with nothing new is allowed.
+            own, = change([{"Create": {"draft": question}}], [])["Changed"]["ack"]["items"]
+            assert events()[-1] == {"Watching": {"question": own["id"]}}, events()[-2:]
+            driven.tool("session", {"Workflow": {"id": identity(), "request": {"Advance": {"roots": [gated["id"]], "through": "Explore"}}, "operatorRequirements": "Question fixture", "token": None}})
+            assert hook("Stop", asking, stop_hook_active=False, last_assistant_message="Asked.") is None
+            # Answered with no waiter running: the host's next round writes the end, and the next stop says it once.
+            answer(own, "The second\nway")
+            written({"Watching": {"question": gate["id"]}})
+            written(ended(own, "The second\nway", False))
+            told = hook("Stop", asking, stop_hook_active=False, last_assistant_message="Done.")
+            assert told == {"decision": "block", "reason": "\n".join([said, f'- question Q{own["id"]["number"]} "Which way" answered: The second way', act])}, told
+            assert hook("Stop", asking, stop_hook_active=True, last_assistant_message="Read.") is None
+            # Answered while a `cq wait` runs on the session: the waiter, which waits although the host works on nothing, reports it, and no stop does.
+            waited, = change([{"Create": {"draft": {**question, "title": "Waited for"}}}], [])["Changed"]["ack"]["items"]
+            waiter = watched([])
+            answer(waited, "Yes")
+            reported, _ = waiter.communicate(timeout=90)
+            assert waiter.returncode == 0 and reported == f'question Q{waited["id"]["number"]} "Waited for" answered: Yes\n', (waiter.returncode, reported)
+            assert ended(waited, "Yes", True) in events()
+            assert hook("Stop", asking, stop_hook_active=False, last_assistant_message="Woken.") is None
+            # The answer the drive rested on: one stop announces it and carries the start directive of the drive, which is on again.
+            answer(gate, "This way")
+            written(ended(gate, "This way", False))
+            continued = hook("Stop", asking, stop_hook_active=False, last_assistant_message="Done.")["reason"].splitlines()
+            assert continued[:3] == [said, f'- question {gate_reference} "Gate" answered: This way', act] and "CQ driver: the user settled what this drive waited for; it continues" in continued, continued
+            assert continued[-1].startswith(f"$cq-advance --roots {gated_reference} --through explore --start-token "), continued
+            assert hook("UserPromptSubmit", asking, prompt="$cq-park")["systemMessage"] == f"CQ driver park: CQ driver parked: {gated_reference} through explore"
             status_line = json.loads((repository / ".claude/settings.local.json").read_text())["statusLine"]["command"]
             shown = subprocess.run(shlex.split(status_line), cwd=repository, env=env, input=json.dumps({"session_id": "attached-fixture-status"}), capture_output=True, text=True, timeout=60)
             assert shlex.split(status_line) == [str(wrapper), "hook", "claude", "StatusLine"] and shown.returncode == 0 and shown.stdout == "CQ driver off\n", shown
