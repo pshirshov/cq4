@@ -12,3 +12,9 @@ generated/
 .bloop/
 metals.sbt
 __pycache__/
+# Harness integrations generated per checkout by cq configure (absolute machine paths)
+.agents/
+.claude/
+.codex/
+.pi/
+.mcp.json
