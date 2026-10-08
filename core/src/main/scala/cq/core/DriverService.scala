@@ -130,6 +130,19 @@ final class DriverService(registry: DriverRegistry, planner: WorksetPlanner) {
 
   private def limit: DriverStopped = DriverStopped(DriverStop.LimitReached, s"This drive issued its $MaxDirectives directives; drive again to continue")
 
+  // Who ended the item's wait for a person: the provenance of the revision from which it has not waited, when an earlier one did.
+  private def settlement(tx: LedgerTransaction, id: ItemId): Option[Provenance] = {
+    def waits(item: Item): Boolean = awaitsUser(item.id.ledger, LedgerPolicy.status(item.draft.content), item.draft.archived)
+    def earliest(item: Item): Option[Provenance] =
+      if (item.revision.value <= 1L) None
+      else tx.historical(id, Revision(item.revision.value - 1)).map(_.item.item) match {
+        case Some(before) if waits(before) => Some(item.provenance)
+        case Some(before) => earliest(before)
+        case None => None
+      }
+    tx.get(id).filterNot(waits).flatMap(earliest)
+  }
+
   private def off(record: DriverRecord): DriverReply = DriverReply.Stop(DriverStopped(DriverStop.Off, "The CQ driver is off"), Some(status(record)), Nil)
 
   // `rested` is the record of a drive that stopped for user input, of which `record` is the copy that is on again: while the decision
@@ -165,10 +178,20 @@ final class DriverService(registry: DriverRegistry, planner: WorksetPlanner) {
           // A Milestone the cycle created for its Tasks stays context: it is accounted for while a selected item still belongs to it.
           val milestones = snapshot.context.map(_.item.id).filter(_.ledger == Ledger.Milestones).toSet
           val unselected = finished.toList.flatMap(_.created).filterNot(id => selected(id) || milestones(id))
+          // What a resting drive waited for is a person's to settle: a settlement any other session made since the drive came to
+          // rest ends the rest, whatever else the drive still waits for.
+          val agents = rested.toList.flatMap(resting => (snapshot.advanceable.map(_.item) ++ snapshot.context.map(_.item))
+            .filter(item => awaitable(item.id.ledger) && !awaitsUser(item) && resting.stoppedAt.forall(item.updatedAt >= _)).map(_.id).distinct
+            .flatMap(id => settlement(tx, id).filter(entry => resting.stoppedAt.forall(entry.receivedAt >= _) && entry.actor.role != Role.Human).map(entry => id -> entry.actor.role)))
           if (unselected.nonEmpty) stop(settled, DriverStopped(DriverStop.Failure,
             s"${references(unselected)} created by cycle ${finished.get.number} is not in the recomputed advanceable set"), messages, now)
+          else if (agents.nonEmpty) stop(settled, settledByAgents(agents), messages, now)
           else decide(snapshot, finished) match {
-            case DriverDecision.Stop(DriverStopped(DriverStop.UserInputRequired, _)) if rested.nonEmpty => off(rested.get)
+            case DriverDecision.Stop(value @ DriverStopped(DriverStop.UserInputRequired, _)) if rested.nonEmpty =>
+              // Still resting: nothing is said, and the record names what the drive waits for now.
+              val resting = rested.get
+              if (!resting.stopped.contains(value)) registry.put(resting.copy(stopped = Some(value)))
+              DriverReply.Stop(value, Some(status(resting.copy(stopped = Some(value)))), Nil)
             case DriverDecision.Stop(value) => stop(settled, value, messages, now)
             case _: DriverDecision.Continue if record.directives >= MaxDirectives => stop(settled, limit, messages, now)
             case DriverDecision.Continue(retried, offered) =>

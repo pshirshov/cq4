@@ -35,7 +35,10 @@ final class LedgerMutation(terminationPlanner: TerminationPlanner, boundary: Dri
     write(scope)
     if (tx.request(scope.actor, request.request).nonEmpty) execute(tx, scope, request, now, reservation)
     else boundary.admit(tx, scope.project, scope.actor.session, cycle, reservation.map(_.intent.id), now) match {
-      case None => execute(tx, scope, request, now, reservation)
+      case None =>
+        val acknowledgement = execute(tx, scope, request, now, reservation)
+        boundary.resting(tx, scope.project, scope.actor.session, acknowledgement)
+        acknowledgement
       case Some(attribution) =>
         boundary.check(tx, attribution, request, now)
         val acknowledgement = execute(tx, scope, request, now, reservation)

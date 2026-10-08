@@ -121,6 +121,29 @@ final class DriverBoundary(registry: DriverRegistry, planner: WorksetPlanner) {
   // For a Question that is a withdrawal, since an answer is refused first; for an Operator Action it is any exit from Requested.
   private def settles(before: Option[Item], after: Item): Boolean = before.exists(waiting) && !waiting(after)
 
+  // Only a person settles a Question, by an answer or by withdrawing it. The refusal leaves the driver as it is: the operator parks, the
+  // item is settled by hand, and the drive starts again.
+  private def unsettled(tx: LedgerTransaction, acknowledgement: ChangeAck): Unit = {
+    val questions = acknowledgement.items.filter(_.id.ledger == Ledger.Questions).map(item => item.id -> written(tx, item))
+    val answered = questions.collect { case (id, (before, after)) if answers(before, after) => id }
+    if (answered.nonEmpty) throw DomainFailure(Fault.Denied(DriverPolicy.answerRefused(answered)))
+    val withdrawn = questions.collect { case (id, (before, after)) if settles(before, after) => id }
+    if (withdrawn.nonEmpty) throw DomainFailure(Fault.Denied(DriverPolicy.withdrawalRefused(withdrawn)))
+    // Nor does a driven write end an Operator Action's wait for the operator: a move out of Requested to any status is an inferred approval
+    // or an inferred refusal. An action the write creates never waited, and one already Confirmed no longer waits, so both stay writable.
+    val settled = acknowledgement.items.filter(_.id.ledger == Ledger.OperatorActions).map(item => item.id -> written(tx, item))
+      .collect { case (id, (before, after)) if settles(before, after) => id }
+    if (settled.nonEmpty) throw DomainFailure(Fault.Denied(DriverPolicy.settlementRefused(settled)))
+  }
+
+  // A drive that rests on user input has no cycle, and its session writes as an undriven one does, with one exception: it settles no
+  // Question and no Operator Action, as while the drive was on. The drive would otherwise continue on its own session's decision.
+  // Park ends the rest and this bound with it.
+  def resting(tx: LedgerTransaction, project: ProjectId, session: SessionId, acknowledgement: ChangeAck): Unit = {
+    given LedgerTransaction = tx
+    if (registry.all(project).exists(record => DriverPolicy.rests(record) && record.attached.contains(session))) unsettled(tx, acknowledgement)
+  }
+
   // Admission, before the write is applied: every existing item the request names is in the cycle's stored snapshot or was created by the cycle.
   // The exceptions are the milestone of an assignment, which may be any Open milestone, the milestone a Reference takes an in-set
   // Task out of, which may be any Complete or Cancelled milestone, and the Defect or Question the bound session links an in-set item
@@ -149,18 +172,7 @@ final class DriverBoundary(registry: DriverRegistry, planner: WorksetPlanner) {
     val outside = changed.map(_.id).filterNot(id => cycle.boundary(id) || linked(id))
     if (outside.nonEmpty)
       registry.fail(record, s"out-of-set change: ${references(outside)} is outside the advanceable set stored for cycle ${cycle.number}", now)
-    // Only a person settles a Question, by an answer or by withdrawing it. The refusal leaves the driver on: the operator parks, the item is
-    // settled by hand, and the drive starts again.
-    val questions = acknowledgement.items.filter(_.id.ledger == Ledger.Questions).map(item => item.id -> written(tx, item))
-    val answered = questions.collect { case (id, (before, after)) if answers(before, after) => id }
-    if (answered.nonEmpty) throw DomainFailure(Fault.Denied(DriverPolicy.answerRefused(answered)))
-    val withdrawn = questions.collect { case (id, (before, after)) if settles(before, after) => id }
-    if (withdrawn.nonEmpty) throw DomainFailure(Fault.Denied(DriverPolicy.withdrawalRefused(withdrawn)))
-    // Nor does a driven write end an Operator Action's wait for the operator: a move out of Requested to any status is an inferred approval
-    // or an inferred refusal. An action the write creates never waited, and one already Confirmed no longer waits, so both stay writable.
-    val settled = acknowledgement.items.filter(_.id.ledger == Ledger.OperatorActions).map(item => item.id -> written(tx, item))
-      .collect { case (id, (before, after)) if settles(before, after) => id }
-    if (settled.nonEmpty) throw DomainFailure(Fault.Denied(DriverPolicy.settlementRefused(settled)))
+    unsettled(tx, acknowledgement)
     val owned = if (created.isEmpty) Nil else {
       val selected = try planner.evaluate(tx, record.targets, record.through, record.workset).advanceable.map(_.item.id).toSet catch {
         case DomainFailure(fault) => registry.fail(record, s"the advanceable set cannot be recomputed after the write: $fault", now)

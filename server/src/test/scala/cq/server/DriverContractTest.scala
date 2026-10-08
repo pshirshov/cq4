@@ -1967,7 +1967,8 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
         rested <- status(service, session, key)
         again <- query(service, session, key)
         unchanged <- status(service, session, key)
-        _ <- ZIO.attempt(assert(again == DriverReply.Stop(off, rested, Nil) && unchanged == rested, s"$again $rested $unchanged"))
+        _ <- ZIO.attempt(assert(again == DriverReply.Stop(rested.get.stopped.get, rested, Nil) && unchanged == rested &&
+          rested.get.line == "CQ driver resting: T1 through work; Awaiting the user on Q1; the driver never answers questions or infers approval", s"$again $rested $unchanged"))
         // Answered: the next query issues the start directive of a new cycle, which the attached session of the drive starts.
         _ <- set(asked, QuestionStatus.Answered, Some("Yes"))
         resumed <- query(service, session, key)
@@ -2002,6 +2003,60 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
         _ <- set(last2, QuestionStatus.Answered, Some("Yes"))
         still <- query(service, parked, fourth)
         _ <- ZIO.attempt(assert(still match { case DriverReply.Stop(`off`, Some(found), Nil) => found.state == DriverState.Off; case _ => false }, still.toString))
+      } yield ()
+    }
+
+    "D164: bound the session of a resting drive as while the drive is on, and continue the drive only on a settlement a person made" in { (service: LedgerService[IO]) =>
+      val w = world
+      def content(status: QuestionStatus, answer: Option[String]): Content = Content.Question(status, "Prompt", "Context", Nil, None, answer)
+      def set(scope: Scope, id: ItemId, value: Content) = service.get(w.operator, id).flatMap(view =>
+        service.change(scope, request(List(Mutation.Replace(id, view.item.revision, view.item.draft.copy(content = value))), Nil)))
+      // A drive on one Task that `gate` gates: its first continuation query stops it for user input.
+      def resting(name: String, gate: ItemDraft): IO[Throwable, (World, DriverKey, ItemId)] = {
+        val session = w.copy(governor = w.other(Role.Governor))
+        val key = claude(name)
+        for {
+          asked <- create(service, w.operator, gate)
+          gated <- create(service, w.operator, task("Gated"))
+          _ <- reference(service, w.operator, gated, Relation.BlockedBy, asked, true).flatMap(service.change(w.operator, _))
+          _ <- on(service, session, key, workset(gated, asked))
+          first <- query(service, session, key)
+          _ <- assertIO(first match { case DriverReply.Stop(DriverStopped(DriverStop.UserInputRequired, _), _, List(_)) => true; case _ => false })
+        } yield (session, key, asked)
+      }
+      def rests(reply: DriverReply): Boolean = reply match {
+        case DriverReply.Stop(DriverStopped(DriverStop.UserInputRequired, _), Some(found), Nil) => found.state == DriverState.Off && found.attached.nonEmpty
+        case _ => false
+      }
+      for {
+        _ <- service.initialize(w.operator, "resting bound")
+        // The session of the drive neither answers nor withdraws the Question the drive rests on, and the drive goes on resting.
+        (session, key, asked) <- resting("self-settled", question("Open question"))
+        answered <- set(session.governor, asked, content(QuestionStatus.Answered, Some("The session's own answer"))).either
+        withdrawn <- set(session.governor, asked, content(QuestionStatus.Withdrawn, None)).either
+        _ <- ZIO.attempt(assert(fault(answered).contains(Fault.Denied(DriverPolicy.answerRefused(List(asked)))) &&
+          fault(withdrawn).contains(Fault.Denied(DriverPolicy.withdrawalRefused(List(asked)))), s"A resting drive let its session settle what it waits for: $answered $withdrawn"))
+        kept <- query(service, session, key)
+        _ <- ZIO.attempt(assert(rests(kept), kept.toString))
+        // Nor does it take an Operator Action out of Requested.
+        (acting, second, requested) <- resting("self-confirmed", action("Requested action"))
+        confirmed <- service.get(w.operator, requested).flatMap(view => service.change(acting.governor,
+          request(List(Mutation.Replace(requested, view.item.revision, moved(view.item, OperatorActionStatus.Cancelled))), Nil))).either
+        _ <- ZIO.attempt(assert(fault(confirmed).contains(Fault.Denied(DriverPolicy.settlementRefused(List(requested)))), confirmed.toString))
+        // A settlement another session made, which is no person's, ends the rest with a stop that says so; the drive does not continue.
+        _ <- set(w.other(Role.Governor), asked, content(QuestionStatus.Answered, Some("An agent's answer")))
+        ended <- query(service, session, key)
+        last <- query(service, session, key)
+        _ <- ZIO.attempt(assert((ended match {
+          case DriverReply.Stop(value @ DriverStopped(DriverStop.Failure, detail), Some(found), List(message)) =>
+            detail == "Q1 was settled by a Governor session, not by a person; a drive continues only on what a person decided" && message == DriverPolicy.stopMessage(value) && stopped(Some(found), DriverStop.Failure)
+          case _ => false
+        }) && (last match { case DriverReply.Stop(DriverStopped(DriverStop.Off, _), _, Nil) => true; case _ => false }), s"$ended $last"))
+        // Park ends the rest and lifts the bound: the session then records the operator's answer, as after any park.
+        (parked, third, later) <- resting("parked-then-answered", question("Open question"))
+        _ <- park(service, parked, third)
+        byHand <- set(parked.governor, later, content(QuestionStatus.Answered, Some("The operator's answer, recorded by the session"))).either
+        _ <- ZIO.attempt(assert(byHand.isRight, byHand.toString))
       } yield ()
     }
 

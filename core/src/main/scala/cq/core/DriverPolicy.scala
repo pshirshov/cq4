@@ -101,6 +101,8 @@ object DriverPolicy {
     case _ => false
   })
   def awaitsUser(item: ItemSummary): Boolean = awaitsUser(item.id.ledger, item.status, item.archived)
+  // The ledgers whose items can wait for a person.
+  def awaitable(ledger: Ledger): Boolean = ledger == Ledger.Questions || ledger == Ledger.OperatorActions
 
   def outcome(value: ChildOutcome): Unit = {
     invalid(value.members.nonEmpty, "An attempt outcome names the items of its attempt")
@@ -216,6 +218,9 @@ object DriverPolicy {
   def rests(record: DriverRecord): Boolean = record.state == DriverState.Off && record.announced && record.attached.nonEmpty &&
     record.stopped.exists(_.reason == DriverStop.UserInputRequired)
   val Rested = "CQ driver: the user settled what this drive waited for; it continues"
+  // The settlements a session that is no person's made of what a resting drive waited for: the drive does not continue on them.
+  def settledByAgents(settled: List[(ItemId, Role)]): DriverStopped = DriverStopped(DriverStop.Failure,
+    settled.map((id, role) => s"${reference(id)} was settled by a $role session").mkString(", ") + ", not by a person; a drive continues only on what a person decided")
 
   def reason(value: DriverStop): String = value match {
     case DriverStop.Quiescent => "quiescent"
@@ -238,6 +243,7 @@ object DriverPolicy {
       val children = record.cycle.filter(_.active).fold(0)(_.activeChildren)
       s"CQ driver on: ${describe(record)}; $children active ${if (children == 1) "child" else "children"}"
     case DriverState.Binding => s"CQ driver binding: ${describe(record)}"
+    case DriverState.Off if rests(record) => s"CQ driver resting: ${describe(record)}; ${record.stopped.get.detail}"
     case DriverState.Off => s"CQ driver off: ${describe(record)}" + record.stopped.fold("")(value => s"; stopped (${reason(value.reason)}): ${value.detail}")
   }
 
