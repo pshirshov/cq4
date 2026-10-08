@@ -189,6 +189,9 @@ def main():
         checks.run(prefix + ["--chdir", str(evidence), sys.executable, "-c", probe, *map(str, hidden)], "source-isolation", 15)
         checks.run(["python3", "dev/guardian-check.py", "-v"], "installed-guardian", support["STARTUP_TIMEOUT"])
         with checks.database(support["DatabaseRole"].Durable, []):
+            # The launcher above runs the installed executable as its child: the attached fixture leaves out the one case that needs
+            # the fixture itself to be the process that started the host.
+            checks.environment["CQ_ATTACHED_LAUNCHER"] = "bwrap"
             checks.transport(prefix + command, "installed", True, 1)
             checks.restart(prefix + command)
             backup_evidence = evidence / "backup"

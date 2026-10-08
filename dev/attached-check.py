@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import queue
 import shlex
+import signal
 import subprocess
 import sys
 import threading
@@ -13,6 +14,25 @@ import time
 import urllib.request
 import uuid
 from fixture_runtime import ROLES, guardian_binary, role_agents, save_agents
+
+
+# The fixture runs its cases one after another in one process and bounds each of them, not their total: a case that does not end
+# within this fails the fixture by its name. Under the tracing agent, where every process starts slowest, the cases took between 9 s
+# and 123 s and 648 s together (2026-10-08, load 3 to 5); about five times the slowest tells a slow case from a stuck one.
+CASE_SECONDS = 600
+_case = {"name": None, "began": 0.0}
+
+
+def _stuck(_signal, _frame):
+    raise AssertionError(f"Attached fixture case did not end within {CASE_SECONDS} seconds: {_case['name']}")
+
+
+def case(name):
+    """Ends the case that runs, printing how long it took, and starts the case `name`; `None` starts none."""
+    if _case["name"] is not None:
+        print(json.dumps({"case": _case["name"], "seconds": round(time.monotonic() - _case["began"], 2)}), flush=True)
+    _case.update(name=name, began=time.monotonic())
+    signal.alarm(0 if name is None else CASE_SECONDS)
 
 
 # Above the longest dispatch wait (120 s) and what the host allows a request besides it (30 s).
@@ -126,6 +146,8 @@ def latched(process, latch, name):
 
 
 def main():
+    signal.signal(signal.SIGALRM, _stuck)
+    case("attached session")
     command = sys.argv[1:]
     root = Path(os.environ["CQ_ATTACHED_EVIDENCE"])
     root.mkdir(parents=True)
@@ -257,6 +279,7 @@ def main():
     assert totals["attempts"]["unknown"] == "1" and totals["attempts"]["running"] == "0" and totals["attemptsWithoutMeters"] == "1", totals
     print(json.dumps({"attachedSession": context["session"], "child": status, "usage": totals, "activationFence": True, "tokenFile": True, "replay": True}))
 
+    case("session records")
     # D160: a harness that opens the connection, lists the tools and closes it has done no governing work. Its host tells the server of
     # no attempt and records no session, so nothing is left to deliver, recover or upload.
     def session_directories():
@@ -327,6 +350,7 @@ def main():
     def current(item):
         return operator({"Read": {"input": {"project": project, "selection": {"ItemDetail": {"id": item["id"]}}}}})["Detail"]["view"]["item"]
 
+    case("driven session")
     # A driven session: the hook entry points hold the operator credential; the attached session binds, activates the issued directive and
     # writes inside its cycle. Its first out-of-set write is rejected and stops the driver.
     key = {"harness": "Codex", "session": "attached-fixture-session"}
@@ -473,6 +497,7 @@ def main():
             assert hook("Stop", hooked, stop_hook_active=True, last_assistant_message="Parked.") is None
             assert hook("Stop", None, stop_hook_active=False) == {"systemMessage": "CQ Stop hook error: Driver session key is missing; no default session is used"}
 
+            case("settled questions of a driven session")
             # D164: a session learns that the operator settled what it waits on. The host reads what the session waits on at its
             # claim-renewal interval, so each step that depends on it waits for the host's next round.
             question = {"title": "Which way", "body": "Fixture question", "labels": [], "archived": False, "citations": [],
@@ -515,6 +540,7 @@ def main():
             assert hook("Stop", asking, stop_hook_active=True, last_assistant_message="Again.") is None
             read(own)
             assert journal.events()[-1] == {"Released": {"item": own["id"]}}, journal.events()[-2:]
+            case("an end given to one of two waiters")
             # Answered while two `cq wait` run on the session: both wait although the host works on nothing, the host gives the end to
             # one of them, which reports it and ends, and the other stays. The session, once it has read it, is told by no stop.
             waited, = change([{"Create": {"draft": {**question, "title": "Waited for"}}}], [])["Changed"]["ack"]["items"]
@@ -549,6 +575,7 @@ def main():
             driven.close()
     print(json.dumps({"drivenSession": driven_session, "cycle": issued["cycle"], "lineage": members(settled), "stop": stop["stopped"]}))
 
+    case("settled question of a session that never drove")
     # D164: a session no driver ever knew. The hook finds it by the host that the process it descends from started, which is this
     # fixture, the owner of the host, and gives its ends to the harness session that found the host first. A hook that does not
     # descend from the owner, and one with another harness session identifier, say nothing and let the stop through.
@@ -563,25 +590,34 @@ def main():
             assert hook("Stop", undriven, stop_hook_active=False, last_assistant_message="Asked.") is None
             answer(asked, "Go on")
             alone_journal.written(settled_event(asked, current, "Go on", None))
-            payload = {"session_id": undriven, "turn_id": str(uuid.uuid4()), "cwd": str(repository), "hook_event_name": "Stop", "model": "fixture-model",
-                       "permission_mode": "default", "stop_hook_active": False}
-            (root / "orphan-input.json").write_text(json.dumps(payload))
-            # The hook's parent is a shell whose own parent has ended, so its ancestors are that shell and whatever adopts orphans.
-            stop_command, = [handler["command"] for group in generated["Stop"] for handler in group["hooks"]]
-            subprocess.run(["sh", "-c", f"({stop_command} < {shlex.quote(str(root / 'orphan-input.json'))} > {shlex.quote(str(root / 'orphan-output'))}; "
-                                        f"echo $? > {shlex.quote(str(root / 'orphan-exit'))}) &"], cwd=repository, env=env, check=True, timeout=60)
-            deadline = time.monotonic() + 60
-            while not (root / "orphan-exit").exists() or not (root / "orphan-exit").read_text().endswith("\n"):
-                assert time.monotonic() < deadline, "The hook without the harness among its ancestors did not end"
-                time.sleep(0.1)
-            assert ((root / "orphan-exit").read_text(), (root / "orphan-output").read_text()) == ("0\n", ""), (root / "orphan-output").read_text()
-            assert hook("Stop", "attached-fixture-another-session-id", stop_hook_active=False, last_assistant_message="Done.") is None
-            alone_told = hook("Stop", undriven, stop_hook_active=False, last_assistant_message="Done.")
-            assert alone_told == {"decision": "block", "reason": "\n".join([said, f'- question Q{asked["id"]["number"]} "Asked without a drive" answered: "Go on"', act])}, alone_told
-            assert hook("Stop", undriven, stop_hook_active=True, last_assistant_message="Read.") is None
+            starter = json.loads((Path(alone_journal.file).parent / "journal" / "started-by").read_text())["pid"]
+            if os.environ.get("CQ_ATTACHED_LAUNCHER") is not None:
+                # The hook finds the host of a session that never drove by the process that started the host: the hook's own harness,
+                # when the harness starts `cq host` itself. Under the launcher of the installed check that process is the launcher.
+                assert starter != os.getpid(), starter
+                print(json.dumps({"stopHookOfUndrivenSession": "not exercised: the check's launcher stands between the owner and the host, so the host's starter is the launcher"}), flush=True)
+            else:
+                assert starter == os.getpid(), starter
+                payload = {"session_id": undriven, "turn_id": str(uuid.uuid4()), "cwd": str(repository), "hook_event_name": "Stop", "model": "fixture-model",
+                           "permission_mode": "default", "stop_hook_active": False}
+                (root / "orphan-input.json").write_text(json.dumps(payload))
+                # The hook's parent is a shell whose own parent has ended, so its ancestors are that shell and whatever adopts orphans.
+                stop_command, = [handler["command"] for group in generated["Stop"] for handler in group["hooks"]]
+                subprocess.run(["sh", "-c", f"({stop_command} < {shlex.quote(str(root / 'orphan-input.json'))} > {shlex.quote(str(root / 'orphan-output'))}; "
+                                            f"echo $? > {shlex.quote(str(root / 'orphan-exit'))}) &"], cwd=repository, env=env, check=True, timeout=60)
+                deadline = time.monotonic() + 60
+                while not (root / "orphan-exit").exists() or not (root / "orphan-exit").read_text().endswith("\n"):
+                    assert time.monotonic() < deadline, "The hook without the harness among its ancestors did not end"
+                    time.sleep(0.1)
+                assert ((root / "orphan-exit").read_text(), (root / "orphan-output").read_text()) == ("0\n", ""), (root / "orphan-output").read_text()
+                assert hook("Stop", "attached-fixture-another-session-id", stop_hook_active=False, last_assistant_message="Done.") is None
+                alone_told = hook("Stop", undriven, stop_hook_active=False, last_assistant_message="Done.")
+                assert alone_told == {"decision": "block", "reason": "\n".join([said, f'- question Q{asked["id"]["number"]} "Asked without a drive" answered: "Go on"', act])}, alone_told
+                assert hook("Stop", undriven, stop_hook_active=True, last_assistant_message="Read.") is None
         finally:
             alone.close()
 
+    case("Pi session")
     with (root / "pi-host.log").open("w") as log:
         pi = Peer(command + ["host", "pi"], repository, env, log)
         try:
@@ -617,6 +653,7 @@ def main():
     assert pi_totals["unattributed"]["total"]["known"] == "15" and pi_totals["incompleteMeters"] == "1", pi_totals
     assert "Acknowledged 0" in cli(["job", "upload", "--session", pi_context["directory"]])
     print(json.dumps({"attachedPiUsage": "deduplicated-partial", "integrationExports": ["claude", "codex", "pi"]}))
+    case("Codex usage")
 
     codex_home = root / "codex-home"
     native_day = codex_home / "sessions/2026/09/28"
@@ -660,6 +697,7 @@ def main():
     after = json.loads(cli(["status", "--session", observed["session"]["value"], "--json"]))["UsageSummary"]["report"]
     assert after == observed_totals
     print(json.dumps({"attachedCodexUsage": "native-metadata-correlated-deduplicated-replayed", "usage": after}))
+    case("ephemeral Codex")
 
     with (root / "codex-ephemeral-host.log").open("w") as log:
         ephemeral = Peer(command + ["host", "codex", "--executable", str(wrapper)], repository, {**env, "CODEX_HOME": str(root / "missing-native-home")}, log)
@@ -670,6 +708,7 @@ def main():
         finally:
             ephemeral.close()
     print(json.dumps({"ephemeralCodex": "CQ-available-usage-explicitly-unavailable"}))
+    case("disconnect with a running child")
 
     with (root / "closing-host.log").open("w") as log:
         closing = Peer(command + ["host", "codex", "--executable", str(wrapper)], repository, env, log)
@@ -698,6 +737,7 @@ def main():
     assert stopped["quietMillis"] is None, stopped
     assert stopped["workspace"]["admission"] == "Quarantined" and Path(stopped["workspace"]["directory"]).is_dir(), stopped
     print(json.dumps({"disconnectWithRunningChild": "cancelled-and-accounted"}))
+    case("initial stall after EOF")
 
     preload = root / "stall.so"
     subprocess.run(["gcc", "-std=c17", "-shared", "-fPIC", "-Wall", "-Wextra", "-Werror", "-o", str(preload), "dev/shutdown-stall.c", "-ldl"], check=True)
@@ -724,6 +764,7 @@ def main():
                 stalled.kill()
             stalled.wait(timeout=5)
     print(json.dumps({"initialStallAfterEOF": "bounded-unresolved-exit"}))
+    case("operation stall with a healthy owner")
 
     latch = root / "operation-stall"
     latch.mkdir()
@@ -744,6 +785,7 @@ def main():
                 stalled.process.kill()
             stalled.process.wait(timeout=5)
     print(json.dumps({"operationStallWithHealthyOwner": "bounded-unresolved-exit"}))
+    case(None)
 
 
 if __name__ == "__main__":
