@@ -4,7 +4,7 @@ import cq.api.*
 import cq.core.{DomainFailure, DriverPolicy}
 import cq.host.{DispatchProjection, DriverCall, DriverEntry, DriverSessionClient}
 import logstage.IzLogger
-import zio.{Semaphore, Task, UIO, Unsafe, ZIO}
+import zio.{FiberId, Promise, Semaphore, Task, UIO, Unsafe, ZIO}
 
 // Where a lineage member stands on its host once the host no longer works on it: finished, or waiting for the session to act on it.
 sealed trait LineageOutcome
@@ -26,11 +26,20 @@ final class LineageTracker(client: DriverSessionClient, report: String => Unit, 
   private var ended = Set.empty[(CycleId, LineageMember)]
   // Orders a report that a member rests against a report that the session resumed it.
   private val reports = Unsafe.unsafe { implicit unsafe => Semaphore.unsafe.make(1) }
-  private def fresh(cycle: CycleId, member: LineageMember): Boolean = synchronized {
-    val added = !tracked.contains((cycle, member)) && !ended((cycle, member))
-    if (added) tracked += (cycle, member) -> 0L
-    added
+  // The members whose first registration has not ended yet, each with what its end completes.
+  private var registering = Map.empty[(CycleId, LineageMember), Promise[Nothing, Unit]]
+  // A member named for the first time is registered by the caller that names it: `Right` with what the end of that registration
+  // completes. Another caller that names it meanwhile gets `Left` with the same completion to wait for, and one that names it later nothing.
+  private def fresh(cycle: CycleId, member: LineageMember): Option[Either[Promise[Nothing, Unit], Promise[Nothing, Unit]]] = synchronized {
+    registering.get((cycle, member)).map(Left(_)).orElse(Option.when(!tracked.contains((cycle, member)) && !ended((cycle, member))) {
+      val registered = Unsafe.unsafe { implicit unsafe => Promise.unsafe.make[Nothing, Unit](FiberId.None) }
+      tracked += (cycle, member) -> 0L
+      registering += (cycle, member) -> registered
+      Right(registered)
+    })
   }
+  private def registered(cycle: CycleId, member: LineageMember, completion: Promise[Nothing, Unit]): UIO[Unit] =
+    ZIO.succeed(synchronized { registering -= ((cycle, member)) }) *> completion.succeed(()).unit
   private def finished(cycle: CycleId, member: LineageMember): Unit = synchronized { tracked -= ((cycle, member)); ended += ((cycle, member)) }
   private def resumes(cycle: CycleId, member: LineageMember): Long = synchronized(tracked.getOrElse((cycle, member), 0L))
   private def resumed(cycle: CycleId, member: LineageMember): Boolean = synchronized {
@@ -81,13 +90,18 @@ final class LineageTracker(client: DriverSessionClient, report: String => Unit, 
       }
     }
 
-  // `observed` reads where the member stands on this host: empty while the host works on it.
+  // `observed` reads where the member stands on this host: empty while the host works on it. Whichever caller names a member first
+  // registers it, and every caller returns only once that registration has reached the server or has been given up: the reply to
+  // the call that started the member's work is therefore never ahead of the server's lineage.
   def track(cycle: CycleId, parent: LineageMember, member: LineageMember, observed: Task[Option[LineageOutcome]]): Task[Unit] =
-    if (!fresh(cycle, member)) ZIO.unit
-    else reliably(client.inherit(cycle, parent, member)).foldZIO(
-      error => abandon(cycle, member, "registration", "could not be registered", error) *> ZIO.succeed(finished(cycle, member)),
-      _ => follow(cycle, parent, member, observed, None, 0L).catchAll(abandon(cycle, member, "settlement", "could not be settled", _))
-        .ensuring(ZIO.succeed(finished(cycle, member))).forkDaemon.unit)
+    ZIO.suspendSucceed(fresh(cycle, member) match {
+      case None => ZIO.unit
+      case Some(Left(outstanding)) => outstanding.await
+      case Some(Right(completion)) => reliably(client.inherit(cycle, parent, member)).foldZIO(
+        error => abandon(cycle, member, "registration", "could not be registered", error) *> ZIO.succeed(finished(cycle, member)),
+        _ => follow(cycle, parent, member, observed, None, 0L).catchAll(abandon(cycle, member, "settlement", "could not be settled", _))
+          .ensuring(ZIO.succeed(finished(cycle, member))).forkDaemon.unit).ensuring(registered(cycle, member, completion))
+    })
   // The session made the host work on a member again. A followed member is in flight on the server before this returns, so a continuation
   // query that follows the dispatch reply never finds it resting. A fault the server returns means the cycle is over and holds nothing;
   // the member's follower reports it. A member that is not followed is registered and followed.

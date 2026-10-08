@@ -2520,6 +2520,64 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
       } yield ()
     }
 
+    "hold a caller that names a member whose registration is outstanding until that registration has reached the server or has failed" in {
+      (service: LedgerService[IO], registry: DriverInspector) =>
+      val w = world
+      // Two callers name the same attempt, as the follower of a unit's request and the reply to the dispatch that started the unit do.
+      // The first holds the registration in transit; `lost` then loses every try of it.
+      def scenario(name: String, lost: Boolean)(verify: (World, DriverKey, LineageMember.Attempt, Int, List[String]) => IO[Throwable, Unit]): IO[Throwable, Unit] = {
+        val session = w.copy(governor = w.other(Role.Governor))
+        val key = claude(name)
+        val request = LineageMember.Request(RequestId(uuid))
+        val attempt = LineageMember.Attempt(AttemptId(uuid))
+        val entered = new java.util.concurrent.CountDownLatch(1)
+        val release = new java.util.concurrent.CountDownLatch(1)
+        val registrations = new java.util.concurrent.atomic.AtomicInteger(0)
+        val reports = new java.util.concurrent.ConcurrentLinkedQueue[String]()
+        def transit(action: DriverSession): Boolean = action match {
+          case DriverSession.Inherit(_, _, `attempt`) => registrations.incrementAndGet(); entered.countDown(); release.await(); lost
+          case _ => false
+        }
+        for {
+          runtime <- ZIO.runtime[Any]
+          root <- create(service, w.operator, goal(name))
+          one <- driven(service, session, key, workset(root))
+          tracker = new LineageTracker(new DriverSessionClient(new SessionApi(service, session.governor, runtime, transit), w.project), message => { reports.add(message); () },
+            Pause, Pause, Pause.multipliedBy(4))
+          ended <- zio.Ref.make(Option.empty[LineageOutcome])
+          lineage = ZIO.succeed(registry.get(w.project, key).flatMap(_.cycle).map(_.lineage.map(_.member)))
+          _ <- tracker.track(one.cycle, LineageMember.Run(one.run), request, ended.get)
+          first <- tracker.track(one.cycle, request, attempt, ended.get).fork
+          // The held registration is released however the check ends: its thread is not interruptible.
+          second <- (for {
+            _ <- ZIO.attemptBlocking(assert(entered.await(30, java.util.concurrent.TimeUnit.SECONDS), s"$name: the registration did not start"))
+            second <- tracker.track(one.cycle, request, attempt, ended.get).fork
+            // Long enough for a caller that does not wait to return.
+            _ <- ZIO.sleep(Pause.multipliedBy(40))
+            returned <- second.poll
+            before <- lineage
+            _ <- ZIO.attempt(assert(returned.isEmpty && !before.exists(_.contains(attempt)),
+              s"$name: a caller that named the attempt returned while its registration was outstanding: returned=${returned.nonEmpty}, lineage=$before"))
+          } yield second).ensuring(ZIO.succeed(release.countDown()))
+          _ <- (first.join *> second.join).timeoutFail(new IllegalStateException(s"$name: a caller stayed held after the registration had ended"))(zio.Duration.fromSeconds(30))
+          after <- lineage
+          _ <- ZIO.attempt(assert(after.exists(_.contains(attempt)) != lost, s"$name: lineage=$after"))
+          _ <- verify(session, key, attempt, registrations.get, { import scala.jdk.CollectionConverters.*; reports.asScala.toList })
+          _ <- ended.set(Some(LineageOutcome.Settled))
+        } yield ()
+      }
+      for {
+        _ <- service.initialize(w.operator, "tracker-single-flight")
+        // One registration serves both callers.
+        _ <- scenario("registration-held", false) { (_, _, _, registrations, reports) => ZIO.attempt(assert(registrations == 1 && reports.isEmpty, s"$registrations $reports")) }
+        // A registration that fails releases the waiting caller, is reported once and stops the driver as it does without a second caller.
+        _ <- scenario("registration-lost", true) { (session, key, attempt, _, reports) =>
+          failed(service, session, key, s"attempt ${attempt.id.value} of cycle 1 could not be registered: Connection reset") *>
+            ZIO.attempt(assert(reports == List(s"Driver lineage registration failed for attempt ${attempt.id.value}: Connection reset; the driver stopped"), reports.toString))
+        }
+      } yield ()
+    }
+
     "report a member the session resumed as in flight before the resume returns, whatever the tracker read or reported before it" in {
       (service: LedgerService[IO], registry: DriverInspector) =>
       val w = world
