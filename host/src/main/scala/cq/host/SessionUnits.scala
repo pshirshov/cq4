@@ -112,7 +112,31 @@ object SessionQuestions {
   val Act = "Read each of them with the CQ read tool (ItemDetail) and act on it before you end your turn."
 }
 
+/** One process as the operating system tells it from every other: a process identifier is given again, its start with it is not. */
+final case class ProcessIdentity(pid: Long, startMillis: Long)
+object ProcessIdentity {
+  def of(handle: ProcessHandle): Option[ProcessIdentity] = {
+    val started = handle.info().startInstant()
+    Option.when(started.isPresent)(ProcessIdentity(handle.pid(), started.get.toEpochMilli))
+  }
+  /** The processes `handle` descends from, nearest first. One whose start cannot be read is left out: it cannot be told from another. */
+  def ancestors(handle: ProcessHandle): List[ProcessIdentity] =
+    Iterator.iterate(handle.parent())(_.flatMap(_.parent())).takeWhile(_.isPresent).map(_.get).flatMap(of).toList
+}
+
 object SessionOwner {
+  private val File = "owner.json"
+  private val MaxBytes = 1024
+  /** The host leaves the process that started it, which is its harness, in its session directory. */
+  def record(directory: Path, owner: ProcessIdentity): Unit = HostFiles.immutable(directory.resolve(File),
+    io.circe.Json.obj("pid" -> io.circe.Json.fromLong(owner.pid), "startMillis" -> io.circe.Json.fromLong(owner.startMillis)).noSpaces, MaxBytes)
+  def started(directory: Path): Option[ProcessIdentity] = {
+    val file = directory.resolve(File)
+    Option.when(Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)) {
+      val cursor = parser.parse(HostFiles.text(file, MaxBytes)).fold(throw _, identity).hcursor
+      ProcessIdentity(cursor.get[Long]("pid").fold(throw _, identity), cursor.get[Long]("startMillis").fold(throw _, identity))
+    }
+  }
   /** Every host holds the exclusive lock on `journal/owner.lock` of its session directory for its lifetime, and the operating system
     * releases it when that process ends. A shared lock that is refused therefore proves a live host; it needs read access only. */
   def runs(directory: Path): Boolean = {
@@ -252,6 +276,9 @@ object HostView {
   * A hook of that checkout knows a drive's attached session only by its identity, and a `cq wait` without a directory knows only its
   * checkout: both ask here. */
 trait SessionViews {
+  /** The attached session whose host was started by a process the asking process descends from: the session of the harness process
+    * that runs this hook. None when no host of the checkout that runs was started by such a process, or more than one was. */
+  def owned: Option[SessionId]
   def view(session: SessionId): HostView
   /** The standing units the session's last stop was answered for with the order to start its waiter; none when it was answered otherwise. */
   def asked(session: SessionId): Option[String]
@@ -260,7 +287,16 @@ trait SessionViews {
   def announce(session: SessionId): List[QuestionEnd]
 }
 
-final class AttachedSessions(configuration: Path) extends SessionViews {
+/** The sessions of a checkout as a process that descends from `ancestors` finds them. */
+final class CheckoutSessions(sessions: () => AttachedSessions, ancestors: () => List[ProcessIdentity]) extends SessionViews {
+  override def owned: Option[SessionId] = sessions().owned(ancestors())
+  override def view(session: SessionId): HostView = sessions().view(session)
+  override def asked(session: SessionId): Option[String] = sessions().asked(session)
+  override def ask(session: SessionId, units: Option[String]): Unit = sessions().ask(session, units)
+  override def announce(session: SessionId): List[QuestionEnd] = sessions().announce(session)
+}
+
+final class AttachedSessions(configuration: Path) {
   private val MaxBytes = 16384
   private val root = configuration.resolve("hosts")
   private def file(session: SessionId): Path = root.resolve(session.value.toString + ".json")
@@ -276,7 +312,7 @@ final class AttachedSessions(configuration: Path) extends SessionViews {
   def forget(session: SessionId): Unit = { Files.deleteIfExists(file(session)); Files.deleteIfExists(prompt(session)); Files.deleteIfExists(told(session)); () }
   // How many events of the session the turn ends of the session have examined for the ends of Questions.
   private def told(session: SessionId): Path = root.resolve(session.value.toString + ".told")
-  override def announce(session: SessionId): List[QuestionEnd] = view(session) match {
+  def announce(session: SessionId): List[QuestionEnd] = view(session) match {
     case running: HostView.Running =>
       val events = SessionUnits.read(running.directory)
       val from = if (Files.isRegularFile(told(session), LinkOption.NOFOLLOW_LINKS)) HostFiles.text(told(session), MaxBytes).toInt else 0
@@ -286,8 +322,8 @@ final class AttachedSessions(configuration: Path) extends SessionViews {
     case _ => Nil
   }
   private def prompt(session: SessionId): Path = root.resolve(session.value.toString + ".asked")
-  override def asked(session: SessionId): Option[String] = Option.when(Files.isRegularFile(prompt(session), LinkOption.NOFOLLOW_LINKS))(HostFiles.text(prompt(session), MaxBytes))
-  override def ask(session: SessionId, units: Option[String]): Unit = units match {
+  def asked(session: SessionId): Option[String] = Option.when(Files.isRegularFile(prompt(session), LinkOption.NOFOLLOW_LINKS))(HostFiles.text(prompt(session), MaxBytes))
+  def ask(session: SessionId, units: Option[String]): Unit = units match {
     case Some(value) => HostFiles.directory(root); Files.writeString(prompt(session), value)
     case None => Files.deleteIfExists(prompt(session)); ()
   }
@@ -296,7 +332,15 @@ final class AttachedSessions(configuration: Path) extends SessionViews {
     else Using.resource(Files.list(root))(_.iterator().asScala.filter(_.getFileName.toString.endsWith(".json")).toList).sortBy(_.getFileName.toString).map(path => path -> read(path))
   /** The session directories of the hosts of this checkout that run. */
   def running: List[AttachedHostRecord] = recorded.map(_._2).filter(value => SessionOwner.runs(Path.of(value.directory)))
-  override def view(session: SessionId): HostView = {
+  /** The session of the one running host that a process among `ancestors` started; no session when there is none or several. */
+  def owned(ancestors: List[ProcessIdentity]): Option[SessionId] = recorded.collect {
+    case (path, value) if SessionOwner.runs(Path.of(value.directory)) && SessionOwner.started(Path.of(value.directory)).exists(ancestors.contains) =>
+      SessionId(java.util.UUID.fromString(path.getFileName.toString.stripSuffix(".json")))
+  } match {
+    case List(only) => Some(only)
+    case _ => None
+  }
+  def view(session: SessionId): HostView = {
     val path = file(session)
     if (!Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)) HostView.Unrecorded
     else {

@@ -133,37 +133,49 @@ final class DriverHook(entry: () => DriverEntry, sessions: SessionViews) {
       }
     }
 
-  // The host works on nothing: what the server still holds in flight is settled by its own rules, with a resume directive. A session
-  // that then stops while it waits on Open Questions is told once to start its waiter, where a waiter can start its next turn: the
-  // answer then does. A session that stops again without one may stop, and learns of the answer at its next turn end.
-  private def idle(dialect: HookDialect, call: DriverCall, session: SessionId, host: HostView.Running): Answer = {
-    val answer = answered(dialect, call, false, None)
-    val key = host.watched.map(question => "Question " + SessionUnits.reference(question)).sorted.mkString(",")
-    dialect.resting.filter(_ => answer.reason.isEmpty && host.watched.nonEmpty && !host.waited) match {
-      case Some(order) if !sessions.asked(session).contains(key) =>
-        sessions.ask(session, Some(key))
-        answer.blocked(order(host.watched.map(SessionUnits.reference).mkString(", "), host.waitCommand))
-      case Some(_) => answer
-      case None => sessions.ask(session, None); answer
+  // A session that stops with nothing running while it waits on Open Questions is told once to start its waiter, where a waiter
+  // can start its next turn: the answer then does. A session that stops again without one may stop, and learns of the answer at
+  // its next turn end.
+  private def resting(dialect: HookDialect, session: SessionId, host: HostView.Running, answer: Answer): Answer =
+    if (host.standing.nonEmpty) answer
+    else {
+      val key = host.watched.map(question => "Question " + SessionUnits.reference(question)).sorted.mkString(",")
+      dialect.resting.filter(_ => answer.reason.isEmpty && host.watched.nonEmpty && !host.waited) match {
+        case Some(order) if !sessions.asked(session).contains(key) =>
+          sessions.ask(session, Some(key))
+          answer.blocked(order(host.watched.map(SessionUnits.reference).mkString(", "), host.waitCommand))
+        case Some(_) => answer
+        case None => sessions.ask(session, None); answer
+      }
     }
-  }
 
-  // The session of a drive that is on, or that rests on user input, is the one this hook can name: what its host wrote about the
-  // Questions it waits on is said before the turn ends, once for each end.
+  // The driver is asked about the session it names, which is bound by token: one that is on, or that rests on user input. The
+  // Questions are those of the session whose host the harness of this hook started, driven or not; where the hook cannot see that
+  // process, they are those of the session the driver names. What that host wrote about them is said before the turn ends, once
+  // for each end.
   private def stop(dialect: HookDialect, call: DriverCall): String = {
     val status = entry().status(call) match {
       case DriverReply.Status(value) => value
       case other => unexpected(other)
     }
     val on = status.exists(_.state == DriverState.On)
-    status.flatMap(_.attached).fold(answered(dialect, call, false, None)) { session =>
+    val bound = status.flatMap(_.attached)
+    val driven = bound.fold(answered(dialect, call, false, None)) { session =>
+      sessions.view(session) match {
+        // The host works on nothing: what the server still holds in flight is settled by its own rules, with a resume directive.
+        // A drive that rests is asked to continue only then.
+        case host: HostView.Running if host.standing.isEmpty => answered(dialect, call, false, None)
+        case host: HostView.Running => if (on) working(dialect, call, session, host) else Answer(None, None)
+        case unseen => if (on) answered(dialect, call, true, Some(unseen)) else Answer(None, None)
+      }
+    }
+    sessions.owned.orElse(bound).fold(driven) { session =>
       sessions.view(session) match {
         case host: HostView.Running =>
-          // A drive that rests is asked to continue only when its session has nothing running.
-          val answer = if (host.standing.isEmpty) idle(dialect, call, session, host) else if (on) working(dialect, call, session, host) else Answer(None, None)
+          val answer = resting(dialect, session, host, driven)
           val settled = sessions.announce(session)
           if (settled.isEmpty) answer else answer.blocked((Settled :: settled.map("- " + SessionQuestions.described(_)) ::: List(SessionQuestions.Act)).mkString("\n"))
-        case unseen => if (on) answered(dialect, call, true, Some(unseen)) else Answer(None, None)
+        case _ => driven
       }
     }.rendered
   }

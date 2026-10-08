@@ -494,6 +494,28 @@ def main():
             assert continued[:3] == [said, f'- question {gate_reference} "Gate" answered: This way', act] and "CQ driver: the user settled what this drive waited for; it continues" in continued, continued
             assert continued[-1].startswith(f"$cq-advance --roots {gated_reference} --through explore --start-token "), continued
             assert hook("UserPromptSubmit", asking, prompt="$cq-park")["systemMessage"] == f"CQ driver park: CQ driver parked: {gated_reference} through explore"
+            # A session key no driver knows: the hook finds the session by the host that the process it descends from started, which
+            # is this fixture, the owner of the host. A hook that does not descend from it says nothing and lets the stop through.
+            undriven = "attached-fixture-undriven-session"
+            alone, = change([{"Create": {"draft": {**question, "title": "Asked without a drive"}}}], [])["Changed"]["ack"]["items"]
+            assert hook("Stop", undriven, stop_hook_active=False, last_assistant_message="Asked.") is None
+            answer(alone, "Go on")
+            written(ended(alone, "Go on", False))
+            payload = {"session_id": undriven, "turn_id": str(uuid.uuid4()), "cwd": str(repository), "hook_event_name": "Stop", "model": "fixture-model",
+                       "permission_mode": "default", "stop_hook_active": False}
+            (root / "orphan-input.json").write_text(json.dumps(payload))
+            # The hook's parent is a shell whose own parent has ended, so its ancestors are that shell and whatever adopts orphans.
+            stop_command, = [handler["command"] for group in generated["Stop"] for handler in group["hooks"]]
+            subprocess.run(["sh", "-c", f"({stop_command} < {shlex.quote(str(root / 'orphan-input.json'))} > {shlex.quote(str(root / 'orphan-output'))}; "
+                                        f"echo $? > {shlex.quote(str(root / 'orphan-exit'))}) &"], cwd=repository, env=env, check=True, timeout=60)
+            deadline = time.monotonic() + 60
+            while not (root / "orphan-exit").exists() or not (root / "orphan-exit").read_text().endswith("\n"):
+                assert time.monotonic() < deadline, "The hook without the harness among its ancestors did not end"
+                time.sleep(0.1)
+            assert ((root / "orphan-exit").read_text(), (root / "orphan-output").read_text()) == ("0\n", ""), (root / "orphan-output").read_text()
+            alone_told = hook("Stop", undriven, stop_hook_active=False, last_assistant_message="Done.")
+            assert alone_told == {"decision": "block", "reason": "\n".join([said, f'- question Q{alone["id"]["number"]} "Asked without a drive" answered: Go on', act])}, alone_told
+            assert hook("Stop", undriven, stop_hook_active=True, last_assistant_message="Read.") is None
             status_line = json.loads((repository / ".claude/settings.local.json").read_text())["statusLine"]["command"]
             shown = subprocess.run(shlex.split(status_line), cwd=repository, env=env, input=json.dumps({"session_id": "attached-fixture-status"}), capture_output=True, text=True, timeout=60)
             assert shlex.split(status_line) == [str(wrapper), "hook", "claude", "StatusLine"] and shown.returncode == 0 and shown.stdout == "CQ driver off\n", shown

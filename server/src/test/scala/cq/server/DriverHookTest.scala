@@ -65,7 +65,10 @@ abstract class DriverHookTest extends SpecZIO with AssertZIO {
     val server = new ApplicationApi(application, root, runtime)
     /** The CQ directory of the checkout the hook runs in: what its attached hosts left there. */
     val sessions = new AttachedSessions(Files.createTempDirectory("cq-hook-checkout-"))
-    val hook = new DriverHook(() => new DriverEntry(server, project), sessions)
+    /** The processes the hook descends from, nearest first: its harness is among them when the harness runs its hooks itself. */
+    var ancestors = List.empty[ProcessIdentity]
+    val views = new CheckoutSessions(() => sessions, () => ancestors)
+    val hook = new DriverHook(() => new DriverEntry(server, project), views)
     def await[A](effect: IO[Throwable, A]): A = Unsafe.unsafe { implicit unsafe => runtime.unsafe.run(effect).getOrThrowFiberFailure() }
     await(ledger.initialize(operator, "hook driver"))
 
@@ -150,6 +153,8 @@ abstract class DriverHookTest extends SpecZIO with AssertZIO {
     def finishes(unit: SessionUnit): Unit = units.ended(UnitEnd(unit, "Completed", Some("ConsiderAcceptance"), None))
     /** A `cq wait` of the session, for as long as the result is open. */
     def waiter(): AutoCloseable = SessionWaiters.hold(directory)(())._1
+    /** The harness process that started this host, as the host leaves it in its session directory. */
+    def startedBy(owner: ProcessIdentity): Unit = SessionOwner.record(directory, owner)
     /** What the host wrote about the Questions the session waits on, in order. */
     def questions: List[SessionUnitEvent] = SessionUnits.read(directory).filter {
       case _: SessionUnitEvent.Watching | _: SessionUnitEvent.Settled | _: SessionUnitEvent.Released => true
@@ -376,7 +381,7 @@ abstract class DriverHookTest extends SpecZIO with AssertZIO {
         override def integrate(value: HostIntegrationInput): IntegrationRecord = server.integrate(value)
         override def grant(value: GrantRequest): AccessToken = server.grant(value)
       }
-      val unanswered = new DriverHook(() => new DriverEntry(lossy, project), sessions)
+      val unanswered = new DriverHook(() => new DriverEntry(lossy, project), views)
       def prompt(hook: DriverHook, text: String): String = {
         val reply = parse(hook.run(harness.toString.toLowerCase, "UserPromptSubmit", payload("UserPromptSubmit", "lost-reply", "prompt" -> Json.fromString(text)).noSpaces.getBytes(UTF_8))).fold(throw _, identity)
         reply.hcursor.downField("hookSpecificOutput").get[String]("additionalContext").fold(throw _, identity)
@@ -524,6 +529,54 @@ abstract class DriverHookTest extends SpecZIO with AssertZIO {
       host.close(); other.close()
     }
 
+    "D164: tell a session that never drove how a person settled a Question it waits on, when its host was started by a process the hook descends from, and no other session" in scenarios { world =>
+      import world.*
+      def end(id: ItemId, answer: String): QuestionEnd = QuestionEnd(id, title(id), QuestionStatus.Answered, Some(answer))
+      def announced(reply: Json): List[String] = reply.hcursor.get[String]("reason").toOption.toList.flatMap(_.linesIterator.toList)
+        .dropWhile(_ != DriverHook.Settled).drop(1).takeWhile(_ != SessionQuestions.Act).map(_.stripPrefix("- "))
+      // Two harness processes in one checkout, each with its own host; neither session has a driver.
+      val (mine, theirs) = (ProcessIdentity(4242L, 1000L), ProcessIdentity(5151L, 2000L))
+      val (s, other) = (session("never-driven"), session("another-harness"))
+      val (host, second) = (new Host(world, s.scope.actor.session), new Host(world, other.scope.actor.session))
+      host.startedBy(mine); second.startedBy(theirs)
+      val (watch, watching) = (new QuestionWatch(s.api, project, host.directory, problem => fail(problem)), new QuestionWatch(other.api, project, second.directory, problem => fail(problem)))
+      val own = s.records(watch, question("Asked without a drive"))
+      val foreign = other.records(watching, question("Asked in the other harness"))
+      assert(status(s.id).isEmpty && status(other.id).isEmpty)
+      // The hook of the first harness: a shell between it and the harness, and what started the harness, are ancestors as well.
+      ancestors = List(ProcessIdentity(9001L, 3000L), mine, ProcessIdentity(1L, 0L))
+      assert(views.owned.contains(s.scope.actor.session))
+      // Nothing settled: where a waiter can start the next turn the session is told once to start it, and then it stops.
+      val first = s.stop()
+      if (harness == Harness.Codex) assert(first.isNull, first.noSpaces)
+      else assert(first.hcursor.get[String]("reason").exists(_.startsWith("CQ: this session waits on Q1 and no cq wait runs for it")), first.noSpaces)
+      assert(s.stop().isNull)
+      settle(own, QuestionStatus.Answered, Some("Go on"))
+      settle(foreign, QuestionStatus.Answered, Some("For the other harness"))
+      watch.poll(); watching.poll()
+      assert(host.questions.last == SessionUnitEvent.Settled(end(own, "Go on"), false) && second.questions.last == SessionUnitEvent.Settled(end(foreign, "For the other harness"), false))
+      // A hook that descends from no process that started a host says nothing and lets the stop through: one run by hand, one whose
+      // ancestors it cannot see, and one whose ancestor has the pid of the harness and another start.
+      List(Nil, List(ProcessIdentity(9001L, 3000L)), List(mine.copy(startMillis = 999L))).foreach { unrelated =>
+        ancestors = unrelated
+        assert(views.owned.isEmpty && s.stop().isNull && other.stop().isNull, unrelated.toString)
+      }
+      // The hook of the first harness announces the first session's Question, once, whatever session key it is run with; the second
+      // session's Question is said by the hook of the second harness alone.
+      ancestors = List(ProcessIdentity(9001L, 3000L), mine)
+      val told = s.stop()
+      assert(told.hcursor.get[String]("decision") == Right("block") && announced(told) == List("question Q1 \"Asked without a drive\" answered: Go on"), told.noSpaces)
+      assert(s.stop().isNull && other.stop().isNull)
+      ancestors = List(theirs)
+      assert(announced(other.stop()) == List("question Q2 \"Asked in the other harness\" answered: For the other harness") && other.stop().isNull)
+      // Two hosts that the same process started cannot be told apart: neither session is named.
+      val third = new Host(world, session("same-owner").scope.actor.session)
+      third.startedBy(mine)
+      ancestors = List(mine)
+      assert(views.owned.isEmpty)
+      host.close(); second.close(); third.close()
+    }
+
     "reject malformed input, a missing session_id and an unknown event with an explicit error, change nothing and allow the stop" in scenarios { world =>
       import world.*
       goal("Goal")
@@ -570,7 +623,7 @@ abstract class DriverHookTest extends SpecZIO with AssertZIO {
       assert(status("errors-ghost").isEmpty && (status(a.id), cursor) == (before._1, before._2))
       assert(server.driverReplies.size == before._3)
       // An unreachable or unauthorized backend is an explicit error too; the stop is allowed and an unrelated prompt needs no backend at all.
-      val offline = new DriverHook(() => throw new IllegalArgumentException(HostCredential.Required), sessions)
+      val offline = new DriverHook(() => throw new IllegalArgumentException(HostCredential.Required), views)
       def offlineRun(origin: DriverOrigin, fields: (String, Json)*): String = offline.run(name, origin.toString, payload(origin.toString, a.id, fields*).noSpaces.getBytes(UTF_8))
       assert(error("Stop", offlineRun(DriverOrigin.Stop)) == HostCredential.Required)
       assert(offlineRun(DriverOrigin.UserPromptSubmit, "prompt" -> Json.fromString("Reply with exactly: HELLO")) == "")

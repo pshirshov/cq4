@@ -39,8 +39,7 @@ final class AttachedProgram(config: SupervisorConfig, authority: SupervisorAutho
     require(run.copy(attempt = run.attempt.copy(startedAt = config.run.attempt.startedAt)) == config.run, "Session record differs from the session of this host")
     HostFiles.immutable(file, HostFiles.encode(SupervisorRun_JsonCodec, run), MaxRecordBytes)
     HostFiles.immutable(config.directory.resolve("settings.json"), HostFiles.encode(SupervisorSettings_JsonCodec, config.settings), MaxRecordBytes)
-    HostFiles.immutable(config.directory.resolve("owner.json"), io.circe.Json.obj("pid" -> io.circe.Json.fromLong(channels.owner.pid),
-      "startMillis" -> io.circe.Json.fromLong(channels.owner.startMillis)).noSpaces, 1024)
+    SessionOwner.record(config.directory, ProcessIdentity(channels.owner.pid, channels.owner.startMillis))
     SessionWaiters.create(config.directory)
     sessions.record(run.attempt.session, AttachedHostRecord(config.directory.toString, wait.line))
     queue.enqueue(0, DeliveryBatch(List(
