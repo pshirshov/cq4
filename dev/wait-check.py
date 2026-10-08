@@ -9,6 +9,7 @@ import tempfile
 import threading
 import time
 import uuid
+from fixture_runtime import waiter_slot
 
 HOST_GONE, NOT_A_SESSION, SEVERAL_HOSTS = 3, 4, 5
 PROJECT = "00000000-0000-4000-8000-000000000001"
@@ -147,10 +148,12 @@ def main():
         asking.event({"Watching": {"item": question(8)}})
         started = []
         def give():
-            asking.event(answered(7, str(started[0].pid + 1)))
+            slot = waiter_slot(started[0], asking.directory)
+            assert slot is not None, "cq wait holds no slot while it waits"
+            asking.event(answered(7, str(slot + 1)))
             time.sleep(1)
             assert started[0].poll() is None, "cq wait ended for an end the host gave to another waiter"
-            asking.event(answered(8, str(started[0].pid)))
+            asking.event(answered(8, str(slot)))
         code, output, errors = wait(asking.directory, "--after", "now", after=give, started=started)
         assert code == 0 and output == 'question Q8 "Which \\"way\\"" answered: "The second way"\n', (code, output, errors)
         # A waiter that starts later reports what the session has not read, whoever was given it: the report of a waiter that was

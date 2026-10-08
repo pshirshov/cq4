@@ -1,3 +1,4 @@
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -21,6 +22,28 @@ def cli_case(label: str, command: list[str], cwd, environment) -> subprocess.Com
         raise AssertionError(f"CLI case did not end within {CLI_CASE_SECONDS} seconds: {label}") from None
     print(json.dumps({"case": label, "seconds": round(time.monotonic() - began, 2), "exit": result.returncode}), flush=True)
     return result
+
+
+def waiter_slot(process: subprocess.Popen, directory: Path) -> int | None:
+    """The slot the `cq wait` that `process` started holds on the session directory, or nothing while it holds none. A waiter holds a
+    shared lock on the byte of its slot of the session's `waiters.lock` for as long as it runs, which refuses an exclusive one; the
+    slot is the process identifier of the waiter and follows the turn byte. An installed command runs the waiter as a child of its
+    launcher, so the waiter is looked for among the started process and its descendants."""
+    def family(pid: int) -> list[int]:
+        try:
+            children = [int(child) for task in Path(f"/proc/{pid}/task").glob("*/children") for child in task.read_text().split()]
+        except OSError:
+            # The process ended while it was read.
+            children = []
+        return [pid] + [member for child in children for member in family(child)]
+    with (Path(directory) / "waiters.lock").open("r+") as stream:
+        for pid in family(process.pid):
+            try:
+                fcntl.lockf(stream, fcntl.LOCK_EX | fcntl.LOCK_NB, 1, 1 + pid)
+            except OSError:
+                return pid
+            fcntl.lockf(stream, fcntl.LOCK_UN, 1, 1 + pid)
+    return None
 
 
 def guardian_binary(directory: Path, provided: str | None) -> Path:

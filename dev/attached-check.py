@@ -1,6 +1,5 @@
 """Behavioral Effectual Good Communication: attached MCP, real server/Git/processes."""
 import datetime
-import fcntl
 import json
 import os
 from pathlib import Path
@@ -13,7 +12,7 @@ import threading
 import time
 import urllib.request
 import uuid
-from fixture_runtime import ROLES, guardian_binary, role_agents, save_agents
+from fixture_runtime import ROLES, guardian_binary, role_agents, save_agents, waiter_slot
 
 
 # The fixture runs its cases one after another in one process and bounds each of them, not their total: a case that does not end
@@ -459,30 +458,15 @@ def main():
                 assert events[-1] == {"Started": {"unit": {"kind": "Attempt", "id": started["attempt"]["value"], "members": [target["id"]]}}}, events
                 return started
             def watched(arguments):
-                """Starts a `cq wait` and returns it once it watches the driven session: it holds a shared lock on the byte of its own
-                slot of the session's `waiters.lock` for as long as it runs, which refuses an exclusive one, and reads the session's
-                units in the turn in which it takes it. The slot is the process identifier of the waiter and follows the turn byte;
-                the lock of another waiter says nothing about this one. An installed command runs the waiter as a child of its
-                launcher, so the waiter is looked for among the started process and its descendants; its slot is left in `slot`."""
+                """Starts a `cq wait` and returns it once it watches the driven session, with its slot in `slot`: it reads the session's
+                units in the turn in which it takes its slot, and the lock of another waiter says nothing about this one."""
                 process = subprocess.Popen([str(wrapper), "wait"] + arguments, cwd=repository, env=env, stdout=subprocess.PIPE, text=True)
-                def family(pid):
-                    try:
-                        children = [int(child) for task in Path(f"/proc/{pid}/task").glob("*/children") for child in task.read_text().split()]
-                    except OSError:
-                        # The process ended while it was read.
-                        children = []
-                    return [pid] + [member for child in children for member in family(child)]
-                with (driven_directory / "waiters.lock").open("r+") as stream:
-                    while True:
-                        assert process.poll() is None, ("The wait command ended while the child ran", process.communicate()[0])
-                        for pid in family(process.pid):
-                            try:
-                                fcntl.lockf(stream, fcntl.LOCK_EX | fcntl.LOCK_NB, 1, 1 + pid)
-                            except OSError:
-                                process.slot = pid
-                                return process
-                            fcntl.lockf(stream, fcntl.LOCK_UN, 1, 1 + pid)
-                        time.sleep(0.05)
+                while True:
+                    assert process.poll() is None, ("The wait command ended while the child ran", process.communicate()[0])
+                    process.slot = waiter_slot(process, driven_directory)
+                    if process.slot is not None:
+                        return process
+                    time.sleep(0.05)
             probe = probed()
             ordered = hook("Stop", hooked, stop_hook_active=False, last_assistant_message="Started.")
             assert ordered is not None and ordered.get("decision") == "block" and ordered["reason"].startswith(
