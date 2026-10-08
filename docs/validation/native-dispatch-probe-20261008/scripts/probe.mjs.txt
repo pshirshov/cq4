@@ -1,0 +1,238 @@
+// Probe of ponygirls-subagents (commit 7aa0caab) in a real Pi process. Pi, the extension, its SDK workers and git are real;
+// the model provider is a scripted local imitation of the OpenAI Responses API. Usage: node probe.mjs OUTDIR
+import { spawn, execFileSync } from "node:child_process";
+import { createServer } from "node:http";
+import { mkdirSync, writeFileSync, readFileSync, appendFileSync, readdirSync, existsSync, statSync } from "node:fs";
+import { join } from "node:path";
+import { randomUUID } from "node:crypto";
+
+const OUT = process.argv[2];
+const PI_ROOT = process.env.PI_ROOT;                 // /nix/store/...-pi-coding-agent-1.0.0
+const EXT = process.env.EXT;                         // .../ponygirls-subagents
+const NODE = process.execPath;
+mkdirSync(OUT, { recursive: true });
+const log = join(OUT, "provider-requests.jsonl");
+writeFileSync(log, "");
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// ---- scripted provider ----
+let n = 0;
+const sse = events => events.map(e => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join("");
+function completed(k, model, items) {
+  const base = { id: "resp_" + k, object: "response", model, status: "in_progress", output: [] };
+  const usage = { input_tokens: 100 + k, input_tokens_details: { cached_tokens: 0 }, output_tokens: 10 + k, output_tokens_details: { reasoning_tokens: 0 }, total_tokens: 110 + 2 * k };
+  const ev = [{ type: "response.created", response: base }];
+  items.forEach((item, i) => {
+    if (item.type === "message") {
+      const text = item.content[0].text;
+      ev.push({ type: "response.output_item.added", output_index: i, item: { ...item, content: [], status: "in_progress" } },
+        { type: "response.content_part.added", output_index: i, item_id: item.id, content_index: 0, part: { type: "output_text", text: "", annotations: [] } },
+        { type: "response.output_text.delta", output_index: i, item_id: item.id, content_index: 0, delta: text },
+        { type: "response.output_text.done", output_index: i, item_id: item.id, content_index: 0, text },
+        { type: "response.output_item.done", output_index: i, item });
+    } else {
+      ev.push({ type: "response.output_item.added", output_index: i, item: { ...item, arguments: "", status: "in_progress" } },
+        { type: "response.function_call_arguments.delta", output_index: i, item_id: item.id, delta: item.arguments },
+        { type: "response.function_call_arguments.done", output_index: i, item_id: item.id, arguments: item.arguments },
+        { type: "response.output_item.done", output_index: i, item });
+    }
+  });
+  ev.push({ type: "response.completed", response: { ...base, status: "completed", output: items, usage } });
+  return sse(ev);
+}
+const text = (k, t) => ({ id: "msg_" + k, type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text: t, annotations: [] }] });
+const call = (k, name, args) => ({ id: "fc_" + k, type: "function_call", status: "completed", call_id: "call_" + k, name, arguments: JSON.stringify(args) });
+
+function lastUserText(input) {
+  for (let i = input.length - 1; i >= 0; i--) {
+    const it = input[i];
+    if (it.role === "user") { const t = JSON.stringify(it.content); if (!t.includes("[subagents]")) return { i, text: t }; }
+  }
+  return { i: -1, text: "" };
+}
+function outputsOf(input, name) {
+  const callIds = new Map(input.filter(x => x.type === "function_call").map(x => [x.call_id, x.name]));
+  return input.filter(x => x.type === "function_call_output" && callIds.get(x.call_id) === name).map(x => String(x.output));
+}
+async function script(req, k) {
+  const tools = (req.tools || []).map(t => t.name);
+  const input = req.input || [];
+  const { i: ui, text: user } = lastUserText(input);
+  const after = input.slice(ui + 1).filter(x => x.type === "function_call").map(x => x.name);
+  const model = req.model;
+  const has = n => after.filter(x => x === n).length;
+  const idOf = s => JSON.parse(s.replace(/^[^{]*/, "")).agentId;
+  if (tools.includes("spawn_agent")) {                // governing session
+    const spawns = outputsOf(input.slice(ui + 1), "spawn_agent").map(idOf);
+    if (user.includes("SCENARIO-A")) {
+      if (has("spawn_agent") === 0) return [call(k, "spawn_agent", { task_name: "reader1", profile: "reader", message: "READER-TASK: read data.txt and report its first line." })];
+      if (has("spawn_agent") === 1) return [call(k, "spawn_agent", { task_name: "writer1", profile: "writer", message: "WRITER-TASK: create out.txt containing 'written by writer1'." })];
+      if (!has("wait_agent")) return [call(k, "wait_agent", { condition: "all_settled", timeout_ms: 60000 })];
+      if (!has("list_agents")) return [call(k, "list_agents", {})];
+      if (has("read_agent") < 2) return [call(k, "read_agent", { target: spawns[has("read_agent")], view: "result" })];
+      return [text(k, "A-DONE")];
+    }
+    if (user.includes("SCENARIO-B")) {
+      if (!has("spawn_agent")) return [call(k, "spawn_agent", { task_name: "slow", profile: "reader", message: "READER-TASK delayed: read data.txt." })];
+      return [text(k, "B-SPAWNED: not waiting")];
+    }
+    if (user.includes("SCENARIO-C")) {
+      if (!has("spawn_agent")) return [call(k, "spawn_agent", { task_name: "gated", profile: "writer", message: "WRITER-TASK: create out.txt containing 'gated'.",
+        gate: { model: { provider: "openai", id: model }, thinkingLevel: "low", prompt: "Approve when out.txt exists.", maxRounds: 2,
+          checks: [{ id: "exists", command: "test -f out.txt && echo present", timeoutMs: 20000 }], promisedOutputs: ["out.txt"] } })];
+      if (!has("wait_agent")) return [call(k, "wait_agent", { condition: "all_settled", timeout_ms: 90000 })];
+      if (!has("list_agents")) return [call(k, "list_agents", {})];
+      if (!has("read_agent")) return [call(k, "read_agent", { target: spawns[0], view: "events", limit: 100 })];
+      return [text(k, "C-DONE")];
+    }
+    if (user.includes("SCENARIO-D")) {
+      if (!has("spawn_agent")) return [call(k, "spawn_agent", { task_name: "boxed", profile: "writer", isolation: "sandbox", repo_id: "proj", message: "WRITER-TASK: create out.txt containing 'boxed'." })];
+      if (!has("wait_agent")) return [call(k, "wait_agent", { condition: "all_settled", timeout_ms: 60000 })];
+      if (!has("read_agent")) return [call(k, "read_agent", { target: spawns[0], view: "result" })];
+      return [text(k, "D-DONE")];
+    }
+    if (user.includes("SCENARIO-E")) {
+      if (!has("spawn_agent")) return [call(k, "spawn_agent", { task_name: "victim", profile: "reader", message: "READER-TASK delayed: read data.txt." })];
+      if (!has("interrupt_agent")) return [call(k, "interrupt_agent", { target: spawns[0] })];
+      if (!has("wait_agent")) return [call(k, "wait_agent", { condition: "all_settled", timeout_ms: 30000 })];
+      if (!has("read_agent")) return [call(k, "read_agent", { target: spawns[0], view: "status" })];
+      return [text(k, "E-DONE")];
+    }
+    if (user.includes("SCENARIO-F")) {
+      if (!has("probe_bridge")) return [call(k, "probe_bridge", { profile: "writer", message: "WRITER-TASK: create out.txt containing 'bridged'." })];
+      return [text(k, "F-DONE")];
+    }
+    return [text(k, "ack")];
+  }
+  if (tools.includes("submit_gate_decision")) {       // managed gate reviewer
+    const m = /candidateId \\\\?"([^"\\\\]+)/.exec(user);
+    if (!after.length) return [call(k, "grep", { pattern: "gated", path: "out.txt", literal: true })];
+    return [call(k, "submit_gate_decision", { schemaVersion: 1, candidateId: m ? m[1] : "?", decision: "approve", advisories: [] })];
+  }
+  if (tools.includes("write")) {                      // writer child
+    if (after.length === 0) return [call(k, "write", { path: "out.txt", content: user.includes("gated") ? "gated\n" : "written by writer1\n" })];
+    if (after.length === 1) return [call(k, "bash", { command: "git status --short && pwd && git rev-parse HEAD" })];
+    return [text(k, "WRITER-RESULT: wrote out.txt")];
+  }
+  if (after.length === 0) { if (user.includes("delayed")) await sleep(5000); return [call(k, "read", { path: "data.txt" })]; }   // reader child
+  return [text(k, "READER-RESULT: data.txt first line is 'alpha'")];
+}
+const provider = createServer((rq, rs) => {
+  let raw = "";
+  rq.on("data", c => raw += c);
+  rq.on("end", async () => {
+    let req = {};
+    try { req = JSON.parse(raw); } catch {}
+    const k = ++n;
+    let items;
+    try { items = await script(req, k); } catch (e) { items = [text(k, "SCRIPT-ERROR " + e)]; }
+    const tools = (req.tools || []).map(t => t.name);
+    appendFileSync(log, JSON.stringify({ n: k, at: new Date().toISOString(), path: rq.url, model: req.model, tools, reply: items.map(i => i.type === "function_call" ? `call ${i.name} ${i.arguments.slice(0, 200)}` : "text " + i.content[0].text),
+      inputTail: (req.input || []).slice(-2).map(i => (i.role || i.type) + ": " + JSON.stringify(i.content ?? i.output ?? i.arguments).slice(0, 600)),
+      noticeInInput: JSON.stringify(req.input || []).includes("[subagents]") }) + "\n");
+    const body = completed(k, req.model || "stub", items);
+    rs.writeHead(200, { "content-type": "text/event-stream", "content-length": Buffer.byteLength(body) });
+    rs.end(body);
+  });
+});
+await new Promise(r => provider.listen(0, "127.0.0.1", r));
+const port = provider.address().port;
+
+// ---- project, agent dir ----
+const root = join(OUT, "run");
+const project = join(root, "project"), agent = join(root, "agent"), home = join(root, "home");
+for (const d of [project, agent, home]) mkdirSync(d, { recursive: true });
+writeFileSync(join(agent, "models.json"), JSON.stringify({ providers: { openai: { baseUrl: `http://127.0.0.1:${port}/v1` } } }));
+writeFileSync(join(agent, "auth.json"), JSON.stringify({ openai: { type: "api_key", key: "sk-stub" } }), { mode: 0o600 });
+writeFileSync(join(agent, "subagents-policy.json"), JSON.stringify({ maxDepth: 1, nesting: false, repos: [{ repoId: "proj", checkoutPath: project, readRoots: [project], allowWriters: true }], allowedModels: null, gateBypassAllowed: false, gateMaxRoundsCeiling: 3 }));
+writeFileSync(join(project, "data.txt"), "alpha\nbeta\n");
+const g = (...a) => execFileSync("git", a, { cwd: project, encoding: "utf8", env: { ...process.env, HOME: home, GIT_AUTHOR_NAME: "p", GIT_AUTHOR_EMAIL: "p@x", GIT_COMMITTER_NAME: "p", GIT_COMMITTER_EMAIL: "p@x" } }).trim();
+g("init", "-q", "-b", "main"); g("add", "."); g("commit", "-q", "-m", "base");
+const base = g("rev-parse", "HEAD");
+
+const env = { HOME: home, PATH: process.env.PATH, LANG: "C.UTF-8", PI_CODING_AGENT_DIR: agent, OPENAI_API_KEY: "sk-stub", PI_OFFLINE: "1", PI_TELEMETRY: "0",
+  PI_SUBAGENTS_SDK_ROOT: join(PI_ROOT, "lib/node_modules/pi-monorepo") };
+const piArgs = ["--approve", "--offline", "--provider", "openai", "--model", "gpt-5.5", "--mode", "rpc", "--no-extensions", "--extension", EXT, "--extension", process.env.BRIDGE, "--no-skills", "--no-context-files", "--no-prompt-templates"];
+const child = spawn(join(PI_ROOT, "bin/pi"), piArgs, { cwd: project, env, stdio: ["pipe", "pipe", "pipe"] });
+writeFileSync(join(OUT, "command.txt"), `cd ${project} && env -i ${Object.entries(env).map(([k, v]) => k + "=" + (k === "OPENAI_API_KEY" ? "<stub>" : v)).join(" ")} ${join(PI_ROOT, "bin/pi")} ${piArgs.join(" ")}\n`);
+const events = join(OUT, "pi-rpc-events.jsonl"); writeFileSync(events, "");
+const records = [];
+let buf = Buffer.alloc(0), stderr = "";
+child.stderr.on("data", c => { stderr += c; });
+child.stdout.on("data", c => {
+  buf = Buffer.concat([buf, c]); let e;
+  while ((e = buf.indexOf(10)) !== -1) { const line = buf.subarray(0, e).toString(); buf = buf.subarray(e + 1); appendFileSync(events, line.slice(0, 4000) + "\n"); try { records.push({ at: Date.now(), ...JSON.parse(line) }); } catch {} }
+});
+async function until(what, pred, from, ms = 120000) {
+  const t0 = Date.now();
+  for (;;) { const i = records.findIndex((r, ix) => ix >= from && pred(r)); if (i >= 0) return i; if (Date.now() - t0 > ms) throw new Error("timeout: " + what + "\n" + stderr); await sleep(50); }
+}
+async function cmd(value) {
+  const id = randomUUID(); const from = records.length;
+  child.stdin.write(JSON.stringify({ id, ...value }) + "\n");
+  const i = await until(value.type, r => r.type === "response" && r.id === id, from);
+  return records[i];
+}
+async function turn(message) {
+  const from = records.length;
+  await cmd({ type: "prompt", message });
+  const i = await until("agent_settled for " + message, r => r.type === "agent_settled", from, 180000);
+  return { from, end: i };
+}
+const sub = join(agent, "subagents");
+const marks = {};
+const note = (k, v) => { marks[k] = v; console.log(k, JSON.stringify(v)); };
+
+await until("start", r => true, 0, 30000).catch(() => {});
+note("pi-version", execFileSync(join(PI_ROOT, "bin/pi"), ["--version"], { env, encoding: "utf8" }).trim());
+note("node-version", process.version);
+note("base-commit", base);
+const state = (await cmd({ type: "get_state" })).data;
+note("sessionId", state.sessionId);
+note("commands", (await cmd({ type: "get_commands" })).data.commands.filter(c => /agents/.test(c.name)).map(c => `${c.source} ${c.name}`));
+
+// Scenario A: reader + writer, parent waits
+const a = await turn("SCENARIO-A");
+note("A-tool-calls", records.slice(a.from, a.end).filter(r => r.type === "tool_execution_start").map(r => r.toolName));
+const aResults = records.slice(a.from, a.end).filter(r => r.type === "tool_execution_end").map(r => ({ tool: r.toolName, isError: r.isError, result: JSON.stringify(r.result).slice(0, 1800) }));
+writeFileSync(join(OUT, "scenario-A-tool-results.json"), JSON.stringify(aResults, null, 1));
+note("A-final", records.slice(a.from, a.end).filter(r => r.type === "message_end" && r.message?.role === "assistant").map(r => JSON.stringify(r.message.content).slice(0, 200)).pop());
+note("git-status-main-checkout-after-A", g("status", "--short"));
+note("git-worktrees-after-A", g("worktree", "list"));
+
+// Scenario B: parent spawns a slow reader, ends its turn, session goes idle
+const b = await turn("SCENARIO-B");
+const bSettledAt = records[b.end].at;
+note("B-parent-turn-done", true);
+const idleFrom = records.length;
+await sleep(12000);                                   // the child finishes meanwhile (5 s provider delay)
+const idleEvents = records.slice(idleFrom).filter(r => r.type !== "extension_ui_request").map(r => r.type);
+note("B-events-while-idle-after-child-finished", idleEvents);
+const journalFiles = readdirSync(join(sub, state.sessionId));
+note("B-root-dir-files", journalFiles);
+const c1 = await turn("STATUS please");
+note("B-notice-in-next-turn-input", readFileSync(log, "utf8").trim().split("\n").map(l => JSON.parse(l)).filter(r => r.noticeInInput && r.tools.includes("spawn_agent")).map(r => r.n));
+note("B-custom-messages", records.filter(r => r.type === "message_end" && r.message?.customType === "pi-subagents-notice").map(r => JSON.stringify(r.message.content).slice(0, 500)));
+
+// Scenario C: gated writer
+const c = await turn("SCENARIO-C");
+note("C-tool-calls", records.slice(c.from, c.end).filter(r => r.type === "tool_execution_start").map(r => r.toolName));
+writeFileSync(join(OUT, "scenario-C-tool-results.json"), JSON.stringify(records.slice(c.from, c.end).filter(r => r.type === "tool_execution_end").map(r => ({ tool: r.toolName, isError: r.isError, result: JSON.stringify(r.result).slice(0, 6000) })), null, 1));
+note("git-worktrees-after-C", g("worktree", "list"));
+
+for (const [tag, msg] of [["D", "SCENARIO-D"], ["E", "SCENARIO-E"], ["F", "SCENARIO-F"]]) {
+  const t = await turn(msg);
+  note(tag + "-tool-calls", records.slice(t.from, t.end).filter(r => r.type === "tool_execution_start").map(r => r.toolName));
+  writeFileSync(join(OUT, `scenario-${tag}-tool-results.json`), JSON.stringify(records.slice(t.from, t.end).filter(r => r.type === "tool_execution_end").map(r => ({ tool: r.toolName, isError: r.isError, result: JSON.stringify(r.result).slice(0, 6000) })), null, 1));
+}
+// Journal and layout evidence
+const walk = (d, depth = 0) => readdirSync(d).flatMap(f => { const p = join(d, f); return statSync(p).isDirectory() && depth < 3 ? [p + "/", ...walk(p, depth + 1)] : [p]; });
+writeFileSync(join(OUT, "root-dir-listing.txt"), walk(join(sub, state.sessionId)).map(p => p.replace(root, "<run>")).join("\n") + "\n");
+const journalPath = join(sub, state.sessionId, "journal.log");
+writeFileSync(join(OUT, "marks.json"), JSON.stringify(marks, null, 1));
+child.stdin.end();
+await sleep(1500);
+child.kill();
+writeFileSync(join(OUT, "pi-stderr.txt"), stderr);
+provider.close();
+setTimeout(() => process.exit(0), 200);

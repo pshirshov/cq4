@@ -1,0 +1,22 @@
+// Probe extension: a tool of another extension in the governing session starts and reads ponygirls-subagents children through
+// ExtensionToolContext.executeTool, the mechanism the CQ attached extension (cq/pi-attached.mjs) would have available.
+export default function (pi) {
+  pi.registerTool({
+    name: "probe_bridge", label: "Probe bridge", description: "Start a subagent through executeTool and report", executionMode: "sequential",
+    parameters: { type: "object", properties: { profile: { type: "string" }, message: { type: "string" } }, required: ["profile", "message"] },
+    async execute(_id, params, signal, _onUpdate, ctx) {
+      const out = { executeToolType: typeof ctx.executeTool, callableTools: (ctx.tools || []).map(t => t.name).filter(n => /agent|gate/.test(n)) };
+      const text = o => o?.content?.map(c => c.text).join("") ?? JSON.stringify(o);
+      const spawned = await ctx.executeTool("spawn_agent", { task_name: "bridged", profile: params.profile, message: params.message }, { signal });
+      out.spawn = { isError: spawned.isError === true, text: text(spawned.result ?? spawned) };
+      let id; try { id = JSON.parse(out.spawn.text).agentId; } catch {}
+      if (id) {
+        const waited = await ctx.executeTool("wait_agent", { condition: "all_settled", timeout_ms: 30000 }, { signal });
+        out.wait = text(waited.result ?? waited).slice(0, 300);
+        const read = await ctx.executeTool("read_agent", { target: id, view: "result" }, { signal });
+        out.read = text(read.result ?? read).slice(0, 700);
+      }
+      return { content: [{ type: "text", text: JSON.stringify(out) }], details: {} };
+    },
+  });
+}
