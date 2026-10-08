@@ -970,37 +970,241 @@ final class AgentConfigLocal extends AnyWordSpec {
   }
 
   "A starting configuration (Behavioral Active Blackbox Atomic)" should {
-    "write a starting configuration in which each harness of the settings runs its settings model and every role resolves" in {
-      val settings = List(HarnessSetting(Harness.Claude, "/bin/claude", "opus", "anthropic", "1", Nil, Set.empty),
-        HarnessSetting(Harness.Codex, "/bin/codex", "gpt-6.1", "openai", "1", Nil, Set.empty),
-        HarnessSetting(Harness.Pi, "/bin/pi", "glm 5,max", "z ai", "1", Nil, Set.empty))
-      val text = cq.core.AgentStarter.text(settings)
-      val parsed = cq.core.AgentConfigText.parse(text).fold(problems => fail(problems.toString), identity)
-      assert(text.contains("  codex:\n    tiers:\n      frontier: [gpt-6.1]\n      standard: [gpt-6.1]\n      fast: [gpt-6.1]\n"))
-      // A review goes to another harness of the settings, in their order, and to the governing one only when the others abstain.
-      assert(!text.contains("    reviewer: $harness") && cq.core.AgentStarter.note(settings).isEmpty &&
-        text.contains("    roles:\n      reviewer: { fallback: [codex:@standard, pi:@standard, claude:@standard] }\n") &&
-        text.contains("    roles:\n      reviewer: { fallback: [claude:@standard, pi:@standard, codex:@standard] }\n") &&
-        text.contains("    roles:\n      reviewer: { fallback: [claude:@standard, codex:@standard, pi:@standard] }\n"))
-      def own(setting: HarnessSetting): ModelRoute = ModelRoute(setting.harness, Option.when(setting.harness == Harness.Pi)("z ai"), setting.model, None)
-      for (setting <- settings; role <- AgentRole.all) {
-        val expected = if (role == AgentRole.Reviewer)
-          ResolvedRole(PanelMode.All, 1, List(ResolvedSeat(SeatStrategy.Fallback, settings.filterNot(_ == setting).map(own) :+ own(setting))),
-            RoleOrigin(AgentLayer.Installation, RoleSource.HarnessRoles), List(0))
-        else ResolvedRole(PanelMode.All, 1, List(ResolvedSeat(SeatStrategy.Fallback, List(own(setting)))), RoleOrigin(AgentLayer.Installation, RoleSource.DefaultRoles), Nil)
+    def setting(harness: Harness, model: String, provider: String): HarnessSetting = HarnessSetting(harness, s"/bin/${harness.toString.toLowerCase}", model, provider, "1", Nil, Set.empty)
+    def started(settings: List[HarnessSetting]): ParsedAgents = cq.core.AgentConfigText.parse(cq.core.AgentStarter.text(settings)).fold(problems => fail(problems.toString), identity)
+    def seat(routes: ModelRoute*): List[ResolvedSeat] = List(ResolvedSeat(SeatStrategy.Fallback, routes.toList))
+    val defaults = RoleOrigin(AgentLayer.Installation, RoleSource.DefaultRoles)
+    val own = RoleOrigin(AgentLayer.Installation, RoleSource.HarnessRoles)
+    // Each settings entry names one model of its lineup, and a different tier of it for each harness.
+    val recognised = List(setting(Harness.Claude, "claude-sonnet-5-5", "anthropic"), setting(Harness.Codex, "gpt-6.1-sol", "openai"), setting(Harness.Pi, "gpt-6-luna", "openai-codex"))
+    val unrecognised = List(setting(Harness.Claude, "opus", "anthropic"), setting(Harness.Codex, "gpt-6.1", "openai"), setting(Harness.Pi, "glm 5,max", "z ai"))
+    "write the lineup of each harness whose settings entry names a model of it, the planner on the frontier tier, the worker on standard and the explorer on fast" in {
+      assert(cq.core.AgentStarter.text(recognised) ==
+        """# Server defaults for agent models.
+          |#
+          |# Roles, whichever harness governs: the planner thinks with the best model, the worker and
+          |# the explorer run cheaper ones. A review goes to another harness first, so that the reviewer
+          |# is not the model that made the work, and to the governing harness only when the others abstain.
+          |defaults:
+          |  roles:
+          |    planner:  $harness:@frontier
+          |    worker:   $harness:@standard
+          |    explorer: $harness:@fast
+          |
+          |# What frontier, standard and fast mean for each harness, and who reviews when it governs.
+          |harnesses:
+          |  claude:
+          |    tiers:
+          |      frontier: [claude-opus-5-5]
+          |      standard: [claude-sonnet-5-5]
+          |      fast:     [claude-haiku-5-5]
+          |    roles:
+          |      reviewer: { fallback: [codex:@frontier, pi:@frontier, claude:@frontier] }
+          |  codex:
+          |    tiers:
+          |      frontier: [gpt-6.1-sol?effort=high]
+          |      standard: [gpt-6.1-sol]
+          |      fast:     [gpt-6-luna?effort=medium]
+          |    roles:
+          |      reviewer: { fallback: [claude:@frontier, pi:@frontier, codex:@frontier] }
+          |  pi:
+          |    tiers:
+          |      frontier: [openai-codex/gpt-6.1-sol?effort=high]
+          |      standard: [openai-codex/gpt-6.1-sol]
+          |      fast:     [openai-codex/gpt-6-luna?effort=medium]
+          |    roles:
+          |      reviewer: { fallback: [claude:@frontier, codex:@frontier, pi:@frontier] }
+          |""".stripMargin)
+      assert(cq.core.AgentStarter.note(recognised).isEmpty)
+    }
+    "resolve each role of each harness of the lineups to the model of its tier with that model's effort, and the reviewer to the other harnesses first" in {
+      val parsed = started(recognised)
+      def frontier(harness: Harness): ModelRoute = harness match {
+        case Harness.Claude => ModelRoute(Harness.Claude, None, "claude-opus-5-5", None)
+        case Harness.Codex => ModelRoute(Harness.Codex, None, "gpt-6.1-sol", Some(Effort.High))
+        case Harness.Pi => ModelRoute(Harness.Pi, Some("openai-codex"), "gpt-6.1-sol", Some(Effort.High))
+      }
+      val standard = Map[Harness, ModelRoute](Harness.Claude -> ModelRoute(Harness.Claude, None, "claude-sonnet-5-5", None), Harness.Codex -> ModelRoute(Harness.Codex, None, "gpt-6.1-sol", None),
+        Harness.Pi -> ModelRoute(Harness.Pi, Some("openai-codex"), "gpt-6.1-sol", None))
+      val fast = Map[Harness, ModelRoute](Harness.Claude -> ModelRoute(Harness.Claude, None, "claude-haiku-5-5", None), Harness.Codex -> ModelRoute(Harness.Codex, None, "gpt-6-luna", Some(Effort.Medium)),
+        Harness.Pi -> ModelRoute(Harness.Pi, Some("openai-codex"), "gpt-6-luna", Some(Effort.Medium)))
+      for (governing <- Harness.all) {
+        def plain(route: ModelRoute): RoleResolution = RoleResolution.Resolved(ResolvedRole(PanelMode.All, 1, seat(route), defaults, Nil))
+        assert(resolution(parsed, ParsedAgents.empty, governing, AgentRole.Planner) == plain(frontier(governing)), governing.toString)
+        assert(resolution(parsed, ParsedAgents.empty, governing, AgentRole.Worker) == plain(standard(governing)), governing.toString)
+        assert(resolution(parsed, ParsedAgents.empty, governing, AgentRole.Explorer) == plain(fast(governing)), governing.toString)
+        assert(resolution(parsed, ParsedAgents.empty, governing, AgentRole.Reviewer) == RoleResolution.Resolved(ResolvedRole(PanelMode.All, 1,
+          seat((Harness.all.filterNot(_ == governing) :+ governing).map(frontier)*), own, List(0))), governing.toString)
+      }
+    }
+    "keep the settings model in every tier of a harness whose settings entry names no model of a lineup, and say so above its tiers" in {
+      val text = cq.core.AgentStarter.text(unrecognised)
+      assert(text ==
+        """# Server defaults for agent models.
+          |#
+          |# Roles, whichever harness governs: the planner runs its frontier tier, the worker its standard
+          |# tier and the explorer its fast tier. A review goes to another harness first, so that the reviewer
+          |# is not the model that made the work, and to the governing harness only when the others abstain.
+          |defaults:
+          |  roles:
+          |    planner:  $harness:@frontier
+          |    worker:   $harness:@standard
+          |    explorer: $harness:@fast
+          |
+          |# What frontier, standard and fast mean for each harness, and who reviews when it governs.
+          |harnesses:
+          |  claude:
+          |    # claude: the settings model in every tier; edit the tiers to use others
+          |    tiers:
+          |      frontier: [opus]
+          |      standard: [opus]
+          |      fast:     [opus]
+          |    roles:
+          |      reviewer: { fallback: [codex:@frontier, pi:@frontier, claude:@frontier] }
+          |  codex:
+          |    # codex: the settings model in every tier; edit the tiers to use others
+          |    tiers:
+          |      frontier: [gpt-6.1]
+          |      standard: [gpt-6.1]
+          |      fast:     [gpt-6.1]
+          |    roles:
+          |      reviewer: { fallback: [claude:@frontier, pi:@frontier, codex:@frontier] }
+          |  pi:
+          |    # pi: the settings model in every tier; edit the tiers to use others
+          |    tiers:
+          |      frontier: [z%20ai/glm%205%2Cmax]
+          |      standard: [z%20ai/glm%205%2Cmax]
+          |      fast:     [z%20ai/glm%205%2Cmax]
+          |    roles:
+          |      reviewer: { fallback: [claude:@frontier, codex:@frontier, pi:@frontier] }
+          |""".stripMargin)
+      val parsed = started(unrecognised)
+      def route(setting: HarnessSetting): ModelRoute = ModelRoute(setting.harness, Option.when(setting.harness == Harness.Pi)("z ai"), setting.model, None)
+      // Every role runs the settings model as before; a review goes to another harness of the settings, in their order, and to the governing one last.
+      for (setting <- unrecognised; role <- AgentRole.all) {
+        val expected = if (role == AgentRole.Reviewer) ResolvedRole(PanelMode.All, 1, seat((unrecognised.filterNot(_ == setting) :+ setting).map(route)*), own, List(0))
+        else ResolvedRole(PanelMode.All, 1, seat(route(setting)), defaults, Nil)
         assert(resolution(parsed, ParsedAgents.empty, setting.harness, role) == RoleResolution.Resolved(expected), s"${setting.harness} $role")
       }
-      // With one harness there is no other to review: every role runs it, and the operator is told that reviews are self-reviews.
-      val single = cq.core.AgentStarter.text(settings.take(1))
-      assert(single.contains("    reviewer: $harness:@standard\n") && !single.contains("fallback") &&
-        cq.core.AgentStarter.note(settings.take(1)).contains("The settings file holds one harness, so every review is a self-review by the governing harness until another harness is configured"))
-      assert(resolution(cq.core.AgentConfigText.parse(single).toOption.get, ParsedAgents.empty, Harness.Claude, AgentRole.Reviewer) ==
-        RoleResolution.Resolved(ResolvedRole(PanelMode.All, 1, List(ResolvedSeat(SeatStrategy.Fallback, List(own(settings.head)))), RoleOrigin(AgentLayer.Installation, RoleSource.DefaultRoles), List(0))))
-      // A harness the settings do not hold has no tier: its roles are unassigned in effect, and the refusal names the tier.
-      assert(resolution(cq.core.AgentConfigText.parse(cq.core.AgentStarter.text(settings.take(1))).toOption.get, ParsedAgents.empty, Harness.Pi, AgentRole.Worker) ==
-        RoleResolution.Unresolved(Some(RoleOrigin(AgentLayer.Installation, RoleSource.DefaultRoles)), List(AgentProblem.TierUndefined(Harness.Pi, ModelTier.Standard, AgentRole.Worker))))
-      assert(intercept[IllegalArgumentException](cq.core.AgentStarter.text(settings :+ settings.head)).getMessage.contains("names each harness once"))
+      assert(intercept[IllegalArgumentException](cq.core.AgentStarter.text(unrecognised :+ unrecognised.head)).getMessage.contains("names each harness once"))
       assert(intercept[IllegalArgumentException](cq.core.AgentStarter.text(Nil)).getMessage.contains("names each harness once"))
+    }
+    "write the lineup of one harness beside the settings model of another, and claim cheaper models only when every harness has a lineup" in {
+      val mixed = List(recognised.head, unrecognised(1))
+      val text = cq.core.AgentStarter.text(mixed)
+      assert(text ==
+        """# Server defaults for agent models.
+          |#
+          |# Roles, whichever harness governs: the planner runs its frontier tier, the worker its standard
+          |# tier and the explorer its fast tier. A review goes to another harness first, so that the reviewer
+          |# is not the model that made the work, and to the governing harness only when the others abstain.
+          |defaults:
+          |  roles:
+          |    planner:  $harness:@frontier
+          |    worker:   $harness:@standard
+          |    explorer: $harness:@fast
+          |
+          |# What frontier, standard and fast mean for each harness, and who reviews when it governs.
+          |harnesses:
+          |  claude:
+          |    tiers:
+          |      frontier: [claude-opus-5-5]
+          |      standard: [claude-sonnet-5-5]
+          |      fast:     [claude-haiku-5-5]
+          |    roles:
+          |      reviewer: { fallback: [codex:@frontier, claude:@frontier] }
+          |  codex:
+          |    # codex: the settings model in every tier; edit the tiers to use others
+          |    tiers:
+          |      frontier: [gpt-6.1]
+          |      standard: [gpt-6.1]
+          |      fast:     [gpt-6.1]
+          |    roles:
+          |      reviewer: { fallback: [claude:@frontier, codex:@frontier] }
+          |""".stripMargin)
+      val parsed = started(mixed)
+      val opus = ModelRoute(Harness.Claude, None, "claude-opus-5-5", None)
+      val gpt = ModelRoute(Harness.Codex, None, "gpt-6.1", None)
+      assert(resolution(parsed, ParsedAgents.empty, Harness.Claude, AgentRole.Explorer) ==
+        RoleResolution.Resolved(ResolvedRole(PanelMode.All, 1, seat(ModelRoute(Harness.Claude, None, "claude-haiku-5-5", None)), defaults, Nil)))
+      assert(resolution(parsed, ParsedAgents.empty, Harness.Codex, AgentRole.Explorer) == RoleResolution.Resolved(ResolvedRole(PanelMode.All, 1, seat(gpt), defaults, Nil)))
+      assert(resolution(parsed, ParsedAgents.empty, Harness.Claude, AgentRole.Reviewer) == RoleResolution.Resolved(ResolvedRole(PanelMode.All, 1, seat(gpt, opus), own, List(0))))
+      assert(resolution(parsed, ParsedAgents.empty, Harness.Codex, AgentRole.Reviewer) == RoleResolution.Resolved(ResolvedRole(PanelMode.All, 1, seat(opus, gpt), own, List(0))))
+    }
+    "give the one harness of a settings file every role, the reviewer on its frontier tier, and tell the operator that reviews are self-reviews" in {
+      val note = "The settings file holds one harness, so every review is a self-review by the governing harness until another harness is configured"
+      assert(cq.core.AgentStarter.text(recognised.take(1)) ==
+        s"""# Server defaults for agent models.
+          |#
+          |# Roles, whichever harness governs: the planner thinks with the best model, the worker and
+          |# the explorer run cheaper ones.
+          |# $note.
+          |defaults:
+          |  roles:
+          |    planner:  $$harness:@frontier
+          |    worker:   $$harness:@standard
+          |    explorer: $$harness:@fast
+          |    reviewer: $$harness:@frontier
+          |
+          |# What frontier, standard and fast mean for each harness.
+          |harnesses:
+          |  claude:
+          |    tiers:
+          |      frontier: [claude-opus-5-5]
+          |      standard: [claude-sonnet-5-5]
+          |      fast:     [claude-haiku-5-5]
+          |""".stripMargin)
+      assert(cq.core.AgentStarter.text(unrecognised.take(1)) ==
+        s"""# Server defaults for agent models.
+          |#
+          |# Roles, whichever harness governs: the planner runs its frontier tier, the worker its standard
+          |# tier and the explorer its fast tier.
+          |# $note.
+          |defaults:
+          |  roles:
+          |    planner:  $$harness:@frontier
+          |    worker:   $$harness:@standard
+          |    explorer: $$harness:@fast
+          |    reviewer: $$harness:@frontier
+          |
+          |# What frontier, standard and fast mean for each harness.
+          |harnesses:
+          |  claude:
+          |    # claude: the settings model in every tier; edit the tiers to use others
+          |    tiers:
+          |      frontier: [opus]
+          |      standard: [opus]
+          |      fast:     [opus]
+          |""".stripMargin)
+      assert(cq.core.AgentStarter.note(recognised.take(1)).contains(note) && cq.core.AgentStarter.note(unrecognised.take(1)).contains(note))
+      assert(resolution(started(recognised.take(1)), ParsedAgents.empty, Harness.Claude, AgentRole.Reviewer) ==
+        RoleResolution.Resolved(ResolvedRole(PanelMode.All, 1, seat(ModelRoute(Harness.Claude, None, "claude-opus-5-5", None)), defaults, List(0))))
+      assert(resolution(started(unrecognised.take(1)), ParsedAgents.empty, Harness.Claude, AgentRole.Worker) ==
+        RoleResolution.Resolved(ResolvedRole(PanelMode.All, 1, seat(ModelRoute(Harness.Claude, None, "opus", None)), defaults, Nil)))
+      // A harness the settings do not hold has no tier: its roles are unassigned in effect, and the refusal names the tier.
+      assert(resolution(started(unrecognised.take(1)), ParsedAgents.empty, Harness.Pi, AgentRole.Worker) ==
+        RoleResolution.Unresolved(Some(defaults), List(AgentProblem.TierUndefined(Harness.Pi, ModelTier.Standard, AgentRole.Worker))))
+    }
+    "write the Codex lineup for Pi under the provider openai-codex alone, and for no harness whose settings model is not a model of its lineup" in {
+      def tiers(value: HarnessSetting): Map[ModelTier, List[TierEntry]] = started(List(value)).config.harnesses(value.harness).tiers
+      def same(provider: Option[String], model: String): Map[ModelTier, List[TierEntry]] = ModelTier.all.map(_ -> List(TierEntry(ModelName(provider, model), None))).toMap
+      // A model name of the lineup under another provider is another provider's model.
+      assert(tiers(setting(Harness.Pi, "gpt-6.1-sol", "openrouter")) == same(Some("openrouter"), "gpt-6.1-sol"))
+      assert(cq.core.AgentStarter.text(List(setting(Harness.Pi, "gpt-6.1-sol", "openrouter"))).contains("    # pi: the settings model in every tier; edit the tiers to use others\n"))
+      assert(tiers(setting(Harness.Pi, "glm-5.3", "openai-codex")) == same(Some("openai-codex"), "glm-5.3"))
+      assert(tiers(setting(Harness.Pi, "gpt-6.1-sol", "openai-codex")) == Map(
+        ModelTier.Frontier -> List(TierEntry(ModelName(Some("openai-codex"), "gpt-6.1-sol"), Some(Effort.High))),
+        ModelTier.Standard -> List(TierEntry(ModelName(Some("openai-codex"), "gpt-6.1-sol"), None)),
+        ModelTier.Fast -> List(TierEntry(ModelName(Some("openai-codex"), "gpt-6-luna"), Some(Effort.Medium)))))
+      // The lineup of one harness is not that of another, and a model is named whole.
+      assert(tiers(setting(Harness.Claude, "gpt-6.1-sol", "anthropic")) == same(None, "gpt-6.1-sol"))
+      assert(tiers(setting(Harness.Codex, "claude-opus-5-5", "openai")) == same(None, "claude-opus-5-5"))
+      assert(tiers(setting(Harness.Codex, "gpt-6.1", "openai")) == same(None, "gpt-6.1"))
+      // Each model of a lineup names it, whichever tier holds it.
+      for (model <- List("claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"))
+        assert(tiers(setting(Harness.Claude, model, "anthropic"))(ModelTier.Fast) == List(TierEntry(ModelName(None, "claude-haiku-5-5"), None)), model)
+      for (model <- List("gpt-6.1-sol", "gpt-6-luna"))
+        assert(tiers(setting(Harness.Codex, model, "openai"))(ModelTier.Frontier) == List(TierEntry(ModelName(None, "gpt-6.1-sol"), Some(Effort.High))), model)
     }
     "save it as the configuration of a layer that holds none, leave a layer that holds it as it is, and replace no other configuration" in {
       val project = ProjectId(java.util.UUID.randomUUID())

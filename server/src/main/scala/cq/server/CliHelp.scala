@@ -138,11 +138,19 @@ Examples: cq status --task T1
 """
       case Some("agents") => """Usage: cq agents init [--settings FILE] [--save installation|project] [--json]
 
-Write an agent model configuration to start from. Every harness of the settings
-file runs its settings model in the frontier, standard and fast tiers. The
-planner, worker and explorer roles run the standard tier of the governing
-harness. The reviewer role of each harness goes to the other harnesses of the
-settings file first, in its order, and to the governing harness only when they
+Write an agent model configuration to start from. The planner role runs the
+frontier tier of the governing harness, the worker its standard tier and the
+explorer its fast tier. A harness whose settings model is a model of a lineup
+the command knows gets that lineup as its tiers:
+  claude   claude-opus-5-5, claude-sonnet-5-5, claude-haiku-5-5
+  codex    gpt-6.1-sol?effort=high, gpt-6.1-sol, gpt-6-luna?effort=medium
+  pi       the codex lineup, for the provider openai-codex alone
+The settings model is compared with the model names, without an effort. Any
+other harness runs its settings model in all three tiers, and the text says so
+above them: the command does not know the other models of that provider. The
+lineups are starting points to edit, last set 2026-10-08. The reviewer role of
+each harness goes to the frontier tier of the other harnesses of the settings
+file first, in its order, and to that of the governing harness only when they
 abstain. With one harness in the settings file every review is a self-review,
 and the command says so. Without --save the text is printed and nothing is
 changed.
