@@ -1,0 +1,29 @@
+##### run.sh
+#!/usr/bin/env bash
+# usage: run.sh name model prompt [extra args...]
+n=$1; m=$2; p=$3; shift 3
+cd /tmp/p18b/proj
+timeout 300 claude -p --output-format stream-json --verbose --model "$m" --no-session-persistence "$@" "$p" > /tmp/p18b/$n.jsonl 2> /tmp/p18b/$n.err
+echo "exit $?" >> /tmp/p18b/$n.err
+##### fg.sh
+fg(){ echo "Delegate in the foreground (run_in_background false) to subagent_type \"$1\" with prompt exactly: \"$2\" Then reply with the subagent final message verbatim."; }
+##### kill.sh
+#!/usr/bin/env bash
+# kill.sh tag sleepsecs bg(true|false)
+tag=$1; s=$2; bg=$3
+cd /tmp/p18b/proj
+claude -p --output-format stream-json --verbose --model sonnet --agents "$(cat /tmp/p18b/agents_par.json)" --dangerously-skip-permissions "Delegate to subagent_type \"rw\" with run_in_background $bg and prompt exactly: \"Run: sleep $s; echo finished-$tag\". Wait for its result." > /tmp/p18b/$tag.jsonl 2>/tmp/p18b/$tag.err </dev/null &
+pid=$!
+for i in $(seq 1 60); do pgrep -xf "sleep $s" >/dev/null && break; sleep 1; done
+echo "$tag claude_pid=$pid" ; echo "-- before kill:"; ps -eo pid,ppid,pgid,etime,args | grep -E "sleep $s" | grep -v grep 
+kill -9 $pid
+sleep 30
+echo "-- 30s after SIGKILL of $pid:"; ps -p $pid -o pid,stat 2>&1 | tail -n 1
+ps -eo pid,ppid,pgid,stat,etime,args | grep -E "sleep $s" | grep -v grep
+echo "-- stream lines: $(wc -l < /tmp/p18b/$tag.jsonl)"
+##### eff.sh
+#!/usr/bin/env bash
+# eff.sh tag agent
+cd /tmp/p18b/proj
+timeout 300 claude -p --output-format stream-json --verbose --model haiku --no-session-persistence --forward-subagent-text --agents "$(cat /tmp/p18b/agents_eff.json)" --dangerously-skip-permissions "Delegate in the foreground (run_in_background false) to subagent_type \"$2\" with prompt exactly: \"A bat and ball cost 1.10 total, bat costs 1.00 more than the ball. Also what is 17*23? Give both answers.\" Then reply with the subagent final message verbatim." > /tmp/p18b/$1.jsonl 2>/tmp/p18b/$1.err </dev/null
+echo "exit $?" >> /tmp/p18b/$1.err
