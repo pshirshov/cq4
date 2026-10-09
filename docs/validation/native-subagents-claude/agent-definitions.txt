@@ -1,0 +1,43 @@
+// agents1.json
+{"ro":{"description":"read only agent","prompt":"You are RO. Do exactly what the task says. Report the tool names you have.","tools":["Read","Grep"],"model":"haiku"},
+ "rw":{"description":"bash agent","prompt":"You are RW. Do exactly what the task says and report results verbatim.","tools":["Bash"],"model":"haiku"}}
+
+// agents_echo.json
+{"ec":{"description":"echo agent","prompt":"Your final message must be exactly the text between the markers BEGIN and END in the task, byte for byte, with no additions, no code fences and no commentary.","tools":["Read"],"model":"haiku"}}
+
+// agents_inh.json
+{"inh":{"description":"no tools field","prompt":"List the exact names of every tool you can call, comma separated, nothing else.","model":"haiku"}}
+
+// agents_js.json
+{"sj":{"description":"codeword agent","prompt":"You are the codeword agent. Whatever the task says, your final message must start with the word ZEBRA-7 and then answer in at most one sentence.","tools":["Read"],"model":"haiku"}}
+
+// agents_mcp.json
+{"sub":{"description":"mcp agent","prompt":"You call MCP tools exactly as told and report their raw text output.","tools":["mcp__subsrv__whoami","mcp__parentsrv__whoami"],"model":"haiku",
+ "mcpServers":[{"subsrv":{"type":"http","url":"http://127.0.0.1:18765/sub","headers":{"Authorization":"Bearer DUMMY-SUB-TOKEN"}}}]}}
+
+// agents_mcp2.json
+{"subonly":{"description":"mcp agent allowlist only subsrv","prompt":"You call MCP tools exactly as told and report their raw text output.","tools":["mcp__subsrv__whoami"],"model":"haiku",
+ "mcpServers":[{"subsrv":{"type":"http","url":"http://127.0.0.1:18765/sub","headers":{"Authorization":"Bearer DUMMY-SUB-TOKEN"}}}]},
+ "inherit":{"description":"mcp agent no tools field, disallow parent whoami","prompt":"You call MCP tools exactly as told and report their raw text output.","disallowedTools":["mcp__parentsrv__whoami"],"model":"haiku",
+ "mcpServers":[{"subsrv":{"type":"http","url":"http://127.0.0.1:18765/sub","headers":{"Authorization":"Bearer DUMMY-SUB-TOKEN"}}}]}}
+
+// agents_par.json
+{"rw":{"description":"bash agent","prompt":"You run shell commands exactly as told and report raw output.","tools":["Bash"],"model":"haiku"}}
+
+// agents_perm.json
+{"rw":{"description":"bash agent","prompt":"You run shell commands exactly as told and report raw output including any error.","tools":["Bash"],"model":"haiku"},
+ "rd":{"description":"read agent","prompt":"You use Read exactly as told and report raw output including any error.","tools":["Read"],"model":"haiku"},
+ "cw":{"description":"cwd test","prompt":"You run shell commands exactly as told and report raw output.","tools":["Bash"],"model":"haiku","cwd":"/tmp/p18b/other","workdir":"/tmp/p18b/other"}}
+
+// agents_q7.json
+{"rv":{"description":"reviewer stand-in","prompt":"You answer questions exactly and briefly; if you do not know something say UNKNOWN.","tools":["Bash"],"model":"haiku"}}
+
+// agents_wt.json
+{"wt":{"description":"worktree bash agent","prompt":"You run shell commands exactly as told and report raw output.","tools":["Bash"],"model":"haiku","isolation":"worktree"}}
+
+// agents_eff.json
+{"elow":{"description":"low effort","prompt":"Answer the task. Final message: the answer only.","tools":["Read"],"model":"sonnet","effort":"low"},
+ "ehigh":{"description":"high effort","prompt":"Answer the task. Final message: the answer only.","tools":["Read"],"model":"sonnet","effort":"max"}}
+
+// mcp_parent.json
+{"mcpServers":{"parentsrv":{"type":"http","url":"http://127.0.0.1:18765/parent","headers":{"Authorization":"Bearer DUMMY-PARENT-TOKEN"}}}}

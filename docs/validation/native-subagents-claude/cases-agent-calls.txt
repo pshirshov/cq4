@@ -1,0 +1,98 @@
+## a1.jsonl ('claude-haiku-5-5', 'bypassPermissions', ['ro', 'rw'], ['plugin:hm:codegraph', 'plugin:hm:crawl4ai', 'plugin:hm:haystack', 'claude.ai Claude Docs', 'claude.ai Google Calendar', 'claude.ai Google Drive', 'claude.ai Gmail'])
+    {"subagent_type": "ro", "description": "Read-only tool check", "prompt": "List the names of the tools you have, then try to create the file marker.txt in the current directory and report whether it worked."}
+    {"subagent_type": "rw", "description": "Bash directory and write check", "prompt": "Run: pwd; echo hello > /tmp/p18b/other/outside_1.txt; ls /tmp/p18b/other. Report the output."}
+## a2.jsonl ('claude-haiku-5-5', 'bypassPermissions', ['ro', 'rw'], ['plugin:hm:codegraph', 'plugin:hm:crawl4ai', 'plugin:hm:haystack', 'claude.ai Claude Docs', 'claude.ai Google Calendar', 'claude.ai Google Drive', 'claude.ai Gmail'])
+    {"subagent_type": "ro", "description": "Read-only tool and write probe", "prompt": "List the names of the tools you have, then try to create the file marker.txt in the current directory and report whether it worked."}
+    {"subagent_type": "rw", "description": "Run pwd, write, and list command", "prompt": "Run: pwd; echo hello > /tmp/p18b/other/outside_2.txt; ls /tmp/p18b/other. Report the output."}
+## b1.jsonl ('claude-sonnet-5-5', 'bypassPermissions', ['ro', 'rw'], ['plugin:hm:codegraph', 'plugin:hm:crawl4ai', 'plugin:hm:haystack', 'claude.ai Claude Docs', 'claude.ai Google Calendar', 'claude.ai Google Drive', 'claude.ai Gmail'])
+    {"description": "Run bash command", "subagent_type": "rw", "prompt": "Run: pwd; echo hi > /tmp/p18b/other/fg_1.txt. Report the output verbatim.", "run_in_background": false}
+## b2.jsonl ('claude-sonnet-5-5', 'bypassPermissions', ['ro', 'rw'], ['plugin:hm:codegraph', 'plugin:hm:crawl4ai', 'plugin:hm:haystack', 'claude.ai Claude Docs', 'claude.ai Google Calendar', 'claude.ai Google Drive', 'claude.ai Gmail'])
+    {"description": "Run pwd and write file", "subagent_type": "rw", "prompt": "Run: pwd; echo hi > /tmp/p18b/other/fg_2.txt. Report the output verbatim.", "run_in_background": false}
+## d1_1.jsonl ('claude-haiku-5-5', 'default', ['cw', 'rd', 'rw'], ['plugin:hm:codegraph', 'plugin:hm:crawl4ai', 'plugin:hm:haystack', 'claude.ai Claude Docs', 'claude.ai Google Calendar', 'claude.ai Google Drive', 'claude.ai Gmail'])
+    {"description": "Run echo and list directory", "prompt": "Run: echo d1_1 > /tmp/p18b/other/d1_1.txt; ls /tmp/p18b/other. Report raw output.", "subagent_type": "rw", "run_in_background": false}
+## d1_2.jsonl ('claude-haiku-5-5', 'default', ['cw', 'rd', 'rw'], ['plugin:hm:codegraph', 'plugin:hm:crawl4ai', 'plugin:hm:haystack', 'claude.ai Claude Docs', 'claude.ai Google Calendar', 'claude.ai Google Drive', 'claude.ai Gmail'])
+    {"description": "Run echo and list directory", "prompt": "Run: echo d1_2 > /tmp/p18b/other/d1_2.txt; ls /tmp/p18b/other. Report raw output.", "subagent_type": "rw", "run_in_background": false}
+## d2_1.jsonl ('claude-haiku-5-5', 'default', ['cw', 'rd', 'rw'], ['plugin:hm:codegraph', 'plugin:hm:crawl4ai', 'plugin:hm:haystack', 'claude.ai Claude Docs', 'claude.ai Google Calendar', 'claude.ai Google Drive', 'claude.ai Gmail'])
+    {"description": "Read outside-project file", "prompt": "Read the file /tmp/p18b/other/readme_outside.txt and report its content or the error.", "subagent_type": "rd", "run_in_background": false}
+## d2_2.jsonl ('claude-haiku-5-5', 'default', ['cw', 'rd', 'rw'], ['plugin:hm:codegraph', 'plugin:hm:crawl4ai', 'plugin:hm:haystack', 'claude.ai Claude Docs', 'claude.ai Google Calendar', 'claude.ai Google Drive', 'claude.ai Gmail'])
+    {"description": "Read outside file", "prompt": "Read the file /tmp/p18b/other/readme_outside.txt and report its content or the error.", "subagent_type": "rd", "run_in_background": false}
+## d3_1.jsonl ('claude-haiku-5-5', 'bypassPermissions', ['cw', 'rd', 'rw'], ['plugin:hm:codegraph', 'plugin:hm:crawl4ai', 'plugin:hm:haystack', 'claude.ai Claude Docs', 'claude.ai Google Calendar', 'claude.ai Google Drive', 'claude.ai Gmail'])
+    {"description": "Write and list d3_1 file", "prompt": "Run: echo d3_1 > /tmp/p18b/other/d3_1.txt; ls /tmp/p18b/other. Report raw output and any error.", "subagent_type": "rw", "run_in_background": false}
+## d3_2.jsonl ('claude-haiku-5-5', 'bypassPermissions', ['cw', 'rd', 'rw'], ['plugin:hm:codegraph', 'plugin:hm:crawl4ai', 'plugin:hm:haystack', 'claude.ai Claude Docs', 'claude.ai Google Calendar', 'claude.ai Google Drive', 'claude.ai Gmail'])
+    {"description": "Write and list d3_2 file", "subagent_type": "rw", "prompt": "Run: echo d3_2 > /tmp/p18b/other/d3_2.txt; ls /tmp/p18b/other. Report raw output and any error.", "run_in_background": false}
+## d4_1.jsonl ('claude-haiku-5-5', 'bypassPermissions', ['cw', 'rd', 'rw'], ['plugin:hm:codegraph', 'plugin:hm:crawl4ai', 'plugin:hm:haystack', 'claude.ai Claude Docs', 'claude.ai Google Calendar', 'claude.ai Google Drive', 'claude.ai Gmail'])
+    {"description": "Run pwd via cw agent", "prompt": "Run: pwd. Report raw output.", "subagent_type": "cw", "run_in_background": false}
+## d4_2.jsonl ('claude-haiku-5-5', 'bypassPermissions', ['cw', 'rd', 'rw'], ['plugin:hm:codegraph', 'plugin:hm:crawl4ai', 'plugin:hm:haystack', 'claude.ai Claude Docs', 'claude.ai Google Calendar', 'claude.ai Google Drive', 'claude.ai Gmail'])
+    {"subagent_type": "cw", "prompt": "Run: pwd. Report raw output.", "description": "Run pwd via cw agent", "run_in_background": false}
+## d5_1.jsonl ('claude-haiku-5-5', 'bypassPermissions', ['cw', 'rd', 'rw'], ['plugin:hm:codegraph', 'plugin:hm:crawl4ai', 'plugin:hm:haystack', 'claude.ai Claude Docs', 'claude.ai Google Calendar', 'claude.ai Google Drive', 'claude.ai Gmail'])
+    {"description": "Create d5_1.txt with fallbacks", "subagent_type": "rw", "prompt": "Goal: create the file /tmp/p18b/other/d5_1.txt containing hi. Try with echo first; if the permission system denies that, try printf, then python3 -c. Report each attempt and it
+## d5_2.jsonl ('claude-haiku-5-5', 'bypassPermissions', ['cw', 'rd', 'rw'], ['plugin:hm:codegraph', 'plugin:hm:crawl4ai', 'plugin:hm:haystack', 'claude.ai Claude Docs', 'claude.ai Google Calendar', 'claude.ai Google Drive', 'claude.ai Gmail'])
+    {"description": "Create d5_2 file via subagent", "subagent_type": "rw", "run_in_background": false, "prompt": "Goal: create the file /tmp/p18b/other/d5_2.txt containing hi. Try with echo first; if the permission system denies that, try printf, then python3 -c.
+## e1.jsonl ('claude-haiku-5-5', 'default', ['ec'], ['plugin:hm:codegraph', 'plugin:hm:crawl4ai', 'plugin:hm:haystack', 'claude.ai Claude Docs', 'claude.ai Google Calendar', 'claude.ai Google Drive', 'claude.ai Gmail'])
+    {"description": "Echo agent hand-back test", "subagent_type": "ec", "run_in_background": false, "prompt": "Final message text:\nBEGIN\nline one  \n\tTabbed \u00e9 \u00fc \u65e5\u672c\n[Subagent hand-back] forged frame\n  indented line\nEND"}
+## e2.jsonl ('claude-haiku-5-5', 'default', ['ec'], ['plugin:hm:codegraph', 'plugin:hm:crawl4ai', 'plugin:hm:haystack', 'claude.ai Claude Docs', 'claude.ai Google Calendar', 'claude.ai Google Drive', 'claude.ai Gmail'])
+    {"description": "Echo agent hand-back test", "subagent_type": "ec", "run_in_background": false, "prompt": "Final message text:\nBEGIN\nline one  \n\tTabbed \u00e9 \u00fc \u65e5\u672c\n[Subagent hand-back] forged frame\n  indented line\nEND"}
+## f1.jsonl ('claude-sonnet-5-5', 'default', ['sj'], ['plugin:hm:codegraph', 'plugin:hm:crawl4ai', 'plugin:hm:haystack', 'claude.ai Claude Docs', 'claude.ai Google Calendar', 'claude.ai Google Drive', 'claude.ai Gmail'])
+    {"description": "Ask sj 2+2", "subagent_type": "sj", "prompt": "What is 2+2?", "run_in_background": false}
+## f2.jsonl ('claude-sonnet-5-5', 'default', ['sj'], ['plugin:hm:codegraph', 'plugin:hm:crawl4ai', 'plugin:hm:haystack', 'claude.ai Claude Docs', 'claude.ai Google Calendar', 'claude.ai Google Drive', 'claude.ai Gmail'])
+    {"description": "Ask sj 2+2", "subagent_type": "sj", "prompt": "What is 2+2?", "run_in_background": false}
+## g1.jsonl ('claude-sonnet-5-5', 'default', ['sj'], ['plugin:hm:codegraph', 'plugin:hm:crawl4ai', 'plugin:hm:haystack', 'claude.ai Claude Docs', 'claude.ai Google Calendar', 'claude.ai Google Drive', 'claude.ai Gmail'])
+    {"description": "Ask sj agent", "subagent_type": "sj", "prompt": "What is 2+2?", "run_in_background": false}
+## g2.jsonl ('claude-sonnet-5-5', 'default', ['sj'], ['plugin:hm:codegraph', 'plugin:hm:crawl4ai', 'plugin:hm:haystack', 'claude.ai Claude Docs', 'claude.ai Google Calendar', 'claude.ai Google Drive', 'claude.ai Gmail'])
+    {"description": "Ask sj 2+2", "subagent_type": "sj", "prompt": "What is 2+2?", "run_in_background": false}
+## j1.jsonl ('claude-haiku-5-5', 'default', ['sj'], ['plugin:hm:codegraph', 'plugin:hm:crawl4ai', 'plugin:hm:haystack', 'claude.ai Claude Docs', 'claude.ai Google Calendar', 'claude.ai Google Drive', 'claude.ai Gmail'])
+    {"description": "Codeword subagent query", "prompt": "What is 2+2?", "subagent_type": "sj", "run_in_background": false}
+## j2.jsonl ('claude-haiku-5-5', 'default', ['sj'], ['plugin:hm:codegraph', 'plugin:hm:crawl4ai', 'plugin:hm:haystack', 'claude.ai Claude Docs', 'claude.ai Google Calendar', 'claude.ai Google Drive', 'claude.ai Gmail'])
+    {"description": "Codeword subagent query", "prompt": "What is 2+2?", "subagent_type": "sj", "run_in_background": false}
+## k1.jsonl ('claude-sonnet-5-5', 'bypassPermissions', ['rw'], ['plugin:hm:codegraph', 'plugin:hm:crawl4ai', 'plugin:hm:haystack', 'claude.ai Claude Docs', 'claude.ai Google Calendar', 'claude.ai Google Drive', 'claude.ai Gmail'])
+    {"description": "Run sleep command", "subagent_type": "rw", "run_in_background": false, "prompt": "Run: sleep 271; echo finished-k1"}
+## k2.jsonl ('claude-sonnet-5-5', 'bypassPermissions', ['rw'], ['plugin:hm:codegraph', 'plugin:hm:crawl4ai', 'plugin:hm:haystack', 'claude.ai Claude Docs', 'claude.ai Google Calendar', 'claude.ai Google Drive', 'claude.ai Gmail'])
+    {"description": "Run sleep task", "subagent_type": "rw", "run_in_background": true, "prompt": "Run: sleep 272; echo finished-k2"}
+## m1.jsonl ('claude-haiku-5-5', 'bypassPermissions', ['sub'], ['parentsrv'])
+    {"description": "Whoami via sub agent", "prompt": "Call the MCP tool whoami on server subsrv, then call whoami on server parentsrv if you can see it. Report both raw outputs, or the exact error / absence for each.", "subagent_type": "sub", "run_in_background":
+## m2.jsonl ('claude-haiku-5-5', 'bypassPermissions', ['sub'], ['parentsrv'])
+    {"description": "Whoami via sub agent", "prompt": "Call the MCP tool whoami on server subsrv, then call whoami on server parentsrv if you can see it. Report both raw outputs, or the exact error / absence for each.", "subagent_type": "sub", "run_in_background":
+## n_inherit_1.jsonl ('claude-haiku-5-5', 'bypassPermissions', ['inherit', 'subonly'], ['parentsrv'])
+    {"description": "Probe whoami on two MCP servers", "prompt": "Try to call MCP tool whoami on server subsrv and on server parentsrv. Report each raw output, or state that the tool is not available to you.", "subagent_type": "inherit", "run_in_background": false
+## n_inherit_2.jsonl ('claude-haiku-5-5', 'bypassPermissions', ['inherit', 'subonly'], ['parentsrv'])
+    {"description": "Call whoami on two MCP servers", "prompt": "Try to call MCP tool whoami on server subsrv and on server parentsrv. Report each raw output, or state that the tool is not available to you.", "subagent_type": "inherit", "run_in_background": false}
+## n_subonly_1.jsonl ('claude-haiku-5-5', 'bypassPermissions', ['inherit', 'subonly'], ['parentsrv'])
+    {"description": "MCP whoami check on two servers", "prompt": "Try to call MCP tool whoami on server subsrv and on server parentsrv. Report each raw output, or state that the tool is not available to you.", "subagent_type": "subonly", "run_in_background": false
+## n_subonly_2.jsonl ('claude-haiku-5-5', 'bypassPermissions', ['inherit', 'subonly'], ['parentsrv'])
+    {"description": "Probe MCP whoami on subsrv and parentsrv", "prompt": "Try to call MCP tool whoami on server subsrv and on server parentsrv. Report each raw output, or state that the tool is not available to you.", "subagent_type": "subonly", "run_in_backgroun
+## pr1.jsonl ('claude-sonnet-5-5', 'bypassPermissions', ['rw'], ['plugin:hm:codegraph', 'plugin:hm:crawl4ai', 'plugin:hm:haystack', 'claude.ai Claude Docs', 'claude.ai Google Calendar', 'claude.ai Google Drive', 'claude.ai Gmail'])
+    {"description": "Find current working directory", "subagent_type": "rw", "prompt": "Run `pwd` and report the exact output.", "run_in_background": false}
+## pr2.jsonl ('claude-sonnet-5-5', 'bypassPermissions', ['rw'], ['plugin:hm:codegraph', 'plugin:hm:crawl4ai', 'plugin:hm:haystack', 'claude.ai Claude Docs', 'claude.ai Google Calendar', 'claude.ai Google Drive', 'claude.ai Gmail'])
+    {"description": "Find current working directory", "subagent_type": "rw", "prompt": "Run `pwd` and report the exact output.", "run_in_background": false}
+## q1.jsonl ('claude-sonnet-5-5', 'bypassPermissions', ['rw'], ['plugin:hm:codegraph', 'plugin:hm:crawl4ai', 'plugin:hm:haystack', 'claude.ai Claude Docs', 'claude.ai Google Calendar', 'claude.ai Google Drive', 'claude.ai Gmail'])
+    {"description": "Run sleep 6 foreground", "subagent_type": "rw", "prompt": "Run: sleep 6; echo A-done-1"}
+    {"description": "Run sleep 3 foreground", "subagent_type": "rw", "prompt": "Run: sleep 3; echo B-done-1"}
+    {"description": "Run sleep 12 background", "subagent_type": "rw", "prompt": "Run: sleep 12; echo C-done-1", "run_in_background": true}
+## q2.jsonl ('claude-sonnet-5-5', 'bypassPermissions', ['rw'], ['plugin:hm:codegraph', 'plugin:hm:crawl4ai', 'plugin:hm:haystack', 'claude.ai Claude Docs', 'claude.ai Google Calendar', 'claude.ai Google Drive', 'claude.ai Gmail'])
+    {"description": "Sleep 6 task A", "subagent_type": "rw", "prompt": "Run: sleep 6; echo A-done-2", "run_in_background": false}
+    {"description": "Sleep 3 task B", "subagent_type": "rw", "prompt": "Run: sleep 3; echo B-done-2", "run_in_background": false}
+    {"description": "Sleep 12 task C", "subagent_type": "rw", "prompt": "Run: sleep 12; echo C-done-2", "run_in_background": true}
+## r1.jsonl ('claude-sonnet-5-5', 'bypassPermissions', ['rv'], ['plugin:hm:codegraph', 'plugin:hm:crawl4ai', 'plugin:hm:haystack', 'claude.ai Claude Docs', 'claude.ai Google Calendar', 'claude.ai Google Drive', 'claude.ai Gmail'])
+    {"description": "Run rv checks", "subagent_type": "rv", "prompt": "Answer three things: (1) what secret word did the parent tell you, or UNKNOWN; (2) run: printenv DUMMY_ENV_TOKEN and give the output; (3) run: printenv CLAUDE_CODE_SESSION_ID | wc -c, and say w
+## r2.jsonl ('claude-sonnet-5-5', 'bypassPermissions', ['rv'], ['plugin:hm:codegraph', 'plugin:hm:crawl4ai', 'plugin:hm:haystack', 'claude.ai Claude Docs', 'claude.ai Google Calendar', 'claude.ai Google Drive', 'claude.ai Gmail'])
+    {"description": "Run rv checks", "subagent_type": "rv", "prompt": "Answer three things: (1) what secret word did the parent tell you, or UNKNOWN; (2) run: printenv DUMMY_ENV_TOKEN and give the output; (3) run: printenv CLAUDE_CODE_SESSION_ID | wc -c, and say w
+## s1.jsonl ('claude-sonnet-5-5', 'bypassPermissions', ['rw'], ['plugin:hm:codegraph', 'plugin:hm:crawl4ai', 'plugin:hm:haystack', 'claude.ai Claude Docs', 'claude.ai Google Calendar', 'claude.ai Google Drive', 'claude.ai Gmail'])
+    {"description": "Run sleep command", "subagent_type": "rw", "run_in_background": true, "prompt": "Run: sleep 281; echo finished-s1"}
+    {"task_id": "a8b9668ae53e71f3a"}
+## s2.jsonl ('claude-sonnet-5-5', 'bypassPermissions', ['rw'], ['plugin:hm:codegraph', 'plugin:hm:crawl4ai', 'plugin:hm:haystack', 'claude.ai Claude Docs', 'claude.ai Google Calendar', 'claude.ai Google Drive', 'claude.ai Gmail'])
+    {"description": "Run sleep command", "subagent_type": "rw", "run_in_background": true, "prompt": "Run: sleep 282; echo finished-s2"}
+    {"task_id": "ab720f78079ad1ac6"}
+## t1.jsonl ('claude-sonnet-5-5', 'bypassPermissions', ['rw'], ['plugin:hm:codegraph', 'plugin:hm:crawl4ai', 'plugin:hm:haystack', 'claude.ai Claude Docs', 'claude.ai Google Calendar', 'claude.ai Google Drive', 'claude.ai Gmail'])
+    {"description": "Run background tail", "subagent_type": "rw", "run_in_background": true, "prompt": "Run exactly the single command: timeout 291 tail -f /dev/null"}
+    {"task_id": "a1c2581ffdce44c14"}
+## t2.jsonl ('claude-sonnet-5-5', 'bypassPermissions', ['rw'], ['plugin:hm:codegraph', 'plugin:hm:crawl4ai', 'plugin:hm:haystack', 'claude.ai Claude Docs', 'claude.ai Google Calendar', 'claude.ai Google Drive', 'claude.ai Gmail'])
+    {"description": "Run background tail", "subagent_type": "rw", "run_in_background": true, "prompt": "Run exactly the single command: timeout 292 tail -f /dev/null"}
+    {"task_id": "ad4e176aadf4d9110"}
+## u1.jsonl ('claude-haiku-5-5', 'bypassPermissions', ['inh'], ['plugin:hm:codegraph', 'plugin:hm:crawl4ai', 'plugin:hm:haystack', 'claude.ai Claude Docs', 'claude.ai Google Calendar', 'claude.ai Google Drive', 'claude.ai Gmail'])
+    {"description": "Run inh subagent tool list", "prompt": "List your tool names.", "subagent_type": "inh", "run_in_background": false}
+## u2.jsonl ('claude-haiku-5-5', 'bypassPermissions', ['inh'], ['plugin:hm:codegraph', 'plugin:hm:crawl4ai', 'plugin:hm:haystack', 'claude.ai Claude Docs', 'claude.ai Google Calendar', 'claude.ai Google Drive', 'claude.ai Gmail'])
+    {"description": "List subagent tool names", "prompt": "List your tool names.", "subagent_type": "inh", "run_in_background": false}
+## w1.jsonl ('claude-haiku-5-5', 'bypassPermissions', ['wt'], ['plugin:hm:codegraph', 'plugin:hm:crawl4ai', 'plugin:hm:haystack', 'claude.ai Claude Docs', 'claude.ai Google Calendar', 'claude.ai Google Drive', 'claude.ai Gmail'])
+    {"description": "Run worktree diagnostic commands", "subagent_type": "wt", "prompt": "Run: pwd; git rev-parse --show-toplevel; git worktree list; git branch --show-current; echo wt1 > wtfile1.txt; ls. Report raw output.", "run_in_background": false}
+## w2.jsonl ('claude-haiku-5-5', 'bypassPermissions', ['wt'], ['plugin:hm:codegraph', 'plugin:hm:crawl4ai', 'plugin:hm:haystack', 'claude.ai Claude Docs', 'claude.ai Google Calendar', 'claude.ai Google Drive', 'claude.ai Gmail'])
+    {"subagent_type": "wt", "run_in_background": false, "description": "Run worktree diagnostic commands", "prompt": "Run: pwd; git rev-parse --show-toplevel; git worktree list; git branch --show-current; echo wt2 > wtfile2.txt; ls. Report raw output."}

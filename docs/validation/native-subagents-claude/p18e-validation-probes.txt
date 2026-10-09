@@ -1,0 +1,137 @@
+# Round 4 (2026-10-09, /tmp/p18d): malformed-definition probes, one claude -p process per key. Script val.sh:
+#!/usr/bin/env bash
+# val.sh key jsonvalue : one claude -p process with a one-agent --agents definition whose <key> has a wrong-typed value
+k=$1; v=$2
+def=$(python3 -c 'import json,sys; print(json.dumps({"vx":{"description":"d","prompt":"p",sys.argv[1]:json.loads(sys.argv[2])}}))' "$k" "$v")
+cd /tmp/p18d/proj
+argv=(claude -p --output-format stream-json --verbose --model haiku --no-session-persistence --agents "$def" "Say ok.")
+{ echo "cwd=/tmp/p18d/proj stdin=/dev/null timeout 120"; printf '%q ' "${argv[@]}"; echo; } > /tmp/p18d/val/cmd-$k.txt
+timeout 120 "${argv[@]}" > /tmp/p18d/val/$k.out 2> /tmp/p18d/val/$k.err < /dev/null
+echo "exit $?" >> /tmp/p18d/val/$k.err
+
+----- key tools
+cwd=/tmp/p18d/proj stdin=/dev/null timeout 120
+claude -p --output-format stream-json --verbose --model haiku --no-session-persistence --agents \{\"vx\":\ \{\"description\":\ \"d\"\,\ \"prompt\":\ \"p\"\,\ \"tools\":\ \"notalist\"\}\} Say\ ok. 
+-- stderr:
+Error: Invalid --agents configuration:
+vx.tools: Invalid input: expected array, received string
+exit 1
+----- key disallowedTools
+cwd=/tmp/p18d/proj stdin=/dev/null timeout 120
+claude -p --output-format stream-json --verbose --model haiku --no-session-persistence --agents \{\"vx\":\ \{\"description\":\ \"d\"\,\ \"prompt\":\ \"p\"\,\ \"disallowedTools\":\ 5\}\} Say\ ok. 
+-- stderr:
+Error: Invalid --agents configuration:
+vx.disallowedTools: Invalid input: expected array, received number
+exit 1
+----- key model
+cwd=/tmp/p18d/proj stdin=/dev/null timeout 120
+claude -p --output-format stream-json --verbose --model haiku --no-session-persistence --agents \{\"vx\":\ \{\"description\":\ \"d\"\,\ \"prompt\":\ \"p\"\,\ \"model\":\ 5\}\} Say\ ok. 
+-- stderr:
+Error: Invalid --agents configuration:
+vx.model: Invalid input: expected string, received number
+exit 1
+----- key effort
+cwd=/tmp/p18d/proj stdin=/dev/null timeout 120
+claude -p --output-format stream-json --verbose --model haiku --no-session-persistence --agents \{\"vx\":\ \{\"description\":\ \"d\"\,\ \"prompt\":\ \"p\"\,\ \"effort\":\ \"bogus\"\}\} Say\ ok. 
+-- stderr:
+Error: Invalid --agents configuration:
+vx.effort: Invalid input
+exit 1
+----- key permissionMode
+cwd=/tmp/p18d/proj stdin=/dev/null timeout 120
+claude -p --output-format stream-json --verbose --model haiku --no-session-persistence --agents \{\"vx\":\ \{\"description\":\ \"d\"\,\ \"prompt\":\ \"p\"\,\ \"permissionMode\":\ \"bogus\"\}\} Say\ ok. 
+-- stderr:
+Error: Invalid --agents configuration:
+vx.permissionMode: Invalid option: expected one of "acceptEdits"|"auto"|"bypassPermissions"|"default"|"dontAsk"|"plan"
+exit 1
+----- key maxTurns
+cwd=/tmp/p18d/proj stdin=/dev/null timeout 120
+claude -p --output-format stream-json --verbose --model haiku --no-session-persistence --agents \{\"vx\":\ \{\"description\":\ \"d\"\,\ \"prompt\":\ \"p\"\,\ \"maxTurns\":\ \"x\"\}\} Say\ ok. 
+-- stderr:
+Error: Invalid --agents configuration:
+vx.maxTurns: Invalid input: expected number, received string
+exit 1
+----- key isolation
+cwd=/tmp/p18d/proj stdin=/dev/null timeout 120
+claude -p --output-format stream-json --verbose --model haiku --no-session-persistence --agents \{\"vx\":\ \{\"description\":\ \"d\"\,\ \"prompt\":\ \"p\"\,\ \"isolation\":\ \"bogus\"\}\} Say\ ok. 
+-- stderr:
+Error: Invalid --agents configuration:
+vx.isolation: Invalid option: expected one of "worktree"|"remote"
+exit 1
+----- key background
+cwd=/tmp/p18d/proj stdin=/dev/null timeout 120
+claude -p --output-format stream-json --verbose --model haiku --no-session-persistence --agents \{\"vx\":\ \{\"description\":\ \"d\"\,\ \"prompt\":\ \"p\"\,\ \"background\":\ \"x\"\}\} Say\ ok. 
+-- stderr:
+Error: Invalid --agents configuration:
+vx.background: Invalid input: expected boolean, received string
+exit 1
+----- key skills
+cwd=/tmp/p18d/proj stdin=/dev/null timeout 120
+claude -p --output-format stream-json --verbose --model haiku --no-session-persistence --agents \{\"vx\":\ \{\"description\":\ \"d\"\,\ \"prompt\":\ \"p\"\,\ \"skills\":\ \"x\"\}\} Say\ ok. 
+-- stderr:
+Error: Invalid --agents configuration:
+vx.skills: Invalid input: expected array, received string
+exit 1
+----- key hooks
+cwd=/tmp/p18d/proj stdin=/dev/null timeout 120
+claude -p --output-format stream-json --verbose --model haiku --no-session-persistence --agents \{\"vx\":\ \{\"description\":\ \"d\"\,\ \"prompt\":\ \"p\"\,\ \"hooks\":\ \"x\"\}\} Say\ ok. 
+-- stderr:
+Error: Invalid --agents configuration:
+vx.hooks: Invalid input: expected record, received string
+exit 1
+----- key memory
+cwd=/tmp/p18d/proj stdin=/dev/null timeout 120
+claude -p --output-format stream-json --verbose --model haiku --no-session-persistence --agents \{\"vx\":\ \{\"description\":\ \"d\"\,\ \"prompt\":\ \"p\"\,\ \"memory\":\ \"bogus\"\}\} Say\ ok. 
+-- stderr:
+Error: Invalid --agents configuration:
+vx.memory: Invalid option: expected one of "user"|"project"|"local"
+exit 1
+----- key initialPrompt
+cwd=/tmp/p18d/proj stdin=/dev/null timeout 120
+claude -p --output-format stream-json --verbose --model haiku --no-session-persistence --agents \{\"vx\":\ \{\"description\":\ \"d\"\,\ \"prompt\":\ \"p\"\,\ \"initialPrompt\":\ 5\}\} Say\ ok. 
+-- stderr:
+Error: Invalid --agents configuration:
+vx.initialPrompt: Invalid input: expected string, received number
+exit 1
+----- key mcpServers
+cwd=/tmp/p18d/proj stdin=/dev/null timeout 120
+claude -p --output-format stream-json --verbose --model haiku --no-session-persistence --agents \{\"vx\":\ \{\"description\":\ \"d\"\,\ \"prompt\":\ \"p\"\,\ \"mcpServers\":\ \{\"a\":\ 1\}\}\} Say\ ok. 
+-- stderr:
+Error: Invalid --agents configuration:
+vx.mcpServers: Invalid input: expected array, received object
+exit 1
+----- key systemPrompt
+cwd=/tmp/p18d/proj stdin=/dev/null timeout 120
+claude -p --output-format stream-json --verbose --model haiku --no-session-persistence --agents \{\"vx\":\ \{\"description\":\ \"d\"\,\ \"prompt\":\ \"p\"\,\ \"systemPrompt\":\ 5\}\} Say\ ok. 
+-- stderr:
+exit 0
+----- key cwd
+cwd=/tmp/p18d/proj stdin=/dev/null timeout 120
+claude -p --output-format stream-json --verbose --model haiku --no-session-persistence --agents \{\"vx\":\ \{\"description\":\ \"d\"\,\ \"prompt\":\ \"p\"\,\ \"cwd\":\ 5\}\} Say\ ok. 
+-- stderr:
+exit 0
+----- key directory
+cwd=/tmp/p18d/proj stdin=/dev/null timeout 120
+claude -p --output-format stream-json --verbose --model haiku --no-session-persistence --agents \{\"vx\":\ \{\"description\":\ \"d\"\,\ \"prompt\":\ \"p\"\,\ \"directory\":\ 5\}\} Say\ ok. 
+-- stderr:
+exit 0
+----- key workdir
+cwd=/tmp/p18d/proj stdin=/dev/null timeout 120
+claude -p --output-format stream-json --verbose --model haiku --no-session-persistence --agents \{\"vx\":\ \{\"description\":\ \"d\"\,\ \"prompt\":\ \"p\"\,\ \"workdir\":\ 5\}\} Say\ ok. 
+-- stderr:
+exit 0
+----- key jsonSchema
+cwd=/tmp/p18d/proj stdin=/dev/null timeout 120
+claude -p --output-format stream-json --verbose --model haiku --no-session-persistence --agents \{\"vx\":\ \{\"description\":\ \"d\"\,\ \"prompt\":\ \"p\"\,\ \"jsonSchema\":\ 5\}\} Say\ ok. 
+-- stderr:
+exit 0
+----- key outputSchema
+cwd=/tmp/p18d/proj stdin=/dev/null timeout 120
+claude -p --output-format stream-json --verbose --model haiku --no-session-persistence --agents \{\"vx\":\ \{\"description\":\ \"d\"\,\ \"prompt\":\ \"p\"\,\ \"outputSchema\":\ 5\}\} Say\ ok. 
+-- stderr:
+exit 0
+----- key allowedTools
+cwd=/tmp/p18d/proj stdin=/dev/null timeout 120
+claude -p --output-format stream-json --verbose --model haiku --no-session-persistence --agents \{\"vx\":\ \{\"description\":\ \"d\"\,\ \"prompt\":\ \"p\"\,\ \"allowedTools\":\ 5\}\} Say\ ok. 
+-- stderr:
+exit 0
