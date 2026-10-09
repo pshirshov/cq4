@@ -1,0 +1,8 @@
+{
+ "harness": "codex",
+ "version": "0.162.0",
+ "case": "c",
+ "clock": "CLOCK_REALTIME, seconds since the epoch, one machine",
+ "t_spawn": 1791574415.8333228,
+ "t_exit": 1791574424.4185486
+}

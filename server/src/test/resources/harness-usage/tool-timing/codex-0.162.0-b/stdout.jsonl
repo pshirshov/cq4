@@ -1,0 +1,13 @@
+{"type":"thread.started","thread_id":"01a12227-ee68-7140-ae55-652dd833a57e"}
+{"type":"turn.started"}
+{"type":"error","message":"Reconnecting... 2/5 (unexpected status 404 Not Found: not found, url: ws://127.0.0.1:39385/v1/responses)"}
+{"type":"error","message":"Reconnecting... 3/5 (unexpected status 404 Not Found: Unknown error, url: ws://127.0.0.1:39385/v1/responses)"}
+{"type":"error","message":"Reconnecting... 4/5 (unexpected status 404 Not Found: Unknown error, url: ws://127.0.0.1:39385/v1/responses)"}
+{"type":"error","message":"Reconnecting... 5/5 (unexpected status 404 Not Found: Unknown error, url: ws://127.0.0.1:39385/v1/responses)"}
+{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Falling back from WebSockets to HTTPS transport. unexpected status 404 Not Found: not found, url: ws://127.0.0.1:39385/v1/responses"}}
+{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"/run/current-system/sw/bin/zsh -c 'date +%s.%N > /tmp/cq-tool-timing/codex-0.162.0-b/markers/b1.start; sleep 2; date +%s.%N > /tmp/cq-tool-timing/codex-0.162.0-b/markers/b1.end'","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"/run/current-system/sw/bin/zsh -c 'date +%s.%N > /tmp/cq-tool-timing/codex-0.162.0-b/markers/b1.start; sleep 2; date +%s.%N > /tmp/cq-tool-timing/codex-0.162.0-b/markers/b1.end'","aggregated_output":"","exit_code":0,"status":"completed"}}
+{"type":"item.started","item":{"id":"item_2","type":"command_execution","command":"/run/current-system/sw/bin/zsh -c 'date +%s.%N > /tmp/cq-tool-timing/codex-0.162.0-b/markers/b2.start; sleep 2; date +%s.%N > /tmp/cq-tool-timing/codex-0.162.0-b/markers/b2.end'","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_2","type":"command_execution","command":"/run/current-system/sw/bin/zsh -c 'date +%s.%N > /tmp/cq-tool-timing/codex-0.162.0-b/markers/b2.start; sleep 2; date +%s.%N > /tmp/cq-tool-timing/codex-0.162.0-b/markers/b2.end'","aggregated_output":"","exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"{\"summary\": \"Done\"}"}}
+{"type":"turn.completed","usage":{"input_tokens":300,"cached_input_tokens":30,"cache_write_input_tokens":0,"output_tokens":17,"reasoning_output_tokens":0}}

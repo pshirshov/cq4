@@ -1,0 +1,8 @@
+{
+ "harness": "pi",
+ "version": "1.1.0",
+ "case": "a",
+ "clock": "CLOCK_REALTIME, seconds since the epoch, one machine",
+ "t_spawn": 1791571233.8173199,
+ "t_exit": 1791571236.2335782
+}

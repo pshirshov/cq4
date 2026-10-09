@@ -1,0 +1,8 @@
+{
+ "harness": "claude",
+ "version": "2.1.295",
+ "case": "a",
+ "clock": "CLOCK_REALTIME, seconds since the epoch, one machine",
+ "t_spawn": 1791571239.632124,
+ "t_exit": 1791571243.3199196
+}

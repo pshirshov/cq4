@@ -1,0 +1,5 @@
+{"method": "server/discover", "id": "server-discover-probe-1", "t_request": 1791571249.6891057, "t_reply_done": 1791571249.689423}
+{"method": "initialize", "id": 0, "t_request": 1791571254.7288196, "t_reply_done": 1791571254.7474473}
+{"method": "notifications/initialized", "id": null, "t_request": 1791571254.7536423, "t_reply_done": 1791571254.753814}
+{"method": "tools/list", "id": 1, "t_request": 1791571254.785942, "t_reply_done": 1791571254.7863219}
+{"method": "tools/call", "id": 2, "t_request": 1791571255.089001, "t_reply_done": 1791571257.0893953}
