@@ -1,0 +1,65 @@
+78
+Claude Codev2.1.295
+Opus 5.5 · API Usage Billing
+/tmp/gt/cap/interactive-c/work
+◐ medium · /effort
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯  
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+⏸ manual mode on · ? for shortcuts · ← for agents
+█▟
+██▀
+   
+█▟
+██▀
+▝▝ 
+█▟
+██▀
+   
+▟█▟
+██▀
+▝▝ 
+█▟█▟
+██▀
+▝   
+▐█▟█▟
+▜██▀
+ ▝▝ 
+ ▐█▟█▟
+▝▜██▀
+▝▝ ▝ 
+▛█▛█
+▂▂
+▛▛
+Replywiththesinglewordready.[stub:plain] 
+
+❯ Reply with the single word ready. [stub:plain]                                                                        
+✶Determining… (running UserPromptSubmit hook · 0s)
+❯  
+ · esc to interrupt · ← for agents
+Envisio
+*
+✢io(0s · ↓2 tokens)
+isirunning Sp hook · 0s · ↓2 tokens)
+●Stubanswer(invented):done.
+●Ran1stophook
+⎿  Stophookerror:Capturehook:continueoncemoreandansweragain.
+·vis0s · ↓ 3 kens)
+Stop hook error occurred · ctrl+o to see
+5
+Envisioning…running Sp hook · 0s · ↓5 tokens)
+7
+●Stubanswer(invented):done.
+✻Crunched for 0s · done 10:30 PM
+
+❯ 
+? for shortcuts · ← for agents
+❯ /exit                       Exit the CLI
+  /context                    Visualize current context usage as a colored grid
+/exit 
+7878
+
+Resume this session with:
+
+claude --resume 4dd49de7-59af-4510-9115-0e6ffff1733d
+

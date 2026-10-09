@@ -1,0 +1,1 @@
+/nix/store/32g45z0w0raaidc7fhdkfkhvjj4a2kxa-claude-code-no-autoupdate/bin/claude --settings /tmp/gt/cap/interactive-b/settings.json --model claude-opus-5-5 --allowedTools Bash,Task,Agent --permission-mode default

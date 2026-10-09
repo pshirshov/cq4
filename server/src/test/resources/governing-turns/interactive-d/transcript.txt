@@ -1,0 +1,61 @@
+78
+ ▐▛███▛█Claude Codev2.1.295
+▝▜██████▀Opus 5.5 · API Usage Billing
+ ▝▝   ▝▝ /tmp/gt/cap/interactive-d/work
+◐ medium · /effort
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯  
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+⏸ manual mode on · ? for shortcuts · ← for agents
+  
+  ▝▝
+▝▝  
+  ▝▝
+▝▝  
+  ▝▝
+▗▟▄
+ ▘
+▝▝
+ ▐ 
+▝▀
+Replywiththesinglewordone.[stub:plain] 
+
+❯ Reply with the single word one. [stub:plain]                                                                          
+✶Meandering… (running UserPromptSubmit hook · 0s)
+❯  
+ · esc to interrupt · ← for agents
+Puzzling… 
+*
+✢Pz(0s · ↓2 tokens)
+Puzrunning Sp hook · 0s · ↓2 tokens)
+·Puzzling…3
+●Stubanswer(invented):done.
+✻Cooked for 0s · done 10:30 PM
+
+❯ 
+? for shortcuts · ← for agents
+Replywiththesinglewordtwo.[stub:plain] 
+
+❯ Reply with the single word two. [stub:plain]                                                                          
+·Leavening… (running UserPromptSubmit hook · 0s)
+  ⎿  Tip: Start with small features or bug fixes, tell Claude to propose a plan, and verify its suggested edits
+❯  
+ · esc to interrupt · ← for agents
+
+(0s · ↓2 tokens)
+Leavening…running Sp hook · 0s · ↓2 tokens)
+●Stubanswer(invented):done.
+✻Crunched for 0s · done 10:30 PM
+
+
+❯ 
+? for shortcuts · ← for agents
+❯ /exit                       Exit the CLI
+  /context                    Visualize current context usage as a colored grid
+/exit 
+7878
+
+Resume this session with:
+
+claude --resume f75034af-bf0c-45fd-b8da-c9cb0203488e
+

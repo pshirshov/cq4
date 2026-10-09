@@ -1,0 +1,3 @@
+session started (SessionStart seen): True
+Escape (interrupt) sent at t_ms=1791581438371.187; held request seen: True
+Stop invocations after the interrupt: 0

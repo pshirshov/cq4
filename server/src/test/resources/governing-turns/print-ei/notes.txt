@@ -1,0 +1,2 @@
+signal SIGINT sent at t_ms=1791581369655.789 to the process group leader pid 1770270 (held request seen: True)
+started t_ms=1791581367746.264 exited t_ms=1791581369769.636
