@@ -205,6 +205,7 @@ final class CliOutput(output: PrintStream, format: CliFormat, invocation: List[S
       })
     line("Wall time sums finished attempts and host spans (check, combination and integration time outside any attempt) " +
       "from start to finish; running and open attempts are counted without wall time.")
+    line("Phase wall times overlap (the governor's attempt spans the session, a reviewer waits for its checks, an integration contains the checks of its commit), so the phase rows must not be added up.")
     line("Costs — estimates and billing remain separate")
     table(List("Phase", "Attribution", "Amount", "Currency", "Basis", "Pricing", "Measurements"), value.phases.flatMap { entry =>
       entry.costs.map { cost =>

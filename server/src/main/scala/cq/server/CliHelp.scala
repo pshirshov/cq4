@@ -127,7 +127,8 @@ Options:
   --snapshot N     Required for attempts/costs continuation
   --limit N        Page size, 1–200; default 50 (paged modes only)
   --attempt UUID   Required by outcomes; scope flags do not apply there
-  --json           Emit one typed Result, retaining all fields and continuation data
+  --json           Emit one typed Result, retaining all fields and continuation data;
+                   status phases emits two, the phase report and then the check report
 
 Shared usage is counted once per assignment, not divided among its members.
 Unknown measurements/costs remain unknown; estimates are not actual billing.

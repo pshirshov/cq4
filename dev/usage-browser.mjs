@@ -146,6 +146,7 @@ export async function usageChecks(page, origin, projectId) {
   assert.equal(await checkTruncation.count(), 0);
   assert.equal(await page.getByRole('table', { name: 'Usage by phase', exact: true }).count(), 1, 'The phase rows stay beside the check rows');
   assert.equal(await page.getByText('the rows must not be added up', { exact: false }).count(), 1);
+  assert.equal(await page.getByText('Phase wall times overlap', { exact: false }).count(), 1, 'The phase rows say that phase wall times overlap');
   await page.getByRole('dialog').getByRole('button', { name: 'Close', exact: true }).click();
   for (let index = 0; index < 200; index++) await run(`filler-${String(index).padStart(3, '0')}`, 'Completed', 1000);
   await page.getByRole('button', { name: 'Project usage', exact: true }).click();

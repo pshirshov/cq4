@@ -124,11 +124,12 @@ export function costsTable(heading: string | undefined, costs: readonly api.Cost
       ...(mixed ? [group.basis] : []), group.pricingVersion === undefined ? quiet('unspecified') : group.pricingVersion]),
     total: complete && costs.length > 1 ? ['Total', costSum(costs, 0n, bases), count(sum(costs.map(cost => cost.measurements))), ...basis.map(() => ''), ''] : undefined }));
 }
+export const phaseOverlapNote = 'Phase wall times overlap (the governor\'s attempt spans the session, a reviewer waits for its checks, an integration contains the checks of its commit), so the phase rows must not be added up.';
 export function phasesTable(phases: readonly api.PhaseUsage[]): HTMLElement {
   const costs = phases.flatMap(entry => entry.costs); const bases = costs.map(cost => cost.group.basis);
   const values = (entry: api.PhaseUsage) => [entry.totals.total.known, entry.totals.total.unknown, entry.totals.total.estimated, entry.totals.unknownCosts];
   const total = (value: (entry: api.PhaseUsage) => bigint) => sum(phases.map(value));
-  return section('By phase', basisNote(bases), table({ label: 'Usage by phase',
+  return section('By phase', [phaseOverlapNote, basisNote(bases)].filter(note => note !== undefined).join(' '), table({ label: 'Usage by phase',
     columns: [rowLabel('Phase'), number('Known tokens'), number('Unknown measurements'), number('Estimated measurements'), number('Unknown costs'),
       number('Cost'), tally('Attempts'), tally('Running'), tally('Open'), number('Busy wall time')],
     rows: phases.map(entry => [entry.phase, ...values(entry).map(count), costSum(entry.costs, entry.totals.unknownCosts, bases),

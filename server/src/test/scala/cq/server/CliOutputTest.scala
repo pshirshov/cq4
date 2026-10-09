@@ -77,6 +77,7 @@ final class CliOutputLocal extends AnyWordSpec {
         row("Integrate") == List("Integrate", "0", "0", "0", "1", "0:00:04"), lines.mkString("\n"))
       assert(lines.contains("Wall time sums finished attempts and host spans (check, combination and integration time outside any attempt) " +
         "from start to finish; running and open attempts are counted without wall time."), lines.mkString("\n"))
+      assert(lines.exists(line => line.startsWith("Phase wall times overlap") && line.contains("must not be added up")), lines.mkString("\n"))
     }
 
     "I35: print one row per configured check with runs per outcome and wall time, an unnamed row and a truncation notice" in {
