@@ -214,14 +214,58 @@ class Compatibility(unittest.TestCase):
             update.compatible(self.manifest("schema", "other"), self.manifest("schema", "new"), step)
         with self.assertRaisesRegex(RuntimeError, "Schema changes"):
             update.compatible(self.manifest("old-schema", "old"), self.manifest("schema", "new"), step)
+        self.assertIsNone(update.data_step(self.manifest("schema", "old"), self.manifest("schema", "new"), step, ROOT))
+
+    STEP = {"kind": "drive-identity-and-periods", "schemaBefore": "old-schema", "schemaAfter": "schema", "modelBefore": "old", "modelAfter": "new"}
+
+    def test_schema_transition_only_as_the_step_names_it(self):
+        # The hash returned is the one the database holds before the replacement.
+        self.assertEqual(update.compatible(self.manifest("old-schema", "old"), self.manifest("schema", "new"), self.STEP), "old-schema")
+        # The same package again changes nothing and needs no step, whatever step the tree pins.
+        self.assertEqual(update.compatible(self.manifest("schema", "new"), self.manifest("schema", "new"), self.STEP), "schema")
+        self.assertIsNone(update.data_step(self.manifest("schema", "new"), self.manifest("schema", "new"), self.STEP, ROOT))
+        for before, after in [(("other-schema", "old"), ("schema", "new")), (("old-schema", "other"), ("schema", "new")),
+                              (("old-schema", "old"), ("other-schema", "new")), (("old-schema", "old"), ("schema", "other")),
+                              (("schema", "new"), ("old-schema", "old"))]:
+            with self.subTest(before=before, after=after), self.assertRaisesRegex(RuntimeError, "Schema changes"):
+                update.compatible(self.manifest(*before), self.manifest(*after), self.STEP)
+        # A later model change on the new schema is not the pinned step's transition.
+        with self.assertRaisesRegex(RuntimeError, "data update step"):
+            update.compatible(self.manifest("schema", "new"), self.manifest("schema", "newer"), self.STEP)
 
     def test_pinned_step_describes_this_tree(self):
         step = json.loads((ROOT / "dev/local-update-step.json").read_text())
-        self.assertEqual(step["kind"], update.UNCHANGED_DATA)
-        self.assertEqual(step["schema"], update.digest(ROOT / update.SCHEMA_SOURCE))
+        sql = (ROOT / update.STEP_SQL).read_text()
+        self.assertEqual(step["kind"], update.DRIVE_IDENTITY_AND_PERIODS)
+        self.assertEqual(step["schemaAfter"], update.digest(ROOT / update.SCHEMA_SOURCE))
         self.assertEqual(step["modelAfter"], update.digest(ROOT / update.MODEL_SOURCE))
-        before, after = self.manifest(step["schema"], step["modelBefore"]), self.manifest(step["schema"], step["modelAfter"])
-        self.assertEqual(update.compatible(before, after, step), step["schema"])
+        self.assertEqual(step["sqlSha256"], update.digest(ROOT / update.STEP_SQL))
+        before, after = self.manifest(step["schemaBefore"], step["modelBefore"]), self.manifest(step["schemaAfter"], step["modelAfter"])
+        self.assertEqual(update.compatible(before, after, step), step["schemaBefore"])
+        planned = update.data_step(before, after, step, ROOT)
+        self.assertEqual((planned.sql, planned.schema_after, planned.schema_source), (sql, step["schemaAfter"], ROOT / update.SCHEMA_SOURCE))
+        # The table and the index the SQL creates are the ones the schema declares.
+        schema = (ROOT / update.SCHEMA_SOURCE).read_text()
+        table = schema[schema.index(f"CREATE TABLE {update.PERIODS} ("):]
+        table = table[:table.index(");\n") + 3]
+        index = "CREATE INDEX cq_drive_periods_drive ON cq_drive_periods(project_id, drive, sequence);\n"
+        self.assertIn(table.replace(f"CREATE TABLE {update.PERIODS}", f"CREATE TABLE IF NOT EXISTS {update.PERIODS}"), sql)
+        self.assertIn(index, schema)
+        self.assertIn(index.replace("CREATE INDEX", "CREATE INDEX IF NOT EXISTS"), sql)
+        self.assertIn(f"SET checksum = '{step['schemaAfter']}' WHERE version = 1 AND checksum = '{step['schemaBefore']}'", sql)
+        tampered = {**step, "sqlSha256": "0" * 64}
+        with self.assertRaisesRegex(RuntimeError, "SQL differs from its pinned step"):
+            update.data_step(before, after, tampered, ROOT)
+
+    def test_table_entries_compare_without_their_order(self):
+        dumps = {"declared": "CREATE TABLE public.t (\n    a text,\n    b text\n);\nCREATE INDEX i ON public.t USING btree (a);\n",
+                 "altered": "\\restrict key\nCREATE TABLE public.t (\n    b text,\n    a text\n);\nCREATE INDEX i ON public.t USING btree (a);\n",
+                 "other": "CREATE TABLE public.t (\n    a text,\n    b bigint\n);\nCREATE INDEX i ON public.t USING btree (a);\n"}
+        class Dumped:
+            def run(self, arguments, label, timeout):
+                return dumps[arguments[-1]]
+        self.assertEqual(update.structure(Dumped(), "declared", "label"), update.structure(Dumped(), "altered", "label"))
+        self.assertNotEqual(update.structure(Dumped(), "declared", "label"), update.structure(Dumped(), "other", "label"))
 
     def test_unknown_step_kind_refused(self):
         step = {"kind": "other", "schema": "schema", "modelBefore": "old", "modelAfter": "new"}
@@ -250,7 +294,7 @@ class PostgreSQLInstall(unittest.TestCase):
                 port = listener.getsockname()[1]
             subprocess.run(["pg_ctl", "-D", str(data), "-l", str(root / "setup.log"), "-o", f"-h 127.0.0.1 -p {port} -c unix_socket_directories=''", "-w", "start"], check=True, stdout=subprocess.DEVNULL)
             try:
-                subprocess.run(["psql", "-h", "127.0.0.1", "-p", str(port), "-U", "cq", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-c", "CREATE TABLE cq_schema_migrations(version integer PRIMARY KEY, checksum text); INSERT INTO cq_schema_migrations VALUES (1,'schema'); CREATE TABLE cq_claims(released boolean, expires_at bigint); CREATE TABLE cq_usage_attempts(effective_outcome text, parent_id uuid, body jsonb); CREATE TABLE cq_integrations(body jsonb); CREATE TABLE cq_fixture(value text); INSERT INTO cq_fixture VALUES ('retained'); INSERT INTO cq_usage_attempts(body) SELECT '{\"role\":\"Governor\",\"collector\":\"CQ attached session; outer usage unavailable\"}'::jsonb FROM generate_series(1,20);"], check=True, stdout=subprocess.DEVNULL)
+                subprocess.run(["psql", "-h", "127.0.0.1", "-p", str(port), "-U", "cq", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-c", "CREATE TABLE cq_schema_migrations(version integer PRIMARY KEY, checksum text); INSERT INTO cq_schema_migrations VALUES (1,'schema'); CREATE TABLE cq_claims(released boolean, expires_at bigint); CREATE TABLE cq_usage_attempts(effective_outcome text, parent_id uuid, body jsonb); CREATE TABLE cq_integrations(body jsonb); CREATE TABLE cq_fixture_key(value text PRIMARY KEY); INSERT INTO cq_fixture_key VALUES ('retained'); CREATE TABLE cq_fixture(value text); INSERT INTO cq_fixture VALUES ('retained'); INSERT INTO cq_usage_attempts(body) SELECT '{\"role\":\"Governor\",\"collector\":\"CQ attached session; outer usage unavailable\"}'::jsonb FROM generate_series(1,20);"], check=True, stdout=subprocess.DEVNULL)
             finally:
                 subprocess.run(["pg_ctl", "-D", str(data), "-m", "fast", "-w", "stop"], check=True, stdout=subprocess.DEVNULL)
             release, candidate, rollback = (root / name for name in ("release", "candidate", "rollback"))
@@ -346,8 +390,8 @@ class PostgreSQLInstall(unittest.TestCase):
             failures = [
                 ("Package file differs", sql, True),
                 ("data-update failed", "BEGIN; UPDATE cq_fixture SET value = 'partial'; SELECT 1/0; COMMIT;", False),
-                # A table the SQL created is not in the backup: the rollback drops it after the restore.
-                ("Package file differs", "BEGIN; CREATE TABLE cq_created(value text); INSERT INTO cq_created VALUES ('new'); UPDATE cq_fixture SET value = 'transformed'; COMMIT;", True),
+                # A table the SQL created is not in the backup and references a table the restore drops: the rollback drops it before the restore.
+                ("Package file differs", "BEGIN; CREATE TABLE cq_created(value text REFERENCES cq_fixture_key); INSERT INTO cq_created VALUES ('retained'); UPDATE cq_fixture SET value = 'transformed'; COMMIT;", True),
             ]
             for index, (reason, statement, modified) in enumerate(failures):
                 with self.subTest(reason=reason):

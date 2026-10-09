@@ -19,6 +19,12 @@ SCHEMA_SOURCE = "server/src/main/resources/db/001-ledgers.sql"
 MODEL_SOURCE = "models/cq-api.baboon"
 ATTACHED_GOVERNOR_COLLECTOR = "CQ attached session; outer usage unavailable"
 UNCHANGED_DATA = "unchanged-data"
+DRIVE_IDENTITY_AND_PERIODS = "drive-identity-and-periods"
+STEP_SQL = "dev/local-update.sql"
+DRIVERS = "cq_drivers"
+PERIODS = "cq_drive_periods"
+MIGRATIONS = "cq_schema_migrations"
+SCHEMA_CHECKSUM = f"SELECT checksum FROM {MIGRATIONS} WHERE version=1"
 STRUCTURE_DATABASE = "cq_update_structure"
 
 
@@ -108,11 +114,15 @@ def package(path: Path) -> dict:
 
 
 def compatible(before: dict, after: dict, step: dict) -> str:
-    """The schema hash the database holds before and after the replacement. A model transition is accepted only as the one the pinned
-    step names; no step kind changes the schema."""
+    """The schema hash the database holds before the replacement. A transition that changes the schema or the model is accepted only
+    as the one the pinned step names."""
     old, new = before["runtimeSourceSha256"], after["runtimeSourceSha256"]
-    require(old[SCHEMA_SOURCE] == new[SCHEMA_SOURCE], "Schema changes require a matching explicit local update step; replacement refused")
-    if old[MODEL_SOURCE] != new[MODEL_SOURCE]:
+    if old[SCHEMA_SOURCE] != new[SCHEMA_SOURCE]:
+        require(step["kind"] == DRIVE_IDENTITY_AND_PERIODS
+                and step["schemaBefore"] == old[SCHEMA_SOURCE] and step["schemaAfter"] == new[SCHEMA_SOURCE]
+                and step["modelBefore"] == old[MODEL_SOURCE] and step["modelAfter"] == new[MODEL_SOURCE],
+                "Schema changes require a matching explicit local update step; replacement refused")
+    elif old[MODEL_SOURCE] != new[MODEL_SOURCE]:
         require(step["kind"] == UNCHANGED_DATA and step["schema"] == old[SCHEMA_SOURCE]
                 and step["modelBefore"] == old[MODEL_SOURCE] and step["modelAfter"] == new[MODEL_SOURCE],
                 "Model changes require a matching explicit data update step; replacement refused")
@@ -142,6 +152,98 @@ class Sql:
 
     def verify(self, database: Database, before: dict[str, str], after: dict[str, str]) -> dict:
         return {}
+
+
+def structure(database: Database, name: str, label: str) -> list[str]:
+    """The tables, constraints and indexes of a database apart from the migration record, which the server creates itself."""
+    text = database.run(["pg_dump", "--schema-only", "--no-owner", "--no-privileges", f"--exclude-table={MIGRATIONS}", "--dbname", name], label, 120)
+    # pg_dump protects each dump with a key of its own.
+    lines = [line for line in text.splitlines() if not line.startswith(("\\restrict", "\\unrestrict"))]
+    # The entries of a table compare without their order.
+    ordered, entries = [], None
+    for line in lines:
+        if entries is None:
+            ordered.append(line)
+            if line.startswith("CREATE TABLE ") and line.endswith("("):
+                entries = []
+        elif line == ");":
+            ordered.extend(sorted(entries) + [line])
+            entries = None
+        else:
+            entries.append(line.removesuffix(","))
+    require(entries is None, "Unterminated table in the dumped structure")
+    return ordered
+
+
+class DriveIdentityAndPeriods:
+    """The step from the schema without drive periods: it creates the table cq_drive_periods with its index, gives every stored driver a
+    drive identity in its body and its summary, records the state each driver is in as the first period of its drive, and records the
+    schema hash that declares the table."""
+    def __init__(self, sql: str, schema_after: str, schema_source: Path):
+        self.sql = sql
+        self.schema_after = schema_after
+        self.schema_source = schema_source
+        self.drivers: list[dict] = []
+
+    @staticmethod
+    def rows(database: Database, label: str) -> list[dict]:
+        rows = database.query(f"SELECT to_jsonb(t) FROM {DRIVERS} t ORDER BY project_id, harness, session_key", label)
+        return [json.loads(row) for row in rows.splitlines()]
+
+    def capture(self, database: Database) -> None:
+        self.drivers = self.rows(database, "drivers-before")
+
+    def verify(self, database: Database, before: dict[str, str], after: dict[str, str]) -> dict:
+        require(database.query(SCHEMA_CHECKSUM, "schema-after") == self.schema_after, "Data step did not record the schema of the new package")
+        require(set(after) == set(before) | {PERIODS}, f"Data step created or dropped a table other than {PERIODS}")
+        require(all(after[table] == value for table, value in before.items() if table not in (DRIVERS, MIGRATIONS)),
+                f"Data step changed a table other than {DRIVERS}, {PERIODS} and {MIGRATIONS}")
+        drivers = self.rows(database, "drivers-after")
+        require(len(drivers) == len(self.drivers), "Data step created or dropped a driver")
+        identities = set()
+        for was, now in zip(self.drivers, drivers):
+            drive = now["body"].get("drive")
+            require(isinstance(drive, dict) and set(drive) == {"value"} and now["summary"].get("drive") == drive, "A driver has no drive identity in its body and its summary")
+            identities.add(drive["value"])
+            without = lambda row: {**row, "body": {k: v for k, v in row["body"].items() if k != "drive"}, "summary": {k: v for k, v in row["summary"].items() if k != "drive"}}
+            require(without(now) == without(was), "Data step changed a driver other than by its drive identity")
+        require(len(identities) == len(drivers), "Two drivers share a drive identity")
+        periods = json.loads(database.query(f"SELECT COALESCE(json_agg(to_jsonb(t) ORDER BY project_id, sequence), '[]') FROM {PERIODS} t", "periods-after"))
+        require(len(periods) == len(drivers), "Data step left other than one period per driver")
+        by_drive = {period["drive"]: period for period in periods}
+        require(set(by_drive) == identities, "A period names another drive than a driver's")
+        for driver in drivers:
+            period = by_drive[driver["body"]["drive"]["value"]]
+            expected_at = driver["stopped_at"] if driver["state"] == "Off" else driver["touched_at"]
+            reason = driver["body"]["stopped"]["reason"] if driver["state"] == "Off" else None
+            require((period["project_id"], period["harness"], period["session_key"], period["attached"], period["state"], period["reason"], period["at"]) ==
+                    (driver["project_id"], driver["harness"], driver["session_key"], driver["attached"], driver["state"], reason, expected_at),
+                    "A period does not record the state of its driver")
+        sequences = {}
+        for period in periods:
+            sequences.setdefault(period["project_id"], []).append(period["sequence"])
+        require(all(numbers == list(range(1, len(numbers) + 1)) for numbers in sequences.values()), "The periods of a project are not numbered from 1 without a gap")
+        # The updated database has the structure the new package's schema declares, table by table: a recorded hash alone does not show it.
+        database.query(f"DROP DATABASE IF EXISTS {STRUCTURE_DATABASE}", "structure-clear")
+        database.query(f"CREATE DATABASE {STRUCTURE_DATABASE}", "structure-create")
+        try:
+            database.run(["psql", "--no-psqlrc", "-v", "ON_ERROR_STOP=1", "--single-transaction", "--dbname", STRUCTURE_DATABASE,
+                          "--file", str(self.schema_source)], "structure-declare", 120)
+            declared = structure(database, STRUCTURE_DATABASE, "structure-declared")
+        finally:
+            database.query(f"DROP DATABASE IF EXISTS {STRUCTURE_DATABASE}", "structure-drop")
+        require(structure(database, "postgres", "structure-updated") == declared, "Updated database structure differs from the schema of the new package")
+        return {"dataStep": DRIVE_IDENTITY_AND_PERIODS, "drivers": len(drivers), "periods": len(periods), "tableCreated": PERIODS,
+                "otherDataUnchanged": True, "structureAsDeclared": True}
+
+
+def data_step(before: dict, after: dict, step: dict, source: Path) -> DataStep | None:
+    """What the accepted transition applies to stored data from the snapshot `source`; none when the stored data stays as it is."""
+    compatible(before, after, step)
+    if before["runtimeSourceSha256"][SCHEMA_SOURCE] == after["runtimeSourceSha256"][SCHEMA_SOURCE]:
+        return None
+    require(digest(source / STEP_SQL) == step["sqlSha256"], "Local update SQL differs from its pinned step")
+    return DriveIdentityAndPeriods((source / STEP_SQL).read_text(), step["schemaAfter"], source / SCHEMA_SOURCE)
 
 
 class Commands:
@@ -219,8 +321,7 @@ def main() -> None:
             new = digest(candidate / "manifest.json")
             receipt.update(status="candidate-verified", newManifest=new, schema=schema)
             write_json(evidence / "receipt.json", receipt)
-            # The only step kind accepted leaves the stored data as it is: no SQL is applied.
-            install(state, release, candidate, rollback, evidence, receipt, schema, commands, None)
+            install(state, release, candidate, rollback, evidence, receipt, schema, commands, data_step(before, after, step, checkout))
         except BaseException as error:
             if receipt["status"] not in ("installed", "recovery-required", "rolled-back", "refused"):
                 receipt.update(status="failed-before-install", error=str(error))
@@ -336,14 +437,14 @@ def install(state: Path, release: Path, candidate: Path, rollback: Path, evidenc
                     owned = True
                     database.run(["pg_ctl", "-D", str(data), "-l", str(evidence / "postgres-recovery.log"), "-o",
                                   f"-h 127.0.0.1 -p {port} -c unix_socket_directories=''", "-w", "-t", "30", "start"], "database-recovery-start", 40)
-                # One transaction: a restore that fails leaves the database as the failed step left it, never partly dropped.
-                database.run(["pg_restore", "--clean", "--if-exists", "--single-transaction", "--exit-on-error", "--no-owner", "--no-privileges",
-                              "--dbname", "postgres", str(backup)], "database-rollback", 600)
-                # The backup does not know a table the step created, so its restore leaves that table in place.
+                # The backup does not know a table the step created, and such a table may reference one the restore drops, so it goes first.
                 created = set(query("SELECT tablename FROM pg_tables WHERE schemaname='public'", "tables-restored").splitlines()) - set(before_data)
                 for table in sorted(created):
                     require(table.startswith("cq_") and all(character.isalnum() or character == '_' for character in table), "Unexpected database table identity")
                     query(f'DROP TABLE "{table}"', "database-rollback-drop-" + table)
+                # One transaction: a restore that fails leaves the database as the failed step left it, never partly dropped.
+                database.run(["pg_restore", "--clean", "--if-exists", "--single-transaction", "--exit-on-error", "--no-owner", "--no-privileges",
+                              "--dbname", "postgres", str(backup)], "database-rollback", 600)
                 require(fingerprints("data-restored") == before_data, "Restored database differs from backup state")
                 require(query("SELECT checksum FROM cq_schema_migrations WHERE version=1", "schema-restored") == schema, "Restored schema differs")
                 receipt.update(databaseRestored=True)

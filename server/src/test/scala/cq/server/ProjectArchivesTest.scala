@@ -70,6 +70,41 @@ final class ProjectArchivesPostgres extends SpecZIO with AssertZIO {
       } yield ()
     }
 
+    "export and import the periods of a drive and read them from the imported project" in {
+      (service: LedgerService[IO], repository: LedgerRepository[IO], config: DatabaseConfig, archives: ProjectArchives) =>
+      val operator = Scope(ProjectId(UUID.randomUUID()), Actor("operator", SessionId(UUID.randomUUID()), Role.Human))
+      val attached = SessionId(UUID.randomUUID())
+      val key = DriverKey(Harness.Pi, "archived-periods")
+      val schema = "cq_restore_" + UUID.randomUUID().toString.replace("-", "")
+      val separator = if (config.url.contains("?")) "&" else "?"
+      val target = new LedgerDatabase(config.copy(url = config.url + separator + "currentSchema=" + schema))
+      val draft = ItemDraft("Ready", "", Set.empty, false, Content.Task(TaskStatus.Ready, List("Observable result"), None, Nil), Nil)
+      for {
+        _ <- service.initialize(operator, "archived periods")
+        created <- service.change(operator, request(List(Mutation.Create(draft))))
+        roots = created.items.map(_.id).toSet
+        started <- service.drive(operator, DriverRequest.Control(key, DriverOrigin.Extension, DriverControl.Start(WorksetTarget.Inline(roots, WorkflowPhase.Work), Some(attached))))
+        drive = started.asInstanceOf[DriverReply.Started].status.drive
+        _ <- service.drive(operator, DriverRequest.Control(key, DriverOrigin.Extension, DriverControl.Park()))
+        before <- repository.drivePeriods(operator.project, drive, None, 10)
+        _ <- assertIO(before.map(period => (period.state, period.reason, period.attached)) ==
+          List((DrivePeriodState.On, None, Some(attached)), (DrivePeriodState.Off, Some(DriverStop.Parked), Some(attached))))
+        file <- ZIO.attempt(Files.createTempFile("cq-drive-periods-", ".zip"))
+        manifest <- archives.backup(operator.project, file)
+        _ <- assertIO(manifest.entries.exists(entry => entry.table == BackupTable.DrivePeriods && entry.rows == 2))
+        _ <- ZIO.attemptBlocking(Using.resource(DriverManager.getConnection(config.url, config.user, config.password)) { connection =>
+          Using.resource(connection.createStatement())(_.execute(s"CREATE SCHEMA $schema")); ()
+        })
+        _ <- target.initialize
+        _ <- new PostgresProjectArchives(target, Clock.systemUTC(), ProcessModePolicy.Release).restore(file)
+        copy = new PostgresLedgerRepository(target)
+        after <- copy.drivePeriods(operator.project, drive, None, 10)
+        listed <- copy.drives(operator.project, None, 10)
+        _ <- assertIO(after == before && listed.map(entry => (entry.drive, entry.first, entry.latest)) == List((drive, before.head, before.last)))
+        _ <- ZIO.attempt(Files.deleteIfExists(file))
+      } yield ()
+    }
+
     "restore a project whose installed-release rows hold an explicitly archived settled record" in {
       (service: LedgerService[IO], database: LedgerDatabase, config: DatabaseConfig, archives: ProjectArchives) =>
       val owner = Scope(ProjectId(UUID.randomUUID()), Actor("operator", SessionId(UUID.randomUUID()), Role.Governor))

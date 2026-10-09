@@ -299,5 +299,19 @@ CREATE TABLE cq_drivers (
   body jsonb NOT NULL,
   PRIMARY KEY (project_id, harness, session_key)
 );
+CREATE TABLE cq_drive_periods (
+  project_id uuid NOT NULL REFERENCES cq_projects,
+  sequence bigint NOT NULL CHECK (sequence > 0),
+  drive uuid NOT NULL,
+  harness text NOT NULL,
+  session_key text NOT NULL,
+  attached uuid,
+  state text NOT NULL CHECK (state IN ('Binding', 'On', 'Off', 'Removed')),
+  reason text,
+  at bigint NOT NULL,
+  CHECK ((state = 'Off') = (reason IS NOT NULL)),
+  PRIMARY KEY (project_id, sequence)
+);
+CREATE INDEX cq_drive_periods_drive ON cq_drive_periods(project_id, drive, sequence);
 CREATE UNIQUE INDEX cq_drivers_bound ON cq_drivers(project_id, attached) WHERE state = 'On';
 CREATE UNIQUE INDEX cq_drivers_cycle ON cq_drivers(project_id, cycle_id) WHERE cycle_id IS NOT NULL;

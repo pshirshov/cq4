@@ -35,6 +35,10 @@ trait LedgerRepository[F[_, _]] {
   def cursors(project: ProjectId, now: Long): F[Throwable, LedgerCursors]
   def driverRecords(project: ProjectId): F[Throwable, List[DriverRecord]]
   def driverSummaries(project: ProjectId): F[Throwable, List[DriverSummary]]
+  // At most `limit` periods of the drive with a sequence above `after`, in time order.
+  def drivePeriods(project: ProjectId, drive: DriveId, after: Option[Long], limit: Int): F[Throwable, List[DrivePeriod]]
+  // At most `limit` drives of the project whose first period has a sequence below `before`, newest first.
+  def drives(project: ProjectId, before: Option[Long], limit: Int): F[Throwable, List[DriveEntry]]
   def transact[A](project: ProjectId)(operation: LedgerTransaction => A): F[Throwable, A]
 }
 
@@ -45,6 +49,8 @@ trait LedgerTransaction {
   def driver(key: DriverKey): Option[DriverRecord]
   def putDriver(record: DriverRecord): Unit
   def removeDriver(key: DriverKey): Unit
+  // Appends an immutable period to the project's drive log in this transaction and gives it the next sequence.
+  def appendDrivePeriod(drive: DriveId, key: DriverKey, attached: Option[SessionId], state: DrivePeriodState, reason: Option[DriverStop], at: Long): Unit
   def project: Project
   // Runs `effect` once this transaction has committed, and never when it fails or is rolled back. For state held outside the repository.
   def afterCommit(effect: () => Unit): Unit

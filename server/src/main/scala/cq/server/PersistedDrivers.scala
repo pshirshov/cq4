@@ -36,6 +36,40 @@ private[server] object PersistedDrivers {
     record
   }
 
+  private val PeriodColumns = "sequence, drive, harness, session_key, attached, state, reason, at"
+  private def period(row: java.sql.ResultSet): DrivePeriod = {
+    val key = DriverKey(Harness.parse(row.getString(3)).getOrElse(throw new IllegalStateException("Invalid persisted drive period harness")), row.getString(4))
+    DrivePeriod(row.getLong(1), DriveId(row.getObject(2, classOf[java.util.UUID])), key, Option(row.getObject(5, classOf[java.util.UUID])).map(SessionId(_)),
+      DrivePeriodState.parse(row.getString(6)).getOrElse(throw new IllegalStateException("Invalid persisted drive period state")),
+      Option(row.getString(7)).map(reason => DriverStop.parse(reason).getOrElse(throw new IllegalStateException("Invalid persisted drive period reason"))), row.getLong(8))
+  }
+
+  // The period takes the next sequence of the project; the caller holds the project's transaction, which serialises the appends.
+  def append(sql: Jdbc, project: ProjectId, drive: DriveId, key: DriverKey, attached: Option[SessionId], state: DrivePeriodState, reason: Option[DriverStop], at: Long): Unit = {
+    require((state == DrivePeriodState.Off) == reason.nonEmpty, "Only an Off drive period carries a stop reason")
+    sql.execute(s"INSERT INTO cq_drive_periods(project_id, $PeriodColumns) SELECT ?, COALESCE(MAX(sequence), 0) + 1, ?, ?, ?, ?, ?, ?, ? FROM cq_drive_periods WHERE project_id = ?") { statement =>
+      statement.setObject(1, project.value); statement.setObject(2, drive.value); statement.setString(3, key.harness.toString); statement.setString(4, key.session)
+      statement.setObject(5, attached.map(_.value).orNull); statement.setString(6, state.toString); statement.setString(7, reason.map(_.toString).orNull)
+      statement.setLong(8, at); statement.setObject(9, project.value)
+    }
+    ()
+  }
+
+  def periods(sql: Jdbc, project: ProjectId, drive: DriveId, after: Option[Long], limit: Int): List[DrivePeriod] = sql.query(
+    s"SELECT $PeriodColumns FROM cq_drive_periods WHERE project_id = ? AND drive = ? AND sequence > ? ORDER BY sequence LIMIT ?") { statement =>
+    statement.setObject(1, project.value); statement.setObject(2, drive.value); statement.setLong(3, after.getOrElse(0L)); statement.setInt(4, limit)
+  }(period)
+
+  def drives(sql: Jdbc, project: ProjectId, before: Option[Long], limit: Int): List[DriveEntry] = sql.query(
+    s"SELECT $PeriodColumns FROM cq_drive_periods f WHERE f.project_id = ? AND f.sequence < ? AND f.sequence = " +
+      "(SELECT MIN(m.sequence) FROM cq_drive_periods m WHERE m.project_id = f.project_id AND m.drive = f.drive) ORDER BY f.sequence DESC LIMIT ?") { statement =>
+    statement.setObject(1, project.value); statement.setLong(2, before.getOrElse(Long.MaxValue)); statement.setInt(3, limit)
+  }(period).map { first =>
+    val latest = sql.query(s"SELECT $PeriodColumns FROM cq_drive_periods WHERE project_id = ? AND drive = ? ORDER BY sequence DESC LIMIT 1")(
+      statement => { statement.setObject(1, project.value); statement.setObject(2, first.drive.value) })(period).head
+    DriveEntry(first.drive, first.key, first, latest)
+  }
+
   def put(sql: Jdbc, project: ProjectId, record: DriverRecord): Unit = {
     validate(record, project)
     require(record.revision.value <= sql.query("SELECT driver_clock FROM cq_projects WHERE project_id = ?")(_.setObject(1, project.value))(_.getLong(1)).head, "Driver revision exceeds the project clock")

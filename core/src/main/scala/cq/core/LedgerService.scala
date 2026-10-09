@@ -418,6 +418,11 @@ object LedgerService {
           }.toEither)
         }
         case _: DriverRequest.Summaries => repository.driverSummaries(scope.project).map(DriverReply.Listed.apply)
+        // One more entry than asked for tells whether the page has a continuation; the continuation is the sequence of the last entry returned.
+        case DriverRequest.Periods(drive, after, limit) => F.fromEither(scala.util.Try(page(limit)).toEither).flatMap(_ =>
+          repository.drivePeriods(scope.project, drive, after, limit + 1).map(found => DriverReply.Periods(found.take(limit), Option.when(found.size > limit)(found(limit - 1).sequence))))
+        case DriverRequest.Drives(before, limit) => F.fromEither(scala.util.Try(page(limit)).toEither).flatMap(_ =>
+          repository.drives(scope.project, before, limit + 1).map(found => DriverReply.Drives(found.take(limit), Option.when(found.size > limit)(found(limit - 1).first.sequence))))
         case _ => repository.transact(scope.project) { tx =>
           val now = clock.millis()
           request match {
@@ -426,6 +431,7 @@ object LedgerService {
             case DriverRequest.Park(key, expected) => drivers.park(tx, scope, key, expected, now)
             case _: DriverRequest.Snapshot => throw new IllegalStateException("Driver snapshot is a read")
             case _: DriverRequest.Summaries => throw new IllegalStateException("Driver list is a read")
+            case _: DriverRequest.Periods | _: DriverRequest.Drives => throw new IllegalStateException("Drive periods are a read")
             case DriverRequest.Session(action) => drivers.session(tx, scope, action, now)
           }
         }

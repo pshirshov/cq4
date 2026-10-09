@@ -248,7 +248,7 @@ object DriverPolicy {
     case DriverState.Off => s"CQ driver off: ${describe(record)}" + record.stopped.fold("")(value => s"; stopped (${reason(value.reason)}): ${value.detail}")
   }
 
-  def status(record: DriverRecord): DriverStatus = DriverStatus(record.key, record.state, record.attached.filter(_ => record.on || rests(record)), record.workset,
+  def status(record: DriverRecord): DriverStatus = DriverStatus(record.drive, record.key, record.state, record.attached.filter(_ => record.on || rests(record)), record.workset,
     record.targets, record.through,
     record.cycle.map(cycle => DriverCycle(cycle.id, cycle.number, cycle.state, cycle.roots, cycle.through, cycle.snapshot.snapshot,
       cycle.snapshot.advanceable.map(member => ItemRevision(member.item.id, member.item.revision)), cycle.run, cycle.created, cycle.lineage)),

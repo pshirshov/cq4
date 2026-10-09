@@ -48,23 +48,22 @@ final class DriverService(registry: DriverRegistry, planner: WorksetPlanner) {
         // At capacity an off driver, or one whose session went silent, makes room; a live driver is never displaced.
         if (others.size >= MaxDrivers)
           others.filter(record => record.state == DriverState.Off || now - record.touchedAt > IdleMillis).sortBy(_.touchedAt).headOption match {
-            case Some(oldest) => registry.remove(oldest)
+            case Some(oldest) => registry.remove(oldest, now)
             case None => throw DomainFailure(Fault.Limit(s"A project holds at most $MaxDrivers CQ drivers; park one first"))
           }
         val offer = if (attached.isEmpty) Some(BindOffer(token(), Math.addExact(now, BindMillis))) else None
         // The record of this key's earlier drive is replaced: what that drive left unsettled passes to the new one.
-        val record = DriverRecord(project, key, if (attached.isEmpty) DriverState.Binding else DriverState.On, attached, preview.workset,
+        val record = DriverRecord(DriveId(UUID.randomUUID()), project, key, if (attached.isEmpty) DriverState.Binding else DriverState.On, attached, preview.workset,
           preview.targets, preview.through, offer, None, 0, None, true, now, registry.get(project, key).fold(Map.empty[SessionId, Set[IntegrationId]])(outstanding), Revision(0L), None)
         attached.foreach(supersede(project, _, key, now))
-        registry.put(attached.fold(record)(inherited(record, _)))
+        registry.enter(attached.fold(record)(inherited(record, _)), now)
         DriverReply.Started(status(record), preview, offer.map(_.token),
           if (attached.isEmpty) s"CQ driver binding: ${describe(record)}; it turns on when this session presents the bind token"
           else s"CQ driver on: ${describe(record)}")
       case _: DriverControl.Park => registry.get(project, key) match {
         // A drive that rests is parked as one that is on: it then no longer continues by itself.
         case Some(record) if record.state != DriverState.Off || rests(record) =>
-          val parked = stopped(record, DriverStopped(DriverStop.Parked, "Parked by the operator"), true, now)
-          registry.put(parked)
+          val parked = registry.stop(record, DriverStopped(DriverStop.Parked, "Parked by the operator"), true, now)
           DriverReply.Parked(Some(status(parked)), s"CQ driver parked: ${describe(parked)}")
         case other => DriverReply.Parked(other.map(status), "CQ driver is already off")
       }
@@ -93,15 +92,15 @@ final class DriverService(registry: DriverRegistry, planner: WorksetPlanner) {
     DriverPolicy.key(key)
     val record = registry.get(scope.project, key).getOrElse(throw DomainFailure(Fault.Missing("Driver does not exist")))
     if (record.revision != expected) throw DomainFailure(Fault.Conflict("Driver changed; refresh before parking"))
-    val parked = stopped(record, DriverStopped(DriverStop.Parked, "Parked by the operator"), true, now)
-    registry.put(parked)
+    val parked = registry.stop(record, DriverStopped(DriverStop.Parked, "Parked by the operator"), true, now)
     DriverReply.Parked(Some(status(parked)), s"CQ driver parked: ${describe(parked)}")
   }
 
   // A harness may issue a new session key while its attached host lives on: the attached session's binding follows the key that drives now.
   private def supersede(project: ProjectId, attached: SessionId, key: DriverKey, now: Long)(using tx: LedgerTransaction): Unit =
     registry.bound(project, attached).foreach { previous =>
-      registry.put(stopped(previous, DriverStopped(DriverStop.Parked, s"Its attached session was bound to the CQ driver of session ${key.session}"), false, now))
+      registry.stop(previous, DriverStopped(DriverStop.Parked, s"Its attached session was bound to the CQ driver of session ${key.session}"), false, now)
+      ()
     }
 
   // A driver that binds an attached session also takes over what that session's drives under other session keys left unsettled.
@@ -110,8 +109,7 @@ final class DriverService(registry: DriverRegistry, planner: WorksetPlanner) {
       registry.all(record.project).filter(_.key != record.key).flatMap(outstanding(_).get(attached)).flatten.toSet))
 
   private def stop(record: DriverRecord, value: DriverStopped, messages: List[String], now: Long)(using tx: LedgerTransaction): DriverReply = {
-    val next = stopped(record, value, true, now)
-    registry.put(next)
+    val next = registry.stop(record, value, true, now)
     DriverReply.Stop(value, Some(status(next)), messages :+ stopMessage(value))
   }
 
@@ -167,9 +165,12 @@ final class DriverService(registry: DriverRegistry, planner: WorksetPlanner) {
     case previous =>
       val finished = previous.map(ended)
       val settled = record.copy(cycle = finished)
+      // The resting drive is on again from here, unless it still rests: its drive continues under the same identity.
+      def revive(): Unit = rested.foreach(resting => registry.period(resting, DrivePeriodState.On, None, now))
       // Snapshot first: the advanceable set is computed from the frozen targets before any readiness decision.
       Try(planner.evaluate(tx, record.targets, record.through, record.workset)) match {
         case Failure(DomainFailure(fault)) =>
+          revive()
           stop(settled, DriverStopped(DriverStop.Failure, s"the advanceable set cannot be computed: $fault"), Nil, now)
         case Failure(error) => throw error
         case Success(snapshot) =>
@@ -183,18 +184,19 @@ final class DriverService(registry: DriverRegistry, planner: WorksetPlanner) {
           val agents = rested.toList.flatMap(resting => (snapshot.advanceable.map(_.item) ++ snapshot.context.map(_.item))
             .filter(item => awaitable(item.id.ledger) && !awaitsUser(item) && resting.stoppedAt.forall(item.updatedAt >= _)).map(_.id).distinct
             .flatMap(id => settlement(tx, id).filter(entry => resting.stoppedAt.forall(entry.receivedAt >= _) && entry.actor.role != Role.Human).map(entry => id -> entry.actor.role)))
-          if (unselected.nonEmpty) stop(settled, DriverStopped(DriverStop.Failure,
-            s"${references(unselected)} created by cycle ${finished.get.number} is not in the recomputed advanceable set"), messages, now)
-          else if (agents.nonEmpty) stop(settled, settledByAgents(agents), messages, now)
+          if (unselected.nonEmpty) { revive(); stop(settled, DriverStopped(DriverStop.Failure,
+            s"${references(unselected)} created by cycle ${finished.get.number} is not in the recomputed advanceable set"), messages, now) }
+          else if (agents.nonEmpty) { revive(); stop(settled, settledByAgents(agents), messages, now) }
           else decide(snapshot, finished) match {
             case DriverDecision.Stop(value @ DriverStopped(DriverStop.UserInputRequired, _)) if rested.nonEmpty =>
               // Still resting: nothing is said, and the record names what the drive waits for now.
               val resting = rested.get
               if (!resting.stopped.contains(value)) registry.put(resting.copy(stopped = Some(value)))
               DriverReply.Stop(value, Some(status(resting.copy(stopped = Some(value)))), Nil)
-            case DriverDecision.Stop(value) => stop(settled, value, messages, now)
-            case _: DriverDecision.Continue if record.directives >= MaxDirectives => stop(settled, limit, messages, now)
+            case DriverDecision.Stop(value) => revive(); stop(settled, value, messages, now)
+            case _: DriverDecision.Continue if record.directives >= MaxDirectives => revive(); stop(settled, limit, messages, now)
             case DriverDecision.Continue(retried, offered) =>
+              revive()
               val start = token()
               val cycle = CycleRecord(CycleId(UUID.randomUUID()), finished.fold(1)(_.number + 1), record.targets, record.through, snapshot,
                 CycleState.Pending, Some(start), None, Map.empty, None, Nil, Nil, Set.empty, Set.empty, Nil, retried)
@@ -220,7 +222,7 @@ final class DriverService(registry: DriverRegistry, planner: WorksetPlanner) {
         if (record.bind.get.expiresAt <= now) denied("The CQ driver bind token expired; park and run the drive command again")
         supersede(project, caller, record.key, now)
         val bound = inherited(record.copy(state = DriverState.On, attached = Some(caller), bind = None, touchedAt = now), caller)
-        registry.put(bound)
+        registry.enter(bound, now)
         DriverReply.Bound(status(bound), s"CQ driver on: ${describe(bound)}")
       case DriverSession.Activate(run, request, presented) =>
         governor(scope)
@@ -257,8 +259,7 @@ final class DriverService(registry: DriverRegistry, planner: WorksetPlanner) {
           outcomes = cycle.outcomes.filterNot(_.attempt == outcome.attempt) :+ outcome)), touchedAt = now)
         if (outcome.end == ChildEnd.Repeated && record.on && cycle.active) {
           val value = repeated(member, cycle, outcome)
-          val next = stopped(concluded, value, false, now)
-          registry.put(next)
+          val next = registry.stop(concluded, value, false, now)
           DriverReply.Stop(value, Some(status(next)), Nil)
         } else {
           registry.put(concluded)
@@ -274,8 +275,7 @@ final class DriverService(registry: DriverRegistry, planner: WorksetPlanner) {
         LedgerPolicy.invalid(detail.trim.nonEmpty && detail.length <= MaxDetail, s"A lineage failure requires a detail of 1–$MaxDetail characters")
         val (record, cycle) = registry.lineage(project, id, caller, now)
         val value = DriverStopped(DriverStop.Failure, s"${DriverPolicy.member(member)} of cycle ${cycle.number} $detail")
-        val next = stopped(record, value, false, now)
-        registry.put(next)
+        val next = registry.stop(record, value, false, now)
         DriverReply.Stop(value, Some(status(next)), Nil)
       case _: DriverSession.Change => throw new IllegalStateException("A cycle-attributed change is a ledger mutation")
     }

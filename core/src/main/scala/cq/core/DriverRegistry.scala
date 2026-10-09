@@ -31,7 +31,7 @@ object DriverRecords {
       Option.when(record.cycle.exists(_.state == CycleState.Pending))(record.carried.getOrElse(session, Set.empty))
     def carries(session: SessionId, integration: IntegrationId): Boolean = record.settleable(session).exists(_.contains(integration))
   }
-  def summary(record: DriverRecord): DriverSummary = DriverSummary(record.key, record.state, record.attached, record.workset,
+  def summary(record: DriverRecord): DriverSummary = DriverSummary(record.drive, record.key, record.state, record.attached, record.workset,
     record.targets, record.through, record.cycle.map(_.id), record.cycle.filter(_.active).fold(0)(_.activeChildren),
     record.stopped, record.touchedAt, record.stoppedAt, record.revision)
   def restored(record: DriverRecord, now: Long): DriverRecord = DriverPolicy.stopped(record,
@@ -57,7 +57,26 @@ final class DriverRegistry {
   }
   def update(project: ProjectId, key: DriverKey)(change: DriverRecord => DriverRecord)(using tx: LedgerTransaction): Unit =
     get(project, key).foreach(record => put(change(record)))
-  def remove(record: DriverRecord)(using tx: LedgerTransaction): Unit = tx.removeDriver(record.key)
+  // The record is deleted; its drive ends with a Removed period at `now`, whatever its state, so that no drive without a live record is left open.
+  def remove(record: DriverRecord, now: Long)(using tx: LedgerTransaction): Unit = {
+    period(record, DrivePeriodState.Removed, None, now)
+    tx.removeDriver(record.key)
+  }
+  // The period of the state a record entered at `at`.
+  def period(record: DriverRecord, state: DrivePeriodState, reason: Option[DriverStop], at: Long)(using tx: LedgerTransaction): Unit =
+    tx.appendDrivePeriod(record.drive, record.key, record.attached, state, reason, at)
+  // The record is put as entered: Binding or On for a start, On for a bind.
+  def enter(record: DriverRecord, now: Long)(using tx: LedgerTransaction): Unit = {
+    put(record)
+    period(record, if (record.state == DriverState.Binding) DrivePeriodState.Binding else DrivePeriodState.On, None, now)
+  }
+  // Every stop: the record turns off with `value` and its drive gets an Off period.
+  def stop(record: DriverRecord, value: DriverStopped, announced: Boolean, now: Long)(using tx: LedgerTransaction): DriverRecord = {
+    val next = DriverPolicy.stopped(record, value, announced, now)
+    put(next)
+    period(next, DrivePeriodState.Off, Some(value.reason), now)
+    next
+  }
   def bound(project: ProjectId, session: SessionId)(using tx: LedgerTransaction): Option[DriverRecord] = all(project).find(record => record.on && record.attached.contains(session))
 
   // Stops the driver with reason failure and rejects the operation that caused it.
@@ -82,7 +101,7 @@ object DriverRejection {
     require(tx.project.id == intent.project, "Driver stop project invariant violated")
     val original = tx.driver(intent.key).getOrElse(throw new IllegalStateException("Rejected driver was not committed before its operation"))
     require(original.state == DriverState.On, "Rejected driver was not on before its operation")
-    new DriverRegistry().put(DriverPolicy.stopped(original, DriverStopped(DriverStop.Failure, intent.detail), false, intent.now))(using tx)
+    new DriverRegistry().stop(original, DriverStopped(DriverStop.Failure, intent.detail), false, intent.now)(using tx)
     DomainFailure(Fault.Denied(s"CQ driver stopped with reason failure: ${intent.detail}"))
   }
 }
