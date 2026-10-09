@@ -131,6 +131,9 @@ final class CliOutputLocal extends AnyWordSpec {
       val bytes = new ByteArrayOutputStream()
       new CliOutput(new PrintStream(bytes, true, UTF_8), CliFormat.Human, List("status", "phases", "--evaluation", "R", "--scenario", "S")).result(Result.UsagePhases(report))
       assert(bytes.toString(UTF_8).linesIterator.exists(line => line.contains("truncated") && line.contains("cq status costs --evaluation R --scenario S")))
+      bytes.reset()
+      new CliOutput(new PrintStream(bytes, true, UTF_8), CliFormat.Human, List("status", "phases", "--evaluation", "run one", "--scenario", "it's")).result(Result.UsagePhases(report))
+      assert(bytes.toString(UTF_8).contains("cq status costs --evaluation 'run one' --scenario 'it'\\''s'"), bytes.toString(UTF_8))
     }
   }
 }

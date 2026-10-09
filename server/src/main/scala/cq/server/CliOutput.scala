@@ -196,6 +196,10 @@ final class CliOutput(output: PrintStream, format: CliFormat, invocation: List[S
     val seconds = millis / 1000
     f"${seconds / 3600}%d:${seconds / 60 % 60}%02d:${seconds % 60}%02d"
   }
+  /** A word safe to paste into a POSIX shell: unchanged when it holds only plain characters, else single-quoted. */
+  private def shellWord(word: String): String =
+    if (word.nonEmpty && word.forall(c => c.isLetterOrDigit || "-_./:=@%+,".contains(c))) word
+    else "'" + word.replace("'", "'\\''") + "'"
   private def phases(value: PhaseReport): Unit = {
     table(List("Phase", "Attempts", "Running", "Open", "Spans", "Wall h:mm:ss", "Input", "Output", "Cache read", "Cache write", "Reasoning", "Total", "Unknown costs"),
       value.phases.map { entry =>
@@ -214,7 +218,7 @@ final class CliOutput(output: PrintStream, format: CliFormat, invocation: List[S
       }
     })
     if (value.costsTruncated) invocation match {
-      case "status" :: "phases" :: scope => line("Cost groups are truncated; list every group with: cq " + ("status" :: "costs" :: scope).mkString(" "))
+      case "status" :: "phases" :: scope => line("Cost groups are truncated; list every group with: cq " + ("status" :: "costs" :: scope).map(shellWord).mkString(" "))
       case _ => throw new IllegalStateException("Phases require a status phases invocation")
     }
   }
