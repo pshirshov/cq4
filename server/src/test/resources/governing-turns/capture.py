@@ -77,12 +77,33 @@ def user_message(text):
     return json.dumps({"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": text}]}}) + "\n"
 
 def run_case(args, mode, case):
+    """Runs one case; whatever fails, the harness process and the stub are ended before the error propagates."""
+    live = {"proc": None, "pid": None, "stub": None}
+    try: _run_case(args, mode, case, live)
+    finally:
+        if live["proc"] is not None and live["proc"].poll() is None:
+            try: os.killpg(live["proc"].pid, signal.SIGKILL)
+            except OSError: pass
+            live["proc"].wait()
+        if live["pid"] is not None:
+            try: os.kill(live["pid"], signal.SIGKILL); os.waitpid(live["pid"], 0)
+            except OSError: pass
+        if live["stub"] is not None and live["stub"].process.poll() is None: live["stub"].stop()
+
+def _run_case(args, mode, case, live):
     directory = pathlib.Path(args.out) / f"{mode}-{case}"
     shutil.rmtree(directory, ignore_errors=True); (directory / "work").mkdir(parents=True)
     settings_file = settings(directory, case)
     stub = None if args.real else Stub(directory)
+    live["stub"] = stub
     env = environment(args, directory, stub)
     hooks = directory / "hooks.jsonl"
+    def held_request():
+        """The turn is under way and unfinished. With the stub: its held request has arrived. In --real mode there is no stub, so the
+        observable condition is the hooks' own: a UserPromptSubmit was logged and no Stop followed (a fast real model may finish first;
+        the notes then say the interrupt came after the turn)."""
+        if stub is not None: return any(r.get("mode") == "hold" and r["phase"] == "arrive" for r in lines(stub.log))
+        return count(hooks, "UserPromptSubmit") >= 1 and count(hooks, "Stop") == 0
     claude = args.claude
     common = [claude, "--settings", str(settings_file), "--model", MODEL, "--allowedTools", "Bash,Task,Agent", "--permission-mode", "default"]
     notes = []
@@ -95,6 +116,7 @@ def run_case(args, mode, case):
         out = open(stdout_path, "wb"); err = open(directory / "stderr.txt", "wb")
         proc = subprocess.Popen(cmd, cwd=directory / "work", env=env, stdin=subprocess.PIPE if stream else subprocess.DEVNULL, stdout=out, stderr=err,
                                 start_new_session=True)
+        live["proc"] = proc
         results = lambda: sum(1 for l in open(stdout_path, errors="replace") if '"type":"result"' in l)
         started = now()
         if case == "d":
@@ -110,7 +132,7 @@ def run_case(args, mode, case):
             notes.append(f"background command woke the session (a second result event): {woke}")
             proc.stdin.close()
         elif case in ("e", "ei"):
-            held = wait_for(lambda: any(r.get("mode") == "hold" and r["phase"] == "arrive" for r in lines(stub.log)), 60)
+            held = wait_for(held_request, 60)
             time.sleep(1.0)
             sig = signal.SIGINT if case == "ei" else signal.SIGTERM
             notes.append(f"signal {sig.name} sent at t_ms={now():.3f} to the process group leader pid {proc.pid} (held request seen: {held})")
@@ -126,6 +148,7 @@ def run_case(args, mode, case):
         cmd = common
         (directory / "command.txt").write_text(" ".join(cmd) + "\n")
         pid, fd = pty.fork()
+        live["pid"] = pid
         if pid == 0:
             os.chdir(directory / "work"); os.execvpe(cmd[0], cmd, {**env, "COLUMNS": "120", "LINES": "40"})
         import fcntl, struct, termios
@@ -152,7 +175,7 @@ def run_case(args, mode, case):
                 time.sleep(1.5)
         elif case in ("e", "ei"):
             send(prompts[0])
-            held = wait_for(lambda: any(r.get("mode") == "hold" and r["phase"] == "arrive" for r in lines(stub.log)), 60)
+            held = wait_for(held_request, 60)
             time.sleep(1.0)
             notes.append(f"Escape (interrupt) sent at t_ms={now():.3f}; held request seen: {held}")
             os.write(fd, b"\x1b")
@@ -171,11 +194,13 @@ def run_case(args, mode, case):
         if not done:
             notes.append("process still running 15 s after /exit; killed with SIGKILL")
             os.kill(pid, signal.SIGKILL); os.waitpid(pid, 0)
+        live["pid"] = None
         (directory / "exit").write_text("0 (left through /exit)\n" if done else "killed\n")
         stop_reading.set(); pump_thread.join(2); raw.close(); stamps.close()
         text = re.sub(rb"\x1b\[[0-9;?<>=]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)|\x1b[()][0-9A-Za-z]|\x1b[=>]", b"", pathlib.Path(stdout_path).read_bytes())
         (directory / "transcript.txt").write_text(text.decode("utf-8", "replace").replace("\r", "\n"))
     if stub: stub.stop()
+    live["stub"] = None
     (directory / "notes.txt").write_text("\n".join(notes) + "\n")
     for leftover in ("home", "config", "work", "stop-block.state"):
         target = directory / leftover

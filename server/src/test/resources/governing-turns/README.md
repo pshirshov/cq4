@@ -18,6 +18,7 @@ One clock: every time is `time.time() * 1000` (CLOCK_REALTIME of this machine, e
 | `stub.py` | The invented provider. Logs one `arrive` and one `done` line per request. |
 | `hook.py` | The hook command of every event: appends `{"t_ms","pid","event","stdin"}` to `hooks.jsonl`; with `--block-once` its Stop answers `{"decision":"block","reason":...}` once (case c). Not CQ's hook program. |
 | `timeline.py CASEDIR` | Prints hooks and stub requests of one case on one time line. |
+| `appendix.py [DIR]` | Prints every captured case as one ordered table (hook lines and stub request lines with times); the appendix of the document. |
 | `intervals.py CASEDIR...` | Prints, per turn, the interval UserPromptSubmit to last Stop and which requests lie in it. |
 
 ## Case directories
