@@ -218,6 +218,8 @@ final class CliOutput(output: PrintStream, format: CliFormat, invocation: List[S
       }
     })
     if (value.costsTruncated) invocation match {
+      case "status" :: "phases" :: scope if scope.exists(value => clean(value) != value) =>
+        line("Cost groups are truncated; list every group with: cq status costs, repeating the original scope options (a scope contains control characters).")
       case "status" :: "phases" :: scope => line("Cost groups are truncated; list every group with: cq " + ("status" :: "costs" :: scope).map(shellWord).mkString(" "))
       case _ => throw new IllegalStateException("Phases require a status phases invocation")
     }

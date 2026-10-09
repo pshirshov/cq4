@@ -134,6 +134,10 @@ final class CliOutputLocal extends AnyWordSpec {
       bytes.reset()
       new CliOutput(new PrintStream(bytes, true, UTF_8), CliFormat.Human, List("status", "phases", "--evaluation", "run one", "--scenario", "it's")).result(Result.UsagePhases(report))
       assert(bytes.toString(UTF_8).contains("cq status costs --evaluation 'run one' --scenario 'it'\\''s'"), bytes.toString(UTF_8))
+      bytes.reset()
+      new CliOutput(new PrintStream(bytes, true, UTF_8), CliFormat.Human, List("status", "phases", "--evaluation", "run\tone")).result(Result.UsagePhases(report))
+      val tabbed = bytes.toString(UTF_8)
+      assert(tabbed.contains("repeating the original scope options") && !tabbed.contains("--evaluation 'run one'"), tabbed)
     }
   }
 }
