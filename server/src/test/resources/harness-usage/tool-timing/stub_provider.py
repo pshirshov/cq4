@@ -155,7 +155,14 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(status); self.send_header("content-type", ctype); self.send_header("content-length", str(len(payload)))
         self.send_header("request-id", "req_stub"); self.end_headers(); self.wfile.write(payload); self.wfile.flush()
     def do_GET(self):
+        t_request = time.time()
+        t_start = time.time()
         self.send(404, "application/json", b'{"error":{"message":"not found"}}')
+        t_done = time.time()
+        # every request is logged, including the refusals of Codex's WebSocket upgrade (a GET)
+        with lock, open(logfile, "a") as out:
+            out.write(json.dumps({"n": None, "method": self.command, "path": self.path, "upgrade": self.headers.get("upgrade"), "t_request": t_request,
+                                  "t_reply_start": t_start, "t_reply_done": t_done, "status": 404, "kind": "refused"}) + "\n")
     do_HEAD = do_GET
     def do_POST(self):
         t_request = time.time()

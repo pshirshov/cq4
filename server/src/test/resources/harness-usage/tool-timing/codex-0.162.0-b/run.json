@@ -3,6 +3,6 @@
  "version": "0.162.0",
  "case": "b",
  "clock": "CLOCK_REALTIME, seconds since the epoch, one machine",
- "t_spawn": 1791571268.1028733,
- "t_exit": 1791571278.8704336
+ "t_spawn": 1791574404.5190556,
+ "t_exit": 1791574415.2375488
 }

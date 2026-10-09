@@ -1,4 +1,4 @@
-{"method": "initialize", "id": 0, "t_request": 1791571279.8427181, "t_reply_done": 1791571279.8430562}
-{"method": "notifications/initialized", "id": null, "t_request": 1791571279.8464534, "t_reply_done": 1791571279.8465505}
-{"method": "tools/list", "id": 1, "t_request": 1791571279.8497875, "t_reply_done": 1791571279.849893}
-{"method": "tools/call", "id": 2, "t_request": 1791571286.407256, "t_reply_done": 1791571288.4076548}
+{"method": "initialize", "id": 0, "t_request": 1791574415.9910858, "t_reply_done": 1791574415.991388}
+{"method": "notifications/initialized", "id": null, "t_request": 1791574415.993629, "t_reply_done": 1791574415.9938056}
+{"method": "tools/list", "id": 1, "t_request": 1791574415.9972074, "t_reply_done": 1791574415.9973123}
+{"method": "tools/call", "id": 2, "t_request": 1791574422.27596, "t_reply_done": 1791574424.2763517}

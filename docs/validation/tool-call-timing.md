@@ -33,7 +33,7 @@ All files are under `server/src/test/resources/harness-usage/tool-timing/` (cite
 - **Name and command**: command: `item.command`, the shell invocation as one string (`/run/current-system/sw/bin/zsh -c '<command>'`); MCP: `item.server` and `item.tool` (`stub`, `stub_wait`).
 - **Pairing key**: `item.id` (`item_1` at `:L8` and `:L9`; `item_1`/`item_2` at `codex-0.162.0-b/stdout.jsonl:L8-L11`).
 - **Timestamp**: not available. No stdout event carries a time or duration (`codex-0.162.0-a/stdout.jsonl`, all 11 lines).
-- Before the work, lines 3-6 (`error`) and 7 (`item.completed`, `item.type` `error`) report the refusal of the WebSocket upgrade by the stub (404, `codex-0.162.0-a/stderr.txt`) and the fall back to HTTPS; this delays the first provider request by about 6 s in every Codex run and is an effect of the stub.
+- Before the work, lines 3-6 (`error`) and 7 (`item.completed`, `item.type` `error`) report the refusal of the WebSocket upgrade by the stub (404, `codex-0.162.0-a/stderr.txt`) and the fall back to HTTPS. The stub logs every request including the refused upgrades (`codex-0.162.0-a/requests.jsonl:L1-L7`, `method` GET, status 404): seven refusals between 0.56 s and 7.04 s after spawn (`run.json` `t_spawn`), then the first provider POST (`:L8`) 7.12 s after spawn. The delay is an effect of the stub.
 
 ### Pi 1.1.0 (`--mode json --print`)
 
@@ -44,12 +44,12 @@ All files are under `server/src/test/resources/harness-usage/tool-timing/` (cite
 
 ## Case (b): two shell calls from one model response
 
-The conclusion of concurrency rests on the marker files alone (`figures.py`; times are seconds, `…` is the epoch prefix 1791571…):
+The conclusion of concurrency rests on the marker files alone (`figures.py`; times are seconds, the figures of this section and of the case (a)/(c) tables are the epoch seconds minus 1791571000 for Claude Code and Pi, and minus 1791574000 for Codex, whose captures were repeated with a stub that logs every request):
 
 | Harness | Interval b1 (marker) | Interval b2 (marker) | Overlap | Result |
 |---|---|---|---|---|
 | Claude Code 2.1.295 (`claude-2.1.295-b/markers`) | 244.330215 – 246.334408 (2.004 s) | 246.371085 – 248.375613 (2.005 s) | 0.000 s | **sequential**; b2 began 0.037 s after b1 ended |
-| Codex 0.162.0 (`codex-0.162.0-b/markers`) | 274.603699 – 276.608528 (2.005 s) | 276.629904 – 278.634194 (2.004 s) | 0.000 s | **sequential**; b2 began 0.021 s after b1 ended |
+| Codex 0.162.0 (`codex-0.162.0-b/markers`) | 410.909037 – 412.913589 (2.005 s) | 412.945016 – 414.949118 (2.004 s) | 0.000 s | **sequential**; b2 began 0.031 s after b1 ended |
 | Pi 1.1.0 (`pi-1.1.0-b/markers`) | 237.217417 – 239.221217 (2.004 s) | 237.220265 – 239.223781 (2.004 s) | 2.001 s | **overlapped** (b2 began 0.003 s after b1) |
 
 Receipt times of the paired start/end lines, as separate figures (the receipt gap is the end line's arrival minus the start line's arrival):
@@ -58,8 +58,8 @@ Receipt times of the paired start/end lines, as separate figures (the receipt ga
 |---|---|---|---|---|---|
 | Claude, call 1 | `…-b/stdout.jsonl:L2` (244.275990) | `:L4` (246.355353) | 2.079 s | 2.004 s | +0.075 s |
 | Claude, call 2 | `:L3` (244.307037) | `:L5` (248.383737) | 4.077 s | 2.005 s | +2.072 s |
-| Codex, call 1 | `codex-0.162.0-b/stdout.jsonl:L8` (274.757308) | `:L9` (276.609793) | 1.852 s | 2.005 s | −0.152 s |
-| Codex, call 2 | `:L10` (276.777781) | `:L11` (278.634757) | 1.857 s | 2.004 s | −0.147 s |
+| Codex, call 1 | `codex-0.162.0-b/stdout.jsonl:L8` (411.077418) | `:L9` (412.915771) | 1.838 s | 2.005 s | −0.166 s |
+| Codex, call 2 | `:L10` (413.094428) | `:L11` (414.949805) | 1.855 s | 2.004 s | −0.149 s |
 | Pi, call 1 | `pi-1.1.0-b/stdout.jsonl:L16` (237.200726) | `:L20` (239.223846) | 2.023 s | 2.004 s | +0.019 s |
 | Pi, call 2 | `:L17` (237.201863) | `:L21` (239.224489) | 2.023 s | 2.004 s | +0.019 s |
 
@@ -73,19 +73,19 @@ Execution interval from the marker (a) or from the stub MCP log (c); receipt gap
 |---|---|---|---|---|---|---|
 | Claude Code | a | 240.817842 – 242.822399 (2.005 s) | `claude-2.1.295-a/stdout.jsonl:L2` (−0.065 s) | `:L3` (+0.013 s) | 2.082 s | +0.078 s |
 | Claude Code | c | 255.089001 – 257.089395 (2.000 s; `claude-2.1.295-c/mcp-calls.jsonl`) | `claude-2.1.295-c/stdout.jsonl:L2` (−0.010 s) | `:L3` (+0.010 s) | 2.021 s | +0.020 s |
-| Codex | a | 265.516367 – 267.521373 (2.005 s) | `codex-0.162.0-a/stdout.jsonl:L8` (+0.162 s) | `:L9` (+0.006 s) | 1.848 s | −0.157 s |
-| Codex | c | 286.407256 – 288.407655 (2.000 s; `codex-0.162.0-c/mcp-calls.jsonl`) | `codex-0.162.0-c/stdout.jsonl:L8` (−0.004 s) | `:L9` (+0.004 s) | 2.009 s | +0.009 s |
+| Codex | a | 401.976335 – 403.980630 (2.004 s) | `codex-0.162.0-a/stdout.jsonl:L8` (+0.172 s) | `:L9` (+0.006 s) | 1.839 s | −0.166 s |
+| Codex | c | 422.275960 – 424.276352 (2.000 s; `codex-0.162.0-c/mcp-calls.jsonl`) | `codex-0.162.0-c/stdout.jsonl:L8` (−0.002 s) | `:L9` (+0.004 s) | 2.006 s | +0.005 s |
 | Pi | a | 234.182650 – 236.188076 (2.005 s) | `pi-1.1.0-a/stdout.jsonl:L13` (−0.015 s) | `:L15` (+0.005 s) | 2.025 s | +0.020 s |
 | Pi | c | not captured (Pi has no case c here) | — | — | not available | not available |
 
-In these captures line arrival approximated the execution interval to within 0.02 s (Pi, Claude Code case c, Codex case c), to within 0.08 s (Claude Code case a: the start event arrives before the process was started, by 65 ms), and Codex's `command_execution` start line arrived 0.15–0.16 s *after* the command had begun (its receipt gap is shorter than the execution by about 0.15 s, in a, b and a-rollout). The cause of Codex's delay was not established. These are single runs per case on an idle machine with a stub provider that answers within milliseconds; they do not establish how arrival behaves under load, with a slow provider or with output larger than the pipe buffer. No capture showed events arriving only afterwards or together: in every one the end line arrived within 0.021 s of the end marker.
+In these captures line arrival approximated the execution interval to within 0.02 s (Pi, Claude Code case c, Codex case c), to within 0.08 s (Claude Code case a: the start event arrives before the process was started, by 65 ms), and Codex's `command_execution` start line arrived 0.15–0.17 s *after* the command had begun (its receipt gap is shorter than the execution by 0.14–0.17 s, in a, b and a-rollout). The cause of Codex's delay was not established. These are single runs per case on an idle machine with a stub provider that answers within milliseconds; they do not establish how arrival behaves under load, with a slow provider or with output larger than the pipe buffer. No capture showed events arriving only afterwards or together: in every one the end line arrived within 0.021 s of the end marker (Codex: within 0.009 s).
 
 ## Codex rollout (non-ephemeral run)
 
-`codex-0.162.0-a-rollout` is case a without `--ephemeral`; it wrote one rollout file, `codex-0.162.0-a-rollout/rollout/rollout-2026-10-09T19-41-28-01a121f8-62e0-7a20-980e-10b41bee0e0e.jsonl`.
+`codex-0.162.0-a-rollout` is case a without `--ephemeral`; it wrote one rollout file, `codex-0.162.0-a-rollout/rollout/rollout-2026-10-09T20-33-44-01a12228-3c82-7450-8fbc-e430ecc55299.jsonl`.
 
 - Every record carries a millisecond `timestamp`.
-- Tool records: `response_item` `custom_tool_call` (the model's `exec` call, name and JavaScript input; `:L9`, timestamp 18:41:35.170Z, 0.18 s before the command began), `event_msg` `item_completed` with item type `CommandExecution` (`:L11`, timestamp 18:41:37.358Z, 2.3 ms after the end marker, with the command as argument vector, `exit_code` and `duration` 1.857823208 s), `response_item` `custom_tool_call_output` (`:L12`). **There is no record of the start of the command**; its start is not stated. The rollout's `duration` (1.858 s) is 0.147 s shorter than the marker interval (2.005 s) and equals the stdout receipt gap (1.859 s); what it measures was not established.
+- Tool records: `response_item` `custom_tool_call` (the model's `exec` call, name and JavaScript input; `:L9`, timestamp 19:33:51.284Z, 0.07 s before the command began), `event_msg` `item_completed` with item type `CommandExecution` (`:L11`, timestamp 19:33:53.362Z, 3 ms after the end marker, with the command as argument vector, `exit_code`, `duration` 1.858567559 s and the fields `started_at_ms` 1791574431501 and `completed_at_ms` 1791574433361), `response_item` `custom_tool_call_output` (`:L12`). The one record that holds the command's start is `:L11` itself: `started_at_ms` is 0.147 s after the start marker (1791574431.354411) and `completed_at_ms` is 2.1 ms after the end marker (1791574433.358855). Their difference, 1.860 s, is a separate figure from the marker interval (2.004 s); it is 0.144 s shorter, and it matches `duration` (1.859 s) and the stdout receipt gap (1.861 s). What `started_at_ms` denotes (the command's start as Codex saw it, with the 0.15 s that the stdout `item.started` line also lags) was not established. There is no separate start record; the record appears only once the command has completed.
 - Child attempts launched by CQ pass `--ephemeral` (`host/src/main/scala/cq/host/HarnessAdapter.scala:196`) and so have no rollout.
 
 ## What CQ stores today (read, not changed)
@@ -111,7 +111,7 @@ Not counted. The artifact is a manifest (355 bytes) of four base64 parts (a79eb0
 
 - **No real model**: provider replies, token counts, identifiers, latencies (milliseconds) and the model name are invented; behaviour with real streaming latency, long outputs, large tool results, permission prompts or tool failures is unknown for every harness.
 - **Claude Code 2.1.295**: one run per case. Concurrency of read-only tools (e.g. `Read`, `Grep`) was not captured; only `Bash` pairs. Whether Claude Code could run two `Bash` calls concurrently in another configuration (e.g. background) is not established. The meaning of `timestamp` is inferred from comparison with markers, not from source. Event order or arrival under a heavy output stream is not established. Real-attempt tool-call counts: not available (artifact above). Claude Code versions other than 2.1.295 were not captured (the retained 2.1.285 fixtures hold no tool call and no `timestamp`).
-- **Codex 0.162.0**: case b ran two separate `exec` calls; one `exec` call that runs two commands with `Promise.all` was not captured, so Codex's concurrency inside one JavaScript cell is not established. Codex's use of `shell` (without code mode) was not captured. The cause of the 0.15 s delay of `item.started` and the meaning of the rollout `duration` are not established. The WebSocket transport (the default when the provider accepts it) was not exercised. Rollout: only the non-ephemeral run; child attempts have none.
+- **Codex 0.162.0**: case b ran two separate `exec` calls; one `exec` call that runs two commands with `Promise.all` was not captured, so Codex's concurrency inside one JavaScript cell is not established. Codex's use of `shell` (without code mode) was not captured. The cause of the 0.15 s delay of `item.started`, and the meaning of the rollout `duration` and `started_at_ms`, are not established. The WebSocket transport (the default when the provider accepts it) was not exercised. Rollout: only the non-ephemeral run; child attempts have none.
 - **Pi 1.1.0**: case c not captured (the task asks for it only for Claude Code and Codex); the CQ bridge extension (`pi-bridge.mjs`) and its MCP tool calls were not exercised. The definition of `durationMs` and of the message `timestamp` was not read from Pi's source. Pi 1.0.0 and 0.99.1 were not captured with tool calls.
 - **Buffering**: stdout was a pipe read directly by the capture script. Whether the guardian's file copy or CQ's reading changes the arrival pattern was not tested; the captures show arrival at the reader of a pipe, which is not CQ's path.
 - **Collector**: the behaviour on a real Codex reconnect, and on versions not in the accepted list, is described only for these transcripts. The tool-call information in these transcripts is not read by any collector.

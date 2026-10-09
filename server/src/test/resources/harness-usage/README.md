@@ -31,9 +31,9 @@ Directories `<harness>-<version>-<case>`: case `a` one shell call that sleeps 2 
 - `command.txt` (port and key replaced), `version.txt`, `exit.txt`, `stderr.txt`, `run.json` (spawn and exit time).
 - `stdout.jsonl`, the harness's stdout unchanged, and `stdout.times`, whose line N is the `time.time()` at which the read of the pipe returned completed line N of `stdout.jsonl`. Receipt times are not execution times.
 - `markers/<label>.start|.end`: written by the scripted shell command itself (`date +%s.%N`, `sleep 2`, `date +%s.%N`).
-- `requests.jsonl`: the stub provider's log (arrival and reply-complete time of each request, tool catalog names, reply kind, token counts sent). `mcp-calls.jsonl` (case c): the stub MCP server's log (arrival of each request and completion of its reply).
+- `requests.jsonl`: the stub provider's log (arrival and reply-complete time of every request, including the refused Codex WebSocket upgrades (`method` GET, `n` null); tool catalog names, reply kind, token counts sent). `mcp-calls.jsonl` (case c): the stub MCP server's log (arrival of each request and completion of its reply).
 - `rollout/` (`codex-0.162.0-a-rollout` only): the rollout file Codex wrote.
 
 All times come from one clock, CLOCK_REALTIME of one machine (`time.time()` of Python and `date +%s.%N`). Scripts: `capture.py` (drives one case), `stub_provider.py`, `stub_mcp.py`, `analyze.py` and `figures.py` (print the figures quoted in the analysis from the files). `ToolTimingUsageLocal` collects these transcripts.
 
-Codex answers the stub's refusal of its WebSocket upgrade with `error` events before it falls back to HTTPS; that is why its requests start about 6 s after spawn and why the collector reports a native failure for these transcripts.
+Codex answers the stub's refusal of its WebSocket upgrade with `error` events before it falls back to HTTPS; that is why its first model request starts about 7 s after spawn (seven refused upgrades are logged first) and why the collector reports a native failure for these transcripts.

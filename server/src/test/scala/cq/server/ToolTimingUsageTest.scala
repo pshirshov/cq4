@@ -36,7 +36,9 @@ final class ToolTimingUsageLocal extends AnyWordSpec {
   /** Input, output and cache-read tokens the stub provider sent, summed over its requests. */
   private def sent(capture: Capture): (Long, Long, Long) = {
     val usage = resource(capture.directory, "requests.jsonl").split("\n").toList.filter(_.nonEmpty)
-      .map(line => parser.parse(line).toOption.get.hcursor.downField("usage"))
+      .map(line => parser.parse(line).toOption.get.hcursor)
+      .filter(_.downField("kind").as[String].toOption.contains("refused") == false) // refused WebSocket upgrades carry no usage
+      .map(_.downField("usage"))
     (usage.map(_.get[Long]("input").toOption.get).sum, usage.map(_.get[Long]("output").toOption.get).sum, usage.map(_.get[Long]("cached").toOption.get).sum)
   }
   private def read(report: CollectedUsage): (Long, Long, Long) = {

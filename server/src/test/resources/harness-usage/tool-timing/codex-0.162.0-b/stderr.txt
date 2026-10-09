@@ -1,8 +1,8 @@
 WARNING: proceeding, even though we could not create PATH aliases: Refusing to create helper binaries under temporary dir "/tmp" (codex_home: AbsolutePathBuf("/tmp/cq-tool-timing/codex-0.162.0-b/config"))
-2026-10-09T18:41:08.287489Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 404 Not Found, url: ws://127.0.0.1:45041/v1/responses
-2026-10-09T18:41:08.309861Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 404 Not Found, url: ws://127.0.0.1:45041/v1/responses
-2026-10-09T18:41:08.532386Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 404 Not Found, url: ws://127.0.0.1:45041/v1/responses
-2026-10-09T18:41:08.937392Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 404 Not Found, url: ws://127.0.0.1:45041/v1/responses
-2026-10-09T18:41:09.765178Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 404 Not Found, url: ws://127.0.0.1:45041/v1/responses
-2026-10-09T18:41:11.253666Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 404 Not Found, url: ws://127.0.0.1:45041/v1/responses
-2026-10-09T18:41:14.299215Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 404 Not Found, url: ws://127.0.0.1:45041/v1/responses
+2026-10-09T19:33:24.745391Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 404 Not Found, url: ws://127.0.0.1:39385/v1/responses
+2026-10-09T19:33:24.768792Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 404 Not Found, url: ws://127.0.0.1:39385/v1/responses
+2026-10-09T19:33:24.986848Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 404 Not Found, url: ws://127.0.0.1:39385/v1/responses
+2026-10-09T19:33:25.375085Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 404 Not Found, url: ws://127.0.0.1:39385/v1/responses
+2026-10-09T19:33:26.168242Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 404 Not Found, url: ws://127.0.0.1:39385/v1/responses
+2026-10-09T19:33:27.693092Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 404 Not Found, url: ws://127.0.0.1:39385/v1/responses
+2026-10-09T19:33:30.661960Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 404 Not Found, url: ws://127.0.0.1:39385/v1/responses
