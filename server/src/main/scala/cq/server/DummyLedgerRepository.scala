@@ -25,13 +25,21 @@ final class DummyLedgerResource extends Lifecycle.LiftF[Task, LedgerRepository[I
         current.projects.get(project.id) match {
           case Some(existing) => (existing.project, current)
           case None =>
-            val state = DummyLedgerState(project, 0L, 0L, 0L, Map.empty, Map.empty, Set.empty, Map.empty, Map.empty, List.empty, Map.empty, Map.empty, Map.empty, Map.empty, Map.empty, Map.empty, Map.empty, Map.empty)
+            val state = DummyLedgerState(project, 0L, 0L, 0L, Map.empty, Map.empty, Set.empty, Map.empty, Map.empty, List.empty, Map.empty, Map.empty, Map.empty, Map.empty, Map.empty, Map.empty, Map.empty, Map.empty, Vector.empty)
             (project, current.copy(cursor = CatalogueCursor(Math.addExact(current.cursor.value, 1L)), projects = current.projects.updated(project.id, state)))
         }
       }
       override def driverRecords(project: ProjectId): IO[Throwable, List[DriverRecord]] = states.get.flatMap(current =>
         ZIO.fromOption(current.projects.get(project)).orElseFail(DomainFailure(Fault.Missing("Project not initialized"))).map(_.drivers.values.toList))
       override def driverSummaries(project: ProjectId): IO[Throwable, List[DriverSummary]] = driverRecords(project).map(_.map(DriverRecords.summary))
+      private def periods(project: ProjectId): IO[Throwable, Vector[DrivePeriod]] = states.get.flatMap(current =>
+        ZIO.fromOption(current.projects.get(project)).orElseFail(DomainFailure(Fault.Missing("Project not initialized"))).map(_.periods))
+      override def drivePeriods(project: ProjectId, drive: DriveId, after: Option[Long], limit: Int): IO[Throwable, List[DrivePeriod]] =
+        periods(project).map(_.filter(period => period.drive == drive && after.forall(period.sequence > _)).take(limit).toList)
+      override def drives(project: ProjectId, before: Option[Long], limit: Int): IO[Throwable, List[DriveEntry]] = periods(project).map { all =>
+        all.groupBy(_.drive).values.map(group => DriveEntry(group.head.drive, group.head.key, group.head, group.last)).toList
+          .filter(entry => before.forall(entry.first.sequence < _)).sortBy(-_.first.sequence).take(limit)
+      }
       override def transact[A](project: ProjectId)(operation: LedgerTransaction => A): IO[Throwable, A] = states.modifyZIO { current =>
         ZIO.attempt {
           val state = current.projects.getOrElse(project, throw DomainFailure(Fault.Missing("Project not initialized")))
@@ -64,6 +72,7 @@ private final case class DummyLedgerState(
   worksets: Map[WorksetId, StoredWorkset],
   settings: Map[ProjectSettingKind, StoredSetting],
   drivers: Map[DriverKey, DriverRecord],
+  periods: Vector[DrivePeriod],
 )
 
 private final class DummyLedgerTransaction(initial: DummyLedgerState, installed: Map[InstallationSettingKind, StoredInstallationSetting]) extends LedgerTransaction {
@@ -101,6 +110,10 @@ private final class DummyLedgerTransaction(initial: DummyLedgerState, installed:
     state = state.copy(drivers = state.drivers.updated(record.key, record))
   }
   override def removeDriver(key: DriverKey): Unit = state = state.copy(drivers = state.drivers - key)
+  override def appendDrivePeriod(drive: DriveId, key: DriverKey, attached: Option[SessionId], period: DrivePeriodState, reason: Option[DriverStop], at: Long): Unit = {
+    val next = state.periods.lastOption.fold(1L)(last => Math.addExact(last.sequence, 1L))
+    state = state.copy(periods = state.periods :+ DrivePeriod(next, drive, key, attached, period, reason, at))
+  }
   override def project: Project = state.project
   override def renameProject(project: Project): Unit = {
     require(project.id == state.project.id, "Project identity cannot change")

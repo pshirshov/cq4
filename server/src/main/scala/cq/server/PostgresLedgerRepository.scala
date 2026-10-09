@@ -49,6 +49,16 @@ final class PostgresLedgerRepository(database: LedgerDatabase) extends LedgerRep
     sql.query("SELECT summary::text FROM cq_drivers WHERE project_id = ? ORDER BY harness, session_key")(_.setObject(1, project.value))(
       row => Wire.decode(DriverSummary_JsonCodec, row.getString(1)))
   }
+  override def drivePeriods(project: ProjectId, drive: DriveId, after: Option[Long], limit: Int): IO[Throwable, List[DrivePeriod]] = database.transaction { connection =>
+    val sql = new Jdbc(connection)
+    requireProject(sql, project)
+    PersistedDrivers.periods(sql, project, drive, after, limit)
+  }
+  override def drives(project: ProjectId, before: Option[Long], limit: Int): IO[Throwable, List[DriveEntry]] = database.transaction { connection =>
+    val sql = new Jdbc(connection)
+    requireProject(sql, project)
+    PersistedDrivers.drives(sql, project, before, limit)
+  }
   private def requireProject(sql: Jdbc, project: ProjectId): Unit =
     if (sql.query("SELECT 1 FROM cq_projects WHERE project_id = ?")(_.setObject(1, project.value))(_.getInt(1)).isEmpty)
       throw DomainFailure(Fault.Missing("Project not initialized"))
@@ -111,6 +121,8 @@ private final class PostgresLedgerTransaction(connection: Connection, override v
   override def drivers: List[DriverRecord] = PersistedDrivers.records(sql, project.id)
   override def driver(key: DriverKey): Option[DriverRecord] = drivers.find(_.key == key)
   override def putDriver(record: DriverRecord): Unit = PersistedDrivers.put(sql, project.id, record)
+  override def appendDrivePeriod(drive: DriveId, key: DriverKey, attached: Option[SessionId], state: DrivePeriodState, reason: Option[DriverStop], at: Long): Unit =
+    PersistedDrivers.append(sql, project.id, drive, key, attached, state, reason, at)
   override def removeDriver(key: DriverKey): Unit = {
     sql.execute("DELETE FROM cq_drivers WHERE project_id = ? AND harness = ? AND session_key = ?") { statement =>
       statement.setObject(1, project.id.value); statement.setString(2, key.harness.toString); statement.setString(3, key.session)

@@ -614,6 +614,121 @@ abstract class DriverContractTest extends SpecZIO with AssertZIO {
       } yield ()
     }
 
+    "I35: record the drive of every key with its identity and the periods of every state it entered, to its stop or its removal at capacity" in { (repository: LedgerRepository[IO]) =>
+      val w = world
+      val begin = 1000000L
+      val g1 = w.copy(governor = w.other(Role.Governor))
+      val g2 = w.copy(governor = w.other(Role.Governor))
+      def at(millis: Long): LedgerService[IO] = FixedLedger.service(repository, Clock.fixed(Instant.ofEpochMilli(millis), ZoneOffset.UTC))
+      type Shape = (DrivePeriodState, Option[DriverStop], Long, Option[SessionId])
+      def shape(period: DrivePeriod): Shape = (period.state, period.reason, period.at, period.attached)
+      // Every page of a bounded read, the continuation followed to its end with a page size of 2.
+      def periods(drive: DriveId): IO[Throwable, List[DrivePeriod]] = {
+        def go(after: Option[Long], acc: List[DrivePeriod]): IO[Throwable, List[DrivePeriod]] = at(begin).drive(w.operator, DriverRequest.Periods(drive, after, 2)).flatMap {
+          case DriverReply.Periods(page, next) =>
+            if (page.size > 2) ZIO.fail(new AssertionError(s"Unbounded page: $page $next"))
+            else next.fold(ZIO.succeed(acc ++ page))(cursor => go(Some(cursor), acc ++ page))
+          case other => ZIO.fail(new IllegalStateException(other.toString))
+        }
+        go(None, Nil)
+      }
+      def drives: IO[Throwable, List[DriveEntry]] = {
+        def go(before: Option[Long], acc: List[DriveEntry]): IO[Throwable, List[DriveEntry]] = at(begin).drive(w.operator, DriverRequest.Drives(before, 2)).flatMap {
+          case DriverReply.Drives(page, next) => next.fold(ZIO.succeed(acc ++ page))(cursor => go(Some(cursor), acc ++ page))
+          case other => ZIO.fail(new IllegalStateException(other.toString))
+        }
+        go(None, Nil)
+      }
+      def expect(drive: DriveId, key: DriverKey, expected: List[Shape]): IO[Throwable, Unit] = periods(drive).flatMap { found =>
+        ZIO.attempt(assert(found.map(shape) == expected && found.forall(period => period.drive == drive && period.key == key) &&
+          found.map(_.sequence) == found.map(_.sequence).sorted.distinct, s"Periods of $key: ${found.map(shape)} instead of $expected"))
+      }
+      def set(service: LedgerService[IO], asked: ItemId, status: QuestionStatus, answer: Option[String]) = service.get(w.operator, asked).flatMap(view => service.change(w.operator,
+        request(List(Mutation.Replace(asked, view.item.revision, view.item.draft.copy(content = Content.Question(status, "Prompt", "Context", Nil, None, answer)))), Nil)))
+      val a = claude("drive-a")
+      val r = claude("drive-rests")
+      val s1 = claude("drive-superseded")
+      val s2 = claude("drive-superseding")
+      val n = claude("drive-not-bound")
+      val gov = w.governor.actor.session
+      val rest = g2.governor.actor.session
+      val shared = g1.governor.actor.session
+      for {
+        _ <- at(begin).initialize(w.operator, "drive periods")
+        root <- create(at(begin), w.operator, goal("Goal"))
+        asked <- create(at(begin), w.operator, question("Open question"))
+        gated <- create(at(begin), w.operator, task("Gated by the question"))
+        _ <- reference(at(begin), w.operator, gated, Relation.BlockedBy, asked, true).flatMap(at(begin).change(w.operator, _))
+        // Start without an attached session is Binding, and the bind turns it On under the same identity.
+        startedA <- start(at(begin), w, a, workset(root))
+        _ <- expect(startedA.status.drive, a, List((DrivePeriodState.Binding, None, begin, None)))
+        _ <- act(at(begin + 10), w.governor, DriverSession.Bind(startedA.bind.get))
+        boundA <- status(at(begin + 10), w, a)
+        _ <- assertIO(boundA.exists(_.drive == startedA.status.drive))
+        _ <- expect(startedA.status.drive, a, List((DrivePeriodState.Binding, None, begin, None), (DrivePeriodState.On, None, begin + 10, Some(gov))))
+        // A drive that rests continues under its identity: Off, then On.
+        startedR <- start(at(begin + 20), g2, r, workset(gated))
+        _ <- act(at(begin + 20), g2.governor, DriverSession.Bind(startedR.bind.get))
+        first <- query(at(begin + 30), g2, r)
+        _ <- assertIO(first match { case DriverReply.Stop(DriverStopped(DriverStop.UserInputRequired, _), _, _) => true; case _ => false })
+        _ <- expect(startedR.status.drive, r, List((DrivePeriodState.Binding, None, begin + 20, None), (DrivePeriodState.On, None, begin + 20, Some(rest)),
+          (DrivePeriodState.Off, Some(DriverStop.UserInputRequired), begin + 30, Some(rest))))
+        again <- query(at(begin + 35), g2, r)
+        _ <- assertIO(again.isInstanceOf[DriverReply.Stop])
+        _ <- set(at(begin + 36), asked, QuestionStatus.Answered, Some("Yes"))
+        resumed <- query(at(begin + 40), g2, r)
+        _ <- assertIO(resumed match { case DriverReply.Continue(_, value, _) => value.drive == startedR.status.drive; case _ => false })
+        _ <- expect(startedR.status.drive, r, List((DrivePeriodState.Binding, None, begin + 20, None), (DrivePeriodState.On, None, begin + 20, Some(rest)),
+          (DrivePeriodState.Off, Some(DriverStop.UserInputRequired), begin + 30, Some(rest)), (DrivePeriodState.On, None, begin + 40, Some(rest))))
+        // Park stops it; the same key then starts a new drive, and the periods of the earlier one stay.
+        _ <- park(at(begin + 50), w, r)
+        startedR2 <- start(at(begin + 60), w, r, workset(root))
+        _ <- assertIO(startedR2.status.drive != startedR.status.drive)
+        _ <- expect(startedR.status.drive, r, List((DrivePeriodState.Binding, None, begin + 20, None), (DrivePeriodState.On, None, begin + 20, Some(rest)),
+          (DrivePeriodState.Off, Some(DriverStop.UserInputRequired), begin + 30, Some(rest)), (DrivePeriodState.On, None, begin + 40, Some(rest)),
+          (DrivePeriodState.Off, Some(DriverStop.Parked), begin + 50, Some(rest))))
+        _ <- expect(startedR2.status.drive, r, List((DrivePeriodState.Binding, None, begin + 60, None)))
+        // Another key that binds the same attached session supersedes the first.
+        startedS1 <- start(at(begin + 70), g1, s1, workset(root))
+        _ <- act(at(begin + 70), g1.governor, DriverSession.Bind(startedS1.bind.get))
+        startedS2 <- start(at(begin + 80), g1, s2, workset(root))
+        _ <- act(at(begin + 80), g1.governor, DriverSession.Bind(startedS2.bind.get))
+        _ <- expect(startedS1.status.drive, s1, List((DrivePeriodState.Binding, None, begin + 70, None), (DrivePeriodState.On, None, begin + 70, Some(shared)),
+          (DrivePeriodState.Off, Some(DriverStop.Parked), begin + 80, Some(shared))))
+        _ <- expect(startedS2.status.drive, s2, List((DrivePeriodState.Binding, None, begin + 80, None), (DrivePeriodState.On, None, begin + 80, Some(shared))))
+        // A drive that is never bound stops with NotBound.
+        startedN <- start(at(begin + 90), w, n, workset(root))
+        stoppedN <- query(at(begin + 100), w, n)
+        _ <- assertIO(stoppedN match { case DriverReply.Stop(DriverStopped(DriverStop.NotBound, _), _, _) => true; case _ => false })
+        _ <- expect(startedN.status.drive, n, List((DrivePeriodState.Binding, None, begin + 90, None), (DrivePeriodState.Off, Some(DriverStop.NotBound), begin + 100, None)))
+        // The project fills up. A new start removes the oldest Off record, which gets a Removed period at that time.
+        fillers <- ZIO.foreach((1 to DriverPolicy.MaxDrivers - 5).toList)(index => start(at(begin + 110), w, claude(s"filler-$index"), workset(root)))
+        full <- repository.driverRecords(w.project)
+        _ <- assertIO(full.size == DriverPolicy.MaxDrivers)
+        x1 <- start(at(begin + 120), w, claude("makes-room"), workset(root))
+        _ <- expect(startedS1.status.drive, s1, List((DrivePeriodState.Binding, None, begin + 70, None), (DrivePeriodState.On, None, begin + 70, Some(shared)),
+          (DrivePeriodState.Off, Some(DriverStop.Parked), begin + 80, Some(shared)), (DrivePeriodState.Removed, None, begin + 120, Some(shared))))
+        gone <- status(at(begin + 120), w, s1)
+        _ <- assertIO(gone.isEmpty)
+        // Once every record has been silent for longer than the idle bound, a silent On record is removed without having been stopped.
+        late = begin + 10 + DriverPolicy.IdleMillis + 1
+        x2 <- start(at(late), w, claude("makes-room-again"), workset(root))
+        _ <- expect(startedA.status.drive, a, List((DrivePeriodState.Binding, None, begin, None), (DrivePeriodState.On, None, begin + 10, Some(gov)),
+          (DrivePeriodState.Removed, None, late, Some(gov))))
+        removed <- status(at(late), w, a)
+        _ <- assertIO(removed.isEmpty)
+        // The drives of the project, newest first, over pages of 2; none is repeated or skipped.
+        listed <- drives
+        expected = (List(startedA, startedR, startedR2, startedS1, startedS2, startedN).map(_.status.drive) ++ fillers.map(_.status.drive) ++ List(x1.status.drive, x2.status.drive)).reverse
+        _ <- ZIO.attempt(assert(listed.map(_.drive) == expected && listed.map(_.first.sequence) == listed.map(_.first.sequence).sorted.reverse &&
+          listed.find(_.drive == startedA.status.drive).exists(entry => entry.latest.state == DrivePeriodState.Removed && entry.first.state == DrivePeriodState.Binding),
+          s"Drives ${listed.map(_.drive)} instead of $expected"))
+        small <- at(begin).drive(w.operator, DriverRequest.Drives(None, 0)).either
+        large <- at(begin).drive(w.operator, DriverRequest.Periods(startedA.status.drive, None, 201)).either
+        _ <- assertIO(invalid(small) && invalid(large))
+      } yield ()
+    }
+
     "expose drive-start and park only to the hook and extension entry points and keep sessions isolated by their trusted key" in {
       (ledger: LedgerService[IO], repository: LedgerRepository[IO], usage: UsageService[IO], artifacts: ArtifactService[IO], admissions: ResultAdmissionService[IO],
         integrations: IntegrationService[IO], proposals: ProposalService[IO]) =>

@@ -42,7 +42,7 @@ final class PostgresProjectArchives(database: LedgerDatabase, clock: Clock, mode
     BackupTable.UsageSpans -> "cq_usage_spans",
     BackupTable.Artifacts -> "cq_artifacts", BackupTable.ResultAdmissions -> "cq_result_admissions",
     BackupTable.Integrations -> "cq_integrations", BackupTable.IntegrationMembers -> "cq_integration_members",
-    BackupTable.Worksets -> "cq_worksets", BackupTable.Drivers -> "cq_drivers", BackupTable.Settings -> "cq_project_settings",
+    BackupTable.Worksets -> "cq_worksets", BackupTable.Drivers -> "cq_drivers", BackupTable.DrivePeriods -> "cq_drive_periods", BackupTable.Settings -> "cq_project_settings",
   )
   private def schema(sql: Jdbc): String = sql.query("SELECT checksum FROM cq_schema_migrations WHERE version = 1")(_ => ())(_.getString(1)).head
   private def columns(sql: Jdbc, table: String): String = sql.query(
@@ -194,7 +194,11 @@ final class PostgresProjectArchives(database: LedgerDatabase, clock: Clock, mode
       }
       PersistedDrivers.records(sql, manifest.project).foreach { record =>
         val revision = Revision(sql.query("UPDATE cq_projects SET driver_clock = driver_clock + 1 WHERE project_id = ? RETURNING driver_clock")(_.setObject(1, manifest.project.value))(_.getLong(1)).head)
-        PersistedDrivers.put(sql, manifest.project, DriverRecords.restored(record, clock.millis()).copy(revision = revision))
+        val now = clock.millis()
+        PersistedDrivers.put(sql, manifest.project, DriverRecords.restored(record, now).copy(revision = revision))
+        // A drive that was live in the archive ends here; one that already rested ended with its own Off period.
+        if (record.state != DriverState.Off)
+          PersistedDrivers.append(sql, manifest.project, record.drive, record.key, record.attached, DrivePeriodState.Off, Some(DriverStop.RestoredArchive), now)
       }
       sql.execute("UPDATE cq_catalogue_clock SET cursor = cursor + 1 WHERE singleton")(_ => ())
       manifest

@@ -1017,6 +1017,8 @@ abstract class IntegrationContractTest extends SpecZIO with AssertZIO {
             override def cursors(project: ProjectId, now: Long): IO[Throwable, LedgerCursors] = repository.cursors(project, now)
             override def driverRecords(project: ProjectId): IO[Throwable, List[DriverRecord]] = repository.driverRecords(project)
             override def driverSummaries(project: ProjectId): IO[Throwable, List[DriverSummary]] = repository.driverSummaries(project)
+            override def drivePeriods(project: ProjectId, drive: DriveId, after: Option[Long], limit: Int): IO[Throwable, List[DrivePeriod]] = repository.drivePeriods(project, drive, after, limit)
+            override def drives(project: ProjectId, before: Option[Long], limit: Int): IO[Throwable, List[DriveEntry]] = repository.drives(project, before, limit)
             override def transact[A](project: ProjectId)(operation: LedgerTransaction => A): IO[Throwable, A] =
               if (abort) repository.transact(project) { tx => operation(tx); throw new IOException("Recording transaction failed after applying changes") }
               else repository.transact(project)(operation).flatMap(_ => ZIO.fail(new IOException("Recording acknowledgement lost after commit")))

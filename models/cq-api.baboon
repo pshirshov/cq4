@@ -50,7 +50,7 @@ enum Role { Human Governor Explorer Planner Worker Reviewer Collector }
 root data Actor { subject: str session: SessionId role: Role }
 root data Provenance { actor: Actor receivedAt: i64 request: RequestId }
 root data Project { id: ProjectId name: str revision: Revision createdAt: i64 }
-enum BackupTable { Projects Counters Items Labels Edges History Requests Changes Claims ClaimMembers UsageClock UsageAssignments UsageMembers UsageAttempts UsageMeters UsageCosts UsageRecords UsageHeads UsageOutcomes UsageSpans Artifacts ResultAdmissions Integrations IntegrationMembers Worksets Settings Drivers }
+enum BackupTable { Projects Counters Items Labels Edges History Requests Changes Claims ClaimMembers UsageClock UsageAssignments UsageMembers UsageAttempts UsageMeters UsageCosts UsageRecords UsageHeads UsageOutcomes UsageSpans Artifacts ResultAdmissions Integrations IntegrationMembers Worksets Settings Drivers DrivePeriods }
 root data BackupEntry { table: BackupTable rows: i64 bytes: i64 sha256: str }
 root data BackupManifest { project: ProjectId schemaSha256: str postgresMajor: i32 createdAt: i64 entries: lst[BackupEntry] }
 
@@ -370,10 +370,17 @@ root adt WorksetAction {
 root data WorksetInput { project: ProjectId action: WorksetAction }
 root id CycleId { value: uid }
 root id DriverToken { value: uid }
+// One drive: from a Start to its last stop or removal. It is allocated by Start and kept by the continuation of a resting drive.
+root id DriveId { value: uid }
 root data DriverKey { harness: Harness session: str }
 enum DriverOrigin { UserPromptSubmit Stop Extension StatusLine }
 enum DriverState { Binding On Off }
 enum DriverStop { Quiescent UserInputRequired LimitReached NotBound Failure Parked Off RestoredArchive }
+enum DrivePeriodState { Binding On Off Removed }
+// An immutable record of the state a drive entered at `at`. `sequence` orders the periods of a project; `reason` is set for Off only.
+root data DrivePeriod { sequence: i64 drive: DriveId key: DriverKey attached: opt[SessionId] state: DrivePeriodState reason: opt[DriverStop] at: i64 }
+// A drive of a project: its first and its latest period.
+root data DriveEntry { drive: DriveId key: DriverKey first: DrivePeriod latest: DrivePeriod }
 root data DriverStopped { reason: DriverStop detail: str }
 enum CycleState { Pending Active Ended }
 root adt CycleToken {
@@ -399,7 +406,7 @@ root data DriverCycle {
   advanceable: lst[ItemRevision] run: opt[RequestId] created: lst[ItemId] lineage: lst[LineageEntry]
 }
 root data DriverStatus {
-  key: DriverKey state: DriverState attached: opt[SessionId] workset: opt[WorksetId] targets: set[ItemId] through: WorkflowPhase
+  drive: DriveId key: DriverKey state: DriverState attached: opt[SessionId] workset: opt[WorksetId] targets: set[ItemId] through: WorkflowPhase
   cycle: opt[DriverCycle] activeChildren: i32 directives: i32 stopped: opt[DriverStopped] line: str
 }
 root data BindOffer { token: DriverToken expiresAt: i64 }
@@ -410,13 +417,13 @@ root data CycleRecord {
   outcomes: lst[ChildOutcome] retried: lst[ChildOutcome]
 }
 root data DriverRecord {
-  project: ProjectId key: DriverKey state: DriverState attached: opt[SessionId] workset: opt[WorksetId]
+  drive: DriveId project: ProjectId key: DriverKey state: DriverState attached: opt[SessionId] workset: opt[WorksetId]
   targets: set[ItemId] through: WorkflowPhase bind: opt[BindOffer] cycle: opt[CycleRecord]
   directives: i32 stopped: opt[DriverStopped] announced: bit touchedAt: i64 carried: map[SessionId, set[IntegrationId]]
   revision: Revision stoppedAt: opt[i64]
 }
 root data DriverSummary {
-  key: DriverKey state: DriverState attached: opt[SessionId] workset: opt[WorksetId] targets: set[ItemId] through: WorkflowPhase
+  drive: DriveId key: DriverKey state: DriverState attached: opt[SessionId] workset: opt[WorksetId] targets: set[ItemId] through: WorkflowPhase
   cycle: opt[CycleId] activeChildren: i32 stopped: opt[DriverStopped] touchedAt: i64 stoppedAt: opt[i64] revision: Revision
 }
 root data DriverDirective { cycle: CycleId token: CycleToken text: str }
@@ -445,6 +452,9 @@ root adt DriverRequest {
   data Summaries {}
   data Park { key: DriverKey expected: Revision }
   data Snapshot { key: DriverKey expected: Revision }
+  // Bounded reads of the drive periods, 1 to 200 entries: the periods of one drive in time order after a sequence, and the drives of the project newest first before a sequence.
+  data Periods { drive: DriveId after: opt[i64] limit: i32 }
+  data Drives { before: opt[i64] limit: i32 }
 }
 root data DriverInput { project: ProjectId request: DriverRequest }
 root adt DriverActivation {
@@ -467,6 +477,8 @@ root adt DriverReply {
   data Settleable { pending: bit integrations: set[IntegrationId] }
   data Listed { drivers: lst[DriverSummary] }
   data Snapshot { preview: WorksetPreview outcomes: lst[ChildOutcome] }
+  data Periods { page: lst[DrivePeriod] next: opt[i64] }
+  data Drives { page: lst[DriveEntry] next: opt[i64] }
 }
 root adt ExtensionDriver {
   data Start { session: str input: str }
