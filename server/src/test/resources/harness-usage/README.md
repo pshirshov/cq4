@@ -21,3 +21,19 @@ The files under `abstention/` are whole native stdout transcripts of the pinned 
 - `unclassified-*`: refusals the host does not read as an abstention (a model the provider does not know, a 403).
 
 Exit statuses: Claude Code and Codex exit 1 in every case; Pi exits 0 in every case. `AbstentionClassifierLocal` lists every file with the class it is read as.
+
+## Tool-call timing captures (`tool-timing/`)
+
+Whole stdout transcripts of Claude Code 2.1.295, Codex 0.162.0 and Pi 1.1.0 (the installed executables, versions read from `--version` and kept in each `version.txt`), captured on 2026-10-09 by `tool-timing/capture.py` for T87, with the Worker argument list of `HarnessAdapter.scala` and scripted tool calls. Analysis: [tool-call timing](../../../../../docs/validation/tool-call-timing.md). **The provider is `tool-timing/stub_provider.py`: every reply, token count and identifier is invented, no real model and no real login took part** (private empty configuration directories, a wrong key). The events of the harness are real. Differences from the production Worker launch: no CQ MCP endpoints and no Pi bridge extension (case c adds the stub MCP server under the name `stub`), a local `ANTHROPIC_BASE_URL`/`openai_base_url`/`models.json`, an invented model name, and a prompt on stdin.
+
+Directories `<harness>-<version>-<case>`: case `a` one shell call that sleeps 2 s, `b` two shell calls from one model response, `c` one call of the stub MCP server's `stub_wait` tool (Claude Code, Codex), `a-rollout` (Codex) case `a` without `--ephemeral`. Every directory holds the files below; all were produced and none failed to capture.
+
+- `command.txt` (port and key replaced), `version.txt`, `exit.txt`, `stderr.txt`, `run.json` (spawn and exit time).
+- `stdout.jsonl`, the harness's stdout unchanged, and `stdout.times`, whose line N is the `time.time()` at which the read of the pipe returned completed line N of `stdout.jsonl`. Receipt times are not execution times.
+- `markers/<label>.start|.end`: written by the scripted shell command itself (`date +%s.%N`, `sleep 2`, `date +%s.%N`).
+- `requests.jsonl`: the stub provider's log (arrival and reply-complete time of each request, tool catalog names, reply kind, token counts sent). `mcp-calls.jsonl` (case c): the stub MCP server's log (arrival of each request and completion of its reply).
+- `rollout/` (`codex-0.162.0-a-rollout` only): the rollout file Codex wrote.
+
+All times come from one clock, CLOCK_REALTIME of one machine (`time.time()` of Python and `date +%s.%N`). Scripts: `capture.py` (drives one case), `stub_provider.py`, `stub_mcp.py`, `analyze.py` and `figures.py` (print the figures quoted in the analysis from the files). `ToolTimingUsageLocal` collects these transcripts.
+
+Codex answers the stub's refusal of its WebSocket upgrade with `error` events before it falls back to HTTPS; that is why its requests start about 6 s after spawn and why the collector reports a native failure for these transcripts.

@@ -1,0 +1,11 @@
+{"type":"thread.started","thread_id":"01a121f8-3f51-7b11-bcea-83328ef69d69"}
+{"type":"turn.started"}
+{"type":"error","message":"Reconnecting... 2/5 (unexpected status 404 Not Found: Unknown error, url: ws://127.0.0.1:37009/v1/responses)"}
+{"type":"error","message":"Reconnecting... 3/5 (unexpected status 404 Not Found: Unknown error, url: ws://127.0.0.1:37009/v1/responses)"}
+{"type":"error","message":"Reconnecting... 4/5 (unexpected status 404 Not Found: not found, url: ws://127.0.0.1:37009/v1/responses)"}
+{"type":"error","message":"Reconnecting... 5/5 (unexpected status 404 Not Found: Unknown error, url: ws://127.0.0.1:37009/v1/responses)"}
+{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Falling back from WebSockets to HTTPS transport. unexpected status 404 Not Found: Unknown error, url: ws://127.0.0.1:37009/v1/responses"}}
+{"type":"item.started","item":{"id":"item_1","type":"mcp_tool_call","server":"stub","tool":"stub_wait","arguments":{},"result":null,"error":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"mcp_tool_call","server":"stub","tool":"stub_wait","arguments":{},"result":{"content":[{"type":"text","text":"waited"}],"structured_content":null},"error":null,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"{\"summary\": \"Done\"}"}}
+{"type":"turn.completed","usage":{"input_tokens":300,"cached_input_tokens":30,"cache_write_input_tokens":0,"output_tokens":17,"reasoning_output_tokens":0}}

@@ -1,0 +1,8 @@
+WARNING: proceeding, even though we could not create PATH aliases: Refusing to create helper binaries under temporary dir "/tmp" (codex_home: AbsolutePathBuf("/tmp/cq-tool-timing/codex-0.162.0-c/config"))
+2026-10-09T18:41:19.920538Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 404 Not Found, url: ws://127.0.0.1:37009/v1/responses
+2026-10-09T18:41:19.955545Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 404 Not Found, url: ws://127.0.0.1:37009/v1/responses
+2026-10-09T18:41:20.179084Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 404 Not Found, url: ws://127.0.0.1:37009/v1/responses
+2026-10-09T18:41:20.597297Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 404 Not Found, url: ws://127.0.0.1:37009/v1/responses
+2026-10-09T18:41:21.376127Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 404 Not Found, url: ws://127.0.0.1:37009/v1/responses
+2026-10-09T18:41:22.865057Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 404 Not Found, url: ws://127.0.0.1:37009/v1/responses
+2026-10-09T18:41:26.372120Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 404 Not Found, url: ws://127.0.0.1:37009/v1/responses
