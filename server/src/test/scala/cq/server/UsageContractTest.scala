@@ -627,6 +627,20 @@ abstract class UsageContractTest extends SpecZIO with AssertZIO {
       } yield ()
     }
 
+    "truncate check groups by UTF-8 byte order of the name" in { (usage: UsageService[IO], ledger: LedgerService[IO]) =>
+      val owner = scope()
+      val host = collector(owner)
+      for {
+        _ <- ledger.initialize(owner, "check order")
+        item <- task(ledger, owner, "Ordered task")
+        work <- phased(usage, owner, item, Role.Worker, UsagePhase.Work, 1000)
+        names = (0 until 199).map(index => f"a$index%03d").toList ++ List("\uE000", new String(Character.toChars(0x10000)))
+        _ <- ZIO.foreachDiscard(names)(name => usage.span(host, PhaseSpan(RequestId(UUID.randomUUID()), work.assignment, owner.actor.session, UsagePhase.Check, 10, 20, AttemptState.Completed, Some(name))))
+        report <- usage.checks(owner, UsageFilter.ProjectAll())
+        _ <- assertIO(report.truncated && report.checks.size == 200 && report.checks.last.check == Some("\uE000"))
+      } yield ()
+    }
+
     "bound phase cost groups and report the truncation" in { (usage: UsageService[IO], ledger: LedgerService[IO]) =>
       val owner = scope()
       for {

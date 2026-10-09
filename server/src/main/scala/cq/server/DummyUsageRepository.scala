@@ -133,7 +133,16 @@ private final class DummyUsageTransaction(initial: DummyUsageState) extends Usag
   override def checks(filter: UsageFilter, limit: Int): List[CheckTally] =
     state.spans.values.filter(value => value.phase == UsagePhase.Check && matches(filter, value.assignment, value.session)).groupBy(value => (value.check, value.state)).toList.map { case ((check, outcome), values) =>
       CheckTally(check, outcome, values.size.toLong, values.foldLeft(0L)((sum, value) => Math.addExact(sum, Math.subtractExact(value.finishedAt, value.startedAt))))
-    }.sortBy(tally => (tally.check.isDefined, tally.check.getOrElse(""), tally.state.toString)).take(limit)
+    }.sortWith((a, b) => checkBefore(a, b)).take(limit)
+  // Unnamed first, then the name by UTF-8 bytes (PostgreSQL COLLATE "C"), then the state name.
+  private def checkBefore(a: CheckTally, b: CheckTally): Boolean = {
+    def bytes(value: Option[String]): Array[Byte] = value.getOrElse("").getBytes(java.nio.charset.StandardCharsets.UTF_8)
+    if (a.check.isDefined != b.check.isDefined) b.check.isDefined
+    else {
+      val c = java.util.Arrays.compareUnsigned(bytes(a.check), bytes(b.check))
+      if (c != 0) c < 0 else a.state.toString < b.state.toString
+    }
+  }
   private def matches(filter: UsageFilter, attempt: Attempt): Boolean = matches(filter, attempt.assignment, attempt.session)
   private def matches(filter: UsageFilter, id: AssignmentId, session: SessionId): Boolean = {
     val assignment = state.assignments(id)
