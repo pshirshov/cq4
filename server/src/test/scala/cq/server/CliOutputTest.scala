@@ -78,5 +78,31 @@ final class CliOutputLocal extends AnyWordSpec {
       assert(lines.contains("Wall time sums finished attempts and host spans (check, combination and integration time outside any attempt) " +
         "from start to finish; running and open attempts are counted without wall time."), lines.mkString("\n"))
     }
+
+    "I35: print one row per configured check with runs per outcome and wall time, an unnamed row and a truncation notice" in {
+      val report = CheckReport(List(
+        CheckUsage(None, AttemptState.Completed, 1, 2000),
+        CheckUsage(Some("cq-fast"), AttemptState.Cancelled, 1, 5000),
+        CheckUsage(Some("cq-fast"), AttemptState.Completed, 3, 3600000),
+        CheckUsage(Some("cq-fast"), AttemptState.Failed, 2, 61000),
+        CheckUsage(Some("cq-ui"), AttemptState.Completed, 1, 1000),
+        CheckUsage(Some("cq-ui"), AttemptState.Unknown, 1, 0)), true, 11)
+      val bytes = new ByteArrayOutputStream()
+      new CliOutput(new PrintStream(bytes, true, UTF_8), CliFormat.Human, List("status", "phases", "--task", "T3")).result(Result.UsageChecks(report))
+      val lines = bytes.toString(UTF_8).linesIterator.toList
+      def row(name: String): List[String] = lines.filter(_.startsWith(name + " ")).map(_.split(" {2,}").toList).head
+      assert(lines.exists(_.split(" {2,}").toList == List("Check", "Runs", "Completed", "Failed", "Cancelled", "Unknown", "Wall h:mm:ss")), lines.mkString("\n"))
+      assert(row("(unnamed)") == List("(unnamed)", "1", "1", "0", "0", "0", "0:00:02"), lines.mkString("\n"))
+      assert(row("cq-fast") == List("cq-fast", "6", "3", "2", "1", "0", "1:01:06"), lines.mkString("\n"))
+      assert(row("cq-ui") == List("cq-ui", "2", "1", "0", "0", "1", "0:00:01"), lines.mkString("\n"))
+      assert(lines.indexWhere(_.startsWith("(unnamed)")) < lines.indexWhere(_.startsWith("cq-fast")))
+      assert(lines.exists(_.contains("Check rows are truncated")), lines.mkString("\n"))
+      bytes.reset()
+      new CliOutput(new PrintStream(bytes, true, UTF_8), CliFormat.Human, List("status", "phases")).result(Result.UsageChecks(report.copy(truncated = false)))
+      assert(!bytes.toString(UTF_8).contains("truncated"))
+      bytes.reset()
+      new CliOutput(new PrintStream(bytes, true, UTF_8), CliFormat.Json, List("status", "phases")).result(Result.UsageChecks(report))
+      assert(Wire.decode(Result_JsonCodec, bytes.toString(UTF_8).trim) == Result.UsageChecks(report))
+    }
   }
 }

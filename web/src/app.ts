@@ -16,7 +16,7 @@ import { icon } from './icons.js';
 import { ArchiveDialog } from './archive.js';
 import { RequirementsDialog } from './requirements.js';
 import { faultMessage } from './faults.js';
-import { attemptsTable, openAttemptNote, outcomesTable, auditTable, costsTable, phasesTable, sharedAssignmentsList, totalsTable, unmeasuredNote } from './usage-view.js';
+import { attemptsTable, openAttemptNote, outcomesTable, auditTable, costsTable, phasesTable, checksTable, sharedAssignmentsList, totalsTable, unmeasuredNote } from './usage-view.js';
 import { TableColumn, TableColumns } from './table-columns.js';
 import { ItemsView } from './items-view.js';
 import { Notifications } from './notifications.js';
@@ -917,17 +917,21 @@ class App {
         const phases = await this.readPanel('usage', new api.Command_Usage(new api.UsageInput(this.currentProject(), new api.UsageSelection_Phases(this.usageFilter()))));
         if (load !== this.usageLoad || phases === null) continue;
         if (!(phases instanceof api.Result_UsagePhases)) throw new Error('Unexpected usage phases response');
+        const checks = await this.readPanel('usage', new api.Command_Usage(new api.UsageInput(this.currentProject(), new api.UsageSelection_Checks(this.usageFilter()))));
+        if (load !== this.usageLoad || checks === null) continue;
+        if (!(checks instanceof api.Result_UsageChecks)) throw new Error('Unexpected usage checks response');
         this.usageSnapshot = result.report.cursor;
         // The phase report is read after the summary; a later cursor leaves the load dirty, so both are read again.
         if (this.usageCursor === null || phases.report.cursor > this.usageCursor) this.usageCursor = phases.report.cursor;
-        this.renderUsage(result.report, phases.report); this.updateAuditFreshness();
+        if (checks.report.cursor > this.usageCursor) this.usageCursor = checks.report.cursor;
+        this.renderUsage(result.report, phases.report, checks.report); this.updateAuditFreshness();
         load.dirty = load.dirty || this.usageCursor > result.report.cursor;
       }
     } catch (error) {
       if (load === this.usageLoad) { this.usageFreshness.textContent = `Unavailable · ${this.usageObserved}`; throw error; }
     } finally { if (load === this.usageLoad) this.usageLoad = null; }
   }
-  private renderUsage(report: api.UsageReport, phases: api.PhaseReport): void {
+  private renderUsage(report: api.UsageReport, phases: api.PhaseReport, checks: api.CheckReport): void {
     this.usageMetric.textContent = `Usage · ${this.usageScope()}: ${report.direct.total.known} direct · ${report.shared.total.known} shared · ${report.unattributed.total.known} unattributed known tokens`;
     const totals = [report.direct.total, report.shared.total, report.unattributed.total];
     this.usageMetric.textContent += ` · ${totals.reduce((sum, value) => sum + value.unknown, 0n)} unknown measurements · ${totals.reduce((sum, value) => sum + value.estimated, 0n)} estimated measurements`;
@@ -942,6 +946,8 @@ class App {
     if (report.costs.hasMore) this.usagePanel.append(button('More costs', () => this.action(() => this.loadCosts(report.costs.after, report.cursor))));
     if (phases.phases.length > 0) this.usagePanel.append(phasesTable(phases.phases));
     if (phases.costsTruncated) this.usagePanel.append(element('p', 'Per-phase costs are truncated; the amounts shown are lower bounds. The cost breakdown lists every cost group.'));
+    if (checks.checks.length > 0) this.usagePanel.append(checksTable(checks));
+    if (checks.truncated) this.usagePanel.append(element('p', 'Per-check rows are truncated; the runs and times shown are lower bounds.'));
     this.usagePanel.append(element('p', `Shared work is counted once and is not divided among members. Incomplete meters: ${report.incompleteMeters}; attempts without measurements: ${report.attemptsWithoutMeters}.` +
         (report.attemptsWithoutMeters > 0n ? ` ${unmeasuredNote}` : '')),
       element('p', `Attempt coverage: ${report.attempts.running} running; ${report.attempts.open} open; ${report.attempts.unknown} unknown outcomes; ${report.attempts.withGaps} with reported gaps.`),

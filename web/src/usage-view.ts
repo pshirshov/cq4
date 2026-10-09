@@ -138,6 +138,24 @@ export function phasesTable(phases: readonly api.PhaseUsage[]): HTMLElement {
       count(total(entry => entry.open)),
       duration(total(entry => entry.wallMillis))] : undefined }));
 }
+export const unnamedCheck = '(unnamed)';
+/** One row per configured check name: runs in total and per outcome and their summed wall time. Runs recorded without a name are one row. */
+export function checksTable(report: api.CheckReport): HTMLElement {
+  const names: (string | undefined)[] = []; const byName = new Map<string | undefined, api.CheckUsage[]>();
+  for (const entry of report.checks) {
+    const group = byName.get(entry.check);
+    if (group === undefined) { names.push(entry.check); byName.set(entry.check, [entry]); } else group.push(entry);
+  }
+  const runs = (entries: api.CheckUsage[], state?: api.AttemptState) => sum(entries.filter(entry => state === undefined || entry.state === state).map(entry => entry.runs));
+  return section('By check', 'Wall time sums the runs of a check from start to finish; runs of different checks may overlap, so the rows must not be added up. ' +
+      `Runs recorded without a check name are the ${unnamedCheck} row.`, table({ label: 'Usage by check',
+    columns: [rowLabel('Check'), tally('Runs'), tally('Completed'), tally('Failed'), tally('Cancelled'), tally('Unknown'), number('Busy wall time')],
+    rows: names.map(name => {
+      const entries = byName.get(name) as api.CheckUsage[];
+      return [name === undefined ? unnamedCheck : name, count(runs(entries)), count(runs(entries, api.AttemptState.Completed)), count(runs(entries, api.AttemptState.Failed)),
+        count(runs(entries, api.AttemptState.Cancelled)), count(runs(entries, api.AttemptState.Unknown)), duration(sum(entries.map(entry => entry.wallMillis)))];
+    }), total: undefined }));
+}
 export const openAttemptNote = 'No outcome delivered. CQ does not observe an attached session\'s own harness, so the session may have ended; ' +
   'cq job upload --session DIR over its retained session directory delivers the outcome.';
 /** What the tokens of an attempt without a measurement are: unknown, and for a Governor's own work known to be elsewhere. */

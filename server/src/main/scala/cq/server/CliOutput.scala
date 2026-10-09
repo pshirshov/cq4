@@ -217,6 +217,21 @@ final class CliOutput(output: PrintStream, format: CliFormat, invocation: List[S
       case _ => throw new IllegalStateException("Phases require a status phases invocation")
     }
   }
+  /** One row per configured check name: runs in total and per outcome, and their summed wall time. Spans without a name are one row. */
+  private def checks(value: CheckReport): Unit = {
+    val unnamed = "(unnamed)"
+    val groups = value.checks.groupBy(_.check).toList.sortBy(_._1).map { (name, entries) =>
+      def runs(state: AttemptState): Long = entries.filter(_.state == state).map(_.runs).sum
+      List(name.getOrElse(unnamed), entries.map(_.runs).sum.toString, runs(AttemptState.Completed).toString, runs(AttemptState.Failed).toString,
+        runs(AttemptState.Cancelled).toString, runs(AttemptState.Unknown).toString, duration(entries.map(_.wallMillis).sum))
+    }
+    if (groups.nonEmpty) {
+      line("Check runs — per configured check")
+      table(List("Check", "Runs", "Completed", "Failed", "Cancelled", "Unknown", "Wall h:mm:ss"), groups)
+      line("Wall time sums the runs of a check from start to finish; runs of different checks may overlap. The unnamed row holds runs recorded without a check name.")
+    }
+    if (value.truncated) line("Check rows are truncated; the runs and times shown are lower bounds.")
+  }
   private def proposal(value: ProposalPreview): Unit = {
     line(s"Proposal ${value.result.value} · ${value.role} · request ${value.request.value}")
     line("Members: " + value.members.map(item => s"${id(item.id)} @ ${item.revision.value}").mkString(", "))
@@ -261,6 +276,7 @@ final class CliOutput(output: PrintStream, format: CliFormat, invocation: List[S
     case Result.UsageSummary(value) => usage(value)
     case Result.UsageCosts(value) => costs(value)
     case Result.UsagePhases(value) => phases(value)
+    case Result.UsageChecks(value) => checks(value)
     case Result.UsageAttempts(value) =>
       table(List("Attempt", "Role", "Harness", "Model", "Effort", "State", "Started", "Items"), value.entries.map(entry =>
         List(entry.attempt.id.value.toString, entry.attempt.role.toString, entry.attempt.harness.toString, entry.attempt.model,
