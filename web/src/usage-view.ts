@@ -124,11 +124,12 @@ export function costsTable(heading: string | undefined, costs: readonly api.Cost
       ...(mixed ? [group.basis] : []), group.pricingVersion === undefined ? quiet('unspecified') : group.pricingVersion]),
     total: complete && costs.length > 1 ? ['Total', costSum(costs, 0n, bases), count(sum(costs.map(cost => cost.measurements))), ...basis.map(() => ''), ''] : undefined }));
 }
+export const phaseOverlapNote = 'Phase wall times overlap (the governor\'s attempt spans the session, a reviewer waits for its checks, an integration contains the checks of its commit), so the phase rows must not be added up.';
 export function phasesTable(phases: readonly api.PhaseUsage[]): HTMLElement {
   const costs = phases.flatMap(entry => entry.costs); const bases = costs.map(cost => cost.group.basis);
   const values = (entry: api.PhaseUsage) => [entry.totals.total.known, entry.totals.total.unknown, entry.totals.total.estimated, entry.totals.unknownCosts];
   const total = (value: (entry: api.PhaseUsage) => bigint) => sum(phases.map(value));
-  return section('By phase', basisNote(bases), table({ label: 'Usage by phase',
+  return section('By phase', [phaseOverlapNote, basisNote(bases)].filter(note => note !== undefined).join(' '), table({ label: 'Usage by phase',
     columns: [rowLabel('Phase'), number('Known tokens'), number('Unknown measurements'), number('Estimated measurements'), number('Unknown costs'),
       number('Cost'), tally('Attempts'), tally('Running'), tally('Open'), number('Busy wall time')],
     rows: phases.map(entry => [entry.phase, ...values(entry).map(count), costSum(entry.costs, entry.totals.unknownCosts, bases),
@@ -137,6 +138,24 @@ export function phasesTable(phases: readonly api.PhaseUsage[]): HTMLElement {
       costSum(costs, total(entry => entry.totals.unknownCosts), bases), count(total(entry => entry.attempts)), count(total(entry => entry.running)),
       count(total(entry => entry.open)),
       duration(total(entry => entry.wallMillis))] : undefined }));
+}
+export const unnamedCheck = '(unnamed)';
+/** One row per configured check name: runs in total and per outcome and their summed wall time. Runs recorded without a name are one row. */
+export function checksTable(report: api.CheckReport): HTMLElement {
+  const names: (string | undefined)[] = []; const byName = new Map<string | undefined, api.CheckUsage[]>();
+  for (const entry of report.checks) {
+    const group = byName.get(entry.check);
+    if (group === undefined) { names.push(entry.check); byName.set(entry.check, [entry]); } else group.push(entry);
+  }
+  const runs = (entries: api.CheckUsage[], state?: api.AttemptState) => sum(entries.filter(entry => state === undefined || entry.state === state).map(entry => entry.runs));
+  return section('By check', 'Wall time sums the runs of a check from start to finish; runs of different checks may overlap, so the rows must not be added up. ' +
+      `Runs recorded without a check name are the ${unnamedCheck} row.`, table({ label: 'Usage by check',
+    columns: [rowLabel('Check'), tally('Runs'), tally('Completed'), tally('Failed'), tally('Cancelled'), tally('Unknown'), number('Busy wall time')],
+    rows: names.map(name => {
+      const entries = byName.get(name) as api.CheckUsage[];
+      return [name === undefined ? unnamedCheck : name, count(runs(entries)), count(runs(entries, api.AttemptState.Completed)), count(runs(entries, api.AttemptState.Failed)),
+        count(runs(entries, api.AttemptState.Cancelled)), count(runs(entries, api.AttemptState.Unknown)), duration(sum(entries.map(entry => entry.wallMillis)))];
+    }), total: undefined }));
 }
 export const openAttemptNote = 'No outcome delivered. CQ does not observe an attached session\'s own harness, so the session may have ended; ' +
   'cq job upload --session DIR over its retained session directory delivers the outcome.';

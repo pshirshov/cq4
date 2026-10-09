@@ -95,7 +95,7 @@ export async function usageChecks(page, origin, projectId) {
   await phaseRows([['Work', '302', '0', '0', '1', '2.0000 USD', '1', '0', '0', '1 s']]);
   await phases.getByTitle('1600 ms', { exact: true }).waitFor();
   assert.equal(await phases.getByTitle('2', { exact: true }).textContent(), '2.0000 USD');
-  await phases.locator('..').locator('..').getByText('Cost basis: ProviderEstimate.', { exact: true }).waitFor();
+  await phases.locator('..').locator('..').getByText('Cost basis: ProviderEstimate.', { exact: false }).waitFor();
   await phaseTruncation.waitFor();
   const timed = [['Review', 'phase-review', 3720000], ['Plan', 'phase-plan', 200000], ['Probe', 'phase-probe', 45000]].map(([phase, model, finishedAt]) =>
     ({ attempt: { ...attempt, id: id(), session: id(), model, startedAt: '0', phase, effort: phase === 'Plan' ? 'XHigh' : null }, finishedAt }));
@@ -126,7 +126,36 @@ export async function usageChecks(page, origin, projectId) {
   assert.equal(await phaseTruncation.count(), 0);
   assert.deepEqual(await detail(), before, 'Usage lifecycle writes must not revise the item');
   await page.getByRole('dialog').getByRole('button', { name: 'Close', exact: true }).click();
+  // I35: check runs per configured check next to the phase rows; spans without a name are one row; a report over 200 entries says it is truncated.
+  const checkSession = id();
+  const run = (check, state, millis) => host({ Span: { value: { id: id(), assignment: assignment.id, session: checkSession, phase: 'Check',
+    startedAt: '10000', finishedAt: String(10000 + millis), state, check } } });
+  await run(null, 'Completed', 1000);
+  await run('cq-fast', 'Completed', 1800000); await run('cq-fast', 'Completed', 1800000); await run('cq-fast', 'Failed', 90000); await run('cq-fast', 'Cancelled', 10000);
+  await run('cq-ui', 'Completed', 2000); await run('cq-ui', 'Unknown', 3000);
+  await page.getByRole('button', { name: 'Project usage', exact: true }).click();
+  const checks = page.getByRole('table', { name: 'Usage by check', exact: true });
+  const checkTruncation = page.getByText('Per-check rows are truncated', { exact: false });
+  const checkRows = () => checks.locator('tbody tr').evaluateAll(rows => rows.map(row => Array.from(row.querySelectorAll('th, td'), cell => cell.textContent)));
+  const waitRows = async count => {
+    const deadline = Date.now() + 5000;
+    while ((await checkRows()).length !== count && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 50));
+  };
+  await checks.waitFor(); await waitRows(3);
+  assert.deepEqual(await checkRows(), [['(unnamed)', '1', '1', '0', '0', '0', '1 s'], ['cq-fast', '4', '2', '1', '1', '0', '1 h 01 min'], ['cq-ui', '2', '1', '0', '0', '1', '5 s']]);
+  assert.equal(await checkTruncation.count(), 0);
+  assert.equal(await page.getByRole('table', { name: 'Usage by phase', exact: true }).count(), 1, 'The phase rows stay beside the check rows');
+  assert.equal(await page.getByText('the rows must not be added up', { exact: false }).count(), 1);
+  assert.equal(await page.getByText('Phase wall times overlap', { exact: false }).count(), 1, 'The phase rows say that phase wall times overlap');
+  await page.getByRole('dialog').getByRole('button', { name: 'Close', exact: true }).click();
+  for (let index = 0; index < 200; index++) await run(`filler-${String(index).padStart(3, '0')}`, 'Completed', 1000);
+  await page.getByRole('button', { name: 'Project usage', exact: true }).click();
+  await checks.waitFor(); await checkTruncation.waitFor(); await waitRows(197);
+  const truncated = await checkRows();
+  assert.equal(truncated.length, 197);
+  assert.deepEqual(truncated.slice(0, 3).map(row => row[0]), ['(unnamed)', 'cq-fast', 'cq-ui']);
+  await page.getByRole('dialog').getByRole('button', { name: 'Close', exact: true }).click();
   await query.fill(''); await page.getByRole('button', { name: 'Search', exact: true }).click();
   await page.getByText('Data: current', { exact: true }).waitFor();
-  console.log('Chromium usage: live independent updates through invalid query, live attempts/outcomes/cost corrections, per-phase table (empty, live, truncated costs, session scope), current audit labels, paginated exact costs and unchanged item revision passed');
+  console.log('Chromium usage: live independent updates through invalid query, live attempts/outcomes/cost corrections, per-phase table (empty, live, truncated costs, session scope), per-check table (rows, unnamed row, truncation), current audit labels, paginated exact costs and unchanged item revision passed');
 }

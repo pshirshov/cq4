@@ -205,6 +205,7 @@ final class CliOutput(output: PrintStream, format: CliFormat, invocation: List[S
       })
     line("Wall time sums finished attempts and host spans (check, combination and integration time outside any attempt) " +
       "from start to finish; running and open attempts are counted without wall time.")
+    line("Phase wall times overlap (the governor's attempt spans the session, a reviewer waits for its checks, an integration contains the checks of its commit), so the phase rows must not be added up.")
     line("Costs — estimates and billing remain separate")
     table(List("Phase", "Attribution", "Amount", "Currency", "Basis", "Pricing", "Measurements"), value.phases.flatMap { entry =>
       entry.costs.map { cost =>
@@ -216,6 +217,21 @@ final class CliOutput(output: PrintStream, format: CliFormat, invocation: List[S
       case "status" :: "phases" :: scope => line("Cost groups are truncated; list every group with: cq " + ("status" :: "costs" :: scope).mkString(" "))
       case _ => throw new IllegalStateException("Phases require a status phases invocation")
     }
+  }
+  /** One row per configured check name: runs in total and per outcome, and their summed wall time. Spans without a name are one row. */
+  private def checks(value: CheckReport): Unit = {
+    val unnamed = "(unnamed)"
+    val groups = value.checks.groupBy(_.check).toList.sortBy(_._1).map { (name, entries) =>
+      def runs(state: AttemptState): Long = entries.filter(_.state == state).map(_.runs).sum
+      List(name.getOrElse(unnamed), entries.map(_.runs).sum.toString, runs(AttemptState.Completed).toString, runs(AttemptState.Failed).toString,
+        runs(AttemptState.Cancelled).toString, runs(AttemptState.Unknown).toString, duration(entries.map(_.wallMillis).sum))
+    }
+    if (groups.nonEmpty) {
+      line("Check runs — per configured check")
+      table(List("Check", "Runs", "Completed", "Failed", "Cancelled", "Unknown", "Wall h:mm:ss"), groups)
+      line("Wall time sums the runs of a check from start to finish; runs of different checks may overlap. The unnamed row holds runs recorded without a check name.")
+    }
+    if (value.truncated) line("Check rows are truncated; the runs and times shown are lower bounds.")
   }
   private def proposal(value: ProposalPreview): Unit = {
     line(s"Proposal ${value.result.value} · ${value.role} · request ${value.request.value}")
@@ -261,6 +277,7 @@ final class CliOutput(output: PrintStream, format: CliFormat, invocation: List[S
     case Result.UsageSummary(value) => usage(value)
     case Result.UsageCosts(value) => costs(value)
     case Result.UsagePhases(value) => phases(value)
+    case Result.UsageChecks(value) => checks(value)
     case Result.UsageAttempts(value) =>
       table(List("Attempt", "Role", "Harness", "Model", "Effort", "State", "Started", "Items"), value.entries.map(entry =>
         List(entry.attempt.id.value.toString, entry.attempt.role.toString, entry.attempt.harness.toString, entry.attempt.model,

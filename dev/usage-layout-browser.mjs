@@ -139,7 +139,7 @@ export async function usageLayoutChecks(browser, storageState, origin, evidence)
       phases.text('Work', 'Known tokens', '277 356 809'); phases.text('Work', 'Busy wall time', '21 h 44 min'); phases.text('Work', 'Cost', '135.3382 USD');
       phases.text('Govern', 'Cost', 'Unknown'); phases.text('Check', 'Cost', '—'); phases.text('Total', 'Known tokens', '329 535 713');
       phases.text('Total', 'Cost', '195.4987 USD');
-      phases.check(phases.note === 'Cost basis: ProviderEstimate.', `the basis note is ${JSON.stringify(phases.note)}`);
+      phases.check(phases.note === "Phase wall times overlap (the governor's attempt spans the session, a reviewer waits for its checks, an integration contains the checks of its commit), so the phase rows must not be added up. Cost basis: ProviderEstimate.", `the basis note is ${JSON.stringify(phases.note)}`);
       for (const result of [costs, phases]) result.check(result.cells.every(entry => !entry.text.includes('ProviderEstimate')), 'a cell repeats the cost basis');
       await expand(dialog, '2 shared assignments', /^T2, T3 · cohort /); await shot('project-shared', width);
       await dialog.getByRole('button', { name: 'Attempts', exact: true }).click();

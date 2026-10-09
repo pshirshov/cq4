@@ -266,6 +266,8 @@ final class Cli(context: CliContext, location: ProjectLocation, upload: SessionU
         case "outcomes" => UsageSelection.Outcomes(AttemptId(UUID.fromString(opts.getOrElse("--attempt", throw new IllegalArgumentException("status outcomes requires --attempt UUID")))), opts.get("--after").map(_.toLong).getOrElse(0L), limit)
       }
       renderer.result(request(config, actorSession, Command.Usage(UsageInput(config.project, selection))))
+      // The phase report is followed by the per-check rows of the same scope.
+      if (mode == "phases") renderer.result(request(config, actorSession, Command.Usage(UsageInput(config.project, UsageSelection.Checks(filter)))))
     // Reads the session directory only: no server, no credential and no project configuration.
     case "wait" :: rest =>
       require(rest.size % 2 == 0, "Options require values")
