@@ -1,0 +1,81 @@
+{
+ "sessionId": "01a11d75-8fac-7028-ae84-82371374c0d0",
+ "workers-before-kill": [
+  {
+   "agentId": "71175d59-0796-4bfb-bacf-fc62a33157f0",
+   "pid": 26124,
+   "bootId": "7b51993f",
+   "alive": true
+  },
+  {
+   "agentId": "3a668906-7169-43a0-96b4-7f02852e65d7",
+   "pid": 26177,
+   "bootId": "7b51993f",
+   "alive": true
+  }
+ ],
+ "journal-kinds-before-kill": [
+  "root.init",
+  "agent.spawned",
+  "command.accepted",
+  "generation.started",
+  "agent.spawned",
+  "command.accepted",
+  "generation.started"
+ ],
+ "pi-pid": 25123,
+ "workers-after-kill-pi": [
+  {
+   "pid": 26124,
+   "alive": false
+  },
+  {
+   "pid": 26177,
+   "alive": false
+  }
+ ],
+ "root-lock-owner": "{\"pid\":25123,\"bootId\":\"7b51993f-57c4-4757-998d-3e418850aa70\",\"starttime\":\"207396978\",\"acquiredAt\":\"2026-10-08T21:40:06.310Z\",\"nonce\":\"96f0d56f-2e46-4b7b-9f88-d863092c6600\"}",
+ "sessionId-after-continue": "01a11d75-8fac-7028-ae84-82371374c0d0",
+ "notify-after-continue": [
+  "subagents: recovered root (settled 2, quarantined 0, queued 0)"
+ ],
+ "journal-kinds-after-recovery": [
+  "root.init",
+  "agent.spawned",
+  "command.accepted",
+  "generation.started",
+  "agent.spawned",
+  "command.accepted",
+  "generation.started",
+  "root.init",
+  "recovery.event",
+  "usage.reported",
+  "generation.settled",
+  "task.terminal",
+  "usage.reported",
+  "generation.settled",
+  "task.terminal",
+  "recovery.event"
+ ],
+ "recovery-events": [
+  {
+   "kind": "recovery.event",
+   "body": "{\"epoch\":\"df189243-78d6-4e1a-abe8-1dba5a63b5ef\",\"phase\":\"started\"}"
+  },
+  {
+   "kind": "recovery.event",
+   "body": "{\"epoch\":\"df189243-78d6-4e1a-abe8-1dba5a63b5ef\",\"phase\":\"completed\",\"settled\":2,\"quarantined\":0}"
+  }
+ ],
+ "workers-after-recovery": [
+  {
+   "pid": 26124,
+   "alive": false
+  },
+  {
+   "pid": 26177,
+   "alive": false
+  }
+ ],
+ "git-worktrees": "/tmp/probe/out2/run/project                                                                                              354d675 [main]\n/tmp/probe/out2/run/agent/subagents/01a11d75-8fac-7028-ae84-82371374c0d0/worktrees/wt-project-354d6753ef29-1791495637806 354d675 (detached HEAD)"
+}

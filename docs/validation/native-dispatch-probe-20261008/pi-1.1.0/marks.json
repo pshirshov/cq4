@@ -1,0 +1,71 @@
+{
+ "pi-version": "1.1.0",
+ "node-version": "v24.20.0",
+ "base-commit": "92c923c927ab604d8d0695d54dd6fb6fa5c42fe4",
+ "sessionId": "01a11d76-c00d-70fc-8777-2698f48b59f5",
+ "commands": [
+  "extension agents"
+ ],
+ "A-tool-calls": [
+  "spawn_agent",
+  "spawn_agent",
+  "wait_agent",
+  "list_agents",
+  "read_agent",
+  "read_agent"
+ ],
+ "A-final": "[{\"type\":\"text\",\"text\":\"A-DONE\",\"textSignature\":\"{\\\"v\\\":1,\\\"id\\\":\\\"msg_12\\\"}\"}]",
+ "git-status-main-checkout-after-A": "",
+ "git-worktrees-after-A": "/tmp/probe/out3/run/project                                                                                              92c923c [main]\n/tmp/probe/out3/run/agent/subagents/01a11d76-c00d-70fc-8777-2698f48b59f5/worktrees/wt-project-92c923c927ab-1791495715086 92c923c (detached HEAD)",
+ "B-parent-turn-done": true,
+ "B-events-while-idle-after-child-finished": [],
+ "B-root-dir-files": [
+  "MANIFEST.json",
+  "checkpoints",
+  "journal.log",
+  "root.lock",
+  "sessions",
+  "tmp",
+  "worker-agent-dirs",
+  "worktrees"
+ ],
+ "B-notice-in-next-turn-input": [
+  5,
+  9,
+  10,
+  11,
+  12,
+  13,
+  14,
+  17
+ ],
+ "B-custom-messages": [
+  "[{\"type\":\"text\",\"text\":\"[subagents]\\n/root/reader1 task 8dd95648-ce62-463d-b701-fe8c942044e4 ended succeeded\"}]",
+  "[{\"type\":\"text\",\"text\":\"[subagents]\\n/root/writer1 task 3ef1d12c-88bc-42cc-9cb3-163a0d4d13fb ended succeeded\"}]",
+  "[{\"type\":\"text\",\"text\":\"[subagents]\\n/root/slow task 8ace7486-3d8b-4b3b-a868-54020b3196bd ended succeeded\"}]"
+ ],
+ "C-tool-calls": [
+  "spawn_agent",
+  "wait_agent",
+  "list_agents",
+  "read_agent"
+ ],
+ "git-worktrees-after-C": "/tmp/probe/out3/run/project                                                                                              92c923c [main]\n/tmp/probe/out3/run/agent/subagents/01a11d76-c00d-70fc-8777-2698f48b59f5/worktrees/wt-project-92c923c927ab-1791495715086 92c923c (detached HEAD)\n/tmp/probe/out3/run/agent/subagents/01a11d76-c00d-70fc-8777-2698f48b59f5/worktrees/wt-project-92c923c927ab-1791495728847 92c923c (detached HEAD)",
+ "D-tool-calls": [
+  "spawn_agent",
+  "wait_agent",
+  "read_agent"
+ ],
+ "E-tool-calls": [
+  "spawn_agent",
+  "interrupt_agent",
+  "wait_agent",
+  "read_agent"
+ ],
+ "F-tool-calls": [
+  "probe_bridge",
+  "spawn_agent",
+  "wait_agent",
+  "read_agent"
+ ]
+}
