@@ -10,7 +10,7 @@ for d in dirs:
     run = json.load(open(d / "run.json")); t0 = run["t_spawn"]
     print("==", d.name, "exit", (d / "exit.txt").read_text().strip(), "t_spawn=%.6f" % t0, "run %.3fs" % (run["t_exit"] - t0))
     ms = {}
-    for f in sorted((d / "markers").iterdir()):
+    for f in (sorted((d / "markers").iterdir()) if (d / "markers").is_dir() else []):
         ms.setdefault(f.stem, {})[f.suffix[1:]] = float(f.read_text())
     for k, v in ms.items(): print("  marker %s start=%.6f end=%.6f duration=%.3f (start at +%.3f)" % (k, v["start"], v["end"], v["end"] - v["start"], v["start"] - t0))
     if len(ms) == 2:
@@ -22,7 +22,7 @@ for d in dirs:
             if r["method"] == "tools/call": print("  mcp tools/call arrived %.6f replied %.6f duration=%.3f" % (r["t_request"], r["t_reply_done"], r["t_reply_done"] - r["t_request"]))
     for l in open(d / "requests.jsonl"):
         r = json.loads(l)
-        print("  provider req %d %s arrived %.6f reply_done %.6f kind=%s usage=%s" % (r["n"], r["path"], r["t_request"], r["t_reply_done"], r["kind"], r["usage"]))
+        print("  provider req n=%s %s %s arrived %.6f reply_done %.6f kind=%s usage=%s" % (r.get("n"), r.get("method", "POST"), r["path"], r["t_request"], r["t_reply_done"], r.get("kind"), r.get("usage")))
     lines, times = open(d / "stdout.jsonl").read().splitlines(), open(d / "stdout.times").read().split()
     for i, (l, t) in enumerate(zip(lines, times), 1):
         try: e = json.loads(l)
