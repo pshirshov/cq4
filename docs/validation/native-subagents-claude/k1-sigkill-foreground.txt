@@ -1,0 +1,11 @@
+k1 claude_pid=76845
+-- before kill:
+  76845   76843   76839       00:08 /nix/store/56vld046mr6h92aik233d13wagl9a0ld-claude-code-2.1.295/libexec/claude-code/claude -p --output-format stream-json --verbose --model sonnet --agents {"rw":{"description":"bash agent","prompt":"You run shell commands e
+  77585   76845   77585       00:00 /etc/profiles/per-user/USER/bin/zsh -c source /home/USER/.claude/shell-snapshots/snapshot-zsh-1791542944498-fhgzvo.sh 2>/dev/null || true && setopt NO_EXTENDED_GLOB NO_BARE_GLOB_QUAL 2>/dev/null || true && { \builtin unali
+  77587   77585   77585       00:00 sleep 271
+./kill.sh: line 11: 76845 Killed                     claude -p --output-format stream-json --verbose --model sonnet --agents "$(cat /tmp/p18b/agents_par.json)" --dangerously-skip-permissions "Delegate to subagent_type \"rw\" with run_in_background $bg and prom
+-- 30s after SIGKILL of 76845:
+    PID STAT
+  77585   67447   77585 SNs        00:30 /etc/profiles/per-user/USER/bin/zsh -c source /home/USER/.claude/shell-snapshots/snapshot-zsh-1791542944498-fhgzvo.sh 2>/dev/null || true && setopt NO_EXTENDED_GLOB NO_BARE_GLOB_QUAL 2>/dev/null || true && { \builtin 
+  77587   77585   77585 SN         00:30 sleep 271
+-- stream lines: 15
