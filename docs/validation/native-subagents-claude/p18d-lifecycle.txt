@@ -1,0 +1,39 @@
+##### k1
+k1 claude_pid=455986
+-- before kill:
+ 455986  455980  455972  455972 SNl        00:08 /nix/store/56vld046mr6h92aik233d13wagl9a0ld-claude-code-2.1.295/libexec/claude-code/claude -p --output-format stream-json --verbose --model sonnet --ag
+ 456561  455986  456561  456561 SNs        00:00 /etc/profiles/per-user/pavel/bin/zsh -c source /home/pavel/.claude/shell-snapshots/snapshot-zsh-1791550583360-o49n0a.sh 2>/dev/null || true && setopt N
+ 456562  456561  456561  456561 SN         00:00 bash -c sleep 271; echo finished-k1
+ 456563  456562  456561  456561 SN         00:00 sleep 271
+-- 30s after SIGKILL of 455986:
+    PID STAT
+ 456561  443300  456561  456561 SNs        00:30 /etc/profiles/per-user/pavel/bin/zsh -c source /home/pavel/.claude/shell-snapshots/snapshot-zsh-1791550583360-o49n0a.sh 2>/dev/null || true && setopt N
+ 456562  456561  456561  456561 SN         00:30 bash -c sleep 271; echo finished-k1
+ 456563  456562  456561  456561 SN         00:30 sleep 271
+-- stream lines: 9
+/home/pavel/.claude/projects/-tmp-p18d-proj/f4355037-94c1-479d-be42-9dde26a5ccc8/subagents:
+total 22
+drwxr-xr-x 2 pavel users   3 Oct  9 13:52 .
+drwxr-xr-x 3 pavel users   3 Oct  9 13:52 ..
+-rw-r--r-- 1 pavel users 169 Oct  9 13:52 agent-ae7cdd4e5be1da3e1.meta.json
+##### k2
+k2 claude_pid=455984
+-- before kill:
+ 455984  455981  455972  455972 SNl        00:07 /nix/store/56vld046mr6h92aik233d13wagl9a0ld-claude-code-2.1.295/libexec/claude-code/claude -p --output-format stream-json --verbose --model sonnet --ag
+ 456541  455984  456541  456541 SNs        00:00 /etc/profiles/per-user/pavel/bin/zsh -c source /home/pavel/.claude/shell-snapshots/snapshot-zsh-1791550582237-annks6.sh 2>/dev/null || true && setopt N
+ 456542  456541  456541  456541 SN         00:00 bash -c sleep 272; echo finished-k2
+ 456543  456542  456541  456541 SN         00:00 sleep 272
+-- 30s after SIGKILL of 455984:
+    PID STAT
+ 456541  443300  456541  456541 SNs        00:30 /etc/profiles/per-user/pavel/bin/zsh -c source /home/pavel/.claude/shell-snapshots/snapshot-zsh-1791550582237-annks6.sh 2>/dev/null || true && setopt N
+ 456542  456541  456541  456541 SN         00:30 bash -c sleep 272; echo finished-k2
+ 456543  456542  456541  456541 SN         00:30 sleep 272
+-- stream lines: 11
+/home/pavel/.claude/projects/-tmp-p18d-proj/f4355037-94c1-479d-be42-9dde26a5ccc8/subagents:
+total 22
+drwxr-xr-x 2 pavel users   3 Oct  9 13:52 .
+drwxr-xr-x 3 pavel users   3 Oct  9 13:52 ..
+-rw-r--r-- 1 pavel users 169 Oct  9 13:52 agent-ae7cdd4e5be1da3e1.meta.json
+
+after parent exit: NO-PROCESS
+after parent exit: NO-PROCESS
