@@ -22,7 +22,7 @@ repository `/srv/nvme/tmp/cxq-probe/repo`, parent working directory = its linked
 (so the Git common directory is `/srv/nvme/tmp/cxq-probe/repo/.git`, outside the cwd), sibling directory
 `/srv/nvme/tmp/cxq-probe/sib`. These are outside `/tmp`, because `workspace-write` makes `/tmp` writable.
 
-Command line of every parent (`run.sh`, stdin from `/dev/null`):
+Command line template of every parent (`run.sh`, stdin from `/dev/null`). **Limitation:** the harness did not write a per-run invocation manifest. The exact launch of each run is the template with the run name's sandbox (the `sandbox` field of its `RUN` line in `run-summaries.txt`), the prompt file `prompts/p_<name>.txt` (`par`, `iso`, `fork2`, `role`, `role2`, `mcp`, `mcp3`, `kill`, `cancel`; the `f_none`/`g_none`/`v2_*`/`cq*` runs used inline prompts that were not retained, so those are reported from rollout excerpts only), and the extra arguments named in the section that reports the run (`-c features.multi_agent_v2=true`, `-c agents.enabled=false`, `--output-schema schema.json`, `-c developer_instructions=…`, MCP `-c` flags below). `kill_2` was launched by `launch_kill.sh`. `scratch-config.toml` now includes the `agents.cwdrole` entry that produced the `cwd` rejection.
 
 ```
 CODEX_HOME=/tmp/cxq/home timeout 300 codex exec --json --skip-git-repo-check \
@@ -83,8 +83,8 @@ Does any setting give a child a narrower sandbox or a different working director
 ## 4. Question 1 — what can be fixed per subagent (observed)
 
 Through `spawn_agent` (per call): `model` and `reasoning_effort` take effect on `fork_turns:"none"` (every iso run: child `model: gpt-6-luna, effort: low`
-while the parent is `gpt-6.1-sol`). With `fork_turns:"all"` the same arguments were accepted without error but **ignored**: both runs (`fork2_1/2`) passed
-`"model":"gpt-6-luna","reasoning_effort":"low"` and the child's `turn_context` was `gpt-6.1-sol / low`. Also `fork_turns:"none"` without `reasoning_effort` gave the
+while the parent is `gpt-6.1-sol`). With `fork_turns:"all"` the `model` argument was accepted without error but **not applied**: both runs (`fork2_1/2`) passed
+`"model":"gpt-6-luna","reasoning_effort":"low"` and the child's `turn_context` was `gpt-6.1-sol / low`. Whether `reasoning_effort` is applied with `all` is **not observed**: the requested `low` equals the parent's `low`, so an override cannot be told from inheritance. Also `fork_turns:"none"` without `reasoning_effort` gave the
 child effort `medium`, not the parent's `low` (`fork2_*`, `g_none`). The `fork_turns` values `none`/`all` are the only ones used; the binary contains the
 string ``fork_turns must be `none` or `all` `` (*binary string*).
 
@@ -98,7 +98,7 @@ Read-only probe role with a narrower sandbox
 }
 ```
 
-Role-file keys observed (role_dfa 1 run, role2_dfa 2 runs, role3_ro 1, mcp runs 3, mcp3 3):
+Role-file keys observed (role_dfa 1 run, role2_dfa 2 runs, role3_ro 1, mcp runs 2, mcp3 1):
 
 | Role-file key | Effect on the child |
 |---|---|
@@ -126,9 +126,9 @@ On 0.162.0 the switch that removes native subagents is `agents.enabled=false`.
 
 Parent configured `stub` with `bearer_token_env_var=STUB_TOKEN_PARENT` (`parent-token-AAA`). `mcp_1`, `mcp_2`: parent calls `whoami` itself, then spawns `plain` (no role), `m1` (role `mcp1` adds server
 `stubchild` → `/mcp-child`, `bearer_token_env_var=STUB_TOKEN_CHILD`=`child-token-BBB`), `m2` (role `mcp2` overrides `stub` → `/mcp-override`, `http_headers.Authorization = "Bearer child-literal-CCC"`).
-`mcp3` (3 runs): role sets `[mcp_servers.stub] enabled=false`.
+`mcp3` (**1 run retained**; an earlier statement of 3 runs is withdrawn, only one parent/child pair is in `run-summaries.txt`): role sets `[mcp_servers.stub] enabled=false`.
 
-- Every child could call the parent's server: `mcp__stub__whoami` → `STUB_OK auth_seen=Bearer parent-token-AAA` (plain ×2, m1 ×2, m2 ×2, m3 ×3).
+- Every child could call the parent's server: `mcp__stub__whoami` → `STUB_OK auth_seen=Bearer parent-token-AAA` (plain ×2, m1 ×2, m2 ×2 over `mcp_1`/`mcp_2`; m3 ×1 in the single retained `mcp3` run: 7 child calls in 3 runs; the stub logs hold 4+4+1 `whoami` calls including the parent's two).
 - Stub log of `mcp_1` (16 requests): 4 separate `initialize` / `notifications/initialized` / `tools/list` / `tools/call whoami` sequences (parent + 3 children), **all** `path=/mcp`, **all** `auth=Bearer parent-token-AAA`.
   No request reached `/mcp-child` or `/mcp-override`; `child-token-BBB` and `child-literal-CCC` never appeared (`mcp_2` identical). No child had a `mcp__stubchild__*` tool.
 - `mcp3`: the `enabled=false` override was ignored; the child still called `stub` with the parent's token (`stub-logs/mcp3.stublog`).
@@ -146,7 +146,7 @@ Over the six iso runs the child's last message equalled the `FINAL_ANSWER` paylo
 `CHILD: …` was a paraphrase-free copy in 6/6 by inspection, but it was not hashed. The `spawn_agent` `message` to the child is encrypted in the parent rollout and cannot be compared. `wait_agent` returns only `{"message":"Wait completed.","timed_out":false}`, never the answer.
 
 Output schema: `--output-schema schema.json` (object with `c1`, `c2`, `order`) applied to the **parent's** final message only (`par_1/2` parent final: `{"c1":"not json: C1 finished (alpha)","c2":"not json: C2 finished (beta)","order":"c2 finished first"}`).
-The children's answers were free text that does not satisfy that schema, and `spawn_agent` has no schema parameter. **No output schema can be enforced on a child** (2 runs).
+The children's answers were free text that does not satisfy that schema, and `spawn_agent` has no schema parameter. So the parent's `--output-schema` does not constrain a child (2 runs). Enforcement through configuration (a role file key or `[agents]` setting) was **not probed**, so "no schema can be enforced by any means" is **not observed**; the binary was not searched for a role-level schema key.
 
 Question 5, usage: each child has its own rollout file with its own `token_count` totals and `token_usage_record` events. A `token_usage_record` carries `thread_id` (the child's), `session_id` (the **parent's**), `turn_id` and `root_turn_id` (the parent's root turn);
 the child's `session_meta` carries `id`, `parent_thread_id`, `source.subagent.thread_spawn{parent_thread_id, depth:1, agent_path:"/root/c2", agent_nickname:"Carson"}`. In `par_1` the children are `…2273fed5c293` (c2) and `…3a57539ce55d` (c1), each 38354 in / 48 out (38402 total),
@@ -168,16 +168,16 @@ In the stream each wait is one `collab_tool_call` item with empty `receiver_thre
 
 Cancellation (`cancel_1`, 1 run): `wait_agent(timeout_ms:5000)` → `{"message":"Wait timed out.\n\nRequested timeout of 5000ms was clamped to the minimum of 10000ms.","timed_out":true}`.
 `interrupt_agent {"target":"slow"}` → `{"previous_status":"running"}`. The child's rollout then holds `turn_aborted reason:"interrupted"` and a developer message `<turn_aborted> The previous turn was interrupted on purpose. Any running unified exec processes may still be running…`; it has no `task_complete`.
-Its command (`sleep 91; echo late > …/late_slow.txt`) was not stopped by the interrupt: the exec item completed `status:"failed","exit_code":137` at 11:02:29.585, 0.2 s before the parent's own exit (11:02:29.392 `task_complete`), i.e. it was killed when the parent process ended. `late_slow.txt` was never created.
+Its command (`sleep 91; echo late > …/late_slow.txt`) was not stopped by the interrupt: the exec item completed `status:"failed","exit_code":137` at 11:02:29.585, 0.2 s after the parent's `task_complete` (11:02:29.392), which suggests it was killed when the parent process ended. `late_slow.txt` was never created. (The `task_complete` is a rollout event, not a process-exit observation; the ordering of the two timestamps was misstated in an earlier draft: 11:02:29.392 precedes 11:02:29.585, so the exec failure was recorded 0.2 s *after* `task_complete`.)
 
-SIGKILL of the scratch parent (`kill_1`, `kill_2`; only the scratch `codex` PID recorded by `launch_kill.sh` was signalled): the child ran `zsh -c 'sleep 61; echo survived > …/killtest.txt'` as a descendant of the parent. After `kill -9`:
+SIGKILL of the scratch parent (`kill_1`, `kill_2`; only the scratch `codex` PID recorded by `launch_kill.sh` was signalled): the child ran `zsh -c 'sleep 61; echo survived > …/killtest.txt'` as a descendant of the parent. After `kill -9` (commands: `launch_kill.sh` for `kill_2` recorded the PID with `echo $$ > /tmp/cxq/kill2.pid` then `exec codex …`; the kill was `kill -9 $(cat /tmp/cxq/kill2.pid)` and the polling was `ps`/`pgrep` of `sleep 61`; **these two command lines and the `ps` output were not retained, so the process-state claims below are reported from the investigator's session log, not from a retained artifact**; only the unfinished rollouts and the truncated stream are retained evidence):
 the parent and the child's `zsh` and the `codex-code-mode-host` were gone, the orphaned `sleep 61` ran to its end (observed alive 3, 20 and 40 s after the kill in `kill_1`, 6 s in `kill_2`, gone after 61 s), `killtest.txt` was **not** written (its shell had died), no child or parent rollout received a `task_complete` or `turn_aborted`
 (last events are `token_usage_record`), the stream ended at `{"type":"item.started","item":{"type":"collab_tool_call","tool":"wait",…,"status":"in_progress"}}`. The children are threads inside the parent process; no child process or rollout finished after the parent was killed.
 
 ## 9. Per-role conclusion
 
 Guarantees of a host-launched child that a native Codex child lacks (all observed above): its own working directory (per-attempt worktree) — a native child runs in the parent's cwd; its own scoped MCP token and role-specific tool allow-list — a native child uses the parent's server definitions and token; a per-role sandbox —
-a native child has exactly the parent's; an enforced output schema (`--output-schema`) and a private `--output-last-message` file — a native child returns free text as an agent message; usage in the process's own stream — only in rollout files; an independent session and credentials — shared session, account and provider;
+a native child has exactly the parent's; an enforced output schema (`--output-schema`; for a native child only the `spawn_agent` parameter list and the parent flag were checked) and a private `--output-last-message` file — a native child returns free text as an agent message; usage in the process's own stream — only in rollout files; an independent session and credentials — shared session, account and provider;
 an independent lifecycle supervised by the guardian — a thread of the parent process that dies with it and is not reported in the stream.
 
 | Role | Verdict | Guarantee of the host-launched child that fails |
