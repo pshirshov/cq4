@@ -294,7 +294,7 @@ class PostgreSQLInstall(unittest.TestCase):
                 port = listener.getsockname()[1]
             subprocess.run(["pg_ctl", "-D", str(data), "-l", str(root / "setup.log"), "-o", f"-h 127.0.0.1 -p {port} -c unix_socket_directories=''", "-w", "start"], check=True, stdout=subprocess.DEVNULL)
             try:
-                subprocess.run(["psql", "-h", "127.0.0.1", "-p", str(port), "-U", "cq", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-c", "CREATE TABLE cq_schema_migrations(version integer PRIMARY KEY, checksum text); INSERT INTO cq_schema_migrations VALUES (1,'schema'); CREATE TABLE cq_claims(released boolean, expires_at bigint); CREATE TABLE cq_usage_attempts(effective_outcome text, parent_id uuid, body jsonb); CREATE TABLE cq_integrations(body jsonb); CREATE TABLE cq_fixture(value text); INSERT INTO cq_fixture VALUES ('retained'); INSERT INTO cq_usage_attempts(body) SELECT '{\"role\":\"Governor\",\"collector\":\"CQ attached session; outer usage unavailable\"}'::jsonb FROM generate_series(1,20);"], check=True, stdout=subprocess.DEVNULL)
+                subprocess.run(["psql", "-h", "127.0.0.1", "-p", str(port), "-U", "cq", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-c", "CREATE TABLE cq_schema_migrations(version integer PRIMARY KEY, checksum text); INSERT INTO cq_schema_migrations VALUES (1,'schema'); CREATE TABLE cq_claims(released boolean, expires_at bigint); CREATE TABLE cq_usage_attempts(effective_outcome text, parent_id uuid, body jsonb); CREATE TABLE cq_integrations(body jsonb); CREATE TABLE cq_fixture_key(value text PRIMARY KEY); INSERT INTO cq_fixture_key VALUES ('retained'); CREATE TABLE cq_fixture(value text); INSERT INTO cq_fixture VALUES ('retained'); INSERT INTO cq_usage_attempts(body) SELECT '{\"role\":\"Governor\",\"collector\":\"CQ attached session; outer usage unavailable\"}'::jsonb FROM generate_series(1,20);"], check=True, stdout=subprocess.DEVNULL)
             finally:
                 subprocess.run(["pg_ctl", "-D", str(data), "-m", "fast", "-w", "stop"], check=True, stdout=subprocess.DEVNULL)
             release, candidate, rollback = (root / name for name in ("release", "candidate", "rollback"))
@@ -390,8 +390,8 @@ class PostgreSQLInstall(unittest.TestCase):
             failures = [
                 ("Package file differs", sql, True),
                 ("data-update failed", "BEGIN; UPDATE cq_fixture SET value = 'partial'; SELECT 1/0; COMMIT;", False),
-                # A table the SQL created is not in the backup: the rollback drops it after the restore.
-                ("Package file differs", "BEGIN; CREATE TABLE cq_created(value text); INSERT INTO cq_created VALUES ('new'); UPDATE cq_fixture SET value = 'transformed'; COMMIT;", True),
+                # A table the SQL created is not in the backup and references a table the restore drops: the rollback drops it before the restore.
+                ("Package file differs", "BEGIN; CREATE TABLE cq_created(value text REFERENCES cq_fixture_key); INSERT INTO cq_created VALUES ('retained'); UPDATE cq_fixture SET value = 'transformed'; COMMIT;", True),
             ]
             for index, (reason, statement, modified) in enumerate(failures):
                 with self.subTest(reason=reason):

@@ -437,14 +437,14 @@ def install(state: Path, release: Path, candidate: Path, rollback: Path, evidenc
                     owned = True
                     database.run(["pg_ctl", "-D", str(data), "-l", str(evidence / "postgres-recovery.log"), "-o",
                                   f"-h 127.0.0.1 -p {port} -c unix_socket_directories=''", "-w", "-t", "30", "start"], "database-recovery-start", 40)
-                # One transaction: a restore that fails leaves the database as the failed step left it, never partly dropped.
-                database.run(["pg_restore", "--clean", "--if-exists", "--single-transaction", "--exit-on-error", "--no-owner", "--no-privileges",
-                              "--dbname", "postgres", str(backup)], "database-rollback", 600)
-                # The backup does not know a table the step created, so its restore leaves that table in place.
+                # The backup does not know a table the step created, and such a table may reference one the restore drops, so it goes first.
                 created = set(query("SELECT tablename FROM pg_tables WHERE schemaname='public'", "tables-restored").splitlines()) - set(before_data)
                 for table in sorted(created):
                     require(table.startswith("cq_") and all(character.isalnum() or character == '_' for character in table), "Unexpected database table identity")
                     query(f'DROP TABLE "{table}"', "database-rollback-drop-" + table)
+                # One transaction: a restore that fails leaves the database as the failed step left it, never partly dropped.
+                database.run(["pg_restore", "--clean", "--if-exists", "--single-transaction", "--exit-on-error", "--no-owner", "--no-privileges",
+                              "--dbname", "postgres", str(backup)], "database-rollback", 600)
                 require(fingerprints("data-restored") == before_data, "Restored database differs from backup state")
                 require(query("SELECT checksum FROM cq_schema_migrations WHERE version=1", "schema-restored") == schema, "Restored schema differs")
                 receipt.update(databaseRestored=True)
