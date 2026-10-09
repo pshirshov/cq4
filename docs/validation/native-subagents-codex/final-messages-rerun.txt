@@ -1,0 +1,37 @@
+## f_all_none_1
+I’ll spawn both children with the requested context settings and wait for their answers.
+CHILD f_none: NONE
+CHILD f_all: PURPLE-7731
+## f_all_none_2
+I’ll spawn both children with the requested context settings and report their answers verbatim.
+CHILD f_none: NONE
+CHILD f_all: PURPLE-7731
+## h_1
+I’ll spawn both children and report their answers. The tool instructions don’t allow model or reasoning overrides with `fork_turns: "all"`, so `h_all` will inherit those settings.
+
+CHILD h_all: PURPLE-7731
+CHILD h_none: NONE
+## h_2
+I’ll spawn both children and report their answers with the requested prefixes.
+CHILD h_all: PURPLE-7731
+CHILD h_none: NONE
+## dev_1
+I’ll spawn both children with the requested settings and wait for their answers.
+CHILD g_none: NONE; ORANGE-5512
+CHILD g_all: PURPLE-7731; ORANGE-5512
+## dev_2
+I’ll spawn both children as requested and wait for their answers.
+CHILD g_none: USER_LABEL=NONE; DEV_LABEL=ORANGE-5512
+CHILD g_all: PURPLE-7731; ORANGE-5512
+## t_default
+TOOLS: collaboration.spawn_agent, collaboration.followup_task, collaboration.interrupt_agent, collaboration.list_agents, collaboration.send_message, collaboration.wait_agent
+## t_agents_off
+TOOLS: NO_AGENT_TOOLS
+## t_multi_off
+TOOLS: collaboration.spawn_agent, collaboration.followup_task, collaboration.interrupt_agent, collaboration.list_agents, collaboration.send_message, collaboration.wait_agent
+## t_v2_off
+TOOLS: collaboration.spawn_agent, collaboration.followup_task, collaboration.send_message, collaboration.interrupt_agent, collaboration.list_agents, collaboration.wait_agent
+## t_both_off
+TOOLS: collaboration.spawn_agent, collaboration.followup_task, collaboration.interrupt_agent, collaboration.list_agents, collaboration.send_message, collaboration.wait_agent
+## t_all_off
+TOOLS: NO_AGENT_TOOLS

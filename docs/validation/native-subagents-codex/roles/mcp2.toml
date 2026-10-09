@@ -1,0 +1,5 @@
+developer_instructions = "ROLE_MARKER_MCP2: start your final answer with ROLE_MARKER_MCP2."
+[mcp_servers.stub]
+url = "http://127.0.0.1:47651/mcp-override"
+http_headers = { Authorization = "Bearer child-literal-CCC" }
+default_tools_approval_mode = "approve"

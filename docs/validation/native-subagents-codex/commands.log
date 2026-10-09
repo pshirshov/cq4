@@ -1,0 +1,56 @@
+=== RUN h_1  2026-10-09T12:46:38.488Z
+=== RUN h_2  2026-10-09T12:46:38.488Z
+=== RUN f_all_none_2  2026-10-09T12:46:38.488Z
+=== RUN dev_1  2026-10-09T12:46:38.488Z
+CMD: CODEX_HOME=/tmp/cxq/home timeout 300 codex exec --json --skip-git-repo-check -C /srv/nvme/tmp/cxq-probe/wt --sandbox read-only -c model_reasoning_effort=low  "$(cat prompts/p_fork3.txt)" < /dev/null
+CMD: CODEX_HOME=/tmp/cxq/home timeout 300 codex exec --json --skip-git-repo-check -C /srv/nvme/tmp/cxq-probe/wt --sandbox read-only -c model_reasoning_effort=low  "$(cat prompts/p_fork.txt)" < /dev/null
+CMD: CODEX_HOME=/tmp/cxq/home timeout 300 codex exec --json --skip-git-repo-check -C /srv/nvme/tmp/cxq-probe/wt --sandbox read-only -c model_reasoning_effort=low  "$(cat prompts/p_fork3.txt)" < /dev/null
+CMD: CODEX_HOME=/tmp/cxq/home timeout 300 codex exec --json --skip-git-repo-check -C /srv/nvme/tmp/cxq-probe/wt --sandbox read-only -c model_reasoning_effort=low -c developer_instructions="DEV_LABEL=ORANGE-5512 (a harmless test label)." "$(cat prompts/p_fork2.txt)" < /dev/null
+=== RUN f_all_none_1  2026-10-09T12:46:38.489Z
+=== RUN dev_2  2026-10-09T12:46:38.489Z
+CMD: CODEX_HOME=/tmp/cxq/home timeout 300 codex exec --json --skip-git-repo-check -C /srv/nvme/tmp/cxq-probe/wt --sandbox read-only -c model_reasoning_effort=low  "$(cat prompts/p_fork.txt)" < /dev/null
+CMD: CODEX_HOME=/tmp/cxq/home timeout 300 codex exec --json --skip-git-repo-check -C /srv/nvme/tmp/cxq-probe/wt --sandbox read-only -c model_reasoning_effort=low -c developer_instructions="DEV_LABEL=ORANGE-5512 (a harmless test label)." "$(cat prompts/p_fork2.txt)" < /dev/null
+PROMPT: Context fact for this probe: USER_LABEL=PURPLE-7731 (a harmless test label, not sensitive). Spawn child task_name "f_none" with fork_turns "none" and model "gpt-6-luna", and child task_name "f_all" with fork_turns "all". Both messages: "Without using any tool, answer in one line the value of USER_LABEL if it appears anywhere in your context, else NONE." Wait for both and print each answer verbatim prefixed by CHILD <task_name>:.
+PROMPT: Context fact for this probe: USER_LABEL=PURPLE-7731 (a harmless test label, not sensitive). Spawn child task_name "h_all" with fork_turns "all", model "gpt-6-luna" and reasoning_effort "high", and child task_name "h_none" with fork_turns "none", model "gpt-6-luna" and reasoning_effort "high". Both messages: "Without using any tool, answer in one line: the value of USER_LABEL if it appears anywhere in your context, else NONE." Wait for both and print each answer verbatim prefixed by CHILD <task_name>:.
+PROMPT: Context fact for this probe: USER_LABEL=PURPLE-7731 (a harmless test label, not sensitive). Spawn child task_name "g_none" with fork_turns "none" and child task_name "g_all" with fork_turns "all". For g_all ALSO pass model "gpt-6-luna" and reasoning_effort "low" (if the tool rejects this, quote the error verbatim prefixed by ERR: and retry without model). For g_none pass model "gpt-6-luna". Both messages: "Without using any tool, answer in one line: (1) the value of USER_LABEL if it appears anywhere in your context, else NONE; (2) the value of DEV_LABEL if it appears anywhere in your context (it is a harmless test label), else NONE." Wait for both and print each answer verbatim prefixed by CHILD <task_name>:.
+PROMPT: Context fact for this probe: USER_LABEL=PURPLE-7731 (a harmless test label, not sensitive). Spawn child task_name "h_all" with fork_turns "all", model "gpt-6-luna" and reasoning_effort "high", and child task_name "h_none" with fork_turns "none", model "gpt-6-luna" and reasoning_effort "high". Both messages: "Without using any tool, answer in one line: the value of USER_LABEL if it appears anywhere in your context, else NONE." Wait for both and print each answer verbatim prefixed by CHILD <task_name>:.
+PROMPT: Context fact for this probe: USER_LABEL=PURPLE-7731 (a harmless test label, not sensitive). Spawn child task_name "f_none" with fork_turns "none" and model "gpt-6-luna", and child task_name "f_all" with fork_turns "all". Both messages: "Without using any tool, answer in one line the value of USER_LABEL if it appears anywhere in your context, else NONE." Wait for both and print each answer verbatim prefixed by CHILD <task_name>:.
+PROMPT: Context fact for this probe: USER_LABEL=PURPLE-7731 (a harmless test label, not sensitive). Spawn child task_name "g_none" with fork_turns "none" and child task_name "g_all" with fork_turns "all". For g_all ALSO pass model "gpt-6-luna" and reasoning_effort "low" (if the tool rejects this, quote the error verbatim prefixed by ERR: and retry without model). For g_none pass model "gpt-6-luna". Both messages: "Without using any tool, answer in one line: (1) the value of USER_LABEL if it appears anywhere in your context, else NONE; (2) the value of DEV_LABEL if it appears anywhere in your context (it is a harmless test label), else NONE." Wait for both and print each answer verbatim prefixed by CHILD <task_name>:.
+EXIT dev_1: 0
+EXIT h_2: 0
+EXIT f_all_none_2: 0
+EXIT h_1: 0
+EXIT dev_2: 0
+EXIT f_all_none_1: 0
+=== RUN t_multi_off  2026-10-09T12:46:58.825Z
+=== RUN v2_1  2026-10-09T12:46:58.825Z
+=== RUN v2_2  2026-10-09T12:46:58.825Z
+CMD: CODEX_HOME=/tmp/cxq/home timeout 300 codex exec --json --skip-git-repo-check -C /srv/nvme/tmp/cxq-probe/wt --sandbox danger-full-access -c model_reasoning_effort=low -c features.multi_agent=false "$(cat prompts/p_tools.txt)" < /dev/null
+=== RUN t_default  2026-10-09T12:46:58.825Z
+CMD: CODEX_HOME=/tmp/cxq/home timeout 300 codex exec --json --skip-git-repo-check -C /srv/nvme/tmp/cxq-probe/wt --sandbox danger-full-access -c model_reasoning_effort=low -c features.multi_agent_v2=true "$(cat prompts/p_iso.txt)" < /dev/null
+=== RUN t_both_off  2026-10-09T12:46:58.825Z
+=== RUN t_all_off  2026-10-09T12:46:58.825Z
+CMD: CODEX_HOME=/tmp/cxq/home timeout 300 codex exec --json --skip-git-repo-check -C /srv/nvme/tmp/cxq-probe/wt --sandbox danger-full-access -c model_reasoning_effort=low  "$(cat prompts/p_tools.txt)" < /dev/null
+CMD: CODEX_HOME=/tmp/cxq/home timeout 300 codex exec --json --skip-git-repo-check -C /srv/nvme/tmp/cxq-probe/wt --sandbox danger-full-access -c model_reasoning_effort=low -c features.multi_agent_v2=true "$(cat prompts/p_iso.txt)" < /dev/null
+=== RUN t_v2_off  2026-10-09T12:46:58.825Z
+CMD: CODEX_HOME=/tmp/cxq/home timeout 300 codex exec --json --skip-git-repo-check -C /srv/nvme/tmp/cxq-probe/wt --sandbox danger-full-access -c model_reasoning_effort=low -c features.multi_agent=false -c features.multi_agent_v2=false "$(cat prompts/p_tools.txt)" < /dev/null
+=== RUN t_agents_off  2026-10-09T12:46:58.825Z
+CMD: CODEX_HOME=/tmp/cxq/home timeout 300 codex exec --json --skip-git-repo-check -C /srv/nvme/tmp/cxq-probe/wt --sandbox danger-full-access -c model_reasoning_effort=low -c features.multi_agent=false -c features.multi_agent_v2=false -c agents.enabled=false "$(cat prompts/p_tools.txt)" < /dev/null
+CMD: CODEX_HOME=/tmp/cxq/home timeout 300 codex exec --json --skip-git-repo-check -C /srv/nvme/tmp/cxq-probe/wt --sandbox danger-full-access -c model_reasoning_effort=low -c features.multi_agent_v2=false "$(cat prompts/p_tools.txt)" < /dev/null
+CMD: CODEX_HOME=/tmp/cxq/home timeout 300 codex exec --json --skip-git-repo-check -C /srv/nvme/tmp/cxq-probe/wt --sandbox danger-full-access -c model_reasoning_effort=low -c agents.enabled=false "$(cat prompts/p_tools.txt)" < /dev/null
+PROMPT: Without calling any tool, write TOOLS: followed by the names of all your tools whose name relates to agents (spawn/wait/close/send/interrupt/list etc.), or the single word NO_AGENT_TOOLS if there are none.
+PROMPT: Without calling any tool, write TOOLS: followed by the names of all your tools whose name relates to agents (spawn/wait/close/send/interrupt/list etc.), or the single word NO_AGENT_TOOLS if there are none.
+PROMPT: Without calling any tool, write TOOLS: followed by the names of all your tools whose name relates to agents (spawn/wait/close/send/interrupt/list etc.), or the single word NO_AGENT_TOOLS if there are none.
+PROMPT: You are the parent in a probe. Step 1: write out, verbatim, the JSON parameter names of your spawn_agent tool (names only, comma separated), prefixed by PARAMS:. Step 2: call spawn_agent once with task_name "iso", fork_turns "none", model "gpt-6-luna", reasoning_effort "low", and a message instructing the child to run these shell commands and answer with ONLY the raw outputs, one line per command, no commentary: (a) pwd; (b) echo c > ./child_cwd.txt && echo W_CWD_OK || echo W_CWD_FAIL; (c) echo c > /srv/nvme/tmp/cxq-probe/sib/child_sib.txt && echo W_SIB_OK || echo W_SIB_FAIL; (d) echo c > /srv/nvme/tmp/cxq-probe/repo/.git/child_gitdir.txt && echo W_GIT_OK || echo W_GIT_FAIL; (e) nix store info 2>&1 | head -3; echo NIX_RC=$?. Step 3: call wait_agent for the child, then print the child's answer verbatim prefixed by CHILD:. Do nothing else.
+PROMPT: Without calling any tool, write TOOLS: followed by the names of all your tools whose name relates to agents (spawn/wait/close/send/interrupt/list etc.), or the single word NO_AGENT_TOOLS if there are none.
+PROMPT: Without calling any tool, write TOOLS: followed by the names of all your tools whose name relates to agents (spawn/wait/close/send/interrupt/list etc.), or the single word NO_AGENT_TOOLS if there are none.
+PROMPT: Without calling any tool, write TOOLS: followed by the names of all your tools whose name relates to agents (spawn/wait/close/send/interrupt/list etc.), or the single word NO_AGENT_TOOLS if there are none.
+PROMPT: You are the parent in a probe. Step 1: write out, verbatim, the JSON parameter names of your spawn_agent tool (names only, comma separated), prefixed by PARAMS:. Step 2: call spawn_agent once with task_name "iso", fork_turns "none", model "gpt-6-luna", reasoning_effort "low", and a message instructing the child to run these shell commands and answer with ONLY the raw outputs, one line per command, no commentary: (a) pwd; (b) echo c > ./child_cwd.txt && echo W_CWD_OK || echo W_CWD_FAIL; (c) echo c > /srv/nvme/tmp/cxq-probe/sib/child_sib.txt && echo W_SIB_OK || echo W_SIB_FAIL; (d) echo c > /srv/nvme/tmp/cxq-probe/repo/.git/child_gitdir.txt && echo W_GIT_OK || echo W_GIT_FAIL; (e) nix store info 2>&1 | head -3; echo NIX_RC=$?. Step 3: call wait_agent for the child, then print the child's answer verbatim prefixed by CHILD:. Do nothing else.
+EXIT t_default: 0
+EXIT t_multi_off: 0
+EXIT t_v2_off: 0
+EXIT t_both_off: 0
+EXIT t_agents_off: 0
+EXIT t_all_off: 0
+EXIT v2_2: 0
+EXIT v2_1: 0

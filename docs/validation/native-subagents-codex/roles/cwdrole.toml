@@ -1,0 +1,2 @@
+cwd = "/srv/nvme/tmp/cxq-probe/sib"
+developer_instructions = "ROLE_MARKER_CWD: your final answer must start with the token ROLE_MARKER_CWD."

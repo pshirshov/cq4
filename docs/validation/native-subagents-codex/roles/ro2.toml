@@ -1,0 +1,2 @@
+default_permissions = ":read-only"
+developer_instructions = "ROLE_MARKER_RO2: start your final answer with ROLE_MARKER_RO2."

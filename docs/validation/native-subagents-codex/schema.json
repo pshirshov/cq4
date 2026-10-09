@@ -1,0 +1,1 @@
+{"type":"object","properties":{"c1":{"type":"string"},"c2":{"type":"string"},"order":{"type":"string"}},"required":["c1","c2","order"],"additionalProperties":false}
