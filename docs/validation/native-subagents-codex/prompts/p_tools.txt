@@ -1,0 +1,1 @@
+Without calling any tool, write TOOLS: followed by the names of all your tools whose name relates to agents (spawn/wait/close/send/interrupt/list etc.), or the single word NO_AGENT_TOOLS if there are none.

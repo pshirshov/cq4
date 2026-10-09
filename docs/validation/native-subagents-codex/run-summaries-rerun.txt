@@ -1,0 +1,48 @@
+RUN dev_1 parent f1f6709ed3b0 {"cwd": "/srv/nvme/tmp/cxq-probe/wt", "model": "gpt-6.1-sol", "effort": "low", "approval": "never", "sandbox": "read-only"} rollout_usage {"input": 57818, "output": 271, "total": 58089}
+  CHILD /root/g_all depth 1 id ad4d2a83d2b2 {"cwd": "/srv/nvme/tmp/cxq-probe/wt", "model": "gpt-6.1-sol", "effort": "low", "approval": "never", "sandbox": "read-only"} session_id_is_parent True provider openai usage {"input": 19149, "output": 15, "total": 19164}
+     child_last "PURPLE-7731; ORANGE-5512" sha e65b6d24b8bc | parent_FINAL_ANSWER_sha ['e65b6d24b8bc'] equal [True]
+  CHILD /root/g_none depth 1 id c8f7d1b86796 {"cwd": "/srv/nvme/tmp/cxq-probe/wt", "model": "gpt-6-luna", "effort": "medium", "approval": "never", "sandbox": "read-only"} session_id_is_parent True provider openai usage {"input": 18448, "output": 11, "total": 18459}
+     child_last "NONE; ORANGE-5512" sha 0e31eb4feee8 | parent_FINAL_ANSWER_sha ['0e31eb4feee8'] equal [True]
+RUN h_2 parent ac16b77a46c4 {"cwd": "/srv/nvme/tmp/cxq-probe/wt", "model": "gpt-6.1-sol", "effort": "low", "approval": "never", "sandbox": "read-only"} rollout_usage {"input": 57409, "output": 207, "total": 57616}
+  CHILD /root/h_none depth 1 id f00818b0f978 {"cwd": "/srv/nvme/tmp/cxq-probe/wt", "model": "gpt-6-luna", "effort": "high", "approval": "never", "sandbox": "read-only"} session_id_is_parent True provider openai usage {"input": 18404, "output": 165, "total": 18569}
+     child_last "NONE" sha c627c09c14e5 | parent_FINAL_ANSWER_sha ['c627c09c14e5'] equal [True]
+  CHILD /root/h_all depth 1 id ac142f9b11f9 {"cwd": "/srv/nvme/tmp/cxq-probe/wt", "model": "gpt-6.1-sol", "effort": "low", "approval": "never", "sandbox": "read-only"} session_id_is_parent True provider openai usage {"input": 19053, "output": 69, "total": 19122}
+     child_last "PURPLE-7731" sha 8cb1fed53956 | parent_FINAL_ANSWER_sha ['8cb1fed53956'] equal [True]
+RUN f_all_none_2 parent 93e27c940d65 {"cwd": "/srv/nvme/tmp/cxq-probe/wt", "model": "gpt-6.1-sol", "effort": "low", "approval": "never", "sandbox": "read-only"} rollout_usage {"input": 59728, "output": 185, "total": 59913}
+  CHILD /root/f_all depth 1 id 131c2cac4017 {"cwd": "/srv/nvme/tmp/cxq-probe/wt", "model": "gpt-6.1-sol", "effort": "low", "approval": "never", "sandbox": "read-only"} session_id_is_parent True provider openai usage {"input": 15916, "output": 9, "total": 15925}
+     child_last "PURPLE-7731" sha 8cb1fed53956 | parent_FINAL_ANSWER_sha ['8cb1fed53956'] equal [True]
+  CHILD /root/f_none depth 1 id e7c90ee69b9f {"cwd": "/srv/nvme/tmp/cxq-probe/wt", "model": "gpt-6-luna", "effort": "medium", "approval": "never", "sandbox": "read-only"} session_id_is_parent True provider openai usage {"input": 19019, "output": 57, "total": 19076}
+     child_last "NONE" sha c627c09c14e5 | parent_FINAL_ANSWER_sha ['c627c09c14e5'] equal [True]
+RUN dev_2 parent 932007bf4831 {"cwd": "/srv/nvme/tmp/cxq-probe/wt", "model": "gpt-6.1-sol", "effort": "low", "approval": "never", "sandbox": "read-only"} rollout_usage {"input": 57824, "output": 275, "total": 58099}
+  CHILD /root/g_all depth 1 id 01ac071a6ec2 {"cwd": "/srv/nvme/tmp/cxq-probe/wt", "model": "gpt-6.1-sol", "effort": "low", "approval": "never", "sandbox": "read-only"} session_id_is_parent True provider openai usage {"input": 19149, "output": 15, "total": 19164}
+     child_last "PURPLE-7731; ORANGE-5512" sha e65b6d24b8bc | parent_FINAL_ANSWER_sha ['e65b6d24b8bc'] equal [True]
+  CHILD /root/g_none depth 1 id 732e5a6f3b5a {"cwd": "/srv/nvme/tmp/cxq-probe/wt", "model": "gpt-6-luna", "effort": "medium", "approval": "never", "sandbox": "read-only"} session_id_is_parent True provider openai usage {"input": 18448, "output": 48, "total": 18496}
+     child_last "USER_LABEL=NONE; DEV_LABEL=ORANGE-5512" sha c3a4ac5645f1 | parent_FINAL_ANSWER_sha ['c3a4ac5645f1'] equal [True]
+RUN h_1 parent 834b5bb0c561 {"cwd": "/srv/nvme/tmp/cxq-probe/wt", "model": "gpt-6.1-sol", "effort": "low", "approval": "never", "sandbox": "read-only"} rollout_usage {"input": 59903, "output": 217, "total": 60120}
+  CHILD /root/h_none depth 1 id 7b03f6f66a17 {"cwd": "/srv/nvme/tmp/cxq-probe/wt", "model": "gpt-6-luna", "effort": "high", "approval": "never", "sandbox": "read-only"} session_id_is_parent True provider openai usage {"input": 19020, "output": 69, "total": 19089}
+     child_last "NONE" sha c627c09c14e5 | parent_FINAL_ANSWER_sha ['c627c09c14e5'] equal [True]
+  CHILD /root/h_all depth 1 id fe3727148878 {"cwd": "/srv/nvme/tmp/cxq-probe/wt", "model": "gpt-6.1-sol", "effort": "low", "approval": "never", "sandbox": "read-only"} session_id_is_parent True provider openai usage {"input": 15940, "output": 9, "total": 15949}
+     child_last "PURPLE-7731" sha 8cb1fed53956 | parent_FINAL_ANSWER_sha ['8cb1fed53956'] equal [True]
+RUN f_all_none_1 parent e96665188ceb {"cwd": "/srv/nvme/tmp/cxq-probe/wt", "model": "gpt-6.1-sol", "effort": "low", "approval": "never", "sandbox": "read-only"} rollout_usage {"input": 57261, "output": 184, "total": 57445}
+  CHILD /root/f_all depth 1 id 614c64696d38 {"cwd": "/srv/nvme/tmp/cxq-probe/wt", "model": "gpt-6.1-sol", "effort": "low", "approval": "never", "sandbox": "read-only"} session_id_is_parent True provider openai usage {"input": 15300, "output": 9, "total": 15309}
+     child_last "PURPLE-7731" sha 8cb1fed53956 | parent_FINAL_ANSWER_sha ['8cb1fed53956'] equal [True]
+  CHILD /root/f_none depth 1 id 16f9f5cf854b {"cwd": "/srv/nvme/tmp/cxq-probe/wt", "model": "gpt-6-luna", "effort": "medium", "approval": "never", "sandbox": "read-only"} session_id_is_parent True provider openai usage {"input": 18403, "output": 5, "total": 18408}
+     child_last "NONE" sha c627c09c14e5 | parent_FINAL_ANSWER_sha ['c627c09c14e5'] equal [True]
+RUN t_default parent 0cfe87f5e926 {"cwd": "/srv/nvme/tmp/cxq-probe/wt", "model": "gpt-6.1-sol", "effort": "low", "approval": "never", "sandbox": "danger-full-access"} rollout_usage {"input": 14700, "output": 31, "total": 14731}
+RUN t_multi_off parent bc3bdf52f07e {"cwd": "/srv/nvme/tmp/cxq-probe/wt", "model": "gpt-6.1-sol", "effort": "low", "approval": "never", "sandbox": "danger-full-access"} rollout_usage {"input": 15684, "output": 31, "total": 15715}
+RUN t_v2_off parent 9394791dcf8b {"cwd": "/srv/nvme/tmp/cxq-probe/wt", "model": "gpt-6.1-sol", "effort": "low", "approval": "never", "sandbox": "danger-full-access"} rollout_usage {"input": 15684, "output": 31, "total": 15715}
+RUN t_both_off parent 65e42eaf3de9 {"cwd": "/srv/nvme/tmp/cxq-probe/wt", "model": "gpt-6.1-sol", "effort": "low", "approval": "never", "sandbox": "danger-full-access"} rollout_usage {"input": 15684, "output": 31, "total": 15715}
+RUN t_agents_off parent b42bf3dc0c6a {"cwd": "/srv/nvme/tmp/cxq-probe/wt", "model": "gpt-6.1-sol", "effort": "low", "approval": "never", "sandbox": "danger-full-access"} rollout_usage {"input": 12555, "output": 42, "total": 12597}
+RUN t_all_off parent fd37cd33cf85 {"cwd": "/srv/nvme/tmp/cxq-probe/wt", "model": "gpt-6.1-sol", "effort": "low", "approval": "never", "sandbox": "danger-full-access"} rollout_usage {"input": 12555, "output": 43, "total": 12598}
+RUN v2_2 parent 0a91e9c4b85c {"cwd": "/srv/nvme/tmp/cxq-probe/wt", "model": "gpt-6.1-sol", "effort": "low", "approval": "never", "sandbox": "danger-full-access"} rollout_usage {"input": 45341, "output": 301, "total": 45642}
+  CHILD /root/iso depth 1 id 548618e2324d {"cwd": "/srv/nvme/tmp/cxq-probe/wt", "model": "gpt-6-luna", "effort": "low", "approval": "never", "sandbox": "danger-full-access"} session_id_is_parent True provider openai usage {"input": 38486, "output": 207, "total": 38693}
+     child_last "/srv/nvme/tmp/cxq-probe/wt\nW_CWD_OK\nW_SIB_OK\nW_GIT_OK\nStore URL: daemon\nVersion: 2.34.8\nTrusted: 0\nNIX_RC=0" sha 64abdb9ac414 | parent_FINAL_ANSWER_sha ['64abdb9ac414'] equal [True]
+RUN v2_1 parent f4f0132be475 {"cwd": "/srv/nvme/tmp/cxq-probe/wt", "model": "gpt-6.1-sol", "effort": "low", "approval": "never", "sandbox": "danger-full-access"} rollout_usage {"input": 60580, "output": 320, "total": 60900}
+  CHILD /root/iso depth 1 id a02667916de4 {"cwd": "/srv/nvme/tmp/cxq-probe/wt", "model": "gpt-6-luna", "effort": "low", "approval": "never", "sandbox": "danger-full-access"} session_id_is_parent True provider openai usage {"input": 116357, "output": 439, "total": 116796}
+     child_last "/srv/nvme/tmp/cxq-probe/wt\nW_CWD_OK\nW_SIB_OK\nW_GIT_OK\nStore URL: daemon\nVersion: 2.34.8\nTrusted: 0\nNIX_RC=0" sha 64abdb9ac414 | parent_FINAL_ANSWER_sha ['64abdb9ac414'] equal [True]
+RUN kill_b parent aa89ca521afd {"cwd": "/srv/nvme/tmp/cxq-probe/wt", "model": "gpt-6.1-sol", "effort": "low", "approval": "never", "sandbox": "danger-full-access"} rollout_usage {"input": 14746, "output": 105, "total": 14851}
+  CHILD /root/victim depth 1 id 3341c00b3e7d {"cwd": "/srv/nvme/tmp/cxq-probe/wt", "model": "gpt-6-luna", "effort": "low", "approval": "never", "sandbox": "danger-full-access"} session_id_is_parent True provider openai usage null
+     child_last null sha e3b0c44298fc | parent_FINAL_ANSWER_sha [] equal []
+RUN kill_a parent 0170fb8607e1 {"cwd": "/srv/nvme/tmp/cxq-probe/wt", "model": "gpt-6.1-sol", "effort": "low", "approval": "never", "sandbox": "danger-full-access"} rollout_usage {"input": 14746, "output": 110, "total": 14856}
+  CHILD /root/victim depth 1 id 5eac32ad4233 {"cwd": "/srv/nvme/tmp/cxq-probe/wt", "model": "gpt-6-luna", "effort": "low", "approval": "never", "sandbox": "danger-full-access"} session_id_is_parent True provider openai usage null
+     child_last null sha e3b0c44298fc | parent_FINAL_ANSWER_sha [] equal []

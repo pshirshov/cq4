@@ -1,0 +1,19 @@
+CMD: CODEX_HOME=/tmp/cxq/home codex exec --json --skip-git-repo-check -C /srv/nvme/tmp/cxq-probe/wt --sandbox danger-full-access -c model_reasoning_effort=low "$(cat /tmp/cxq/p_kill_b.txt)"
+PROMPT: Probe. Spawn one child task_name "victim", fork_turns "none", model "gpt-6-luna", reasoning_effort "low", message: "Run the shell command `sleep 73; echo survived > /srv/nvme/tmp/cxq-probe/sib/killtest_kill_b.txt` and then answer DONE_VICTIM." Then call wait_agent with timeout_ms 120000 and after it returns answer END.
+12:48:00.607 scratch parent PID=435916
+12:48:10.746 sleep 73 present: 436441 sleep 73;
+12:48:10.749 process tree of parent before kill:
+12:48:10.768 sleep pid=436441 ppid= 436440 
+12:48:10.770 KILL: kill -9 435916
+12:48:11.786 +1s after kill: parent alive? no; sleep pid 436441:  436441  429636 SN   sleep 73; other descendants: 2
+12:48:13.804 +3s after kill: parent alive? no; sleep pid 436441:  436441  429636 SN   sleep 73; other descendants: 2
+12:48:20.853 +10s after kill: parent alive? no; sleep pid 436441:  436441  429636 SN   sleep 73; other descendants: 2
+12:48:30.876 +20s after kill: parent alive? no; sleep pid 436441:  436441  429636 SN   sleep 73; other descendants: 2
+12:48:50.918 +40s after kill: parent alive? no; sleep pid 436441:  436441  429636 SN   sleep 73; other descendants: 2
+12:49:26.933 after sleep expired: sleep pid 436441: gone; killtest file: ls: cannot access '/srv/nvme/tmp/cxq-probe/sib/killtest_kill_b.txt': No such file or directory
+--- process tree of the scratch parent before the kill (lines of the scratch subtree only, from pstree -p):
+CMD: CODEX_HOME=/tmp/cxq/home codex exec --json --skip-git-repo-check -C /srv/nvme/tmp/cxq-probe/wt --sandbox danger-full-access -c model_reasoning_effort=low "$(cat /tmp
+               \-+- 435916 pavel codex exec --json --skip-git-repo-check -C /srv/nvme/tmp/cxq-probe/wt --sandbox danger-full-access -c model_reasoning_effort=low Probe. S
+                 |-+= 436440 pavel /run/current-system/sw/bin/zsh -c sleep 73; echo survived > /srv/nvme/tmp/cxq-probe/sib/killtest_kill_b.txt 
+                 | \--- 436441 pavel sleep 73 
+                 \--= 436423 pavel /nix/store/n4rql6r3ky5lhymfjdh5spw04j60isi9-codex-0.162.0/bin/codex-code-mode-host 

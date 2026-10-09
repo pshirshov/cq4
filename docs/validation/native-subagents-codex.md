@@ -22,12 +22,24 @@ repository `/srv/nvme/tmp/cxq-probe/repo`, parent working directory = its linked
 (so the Git common directory is `/srv/nvme/tmp/cxq-probe/repo/.git`, outside the cwd), sibling directory
 `/srv/nvme/tmp/cxq-probe/sib`. These are outside `/tmp`, because `workspace-write` makes `/tmp` writable.
 
-Command line template of every parent (`run.sh`, stdin from `/dev/null`). **Limitation:** the harness did not write a per-run invocation manifest. The exact launch of each run is the template with the run name's sandbox (the `sandbox` field of its `RUN` line in `run-summaries.txt`), the prompt file `prompts/p_<name>.txt` (`par`, `iso`, `fork2`, `role`, `role2`, `mcp`, `mcp3`, `kill`, `cancel`; the `f_none`/`g_none`/`v2_*`/`cq*` runs used inline prompts that were not retained, so those are reported from rollout excerpts only), and the extra arguments named in the section that reports the run (`-c features.multi_agent_v2=true`, `-c agents.enabled=false`, `--output-schema schema.json`, `-c developer_instructions=…`, MCP `-c` flags below). `kill_2` was launched by `launch_kill.sh`. `scratch-config.toml` now includes the `agents.cwdrole` entry that produced the `cwd` rejection.
+Two sessions of runs are reported. **S1** (`run-summaries.txt`) ran the probes of sections 2, 3, 5, 6 and the role/cancel runs of sections 4 and 8 with `run.sh` (then without a manifest). **S2** (`run-summaries-rerun.txt`, `commands.log`, `rerun.sh`, `kill_probe.sh`) re-ran, with every launch retained, the probes whose inline prompts were lost in S1: fork context (`f_all_none_*`), model/effort override with `fork_turns:"all"` (`h_*`), parent developer instructions (`dev_*`), `multi_agent_v2` (`v2_*`), the feature-switch tool listing (`t_*`) and SIGKILL (`kill_a`, `kill_b`). Every behavioural claim about those topics below cites S2. `rerun.sh` is the verbatim invocation sequence of S2 (`commands.log` holds the same command lines and prompt texts written by `run.sh`; the lines of the parallel runs are interleaved, the `RUN` header and `CMD` line of one run are not adjacent, so `rerun.sh` is the authoritative mapping of run name to arguments).
+
+Launches of S1 (all through the template below, stdin `/dev/null`, `<sb>` = the `sandbox` field of the run's `RUN` line in `run-summaries.txt`; prompt file in `prompts/`; `scratch-config.toml` is the `config.toml` of the scratch `CODEX_HOME`):
+
+| S1 runs | sandbox | prompt file | extra arguments |
+|---|---|---|---|
+| `iso_<mode>_1/2` | read-only, workspace-write, danger-full-access | `p_iso.txt` | none |
+| `par_1/2` | read-only | `p_par.txt` | `--output-schema schema.json` |
+| `role_dfa`, `role2_dfa_1/2`, `role3_ro` | danger (`role3_ro`: read-only) | `p_role.txt` (`role_dfa`), `p_role2.txt` (others) | none (roles come from `scratch-config.toml`, files in `roles/`) |
+| `mcp_1/2`, `mcp3` | danger-full-access | `p_mcp.txt` (`mcp_*`), `p_mcp3.txt` | the three MCP `-c` flags below |
+| `cancel_1` | danger-full-access | `p_cancel.txt` | none |
+| `kill_1`, `kill_2` | danger-full-access | `p_kill.txt` | none; superseded by S2 `kill_a/b` (their process-state output was not retained) |
+| `fork_*`, `fork2_*`, `cq*` | — | prompts not retained | superseded by S2; S1 numbers are not used as evidence except where S2 repeats them |
 
 ```
 CODEX_HOME=/tmp/cxq/home timeout 300 codex exec --json --skip-git-repo-check \
   -C /srv/nvme/tmp/cxq-probe/wt --sandbox <read-only|workspace-write|danger-full-access> \
-  -c model_reasoning_effort=low [extra -c / --output-schema] "<prompt>"
+  -c model_reasoning_effort=low [extra -c / --output-schema] "$(cat prompts/<file>)"
 ```
 
 Scratch `config.toml`: `model="gpt-6.1-sol"`, `model_reasoning_effort="low"`, `[features] multi_agent=true`,
@@ -35,7 +47,7 @@ and `[agents.<name>] description / config_file` entries for the probe roles. MCP
 `-c mcp_servers.stub.url=http://127.0.0.1:47651/mcp -c mcp_servers.stub.bearer_token_env_var=STUB_TOKEN_PARENT
 -c mcp_servers.stub.default_tools_approval_mode=approve`, with fake tokens `parent-token-AAA` and `child-token-BBB`
 in the environment. No CQ token and no real MCP credential was used. Files: `docs/validation/native-subagents-codex/`
-(`run.sh`, `scratch-config.toml`, `roles/`, `prompts/`, `stub.py`, `stub-logs/`, `summ.py`, `par.py`, `run-summaries.txt`).
+(`run.sh`, `scratch-config.toml`, `roles/`, `prompts/`, `stub.py`, `stub-logs/`, `summ.py`, `par.py`, `run-summaries.txt`, `run-summaries-rerun.txt`, `commands.log`, `rerun.sh`, `kill_probe.sh`, `kill-kill_*.proc.log`, `final-messages-rerun.txt`).
 `run-summaries.txt` lists, for every run that created a rollout, the parent and child `cwd`, model, effort, approval policy,
 sandbox type, session id relation, provider, per-thread rollout usage, and hashes of the child's last message and of the
 parent's `FINAL_ANSWER` payload.
@@ -84,8 +96,8 @@ Does any setting give a child a narrower sandbox or a different working director
 
 Through `spawn_agent` (per call): `model` and `reasoning_effort` take effect on `fork_turns:"none"` (every iso run: child `model: gpt-6-luna, effort: low`
 while the parent is `gpt-6.1-sol`). With `fork_turns:"all"` the `model` argument was accepted without error but **not applied**: both runs (`fork2_1/2`) passed
-`"model":"gpt-6-luna","reasoning_effort":"low"` and the child's `turn_context` was `gpt-6.1-sol / low`. Whether `reasoning_effort` is applied with `all` is **not observed**: the requested `low` equals the parent's `low`, so an override cannot be told from inheritance. Also `fork_turns:"none"` without `reasoning_effort` gave the
-child effort `medium`, not the parent's `low` (`fork2_*`, `g_none`). The `fork_turns` values `none`/`all` are the only ones used; the binary contains the
+`"model":"gpt-6-luna","reasoning_effort":"low"` and the child's `turn_context` was `gpt-6.1-sol / low`. `reasoning_effort` with `all`: S2 `h_1`/`h_2` requested `"model":"gpt-6-luna","reasoning_effort":"high"` with `fork_turns:"all"` (call quoted from the parent rollout: `{"task_name":"h_all","fork_turns":"all","model":"gpt-6-luna","reasoning_effort":"high","message":"gAAAAAB…"}`); the child's `turn_context` was `gpt-6.1-sol` / `low` in both runs (`run-summaries-rerun.txt`), i.e. **neither the model nor the effort override was applied** with `all`, while the same request with `fork_turns:"none"` (`h_none`) gave `gpt-6-luna` / `high` (2/2). Without error: in `h_1` the parent said in its own words `The tool instructions don’t allow model or reasoning overrides with fork_turns: "all"` (`final-messages-rerun.txt`; parent self-report, not a tool error). Also `fork_turns:"none"` without `reasoning_effort` gave the
+child effort `medium`, not the parent's `low` (S1 `fork2_*`, `g_none`; S2 `f_all_none_1/2`: `f_none` child effort `medium`, 2/2). The `fork_turns` values `none`/`all` are the only ones used; the binary contains the
 string ``fork_turns must be `none` or `all` `` (*binary string*).
 
 Through configuration: `[agents.<name>] description, config_file` defines a role selectable with `agent_type`. The parent's `spawn_agent` description then lists built-in
@@ -111,15 +123,14 @@ Role-file keys observed (role_dfa 1 run, role2_dfa 2 runs, role3_ro 1, mcp runs 
 
 A role whose file is malformed is dropped silently except for an `error` item in the stream; the parent then fails the spawn with `unknown agent_type 'cwdrole'`.
 
-`multi_agent_v2`: with `-c features.multi_agent_v2=true`, 2 `danger-full-access` runs showed the same `spawn_agent` parameter list, the same tool names (`spawn_agent`, `wait_agent`), the same
+`multi_agent_v2`: with `-c features.multi_agent_v2=true`, 2 S1 and 2 S2 (`v2_1`, `v2_2`, `p_iso.txt`, `danger-full-access`) runs showed the same `spawn_agent` parameter list, the same tool names (`spawn_agent`, `wait_agent`), the same
 inheritance and the same `nix store info` result as the default. The rollout `session_meta` carries `"multi_agent_version":"v2"` in the default runs as well, so it does not distinguish the flag. **What the flag changes was not observed**:
 the only differences found are *binary strings* for `features.multi_agent_v2.{max_concurrent_threads_per_session,min_wait_timeout_ms,max_wait_timeout_ms,default_wait_timeout_ms}` and `agents.max_threads` / `agents.max_concurrent_threads_per_session`;
 none was exercised. `wait_agent` clamps `timeout_ms` to a minimum of 10000 ms in the default configuration (observed, section 8).
 
 Tool surface of the parent (observed in `cancel_1`, 1 run): `collaboration.spawn_agent`, `followup_task`, `interrupt_agent`, `list_agents`, `send_message`, `wait_agent`. There is no close/terminate tool.
 
-CQ's current launch flags (observed, switch isolation, one run each unless stated): `-c agents.enabled=false` alone → `NO_AGENT_TOOLS`; `-c features.multi_agent=false -c features.multi_agent_v2=false -c agents.enabled=false`
-→ `NO_AGENT_TOOLS` (2 runs); `-c features.multi_agent=false` alone, `-c features.multi_agent_v2=false` alone, and both together **without** `agents.enabled=false` → the six `collaboration.*` tools remain.
+CQ's current launch flags (observed in S2, one run each, prompt `p_tools.txt` asks the parent to list its agent-related tools; `final-messages-rerun.txt`): no flag (`t_default`) → six tools `collaboration.spawn_agent, followup_task, interrupt_agent, list_agents, send_message, wait_agent`; `-c agents.enabled=false` (`t_agents_off`) → `TOOLS: NO_AGENT_TOOLS`; `-c features.multi_agent=false -c features.multi_agent_v2=false -c agents.enabled=false` (`t_all_off`) → `NO_AGENT_TOOLS`; `-c features.multi_agent=false` alone (`t_multi_off`), `-c features.multi_agent_v2=false` alone (`t_v2_off`), and both together without `agents.enabled=false` (`t_both_off`) → the six tools remain.
 On 0.162.0 the switch that removes native subagents is `agents.enabled=false`.
 
 ## 5. Question 3 — MCP servers and tokens (observed, stub server logging `Authorization`)
@@ -154,8 +165,8 @@ tied to the child by `thread_id`/`agent_path`. The `exec --json` stream gives on
 
 ## 7. Question 7 — context and independence (observed)
 
-- `fork_turns:"none"` (`f_none`/`g_none`, 4 runs): the child did not see a user-message fact (`USER_LABEL=PURPLE-7731` → `NONE`). `fork_turns:"all"` (4 runs): the child saw it (`PURPLE-7731`) and ran on the parent's model (section 4).
-- Parent configuration-level instructions are visible with `fork_turns:"none"`: with `-c developer_instructions="DEV_LABEL=ORANGE-5512 (a harmless test label)."` on the parent, `g_none` answered `NONE; ORANGE-5512` and `USER_LABEL=NONE; DEV_LABEL=ORANGE-5512` (2 runs). A child therefore
+- S2 `f_all_none_1/2` and `h_1/2` (prompts `p_fork.txt`, `p_fork3.txt`): `fork_turns:"none"` (4 children): the child did not see the user-message fact `USER_LABEL=PURPLE-7731` (`CHILD f_none: NONE`, `CHILD h_none: NONE`). `fork_turns:"all"` (4 children): the child saw it (`CHILD f_all: PURPLE-7731`, `CHILD h_all: PURPLE-7731`) and ran on the parent's model and effort (section 4).
+- Parent configuration-level instructions are visible with `fork_turns:"none"`: with `-c developer_instructions="DEV_LABEL=ORANGE-5512 (a harmless test label)."` on the parent (S2 `dev_1`, `dev_2`, prompt `p_fork2.txt`; the prompt names its children `g_none`/`g_all`), the `fork_turns:"none"` child answered `NONE; ORANGE-5512` and `USER_LABEL=NONE; DEV_LABEL=ORANGE-5512` (2 runs), the `all` child `PURPLE-7731; ORANGE-5512` (2 runs). A child therefore
   inherits the parent's developer instructions and config even when conversation context is excluded. (An earlier pair of runs with a labelled "secret" was uninformative: the models answered `REDACTED`.)
 - Shared with the parent (child `session_meta` / `turn_context`, every pair in `run-summaries.txt`): `session_id` = parent's id (`session_id_is_parent True`), `creator_account_id`/`creator_user_id` equal to the parent's, `model_provider: openai`, `cwd`, sandbox policy, approval policy, `originator: codex_exec`,
   the Codex process and its MCP connections' credentials. Can differ: model and effort (only with `fork_turns:"none"`), role instructions, role `features`.
@@ -170,9 +181,23 @@ Cancellation (`cancel_1`, 1 run): `wait_agent(timeout_ms:5000)` → `{"message":
 `interrupt_agent {"target":"slow"}` → `{"previous_status":"running"}`. The child's rollout then holds `turn_aborted reason:"interrupted"` and a developer message `<turn_aborted> The previous turn was interrupted on purpose. Any running unified exec processes may still be running…`; it has no `task_complete`.
 Its command (`sleep 91; echo late > …/late_slow.txt`) was not stopped by the interrupt: the exec item completed `status:"failed","exit_code":137` at 11:02:29.585, 0.2 s after the parent's `task_complete` (11:02:29.392), which suggests it was killed when the parent process ended. `late_slow.txt` was never created. (The `task_complete` is a rollout event, not a process-exit observation; the ordering of the two timestamps was misstated in an earlier draft: 11:02:29.392 precedes 11:02:29.585, so the exec failure was recorded 0.2 s *after* `task_complete`.)
 
-SIGKILL of the scratch parent (`kill_1`, `kill_2`; only the scratch `codex` PID recorded by `launch_kill.sh` was signalled): the child ran `zsh -c 'sleep 61; echo survived > …/killtest.txt'` as a descendant of the parent. After `kill -9` (commands: `launch_kill.sh` for `kill_2` recorded the PID with `echo $$ > /tmp/cxq/kill2.pid` then `exec codex …`; the kill was `kill -9 $(cat /tmp/cxq/kill2.pid)` and the polling was `ps`/`pgrep` of `sleep 61`; **these two command lines and the `ps` output were not retained, so the process-state claims below are reported from the investigator's session log, not from a retained artifact**; only the unfinished rollouts and the truncated stream are retained evidence):
-the parent and the child's `zsh` and the `codex-code-mode-host` were gone, the orphaned `sleep 61` ran to its end (observed alive 3, 20 and 40 s after the kill in `kill_1`, 6 s in `kill_2`, gone after 61 s), `killtest.txt` was **not** written (its shell had died), no child or parent rollout received a `task_complete` or `turn_aborted`
-(last events are `token_usage_record`), the stream ended at `{"type":"item.started","item":{"type":"collab_tool_call","tool":"wait",…,"status":"in_progress"}}`. The children are threads inside the parent process; no child process or rollout finished after the parent was killed.
+SIGKILL of the scratch parent (S2 `kill_a`, `kill_b`, run in parallel by `kill_probe.sh`; prompt `p_kill.txt` with `sleep 71`/`sleep 73` and a per-run marker file; only the scratch `codex` PID started by the script was signalled, `kill -9 <that PID>`). Retained process-state logs: `kill-kill_a.proc.log`, `kill-kill_b.proc.log`. Quoted from `kill-kill_a.proc.log` (UTC):
+
+```
+12:48:00.607 scratch parent PID=435919
+12:48:11.760 sleep 71 present: 436476 sleep 71;
+  \-+- 435919 pavel codex exec --json --skip-git-repo-check -C … --sandbox danger-full-access …
+     |-+= 436475 pavel /run/current-system/sw/bin/zsh -c sleep 71; echo survived > …/killtest_kill_a.txt
+     | \--- 436476 pavel sleep 71
+     \--= 436459 pavel …/codex-0.162.0/bin/codex-code-mode-host
+12:48:11.776 sleep pid=436476 ppid= 436475
+12:48:11.777 KILL: kill -9 435919
+12:48:12.795 +1s after kill: parent alive? no; sleep pid 436476:  436476  429636 SN   sleep 71
+12:48:51.873 +40s after kill: parent alive? no; sleep pid 436476:  436476  429636 SN   sleep 71
+12:49:25.909 after sleep expired: sleep pid 436476: gone; killtest file: ls: cannot access '…/killtest_kill_a.txt': No such file or directory
+```
+
+`kill_b` is identical in shape (`sleep 73`, parent PID 435916, killed 12:48:10.770, `sleep` alive at +1, +3, +10, +20 and +40 s, gone at 12:49:26.933, no `killtest_kill_b.txt`). Observed (2/2): after SIGKILL of the parent the parent PID was gone at +1 s; the child's command `sleep` survived as an orphan (re-parented from its `zsh -c` shell, ppid 436475, to ppid 429636, a subreaper outside the scratch tree) and was still alive 40 s after the kill; it was gone when checked 74 s after the kill (the exact moment of exit was not sampled between 40 s and 74 s, only that it ended no later than its 71/73 s sleep would allow). The shell that would have written the marker was no longer its parent after the kill (ppid changed) and the marker file was **not** created in both runs, so the shell died with the parent; whether `codex-code-mode-host` also died was not sampled. Rollouts (`run-summaries-rerun.txt` `kill_a`/`kill_b`, checked on the rollout files): the parent's and the child's rollout have no `task_complete` and no `turn_aborted`; the last events of the child are at 12:48:11.421Z/12:48:10.537Z, just before the kill. The `exec --json` stream of `kill_a` ends at `{"type":"item.started","item":{"type":"collab_tool_call","tool":"wait",…,"status":"in_progress"}}`. The children are threads inside the parent process: no child rollout finished after the parent was killed (2/2), and the stream carried no notice of the child's death. The orphaned command process is not stopped by the death of its parent in this setup.
 
 ## 9. Per-role conclusion
 
@@ -207,5 +232,5 @@ The parent was a fresh `codex exec` process in a scratch `CODEX_HOME`, not the o
 
 ## 12. Cleanup
 
-The scratch copy of the operator's credentials (`/tmp/cxq/home/auth.json`) and the scratch tree `/tmp/cxq` and `/srv/nvme/tmp/cxq-probe` were removed after the note was written; `/tmp/cxp/home/auth.json` from the earlier probe did not exist at the start of this Task.
+The scratch copies of the operator's credentials (`/tmp/cxq/home/auth.json` of S1, recreated and deleted again for S2) and the scratch trees `/tmp/cxq` and `/srv/nvme/tmp/cxq-probe` were removed after S2; `/tmp/cxp/home/auth.json` from the earlier probe did not exist at the start of this Task.
 No token or credential is committed: the only bearer strings in the repository files are the fake `parent-token-AAA`, `child-token-BBB`, `child-literal-CCC`.
