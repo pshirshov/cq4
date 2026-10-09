@@ -1,0 +1,1 @@
+Spawn one child (task_name "m3", agent_type "mcp3", fork_turns "none") with message: "List the names of all MCP tools available to you whose name contains stub, call each one named whoami, and answer ONLY with names and verbatim results; if none answer NO_STUB_TOOL." Then wait_agent and print the child's answer verbatim prefixed by CHILD:.

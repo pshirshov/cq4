@@ -1,0 +1,1 @@
+Probe. Spawn one child task_name "victim", fork_turns "none", model "gpt-6-luna", reasoning_effort "low", message: "Run the shell command `sleep 61; echo survived > /srv/nvme/tmp/cxq-probe/sib/killtest.txt` and then answer DONE_VICTIM." Then call wait_agent with timeout_ms 120000 and after it returns answer END.

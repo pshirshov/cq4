@@ -1,0 +1,28 @@
+model = "gpt-6.1-sol"
+model_reasoning_effort = "low"
+[features]
+multi_agent = true
+
+[projects."/srv/nvme/tmp/cxq-probe/repo"]
+trust_level = "trusted"
+[agents.ro]
+description = "Read-only probe role with a narrower sandbox"
+config_file = "/tmp/cxq/roles/ro.toml"
+[agents.noshell]
+description = "Probe role that tries to disable shell tools"
+config_file = "/tmp/cxq/roles/noshell.toml"
+[agents.ro2]
+description = "role with default_permissions :read-only"
+config_file = "/tmp/cxq/roles/ro2.toml"
+[agents.ro3]
+description = "role with sandbox_mode workspace-write and approval untrusted"
+config_file = "/tmp/cxq/roles/ro3.toml"
+[agents.mcp1]
+description = "role that adds its own MCP server stubchild with its own token env var"
+config_file = "/tmp/cxq/roles/mcp1.toml"
+[agents.mcp2]
+description = "role that overrides MCP server stub with a literal header"
+config_file = "/tmp/cxq/roles/mcp2.toml"
+[agents.mcp3]
+description = "role that sets mcp_servers.stub.enabled=false"
+config_file = "/tmp/cxq/roles/mcp3.toml"

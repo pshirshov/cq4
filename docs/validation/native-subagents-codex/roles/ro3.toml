@@ -1,0 +1,5 @@
+sandbox_mode = "workspace-write"
+approval_policy = "untrusted"
+developer_instructions = "ROLE_MARKER_RO3: start your final answer with ROLE_MARKER_RO3."
+[sandbox_workspace_write]
+writable_roots = []

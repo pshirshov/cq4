@@ -1,0 +1,4 @@
+model = "gpt-6-luna"
+model_reasoning_effort = "low"
+sandbox_mode = "read-only"
+developer_instructions = "ROLE_MARKER_RO: your final answer must start with the token ROLE_MARKER_RO."

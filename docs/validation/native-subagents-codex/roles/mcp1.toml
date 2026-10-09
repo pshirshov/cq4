@@ -1,0 +1,5 @@
+developer_instructions = "ROLE_MARKER_MCP1: start your final answer with ROLE_MARKER_MCP1."
+[mcp_servers.stubchild]
+url = "http://127.0.0.1:47651/mcp-child"
+bearer_token_env_var = "STUB_TOKEN_CHILD"
+default_tools_approval_mode = "approve"

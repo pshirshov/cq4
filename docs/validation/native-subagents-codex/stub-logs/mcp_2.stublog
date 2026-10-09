@@ -1,0 +1,16 @@
+{"t": 1791543292.237, "http": "POST", "path": "/mcp", "auth": "Bearer parent-token-AAA", "rpc": "initialize", "tool": null}
+{"t": 1791543292.247, "http": "POST", "path": "/mcp", "auth": "Bearer parent-token-AAA", "rpc": "notifications/initialized", "tool": null}
+{"t": 1791543292.251, "http": "POST", "path": "/mcp", "auth": "Bearer parent-token-AAA", "rpc": "tools/list", "tool": null}
+{"t": 1791543301.477, "http": "POST", "path": "/mcp", "auth": "Bearer parent-token-AAA", "rpc": "tools/call", "tool": "whoami"}
+{"t": 1791543315.547, "http": "POST", "path": "/mcp", "auth": "Bearer parent-token-AAA", "rpc": "initialize", "tool": null}
+{"t": 1791543315.561, "http": "POST", "path": "/mcp", "auth": "Bearer parent-token-AAA", "rpc": "notifications/initialized", "tool": null}
+{"t": 1791543315.566, "http": "POST", "path": "/mcp", "auth": "Bearer parent-token-AAA", "rpc": "tools/list", "tool": null}
+{"t": 1791543315.587, "http": "POST", "path": "/mcp", "auth": "Bearer parent-token-AAA", "rpc": "tools/call", "tool": "whoami"}
+{"t": 1791543370.696, "http": "POST", "path": "/mcp", "auth": "Bearer parent-token-AAA", "rpc": "initialize", "tool": null}
+{"t": 1791543370.714, "http": "POST", "path": "/mcp", "auth": "Bearer parent-token-AAA", "rpc": "notifications/initialized", "tool": null}
+{"t": 1791543370.718, "http": "POST", "path": "/mcp", "auth": "Bearer parent-token-AAA", "rpc": "tools/list", "tool": null}
+{"t": 1791543370.751, "http": "POST", "path": "/mcp", "auth": "Bearer parent-token-AAA", "rpc": "tools/call", "tool": "whoami"}
+{"t": 1791543423.221, "http": "POST", "path": "/mcp", "auth": "Bearer parent-token-AAA", "rpc": "initialize", "tool": null}
+{"t": 1791543423.235, "http": "POST", "path": "/mcp", "auth": "Bearer parent-token-AAA", "rpc": "notifications/initialized", "tool": null}
+{"t": 1791543423.24, "http": "POST", "path": "/mcp", "auth": "Bearer parent-token-AAA", "rpc": "tools/list", "tool": null}
+{"t": 1791543423.258, "http": "POST", "path": "/mcp", "auth": "Bearer parent-token-AAA", "rpc": "tools/call", "tool": "whoami"}

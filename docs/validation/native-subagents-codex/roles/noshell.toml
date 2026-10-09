@@ -1,0 +1,4 @@
+developer_instructions = "ROLE_MARKER_NOSHELL: your final answer must start with the token ROLE_MARKER_NOSHELL."
+[features]
+shell_tool = false
+unified_exec = false
