@@ -1,0 +1,72 @@
+=== CODEX_HOME=/tmp/cxq/home
+--- config.toml (sha256 8815c7569e4f6d42)
+model = "gpt-6.1-sol"
+model_reasoning_effort = "low"
+[features]
+multi_agent = true
+
+[projects."/srv/nvme/tmp/cxq-probe/repo"]
+trust_level = "trusted"
+[agents.ro]
+description = "Read-only probe role with a narrower sandbox"
+config_file = "/tmp/cxq/roles/ro.toml"
+[agents.noshell]
+description = "Probe role that tries to disable shell tools"
+config_file = "/tmp/cxq/roles/noshell.toml"
+[agents.ro2]
+description = "role with default_permissions :read-only"
+config_file = "/tmp/cxq/roles/ro2.toml"
+[agents.ro3]
+description = "role with sandbox_mode workspace-write and approval untrusted"
+config_file = "/tmp/cxq/roles/ro3.toml"
+[agents.mcp1]
+description = "role that adds its own MCP server stubchild with its own token env var"
+config_file = "/tmp/cxq/roles/mcp1.toml"
+[agents.mcp2]
+description = "role that overrides MCP server stub with a literal header"
+config_file = "/tmp/cxq/roles/mcp2.toml"
+[agents.mcp3]
+description = "role that sets mcp_servers.stub.enabled=false"
+config_file = "/tmp/cxq/roles/mcp3.toml"
+[agents.cwdrole]
+description = "role with an unsupported cwd key (rejected by 0.162.0)"
+config_file = "/tmp/cxq/roles/cwdrole.toml"
+--- /tmp/cxq/roles/cwdrole.toml
+cwd = "/srv/nvme/tmp/cxq-probe/sib"
+developer_instructions = "ROLE_MARKER_CWD: your final answer must start with the token ROLE_MARKER_CWD."
+--- /tmp/cxq/roles/mcp1.toml
+developer_instructions = "ROLE_MARKER_MCP1: start your final answer with ROLE_MARKER_MCP1."
+[mcp_servers.stubchild]
+url = "http://127.0.0.1:47651/mcp-child"
+bearer_token_env_var = "STUB_TOKEN_CHILD"
+default_tools_approval_mode = "approve"
+--- /tmp/cxq/roles/mcp2.toml
+developer_instructions = "ROLE_MARKER_MCP2: start your final answer with ROLE_MARKER_MCP2."
+[mcp_servers.stub]
+url = "http://127.0.0.1:47651/mcp-override"
+http_headers = { Authorization = "Bearer child-literal-CCC" }
+default_tools_approval_mode = "approve"
+--- /tmp/cxq/roles/mcp3.toml
+developer_instructions = "ROLE_MARKER_MCP3: start your final answer with ROLE_MARKER_MCP3."
+[mcp_servers.stub]
+url = "http://127.0.0.1:47651/mcp"
+enabled = false
+--- /tmp/cxq/roles/noshell.toml
+developer_instructions = "ROLE_MARKER_NOSHELL: your final answer must start with the token ROLE_MARKER_NOSHELL."
+[features]
+shell_tool = false
+unified_exec = false
+--- /tmp/cxq/roles/ro2.toml
+default_permissions = ":read-only"
+developer_instructions = "ROLE_MARKER_RO2: start your final answer with ROLE_MARKER_RO2."
+--- /tmp/cxq/roles/ro3.toml
+sandbox_mode = "workspace-write"
+approval_policy = "untrusted"
+developer_instructions = "ROLE_MARKER_RO3: start your final answer with ROLE_MARKER_RO3."
+[sandbox_workspace_write]
+writable_roots = []
+--- /tmp/cxq/roles/ro.toml
+model = "gpt-6-luna"
+model_reasoning_effort = "low"
+sandbox_mode = "read-only"
+developer_instructions = "ROLE_MARKER_RO: your final answer must start with the token ROLE_MARKER_RO."

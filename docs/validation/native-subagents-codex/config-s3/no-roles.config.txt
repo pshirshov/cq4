@@ -1,0 +1,9 @@
+=== CODEX_HOME=/tmp/cxq/home_noroles
+--- config.toml (sha256 77c29c3625c94074)
+model = "gpt-6.1-sol"
+model_reasoning_effort = "low"
+[features]
+multi_agent = true
+
+[projects."/srv/nvme/tmp/cxq-probe/repo"]
+trust_level = "trusted"

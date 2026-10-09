@@ -1,5 +1,5 @@
 import json,glob,hashlib,os
-H='/tmp/cxq/home/sessions'
+H=os.environ.get('SESSIONS','/tmp/cxq/home/sessions')
 files={}
 for f in glob.glob(H+'/**/*.jsonl',recursive=True):
     ls=[json.loads(l) for l in open(f)]; files[ls[0]['payload']['id']]=ls

@@ -22,22 +22,16 @@ repository `/srv/nvme/tmp/cxq-probe/repo`, parent working directory = its linked
 (so the Git common directory is `/srv/nvme/tmp/cxq-probe/repo/.git`, outside the cwd), sibling directory
 `/srv/nvme/tmp/cxq-probe/sib`. These are outside `/tmp`, because `workspace-write` makes `/tmp` writable.
 
-Two sessions of runs are reported. **S1** (`run-summaries.txt`) ran the probes of sections 2, 3, 5, 6 and the role/cancel runs of sections 4 and 8 with `run.sh` (then without a manifest). **S2** (`run-summaries-rerun.txt`, `commands.log`, `rerun.sh`, `kill_probe.sh`) re-ran, with every launch retained, the probes whose inline prompts were lost in S1: fork context (`f_all_none_*`), model/effort override with `fork_turns:"all"` (`h_*`), parent developer instructions (`dev_*`), `multi_agent_v2` (`v2_*`), the feature-switch tool listing (`t_*`) and SIGKILL (`kill_a`, `kill_b`). Every behavioural claim about those topics below cites S2. `rerun.sh` is the verbatim invocation sequence of S2 (`commands.log` holds the same command lines and prompt texts written by `run.sh`; the lines of the parallel runs are interleaved, the `RUN` header and `CMD` line of one run are not adjacent, so `rerun.sh` is the authoritative mapping of run name to arguments).
+Three sessions of runs are reported.
 
-Launches of S1 (all through the template below, stdin `/dev/null`, `<sb>` = the `sandbox` field of the run's `RUN` line in `run-summaries.txt`; prompt file in `prompts/`; `scratch-config.toml` is the `config.toml` of the scratch `CODEX_HOME`):
+- **S1** (`run-summaries.txt`): the first pass. Its launches were **not** fully recorded: `run.sh` then had no manifest and no configuration snapshot, `scratch-config.toml` grew while S1 ran (role entries were appended over time), and several inline prompts were lost. **S1 is therefore history only; no claim in this note rests on S1 alone.** Where S1 numbers are quoted they are marked "S1" and are repeated by S3 or S2.
+- **S2** (`run-summaries-rerun.txt`, `commands.log`, `rerun.sh`, `kill_probe.sh`, `kill-kill_*.proc.log`): every launch retained (command line and prompt per run in `commands.log`; `rerun.sh` is the verbatim sequence). It covers fork context (`f_all_none_*`), model/effort override with `fork_turns:"all"` (`h_*`), parent developer instructions (`dev_*`), `multi_agent_v2` (`v2_*`), the feature-switch tool listing (`t_*`) and SIGKILL (`kill_a`, `kill_b`). Its configuration was `scratch-config.toml` (only the `model`, `model_reasoning_effort` and `[features] multi_agent` lines matter for these runs; none of them spawns a role).
+- **S3** (`run-summaries-s3.txt`, `run-summaries-s3-noroles.txt`, `commands-s3.log`, `rerun3.sh`, `config-s3/`, `stub-logs/s3-mcp.stublog`): a complete re-run of every configuration-sensitive S1 probe with an exact record per run. `run.sh` now writes, before each launch, a snapshot of the effective `config.toml` plus every role file it references, and `commands-s3.log` holds the command line and prompt text of each run. The mapping of run name to configuration is `config-s3/run-to-config.txt` (run, sha256 prefix of `config.toml`). There are exactly two configurations: **`77c29c3625c94074` = `config-s3/no-roles.config.txt`** (first 7 lines of `scratch-config.toml`: model, effort, `multi_agent=true`, project trust; no `[agents.*]`), used by the 6 `s3_noroles_*` runs, and **`8815c7569e4f6d42` = `config-s3/full-roles.config.txt`** (the complete `scratch-config.toml` plus all role files in `roles/`), used by the other 20 runs. Run names: `s3_iso_<mode>_1/2` and `s3_noroles_<mode>_1/2` (prompt `p_iso.txt`, sandbox = `<mode>`), `s3_role_dfa_1/2` (`p_role.txt`, danger-full-access), `s3_role2_dfa_1/2` (`p_role2.txt`, danger-full-access), `s3_role3_ro_1/2` (`p_role2.txt`, read-only), `s3_mcp_1/2` (`p_mcp.txt`), `s3_mcp3_1/2` (`p_mcp3.txt`) with the three MCP `-c` flags below, `s3_par_1/2` (`p_par.txt`, read-only, `--output-schema schema.json`), `s3_cancel_1/2` (`p_cancel.txt`, danger-full-access). Two procedural slips are recorded in `commands-s3.log` (marker lines starting `###`): the first MCP launch ran before the stub server was listening, and a second was started from zsh, which passed the three `-c` flags as one word. Both were discarded; the MCP results come from the third launch (via `sh`, `/tmp/cxq/mcp_part.sh`, the final `s3_mcp*` entries of the log), whose stub log is `stub-logs/s3-mcp.stublog`. The filesystem state of the isolation runs was checked per mode (files removed before each mode, `FS after <mode>:` lines in `commands-s3.log`).
 
-| S1 runs | sandbox | prompt file | extra arguments |
-|---|---|---|---|
-| `iso_<mode>_1/2` | read-only, workspace-write, danger-full-access | `p_iso.txt` | none |
-| `par_1/2` | read-only | `p_par.txt` | `--output-schema schema.json` |
-| `role_dfa`, `role2_dfa_1/2`, `role3_ro` | danger (`role3_ro`: read-only) | `p_role.txt` (`role_dfa`), `p_role2.txt` (others) | none (roles come from `scratch-config.toml`, files in `roles/`) |
-| `mcp_1/2`, `mcp3` | danger-full-access | `p_mcp.txt` (`mcp_*`), `p_mcp3.txt` | the three MCP `-c` flags below |
-| `cancel_1` | danger-full-access | `p_cancel.txt` | none |
-| `kill_1`, `kill_2` | danger-full-access | `p_kill.txt` | none; superseded by S2 `kill_a/b` (their process-state output was not retained) |
-| `fork_*`, `fork2_*`, `cq*` | — | prompts not retained | superseded by S2; S1 numbers are not used as evidence except where S2 repeats them |
+Every launch has the form (stdin `/dev/null`; `CODEX_HOME` = `/tmp/cxq/home` or `/tmp/cxq/home_noroles`):
 
 ```
-CODEX_HOME=/tmp/cxq/home timeout 300 codex exec --json --skip-git-repo-check \
+CODEX_HOME=<home> timeout 300 codex exec --json --skip-git-repo-check \
   -C /srv/nvme/tmp/cxq-probe/wt --sandbox <read-only|workspace-write|danger-full-access> \
   -c model_reasoning_effort=low [extra -c / --output-schema] "$(cat prompts/<file>)"
 ```
@@ -47,7 +41,7 @@ and `[agents.<name>] description / config_file` entries for the probe roles. MCP
 `-c mcp_servers.stub.url=http://127.0.0.1:47651/mcp -c mcp_servers.stub.bearer_token_env_var=STUB_TOKEN_PARENT
 -c mcp_servers.stub.default_tools_approval_mode=approve`, with fake tokens `parent-token-AAA` and `child-token-BBB`
 in the environment. No CQ token and no real MCP credential was used. Files: `docs/validation/native-subagents-codex/`
-(`run.sh`, `scratch-config.toml`, `roles/`, `prompts/`, `stub.py`, `stub-logs/`, `summ.py`, `par.py`, `run-summaries.txt`, `run-summaries-rerun.txt`, `commands.log`, `rerun.sh`, `kill_probe.sh`, `kill-kill_*.proc.log`, `final-messages-rerun.txt`).
+(`run.sh`, `rerun3.sh`, `config-s3/`, `commands-s3.log`, `run-summaries-s3*.txt`, `scratch-config.toml`, `roles/`, `prompts/`, `stub.py`, `stub-logs/`, `summ.py`, `par.py`, `run-summaries.txt`, `run-summaries-rerun.txt`, `commands.log`, `rerun.sh`, `kill_probe.sh`, `kill-kill_*.proc.log`, `final-messages-rerun.txt`).
 `run-summaries.txt` lists, for every run that created a rollout, the parent and child `cwd`, model, effort, approval policy,
 sandbox type, session id relation, provider, per-thread rollout usage, and hashes of the child's last message and of the
 parent's `FINAL_ANSWER` payload.
@@ -64,6 +58,8 @@ excerpts quoted here and `run-summaries.txt` are the retained form).
 | Child final answer reaches the parent as a `FINAL_ANSWER` agent message and is in the child's rollout | **Observed.** Parent rollout: `{"type":"agent_message","author":"/root/c2","recipient":"/root","content":[{"type":"input_text","text":"Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/c2\nPayload:\nnot json: C2 finished (beta)"}]}`. The child's rollout holds the same text as `task_complete.last_agent_message`. | 6 (iso) + 2 (par) + others, all equal |
 | Per-child token counts exist only in the child's rollout, not in the `exec --json` stream | **Observed.** `par_1`: stream `turn.completed` = `{"input_tokens":76215,"output_tokens":302,…}` equals the parent rollout total (76215 / 302) exactly; the two children's rollouts each hold `38354 / 48` and are not included. Identical in `par_2`. In 6 iso runs the child's rollout total (e.g. 113880 in) exceeds the parent's stream total (43995 in). The stream shows a child only as `{"type":"collab_tool_call","tool":"wait","sender_thread_id":"…","receiver_thread_ids":[],"agents_states":{},"status":"completed"}` — receiver ids empty. | 8 |
 
+**S3 re-observation (exact configuration per run, `config-s3/run-to-config.txt`).** `spawn_agent` parameters, from the parent's `PARAMS:` line: with configuration `77c29c3625c94074` (no `[agents.*]`) 6 of 6 runs listed `fork_turns, message, model, reasoning_effort, task_name` (5 names, order varies); with `8815c7569e4f6d42` (roles configured) the `s3_iso_*` runs listed `agent_type, fork_turns, message, model, reasoning_effort, task_name` (6 names; the quoted example is `s3_iso_read-only_1`). So `agent_type` exists only when roles are configured. Inheritance: in all 12 `s3_iso_*`/`s3_noroles_*` pairs the child's `cwd`, `sandbox_policy.type` and `approval_policy` equal the parent's (`run-summaries-s3.txt`, `run-summaries-s3-noroles.txt`; approval `never`, cwd `/srv/nvme/tmp/cxq-probe/wt`). `FINAL_ANSWER`: in every S3 child (about 50 children) the sha256 prefix of the child's `task_complete.last_agent_message` equals the `Payload:` of the parent's `FINAL_ANSWER` message (`equal [True]`; the exceptions are the interrupted `s3_cancel_*` children, which never completed). Token counts: `s3_par_1` stream `turn.completed` input/output `60819 / 232` equals the parent rollout total exactly, `s3_par_2` `76195 / 297` likewise; the children's rollouts hold their own `38354 / 48` and `38359 / 53` (`s3_par_1`), `38354 / 48` twice (`s3_par_2`) and are absent from the stream.
+
 ## 3. Question 2 — isolation by parent sandbox (observed, 2 runs per mode)
 
 Child task: `pwd`; write `./child_cwd.txt`; write `/srv/nvme/tmp/cxq-probe/sib/child_sib.txt`; write
@@ -78,6 +74,8 @@ Child task: `pwd`; write `./child_cwd.txt`; write `/srv/nvme/tmp/cxq-probe/sib/c
 (The `NIX_RC=0` line in the raw outputs is the exit status of `head`, not of `nix`; success is read from the output.)
 After the six runs the file system held `wt/child_cwd.txt` (workspace-write, danger), `sib/child_sib.txt` and
 `repo/.git/child_gitdir.txt` (danger only).
+
+S3 repeats this matrix with exact configurations: 2 runs per mode with `8815c7569e4f6d42` (`s3_iso_*`) and 2 per mode with `77c29c3625c94074` (`s3_noroles_*`), i.e. 4 per mode, files removed before each mode. Child outputs (`run-summaries-s3*.txt`): read-only 4/4 `W_CWD_FAIL W_SIB_FAIL W_GIT_FAIL` and `error: cannot connect to socket at '/nix/var/nix/daemon-socket/socket': Operation not permitted`; workspace-write 4/4 `W_CWD_OK W_SIB_FAIL W_GIT_FAIL` and the same nix socket error; danger-full-access 4/4 `W_CWD_OK W_SIB_OK W_GIT_OK` and `Store URL: daemon / Version: 2.34.8 / Trusted: 0`. File system after each mode (`FS after <mode>` in `commands-s3.log`): read-only no file; workspace-write only `wt/child_cwd.txt`; danger-full-access `wt/child_cwd.txt`, `sib/child_sib.txt`, `repo/.git/child_gitdir.txt`. Identical in both configurations.
 
 Does any setting give a child a narrower sandbox or a different working directory?
 
@@ -121,6 +119,8 @@ Role-file keys observed (role_dfa 1 run, role2_dfa 2 runs, role3_ro 1, mcp runs 
 | `cwd` | **rejected** (`unknown field \`cwd\``) |
 | `[mcp_servers.<n>]` with `url`, `bearer_token_env_var` / `http_headers` / `enabled=false` | accepted (without `url` the role is rejected: `invalid transport`), **not applied** (section 5) |
 
+S3 role runs (config `8815c7569e4f6d42`): `s3_role_dfa_1/2` (danger-full-access): `ro` child `ROLE_MARKER_RO … W_CWD_OK`, `noshell` child `ROLE_MARKER_NOSHELL` + "no shell … tool is available" (2/2), `cwdrole` rejected 2/2 with `unknown field \`cwd\`` in the stream and then `unknown agent_type 'cwdrole'`. `s3_role2_dfa_1/2`: `ro2` and `ro3` children printed their `ROLE_MARKER_*` and `W_CWD_OK` under a danger-full-access parent (2/2 each), while `s3_role3_ro_1/2` (read-only parent) gave `W_CWD_FAIL` (`read-only file system`) for both (2/2 each): the role's `workspace-write`/`:read-only` setting neither narrowed nor widened the parent's sandbox.
+
 A role whose file is malformed is dropped silently except for an `error` item in the stream; the parent then fails the spawn with `unknown agent_type 'cwdrole'`.
 
 `multi_agent_v2`: with `-c features.multi_agent_v2=true`, 2 S1 and 2 S2 (`v2_1`, `v2_2`, `p_iso.txt`, `danger-full-access`) runs showed the same `spawn_agent` parameter list, the same tool names (`spawn_agent`, `wait_agent`), the same
@@ -137,9 +137,10 @@ On 0.162.0 the switch that removes native subagents is `agents.enabled=false`.
 
 Parent configured `stub` with `bearer_token_env_var=STUB_TOKEN_PARENT` (`parent-token-AAA`). `mcp_1`, `mcp_2`: parent calls `whoami` itself, then spawns `plain` (no role), `m1` (role `mcp1` adds server
 `stubchild` → `/mcp-child`, `bearer_token_env_var=STUB_TOKEN_CHILD`=`child-token-BBB`), `m2` (role `mcp2` overrides `stub` → `/mcp-override`, `http_headers.Authorization = "Bearer child-literal-CCC"`).
-`mcp3` (**1 run retained**; an earlier statement of 3 runs is withdrawn, only one parent/child pair is in `run-summaries.txt`): role sets `[mcp_servers.stub] enabled=false`.
+`mcp3` (S1: 1 run retained; S3: 2 runs): role sets `[mcp_servers.stub] enabled=false`.
 
 - Every child could call the parent's server: `mcp__stub__whoami` → `STUB_OK auth_seen=Bearer parent-token-AAA` (plain ×2, m1 ×2, m2 ×2 over `mcp_1`/`mcp_2`; m3 ×1 in the single retained `mcp3` run: 7 child calls in 3 runs; the stub logs hold 4+4+1 `whoami` calls including the parent's two).
+- **S3 (authoritative counts; configuration `8815c7569e4f6d42` + the three MCP `-c` flags, runs `s3_mcp_1/2`, `s3_mcp3_1/2`, stub log `stub-logs/s3-mcp.stublog`):** 10 `tools/call` requests reached the stub: 2 from the parents (`thread_source:"user"`) and 8 from children (`thread_source:"subagent"`: `plain`, `m1`, `m2` in each of two `mcp` runs, `m3` in each of two `mcp3` runs). All 10 used `path=/mcp` and `auth=Bearer parent-token-AAA`; no request reached `/mcp-child` or `/mcp-override`, and `child-token-BBB`/`child-literal-CCC` do not appear. The `mcp3` children (role sets `[mcp_servers.stub] enabled=false`) still returned `STUB_OK auth_seen=Bearer parent-token-AAA` (2/2). In these runs the children also listed the account's `mcp__codex_apps__*` tools (the operator account's connectors, inherited like the parent's own). The S1 counts below are historical and superseded by this paragraph.
 - Stub log of `mcp_1` (16 requests): 4 separate `initialize` / `notifications/initialized` / `tools/list` / `tools/call whoami` sequences (parent + 3 children), **all** `path=/mcp`, **all** `auth=Bearer parent-token-AAA`.
   No request reached `/mcp-child` or `/mcp-override`; `child-token-BBB` and `child-literal-CCC` never appeared (`mcp_2` identical). No child had a `mcp__stubchild__*` tool.
 - `mcp3`: the `enabled=false` override was ignored; the child still called `stub` with the parent's token (`stub-logs/mcp3.stublog`).
@@ -180,6 +181,8 @@ In the stream each wait is one `collab_tool_call` item with empty `receiver_thre
 Cancellation (`cancel_1`, 1 run): `wait_agent(timeout_ms:5000)` → `{"message":"Wait timed out.\n\nRequested timeout of 5000ms was clamped to the minimum of 10000ms.","timed_out":true}`.
 `interrupt_agent {"target":"slow"}` → `{"previous_status":"running"}`. The child's rollout then holds `turn_aborted reason:"interrupted"` and a developer message `<turn_aborted> The previous turn was interrupted on purpose. Any running unified exec processes may still be running…`; it has no `task_complete`.
 Its command (`sleep 91; echo late > …/late_slow.txt`) was not stopped by the interrupt: the exec item completed `status:"failed","exit_code":137` at 11:02:29.585, 0.2 s after the parent's `task_complete` (11:02:29.392), which suggests it was killed when the parent process ended. `late_slow.txt` was never created. (The `task_complete` is a rollout event, not a process-exit observation; the ordering of the two timestamps was misstated in an earlier draft: 11:02:29.392 precedes 11:02:29.585, so the exec failure was recorded 0.2 s *after* `task_complete`.)
+
+S3 repeats the cancellation twice (`s3_cancel_1/2`, config `8815c7569e4f6d42`): `WAIT1: {"message":"Wait timed out.\n\nRequested timeout of 5000ms was clamped to the minimum of 10000ms.","timed_out":true}`, `CANCEL: collaboration.interrupt_agent {"previous_status":"running"}`, `WAIT2` timed out likewise (3000 ms clamped to 10000), 2/2; the sibling directory held no `late_slow.txt` afterwards. The `exit_code` 137 observation above comes from S1 only, was not repeated, and is **not** relied on: whether an interrupted child's command keeps running was not established beyond the absence of `late_slow.txt` in S3 (the 91 s command was not waited out).
 
 SIGKILL of the scratch parent (S2 `kill_a`, `kill_b`, run in parallel by `kill_probe.sh`; prompt `p_kill.txt` with `sleep 71`/`sleep 73` and a per-run marker file; only the scratch `codex` PID started by the script was signalled, `kill -9 <that PID>`). Retained process-state logs: `kill-kill_a.proc.log`, `kill-kill_b.proc.log`. Quoted from `kill-kill_a.proc.log` (UTC):
 
@@ -226,11 +229,11 @@ The parent was a fresh `codex exec` process in a scratch `CODEX_HOME`, not the o
 
 ## 11. Memory candidates
 
-- On Codex 0.162.0 only `-c agents.enabled=false` removes the `collaboration.*` tools; `features.multi_agent=false` and `features.multi_agent_v2=false` (alone or together) leave them in place. Applies to CQ's managed launch flags. Evidence: section 4, runs `cq_agents_only`, `cq_v2_only`, `cq_multi_v2`, `cqflags_*`.
+- On Codex 0.162.0 only `-c agents.enabled=false` removes the `collaboration.*` tools; `features.multi_agent=false` and `features.multi_agent_v2=false` (alone or together) leave them in place. Applies to CQ's managed launch flags. Evidence: section 4, S2 runs `t_default`, `t_agents_off`, `t_multi_off`, `t_v2_off`, `t_both_off`, `t_all_off` (`final-messages-rerun.txt`).
 - Codex 0.162.0 agent role files (`[agents.<n>] config_file`) apply `model`, `model_reasoning_effort`, `developer_instructions` and `[features]` to the child but ignore `sandbox_mode`, `default_permissions`, `approval_policy` and `mcp_servers`, and reject `cwd`; a child always has the parent's cwd, sandbox, approval policy, MCP servers and bearer tokens. Evidence: sections 3–5.
 - MCP `tools/call` requests from a Codex subagent carry `params._meta.x-codex-turn-metadata` with the child's `thread_id`, `parent_thread_id` and `subagent_kind:"thread_spawn"` under the parent's bearer token. Evidence: `stub-logs/mcp3.stublog`.
 
 ## 12. Cleanup
 
-The scratch copies of the operator's credentials (`/tmp/cxq/home/auth.json` of S1, recreated and deleted again for S2) and the scratch trees `/tmp/cxq` and `/srv/nvme/tmp/cxq-probe` were removed after S2; `/tmp/cxp/home/auth.json` from the earlier probe did not exist at the start of this Task.
+The scratch copies of the operator's credentials (`/tmp/cxq/home/auth.json` and `/tmp/cxq/home_noroles/auth.json`, recreated for S3 and deleted again at its end) and the scratch trees `/tmp/cxq` and `/srv/nvme/tmp/cxq-probe` were removed after S3; `/tmp/cxp/home/auth.json` from the earlier probe did not exist at the start of this Task.
 No token or credential is committed: the only bearer strings in the repository files are the fake `parent-token-AAA`, `child-token-BBB`, `child-literal-CCC`.
