@@ -120,13 +120,15 @@ Scope (choose one; default is the whole project):
   --task ID       Direct and shared usage for one item
   --cohort UUID   Usage for a cohort execution
   --session UUID  Usage for a governing session
+  --evaluation RUN  Usage for an evaluation run; add --scenario NAME for one scenario
+                    (--scenario requires --evaluation)
 
 Options:
   --after CURSOR   Continue audit/outcomes by sequence, attempts by UUID,
                    or costs by the JSON group returned by the preceding page
   --snapshot N     Required for attempts/costs continuation
   --limit N        Page size, 1–200; default 50 (paged modes only)
-  --attempt UUID   Required by outcomes; scope flags do not apply there
+  --attempt UUID   Required by outcomes; scope flags (including --evaluation) do not apply there
   --json           Emit one typed Result, retaining all fields and continuation data;
                    status phases emits two, the phase report and then the check report
 
@@ -136,6 +138,7 @@ Unknown measurements/costs remain unknown; estimates are not actual billing.
 Examples: cq status --task T1
           cq status phases --session SESSION_UUID
           cq status attempts --session SESSION_UUID --json
+          cq status phases --evaluation RUN --scenario NAME
           cq status outcomes --attempt ATTEMPT_UUID
 """
       case Some("agents") => """Usage: cq agents init [--settings FILE] [--save installation|project] [--json]

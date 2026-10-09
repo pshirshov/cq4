@@ -105,5 +105,32 @@ final class CliOutputLocal extends AnyWordSpec {
       new CliOutput(new PrintStream(bytes, true, UTF_8), CliFormat.Json, List("status", "phases")).result(Result.UsageChecks(report))
       assert(Wire.decode(Result_JsonCodec, bytes.toString(UTF_8).trim) == Result.UsageChecks(report))
     }
+
+    "I35: map status scope options to a usage filter and refuse bad combinations" in {
+      val project = ProjectId(UUID.randomUUID())
+      val item: String => ItemId = _ => ItemId(project, Ledger.Tasks, 3)
+      val id = UUID.randomUUID().toString
+      assert(StatusScope.filter(Map("--evaluation" -> "R"), item) == UsageFilter.EvaluationOnly("R", None))
+      assert(StatusScope.filter(Map("--evaluation" -> "R", "--scenario" -> "S"), item) == UsageFilter.EvaluationOnly("R", Some("S")))
+      assert(StatusScope.filter(Map("--task" -> "T3"), item) == UsageFilter.TaskOnly(ItemId(project, Ledger.Tasks, 3)))
+      assert(StatusScope.filter(Map("--cohort" -> id), item) == UsageFilter.CohortOnly(UUID.fromString(id)))
+      assert(StatusScope.filter(Map("--session" -> id), item) == UsageFilter.SessionOnly(SessionId(UUID.fromString(id))))
+      assert(StatusScope.filter(Map.empty, item) == UsageFilter.ProjectAll())
+      assert(intercept[IllegalArgumentException](StatusScope.filter(Map("--scenario" -> "S"), item)).getMessage.contains("--scenario requires --evaluation"))
+      for (other <- List("--task" -> "T3", "--cohort" -> id, "--session" -> id))
+        assert(intercept[IllegalArgumentException](StatusScope.filter(Map("--evaluation" -> "R", other), item)).getMessage.contains("Choose one usage scope"))
+      for (mode <- List("summary", "phases", "audit", "costs", "attempts"))
+        assert(Set("--evaluation", "--scenario").subsetOf(StatusScope.allowed(mode)), mode)
+      assert(!StatusScope.allowed("outcomes").exists(Set("--evaluation", "--scenario")))
+    }
+
+    "I35: the truncated phase report repeats the evaluation scope and scenario in its follow-up command" in {
+      val none = MetricTotal(0, 0, 0)
+      val empty = UsageTotals(none, none, none, none, none, none, 0)
+      val report = PhaseReport(List(PhaseUsage(UsagePhase.Work, 1, 0, 0, 0, 0, empty, Nil)), true, 1)
+      val bytes = new ByteArrayOutputStream()
+      new CliOutput(new PrintStream(bytes, true, UTF_8), CliFormat.Human, List("status", "phases", "--evaluation", "R", "--scenario", "S")).result(Result.UsagePhases(report))
+      assert(bytes.toString(UTF_8).linesIterator.exists(line => line.contains("truncated") && line.contains("cq status costs --evaluation R --scenario S")))
+    }
   }
 }

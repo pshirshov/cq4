@@ -488,7 +488,7 @@ S5 has a fixed order. It holds also for a run that a stop rule ended early: thre
 
 The S5 script of the matrix did steps 1, 2 and 4 to 7 in this order. Step 3 was not part of it.
 
-The `cq status` command line has the scopes `--task`, `--cohort` and `--session` and no evaluation scope (`cq help status`), so the filter is reachable through the API only. `cq status phases --session <session>` gives the same phase table for one session; a run of several sessions needs the filter.
+The `cq status` command line has the scopes `--task`, `--cohort`, `--session` and `--evaluation RUN` with the optional `--scenario NAME` (`cq help status`), so the `EvaluationOnly` filter is reachable through the API and the CLI. `cq status phases --evaluation <run> [--scenario <name>]` gives the phase table of a run of several sessions; `cq status phases --session <session>` gives it for one session.
 
 The summary reports direct, shared and unattributed totals, incomplete meters, attempts without meters and cost groups; the phase report gives attempts, host spans, finished wall time, tokens and costs per phase (Govern, Explore, Probe, Plan, Work, Check, Review, Combine, Integrate). Phase wall times overlap and are not added up ([usage audit](design/usage-audit.md)).
 

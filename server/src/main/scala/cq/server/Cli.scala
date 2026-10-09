@@ -241,21 +241,10 @@ final class Cli(context: CliContext, location: ProjectLocation, upload: SessionU
       renderer.result(request(config, actorSession, command))
     case "status" :: rest =>
       val mode = rest.headOption.filter(Set("phases", "audit", "costs", "attempts", "outcomes")).getOrElse("summary")
-      val scopes = Set("--task", "--cohort", "--session")
-      val allowed = mode match {
-        case "summary" | "phases" => scopes
-        case "audit" => scopes ++ Set("--after", "--limit")
-        case "costs" => scopes ++ Set("--after", "--snapshot", "--limit")
-        case "attempts" => scopes ++ Set("--after", "--snapshot", "--limit")
-        case "outcomes" => Set("--attempt", "--after", "--limit")
-      }
-      val opts = options(if (mode == "summary") rest else rest.tail, allowed)
-      require(scopes.count(opts.contains) <= 1, "Choose one usage scope")
+      val opts = options(if (mode == "summary") rest else rest.tail, StatusScope.allowed(mode))
       val location = configDirectory
       val (config, actorSession) = locked(location)((configuration(location), session(location)))
-      val filter = opts.get("--task").map(v => UsageFilter.TaskOnly(item(config.project, v)))
-        .orElse(opts.get("--cohort").map(v => UsageFilter.CohortOnly(UUID.fromString(v))))
-        .orElse(opts.get("--session").map(v => UsageFilter.SessionOnly(SessionId(UUID.fromString(v))))).getOrElse(UsageFilter.ProjectAll())
+      val filter = StatusScope.filter(opts, v => item(config.project, v))
       val limit = opts.get("--limit").map(_.toInt).getOrElse(DefaultPageSize)
       val selection = mode match {
         case "summary" => UsageSelection.Summary(filter)
@@ -296,5 +285,31 @@ final class Cli(context: CliContext, location: ProjectLocation, upload: SessionU
       if (outcome.isInstanceOf[WaitOutcome.HostGone]) throw new WaitFinished(SessionWait.HostGoneExit)
     case List("web") => renderer.endpoint(configuration(configDirectory).endpoint)
     case _ => throw new IllegalArgumentException("Unknown command; use cq --help")
+  }
+}
+
+/** The scope options of `cq status` and their mapping to a `UsageFilter`; it reads no server. */
+object StatusScope {
+  val Scopes: Set[String] = Set("--task", "--cohort", "--session", "--evaluation")
+  private val Scenario = "--scenario"
+  /** The options a status mode accepts. `outcomes` takes no scope. */
+  def allowed(mode: String): Set[String] = {
+    val scoped = Scopes + Scenario
+    mode match {
+      case "summary" | "phases" => scoped
+      case "audit" => scoped ++ Set("--after", "--limit")
+      case "costs" | "attempts" => scoped ++ Set("--after", "--snapshot", "--limit")
+      case "outcomes" => Set("--attempt", "--after", "--limit")
+    }
+  }
+  /** Refuses two scopes, and a scenario without an evaluation run; an item is resolved by `item`. */
+  def filter(opts: Map[String, String], item: String => ItemId): UsageFilter = {
+    require(Scopes.count(opts.contains) <= 1, "Choose one usage scope: --task, --cohort, --session or --evaluation")
+    require(!opts.contains(Scenario) || opts.contains("--evaluation"), "--scenario requires --evaluation RUN")
+    opts.get("--task").map(v => UsageFilter.TaskOnly(item(v)))
+      .orElse(opts.get("--cohort").map(v => UsageFilter.CohortOnly(UUID.fromString(v))))
+      .orElse(opts.get("--session").map(v => UsageFilter.SessionOnly(SessionId(UUID.fromString(v)))))
+      .orElse(opts.get("--evaluation").map(v => UsageFilter.EvaluationOnly(v, opts.get(Scenario))))
+      .getOrElse(UsageFilter.ProjectAll())
   }
 }
