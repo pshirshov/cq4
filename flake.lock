@@ -112,10 +112,28 @@
         "type": "github"
       }
     },
+    "ponygirls": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1791491725,
+        "narHash": "sha256-yW+q36QoU4MMiutf+VgfEo4vcpUcf9ThEkLWAI8Dl6U=",
+        "owner": "7mind",
+        "repo": "ponygirls",
+        "rev": "7aa0caab568f82a90653f701e60e7f30aae027b6",
+        "type": "github"
+      },
+      "original": {
+        "owner": "7mind",
+        "repo": "ponygirls",
+        "rev": "7aa0caab568f82a90653f701e60e7f30aae027b6",
+        "type": "github"
+      }
+    },
     "root": {
       "inputs": {
         "baboon": "baboon",
-        "nixpkgs": "nixpkgs_2"
+        "nixpkgs": "nixpkgs_2",
+        "ponygirls": "ponygirls"
       }
     },
     "squish-find-the-brains": {
