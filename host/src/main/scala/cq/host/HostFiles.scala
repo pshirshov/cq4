@@ -44,4 +44,19 @@ object HostFiles {
       } finally Files.deleteIfExists(temporary)
     }
   }
+  /** Replaces the record at `path` with `value` (or writes it), atomically: a reader sees the old record or the new one. */
+  def replace(path: Path, value: String, maximum: Int): Unit = {
+    val encoded = UTF_8.newEncoder().encode(java.nio.CharBuffer.wrap(value))
+    require(encoded.remaining() <= maximum, "Host record exceeds its byte bound")
+    val content = new Array[Byte](encoded.remaining())
+    encoded.get(content)
+    val temporary = Files.createTempFile(path.getParent, ".upload-", ".pending",
+      PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------")))
+    try {
+      Files.write(temporary, content)
+      Using.resource(FileChannel.open(temporary, StandardOpenOption.WRITE))(_.force(true))
+      Files.move(temporary, path, StandardCopyOption.ATOMIC_MOVE)
+      Using.resource(FileChannel.open(path.getParent, StandardOpenOption.READ))(_.force(true))
+    } finally Files.deleteIfExists(temporary)
+  }
 }

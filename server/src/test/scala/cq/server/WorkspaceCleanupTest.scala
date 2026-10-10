@@ -22,12 +22,12 @@ final class WorkspaceCleanupLocal extends SpecZIO with AssertZIO {
   override def config = super.config.copy(pluginConfig = PluginConfig.const(List(WorkspaceTestPlugin)), activation = Activation(Repo -> Repo.Prod))
   private def uuid: UUID = UUID.randomUUID()
 
-  private final class Receiver extends ServerApi {
+  private final class Receiver(spans: java.util.Queue[PhaseSpan] = new java.util.concurrent.ConcurrentLinkedQueue[PhaseSpan]()) extends ServerApi {
     override def usage(value: HostUsageInput): HostUsageResult = value.operation match {
       case HostUsage.Assign(assignment) => HostUsageResult.Assigned(assignment)
       case HostUsage.Start(attempt) => HostUsageResult.Started(attempt)
       case HostUsage.Finish(outcome) => HostUsageResult.Finished(outcome)
-      case HostUsage.Span(span) => HostUsageResult.Spanned(span)
+      case HostUsage.Span(span) => spans.add(span); HostUsageResult.Spanned(span)
       case other => throw new IllegalStateException("Unexpected fixture usage: " + other.getClass.getSimpleName)
     }
     override def artifact(value: ArtifactUpload): ArtifactMetadata = ArtifactMetadata(value.project, value.id, value.attempt, value.kind, value.mediaType, "fixture",
@@ -43,10 +43,11 @@ final class WorkspaceCleanupLocal extends SpecZIO with AssertZIO {
     val root: Path = Files.createTempDirectory(local.directory, "state-")
     val project: ProjectConfig = ProjectConfig(ProjectId(uuid), "http://localhost", "Startup recovery")
     val grants = new AtomicInteger(0)
+    val delivered = new java.util.concurrent.ConcurrentLinkedQueue[PhaseSpan]()
     private val limits = HostLimits(3000, 1000, 300, 2000, 262144)
     private val profile = HarnessSetting(Harness.Claude, "/unused/claude", "fixture", "anthropic", HarnessUsage.version(Harness.Claude), Nil, Set.empty)
     private val collectors = new SessionCollectors {
-      override def collector(run: SupervisorRun): ServerApi = { grants.incrementAndGet(); new Receiver }
+      override def collector(run: SupervisorRun): ServerApi = { grants.incrementAndGet(); new Receiver(delivered) }
     }
     def run(owner: ProjectConfig, repository: String): SupervisorRun = {
       val assignment = Assignment(AssignmentId(uuid), owner.project, Set.empty, Attribution.Unattributed, None, None)
@@ -342,7 +343,7 @@ final class WorkspaceCleanupLocal extends SpecZIO with AssertZIO {
         ended <- state.session(0)
         span <- ZIO.attemptBlocking {
           ended.finish()
-          val span = PhaseSpan(RequestId(uuid), ended.run.assignment.id, ended.run.attempt.session, UsagePhase.Check, 1000, 2000, AttemptState.Cancelled, None)
+          val span = PhaseSpan(RequestId(uuid), ended.run.assignment.id, ended.run.attempt.session, UsagePhase.Check, 1000, 2000, AttemptState.Cancelled, None, None)
           new SpanDelivery(ended.directory.resolve("spans"), ended.run.project.project).retain(span)
           ended.directory.resolve("spans").resolve(span.id.value.toString)
         }
@@ -351,6 +352,34 @@ final class WorkspaceCleanupLocal extends SpecZIO with AssertZIO {
           println(s"Retained span: $receipt marker=${ended.recovery}")
           assert(Files.exists(span.resolve("000000.ack")) && state.grants.get() == 1 && receipt.sessions.map(_.acknowledged) == List(1), receipt.toString)
           assert(ended.recovery.exists(_.outcome == RecoveryOutcome.Recovered))
+        }
+      } yield ()
+    }
+
+    "end the waits an ended session left Running as Unknown at their last observation, deliver the ones the server did not acknowledge and leave the one that ended" in { (local: LocalWorkspaceFixture) =>
+      val state = new State(local)
+      def wait(run: SupervisorRun, item: Long, finished: Long, status: AttemptState, observation: Long): PhaseSpan = PhaseSpan(RequestId(uuid), run.assignment.id, run.attempt.session,
+        UsagePhase.Await, 1000, finished, status, None, Some(AwaitedSpan(ItemId(run.project.project, Ledger.Questions, item), Set(ItemId(run.project.project, Ledger.Tasks, 1)), false, observation)))
+      for {
+        ended <- state.session(0)
+        spans <- ZIO.attemptBlocking {
+          ended.finish()
+          val running = wait(ended.run, 1, 4000, AttemptState.Running, 3)
+          val completed = wait(ended.run, 2, 5000, AttemptState.Completed, 2)
+          val store = new WaitStore(ended.directory.resolve(OperatorWaits.Directory), ended.run.project.project)
+          store.retain(running)
+          store.retain(completed)
+          assert(store.send(completed, new Receiver()))
+          assert(SessionDelivery.remainder(ended.directory, ended.run).undelivered)
+          (running, completed, store)
+        }
+        (running, completed, store) = spans
+        receipt <- state.recover(WorkspaceCleanup.Default)
+        _ <- ZIO.attemptBlocking {
+          val ended = running.copy(state = AttemptState.Unknown, await = running.await.map(wait => wait.copy(observation = 4)))
+          assert(state.delivered.asScala.toList == List(ended), state.delivered.toString)
+          assert(store.read(running.id) == Some(RetainedWait(ended, Some(4))) && store.read(completed.id) == Some(RetainedWait(completed, Some(2))))
+          assert(receipt.sessions.map(_.acknowledged) == List(1), receipt.toString)
         }
       } yield ()
     }

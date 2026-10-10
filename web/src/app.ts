@@ -948,6 +948,7 @@ class App {
     if (phases.costsTruncated) this.usagePanel.append(element('p', 'Per-phase costs are truncated; the amounts shown are lower bounds. The cost breakdown lists every cost group.'));
     if (checks.checks.length > 0) this.usagePanel.append(checksTable(checks));
     if (checks.truncated) this.usagePanel.append(element('p', 'Per-check rows are truncated; the runs and times shown are lower bounds.'));
+    if (phases.truncatedWaits > 0n) this.usagePanel.append(element('p', `${phases.truncatedWaits} waits on the operator name too many blocked items to list them all and do not name this Task; they may concern it.`));
     this.usagePanel.append(element('p', `Shared work is counted once and is not divided among members. Incomplete meters: ${report.incompleteMeters}; attempts without measurements: ${report.attemptsWithoutMeters}.` +
         (report.attemptsWithoutMeters > 0n ? ` ${unmeasuredNote}` : '')),
       element('p', `Attempt coverage: ${report.attempts.running} running; ${report.attempts.open} open; ${report.attempts.unknown} unknown outcomes; ${report.attempts.withGaps} with reported gaps.`),

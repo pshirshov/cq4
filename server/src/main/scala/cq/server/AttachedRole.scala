@@ -69,8 +69,11 @@ final class AttachedProgram(config: SupervisorConfig, authority: SupervisorAutho
             "Outer interactive model completion is unobserved; Pi finalized messages and bound Codex response records cover only observed usage; Claude outer usage is unavailable; managed children are independent") ++
             codex.gaps, None)
         queue.commit(List(HostDelivery.Usage(HostUsageInput(config.project.project, HostUsage.Finish(outcome)))))
-        queue.flush(authority.collector)
-        new SessionSpans(config, authority).flush()
+        // The waits the session was in end with it whatever delivery before it failed, and every wait the server did not acknowledge is sent.
+        awaited.end { () =>
+          queue.flush(authority.collector)
+          new SessionSpans(config, authority).flush()
+        }
       }) *>
       // The claims go once the work under them has settled or was cancelled and the Finish is committed locally; a claim under which a
       // child's result still awaits admission stays, and a host that dies leaves them all to their leases.

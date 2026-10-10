@@ -4,7 +4,7 @@ import cq.api.*
 
 final case class MeterKey(attempt: AttemptId, meter: String)
 final case class PhaseCost(phase: UsagePhase, total: CostTotal)
-final case class SpanTally(phase: UsagePhase, spans: Long, wallMillis: Long)
+final case class SpanTally(phase: UsagePhase, spans: Long, wallMillis: Long, running: Long)
 /** The runs of one check (absent for spans stored without a name) that ended in one state. */
 final case class CheckTally(check: Option[String], state: AttemptState, runs: Long, wallMillis: Long)
 final case class UsageCursors(usage: Long, attempts: Long)
@@ -53,6 +53,8 @@ trait UsageReader {
   def span(id: RequestId): Option[PhaseSpan]
   /** One tally per phase that has a matching span. */
   def spans(filter: UsageFilter): List[SpanTally]
+  /** Under a Task filter, the waits with the truncation flag that the filter does not match and whose blocked items do not name the Task; otherwise zero. */
+  def truncatedWaits(filter: UsageFilter): Long
   /** At most `limit` tallies of Check spans, one per check name and state, ordered by name (absent first, UTF-8 byte order) and then state name. */
   def checks(filter: UsageFilter, limit: Int): List[CheckTally]
 }

@@ -13,7 +13,8 @@ import cq.core.{DomainFailure, DriverPolicy, LedgerPolicy}
  * the session wrote; one it linked, or one of the workflow's workset, enters at the next `poll`, which reads what is watched by ID. `report` is told what the host could not
  * examine. `enabled` is false for a session whose harness integration cannot tell it of an end until it says that it can.
  */
-final class AwaitedWatch(api: ServerApi, project: ProjectId, directory: java.nio.file.Path, report: String => Unit, enabled: Boolean) {
+final class AwaitedWatch(api: ServerApi, project: ProjectId, directory: java.nio.file.Path, report: String => Unit, enabled: Boolean,
+  waits: Option[OperatorWaits] = None) {
   private val units = new SessionUnits(directory)
   private var active = enabled
   // What the session waits on, with the revision at which the host last found it waiting. `written` are those the session wrote,
@@ -33,6 +34,12 @@ final class AwaitedWatch(api: ServerApi, project: ProjectId, directory: java.nio
   // How many events of the session the turn ends of a session that asks this host have examined.
   private var told = 0
 
+  /** The session ends: the waits it is still in are cancelled and every wait the server has not acknowledged is sent. */
+  /** The session's final delivery, then its end: the waits end whether or not what was delivered before them failed. */
+  def end(deliver: () => Unit): Unit = try deliver() finally close()
+
+  def close(): Unit = waits.foreach { recorded => recorded.close(); recorded.flush() }
+
   def enable(): Unit = synchronized { active = true }
 
   private def waits(id: ItemId, draft: ItemDraft): Boolean = DriverPolicy.awaitsUser(id.ledger, LedgerPolicy.status(draft.content), false)
@@ -42,15 +49,22 @@ final class AwaitedWatch(api: ServerApi, project: ProjectId, directory: java.nio
     case _ => None
   }
   // The session holds the item as settled: it wrote it so, or was shown it so. Nothing announces it any more.
-  private def release(id: ItemId): Unit = {
+  private def release(id: ItemId, state: AttemptState = AttemptState.Cancelled): Unit = {
     val known = synchronized {
       val known = watched.contains(id) || unread(id)
       watched -= id; written -= id; scoped -= id; leaving -= id; named -= id; unread -= id
       known
     }
-    if (known) units.released(id)
+    if (known) left(id, state)
   }
-  private def shown(item: Item): Unit = if (DriverPolicy.awaitable(item.id.ledger) && !waits(item.id, item.draft)) release(item.id)
+  // The session no longer waits on the item: no person settled it (Cancelled), or it was shown settled, which a person did (Completed).
+  private def left(id: ItemId, state: AttemptState = AttemptState.Cancelled): Unit = { units.released(id); waits.foreach(_.end(id, state)) }
+  // What a reading shows the awaited item blocking joins the union of its wait, whether or not a later round finds the link again.
+  private def seen(view: ItemView): Unit =
+    if (DriverPolicy.awaitable(view.item.id.ledger))
+      waits.foreach(recorded => if (recorded.isWaiting(view.item.id)) recorded.refresh(view.item.id, view.refs.filter(_.relation == Relation.Blocks).map(_.target).toSet))
+  // A watched item the session reads settled was settled by a person: the notification is released, the wait is Completed.
+  private def shown(item: Item): Unit = if (DriverPolicy.awaitable(item.id.ledger) && !waits(item.id, item.draft)) release(item.id, AttemptState.Completed)
   private def note(id: ItemId, wrote: Option[Revision]): Unit = synchronized {
     written += id; leaving -= id
     if (!watched.contains(id)) named += id -> wrote.orElse(named.get(id).flatten)
@@ -78,6 +92,14 @@ final class AwaitedWatch(api: ServerApi, project: ProjectId, directory: java.nio
     case value: Content.OperatorAction => value.status == OperatorActionStatus.Requested
     case _ => false
   }
+  // An acknowledged link that the awaited item of a running wait blocks joins the union of that wait at once, whether or not it is
+  // removed before the next round reads it.
+  private def linked(mutation: Mutation): Unit = (mutation match {
+    case Mutation.Reference(source, _, Relation.Blocks, target, _, true) => Some(source -> target)
+    case Mutation.Reference(source, _, Relation.BlockedBy, target, _, true) => Some(target -> source)
+    case _ => None
+  }).foreach((awaited, blocked) =>
+    if (DriverPolicy.awaitable(awaited.ledger)) waits.foreach(recorded => if (recorded.isWaiting(awaited)) recorded.refresh(awaited, Set(blocked))))
   // The item of a BlockedBy edge that gates: a Question or an Operator Action.
   private def gate(mutation: Mutation): Option[ItemId] = (mutation match {
     case Mutation.Reference(_, _, Relation.BlockedBy, target, _, true) => Some(target)
@@ -95,7 +117,7 @@ final class AwaitedWatch(api: ServerApi, project: ProjectId, directory: java.nio
         case Command.Change(input) =>
           input.change.mutations.foreach {
             case Mutation.Replace(id, _, draft) if DriverPolicy.awaitable(id.ledger) => if (waiting(draft)) revisions.get(id).foreach(wrote(id, _)) else release(id)
-            case other => gate(other).foreach(note(_, None))
+            case other => linked(other); gate(other).foreach(note(_, None))
           }
           // What the change created waits when every draft of it that could wait was written waiting, and is read at the next
           // round when only some were: the acknowledgement does not say which item came of which draft.
@@ -105,8 +127,8 @@ final class AwaitedWatch(api: ServerApi, project: ProjectId, directory: java.nio
         // An applied proposal names no drafts.
         case _ => created.foreach(item => note(item.id, Some(item.revision)))
       }
-    case (_, Result.Detail(view)) => shown(view.item)
-    case (_, Result.Details(page)) => page.items.foreach(view => shown(view.item))
+    case (_, Result.Detail(view)) => seen(view); shown(view.item)
+    case (_, Result.Details(page)) => page.items.foreach(view => { seen(view); shown(view.item) })
     case _ => ()
   }
 
@@ -141,10 +163,19 @@ final class AwaitedWatch(api: ServerApi, project: ProjectId, directory: java.nio
     fresh.foreach(began)
   }
   // An event the host writes after it decided: what the session did meanwhile is written after it.
-  private def began(id: ItemId): Unit = { units.watching(id); if (!synchronized(watched.contains(id))) units.released(id) }
+  private def began(id: ItemId): Unit = {
+    units.watching(id)
+    if (!synchronized(watched.contains(id))) left(id) else waits.foreach(_.begin(id, blocking(id).getOrElse(Set.empty)))
+  }
+  // The items the awaited one blocks, as far as the host could read them; a failed reading is another reading's task.
+  private def blocking(id: ItemId): Option[Set[ItemId]] =
+    try call(Command.Read(ReadInput(project, ReadSelection.ItemDetail(id)))) match {
+      case Result.Detail(view) => Some(view.refs.filter(_.relation == Relation.Blocks).map(_.target).toSet)
+      case _ => None
+    } catch { case scala.util.control.NonFatal(_) => None }
 
   private def read(id: ItemId): Option[Item] = call(Command.Read(ReadInput(project, ReadSelection.ItemDetail(id)))) match {
-    case Result.Detail(view) => Some(view.item)
+    case Result.Detail(view) => seen(view); Some(view.item)
     case Result.Failed(_: Fault.Missing) => None
     case Result.Failed(fault) => report(s"${SessionUnits.reference(id)} is not watched: it could not be read: $fault"); None
     case other => throw new IllegalStateException(s"Reading ${SessionUnits.reference(id)} returned ${other.getClass.getSimpleName}")
@@ -181,7 +212,7 @@ final class AwaitedWatch(api: ServerApi, project: ProjectId, directory: java.nio
     }
     verdict.foreach {
       case Began => began(id)
-      case Left => units.released(id)
+      case Left => left(id)
       // The item stays watched until its end is written: a round that fails here finds it again.
       case Ended(end) =>
         units.settled(end, stopping)
@@ -191,7 +222,7 @@ final class AwaitedWatch(api: ServerApi, project: ProjectId, directory: java.nio
           if (still) unread += id
           still
         }
-        if (!still) units.released(id)
+        if (still) waits.foreach(_.end(id, AttemptState.Completed)) else left(id)
     }
   }
 
@@ -207,6 +238,7 @@ final class AwaitedWatch(api: ServerApi, project: ProjectId, directory: java.nio
           report(s"What gates the workflow of this session is not watched: its workset could not be previewed: $fault")
       }
     }
+    waits.foreach(waiting => waiting.waiting.foreach(id => if (!stopping()) waiting.refresh(id, blocking(id).getOrElse(Set.empty))))
     val (known, single) = synchronized {
       val single = named.keySet ++ leaving
       (watched.toList.filterNot((id, _) => single(id)).sortBy((id, _) => LedgerPolicy.key(id)), single.toList.sortBy(LedgerPolicy.key))

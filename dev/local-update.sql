@@ -27,5 +27,7 @@ INSERT INTO cq_drive_periods(project_id, sequence, drive, harness, session_key, 
          CASE WHEN d.state = 'Off' THEN d.body->'stopped'->>'reason' END, COALESCE(d.stopped_at, d.touched_at)
   FROM cq_drivers d
   WHERE NOT EXISTS (SELECT 1 FROM cq_drive_periods p WHERE p.project_id = d.project_id AND p.drive = (d.body->'drive'->>'value')::uuid);
+UPDATE cq_usage_spans SET body = '{"check": null, "await": null}'::jsonb || body
+  WHERE NOT (jsonb_exists(body, 'check') AND jsonb_exists(body, 'await'));
 UPDATE cq_schema_migrations SET checksum = 'e2f614ff501015977c9662dcc48701cfb8b0d93453db89b6a828ef804a2091d6' WHERE version = 1 AND checksum = 'da5a0f6cb21680869d5d40e52f1ee403434ab5a8ab9a33652f6730feb6cf01f1';
 COMMIT;

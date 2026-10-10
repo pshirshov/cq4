@@ -518,7 +518,7 @@ abstract class UsageContractTest extends SpecZIO with AssertZIO {
       val host = collector(owner)
       val session = UsageFilter.SessionOnly(owner.actor.session)
       def span(assignment: AssignmentId, phase: UsagePhase, startedAt: Long, finishedAt: Long, state: AttemptState): PhaseSpan =
-        PhaseSpan(RequestId(UUID.randomUUID()), assignment, owner.actor.session, phase, startedAt, finishedAt, state, None)
+        PhaseSpan(RequestId(UUID.randomUUID()), assignment, owner.actor.session, phase, startedAt, finishedAt, state, None, None)
       for {
         _ <- ledger.initialize(owner, "phase spans")
         item <- task(ledger, owner, "Checked task")
@@ -573,7 +573,7 @@ abstract class UsageContractTest extends SpecZIO with AssertZIO {
       val other = owner.copy(actor = owner.actor.copy(session = SessionId(UUID.randomUUID())))
       val host = collector(owner)
       def check(assignment: AssignmentId, name: Option[String], startedAt: Long, finishedAt: Long, state: AttemptState): PhaseSpan =
-        PhaseSpan(RequestId(UUID.randomUUID()), assignment, owner.actor.session, UsagePhase.Check, startedAt, finishedAt, state, name)
+        PhaseSpan(RequestId(UUID.randomUUID()), assignment, owner.actor.session, UsagePhase.Check, startedAt, finishedAt, state, name, None)
       def entries(report: CheckReport): List[(Option[String], AttemptState, Long, Long)] = report.checks.map(value => (value.check, value.state, value.runs, value.wallMillis))
       def phase(report: PhaseReport): (Long, Long) = report.phases.find(_.phase == UsagePhase.Check).map(value => (value.spans, value.wallMillis)).getOrElse((0L, 0L))
       def consistent(filter: UsageFilter): IO[Throwable, CheckReport] = for {
@@ -606,7 +606,7 @@ abstract class UsageContractTest extends SpecZIO with AssertZIO {
         _ <- usage.span(host, check(work.assignment, None, 5000, 5000, AttemptState.Unknown))
         _ <- usage.span(host, check(work.assignment, Some("unit"), 4200, 4210, AttemptState.Completed))
         _ <- usage.span(host, check(separate.assignment, Some("lint"), 100, 105, AttemptState.Unknown))
-        _ <- usage.span(host, PhaseSpan(RequestId(UUID.randomUUID()), work.assignment, owner.actor.session, UsagePhase.Integrate, 6000, 8500, AttemptState.Cancelled, None))
+        _ <- usage.span(host, PhaseSpan(RequestId(UUID.randomUUID()), work.assignment, owner.actor.session, UsagePhase.Integrate, 6000, 8500, AttemptState.Cancelled, None, None))
         _ <- usage.span(host, check(work.assignment, Some("unit"), 1, 8, AttemptState.Completed).copy(session = other.actor.session))
         long = Some("c" * 300)
         session <- consistent(UsageFilter.SessionOnly(owner.actor.session))
@@ -635,9 +635,122 @@ abstract class UsageContractTest extends SpecZIO with AssertZIO {
         item <- task(ledger, owner, "Ordered task")
         work <- phased(usage, owner, item, Role.Worker, UsagePhase.Work, 1000)
         names = (0 until 199).map(index => f"a$index%03d").toList ++ List("\uE000", new String(Character.toChars(0x10000)))
-        _ <- ZIO.foreachDiscard(names)(name => usage.span(host, PhaseSpan(RequestId(UUID.randomUUID()), work.assignment, owner.actor.session, UsagePhase.Check, 10, 20, AttemptState.Completed, Some(name))))
+        _ <- ZIO.foreachDiscard(names)(name => usage.span(host, PhaseSpan(RequestId(UUID.randomUUID()), work.assignment, owner.actor.session, UsagePhase.Check, 10, 20, AttemptState.Completed, Some(name), None)))
         report <- usage.checks(owner, UsageFilter.ProjectAll())
         _ <- assertIO(report.truncated && report.checks.size == 200 && report.checks.last.check == Some("\uE000"))
+      } yield ()
+    }
+
+    "register waits on the operator as spans, refresh them while they run and read them by their blocked tasks" in { (usage: UsageService[IO], ledger: LedgerService[IO]) =>
+      val owner = scope()
+      val host = collector(owner)
+      val governing = assignment(owner, Set.empty, Attribution.Unattributed, None).copy(evaluation = None)
+      val elsewhere = governing.copy(id = AssignmentId(UUID.randomUUID()))
+      def wait(id: RequestId, item: ItemId, blocked: Set[ItemId], start: Long, finish: Long, state: AttemptState, observation: Long, truncated: Boolean = false): PhaseSpan =
+        PhaseSpan(id, governing.id, owner.actor.session, UsagePhase.Await, start, finish, state, None, Some(AwaitedSpan(item, blocked, truncated, observation)))
+      def observation(span: PhaseSpan, number: Long): PhaseSpan = span.copy(await = span.await.map(_.copy(observation = number)))
+      def blockedBy(span: PhaseSpan): Set[ItemId] = span.await.get.blocked
+      def row(report: PhaseReport): Option[PhaseUsage] = report.phases.find(_.phase == UsagePhase.Await)
+      def figures(report: PhaseReport): Option[(Long, Long, Long, Long)] = row(report).map(value => (value.attempts, value.spans, value.running, value.wallMillis))
+      for {
+        _ <- ledger.initialize(owner, "waits")
+        blocked <- task(ledger, owner, "Blocked task")
+        other <- task(ledger, owner, "Another task")
+        question <- task(ledger, owner, "Awaited stand-in 1")
+        second <- task(ledger, owner, "Awaited stand-in 2")
+        third <- task(ledger, owner, "Awaited stand-in 3")
+        _ <- usage.assign(host, governing)
+        _ <- usage.assign(host, elsewhere)
+        // First registration.
+        id = RequestId(UUID.randomUUID())
+        first = wait(id, question, Set.empty, 1000, 1000, AttemptState.Running, 1)
+        _ <- denied(usage.start(host, Attempt(AttemptId(UUID.randomUUID()), governing.id, None, owner.actor.session, Role.Governor, Harness.Claude, "p", "m", "c", 1000, UsagePhase.Await, None)))(_.isInstanceOf[Fault.Invalid])
+        _ <- denied(usage.span(owner, first))(_.isInstanceOf[Fault.Denied])
+        _ <- denied(usage.span(host, first.copy(assignment = AssignmentId(UUID.randomUUID()))))(_.isInstanceOf[Fault.Missing])
+        _ <- denied(usage.span(host, first.copy(finishedAt = 999)))(_.isInstanceOf[Fault.Invalid])
+        _ <- denied(usage.span(host, first.copy(await = None)))(_.isInstanceOf[Fault.Invalid])
+        _ <- denied(usage.span(host, first.copy(phase = UsagePhase.Check, check = Some("unit"))))(_.isInstanceOf[Fault.Invalid])
+        _ <- denied(usage.span(host, first.copy(phase = UsagePhase.Check, state = AttemptState.Running, await = None)))(_.isInstanceOf[Fault.Invalid])
+        many = (1001L to 1201L).map(number => ItemId(owner.project, Ledger.Tasks, number)).toSet
+        _ <- denied(usage.span(host, first.copy(await = first.await.map(_.copy(blocked = many)))))(_.isInstanceOf[Fault.Invalid])
+        _ <- denied(usage.span(host, first.copy(await = first.await.map(_.copy(observation = 0)))))(_.isInstanceOf[Fault.Invalid])
+        cursor0 <- usage.cursor(owner)
+        registered <- usage.span(host, first)
+        cursor1 <- usage.cursor(owner)
+        _ <- assertIO(registered == first && cursor1 == cursor0 + 1)
+        full <- usage.span(host, wait(RequestId(UUID.randomUUID()), second, many.take(200), 1500, 1500, AttemptState.Running, 1, truncated = true))
+        _ <- assertIO(blockedBy(full).size == 200)
+        // Refreshing: the finish time and the blocked items grow, a replay changes nothing.
+        refreshed <- usage.span(host, wait(id, question, Set(blocked), 1000, 1600, AttemptState.Running, 2))
+        cursor2 <- usage.cursor(owner)
+        _ <- assertIO(refreshed.finishedAt == 1600 && blockedBy(refreshed) == Set(blocked) && cursor2 == cursor1 + 2)
+        latest = wait(id, question, Set(blocked), 1000, 2200, AttemptState.Running, 3)
+        _ <- usage.span(host, latest)
+        cursor3 <- usage.cursor(owner)
+        // Fixed fields, with a higher, the same and a lower observation number.
+        changes = List(
+          first.copy(assignment = elsewhere.id), first.copy(session = SessionId(UUID.randomUUID())), first.copy(phase = UsagePhase.Check),
+          wait(id, second, Set(blocked), 1000, 2200, AttemptState.Running, 3), latest.copy(startedAt = 999))
+        _ <- ZIO.foreachDiscard(changes) { change =>
+          denied(usage.span(host, observation(change, 4)))(_.isInstanceOf[Fault.Invalid]) *> usage.span(host, observation(latest, 1)).flatMap(stored => assertIO(stored == latest))
+        }
+        _ <- ZIO.foreachDiscard(List(3L, 1L)) { number => denied(usage.span(host, observation(latest.copy(assignment = elsewhere.id), number)))(_.isInstanceOf[Fault.Invalid]) }
+        cursor4 <- usage.cursor(owner)
+        _ <- assertIO(cursor4 == cursor3)
+        // Same observation: identical content returns the stored span; other content is a conflict.
+        same <- usage.span(host, latest)
+        _ <- denied(usage.span(host, latest.copy(finishedAt = 2300)))(_.isInstanceOf[Fault.Conflict])
+        _ <- denied(usage.span(host, latest.copy(await = latest.await.map(_.copy(blocked = Set.empty)))))(_.isInstanceOf[Fault.Conflict])
+        // Lower observation: the stored span, not a conflict.
+        stale <- usage.span(host, wait(id, question, Set.empty, 1000, 1000, AttemptState.Running, 1))
+        _ <- assertIO(same == latest && stale == latest)
+        cursor5 <- usage.cursor(owner)
+        _ <- assertIO(cursor5 == cursor3)
+        // A higher observation that lowers the finish time, drops a blocked item or clears the flag is refused.
+        _ <- denied(usage.span(host, wait(id, question, Set(blocked), 1000, 2199, AttemptState.Running, 4)))(_.isInstanceOf[Fault.Invalid])
+        _ <- denied(usage.span(host, wait(id, question, Set.empty, 1000, 2300, AttemptState.Running, 4)))(_.isInstanceOf[Fault.Invalid])
+        cursor6 <- usage.cursor(owner)
+        _ <- assertIO(cursor6 == cursor3)
+        // A truncated observation sets the flag for good: a later one cannot clear it.
+        flagged = wait(id, question, Set(blocked), 1000, 2200, AttemptState.Running, 4, truncated = true)
+        _ <- usage.span(host, flagged)
+        cursor7 <- usage.cursor(owner)
+        _ <- denied(usage.span(host, observation(flagged, 5).copy(await = flagged.await.map(_.copy(truncated = false, observation = 5)))))(_.isInstanceOf[Fault.Invalid])
+        _ <- assertIO(cursor7 == cursor6 + 1)
+        // A terminal span is immutable: a higher observation is refused, a lower one returns it.
+        ended = wait(id, question, Set(blocked), 1000, 2500, AttemptState.Completed, 5, truncated = true)
+        _ <- usage.span(host, ended)
+        cursor8 <- usage.cursor(owner)
+        _ <- denied(usage.span(host, observation(ended, 6).copy(state = AttemptState.Cancelled)))(_.isInstanceOf[Fault.Invalid])
+        _ <- denied(usage.span(host, observation(ended, 6)))(_.isInstanceOf[Fault.Invalid])
+        olderTerminal <- usage.span(host, observation(latest, 2))
+        replayTerminal <- usage.span(host, ended)
+        cursor9 <- usage.cursor(owner)
+        _ <- assertIO(olderTerminal == ended && replayTerminal == ended && cursor9 == cursor8 && cursor8 == cursor7 + 1)
+        // The report: one Running wait refreshed twice, one ended, one with the truncation flag.
+        running = wait(RequestId(UUID.randomUUID()), second, Set.empty, 5000, 5000, AttemptState.Running, 1)
+        _ <- usage.span(host, running)
+        _ <- usage.span(host, wait(running.id, second, Set(blocked), 5000, 5400, AttemptState.Running, 2))
+        _ <- usage.span(host, wait(running.id, second, Set(blocked), 5000, 5900, AttemptState.Running, 3))
+        _ <- usage.span(host, wait(running.id, second, Set(blocked), 5000, 5900, AttemptState.Running, 2))
+        completed = wait(RequestId(UUID.randomUUID()), third, Set(blocked), 7000, 7500, AttemptState.Completed, 1)
+        _ <- usage.span(host, completed)
+        truncated = wait(RequestId(UUID.randomUUID()), third, Set.empty, 8000, 8100, AttemptState.Cancelled, 1, truncated = true)
+        _ <- usage.span(host, truncated)
+        byProject <- usage.phases(owner, UsageFilter.ProjectAll())
+        bySession <- usage.phases(owner, UsageFilter.SessionOnly(owner.actor.session))
+        byBlocked <- usage.phases(owner, UsageFilter.TaskOnly(blocked))
+        byOther <- usage.phases(owner, UsageFilter.TaskOnly(other))
+        // The wait of `question` (1500 ms), the full one (0), the running one (900), the ended (500) and the truncated (100).
+        _ <- assertIO(figures(byProject) == Some((0L, 5L, 2L, 1500L + 0L + 900L + 500L + 100L)))
+        _ <- assertIO(figures(bySession) == figures(byProject))
+        _ <- assertIO(figures(byBlocked) == Some((0L, 3L, 1L, 1500L + 900L + 500L)))
+        _ <- assertIO(row(byOther).isEmpty)
+        _ <- assertIO(byProject.truncatedWaits == 0 && bySession.truncatedWaits == 0)
+        // The truncated waits that do not name the Task: the full one and the truncated one, and the first, flagged, names it.
+        _ <- assertIO(byBlocked.truncatedWaits == 2 && byOther.truncatedWaits == 3)
+        again <- usage.phases(owner, UsageFilter.SessionOnly(owner.actor.session))
+        _ <- assertIO(figures(again) == figures(bySession) && again.cursor == bySession.cursor)
       } yield ()
     }
 

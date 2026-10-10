@@ -24,6 +24,7 @@ STEP_SQL = "dev/local-update.sql"
 DRIVERS = "cq_drivers"
 PERIODS = "cq_drive_periods"
 MIGRATIONS = "cq_schema_migrations"
+SPANS = "cq_usage_spans"
 SCHEMA_CHECKSUM = f"SELECT checksum FROM {MIGRATIONS} WHERE version=1"
 STRUCTURE_DATABASE = "cq_update_structure"
 
@@ -177,13 +178,14 @@ def structure(database: Database, name: str, label: str) -> list[str]:
 
 class DriveIdentityAndPeriods:
     """The step from the schema without drive periods: it creates the table cq_drive_periods with its index, gives every stored driver a
-    drive identity in its body and its summary, records the state each driver is in as the first period of its drive, and records the
+    drive identity in its body and its summary, gives every stored span the optional fields check and await as null, records the state each driver is in as the first period of its drive, and records the
     schema hash that declares the table."""
     def __init__(self, sql: str, schema_after: str, schema_source: Path):
         self.sql = sql
         self.schema_after = schema_after
         self.schema_source = schema_source
         self.drivers: list[dict] = []
+        self.spans: list[dict] = []
 
     @staticmethod
     def rows(database: Database, label: str) -> list[dict]:
@@ -192,12 +194,23 @@ class DriveIdentityAndPeriods:
 
     def capture(self, database: Database) -> None:
         self.drivers = self.rows(database, "drivers-before")
+        self.spans = self.span_rows(database, "spans-before")
+
+    @staticmethod
+    def span_rows(database: Database, label: str) -> list[dict]:
+        rows = database.query(f"SELECT to_jsonb(t) FROM {SPANS} t ORDER BY project_id, span_id", label)
+        return [json.loads(row) for row in rows.splitlines()]
 
     def verify(self, database: Database, before: dict[str, str], after: dict[str, str]) -> dict:
         require(database.query(SCHEMA_CHECKSUM, "schema-after") == self.schema_after, "Data step did not record the schema of the new package")
         require(set(after) == set(before) | {PERIODS}, f"Data step created or dropped a table other than {PERIODS}")
-        require(all(after[table] == value for table, value in before.items() if table not in (DRIVERS, MIGRATIONS)),
-                f"Data step changed a table other than {DRIVERS}, {PERIODS} and {MIGRATIONS}")
+        require(all(after[table] == value for table, value in before.items() if table not in (DRIVERS, SPANS, MIGRATIONS)),
+                f"Data step changed a table other than {DRIVERS}, {SPANS}, {PERIODS} and {MIGRATIONS}")
+        # A stored span decodes only with the optional fields check and await present: each gains them as null and nothing else changes.
+        spans = self.span_rows(database, "spans-after")
+        require(len(spans) == len(self.spans), "Data step created or dropped a span")
+        for was, now in zip(self.spans, spans):
+            require(now == {**was, "body": {"check": None, "await": None, **was["body"]}}, "Data step changed a span other than by the fields check and await")
         drivers = self.rows(database, "drivers-after")
         require(len(drivers) == len(self.drivers), "Data step created or dropped a driver")
         identities = set()
@@ -234,7 +247,7 @@ class DriveIdentityAndPeriods:
             database.query(f"DROP DATABASE IF EXISTS {STRUCTURE_DATABASE}", "structure-drop")
         require(structure(database, "postgres", "structure-updated") == declared, "Updated database structure differs from the schema of the new package")
         return {"dataStep": DRIVE_IDENTITY_AND_PERIODS, "drivers": len(drivers), "periods": len(periods), "tableCreated": PERIODS,
-                "otherDataUnchanged": True, "structureAsDeclared": True}
+                "spans": len(spans), "otherDataUnchanged": True, "structureAsDeclared": True}
 
 
 def data_step(before: dict, after: dict, step: dict, source: Path) -> DataStep | None:

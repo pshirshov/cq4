@@ -129,7 +129,7 @@ export async function usageChecks(page, origin, projectId) {
   // I35: check runs per configured check next to the phase rows; spans without a name are one row; a report over 200 entries says it is truncated.
   const checkSession = id();
   const run = (check, state, millis) => host({ Span: { value: { id: id(), assignment: assignment.id, session: checkSession, phase: 'Check',
-    startedAt: '10000', finishedAt: String(10000 + millis), state, check } } });
+    startedAt: '10000', finishedAt: String(10000 + millis), state, check, await: null } } });
   await run(null, 'Completed', 1000);
   await run('cq-fast', 'Completed', 1800000); await run('cq-fast', 'Completed', 1800000); await run('cq-fast', 'Failed', 90000); await run('cq-fast', 'Cancelled', 10000);
   await run('cq-ui', 'Completed', 2000); await run('cq-ui', 'Unknown', 3000);
@@ -154,6 +154,21 @@ export async function usageChecks(page, origin, projectId) {
   const truncated = await checkRows();
   assert.equal(truncated.length, 197);
   assert.deepEqual(truncated.slice(0, 3).map(row => row[0]), ['(unnamed)', 'cq-fast', 'cq-ui']);
+  await page.getByRole('dialog').getByRole('button', { name: 'Close', exact: true }).click();
+  // Waits on the operator are spans of the Await phase: its own row, found under the Task they block, and a truncated wait that does not
+  // name the Task is counted as one that may concern it.
+  const other = { project, ledger: 'Tasks', number: '2' };
+  const waiter = id();
+  const wait = (blocked, truncated) => ({ id: id(), assignment: overhead.id, session: waiter, phase: 'Await', startedAt: '0', finishedAt: '60000', state: 'Running',
+    check: null, await: { item: { project, ledger: 'Questions', number: '1' }, blocked, truncated, observation: '1' } });
+  await host({ Span: { value: wait([member], false) } }); await host({ Span: { value: wait([other], true) } });
+  await page.getByRole('button', { name: 'Project usage', exact: true }).click();
+  await page.getByRole('button', { name: 'Attempts', exact: true }).click();
+  await page.getByRole('table', { name: 'Attempts', exact: true }).getByRole('row').filter({ has: page.getByRole('cell', { name: 'controlled-browser-fixture / no-model-call', exact: true }) }).filter({ has: page.getByRole('cell', { name: 'Completed', exact: true }) }).getByText('Attempt details', { exact: true }).click();
+  await page.getByRole('button', { name: 'Task usage · T1', exact: true }).click();
+  await page.getByRole('heading', { name: 'Usage · T1', exact: true }).waitFor();
+  await phases.getByRole('rowheader', { name: 'Await', exact: true }).waitFor();
+  await page.getByText('1 waits on the operator name too many blocked items to list them all and do not name this Task; they may concern it.', { exact: true }).waitFor();
   await page.getByRole('dialog').getByRole('button', { name: 'Close', exact: true }).click();
   await query.fill(''); await page.getByRole('button', { name: 'Search', exact: true }).click();
   await page.getByText('Data: current', { exact: true }).waitFor();

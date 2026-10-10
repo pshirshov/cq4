@@ -193,7 +193,10 @@ private final class PostgresUsageTransaction(connection: Connection, project: Pr
   override def span(id: RequestId): Option[PhaseSpan] = sql.query("SELECT body::text FROM cq_usage_spans WHERE project_id = ? AND span_id = ?")(identity(_, id.value))(r => Wire.decode(PhaseSpan_JsonCodec, r.getString(1))).headOption
 
   override def putSpan(value: PhaseSpan, actor: Actor, receivedAt: Long): Unit = {
-    sql.execute("INSERT INTO cq_usage_spans(project_id, span_id, assignment_id, session_id, phase, started_at, finished_at, actor, received_at, body) VALUES (?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?::jsonb)") { s =>
+    // A wait is replaced by its later observation; every other span is written once.
+    sql.execute("INSERT INTO cq_usage_spans(project_id, span_id, assignment_id, session_id, phase, started_at, finished_at, actor, received_at, body) VALUES (?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?::jsonb) " +
+      "ON CONFLICT (project_id, span_id) DO UPDATE SET finished_at = EXCLUDED.finished_at, actor = EXCLUDED.actor, received_at = EXCLUDED.received_at, body = EXCLUDED.body " +
+      "WHERE cq_usage_spans.phase = 'Await' AND EXCLUDED.phase = 'Await'") { s =>
       identity(s, value.id.value); s.setObject(3, value.assignment.value); s.setObject(4, value.session.value); s.setString(5, value.phase.toString)
       s.setLong(6, value.startedAt); s.setLong(7, value.finishedAt); s.setString(8, Wire.encode(Actor_JsonCodec, actor)); s.setLong(9, receivedAt)
       s.setString(10, Wire.encode(PhaseSpan_JsonCodec, value))
@@ -202,9 +205,31 @@ private final class PostgresUsageTransaction(connection: Connection, project: Pr
     ()
   }
 
+  // A wait is also seen by the Task it blocked at any time during the wait, through the blocked items of its body.
+  private def blocked(item: ItemId): String = "[" + Wire.encode(ItemId_JsonCodec, item) + "]"
+  private def spanFilterSql(filter: UsageFilter): String = filter match {
+    case _: UsageFilter.TaskOnly => " AND (" + filterSql(filter).stripPrefix(" AND ") + " OR (t.phase = 'Await' AND t.body->'await'->'blocked' @> ?::jsonb))"
+    case _ => filterSql(filter)
+  }
+  private def bindSpanFilter(s: PreparedStatement, filter: UsageFilter): Int = {
+    val index = bindFilter(s, filter)
+    filter match {
+      case UsageFilter.TaskOnly(item) => s.setString(index, blocked(item)); index + 1
+      case _ => index
+    }
+  }
+
   override def spans(filter: UsageFilter): List[SpanTally] =
-    sql.query("SELECT t.phase, count(*), sum(t.finished_at - t.started_at) FROM cq_usage_spans t JOIN cq_usage_assignments a USING(project_id, assignment_id) WHERE t.project_id = ?" +
-      filterSql(filter) + " GROUP BY t.phase")(s => { bindFilter(s, filter); () })(r => SpanTally(UsagePhase.parse(r.getString(1)).get, r.getLong(2), r.getBigDecimal(3).longValueExact()))
+    sql.query("SELECT t.phase, count(*), sum(t.finished_at - t.started_at), count(*) FILTER (WHERE t.body->>'state' = 'Running') FROM cq_usage_spans t JOIN cq_usage_assignments a USING(project_id, assignment_id) WHERE t.project_id = ?" +
+      spanFilterSql(filter) + " GROUP BY t.phase")(s => { bindSpanFilter(s, filter); () })(
+      r => SpanTally(UsagePhase.parse(r.getString(1)).get, r.getLong(2), r.getBigDecimal(3).longValueExact(), r.getLong(4)))
+
+  override def truncatedWaits(filter: UsageFilter): Long = filter match {
+    case UsageFilter.TaskOnly(_) =>
+      sql.query("SELECT count(*) FROM cq_usage_spans t JOIN cq_usage_assignments a USING(project_id, assignment_id) WHERE t.project_id = ? AND t.phase = 'Await' AND t.body->'await'->>'truncated' = 'true' AND NOT (" +
+        spanFilterSql(filter).stripPrefix(" AND ") + ")")(s => { bindSpanFilter(s, filter); () })(_.getLong(1)).head
+    case _ => 0L
+  }
 
   override def checks(filter: UsageFilter, limit: Int): List[CheckTally] =
     sql.query("SELECT g.name, g.state, g.runs, g.wall FROM (SELECT t.body->>'check' AS name, t.body->>'state' AS state, count(*) AS runs, sum(t.finished_at - t.started_at) AS wall " +

@@ -127,9 +127,17 @@ private final class DummyUsageTransaction(initial: DummyUsageState) extends Usag
   override def span(id: RequestId): Option[PhaseSpan] = state.spans.get(id)
   override def putSpan(value: PhaseSpan, actor: Actor, receivedAt: Long): Unit = { state = state.copy(spans = state.spans.updated(value.id, value)); tick(); () }
   override def spans(filter: UsageFilter): List[SpanTally] =
-    state.spans.values.filter(value => matches(filter, value.assignment, value.session)).groupBy(_.phase).toList.map { case (phase, values) =>
-      SpanTally(phase, values.size.toLong, values.foldLeft(0L)((sum, value) => Math.addExact(sum, Math.subtractExact(value.finishedAt, value.startedAt))))
+    state.spans.values.filter(matchesSpan(filter, _)).groupBy(_.phase).toList.map { case (phase, values) =>
+      SpanTally(phase, values.size.toLong, values.foldLeft(0L)((sum, value) => Math.addExact(sum, Math.subtractExact(value.finishedAt, value.startedAt))),
+        values.count(_.state == AttemptState.Running).toLong)
     }
+  // A wait is also seen by the Task it blocked at any time during the wait.
+  private def matchesSpan(filter: UsageFilter, span: PhaseSpan): Boolean = matches(filter, span.assignment, span.session) ||
+    ((filter, span.await) match { case (UsageFilter.TaskOnly(item), Some(wait)) => wait.blocked.contains(item); case _ => false })
+  override def truncatedWaits(filter: UsageFilter): Long = filter match {
+    case UsageFilter.TaskOnly(item) => state.spans.values.count(span => span.await.exists(_.truncated) && !matchesSpan(filter, span)).toLong
+    case _ => 0L
+  }
   override def checks(filter: UsageFilter, limit: Int): List[CheckTally] =
     state.spans.values.filter(value => value.phase == UsagePhase.Check && matches(filter, value.assignment, value.session)).groupBy(value => (value.check, value.state)).toList.map { case ((check, outcome), values) =>
       CheckTally(check, outcome, values.size.toLong, values.foldLeft(0L)((sum, value) => Math.addExact(sum, Math.subtractExact(value.finishedAt, value.startedAt))))
