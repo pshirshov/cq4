@@ -94,11 +94,11 @@ object TimeAccounting {
     val open = units.exists(hasTail)
     val lastObserved = if (units.isEmpty) None else Some(ends.max)
     val window: Option[Window] = input.window match {
+      case _ if units.isEmpty => None
       case Some((from, until)) => Some(Window(from, math.max(from, until), open, explicit = true))
-      case None if units.isEmpty => None
       case None =>
         val from = units.map(_.start).min
-        val until = if (units.forall(isOpenAttached)) from else ends.max
+        val until = if (units.size == 1 && isOpenAttached(units.head)) from else ends.max
         Some(Window(from, until, open, explicit = false))
     }
     val explicitWindow = window.filter(_.explicit)

@@ -111,6 +111,15 @@ final class TimeAccountingLocal extends AnyWordSpec {
       val r = measure(Seq.empty)
       assert(r.window.isEmpty && r.split.sum == 0 && r.categories.isEmpty && !r.open && r.lastObserved.isEmpty)
     }
+    "no units with an explicit window: no window, all zero" in {
+      val r = measure(Seq.empty, window = Some((0, 60)))
+      assert(r.window.isEmpty && r.split.sum == 0 && r.categories.isEmpty && !r.open && r.lastObserved.isEmpty)
+    }
+    "several open attached governing attempts use earliest start to latest observed" in {
+      val r = measure(Seq(attached("a", 0, "s1"), attached("b", 10, "s2")), latest = Map("s1" -> 20, "s2" -> 30))
+      assert(r.window.exists(w => w.from == 0 && w.until == s(30) && w.open))
+      split(r, 0, 0, 30, 0, 0)
+    }
     "only an open attached governing attempt" in {
       val r = measure(Seq(attached("g", 7)), latest = Map("s" -> 20))
       assert(r.window.exists(w => w.from == s(7) && w.length == 0 && w.open))
