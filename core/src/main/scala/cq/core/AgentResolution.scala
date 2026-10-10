@@ -39,17 +39,10 @@ object AgentResolution {
     }) ++ Option.when(harness == Harness.Pi && piThinkingSuffix(model.model))(AgentProblem.ModelAmbiguous(at, harness, model.model)) ++
       effortProblems(at, harness, effort)
 
-  /**
-   * The first layer and part that assigns the role decides it whole: the project's roles for the governing harness, the project's
-   * defaults, the installation's roles for that harness, the installation's defaults. A part assigns the role to this work by the key
-   * of the work's mode or, without that key, by the key of the role: the key of a mode wins within its part only, and the key of the
-   * role in an earlier part decides before the key of a mode in a later one. Tiers alone are merged: the project's list of a tier
-   * replaces the installation's, for every reference whichever layer wrote it.
-   */
-  def resolve(installation: ParsedAgents, project: ParsedAgents, governing: Harness, work: DispatchWork): ResolvedAssignment = {
-    val role = RoleKeys.role(work)
-    val plain: RoleKey = RoleKey.Plain(role)
-    val found = (for {
+  private def lookup(installation: ParsedAgents, project: ParsedAgents, governing: Harness, work: DispatchWork)
+  : Option[(RoleOrigin, RoleKey, RoleChoice, List[List[TextPosition]])] = {
+    val plain: RoleKey = RoleKey.Plain(RoleKeys.role(work))
+    (for {
       (layer, document) <- List(AgentLayer.Project -> project, AgentLayer.Installation -> installation)
       (source, scope, assigned) <- List(
         (RoleSource.HarnessRoles, Some(governing), document.config.harnesses.get(governing).fold(List.empty[RoleAssignment])(_.roles)),
@@ -57,6 +50,65 @@ object AgentResolution {
       key <- RoleKeys.qualified(work).toList :+ plain
       assignment <- assigned.find(_.key == key)
     } yield (RoleOrigin(layer, source), key, assignment.choice, document.references(AgentRoleKey(scope, key)))).headOption
+  }
+
+  private def rank(value: ModelTier): Int = value match {
+    case ModelTier.Fast => 0
+    case ModelTier.Standard => 1
+    case ModelTier.Frontier => 2
+  }
+
+  /** The highest of the tiers; none for an empty list. */
+  def highest(values: List[ModelTier]): Option[ModelTier] = values.sortBy(rank).lastOption
+
+  /** The highest tier written in a tier reference that the resolution reads in the Worker entry for Implement work, if any. */
+  def configuredTier(installation: ParsedAgents, project: ParsedAgents, governing: Harness): Option[ModelTier] = {
+    val read = lookup(installation, project, governing, DispatchWork.Worker(WorkerMode.Implement)).toList.flatMap { case (_, _, choice, _) =>
+      val seats = choice match {
+        case RoleChoice.Seat(single) => List(single)
+        case RoleChoice.Panel(_, listed, _) => listed
+      }
+      seats.flatMap {
+        case SeatChoice.Single(reference) => List(reference)
+        case SeatChoice.Strategy(SeatStrategy.First, listed) => listed.take(1)
+        case SeatChoice.Strategy(_, listed) => listed
+      }
+    }
+    highest(read.collect { case ModelReference(_, ModelTarget.Tier(value), _) => value })
+  }
+
+  /**
+   * The tier a cohort runs its Workers at: the highest recommended tier when every member has one; none when no member has one; when
+   * mixed, the highest of the recommended tiers and the configured tier (members without a recommendation are ignored where the Worker
+   * entry names no tier).
+   */
+  def cohortTier(installation: ParsedAgents, project: ParsedAgents, governing: Harness, recommended: List[Option[ModelTier]]): Option[ModelTier] = {
+    val stated = recommended.flatten
+    if (stated.isEmpty) None
+    else if (stated.size == recommended.size) highest(stated)
+    else highest(stated ++ configuredTier(installation, project, governing))
+  }
+
+  /**
+   * The first layer and part that assigns the role decides it whole: the project's roles for the governing harness, the project's
+   * defaults, the installation's roles for that harness, the installation's defaults. A part assigns the role to this work by the key
+   * of the work's mode or, without that key, by the key of the role: the key of a mode wins within its part only, and the key of the
+   * role in an earlier part decides before the key of a mode in a later one. Tiers alone are merged: the project's list of a tier
+   * replaces the installation's, for every reference whichever layer wrote it.
+   */
+  def resolve(installation: ParsedAgents, project: ParsedAgents, governing: Harness, work: DispatchWork): ResolvedAssignment =
+    resolve(installation, project, governing, work, None)
+
+  /**
+   * As above, and when `taskTier` is given for Worker Implement work (the implementing and the correction Worker), every tier reference
+   * that the resolution reads in the resolved entry is expanded with `taskTier` instead of the written one. An effort written on the
+   * reference is kept; exact references are unchanged. Other work resolves as configured.
+   */
+  def resolve(installation: ParsedAgents, project: ParsedAgents, governing: Harness, work: DispatchWork, taskTier: Option[ModelTier]): ResolvedAssignment = {
+    val role = RoleKeys.role(work)
+    val plain: RoleKey = RoleKey.Plain(role)
+    val forced = taskTier.filter(_ => work == DispatchWork.Worker(WorkerMode.Implement))
+    val found = lookup(installation, project, governing, work)
     found.fold(ResolvedAssignment(governing, plain, RoleResolution.Unresolved(None, List(AgentProblem.RoleUnassigned(governing, role))))) { case (origin, key, choice, positions) =>
       def tier(harness: Harness, value: ModelTier): Option[List[TierEntry]] =
         List(project, installation).flatMap(_.config.harnesses.get(harness).flatMap(_.tiers.get(value))).headOption
@@ -68,7 +120,9 @@ object AgentResolution {
         }
         val routes = reference.target match {
           case ModelTarget.Exact(model) => Right(List(ModelRoute(harness, model.provider, model.model, reference.effort)))
-          case ModelTarget.Tier(value) => tier(harness, value).toRight(List[AgentProblem](AgentProblem.TierUndefined(harness, value, role)))
+          case ModelTarget.Tier(written) =>
+            val value = forced.getOrElse(written)
+            tier(harness, value).toRight(List[AgentProblem](AgentProblem.TierUndefined(harness, value, role)))
             .map(_.map(entry => ModelRoute(harness, entry.model.provider, entry.model.model, reference.effort.orElse(entry.effort))))
         }
         routes.flatMap { values =>

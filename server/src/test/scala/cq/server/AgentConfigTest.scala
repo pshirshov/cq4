@@ -2,7 +2,7 @@ package cq.server
 
 import baboon.runtime.shared.BaboonCodecContext
 import cq.api.*
-import cq.core.{AgentConfigText, AgentResolution, ParsedAgents, RoleKeys}
+import cq.core.{AgentConfigText, AgentResolution, AgentRoleKey, ParsedAgents, RoleKeys}
 import org.scalatest.wordspec.AnyWordSpec
 
 final class AgentConfigLocal extends AnyWordSpec {
@@ -1231,6 +1231,125 @@ final class AgentConfigLocal extends AnyWordSpec {
       val refused = intercept[IllegalArgumentException](AgentsInit.save(call, project, "project", text)).getMessage
       assert(refused.contains("The project already holds an agent configuration (revision 4); cq agents init starts one and replaces none") && replaced.size == 2, refused)
       assert(intercept[IllegalArgumentException](AgentsInit.save(call, project, "server", text)).getMessage.contains("--save takes installation or project"))
+    }
+  }
+
+  "A Task tier and a cohort tier (Behavioral Active Blackbox Atomic)" should {
+    val tiers =
+      """harnesses:
+        |  claude: { tiers: { frontier: [opus], standard: [sonnet], fast: [haiku] } }
+        |  codex: { tiers: { frontier: [gpt-6.1-sol?effort=xhigh], standard: [gpt-6.1-sol], fast: [gpt-6-luna?effort=low] } }
+        |  pi: { tiers: { frontier: [zai/big], standard: [zai/mid, zai/mid2], fast: [zai/small?effort=low] } }
+        |""".stripMargin
+    def config(worker: String, rest: String = ""): ParsedAgents = parsed(s"defaults: { roles: { worker: $worker$rest } }\n$tiers")
+    val implement = DispatchWork.Worker(WorkerMode.Implement)
+    def routes(document: ParsedAgents, governing: Harness, work: DispatchWork, taskTier: Option[ModelTier]): List[ModelRoute] =
+      AgentResolution.resolve(document, ParsedAgents.empty, governing, work, taskTier).resolution match {
+        case RoleResolution.Resolved(plan) => plan.seats.flatMap(_.candidates)
+        case other => fail(s"Unresolved: $other")
+      }
+
+    "replace the tier of a single reference by the Task's tier" in {
+      val document = config("$harness:@standard")
+      assert(routes(document, Harness.Claude, implement, None) == List(route(Harness.Claude, "sonnet")))
+      assert(routes(document, Harness.Claude, implement, Some(ModelTier.Fast)) == List(route(Harness.Claude, "haiku")))
+      assert(routes(document, Harness.Claude, implement, Some(ModelTier.Standard)) == List(route(Harness.Claude, "sonnet")))
+      assert(routes(document, Harness.Claude, implement, Some(ModelTier.Frontier)) == List(route(Harness.Claude, "opus")))
+    }
+
+    "keep an exact model of a fallback list and replace its tier references" in {
+      val document = config("{ fallback: [$harness:@standard, pi:zai/exact] }")
+      assert(routes(document, Harness.Claude, implement, Some(ModelTier.Frontier)) == List(route(Harness.Claude, "opus"), route(Harness.Pi, "zai/exact")))
+      assert(routes(document, Harness.Claude, implement, None) == List(route(Harness.Claude, "sonnet"), route(Harness.Pi, "zai/exact")))
+    }
+
+    "keep a written effort and use the effort of the tier entry otherwise" in {
+      val document = config("{ fallback: [$harness:@standard?effort=high, $harness:@standard] }")
+      assert(routes(document, Harness.Codex, implement, Some(ModelTier.Fast)) ==
+        List(route(Harness.Codex, "gpt-6-luna", Effort.High), route(Harness.Codex, "gpt-6-luna", Effort.Low)).distinct)
+      assert(routes(document, Harness.Codex, implement, Some(ModelTier.Frontier)) ==
+        List(route(Harness.Codex, "gpt-6.1-sol", Effort.High), route(Harness.Codex, "gpt-6.1-sol", Effort.XHigh)))
+    }
+
+    "replace the tier of a named harness" in {
+      val document = config("pi:@standard")
+      assert(routes(document, Harness.Claude, implement, Some(ModelTier.Fast)) == List(route(Harness.Pi, "zai/small", Effort.Low)))
+      assert(routes(document, Harness.Claude, implement, None) == List(route(Harness.Pi, "zai/mid"), route(Harness.Pi, "zai/mid2")))
+    }
+
+    // The text format gives a panel to the reviewer role alone, so a Worker panel is built from a reviewer panel's parse: the resolution
+    // reads every seat of a panel whatever role it is assigned to.
+    def workerPanel(text: String): ParsedAgents = {
+      val document = parsed(text)
+      val reviewer = AgentRoleKey(None, RoleKey.Plain(AgentRole.Reviewer))
+      val references = classOf[ParsedAgents].getMethod("references").invoke(document).asInstanceOf[Map[AgentRoleKey, List[List[TextPosition]]]]
+      val choice = document.config.defaults.collectFirst { case RoleAssignment(RoleKey.Plain(AgentRole.Reviewer), value) => value }.getOrElse(fail("no reviewer"))
+      val config = document.config.copy(defaults = List(RoleAssignment(RoleKey.Plain(AgentRole.Worker), choice)))
+      val constructor = classOf[ParsedAgents].getConstructors.head
+      constructor.newInstance(config, Map(AgentRoleKey(None, RoleKey.Plain(AgentRole.Worker)) -> references(reviewer)), Map.empty[AgentRoleKey, TextPosition])
+        .asInstanceOf[ParsedAgents]
+    }
+
+    "replace the tier of every seat of a panel" in {
+      val document = workerPanel(s"defaults: { roles: { reviewer: { all: [$$harness:@fast, pi:@standard, claude:exact], min: 1 } } }\n$tiers")
+      def seats(taskTier: Option[ModelTier]): List[List[ModelRoute]] =
+        AgentResolution.resolve(document, ParsedAgents.empty, Harness.Claude, implement, taskTier).resolution match {
+          case RoleResolution.Resolved(plan) => plan.seats.map(_.candidates)
+          case other => fail(s"Unresolved: $other")
+        }
+      assert(seats(Some(ModelTier.Frontier)) == List(List(route(Harness.Claude, "opus")), List(route(Harness.Pi, "zai/big")), List(route(Harness.Claude, "exact"))))
+      assert(seats(None) == List(List(route(Harness.Claude, "haiku")), List(route(Harness.Pi, "zai/mid"), route(Harness.Pi, "zai/mid2")), List(route(Harness.Claude, "exact"))))
+    }
+
+    "leave the role unresolved when the Task's tier has no list for the harness" in {
+      val document = parsed("defaults: { roles: { worker: $harness:@standard } }\nharnesses: { claude: { tiers: { standard: [sonnet] } } }")
+      AgentResolution.resolve(document, ParsedAgents.empty, Harness.Claude, implement, Some(ModelTier.Fast)).resolution match {
+        case RoleResolution.Unresolved(_, found) => assert(found == List(AgentProblem.TierUndefined(Harness.Claude, ModelTier.Fast, AgentRole.Worker)))
+        case other => fail(s"Resolved: $other")
+      }
+    }
+
+    "resolve every other kind of work as configured under a Task tier" in {
+      val document = parsed(
+        s"""defaults: { roles: { planner: $$harness:@standard, explorer: $$harness:@standard, reviewer: pi:@standard, worker: $$harness:@standard } }
+           |$tiers""".stripMargin)
+      val others = List[DispatchWork](DispatchWork.Planner(), DispatchWork.Explorer(ExplorerMode.Investigate), DispatchWork.Explorer(ExplorerMode.Research),
+        DispatchWork.Reviewer(ReviewerMode.Plan), DispatchWork.Reviewer(ReviewerMode.Candidate), DispatchWork.Reviewer(ReviewerMode.Audit),
+        DispatchWork.Worker(WorkerMode.Probe), DispatchWork.Worker(WorkerMode.ResolveConflict))
+      others.foreach { work =>
+        val plain = AgentResolution.resolve(document, ParsedAgents.empty, Harness.Claude, work)
+        ModelTier.all.foreach { value =>
+          assert(AgentResolution.resolve(document, ParsedAgents.empty, Harness.Claude, work, Some(value)) == plain, s"$work at $value")
+        }
+        assert(AgentResolution.resolve(document, ParsedAgents.empty, Harness.Claude, work, None) == plain)
+      }
+    }
+
+    def cohort(worker: String, recommended: Option[ModelTier]*): Option[ModelTier] =
+      AgentResolution.cohortTier(config(worker), ParsedAgents.empty, Harness.Claude, recommended.toList)
+    val Fast = Some(ModelTier.Fast)
+    val Standard = Some(ModelTier.Standard)
+    val Frontier = Some(ModelTier.Frontier)
+
+    "take the highest recommended tier when every member has one" in {
+      assert(cohort("$harness:@fast", Fast, Frontier, Standard) == Frontier)
+      assert(cohort("$harness:@frontier", Fast, Standard) == Standard)
+      assert(cohort("$harness:@standard", Fast) == Fast)
+    }
+
+    "give no tier when no member has a recommendation" in {
+      assert(cohort("$harness:@standard", None, None) == None)
+      assert(cohort("$harness:@standard") == None)
+    }
+
+    "count members without a recommendation at the configured tier" in {
+      assert(cohort("$harness:@standard", Fast, None) == Standard)
+      assert(cohort("$harness:@standard", Frontier, None) == Frontier)
+      assert(cohort("claude:opus", Fast, None) == Fast)
+      assert(cohort("{ first: [$harness:@fast, $harness:@frontier] }", Fast, None) == Fast)
+      assert(cohort("{ fallback: [$harness:@fast, $harness:@frontier] }", Fast, None) == Frontier)
+      val panel = workerPanel(s"defaults: { roles: { reviewer: { all: [$$harness:@fast, pi:@standard], min: 1 } } }\n$tiers")
+      assert(AgentResolution.cohortTier(panel, ParsedAgents.empty, Harness.Claude, List(Fast, None)) == Standard)
     }
   }
 }
